@@ -1,0 +1,11 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10i64);
+c.push_null();
+c.push(30i64);
+println(c.len());
+println(c.null_count());
+println(c.valid_count());
+println(c.is_null(0));
+println(c.is_null(1));
+}

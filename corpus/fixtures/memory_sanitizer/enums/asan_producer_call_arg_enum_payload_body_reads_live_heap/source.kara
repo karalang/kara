@@ -1,0 +1,11 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+enum Tv { A(R), Nil }
+impl Drop for Tv { fn drop(mut ref self) { println("dTv") } }
+fn eatS(v: Sv) { println("e") }
+fn eatT(v: Tv) { println("e") }
+fn mkS(i: i64) -> Sv { return Sv.Hold { inner: R { id: i, s: "pay", xs: [1, 2, 3] } }; }
+fn mkT(i: i64) -> Tv { return Tv.A(R { id: i, s: "pay", xs: [1, 2] }); }
+fn main() { eatS(mkS(5)); eatT(mkT(6)) }

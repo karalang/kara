@@ -1,0 +1,9 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 2i64]));
+df.insert("a", Column.from_vec([9i64, 8i64]));
+println(df.width());
+println(df.height());
+let a: Column[i64] = df.column("a");
+match a[0] { Some(v) => { println(v); } None => { println(-1i64); } }
+}

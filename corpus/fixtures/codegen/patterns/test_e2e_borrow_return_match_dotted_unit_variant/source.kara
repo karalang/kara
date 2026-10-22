@@ -1,0 +1,13 @@
+enum Side { Left, Right }
+struct Pair { first: String, second: String }
+fn choose(s: ref Side, p: ref Pair) -> ref String {
+    match s {
+        Side.Left => p.first,
+        Side.Right => p.second,
+    }
+}
+fn main() {
+    let pr = Pair { first: "FST", second: "SND" };
+    println(choose(Side.Left, pr));
+    println(choose(Side.Right, pr));
+}

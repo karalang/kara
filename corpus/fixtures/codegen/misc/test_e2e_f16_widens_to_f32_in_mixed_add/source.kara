@@ -1,0 +1,5 @@
+fn main() {
+let a: f16 = 2.0f16;
+let b: f32 = 3.0f32;
+println((a as f32) + b);
+}

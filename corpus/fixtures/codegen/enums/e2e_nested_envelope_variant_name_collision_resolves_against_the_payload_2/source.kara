@@ -1,0 +1,6 @@
+struct Rc7 { id: i64, name: String }
+impl Drop for Rc7 { fn drop(mut ref self) { println(f"dRc{self.id}") } }
+enum MyOptB { Some(Rc7), Nothing }
+fn main() { let x: Option[MyOptB] = Some(MyOptB.Some(Rc7 { id: 71, name: f"a" }));
+match x { Some(Some(r)) => { println(f"a{r.id}") } Some(Nothing) => { println("sn") } None => { println("n") } }
+println("done") }

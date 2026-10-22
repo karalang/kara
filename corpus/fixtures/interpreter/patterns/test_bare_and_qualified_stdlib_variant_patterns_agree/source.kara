@@ -1,0 +1,8 @@
+fn main() {
+let a = Stdio.Inherit;
+let c = Stdio.Piped;
+match a { Inherit => println("bare:a=Inherit"), Null => println("bare:a=Null"), Piped => println("bare:a=Piped") }
+match c { Inherit => println("bare:c=Inherit"), Null => println("bare:c=Null"), Piped => println("bare:c=Piped") }
+match a { Stdio.Inherit => println("qual:a=Inherit"), Stdio.Null => println("qual:a=Null"), Stdio.Piped => println("qual:a=Piped") }
+match c { Stdio.Inherit => println("qual:c=Inherit"), Stdio.Null => println("qual:c=Null"), Stdio.Piped => println("qual:c=Piped") }
+}

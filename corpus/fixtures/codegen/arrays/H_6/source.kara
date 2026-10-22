@@ -1,0 +1,2 @@
+fn main() { let a: Array[E, 2] = [E.B, E.B];
+             let b = a; println("moved"); }

@@ -1,0 +1,4 @@
+fn main() {
+    let n = 7;
+    let mut h = H { v: [S { s: f"one-aaaaaaaaaaaa-{n}", k: 1 }] }; h.v[0] = S { s: f"rep-bbbbbbbbbbbb-{n}", k: h.v.len() }; println(f"{h.v[0].k} {h.v[0].s}")
+}

@@ -1,0 +1,6 @@
+fn main() {
+let s: String = "kara";
+println(StableHash.siphash24(s.bytes(), 1u64, 2u64));
+println(StableHash.siphash24(s.bytes(), 2u64, 1u64));
+println(StableHash.siphash24(s.bytes(), 506097522914230528u64, 1084818905618843912u64));
+}

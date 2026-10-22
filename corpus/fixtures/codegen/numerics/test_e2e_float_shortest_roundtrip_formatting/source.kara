@@ -1,0 +1,14 @@
+struct P { a: f64, b: f32 }
+fn main() {
+println(7.0 / 3.0);
+println(1.0);
+println(100.0);
+println(0.1);
+println(f"x={2.0 / 3.0}");
+let p = P { a: 3.141592653589793, b: 1.5 };
+println(f"{p.a} {p.b}");
+let nan: f64 = 0.0 / 0.0;
+println(nan);
+let inf: f64 = 1.0 / 0.0;
+println(inf);
+}

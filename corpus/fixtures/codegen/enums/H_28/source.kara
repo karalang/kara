@@ -1,0 +1,2 @@
+fn take(e: E) -> i64 { 7 }
+fn main() { let e = B; println(f"{take(e)}") }

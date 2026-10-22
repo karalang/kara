@@ -1,0 +1,12 @@
+fn pair() -> (i64, i64) { (5, 6) }
+fn main() {
+let t: (i64, i64) = (3, 7);
+println(f"{t}");
+println(t);
+let s: (i64, String) = (1, "hi");
+println(f"s={s}");
+let n: (i64, (i64, i64)) = (1, (2, 3));
+println(n);
+println(pair());
+println(f"{t.0} {t.1}");
+}

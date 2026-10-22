@@ -1,0 +1,4 @@
+struct Bag[=T] { xs: Vec[T] }
+fn n[T](b: ref Bag[T]) -> i64 { let v = b.xs.clone(); return v.len(); }
+fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };
+a.xs.push(1); a.xs.push(2); println(f"{n(a)}"); }

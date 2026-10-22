@@ -1,0 +1,2 @@
+enum Es { A { v: Array[R, 2], k: i64 }, B }
+fn main() { let e = Es.A { v: mka(), k: 3 }; match e { Es.A { v, k } => println(f"k{k} {v[0].id}"), Es.B => println("b") } println("x") }

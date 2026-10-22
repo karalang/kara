@@ -1,0 +1,17 @@
+source = "tests/codegen/misc.rs::test_e2e_ptr_dangling_is_not_null"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:an expression with no recorded type"
+classified_with = "79705a229"
+extracted_src = "adfd8581"
+model_rev = "583cfb0d"
+model_src = "adfd8581"

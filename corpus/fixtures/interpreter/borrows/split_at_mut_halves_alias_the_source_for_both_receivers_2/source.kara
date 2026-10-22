@@ -1,0 +1,7 @@
+fn main() {
+let mut a: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];
+let mut s: mut Slice[i64] = a.as_slice_mut();
+let mut p: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(1i64);
+p.1[0] = 55i64;
+println(f"{a[0]} {a[1]}");
+}

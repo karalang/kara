@@ -1,0 +1,6 @@
+struct S { v: Vec[i64], n: i64 }
+fn main() {
+let a: Option[S] = Some(S { v: [11, 22], n: 5 });
+match a { Some(S { v: ref v, n }) => { println(v[0] + 1); } None => {} }
+match a { Some(S { v, n }) => println(v[1] + 1), None => println("none") }
+}

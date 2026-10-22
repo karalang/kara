@@ -1,0 +1,1 @@
+struct Reg { status: i32, control: i32 } fn main() { let r: Reg = Reg { status: 1, control: 2 }; let p: *const i32 = ptr.const(r.control); }

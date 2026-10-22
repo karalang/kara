@@ -1,0 +1,17 @@
+source = "tests/interpreter/numerics.rs::vector_signed_lane_arithmetic_wraps_in_twos_complement"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:simd", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[N]: unchecked Add overflowed; the builder must use Chec"
+classified_with = "79705a229"
+extracted_src = "4f0af5cb"
+model_rev = "583cfb0d"
+model_src = "4f0af5cb"

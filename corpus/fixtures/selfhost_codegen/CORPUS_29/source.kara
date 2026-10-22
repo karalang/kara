@@ -1,0 +1,1 @@
+fn main() { println((84 / 2).to_string()); println((17 % 5).to_string()) }

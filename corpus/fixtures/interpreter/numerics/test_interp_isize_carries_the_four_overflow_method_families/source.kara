@@ -1,0 +1,6 @@
+fn main() {
+             println(isize.MAX.checked_add(1isize));
+             println(isize.MAX.wrapping_add(1isize));
+             println(isize.MAX.saturating_add(1isize));
+             println(isize.MAX.overflowing_add(1isize));
+         }

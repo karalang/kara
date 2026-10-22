@@ -1,0 +1,3 @@
+enum Op { Add(i64), Zero }
+fn mk(n: i64) -> Op { if n > 0 { return Op.Add(n); } Op.Zero }
+fn main() { println(match mk(4) { Add(n) => n + 100, Zero => 0 }.to_string()); println(match mk(0 - 1) { Add(n) => n, Zero => 99 }.to_string()) }

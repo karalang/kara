@@ -1,0 +1,1 @@
+fn main() { let x = 5i64; let _ = x.bogus(); }

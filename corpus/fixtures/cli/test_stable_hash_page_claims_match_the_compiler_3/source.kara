@@ -1,0 +1,1 @@
+fn main() { println(crypto.sha256([1u8, 2u8])); }

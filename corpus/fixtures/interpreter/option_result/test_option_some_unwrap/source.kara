@@ -1,0 +1,1 @@
+fn main() { let x = Some(42); println(x.unwrap()); }

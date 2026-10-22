@@ -1,0 +1,9 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { } }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { return f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+fn mk(i: i64) -> R { return R { id: i, s: payload() }; }
+fn mke(i: i64) -> E { return E.A(mk(i)); }
+fn main() { println(go()); }

@@ -1,0 +1,9 @@
+fn main() {
+    let mut v: Vec[f32] = [];
+    for i in 0..200 { v.push(500.0 - (i as f32)) }
+    let m = gpu.min(v);
+    match m {
+        Some(x) => println(f"{x}"),
+        None => println("empty"),
+    }
+}

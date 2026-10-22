@@ -1,0 +1,305 @@
+#[derive(Clone)]
+struct Span {
+    line: i64,
+    column: i64,
+    offset: i64,
+    length: i64,
+}
+#[derive(Clone)]
+enum Token {
+    Fn,
+    Struct,
+    Enum,
+    Let,
+    Mut,
+    If,
+    Else,
+    Return,
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    Colon,
+    Comma,
+    Equal,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Identifier(String),
+    Integer(i64, String),
+    Eof,
+}
+#[derive(Clone)]
+struct SpannedToken {
+    token: Token,
+    span: Span,
+}
+struct Lexer {
+    src: String,
+    pos: i64,
+    line: i64,
+    col: i64,
+}
+fn is_word_start(c: String) -> bool {
+    if c >= "a" and c <= "z" {
+        return true;
+    }
+    if c >= "A" and c <= "Z" {
+        return true;
+    }
+    return c == "_";
+}
+fn is_word_cont(c: String) -> bool {
+    if is_word_start(c) {
+        return true;
+    }
+    return c >= "0" and c <= "9";
+}
+fn is_digit(c: String) -> bool {
+    return c >= "0" and c <= "9";
+}
+fn keyword_of(w: ref String) -> i64 {
+    if w == "fn" {
+        return 1;
+    }
+    if w == "struct" {
+        return 2;
+    }
+    if w == "enum" {
+        return 3;
+    }
+    if w == "let" {
+        return 4;
+    }
+    if w == "mut" {
+        return 5;
+    }
+    if w == "if" {
+        return 6;
+    }
+    if w == "else" {
+        return 7;
+    }
+    if w == "return" {
+        return 8;
+    }
+    return 0;
+}
+fn kw_token(k: i64) -> Token {
+    match k {
+        1 => {
+            return Token.Fn;
+        }
+        2 => {
+            return Token.Struct;
+        }
+        3 => {
+            return Token.Enum;
+        }
+        4 => {
+            return Token.Let;
+        }
+        5 => {
+            return Token.Mut;
+        }
+        6 => {
+            return Token.If;
+        }
+        7 => {
+            return Token.Else;
+        }
+        _ => {
+            return Token.Return;
+        }
+    }
+    return Token.Eof;
+}
+fn sym_token(c: ref String) -> Token {
+    if c == "(" {
+        return Token.LeftParen;
+    }
+    if c == ")" {
+        return Token.RightParen;
+    }
+    if c == "{" {
+        return Token.LeftBrace;
+    }
+    if c == "}" {
+        return Token.RightBrace;
+    }
+    if c == ":" {
+        return Token.Colon;
+    }
+    if c == "," {
+        return Token.Comma;
+    }
+    if c == "=" {
+        return Token.Equal;
+    }
+    if c == "+" {
+        return Token.Plus;
+    }
+    if c == "-" {
+        return Token.Minus;
+    }
+    if c == "*" {
+        return Token.Star;
+    }
+    return Token.Slash;
+}
+impl Lexer {
+    fn new(src: String) -> Lexer {
+        return Lexer { src: src, pos: 0, line: 1, col: 1 };
+    }
+    fn done(ref self) -> bool {
+        return self.pos >= self.src.len();
+    }
+    fn peek(ref self) -> String {
+        return self.src.substring(self.pos, self.pos + 1);
+    }
+    fn advance(mut ref self) {
+        self.pos = self.pos + 1;
+        self.col = self.col + 1;
+    }
+    fn skip_ws(mut ref self) {
+        while self.pos < self.src.len() and self.peek() == " " {
+            self.advance();
+        }
+    }
+    fn next_token(mut ref self) -> SpannedToken {
+        self.skip_ws();
+        let start = self.pos;
+        let start_col = self.col;
+        if self.pos >= self.src.len() {
+            return SpannedToken {
+                token: Token.Eof,
+                span: Span { line: self.line, column: start_col, offset: start, length: 0 },
+            };
+        }
+        if is_word_start(self.peek()) {
+            while self.pos < self.src.len() and is_word_cont(self.peek()) {
+                self.advance();
+            }
+            let w = self.src.substring(start, self.pos);
+            let k = keyword_of(w);
+            let ln = self.pos - start;
+            if k > 0 {
+                return SpannedToken {
+                    token: kw_token(k),
+                    span: Span { line: self.line, column: start_col, offset: start, length: ln },
+                };
+            }
+            return SpannedToken {
+                token: Token.Identifier(w),
+                span: Span { line: self.line, column: start_col, offset: start, length: ln },
+            };
+        }
+        if is_digit(self.peek()) {
+            let mut val = 0;
+            while self.pos < self.src.len() and is_digit(self.peek()) {
+                let d = self.src.substring(self.pos, self.pos + 1);
+                let mut dv = 0;
+                if d == "1" {
+                    dv = 1;
+                }
+                if d == "2" {
+                    dv = 2;
+                }
+                if d == "3" {
+                    dv = 3;
+                }
+                if d == "4" {
+                    dv = 4;
+                }
+                if d == "5" {
+                    dv = 5;
+                }
+                if d == "6" {
+                    dv = 6;
+                }
+                if d == "7" {
+                    dv = 7;
+                }
+                if d == "8" {
+                    dv = 8;
+                }
+                if d == "9" {
+                    dv = 9;
+                }
+                val = val * 10 + dv;
+                self.advance();
+            }
+            let lex = self.src.substring(start, self.pos);
+            let ln = self.pos - start;
+            return SpannedToken {
+                token: Token.Integer(val, lex),
+                span: Span { line: self.line, column: start_col, offset: start, length: ln },
+            };
+        }
+        self.advance();
+        let c = self.src.substring(start, self.pos);
+        return SpannedToken {
+            token: sym_token(c),
+            span: Span { line: self.line, column: start_col, offset: start, length: 1 },
+        };
+    }
+}
+fn lex_all(src: String) -> Vec[SpannedToken] {
+    let mut lx = Lexer.new(src);
+    let mut out: Vec[SpannedToken] = Vec.new();
+    while not lx.done() {
+        out.push(lx.next_token());
+        lx.skip_ws();
+    }
+    return out;
+}
+fn main() {
+    let toks = lex_all("fn add(a: i64, b) { return a + b * 42 }".to_string());
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i].clone();
+        match t.token {
+            Identifier(name) => {
+                println("ident ".to_string() + name);
+            }
+            Integer(v, lex) => {
+                println("int ".to_string() + v.to_string() + " '" + lex + "'");
+            }
+            Fn => {
+                println("kw fn");
+            }
+            Struct => {
+                println("kw struct");
+            }
+            Enum => {
+                println("kw enum");
+            }
+            Let => {
+                println("kw let");
+            }
+            Mut => {
+                println("kw mut");
+            }
+            If => {
+                println("kw if");
+            }
+            Else => {
+                println("kw else");
+            }
+            Return => {
+                println("kw return");
+            }
+            Eof => {
+                println("eof");
+            }
+            other => {
+                println("sym");
+            }
+        }
+        let cl = t.span.column;
+        let ln = t.span.length;
+        println(cl.to_string() + "+" + ln.to_string());
+        i = i + 1;
+    }
+}

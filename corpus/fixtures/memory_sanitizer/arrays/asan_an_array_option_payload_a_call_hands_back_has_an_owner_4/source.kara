@@ -1,0 +1,12 @@
+fn mk(n: i64) -> Option[Array[String, 2]] {
+    if n < 0 { return None; }
+    return Some(Array[f"raaaaaaaaaaaa{n}", f"cbbbbbbbbbbbb{n}"]);
+}
+fn main() {
+    let a: Option[Array[String, 2]] = mk(1);
+    match a { Some(v) => { println(f"a:{v[0]}"); } None => { println("a:none"); } }
+    let b = mk(2);
+    match b { Some(v) => { println(f"b:{v[0]}"); } None => { println("b:none"); } }
+    let c: Option[Array[String, 2]] = mk(3);
+    println("c:unread");
+}

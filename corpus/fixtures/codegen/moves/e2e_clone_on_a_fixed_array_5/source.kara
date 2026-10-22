@@ -1,0 +1,5 @@
+#[derive(Clone)]
+struct S { a: Array[String, 2], n: i64 }
+fn main() { let m = env.args().len() as i64;
+let s = S { a: [f"x-{m}", f"y-{m}"], n: 7 };
+let t = s.clone(); println(f"{t.a[0]}:{t.n}"); }

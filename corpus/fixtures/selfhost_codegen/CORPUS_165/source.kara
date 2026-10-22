@@ -1,0 +1,51 @@
+enum E { A(i64), B(String), C }
+fn f(n: i64) -> Option[i64] {
+    if n > 0 {
+        return Some(n * 2);
+    }
+    return None;
+}
+fn main() {
+    let o = Some(5);
+    if let Some(x) = o {
+        println(x.to_string());
+    }
+    let z: Option[i64] = None;
+    if let Some(x) = z {
+        println(x.to_string());
+    } else {
+        println("empty");
+    }
+    let s = Some("hi".to_string());
+    if let Some(w) = s {
+        println(w);
+    }
+    if let Some(v) = f(4) {
+        println(v.to_string());
+    } else {
+        println("neg");
+    }
+    if let Some(v) = f(0) {
+        println(v.to_string());
+    } else {
+        println("neg");
+    }
+    let e = E.A(9);
+    if let A(n) = e {
+        println(n.to_string());
+    } else {
+        println("other");
+    }
+    let e2 = E.B("bee".to_string());
+    if let B(t) = e2 {
+        println(t);
+    } else {
+        println("other");
+    }
+    let e3 = E.C;
+    if let A(n) = e3 {
+        println(n.to_string());
+    } else {
+        println("nope");
+    }
+}

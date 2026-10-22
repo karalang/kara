@@ -1,0 +1,10 @@
+enum V { Table { m: Map[String, i64], tag: i64 } }
+fn add(v: mut ref V) { match v { Table { m, tag } => { m.insert("z", 99); } } }
+fn size(v: ref V) -> i64 { match v { Table { m, tag } => m.len() as i64 } }
+fn main() {
+let mut mp: Map[String, i64] = Map.new();
+mp.insert("a", 1);
+let mut t = V.Table { m: mp, tag: 7 };
+add(mut t);
+println(size(t));
+}

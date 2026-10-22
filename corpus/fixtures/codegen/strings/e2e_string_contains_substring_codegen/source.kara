@@ -1,0 +1,7 @@
+fn main() {
+let s: String = "hello world";
+println(s.contains("world"));
+println(s.contains("xyz"));
+println(s.contains(""));
+println(s.contains("hello world!"));
+}

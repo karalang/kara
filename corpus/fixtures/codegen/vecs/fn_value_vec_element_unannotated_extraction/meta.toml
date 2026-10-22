@@ -1,0 +1,17 @@
+source = "tests/codegen/vecs.rs::fn_value_vec_element_unannotated_extraction"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "b-fix-incomplete:E0517"
+classified_with = "79705a229"
+extracted_src = "45c1981f"
+model_rev = "583cfb0d"
+model_src = "45c1981f"

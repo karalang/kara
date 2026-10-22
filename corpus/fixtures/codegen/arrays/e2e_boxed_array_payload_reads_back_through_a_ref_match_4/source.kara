@@ -1,0 +1,8 @@
+enum Slot[T] { Filled(T), Blank }
+fn f(s: ref Slot[Array[String, 2]]) {
+    match s { Filled(a) => { println(f"s:{a[0]}") } Blank => { println("n") } }
+}
+fn main() {
+    let x: Slot[Array[String, 2]] = Filled([f"aaaaaaaa0", f"bbbbbbbb0"]);
+    f(x);
+}

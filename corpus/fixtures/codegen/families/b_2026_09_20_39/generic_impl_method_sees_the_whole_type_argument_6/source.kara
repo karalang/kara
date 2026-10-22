@@ -1,0 +1,3 @@
+enum H[T] { Y(T), N }
+impl H[Array[String, 2]] { fn show(self) -> i64 { match self { H.Y(v) => { println(f"h={v}"); return 4; } H.N => { return 0; } } } }
+fn main() { let c: H[Array[String, 2]] = H.Y([f"a-{1}", f"b-{2}"]); println(f"m:{c.show()}"); }

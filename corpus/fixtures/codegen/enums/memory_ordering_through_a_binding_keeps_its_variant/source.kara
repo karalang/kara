@@ -1,0 +1,21 @@
+fn main() {
+let a = MemoryOrdering.Relaxed;
+let b = MemoryOrdering.Acquire;
+let c = MemoryOrdering.Release;
+let d = MemoryOrdering.AcqRel;
+let e = MemoryOrdering.SeqCst;
+println(name(a));
+println(name(b));
+println(name(c));
+println(name(d));
+println(name(e));
+}
+fn name(m: MemoryOrdering) -> String {
+match m {
+Relaxed => "Relaxed",
+Acquire => "Acquire",
+Release => "Release",
+AcqRel => "AcqRel",
+SeqCst => "SeqCst",
+}
+}

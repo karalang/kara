@@ -1,0 +1,31 @@
+struct R { id: i64, tag: String, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"pay-{n}");
+    return R { id: n, tag: f"tag-{n}", xs: v }
+}
+fn f(p: own R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 2 {
+        let mut out: R = mk(90 + i);
+        if i == 0 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+fn g(q: own R) -> i64 {
+    let mut acc: i64 = 0;
+    for k in 0..3 {
+        let mut o: R = mk(40 + k);
+        if k == 1 { o = q; }
+        acc = acc + o.id;
+    }
+    return acc
+}
+fn main() {
+    println(f"a{f(mk(5))}");
+    println(f"b{g(mk(7))}");
+}

@@ -1,0 +1,8 @@
+fn main() {
+let mut x = 1_i64;
+let print_x = mut ref || { println(x); x = x + 10; };
+print_x();
+x = 100_i64;
+print_x();
+println(x);
+}

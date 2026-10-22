@@ -1,0 +1,10 @@
+let COUNT: i64 = 42i64;
+let DOUBLED = COUNT * 2i64;
+let TRIPLED = DOUBLED + COUNT;
+let SMALL: i32 = 7i32;
+let SMALL2 = SMALL + 3i32;
+fn main() {
+println(DOUBLED);
+println(TRIPLED);
+println(SMALL2);
+}

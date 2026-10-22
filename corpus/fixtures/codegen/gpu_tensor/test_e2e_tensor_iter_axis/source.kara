@@ -1,0 +1,15 @@
+fn main() {
+let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+let rows = a.iter_axis(0);
+println(rows.len());
+for r in rows { println(r[0]); println(r[2]); }
+let cols = a.iter_axis(1);
+println(cols.len());
+for c in cols { println(c[1]); }
+let v = Tensor.from([10, 20, 30]);
+let scal = v.iter_axis(0);
+println(scal.len());
+for x in scal { println(x); }
+let subs = a.iter_axis(0);
+println(subs[1][2]);
+}

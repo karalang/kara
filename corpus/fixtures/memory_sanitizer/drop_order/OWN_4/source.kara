@@ -1,0 +1,10 @@
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("drop E"); } }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkt() -> (E, i64) { return (E.A(payload()), 7); }
+fn take(t: (E, i64)) -> i64 { return 1; }
+fn go() -> i64 { let t = mkt(); let mut i = 0i64;
+  while i < 0i64 { take(t); i = i + 1; }
+  return 1; }
+fn main() { println(go()); }

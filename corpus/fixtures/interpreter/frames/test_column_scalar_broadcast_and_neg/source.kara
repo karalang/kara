@@ -1,0 +1,7 @@
+fn main() {
+let a: Column[i64] = Column.from_iter_nullable([Some(10i64), None, Some(30i64)]);
+let m = a * 2i64;
+for x in m.iter() { match x { Some(v) => { println(v); } None => { println(-1i64); } } }
+let n = -a;
+for x in n.iter() { match x { Some(v) => { println(v); } None => { println(-1i64); } } }
+}

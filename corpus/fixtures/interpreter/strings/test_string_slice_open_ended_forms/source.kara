@@ -1,0 +1,6 @@
+fn main() {
+             let s = "hello world";
+             println(s[6..]);
+             println(s[..5]);
+             println(s[..]);
+         }

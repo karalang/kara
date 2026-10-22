@@ -1,0 +1,20 @@
+fn main() {
+let a: Option[i64] = Some(42);
+match a.ok_or("no") {
+Ok(v) => println(f"ok {v}"),
+Err(e) => println(f"err {e}"),
+}
+let b: Option[i64] = None;
+match b.ok_or("missing value") {
+Ok(v) => println(f"ok {v}"),
+Err(e) => println(f"err {e}"),
+}
+let c: Option[i64] = None;
+match c.ok_or(0 - 99) {
+Ok(v) => println(f"ok {v}"),
+Err(e) => println(f"errcode {e}"),
+}
+// unwrap_or on the Ok/Err result
+let d: Option[i64] = Some(7);
+println(d.ok_or("x").unwrap_or(0));
+}

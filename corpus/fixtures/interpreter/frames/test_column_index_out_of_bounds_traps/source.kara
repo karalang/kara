@@ -1,0 +1,4 @@
+fn main() {
+let c: Column[i64] = Column.from_vec([1i64, 2i64]);
+let _ = c[5];
+}

@@ -1,0 +1,43 @@
+fieldlet/local
+  dE
+  dR1
+  r1
+fieldlet/temp
+  dE
+  dR2
+  r2
+readlet/local
+  dE
+  dR3
+  r3
+justlet/local
+  dE
+  dR4
+  r7
+deep/local
+  dE
+  dR5
+  r5
+mid/local
+  dE
+  dR6
+  r6
+deep/temp
+  dE
+  dR7
+  r7
+borrowedlet/local
+  dE
+  dR8
+  dE
+  dR8
+  r8
+p_fieldlet/local
+  dE
+  dR9
+  r9
+p_fieldlet/temp
+  dE
+  dR10
+  r10
+end

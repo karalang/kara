@@ -1,0 +1,9 @@
+fn main() {
+let s: SortedSet[i64] = SortedSet.new();
+let inserted = s.insert(3_i64);
+println(f"{inserted}");
+let again = s.insert(3_i64);
+println(f"{again}");
+println(f"{s.contains(3_i64)}");
+println(f"{s.contains(99_i64)}");
+}

@@ -1,0 +1,2 @@
+fn inc(x: mut ref i64) { x += 1i64; }
+fn main() { let mut n: i64 = 10i64; inc(mut n); println(n); }

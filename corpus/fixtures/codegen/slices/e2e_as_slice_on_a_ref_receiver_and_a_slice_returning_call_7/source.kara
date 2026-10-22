@@ -1,0 +1,9 @@
+fn grow(v: mut ref Vec[i64]) -> i64 {
+    v.push(40i64);
+    let s = v.as_slice();
+    return s.len();
+}
+fn main() {
+    let mut v: Vec[i64] = [10, 20, 30];
+    println(f"{grow(mut v)}");
+}

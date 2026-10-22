@@ -1,0 +1,10 @@
+enum V { Table(Map[String, i64]) }
+fn unwrap(v: V) -> Map[String, i64] { match v { Table(m) => m } }
+fn main() {
+let mut mp: Map[String, i64] = Map.new();
+let _ = mp.insert("a", 1);
+let _ = mp.insert("b", 2);
+let t = V.Table(mp);
+let m2 = unwrap(t);
+println(m2.len() as i64);
+}

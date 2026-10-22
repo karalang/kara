@@ -1,0 +1,25 @@
+struct Res { id: i64 }
+struct W { r: Res }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+fn main() {
+let r = Res { id: 31 };
+println("a");
+let _ = (r, 1);
+println("b");
+let s = Res { id: 32 };
+let _ = Option.Some(s);
+println("c");
+let r0 = Res { id: 33 };
+let _ = W { r: r0 };
+println("d");
+let t = Res { id: 34 };
+let _ = t;
+println("e");
+let k = 5;
+let _ = Res { id: k };
+println("end");
+}

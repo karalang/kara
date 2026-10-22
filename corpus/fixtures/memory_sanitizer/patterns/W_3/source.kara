@@ -1,0 +1,4 @@
+struct W { id: i64, a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.a}/{self.b}") } }
+fn take(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn main() { println(f"g{take(Some((W { id: 3, a: f"aaaa1", b: f"bbbbbb2" }, 9)))}") }

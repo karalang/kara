@@ -1,0 +1,20 @@
+struct H { v: Vec[i64] }
+struct S { s: String }
+fn main() {
+let mut h = H { v: [1, 2] };
+let mut v2: Vec[i64] = Vec.new();
+v2.push(5); v2.push(6); v2.push(7);
+h.v = v2;
+println(h.v.len());
+h.v = [9, 8, 7, 6];
+println(h.v.len());
+let mut sh = S { s: (11).to_string() };
+sh.s = (222222).to_string();
+println(sh.s);
+let mut m: Map[i64, i64] = Map.new();
+m.insert(1, 10);
+let mut m2: Map[i64, i64] = Map.new();
+m2.insert(2, 20); m2.insert(3, 30);
+m = m2;
+println(m.len());
+}

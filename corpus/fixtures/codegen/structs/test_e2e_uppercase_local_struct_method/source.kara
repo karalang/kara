@@ -1,0 +1,8 @@
+struct Counter { n: i64 }
+impl Counter {
+fn doubled(self) -> i64 { self.n * 2 }
+}
+fn main() {
+let C: Counter = Counter { n: 21 };
+println(C.doubled());
+}

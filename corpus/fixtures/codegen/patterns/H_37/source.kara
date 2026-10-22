@@ -1,0 +1,3 @@
+fn main() { let o: Option[E] = Some(E.B);
+             match o { Some(e) => { sink(e) }
+                       None => { println("none") } } }

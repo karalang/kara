@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+let mut i: i64 = 0i64;
+while i < 64i64 { v.push(i); i = i + 1i64; }
+println(v.len().to_string());
+}

@@ -1,0 +1,24 @@
+fn main() {
+let deep: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.Some(99)));
+match deep {
+Option.Some(Option.Some(Option.Some(x))) => println(f"deep {x}"),
+Option.Some(Option.Some(Option.None)) => println("l3 none"),
+Option.Some(Option.None) => println("l2 none"),
+Option.None => println("l1 none"),
+}
+let mid: Option[Option[Option[i64]]] = Option.Some(Option.Some(Option.None));
+match mid {
+Option.Some(Option.Some(Option.Some(x))) => println(f"deep {x}"),
+Option.Some(Option.Some(Option.None)) => println("l3 none"),
+Option.Some(Option.None) => println("l2 none"),
+Option.None => println("l1 none"),
+}
+let s: Option[Option[String]] = Option.Some(Option.Some("moved"));
+match s {
+Option.Some(Option.Some(v)) => {
+let joined: String = v + "!";
+println(joined);
+},
+_ => println("other"),
+}
+}

@@ -1,0 +1,9 @@
+fn main() {
+let s: String = "hello".to_string();
+println(s.to_string().to_string());
+println("abc".to_string().len());
+let t: String = "  hi  ".to_string();
+println(t.trim().to_string().len());
+println(s.to_uppercase().to_string());
+println(s.clone().to_string());
+}

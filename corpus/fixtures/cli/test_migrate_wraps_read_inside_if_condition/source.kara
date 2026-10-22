@@ -1,0 +1,13 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn check(c: ref Counter) -> i64 {
+    if c.count > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn main() {}

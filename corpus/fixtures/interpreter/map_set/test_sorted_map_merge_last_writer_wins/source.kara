@@ -1,0 +1,11 @@
+fn main() {
+let a: SortedMap[i64, i64] = SortedMap.new();
+a.insert(1_i64, 100_i64);
+a.insert(2_i64, 200_i64);
+let b: SortedMap[i64, i64] = SortedMap.new();
+b.insert(2_i64, 999_i64);
+b.insert(3_i64, 300_i64);
+let merged = a.merge(b);
+println(f"{merged.get_or(2_i64, 0_i64)}");
+println(f"{merged.len()}");
+}

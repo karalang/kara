@@ -1,0 +1,24 @@
+fn tag_first(items: ref Vec[String]) -> String {
+match items.first() {
+Some(s) => { return "f:".to_string() + s; }
+None => { return "empty".to_string(); }
+}
+return "?".to_string();
+}
+fn main() {
+let v: Vec[String] = ["aa", "bb"];
+println(tag_first(v));
+println(tag_first(v));
+match v.first() {
+Some(s) => { println("p:".to_string() + s); }
+None => { println("empty"); }
+}
+match v.first() {
+Some(s) => {
+let t = "pre".to_string() + s;
+println(t + "!".to_string());
+}
+None => { println("x"); }
+}
+println("a".to_string() + "b".to_string());
+}

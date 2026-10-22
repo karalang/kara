@@ -1,0 +1,2 @@
+fn take(p: (String, i64)) -> String { p.0.clone() }
+fn main() { let x = take((f"n{41}", 1)); println(f"{x}") }

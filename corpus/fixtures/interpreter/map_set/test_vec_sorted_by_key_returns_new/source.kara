@@ -1,0 +1,7 @@
+fn main() {
+            let mut xs: Vec[i64] = Vec.new();
+            xs.push(3i64); xs.push(1i64); xs.push(2i64);
+            let ys = xs.sorted_by_key(|x| x);
+            for y in ys.iter() { println(y); }
+            for x in xs.iter() { println(x); }
+        }

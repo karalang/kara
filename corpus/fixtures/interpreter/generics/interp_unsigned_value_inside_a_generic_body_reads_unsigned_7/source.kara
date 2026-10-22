@@ -1,0 +1,2 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn main() { let s: i64 = -9; println(show(s)); }

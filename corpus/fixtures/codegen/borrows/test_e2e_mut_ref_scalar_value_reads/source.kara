@@ -1,0 +1,16 @@
+fn take(v: i64) -> i64 { v * 2 }
+fn probe(xs: Vec[i64], cur: mut ref i64) {
+let ci: i64 = cur;
+println(ci);
+println(xs[cur]);
+println(take(cur));
+let c2 = cur as i64;
+println(c2);
+cur = cur + 1;
+}
+fn main() {
+let xs: Vec[i64] = [10, 20, 30];
+let mut c: i64 = 1;
+probe(xs, mut c);
+println(c);
+}

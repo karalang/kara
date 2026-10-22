@@ -1,0 +1,2 @@
+fn main() { let a: u32 = 4000000000u32; let b: u32 = 1u32;
+println(f"{a.lt(b)} {a.gt(b)}"); }

@@ -1,0 +1,2 @@
+fn takeR(x: Option[Option[Rn]]) { match x { Some(t) => { println("ok") } None => { println("n") } } }
+fn main() { let e: Option[Option[Rn]] = None; takeR(e); println("done") }

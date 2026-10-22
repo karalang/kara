@@ -1,0 +1,1 @@
+fn main() { let o: Option[J] = Some(J.A(3)); println("mid"); }

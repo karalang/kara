@@ -1,0 +1,9 @@
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+let o: E = E.A(R { id: 8, tag: f"t8" });
+let mut out: R = R { id: 0, tag: f"t0" };
+match o { E.A(r) => { out = r; } E.B => { } }
+println("m");
+println(f"v{out.id}");
+println("end");
+}

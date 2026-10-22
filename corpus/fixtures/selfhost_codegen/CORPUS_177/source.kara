@@ -1,0 +1,84 @@
+shared enum Chain {
+    End,
+    Link(Chain),
+}
+shared enum V {
+    Num(i64),
+    Name(String),
+    Flag(bool),
+    Real(f64),
+    Nothing,
+}
+fn depth(c: ref Chain) -> i64 {
+    match c {
+        End => 0,
+        Link(inner) => 1 + depth(inner),
+    }
+}
+fn kind_of(v: ref V) -> String {
+    match v {
+        Num(n) => "num".to_string(),
+        Name(s) => "name".to_string(),
+        Flag(b) => "flag".to_string(),
+        Real(f) => "real".to_string(),
+        Nothing => "none".to_string(),
+    }
+}
+fn num_of(v: ref V) -> i64 {
+    match v {
+        Num(n) => n,
+        Name(s) => 0 - 1,
+        Flag(b) => 0 - 2,
+        Real(f) => 0 - 3,
+        Nothing => 0 - 4,
+    }
+}
+fn truth(v: ref V) -> bool {
+    match v {
+        Flag(b) => b,
+        Num(n) => false,
+        Name(s) => false,
+        Real(f) => false,
+        Nothing => false,
+    }
+}
+fn make(n: i64) -> V {
+    if n > 0 {
+        return V.Num(n);
+    }
+    V.Nothing
+}
+fn main() {
+    let c = Chain.Link(Chain.Link(Chain.Link(Chain.End)));
+    let d = depth(c);
+    println(d.to_string());
+    let a = V.Num(7);
+    println(kind_of(a));
+    let an = num_of(a);
+    println(an.to_string());
+    let b = V.Flag(true);
+    println(kind_of(b));
+    if truth(b) {
+        println("yes");
+    } else {
+        println("no");
+    }
+    let r = V.Real(2.5);
+    println(kind_of(r));
+    let e = V.Nothing;
+    println(kind_of(e));
+    let f = V.Name("hi".to_string());
+    match f {
+        Num(n) => println("num"),
+        Name(s) => println(s),
+        Flag(g) => println("flag"),
+        Real(q) => println("real"),
+        Nothing => println("none"),
+    }
+    let x = make(5);
+    println(kind_of(x));
+    let xn = num_of(x);
+    println(xn.to_string());
+    let y = make(0);
+    println(kind_of(y));
+}

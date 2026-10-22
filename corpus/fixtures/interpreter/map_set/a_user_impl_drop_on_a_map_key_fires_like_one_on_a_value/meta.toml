@@ -1,0 +1,17 @@
+source = "tests/interpreter/map_set.rs::a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "src:legacy-tests", "lib:map"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "eb5679da"
+model_rev = "583cfb0d"
+model_src = "eb5679da"

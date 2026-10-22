@@ -1,0 +1,8 @@
+let COUNT: i64 = 42i64;
+let DOUBLED: i64 = COUNT * 2i64;
+let TRIPLED: i64 = DOUBLED + COUNT;
+fn main() {
+println(COUNT);
+println(DOUBLED);
+println(TRIPLED);
+}

@@ -1,0 +1,53 @@
+enum Tok { Fn, Let, If, Else, Plus, Minus, Star, Ident(String), Eof }
+fn is_kw(t: ref Tok) -> bool {
+    match t {
+        Fn | Let | If | Else => {
+            return true;
+        }
+        _ => {
+            return false;
+        }
+    }
+    return false;
+}
+fn is_op(t: ref Tok) -> bool {
+    match t {
+        Plus | Minus | Star => {
+            return true;
+        }
+        Ident(name) => {
+            return false;
+        }
+        _ => {
+            return false;
+        }
+    }
+    return false;
+}
+fn cat(t: ref Tok) -> i64 {
+    match t {
+        Fn | Let | If | Else => {
+            return 1;
+        }
+        Plus | Minus | Star => {
+            return 2;
+        }
+        Ident(n) => {
+            return 3;
+        }
+        Eof => {
+            return 0;
+        }
+    }
+    return 0 - 1;
+}
+fn main() {
+    println(is_kw(Tok.Let).to_string());
+    println(is_kw(Tok.Plus).to_string());
+    println(is_op(Tok.Star).to_string());
+    println(is_op(Tok.Ident("x".to_string())).to_string());
+    println(cat(Tok.If).to_string());
+    println(cat(Tok.Minus).to_string());
+    println(cat(Tok.Ident("y".to_string())).to_string());
+    println(cat(Tok.Eof).to_string());
+}

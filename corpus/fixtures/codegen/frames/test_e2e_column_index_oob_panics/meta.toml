@@ -1,0 +1,16 @@
+source = "tests/codegen/frames.rs::test_e2e_column_index_oob_panics"
+dedup_of = []
+expect = "skip"
+exit = 101
+tags = ["deferred:dataframe", "literal-unmatched", "panic", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'Column index out of bounds'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "00c97b55"

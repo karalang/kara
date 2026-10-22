@@ -1,0 +1,3 @@
+fn main() { let s = mk();
+   let a = s[0..23]; let b = s[0..24];
+   println(f"n:{a.len()}/{b.len()}"); println("end") }

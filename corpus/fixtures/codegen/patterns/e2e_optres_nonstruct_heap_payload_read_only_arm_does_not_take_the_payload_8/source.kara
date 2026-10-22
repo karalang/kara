@@ -1,0 +1,5 @@
+fn main() {
+let a: Option[Option[i64]] = Some(Some(5));
+match a { Some(p) => { match p { Some(s) => println(s), None => println("in") } } None => {} }
+match a { Some(q) => { match q { Some(s) => println(s), None => println("in") } } None => {} }
+}

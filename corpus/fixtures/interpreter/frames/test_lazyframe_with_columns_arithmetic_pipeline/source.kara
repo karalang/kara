@@ -1,0 +1,41 @@
+import std.lazy.{col, lit};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 2i64, 3i64]));
+df.insert("b", Column.from_vec([10.5, 20.5, 30.5]));
+df.insert("name", Column.from_vec(["x", "y", "z"]));
+let plan = df.lazy().with_columns(vec![col("a").mul(2).alias_("a2"), col("b").add(col("a")).alias_("ab"), col("name").alias_("label")]);
+println(plan.explain());
+let out = plan.collect();
+println(out.width());
+for n in out.column_names() { println(n); }
+let a2: Column[i64] = out.column("a2");
+let ab: Column[f64] = out.column("ab");
+match a2[2] { Some(v) => println(v), None => println(-1i64) }
+match ab[0] { Some(v) => println(v), None => println(-1.0) }
+let rep = df.lazy().with_columns(vec![col("a").add(100).alias_("a")]).collect();
+for n in rep.column_names() { println(n); }
+let ra: Column[i64] = rep.column("a");
+match ra[0] { Some(v) => println(v), None => println(-1i64) }
+let nn: Vec[Option[i64]] = vec![Some(1i64), None];
+let mut nf: DataFrame = DataFrame.new();
+nf.insert("v", Column.from_iter_nullable(nn));
+let v10: Column[i64] = nf.lazy().with_columns(vec![col("v").mul(10).alias_("v10")]).collect().column("v10");
+match v10[0] { Some(v) => println(v), None => println("null") }
+match v10[1] { Some(v) => println(v), None => println("null") }
+let piped = df.lazy()
+.select(vec!["a", "b"])
+.with_columns(vec![col("a").mul(lit(2).add(1)).alias_("a3")])
+.filter(col("a3").gt(3));
+println(piped.explain());
+let out4 = piped.collect();
+println(out4.height());
+let a3: Column[i64] = out4.column("a3");
+match a3[0] { Some(v) => println(v), None => println(-1i64) }
+let bg: Column[bool] = df.lazy().with_columns(vec![col("a").ge(2).alias_("big")]).collect().column("big");
+match bg[0] { Some(v) => println(v), None => println("null") }
+match bg[1] { Some(v) => println(v), None => println("null") }
+let s = df.lazy().with_columns(vec![col("a").mul(-1).alias_("neg")]).sort(vec![col("neg")]).collect();
+let sa: Column[i64] = s.column("a");
+match sa[0] { Some(v) => println(v), None => println(-1i64) }
+}

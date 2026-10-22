@@ -1,0 +1,3 @@
+fn load() -> i64 with reads(FileSystem) { 1 }
+let CONFIG: i64 = load();
+fn main() { println(CONFIG); }

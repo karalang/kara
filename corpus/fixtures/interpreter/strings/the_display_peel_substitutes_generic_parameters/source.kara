@@ -1,0 +1,12 @@
+#[derive(Display)]
+struct Cell[T] { pub val: T }
+#[derive(Display)]
+enum MyOpt[T] { Has(T), Empty }
+fn main() {
+let c: Cell[u64] = Cell { val: 18446744073709551615u64 };
+println(c);
+let c2: Cell[u128] = Cell { val: 340282366920938463463374607431768211455u128 };
+println(c2);
+let e: MyOpt[u64] = MyOpt.Has(18446744073709551615u64);
+println(e);
+}

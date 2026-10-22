@@ -1,0 +1,16 @@
+fn main() {
+    let (tx, rx) = Channel.bounded(1);
+    let a = "alpha";
+    match tx.try_send(a) {
+        Ok(u) => println("sent alpha"),
+        Err(SendError.Full(v)) => println(f"full, kept {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    let b = "beta";
+    match tx.try_send(b) {
+        Ok(u) => println("sent beta"),
+        Err(SendError.Full(v)) => println(f"full, kept {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    println(f"drained {rx.recv_blocking()}");
+}

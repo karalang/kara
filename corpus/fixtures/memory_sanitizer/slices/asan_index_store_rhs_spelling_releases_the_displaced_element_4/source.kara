@@ -1,0 +1,8 @@
+struct S { s: String, k: i64, t: (i64, i64) }
+             fn mk(n: i64) -> S { return S { s: f"replaced-bbbbbbbbbbbb-{n}", k: n, t: (n, n) }; }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f"one-aaaaaaaaaaaa-{n}", k: 1, t: (1, 1) }];
+                 a[0] = mk(a[0].t.1);
+                 println(f"r:{a[0].k}:{a[0].s.len()}");
+             }

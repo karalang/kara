@@ -1,0 +1,1 @@
+fn main() { let x: i64 = -123i64; println(x); }

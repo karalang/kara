@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[i64] = Vec.new(); v.push(9); let mut p = 0; while p < v.len() and v[p] > 0 { p = p + 1; } println(p.to_string()) }

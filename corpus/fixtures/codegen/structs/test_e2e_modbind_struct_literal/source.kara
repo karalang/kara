@@ -1,0 +1,6 @@
+struct Config { max: i64, count: i64 }
+let DEFAULT_CFG: Config = Config { max: 64, count: 7 };
+fn main() {
+println(DEFAULT_CFG.max);
+println(DEFAULT_CFG.count);
+}

@@ -1,0 +1,10 @@
+fn dies(b: E) -> i64 {
+let mut out: R = R { id: 0, tag: f"t0" };
+match b { E.A(r) => { out = r; } E.B => { } }
+println("mid");
+let loc: R = R { id: 9, tag: f"t9" };
+let s: i64 = out.id + loc.id;
+println("pre-ret");
+return s;
+}
+fn main() { let c1: E = E.A(R { id: 8, tag: f"t8" }); let v1: i64 = dies(c1); println("post-call"); println(f"v{v1}"); }

@@ -1,0 +1,7 @@
+fn main() {
+let a = Atomic.new(0);
+a.store(7, MemoryOrdering.SeqCst);
+println(a.load(MemoryOrdering.SeqCst));
+let m = MemoryOrdering.Acquire;
+match m { Relaxed => println("Relaxed"), Acquire => println("Acquire"), Release => println("Release"), AcqRel => println("AcqRel"), SeqCst => println("SeqCst") }
+}

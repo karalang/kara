@@ -1,0 +1,9 @@
+fn next(c: mut ref i64) -> i64 { c = c + 1i64; return 0i64; }
+fn bump(x: mut ref i64) { x = x + 1i64; }
+fn main() {
+let mut c: i64 = 0i64;
+let mut v: Vec[i64] = Vec.new();
+v.push(7i64);
+bump(mut v[next(mut c)]);
+println(f"{v[0i64]}:{c}");
+}

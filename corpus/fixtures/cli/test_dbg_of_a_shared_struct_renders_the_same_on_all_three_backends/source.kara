@@ -1,0 +1,10 @@
+shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }
+shared struct Link { v: i64, mut next: Option[Link] }
+fn main() {
+    let n = Node { zeta: 7, alpha: "hi", counter: 3, mid: true };
+    dbg(n);
+    let tail = Link { v: 2, next: None };
+    let head = Link { v: 1, next: Some(tail) };
+    dbg(head);
+    println("done");
+}

@@ -1,0 +1,2 @@
+impl T1 { fn eat(ref self, r: R, k: bool) { if k { return; } println(f"kept {r.id}"); } }
+fn main() { let t = T1 { n: 1 }; t.eat(R { id: 31, tag: f"g" }, true); println("after"); }

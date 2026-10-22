@@ -1,0 +1,12 @@
+shared struct Parent { id: i64 }
+shared struct Child { id: i64, mut weak parent: Parent }
+fn make_pair() -> (Child, Child) {
+let p = Parent { id: 1 };
+(Child { id: 10, parent: p }, Child { id: 11, parent: p })
+}
+fn main() {
+let pair = make_pair();
+let (a, b) = pair;
+match a.parent { Some(_) => println("a:alive"), None => println("a:dangling") }
+match b.parent { Some(_) => println("b:alive"), None => println("b:dangling") }
+}

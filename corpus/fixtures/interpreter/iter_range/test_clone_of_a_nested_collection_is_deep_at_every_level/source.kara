@@ -1,0 +1,7 @@
+fn main() {
+let orig: Vec[Vec[i64]] = [[1_i64, 1_i64], [1_i64, 1_i64]];
+let mut copy = orig.clone();
+copy[0][0] = 99_i64;
+println(orig[0][0]);
+println(copy[0][0]);
+}

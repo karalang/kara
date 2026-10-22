@@ -1,0 +1,8 @@
+fn main() {
+let nfd = "e\u{0301}";
+let nfc = "\u{00e9}";
+println(nfd.len());
+println(nfd.normalize(NormalizationForm.Nfc).len());
+println(nfc.len());
+println(nfc.normalize(NormalizationForm.Nfd).len());
+}

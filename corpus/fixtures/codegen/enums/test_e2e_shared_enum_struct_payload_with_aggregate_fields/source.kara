@@ -1,0 +1,19 @@
+struct Sp { line: i64, column: i64, offset: i64, length: i64 }
+enum Bop { Add, Sub }
+struct IntLit { value: i64, span: Sp }
+struct BinE { op: Bop, left: Expr, right: Expr, span: Sp }
+shared enum Expr { Int(IntLit), Bin(BinE) }
+fn eval(e: Expr) -> i64 {
+match e {
+Int(n) => n.value,
+Bin(b) => b.span.length,
+}
+}
+fn main() {
+let lf = Expr.Int(IntLit { value: 1, span: Sp { line: 1, column: 1, offset: 0, length: 1 } });
+let rt = Expr.Int(IntLit { value: 2, span: Sp { line: 1, column: 1, offset: 2, length: 1 } });
+let b = Expr.Bin(BinE { op: Bop.Add, left: lf, right: rt, span: Sp { line: 1, column: 1, offset: 0, length: 3 } });
+println(eval(b).to_string());
+let a = Expr.Int(IntLit { value: 5, span: Sp { line: 1, column: 1, offset: 0, length: 1 } });
+println(eval(a).to_string());
+}

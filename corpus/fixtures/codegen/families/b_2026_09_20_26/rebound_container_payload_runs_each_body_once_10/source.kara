@@ -1,0 +1,1 @@
+fn main() { let e: EArr = EArr.A(mka()); let w: Array[R, 2] = match e { EArr.A(v) => v, EArr.B => mka() }; println(f"w{w[0].id}") ; println("end") }

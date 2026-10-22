@@ -1,0 +1,7 @@
+fn main() {
+let xs: Vec[i64] = Vec[10, 20, 30];
+println(xs.len());
+println(xs[0]);
+println(xs[1]);
+println(xs[2]);
+}

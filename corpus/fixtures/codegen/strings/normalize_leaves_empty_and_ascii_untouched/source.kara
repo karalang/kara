@@ -1,0 +1,5 @@
+fn main() {
+println("".normalize(NormalizationForm.Nfc).len());
+println("plain ascii".normalize(NormalizationForm.Nfd));
+println("plain ascii".normalize(NormalizationForm.Nfkd));
+}

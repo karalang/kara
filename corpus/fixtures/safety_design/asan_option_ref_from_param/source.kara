@@ -1,0 +1,12 @@
+fn wrap(s: ref String) -> Option[ref String] {
+Option.Some(s)
+}
+fn main() {
+let mut s: String = "";
+s.push_str("a longer payload string");
+match wrap(s) {
+Some(n) => println(n.len()),
+None => println(0),
+}
+println(s);
+}

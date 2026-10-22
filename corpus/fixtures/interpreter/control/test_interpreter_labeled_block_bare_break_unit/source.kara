@@ -1,0 +1,4 @@
+fn main() {
+'lbl: { break 'lbl; };
+println(7);
+}

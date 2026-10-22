@@ -1,0 +1,24 @@
+fn make(fail: bool) -> Result[i64, AllocError] {
+if fail { Err(AllocError.OutOfMemory { requested_bytes: 2048 }) } else { Ok(7) }
+}
+fn classify(e: AllocError) -> i64 {
+match e {
+AllocError.OutOfMemory { requested_bytes } => requested_bytes as i64,
+AllocError.CapacityOverflow => -1,
+}
+}
+fn main() {
+let a = AllocError.OutOfMemory { requested_bytes: 2048 };
+let a2 = AllocError.OutOfMemory { requested_bytes: 2048 };
+let a3 = AllocError.OutOfMemory { requested_bytes: 99 };
+let b = AllocError.CapacityOverflow;
+println(f"{a == a2}");
+println(f"{a == a3}");
+println(f"{a == b}");
+println(f"{b == b}");
+println(f"{classify(a)}");
+match make(true) {
+Ok(n) => println(f"ok:{n}"),
+Err(e) => println(f"err:{classify(e)}"),
+}
+}

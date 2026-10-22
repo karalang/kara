@@ -1,0 +1,10 @@
+fn mk(r: i64, c: i64) -> Tensor[i64, [?, ?]] {
+let t: Tensor[i64, [?, ?]] = Tensor.full([r, c], 1);
+t
+}
+fn main() {
+let a: Tensor[i64, [?, ?]] = mk(2, 3);
+let b: Tensor[i64, [?, ?]] = mk(2, 4);
+let r = a.broadcast_add(b);
+println(r[0, 0]);
+}

@@ -1,0 +1,4 @@
+fn persist() with writes(Storage) {
+}
+
+fn main() { persist(); }

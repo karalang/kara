@@ -1,0 +1,9 @@
+fn main() {
+let mut s: Set[String, FxBuildHasher] = Set.new();
+s.insert("alpha");
+s.insert("bravo");
+s.insert("alpha");
+println(s.len());
+if s.contains("bravo") { println(1); } else { println(0); }
+if s.contains("charlie") { println(1); } else { println(0); }
+}

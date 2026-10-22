@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[String] = ["aa", "bb"];
+match v.iter().next() { Some(s) => println(s), None => println("none") }
+}

@@ -1,0 +1,1 @@
+fn main() { let mut d = DataFrame.new(); d.insert("x", Column.from_vec([1, 2])); let b = d.to_arrow_ipc(); println(b.len()); }

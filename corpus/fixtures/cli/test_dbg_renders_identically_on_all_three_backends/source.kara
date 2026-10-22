@@ -1,0 +1,20 @@
+struct S { zeta: i64, alpha: String, mid: char }
+enum Shape { Dot, Line(i64, i64), Box { w: i64, h: i64 } }
+fn main() {
+    let a = dbg(42);
+    let b = dbg(-7);
+    let c = dbg(true);
+    let d = dbg("a\"b\nc");
+    let e = dbg('\n');
+    let f = dbg(S { zeta: 1, alpha: "in", mid: 'q' });
+    let g = dbg(Shape.Line(2, 3));
+    let h = dbg(Shape.Box { w: 4, h: 5 });
+    let i = dbg(Shape.Dot);
+    let j: Option[String] = Some("p");
+    let k = dbg(j);
+    let l: Result[i64, String] = Err("bad");
+    let m = dbg(l);
+    let n = dbg((1, "two", 'u'));
+    let o = dbg(41) + 1;
+    println(f"{a}{b}{c}{d}{e}{f.zeta}{n.2}{o}");
+}

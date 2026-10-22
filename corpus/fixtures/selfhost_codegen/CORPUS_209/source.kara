@@ -1,0 +1,12 @@
+enum Tok {
+    Word(String),
+    Stop,
+}
+fn main() {
+    let t = Tok.Word("hello".to_string());
+    let w = match t {
+        Word(s) => s,
+        Stop => "none".to_string(),
+    };
+    println(w);
+}

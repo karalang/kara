@@ -1,0 +1,6 @@
+fn g_add[T: Add](a: T, b: T) -> T { a + b }
+fn main() {
+let h: f16 = 1.5; let b: bf16 = 1.5;
+let s: f32 = 1.5; let d: f64 = 1.5;
+println(f"{g_add(h,h)} {g_add(b,b)} {g_add(s,s)} {g_add(d,d)}");
+}

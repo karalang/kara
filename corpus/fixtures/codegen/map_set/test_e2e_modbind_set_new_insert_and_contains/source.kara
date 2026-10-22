@@ -1,0 +1,9 @@
+let mut SEEN: Set[i64] = Set.new();
+fn mark() { SEEN.insert(7); }
+fn main() {
+mark();
+SEEN.insert(9);
+println(SEEN.contains(7));
+println(SEEN.contains(9));
+println(SEEN.contains(3));
+}

@@ -1,0 +1,2 @@
+struct F { on: bool, n: i64 }
+fn main() { let f = F { on: true, n: 8 }; if f.on { println(f.n.to_string()) } }

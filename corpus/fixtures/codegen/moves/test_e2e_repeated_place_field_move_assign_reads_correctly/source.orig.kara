@@ -1,0 +1,12 @@
+struct S { s: String }
+fn main() {
+let mut box_: Vec[S] = Vec.new();
+let mut nm = String.new();
+nm.push_str("region");
+box_.push(S { s: nm });
+let mut cur = String.new();
+cur = box_[0].s;
+println(cur);
+cur = box_[0].s;
+println(cur);
+}

@@ -1,0 +1,3 @@
+struct W { xs: Vec[Vec[N]] }
+impl W { fn set(mut ref self) { self.xs[0][0] = N { k: 2 }; } }
+fn main() { let n = 7; let mut w = W { xs: [[N { k: 1 }]] }; w.set(); println("end") }

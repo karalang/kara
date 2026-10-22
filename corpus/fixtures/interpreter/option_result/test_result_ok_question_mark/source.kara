@@ -1,0 +1,6 @@
+fn get_value() -> i64 {
+let r = Ok(42);
+let v = r?;
+v
+}
+fn main() { println(get_value()); }

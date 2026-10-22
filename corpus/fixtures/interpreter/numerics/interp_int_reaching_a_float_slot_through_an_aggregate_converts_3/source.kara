@@ -1,0 +1,3 @@
+fn main() { let m: i64 = 9007199254740993;
+let r: Result[f64, i64] = Ok(m);
+match r { Ok(x) => println(x), Err(_) => println(-1.0) } }

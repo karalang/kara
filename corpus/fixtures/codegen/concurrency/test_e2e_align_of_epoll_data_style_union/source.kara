@@ -1,0 +1,2 @@
+#[repr(C)] union EpollData { ptr: *mut u8, fd: i32, u32val: u32, u64val: u64 }
+fn main() { println(align_of[EpollData]()); }

@@ -1,0 +1,8 @@
+kw let
+tok x1
+tok =
+tok 42
+tok +
+tok foo
+tok *
+tok 7

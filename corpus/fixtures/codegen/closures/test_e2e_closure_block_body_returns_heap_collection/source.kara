@@ -1,0 +1,16 @@
+fn main() {
+let base: Vec[i64] = [10, 20, 30];
+let build = || {
+let mut out = Vec.new();
+let mut i = 0;
+while i < base.len() { out.push(base[i] * 2); i = i + 1; }
+out
+};
+let r = build();
+println((r[0] + r[1] + r[2]).to_string());
+let greet = || {
+let s = String.from("hi");
+s
+};
+println(greet());
+}

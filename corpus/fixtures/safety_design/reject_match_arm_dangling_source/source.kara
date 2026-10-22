@@ -1,0 +1,11 @@
+fn bad(a: ref String, which: i64) -> ref String {
+match which {
+0 => a,
+_ => "local",
+}
+}
+fn main() {
+let x = String.from("x");
+let r = bad(x, 0);
+println(r.len());
+}

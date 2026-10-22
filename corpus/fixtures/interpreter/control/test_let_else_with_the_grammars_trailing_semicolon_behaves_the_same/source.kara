@@ -1,0 +1,16 @@
+fn make(empty: bool) -> Option[i64] {
+if empty { return Option.None; }
+return Option.Some(7_i64);
+}
+fn check(empty: bool) {
+let Some(x) = make(empty) else {
+println(0_i64);
+return;
+};
+println(x);
+}
+fn main() {
+check(false);
+check(true);
+println(99_i64);
+}

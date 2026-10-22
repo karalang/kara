@@ -1,0 +1,16 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert("zulu", 1);
+m.insert("alpha", 2);
+m.insert("mike", 3);
+m.insert("bravo", 4);
+m.insert("yankee", 5);
+m.insert("charlie", 6);
+m.insert("xray", 7);
+m.insert("delta", 8);
+m.insert("whiskey", 9);
+m.insert("echo", 10);
+let mut out = "";
+for k in m.keys() { out = out + k + " "; }
+println(out);
+}

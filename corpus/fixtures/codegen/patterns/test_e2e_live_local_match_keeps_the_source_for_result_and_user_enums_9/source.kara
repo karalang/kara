@@ -1,0 +1,7 @@
+#[derive(Clone)]
+enum E { A(String), B }
+fn main() {
+let e: E = E.A(f"hi");
+match e { E.A(ref v) => { let k: String = v.clone(); println(k); } E.B => {} }
+match e { E.A(v) => { println(v); } E.B => {} }
+}

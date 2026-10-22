@@ -1,0 +1,10 @@
+fn ch(p: Option[char]) -> String { match p { Some('a') => "A", _ => "z" } }
+fn bo(p: Option[bool]) -> String { match p { Some(true) => "T", _ => "F" } }
+fn fl(p: Option[f64]) -> String { match p { Some(1.5) => "f", _ => "o" } }
+fn st(p: Option[String]) -> String { match p { Some("ok") => "OK", _ => "no" } }
+fn main() {
+println(ch(Some('a'))); println(ch(Some('b')));
+println(bo(Some(true))); println(bo(Some(false)));
+println(fl(Some(1.5f64))); println(fl(Some(2.5f64)));
+println(st(Some("ok"))); println(st(Some("nope")));
+}

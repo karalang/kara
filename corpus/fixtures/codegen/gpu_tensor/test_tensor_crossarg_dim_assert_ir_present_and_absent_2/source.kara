@@ -1,0 +1,10 @@
+fn pairfn[A, B, C, D](a: Tensor[f64, [A, B]], b: Tensor[f64, [C, D]]) -> f64 { 0.0 }
+fn mk(r: i64, c: i64) -> Tensor[f64, [?, ?]] {
+let t: Tensor[f64, [?, ?]] = Tensor.zeros([r, c]);
+t
+}
+fn main() {
+let a: Tensor[f64, [?, ?]] = mk(2, 4);
+let b: Tensor[f64, [?, ?]] = mk(4, 5);
+println(pairfn(a, b));
+}

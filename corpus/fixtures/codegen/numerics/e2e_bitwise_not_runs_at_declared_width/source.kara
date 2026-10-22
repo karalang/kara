@@ -1,0 +1,37 @@
+fn main() {
+    // (a) UNSUFFIXED narrow unsigned — the broken spelling
+    let a: u8 = 5;
+    println(~a);
+    let b: u16 = 5;
+    println(~b);
+    let c: u32 = 5;
+    println(~c);
+    // (b) the same through a bound result, not just inline
+    let d: u8 = 5;
+    let rd: u8 = ~d;
+    println(rd);
+    // (c) SUFFIXED — already correct, must stay correct
+    let e: u8 = 5u8;
+    println(~e);
+    let f: u8 = 5u8;
+    let rf: u8 = ~f;
+    println(rf);
+    // (d) narrow signed and u64 — correct before and after
+    let g: i8 = 5;
+    println(~g);
+    let h: i32 = 5;
+    println(~h);
+    let i: u64 = 5;
+    println(~i);
+    // (e) edges saturate the WIDTH, not the carrier
+    let z: u8 = 0;
+    println(~z);
+    let m: u8 = 255;
+    println(~m);
+    let lo: i8 = -128;
+    println(~lo);
+    // (f) …so the result is a real narrow value: an equality
+    // against the in-range answer holds
+    let n: u8 = 250;
+    println(~n == 5);
+}

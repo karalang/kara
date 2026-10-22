@@ -1,0 +1,1 @@
+fn main() { let m: SortedMap[String, i64] = SortedMap[]; print(m.len()); }

@@ -1,0 +1,16 @@
+fn noop[T](x: T) { if true { } }
+fn choose[T: Ord](x: T, y: T) { if x > y { } else { } }
+fn early[T: Ord](x: T, y: T) { if x > y { return; } }
+fn cmp_swap[T: Ord](xs: mut ref Vec[T], i: i64, j: i64) {
+    if xs[i] > xs[j] { xs.swap(i, j); }
+}
+fn bigger[T: Ord](x: T, y: T) -> i64 { if x > y { 1 } else { 0 } }
+fn to_u8[T](x: T) -> u8 { 255 }
+fn main() {
+    noop(7); choose(3, 1); early(3, 1);
+    let mut v: Vec[i64] = [5, 2, 9, 1];
+    cmp_swap(mut v, 0, 1);
+    println(f"{v[0]}");
+    println(f"{bigger(9, 4)}");
+    println(f"{to_u8(0)}");
+}

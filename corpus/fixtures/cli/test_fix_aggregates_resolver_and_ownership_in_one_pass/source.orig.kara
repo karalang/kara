@@ -1,0 +1,8 @@
+struct Owned { x: i64 }
+fn helper() -> i64 { 42 }
+fn main() {
+let _ = helper();
+let o = Owned { x: 1 };
+let f = mut ref || o.x + 1;
+let _ = f();
+}

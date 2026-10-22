@@ -1,0 +1,10 @@
+struct R { v: String }
+impl R { fn get(self) -> String { self.v } }
+enum E { A(String) }
+impl E { fn take(self) -> String { match self { E.A(s) => s } } }
+fn mk() -> R { R { v: "chained".to_string() } }
+fn main() {
+println(R { v: "structlit".to_string() }.get());
+println(E.A("enumlit".to_string()).take());
+println(mk().get());
+}

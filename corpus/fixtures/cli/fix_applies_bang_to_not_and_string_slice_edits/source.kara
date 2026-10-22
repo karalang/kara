@@ -1,0 +1,10 @@
+let ALPHA: String = "abc";
+let BETA = "xyz";
+fn main() {
+let f = true;
+if !f { println("a"); }
+let g = true;
+if ! g { println("b"); }
+println(ALPHA);
+println(BETA);
+}

@@ -1,0 +1,2 @@
+struct H { a: Array[R, 2] }
+fn main() { let e: H = H { a: mka() }; match e { H { a } => { let u = a; println("in") } } println("end") }

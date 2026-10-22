@@ -1,0 +1,11 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([20i64, 30i64, 40i64, 50i64]));
+df.insert("name", Column.from_vec(["a", "b", "c", "d"]));
+let d: DataFrame = df.describe();
+println(d.width());
+println(d.height());
+for n in d.column_names() { println(n); }
+let a: Column[f64] = d.column("age");
+for v in a.iter_valid() { println(v); }
+}

@@ -1,0 +1,17 @@
+source = "tests/cli.rs::bindings_explicit_component_emits_embedded_component"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function report"
+classified_with = "79705a229"
+extracted_src = "ca478145"
+model_rev = "583cfb0d"
+model_src = "ca478145"

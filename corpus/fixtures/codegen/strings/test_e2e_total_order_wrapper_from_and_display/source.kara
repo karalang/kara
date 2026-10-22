@@ -1,0 +1,24 @@
+fn main() {
+let a = F64.from(3.25);
+let b = F32.from(2.5);
+println(a);
+println(b);
+println(f"{a} {b}");
+println(F64.from(1.5).value);
+println(a.value + 1.0);
+let mut v: Vec[F64] = Vec.new();
+v.push(F64.from(3.0));
+v.push(F64.from(1.0));
+v.push(F64.from(2.0));
+v.sort();
+let lo = v[0];
+let hi = v[2];
+println(lo);
+println(hi);
+println(v);
+let mut m: Map[F64, i64] = Map.new();
+let _ = m.insert(F64.from(2.0), 20);
+match m.get(F64.from(2.0)) { Some(x) => println(x), None => println(0 - 1) }
+println(F64.from(2.0) == F64.from(2.0));
+println(F64.from(1.0) < F64.from(2.0));
+}

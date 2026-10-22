@@ -1,0 +1,10 @@
+fn main() {
+let opts: Vec[Option[i64]] = [Some(1), None, Some(3)];
+let e: Column[i64] = Column.from_iter_nullable(opts);
+println(e.len());
+println(e.null_count());
+println(e.is_null(1));
+match e[0] { Some(v) => println(v), None => println(-1) }
+match e[1] { Some(v) => println(v), None => println(-1) }
+match e[2] { Some(v) => println(v), None => println(-1) }
+}

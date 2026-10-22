@@ -1,0 +1,9 @@
+fn mk() -> Map[i64, Array[String, 2]] {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, [f"aaaaaaaa0", f"bbbbbbbb0"]);
+    return m;
+}
+fn main() {
+    let m = mk();
+    println("s:ok");
+}

@@ -1,0 +1,17 @@
+source = "tests/interpreter/map_set.rs::test_sorted_set_insert_and_contains"
+dedup_of = []
+expect = "error:E0510"
+exit = 1
+tags = ["lib:sortedset", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "a3628409"
+model_rev = "583cfb0d"
+model_src = "a3628409"

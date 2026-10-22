@@ -1,0 +1,11 @@
+fn mk(i: i64) -> Option[Array[String, 2]] {
+    return Option.Some([f"row-aaaaaaaaaaaaaaaa-{i}", f"col-bbbbbbbbbbbbbbbb-{i}"]);
+}
+fn main() {
+    let mut j: i64 = 0i64;
+    while j < 2i64 {
+        match mk(j) { Option.Some(a) => { println(f"e:{a[0].len()}") } Option.None => { println("n") } }
+        j = j + 1i64;
+    }
+    println("end");
+}

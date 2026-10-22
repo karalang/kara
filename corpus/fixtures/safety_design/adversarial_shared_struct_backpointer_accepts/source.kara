@@ -1,0 +1,9 @@
+shared struct Node {
+mut next: Option[Node],
+value: i64,
+}
+fn main() {
+let a = Node { next: Option.None, value: 1 };
+let b = Node { next: Option.Some(a), value: 2 };
+println(b.value);
+}

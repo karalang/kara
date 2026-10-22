@@ -1,0 +1,7 @@
+fn main() {
+let mut m0: Map[i64, String] = Map.new();
+m0.insert(1, f"mv");
+let a: Option[Map[i64, String]] = Some(m0);
+if let Some(p) = a { println(p.len()); }
+if let Some(q) = a { println(q.len()); } else { println("none"); }
+}

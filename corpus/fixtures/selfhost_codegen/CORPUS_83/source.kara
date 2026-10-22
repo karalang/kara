@@ -1,0 +1,2 @@
+enum Color { Red, Green, Blue }
+fn main() { let c = Color.Green; match c { Red => { println("r") } Green => { println("g") } Blue => { println("b") } } }

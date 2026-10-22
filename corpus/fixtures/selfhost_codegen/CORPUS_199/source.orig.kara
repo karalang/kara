@@ -1,0 +1,31 @@
+enum Tok {
+    Num(i64),
+    Named(i64, String),
+    Blank,
+}
+struct Node {
+    tok: Tok,
+    k: i64,
+}
+shared enum E {
+    V(Node),
+}
+fn show(e: ref E) -> String {
+    match e {
+        V(n) => {
+            match n.tok {
+                Num(v) => "num".to_string(),
+                Named(v, s) => s,
+                Blank => "blank".to_string(),
+            }
+        }
+    }
+}
+fn main() {
+    let a = E.V(Node { tok: Tok.Named(1, "hello".to_string()), k: 1 });
+    println(show(a));
+    let b = E.V(Node { tok: Tok.Num(9), k: 2 });
+    println(show(b));
+    let c = E.V(Node { tok: Tok.Blank, k: 3 });
+    println(show(c));
+}

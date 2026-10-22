@@ -1,0 +1,5 @@
+fn main() {
+    let mut b: Vec[i64] = vec![1, 2];
+    let g = take(mut b);
+    println(f"{b.len()} {g.len()}");
+}

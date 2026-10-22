@@ -1,0 +1,7 @@
+struct R25 { s: String }
+enum K5 { A(R25), B }
+impl Drop for K5 { fn drop(mut ref self) { println("dK5") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[K5]) { match x { Option.Some(K5.A(_)) => { println("a") } Option.Some(K5.B) => {} Option.None => {} } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { show(Option.Some(K5.A(R25 { s: f"z" }))); println("end") }

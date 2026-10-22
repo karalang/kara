@@ -1,0 +1,7 @@
+import mathx.double;
+import mathx.geo.area;
+
+fn main() {
+    println(double(21));
+    println(area(3, 4));
+}

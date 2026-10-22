@@ -1,0 +1,15 @@
+struct H { acc: i64 }
+impl H {
+fn twice(ref self, a: mut ref i64, b: mut ref i64) {
+a = a + 1;
+b = b + 2;
+}
+}
+fn main() {
+let h = H { acc: 0 };
+let mut a = 0;
+let mut b = 0;
+h.twice(mut a, mut b);
+println(a);
+println(b);
+}

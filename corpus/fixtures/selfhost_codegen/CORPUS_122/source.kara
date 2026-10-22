@@ -1,0 +1,2 @@
+fn shout(w: String, early: bool) -> String { let pad = "..".to_string(); if early { return w + "!"; } let out = pad + w; return out; }
+fn main() { println(shout("hey".to_string(), true)); println(shout("ho".to_string(), false)) }

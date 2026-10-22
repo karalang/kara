@@ -1,0 +1,13 @@
+a
+arm sees 33
+drop 33
+b
+arm sees 34
+drop 34
+c
+empty
+d
+consumed 35
+after move
+drop 35
+end

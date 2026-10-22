@@ -1,0 +1,17 @@
+fn main() {
+let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);
+println(t.rank());
+let s = t.shape();
+println(s[0]);
+println(s[1]);
+println(t[1, 2]);
+let mut u: Tensor[i64, [2, 2]] = Tensor.full([2, 2], 7);
+u[0, 1] = 42;
+println(u[0, 0]);
+println(u[0, 1]);
+let f = Tensor.from([[1.5, 2.5], [3.5, 4.5]]);
+println(f[1, 0]);
+println(f.rank());
+let o: Tensor[f64, [4]] = Tensor.ones([4]);
+println(o[3]);
+}

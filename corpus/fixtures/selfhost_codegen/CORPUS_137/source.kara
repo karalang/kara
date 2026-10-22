@@ -1,0 +1,2 @@
+fn ord(a: String, b: String) -> String { if a < b { return "lt".to_string(); } if a > b { return "gt".to_string(); } return "eq".to_string(); }
+fn main() { println(ord("ab".to_string(), "abc".to_string())); println(ord("b".to_string(), "abc".to_string())); println(ord("same".to_string(), "same".to_string())); println(("0" <= "9").to_string()); println(("z" < "a").to_string()) }

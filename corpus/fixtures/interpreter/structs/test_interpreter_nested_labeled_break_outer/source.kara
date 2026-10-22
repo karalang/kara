@@ -1,0 +1,11 @@
+fn main() {
+let mut count = 0;
+'outer: while true {
+'inner: while true {
+count = count + 1;
+break 'outer ();
+}
+count = count + 100;
+}
+println(count);
+}

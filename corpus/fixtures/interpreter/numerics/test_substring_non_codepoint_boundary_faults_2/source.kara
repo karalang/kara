@@ -1,0 +1,1 @@
+fn main() { let s = "日本語"; println(s.substring(1i64, 1i64).len()); }

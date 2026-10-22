@@ -1,0 +1,8 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10i64); c.push_null(); c.push(30i64);
+let d = c.dropna();
+println(d.len());
+println(d.null_count());
+for v in d.iter_valid() { println(v); }
+}

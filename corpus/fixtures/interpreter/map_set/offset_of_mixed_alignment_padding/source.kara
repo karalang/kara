@@ -1,0 +1,8 @@
+struct Mixed { a: bool, b: i32, c: i8, d: i64, e: i16 }
+fn main() {
+    println(offset_of[Mixed](a));
+    println(offset_of[Mixed](b));
+    println(offset_of[Mixed](c));
+    println(offset_of[Mixed](d));
+    println(offset_of[Mixed](e));
+}

@@ -1,0 +1,10 @@
+fn main() {
+let a: Option[i64] = Some(5);
+let b: Option[i64] = None;
+println(a.unwrap_or(0));
+println(b.unwrap_or(7));
+let r: Result[String, i64] = Ok("got");
+let e: Result[String, i64] = Err(404);
+println(r.unwrap_or("fb"));
+println(e.unwrap_or("fb"));
+}

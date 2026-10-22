@@ -1,0 +1,4 @@
+impl B5 { fn take(ref self, r: R, o: Option[i64]) -> R {
+let Some(v) = o else { return R { id: 98 }; };
+println(f"v {v}"); return r; } }
+fn main() { let b = B5 { n: 1 }; let x = b.take(R { id: 41 }, None); println(f"{x.id}") }

@@ -1,0 +1,17 @@
+source = "tests/codegen/closures.rs::escaping_capturing_closure_explicit_return_is_rejected"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = ["closure", "post-m1:escaping", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "c8478abd"
+model_rev = "583cfb0d"
+model_src = "c8478abd"

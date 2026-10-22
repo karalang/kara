@@ -1,0 +1,5 @@
+fn main() {
+    let s = "h\u{e9}llo";
+    let k = s.len() - 4;
+    println(s[0..k]);
+}

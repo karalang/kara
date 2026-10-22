@@ -1,0 +1,7 @@
+fn main() {
+         env.set("KARAC_ENV_SET_ROUND_TRIP_TEST", "hello-set");
+         match env.var("KARAC_ENV_SET_ROUND_TRIP_TEST") {
+             Ok(v) => println(v),
+             Err(_) => println("unset"),
+         }
+     }

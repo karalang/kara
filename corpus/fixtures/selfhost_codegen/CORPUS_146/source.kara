@@ -1,0 +1,45 @@
+struct Span { line: i64, col: i64 }
+enum Tok { Plus, Num(i64), Ident(String) }
+#[derive(Clone)]
+struct SpTok { tok: Tok, span: Span }
+fn mk(t: Tok, line: i64, col: i64) -> SpTok {
+    return SpTok { tok: t, span: Span { line: line, col: col } };
+}
+fn main() {
+    let mut v: Vec[SpTok] = Vec.new();
+    v.push(mk(Tok.Num(42), 2, 1));
+    v.push(mk(Tok.Ident("zed".to_string()), 3, 1));
+    v.push(mk(Tok.Plus, 3, 5));
+    let mut i = 0;
+    while i < v.len() {
+        let t = v[i].clone();
+        match t.tok {
+            Ident(name) => {
+                println("id ".to_string() + name);
+            }
+            Num(n) => {
+                println("n".to_string() + n.to_string());
+            }
+            Plus => {
+                println("+");
+            }
+        }
+        let ln = t.span.line;
+        let cl = t.span.col;
+        println(ln.to_string() + ":" + cl.to_string());
+        i = i + 1;
+    }
+    let a = mk(Tok.Ident("foo".to_string()), 9, 9);
+    let b = a;
+    match b.tok {
+        Ident(name) => {
+            println("held ".to_string() + name);
+        }
+        Num(n) => {
+            println("hn");
+        }
+        Plus => {
+            println("h+");
+        }
+    }
+}

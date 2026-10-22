@@ -1,0 +1,14 @@
+fn first[T](s: Slice[T]) -> T { s[0] }
+fn second[T](s: Slice[T]) -> T { s[1] }
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("heap-owned-" + "alpha");
+    println(f"[{first(a)}]");
+    let mut b: Vec[String] = Vec.new();
+    b.push("filler" + "-0");
+    b.push("heap-owned-" + "beta");
+    println(f"[{second(b)}]");
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(41i64 + 1i64);
+    println(f"[{first(ns)}]");
+}

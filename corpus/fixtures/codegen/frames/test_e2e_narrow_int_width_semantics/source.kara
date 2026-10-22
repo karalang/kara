@@ -1,0 +1,5 @@
+fn main() {
+let s = "ab";
+let b = s.bytes();
+println(b[0] + b[1]);
+}

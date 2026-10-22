@@ -1,0 +1,17 @@
+source = "tests/interpreter/io_runtime.rs::size_of_unsupported_type_arg_shape_is_runtime_error_not_panic"
+dedup_of = []
+expect = "error:E0202"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "eb28529f"
+model_rev = "583cfb0d"
+model_src = "eb28529f"

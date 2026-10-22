@@ -1,0 +1,57 @@
+struct One { msg: String }
+struct Two { code: i64, msg: String }
+fn s_of(tag: String, i: i64) -> String {
+let mut s: String = String.new();
+s.push_str(tag);
+s.push_str(f"-payload-{i}");
+return s;
+}
+fn digits(i: i64) -> String {
+let mut d: String = String.new();
+d.push_str(f"{i}");
+return d;
+}
+fn g1(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of("one", i) }); }
+fn g2(i: i64) -> Result[i64, Two] { return Result.Err(Two { code: i, msg: s_of("two", i) }); }
+fn main() {
+let n: i64 = 1i64;
+match g1(n) {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(e) => { println("a:unused"); }
+}
+match g1(n + 10i64) {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(e) => {
+if e.msg.contains(digits(n + 10i64)) { println(f"b:{e.msg.len()}"); }
+else { println("b:BAD"); }
+}
+}
+match g2(n + 100i64) {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(e) => {
+if e.msg.contains(digits(n + 100i64)) { println(f"c:{e.code}:{e.msg.len()}"); }
+else { println("c:BAD"); }
+}
+}
+match g1(n + 1000i64) {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(_) => { println("d:wild"); }
+}
+let r: Result[i64, One] = g1(n + 10000i64);
+match r {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(e) => {
+if e.msg.contains(digits(n + 10000i64)) { println(f"e:{e.msg.len()}"); }
+else { println("e:BAD"); }
+}
+}
+match g1(n + 100000i64) {
+Result.Ok(v) => { println(f"ok{v}"); }
+Result.Err(e) => {
+let m: String = e.msg;
+if m.contains(digits(n + 100000i64)) { println(f"f:{m.len()}"); }
+else { println("f:BAD"); }
+}
+}
+println("end");
+}

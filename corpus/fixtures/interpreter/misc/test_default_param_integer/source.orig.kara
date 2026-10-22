@@ -1,0 +1,2 @@
+fn add(x: i64, step: i64 = 1) -> i64 { x + step }
+fn main() { println(add(10)); println(add(10, 5)); }

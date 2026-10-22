@@ -1,0 +1,5 @@
+fn main() {
+    let mut a: Array[Vec[String], 2] = [["x", "y"], ["z"]];
+    a[0][1] = "MUT";
+    println(f"{a[0][1]}");
+}

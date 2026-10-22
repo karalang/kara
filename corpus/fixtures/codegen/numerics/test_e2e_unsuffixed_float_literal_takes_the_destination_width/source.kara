@@ -1,0 +1,32 @@
+struct Bx { f: f32 }
+fn takef(x: f32) -> f32 { x }
+fn retf() -> f32 { 0.1 }
+fn main() {
+let la: f32 = 0.1;
+println(la);
+let sl = Bx { f: 0.1 };
+println(sl.f);
+println(takef(0.1));
+println(retf());
+let mut v: Vec[f32] = Vec.new();
+v.push(0.1);
+println(v[0]);
+let ar: Array[f32, 1] = [0.1];
+println(ar[0]);
+let tu: (f32, f32) = (0.1, 0.2);
+println(tu.0);
+let po: Option[f32] = Option.Some(0.1);
+println(po);
+let pb: Option[f32] = Some(0.1);
+println(pb);
+let pk: Result[f32, i64] = Ok(0.1);
+println(pk);
+let pe: Result[i64, f32] = Err(0.1);
+println(pe);
+let vl: Vec[f32] = [0.1];
+println(vl[0]);
+let ap: Array[f32, 1] = Array[0.1];
+println(ap[0]);
+let h: f16 = 0.1;
+println(h);
+}

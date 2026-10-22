@@ -1,0 +1,1 @@
+fn main() { let c: G[String] = G.Y(f"s-{1}"); println(f"m:{c.show()}"); }

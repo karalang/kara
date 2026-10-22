@@ -1,0 +1,11 @@
+fn extract(j: Json) -> bool {
+match j {
+Json.Bool(b) => b,
+_ => false,
+}
+}
+fn main() {
+println(extract(Json.Bool(true)));
+println(extract(Json.Bool(false)));
+println(extract(Json.Number(42.0)));
+}

@@ -1,0 +1,13 @@
+fn wrap(a: Array[String, 2]) -> Option[Array[String, 2]] { return Some(a); }
+fn mk(n: i64) -> Option[Array[String, 2]] { return Some([f"row-aaaaaaaaaaaaaaaa-{n}", f"col-bbbbbbbbbbbbbbbb-{n}"]); }
+fn main() {
+    let mut j: i64 = 0;
+    while j < 3 {
+        let e: Array[String, 2] = [f"row-aaaaaaaaaaaaaaaa-{j}", f"col-bbbbbbbbbbbbbbbb-{j}"];
+        let o = wrap(e);
+        match o { Some(a) => { println(f"w:{a[0]}"); } None => { println("none"); } }
+        match mk(j) { Some(a) => { println(f"m:{a[0]}"); } None => { println("none"); } }
+        j = j + 1;
+    }
+    println("end");
+}

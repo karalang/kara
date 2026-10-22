@@ -1,0 +1,8 @@
+fn main() {
+let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+let mut inner: Vec[Vector[i64, 4]] = [];
+for i in 0..5 { inner.push(a); }
+let g = ref inner[4];
+println(g.reduce_sum());
+println(inner.len());
+}

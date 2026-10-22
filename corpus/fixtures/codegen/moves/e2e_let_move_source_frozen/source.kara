@@ -1,0 +1,17 @@
+fn main() {
+    let mut w: Vec[i64] = Vec.new();
+    w.push(1);
+    let mut v = w;
+    v.push(2);
+    println(w.len());
+    println(v.len());
+    let outer: Vec[String] = Vec.new();
+    let mut grab = |x: String| {
+        let mut v2 = outer;
+        v2.push(x);
+        v2.len()
+    };
+    let a = grab(String.from("a"));
+    let b = grab(String.from("b"));
+    println(a + b);
+}

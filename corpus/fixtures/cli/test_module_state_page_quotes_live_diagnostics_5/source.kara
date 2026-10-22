@@ -1,0 +1,3 @@
+let mut COUNTER: i64 = 0;
+fn bump() { COUNTER = COUNTER + 1; }
+fn main() { par { bump(); bump(); } }

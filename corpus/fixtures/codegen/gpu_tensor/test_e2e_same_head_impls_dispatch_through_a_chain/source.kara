@@ -1,0 +1,11 @@
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Vec[i64] { fn describe(ref self) -> String { return f"I64"; } }
+impl Zero for Vec[String] { fn describe(ref self) -> String { return f"STRING"; } }
+fn main() {
+let mut a: Vec[i64] = Vec.new();
+a.push(1);
+let mut b: Vec[String] = Vec.new();
+b.push("x");
+println(a.describe().len());
+println(b.describe().to_uppercase());
+}

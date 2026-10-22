@@ -1,0 +1,6 @@
+let mut FLAG: bool = false;
+fn flip() { FLAG = true; }
+fn main() {
+flip();
+println(FLAG);
+}

@@ -1,0 +1,14 @@
+fn outer(k: i64) -> Option[Option[i64]] {
+if k == 1 { return Some(Some(11)); }
+if k == 2 { return Some(None); }
+return None;
+}
+fn mid(k: i64) -> Option[i64] {
+if k == 5 { return Some(55); }
+return None;
+}
+fn main() {
+println(outer(1) ?? mid(5) ?? -1);
+println(outer(2) ?? mid(5) ?? -1);
+println(outer(3) ?? mid(9) ?? -1);
+}

@@ -1,0 +1,2 @@
+fn ri(x: ref i64) -> i64 { x + 1 }
+fn main() { let a: Array[i64, 2] = [5, 6]; println(f"{ri(a[1])}"); }

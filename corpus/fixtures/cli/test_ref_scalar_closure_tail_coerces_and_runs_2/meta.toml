@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_ref_scalar_closure_tail_coerces_and_runs"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closure", "ref-return", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "d3d2aa9e"
+model_rev = "583cfb0d"
+model_src = "d3d2aa9e"

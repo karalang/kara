@@ -1,0 +1,8 @@
+fn takesOpt[T: Display](x: Option[T]) -> i64 {
+    match x { Some(t) => { println(f"s:{t}"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let p: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let n = takesOpt(Some(p));
+    println(f"n:{n}");
+}

@@ -1,0 +1,2 @@
+fn g(b: G2[Cn]) -> i64 { let mut o = Cn { r: R { id: 9 }, n: 0 }; match b { G2.A(w, k) => { o = w; } G2.B => { } }; println("ret"); o.n }
+fn main() { println(f"r:{g(G2.A(Cn { r: R { id: 7 }, n: 1 }, 3))}") }

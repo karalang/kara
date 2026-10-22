@@ -1,0 +1,17 @@
+source = "tests/interpreter/numerics.rs::test_vector_replace"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:simd", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "20fafeea"
+model_rev = "583cfb0d"
+model_src = "20fafeea"

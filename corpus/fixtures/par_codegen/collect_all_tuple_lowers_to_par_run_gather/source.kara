@@ -1,0 +1,8 @@
+fn fa(n: i64) -> Result[i64, String] { Result.Ok(n) }
+fn fb(s: String) -> Result[String, i64] { Result.Err(1) }
+fn main() {
+let a: i64 = 1;
+let t: (Result[i64, String], Result[String, i64]) =
+collect_all(|| fa(a), || fb("x"));
+let _0: Result[i64, String] = t.0;
+}

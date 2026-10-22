@@ -1,0 +1,5 @@
+#[used]
+fn a() -> i64 { 1 }
+#[used]
+fn b() -> i64 { 2 }
+fn main() {}

@@ -1,0 +1,2 @@
+fn main() { let u: u64 = 18446744073709551615u64; let s: i64 = -3;
+let t: (f64, f64) = (u, s); println(f"{t.0} {t.1}"); }

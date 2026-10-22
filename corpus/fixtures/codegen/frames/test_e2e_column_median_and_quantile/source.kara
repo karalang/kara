@@ -1,0 +1,10 @@
+fn main() {
+let c: Column[f64] = Column.from_vec([4.0, 1.0, 3.0, 2.0]);
+println(c.median());
+println(c.quantile(0.0));
+println(c.quantile(0.25));
+println(c.quantile(0.75));
+println(c.quantile(1.0));
+let o: Column[i64] = Column.from_iter_nullable([Some(5), None, Some(1), Some(3)]);
+println(o.median());
+}

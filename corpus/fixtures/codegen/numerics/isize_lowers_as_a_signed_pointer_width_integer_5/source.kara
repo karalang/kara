@@ -1,0 +1,9 @@
+struct Holder { n: isize }
+                 fn main() {
+                     let o: Option[isize] = Some(-5isize);
+                     match o { Some(x) => println(x), None => println(0) }
+                     println(Holder { n: -9isize }.n);
+                     let mut v: Vec[isize] = [3isize, -1isize, 2isize];
+                     v.sort();
+                     println(f"{v}");
+                 }

@@ -1,0 +1,1 @@
+fn main() { let g: Vec[Vec[i64]] = Vec.filled(8, Vec.new()); println(g[0].len()); }

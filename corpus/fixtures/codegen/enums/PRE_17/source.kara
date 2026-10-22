@@ -1,0 +1,3 @@
+struct Wt { a: Rt, b: Rt }
+fn takeW(x: Option[Wt]) { match x { Some(t) => { println("ok") } None => { println("n") } } }
+fn main() { takeW(Some(Wt { a: Rt { id: 71, name: f"a" }, b: Rt { id: 72, name: f"b" } })); println("done") }

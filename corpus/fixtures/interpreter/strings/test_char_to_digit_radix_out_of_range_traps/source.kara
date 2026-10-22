@@ -1,0 +1,1 @@
+fn main() { match '5'.to_digit(40) { Some(d) => println(d), None => println(0u32) } }

@@ -1,0 +1,18 @@
+struct S { k: i64, nxt: Option[E] }
+shared enum E { V(S) }
+fn sum(e: E) -> i64 {
+    match e {
+        V(s) => {
+            let S { k, nxt } = s;
+            match nxt {
+                None => k,
+                Some(inner) => k + sum(inner),
+            }
+        }
+    }
+}
+fn main() {
+    let leaf = E.V(S { k: 1, nxt: None });
+    let node = E.V(S { k: 10, nxt: Some(leaf) });
+    println(sum(node).to_string());
+}

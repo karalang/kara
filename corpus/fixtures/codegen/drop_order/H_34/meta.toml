@@ -1,0 +1,17 @@
+source = "tests/codegen/drop_order.rs::H"
+dedup_of = ["tests/interpreter/drop_order.rs::H"]
+expect = "error:E0100"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "8ea9a490"
+model_rev = "583cfb0d"
+model_src = "8ea9a490"

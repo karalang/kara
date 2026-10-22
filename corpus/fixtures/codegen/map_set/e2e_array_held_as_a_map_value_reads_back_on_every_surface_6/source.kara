@@ -1,0 +1,10 @@
+fn main() {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"aaaaaaaa0");
+    let mut m: Map[i64, Vec[String]] = Map.new();
+    m.insert(1, inner);
+    match m.get(1) {
+        Some(v) => { println(f"s:{v[0]}"); }
+        None => { println("s:missing"); }
+    }
+}

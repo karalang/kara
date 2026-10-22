@@ -1,0 +1,2 @@
+fn make() -> String { "z" + "z" }
+fn main() { make(); println("done") }

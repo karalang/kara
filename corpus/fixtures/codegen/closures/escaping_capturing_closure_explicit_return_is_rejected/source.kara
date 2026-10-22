@@ -1,0 +1,5 @@
+fn make(k: i64, c: bool) -> Fn(i64) -> i64 {
+if c { return |x| x + k; }
+|x| x - k
+}
+fn main() { let f = make(10i64, true); println(f"{f(5i64)}"); }

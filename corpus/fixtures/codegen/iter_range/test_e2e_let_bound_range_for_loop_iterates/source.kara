@@ -1,0 +1,19 @@
+fn main() {
+let r1 = 0..5;
+let mut a = 0;
+for i in r1 { a = a + i; }
+let mut ac = 0;
+for i in 0..5 { ac = ac + i; }
+let r2 = 0..=4;
+let mut b = 0;
+for i in r2 { b = b + i; }
+let lo = 2;
+let hi = 6;
+let r3 = lo..hi;
+let mut c = 0;
+for i in r3 { c = c + i; }
+println(a);
+println(ac);
+println(b);
+println(c);
+}

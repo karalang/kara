@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+             fn main() {
+                 let mut a: Array[D, 2] = [D { id: 21, s: f"aaaaaaaaaaaaaaaaaaaaaaaaa-21" }, D { id: 22, s: f"bb-22" }];
+                 let t: D = D { id: 23, s: f"ccccccccccccccccccccccccccccc-23" };
+                 a[0] = t;
+                 println(f"two:{a[0].id}:{a[0].s.len()}");
+             }

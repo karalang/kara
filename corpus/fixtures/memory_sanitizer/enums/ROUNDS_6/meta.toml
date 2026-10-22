@@ -1,0 +1,18 @@
+source = "tests/memory_sanitizer/enums.rs::ROUNDS"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["literal-unmatched", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'let mut i: i64 = 0i64; while i < 8i64 {'"
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "8db33007"
+model_rev = "583cfb0d"
+model_src = "8db33007"

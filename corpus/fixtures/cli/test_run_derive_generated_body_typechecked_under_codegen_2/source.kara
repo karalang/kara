@@ -1,0 +1,7 @@
+comptime fn derive_two(comptime T: Type) -> Vec[Item] {
+let n = T.name();
+[ast.item("impl " + n + " { fn combine(ref self) -> i64 { let mut a = Vec.new(); a.push(self.x); a.push(self.x); let mut b = Vec.new(); b.push(self.y); let mut s = 0; for e in a.iter() { s = s + e; } for e in b.iter() { s = s + e; } s } }")]
+}
+#[derive(Two)]
+struct P { x: i64, y: i64 }
+fn main() { println(P { x: 10, y: 3 }.combine()); }

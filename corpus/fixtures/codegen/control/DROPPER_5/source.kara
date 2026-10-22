@@ -1,0 +1,2 @@
+impl T1 { fn gtake[X](ref self, r: R, x: X) -> R { return r; } }
+fn main() { let t = T1 { n: 1 }; let b = t.gtake(R { id: 32, tag: f"h" }, 5); println(f"{b.id}"); }

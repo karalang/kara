@@ -1,0 +1,1 @@
+fn main() { let _ = Vector[bool, 4](true, false, true, false); }

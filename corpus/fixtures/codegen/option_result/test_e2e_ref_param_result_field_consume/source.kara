@@ -1,0 +1,54 @@
+struct Holder { res: Result[String, i64], vres: Result[Vec[i64], i64], n: i64 }
+fn render(h: ref Holder) -> String {
+match h.res {
+Ok(s) => { return "ok:".to_string() + s; }
+Err(e) => { return "err:".to_string() + e.to_string(); }
+}
+return "?".to_string();
+}
+fn code(h: ref Holder) -> i64 {
+match h.res {
+Ok(_) => { return 1; }
+Err(e) => { return e; }
+}
+return -1;
+}
+fn total(h: ref Holder) -> i64 {
+match h.vres {
+Ok(v) => { return v.len() + v[0]; }
+Err(e) => { return e; }
+}
+return -1;
+}
+fn ifl(h: ref Holder) -> String {
+if let Ok(s) = h.res {
+return "if:".to_string() + s;
+}
+return "no".to_string();
+}
+fn lel(h: ref Holder) -> String {
+let Ok(s) = h.res else {
+return "no".to_string();
+}
+return "le:".to_string() + s;
+}
+fn main() {
+let a = Holder { res: Ok("rr".to_string()), vres: Ok([10, 20]), n: 1 };
+println(render(a));
+println(render(a));
+println(code(a));
+println(total(a));
+println(total(a));
+println(ifl(a));
+println(lel(a));
+let b = Holder { res: Err(7), vres: Err(9), n: 2 };
+println(render(b));
+println(code(b));
+println(total(b));
+println(ifl(b));
+println(lel(b));
+let dra = a.res;
+if let Ok(s) = dra { println("d:".to_string() + s); }
+let drv = a.vres;
+if let Ok(v) = drv { println(v[1]); }
+}

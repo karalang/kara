@@ -1,0 +1,27 @@
+fn main() {
+let mut acc: Vec[i64] = Vec.new();
+let mut push = |x: i64| { acc.push(x); };
+push(1);
+push(2);
+push(3);
+println(acc.len());
+let mut sum: i64 = 0;
+for x in acc.iter() { sum = sum + x; }
+println(sum);
+let mut buf: String = "";
+let mut append = |s: String| { buf.push_str(s); };
+append("hello");
+println(buf);
+let mut m: Map[String, i64] = Map.new();
+let mut record = |k: String, v: i64| { m.insert(k, v); };
+record("x", 10);
+println(m.len());
+// read-only capture stays by-value (no over-mark / no crash)
+let data: Vec[i64] = [1, 2, 3, 4];
+let count_big = |t: i64| {
+let mut c: i64 = 0;
+for x in data.iter() { if x > t { c = c + 1; } }
+c
+};
+println(count_big(2));
+}

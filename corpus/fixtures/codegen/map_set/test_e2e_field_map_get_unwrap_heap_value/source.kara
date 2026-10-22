@@ -1,0 +1,27 @@
+struct Holder { tag: i64, ms: Map[i64, String], mv: Map[i64, Vec[i64]] }
+impl Holder {
+fn probe(ref self) -> i64 {
+let a = self.ms.get(1).unwrap().len();
+let b = self.mv.get(1).unwrap()[0];
+return a + b;
+}
+}
+fn takes(s: String) -> i64 { s.len() }
+fn main() {
+let mut ms: Map[i64, String] = Map.new();
+ms.insert(1, "hello");
+ms.insert(2, "worldwide");
+let mut mv: Map[i64, Vec[i64]] = Map.new();
+mv.insert(1, [10, 20, 30]);
+let h = Holder { tag: 7, ms: ms, mv: mv };
+println(h.ms.get(1).unwrap());
+println(h.ms.get(2).unwrap().len());
+println(takes(h.ms.get(1).unwrap()));
+let v = h.ms.get(2).unwrap();
+println(v);
+println(h.mv.get(1).unwrap()[1]);
+let row = h.mv.get(1).unwrap();
+println(row[2]);
+println(h.probe());
+println(h.ms.get(1).unwrap());
+}

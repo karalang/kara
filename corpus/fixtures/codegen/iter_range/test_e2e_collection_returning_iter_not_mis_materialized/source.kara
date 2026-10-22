@@ -1,0 +1,9 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10);
+c.push(30);
+let all: Vec[Option[i64]] = c.iter();
+println(all.len());
+let b = "ab".bytes();
+println(b[0] + b[1]);
+}

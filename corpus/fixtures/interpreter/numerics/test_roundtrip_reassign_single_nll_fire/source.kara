@@ -1,0 +1,34 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+enum Loud { Hold(Res), Quiet }
+impl Drop for Loud {
+fn drop(mut ref self) {
+println("loud drop")
+}
+}
+fn mk_loud(n: i64) -> Loud {
+return Loud.Hold(Res { id: n, name: f"l{n}" });
+}
+fn pass(b: Loud) -> Loud {
+return b;
+}
+fn mk_res(n: i64) -> Res {
+return Res { id: n, name: f"r{n}" };
+}
+fn pass_res(b: Res) -> Res {
+return b;
+}
+fn main() {
+let mut e = mk_loud(7);
+println("a");
+e = pass(e);
+println("b");
+let mut s = mk_res(4);
+s = pass_res(s);
+println(s.name);
+println("end");
+}

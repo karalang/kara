@@ -1,0 +1,2 @@
+enum E { A(String), B }
+fn main() { let n = 7; let mut d: Vec[Vec[Vec[E]]] = [[[E.A(f"one-aaaaaaaaaaaa-{n}")]]]; d[0][0][0] = E.A(f"replaced-bbbbbbbbbbbb-{n}"); println(f"r:{d.len()}") }

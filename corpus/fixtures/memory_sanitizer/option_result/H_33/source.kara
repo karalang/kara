@@ -1,0 +1,3 @@
+fn f() -> i64 { let vv: Result[Option[i64], i64] = Ok(Some(seed()));
+   match vv { Ok(Some(x)) => x, _ => 0 } }
+fn main() { println(f()); }

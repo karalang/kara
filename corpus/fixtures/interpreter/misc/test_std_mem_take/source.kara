@@ -1,0 +1,5 @@
+fn main() {
+let mut n = 7i64;
+let prev = take(mut n);
+println(f"{prev} {n}");
+}

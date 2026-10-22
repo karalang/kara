@@ -1,0 +1,3 @@
+#[must_use]
+fn compute() -> i64 { return 7; }
+fn main() { compute(); println(f"done"); }

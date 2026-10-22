@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"body-{self.id}-{self.s}"); } }
+fn take(a: Array[D, 2]) -> i64 { return a[0].id; }
+fn main() {
+    let a: Array[D, 2] = [D { id: 7, s: f"left-aaaaaaaaaaaaaaaa" }, D { id: 107, s: f"right-bbbbbbbbbbbbbbbb" }];
+    println(f"got={take(a)}");
+    println("post");
+}

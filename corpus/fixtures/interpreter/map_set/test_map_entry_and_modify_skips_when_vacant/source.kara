@@ -1,0 +1,5 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.entry("k").and_modify(|v| { v += 1; });
+println(m.is_empty());
+}

@@ -1,0 +1,2 @@
+struct Wb { o: Result[Result[Re, i64], i64] }
+fn main() { let w = Wb { o: Result[Result[Re, i64], i64].Ok(Result[Re, i64].Ok(Re { id: 71, name: f"a" })) }; println("ok"); println("done") }

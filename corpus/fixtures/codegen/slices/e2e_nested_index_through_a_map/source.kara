@@ -1,0 +1,5 @@
+fn main() {
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.insert(1i64, [7i64, 8i64]);
+    println(f"{m[1i64][0]}");
+}

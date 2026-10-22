@@ -1,0 +1,28 @@
+struct S { mut b: u8, mut tail: i64 }
+
+shared struct Sh { mut b: u8, mut tail: i64 }
+
+impl S {
+fn get_b(ref self) -> u8 {
+        return self.b;
+    }
+}
+
+fn poke(s: mut ref S) {
+    s.b = 201;
+}
+
+fn main() {
+let mut s = S { b: 1, tail: 7 };
+s.b = 200;
+println(s.b);
+println(s.tail);
+println(s.get_b());
+poke(mut s);
+println(s.b);
+let sh = Sh { b: 200, tail: 9 };
+println(sh.b);
+sh.b = 199;
+println(sh.b);
+println(sh.tail);
+}

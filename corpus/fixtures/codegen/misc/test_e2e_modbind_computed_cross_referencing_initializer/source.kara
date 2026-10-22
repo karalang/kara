@@ -1,0 +1,10 @@
+let COUNT: i64 = 42;
+let DOUBLED: i64 = COUNT * 2;
+let TRIPLED: i64 = DOUBLED + COUNT;
+let SUM: i64 = 2 + 3 * 4;
+fn main() {
+println(COUNT);
+println(DOUBLED);
+println(TRIPLED);
+println(SUM);
+}

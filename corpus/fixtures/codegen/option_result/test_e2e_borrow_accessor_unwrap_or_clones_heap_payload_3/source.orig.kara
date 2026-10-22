@@ -1,0 +1,8 @@
+fn main() {
+let mut m: Map[String, Vec[String]] = Map.new();
+let mut v: Vec[String] = Vec.new();
+v.push(f"alpha");
+m.insert(f"k", v);
+let got = m.get(f"k").unwrap_or(Vec.new());
+println(got[0]);
+}

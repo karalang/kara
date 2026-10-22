@@ -1,0 +1,13 @@
+struct Wrap { items: Vec[i64] }
+struct Holder { w: Option[Wrap] }
+fn count(h: ref Holder) -> i64 {
+let mut c = 0;
+match h.w { Some(g) => { for x in g.items { c = c + 1; } } None => {} }
+c
+}
+fn main() {
+let mut items: Vec[i64] = Vec.new();
+items.push(1); items.push(2); items.push(3);
+let h = Holder { w: Some(Wrap { items: items }) };
+println(count(h));
+}

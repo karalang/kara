@@ -1,0 +1,2 @@
+fn find(v: ref Vec[i64], t: i64) -> i64 { let tag = "probe".to_string(); let mut i = 0; while i < v.len() { if v[i] == t { return i; } i = i + 1; } return 0 - 1; }
+fn main() { let mut v: Vec[i64] = Vec.new(); v.push(4); v.push(9); v.push(7); println(find(v, 9).to_string()); println(find(v, 5).to_string()) }

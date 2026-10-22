@@ -1,0 +1,4 @@
+#[target_feature(enable: "avx2,bmi2")]
+unsafe fn hot(a: i64, b: i64) -> i64 { a + b }
+fn cold_fn(a: i64) -> i64 { a }
+fn main() { let _ = unsafe { hot(1, 2) }; let _ = cold_fn(3); }

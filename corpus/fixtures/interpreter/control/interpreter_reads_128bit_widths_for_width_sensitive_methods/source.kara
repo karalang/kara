@@ -1,0 +1,9 @@
+fn main() {
+let a: i64 = 9223372036854775807i64;
+println(a.wrapping_add(1i64));
+let b: i64 = 0i64 - 1i64;
+println(b.count_ones());
+let c: i64 = 1i64;
+println(c.rotate_left(1u32));
+println(c.leading_zeros());
+}

@@ -1,0 +1,38 @@
+struct H3 { res: Result[String, i64], n: i64 }
+struct P2 { r: Result[String, String], n: i64 }
+fn take_n(h: H3) -> i64 { return h.n; }
+fn take_s(h: H3) -> String {
+match h.res {
+Ok(s) => { return s.clone(); }
+Err(e) => { return e.to_string(); }
+}
+return "?".to_string();
+}
+fn mk(v: String) -> H3 { return H3 { res: Ok(v.clone()), n: 9 }; }
+fn main() {
+let a1 = H3 { res: Ok("aa".to_string()), n: 1 };
+println(take_n(a1).to_string());
+let a2 = H3 { res: Ok("aa".to_string()), n: 1 };
+println(take_s(a2));
+let a3 = H3 { res: Ok("aa".to_string()), n: 1 };
+println(take_s(a3));
+let b = mk("bb".to_string());
+println(b.n.to_string());
+let c = H3 { res: Ok("cc".to_string()), n: 3 };
+let c2 = c;
+match c2.res {
+Ok(s) => { println("c:".to_string() + s); }
+Err(e) => { println(e.to_string()); }
+}
+let mut vs: Vec[H3] = vec![];
+vs.push(H3 { res: Ok("vv".to_string()), n: 4 });
+println(vs[0].n.to_string());
+let d = H3 { res: Ok("dd".to_string()), n: 5 };
+let H3 { res: r, n: k } = d;
+println(k.to_string());
+if let Ok(s) = r { println("r:".to_string() + s); }
+let e = H3 { res: Err(7), n: 6 };
+println(take_s(e));
+let g = P2 { r: Err("bad".to_string()), n: 8 };
+println(g.n.to_string());
+}

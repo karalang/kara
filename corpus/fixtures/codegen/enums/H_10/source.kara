@@ -1,0 +1,1 @@
+fn main() { let g = (E.B, 6); let (gv, gn) = g; println(f"{gn}") }

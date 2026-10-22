@@ -1,0 +1,1 @@
+fn main() { let W { r, n } = make(); println(f"{r.id + n}") }

@@ -1,0 +1,6 @@
+impl T { fn take(ref self, b: E) -> i64 {
+let mut out: R = R { id: 0, tag: f"t0" };
+match b { E.A(r) => { out = r; } E.B => { } }
+println("m"); return out.id; } }
+fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f"t8" });
+let v: i64 = t.take(c); println(f"v{v}") }

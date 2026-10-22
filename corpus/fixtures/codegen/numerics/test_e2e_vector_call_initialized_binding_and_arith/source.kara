@@ -1,0 +1,11 @@
+fn zero8() -> Vector[f32, 8] {
+Vector[f32, 8](0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32)
+}
+fn main() {
+let z: Vector[f32, 8] = zero8();
+println(z.reduce_sum().to_string());
+let mut acc: Vector[f32, 8] = zero8();
+let x = Vector[f32, 8](1.0f32, 2.0f32, 1.0f32, 2.0f32, 1.0f32, 2.0f32, 1.0f32, 2.0f32);
+acc = acc + x * x;
+println(acc.reduce_sum().to_string());
+}

@@ -1,0 +1,20 @@
+fn main() {
+let src: Vec[i64] = Vec.filled(4, 5);
+let mut a: Vec[i64] = Vec.with_capacity(2);
+a.push(1);
+let mut b: Vec[i64] = Vec.with_capacity(2);
+b.push(1);
+match a.try_extend(src.clone()) {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+match b.try_extend_from_slice(src) {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+println(a.len());
+println(b.len());
+println(a[0]);
+println(a[4]);
+println(b[4]);
+}

@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[String, String] = Err(f"boom");
+match r.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }
+}

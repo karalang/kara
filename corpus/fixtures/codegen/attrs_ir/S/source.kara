@@ -1,0 +1,2 @@
+fn plainV(x: Option[Vec[S]]) { println("in"); }
+fn main() { plainV(Some([S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }])); }

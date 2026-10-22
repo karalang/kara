@@ -1,0 +1,4 @@
+struct Sm { a: Map[String, i64] }
+fn mk() -> Sm { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); return Sm { a: m }; }
+fn take(s: Sm) { println(f"{s.a.len()}"); }
+fn main() { take(mk()); }

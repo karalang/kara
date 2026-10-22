@@ -1,0 +1,4 @@
+fn main() {
+let t: Tensor[f64, [1, ?]] = Tensor.zeros([1, 4]);
+let bad = t.squeeze(1);
+}

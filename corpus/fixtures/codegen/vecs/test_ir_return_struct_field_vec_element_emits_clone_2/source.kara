@@ -1,0 +1,3 @@
+struct S { ns: Vec[i64] }
+impl S { fn get(ref self, i: i64) -> i64 { return self.ns[i]; } }
+fn main() { let mut s = S { ns: Vec.new() }; s.ns.push(7); println(s.get(0)); }

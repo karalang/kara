@@ -1,0 +1,6 @@
+fn d(a: ref Tensor[f32, [64]], b: ref Tensor[f32, [64]]) -> f32 { let p = a.zip_with(b, |x, y| x * y); p.sum() }
+fn main() {
+let a: Tensor[f32, [64]] = Tensor.ones([64]);
+let b: Tensor[f32, [64]] = Tensor.ones([64]);
+println(d(a, b));
+}

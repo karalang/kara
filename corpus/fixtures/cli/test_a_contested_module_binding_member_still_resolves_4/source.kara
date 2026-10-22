@@ -1,0 +1,8 @@
+import conn;
+import pool;
+fn main() {
+    let a: conn.Node = conn.Node { v: 1 };
+    let b: pool.Node = pool.Node { v: 2 };
+    println(a.v);
+    println(b.v);
+}

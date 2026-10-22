@@ -1,0 +1,1 @@
+fn main() { let b = Bx { n: 1 }; let s: Result[String, i64] = Result.Ok(f"c{b.n}"); match b.take_res(s) { Result.Ok(v) => { println(f"got {v}"); } Result.Err(e) => { println(f"err {e}"); } } }

@@ -1,0 +1,2 @@
+fn mk() -> E { E.A(R { id: 41 }) }
+fn main() { mk(); println("end") }

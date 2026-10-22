@@ -1,0 +1,6 @@
+struct Rec { id: i64, name: String }
+fn main() {
+let c: OnceLock[Rec] = OnceLock.new();
+match c.set(Rec { id: 7i64, name: "hello".to_string() }) { Ok(_) => { println("set ok"); }, Err(_) => { println("set err"); }, }
+match c.get() { Some(r) => { println(f"{r.id}:{r.name}"); }, None => { println("none"); }, }
+}

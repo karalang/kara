@@ -1,0 +1,31 @@
+struct Scanner { src: String, pos: i64 }
+impl Scanner {
+    fn new(src: String) -> Scanner {
+        return Scanner { src: src, pos: 0 };
+    }
+    fn done(ref self) -> bool {
+        return self.pos >= self.src.len();
+    }
+    fn advance(mut ref self, by: i64) {
+        self.pos = self.pos + by;
+    }
+    fn take(mut ref self, n: i64) -> String {
+        let w = self.src.substring(self.pos, self.pos + n);
+        self.pos = self.pos + n;
+        return w;
+    }
+    fn rest(ref self) -> String {
+        return self.src.substring(self.pos, self.src.len());
+    }
+}
+fn main() {
+    let mut s = Scanner.new("let x = 7".to_string());
+    println(s.take(3));
+    s.advance(1);
+    println(s.take(1));
+    s.advance(1);
+    println(s.rest());
+    println(s.done().to_string());
+    s.advance(3);
+    println(s.done().to_string());
+}

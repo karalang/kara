@@ -1,0 +1,3 @@
+struct Hh { r: R }
+impl T2 { fn wrap(ref self, r: R) -> Hh { Hh { r: r } } }
+fn main() { let t = T2 { n: 1 }; let a = R { id: 21, tag: f"h" }; let h = t.wrap(a); println(f"{h.r.id}"); }

@@ -1,0 +1,1 @@
+fn main() { let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64, 1u64 << 62]); let s = c.sorted(); println(f"{s[0]},{s[1]},{s[2]}"); let a = c.argsort(); println(f"{a[0]},{a[1]},{a[2]}"); println(f"{c.argmin()}"); println(f"{c.argmax()}"); }

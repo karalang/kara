@@ -1,0 +1,1 @@
+fn main() { let v = { let d: Vec[Vec[D]] = [[D { id: 7 }]]; let e: ref Vec[D] = ref d[0]; mid(7); e[0].id }; println(f"v:{v}"); }

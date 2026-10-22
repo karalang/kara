@@ -1,0 +1,6 @@
+fn boom() -> Result[i64, String] { todo("kaboom") }
+fn main() {
+let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| Result.Ok(1), || boom(), || Result.Ok(3)];
+let results: Vec[Result[i64, String]] = collect_all_vec(fs);
+println(f"after len={results.len()}");
+}

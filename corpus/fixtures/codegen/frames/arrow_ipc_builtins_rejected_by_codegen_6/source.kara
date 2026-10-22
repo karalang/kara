@@ -1,0 +1,1 @@
+fn main() { let bytes: Vec[u8] = Vec.new(); let t: Tensor[i64, [2, 2]] = Tensor.from_arrow_ipc(bytes); println(t.rank()); }

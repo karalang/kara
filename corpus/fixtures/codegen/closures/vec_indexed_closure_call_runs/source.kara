@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+v.push(|x| x + 1i64);
+v.push(|x| x * 10i64);
+println(f"{v[1](4i64)}");
+}

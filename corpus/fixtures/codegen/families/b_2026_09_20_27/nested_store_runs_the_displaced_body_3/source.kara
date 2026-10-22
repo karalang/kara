@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[Array[D, 1]]] = [[[D { id: 5 }]]]; d[0][0] = [D { id: 10 }]; println("end") }

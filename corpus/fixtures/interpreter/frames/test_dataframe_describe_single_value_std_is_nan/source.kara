@@ -1,0 +1,7 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("x", Column.from_vec([7.0]));
+let d: DataFrame = df.describe();
+let c: Column[f64] = d.column("x");
+match c[2] { Some(x) => println(x), None => println(0.0) }
+}

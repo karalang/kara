@@ -1,0 +1,1 @@
+fn main() { let s = "one"; let s = "two"; println(s) }

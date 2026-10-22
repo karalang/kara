@@ -1,0 +1,6 @@
+import db.connection.Pool as P;
+
+         fn main() {
+    let p = P { size: 2 };
+    println(f"{p.size}");
+}

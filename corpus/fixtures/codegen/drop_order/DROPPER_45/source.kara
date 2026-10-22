@@ -1,0 +1,2 @@
+fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }
+fn main() { take(R { id: 41 }, false); println("end"); }

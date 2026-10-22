@@ -1,0 +1,22 @@
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, ProtoBuf.wire_varint()));
+    buf.extend_from_slice(ProtoBuf.encode_varint(7u64));
+    buf.extend_from_slice(ProtoBuf.encode_tag(3, ProtoBuf.wire_varint()));
+    buf.extend_from_slice(ProtoBuf.encode_varint(999u64));
+    buf.extend_from_slice(ProtoBuf.encode_tag(2, ProtoBuf.wire_varint()));
+    buf.extend_from_slice(ProtoBuf.encode_varint(8u64));
+
+    let mut r = ProtoReader.new(buf);
+    while r.at_end() == false {
+        let (field, wt) = r.read_tag();
+        if field == 1 {
+            println(r.read_varint());
+        } else if field == 2 {
+            println(r.read_varint());
+        } else {
+            r.skip_field(wt);
+        }
+    }
+}

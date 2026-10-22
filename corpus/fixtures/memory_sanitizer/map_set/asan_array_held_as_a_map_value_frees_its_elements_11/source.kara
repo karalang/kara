@@ -1,0 +1,7 @@
+struct W { a: String, b: String }
+fn main() {
+    let w: W = W { a: f"aaaaaaaa0", b: f"bbbbbbbb0" };
+    let mut m: Map[i64, W] = Map.new();
+    m.insert(1, w);
+    println("s:ok");
+}

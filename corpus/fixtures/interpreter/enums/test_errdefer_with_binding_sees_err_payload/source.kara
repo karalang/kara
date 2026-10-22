@@ -1,0 +1,5 @@
+fn body() -> Result[i64, String] {
+errdefer(e) { print(e); }
+return Err("oops");
+}
+fn main() { let _ = body(); }

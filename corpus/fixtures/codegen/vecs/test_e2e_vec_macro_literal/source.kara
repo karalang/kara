@@ -1,0 +1,7 @@
+fn main() {
+let v = vec![10, 20, 30];
+let mut total = 0;
+for x in v { total = total + x; }
+println(total);
+println(v.len());
+}

@@ -1,0 +1,11 @@
+#[derive(Arithmetic)]
+distinct type Score = i64;
+fn main() {
+let a: Score = 10;
+let b: Score = 3;
+println(a + b);
+println(a - b);
+println(a * b);
+println(a / b);
+println(a % b);
+}

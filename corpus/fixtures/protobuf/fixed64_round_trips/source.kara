@@ -1,0 +1,8 @@
+
+fn main() {
+    let v = 1234567890123u64;
+    let enc = ProtoBuf.encode_fixed64(v);
+    println(enc.len());
+    let mut r = ProtoReader.new(enc);
+    println(r.read_fixed64());
+}

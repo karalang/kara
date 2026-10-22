@@ -1,0 +1,5 @@
+fn main() {
+let s: Column[String] = Column.from_vec(["a", "b"]);
+let bad: Column[i64] = Column.from_arrow_ipc(s.to_arrow_ipc());
+println(bad.len());
+}

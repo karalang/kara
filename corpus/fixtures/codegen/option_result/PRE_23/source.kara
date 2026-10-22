@@ -1,0 +1,1 @@
+fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f"a" }); let v: Array[Option[Rt], 1] = [o]; println("ok"); println("done") }

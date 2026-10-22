@@ -1,0 +1,2 @@
+let SLOT: LazyLock[i64] = LazyLock.new(|| 1);
+fn main() { println(SLOT.get()); }

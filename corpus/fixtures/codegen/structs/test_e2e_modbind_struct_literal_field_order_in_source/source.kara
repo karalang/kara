@@ -1,0 +1,3 @@
+struct Pair { a: i64, b: i64 }
+let PR: Pair = Pair { b: 22, a: 11 };
+fn main() { println(PR.a); println(PR.b); }

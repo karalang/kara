@@ -1,0 +1,12 @@
+fn parse(ok: bool) -> Result[i64, i64] {
+    if ok { Result.Ok(42) } else { Result.Err(99) }
+}
+fn emsg(ok: bool) -> Result[i64, String] {
+    if ok { Result.Ok(1) } else { Result.Err("the error message here".to_string()) }
+}
+fn main() {
+    println(parse(true).unwrap());
+    println(parse(false).unwrap_err());
+    println(emsg(false).unwrap_err());
+    println(emsg(false).expect_err("wanted an error"));
+}

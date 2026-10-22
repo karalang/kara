@@ -1,0 +1,23 @@
+fn main() {
+let mut people: DataFrame = DataFrame.new();
+people.insert("id", Column.from_vec([1i64, 2i64, 3i64, 4i64]));
+people.insert("name", Column.from_vec(["ada", "bob", "cyd", "dee"]));
+people.insert("city", Column.from_vec(["rome", "oslo", "rome", "lima"]));
+let mut cities: DataFrame = DataFrame.new();
+cities.insert("city", Column.from_vec(["rome", "oslo", "kiev"]));
+cities.insert("pop", Column.from_vec([60i64, 80i64, 30i64]));
+cities.insert("name", Column.from_vec(["Roma", "Oslo", "Kyiv"]));
+let plan = people.lazy().join(cities.lazy(), vec!["city"]);
+println(plan.explain());
+let out = plan.collect();
+println(out.width()); println(out.height());
+for n in out.column_names() { println(n); }
+let names: Column[String] = out.column("name");
+let rn: Column[String] = out.column("name_right");
+let pops: Column[i64] = out.column("pop");
+for i in 0..out.height() {
+match names[i] { Some(v) => println(v), None => println("null") }
+match rn[i] { Some(v) => println(v), None => println("null") }
+match pops[i] { Some(v) => println(v), None => println(-1i64) }
+}
+}

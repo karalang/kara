@@ -1,0 +1,8 @@
+fn main() {
+let mut v: Vec[Vec[i64]] = Vec.new();
+let mut a: Vec[i64] = Vec.new(); a.push(1i64); a.push(2i64);
+let mut b: Vec[i64] = Vec.new(); b.push(9i64);
+v.push(a); v.push(b);
+v.sort_by_key(|x| x.len());
+println(f"{v[0].len()} {v[1].len()}");
+}

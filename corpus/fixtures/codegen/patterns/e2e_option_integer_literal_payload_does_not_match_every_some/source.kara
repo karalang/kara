@@ -1,0 +1,9 @@
+fn cls(p: Option[i64]) -> String {
+match p { Some(7) => "seven", Some(0) => "zero", _ => "other" }
+}
+fn main() {
+println(cls(Some(5i64)));
+println(cls(Some(7i64)));
+println(cls(Some(0i64)));
+println(cls(None));
+}

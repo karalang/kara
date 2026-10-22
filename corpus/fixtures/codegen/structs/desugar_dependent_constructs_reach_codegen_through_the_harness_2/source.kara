@@ -1,0 +1,7 @@
+trait Greet {
+fn name(self) -> String;
+fn greet(self) -> String { return "hi " + self.name(); }
+}
+struct P { n: String }
+impl Greet for P { fn name(self) -> String { return self.n.clone(); } }
+fn main() { let p: P = P { n: "bob" }; println(p.greet()); }

@@ -1,0 +1,18 @@
+shared struct Res { name: String }
+impl Drop for Res {
+fn drop(mut ref self) { print(f"c:{self.name}|"); }
+}
+fn main() {
+let a = Res { name: "A".to_string() };
+let b = Res { name: "B".to_string() };
+print(f"{a.name}{b.name}|");
+print("tail|");
+let p = Res { name: "P".to_string() };
+let q = p;
+print(f"{p.name}|");
+print("mid|");
+print(f"{q.name}|");
+print("after|");
+let z = Res { name: "Z".to_string() };
+print(f"end:{z.name}");
+}

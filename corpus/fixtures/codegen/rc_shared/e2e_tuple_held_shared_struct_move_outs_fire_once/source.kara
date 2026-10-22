@@ -1,0 +1,15 @@
+shared struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+struct H { s: S }
+struct W { p: (S, i64) }
+fn pick(a: (S, i64)) -> S { return a.0 }
+fn pick2(a: (S, i64)) -> S { a.0 }
+fn main() {
+    { let a: (S, i64) = (S { id: 1 }, 3); let s: S = a.0; println(f"v{s.id}{a.0.id}"); println("one"); }
+    { let a: (S, i64) = (S { id: 2 }, 3); let (s, n) = a; println(f"v{s.id}{n}"); println("two"); }
+    { let a: (S, i64) = (S { id: 3 }, 3); let s: S = pick(a); println(f"v{s.id}"); println("three"); }
+    { let a: (S, i64) = (S { id: 4 }, 3); let s: S = pick2(a); println(f"v{s.id}"); println("four"); }
+    { let a: (S, i64) = (S { id: 5 }, 3); let h: H = H { s: a.0 }; println(f"v{h.s.id}{a.0.id}"); println("five"); }
+    { let w: W = W { p: (S { id: 6 }, 3) }; let p: (S, i64) = w.p; println(f"v{p.0.id}"); println("six"); }
+    println("end");
+}

@@ -1,0 +1,13 @@
+shared struct Bag { mut items: Vec[i64] }
+impl Bag {
+fn push(self, v: i64) { self.items.push(v); }
+fn get(self, i: u64) -> i64 { self.items[i] }
+fn set(self, i: u64, v: i64) { self.items[i] = v; }
+}
+fn main() {
+let b = Bag { items: Vec.new() };
+b.push(100); b.push(200);
+b.set(1, 222);
+println(b.get(0));
+println(b.get(1));
+}

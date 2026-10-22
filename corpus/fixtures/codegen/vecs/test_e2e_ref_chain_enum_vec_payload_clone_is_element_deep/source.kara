@@ -1,0 +1,10 @@
+enum E { A(Vec[String]), B }
+struct S { e: E }
+fn take(s: ref S) {
+match s.e { E.A(x) => { for t in x { println(t); } } E.B => {} }
+}
+fn main() {
+let s: S = S { e: E.A([f"aa", f"bb"]) };
+take(s);
+take(s);
+}

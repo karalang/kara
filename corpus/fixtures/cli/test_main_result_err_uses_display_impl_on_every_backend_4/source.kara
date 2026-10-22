@@ -1,0 +1,5 @@
+#[derive(Display)]
+struct DErr { zulu: i64, alpha: i64, mike: i64, bravo: i64 }
+fn main() -> Result[(), DErr] {
+    return Err(DErr { zulu: 1, alpha: 2, mike: 3, bravo: 4 })
+}

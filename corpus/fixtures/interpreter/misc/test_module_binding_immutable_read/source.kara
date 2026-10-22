@@ -1,0 +1,6 @@
+let COUNT: i64 = 42i64;
+let FLAG: bool = true;
+fn main() {
+println(COUNT);
+if FLAG { println(1i64); } else { println(0i64); }
+}

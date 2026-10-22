@@ -1,0 +1,35 @@
+struct W { mut a: i64, mut f: f64 }
+enum E { F(f64) }
+struct M { mut f: f64, mut n: i64 }
+impl M {
+fn setf(mut ref self, x: f64) { self.f = x; }
+fn setn(mut ref self, x: i64) { self.n = x; }
+}
+fn takesf(x: f64) -> f64 { x }
+fn retf(b: u8) -> f64 { return b; }
+fn main() {
+let b: u8 = 200u8;
+let s: i8 = -5i8;
+let w = W { a: 0i64, f: b };
+println(w.f);
+println(takesf(b));
+println(retf(b));
+let mut q = W { a: 0i64, f: 0.0 };
+q.f = b;
+println(q.f);
+let mut m = M { f: 0.0, n: 0 };
+m.setf(b);
+m.setn(b);
+println(m.f);
+println(m.n);
+let e = E.F(b);
+match e { F(x) => { println(x); } }
+let mut mp: Map[i64, f64] = Map.new();
+let _ = mp.insert(1, b);
+mp[2] = b;
+match mp.get(1) { Some(x) => { println(x); } None => { println(0.0); } }
+match mp.get(2) { Some(x) => { println(x); } None => { println(0.0); } }
+println(takesf(s));
+let ws = W { a: 0i64, f: s };
+println(ws.f);
+}

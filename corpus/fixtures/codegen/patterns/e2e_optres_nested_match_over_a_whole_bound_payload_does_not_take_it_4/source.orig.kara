@@ -1,0 +1,6 @@
+enum E { A { s: String }, B }
+fn main() {
+let a: Result[E, i64] = Ok(E.A { s: f"ilr" });
+if let Ok(p) = a { match p { E.A { s } => { println(s); } E.B => {} } }
+if let Ok(p) = a { match p { E.A { s } => { println(s); } E.B => {} } } else { println("err"); }
+}

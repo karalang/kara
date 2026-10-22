@@ -1,0 +1,2 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(21i64), make(22i64)]; let i = 1i64; let g = a[i]; println(f"{g(20i64)}"); }

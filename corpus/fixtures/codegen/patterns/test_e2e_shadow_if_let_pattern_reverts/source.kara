@@ -1,0 +1,5 @@
+fn main() {
+let v = 100;
+if let Some(v) = Some(42) { println(v.to_string()); }
+println(v.to_string());
+}

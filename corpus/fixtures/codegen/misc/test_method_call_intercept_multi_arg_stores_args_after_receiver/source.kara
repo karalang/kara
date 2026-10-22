@@ -1,0 +1,10 @@
+effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self, n: i64) { fetch(); }
+             }
+             fn main() {
+                 let h = Hub { count: 0 };
+                 h.run(42);
+             }

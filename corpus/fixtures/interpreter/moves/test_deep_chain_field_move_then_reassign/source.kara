@@ -1,0 +1,16 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+struct H7 { r: Res }
+struct O7 { h: H7 }
+fn main() {
+println("a");
+let mut o = O7 { h: H7 { r: Res { id: 9, name: f"z{9}" } } };
+let x = o.h.r;
+o.h.r = Res { id: 5, name: f"y{5}" };
+println(f"x {x.name} new {o.h.r.name}");
+println("end");
+}

@@ -1,0 +1,15 @@
+enum Sig { A(i64), B }
+impl Drop for Sig {
+fn drop(mut ref self) {
+println(1);
+}
+}
+fn make() -> Sig {
+let s = Sig.A(1);
+s
+}
+fn main() {
+let a = make();
+let b = a;
+println(0);
+}

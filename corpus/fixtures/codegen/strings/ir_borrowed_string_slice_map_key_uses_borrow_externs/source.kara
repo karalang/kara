@@ -1,0 +1,7 @@
+fn main() {
+let s = "abcd";
+let mut m: Map[String, i64] = Map.new();
+match m.get(s[0..2]) { Some(_v) => {}, None => {} }
+m.insert(s[2..4], 1);
+println(m.len());
+}

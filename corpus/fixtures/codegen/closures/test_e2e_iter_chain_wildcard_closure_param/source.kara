@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+let m: Vec[i64] = v.iter().map(|_| 7).collect();
+println(f"{m.len()}");
+let k: Vec[i64] = v.iter().filter(|_| true).collect();
+println(f"{k.len()}");
+println(f"{v.iter().fold(0, |a, _| a + 1)}");
+println(f"{v.iter().filter(|x| x > 2).fold(0, |a, _| a + 1)}");
+println(f"{v.iter().any(|_| true)}");
+println(f"{v.iter().map(|_| 1).all(|x| x == 1)}");
+}

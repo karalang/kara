@@ -1,0 +1,9 @@
+struct Counter { n: i64 }
+fn main() {
+let mut c = Counter { n: 0 };
+let bump = mut ref || { c.n = c.n + 1; };
+bump();
+bump();
+bump();
+println(c.n);
+}

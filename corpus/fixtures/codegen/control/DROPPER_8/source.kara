@@ -1,0 +1,2 @@
+impl T1 { fn swapout(ref self, r: R) -> R { println(f"saw {r.id}"); return R { id: 99, tag: f"z" }; } }
+fn main() { let t = T1 { n: 1 }; let b = t.swapout(R { id: 31, tag: f"g" }); println(f"{b.id}"); }

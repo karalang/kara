@@ -1,0 +1,12 @@
+fn pick(opt: ref Option[String], b: ref String) -> ref String {
+match opt {
+Some(x) => x,
+_ => b,
+}
+}
+fn main() {
+let o: Option[String] = Option.Some(String.from("hi"));
+let y = String.from("no");
+let r = pick(o, y);
+println(r.len());
+}

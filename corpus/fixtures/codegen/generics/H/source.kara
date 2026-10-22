@@ -1,0 +1,2 @@
+fn main() { let p = (Box2[R] { v: R { id: 41 } }, 1); let (b, n) = p;
+             println(f"{n}"); }

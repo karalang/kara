@@ -1,0 +1,6 @@
+import db.connection.{open as make, Connection};
+
+         fn main() {
+    let c: Connection = make(9);
+    println(f"{c.id}");
+}

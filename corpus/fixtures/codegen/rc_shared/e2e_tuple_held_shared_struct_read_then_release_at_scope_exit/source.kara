@@ -1,0 +1,7 @@
+shared struct S { id: i64, tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}/{self.tag}"); } }
+fn main() {
+    { let a: (S, i64) = (S { id: 14, tag: "alpha" }, 3); println(f"r1={a.0.id}"); println(f"r2={a.0.tag}"); println("one"); }
+    { let b: (S, i64) = (S { id: 15, tag: "beta" }, 3); println("two"); }
+    println("end");
+}

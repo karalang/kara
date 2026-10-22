@@ -1,0 +1,1 @@
+fn main() { let c: G[Array[String, 2]] = G.Y([f"ccccccccccd-13-1", f"ddddddddddde-13-1"]); println(f"self_recv:{c.seen()}"); }

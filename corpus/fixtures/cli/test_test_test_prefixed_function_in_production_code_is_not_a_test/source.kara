@@ -1,0 +1,2 @@
+fn main() {}
+fn test_helper_named_like_a_test() -> i64 { 42 }

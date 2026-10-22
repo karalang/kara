@@ -1,0 +1,10 @@
+struct T { tag: i64, name: String }
+impl Drop for T { fn drop(mut ref self) { println(f"D{self.tag}"); } }
+fn sink() -> () { println("sink"); }
+fn g() -> () {
+let s: String = "owned_payload_long_enough_to_heap_allocate".to_string();
+let t: T = T { tag: 5i64, name: "tracked_payload_long_enough_here".to_string() };
+println(s.len() + t.name.len());
+return sink();
+}
+fn main() { println("before"); g(); println("after"); }

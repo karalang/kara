@@ -1,0 +1,8 @@
+struct R { id: i64, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.xs.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+fn main() {
+    let _ = Sv.Hold { inner: R { id: 1, xs: [1, 2, 3] } };
+    println("d")
+}

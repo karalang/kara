@@ -1,0 +1,17 @@
+source = "tests/codegen/rc_shared.rs::e2e_nested_vecdeque_literal_lowers_to_a_heap_handle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests", "lib:vecdeque"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "70bb8117"
+model_rev = "583cfb0d"
+model_src = "70bb8117"

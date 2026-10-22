@@ -1,0 +1,5 @@
+fn main() {
+let c: Vector[u8, 4] = Vector[u8, 4].splat(5);
+let d: Vector[u8, 4] = Vector[u8, 4].splat(10);
+println((c - d)[0] as i64);
+}

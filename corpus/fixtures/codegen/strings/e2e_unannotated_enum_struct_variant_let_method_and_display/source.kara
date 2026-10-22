@@ -1,0 +1,10 @@
+enum E { A { n: i64 }, B }
+impl E { fn code(ref self) -> i64 { match self { A { n } => n, B => 0 } } }
+impl Display for E { fn to_string(ref self) -> String { match self { A { n } => f"A:{n}", B => "B" } } }
+fn main() {
+let a = E.A { n: 3 };
+println(f"{a.code()}");
+println(a.to_string());
+println(f"{a}");
+println(a);
+}

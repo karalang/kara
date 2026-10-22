@@ -1,0 +1,5 @@
+pub trait Recorder { fn record(value: i64); }
+pub struct Counter { n: i64 }
+impl Recorder for Counter { fn record(value: i64) { } }
+pub effect resource Metric: Recorder;
+fn main() { }

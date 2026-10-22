@@ -1,0 +1,11 @@
+fn first[T](s: ref Slice[T]) -> T { s[0] }
+fn main() {
+    let a1: Array[i64, 2] = [100i64, 7i64];
+    let a2: Array[String, 2] = ["own-" + "alpha", "own-" + "beta"];
+    println(f"[{first(a1)}]");
+    println(f"[{first(a2)}]");
+    let b1: Array[String, 2] = ["own-" + "gamma", "own-" + "delta"];
+    let b2: Array[i64, 2] = [42i64, 9i64];
+    println(f"[{first(b1)}]");
+    println(f"[{first(b2)}]");
+}

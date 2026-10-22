@@ -1,0 +1,20 @@
+import std.json.{Json};
+
+fn main() {
+match Json.parse("42") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+match Json.parse("\"hi\"") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+match Json.parse("true") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+match Json.parse("null") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+}

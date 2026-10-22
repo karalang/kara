@@ -1,0 +1,11 @@
+shared enum Tree { Leaf(i64), Node(i64, i64) }
+fn pick() -> Tree {
+    let mut i: i64 = env.args().len() - 1;
+    loop {
+        i = i + 1;
+        let scratch = Tree.Leaf(i);
+        let stop = match scratch { Leaf(a) => a == 2, Node(a, b) => a == b };
+        if stop { break match i { 2 => Tree.Node(i, i * 2), _ => Tree.Leaf(i) } }
+    }
+}
+fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }

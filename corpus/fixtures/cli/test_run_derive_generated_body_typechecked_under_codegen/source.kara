@@ -1,0 +1,7 @@
+comptime fn derive_chain(comptime T: Type) -> Vec[Item] {
+let n = T.name();
+[ast.item("impl " + n + " { fn make(ref self) -> Vec[i64] { let mut v = Vec.new(); v.push(self.a); v.push(self.a); v } fn count(ref self) -> i64 { let b = self.make(); b.len() as i64 } }")]
+}
+#[derive(Chain)]
+struct S { a: i64 }
+fn main() { println(S { a: 9 }.count()); }

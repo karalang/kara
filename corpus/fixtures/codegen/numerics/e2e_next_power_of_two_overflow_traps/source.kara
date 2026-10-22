@@ -1,0 +1,1 @@
+fn main() { let g: u8 = 129; println(g.next_power_of_two()); }

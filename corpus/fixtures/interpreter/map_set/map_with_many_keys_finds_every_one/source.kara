@@ -1,0 +1,13 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+let mut i = 0i64;
+while i < 400i64 { m.insert(i, i * 3i64); i = i + 1i64; }
+let mut missing = 0i64;
+let mut sum = 0i64;
+let mut j = 0i64;
+while j < 400i64 {
+match m.get(j) { Some(v) => { sum = sum + v; } None => { missing = missing + 1i64; } }
+j = j + 1i64;
+}
+println(f"len={m.len()} missing={missing} sum={sum}");
+}

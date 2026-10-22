@@ -1,0 +1,12 @@
+fn main() {
+let v = [10, 20, 30];
+let a = v.first();
+let b = v.last();
+println(a);
+println(b);
+println(v.get(1));
+let fv = [1.5, 2.5];
+println(fv.first());
+let mut empty: Vec[i64] = Vec.new();
+println(empty.first());
+}

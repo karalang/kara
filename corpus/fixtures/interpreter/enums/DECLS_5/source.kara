@@ -1,0 +1,2 @@
+fn takef(o: Option[String]) -> Option[String] { o }
+fn main() { let n = 1; let s = Option.Some(f"a{n}"); let o = takef(s); match o { Option.Some(v) => { println(f"got {v}") } Option.None => { println("none") } } }

@@ -1,0 +1,3 @@
+enum E3 { A(i64), B }
+impl Drop for E3 { fn drop(mut ref self) { println("drop E3") } }
+fn main() { let r: Result[E3, i64] = Ok(E3.A(3)); println("mid"); }

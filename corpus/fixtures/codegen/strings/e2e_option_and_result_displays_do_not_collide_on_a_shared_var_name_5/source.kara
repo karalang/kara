@@ -1,0 +1,5 @@
+fn a(x: Option[i64]) { println(f"a {x}"); }
+fn b(x: Result[i64, i64]) { println(f"b {x}"); }
+fn c(x: Option[String]) { println(f"c {x}"); }
+fn d(x: Result[String, i64]) { println(f"d {x}"); }
+fn main() { a(Some(1)); b(Ok(2)); c(Some("s")); d(Ok("t")); }

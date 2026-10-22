@@ -1,0 +1,7 @@
+fn main() {
+let v: Vec[u8] = [1u8, 2u8, 3u8];
+println(StableHash.siphash24(v, 0u64, 0u64));
+println(StableHash.siphash24([1u8, 2u8, 3u8], 0u64, 0u64));
+let sl = v.as_slice();
+println(StableHash.siphash24(sl, 0u64, 0u64));
+}

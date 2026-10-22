@@ -1,0 +1,2 @@
+fn g(b: Gen[Wn]) -> i64 { match b { Gen.A(w) => { println(f"rd{w.a.id}"); } Gen.B => { } }; println("ret"); 1 }
+fn main() { let r = g(Gen.A(Wn { a: R { id: 41 } })); println(f"r:{r}") }

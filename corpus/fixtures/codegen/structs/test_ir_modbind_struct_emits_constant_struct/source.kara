@@ -1,0 +1,3 @@
+struct Pt { x: i64, y: i64 }
+let CORNER: Pt = Pt { x: 3, y: 7 };
+fn main() { println(CORNER.x); }

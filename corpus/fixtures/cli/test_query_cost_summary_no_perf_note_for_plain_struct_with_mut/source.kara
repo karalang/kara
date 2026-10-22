@@ -1,0 +1,5 @@
+struct Plain {
+    mut x: i64,
+    mut y: i64,
+}
+fn main() {}

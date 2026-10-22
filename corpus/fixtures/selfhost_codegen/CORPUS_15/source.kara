@@ -1,0 +1,1 @@
+fn main() { let x = 5; println(x.to_string()) }

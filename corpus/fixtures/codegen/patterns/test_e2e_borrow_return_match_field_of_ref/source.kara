@@ -1,0 +1,12 @@
+struct Pair { first: String, second: String }
+fn choose(p: ref Pair, which: i32) -> ref String {
+    match which {
+        0 => p.first,
+        _ => p.second,
+    }
+}
+fn main() {
+    let pr = Pair { first: "L", second: "R" };
+    let a = choose(pr, 0); println(a);
+    let b = choose(pr, 9); println(b);
+}

@@ -1,0 +1,1 @@
+fn main() { println((2.7f64).floor()); }

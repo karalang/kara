@@ -1,0 +1,1 @@
+fn main() { let _x = comptime { 1 / 0 }; }

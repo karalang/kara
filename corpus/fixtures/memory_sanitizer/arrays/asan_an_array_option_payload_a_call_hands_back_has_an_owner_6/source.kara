@@ -1,0 +1,7 @@
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, Array[f"raaaaaaaaaaaa1", f"cbbbbbbbbbbbb1"]);
+    match m.get(1) { Some(a) => { println(f"p:{a[0]}"); } None => { println("p:none"); } }
+    match m.get(1) { Some(a) => { println(f"q:{a[0]}"); } None => { println("q:none"); } }
+    println(f"n:{m.len()}");
+}

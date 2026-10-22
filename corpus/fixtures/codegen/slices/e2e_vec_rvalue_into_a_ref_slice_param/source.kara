@@ -1,0 +1,6 @@
+fn total(b: ref Slice[u8]) -> i64 { b.len() }
+fn total_val(b: Slice[u8]) -> i64 { b.len() }
+fn main() {
+println(total([1u8, 2u8, 3u8]));
+println(total_val([1u8, 2u8, 3u8, 4u8]));
+}

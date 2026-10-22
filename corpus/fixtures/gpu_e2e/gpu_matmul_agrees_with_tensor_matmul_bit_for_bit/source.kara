@@ -1,0 +1,13 @@
+fn main() {
+    let a: Tensor[f32, [?, ?]] = Tensor.from([[1.5, -2.25, 3.125], [0.5, 4.0, -1.75]]);
+    let b: Tensor[f32, [?, ?]] = Tensor.from([[2.0, -0.5], [1.25, 3.0], [-4.5, 0.75]]);
+    let g = gpu.matmul(a, b);
+    let c = a.matmul(b);
+    let mut same = true;
+    for i in 0..2 {
+        for j in 0..2 {
+            if g[i, j] != c[i, j] { same = false; }
+        }
+    }
+    println(f"{same} {g[0, 0]} {g[1, 1]}");
+}

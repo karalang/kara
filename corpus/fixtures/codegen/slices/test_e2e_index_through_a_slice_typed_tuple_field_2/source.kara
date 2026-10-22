@@ -1,0 +1,7 @@
+fn main() {
+let mut buf: Vec[u8] = [0u8, 0u8, 0u8, 0u8];
+let mut p: (mut Slice[u8], mut Slice[u8]) = buf.split_at_mut(2i64);
+p.0[0] = 7u8;
+p.1[1] = 9u8;
+println(f"{buf[0]} {buf[1]} {buf[2]} {buf[3]}");
+}

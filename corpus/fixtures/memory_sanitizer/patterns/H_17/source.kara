@@ -1,0 +1,8 @@
+struct D { s: String }
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mk(i: i64) -> R { return R { id: i, s: payload() }; }
+fn slen(s: String) -> i64 { if s.contains("payload") { s.len() } else { 0 } }
+fn main() { println(go()); }

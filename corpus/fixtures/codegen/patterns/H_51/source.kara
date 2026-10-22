@@ -1,0 +1,4 @@
+fn f() { let e = mk(7);
+  match e { E.A(n) => { println(f"v{n}"); return } E.B => {} }
+  println("AFTER") }
+fn main() { f() }

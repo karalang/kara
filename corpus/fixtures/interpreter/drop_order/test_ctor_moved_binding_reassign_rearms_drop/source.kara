@@ -1,0 +1,13 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"D{self.id}")
+}
+}
+enum Slot { Empty, Held(Res) }
+fn main() {
+let mut r = Res { id: 1 };
+let s = Slot.Held(r);
+r = Res { id: 2 };
+println("x");
+}

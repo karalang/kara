@@ -1,0 +1,14 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3];
+match v.iter().last() { Some(x) => println(x), None => println(-1) }
+let e: Vec[i64] = [];
+match e.iter().last() { Some(x) => println(x), None => println(-1) }
+match v.iter().filter(|x| x % 2 == 1).last() { Some(x) => println(x), None => println(-1) }
+match v.iter().map(|x| x * 10).last() { Some(x) => println(x), None => println(-1) }
+let w: Vec[i64] = [10, 20, 30, 40];
+match w.iter().nth(2) { Some(x) => println(x), None => println(-1) }
+match w.iter().nth(9) { Some(x) => println(x), None => println(-1) }
+match w.iter().nth(0) { Some(x) => println(x), None => println(-1) }
+match w.iter().filter(|x| x % 20 == 0).nth(1) { Some(x) => println(x), None => println(-1) }
+match (0..10).nth(5) { Some(x) => println(x), None => println(-1) }
+}

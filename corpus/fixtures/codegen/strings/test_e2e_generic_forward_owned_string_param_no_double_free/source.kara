@@ -1,0 +1,9 @@
+fn id[T](x: T) -> T { x }
+fn twice[T](x: T) -> T { id(x) }
+fn pick[T](a: T, b: T) -> T { id(a) }
+fn nest[T](x: T) -> T { id(id(x)) }
+fn main() {
+    println(twice(f"deep"));
+    println(pick(f"aa", f"bb"));
+    println(nest(f"chain"));
+}

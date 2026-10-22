@@ -1,0 +1,7 @@
+fn inc(x: mut ref i64) { x = x + 1i64; }
+fn wrap(x: mut ref i64) { inc(x); }
+fn main() {
+let mut t: i64 = 0;
+wrap(mut t);
+println(t);
+}

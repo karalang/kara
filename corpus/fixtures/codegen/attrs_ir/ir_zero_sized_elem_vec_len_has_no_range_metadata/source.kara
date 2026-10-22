@@ -1,0 +1,6 @@
+struct E {}
+fn main() {
+let mut v: Vec[E] = Vec.new();
+v.push(E {});
+println(v.len());
+}

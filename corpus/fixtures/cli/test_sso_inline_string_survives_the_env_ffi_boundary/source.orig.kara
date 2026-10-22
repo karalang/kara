@@ -1,0 +1,10 @@
+fn main() writes(Env) reads(Env) {
+    let src = "KARAC_SSO_ENVPROBE=short-val";
+    let name = src.substring(0, 18);
+    let val = src.substring(19, 28);
+    env.set(name, val);
+    match env.var(name) {
+        Ok(v) => { println(v); }
+        Err(_) => { println("missing"); }
+    }
+}

@@ -1,0 +1,37 @@
+struct H { m: Map[String, Vec[String]] }
+fn firstk(m: ref Map[String, i64]) -> i64 {
+    for k in m.keys() { if k.len() > 0i64 { return 1i64; } }
+    return 0i64;
+}
+fn main() {
+    let mut a: Map[String, i64] = Map.new();
+    a.insert("aa".to_string(), 1i64);
+    a.insert("bbb".to_string(), 2i64);
+    let mut s = 0i64;
+    for k in a.keys() { s = s + k.len(); }
+    println(s);
+    let mut owned: Vec[String] = Vec.new();
+    for k in a.keys() { owned.push(k); }
+    println(owned.len());
+    let mut t = 0i64;
+    for v in a.values() { t = t + v; }
+    println(t);
+    let mut e = 0i64;
+    for (k, v) in a.entries() { e = e + k.len() + v; }
+    println(e);
+    let mut b: Map[i64, String] = Map.new();
+    b.insert(1i64, "xx".to_string());
+    b.insert(2i64, "yyy".to_string());
+    let mut u = 0i64;
+    for v in b.values() { u = u + v.len(); }
+    println(u);
+    let mut h = H { m: Map.new() };
+    let mut inner: Vec[String] = Vec.new();
+    inner.push("p".to_string());
+    h.m.insert("kk".to_string(), inner);
+    let mut c = 0i64;
+    for k in h.m.keys() { c = c + k.len(); }
+    println(c);
+    println(firstk(a));
+    println(a.len());
+}

@@ -1,0 +1,4 @@
+fn f() -> i64 { let value = mk_big(); let mut vv = value;
+   let n = match vv { Some(w) => big_len(w), None => 0 };
+   vv = big_none(); n + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

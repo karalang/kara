@@ -1,0 +1,9 @@
+fn main() {
+let a: i64 = 9223372036854775807i64;
+let b: i64 = 0i64 - 9223372036854775807i64 - 1i64;
+println(a);
+println(b);
+println(0i64 - 7i64 / 2i64);
+println(0i64 - 7i64 % 2i64);
+println(6i64 * 7i64);
+}

@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println("d".to_string() + self.id.to_string()); } }
+struct S { r: R }
+fn borrowed(s: ref S) -> i64 { let m = ref s.r; return m.id; }
+fn owned(s: S) -> i64 { let m = ref s.r; return m.id; }
+fn main() {
+let a = S { r: R { id: 3 } };
+println(borrowed(a).to_string());
+let b = S { r: R { id: 7 } };
+println(owned(b).to_string());
+println("end");
+}

@@ -1,0 +1,14 @@
+#[repr(u8)]
+enum Big { Lo = 0, Hi = 255 }
+struct Holder { kind: Big }
+#[repr(u8)]
+enum Op { Add = 1, Sub = 2 }
+impl Op {
+fn code(ref self) -> u8 { self.discriminant() }
+}
+fn as_u8(k: Big) -> u8 { k.discriminant() }
+fn main() {
+let h = Holder { kind: Big.Hi };
+let o = Op.Add;
+println(f"{h.kind.discriminant()} {as_u8(Big.Hi)} {Op.Sub.code()} {o.code()}");
+}

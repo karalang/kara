@@ -1,0 +1,7 @@
+fn plainV(x: Option[Array[Vec[i64], 2]]) {
+    match x { Some(t) => { println(f"s:{t[0][1]}") } None => { println("n") } }
+}
+fn main() {
+    let a: Array[Vec[i64], 2] = [[10, 11], [20]];
+    plainV(Some(a));
+}

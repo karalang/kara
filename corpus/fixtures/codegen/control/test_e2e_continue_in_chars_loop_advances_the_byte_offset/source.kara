@@ -1,0 +1,37 @@
+fn count_non_x(s: String) -> i64 {
+    let mut n = 0i64;
+    for c in s.chars() { if c == 'x' { continue; } n = n + 1i64; }
+    return n;
+}
+fn main() {
+    let s: String = "aéc";
+    let mut n = 0i64;
+    for ch in s.chars() { if ch == 'c' { continue; } n = n + 1i64; }
+    println(n);
+    let mut g: String = "abcde";
+    g.push('é');
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    for c in g.chars() {
+        if i == 1i64 { i = i + 1i64; continue; }
+        if i == 4i64 { break; }
+        sum = sum + (c as i64);
+        i = i + 1i64;
+    }
+    println(sum);
+    println(count_non_x("axbxé"));
+    let mut t: String = "aé";
+    t.push('z');
+    let mut m = 0i64;
+    'outer: for c in t.chars() {
+        for k in 0i64..3i64 {
+            if k == 1i64 { continue 'outer; }
+            m = m + (c as i64);
+        }
+    }
+    println(m);
+    let u: String = "éé";
+    let mut z = 0i64;
+    for c in u.chars() { z = z + 1i64; continue; }
+    println(z);
+}

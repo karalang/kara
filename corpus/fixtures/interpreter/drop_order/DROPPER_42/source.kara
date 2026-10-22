@@ -1,0 +1,2 @@
+fn take(a: R, b: R, k: bool) -> R { if k { a } else { b } }
+fn main() { let x = take(R { id: 41 }, R { id: 42 }, true); println(f"{x.id}") }

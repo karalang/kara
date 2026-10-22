@@ -1,0 +1,5 @@
+fn main() {
+    let x: f32 = 0.1;
+    let t: Tensor[f32, [?]] = Tensor.from([0.1, -0.1, x, 0.05 + 0.05]);
+    println(t[0]); println(t[1]); println(t[2]); println(t[3]);
+}

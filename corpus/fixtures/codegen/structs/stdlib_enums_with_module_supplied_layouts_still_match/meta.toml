@@ -1,0 +1,17 @@
+source = "tests/codegen/structs.rs::stdlib_enums_with_module_supplied_layouts_still_match"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0236"
+classified_with = "79705a229"
+extracted_src = "d24c17b9"
+model_rev = "583cfb0d"
+model_src = "d24c17b9"

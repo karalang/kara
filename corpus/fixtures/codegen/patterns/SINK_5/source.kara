@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct P { xs: Vec[i64], name: String }
+impl Drop for P { fn drop(mut ref self) { println(f"dP[{self.name}]len{self.xs.len()}") } }
+fn fp(o: Option[(P, P)]) -> P { match o { Some(t) => { return t.0.clone(); } None => { return P { xs: [0], name: "z" }; } } }
+fn sink(r: P) { println(f"sank[{r.name}]len{r.xs.len()}") }
+fn main() { sink(fp(Some((P { xs: [1, 2, 3], name: "a" }, P { xs: [4, 5], name: "b" })))); }

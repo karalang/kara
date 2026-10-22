@@ -1,0 +1,20 @@
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+fn make(v: Vec[Body]) -> GpuBuffer[Body] { gpu.upload(v) }
+fn total(b: ref GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }
+impl Sim {
+    fn mass(ref self) -> f32 { gpu.sum(self.grid.mass) }
+}
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 10.0 },
+                             Body { mass: 3.0, speed: 30.0 }];
+    let buf = make(bodies);
+    println(f"{total(buf)}");
+    let sim = Sim { grid: buf, step: 0 };
+    println(f"{sim.mass()}");
+    println(f"{gpu.sum(sim.grid.mass)}");
+    println(f"{gpu.sum(sim.grid.speed)}");
+    println(f"{gpu.sum(sim.grid.mass)}");
+    let back = gpu.download(sim.grid);
+    println(f"{back.len()}");
+}

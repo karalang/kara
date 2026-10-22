@@ -1,0 +1,3 @@
+fn main() { let o: Result[E, i64] = Ok(E.B);
+             match o { Ok(e) => { println("got") }
+                       Err(n) => { println("err") } } }

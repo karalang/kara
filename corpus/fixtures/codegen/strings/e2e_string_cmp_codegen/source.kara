@@ -1,0 +1,16 @@
+fn tag(a: String, b: String) -> i64 {
+match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }
+}
+fn main() {
+let r1 = tag("abc", "abd");
+let r2 = tag("abd", "abc");
+let r3 = tag("abc", "abc");
+let r4 = tag("ab", "abc");
+println(f"{r1}");
+println(f"{r2}");
+println(f"{r3}");
+println(f"{r4}");
+let mut v: Vec[String] = ["banana", "apple", "cherry"];
+v.sort_by(|x, y| x.cmp(y));
+println(v[0]);
+}

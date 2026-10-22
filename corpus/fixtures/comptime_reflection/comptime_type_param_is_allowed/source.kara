@@ -1,0 +1,4 @@
+
+struct Point { x: i64, y: i64 }
+comptime fn describe(comptime T: Type) -> i64 { 0 }
+fn main() {}

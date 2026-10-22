@@ -1,0 +1,6 @@
+
+struct Empty {}
+comptime fn require_fields(comptime T: Type) {
+    if T.fields().len() == 0 { compiler.error("type must have at least one field"); }
+}
+fn main() { comptime { require_fields(Empty) }; }

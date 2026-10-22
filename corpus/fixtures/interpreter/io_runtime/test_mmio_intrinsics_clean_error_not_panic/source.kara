@@ -1,0 +1,1 @@
+fn main() { let cell: i32 = 0; unsafe { let p: *const i32 = ptr.const(cell); } }

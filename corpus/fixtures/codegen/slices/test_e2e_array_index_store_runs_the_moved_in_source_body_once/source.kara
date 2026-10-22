@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}"); } }
+fn main() {
+    let mut a: Array[D, 2] = [D { id: 1, s: "b30-static-one" }, D { id: 2, s: "b30-static-two" }];
+    let b = D { id: 3, s: f"b30-heap-payload" };
+    a[0] = b;
+    println(f"a0:{a[0].id}");
+}

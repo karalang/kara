@@ -1,0 +1,32 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+impl Res {
+    fn plus(self, n: i64) -> Res {
+        return Res { id: self.id + n, name: self.name.clone() };
+    }
+    fn me(self) -> Res {
+        return self;
+    }
+    fn ident(ref self) -> i64 {
+        return self.id;
+    }
+}
+fn mk(n: i64) -> Res {
+    return Res { id: n, name: f"r{n}" };
+}
+fn main() {
+    println("a: rebuild-chain");
+    let x = mk(1).plus(10);
+    println(f"x={x.id}");
+    println("b: passthrough self");
+    let y = mk(2).me();
+    println(f"y={y.id}");
+    println("c: chain then ref-method");
+    let z = mk(3).me().ident();
+    println(f"z={z}");
+    println("end");
+}

@@ -1,0 +1,9 @@
+fn main() {
+let mut a: Column[i64] = Column.new();
+a.push_null(); a.push(8);
+let mut b: Column[i64] = Column.new();
+b.push(0); b.push(2);
+let q = a / b;
+match q[0] { Some(v) => { println(v); }, None => { println(-1); } }
+match q[1] { Some(v) => { println(v); }, None => { println(-1); } }
+}

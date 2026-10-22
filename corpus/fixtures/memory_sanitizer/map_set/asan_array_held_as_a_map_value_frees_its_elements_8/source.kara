@@ -1,0 +1,6 @@
+fn take(m: Map[i64, Array[String, 2]]) -> i64 { return m.len() as i64; }
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, [f"aaaaaaaa0", f"bbbbbbbb0"]);
+    println(f"s:{take(m)}");
+}

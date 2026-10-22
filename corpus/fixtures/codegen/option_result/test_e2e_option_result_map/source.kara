@@ -1,0 +1,14 @@
+fn dbl(n: i64) -> i64 { n * 2 }
+fn main() {
+let a: Option[i64] = Some(5);
+println(f"{a.map(dbl).unwrap_or(-1)}");
+let n: Option[i64] = None;
+println(f"{n.map(dbl).unwrap_or(-1)}");
+let ok: Result[i64, String] = Ok(21);
+println(f"{ok.map(dbl).unwrap_or(-1)}");
+let er: Result[i64, String] = Err(f"boom");
+println(f"{er.map(dbl).unwrap_or(-99)}");
+println(f"{a.map(dbl).map(|x: i64| x + 1).unwrap_or(-1)}");
+let m = a.map(|x: i64| x > 3);
+match m { Some(b) => { println(f"{b}"); } None => { println("none"); } }
+}

@@ -1,0 +1,11 @@
+struct Inner { field: i64 }
+struct Config { max: i64, count: i64 }
+struct Outer { inner: Inner }
+let CFG: Config = Config { max: 64, count: 7 };
+fn main() {
+let m: i64 = CFG.max;
+let c: i64 = CFG.count;
+let OUTER: Outer = Outer { inner: Inner { field: 9 } };
+let n: i64 = OUTER.inner.field;
+println(f"{m} {c} {n}");
+}

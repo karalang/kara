@@ -1,0 +1,56 @@
+enum Tok { Plus, Ident(String) }
+struct SpTok { tok: Tok, n: i64 }
+struct Outer { sp: SpTok }
+impl SpTok {
+fn label(ref self) -> String {
+match self.tok {
+Ident(name) => { return "m:".to_string() + name; }
+Plus => { return "m:+".to_string(); }
+}
+return "?".to_string();
+}
+}
+fn render(st: ref SpTok) -> String {
+match st.tok {
+Ident(name) => { return "id:".to_string() + name; }
+Plus => { return "+".to_string(); }
+}
+return "?".to_string();
+}
+fn take_name(st: ref SpTok) -> String {
+match st.tok {
+Ident(name) => { return name.clone(); }
+Plus => { return "+".to_string(); }
+}
+return "?".to_string();
+}
+fn deep(o: ref Outer) -> String {
+match o.sp.tok {
+Ident(name) => { return "d:".to_string() + name; }
+Plus => { return "d:+".to_string(); }
+}
+return "?".to_string();
+}
+fn name_len(st: ref SpTok) -> i64 {
+match st.tok {
+Ident(name) => { return name.len(); }
+Plus => { return 0; }
+}
+return -1;
+}
+fn main() {
+let a = SpTok { tok: Tok.Ident("foo".to_string()), n: 1 };
+println(render(a));
+println(render(a));
+println(take_name(a));
+println(a.label());
+println(name_len(a));
+let p = SpTok { tok: Tok.Plus, n: 2 };
+println(render(p));
+let o = Outer { sp: SpTok { tok: Tok.Ident("deep".to_string()), n: 3 } };
+println(deep(o));
+let mut v: Vec[SpTok] = Vec.new();
+v.push(SpTok { tok: Tok.Ident("vec".to_string()), n: 4 });
+let t = ref v[0];
+println(render(t));
+}

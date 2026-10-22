@@ -1,0 +1,2 @@
+fn takef(r: R) -> R { return r; }
+fn main() { let b = takef(R { id: 32, tag: f"h" }); println(f"{b.id}"); }

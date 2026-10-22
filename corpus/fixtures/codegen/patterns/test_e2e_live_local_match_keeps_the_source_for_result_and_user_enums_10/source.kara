@@ -1,0 +1,6 @@
+enum E { A(Vec[i64]), B }
+fn main() {
+let e: E = E.A([11, 22]);
+match e { E.A(ref v) => { for s in v { println(s); } } E.B => {} }
+match e { E.A(v) => { for s in v { println(s); } } E.B => {} }
+}

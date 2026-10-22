@@ -1,0 +1,9 @@
+fn main() {
+println(f"{(3.0f64).hypot(4.0f64)}");
+println(f"{(0.0f64).asinh()}");
+println(f"{(1.0f64).acosh()}");
+println(f"{(0.0f64).atanh()}");
+println(f"{(0.0f64).exp_m1()}");
+println(f"{(0.0f64).ln_1p()}");
+println(f"{(0.7f64).asinh()}");
+}

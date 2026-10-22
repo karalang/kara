@@ -1,0 +1,4 @@
+enum Box2 { Full(Res), Empty }
+struct T { n: i64 }
+impl T { fn take(ref self, b: Box2) -> Res { match b { Box2.Full(r) => { return r; } Box2.Empty => { return Res { id: 0, name: f"z" }; } } } }
+fn main() { let t = T { n: 1 }; let b: Box2 = Box2.Full(Res { id: 7, name: f"e7" }); let r: Res = t.take(b); println(f"got {r.id}") }

@@ -1,0 +1,59 @@
+#[derive(Clone)]
+struct Blob { bytes: Vec[i64], n: i64 }
+#[derive(Clone)]
+enum Tok { Eof, Cstr(Blob), Interp(Vec[i64]) }
+fn show(t: ref Tok) -> i64 {
+    match t {
+        Cstr(b) => {
+            let mut s = 0;
+            let mut i = 0;
+            while i < b.bytes.len() {
+                s = s + b.bytes[i];
+                i = i + 1;
+            }
+            return s + b.n;
+        }
+        Interp(v) => {
+            let mut s = 0;
+            let mut i = 0;
+            while i < v.len() {
+                s = s + v[i];
+                i = i + 1;
+            }
+            return s;
+        }
+        Eof => {}
+    }
+    return 0 - 1;
+}
+fn mk_cstr(a: i64, b: i64) -> Tok {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(a);
+    v.push(b);
+    return Tok.Cstr(Blob { bytes: v, n: 2 });
+}
+fn mk_interp(a: i64, b: i64, c: i64) -> Tok {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    return Tok.Interp(v);
+}
+fn main() {
+    let x = mk_cstr(10, 20);
+    println(show(x).to_string());
+    let y = mk_interp(1, 2, 3);
+    println(show(y).to_string());
+    let z = x;
+    println(show(z).to_string());
+    println(show(Tok.Eof).to_string());
+    let mut ts: Vec[Tok] = Vec.new();
+    ts.push(mk_cstr(5, 6));
+    ts.push(mk_interp(7, 8, 9));
+    let mut i = 0;
+    while i < ts.len() {
+        let e = ts[i].clone();
+        println(show(e).to_string());
+        i = i + 1;
+    }
+}

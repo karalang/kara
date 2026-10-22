@@ -1,0 +1,8 @@
+struct Owned { x: i64 }
+fn main() {
+let o = Owned { x: 10 };
+let f = ref || o.x;
+for _i in 0..3 {
+println(f());
+}
+}

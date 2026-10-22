@@ -1,0 +1,2 @@
+fn eat(o: Option[Tr]) -> i64 { match o { Some(t) => { let z: i64 = t.tag; z } None => { 0 } } }
+fn main() { println(f"r:{eat(Some(Tr { tag: 7 }))}"); println("end") }

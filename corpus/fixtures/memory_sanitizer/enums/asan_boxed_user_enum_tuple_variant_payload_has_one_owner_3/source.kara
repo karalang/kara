@@ -1,0 +1,5 @@
+enum Kz4 { A(String, String, String, String), B }
+impl Drop for Kz4 { fn drop(mut ref self) { println("dKz4") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Kz4], acc: mut ref Vec[String]) { match x { Option.Some(Kz4.A(s, t, u, v)) => { acc.push(s); acc.push(t); acc.push(u); acc.push(v) } Option.Some(Kz4.B) => {} Option.None => {} } }
+fn main() { let mut acc: Vec[String] = []; for i in 0..3 { show(Option.Some(Kz4.A(f"cccccccccccccccccccc-{i}", f"dddddddddddddddddddd-{i}", f"eeeeeeeeeeeeeeeeeeee-{i}", f"ffffffffffffffffffff-{i}")), mut acc); } println(f"len:{acc.len()}") }

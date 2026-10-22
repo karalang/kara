@@ -1,0 +1,4 @@
+fn main() {
+let bad: Tensor[f64, [3, ?]] = Tensor.zeros([7, 5]);
+println(bad.rank());
+}

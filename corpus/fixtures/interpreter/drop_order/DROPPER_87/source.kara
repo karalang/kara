@@ -1,0 +1,2 @@
+fn eatf(r: R) -> i64 { println(f"saw {r.id}"); return 0; }
+fn main() { let a = R { id: 41 }; let n = eatf(a); println(f"{n}") }

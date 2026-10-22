@@ -1,0 +1,6 @@
+struct Pair[A, B] { first: A, second: B }
+fn main() {
+let p = Pair { first: 1, second: true };
+println(p.first);
+println(p.second);
+}

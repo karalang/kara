@@ -1,0 +1,4 @@
+fn mk() -> W { return W { r: R { id: 43 }, n: 3 }; }
+#[allow(partial_move_of_drop_struct)]
+fn take(w: W) -> R { let W { r, n } = w; r }
+fn main() { let x = take(mk()); println(f"{x.id}"); }

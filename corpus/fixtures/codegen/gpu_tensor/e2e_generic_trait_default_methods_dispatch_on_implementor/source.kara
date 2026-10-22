@@ -1,0 +1,35 @@
+trait Chooser[T] {
+    fn base(ref self) -> T;
+    fn choose(ref self, alt: T, use_alt: bool) -> T {
+        let picked: T = if use_alt { alt } else { self.base() };
+        picked
+    }
+}
+struct IBox { v: i64 }
+struct FBox { v: f64 }
+impl Chooser[i64] for IBox { fn base(ref self) -> i64 { self.v } }
+impl Chooser[f64] for FBox { fn base(ref self) -> f64 { self.v } }
+trait Zeroish { fn zero() -> Self; }
+struct Cnt { n: i64 }
+impl Zeroish for Cnt { fn zero() -> Cnt { Cnt { n: 7 } } }
+trait Maker[T: Zeroish] {
+    fn seed(ref self) -> T { T.zero() }
+    fn make(ref self) -> T { self.seed() }
+    fn tag(ref self) -> i64 { 0 }
+}
+struct Gen {}
+impl Maker[Cnt] for Gen { fn tag(ref self) -> i64 { 9 } }
+fn main() {
+    let a = IBox { v: 7 };
+    let b = FBox { v: 2.5 };
+    println(f"{a.choose(99, false)}");
+    println(f"{a.choose(99, true)}");
+    println(f"{b.choose(1.5, false)}");
+    println(f"{b.choose(1.5, true)}");
+    let g = Gen {};
+    let m = g.make();
+    println(f"{m.n}");
+    let s = g.seed();
+    println(f"{s.n}");
+    println(f"{g.tag()}");
+}

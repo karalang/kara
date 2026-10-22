@@ -1,0 +1,7 @@
+fn main() {
+let s: Set[i64] = Set.new();
+s.insert(10_i64);
+let was_present = s.remove(10_i64);
+println(was_present);
+println(s.len());
+}

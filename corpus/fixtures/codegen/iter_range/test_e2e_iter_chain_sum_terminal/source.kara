@@ -1,0 +1,12 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4, 5, 6];
+println(f"{v.iter().sum()}");
+println(f"{v.iter().map(|x| x * x).sum()}");
+println(f"{v.iter().filter(|x| x % 2 == 0).sum()}");
+println(f"{v.iter().filter(|x| x > 2).map(|x| x * 10).sum()}");
+let f: Vec[f64] = [1.5, 2.5, 3.0];
+println(f"{f.iter().sum()}");
+let e: Vec[i64] = [];
+println(f"{e.iter().sum()}");
+println(f"{(1..5).sum()}");
+}

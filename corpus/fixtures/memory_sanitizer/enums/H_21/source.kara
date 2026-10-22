@@ -1,0 +1,7 @@
+fn show(x: Result[K, i64]) {
+   match x {
+     Result.Ok(K.A(r)) => { println(f"a:{r.s}") }
+     Result.Ok(K.B) => {}
+     Result.Err(e) => { println(f"e:{e}") }
+   } }
+fn main() { show(Result.Ok(K.A(R2 { s: f"y" }))); println("end") }

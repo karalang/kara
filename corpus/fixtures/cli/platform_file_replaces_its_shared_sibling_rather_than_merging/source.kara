@@ -1,0 +1,2 @@
+import host.{run, shared_only};
+fn main() { run(); shared_only(); }

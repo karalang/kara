@@ -1,0 +1,6 @@
+fn apply[T](x: T, f: Fn(T) -> T) -> T {
+return f(x);
+}
+fn main() {
+println(apply(20, |v| v * 2 + 2));
+}

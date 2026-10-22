@@ -1,0 +1,6 @@
+fn main() {
+let mut pairs: Vec[(String, Json)] = Vec.new();
+pairs.push(("a", Json.Number(1.0)));
+pairs.push(("b", Json.Bool(true)));
+println(Json.Object(pairs).stringify());
+}

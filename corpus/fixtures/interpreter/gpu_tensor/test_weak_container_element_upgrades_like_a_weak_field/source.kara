@@ -1,0 +1,8 @@
+shared struct N { mut v: i64 }
+             fn main() {
+                 let a: N = N { v: 41i64 };
+                 let mut w: Vec[weak N] = Vec.new();
+                 w.push(a);
+                 println(a.v);
+                 match w[0] { Some(x) => { println(x.v); } None => { println(0 - 1); } }
+             }

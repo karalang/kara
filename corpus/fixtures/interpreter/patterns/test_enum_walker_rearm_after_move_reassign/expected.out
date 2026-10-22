@@ -1,0 +1,8 @@
+a
+drop 3 s3
+drop 4 s4
+m
+took 5
+drop 5 s5
+drop 6 s6
+end

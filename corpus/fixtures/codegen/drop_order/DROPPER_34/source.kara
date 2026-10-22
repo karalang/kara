@@ -1,0 +1,2 @@
+fn take(n: i64) -> R { let a = R { id: 1 }; let b = R { id: 2 }; match n { 0 => a, 1 => b, _ => R { id: 9 } } }
+fn main() { let x = take(0); println(f"{x.id}"); }

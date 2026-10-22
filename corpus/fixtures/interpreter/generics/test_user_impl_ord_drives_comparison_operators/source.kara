@@ -1,0 +1,21 @@
+struct Point { x: i64, y: i64 }
+             impl PartialEq for Point {
+                 fn eq(ref self, other: ref Point) -> bool { self.x == other.x and self.y == other.y }
+             }
+             impl Eq for Point {}
+             impl PartialOrd for Point {
+                 fn partial_cmp(ref self, other: ref Point) -> Option[Ordering] { Some(self.x.cmp(other.x)) }
+             }
+             impl Ord for Point {
+                 fn lt(self, other: Point) -> bool { self.x < other.x }
+                 fn le(self, other: Point) -> bool { self.x <= other.x }
+                 fn gt(self, other: Point) -> bool { self.x > other.x }
+                 fn ge(self, other: Point) -> bool { self.x >= other.x }
+             }
+             fn main() {
+                 let a = Point { x: 1, y: 99 };
+                 let b = Point { x: 5, y: 1 };
+                 println(a < b);
+                 println(a > b);
+                 println(a <= b);
+             }

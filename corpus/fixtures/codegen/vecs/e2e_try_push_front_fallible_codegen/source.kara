@@ -1,0 +1,11 @@
+fn main() {
+let mut q: VecDeque[i64] = VecDeque.new();
+let _ = q.try_push_back(2_i64);
+match q.try_push_front(1_i64) {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+println(q.len());
+println(q[0]);
+println(q[1]);
+}

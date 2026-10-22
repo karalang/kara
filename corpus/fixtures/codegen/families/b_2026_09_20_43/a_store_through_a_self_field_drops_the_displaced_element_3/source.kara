@@ -1,0 +1,1 @@
+fn main() { let mut a: Vec[D] = [D { id: 91 }]; a[0] = D { id: 92 }; println(f"x:{a[0].id}"); }

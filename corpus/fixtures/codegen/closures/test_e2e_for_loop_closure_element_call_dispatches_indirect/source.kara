@@ -1,0 +1,26 @@
+fn main() {
+let ops = [|x| x + 1, |x| x * 10];
+let mut v = 5;
+for op in ops { v = op(v); }
+println(v);
+let mut vs: Vec[Fn(i64) -> i64] = Vec.new();
+vs.push(|x| x + 1);
+vs.push(|x| x * 10);
+vs.push(|x| x - 3);
+let mut w = 5;
+for op in vs { w = op(w); }
+println(w);
+let one = [|x| x + 100];
+let mut u = 5;
+for op in one { u = op(u); }
+println(u);
+let base = 100;
+let caps = [|x| x + base, |x| x * base];
+let mut c = 1;
+for op in caps { c = op(c); }
+println(c);
+let fs = [|s: String| s + "-a", |s: String| s + "-b"];
+let mut acc = "x".to_string();
+for f in fs { acc = f(acc); }
+println(acc);
+}

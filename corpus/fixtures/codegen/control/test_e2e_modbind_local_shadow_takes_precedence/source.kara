@@ -1,0 +1,9 @@
+let mut COUNTER: i64 = 100;
+fn local_shadows() -> i64 {
+let COUNTER: i64 = 7;
+COUNTER
+}
+fn main() {
+println(local_shadows());
+println(COUNTER);
+}

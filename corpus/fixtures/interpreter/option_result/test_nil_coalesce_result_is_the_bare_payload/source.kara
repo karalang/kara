@@ -1,0 +1,2 @@
+fn find(k: i64) -> Option[i64] { if k == 7 { return Some(7); } return None; }
+fn main() { println((find(7) ?? -1) + 1); println((find(3) ?? -1) + 1); }

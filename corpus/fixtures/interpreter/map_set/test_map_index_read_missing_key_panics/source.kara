@@ -1,0 +1,5 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m["x"] = 1_i64;
+println(m["nope"]);
+}

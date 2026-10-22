@@ -1,0 +1,6 @@
+fn nap(ms: i64) {
+sleep_ms(ms);
+}
+fn main() {
+nap(500);
+}

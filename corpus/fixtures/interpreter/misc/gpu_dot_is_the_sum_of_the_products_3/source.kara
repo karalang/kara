@@ -1,0 +1,14 @@
+fn main() {
+    let mut a: Vec[f32] = [];
+    let mut b: Vec[f32] = [];
+    let mut p: Vec[f32] = [];
+    for i in 0..4096 {
+        let x: f32 = 0.1;
+        let y: f32 = 1.0;
+        a.push(x);
+        b.push(y);
+        p.push(x * y)
+    }
+    println(f"{gpu.dot(a, b)}");
+    println(f"{gpu.sum(p)}")
+}

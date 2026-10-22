@@ -1,0 +1,2 @@
+fn takes(y: i64) { println(y); }
+fn main() { let x: i32 = 99; takes(x.into()); }

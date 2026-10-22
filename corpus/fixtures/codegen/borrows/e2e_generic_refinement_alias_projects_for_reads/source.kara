@@ -1,0 +1,14 @@
+pub type PositiveQty = i64 where self > 0;
+pub type NonEmpty[T] = Vec[T] where self.len() > 0;
+pub struct Item { price: f64, qty: PositiveQty }
+pub fn total(rows: NonEmpty[Item]) -> f64 {
+let mut t = 0.0;
+for r in rows { t = t + r.price * (r.qty as f64); }
+t
+}
+fn main() {
+let mut xs: Vec[Item] = Vec.new();
+xs.push(Item { price: 1.5, qty: 2 });
+xs.push(Item { price: 0.25, qty: 4 });
+println(total(xs as NonEmpty[Item]));
+}

@@ -1,0 +1,4 @@
+struct St { id: i64 }
+impl Drop for St { fn drop(mut ref self) { println(f"dSt{self.id}") } }
+fn takeS(x: Option[(St, St)]) { match x { Some(t) => { println("ok") } None => { println("n") } } }
+fn main() { takeS(Some((St { id: 71 }, St { id: 72 }))); println("done") }

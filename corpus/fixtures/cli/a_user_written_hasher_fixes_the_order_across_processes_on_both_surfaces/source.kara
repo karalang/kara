@@ -1,0 +1,28 @@
+struct Fnv { h: u64 }
+impl Hasher for Fnv {
+fn write(mut ref self, bytes: ref Slice[u8]) {
+for b in bytes { self.h = (self.h ^ (b as u64)).wrapping_mul(1099511628211u64); }
+}
+fn finish(ref self) -> u64 { self.h }
+}
+struct FnvBuild { }
+impl BuildHasher for FnvBuild {
+type Hasher = Fnv;
+fn build(ref self) -> Fnv { Fnv { h: 14695981039346656037u64 } }
+}
+fn main() {
+let mut u: Map[String, i64, FnvBuild] = Map.new();
+let mut sip: Map[String, i64] = Map.new();
+let names = ["zulu", "alpha", "mike", "bravo", "yankee",
+"charlie", "xray", "delta", "whiskey", "echo"];
+for n in names {
+u.insert(n.to_string(), 1);
+sip.insert(n.to_string(), 1);
+}
+let mut a = "";
+for k in u.keys() { a = a + k + " "; }
+println(a);
+let mut b = "";
+for k in sip.keys() { b = b + k + " "; }
+println(b);
+}

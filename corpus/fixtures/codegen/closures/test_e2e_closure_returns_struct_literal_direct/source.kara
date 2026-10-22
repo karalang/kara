@@ -1,0 +1,7 @@
+struct V { a: i64, b: i64 }
+fn main() {
+let make = || V { a: 10i64, b: 20i64 };
+let v = make();
+let w = make();
+println((v.a + v.b + w.a).to_string());
+}

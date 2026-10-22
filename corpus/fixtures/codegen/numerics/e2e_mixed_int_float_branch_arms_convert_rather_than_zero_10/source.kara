@@ -1,0 +1,2 @@
+fn f(k: i64, n: i64) -> f64 { match k { 0 => n, _ => 2.5 } }
+fn main() { println(f(0, 7)); println(f(1, 7)); }

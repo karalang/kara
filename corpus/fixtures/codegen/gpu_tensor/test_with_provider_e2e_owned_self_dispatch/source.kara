@@ -1,0 +1,8 @@
+pub trait Counter { fn count(self) -> i64; }
+pub struct H { val: i64 }
+impl Counter for H { fn count(self) -> i64 { self.val } }
+pub effect resource Cnt: Counter;
+fn main() {
+let p = H { val: 42 };
+with_provider[Cnt](p, || { println(Cnt.count()); });
+}

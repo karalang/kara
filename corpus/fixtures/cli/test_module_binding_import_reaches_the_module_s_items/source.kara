@@ -1,0 +1,7 @@
+import db.connection;
+
+fn main() {
+    let c = connection.open(7);
+    let p = connection.Pool { size: 3 };
+    println(f"{c.id} {p.size}");
+}

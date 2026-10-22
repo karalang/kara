@@ -1,0 +1,6 @@
+#[derive(Display)]
+        struct Point { x: i64, y: i64 }
+        fn main() {
+            let v: Vec[Point] = [Point { x: 9, y: 8 }, Point { x: 7, y: 6 }];
+            println(f"list={v}");
+        }

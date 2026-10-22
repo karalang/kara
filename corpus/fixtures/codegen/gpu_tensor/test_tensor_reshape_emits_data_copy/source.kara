@@ -1,0 +1,5 @@
+fn main() {
+let a = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+let r = a.reshape([3, 2]);
+println(r[2, 1]);
+}

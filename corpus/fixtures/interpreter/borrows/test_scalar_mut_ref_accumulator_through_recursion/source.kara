@@ -1,0 +1,10 @@
+fn bump(d: i64, t: mut ref i64) {
+if d == 0i64 { t = t + 1i64; return; }
+bump(d - 1i64, t);
+bump(d - 1i64, t);
+}
+fn main() {
+let mut t: i64 = 0;
+bump(3i64, mut t);
+println(t);
+}

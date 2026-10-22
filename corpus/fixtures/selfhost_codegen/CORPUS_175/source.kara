@@ -1,0 +1,79 @@
+struct P {
+    x: i64,
+    y: i64,
+}
+fn clone_p(p: ref P) -> P {
+    return P { x: p.x, y: p.y };
+}
+enum E {
+    A(P),
+    B(P),
+}
+enum T {
+    X,
+    Y,
+}
+fn pick_str(t: ref T) -> String {
+    match t {
+        X => "ex".to_string(),
+        Y => "why".to_string(),
+    }
+}
+fn pick_struct(e: ref E) -> P {
+    match e {
+        A(n) => clone_p(n),
+        B(n) => clone_p(n),
+    }
+}
+fn name_of(n: i64) -> String {
+    match n {
+        0 => "zero".to_string(),
+        1 => "one".to_string(),
+        _ => "many".to_string(),
+    }
+}
+fn label(c: bool) -> String {
+    if c {
+        "yes".to_string()
+    } else {
+        "no".to_string()
+    }
+}
+fn corner(c: bool) -> P {
+    if c {
+        P { x: 1, y: 2 }
+    } else {
+        P { x: 3, y: 4 }
+    }
+}
+fn tag(t: ref T) -> i64 {
+    match t {
+        X => 10,
+        Y => 20,
+    }
+}
+fn yes(t: ref T) -> bool {
+    match t {
+        X => true,
+        Y => false,
+    }
+}
+fn main() {
+    println(pick_str(T.X));
+    println(pick_str(T.Y));
+    let r = pick_struct(E.A(P { x: 7, y: 2 }));
+    println((r.x + r.y).to_string());
+    println(name_of(0));
+    println(name_of(1));
+    println(name_of(9));
+    println(label(true));
+    println(label(false));
+    let q = corner(false);
+    println((q.x + q.y).to_string());
+    println(tag(T.Y).to_string());
+    if yes(T.X) {
+        println("yx");
+    } else {
+        println("nx");
+    }
+}

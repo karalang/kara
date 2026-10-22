@@ -1,0 +1,10 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);
+df.insert("score", score);
+let d: DataFrame = df.describe();
+let lab: Column[String] = d.column("statistic");
+for s in lab.iter_valid() { println(s); }
+let c: Column[f64] = d.column("score");
+for v in c.iter_valid() { println(v); }
+}

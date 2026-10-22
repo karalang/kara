@@ -1,0 +1,3 @@
+struct S { xs: Vec[String] }
+impl S { fn get(ref self, i: i64) -> String { return self.xs[i].clone(); } }
+fn main() { let mut s = S { xs: Vec.new() }; s.xs.push("a"); println(s.get(0)); }

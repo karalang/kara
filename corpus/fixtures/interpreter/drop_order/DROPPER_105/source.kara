@@ -1,0 +1,2 @@
+fn take(w: W) -> R { return w.r; }
+fn main() { let x = take(W { r: R { id: 42 }, n: 2 }); println(f"{x.id}") }

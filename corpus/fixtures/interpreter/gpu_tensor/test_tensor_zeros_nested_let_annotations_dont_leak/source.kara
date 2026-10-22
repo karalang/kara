@@ -1,0 +1,8 @@
+fn main() {
+let outer: Tensor[i64, [2]] = {
+let inner: Tensor[bool, [2]] = Tensor.zeros([2]);
+println(inner[0]);
+Tensor.zeros([2])
+};
+println(outer[0] + 5);
+}

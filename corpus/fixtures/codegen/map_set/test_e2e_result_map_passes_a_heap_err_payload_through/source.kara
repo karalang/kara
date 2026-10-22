@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[i64, String] = Err(f"boom");
+match r.map(|x| x + 1i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }
+}

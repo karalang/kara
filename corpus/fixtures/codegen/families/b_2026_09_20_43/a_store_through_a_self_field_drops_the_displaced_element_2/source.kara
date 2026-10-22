@@ -1,0 +1,1 @@
+fn main() { let mut b = Bag { xs: [D { id: 1 }, D { id: 2 }] }; b.put2(1, D { id: 3 }); println(f"x:{b.xs[1].id}"); }

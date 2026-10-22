@@ -1,0 +1,15 @@
+fn find() {
+let r = None;
+r?
+}
+fn search() {
+let v = find()?;
+v
+}
+fn main() {
+let result = search();
+match result {
+Some(v) => println(v),
+None => println("not found"),
+}
+}

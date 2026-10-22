@@ -1,0 +1,7 @@
+fn main() {
+let mut l: DataFrame = DataFrame.new();
+l.insert("a", Column.from_vec([1i64]));
+let mut r: DataFrame = DataFrame.new();
+r.insert("b", Column.from_vec([1i64]));
+let _ = l.lazy().join(r.lazy(), vec!["b"]).collect();
+}

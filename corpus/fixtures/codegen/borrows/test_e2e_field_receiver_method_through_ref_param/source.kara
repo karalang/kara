@@ -1,0 +1,15 @@
+import std.json.{Json};
+
+struct Todo { id: i64, title: String, completed: bool }
+fn todo_to_json(t: ref Todo) -> Json {
+let mut fields: Vec[(String, Json)] = Vec.new();
+fields.push(("id", Json.Number(t.id as f64)));
+fields.push(("title", Json.String(t.title.clone())));
+fields.push(("completed", Json.Bool(t.completed)));
+Json.Object(fields)
+}
+fn main() {
+let t: Todo = Todo { id: 42, title: "Learn Kara", completed: true };
+let j: Json = todo_to_json(t);
+println(j.stringify());
+}

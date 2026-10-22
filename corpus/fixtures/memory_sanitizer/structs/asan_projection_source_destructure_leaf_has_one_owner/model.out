@@ -1,0 +1,9 @@
+  p1:n1
+dR1:n1:1
+  o:n2:s
+dR2:n2:1
+  t:n3
+dR3:n3:1
+  nr1:n4
+dR4:n4:1
+end

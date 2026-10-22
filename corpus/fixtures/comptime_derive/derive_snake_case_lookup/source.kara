@@ -1,0 +1,12 @@
+
+comptime fn derive_partial_eq(comptime T: Type) -> Vec[Item] {
+    [ast.item("impl " + T.name() + " { fn peq(self) -> bool { true } }")]
+}
+
+#[derive(PartialEq)]
+struct Q { x: i64 }
+
+fn main() {
+    let q = Q { x: 1 };
+    println(q.peq());
+}

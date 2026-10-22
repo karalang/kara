@@ -1,0 +1,12 @@
+shared struct Cache { capacity: u64, index: Map[i64, u64] }
+impl Cache {
+fn new(capacity: u64) -> Cache { Cache { capacity, index: Map.new() } }
+fn put(self, k: i64, v: u64) { let _ = self.index.insert(k, v); }
+fn count(ref self) -> u64 { self.index.len() as u64 }
+}
+fn main() {
+let mut c = Cache.new(2);
+c.put(5, 9);
+c.put(7, 3);
+println(c.count());
+}

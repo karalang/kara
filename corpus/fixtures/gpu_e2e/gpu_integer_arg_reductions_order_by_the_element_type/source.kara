@@ -1,0 +1,8 @@
+fn main() {
+    let v: Vec[u32] = [4294967295, 1];
+    let m = gpu.argmax(v);
+    match m {
+        Some(x) => println(f"{x}"),
+        None => println("empty"),
+    }
+}

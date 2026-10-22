@@ -1,0 +1,10 @@
+fn mk(n: i64) -> Array[Array[String, 2], 2] {
+    return [[f"aaaaaaaa{n}", f"bbbbbbbb{n}"], [f"cccccccc{n}", f"dddddddd{n}"]];
+}
+fn main() {
+    let x: Array[Array[String, 2], 2] = mk(0);
+    let y: Array[Array[String, 2], 2] = mk(0);
+    let z: Array[Array[String, 2], 2] = mk(1);
+    println(f"e:{x == y}");
+    println(f"n:{x == z}");
+}

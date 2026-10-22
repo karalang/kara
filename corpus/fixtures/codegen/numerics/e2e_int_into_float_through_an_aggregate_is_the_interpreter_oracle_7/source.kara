@@ -1,0 +1,1 @@
+fn main() { let t: (f64, f64) = (1.5, 2.5); println(f"{t.0} {t.1}"); }

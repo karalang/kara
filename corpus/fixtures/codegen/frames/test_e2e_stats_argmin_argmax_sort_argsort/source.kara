@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[f64] = vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0];
+match Stats.argmin(v) { Some(i) => println(i), None => println(-1), }
+match Stats.argmax(v) { Some(i) => println(i), None => println(-1), }
+let s: Vec[f64] = Stats.sort(v);
+println(s[0]);
+println(s[6]);
+let a: Vec[i64] = Stats.argsort(v);
+println(a[0]);
+println(a[6]);
+}

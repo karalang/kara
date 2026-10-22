@@ -1,0 +1,4 @@
+enum Plain { A, B, C }
+fn main() {
+println(f"{Plain.A.discriminant()} {Plain.B.discriminant()} {Plain.C.discriminant()}");
+}

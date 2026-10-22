@@ -1,0 +1,13 @@
+fn main() {
+let mut outer: Vec[Vec[i64]] = Vec.new();
+outer.push(Vec[3, 1]);
+outer.push(Vec[2]);
+outer.push(Vec[2, 9]);
+outer.sort();
+let mut i = 0;
+while i < outer.len() {
+println(outer[i][0]);
+println(outer[i].len());
+i = i + 1;
+};
+}

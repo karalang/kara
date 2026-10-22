@@ -1,0 +1,8 @@
+fn main() {
+let c: Column[f64] = Column.from_vec([2.0, 4.0, 6.0]);
+println(c.mean());
+println(c.var());
+println(c.std());
+println(c.min());
+println(c.max());
+}

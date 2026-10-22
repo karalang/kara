@@ -1,0 +1,15 @@
+source = "tests/interpreter/misc.rs::gpu_sum_uses_the_gpu_tree_order_not_a_left_fold"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "2e0d04e7"

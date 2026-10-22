@@ -1,0 +1,9 @@
+fn main() {
+let mut m: Map[i64, Vec[i64]] = Map.new();
+m.insert(1_i64, [7_i64]);
+let cm = m.clone();
+let mut got = cm[1_i64];
+got[0] = 55_i64;
+println(m[1_i64][0]);
+println(got[0]);
+}

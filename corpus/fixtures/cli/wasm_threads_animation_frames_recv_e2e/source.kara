@@ -1,0 +1,15 @@
+import std.web.time.{animation_frames};
+
+fn main() {
+    println("before");
+    let frames = animation_frames();
+    let mut n = 0;
+    loop {
+        frames.recv();
+        n = n + 1;
+        if n >= 3 {
+            break;
+        }
+    }
+    println("after");
+}

@@ -1,0 +1,15 @@
+enum Sink { None, Open(i64) }
+enum Slot { Ok, Err, Eof }
+enum MyIoErr { Other(i64), Eof }
+fn make(x: i64) -> Option[i64] { if x > 0 { Some(x) } else { None } }
+fn div(x: i64) -> Result[i64, i64] { if x > 0 { Ok(x) } else { Err(0 - 1) } }
+fn main() {
+match make(1) { Some(v) => println(v), None => println(-1) }
+match make(0) { Some(v) => println(v), None => println(-1) }
+match div(2) { Ok(v) => println(v), Err(e) => println(e) }
+match div(0) { Ok(v) => println(v), Err(e) => println(e) }
+let s: Sink = Sink.None;
+match s { None => println(-2), Open(v) => println(v) }
+let e = Other(7);
+match e { Other(v) => println(v), Eof => println(-3) }
+}

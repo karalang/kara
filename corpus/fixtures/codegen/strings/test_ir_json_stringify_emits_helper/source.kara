@@ -1,0 +1,6 @@
+import std.json.{Json};
+
+fn main() {
+println(Json.Number(1.0).stringify());
+println(Json.Number(2.0).stringify());
+}

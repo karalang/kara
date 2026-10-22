@@ -1,0 +1,6 @@
+enum Ec { A(Array[Vec[R], 2]), B }
+fn main() {
+    let e = Ec.A([mkv(), mkv()]); match e { Ec.A(v) => { let u = v; println("mv") } Ec.B => { println("no") } }
+    let f = Ec.A([mkv(), mkv()]); match f { Ec.A(v) => { println("rd") } Ec.B => { println("no") } }
+    println("end")
+}

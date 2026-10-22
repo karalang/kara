@@ -1,0 +1,13 @@
+#[derive(Hash, Eq)]
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn main() {
+    println("a");
+    let mut s: Set[Res] = Set.new();
+    s.insert(Res { id: 5 });
+    println("end");
+}

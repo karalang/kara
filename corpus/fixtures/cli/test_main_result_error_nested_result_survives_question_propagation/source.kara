@@ -1,0 +1,8 @@
+fn inner() -> Result[i64, Result[i64, i64]] {
+    return Err(Ok(3));
+}
+fn main() -> Result[(), Result[i64, i64]] {
+    let x = inner()?;
+    println(f"got {x}");
+    return Ok(());
+}

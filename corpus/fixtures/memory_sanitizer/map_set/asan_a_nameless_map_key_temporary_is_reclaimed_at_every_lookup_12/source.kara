@@ -1,0 +1,7 @@
+fn mk20(n: i64) -> (String, String) { return (f"aaaaaaaaaaaa{n}", f"bbbbbbbbbbbb{n}"); }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 { m.insert(mk20(i), i); i = i + 1; }
+    println(f"len:{m.len()}");
+}

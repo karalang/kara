@@ -1,0 +1,5 @@
+enum E { Missing(String) }
+struct Sm { a: Map[String, i64] }
+fn mk() -> Result[Sm, E] { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); Ok(Sm { a: m }) }
+fn take(s: Sm) { println(f"{s.a.len()}"); }
+fn main() { match mk() { Ok(s) => take(s), Err(_e) => println("e") } }

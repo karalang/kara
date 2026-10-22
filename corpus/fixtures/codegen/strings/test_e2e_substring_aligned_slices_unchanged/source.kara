@@ -1,0 +1,10 @@
+fn main() {
+let s = "日本語";
+println(s.substring(0i64, 3i64).len());
+println(s.substring(3i64, 9i64).len());
+println(s.substring(0i64, 9i64).len());
+println(s.substring(9i64).len());
+println("abcdef".substring(0i64, 20i64));
+println("abcdef".substring(2i64));
+println(s.substring(20i64).len());
+}

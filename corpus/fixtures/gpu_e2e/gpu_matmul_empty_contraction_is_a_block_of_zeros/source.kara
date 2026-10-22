@@ -1,0 +1,6 @@
+fn main() {
+    let a: Tensor[f32, [?, ?]] = Tensor.zeros([2, 0]);
+    let b: Tensor[f32, [?, ?]] = Tensor.zeros([0, 3]);
+    let g = gpu.matmul(a, b);
+    println(f"{g.shape()[0]} {g.shape()[1]} {g[0, 0]} {g[1, 2]}");
+}

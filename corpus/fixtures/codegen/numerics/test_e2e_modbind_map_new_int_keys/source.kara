@@ -1,0 +1,8 @@
+let mut SCORES: Map[i64, i64] = Map.new();
+fn main() {
+SCORES.insert(1, 10);
+SCORES.insert(2, 20);
+SCORES.insert(1, 11);
+println(SCORES.get(1).unwrap_or(0));
+println(SCORES.get(2).unwrap_or(0));
+}

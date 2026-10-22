@@ -1,0 +1,1 @@
+fn main() { let a: G[Vec[i64]] = G.Y([1, 2, 3]); a.show(); for i in 0..3 { let g: G[Vec[i64]] = G.Y([i, i]); g.show(); } }

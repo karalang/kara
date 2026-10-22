@@ -1,0 +1,7 @@
+struct Pair[T] { a: T, b: T }
+fn swap[T](p: Pair[T]) -> Pair[T] { Pair { a: p.b, b: p.a } }
+fn main() {
+     let p = Pair { a: "x".to_string(), b: "y".to_string() };
+     let q = swap(p);
+     print(q.a); print(q.b);
+}

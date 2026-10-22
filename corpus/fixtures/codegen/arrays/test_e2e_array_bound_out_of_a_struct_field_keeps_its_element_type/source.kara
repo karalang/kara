@@ -1,0 +1,23 @@
+struct R { id: i64, tag: String }
+struct Ha { a: Array[R, 2] }
+struct Nums { ns: Array[i64, 3] }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag{n}" }; }
+impl Nums {
+fn sorted(ref self) -> bool {
+let x = self.ns;
+return x.is_sorted();
+}
+}
+fn main() {
+let h = Ha { a: [mk(2), mk(3)] };
+println(f"direct {h.a[0].id}/{h.a[1].tag}");
+let h2 = Ha { a: [mk(4), mk(5)] };
+let x = h2.a;
+let e = ref x[0];
+println(f"bound {e.id}/{e.tag}");
+let h3 = Ha { a: [mk(6), mk(7)] };
+let y: Array[R, 2] = h3.a;
+println(f"annot {y[1].id}/{y[1].tag}");
+let n = Nums { ns: [1, 2, 3] };
+println(f"sorted {n.sorted()}");
+}

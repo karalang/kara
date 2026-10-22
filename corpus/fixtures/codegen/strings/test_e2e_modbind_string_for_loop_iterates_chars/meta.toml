@@ -1,0 +1,17 @@
+source = "tests/codegen/strings.rs::test_e2e_modbind_string_for_loop_iterates_chars"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E_MODULE_LET"
+classified_with = "79705a229"
+extracted_src = "677a5e88"
+model_rev = "583cfb0d"
+model_src = "677a5e88"

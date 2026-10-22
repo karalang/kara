@@ -1,0 +1,9 @@
+fn count_to_return(limit: i64) -> i64 {
+let mut i = 0;
+while true {
+i += 1;
+if i >= limit { return i; }
+}
+0
+}
+fn main() { println(count_to_return(5)); }

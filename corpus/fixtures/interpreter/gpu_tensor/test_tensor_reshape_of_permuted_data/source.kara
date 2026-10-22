@@ -1,0 +1,9 @@
+fn main() {
+let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+let p = t.permute([1, 0]);
+let flat = p.reshape([6]);
+println(flat[0]);
+println(flat[1]);
+println(flat[2]);
+println(flat[5]);
+}

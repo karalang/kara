@@ -1,0 +1,9 @@
+
+comptime fn derive_oops(comptime T: Type) -> Vec[Item] {
+    [ast.item("this is not an item")]
+}
+
+#[derive(Oops)]
+struct S { x: i64 }
+
+fn main() {}

@@ -1,0 +1,14 @@
+fn main() {
+let a: Option[u8] = Some(200u8);
+println(a.unwrap());
+let b: Option[u16] = Some(60000u16);
+println(b.unwrap_or(0u16));
+let c: Option[u32] = Some(4000000000u32);
+println(c.expect("x"));
+let d: Option[i8] = Some(-56i8);
+println(d.unwrap_or(0i8));
+let g: Option[u8] = None;
+println(g.unwrap_or(255u8));
+let h: Result[u8, String] = Ok(250u8);
+println(h.unwrap_or(0u8));
+}

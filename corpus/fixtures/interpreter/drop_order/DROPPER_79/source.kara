@@ -1,0 +1,2 @@
+fn id2(r: R) -> R { r }
+fn main() { let x = id2(R { id: 41 }); println(f"{x.id}") }

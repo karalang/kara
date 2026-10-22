@@ -1,0 +1,2 @@
+fn f() -> i64 { let o = L1 { b: L2 { c: L3 { r: mk(1), q: mk(2) }, d: mk(3) }, e: mk(4) }; let x = o.b.c.r; return 7; }
+fn main() { println(f()) }

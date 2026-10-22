@@ -1,0 +1,3 @@
+impl Drop for K { fn drop(mut ref self) { println("dK") } }
+fn show(x: Option[K]) { match x { Option.Some(K.A(r)) => { println(f"a:{r.s}"); }, Option.Some(K.B) => {}, Option.None => {} } }
+fn main() { let mut i = 0; while i < 3 { let q = Option.Some(K.A(mkr(i))); show(q); i = i + 1; } println("end") }

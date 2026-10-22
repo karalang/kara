@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_fix_applies_concurrent_shared_struct_migration"
+dedup_of = []
+expect = "error:E0520"
+exit = 1
+tags = ["par", "post-m1:par", "shared", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "f3d518c0"
+model_rev = "583cfb0d"
+model_src = "f3d518c0"

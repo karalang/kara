@@ -1,0 +1,2 @@
+fn pad(a: String, b: String) -> String { a + " " + b }
+fn main() { println(pad("left", "right")) }

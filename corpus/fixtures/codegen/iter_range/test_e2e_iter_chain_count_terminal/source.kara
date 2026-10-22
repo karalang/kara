@@ -1,0 +1,12 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4, 5];
+println(f"{v.iter().count()}");
+println(f"{v.iter().filter(|x| x > 2).count()}");
+println(f"{v.iter().map(|x| x * 2).count()}");
+println(f"{v.iter().filter(|x| x > 1).map(|x| x + 1).count()}");
+let e: Vec[i64] = [];
+println(f"{e.iter().count()}");
+println(f"{(1..5).count()}");
+let s: String = "hello";
+println(f"{s.chars().count()}");
+}

@@ -1,0 +1,1 @@
+fn main() { let p = P { id: 1, s: f"one" }; let w: Ws = Ws.Full(p); println(f"p:{p.s}"); println("end") }

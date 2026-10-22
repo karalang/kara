@@ -1,0 +1,16 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct Holder { xs: Vec[Res], tag: i64 }
+fn main() {
+println("a");
+{
+let mut m: Map[i64, Holder] = Map.new();
+let mut xs: Vec[Res] = Vec.new();
+xs.push(Res { id: 3, name: f"mm{3}" });
+let _ = m.insert(1, Holder { xs: xs, tag: 7 });
+println(m.len());
+}
+println("end");
+}

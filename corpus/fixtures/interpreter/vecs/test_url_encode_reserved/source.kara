@@ -1,0 +1,3 @@
+fn main() {
+println(Url.encode("hello world"));
+}

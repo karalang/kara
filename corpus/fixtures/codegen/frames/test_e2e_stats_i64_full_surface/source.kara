@@ -1,0 +1,17 @@
+fn main() {
+let xs: Vec[i64] = vec![4, 1, 3, 2];
+println(Stats.sum(xs));
+println(Stats.prod(xs));
+println(Stats.mean(xs));
+println(Stats.variance(xs));
+println(Stats.median(xs));
+println(Stats.percentile(xs, 25));
+match Stats.min(xs) { Some(v) => println(v), None => println(-1) }
+match Stats.max(xs) { Some(v) => println(v), None => println(-1) }
+match Stats.argmin(xs) { Some(i) => println(i), None => println(-1) }
+match Stats.argmax(xs) { Some(i) => println(i), None => println(-1) }
+let s: Vec[i64] = Stats.sort(xs);
+println(s[0]); println(s[3]);
+let a: Vec[i64] = Stats.argsort(xs);
+println(a[0]); println(a[3]);
+}

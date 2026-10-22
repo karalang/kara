@@ -1,0 +1,2 @@
+fn id(s: String) -> String { s }
+fn main() { println(id("echo")) }

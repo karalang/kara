@@ -1,0 +1,11 @@
+fn main() {
+let a: i128 = 1i128;
+println(a << 100u32);
+let b: i128 = 1267650600228229401496703205376i128;
+println(b >> 100u32);
+let c: i64 = 1099511627776i64;
+println(c << 1u32);
+println(c >> 1u32);
+let d: u64 = 18446744073709551615u64;
+println(d >> 32u32);
+}

@@ -1,0 +1,21 @@
+fn main() {
+let v = [1, 2, 3, 4, 5, 6];
+let (evens, odds): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);
+println(f"{evens.len()}:{odds.len()}");
+let mut es = 0;
+for e in evens { es = es + e; }
+let mut os = 0;
+for o in odds { os = os + o; }
+println(f"{es}:{os}");
+let (big, small): (Vec[i64], Vec[i64]) = v.iter().map(|x| x * 2).partition(|y| y > 6);
+let mut bs = 0;
+for b in big { bs = bs + b; }
+let mut ss = 0;
+for s in small { ss = ss + s; }
+println(f"{bs}:{ss}");
+let f: Vec[f64] = [1.5, 2.5, 3.5];
+let (hi, lo): (Vec[f64], Vec[f64]) = f.iter().partition(|x| x > 2.0);
+println(f"{hi.len()}:{lo.len()}");
+let (none_big, all_small): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x > 100);
+println(f"{none_big.len()}:{all_small.len()}");
+}

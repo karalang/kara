@@ -1,0 +1,2 @@
+impl B2 { fn pick(ref self, r: R, k: bool) -> R { if k { r } else { R { id: 99 } } } }
+fn main() { let b = B2 { n: 1 }; let x = b.pick(R { id: 41 }, true); println(f"{x.id}") }

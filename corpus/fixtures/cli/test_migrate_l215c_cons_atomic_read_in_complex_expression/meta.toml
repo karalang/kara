@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_migrate_l215c_cons_atomic_read_in_complex_expression"
+dedup_of = []
+expect = "error:E0104"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "a371ea63"
+model_rev = "583cfb0d"
+model_src = "a371ea63"

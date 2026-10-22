@@ -1,0 +1,2 @@
+fn g(b: Gen[Wn]) { match b { Gen.A(w) => { println(f"rd{w.a.id}") } Gen.B => { println("none") } } }
+fn main() { { let a: Gen[Wn] = Gen.A(Wn { a: R { id: 42 } }); g(a) }; println("end") }

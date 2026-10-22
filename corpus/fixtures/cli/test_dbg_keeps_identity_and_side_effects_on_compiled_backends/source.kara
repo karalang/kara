@@ -1,0 +1,6 @@
+fn side() -> i64 { println("SIDE"); 5 }
+fn main() {
+    let a = dbg(41) + 1;
+    let b = dbg(side());
+    println(f"a={a} b={b}");
+}

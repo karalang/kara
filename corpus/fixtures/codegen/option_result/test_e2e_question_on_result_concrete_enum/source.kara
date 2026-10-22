@@ -1,0 +1,18 @@
+enum J { N, S(String), Pair(i64, String) }
+fn get(k: i64) -> Result[J, String] {
+if k == 0 { Result.Ok(J.N) }
+else { if k == 1 { Result.Ok(J.S("hi")) } else { Result.Ok(J.Pair(7, "x")) } }
+}
+fn show(k: i64) -> Result[String, String] {
+let v = get(k)?;
+match v {
+N => { Result.Ok("N") }
+S(s) => { Result.Ok(s) }
+Pair(a, s) => { Result.Ok(f"{a}:{s}") }
+}
+}
+fn main() {
+match show(0) { Ok(r) => println(r), Err(_) => println("e") }
+match show(1) { Ok(r) => println(r), Err(_) => println("e") }
+match show(2) { Ok(r) => println(r), Err(_) => println("e") }
+}

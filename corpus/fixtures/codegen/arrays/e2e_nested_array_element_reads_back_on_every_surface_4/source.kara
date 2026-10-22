@@ -1,0 +1,4 @@
+fn plainNN(x: Option[Array[Array[String, 2], 2]]) {
+    match x { Some(t) => { println(f"s:{t[1][0]}") } None => { println("n") } }
+}
+fn main() { plainNN(None); }

@@ -1,0 +1,20 @@
+#[derive(Eq, Ord)]
+enum Shape { Circle(i64), Rect(i64, i64), Unit }
+fn stag(s: ref Shape) -> i64 {
+    match s {
+        Shape.Circle(r) => 100 + r,
+        Shape.Rect(w, h) => 200 + w * 10 + h,
+        Shape.Unit => 300,
+    }
+}
+fn main() {
+    let mut v: Vec[Shape] = Vec.new();
+    v.push(Shape.Rect(2, 1));
+    v.push(Shape.Circle(9));
+    v.push(Shape.Unit);
+    v.push(Shape.Rect(1, 5));
+    v.push(Shape.Circle(3));
+    v.sort();
+    let mut i = 0;
+    while i < v.len() { let s = ref v[i]; println(f"{stag(s)}"); i = i + 1; };
+}

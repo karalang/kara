@@ -1,0 +1,1 @@
+fn main() { let mut pair: (i32, i32) = (1, 2); let pt: *mut i32 = ptr.mut(pair.0); let mut v: Vec[i32] = Vec.new(); v.push(9); let pv: *mut i32 = ptr.mut(v[0]); }

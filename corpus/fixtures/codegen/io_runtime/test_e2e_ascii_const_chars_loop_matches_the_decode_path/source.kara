@@ -1,0 +1,64 @@
+fn pick() -> String { return "é→"; }
+fn spoil(s: mut ref String) { s.push('é'); }
+fn main() {
+    let a: String = "abcXYZ";
+    let mut o = 0i64;
+    for c in a.chars() { o = o + (c as i64); }
+    println(o);
+    let m: String = "héllo→";
+    let mut p = 0i64;
+    for c in m.chars() { p = p + (c as i64); }
+    println(p);
+    let mut q = 0i64;
+    for c in "hey".chars() { q = q + (c as i64); }
+    println(q);
+    let mut r = 0i64;
+    for c in "é→".chars() { r = r + (c as i64); }
+    println(r);
+    let e: String = "pq";
+    let mut t = 0i64;
+    for c in e { t = t + (c as i64); }
+    println(t);
+    let mut g: String = "ab";
+    g.push('é');
+    let mut u = 0i64;
+    for c in g.chars() { u = u + (c as i64); }
+    println(u);
+    let mut w: String = "ab";
+    w = "é";
+    let mut x = 0i64;
+    for c in w.chars() { x = x + (c as i64); }
+    println(x);
+    let k: String = "abcdef";
+    let mut n = 0i64;
+    let mut s = 0i64;
+    for c in k.chars() {
+        if n == 1i64 { n = n + 1i64; continue; }
+        if n == 4i64 { break; }
+        s = s + (c as i64);
+        n = n + 1i64;
+    }
+    println(s);
+    let mut z = 0i64;
+    for c in "".chars() { z = z + 1i64; }
+    println(z);
+    let v: String = "xyz";
+    let mut gl: String = "";
+    for c in v.chars() { gl = gl + f"{c}"; }
+    println(gl);
+    let alphabet: String = "ab";
+    let mut y = 0i64;
+    for c in alphabet.chars() { y = y + (c as i64); }
+    println(y);
+    {
+        let alphabet: String = pick();
+        let mut sh = 0i64;
+        for c in alphabet.chars() { sh = sh + (c as i64); }
+        println(sh);
+    }
+    let mut ma: String = "ab";
+    spoil(mut ma);
+    let mut mc = 0i64;
+    for c in ma.chars() { mc = mc + (c as i64); }
+    println(mc);
+}

@@ -1,0 +1,32 @@
+fn main() {
+    let mut x = 5;
+    x += 3;
+    println(x.to_string());
+    x -= 2;
+    println(x.to_string());
+    x *= 4;
+    println(x.to_string());
+    x /= 5;
+    println(x.to_string());
+    x %= 3;
+    println(x.to_string());
+    let mut b = 12;
+    b &= 10;
+    println(b.to_string());
+    b |= 5;
+    println(b.to_string());
+    b ^= 6;
+    println(b.to_string());
+    let mut sh = 1;
+    sh <<= 4;
+    println(sh.to_string());
+    sh >>= 2;
+    println(sh.to_string());
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 5 {
+        acc += i;
+        i += 1;
+    }
+    println(acc.to_string());
+}

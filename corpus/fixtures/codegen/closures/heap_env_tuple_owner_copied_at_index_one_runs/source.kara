@@ -1,0 +1,2 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() { let a = (0i64, make(10i64)); let s = a; println(f"{(a.1)(1i64)}"); println(f"{(s.1)(2i64)}"); }

@@ -1,0 +1,7 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+m.insert(1, 1);
+let mut n = m.clone();
+n.insert(2, 2);
+println(f"m={m.len()} n={n.len()}");
+}

@@ -1,0 +1,12 @@
+fn main() {
+let a: Option[i64] = Some(1);
+let b: Option[i64] = Some(1);
+let c: Option[i64] = None;
+let d: Option[i64] = None;
+println(f"{a == b}");
+println(f"{a == c}");
+println(f"{c == d}");
+let r: Result[i64, i64] = Ok(5);
+let s: Result[i64, i64] = Ok(5);
+println(f"{r == s}");
+}

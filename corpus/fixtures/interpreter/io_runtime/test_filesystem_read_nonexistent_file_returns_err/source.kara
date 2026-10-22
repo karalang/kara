@@ -1,0 +1,10 @@
+fn main() {
+                   let r = FileSystem.read_to_string("/nonexistent_karac_test_xyz.txt");
+                   match r {
+                       Ok(_) => println("ok"),
+                       Err(e) => match e {
+                           IoError.NotFound => println("not found"),
+                           _ => println("other error"),
+                       },
+                   }
+               }

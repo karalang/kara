@@ -1,0 +1,6 @@
+struct S { n: i64 }
+fn main() {
+let a: Option[S] = Some(S { n: 3 });
+match a { Some(S { n }) => { println(n); } None => {} }
+match a { Some(S { n }) => println(n), None => println("none") }
+}

@@ -1,0 +1,2 @@
+pub let myConfig: i64 = 5;
+fn main() { println(myConfig); }

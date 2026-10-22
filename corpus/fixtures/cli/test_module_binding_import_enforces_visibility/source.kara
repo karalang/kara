@@ -1,0 +1,5 @@
+import db.helpers;
+
+fn main() {
+    println(f"{helpers.secret()}");
+}

@@ -1,0 +1,2 @@
+impl B2 { fn both(ref self, r: R, k: bool) -> R { if k { return r; } r } }
+fn main() { let b = B2 { n: 1 }; let z = b.both(R { id: 23 }, false); println(f"{z.id}"); }

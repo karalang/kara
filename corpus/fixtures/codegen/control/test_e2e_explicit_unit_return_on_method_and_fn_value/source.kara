@@ -1,0 +1,3 @@
+struct S { v: i64 }
+impl S { fn show(ref self) -> () { println("m"); } }
+fn main() { println("before"); let s: S = S { v: 1i64 }; s.show(); println("after"); }

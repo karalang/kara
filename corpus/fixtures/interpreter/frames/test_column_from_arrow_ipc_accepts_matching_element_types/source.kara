@@ -1,0 +1,11 @@
+fn main() {
+let a: Column[i64] = Column.from_vec([1, 2, 3]);
+let ra: Column[i64] = Column.from_arrow_ipc(a.to_arrow_ipc());
+println(ra.len());
+let b: Column[String] = Column.from_vec(["a", "b"]);
+let rb: Column[String] = Column.from_arrow_ipc(b.to_arrow_ipc());
+println(rb.len());
+let c: Column[f64] = Column.from_vec([1.5, 2.5]);
+let rc: Column[f64] = Column.from_arrow_ipc(c.to_arrow_ipc());
+println(rc.len());
+}

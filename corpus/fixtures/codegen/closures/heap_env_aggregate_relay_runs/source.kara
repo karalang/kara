@@ -1,0 +1,5 @@
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> H { let h = H { f: make(k) }; h }
+fn relay(k: i64) -> H { let r = build(k); return r; }
+fn main() { let r = relay(20i64); println(f"{(r.f)(22i64)}"); }

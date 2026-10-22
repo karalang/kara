@@ -1,0 +1,22 @@
+#[derive(PartialEq)]
+        struct WrapS { a: Array[String, 2] }
+        fn main() {
+            let x: Array[i64, 2] = Array[1, 2];
+            let y: Array[i64, 2] = Array[1, 9];
+            println(f"{x == y}");
+            println(f"{x != y}");
+            let p: Array[String, 2] = Array["ab", "cd"];
+            let q: Array[String, 2] = Array["ab", "cd"];
+            let r: Array[String, 2] = Array["ab", "zz"];
+            println(f"{p == q}");
+            println(f"{p == r}");
+            println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "cd"] }}");
+            let n3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 6]];
+            let m3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 7]];
+            println(f"{n3 == m3}");
+            let mut km: Map[Array[String, 2], i64] = Map.new();
+            km.insert(Array["ab", "cd"], 1);
+            km.insert(Array["ab", "cd"], 2);
+            km.insert(Array["ab", "zz"], 3);
+            println(f"{km.len()}");
+        }

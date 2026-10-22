@@ -1,0 +1,7 @@
+fn main() {
+let mut s: SortedSet[i64] = SortedSet.new();
+s.insert(4);
+s.insert(9);
+println("mx=" + s.max().unwrap().to_string());
+println("mn=" + s.min().unwrap().to_string());
+}

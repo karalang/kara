@@ -1,0 +1,21 @@
+effect resource Disk;
+
+struct IoStats {
+    reads: i64,
+    writes: i64,
+    blocks: i64,
+}
+
+fn total(s: ref IoStats) -> i64 {
+    s.reads + s.writes + s.blocks
+}
+
+pub fn load(path: String) -> i64 with reads(Disk) blocks {
+    let reads = 3;
+    reads
+}
+
+fn main() {
+    let s = IoStats { reads: 1, writes: 2, blocks: 3 };
+    println(f"{total(s)}");
+}

@@ -1,0 +1,2 @@
+fn g(b: Ech, base: i64) -> i64 { let mut o: Ch = Ch { r: R { id: base }, s: f"OUT" }; match b { Ech.A(w) => { o = w; } Ech.B => { } }; println("ret"); return o.r.id }
+fn main() { println(f"r:{g(Ech.A(Ch { r: R { id: 12 }, s: f"IN" }), 11)}") }

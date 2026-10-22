@@ -1,0 +1,2 @@
+fn f(a: ref Array[i64, 2]) -> i64 { return a[0].abs(); }
+fn main() { let a: Array[i64, 2] = [0 - 7, 3]; println(f"{f(a)}"); }

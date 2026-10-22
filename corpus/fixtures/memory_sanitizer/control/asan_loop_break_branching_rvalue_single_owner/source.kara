@@ -1,0 +1,10 @@
+shared struct Node { v: i64 }
+fn pick() -> Node {
+    let mut i: i64 = env.args().len() - 1;
+    loop {
+        i = i + 1;
+        let scratch = Node { v: i };
+        if i == 3 { break if scratch.v > 2 { Node { v: i * 11 } } else { Node { v: i } } }
+    }
+}
+fn main() { println(pick().v); }

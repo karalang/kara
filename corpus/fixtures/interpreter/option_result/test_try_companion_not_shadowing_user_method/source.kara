@@ -1,0 +1,7 @@
+struct Bag { n: i64 }
+impl Bag { fn try_push(ref self, x: i64) -> i64 { x + 100_i64 } }
+fn main() {
+let b = Bag { n: 0 };
+println(b.try_push(3_i64));
+println(b.try_push(4_i64));
+}

@@ -1,0 +1,6 @@
+struct N { v: i64 }
+struct H { f: Array[N, 2] }
+fn main() {
+    let h: H = H { f: [N { v: 1 }, N { v: 2 }] };
+    println("end");
+}

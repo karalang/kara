@@ -1,0 +1,1 @@
+fn main() { println((300.0f64).wrapping_to_i8()); }

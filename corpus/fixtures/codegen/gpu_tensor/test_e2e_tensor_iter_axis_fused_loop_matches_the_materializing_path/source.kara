@@ -1,0 +1,41 @@
+fn main() {
+let mut t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);
+let mut i = 0;
+while i < 4 {
+let mut j = 0;
+while j < 3 { t[i, j] = (i * 3 + j) as f32; j = j + 1; }
+i = i + 1;
+}
+let mut a: f32 = 0.0;
+for row in t.iter_axis(0) { a = a + row.sum(); }
+println(a.to_string());
+let mut b: f32 = 0.0;
+for col in t.iter_axis(1) { b = b + col.sum(); }
+println(b.to_string());
+let mut c: f32 = 0.0;
+for row in t.iter_axis(0) {
+c = c + row.sum();
+if c > 10.0 { break; }
+}
+println(c.to_string());
+let mut d: f32 = 0.0;
+let mut k = 0;
+for row in t.iter_axis(0) {
+k = k + 1;
+if k == 2 { continue; }
+d = d + row.sum();
+}
+println(d.to_string());
+let mut keep: Vec[f32] = Vec.new();
+for row in t.iter_axis(0) { keep.push(row.sum()); }
+println(keep.len().to_string());
+let q: Tensor[f32, [3]] = Tensor.ones([3]);
+let mut e: f32 = 0.0;
+for row in t.iter_axis(0) { e = e + q.zip_with(row, |x, y| x * y).sum(); }
+println(e.to_string());
+let mut f: f32 = 0.0;
+for r1 in t.iter_axis(0) {
+for r2 in t.iter_axis(0) { f = f + r1.sum() + r2.sum(); }
+}
+println(f.to_string());
+}

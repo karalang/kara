@@ -1,0 +1,67 @@
+fn main() {
+let xs: Vec[i64] = [1, 2, 3, 4, 5];
+let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];
+let mut a: i64 = 0;
+for x in xs.iter().peekable() { a = a + x; }
+println(a);
+println(xs.iter().peekable().filter(|v| v % 2 == 1).sum());
+let mut b: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter()).filter(|v| v > 2) { b = b + y; }
+println(b);
+let mut c: i64 = 0;
+for x in xs.iter().cycle().take(7) { c = c + x; }
+println(c);
+let mut d: i64 = 0;
+for w in xs.iter().windows(2).skip(2) { d = d + w[0]; }
+println(d);
+let mut g1: i64 = 0;
+'out1: for y in vv.iter().flat_map(|row| row.iter()) {
+g1 = g1 + y;
+if y == 3 { break 'out1 (); }
+}
+println(g1);
+let mut h: i64 = 0;
+'out2: for y in vv.iter().flat_map(|row| row.iter()) {
+if y % 2 == 0 { continue 'out2; }
+h = h + y;
+}
+println(h);
+let mut m: i64 = 0;
+let mut pulls: i64 = 0;
+'out4: for x in xs.iter().cycle() {
+pulls = pulls + 1;
+if pulls == 12 { break; }
+if x % 2 == 0 { continue 'out4; }
+m = m + x;
+}
+println(m);
+let rs: Vec[i64] = [1, 1, 2, 2, 2, 3];
+for g in rs.iter().chunk_by(|x| x) { println(f"{g.len()}:{g[0]}"); }
+let mut lens: i64 = 0;
+for g in rs.iter().chunk_by(|x| x % 2) { lens = lens * 10 + g.len(); }
+println(lens);
+let mut w2: i64 = 0;
+for g in rs.iter().chunk_by(|x| x).filter(|q| q.len() >= 2) { w2 = w2 + g[0]; }
+println(w2);
+let names: Vec[String] = [f"ant", f"bee", f"cat", f"dog"];
+let tags: Vec[String] = [f"x", f"yy", f"zzz"];
+let mut za: i64 = 0;
+for (n, t) in names.iter().zip(tags.iter()) { za = za + n.len() + t.len(); }
+println(za);
+let mut ch: String = f"";
+for w in names.iter().chain(tags.iter()) {
+if w == "cat" { break; }
+ch = ch + w;
+}
+println(ch);
+let mut sk: String = f"";
+for w in names.iter().skip(1).take(2) { sk = sk + w + f"|"; }
+println(sk);
+let hs: Vec[String] = [f"aa", f"bb", f"aa", f"cc", f"cc"];
+for w in hs.iter().windows(2) { println(f"{w[0]}~{w[1]}"); }
+let mut hc: i64 = 0;
+for c2 in hs.iter().chunks(2) { hc = hc + c2.len(); }
+println(hc);
+for g in hs.iter().chunk_by(|x| x) { println(f"{g.len()}:{g[0]}"); }
+println(hs.len());
+}

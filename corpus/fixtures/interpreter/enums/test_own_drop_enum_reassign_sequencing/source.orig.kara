@@ -1,0 +1,49 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+enum Loud { Hold(Res), Quiet }
+impl Drop for Loud {
+fn drop(mut ref self) {
+println("loud drop")
+}
+}
+fn mk_loud(n: i64) -> Loud {
+return Loud.Hold(Res { id: n, name: f"l{n}" });
+}
+fn use_res(r: Res) {
+println(f"took {r.id}");
+}
+fn pass(b: Loud) -> Loud {
+return b;
+}
+fn main() {
+println("m1: plain reassign");
+let mut a = mk_loud(1);
+a = mk_loud(2);
+println("m1 end");
+println("m2: reassign after whole-value move");
+let mut b = mk_loud(3);
+let c = b;
+b = mk_loud(4);
+println("m2 end");
+println("m3: reassign after payload move-out");
+let mut d = mk_loud(5);
+match d {
+Loud.Hold(r) => { use_res(r); }
+Loud.Quiet => {}
+}
+d = mk_loud(6);
+println("m3 end");
+println("m4: self-mention");
+let mut e = mk_loud(7);
+e = pass(e);
+println("m4 end");
+println("m5: quiet-to-full and full-to-quiet");
+let mut g = mk_loud(8);
+g = Loud.Quiet;
+g = mk_loud(9);
+println("end");
+}

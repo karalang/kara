@@ -1,0 +1,3 @@
+enum Box2 { Full(Res), Empty }
+fn takef(b: Box2) -> Res { match b { Box2.Full(r) => { return r; } Box2.Empty => { return Res { id: 0, name: f"z" }; } } }
+fn main() { let qq: Box2 = Box2.Full(Res { id: 7, name: f"e7" }); let r: Res = takef(qq); println(f"got {r.id}") }

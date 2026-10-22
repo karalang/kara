@@ -1,0 +1,27 @@
+fn main() {
+let a: F16 = F16 { value: 2.5 };
+let b: F16 = F16 { value: 1.5 };
+println(a > b);
+println(a < b);
+println(a == a);
+println(a == b);
+let mut m: Map[F16, i64] = Map.new();
+let _ = m.insert(F16 { value: 2.0 }, 20);
+let _ = m.insert(F16 { value: 3.0 }, 30);
+match m.get(F16 { value: 2.0 }) { Some(v) => println(v), None => println(0 - 1) }
+let mut v: Vec[F16] = Vec.new();
+v.push(F16 { value: 3.0 });
+v.push(F16 { value: 1.0 });
+v.push(F16 { value: 2.0 });
+v.sort();
+println(v[0].value);
+println(v[2].value);
+let c: Bf16 = Bf16 { value: 3.25 };
+let d: Bf16 = Bf16 { value: 1.25 };
+println(c > d);
+println(c == c);
+let neg0: Bf16 = Bf16 { value: 0.0 * (0.0 - 1.0) };
+let pos0: Bf16 = Bf16 { value: 0.0 };
+println(neg0 < pos0);
+println(neg0 == pos0);
+}

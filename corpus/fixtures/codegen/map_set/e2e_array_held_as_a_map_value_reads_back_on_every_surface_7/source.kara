@@ -1,0 +1,8 @@
+fn main() {
+    let mut m: Map[i64, Array[i64, 2]] = Map.new();
+    m.insert(1, [11, 22]);
+    match m.get(1) {
+        Some(a) => { println(f"s:{a[1]}"); }
+        None => { println("s:missing"); }
+    }
+}

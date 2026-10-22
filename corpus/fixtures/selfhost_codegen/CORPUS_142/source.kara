@@ -1,0 +1,52 @@
+fn find(v: ref Vec[i64], t: i64) -> Option[i64] {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == t {
+            return Some(i);
+        }
+        i = i + 1;
+    }
+    return None;
+}
+fn label(o: Option[String]) -> String {
+    match o {
+        Some(s) => {
+            return "got:".to_string() + s;
+        }
+        None => {}
+    }
+    return "nothing".to_string();
+}
+fn pick(flag: bool) -> Option[String] {
+    if flag {
+        return Some("payload".to_string() + "!");
+    }
+    return None;
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(4);
+    v.push(9);
+    match find(v, 9) {
+        Some(i) => {
+            println("at " + i.to_string());
+        }
+        None => {
+            println("missing");
+        }
+    }
+    match find(v, 5) {
+        Some(i) => {
+            println("at " + i.to_string());
+        }
+        None => {
+            println("missing");
+        }
+    }
+    println(label(pick(true)));
+    println(label(pick(false)));
+    let held = pick(true);
+    println(label(held));
+    let empty: Option[String] = None;
+    println(label(empty));
+}

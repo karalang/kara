@@ -1,0 +1,8 @@
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+fn main() {
+match UsbClass.try_from(UsbClass.MassStorage.discriminant()) {
+Ok(c) => println(c.discriminant()),
+Err(_) => println(999),
+}
+}

@@ -1,0 +1,9 @@
+fn main() {
+let xs: Vec[i64] = [1, 5, 3];
+println(xs.max().unwrap());
+println("max=" + xs.max().unwrap().to_string());
+let s = xs.min().unwrap().to_string();
+println(s);
+println("sum=" + xs.sum().to_string());
+println("prod=" + xs.product().to_string());
+}

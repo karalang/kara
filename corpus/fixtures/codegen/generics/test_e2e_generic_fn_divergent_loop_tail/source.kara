@@ -1,0 +1,9 @@
+fn f[T](x: T) -> i64 { loop { return 5; } }
+fn g[T](x: T) -> i64 { let mut i = 0; loop { if i >= 3 { return i; } i = i + 1; } }
+fn h[T](x: T) { loop { return; } }
+fn main() {
+println(f"{f(99)}");
+println(f"{g(99)}");
+h(99);
+println("ok");
+}

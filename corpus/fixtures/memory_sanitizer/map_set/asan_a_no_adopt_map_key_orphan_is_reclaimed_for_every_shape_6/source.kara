@@ -1,0 +1,18 @@
+#[derive(Hash, Eq)]
+struct K6d { a: String, b: String }
+fn mk(n: i64) -> K6d { return K6d { a: f"aaaaaaaaaaaa{n}", b: f"bbbbbbbbbbbb{n}" }; }
+fn main() {
+    let mut m: Map[K6d, i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 6 { m.insert(mk(i % 3), i); i = i + 1; }
+    println(f"len:{m.len()}");
+    match m.get(mk(1)) {
+        Some(v) => { println(f"g:{v}"); }
+        None => { println("g:missing"); }
+    }
+    match m.remove(mk(1)) {
+        Some(v) => { println(f"r:{v}"); }
+        None => { println("r:nothing"); }
+    }
+    println(f"len2:{m.len()}");
+}

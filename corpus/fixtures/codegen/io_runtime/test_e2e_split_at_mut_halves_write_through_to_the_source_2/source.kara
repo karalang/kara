@@ -1,0 +1,12 @@
+fn fill(s: mut Slice[i64], v: i64) {
+let mut i: i64 = 0i64;
+while i < s.len() { s[i] = v; i = i + 1i64; }
+}
+fn main() {
+let mut a: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];
+let mut s: mut Slice[i64] = a.as_slice_mut();
+let mut p: (mut Slice[i64], mut Slice[i64]) = s.split_at_mut(1i64);
+fill(p.0, 100i64);
+fill(p.1, 200i64);
+println(f"{a[0]} {a[1]} {a[2]} {a[3]}");
+}

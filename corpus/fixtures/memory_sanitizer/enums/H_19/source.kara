@@ -1,0 +1,13 @@
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[K], acc: mut ref Vec[R2]) {
+   match x {
+     Option.Some(K.A(r)) => { acc.push(r) }
+     Option.Some(K.B) => {}
+     Option.None => {}
+   } }
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+   let mut acc: Vec[R2] = [];
+   show(Option.Some(K.A(R2 { s: f"z" })), mut acc);
+   println(f"len:{acc.len()}");
+   println("end") }

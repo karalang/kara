@@ -1,0 +1,9 @@
+fn main() {
+let s: SortedSet[String] = SortedSet.new();
+s.insert("banana");
+s.insert("apple");
+s.insert("cherry");
+for x in s {
+println(x);
+}
+}

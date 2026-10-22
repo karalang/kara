@@ -1,0 +1,3 @@
+struct Pair2[A, B] { a: A, b: B }
+fn main() { let (b, n) = (Pair2[R, i64] { a: R { id: 45 }, b: 7 }, 1);
+             println(f"{n}"); }

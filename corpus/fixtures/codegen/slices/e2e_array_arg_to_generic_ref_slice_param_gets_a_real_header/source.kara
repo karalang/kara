@@ -1,0 +1,15 @@
+fn first[T: Clone](s: ref Slice[T]) -> T { s[0].clone() }
+fn size[T](s: ref Slice[T]) -> i64 { s.len() }
+fn firstc(s: ref Slice[String]) -> String { s[0].clone() }
+fn firstv[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn main() {
+    let ns: Array[i64, 4] = [100, 7, 3, 4];
+    println(f"[{size(ns)}]");
+    println(f"[{first(ns)}]");
+    let ss: Array[String, 2] = ["lit-x", "lit-y"];
+    println(f"[{first(ss)}]");
+    println(f"[{firstc(ss)}]");
+    println(f"[{firstv(ss)}]");
+    let vs: Vec[String] = ["vec-x", "vec-y"];
+    println(f"[{first(vs)}]");
+}

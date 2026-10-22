@@ -1,0 +1,5 @@
+fn main() {
+    let mut v1: Vec[String] = Vec.new();
+    v1.push(f"one-payload-one");
+    let mut v2: Vec[String] = Vec.new();
+    v2.push(f"two-payload-two");

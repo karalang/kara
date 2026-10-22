@@ -1,0 +1,5 @@
+fn main() {
+let s: Vec[i64] = { let mut v: Vec[i64] = Vec.new(); v.push(10); v.push(20); v };
+println(s.len().to_string());
+println(s[1].to_string());
+}

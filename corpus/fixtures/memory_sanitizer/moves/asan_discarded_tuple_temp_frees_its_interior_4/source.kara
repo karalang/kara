@@ -1,0 +1,3 @@
+fn seed() -> i64 { env.args().len() }
+fn f(a: i64) -> (i64, i64) { return (a, 9); }
+fn main() { f(seed()); println("ok"); }

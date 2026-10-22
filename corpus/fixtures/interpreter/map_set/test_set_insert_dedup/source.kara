@@ -1,0 +1,6 @@
+fn main() {
+let s: Set[i64] = Set.new();
+s.insert(5_i64);
+s.insert(5_i64);
+println(s.len());
+}

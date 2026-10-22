@@ -1,0 +1,12 @@
+fn has(xs: ref Vec[i64], s: ref String) -> bool {
+let found_num = xs.contains(2);
+let found_sub = s.contains("ll");
+found_num and found_sub
+}
+fn main() {
+let mut xs: Vec[i64] = Vec.new();
+xs.push(1);
+xs.push(2);
+let s: String = "hello";
+println(has(xs, s));
+}

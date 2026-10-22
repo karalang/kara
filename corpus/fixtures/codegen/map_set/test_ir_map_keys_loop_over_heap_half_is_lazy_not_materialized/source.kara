@@ -1,0 +1,10 @@
+fn total(m: ref Map[String, i64]) -> i64 {
+    let mut s = 0i64;
+    for k in m.keys() { s = s + k.len(); }
+    return s;
+}
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("aa".to_string(), 1i64);
+    println(total(m));
+}

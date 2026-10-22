@@ -1,0 +1,1 @@
+fn main() { let x = f64.NAN; println(x); }

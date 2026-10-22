@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_migrate_project_mode_walks_modules"
+dedup_of = ["tests/cli.rs::test_migrate_project_mode_apply_rewrites_all_files", "tests/cli.rs::test_migrate_l215c_atomic_when_only_bare_assigns", "tests/cli.rs::test_migrate_l215c_cons_no_atomic_flag_keeps_mutex_path", "tests/cli.rs::test_migrate_default_atomic_when_only_bare_assigns"]
+expect = "error:E0104"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "1797cb32"
+model_rev = "583cfb0d"
+model_src = "1797cb32"

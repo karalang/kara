@@ -1,0 +1,7 @@
+fn main() {
+let mut names: Vec[String] = Vec.new();
+names.push("alice");
+names.push("bob");
+println(names.contains("bob"));
+println(names.contains("carol"));
+}

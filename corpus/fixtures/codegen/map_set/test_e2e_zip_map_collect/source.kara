@@ -1,0 +1,13 @@
+fn main() {
+let a: Vec[i64] = [10, 10, 10];
+let b: Vec[i64] = [1, 2, 3];
+let c: Vec[i64] = a.iter().zip(b.iter()).map(|p| p.0 + p.1).collect();
+let mut i = 0;
+while i < c.len() { println(c[i]); i = i + 1; }
+let d: Vec[i64] = [5, 5, 5, 5];
+let e: Vec[i64] = [2, 3];
+let g: Vec[i64] = d.iter().zip(e.iter()).map(|(x, y)| x * y).collect();
+println(g.len());
+let s: Vec[String] = a.iter().zip(b.iter()).map(|p| f"{p.0}:{p.1}").collect();
+println(s[0]);
+}

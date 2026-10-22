@@ -1,0 +1,12 @@
+struct A { t: i64 }
+impl Drop for A { fn drop(mut ref self) { println(f"dA{self.t}"); } }
+struct Mid { a: A }
+struct Outer { m: Mid, a2: A }
+struct Two { x: A, y: A }
+struct Moved { a: A }
+fn main() {
+{ let o = Outer { m: Mid { a: A { t: 1 } }, a2: A { t: 2 } }; println(f"{o.a2.t}"); }
+{ let t = Two { x: A { t: 4 }, y: A { t: 5 } }; println(f"{t.x.t}"); }
+{ let h = Moved { a: A { t: 7 } }; let x = h.a; println(f"{x.t}"); }
+println("end");
+}

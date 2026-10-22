@@ -1,0 +1,17 @@
+source = "tests/memory_sanitizer/families/b_2026_09_20_39.rs::asan_owned_self_match_frees_a_vec_or_array_payload_once"
+dedup_of = []
+expect = "error:E0100"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "cf7306e3"
+model_rev = "583cfb0d"
+model_src = "cf7306e3"

@@ -1,0 +1,14 @@
+struct H { xs: Vec[String] }
+impl H {
+    fn swap(mut ref self, i: i64, j: i64) {
+        self.xs.swap(i, j);
+    }
+}
+fn main() {
+    let mut v: Vec[String] = [f"alpha", f"bravo", f"charlie"];
+    v.swap(0, 1);
+    println(v[0]); println(v[1]); println(v[2]);
+    let mut h = H { xs: [f"one", f"two", f"three"] };
+    h.swap(0, 2);
+    println(h.xs[0]); println(h.xs[1]); println(h.xs[2]);
+}

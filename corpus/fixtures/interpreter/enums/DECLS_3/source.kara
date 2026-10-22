@@ -1,0 +1,1 @@
+fn main() { let b = Bx { n: 1 }; let p = Option.Some(f"f{b.n}"); let q = Option.Some(f"g{b.n}"); let o = b.first(p, q); match o { Option.Some(v) => { println(f"got {v}") } Option.None => { println("none") } } }

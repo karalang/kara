@@ -1,0 +1,5 @@
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn main() {
+    let y: String = "two";
+    println(add(1, y));
+}

@@ -1,0 +1,2 @@
+fn pick() -> Fn(i64) -> i64 { |x| x * 2i64 }
+fn main() { let f = pick(); println(f"{f(21i64)}"); }

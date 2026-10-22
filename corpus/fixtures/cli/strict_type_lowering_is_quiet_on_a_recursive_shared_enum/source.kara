@@ -1,0 +1,17 @@
+shared enum Expr { Num(i64), Blk(Block), Error }
+struct Block { tail: Option[Expr] }
+fn render_block(b: Block) -> String {
+let Block { tail } = b;
+match tail { Some(e) => render_expr(e), None => "no-tail".to_string() }
+}
+fn render_expr(e: Expr) -> String {
+match e {
+Num(n) => n.to_string(),
+Blk(b) => render_block(b),
+Error => "error".to_string(),
+}
+}
+fn main() {
+let blk = Block { tail: Some(Expr.Num(7)) };
+println(render_expr(Expr.Blk(blk)));
+}

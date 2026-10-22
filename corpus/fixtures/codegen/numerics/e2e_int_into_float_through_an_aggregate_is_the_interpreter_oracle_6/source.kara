@@ -1,0 +1,2 @@
+fn main() { let m: i64 = 9007199254740993;
+let a: Array[f64, 2] = [m, 1.0]; println(a[0]); }

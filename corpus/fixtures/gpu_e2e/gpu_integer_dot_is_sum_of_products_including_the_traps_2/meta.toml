@@ -1,0 +1,16 @@
+source = "tests/gpu_e2e.rs::gpu_integer_dot_is_sum_of_products_including_the_traps"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:gpu", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'int_dot_identity'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "1e0d33f2"

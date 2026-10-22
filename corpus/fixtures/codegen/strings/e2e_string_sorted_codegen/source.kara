@@ -1,0 +1,11 @@
+fn main() {
+println("eat".sorted());
+println("tea".sorted());
+let w: String = "listen";
+println(w.sorted());
+println(w);
+println("".sorted());
+println("dcba".sorted());
+let anag = "eat".sorted() == "tea".sorted();
+println(f"{anag}");
+}

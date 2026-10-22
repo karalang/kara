@@ -1,0 +1,15 @@
+type Plain[T] = Vec[T];
+type Ints = Vec[i64];
+type Name = String;
+fn total(xs: Plain[i64]) -> i64 {
+let mut t = 0;
+for x in xs { t = t + x; }
+t
+}
+fn count(xs: Ints) -> i64 { xs.len() }
+fn shout(n: Name) -> Name { n + "!" }
+fn main() {
+println(total(vec![1, 2, 3]));
+println(count(vec![4, 5]));
+println(shout("hi"));
+}

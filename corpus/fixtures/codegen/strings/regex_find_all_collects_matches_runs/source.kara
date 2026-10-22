@@ -1,0 +1,8 @@
+fn main() {
+let re = Regex.compile("[0-9]+").unwrap();
+let ms = re.find_all("a1b22c333");
+println(ms.len().to_string());
+for m in ms {
+println(f"{m.text}@{m.start}");
+}
+}

@@ -1,0 +1,5 @@
+struct S { zeta: i64, alpha: i64, mid: i64 }
+fn main() {
+    dbg(S { zeta: 1, alpha: 2, mid: 3 });
+    println("done");
+}

@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct R25 { s: String }
+enum K5 { A(R25), B }
+impl Drop for K5 { fn drop(mut ref self) { println("dK5") } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { let mut acc: Vec[R25] = []; let x: Option[K5] = Option.Some(K5.A(R25 { s: f"z" })); match x { Option.Some(K5.A(ref r)) => { acc.push(r.clone()) } Option.Some(K5.B) => {} Option.None => {} } println(f"len:{acc.len()}"); println("end") }

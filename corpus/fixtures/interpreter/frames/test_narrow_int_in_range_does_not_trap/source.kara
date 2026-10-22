@@ -1,0 +1,1 @@
+fn main() { let a: u8 = 97; let b: u8 = 98; println(a + b); }

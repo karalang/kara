@@ -1,0 +1,2 @@
+enum N { V { b: u8 } }
+fn main() { match N.V { b: 200 } { V { b } => println(b) } }

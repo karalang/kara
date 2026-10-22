@@ -1,0 +1,20 @@
+enum Item {
+Named(String),
+Plain(i64),
+}
+fn main() {
+let mut src: Vec[Item] = Vec.new();
+src.push(Item.Named(f"x{1}"));
+src.push(Item.Plain(7));
+src.push(Item.Named(f"y{2}"));
+let mut out: Vec[Item] = Vec.new();
+for it in src.into_iter() {
+out.push(it);
+}
+for it in out {
+match it {
+Item.Named(s) => println(s),
+Item.Plain(n) => println(f"{n}"),
+}
+}
+}

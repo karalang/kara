@@ -1,0 +1,11 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }
+fn main() {
+    let mut sink: Vec[Res] = Vec.new();
+    let carg: Res = Res { id: 7 };
+    take(mut sink, carg);
+    println(f"pushed {sink.len()}");
+}

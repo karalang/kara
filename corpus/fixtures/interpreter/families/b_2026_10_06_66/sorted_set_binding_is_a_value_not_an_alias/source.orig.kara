@@ -1,0 +1,7 @@
+fn main() {
+let mut s: SortedSet[i64] = SortedSet.new();
+s.insert(1);
+let mut t = s;
+t.insert(2);
+println(f"s={s.len()} t={t.len()}");
+}

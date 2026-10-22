@@ -1,0 +1,2 @@
+fn take(e: E) -> i64 { 7 }
+fn main() { println(f"{take(E.B)}") }

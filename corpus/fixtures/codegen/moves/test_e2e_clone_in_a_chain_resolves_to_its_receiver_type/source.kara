@@ -1,0 +1,8 @@
+fn main() {
+let s: String = "hello".to_string();
+println(s.clone().to_string().len());
+let n: i64 = 12345;
+println(n.clone().to_string().len());
+let v: Vec[i64] = [1, 2, 3];
+println(v.clone().len());
+}

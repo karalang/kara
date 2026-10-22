@@ -1,0 +1,2 @@
+import conn;
+fn main() { let open = 5; println(open); println(conn.open()); }

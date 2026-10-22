@@ -1,0 +1,6 @@
+fn main() {
+let c: Column[i64] = Column.from_vec([1i64, 2i64, 3i64]);
+println(c.len());
+println(c.null_count());
+match c[2] { Some(v) => { println(v); } None => { println(-1i64); } }
+}

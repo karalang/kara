@@ -1,0 +1,9 @@
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn main() { println(go()); }
+fn go() -> i64 { let t = mkp(9);
+  if seed() > 0 { P { a: t.a, b: 1 } } else { P { a: payload(), b: 2 } };
+  let z = payload();
+  z.len() - z.len() + 1 }

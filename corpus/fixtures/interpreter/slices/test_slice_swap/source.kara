@@ -1,0 +1,7 @@
+fn main() {
+         let mut v = [10, 20, 30];
+         let mut s = v.as_slice_mut();
+         s.swap(0, 2);
+         match s.get(0) { Some(x) => println(x), None => {} }
+         match s.get(2) { Some(x) => println(x), None => {} }
+     }

@@ -1,0 +1,7 @@
+fn show(x: Option[S]) {
+   match x {
+     Option.Some(S.A(m)) => { println(f"n:{m.n}") }
+     Option.Some(S.B) => {}
+     Option.None => {}
+   } }
+fn main() { show(Option.Some(S.A(Small { n: 7 }))); println("end") }

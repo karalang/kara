@@ -1,0 +1,7 @@
+fn main() {
+let n = env.args().len() as i64;
+let mut v: Vec[i64] = Vec.new();
+v.push(n);
+                 let s: Slice[i64] = v.as_slice();
+dbg(s);
+             }

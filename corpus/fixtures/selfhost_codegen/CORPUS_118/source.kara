@@ -1,0 +1,3 @@
+struct User { name: String, age: i64 }
+fn birthday(u: mut ref User) { u.age = u.age + 1; }
+fn main() { let mut u = User { name: "bo", age: 9 }; birthday(mut u); birthday(mut u); println(u.age.to_string()) }

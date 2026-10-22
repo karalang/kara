@@ -1,0 +1,13 @@
+fn main() {
+let mut t: Tensor[i64, [2, 3]] = Tensor.full([2, 3], 0);
+t[0, 0] = 1;
+t[0, 2] = 3;
+t[1, 0] = 4;
+t[1, 2] = 6;
+println(t[0, 0]);
+println(t[0, 1]);
+println(t[0, 2]);
+println(t[1, 0]);
+println(t[1, 1]);
+println(t[1, 2]);
+}

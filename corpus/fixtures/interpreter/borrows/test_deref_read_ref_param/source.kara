@@ -1,0 +1,2 @@
+fn read_val(r: ref i64) -> i64 { *r }
+fn main() { let x = 42_i64; println(read_val(x)); }

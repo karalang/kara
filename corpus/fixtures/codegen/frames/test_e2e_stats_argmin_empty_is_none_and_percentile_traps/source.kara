@@ -1,0 +1,6 @@
+fn main() {
+let v: Vec[f64] = vec![];
+match Stats.argmin(v) { Some(i) => println(i), None => println(-1), }
+let a: Vec[i64] = Stats.argsort(v);
+println(a.len());
+}

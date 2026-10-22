@@ -1,0 +1,2 @@
+fn bump(x: i64) -> i64 ensures(result) result > old(x) { x + 1 }
+fn main() { println(bump(5)); }

@@ -1,0 +1,9 @@
+fn clobber(dst: mut ref Vec[i64], src: ref Vec[i64]) {
+dst.push(src.len());
+}
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(1);
+clobber(mut v, v);
+println(v.len());
+}

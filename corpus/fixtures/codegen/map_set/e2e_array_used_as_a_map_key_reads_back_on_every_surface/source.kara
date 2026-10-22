@@ -1,0 +1,20 @@
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 {
+        let k: Array[String, 2] = [f"kaaaaaaa{i}", f"kbbbbbbb{i}"];
+        m.insert(k, i * 10);
+        i = i + 1;
+    }
+    let p0: Array[String, 2] = [f"kaaaaaaa0", f"kbbbbbbb0"];
+    let p2: Array[String, 2] = [f"kaaaaaaa2", f"kbbbbbbb2"];
+    match m.get(p0) {
+        Some(v) => { println(f"s:{v}"); }
+        None => { println("s:missing"); }
+    }
+    match m.get(p2) {
+        Some(v) => { println(f"t:{v}"); }
+        None => { println("t:missing"); }
+    }
+    println(f"u:{m.len()}");
+}

@@ -1,0 +1,28 @@
+shared struct N { mut val: i64 }
+shared struct T { mut s: String }
+shared struct Inner { mut v: i64 }
+shared struct Outer { mut inner: Inner }
+impl N {
+fn go(ref self) { bump(mut self.val); }
+}
+fn bump(x: mut ref i64) { x = x + 1i64; }
+fn app(x: mut ref String, tag: String) { x = x + tag; }
+fn viaref(n: ref N) -> i64 { bump(mut n.val); return n.val; }
+fn main() {
+let n: i64 = 1i64;
+let a = N { val: n + 6i64 };
+bump(mut a.val);
+println(f"a:{a.val}");
+let b = N { val: n + 6i64 };
+println(f"b:{viaref(b)}");
+let c = N { val: n + 6i64 };
+c.go();
+println(f"c:{c.val}");
+let di = Inner { v: n + 6i64 };
+let d = Outer { inner: di };
+bump(mut d.inner.v);
+println(f"d:{d.inner.v}");
+let e = T { s: "a" };
+app(mut e.s, "b");
+println(f"e:{e.s}:{e.s.len()}");
+}

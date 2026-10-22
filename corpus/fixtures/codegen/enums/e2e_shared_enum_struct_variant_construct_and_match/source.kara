@@ -1,0 +1,11 @@
+shared enum T { Node { v: i64 }, Leaf }
+shared enum P { Pair { a: i64, s: String }, None }
+fn f(t: T) -> i64 { match t { T.Node { v } => v, Leaf => -1 } }
+fn g(t: T) -> i64 { match t { Node { v } => v, Leaf => -1 } }
+fn h(p: P) -> i64 { match p { Pair { a, s } => a + s.len(), None => 0 } }
+fn main() {
+println(f(T.Node { v: 7 }));
+println(f(T.Leaf));
+println(g(T.Node { v: 9 }));
+println(h(P.Pair { a: 3, s: "hello" }));
+}

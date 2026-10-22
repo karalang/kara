@@ -1,0 +1,8 @@
+struct S { lbl: Option[String], k: i64 }
+shared enum E { V(S) }
+fn main() {
+    let a = E.V(S { lbl: Some("hi"), k: 1 });
+    match a { V(s) => println(s.k.to_string()) }
+    let b = E.V(S { lbl: None, k: 2 });
+    match b { V(s) => println(s.k.to_string()) }
+}

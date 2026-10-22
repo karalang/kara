@@ -1,0 +1,6 @@
+fn main() {
+let x = 5.0;
+let e = Tensor.from([[x, x + 1.0], [x * 2.0, 0.0]]);
+println(e[0, 1]);
+println(e[1, 0]);
+}

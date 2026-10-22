@@ -1,0 +1,19 @@
+struct Full { a: i64 }
+enum Holder { Full { a: i64 }, Nothing }
+fn main() {
+let s: Full = Full { a: 11i64 };
+match s {
+Full { a } => { println(f"s:{a}"); }
+}
+let h: Holder = Holder.Full { a: 22i64 };
+match h {
+Full { a } => { println(f"v:{a}"); }
+Nothing => { println("v:none"); }
+}
+let h2: Holder = Holder.Nothing;
+match h2 {
+Holder.Full { a } => { println(f"q:{a}"); }
+Holder.Nothing => { println("q:none"); }
+}
+println("end");
+}

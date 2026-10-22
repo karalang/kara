@@ -1,0 +1,1 @@
+fn main() { let s = c"hi"; println(s.len()); }

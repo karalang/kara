@@ -1,0 +1,17 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+println("a");
+{
+let t: (Result[Res, i64], i64) =
+(Result.Ok(Res { id: 3, name: f"cccc{1}" }), 4);
+match t.0 {
+Result.Ok(r) => { println(r.id) }
+Result.Err(e) => { println(e) }
+}
+println(t.1);
+}
+println("end");
+}

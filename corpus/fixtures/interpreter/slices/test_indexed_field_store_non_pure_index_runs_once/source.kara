@@ -1,0 +1,16 @@
+struct P { mut id: i64, mut name: String }
+struct O { mut hs: Vec[P] }
+fn idx() -> i64 {
+println("eval");
+return 0;
+}
+fn main() {
+let mut v: Vec[P] = Vec.new();
+v.push(P { id: 1, name: "a" });
+v[idx()].id = 9;
+println(f"v={v[0].id}");
+let mut o = O { hs: Vec.new() };
+o.hs.push(P { id: 1, name: "a" });
+o.hs[idx()].name = f"b";
+println(f"o={o.hs[0].name}");
+}

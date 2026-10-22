@@ -1,0 +1,2 @@
+fn take(p: (E, i64)) -> i64 { let (gv, gn) = p; gn }
+fn main() { let arg = (E.A(R { id: 5 }), 6); println(f"{take(arg)}") }

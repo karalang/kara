@@ -1,0 +1,6 @@
+fn rng(p: Option[i64]) -> String { match p { Some(1..=5) => "low", _ => "hi" } }
+fn orp(p: Option[i64]) -> String { match p { Some(1 | 2) => "12", _ => "o" } }
+fn main() {
+println(rng(Some(3i64))); println(rng(Some(9i64)));
+println(orp(Some(2i64))); println(orp(Some(3i64)));
+}

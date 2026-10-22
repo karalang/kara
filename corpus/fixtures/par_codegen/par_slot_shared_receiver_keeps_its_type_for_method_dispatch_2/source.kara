@@ -1,0 +1,13 @@
+shared enum Shape { Circle(i64), Square(i64) }
+impl Shape {
+    fn area(ref self) -> i64 {
+        match self { Shape.Circle(r) => { return r * r * 3; } Shape.Square(s) => { return s * s; } }
+    }
+}
+fn mk(k: i64) -> Shape { if k > 0 { return Shape.Circle(k); } return Shape.Square(2); }
+fn main() {
+    let a = mk(2_i64);
+    println(a.area());
+    let b = mk(3_i64);
+    println(b.area());
+}

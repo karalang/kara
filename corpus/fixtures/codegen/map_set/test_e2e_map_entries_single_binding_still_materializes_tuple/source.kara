@@ -1,0 +1,9 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("aa".to_string(), 5i64);
+    let mut n = 0i64;
+    let mut l = 0i64;
+    for e in m.entries() { l = l + e.0.len(); n = n + e.1; }
+    println(l);
+    println(n);
+}

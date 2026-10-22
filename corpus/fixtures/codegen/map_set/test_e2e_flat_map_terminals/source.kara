@@ -1,0 +1,14 @@
+fn main() {
+let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];
+println(vv.iter().flat_map(|row| row.iter()).sum());
+println(vv.iter().flat_map(|row| row.iter()).count());
+println(vv.iter().flat_map(|row| row.iter()).fold(1, |a, x| a * x));
+println(vv.iter().flat_map(|row| row.iter().map(|v| v * 2)).sum());
+println(vv.iter().flat_map(|row| row.iter()).any(|v| v == 4));
+println(vv.iter().flat_map(|row| row.iter()).all(|v| v > 0));
+let m = vv.iter().flat_map(|row| row.iter()).reduce(|p, q| if p > q { p } else { q });
+println(m.unwrap_or(0 - 1));
+let mut t: i64 = 0;
+vv.iter().flat_map(|row| row.iter()).for_each(|v| { t = t + v; });
+println(t);
+}

@@ -1,0 +1,18 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+let it = v.iter();
+println(it.fold(0, |a, x| a + x));
+let it2 = v.iter().map(|x| x * 2);
+println(it2.sum());
+let it3 = v.iter();
+let mut tot = 0;
+it3.for_each(|x| { tot = tot + x; });
+println(tot);
+let it4 = v.iter();
+let it5 = it4.filter(|x| x > 2);
+println(it5.sum());
+let it6 = v.iter();
+let mut s = 0;
+for x in it6 { s = s + x; }
+println(s);
+}

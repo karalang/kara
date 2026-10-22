@@ -1,0 +1,5 @@
+struct In4 { n: i64 }
+impl Drop for In4 { fn drop(mut ref self) { println(f"dIn{self.n}") } }
+struct Hd4 { inner: In4, tag: i64 }
+fn eat(o: Option[Hd4]) -> i64 { match o { Some(t) => { t.tag } None => { 0 } } }
+fn main() { println(f"r:{eat(Some(Hd4 { inner: In4 { n: 5 }, tag: 7 }))}"); println("end") }

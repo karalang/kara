@@ -1,0 +1,3 @@
+fn m(t: ref Tensor[f32, [64]]) -> f32 { t.min() }
+fn x(t: ref Tensor[f32, [64]]) -> f32 { t.max() }
+fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); println(m(t)); println(x(t)); }

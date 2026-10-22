@@ -1,0 +1,18 @@
+struct Inner { w: i64 }
+struct Box { v: i64, inner: Inner }
+struct H { acc: i64 }
+impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }
+fn main() {
+let h = H { acc: 0 };
+let mut b = Box { v: 1, inner: Inner { w: 1 } };
+h.bump(mut b.v);
+h.bump(mut b.inner.w);
+println(b.v);
+println(b.inner.w);
+let mut t = (1, 2);
+h.bump(mut t.0);
+println(t.0);
+let mut a = [10, 20];
+h.bump(mut a[1]);
+println(a[1]);
+}

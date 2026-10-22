@@ -1,0 +1,5 @@
+fn main() {
+let mut vv: Vec[String] = Vec.new();
+vv.push(f"alpha");
+println(vv.get(0).unwrap_or(f"-"));
+}

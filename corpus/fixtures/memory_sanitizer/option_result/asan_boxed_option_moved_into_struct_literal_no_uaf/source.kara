@@ -1,0 +1,27 @@
+struct Wide { tag: i64, payload: String }
+struct Holder { name: String, body: Option[Wide] }
+fn mk_wide() -> Wide {
+    Wide { tag: 7, payload: "boxed-option-payload-string-long-enough-aaaa".to_string() }
+}
+fn build() -> Holder {
+    let mut body: Option[Wide] = None;
+    body = Some(mk_wide());
+    Holder { name: "holder-name-payload-string-long-enough".to_string(), body: body }
+}
+fn read(h: Holder) -> i64 {
+    let Holder { name, body } = h;
+    let n = name.len() as i64;
+    match body {
+        Some(w) => { let Wide { tag, payload } = w; tag + (payload.len() as i64) + n }
+        None => n,
+    }
+}
+fn main() {
+    let mut acc = 0i64;
+    let mut i = 0;
+    while i < 50 {
+        acc = acc + read(build());
+        i = i + 1;
+    }
+    println(acc);
+}

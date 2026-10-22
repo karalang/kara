@@ -1,0 +1,9 @@
+trait Head { fn tag(self) -> String; }
+impl Head for Array[i64, 3] { fn tag(self) -> String { return "ARR"; } }
+impl Head for Vec[i64] { fn tag(self) -> String { return "VEC"; } }
+fn main() {
+let a: Array[i64, 3] = [1, 2, 3];
+let v: Vec[i64] = [1, 2];
+println(a.tag());
+println(v.tag());
+}

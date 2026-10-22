@@ -1,0 +1,2 @@
+fn take(r: R, k: bool) -> i64 { if k { 1 } else { 2 } }
+fn main() { let x = take(R { id: 41 }, false); println(f"{x}") }

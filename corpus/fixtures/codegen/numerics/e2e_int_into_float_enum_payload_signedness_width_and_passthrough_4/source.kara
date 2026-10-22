@@ -1,0 +1,1 @@
+fn main() { let s: Option[String] = Some("hi"); match s { Some(x) => println(x), None => println("no") } }

@@ -1,0 +1,10 @@
+fn main() {
+let t = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+println(t.rank());
+println(t.shape()[0]);
+println(t.shape()[1]);
+println(t[0, 0]);
+println(t[0, 1]);
+println(t[1, 0]);
+println(t[1, 1]);
+}

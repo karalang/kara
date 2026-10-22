@@ -1,0 +1,2 @@
+fn main() { let a: i64 = -5; let b: i64 = 3;
+println(f"{a.lt(b)} {a.gt(b)}"); }

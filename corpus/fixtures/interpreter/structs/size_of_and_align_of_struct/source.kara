@@ -1,0 +1,2 @@
+struct Point { x: i64, y: i64 }
+fn main() { println(size_of[Point]()); println(align_of[Point]()); }

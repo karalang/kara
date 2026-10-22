@@ -1,0 +1,14 @@
+fn main() {
+let mut i = 0;
+'outer: while i < 5 {
+let mut j = 0;
+while j < 5 {
+if j == 2 {
+break 'outer ();
+}
+j = j + 1;
+}
+i = i + 1;
+}
+println(i);
+}

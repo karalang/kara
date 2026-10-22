@@ -1,0 +1,2 @@
+fn eat(x: Option[Rp], acc: mut ref Vec[Rp]) { match x { Some(r) => { acc.push(r) } None => { println("n") } } }
+fn main() { let mut acc: Vec[Rp] = []; eat(Some(Rp { id: 1 }), mut acc); println(f"len:{acc.len()}"); println("end") }

@@ -1,0 +1,13 @@
+#[track_caller]
+fn inner() {
+unreachable()
+}
+#[track_caller]
+fn outer() {
+inner()
+}
+fn main() {
+let x = 1;
+let _ = x;
+outer();
+}

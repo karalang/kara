@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_operators_page_quotes_live_diagnostics"
+dedup_of = []
+expect = "error:E0209"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "ab4e582e"
+model_rev = "583cfb0d"
+model_src = "ab4e582e"

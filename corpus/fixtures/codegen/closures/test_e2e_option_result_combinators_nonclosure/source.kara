@@ -1,0 +1,24 @@
+fn main() {
+let r: Result[i64, i64] = Ok(5);
+println(r.ok().unwrap_or(0));
+let e: Result[i64, i64] = Err(7);
+println(e.ok().unwrap_or(0));
+let e2: Result[i64, i64] = Err(7);
+println(e2.err().unwrap_or(0));
+let r2: Result[i64, i64] = Ok(5);
+println(r2.err().unwrap_or(0));
+let n: Option[i64] = None;
+println(n.or(Some(9)).unwrap_or(0));
+let s: Option[i64] = Some(9);
+println(s.and(Some(3)).unwrap_or(0));
+let n2: Option[i64] = None;
+println(n2.and(Some(9)).unwrap_or(-1));
+let s2: Option[i64] = Some(9);
+println(s2.ok_or(99).unwrap());
+let n3: Option[i64] = None;
+println(n3.ok_or(99).unwrap_err());
+let oo: Option[Option[i64]] = Some(Some(42));
+println(oo.flatten().unwrap_or(0));
+let on: Option[Option[i64]] = Some(None);
+println(on.flatten().unwrap_or(-1));
+}

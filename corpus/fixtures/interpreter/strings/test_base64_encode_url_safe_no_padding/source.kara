@@ -1,0 +1,4 @@
+fn main() {
+let bs = [251u8, 255u8, 191u8];
+println(Base64.encode_url_safe(bs));
+}

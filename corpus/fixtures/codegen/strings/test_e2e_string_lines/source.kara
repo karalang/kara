@@ -1,0 +1,20 @@
+fn main() {
+let a: String = "one\ntwo\nthree";
+let v = a.lines();
+println(f"{v.len()}");
+println(v[0]);
+println(v[2]);
+let t: String = "trailing\n";
+let tv = t.lines();
+println(f"{tv.len()}");
+let c: String = "crlf\r\nhandling\r\n";
+let w = c.lines();
+println(f"{w.len()}");
+println(w[1]);
+let d: String = "a\n\nb";
+let x = d.lines();
+println(f"{x.len()} {x[1].len()}");
+let e: String = "";
+let ev = e.lines();
+println(f"{ev.len()}");
+}

@@ -1,0 +1,30 @@
+struct R { region: String }
+struct V { xs: Vec[i64] }
+fn main() {
+let mut s1 = String.new(); s1.push_str("north");
+let mut a1: Vec[R] = Vec.new(); a1.push(R { region: s1 });
+let mut o1 = String.new(); o1 = a1[0].region;
+let mut iv: Vec[i64] = Vec.new(); iv.push(7);
+let mut a2: Vec[V] = Vec.new(); a2.push(V { xs: iv });
+let mut o2: Vec[i64] = Vec.new(); o2 = a2[0].xs;
+let mut s3 = String.new(); s3.push_str("east");
+let mut a3: Vec[R] = Vec.new(); a3.push(R { region: s3 });
+let pre = a3[0].region.len();
+let mut o3 = String.new(); o3 = a3[0].region;
+let c1 = "so".to_string(); let c2 = "uth".to_string();
+let mut a4: Vec[R] = Vec.new(); a4.push(R { region: c1 + c2 });
+let mut o4 = String.new(); o4 = a4[0].region;
+let mut s5 = String.new(); s5.push_str("west");
+let mut a5: Vec[R] = Vec.new(); a5.push(R { region: s5 });
+let o5 = a5[0].region;
+let mut s6 = String.new(); s6.push_str("up");
+let h6 = R { region: s6 };
+let mut o6 = String.new(); o6 = h6.region;
+let mut s7 = String.new(); s7.push_str("down");
+let t7 = (R { region: s7 }, 1);
+let mut o7 = String.new(); o7 = t7.0.region;
+let mut s8 = String.new(); s8.push_str("flat");
+let mut a8: Vec[String] = Vec.new(); a8.push(s8);
+let mut o8 = String.new(); o8 = a8[0].clone();
+println(f"{o1} {o2.len()} {pre} {o3} {o4} {o5} {o6} {o7} {o8}");
+}

@@ -1,0 +1,2 @@
+import helper.{help};
+fn main() { println(help()); }

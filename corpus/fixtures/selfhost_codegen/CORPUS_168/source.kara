@@ -1,0 +1,26 @@
+fn nib(bits: i64, i: i64) -> i64 {
+    return (bits >> (i * 4)) & 15;
+}
+fn main() {
+    println((12 & 10).to_string());
+    println((12 | 10).to_string());
+    println((12 ^ 10).to_string());
+    println((1 << 4).to_string());
+    println((256 >> 2).to_string());
+    println(nib(250, 0).to_string());
+    println(nib(250, 1).to_string());
+    let mut acc = 0;
+    let bits = 0 - 1;
+    let mut i = 0;
+    while i < 4 {
+        acc = acc + nib(bits, i);
+        i = i + 1;
+    }
+    println(acc.to_string());
+    let x = 5;
+    if x > 0 and x < 10 {
+        println("y");
+    } else {
+        println("n");
+    }
+}

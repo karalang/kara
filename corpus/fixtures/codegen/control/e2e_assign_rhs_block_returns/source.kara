@@ -1,0 +1,14 @@
+fn a1() -> i64 {
+let mut x = 1;
+x = { return 5; };
+x
+}
+fn a2() -> i64 {
+let mut x = 1;
+x += { return 6; };
+x
+}
+fn main() {
+println(f"{a1()}");
+println(f"{a2()}");
+}

@@ -1,0 +1,2 @@
+fn take2(k: bool) -> H { let h = H { id: 41, name: "forty-one" }; if k { h } else { H { id: 99, name: "ninety-nine" } } }
+fn main() { let x = take2(true); println(f"{x.id} {x.name}") }

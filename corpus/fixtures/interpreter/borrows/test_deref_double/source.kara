@@ -1,0 +1,2 @@
+fn double_in_place(r: mut ref i64) { *r = *r * 2; }
+fn main() { let mut n = 5_i64; double_in_place(mut n); println(n); }

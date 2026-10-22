@@ -1,0 +1,8 @@
+#[derive(Default)]
+struct S { x: i64, name: String }
+fn main() {
+let mut a = S { x: 42i64, name: "hello".to_string() };
+let old = take(mut a);
+println(f"{old.x} {old.name}");
+println(f"{a.x} [{a.name}]");
+}

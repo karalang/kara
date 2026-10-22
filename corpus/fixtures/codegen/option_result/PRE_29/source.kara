@@ -1,0 +1,2 @@
+fn mk() -> Option[Option[Rn]] { Some(Some(Rn { id: 71, name: f"a" })) }
+fn main() { let o = mk(); println("ok"); println("done") }

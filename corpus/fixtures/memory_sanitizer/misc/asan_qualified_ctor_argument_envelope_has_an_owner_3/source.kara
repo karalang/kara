@@ -1,0 +1,10 @@
+fn show(x: Option[Vec[String]]) {
+    match x { Some(v) => { println(f"n:{v.len()}") } None => { println("n") } }
+}
+fn main() {
+    for i in 0..3 {
+        let vs: Vec[String] = [f"aaaaaaaaaaaaaaaaaaaa-{i}", f"bbbbbbbbbbbbbbbbbbbb-{i}"];
+        show(Option[Vec[String]].Some(vs));
+    }
+    println("end");
+}

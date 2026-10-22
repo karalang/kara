@@ -1,0 +1,2 @@
+fn make(v: Vec[String]) -> Fn(i64) -> i64 { |n| v.len() + n }
+fn main() { let mut xs = Vec.new(); xs.push(String.from("a heap-backed string beyond the sso inline limit")); let f = make(xs); println(f"{f(0i64)}"); }

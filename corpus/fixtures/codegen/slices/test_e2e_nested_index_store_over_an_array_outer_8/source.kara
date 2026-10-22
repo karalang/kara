@@ -1,0 +1,9 @@
+fn main() {
+    let r0: Array[i64, 2] = [10, 11];
+    let r1: Array[i64, 2] = [20, 21];
+    let mut v: Vec[Array[i64, 2]] = Vec.new();
+    v.push(r0);
+    v.push(r1);
+    v[0][1] = 99;
+    println(f"{v[0][1]}:{v[1][0]}");
+}

@@ -1,0 +1,11 @@
+shared struct Counter { mut value: i64 }
+impl Counter {
+fn bump(ref self) { self.value = self.value + 1; }
+}
+fn main() {
+let c = Counter { value: 0 };
+c.bump();
+c.bump();
+c.bump();
+println(c.value);
+}

@@ -1,0 +1,2 @@
+fn take(r: R) -> i64 { let w = W.One(r); let w2 = w; 7 }
+fn main() { let v = take(R { id: 1 }); println(f"v={v}") }

@@ -1,0 +1,11 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+m.insert(10_i64, "a");
+m.insert(20_i64, "b");
+m.insert(30_i64, "c");
+println(f"{m.range(10_i64, 25_i64).len()}");
+println(f"{m.range(10_i64, 30_i64).len()}");
+println(f"{m.range(25_i64, 15_i64).len()}");
+for pair in m.range(15_i64, 30_i64) { print(f"{pair.0};"); }
+println("");
+}

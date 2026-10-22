@@ -1,0 +1,46 @@
+fn key(i: i64) -> String {
+let mut s: String = "k";
+s.push_str(f"{i}");
+s
+}
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+let mut i = 0i64;
+while i < 400i64 {
+let _ = m.insert(key(i), i * 3i64);
+i = i + 1i64;
+}
+// Tombstones: drop every 5th key, then re-probe the survivors.
+let mut d = 0i64;
+while d < 400i64 {
+let _ = m.remove(key(d));
+d = d + 5i64;
+}
+let mut hits = 0i64;
+let mut sum = 0i64;
+let mut misses = 0i64;
+let mut j = 0i64;
+while j < 400i64 {
+match m.get(key(j)) {
+Some(v) => { hits = hits + 1i64; sum = (sum + v) % 1000000007i64; }
+None => { misses = misses + 1i64; }
+}
+j = j + 1i64;
+}
+println(f"{hits} {sum} {misses}");
+// Absent keys must miss, not alias a live bucket.
+match m.get("nope") { Some(_) => { println("BAD"); } None => { println("absent"); } }
+match m.get("") { Some(_) => { println("BAD"); } None => { println("absent"); } }
+// A clone is a distinct creation path; it must probe the same.
+let c = m.clone();
+let mut chits = 0i64;
+let mut k = 0i64;
+while k < 400i64 {
+match c.get(key(k)) {
+Some(_) => { chits = chits + 1i64; }
+None => {}
+}
+k = k + 1i64;
+}
+println(f"{chits}");
+}

@@ -1,0 +1,5 @@
+struct R4w { s: String, a: i64 }
+enum K4w { A(R4w), B }
+fn nested(x: Option[K4w]) { match x { Option.Some(K4w.A(r)) => { println(f"n:{r.s}:{r.a}") } Option.Some(K4w.B) => {} Option.None => {} } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { nested(Option.Some(K4w.A(R4w { s: f"ssssssss1", a: 7 }))); println("end") }

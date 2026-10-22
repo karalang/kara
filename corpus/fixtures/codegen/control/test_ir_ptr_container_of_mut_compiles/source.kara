@@ -1,0 +1,1 @@
+struct Inner { x: i32, y: i32 } struct Outer { a: i32, inner: Inner } fn recover(fp: *mut i32) -> *mut Outer { unsafe { ptr.container_of_mut(fp, offset_of[Outer](inner.y)) } } fn main() {}

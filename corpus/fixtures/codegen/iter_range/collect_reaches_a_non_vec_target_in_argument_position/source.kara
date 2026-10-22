@@ -1,0 +1,17 @@
+fn take_set(s: Set[i64]) -> i64 { return s.len() as i64; }
+fn take_deque(d: VecDeque[i64]) -> i64 { return d.len() as i64; }
+fn take_map(m: Map[i64, i64]) -> i64 { return m.len() as i64; }
+fn take_str(s: String) -> i64 { return s.len() as i64; }
+fn ambush(s: Set[i64]) -> i64 { return s.len() as i64; }
+fn main() {
+let v: Vec[i64] = [3, 1, 3, 2];
+println(take_set(v.iter().collect()).to_string());
+println(take_deque(v.iter().map(|x| x + 1).collect()).to_string());
+println(take_map(v.iter().map(|x| (x, x * 2)).collect()).to_string());
+let w: Vec[String] = ["ab", "cd"];
+println(take_str(w.iter().collect()).to_string());
+let s: String = "xyz";
+println(take_str(s.chars().collect()).to_string());
+let ambush = |x: Vec[i64]| x.len() as i64;
+println(ambush(v.iter().collect()).to_string());
+}

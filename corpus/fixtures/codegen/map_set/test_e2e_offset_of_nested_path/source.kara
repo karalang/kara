@@ -1,0 +1,3 @@
+struct Inner { x: i32, y: i32 }
+struct Outer { a: i32, inner: Inner, c: i32 }
+fn main() { println(offset_of[Outer](inner.y)); }

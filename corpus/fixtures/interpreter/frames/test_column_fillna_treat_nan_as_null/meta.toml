@@ -1,0 +1,15 @@
+source = "tests/interpreter/frames.rs::test_column_fillna_treat_nan_as_null"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:dataframe", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "f92840bd"

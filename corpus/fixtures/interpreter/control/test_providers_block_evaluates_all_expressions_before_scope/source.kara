@@ -1,0 +1,16 @@
+effect resource R1;
+         effect resource R2;
+         struct P { n: i64 }
+         impl P { fn n(self) -> i64 { self.n } }
+         fn mk1() -> P { println("eval1"); P { n: 1 } }
+         fn mk2() -> P { println("eval2"); P { n: 2 } }
+         fn main() {
+             providers {
+                 R1 => mk1(),
+                 R2 => mk2(),
+             } in {
+                 println("body");
+                 println(R1.n());
+                 println(R2.n());
+             }
+         }

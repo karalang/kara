@@ -1,0 +1,1 @@
+fn main() { B; println("end") }

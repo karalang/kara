@@ -1,0 +1,2 @@
+fn eight() { let mut b = Bag { xs: [D { id: 81 }] }; b.put(D { id: 82 }); println(f"eight:{b.xs[0].id}"); }
+fn main() { eight(); }

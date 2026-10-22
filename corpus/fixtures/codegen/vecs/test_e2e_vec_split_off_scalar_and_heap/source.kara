@@ -1,0 +1,21 @@
+fn main() {
+let mut v: Vec[i64] = [1, 2, 3, 4, 5];
+let t: Vec[i64] = v.split_off(2);
+println(v.len()); println(t.len());
+println(v[1]); println(t[0]); println(t[2]);
+let mut z: Vec[i64] = [1, 2, 3];
+let za: Vec[i64] = z.split_off(0);
+println(z.len()); println(za.len());
+let mut e: Vec[i64] = [1, 2, 3];
+let eo: Vec[i64] = e.split_off(10);
+println(e.len()); println(eo.len());
+let mut s: Vec[String] = ["a", "b", "c", "d"];
+let st: Vec[String] = s.split_off(2);
+println(s[0]); println(st[0]); println(st[1]);
+let mut n: Vec[i64] = [1, 2, 3, 4];
+let nt: Vec[i64] = n.split_off(2);
+let mut sum: i64 = 0;
+for x in n { sum = sum + x; }
+for y in nt { sum = sum + y; }
+println(sum);
+}

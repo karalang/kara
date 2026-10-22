@@ -1,0 +1,11 @@
+import std.json.{Json};
+
+fn main() {
+match Json.parse("{\"a\": }") {
+Ok(j) => println("ok"),
+Err(e) => {
+println(e.line);
+println(e.column);
+},
+}
+}

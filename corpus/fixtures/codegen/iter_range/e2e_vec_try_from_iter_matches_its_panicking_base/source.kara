@@ -1,0 +1,6 @@
+fn build() -> Result[i64, AllocError] {
+let a: Vec[i64] = Vec.try_from_iter((0..9).map(|x| x * 3))?;
+println(f"{a.len()} {a[0]} {a[8]}");
+return Ok(a.len());
+}
+fn main() { match build() { Ok(n) => { println(f"n {n}"); } Err(e) => { println("oom"); } } }

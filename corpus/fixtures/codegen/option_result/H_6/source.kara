@@ -1,0 +1,2 @@
+fn main() { let o: Option[H] = Some(H.A(R { id: 6 }));
+             println("mid"); }

@@ -1,0 +1,16 @@
+#[derive(Message)]
+struct Tags { names: Vec[String] }
+#[derive(Message)]
+struct Counts { tally: Map[String, i64] }
+fn main() {
+let t = Tags { names: ["a", "bb", "ccc"] };
+let tb = Tags.decode(t.encode());
+println(tb.names.len());
+println(tb.names[1]);
+let mut m: Map[String, i64] = Map.new();
+let _ = m.insert("x", 7);
+let _ = m.insert("yy", 9);
+let cb = Counts.decode(Counts { tally: m }.encode());
+println(cb.tally.len());
+println(cb.tally.get("yy").unwrap_or(0));
+}

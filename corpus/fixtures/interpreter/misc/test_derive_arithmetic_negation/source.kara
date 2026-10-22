@@ -1,0 +1,7 @@
+#[derive(Arithmetic)]
+distinct type Offset = i64;
+fn main() {
+let x: Offset = 7;
+let neg: Offset = -x;
+println(neg);
+}

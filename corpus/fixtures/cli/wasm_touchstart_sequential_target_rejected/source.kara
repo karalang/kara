@@ -1,0 +1,6 @@
+import std.web.events.{touchstart, TouchEvent};
+
+fn main() {
+    let starts = touchstart();
+    starts.recv();
+}

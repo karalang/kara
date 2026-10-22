@@ -1,0 +1,7 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10i64); c.push_null(); c.push(30i64);
+for x in c.iter() {
+match x { Some(v) => { println(v); } None => { println(-1i64); } }
+}
+}

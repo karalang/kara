@@ -1,0 +1,17 @@
+source = "tests/codegen/closures.rs::heap_env_two_closure_tuple_escape_runs"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "post-m1:escaping", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "a717ff6e"
+model_rev = "583cfb0d"
+model_src = "a717ff6e"

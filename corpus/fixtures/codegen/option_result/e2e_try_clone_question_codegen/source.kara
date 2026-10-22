@@ -1,0 +1,10 @@
+fn dup() -> Result[i64, AllocError] {
+let mut v: Vec[i64] = Vec.new();
+v.push(3_i64);
+v.push(4_i64);
+let c: Vec[i64] = v.try_clone()?;
+Ok(c[0] + c[1])
+}
+fn main() {
+match dup() { Ok(n) => println(n), Err(_) => println("err") }
+}

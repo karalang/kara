@@ -1,0 +1,3 @@
+enum Ho[T] { Full(T), Empty }
+fn main() { let v: Ho[i64] = Ho[i64].Empty;
+match v { Full(r) => { println(f"f:{r}") } Empty => { println("e") } } }

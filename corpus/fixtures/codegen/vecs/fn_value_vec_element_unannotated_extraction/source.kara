@@ -1,0 +1,7 @@
+fn doubler(n: i64) -> i64 { n * 2i64 }
+fn main() {
+let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+v.push(doubler);
+let g = v[0];
+println(f"{g(21i64)}");
+}

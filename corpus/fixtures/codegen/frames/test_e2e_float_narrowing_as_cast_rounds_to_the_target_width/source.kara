@@ -1,0 +1,13 @@
+fn takef(x: f32) -> f32 { x }
+fn main() {
+let c: f64 = 0.1;
+println(c);
+let d: f32 = c as f32;
+println(d);
+println(takef(c as f32));
+let mut v: Vec[f32] = Vec.new();
+v.push(c as f32);
+println(v[0]);
+let h: f16 = c as f16;
+println(h);
+}

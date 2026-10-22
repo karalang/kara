@@ -1,0 +1,7 @@
+fn main() {
+   let mut m: Map[String, B] = Map.new(); fill(mut m);
+   let mut i = 0; let mut n = 0;
+   while i < 4 {
+     match m.get("k") { None => {} Some(B.S(w)) => { n = n + w.len(); } Some(B.C) => {} }
+     i = i + 1; }
+   println(f"n:{n}"); println("end") }

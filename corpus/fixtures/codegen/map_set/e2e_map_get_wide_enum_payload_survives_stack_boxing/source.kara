@@ -1,0 +1,75 @@
+enum B {
+    S(String),
+    C,
+}
+struct Wide {
+    a: String,
+    b: String,
+    n: i64,
+}
+enum W {
+    V(Wide),
+    E,
+}
+fn main() {
+    let mut m: Map[String, B] = Map.new();
+    let _ = m.insert("k1", B.S("v1"));
+    let _ = m.insert("k2", B.C);
+    let mut i = 0;
+    let mut hits = 0;
+    while i < 5 {
+        let u = match m.get("k1") {
+            None => false,
+            Some(B.S(w)) => w == "v1",
+            Some(B.C) => false,
+        };
+        if u {
+            hits = hits + 1;
+        }
+        i = i + 1;
+    }
+    println(f"1 hits {hits}");
+    let mut moved = String.new();
+    match m.get("k1") {
+        None => {}
+        Some(B.S(w)) => {
+            moved = w;
+        }
+        Some(B.C) => {}
+    }
+    println(f"2 moved {moved}");
+    match m.get("zz") {
+        None => println("3 none"),
+        Some(B.S(w)) => println(f"3 {w}"),
+        Some(B.C) => println("3 conf"),
+    }
+    match m.get("k1") {
+        None => println("4 n"),
+        Some(_) => println("4 s"),
+    }
+    if let Some(B.S(w)) = m.get("k1") {
+        println(f"5 {w}");
+    }
+    match m.get("k2") {
+        None => println("6 none"),
+        Some(B.S(w)) => println(f"6 {w}"),
+        Some(B.C) => println("6 conf"),
+    }
+    let mut wm: Map[String, W] = Map.new();
+    let _ = wm.insert("w", W.V(Wide { a: "aa", b: "bb", n: 7 }));
+    let mut j = 0;
+    while j < 3 {
+        match wm.get("w") {
+            None => println("7 none"),
+            Some(W.V(x)) => println(f"7 {x.a}{x.b}{x.n}"),
+            Some(W.E) => println("7 e"),
+        }
+        j = j + 1;
+    }
+    match m.get("k1") {
+        None => println("8 none"),
+        Some(B.S(w)) => println(f"8 {w}"),
+        Some(B.C) => println("8 conf"),
+    }
+    println("end");
+}

@@ -1,0 +1,2 @@
+fn main() { let s = mk(); let f = s[0..s.len()]; let e = s[3..3];
+   println(f"n:{f.len() > 0}/{e.len()}"); println("end") }

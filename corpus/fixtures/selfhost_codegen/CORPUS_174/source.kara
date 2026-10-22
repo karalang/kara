@@ -1,0 +1,91 @@
+enum T {
+    A,
+    B,
+    C,
+}
+fn pick(t: ref T) -> bool {
+    match t {
+        A => true,
+        B => false,
+        C => true,
+    }
+}
+fn small(n: i64) -> bool {
+    match n {
+        0 => false,
+        1 => true,
+        _ => false,
+    }
+}
+fn flip(c: bool) -> bool {
+    if c {
+        false
+    } else {
+        true
+    }
+}
+fn advance(cur: i64, n: i64, e: i64) -> bool {
+    if cur >= n {
+        false
+    } else if e != 7 {
+        false
+    } else {
+        true
+    }
+}
+fn maxi(a: i64, b: i64) -> i64 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+fn main() {
+    if pick(T.A) {
+        println("a-t");
+    } else {
+        println("a-f");
+    }
+    if pick(T.B) {
+        println("b-t");
+    } else {
+        println("b-f");
+    }
+    if small(1) {
+        println("one");
+    } else {
+        println("not-one");
+    }
+    if flip(true) {
+        println("ft");
+    } else {
+        println("ff");
+    }
+    if flip(true) and flip(false) {
+        println("both");
+    } else {
+        println("nope");
+    }
+    if not flip(true) {
+        println("neg");
+    } else {
+        println("plain");
+    }
+    let b = flip(false);
+    if b {
+        println("bound-t");
+    } else {
+        println("bound-f");
+    }
+    if advance(0, 3, 7) {
+        println("adv");
+    } else {
+        println("stay");
+    }
+    if advance(5, 3, 7) {
+        println("adv2");
+    } else {
+        println("stay2");
+    }
+    println(maxi(3, 9).to_string());
+}

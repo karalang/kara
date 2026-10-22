@@ -1,0 +1,17 @@
+source = "tests/interpreter/strings.rs::user_impl_display_reaches_set_and_sorted_collection_elements"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests", "lib:set", "lib:sortedmap", "lib:sortedset"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "e150d6e3"
+model_rev = "583cfb0d"
+model_src = "e150d6e3"

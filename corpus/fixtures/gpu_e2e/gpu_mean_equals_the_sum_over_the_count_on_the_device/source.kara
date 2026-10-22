@@ -1,0 +1,11 @@
+fn main() {
+    let mut v: Vec[f32] = [];
+    let mut p: Vec[f32] = [];
+    for i in 0..4096 { v.push(0.1); p.push(0.1) }
+    let m = gpu.mean(v);
+    match m {
+        Some(x) => println(f"{x}"),
+        None => println("empty"),
+    }
+    println(f"{gpu.sum(p) / 4096.0}")
+}

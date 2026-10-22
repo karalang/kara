@@ -1,0 +1,8 @@
+#[derive(Arithmetic)]
+distinct type Meters = i64;
+fn main() {
+let a: Meters = 10;
+let b: Meters = 3;
+let sum: Meters = a + b;
+println(sum);
+}

@@ -1,0 +1,5 @@
+fn first_elem[N](a: Tensor[f64, [N, N]]) -> f64 { a[0, 0] }
+fn main() {
+let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+println(first_elem(a));
+}

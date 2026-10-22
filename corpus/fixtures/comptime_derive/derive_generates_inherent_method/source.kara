@@ -1,0 +1,13 @@
+
+comptime fn derive_describe(comptime T: Type) -> Vec[Item] {
+    let n = T.name();
+    [ast.item("impl " + n + " { fn describe(self) -> String { \"a " + n + "\" } }")]
+}
+
+#[derive(Describe)]
+struct Widget { id: i64 }
+
+fn main() {
+    let w = Widget { id: 7 };
+    println(w.describe());
+}

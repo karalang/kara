@@ -1,0 +1,9 @@
+#[allow(partial_move_of_drop_enum)]
+fn dies(b: E) -> i64 {
+let mut k: i64 = 0;
+match b { E.A(r) => { let inner: R = r; k = inner.id; } E.B => { } }
+println("mid");
+return k;
+}
+#[allow(partial_move_of_drop_enum)]
+fn main() { let c1: E = E.A(R { id: 8, tag: f"t8" }); let v1: i64 = dies(c1); println(f"v{v1}"); }

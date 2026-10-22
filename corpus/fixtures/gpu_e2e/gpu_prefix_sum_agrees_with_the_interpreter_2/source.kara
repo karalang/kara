@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[f32] = [];
+    let p = gpu.prefix_sum(v);
+    println(f"{p.len()}");
+}

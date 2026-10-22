@@ -1,0 +1,9 @@
+fn main() {
+let mut src: Vec[String] = Vec.new();
+src.push("ab");
+src.push("cd");
+match Vec.try_from_slice(src) {
+Ok(v) => { println(v.len()); println(v[0]); println(v[1]); }
+Err(_) => println("err"),
+}
+}

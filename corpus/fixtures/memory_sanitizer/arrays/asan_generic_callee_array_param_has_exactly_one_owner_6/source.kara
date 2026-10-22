@@ -1,0 +1,9 @@
+fn mk() -> Array[String, 2] {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    return a;
+}
+fn passthru[T](x: T) -> T { return x; }
+fn main() {
+    let b: Array[String, 2] = passthru(mk());
+    println(f"s:{b[0]}");
+}

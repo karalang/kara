@@ -1,0 +1,2 @@
+fn main() { let p = (((R { id: 41 }, 3), 2), 1); let (mid, n) = p;
+             println(f"{n}") }

@@ -1,0 +1,21 @@
+struct H { id: i64, xs: Vec[i64], name: String }
+fn mk(id: i64) -> H {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return H { id: id, xs: v, name: f"n{id}" }
+}
+fn moveStr(t: (H, i64)) {
+    match t { (r, k) => { let n = r.name; println(f"  s{r.xs.len()}:{n}") } }
+}
+fn moveVec(t: (H, i64)) {
+    match t { (r, k) => { let w = r.xs; println(f"  v{w.len()}:{r.name}") } }
+}
+fn bare(h: H) { let n = h.name; println(f"  bare{h.xs.len()}:{n}") }
+fn noMove(t: (H, i64)) { match t { (r, k) => { println(f"  nm{r.xs.len()}:{r.name}") } } }
+fn main() {
+    moveStr((mk(1), 0));
+    moveVec((mk(2), 0));
+    bare(mk(3));
+    noMove((mk(4), 0));
+    println("end")
+}

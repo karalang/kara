@@ -1,0 +1,6 @@
+fn main() {
+match Json.parse("{not json}") {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+}

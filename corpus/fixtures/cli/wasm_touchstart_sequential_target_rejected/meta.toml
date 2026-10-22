@@ -1,0 +1,17 @@
+source = "tests/cli.rs::wasm_touchstart_sequential_target_rejected"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main#resume at bbN[term]: in touchstart at bbN[term]: call of unkno"
+classified_with = "79705a229"
+extracted_src = "fdab9420"
+model_rev = "583cfb0d"
+model_src = "fdab9420"

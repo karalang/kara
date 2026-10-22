@@ -1,0 +1,2 @@
+fn main() { let a = make(1); println(a.tag);
+             let c = make(2); println(c.tag); }

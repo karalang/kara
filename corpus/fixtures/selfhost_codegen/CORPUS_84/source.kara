@@ -1,0 +1,2 @@
+enum Op { Add(i64), Zero }
+fn main() { let e = Op.Add(7); match e { Add(n) => { println(n.to_string()) } _ => { println("other") } } }

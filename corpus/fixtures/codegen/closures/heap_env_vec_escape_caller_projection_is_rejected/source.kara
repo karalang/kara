@@ -1,0 +1,3 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v }
+fn main() { let r = build(21i64); let g = r[0]; println(f"{g(21i64)}"); }

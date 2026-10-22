@@ -1,0 +1,12 @@
+struct Box[T] { value: T }
+impl[T] Box[T] {
+    fn sizes(ref self) -> i64 {
+        let a: Vec[i64] = Vec.new();
+        let b: Vec[i64] = Vec.new();
+        a.len() + b.len()
+    }
+}
+fn main() {
+    let bx = Box { value: 5 };
+    println(f"{bx.sizes()}");
+}

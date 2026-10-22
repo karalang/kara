@@ -1,0 +1,6 @@
+import std.json.{Json};
+
+fn main() {
+let r1 = Json.parse("1");
+let r2 = Json.parse("2");
+}

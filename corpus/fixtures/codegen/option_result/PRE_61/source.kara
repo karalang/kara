@@ -1,0 +1,2 @@
+fn f(r: R) -> H { let h = wrap_bodied(r); println(f"v={h.r.id}"); return h; }
+fn main() { let g = f(mkr(9)); println(f"g={g.n}"); println("end") }

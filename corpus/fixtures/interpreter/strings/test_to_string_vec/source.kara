@@ -1,0 +1,4 @@
+fn main() {
+let v = Vec[1_i64, 2_i64];
+println(v.to_string());
+}

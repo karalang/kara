@@ -1,0 +1,4 @@
+fn main() {
+    let a: i32 = 1i32; let s: i32 = 31i32; println(a << s);
+    let b: i64 = 1i64; let t: i64 = 63i64; println(b << t);
+}

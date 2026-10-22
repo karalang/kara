@@ -1,0 +1,3 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> (Fn(i64) -> i64, i64) { let f = make(k); let t = (f, 0i64); t }
+fn main() { let r = build(22i64); println(f"{(r.0)(20i64)}"); }

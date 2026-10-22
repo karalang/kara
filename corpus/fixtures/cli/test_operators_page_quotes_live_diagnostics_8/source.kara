@@ -1,0 +1,1 @@
+fn main() { let b: bool = true; let r: bool = ~b; }

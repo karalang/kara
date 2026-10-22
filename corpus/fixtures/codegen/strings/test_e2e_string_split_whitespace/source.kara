@@ -1,0 +1,17 @@
+fn main() {
+let a: String = "  the  quick   brown fox  ";
+let v = a.split_whitespace();
+println(f"{v.len()}");
+println(v[0]);
+println(v[3]);
+let e: String = "tab\tand\nnewline";
+let w = e.split_whitespace();
+println(f"{w.len()}");
+println(w[1]);
+let one = "single".split_whitespace();
+println(f"{one.len()}");
+let ws = "   ".split_whitespace();
+println(f"{ws.len()}");
+let empty = "".split_whitespace();
+println(f"{empty.len()}");
+}

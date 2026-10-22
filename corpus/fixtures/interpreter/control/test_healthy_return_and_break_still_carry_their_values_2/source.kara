@@ -1,0 +1,6 @@
+fn pick() -> i64 {
+let mut i = 0;
+let r = loop { i = i + 1; if i == 3 { break i * 10 } };
+r
+}
+fn main() { println(pick()); }

@@ -1,0 +1,15 @@
+struct Cell { m: f32, t: f32 }
+fn main() {
+    let cells: Vec[Cell] = [Cell { m: 1.0, t: 10.0 },
+                            Cell { m: 2.0, t: 20.0 },
+                            Cell { m: 3.0, t: 30.0 }];
+    let buf = gpu.upload(cells);
+    println(f"{gpu.sum(buf.m)}");
+    println(f"{gpu.sum(buf.t)}");
+    let back = gpu.download(buf);
+    println(f"{back.len()}");
+    let one: Vec[Cell] = [Cell { m: 4.0, t: 40.0 }, Cell { m: 5.0, t: 50.0 }];
+    println(f"{gpu.sum(gpu.upload(one).m)}");
+    let two: Vec[Cell] = [Cell { m: 6.0, t: 60.0 }];
+    println(f"{gpu.sum(gpu.upload(two).t)}");
+}

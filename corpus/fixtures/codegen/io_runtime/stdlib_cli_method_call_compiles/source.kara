@@ -1,0 +1,1 @@
+fn main() { let a = Arg.string(); let b = a.required(); println("ok"); }

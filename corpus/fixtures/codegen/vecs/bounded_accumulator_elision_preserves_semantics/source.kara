@@ -1,0 +1,16 @@
+fn count_set(nums: ref Vec[i64], b: i64) -> i64 {
+let mut cnt = 0i64;
+let mut i = 0i64;
+while i < nums.len() {
+if ((nums[i] >> b) & 1i64) == 1i64 {
+cnt = cnt + 1i64;
+}
+i = i + 1i64;
+}
+cnt
+}
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(1i64); v.push(2i64); v.push(3i64); v.push(7i64); v.push(8i64);
+println(f"{count_set(v, 0i64)} {count_set(v, 1i64)} {count_set(v, 3i64)}");
+}

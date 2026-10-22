@@ -1,0 +1,10 @@
+fn main() {
+let mut s: String = "";
+match s.try_push_str("ab") {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+let _ = s.try_push_str("cde");
+println(s);
+println(s.len());
+}

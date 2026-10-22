@@ -1,0 +1,10 @@
+fn diag_sum[N](a: Tensor[f64, [N, N]], b: Tensor[f64, [N, N]], n: i64) -> f64 {
+let mut s = 0.0;
+for i in 0..n { s = s + a[i, i] + b[i, i]; }
+s
+}
+fn main() {
+let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+let b: Tensor[f64, [2, 2]] = Tensor.from([[10.0, 0.0], [0.0, 20.0]]);
+println(diag_sum(a, b, 2));
+}

@@ -1,0 +1,8 @@
+fn boom() {
+unreachable()
+}
+fn main() {
+let x = 1;
+let _ = x;
+boom();
+}

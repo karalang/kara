@@ -1,0 +1,8 @@
+fn orphan() -> Sender[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    return tx;
+}
+fn main() {
+    orphan().send(9);
+    println("unreachable");
+}

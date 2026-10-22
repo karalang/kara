@@ -1,0 +1,24 @@
+fn hexval(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    return -1;
+}
+fn neg(x: i64) -> i64 {
+    return -x;
+}
+fn main() {
+    let a = -1;
+    println(a.to_string());
+    println((-5).to_string());
+    println(neg(7).to_string());
+    println((-2 * 3).to_string());
+    println(hexval(55).to_string());
+    println(hexval(200).to_string());
+    let b = true;
+    if not b {
+        println("t");
+    } else {
+        println("f");
+    }
+}

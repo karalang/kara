@@ -1,0 +1,5 @@
+fn main() {
+let xs: Vec[f64] = Vec[0.0_f64];
+let ys = xs[1..];
+match Stats.argmin(ys) { Some(i) => println(i), None => println(-1), }
+}

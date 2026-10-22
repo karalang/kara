@@ -1,0 +1,2 @@
+fn eat(x: Array[R, 2]) { println(f"ate{x[0].id}") }
+fn main() { let e: EArr = EArr.A(mka()); match e { EArr.A(v) => { eat(v) } EArr.B => { println("no") } } println("end") }

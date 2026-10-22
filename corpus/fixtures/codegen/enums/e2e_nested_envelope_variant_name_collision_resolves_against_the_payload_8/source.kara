@@ -1,0 +1,4 @@
+shared enum MyOptS { Some(i64), Nothing }
+fn main() { let x: Option[MyOptS] = Some(MyOptS.Some(71));
+match x { Some(Some(v)) => { println(f"a{v}") } Some(Nothing) => { println("sn") } None => { println("n") } }
+println("done") }

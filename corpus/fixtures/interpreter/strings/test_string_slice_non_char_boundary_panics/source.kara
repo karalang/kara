@@ -1,0 +1,5 @@
+fn main() {
+             let s = "héllo";
+             let bad = s[0..2];
+             println(bad);
+         }

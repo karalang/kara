@@ -1,0 +1,27 @@
+#[derive(Display)]
+enum MyOpt[T] { Has(T), Empty }
+fn main() {
+let mut a: Vec[Option[i64]] = vec![];
+a.push(Some(5i64));
+a.push(None);
+println(a);
+let mut b: Vec[Result[i64, String]] = vec![];
+b.push(Ok(5i64));
+b.push(Err("bad"));
+println(b);
+let mut m: Map[String, Option[i64]] = Map.new();
+m.insert("k", Some(5i64));
+println(m);
+let mut g: Vec[MyOpt[i64]] = vec![];
+g.push(MyOpt.Has(5i64));
+g.push(MyOpt.Empty);
+println(g);
+let mut h: Vec[MyOpt[String]] = vec![];
+h.push(MyOpt.Has("hello"));
+println(h);
+let mut i: Vec[i64] = vec![];
+i.push(7i64);
+let mut v: Vec[MyOpt[Vec[i64]]] = vec![];
+v.push(MyOpt.Has(i));
+println(v);
+}

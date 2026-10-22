@@ -1,0 +1,17 @@
+source = "tests/interpreter/patterns.rs::a_negative_literal_pattern_matches"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:this literal pattern"
+classified_with = "79705a229"
+extracted_src = "cc882c0a"
+model_rev = "583cfb0d"
+model_src = "cc882c0a"

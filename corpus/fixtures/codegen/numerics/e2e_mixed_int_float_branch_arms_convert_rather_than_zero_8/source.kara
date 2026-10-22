@@ -1,0 +1,2 @@
+fn opt() -> Option[i64] { Some(7) }
+fn main() { let a: f64 = if let Some(v) = opt() { v } else { 0.0 }; println(a); }

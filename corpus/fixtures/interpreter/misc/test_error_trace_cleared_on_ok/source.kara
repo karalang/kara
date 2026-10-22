@@ -1,0 +1,8 @@
+fn try_thing() {
+let r = Ok(10);
+r?
+}
+fn main() {
+let v = try_thing();
+println(v);
+}

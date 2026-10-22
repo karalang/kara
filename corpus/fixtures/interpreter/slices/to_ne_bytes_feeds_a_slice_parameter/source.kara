@@ -1,0 +1,10 @@
+fn total(b: ref Slice[u8]) -> i64 {
+let mut s = 0i64;
+let mut i = 0i64;
+while i < b.len() { s = s + b[i] as i64; i = i + 1i64; }
+s
+}
+fn main() {
+let w: u32 = 16909060u32;
+println(total(w.to_ne_bytes()));
+}

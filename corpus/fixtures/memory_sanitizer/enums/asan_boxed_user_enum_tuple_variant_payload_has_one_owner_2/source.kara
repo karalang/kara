@@ -1,0 +1,6 @@
+struct R2z { s: String }
+enum Kz { A(R2z), B }
+impl Drop for Kz { fn drop(mut ref self) { println("dKz") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Kz]) { match x { Option.Some(Kz.A(r)) => { println(f"a:{r.s.len()}") } Option.Some(Kz.B) => {} Option.None => {} } }
+fn main() { for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f"bbbbbbbbbbbbbbbbbbbb-{i}" }))); } println("end") }

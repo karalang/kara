@@ -1,0 +1,4 @@
+fn main() {
+let o: Option[i64] = Some(20i64);
+match o.map(|x| x + 1i64).map(|x| x * 2i64).map(|x| x + 0i64) { Some(v) => { println(v); } None => { println("-"); } }
+}

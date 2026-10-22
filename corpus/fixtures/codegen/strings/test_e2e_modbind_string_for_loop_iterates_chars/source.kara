@@ -1,0 +1,6 @@
+let GREETING: StringSlice = "héllo";
+fn main() {
+let mut n = 0;
+for c in GREETING { n = n + 1; }
+println(n);
+}

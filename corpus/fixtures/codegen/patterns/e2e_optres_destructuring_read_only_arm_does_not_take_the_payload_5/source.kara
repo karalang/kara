@@ -1,0 +1,7 @@
+struct Inner { s: String }
+struct Outer { i: Inner }
+fn main() {
+let a: Option[Outer] = Some(Outer { i: Inner { s: f"deep" } });
+match a { Some(Outer { i: ref i }) => { println(i.s); } None => {} }
+match a { Some(Outer { i }) => println(i.s), None => println("none") }
+}

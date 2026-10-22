@@ -1,0 +1,17 @@
+source = "tests/interpreter/frames.rs::stats_int_reductions_still_work_when_they_do_not_overflow"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Stats.sum"
+classified_with = "79705a229"
+extracted_src = "94b21dd6"
+model_rev = "583cfb0d"
+model_src = "94b21dd6"

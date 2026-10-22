@@ -1,0 +1,5 @@
+a=Some(10) b=None
+Some(10)
+s=Some(hi)
+r=Ok(7) e=Err(boom)
+Err(boom)

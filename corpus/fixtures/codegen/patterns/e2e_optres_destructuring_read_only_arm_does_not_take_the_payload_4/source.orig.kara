@@ -1,0 +1,5 @@
+fn main() {
+let a: Option[(String, i64)] = Some((f"td", 1));
+match a { Some((s, n)) => { println(s); } None => {} }
+match a { Some((s, n)) => println(s), None => println("none") }
+}

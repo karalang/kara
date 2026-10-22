@@ -1,0 +1,11 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+m.insert(10, 1);
+m.insert(20, 2);
+m.insert(30, 3);
+m.remove(10);
+for (k, v) in m { println(f"{k}={v}"); }
+match m.get(30) { Some(v) => { println(f"found30={v}"); } None => { println("LOST30"); } }
+match m.get(20) { Some(v) => { println(f"found20={v}"); } None => { println("LOST20"); } }
+match m.get(10) { Some(v) => { println(f"found10={v}"); } None => { println("gone10"); } }
+}

@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[i64, Vec[i64]] = Err(vec![1i64, 2i64]);
+match r.map(|x| x + 1i64) { Ok(v) => { println(v); } Err(e) => { println(e.len()); } }
+}

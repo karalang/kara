@@ -1,0 +1,3 @@
+struct Pair { x: i64, y: i64 }
+impl Pair { fn read_y(ref self) -> i64 { self.y } }
+fn main() { let p = Pair { x: 7, y: 99 }; println(p.read_y()); }

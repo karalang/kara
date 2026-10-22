@@ -1,0 +1,19 @@
+fn build() -> Result[i64, AllocError] {
+let a: Vec[i64] = Vec.try_from_iter(0..4)?;
+println(f"{a.len()} {a[0]} {a[3]}");
+let b: Vec[i64] = Vec.try_from_iter((0..6).map(|x| x * 2))?;
+println(f"{b.len()} {b[5]}");
+let s: Vec[i64] = [5, 6, 7];
+let c: Vec[i64] = Vec.try_from_iter(s.iter().map(|x| x + 1))?;
+println(f"{c.len()} {c[2]}");
+let h: Vec[String] = ["a", "bb"];
+let hu: Vec[String] = Vec.try_from_iter(h.iter().map(|t| t.to_uppercase()))?;
+println(f"{hu.len()} {hu[0]} {hu[1]}");
+return Ok(a.len() + b.len() + c.len() + hu.len());
+}
+fn main() {
+match build() {
+Ok(n) => { println(f"ok {n}"); }
+Err(e) => { println("oom"); }
+}
+}

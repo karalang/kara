@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(i: i64) -> D { return D { id: i, s: f"ssssssssssssssss{i}" } }
+fn main() {
+    let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);
+    let t2 = t;
+    println(f"n:{t2.1}");
+}

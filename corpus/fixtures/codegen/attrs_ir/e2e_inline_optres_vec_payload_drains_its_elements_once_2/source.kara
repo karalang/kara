@@ -1,0 +1,7 @@
+fn plainV(x: Result[Vec[Vec[String]], i64]) {
+    match x { Ok(t) => { println(f"s:{t[0][0]}") } Err(e) => { println("n") } }
+}
+fn main() {
+    let v: Vec[Vec[String]] = [[f"aaaaaaaa0", f"aaaaaaaa1"], [f"bbbbbbbb0"]];
+    plainV(Ok(v));
+}

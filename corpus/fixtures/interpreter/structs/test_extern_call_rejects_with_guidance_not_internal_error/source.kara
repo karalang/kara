@@ -1,0 +1,2 @@
+unsafe extern "C" { fn abs(n: i32) -> i32; }
+fn main() { println(unsafe { abs(-5i32) }); }

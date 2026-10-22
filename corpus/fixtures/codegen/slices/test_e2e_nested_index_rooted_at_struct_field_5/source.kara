@@ -1,0 +1,9 @@
+fn main() {
+let mut a: Vec[i64] = Vec.new();
+a.push(1i64);
+let mut b: Vec[Vec[i64]] = Vec.new();
+b.push(a);
+let mut c: Vec[Vec[Vec[i64]]] = Vec.new();
+c.push(b);
+println(f"{c[0][0][0]}");
+}

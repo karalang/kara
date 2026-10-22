@@ -1,0 +1,3 @@
+fn main() {
+match Result.Ok(5) { Ok(n) => println(n), Err(e) => println(0) }
+}

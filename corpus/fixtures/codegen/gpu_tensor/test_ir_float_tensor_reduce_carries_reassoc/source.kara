@@ -1,0 +1,2 @@
+fn s(t: ref Tensor[f32, [64]]) -> f32 { t.sum() }
+fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); println(s(t)); }

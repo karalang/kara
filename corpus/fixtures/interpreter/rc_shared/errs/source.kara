@@ -1,0 +1,2 @@
+struct P { v: i64 }
+fn main() { let a = P { v: 1 }; let b = P { v: 1 }; println(ref_eq(a, b)); }

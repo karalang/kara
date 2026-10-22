@@ -1,0 +1,23 @@
+enum Payload { Empty, Items(Vec[i64]), Named(String) }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let nested: Vec[Vec[i64]] = [[1], [2, 3]];
+    let names: Vec[String] = ["a", "bb"];
+    let mut total = 0i64;
+    for i in 0..v.len() {
+        let line: String = f"row {i}";
+        total = total + line.len();
+    }
+    let empty = 0i64;
+    for j in 0..empty {
+        let skipped: String = f"never {j}";
+        total = total + skipped.len();
+    }
+    let p: Payload = Payload.Empty;
+    match p {
+        Payload.Items(xs) => { total = total + xs.len(); }
+        Payload.Named(s) => { total = total + s.len(); }
+        Payload.Empty => { total = total + 1i64; }
+    }
+    println(f"{total} {nested.len()} {names.len()}");
+}

@@ -1,0 +1,7 @@
+struct R2z { s: String }
+struct Accz { held: R2z }
+enum Kz { A(R2z), B }
+impl Drop for Kz { fn drop(mut ref self) { println("dKz") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Kz], acc: mut ref Accz) { match x { Option.Some(Kz.A(r)) => { acc.held = r; } Option.Some(Kz.B) => {} Option.None => {} } }
+fn main() { let mut acc = Accz { held: R2z { s: f"gggggggggggggggggggg-0" } }; for i in 0..3 { show(Option.Some(Kz.A(R2z { s: f"hhhhhhhhhhhhhhhhhhhh-{i}" })), mut acc); } println(f"h:{acc.held.s}") }

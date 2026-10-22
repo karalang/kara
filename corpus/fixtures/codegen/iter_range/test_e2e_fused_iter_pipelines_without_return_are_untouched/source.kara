@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];
+let d: Vec[i64] = v.iter().map(|n| n * 2i64).collect();
+let e: Vec[i64] = v.iter().filter(|n| n > 2i64).collect();
+let s: i64 = v.iter().fold(0i64, |acc, n| acc + n);
+let a: bool = v.iter().any(|n| n > 3i64);
+let b: bool = v.iter().all(|n| n > 0i64);
+let mut w: Vec[i64] = v;
+w.retain(|n| n > 2i64);
+println(f"{d[3]} {e.len()} {s} {a} {b} {w.len()}");
+}

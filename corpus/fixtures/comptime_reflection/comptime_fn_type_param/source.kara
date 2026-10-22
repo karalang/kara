@@ -1,0 +1,4 @@
+
+struct Point { x: i64, y: i64 }
+comptime fn field_count(comptime T: Type) -> usize { T.fields().len() }
+fn main() { println(comptime { field_count(Point) }); }

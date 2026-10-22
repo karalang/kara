@@ -1,0 +1,5 @@
+type Ints = Vec[i64];
+type Alias2 = Ints;
+type Loop = Loop;
+fn count(xs: Alias2) -> i64 { xs.len() }
+fn main() { println(count(vec![7, 8, 9])); }

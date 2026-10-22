@@ -1,0 +1,3 @@
+trait Zero { fn zero() -> Self; }
+impl Zero for i64 { fn zero() -> i64 { return 41; } }
+fn main() { println(i64.zero().to_string()); }

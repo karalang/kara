@@ -1,0 +1,6 @@
+fn main() {
+let mut a = 1i64;
+let mut b = 2i64;
+a, b = b, a;
+println(f"{a} {b}");
+}

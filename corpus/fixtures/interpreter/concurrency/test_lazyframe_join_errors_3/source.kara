@@ -1,0 +1,8 @@
+fn main() {
+let mut l: DataFrame = DataFrame.new();
+l.insert("k", Column.from_vec([1i64, 2i64]));
+let mut r: DataFrame = DataFrame.new();
+r.insert("k", Column.from_vec(["1", "2"]));
+r.insert("w", Column.from_vec([10i64, 20i64]));
+let _ = l.lazy().join(r.lazy(), vec!["k"]).collect();
+}

@@ -1,0 +1,11 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(self.id); } }
+enum Bare { Empty, Full(i64) }
+impl Drop for Bare { fn drop(mut ref self) { println(1); } }
+enum Both { Nil, Held(Res) }
+impl Drop for Both { fn drop(mut ref self) { println(2); } }
+fn main() {
+{ let b = Bare.Full(7); println(50); }
+{ let h = Both.Held(Res { id: 41 }); println(51); }
+println(999);
+}

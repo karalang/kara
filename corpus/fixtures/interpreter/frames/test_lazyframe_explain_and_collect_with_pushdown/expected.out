@@ -1,0 +1,12 @@
+== logical plan ==
+LIMIT 2
+  LIMIT 7
+    SELECT [b, a]
+      SCAN [a, b, c]
+== optimized ==
+SCAN cols=[b, a] limit=2
+2
+2
+b
+a
+20.5

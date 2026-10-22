@@ -1,0 +1,11 @@
+struct S {
+    k: i64,
+    nxt: Option[E],
+}
+shared enum E {
+    V(S),
+}
+fn main() {
+    let a = E.V(S { k: 1, nxt: None });
+    println("y");
+}

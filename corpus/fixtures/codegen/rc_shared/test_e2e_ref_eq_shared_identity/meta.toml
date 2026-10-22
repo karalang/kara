@@ -1,0 +1,17 @@
+source = "tests/codegen/rc_shared.rs::test_e2e_ref_eq_shared_identity"
+dedup_of = ["tests/interpreter/rc_shared.rs::test_ref_eq_shared_struct_identity"]
+expect = "stdout"
+exit = 0
+tags = ["shared", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "a42ce0a3"
+model_rev = "583cfb0d"
+model_src = "a42ce0a3"

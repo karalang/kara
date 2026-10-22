@@ -1,0 +1,3 @@
+fn show(x: Option[i64]) { println(f"o {x}"); }
+fn showr(x: Result[i64, i64]) { println(f"r {x}"); }
+fn main() { show(Some(7)); showr(Ok(7)); showr(Err(9)); show(None); }

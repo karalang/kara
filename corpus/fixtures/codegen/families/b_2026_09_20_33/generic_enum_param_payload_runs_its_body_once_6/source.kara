@@ -1,0 +1,2 @@
+fn g(b: Gen[Cn]) -> i64 { let mut o = Cn { r: R { id: 9 }, n: 0 }; let Gen.A(w) = b else { return 0 }; o = w; println("ret"); o.n }
+fn main() { println(f"r:{g(Gen.A(Cn { r: R { id: 3 }, n: 1 }))}") }

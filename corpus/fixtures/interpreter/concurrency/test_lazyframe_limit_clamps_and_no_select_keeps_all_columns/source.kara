@@ -1,0 +1,9 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 2i64]));
+let zero = df.lazy().limit(-3).collect();
+println(zero.height());
+let all = df.lazy().limit(99).collect();
+println(all.height()); println(all.width());
+println(df.lazy().explain());
+}

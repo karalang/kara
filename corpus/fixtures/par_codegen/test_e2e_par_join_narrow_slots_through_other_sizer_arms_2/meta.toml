@@ -1,0 +1,17 @@
+source = "tests/par_codegen.rs::test_e2e_par_join_narrow_slots_through_other_sizer_arms"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "post-m1:par", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "b-fix-incomplete:E0520"
+classified_with = "79705a229"
+extracted_src = "e5dfe600"
+model_rev = "583cfb0d"
+model_src = "e5dfe600"

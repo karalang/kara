@@ -1,0 +1,2 @@
+fn grade(s: i64) -> String { let label = "grade ".to_string(); match s { 0 => { return label + "zero"; } 1 => { return label + "one"; } n => { return label + "n" + n.to_string(); } } }
+fn main() { println(grade(0)); println(grade(1)); println(grade(7)) }

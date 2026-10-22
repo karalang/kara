@@ -1,0 +1,14 @@
+fn main() {
+let b: u8 = 200;
+println(b.count_ones());
+let n: u64 = 1024;
+println(n.leading_zeros());
+println(n.trailing_zeros());
+let z: u8 = 0;
+println(z.leading_zeros());
+println(z.trailing_zeros());
+let neg: i8 = -1;
+println(neg.count_ones());
+let m: i32 = 1;
+println(m.leading_zeros());
+}

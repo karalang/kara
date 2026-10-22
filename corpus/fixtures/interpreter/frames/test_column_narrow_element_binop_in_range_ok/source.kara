@@ -1,0 +1,5 @@
+fn main() {
+let c: Column[i32] = Column.from_vec([100, 200]);
+let d = c + 1;
+match d[1] { Some(x) => { println(x); }, None => { println(0); } }
+}

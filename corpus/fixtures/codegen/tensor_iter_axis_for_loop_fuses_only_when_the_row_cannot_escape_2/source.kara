@@ -1,0 +1,6 @@
+fn main() {
+let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);
+let mut keep: Vec[Tensor[f32, [3]]] = Vec.new();
+for row in t.iter_axis(0) { keep.push(row); }
+println(keep.len().to_string());
+}

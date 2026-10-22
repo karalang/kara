@@ -1,0 +1,10 @@
+pub type NonEmptyV = Vec[String] where self.len() > 0;
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push("a".to_string());
+v.push("b".to_string());
+match NonEmptyV.try_from(v) {
+Ok(rows) => println(f"got {rows.len()} rows"),
+Err(_)   => println("empty"),
+}
+}

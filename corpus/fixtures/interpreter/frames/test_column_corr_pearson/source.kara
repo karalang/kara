@@ -1,0 +1,5 @@
+fn main() {
+let a: Column[f64] = Column.from_vec([1.0, 2.0, 3.0, 4.0]);
+let b: Column[f64] = Column.from_vec([2.0, 4.0, 6.0, 8.0]);
+println(a.corr(b));
+}

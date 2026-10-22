@@ -1,0 +1,17 @@
+source = "tests/interpreter/vecs.rs::vec_from_fn_computes_each_slot_by_index"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "475aa2c7"
+model_rev = "583cfb0d"
+model_src = "475aa2c7"

@@ -1,0 +1,46 @@
+import std.lazy.{col};
+fn main() {
+let mut people: DataFrame = DataFrame.new();
+people.insert("id", Column.from_vec([1i64, 2i64, 3i64, 4i64]));
+people.insert("name", Column.from_vec(["ada", "bob", "cyd", "dee"]));
+people.insert("city", Column.from_vec(["rome", "oslo", "rome", "lima"]));
+let mut cities: DataFrame = DataFrame.new();
+cities.insert("city", Column.from_vec(["rome", "oslo", "kiev"]));
+cities.insert("pop", Column.from_vec([60i64, 80i64, 30i64]));
+cities.insert("name", Column.from_vec(["Roma", "Oslo", "Kyiv"]));
+let plan = people.lazy()
+.join(cities.lazy().select(vec!["city", "pop"]), vec!["city"])
+.filter(col("pop").gt(50))
+.select(vec!["name", "pop"]);
+println(plan.explain());
+let planc = plan.collect();
+println(planc.height());
+let pre = people.lazy().select(vec!["name", "city"]).join(cities.lazy(), vec!["city"]);
+println(pre.explain());
+let prec = pre.collect();
+println(prec.width());
+let mut left: DataFrame = DataFrame.new();
+let lk: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];
+left.insert("k", Column.from_iter_nullable(lk));
+let mut right: DataFrame = DataFrame.new();
+let rk: Vec[Option[i64]] = vec![Some(1i64), None];
+right.insert("k", Column.from_iter_nullable(rk));
+right.insert("w", Column.from_vec([100i64, 200i64]));
+let njp = left.lazy().join(right.lazy(), vec!["k"]);
+let nj = njp.collect();
+println(nj.height());
+let ws: Column[i64] = nj.column("w");
+match ws[0] { Some(v) => println(v), None => println(-1i64) }
+let mut dup: DataFrame = DataFrame.new();
+dup.insert("city", Column.from_vec(["rome", "rome"]));
+dup.insert("tag", Column.from_vec(["a", "b"]));
+let fanp = people.lazy().select(vec!["name", "city"]).join(dup.lazy(), vec!["city"]);
+let fan = fanp.collect();
+println(fan.height());
+let n4: Column[String] = fan.column("name");
+let t4: Column[String] = fan.column("tag");
+for i in 0..fan.height() {
+match n4[i] { Some(v) => println(v), None => println("null") }
+match t4[i] { Some(v) => println(v), None => println("null") }
+}
+}

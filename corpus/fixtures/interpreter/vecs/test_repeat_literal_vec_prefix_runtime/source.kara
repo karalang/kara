@@ -1,0 +1,5 @@
+fn main() {
+                 let v = Vec[7; 4];
+                 println(v.len());
+                 println(v[3]);
+             }

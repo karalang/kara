@@ -1,0 +1,2 @@
+fn g(b: Gen[Ch]) -> i64 { match b { Gen.A(w) => { sink(w); } Gen.B => { } }; println("ret"); 1 }
+fn main() { println(f"r:{g(Gen.A(Ch { r: R { id: 2 }, s: f"p" }))}") }

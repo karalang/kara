@@ -1,0 +1,14 @@
+fn main() {
+let e = 5..5;
+let mut n = 0;
+for i in e { n = n + 1; }
+let one = 3..=3;
+let mut m = 0;
+for i in one { m = m + 1; }
+let r = 0..3;
+let mut k = 0;
+for i in r { for j in r { k = k + 1; } }
+println(n);
+println(m);
+println(k);
+}

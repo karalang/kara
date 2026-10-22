@@ -1,0 +1,5 @@
+struct S2 { a: String, b: i64 }
+fn plainV(x: Option[Vec[S2]]) {
+    match x { Some(t) => { println(f"s:{t.len()}") } None => { println("n") } }
+}
+fn main() { plainV(Some([S2 { a: f"aaaaaaaa0", b: 1 }, S2 { a: f"bbbbbbbb1", b: 2 }])); }

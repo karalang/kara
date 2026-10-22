@@ -1,0 +1,2 @@
+fn setit(d: mut ref Vec[Vec[N]]) { d[0][0] = N { k: 2 }; }
+fn main() { let mut d: Vec[Vec[N]] = [[N { k: 1 }]]; setit(mut d); println("end") }

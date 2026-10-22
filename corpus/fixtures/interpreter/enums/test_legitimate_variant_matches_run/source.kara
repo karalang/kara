@@ -1,0 +1,14 @@
+enum Color { Red, Green, Blue }
+enum Shape { Circle(i64), Square(i64) }
+fn col(c: Color) -> i64 { match c { Red => 1, Color.Green => 2, _ => 3 } }
+fn shp(s: Shape) -> i64 { match s { Shape.Circle(r) => r, Square(w) => w } }
+fn opt(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1 } }
+fn main() {
+println(col(Color.Red));
+println(col(Color.Green));
+println(col(Color.Blue));
+println(shp(Shape.Circle(7)));
+println(shp(Shape.Square(4)));
+println(opt(Some(9)));
+println(opt(None));
+}

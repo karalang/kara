@@ -1,0 +1,3 @@
+import conn;
+fn open() -> i64 { return 99; }
+fn main() { println(open()); println(conn.open()); }

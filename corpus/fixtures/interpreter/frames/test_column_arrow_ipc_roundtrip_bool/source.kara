@@ -1,0 +1,12 @@
+fn main() {
+let mut c: Column[bool] = Column.new();
+c.push(true); c.push(false); c.push_null(); c.push(true);
+let bytes = c.to_arrow_ipc();
+let d: Column[bool] = Column.from_arrow_ipc(bytes);
+println(d.len());
+println(d.null_count());
+let vals = d.iter_valid();
+println(vals[0]);
+println(vals[1]);
+println(vals[2]);
+}

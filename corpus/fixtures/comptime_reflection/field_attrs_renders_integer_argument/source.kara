@@ -1,0 +1,10 @@
+
+struct S { #[karac::field(5)] x: i64, y: i64 }
+fn main() {
+    let r = comptime {
+        let mut s = "";
+        for f in S.fields() { for a in f.attrs { s = s + f.name + "=" + a + ";"; } }
+        s
+    };
+    println(r);
+}

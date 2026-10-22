@@ -1,0 +1,36 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 10, 4, 5, 11, 6];
+let mut a: i64 = 0;
+for x in v.iter().take_while(|w| w < 10) { a = a + x; }
+println(a);
+let mut b: i64 = 0;
+for x in v.iter().skip_while(|w| w < 10) { b = b + x; }
+println(b);
+let mut c: i64 = 0;
+for y in v.iter().skip_while(|w| w < 10).map(|w| w * 2).take_while(|z| z < 21) { c = c + y; }
+println(c);
+let mut e: i64 = 0;
+for x in v.iter().take_while(|w| w < 10) {
+if x == 3 { break; }
+e = e + x;
+}
+println(e);
+let mut o: i64 = 0;
+for x in v.iter().skip_while(|w| w < 3).skip_while(|w| w < 5) { o = o + x; }
+println(o);
+println(v.iter().take_while(|w| w < 10).fold(1, |acc, x| acc * x));
+println(v.iter().skip_while(|w| w < 10).sum());
+println(v.iter().take_while(|w| w < 10).filter(|w| w % 2 == 1).count());
+println(v.iter().skip_while(|w| w < 10).any(|w| w == 6));
+println(v.iter().take_while(|w| w < 10).all(|w| w % 2 == 0));
+let names: Vec[String] = [f"ant", f"bee", f"zebra", f"dog"];
+let mut picked: String = f"";
+for n in names.iter().take_while(|s| s != "zebra") { picked = picked + n + f","; }
+println(picked);
+let mut rest: String = f"";
+for n in names.iter().skip_while(|s| s != "zebra") { rest = rest + n + f","; }
+println(rest);
+let mut q: i64 = 0;
+for x in v.iter().take_while(|w| w < 0) { q = q + x; }
+println(q);
+}

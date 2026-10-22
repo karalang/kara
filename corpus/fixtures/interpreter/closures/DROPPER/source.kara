@@ -1,0 +1,5 @@
+fn main() {
+    let f = |p: (R, i64)| { let (r, n) = p; r.id + n };
+    println(f"{f((R { id: 41 }, 1))}");
+    println("end");
+}

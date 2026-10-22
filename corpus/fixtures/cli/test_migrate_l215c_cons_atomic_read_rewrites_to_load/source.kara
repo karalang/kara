@@ -1,0 +1,5 @@
+fn read(c: ref Counter) -> i64 {
+    c.count
+}
+
+fn main() {}

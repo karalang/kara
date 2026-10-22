@@ -1,0 +1,15 @@
+source = "tests/codegen/structs.rs::user_struct_shadowing_a_prelude_type_name_keeps_its_own_layout"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:dataframe", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "d4f28bd3"

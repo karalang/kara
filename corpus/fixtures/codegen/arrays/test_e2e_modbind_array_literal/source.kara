@@ -1,0 +1,6 @@
+let ARR: Array[i64, 3] = [10, 20, 30];
+fn main() {
+println(ARR[0]);
+println(ARR[1]);
+println(ARR[2]);
+}

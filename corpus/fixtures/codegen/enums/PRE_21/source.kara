@@ -1,0 +1,2 @@
+struct Wc { o: Option[Option[Option[Re]]] }
+fn main() { let w = Wc { o: Some(Some(Some(Re { id: 71, name: f"a" }))) }; println("ok"); println("done") }

@@ -1,0 +1,5 @@
+struct W { a: Array[Array[String, 2], 2] }
+fn main() {
+    let w = W { a: [[f"aaaaaaaa0", f"bbbbbbbb0"], [f"cccccccc0", f"dddddddd0"]] };
+    println("s:ok");
+}

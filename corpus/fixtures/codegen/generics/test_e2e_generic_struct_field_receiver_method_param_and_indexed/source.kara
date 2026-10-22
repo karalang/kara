@@ -1,0 +1,26 @@
+struct Pair[A, B] { first: A, second: B }
+struct Box[T] { v: T }
+fn show(p: ref Pair[Vec[i64], Vec[i64]]) -> i64 {
+p.first.len() + p.second.len()
+}
+fn sink(b: Box[String]) -> i64 {
+b.v.len()
+}
+fn main() {
+let mut a: Vec[i64] = Vec.new();
+a.push(1); a.push(2);
+let mut b: Vec[i64] = Vec.new();
+b.push(10); b.push(20); b.push(30);
+let p = Pair { first: a, second: b };
+println(show(p));
+let bx = Box { v: (12345).to_string() };
+println(sink(bx));
+let mut a2: Vec[i64] = Vec.new();
+a2.push(7);
+let mut b2: Vec[i64] = Vec.new();
+b2.push(8); b2.push(9);
+let p2 = Pair { first: a2, second: b2 };
+let mut v: Vec[Pair[Vec[i64], Vec[i64]]] = Vec.new();
+v.push(p2);
+println(v[0].second.len());
+}

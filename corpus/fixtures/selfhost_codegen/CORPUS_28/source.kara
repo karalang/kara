@@ -1,0 +1,1 @@
+fn main() { let n = 9; if n < 5 { println("lo") } else { if n < 20 { println("mid") } else { println("hi") } } }

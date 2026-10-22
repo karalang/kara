@@ -1,0 +1,18 @@
+struct P { x: i64, y: i64 }
+fn reset(slot: mut ref i64) -> i64 { let mut z = 0i64; swap(slot, mut z); z }
+fn main() {
+let mut a = 1i64; let mut b = 2i64;
+swap(mut a, mut b);
+println(f"{a} {b}");
+let old = replace(mut a, 99i64);
+println(f"{a} {old}");
+let mut s = "hello".to_string(); let mut t = "world".to_string();
+swap(mut s, mut t);
+let prev = replace(mut s, "new".to_string());
+println(f"{s} {t} {prev}");
+let mut p = P { x: 3i64, y: 4i64 }; let mut q = P { x: 5i64, y: 6i64 };
+swap(mut p, mut q);
+println(f"{p.x} {q.x}");
+let mut n = 77i64; let pv = reset(mut n);
+println(f"{n} {pv}");
+}

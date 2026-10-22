@@ -1,0 +1,3 @@
+fn combine(a: i64, b: i64) -> i64 { a * 10i64 + b }
+fn apply2(f: Fn(i64, i64) -> i64, x: i64, y: i64) -> i64 { f(x, y) }
+fn main() { println(f"{apply2(combine, 4i64, 2i64)}"); }

@@ -1,0 +1,3 @@
+struct Counter { n: i64 }
+impl Counter { fn bump(mut ref self) { self.n = self.n + 1; } }
+fn main() { let mut c = Counter { n: 42 }; c.bump(); c.bump(); println(c.n); }

@@ -1,0 +1,10 @@
+struct H { k: i64 }
+impl H {
+    fn passthru(self, x: Array[String, 2]) -> Array[String, 2] { return x; }
+}
+fn main() {
+    let h: H = H { k: 1 };
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    h.passthru(a);
+    println("s:ok");
+}

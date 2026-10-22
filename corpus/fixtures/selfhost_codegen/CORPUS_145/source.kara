@@ -1,0 +1,64 @@
+#[derive(Clone)]
+enum Tok { Plus, Num(i64), Ident(String) }
+impl Tok {
+    fn describe(ref self) -> String {
+        match self {
+            Ident(name) => {
+                return "id:".to_string() + name;
+            }
+            Num(n) => {
+                return "n:".to_string() + n.to_string();
+            }
+            Plus => {}
+        }
+        return "+".to_string();
+    }
+}
+fn lex(src: String) -> Vec[Tok] {
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut start = 0 - 1;
+    let mut i = 0;
+    for b in src.bytes() {
+        if start >= 0 {
+            if not ((b >= 97 and b <= 122) or (b >= 48 and b <= 57)) {
+                let w = src.substring(start, i);
+                let f = src.substring(start, start + 1);
+                if f >= "0" and f <= "9" {
+                    toks.push(Tok.Num(w.len()));
+                } else {
+                    toks.push(Tok.Ident(w));
+                }
+                start = 0 - 1;
+            }
+        }
+        if start < 0 {
+            if (b >= 97 and b <= 122) or (b >= 48 and b <= 57) {
+                start = i;
+            } else if b == 43 {
+                toks.push(Tok.Plus);
+            }
+        }
+        i = i + 1;
+    }
+    if start >= 0 {
+        let w = src.substring(start, src.len());
+        let f = src.substring(start, start + 1);
+        if f >= "0" and f <= "9" {
+            toks.push(Tok.Num(w.len()));
+        } else {
+            toks.push(Tok.Ident(w));
+        }
+    }
+    return toks;
+}
+fn main() {
+    let toks = lex("abc + 4711 + x".to_string());
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i].clone();
+        println(t.describe());
+        i = i + 1;
+    }
+    let held = toks[0].clone();
+    println(held.describe());
+}

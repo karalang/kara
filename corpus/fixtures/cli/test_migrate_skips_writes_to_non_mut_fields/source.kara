@@ -1,0 +1,10 @@
+shared struct Counter {
+    mut count: i64,
+    name: String,
+}
+
+fn main() {
+    let c: Counter = Counter { count: 0, name: "a" };
+    c.count = 1;
+    c.name = "b";
+}

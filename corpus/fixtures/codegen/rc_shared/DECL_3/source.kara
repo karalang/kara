@@ -1,0 +1,4 @@
+struct H { xs: Vec[R] }
+impl H { fn peek(ref self) -> String { self.xs[0].name } }
+fn main() { let h = H { xs: [R { id: 41, name: f"n{41}" }] };
+println(f"{h.peek()}"); println(f"{h.xs[0].name}") }

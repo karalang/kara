@@ -1,0 +1,17 @@
+source = "tests/memory_sanitizer/enums.rs::asan_bare_variant_ctor_tuple_elem_keeps_one_owner"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "cd6508ca"
+model_rev = "583cfb0d"
+model_src = "cd6508ca"

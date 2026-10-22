@@ -1,0 +1,6 @@
+fn main() {
+         match env.var("__KARAC_NO_SUCH_VAR_XYZ__") {
+             Ok(v) => println(v),
+             Err(e) => println("not found"),
+         }
+     }

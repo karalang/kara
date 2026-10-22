@@ -1,0 +1,9 @@
+struct Column { data: Vec[i64], name: String }
+fn make(v: Vec[i64]) -> Column {
+return Column { data: v, name: "col".to_string() };
+}
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+let c: Column = make(v);
+println((c.data.len() + c.name.len()).to_string());
+}

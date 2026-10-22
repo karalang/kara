@@ -1,0 +1,15 @@
+fn main() {
+    let mut i = 0;
+    let mut out = "".to_string();
+    while i < 5 {
+        let s = match i {
+            0 => "zero".to_string(),
+            1 => "one".to_string(),
+            _ => break,
+        };
+        out = out + s + ";";
+        i = i + 1;
+    }
+    println(out);
+    println(i.to_string());
+}

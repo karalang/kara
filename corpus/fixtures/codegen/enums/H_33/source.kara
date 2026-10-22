@@ -1,0 +1,6 @@
+enum E { A(i64), Z }
+impl Drop for E { fn drop(mut ref self) { println("drop E") } }
+enum F { Y(i64), W }
+impl Drop for F { fn drop(mut ref self) { println("drop F") } }
+fn take(e: E) -> i64 { 7 }
+fn main() { let x = take(Z); println(f"{x}"); let _ = W; println("end") }

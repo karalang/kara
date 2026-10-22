@@ -1,0 +1,17 @@
+source = "tests/codegen/strings.rs::e2e_borrowed_string_slice_map_key_counts"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests", "lib:map"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0200"
+classified_with = "79705a229"
+extracted_src = "b0deff1e"
+model_rev = "583cfb0d"
+model_src = "b0deff1e"

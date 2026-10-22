@@ -1,0 +1,16 @@
+a
+got 61
+drop 61
+b
+iflet got 62
+drop 62
+c
+wlet got 63
+drop 63
+d
+see 81
+e
+first 82
+end
+drop 82
+drop 81

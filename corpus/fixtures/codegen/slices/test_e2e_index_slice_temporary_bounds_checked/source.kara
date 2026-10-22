@@ -1,0 +1,5 @@
+fn main() {
+let s: String = "hi";
+let i = 7i64;
+println(s.bytes()[i]);
+}

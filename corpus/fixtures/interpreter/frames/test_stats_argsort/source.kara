@@ -1,0 +1,7 @@
+fn main() {
+let xs = [3.0_f64, 1.0_f64, 2.0_f64];
+let a: Vec[i64] = Stats.argsort(xs);
+println(a[0]);
+println(a[1]);
+println(a[2]);
+}

@@ -1,0 +1,11 @@
+shared enum Expr { Num { n: i64 }, Bin { l: Expr, r: Expr } }
+fn eval(e: Expr) -> i64 {
+match e {
+Num { n } => n,
+Bin { l, r } => eval(l) + eval(r),
+}
+}
+fn main() {
+let t: Expr = Bin { l: Num { n: 3 }, r: Num { n: 4 } };
+println(f"{eval(t)}");
+}

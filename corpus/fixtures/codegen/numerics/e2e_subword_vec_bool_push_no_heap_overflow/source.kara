@@ -1,0 +1,9 @@
+fn main() {
+let mut v: Vec[bool] = Vec.new();
+let mut a = 0i64;
+while a < 200i64 { v.push((a % 2i64) == 0i64); a = a + 1i64; }
+let mut trues = 0i64;
+let mut k = 0i64;
+while k < v.len() { if v[k] { trues = trues + 1i64; } k = k + 1i64; }
+println(f"{v.len()} {trues}");
+}

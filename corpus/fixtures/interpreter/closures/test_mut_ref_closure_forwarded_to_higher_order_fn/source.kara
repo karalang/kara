@@ -1,0 +1,7 @@
+fn run_thrice(f: ref Fn()) { f(); f(); f(); }
+fn main() {
+let mut counter = 0_i64;
+let bump = mut ref || { counter = counter + 1; };
+run_thrice(bump);
+println(counter);
+}

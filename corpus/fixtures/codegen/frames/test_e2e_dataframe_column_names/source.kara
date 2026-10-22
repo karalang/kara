@@ -1,0 +1,6 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([1, 2]));
+df.insert("name", Column.from_vec([3, 4]));
+for n in df.column_names() { println(n); }
+}

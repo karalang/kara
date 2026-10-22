@@ -1,0 +1,6 @@
+fn work(n: i64) -> i64 { let mut t = 0; for i in 0..n { t = t + i; } t }
+fn main() {
+let a = work(1000);
+let b = work(2000);
+println(a + b);
+}

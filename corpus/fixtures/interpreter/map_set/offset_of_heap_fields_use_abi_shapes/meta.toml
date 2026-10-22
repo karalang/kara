@@ -1,0 +1,17 @@
+source = "tests/interpreter/map_set.rs::offset_of_heap_fields_use_abi_shapes"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:the expression kind `OffsetOf`"
+classified_with = "79705a229"
+extracted_src = "81960b2f"
+model_rev = "583cfb0d"
+model_src = "81960b2f"

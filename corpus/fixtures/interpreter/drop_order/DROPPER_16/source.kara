@@ -1,0 +1,4 @@
+fn take(k: bool) -> R { let r = R { id: 41 };
+   match k { true => { return r; } false => {} }
+   R { id: 99 } }
+fn main() { let x = take(false); println(f"{x.id}") }

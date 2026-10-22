@@ -1,0 +1,18 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(3i64); v.push(1i64); v.push(2i64);
+let n = v.len();
+let mut i = 0i64;
+while i < n {
+let mut j = 0i64;
+while j + 1i64 < n {
+if v[j] > v[j + 1i64] {
+v[j], v[j + 1i64] = v[j + 1i64], v[j];
+}
+j = j + 1i64;
+}
+i = i + 1i64;
+}
+let extra = { let mut p = 9i64; let mut q = 8i64; p, q = q, p; p - q };
+println(f"{v[0]} {v[1]} {v[2]} {extra}");
+}

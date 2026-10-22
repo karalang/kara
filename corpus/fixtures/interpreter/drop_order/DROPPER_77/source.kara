@@ -1,0 +1,2 @@
+impl B2 { fn eat(self, r: R) -> i64 { 9 } }
+fn main() { let d = B2 { n: 1 }; let v = d.eat(R { id: 3 }); println(f"{v}") }

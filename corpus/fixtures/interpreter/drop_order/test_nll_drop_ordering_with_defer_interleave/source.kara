@@ -1,0 +1,7 @@
+fn main() {
+let a = 1;
+println(a);
+defer { println("d"); }
+let b = 2;
+println(b);
+}

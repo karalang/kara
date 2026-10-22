@@ -1,0 +1,28 @@
+import std.web.events.{keyup, KeyEvent};
+
+fn main() {
+    println("before");
+    let keys = keyup();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same event every tick.
+    loop {
+        let k = keys.recv();
+        if k.key_code() == 27 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("KEYUP_OK");
+    } else {
+        println("KEYUP_FAIL");
+    }
+    println("after");
+}

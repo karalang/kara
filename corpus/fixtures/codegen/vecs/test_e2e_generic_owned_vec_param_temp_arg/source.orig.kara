@@ -1,0 +1,35 @@
+fn take[T](v: Vec[T]) -> i64 { return v.len(); }
+fn head[T](v: Vec[T]) -> T { return v[0]; }
+fn take_i(v: Vec[i64]) -> i64 { return v.len(); }
+fn passthru[T](v: Vec[T]) -> Vec[T] { return v; }
+fn id[T](v: Vec[T]) -> Vec[T] { return v; }
+fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }
+fn sink[T](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v); }
+fn two[T](v: Vec[i64], t: T) -> i64 { return v.len(); }
+fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30]; return v; }
+fn main() {
+let nums: Vec[i64] = [1, 2, 3, 4, 5];
+let ns: Vec[String] = ["alpha", "beta", "gamma"];
+println(take(nums.clone()));
+println(take(ns.clone()));
+println(head(nums.clone()));
+println(head(ns.clone()));
+println(take_i(nums.clone()));
+println(take(mk()));
+println(take([7, 8, 9]));
+let p = passthru(nums.clone());
+println(p[2]);
+let q = passthru(ns.clone());
+println(q[1]);
+let w = pick(nums.clone(), mk());
+println(w[0]);
+let mut acc: Vec[Vec[i64]] = Vec.new();
+sink(mut acc, nums.clone());
+sink(mut acc, mk());
+println(acc.len());
+println(acc[0][1]);
+println(acc[1][2]);
+println(two(nums.clone(), 5));
+println(nums.len());
+println(ns[0]);
+}

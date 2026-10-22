@@ -1,0 +1,11 @@
+fn mk(n: i64) -> Array[Array[String, 2], 2] {
+    return [[f"aaaaaaaa{n}", f"bbbbbbbb{n}"], [f"cccccccc{n}", f"dddddddd{n}"]];
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let a: Array[Array[String, 2], 2] = mk(i);
+        println(f"s:{i}");
+        i = i + 1;
+    }
+}

@@ -1,0 +1,2 @@
+enum G1[T] { X(T), Y }
+fn main() { let g: G1[i64] = X(5i64); println(1i64); }

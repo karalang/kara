@@ -1,0 +1,2 @@
+struct W { r: R }
+fn main() { let p = (W { r: R { id: 41 } }, 1); let (w, n) = p; println(f"{w.r.id + n}"); }

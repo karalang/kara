@@ -1,0 +1,36 @@
+struct Wrap { msg: String }
+fn mk(i: i64) -> Wrap { return Wrap { msg: f"err-payload-{i}" }; }
+fn g(i: i64) -> Result[i64, Wrap] { return Result.Err(mk(i)); }
+fn gopt(i: i64) -> Option[Wrap] { return Option.Some(mk(i)); }
+fn main() {
+    match g(1i64) {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(e) => { println(e.msg); }
+    }
+    match g(2i64) {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(e) => { println(f"b:{e.msg}"); }
+    }
+    match g(3i64) {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(e) => { println(f"c:{e.msg.len()}"); }
+    }
+    match g(4i64) {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(e) => { println("d:unused"); }
+    }
+    match g(5i64) {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(_) => { println("e:wild"); }
+    }
+    match gopt(6i64) {
+        Option.Some(w) => { println(f"f:{w.msg}"); }
+        Option.None => { println("f:none"); }
+    }
+    let r: Result[i64, Wrap] = g(7i64);
+    match r {
+        Result.Ok(v) => { println(f"ok{v}"); }
+        Result.Err(e) => { println(f"g:{e.msg}"); }
+    }
+    println("end");
+}

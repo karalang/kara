@@ -1,0 +1,2 @@
+fn g[T: PartialOrd](a: T, b: T) -> bool { a < b }
+fn main() { let n: i64 = 3; let o: i64 = 4; println(g(n, o)); }

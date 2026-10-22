@@ -1,0 +1,17 @@
+source = "tests/interpreter/structs.rs::test_uppercase_local_binding_nested_field_read"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:this name"
+classified_with = "79705a229"
+extracted_src = "b706c0cc"
+model_rev = "583cfb0d"
+model_src = "b706c0cc"

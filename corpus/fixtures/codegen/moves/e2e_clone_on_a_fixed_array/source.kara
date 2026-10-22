@@ -1,0 +1,3 @@
+fn main() { let n = env.args().len() as i64;
+let a: Array[String, 2] = [f"aa-{n}", f"bb-{n}"];
+let b: Array[String, 2] = a.clone(); println(f"{b[0]}:{b[1]}"); }

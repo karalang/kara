@@ -1,0 +1,11 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn frw() { let (r, _) = (mk(31), Option.Some(mk(131))); println(f"rd{r.id}") }
+fn frres() { let (r, _) = (mk(35), Result[R, String].Ok(mk(135))); println(f"rr{r.id}") }
+fn frw0() { let (_, r) = (Option.Some(mk(41)), mk(141)); println(f"w0{r.id}") }
+fn frnest() { let ((_, _), n) = ((mk(43), Option.Some(mk(143))), 4); println(f"nn{n}") }
+fn frloop() { let mut i = 0; while i < 3 { let (_, _) = (mk(44), Option.Some(mk(144))); i = i + 1; } println("fl") }
+fn frstr() { let (r, _) = (mk(45), Option.Some(f"x45")); println(f"fs{r.id}") }
+fn frplain() { let (r, _) = (mk(46), mk(146)); println(f"fp{r.id}") }
+fn main() { frw(); frres(); frw0(); frnest(); frloop(); frstr(); frplain(); }

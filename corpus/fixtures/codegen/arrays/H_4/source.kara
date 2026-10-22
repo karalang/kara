@@ -1,0 +1,2 @@
+fn main() { let a: Array[R, 2] = [R { id: 1 }, R { id: 2 }];
+             println("mid"); }

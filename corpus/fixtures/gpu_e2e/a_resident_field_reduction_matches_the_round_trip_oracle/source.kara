@@ -1,0 +1,18 @@
+struct Cell { m: f32, t: f32 }
+fn main() {
+    let mut cells: Vec[Cell] = Vec.new();
+    let mut host: Vec[f32] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5000 {
+        let v: f32 = (i as f32) * 0.1;
+        cells.push(Cell { m: v, t: 0.0 });
+        host.push(v);
+        i = i + 1;
+    }
+    let want = gpu.sum(host);
+    let buf = gpu.upload(cells);
+    let got = gpu.sum(buf.m);
+    if want == got { println("MATCH"); } else { println("DIVERGE"); }
+    println(f"{want}");
+    println(f"{got}");
+}

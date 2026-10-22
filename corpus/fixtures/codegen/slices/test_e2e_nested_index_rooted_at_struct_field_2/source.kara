@@ -1,0 +1,10 @@
+struct H { data: Vec[Vec[i64]] }
+fn main() {
+let mut i: Vec[i64] = Vec.new();
+i.push(1i64);
+let mut d: Vec[Vec[i64]] = Vec.new();
+d.push(i);
+let mut h = H { data: d };
+h.data[0][0] = 42i64;
+println(f"{h.data[0][0]}");
+}

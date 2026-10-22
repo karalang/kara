@@ -1,0 +1,17 @@
+source = "tests/codegen/slices.rs::test_e2e_slice_read_accessors_have_codegen"
+dedup_of = ["tests/interpreter/slices.rs::test_slice_read_accessors_match_codegen"]
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "48bdea04"
+model_rev = "583cfb0d"
+model_src = "48bdea04"

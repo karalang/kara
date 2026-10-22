@@ -1,0 +1,13 @@
+shared struct S { mut val: i64 }
+struct H { acc: i64 }
+impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }
+fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }
+fn main() {
+let g1 = S { val: 7 };
+free_bump(mut g1.val);
+println(g1.val);
+let h = H { acc: 0 };
+let g2 = S { val: 7 };
+h.bump(mut g2.val);
+println(g2.val);
+}

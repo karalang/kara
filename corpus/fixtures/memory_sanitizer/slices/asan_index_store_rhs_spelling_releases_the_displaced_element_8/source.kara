@@ -1,0 +1,7 @@
+struct S { s: String, v: Vec[i64] }
+             fn main() {
+                 let n = 7;
+                 let mut a: Vec[S] = [S { s: f"one-aaaaaaaaaaaa-{n}", v: [1, 2] }];
+                 a[0] = S { s: f"replaced-bbbbbbbbbbbb-{n}", v: a[0].v.clone() };
+                 println(f"r:{a[0].v.len()}:{a[0].s.len()}");
+             }

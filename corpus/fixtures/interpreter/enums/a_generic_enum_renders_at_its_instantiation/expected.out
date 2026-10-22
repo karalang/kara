@@ -1,0 +1,6 @@
+[Some(5), None]
+[Ok(5), Err(bad)]
+{k: Some(5)}
+[Has(5), Empty]
+[Has(hello)]
+[Has([7])]

@@ -1,0 +1,2 @@
+fn shout(s: String) { println(s + "!") }
+fn main() { shout("hey"); shout("ho") }

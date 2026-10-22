@@ -1,0 +1,7 @@
+struct-field-tuple:
+10
+drop 1 a1
+map-value-tuple:
+1
+drop 2 bb2
+end

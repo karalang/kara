@@ -1,0 +1,6 @@
+fn main() {
+    let a = 0_i64;
+    let b = 1_000_i64;
+    let c = 42i64;
+    println(f"{a} {b} {c}");
+}

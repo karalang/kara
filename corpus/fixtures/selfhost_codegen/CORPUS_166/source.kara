@@ -1,0 +1,24 @@
+fn hexish(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return (c as i64) - (48 as i64);
+    }
+    return -1;
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(12);
+    let mut s = 0;
+    let mut i = 0;
+    while i < v.len() as i64 {
+        s = s + v[i as i64];
+        i = i + 1;
+    }
+    println(s.to_string());
+    println("A");
+    println("B");
+    let x = 5;
+    println((x as i64 - 2).to_string());
+    println(hexish(55).to_string());
+}

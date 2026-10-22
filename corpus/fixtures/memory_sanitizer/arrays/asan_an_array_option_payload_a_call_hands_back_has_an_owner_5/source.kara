@@ -1,0 +1,10 @@
+fn mk(n: i64) -> Result[Array[String, 2], i64] {
+    if n < 0 { return Err(7); }
+    return Ok(Array[f"raaaaaaaaaaaa{n}", f"cbbbbbbbbbbbb{n}"]);
+}
+fn main() {
+    let a = mk(1);
+    match a { Ok(v) => { println(f"a:{v[0]}"); } Err(e) => { println("a:err"); } }
+    let b = mk(0 - 1);
+    match b { Ok(v) => { println(f"b:{v[0]}"); } Err(e) => { println("b:err"); } }
+}

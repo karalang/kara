@@ -1,0 +1,27 @@
+fn sum_to(n: i64) -> i64 {
+let r = 0..n;
+let mut t = 0;
+for i in r { t = t + i; }
+return t;
+}
+fn main() {
+println(sum_to(5));
+let r = 0..10;
+let mut b = 0;
+for i in r {
+if i == 4 { break; }
+if i % 2 == 0 { continue; }
+b = b + i;
+}
+println(b);
+let outer = 0..3;
+let inner = 0..3;
+let mut c = 0;
+'o: for i in outer {
+for j in inner {
+if j == 2 { continue 'o; }
+c = c + 1;
+}
+}
+println(c);
+}

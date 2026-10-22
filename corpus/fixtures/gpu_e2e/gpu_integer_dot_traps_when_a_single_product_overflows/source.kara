@@ -1,0 +1,5 @@
+fn main() {
+    let a: Vec[i32] = [65536 as i32, 0 as i32];
+    let b: Vec[i32] = [65536 as i32, 0 as i32];
+    println(f"{gpu.dot(a, b)}");
+}

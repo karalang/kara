@@ -1,0 +1,19 @@
+fn mk(n: i64) -> Array[String, 2] { return Array[f"kaaaaaaa{n}", f"kbbbbbbb{n}"]; }
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let k1 = mk(1);
+    let k2 = mk(1);
+    match m.try_insert(k1, 11) {
+        Ok(o) => { println("s:ok"); }
+        Err(e) => { println("s:err"); }
+    }
+    match m.try_insert(k2, 22) {
+        Ok(o) => { println("t:ok"); }
+        Err(e) => { println("t:err"); }
+    }
+    let p: Array[String, 2] = mk(1);
+    match m.get(p) {
+        Some(v) => { println(f"u:{v}"); }
+        None => { println("u:missing"); }
+    }
+}

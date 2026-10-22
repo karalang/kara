@@ -1,0 +1,5 @@
+fn pick() -> String {
+    let mut i: i64 = env.args().len() - 1;
+    loop { i = i + 1; if i == 2 { break f"got{i}" } }
+}
+fn main() { println(pick()); }

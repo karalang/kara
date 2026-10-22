@@ -1,0 +1,7 @@
+
+fn main() {
+    let enc = ProtoBuf.encode_string("");
+    println(enc.len());
+    let mut r = ProtoReader.new(enc);
+    println(r.read_string());
+}

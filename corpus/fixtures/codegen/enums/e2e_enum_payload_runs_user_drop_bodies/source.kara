@@ -1,0 +1,16 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(self.id); } }
+struct W { r: Res }
+enum Slot { Empty, Full(Res) }
+enum Named { None0, One { r: Res, tag: i64 } }
+enum Pair { Zero, Two(Res, Res) }
+enum Nest { Nil, Wrap(W) }
+enum Plain { A, B(i64) }
+fn main() {
+    { let s = Slot.Full(Res { id: 21 }); println(1); }
+    { let n = Named.One { r: Res { id: 22 }, tag: 5 }; println(2); }
+    { let p = Pair.Two(Res { id: 23 }, Res { id: 24 }); println(3); }
+    { let w = Nest.Wrap(W { r: Res { id: 25 } }); println(4); }
+    { let q = Plain.B(7); println(5); }
+    println(999);
+}

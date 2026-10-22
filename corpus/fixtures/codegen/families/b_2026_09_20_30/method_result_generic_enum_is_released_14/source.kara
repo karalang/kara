@@ -1,0 +1,4 @@
+fn main() {
+    // Safety: no raw pointers are touched.
+    let b: Box2[Sh] = unsafe { freemk(53) }; println("x")
+}

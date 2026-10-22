@@ -1,0 +1,6 @@
+sync struct C { n: Atomic[i64] }
+         impl C {
+             fn set(ref self, v: i64) { self.n.store(v, MemoryOrdering.SeqCst); }
+             fn get(ref self) -> i64 { self.n.load(MemoryOrdering.SeqCst) }
+         }
+         fn main() { let c = C { n: Atomic.new(0) }; c.set(7); println(c.get()); }

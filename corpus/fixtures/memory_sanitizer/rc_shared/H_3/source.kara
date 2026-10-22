@@ -1,0 +1,2 @@
+fn main() { { let a = make_outer(1).inner; println(a.tag); }
+             { let b = make_outer(2).inner; println(b.tag); } }

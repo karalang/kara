@@ -1,0 +1,4 @@
+pub trait Foo { fn f(value: i64); }
+pub struct Bar { n: i64 }
+impl Foo for Bar { fn f(value: i64) { } }
+fn main() { }

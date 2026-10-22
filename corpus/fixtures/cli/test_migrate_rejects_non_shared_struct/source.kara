@@ -1,0 +1,5 @@
+struct Counter {
+    mut count: i64,
+}
+
+fn main() {}

@@ -1,0 +1,1 @@
+fn main() { let (gv, gn) = (E.A(R { id: 5 }), 6); println(f"{gn}") }

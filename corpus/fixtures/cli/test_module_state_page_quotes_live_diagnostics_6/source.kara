@@ -1,0 +1,2 @@
+let mut COUNTER: i64 = 0;
+fn main() { }

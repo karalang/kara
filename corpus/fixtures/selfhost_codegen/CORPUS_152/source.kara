@@ -1,0 +1,69 @@
+struct Span { line: i64, col: i64 }
+struct Named { name: String, id: i64 }
+#[derive(Clone)]
+enum Ev { Nothing, At(Span), Count(i64), Label(String) }
+enum Rec { Empty, Item(Named) }
+fn show_ev(e: ref Ev) -> String {
+    match e {
+        At(sp) => {
+            let ln = sp.line;
+            let cl = sp.col;
+            return "at ".to_string() + ln.to_string() + ":" + cl.to_string();
+        }
+        Count(n) => {
+            return "count ".to_string() + n.to_string();
+        }
+        Label(s) => {
+            return "label ".to_string() + s;
+        }
+        Nothing => {}
+    }
+    return "nothing".to_string();
+}
+fn show_rec(r: ref Rec) -> i64 {
+    match r {
+        Item(nm) => {
+            return nm.id;
+        }
+        Empty => {}
+    }
+    return 0 - 1;
+}
+fn main() {
+    let a = Ev.At(Span { line: 3, col: 9 });
+    println(show_ev(a));
+    println(show_ev(Ev.Count(7)));
+    let lbl = Ev.Label("tick".to_string());
+    println(show_ev(lbl));
+    println(show_ev(Ev.Nothing));
+    let b = a;
+    println(show_ev(b));
+    let r = Rec.Item(Named { name: "alpha".to_string(), id: 42 });
+    println(show_rec(r).to_string());
+    let r2 = r;
+    println(show_rec(r2).to_string());
+    println(show_rec(Rec.Empty).to_string());
+    let mut v: Vec[Ev] = Vec.new();
+    v.push(Ev.At(Span { line: 1, col: 1 }));
+    v.push(Ev.Count(5));
+    let mut i = 0;
+    while i < v.len() {
+        let e = v[i].clone();
+        match e {
+            At(sp) => {
+                let ln = sp.line;
+                println("v at ".to_string() + ln.to_string());
+            }
+            Count(n) => {
+                println("v count ".to_string() + n.to_string());
+            }
+            Label(s) => {
+                println(s);
+            }
+            Nothing => {
+                println("v nothing");
+            }
+        }
+        i = i + 1;
+    }
+}

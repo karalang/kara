@@ -1,0 +1,36 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+struct Holder { r: Res }
+enum E2 { B(Res), Empty }
+fn take(h: Holder) {
+    let mut h2 = Holder { r: Res { id: 9, name: f"z{9}" } };
+    h2 = h;
+    println(f"held {h2.r.id}");
+    println("take done");
+}
+fn take_enum(w: E2) {
+    let mut w2 = E2.Empty;
+    w2 = w;
+    match w2 {
+        E2.B(r) => { println(f"got {r.id}"); }
+        E2.Empty => { println("none"); }
+    }
+    println("take2 done");
+}
+fn main() {
+    println("a");
+    let x = Holder { r: Res { id: 5, name: f"y{5}" } };
+    take(x);
+    println("b");
+    let mut d = Holder { r: Res { id: 3, name: f"w{3}" } };
+    d = Holder { r: Res { id: 4, name: f"v{4}" } };
+    println(f"kept {d.r.id}");
+    println("c");
+    let e = E2.B(Res { id: 7, name: f"q{7}" });
+    take_enum(e);
+    println("end");
+}

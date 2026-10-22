@@ -1,0 +1,11 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+fn main() {
+    let c = true;
+    let _ = if c { Sv.Hold { inner: R { id: 7, s: "pay", xs: [1, 2, 3] } } } else { Sv.Nil };
+    let n = 1;
+    let _ = match n { 1 => { Sv.Hold { inner: R { id: 8, s: "pay2", xs: [4, 5] } } } _ => { Sv.Nil } };
+    println("end")
+}

@@ -1,0 +1,17 @@
+trait Joiner {
+    fn concat(ref self) -> String;
+}
+impl Joiner for Vec[String] {
+    fn concat(ref self) -> String {
+        let mut out = String.new();
+        for s in self { out = out + s; }
+        out
+    }
+}
+fn callit[C: Joiner](c: ref C) -> String { c.concat() }
+fn main() {
+    let mut v = Vec.new();
+    v.push("ab"); v.push("cd"); v.push("ef");
+    println(v.concat());
+    println(callit(v));
+}

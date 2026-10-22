@@ -1,0 +1,7 @@
+struct V { f: i64 }
+fn main() {
+let v = V { f: 9 };
+println(v.f.to_string());
+let s = "ab";
+println(s.len().to_string());
+}

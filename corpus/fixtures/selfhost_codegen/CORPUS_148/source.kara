@@ -1,0 +1,40 @@
+#[derive(Clone)]
+enum Tok { Eof, Integer(i64, String), Ident(String) }
+fn describe(t: ref Tok) -> String {
+    match t {
+        Integer(v, lex) => {
+            return "int ".to_string() + v.to_string() + " '" + lex + "'";
+        }
+        Ident(name) => {
+            return "ident ".to_string() + name;
+        }
+        Eof => {}
+    }
+    return "eof".to_string();
+}
+fn main() {
+    let a = Tok.Integer(42, "42".to_string());
+    println(describe(a));
+    let b = Tok.Ident("foo".to_string());
+    println(describe(b));
+    println(describe(Tok.Eof));
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok.Integer(7, "0x7".to_string()));
+    v.push(Tok.Eof);
+    let mut i = 0;
+    while i < v.len() {
+        let t = v[i].clone();
+        match t {
+            Integer(val, lx) => {
+                println(val.to_string() + "/" + lx);
+            }
+            Ident(nm) => {
+                println(nm);
+            }
+            Eof => {
+                println("eof");
+            }
+        }
+        i = i + 1;
+    }
+}

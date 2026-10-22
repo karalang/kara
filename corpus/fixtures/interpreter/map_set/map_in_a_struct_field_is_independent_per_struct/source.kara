@@ -1,0 +1,9 @@
+#[derive(Clone)]
+struct H { m: Map[i64, i64] }
+fn main() {
+let mut a = H { m: Map.new() };
+a.m.insert(1, 1);
+let mut b = a.clone();
+b.m.insert(2, 2);
+println(f"a={a.m.len()} b={b.m.len()}");
+}

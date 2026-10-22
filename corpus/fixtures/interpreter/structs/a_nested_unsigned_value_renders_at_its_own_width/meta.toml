@@ -1,0 +1,17 @@
+source = "tests/interpreter/structs.rs::a_nested_unsigned_value_renders_at_its_own_width"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "56ba4de5"
+model_rev = "583cfb0d"
+model_src = "56ba4de5"

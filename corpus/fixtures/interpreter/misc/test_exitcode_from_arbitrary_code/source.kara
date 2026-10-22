@@ -1,0 +1,1 @@
+fn main() { println(ExitCode.from(42).raw()); }

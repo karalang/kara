@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[i64] = Vec[5, 6, 7];
+let s = v[0..2];
+println(s.len());
+println(s[0]);
+let x = v[1];
+println(x);
+let t: String = "hello";
+let w = t[1..3];
+println(w);
+}

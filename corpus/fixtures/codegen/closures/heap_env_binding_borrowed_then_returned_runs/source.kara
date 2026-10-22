@@ -1,0 +1,4 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }
+fn outer(k: i64) -> Fn(i64) -> i64 { let f = make(k); let _a = apply(f, 1i64); f }
+fn main() { let h = outer(10i64); println(f"{h(1i64)}"); }

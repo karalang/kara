@@ -1,0 +1,4 @@
+fn main() {
+let t = Clock.now();
+println(t > 1_000_000_000);
+}

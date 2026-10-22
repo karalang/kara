@@ -1,0 +1,8 @@
+fn doubler(n: i64) -> i64 { n * 2i64 }
+fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn main() {
+let g = doubler;
+let h: Fn(i64) -> i64 = doubler;
+println(f"{apply(g, 10i64)}");
+println(f"{h(11i64)}");
+}

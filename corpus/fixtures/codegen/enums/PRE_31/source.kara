@@ -1,0 +1,1 @@
+fn main() { let p = (Some(Rq { id: 71, name: f"a" }), 7); println(f"n{p.1}"); println("done") }

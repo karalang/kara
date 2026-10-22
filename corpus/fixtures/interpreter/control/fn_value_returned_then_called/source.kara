@@ -1,0 +1,3 @@
+fn doubler(n: i64) -> i64 { n * 2 }
+fn pick() -> Fn(i64) -> i64 { doubler }
+fn main() { let f = pick(); println(f(21)); }

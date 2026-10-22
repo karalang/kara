@@ -1,0 +1,8 @@
+fn describe(x: Option[i64]) -> i64 {
+let v = 100;
+match x { Some(v) => v, None => v }
+}
+fn main() {
+println(describe(Some(7)).to_string());
+println(describe(None).to_string());
+}

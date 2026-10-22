@@ -1,0 +1,1 @@
+fn main() { let mut d = VecDeque[1, 2, 3]; let f = d.pop_front(); print(f.unwrap()); print(d.len()); }

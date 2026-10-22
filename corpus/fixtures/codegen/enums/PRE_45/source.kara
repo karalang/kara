@@ -1,0 +1,2 @@
+fn plainD(x: Result[Array[Rq, 2], i64]) { match x { Ok(t) => { println(f"s:{t[0].id}") } Err(e) => { println("n") } } }
+fn main() { let a: Array[Rq, 2] = [Rq { id: 1 }, Rq { id: 2 }]; plainD(Result[Array[Rq, 2], i64].Ok(a)); println("end") }

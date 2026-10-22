@@ -1,0 +1,10 @@
+
+struct Point { x: i64, y: i64 }
+fn main() {
+    let names = comptime {
+        let mut s = "";
+        for f in Point.fields() { s = s + f.name + ";"; }
+        s
+    };
+    println(names);
+}

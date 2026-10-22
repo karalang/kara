@@ -1,0 +1,16 @@
+fn main() {
+let mut m: Map[i64, Vec[i64]] = Map.new();
+m.insert(1, [10, 20, 30]);
+println(m.get(1).unwrap()[1]);
+let mut s: Map[i64, Vec[String]] = Map.new();
+s.insert(1, ["alpha", "beta", "gamma"]);
+println(s.get(1).unwrap()[0]);
+println(s.get(1).unwrap()[2].len());
+let w = s.get(1).unwrap()[1].clone();
+println(w);
+let mut n: Map[i64, Vec[Vec[i64]]] = Map.new();
+n.insert(7, [[1, 2], [3, 4, 5]]);
+let inner = n.get(7).unwrap()[1].clone();
+println(inner[2]);
+println(m.get(1).unwrap()[0]);
+}

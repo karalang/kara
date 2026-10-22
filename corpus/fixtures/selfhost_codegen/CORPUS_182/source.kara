@@ -1,0 +1,16 @@
+struct Leaf { v: i64 }
+shared enum Expr {
+    L(Leaf),
+    W(Expr),
+}
+fn depth(e: Expr) -> i64 {
+    match e {
+        L(x) => 0,
+        W(b) => 1 + depth(b),
+    }
+}
+fn main() {
+    let a = Expr.L(Leaf { v: 1 });
+    let w = Expr.W(a);
+    println(depth(w).to_string());
+}

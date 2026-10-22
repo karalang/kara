@@ -1,0 +1,8 @@
+fn take(a: Array[String, 2]) { println(f"t:{a[0]}") }
+fn plainM(x: Option[Array[String, 2]]) {
+    match x { Some(t) => { let u = t; take(u) } None => { println("n") } }
+}
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    plainM(Some(a));
+}

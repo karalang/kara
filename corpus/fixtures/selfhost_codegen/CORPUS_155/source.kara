@@ -1,0 +1,43 @@
+#[derive(Clone)]
+enum Bag { Empty, Nums(Vec[i64]), Words(Vec[i64]) }
+fn total(b: ref Bag) -> i64 {
+    match b {
+        Nums(v) => {
+            let mut t = 0;
+            let mut i = 0;
+            while i < v.len() {
+                t = t + v[i];
+                i = i + 1;
+            }
+            return t;
+        }
+        Words(w) => {
+            return w.len();
+        }
+        Empty => {}
+    }
+    return 0 - 1;
+}
+fn mk(a: i64, b: i64, c: i64) -> Bag {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(a);
+    v.push(b);
+    v.push(c);
+    return Bag.Nums(v);
+}
+fn main() {
+    let x = mk(3, 4, 5);
+    println(total(x).to_string());
+    let y = x;
+    println(total(y).to_string());
+    println(total(Bag.Empty).to_string());
+    let mut vv: Vec[Bag] = Vec.new();
+    vv.push(mk(1, 2, 3));
+    vv.push(mk(10, 20, 30));
+    let mut i = 0;
+    while i < vv.len() {
+        let e = vv[i].clone();
+        println(total(e).to_string());
+        i = i + 1;
+    }
+}

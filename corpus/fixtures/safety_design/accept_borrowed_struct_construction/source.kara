@@ -1,0 +1,9 @@
+struct Parser {
+source: ref String,
+position: i64,
+}
+fn main() {
+let s = String.from("input");
+let p = Parser { source: s, position: 0 };
+println(p.position);
+}

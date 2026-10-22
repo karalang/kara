@@ -1,0 +1,11 @@
+
+enum Color { Red, Green, Blue }
+fn main() {
+    println(comptime { Color.variants().len() });
+    let names = comptime {
+        let mut s = "";
+        for v in Color.variants() { s = s + v.name + ";"; }
+        s
+    };
+    println(names);
+}

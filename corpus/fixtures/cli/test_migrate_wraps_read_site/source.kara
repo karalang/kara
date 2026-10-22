@@ -1,0 +1,10 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn read(c: ref Counter) -> i64 {
+    let x: i64 = c.count;
+    x
+}
+
+fn main() {}

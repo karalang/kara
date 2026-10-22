@@ -1,0 +1,13 @@
+fn get(k: i64) -> Option[i64] { if k == 1 { Some(10) } else { None } }
+fn main() {
+let a = get(1);
+let b = get(2);
+println(f"a={a} b={b}");
+println(a);
+let s: Option[String] = Some("hi");
+println(f"s={s}");
+let r: Result[i64, String] = Ok(7);
+let e: Result[i64, String] = Err("boom");
+println(f"r={r} e={e}");
+println(e);
+}

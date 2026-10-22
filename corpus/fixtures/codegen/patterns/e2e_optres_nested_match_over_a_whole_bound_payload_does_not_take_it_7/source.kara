@@ -1,0 +1,5 @@
+enum E { A { s: String }, B }
+fn main() {
+let a: Option[E] = Some(E.A { s: f"moved" });
+match a { Some(p) => { match p { E.A { s } => { let owned: String = s; println(owned); } E.B => {} } } None => {} }
+}

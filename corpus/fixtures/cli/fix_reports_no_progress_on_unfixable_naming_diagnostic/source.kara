@@ -1,0 +1,2 @@
+pub let M: i64 = 3;
+fn main() { println(M); }

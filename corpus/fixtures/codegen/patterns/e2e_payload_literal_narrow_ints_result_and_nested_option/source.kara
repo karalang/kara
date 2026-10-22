@@ -1,0 +1,16 @@
+fn narrow(v: Option[i32]) -> String { match v { Some(300) => "a", _ => "o" } }
+fn byte(v: Option[u8]) -> String { match v { Some(200) => "b", _ => "o" } }
+fn nested(v: Option[Option[i64]]) -> String {
+match v { Some(Some(5)) => "s5", Some(Some(n)) => "sn", Some(None) => "sN", None => "n" }
+}
+fn resu(v: Result[i64, String]) -> String {
+match v { Ok(1) => "ok1", Ok(n) => "okN", Err("bad") => "eb", Err(e) => "eN" }
+}
+fn main() {
+println(narrow(Some(300i32))); println(narrow(Some(7i32)));
+println(byte(Some(200u8))); println(byte(Some(7u8)));
+println(nested(Some(Some(5i64)))); println(nested(Some(Some(6i64))));
+println(nested(Some(None))); println(nested(None));
+println(resu(Ok(1i64))); println(resu(Ok(2i64)));
+println(resu(Err("bad"))); println(resu(Err("z")));
+}

@@ -1,0 +1,1 @@
+fn main() { let o: Option[i64] = Some(3i64);                match o { Some(x) => { println(x); }, None => {} } }

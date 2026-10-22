@@ -1,0 +1,23 @@
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+enum Stmt { Call(CallExpr) }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+fn eval(e: Expr) -> i64 {
+match e { Num(n) => n, Add(b) => eval(b.left) + eval(b.right) }
+}
+fn use_stmt(s: Stmt) -> i64 {
+match s {
+Call(c) => {
+let mut acc = eval(c.callee);
+for a in c.args { acc = acc + eval(a); }
+acc
+}
+}
+}
+fn main() {
+let mut args: Vec[Expr] = Vec.new();
+let mut i: i64 = 0;
+while i < 3 { args.push(Num(i)); i = i + 1; }
+let s = Call(CallExpr { callee: Num(100), args: args });
+println(use_stmt(s));
+}

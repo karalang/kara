@@ -1,0 +1,1 @@
+fn main() { let mut a: i64 = 1; let mut b: i64 = 2; a, b = b, a; println(a); }

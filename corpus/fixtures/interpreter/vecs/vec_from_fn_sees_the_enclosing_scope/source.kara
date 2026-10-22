@@ -1,0 +1,5 @@
+fn main() {
+let base = 100i64;
+let v = Vec.from_fn(3, |i| base + i);
+println(f"{v[0]} {v[2]}");
+}

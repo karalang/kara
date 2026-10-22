@@ -1,0 +1,3 @@
+struct P { val: i64 }
+fn getval(o: ref Option[P]) -> i64 { match o { None => 999i64, Some(n) => n.val } }
+fn main() { println(getval(Some(P { val: -3i64 }))); println(getval(None)); }

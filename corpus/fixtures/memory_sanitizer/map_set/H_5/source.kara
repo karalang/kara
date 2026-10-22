@@ -1,0 +1,4 @@
+fn main() {
+   let mut m: Map[String, B] = Map.new(); fill(mut m);
+   match m.get("absent") { None => println("none"), Some(B.S(w)) => println(w), Some(B.C) => println("c") }
+   println("end") }

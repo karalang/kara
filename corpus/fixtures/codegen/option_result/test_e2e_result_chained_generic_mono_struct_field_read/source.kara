@@ -1,0 +1,9 @@
+struct Pair { a: i64, b: i64 }
+struct Wrap[T] { inner: T }
+fn boom() -> Result[i64, Wrap[Pair]] { Err(Wrap { inner: Pair { a: 3i64, b: 4i64 } }) }
+fn main() {
+match boom() {
+Ok(_) => { println("ok"); },
+Err(e) => { println((e.inner.a + e.inner.b).to_string()); },
+}
+}

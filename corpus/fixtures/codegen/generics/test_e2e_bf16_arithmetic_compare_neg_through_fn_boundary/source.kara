@@ -1,0 +1,12 @@
+fn step(x: bf16) -> bf16 {
+x + 0.5bf16
+}
+fn main() {
+let y = step(1.25bf16);
+println(y);
+let n = -y;
+println(n);
+if n < 0.0bf16 { println("neg") }
+println(y * 2.0bf16);
+println(y / 0.5bf16);
+}

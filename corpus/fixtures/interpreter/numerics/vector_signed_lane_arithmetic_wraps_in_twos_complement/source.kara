@@ -1,0 +1,6 @@
+fn main() {
+let a: Vector[i8, 4] = Vector[i8, 4].splat(100);
+println((a + a)[0] as i64);
+let b: Vector[i16, 4] = Vector[i16, 4].splat(300);
+println((b * b)[0] as i64);
+}

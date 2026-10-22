@@ -1,0 +1,7 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+m.insert(5_i64, "five");
+match m.remove(5_i64) { Some(v) => println(v), None => println("none") }
+match m.remove(5_i64) { Some(v) => println(v), None => println("none") }
+println(f"{m.is_empty()}");
+}

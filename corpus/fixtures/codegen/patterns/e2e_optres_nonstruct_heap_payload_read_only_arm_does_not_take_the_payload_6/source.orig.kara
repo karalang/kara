@@ -1,0 +1,5 @@
+fn main() {
+let a: Option[Vec[String]] = Some([f"x", f"y"]);
+match a { Some(p) => { println(p.len()); } None => {} }
+match a { Some(q) => println(q[1]), None => println("none") }
+}

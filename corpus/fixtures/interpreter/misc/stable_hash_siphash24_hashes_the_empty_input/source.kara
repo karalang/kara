@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[u8] = [];
+println(StableHash.siphash24(v, 0u64, 0u64));
+}

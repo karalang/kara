@@ -1,0 +1,7 @@
+fn main() {
+let a = 1;
+let b = 2;
+if a == 1 && b == 2 { println("both"); }
+if a == 1 || b == 3 || a == 9 || b == 2 { println("chain"); }
+if a == 1&&b == 2 { println("tight"); }
+}

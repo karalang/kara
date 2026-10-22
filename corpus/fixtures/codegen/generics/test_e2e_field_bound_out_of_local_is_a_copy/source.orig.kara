@@ -1,0 +1,26 @@
+struct S { name: String }
+struct A { lines: Vec[String] }
+struct B { a: A, n: i64 }
+fn main() {
+let k = 1;
+let s = S { name: f"hi{k}" };
+let n1 = s.name;
+println(n1);
+println(s.name);
+let mut v: Vec[String] = Vec.new();
+v.push(f"x{k}");
+let d = A { lines: v };
+let t = d.lines;
+println(t.len());
+println(d.lines.len());
+println(d.lines[0]);
+let mut v2: Vec[String] = Vec.new();
+v2.push(f"y{k}");
+let b = B { a: A { lines: v2 }, n: 7 };
+let u = b.a;
+println(u.lines.len());
+let w = b.a;
+println(w.lines.len());
+println(w.lines[0]);
+println(b.n);
+}

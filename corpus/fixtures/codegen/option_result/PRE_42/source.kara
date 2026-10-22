@@ -1,0 +1,3 @@
+struct Sk { n: i64 }
+impl Sk { fn take(mut ref self, x: Option[Rp]) { match x { Some(r) => { println(f"m:{r.id}") } None => { println("n") } } } }
+fn main() { let mut s = Sk { n: 0 }; s.take(Option[Rp].Some(Rp { id: 1 })); println("end") }

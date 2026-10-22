@@ -1,0 +1,17 @@
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    let mut i: i64 = 0;
+    while i < 2 {
+        let e: Array[String, 2] = [f"aaaaaaaa{i}", f"bbbbbbbb{i}"];
+        m.insert(i, e);
+        i = i + 1;
+    }
+    match m.get(0) {
+        Some(a) => { println(f"s:{a[0]}"); }
+        None => { println("s:missing"); }
+    }
+    match m.get(1) {
+        Some(a) => { println(f"t:{a[1]}"); }
+        None => { println("t:missing"); }
+    }
+}

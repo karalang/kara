@@ -1,0 +1,3 @@
+fn f() -> i64 { let vv: Result[i64, Option[String]] = Err(Some(payload()));
+   match vv { Ok(_) => 1, Err(_) => 0 } }
+fn main() { println(f()); }

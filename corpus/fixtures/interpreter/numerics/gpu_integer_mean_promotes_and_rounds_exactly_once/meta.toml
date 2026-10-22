@@ -1,0 +1,15 @@
+source = "tests/interpreter/numerics.rs::gpu_integer_mean_promotes_and_rounds_exactly_once"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "9bcbadb2"

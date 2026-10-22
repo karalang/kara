@@ -1,0 +1,8 @@
+enum E { V(Vector[i64, 4]), N }
+fn plainE(x: E) {
+    match x { E.V(v) => { println(f"s:{v}") } E.N => { println("n") } }
+}
+fn main() {
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    plainE(E.V(v));
+}

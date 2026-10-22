@@ -1,0 +1,9 @@
+fn main() {
+let b: Tensor[bool, [2]] = Tensor.zeros([2]);
+println(b[0]);
+let t: Tensor[bool, [2]] = Tensor.ones([2]);
+println(t[0]);
+if t[1] {
+println("flag-set");
+}
+}

@@ -1,0 +1,18 @@
+trait Counter { fn get(ref self) -> i64; }
+trait Namer { fn name(ref self) -> String; }
+effect resource Ctr: Counter;
+effect resource Who: Namer;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+struct N1 { s: String }
+impl Namer for N1 { fn name(ref self) -> String { self.s.clone() } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn multi() -> String with reads(Ctr) reads(Who) {
+providers { Ctr => InMem { n: 2 }, Who => N1 { s: "zed" } } in {
+return f"{Who.name()}-{read()}";
+}
+}
+fn main() with reads(Ctr) reads(Who) {
+println(f"{multi()}");
+with_provider[Ctr](InMem { n: 9 }, || { println(f"{read()}"); });
+}

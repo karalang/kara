@@ -1,0 +1,14 @@
+fn main() {
+println((200u8).count_zeros());
+println((255u8).count_zeros());
+println((0i64).count_zeros());
+println((1u8).reverse_bits());
+println((258u16).swap_bytes());
+println((1u32).swap_bytes());
+println((5u8).swap_bytes());
+println((4278255360u32).reverse_bits());
+println((1i8).reverse_bits());
+println((1i32).reverse_bits());
+let big: u64 = 1;
+println(big.reverse_bits());
+}

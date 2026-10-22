@@ -1,0 +1,2 @@
+fn main() { let v: Vec[R] = [R { id: 41, name: f"n{41}" }];
+let s = v[0].name; println(f"{s}"); println(f"{v[0].name}") }

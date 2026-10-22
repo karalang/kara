@@ -1,0 +1,4 @@
+fn main() { let s = mk(); let mut v: Vec[String] = Vec.new();
+   let mut i = 0;
+   while i < 12 { v.push(s[i..(i + 30)]); i = i + 1; }
+   println(f"n:{v.len()}/{v[11].len()}"); println("end") }

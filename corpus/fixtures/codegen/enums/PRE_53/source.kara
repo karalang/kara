@@ -1,0 +1,1 @@
+fn main() { let z = Option[Rq].Some(Rq { id: 1 }); println("l"); println("end") }

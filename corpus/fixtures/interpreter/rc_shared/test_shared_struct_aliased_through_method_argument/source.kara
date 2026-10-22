@@ -1,0 +1,8 @@
+shared struct Box { mut value: i64 }
+fn bump(b: ref Box) { b.value = b.value + 100; }
+fn main() {
+let x = Box { value: 5 };
+bump(x);
+bump(x);
+println(x.value);
+}

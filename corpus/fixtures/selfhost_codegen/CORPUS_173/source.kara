@@ -1,0 +1,54 @@
+struct E {
+    stk: Vec[String],
+    nums: Vec[i64],
+}
+impl E {
+    fn enter(mut ref self, l: String) {
+        self.stk.push(l);
+    }
+    fn leave(mut ref self) {
+        self.stk.pop();
+    }
+    fn add(mut ref self, x: i64) {
+        self.nums.push(x);
+    }
+    fn drop_num(mut ref self) {
+        self.nums.pop();
+    }
+    fn report(ref self) {
+        println(self.stk.len().to_string());
+        let mut i = 0;
+        while i < self.stk.len() as i64 {
+            println(self.stk[i]);
+            i += 1;
+        }
+        let mut s = 0;
+        let mut j = 0;
+        while j < self.nums.len() as i64 {
+            s = s + self.nums[j];
+            j += 1;
+        }
+        println(s.to_string());
+    }
+}
+fn main() {
+    let mut e = E {
+        stk: Vec.new(),
+        nums: Vec.new(),
+    };
+    e.enter("a".to_string());
+    e.enter("b".to_string());
+    e.leave();
+    e.enter("c".to_string());
+    e.add(10);
+    e.add(20);
+    e.add(30);
+    e.drop_num();
+    e.report();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(8);
+    v.pop();
+    println(v.len().to_string());
+    println(v[0].to_string());
+}

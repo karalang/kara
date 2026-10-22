@@ -1,0 +1,1 @@
+fn main() { let k = 8i64; let mut j = 0i64; let mut s = 0i64; while j < k { let mut q = 0i64; while q < 100000i64 { s = s + q; q = q + 1i64; } j = j + 1i64; } println(s); }

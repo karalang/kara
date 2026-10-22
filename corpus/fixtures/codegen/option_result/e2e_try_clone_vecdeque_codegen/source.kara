@@ -1,0 +1,9 @@
+fn main() {
+let mut q: VecDeque[i64] = VecDeque.new();
+q.push_back(1_i64);
+q.push_back(2_i64);
+match q.try_clone() {
+Ok(c) => { println(c.len()); println(c[0]); println(c[1]); }
+Err(_) => println("err"),
+}
+}

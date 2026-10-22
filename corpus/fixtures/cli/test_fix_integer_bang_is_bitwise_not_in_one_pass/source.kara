@@ -1,0 +1,6 @@
+fn main() {
+    let row: i64 = 6;
+    let m: i64 = 2;
+    let b = false;
+    println(f"{m & !row == 0} {!b} {!(m & 1)}");
+}

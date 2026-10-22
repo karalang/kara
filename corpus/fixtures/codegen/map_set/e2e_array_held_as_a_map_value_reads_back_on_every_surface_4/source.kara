@@ -1,0 +1,9 @@
+fn main() {
+    let mut m: SortedMap[i64, Array[String, 2]] = SortedMap.new();
+    let e: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    m.insert(1, e);
+    match m.get(1) {
+        Some(a) => { println(f"s:{a[1]}"); }
+        None => { println("s:missing"); }
+    }
+}

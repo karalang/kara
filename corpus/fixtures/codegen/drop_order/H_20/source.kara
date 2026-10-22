@@ -1,0 +1,2 @@
+fn main() { let w = W { r: R { id: 41 }, n: 1 };
+             let W { r, n } = w; println(f"{n}") }

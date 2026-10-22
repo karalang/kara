@@ -1,0 +1,38 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+fn mkbox(n: i64) -> Box2 {
+    Box2.Full(Res { id: n })
+}
+fn take_res(r: Res) {
+    println(f"consumed {r.id}")
+}
+fn main() {
+    let b = Box2.Full(Res { id: 33 });
+    println("a");
+    if let Box2.Full(r) = b {
+        println(f"arm sees {r.id}");
+    }
+    println("b");
+    if let Box2.Full(r) = mkbox(34) {
+        println(f"arm sees {r.id}");
+    }
+    println("c");
+    let e = Box2.Empty;
+    if let Box2.Full(r) = e {
+        println(f"arm sees {r.id}");
+    } else {
+        println("empty");
+    }
+    println("d");
+    let c = Box2.Full(Res { id: 35 });
+    if let Box2.Full(r) = c {
+        take_res(r);
+        println("after move");
+    }
+    println("end");
+}

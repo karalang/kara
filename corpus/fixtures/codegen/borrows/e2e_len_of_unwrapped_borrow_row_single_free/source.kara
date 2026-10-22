@@ -1,0 +1,11 @@
+fn mk_rows() -> Vec[Vec[i64]] {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    v.push(Vec[1, 2, 3]);
+    v.push(Vec[4, 5]);
+    v
+}
+fn main() {
+    println(f"{mk_rows().first().unwrap().len()}");
+    println(f"{mk_rows().last().unwrap().len()}");
+    println(f"{mk_rows().get(1).unwrap().len()}");
+}

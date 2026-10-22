@@ -1,0 +1,11 @@
+fn tail_str(xs: Vec[i64]) -> String {
+let mut out = "";
+for x in xs {
+out = f"{out}{x}";
+}
+return out;
+}
+fn main() {
+let s: String = tail_str(vec![100, 200, 300]);
+println(s);
+}

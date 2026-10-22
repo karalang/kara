@@ -1,0 +1,6 @@
+enum E { A(Vec[String]), B }
+fn main() {
+let e: E = E.A([f"aa", f"bb"]);
+match e { E.A(v) => { for s in v { println(s); } } E.B => {} }
+match e { E.A(v) => { for s in v { println(s); } } E.B => {} }
+}

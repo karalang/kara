@@ -1,0 +1,9 @@
+fn main() {
+let mut c: Column[f64] = Column.new();
+c.push(1.5); c.push(2.5); c.push_null();
+let bytes = c.to_arrow_ipc();
+let d: Column[f64] = Column.from_arrow_ipc(bytes);
+println(d.len());
+println(d.null_count());
+println(d.sum());
+}

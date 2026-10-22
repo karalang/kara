@@ -1,0 +1,1 @@
+fn main() { let m: Map[String, i64] = Map["a": 1]; print(m); }

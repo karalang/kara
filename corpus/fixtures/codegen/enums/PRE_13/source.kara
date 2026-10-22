@@ -1,0 +1,2 @@
+fn takeR(x: Result[(Rt, Rt), i64]) { match x { Ok(t) => { println("ok") } Err(e) => { println("n") } } }
+fn main() { takeR(Result.Ok((Rt { id: 71, name: f"a" }, Rt { id: 72, name: f"b" }))); println("done") }

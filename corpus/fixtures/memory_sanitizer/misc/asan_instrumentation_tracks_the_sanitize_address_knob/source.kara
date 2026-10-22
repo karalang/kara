@@ -1,0 +1,1 @@
+fn main() { let v = [1, 2, 3]; println(f"n={v.len()}") }

@@ -1,0 +1,11 @@
+
+fn main() {
+    let data = Array[1u8, 2u8, 3u8, 250u8];
+    let mut payload = Vec.new();
+    payload.extend_from_slice(data);
+    let mut r = ProtoReader.new(ProtoBuf.encode_len_delim(payload));
+    let got = r.read_len_delim();
+    println(got.len());
+    println(got[0]);
+    println(got[3]);
+}

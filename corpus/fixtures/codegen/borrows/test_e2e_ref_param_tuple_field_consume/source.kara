@@ -1,0 +1,35 @@
+struct Holder { pair: (String, i64), two: (String, String), n: i64 }
+fn render(h: ref Holder) -> String {
+match h.pair {
+(s, x) => { return "t:".to_string() + s + ":" + x.to_string(); }
+}
+return "?".to_string();
+}
+fn left_only(h: ref Holder) -> String {
+match h.two {
+(a, _) => { return "L:".to_string() + a; }
+}
+return "?".to_string();
+}
+fn ifl(h: ref Holder) -> String {
+if let (s, x) = h.pair {
+return "i:".to_string() + s + ":" + x.to_string();
+}
+return "?".to_string();
+}
+fn lel(h: ref Holder) -> String {
+let (s, x) = h.pair else {
+return "?".to_string();
+}
+return "e:".to_string() + s + ":" + x.to_string();
+}
+fn main() {
+let a = Holder { pair: ("tp".to_string(), 4),
+two: ("aa".to_string(), "bb".to_string()), n: 1 };
+println(render(a));
+println(render(a));
+println(left_only(a));
+println(left_only(a));
+println(ifl(a));
+println(lel(a));
+}

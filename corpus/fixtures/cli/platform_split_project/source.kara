@@ -1,0 +1,2 @@
+import poller.name;
+fn main() { println(name()); }

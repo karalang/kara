@@ -1,0 +1,10 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+let r = m.entry("a").or_insert(10_i64);
+*r += 1;
+r += 1;
+match m.get("a") {
+Some(x) => println(x),
+None => println("missing"),
+}
+}

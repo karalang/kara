@@ -1,0 +1,13 @@
+fn main() {
+let mut df = DataFrame.new();
+df.insert("id", Column.from_vec([10, 20, 30]));
+df.insert("score", Column.from_vec([1.5, 2.5, 3.5]));
+let bytes = df.to_arrow_ipc();
+let d = DataFrame.from_arrow_ipc(bytes);
+println(d.width());
+println(d.height());
+let id: Column[i64] = d.column("id");
+println(id.sum());
+let score: Column[f64] = d.column("score");
+println(score.sum());
+}

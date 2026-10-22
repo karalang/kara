@@ -1,0 +1,7 @@
+fn main() {
+         let v = [1, 2, 3, 4];
+         let s = v.as_slice();
+         let (a, b) = s.split_at(2);
+         println(a.len());
+         println(b.len());
+     }

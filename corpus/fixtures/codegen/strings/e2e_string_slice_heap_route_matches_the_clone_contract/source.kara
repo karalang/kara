@@ -1,0 +1,19 @@
+fn main() {
+    let s = "the quick brown fox jumps over the lazy dog, twice over";
+    let a = s[0..24];
+    let b = s[4..40];
+    let c = s[0..s.len()];
+    println(f"1 {a.len()} [{a}]");
+    println(f"2 {b.len()} [{b}]");
+    println(f"3 {c == s}");
+    let d = c.clone();
+    println(f"4 {d == c} {d.len() == c.len()}");
+    let mut e = s[10..40];
+    e.push_str("!");
+    println(f"5 {e.len()} [{e}]");
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(s[i..(i + 30)]); i = i + 1; }
+    println(f"6 {v.len()} {v[0].len()} [{v[7]}]");
+    println("end")
+}

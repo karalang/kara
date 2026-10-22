@@ -1,0 +1,15 @@
+source = "tests/interpreter/misc.rs::gpu_integer_arg_orders_by_the_element_type"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "fca6274e"

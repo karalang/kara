@@ -1,0 +1,31 @@
+fn main() {
+    let a: f32 = 2.0f32;
+    println(a.to_degrees());
+    println(a.to_radians());
+    let g1: f32 = 9.0f32;
+    println(g1.to_degrees());
+    let g2: f32 = 0.3f32;
+    println(g2.to_radians());
+    println(a.cosh());
+    let h: f16 = 2.0f16;
+    println(h.to_degrees());
+    let b: bf16 = 2.0bf16;
+    println(b.to_degrees());
+    let three: bf16 = 3.0bf16;
+    println(three.recip());
+    let t: f32 = 3.0f32;
+    println(t.recip());
+    let s: f32 = 0.2857142984867096f32;
+    println(s.sinh());
+    println(s.log10());
+    println(s.atan());
+    let c1: f32 = 1.22f32;
+    println(c1.cosh());
+    let c2: f32 = 1.175f32;
+    println(c2.sinh());
+    let c3: f32 = 0.057f32;
+    println(c3.atan());
+    let d: f64 = 2.0;
+    println(d.to_degrees());
+    println(d.cosh());
+}

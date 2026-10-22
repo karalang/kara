@@ -1,0 +1,6 @@
+import std.json.{Json};
+
+fn main() {
+let arr: Json = Json.Array(Vec[Json.Number(1.0), Json.Number(2.0)]);
+println(arr.stringify());
+}

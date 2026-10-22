@@ -1,0 +1,2 @@
+fn boom() -> i64 { let o: Option[i64] = None; return o.unwrap() }
+fn main() { let x = boom(); println(f"got {x}"); }

@@ -1,0 +1,15 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+let _ = m.insert(1, 10);
+let _ = m.insert(2, 20);
+let _ = m.insert(3, 30);
+let vs: Vec[i64] = m.values().iter().collect();
+let ks: Vec[i64] = m.keys().iter().collect();
+let mut vsum = 0;
+for v in vs.iter() { vsum = vsum + v; }
+let mut ksum = 0;
+for k in ks.iter() { ksum = ksum + k; }
+println(vsum);
+println(ksum);
+println(vs.len());
+}

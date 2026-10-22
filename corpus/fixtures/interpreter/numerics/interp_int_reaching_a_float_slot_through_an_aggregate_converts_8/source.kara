@@ -1,0 +1,2 @@
+struct S { f: f64 }
+fn main() { let m: i64 = 9007199254740993; let s = S { f: m }; println(s.f); }

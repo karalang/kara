@@ -1,0 +1,14 @@
+fn f(a: i64, b: i64) -> i64 { match (a, b) { (0, 0) => 10, (1, 2) => 20, _ => 30 } }
+fn bt(a: bool, b: bool) -> i64 { match (a, b) { (true, true) => 1, _ => 0 } }
+fn mixed(a: i64, b: i64) -> i64 {
+match (a, b) { (0, y) => y + 100, (x, 0) => x + 200, (1, 2) => 20, _ => 30 }
+}
+fn nested(a: i64, b: i64, c: i64) -> i64 {
+match (a, (b, c)) { (0, (1, 2)) => 1, (0, (_, _)) => 2, _ => 3 }
+}
+fn main() {
+println(f"{f(0, 0)} {f(1, 2)} {f(5, 5)}");
+println(f"{bt(true, true)} {bt(true, false)} {bt(false, false)}");
+println(f"{mixed(0, 5)} {mixed(7, 0)} {mixed(1, 2)} {mixed(9, 9)}");
+println(f"{nested(0, 1, 2)} {nested(0, 4, 5)} {nested(8, 1, 2)}");
+}

@@ -1,0 +1,11 @@
+fn main() {
+let mut m: Map[String, i64, FxBuildHasher] = Map.new();
+m.insert("alpha", 1);
+m.insert("bravo", 2);
+m.insert("charlie", 3);
+m.remove("bravo");
+match m.get("alpha") { Some(v) => { println(v); } None => { println(-1); } }
+match m.get("charlie") { Some(v) => { println(v); } None => { println(-1); } }
+match m.get("bravo") { Some(v) => { println(v); } None => { println(-1); } }
+println(m.len());
+}

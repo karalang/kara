@@ -1,0 +1,7 @@
+effect resource Reporter;
+
+host fn report(value: i64) -> i64 with writes(Reporter);
+
+fn main() {
+    report(42);
+}

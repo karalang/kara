@@ -1,0 +1,4 @@
+struct R5w { s: String, a: i64, b: i64 }
+enum K5w { A(R5w), B }
+fn nested(x: Result[K5w, i64], acc: mut ref Vec[R5w]) { match x { Result.Ok(K5w.A(r)) => { acc.push(r) } Result.Ok(K5w.B) => {} Result.Err(e) => { println("er") } } }
+fn main() { let mut acc: Vec[R5w] = []; for i in 0..3 { nested(Result.Ok(K5w.A(R5w { s: f"ssssssssssss{i}", a: 7, b: 8 })), mut acc); } println(f"len:{acc.len()}") }

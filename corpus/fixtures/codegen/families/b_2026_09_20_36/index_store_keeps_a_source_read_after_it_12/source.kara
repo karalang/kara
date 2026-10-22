@@ -1,0 +1,1 @@
+fn main() { let mut a: Vec[W] = [W { d: D { k: 0 }, s: f"zero" }]; let w = W { d: D { k: 4 }, s: f"four" }; a[0] = w; println(f"a:{a[0].s}"); println("end") }

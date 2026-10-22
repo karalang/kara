@@ -1,0 +1,17 @@
+source = "tests/cli.rs::wasm_threads_animation_frames_recv_e2e"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main#resume at bbN[term]: in animation_frames at bbN[term]: call of"
+classified_with = "79705a229"
+extracted_src = "c1edda91"
+model_rev = "583cfb0d"
+model_src = "c1edda91"

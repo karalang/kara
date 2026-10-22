@@ -1,0 +1,4 @@
+fn main() {
+let j = Json.Number(42.0);
+println(j.stringify());
+}

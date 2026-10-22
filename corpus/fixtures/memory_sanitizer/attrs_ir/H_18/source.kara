@@ -1,0 +1,4 @@
+fn pass(o: Option[String]) -> Option[String] { o }
+fn f() -> i64 { let mut vv: Option[String] = Some(payload()); vv = pass(vv);
+   match vv { Some(s) => slen(s), None => 0 } }
+fn main() { println(f()); }

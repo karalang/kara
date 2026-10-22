@@ -1,0 +1,24 @@
+struct Sp { line: i64, column: i64, offset: i64, length: i64 }
+struct FLit { value: f64, suffix: String, span: Sp }
+enum Tok { Float(f64, String), Int(i64, String) }
+shared enum Expr { Int(i64), Boolish(i64), Float(FLit) }
+fn tok_kind(t: Tok) -> i64 {
+match t {
+Float(v, s) => 100,
+Int(v, s) => 200,
+}
+}
+fn expr_off(e: Expr) -> i64 {
+match e {
+Int(v) => v,
+Boolish(v) => v,
+Float(n) => n.span.offset,
+}
+}
+fn main() {
+let t = Tok.Float(1.5, "f64");
+println(tok_kind(t).to_string());
+let n = FLit { value: 2.5, suffix: "", span: Sp { line: 1, column: 1, offset: 7, length: 3 } };
+let e = Expr.Float(n);
+println(expr_off(e).to_string());
+}

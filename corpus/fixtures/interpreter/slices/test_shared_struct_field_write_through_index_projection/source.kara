@@ -1,0 +1,8 @@
+shared struct Cell { mut value: i64 }
+fn main() {
+let c = Cell { value: 1 };
+let mut v = Vec.new();
+v.push(c);
+v[0].value = 42;
+println(c.value);
+}

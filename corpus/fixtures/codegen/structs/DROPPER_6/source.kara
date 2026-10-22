@@ -1,0 +1,6 @@
+struct I2 { r: R, s: R }
+struct W2 { inner: I2, n: i64 }
+fn take(w: W2) -> R { w.inner.r }
+fn main() { let x = take(W2 { inner: I2 { r: R { id: 42 }, s: R { id: 52 } },
+                           n: 2 });
+             println(f"{x.id}"); }

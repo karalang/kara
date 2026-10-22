@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[String]; v = Vec.new(); v.push(f"a{1}"); println(v[0]); }

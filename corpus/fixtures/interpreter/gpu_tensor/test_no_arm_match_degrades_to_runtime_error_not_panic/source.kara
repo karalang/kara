@@ -1,0 +1,7 @@
+fn main() {
+let x: i64 = 5;
+match x {
+Some(v) => println(v),
+None => println("none"),
+}
+}

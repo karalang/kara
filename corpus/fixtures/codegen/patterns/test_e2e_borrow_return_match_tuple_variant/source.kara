@@ -1,0 +1,13 @@
+fn pick(res: ref Result[i64, String], a: ref String, b: ref String) -> ref String {
+    match res {
+        Ok(_) => a,
+        _ => b,
+    }
+}
+fn main() {
+    let ok: Result[i64, String] = Result.Ok(1);
+    let er: Result[i64, String] = Result.Err("e");
+    let x = "yes"; let y = "no";
+    println(pick(ok, x, y));
+    println(pick(er, x, y));
+}

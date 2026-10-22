@@ -1,0 +1,9 @@
+struct Wide { alpha: i64, beta: i64, gamma: i64, delta: i64 }
+impl Display for Wide {
+    fn to_string(ref self) -> String {
+        f"W({self.alpha},{self.beta},{self.gamma},{self.delta})"
+    }
+}
+fn main() -> Result[(), Wide] {
+    return Err(Wide { alpha: 1, beta: 2, gamma: 3, delta: 4 })
+}

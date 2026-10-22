@@ -1,0 +1,2 @@
+fn hg(g: G[i64]) { println("ig"); }
+fn main() { println("A"); let a = G.X(7); hg(a); println("end") }

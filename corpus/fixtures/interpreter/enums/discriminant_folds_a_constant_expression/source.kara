@@ -1,0 +1,6 @@
+const BASE: i64 = 16;
+#[repr(u8)]
+enum Op { Add = BASE + 1, Sub = BASE + 2 }
+fn main() {
+println(f"{Op.Add.discriminant()} {Op.Sub.discriminant()}");
+}

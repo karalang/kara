@@ -1,0 +1,2 @@
+fn make_map() -> Map[i64, i64] { let m: Map[i64, i64] = Map.new(); m.insert(1, 100); m }
+fn main() { let mp: Map[i64, i64] = make_map(); match mp.get(1) { Some(v) => println(v), None => println(-1), } }

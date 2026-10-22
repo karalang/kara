@@ -1,0 +1,16 @@
+struct H { items: Vec[i64] }
+impl H {
+fn view(ref self) -> ref Vec[i64] { self.items }
+}
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(3);
+v.push(9);
+let h = H { items: v };
+println(h.view().is_empty().to_string());
+println(f"{h.view().is_empty()}");
+println(h.view().len().to_string());
+println(h.view().contains(9).to_string());
+let e = H { items: Vec.new() };
+println(e.view().is_empty().to_string());
+}

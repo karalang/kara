@@ -1,0 +1,10 @@
+struct Inner { x: i64 }
+struct Outer { inner: Inner }
+fn bump(o: mut ref Outer) {
+o.inner.x = 99;
+}
+fn main() {
+let mut o = Outer { inner: Inner { x: 1 } };
+bump(mut o);
+println(o.inner.x);
+}

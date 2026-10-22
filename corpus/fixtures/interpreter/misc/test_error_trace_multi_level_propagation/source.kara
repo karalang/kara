@@ -1,0 +1,19 @@
+fn inner() {
+let r = Err(99);
+r?
+}
+fn middle() {
+let v = inner()?;
+v
+}
+fn outer() {
+let v = middle()?;
+v
+}
+fn main() {
+let result = outer();
+match result {
+Ok(v) => println(v),
+Err(e) => println(e),
+}
+}

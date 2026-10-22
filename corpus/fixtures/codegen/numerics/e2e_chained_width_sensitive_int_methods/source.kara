@@ -1,0 +1,12 @@
+fn main() {
+let a: i32 = 305419896i32;
+println(a.swap_bytes().swap_bytes());
+let b: i16 = 4660i16;
+println(b.swap_bytes().swap_bytes());
+let c: i32 = 1i32;
+println(c.rotate_left(8u32).rotate_right(8u32));
+let d: i64 = 7i64;
+println(d.wrapping_add(1i64).wrapping_sub(1i64));
+let e: u32 = 4294967295u32;
+println(e.reverse_bits().reverse_bits());
+}

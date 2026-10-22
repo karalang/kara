@@ -1,0 +1,13 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 2i64, 3i64, 4i64]));
+df.insert("b", Column.from_vec([10.5, 20.5, 30.5, 40.5]));
+df.insert("c", Column.from_vec(["x", "y", "z", "w"]));
+let plan = df.lazy().select(vec!["b", "a"]).limit(7).limit(2);
+println(plan.explain());
+let out = plan.collect();
+println(out.width()); println(out.height());
+for n in out.column_names() { println(n); }
+let b: Column[f64] = out.column("b");
+match b[1] { Some(v) => println(v), None => println(-1.0) }
+}

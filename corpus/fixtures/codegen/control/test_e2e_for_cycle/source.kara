@@ -1,0 +1,35 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3];
+let mut n: i64 = 0;
+let mut a: i64 = 0;
+for x in v.iter().cycle() {
+if n == 7 { break; }
+n = n + 1;
+a = a + x;
+}
+println(a);
+let es: Vec[i64] = [];
+let mut b: i64 = 0;
+for x in es.iter().cycle() { b = b + x; }
+println(b);
+let mut c: i64 = 0;
+for x in v.iter().filter(|w| w > 100).cycle() { c = c + x; }
+println(c);
+let mut m: i64 = 0;
+let mut d: i64 = 0;
+for x in v.iter().take(2).cycle() {
+if m == 5 { break; }
+m = m + 1;
+d = d + x;
+}
+println(d);
+let ws: Vec[String] = [f"ab", f"c"];
+let mut h: i64 = 0;
+let mut cnt: i64 = 0;
+for w in ws.iter().cycle() {
+if cnt == 5 { break; }
+cnt = cnt + 1;
+h = h + w.len();
+}
+println(h);
+}

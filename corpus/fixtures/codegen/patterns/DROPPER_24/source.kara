@@ -1,0 +1,1 @@
+fn main() { let p = ((R { id: 41 }, 2), 1); let ((_, m), n) = p; println(f"{m + n}") }

@@ -1,0 +1,11 @@
+fn f(s: String) -> Vec[String] {
+let mut v: Vec[String] = Vec.new();
+v.push(s[0..2].to_string());
+v.push(s[6..].clone());
+return v;
+}
+fn main() {
+let v = f("hello world");
+println(v[0]);
+println(v[1]);
+}

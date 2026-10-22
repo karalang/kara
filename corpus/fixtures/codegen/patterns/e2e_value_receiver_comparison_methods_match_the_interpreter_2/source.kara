@@ -1,0 +1,2 @@
+fn main() { let a: u8 = 200u8; let b: u8 = 100u8;
+println(f"{a.lt(b)} {a.gt(b)} {a.le(b)} {a.ge(b)}"); }

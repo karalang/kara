@@ -1,0 +1,4 @@
+#[deprecated(note: "use `next_way` instead")]
+fn old_way() -> i64 { return 1; }
+fn next_way() -> i64 { return 2; }
+fn main() { println(old_way().to_string()); }

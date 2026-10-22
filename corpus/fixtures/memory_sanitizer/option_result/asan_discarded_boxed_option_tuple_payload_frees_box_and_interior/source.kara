@@ -1,0 +1,15 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn topagg(r: R) -> Option[(R, i64)] { return Option.Some((r, 9)); }
+fn fss(n: i64) -> Option[(String, String)] { return Option.Some((f"aa{n}", f"bb{n}")); }
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let _ = topagg(mk(n));
+        let _ = Option.Some((mk(n + 100), 9));
+        let _ = fss(n);
+        let _ = Option.Some(mk(n + 200));
+        n = n + 1;
+    }
+}

@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct In3 { n: i64 }
+impl Drop for In3 { fn drop(mut ref self) { println(f"dIn{self.n}") } }
+struct Hd3 { inner: In3, tag: i64 }
+fn eat(o: Option[Hd3]) -> In3 { match o { Some(t) => { return t.inner.clone(); } None => { return In3 { n: 0 }; } } }
+fn main() { let g: In3 = eat(Some(Hd3 { inner: In3 { n: 5 }, tag: 7 })); println(f"g:{g.n}"); println("end") }

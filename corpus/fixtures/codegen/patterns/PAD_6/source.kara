@@ -1,0 +1,5 @@
+enum E { A(i64), B }
+                 fn main() {
+                     let a: Option[E] = Some(E.A(7));
+                     match a { Some(E.A(n)) => println(n), Some(E.B) => {} None => println("none") }
+                 }

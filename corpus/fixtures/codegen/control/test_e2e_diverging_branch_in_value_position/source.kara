@@ -1,0 +1,19 @@
+fn classify(n: i64) -> i64 {
+// value path AND diverging path share the if-expression
+let label = if n >= 0 { 'P' } else { return -1; };
+label as i64
+}
+fn first_or_bail(v: ref Vec[i64]) -> i64 {
+// match-arm-block diverging variant
+let x = match v.len() { 0 => { return -7; }, _ => v[0] };
+x * 2
+}
+fn main() {
+println(classify(5).to_string());   // 'P' = 80
+println(classify(-3).to_string());  // -1 via diverging else
+let mut a: Vec[i64] = Vec.new();
+a.push(21);
+println(first_or_bail(a).to_string()); // 42
+let empty: Vec[i64] = Vec.new();
+println(first_or_bail(empty).to_string()); // -7 via diverging arm
+}

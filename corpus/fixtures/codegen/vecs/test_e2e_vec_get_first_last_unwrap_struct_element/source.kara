@@ -1,0 +1,14 @@
+struct Point { x: i64, y: i64 }
+struct Big { a: i64, b: i64, c: i64, d: i64, e: i64 }
+fn main() {
+let pts: Vec[Point] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
+let p = pts.get(1).unwrap();
+println(p.x);
+println(p.y);
+let f = pts.first().unwrap();
+println(f.x);
+let big: Vec[Big] = [Big { a: 1, b: 2, c: 3, d: 4, e: 5 }];
+let b = big.last().unwrap();
+println(b.a);
+println(b.e);
+}

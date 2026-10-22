@@ -1,0 +1,21 @@
+fn main() {
+let m: u128 = 340282366920938463463374607431768211455u128;
+let h: u128 = 200000000000000000000000000000000000000u128;
+println(m);
+println(f"{m}");
+println(h > 5u128);
+println(h < 5u128);
+println(m >= h);
+println(h / 3u128);
+println(h % 7u128);
+println(m / 2u128);
+println(h - 5u128);
+println(m.count_ones());
+println(m.wrapping_add(1u128));
+println(m.saturating_add(1u128));
+let o: Option[u128] = Some(m);
+match o { Some(v) => println(v), None => println("none") }
+println(m as u64);
+let n: i128 = -170141183460469231731687303715884105728i128;
+println(n);
+}

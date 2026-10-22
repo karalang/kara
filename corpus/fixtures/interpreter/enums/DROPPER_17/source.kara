@@ -1,0 +1,3 @@
+enum W2 { Two(R, R), None3 }
+fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2 }); 7 }
+fn main() { let v = take(R { id: 1 }); println(f"v={v}") }

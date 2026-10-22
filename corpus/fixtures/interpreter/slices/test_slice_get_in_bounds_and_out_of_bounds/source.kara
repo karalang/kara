@@ -1,0 +1,6 @@
+fn main() {
+         let v = [100, 200, 300];
+         let s = v.as_slice();
+         match s.get(1) { Some(x) => println(x), None => println("oob") }
+         match s.get(5) { Some(x) => println(x), None => println("oob") }
+     }

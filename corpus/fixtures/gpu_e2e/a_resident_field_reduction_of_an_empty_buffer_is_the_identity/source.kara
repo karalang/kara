@@ -1,0 +1,10 @@
+struct Cell { m: f32, t: f32 }
+fn main() {
+    let empty: Vec[Cell] = Vec.new();
+    let buf = gpu.upload(empty);
+    println(f"{gpu.sum(buf.m)}");
+    match gpu.min(buf.m) {
+        Some(m) => println(f"{m}"),
+        None => println("none"),
+    }
+}

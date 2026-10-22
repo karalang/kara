@@ -1,0 +1,30 @@
+#[derive(Eq, Ord)]
+struct P { a: i64, b: i64 }
+#[derive(Eq, Ord)]
+enum E { Lo, Mid, Hi }
+fn main() {
+let mut ss: SortedSet[P] = SortedSet.new();
+ss.insert(P { a: 2, b: 1 });
+ss.insert(P { a: 1, b: 9 });
+ss.insert(P { a: 1, b: 2 });
+println(f"{ss.len()}");
+println(f"{ss.contains(P { a: 1, b: 9 })}");
+println(f"{ss.contains(P { a: 5, b: 5 })}");
+let mut sm: SortedMap[P, i64] = SortedMap.new();
+let _ = sm.insert(P { a: 1, b: 1 }, 10);
+let _ = sm.insert(P { a: 2, b: 2 }, 20);
+let _ = sm.insert(P { a: 3, b: 3 }, 30);
+println(f"{sm.len()}");
+let mut es: SortedSet[E] = SortedSet.new();
+es.insert(E.Hi);
+es.insert(E.Lo);
+es.insert(E.Mid);
+println(f"{es.len()}");
+let mut v: Vec[P] = Vec.new();
+v.push(P { a: 2, b: 0 });
+v.push(P { a: 1, b: 9 });
+v.push(P { a: 1, b: 2 });
+v.sort();
+let mut i = 0;
+while i < v.len() { let p = v[i]; println(f"{p.a},{p.b}"); i = i + 1; };
+}

@@ -1,0 +1,15 @@
+source = "tests/interpreter/strings.rs::test_normalize_accepts_a_bare_variant_a_qualified_one_and_a_binding"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:normalize", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "5b6542cb"

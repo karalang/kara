@@ -1,0 +1,13 @@
+fn main() {
+let mut v: Vec[i64] = [1, 2, 3, 4];
+for x in v.iter_mut() { *x = *x * 2; }
+for x in v.iter_mut() { *x += 1; }
+let mut s = 0;
+for y in v { s = s + y; }
+println(s);
+let mut f: Vec[f64] = [1.5, 2.5];
+for z in f.iter_mut() { *z = *z + 0.5; }
+let mut fs = 0.0;
+for w in f { fs = fs + w; }
+println(fs);
+}

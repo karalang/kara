@@ -1,0 +1,2 @@
+fn main() { let m: i64 = 9007199254740993;
+let t: (f64, i64) = (m, 1); println(t.0); }

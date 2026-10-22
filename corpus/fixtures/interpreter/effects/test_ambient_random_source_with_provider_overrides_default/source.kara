@@ -1,0 +1,11 @@
+struct FakeRandom {}
+impl FakeRandom { fn next_u64(self) -> i64 { 7 } }
+fn main() {
+with_provider[RandomSource](FakeRandom {}, || {
+println(RandomSource.next_u64());
+println(RandomSource.next_u64());
+});
+let a = RandomSource.next_u64();
+let b = RandomSource.next_u64();
+println(a != b);
+}

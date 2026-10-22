@@ -1,0 +1,6 @@
+fn passthru[T](x: T) -> T { return x; }
+fn main() {
+    let a: Vec[String] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let b: Vec[String] = passthru(a);
+    println(f"s:{b[0]}");
+}

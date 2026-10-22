@@ -1,0 +1,1 @@
+fn main() { let c: Column[i64] = Column.from_vec([1, 2]); let b = c.to_arrow_ipc(); println(b.len()); }

@@ -1,0 +1,2 @@
+let ARR: Array[i64, 3] = [1, 2, 3];
+fn main() { println(ARR[0]); }

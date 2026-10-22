@@ -1,0 +1,9 @@
+fn main() {
+let mut q: VecDeque[i64] = VecDeque.with_capacity(8);
+q.push_back(1_i64);
+q.push_front(2_i64);
+println(q.len()); println(q[0]); println(q[1]);
+let mut s: String = String.with_capacity(8);
+s.push_str("hi");
+println(s); println(s.len());
+}

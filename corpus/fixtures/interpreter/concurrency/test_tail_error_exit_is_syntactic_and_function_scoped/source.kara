@@ -1,0 +1,6 @@
+fn body(c: bool) -> Result[i64, String] {
+defer { print("d"); }
+errdefer { print("e"); }
+if c { Err("boom") } else { Ok(1) }
+}
+fn main() { let _ = body(true); }

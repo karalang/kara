@@ -1,0 +1,6 @@
+fn main() {
+let o: Option[String] = Some(f"hi");
+let a: Option[i64] = match o { Some(ref v) => { Some(v.len()) } None => { None } };
+match o { Some(v) => { println(v); } None => {} }
+println(a.unwrap_or(0));
+}

@@ -1,0 +1,6 @@
+fn main() {
+let c = Tensor.from([[[1, 2]], [[3, 4]]]);
+let n = 0;
+let sq = c.squeeze(n);
+println(sq[0,0]);
+}

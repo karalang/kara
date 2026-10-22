@@ -1,0 +1,6 @@
+struct Grid { cells: Vec[Vec[Vec[i64]]] }
+fn main() {
+    let mut g = Grid { cells: [[[9]]] };
+    g.cells[0][0][0] = 11i64;
+    println(f"{g.cells[0][0][0]}");
+}

@@ -1,0 +1,2 @@
+fn emit_tok(toks: mut ref Vec[String], src: ref String, a: i64, b: i64) { toks.push(src.substring(a, b)) }
+fn main() { let src = "ab cd"; let mut toks: Vec[String] = Vec.new(); emit_tok(mut toks, src, 0, 2); emit_tok(mut toks, src, 3, 5); println(toks[0]); println(toks[1]); println(src) }

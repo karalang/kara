@@ -1,0 +1,4 @@
+import alpha.common;
+import beta.common as beta_common;
+import facade.common as via_facade;
+fn main() { println(common()); println(beta_common()); println(via_facade()); }

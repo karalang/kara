@@ -1,0 +1,13 @@
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+struct Lexer { start: i64, current: i64, line: i64 }
+impl Lexer {
+fn span(ref self) -> Span {
+Span { line: self.line, column: 1, offset: self.start,
+length: self.current - self.start }
+}
+}
+fn main() {
+let lx = Lexer { start: 2, current: 5, line: 1 };
+let sp = lx.span();
+println(f"{sp.offset} {sp.length} {sp.line} {sp.column}");
+}

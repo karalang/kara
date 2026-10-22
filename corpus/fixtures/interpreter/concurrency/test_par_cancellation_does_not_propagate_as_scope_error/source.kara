@@ -1,0 +1,24 @@
+fn attempt() -> Result[i64, String] {
+par {
+{
+let _a = 0;
+let _b = 0;
+let _c = 0;
+let _d = 0;
+let _e = 0;
+let _f = 0;
+let _g = 0;
+let _h = 0;
+}
+{
+return Err("r-fail");
+}
+};
+Ok(0)
+}
+fn main() {
+match attempt() {
+Ok(_) => print("ok"),
+Err(e) => print(e),
+}
+}

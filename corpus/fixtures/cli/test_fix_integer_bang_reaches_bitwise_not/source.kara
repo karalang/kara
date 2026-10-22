@@ -1,0 +1,3 @@
+fn low_zero(w: i64) -> i64 { (!w).trailing_zeros() as i64 }
+fn clear(w: i64, n: i64) -> i64 { w & !(1 << n) }
+fn main() { println(f"{low_zero(7)} {clear(7, 1)}"); }

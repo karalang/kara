@@ -1,0 +1,20 @@
+fn main() {
+let lt = Ordering.Less;
+let eq = Ordering.Equal;
+let gt = Ordering.Greater;
+println(lt.is_lt());
+println(lt.is_le());
+println(lt.is_gt());
+println(lt.is_ge());
+println(lt.is_eq());
+println(eq.is_lt());
+println(eq.is_le());
+println(eq.is_gt());
+println(eq.is_ge());
+println(eq.is_eq());
+println(gt.is_lt());
+println(gt.is_le());
+println(gt.is_gt());
+println(gt.is_ge());
+println(gt.is_eq());
+}

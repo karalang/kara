@@ -1,0 +1,2 @@
+struct W { s: String, k: i64 }
+fn main() { let n = 7; let mut d: Vec[Vec[Vec[W]]] = [[[W { s: f"one-aaaaaaaaaaaa-{n}", k: 1 }]]]; d[0][0][0] = W { s: f"replaced-bbbbbbbbbbbb-{n}", k: 2 }; println(f"r:{d.len()}") }

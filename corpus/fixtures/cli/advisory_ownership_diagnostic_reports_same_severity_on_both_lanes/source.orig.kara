@@ -1,0 +1,7 @@
+fn consume_vec(x: own Vec[i64]) -> i64 { return x.len(); }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    let n = consume_vec(v);
+    println(f"consumed={n} after={v.len()}");
+}

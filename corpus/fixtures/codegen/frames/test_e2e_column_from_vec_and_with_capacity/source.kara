@@ -1,0 +1,16 @@
+fn main() {
+let d: Column[i64] = Column.from_vec([1, 2, 3]);
+println(d.len());
+println(d.null_count());
+match d[0] { Some(x) => println(x), None => println(-9) }
+let mut f: Column[f64] = Column.with_capacity(2);
+f.push(1.5);
+f.push_null();
+f.push(2.5);
+println(f.null_count());
+match f[2] { Some(x) => println(x), None => println(0.0) }
+let mut b: Column[bool] = Column.new();
+b.push(true);
+b.push(false);
+match b[1] { Some(x) => println(x), None => println(true) }
+}

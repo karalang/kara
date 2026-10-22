@@ -1,0 +1,16 @@
+
+comptime fn derive_one(comptime T: Type) -> Vec[Item] {
+    [ast.item("impl " + T.name() + " { fn one(self) -> i64 { 1 } }")]
+}
+comptime fn derive_two(comptime T: Type) -> Vec[Item] {
+    [ast.item("impl " + T.name() + " { fn two(self) -> i64 { 2 } }")]
+}
+
+#[derive(One, Two)]
+struct S { x: i64 }
+
+fn main() {
+    let s = S { x: 0 };
+    println(s.one());
+    println(s.two());
+}

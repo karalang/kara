@@ -1,0 +1,11 @@
+#[derive(Hash, Eq)]
+struct K6 { a: String, b: String }
+fn mk() -> K6 { return K6 { a: f"aaaaaaaaaaaa0", b: f"bbbbbbbbbbbb0" }; }
+fn main() {
+    let mut m: Map[K6, i64] = Map.new();
+    let k1 = mk();
+    let k2 = mk();
+    m.insert(k1, 1);
+    m.insert(k2, 2);
+    println(f"s:{m.len()}");
+}

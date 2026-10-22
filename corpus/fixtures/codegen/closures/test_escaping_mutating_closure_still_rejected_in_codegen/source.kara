@@ -1,0 +1,5 @@
+fn mk() -> Fn(i64) {
+let mut c: i64 = 0;
+|x: i64| { c = c + x; }
+}
+fn main() { let f = mk(); println(f"done"); }

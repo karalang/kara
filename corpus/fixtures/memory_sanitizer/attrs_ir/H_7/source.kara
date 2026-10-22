@@ -1,0 +1,5 @@
+fn nn() -> Option[String] { Option.None }
+fn f() -> i64 { let value: Option[String] = Some(payload()); let mut vv = value;
+   let n = match vv { Some(s) => slen(s), None => 0 };
+   vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

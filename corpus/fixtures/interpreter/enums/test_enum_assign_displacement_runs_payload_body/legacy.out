@@ -1,0 +1,11 @@
+a: full -> empty
+drop 5
+b: full -> full
+drop 6
+drop 7
+c: empty -> full (no old body)
+drop 8
+d: moved-out then reassign (no double)
+took 9
+drop 9
+end

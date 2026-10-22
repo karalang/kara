@@ -1,0 +1,8 @@
+struct R { id: i64, s: String }
+struct Inner { n: i64 }
+struct Outer { inner: Inner, m: i64 }
+struct S2 { r: R, s: R, k: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mk(i: i64) -> R { return R { id: i, s: payload() }; }
+fn main() { println(go()); }

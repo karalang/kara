@@ -1,0 +1,24 @@
+struct Pair { word: String, n: i64 }
+struct Deep { inner: Pair, tag: i64 }
+struct Outer { mid: Deep, label: String }
+fn main() {
+let k = 1;
+let mut ds: Vec[Deep] = Vec.new();
+ds.push(Deep { inner: Pair { word: f"a{k}", n: 7 }, tag: 8 });
+let bound = ds[0].inner.word;
+println(bound);
+println(ds[0].inner.word);
+let mut out: Vec[String] = Vec.new();
+out.push(ds[0].inner.word);
+println(out[0]);
+println(ds[0].inner.word);
+println(ds[0].inner.n);
+let mut xs: Vec[Outer] = Vec.new();
+xs.push(Outer {
+mid: Deep { inner: Pair { word: f"b{k}", n: 9 }, tag: 10 },
+label: f"L{k}",
+});
+let deep = xs[0].mid.inner.word;
+println(deep);
+println(xs[0].mid.inner.word);
+}

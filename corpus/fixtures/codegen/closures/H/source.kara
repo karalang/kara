@@ -1,0 +1,2 @@
+fn main() { let f = |r: R| { r.id };
+             println(f"{f(R { id: 41 })}"); println("end"); }

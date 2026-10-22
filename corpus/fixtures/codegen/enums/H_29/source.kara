@@ -1,0 +1,2 @@
+fn pass(e: E) -> E { e }
+fn main() { let y = pass(B); println("mid") }

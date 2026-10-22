@@ -1,0 +1,12 @@
+fn main() {
+let e = IoError.PermissionDenied;
+match e {
+NotFound => println("NotFound"),
+PermissionDenied => println("PermissionDenied"),
+_ => println("other"),
+}
+let a = Stdio.Inherit;
+let c = Stdio.Piped;
+match a { Inherit => println("a=Inherit"), Null => println("a=Null"), Piped => println("a=Piped") }
+match c { Inherit => println("c=Inherit"), Null => println("c=Null"), Piped => println("c=Piped") }
+}

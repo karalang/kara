@@ -1,0 +1,18 @@
+struct FakeEnv {}
+impl FakeEnv {
+fn var(self, name: ref String) -> Result[String, String] {
+if name == "FOO" { Ok("fake-foo") } else { Err("") }
+}
+}
+fn main() {
+with_provider[Env](FakeEnv {}, || {
+match Env.var("FOO") {
+Ok(v) => println(v),
+Err(_) => println("err"),
+}
+match Env.var("BAR") {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+});
+}

@@ -1,0 +1,1 @@
+fn main() { let v: Vec[u8] = vec![1u8, 2u8]; println(Base64.encode_url_safe(v)); }

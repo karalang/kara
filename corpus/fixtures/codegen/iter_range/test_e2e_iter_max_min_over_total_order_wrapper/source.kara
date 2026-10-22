@@ -1,0 +1,22 @@
+fn main() {
+let z: f64 = 0.0;
+let nan: f64 = z / z;
+let clean: Vec[f64] = [3.0, 1.0, 2.0];
+let cw: Vec[F64] = clean.iter().map(F64.from).collect();
+let cmax: F64 = cw.iter().max().unwrap();
+let cmin: F64 = cw.iter().min().unwrap();
+println(cmax.value);
+println(cmin.value);
+let first: Vec[f64] = [nan, 3.0, 1.0];
+let fw: Vec[F64] = first.iter().map(F64.from).collect();
+let fmax: F64 = fw.iter().max().unwrap();
+let fmin: F64 = fw.iter().min().unwrap();
+println(fmax.value);
+println(fmin.value);
+let mid: Vec[f64] = [3.0, nan, 1.0];
+let mw: Vec[F64] = mid.iter().map(F64.from).collect();
+let mmax: F64 = mw.iter().max().unwrap();
+let mmin: F64 = mw.iter().min().unwrap();
+println(mmax.value);
+println(mmin.value);
+}

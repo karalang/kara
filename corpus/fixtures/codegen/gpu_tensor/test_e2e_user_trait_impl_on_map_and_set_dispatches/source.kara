@@ -1,0 +1,13 @@
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Map[String, i64] { fn describe(ref self) -> String { return f"m"; } }
+impl Zero for Set[i64] { fn describe(ref self) -> String { return f"s"; } }
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert("a", 1);
+println(m.describe());
+println(m.len());
+let mut s: Set[i64] = Set.new();
+s.insert(7);
+println(s.describe());
+println(s.len());
+}

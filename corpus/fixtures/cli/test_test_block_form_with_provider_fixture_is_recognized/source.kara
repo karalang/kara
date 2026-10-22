@@ -1,0 +1,5 @@
+fn main() {}
+shared struct FakeClock { value: i64 }
+impl FakeClock {
+    fn now(self) -> i64 { self.value }
+}

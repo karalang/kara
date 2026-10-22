@@ -1,0 +1,12 @@
+fn pick(score: i64, a: ref String, b: ref String) -> ref String {
+match score {
+_ if score > 90 => a,
+_ => b,
+}
+}
+fn main() {
+let x = String.from("hi");
+let y = String.from("lo");
+let r = pick(95, x, y);
+println(r.len());
+}

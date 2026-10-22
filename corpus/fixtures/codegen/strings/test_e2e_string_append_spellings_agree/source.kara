@@ -1,0 +1,21 @@
+fn mk(n: i64) -> String { let mut t = String.new(); t.push_str("v"); t.push_str(n.to_string()); t }
+fn app_ref(s: mut ref String) { s = s + "R"; }
+fn main() {
+let mut s = "lit";
+s = s + "abc"; println(s);
+let t = "T";
+s = s + t; println(s);
+s = s + " " + t; println(s);
+s = s + mk(3i64); println(s);
+s += "P"; println(s);
+let mut d = "ab";
+d = d + d; println(d);
+let mut e = "ab";
+e = e + e[0..1]; println(e);
+let mut p = "P";
+p = "X" + p; println(p);
+let mut r = "r";
+app_ref(mut r); println(r);
+let mut z = String.new();
+z = z + ""; println(z.len());
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let mut m: Map[i64, (String, String)] = Map.new();
+    m.insert(1, (f"aaaaaaaa0", f"bbbbbbbb0"));
+    println("s:ok");
+}

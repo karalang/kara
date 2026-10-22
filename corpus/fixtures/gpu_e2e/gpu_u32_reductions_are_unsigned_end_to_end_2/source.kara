@@ -1,0 +1,12 @@
+fn main() {
+    let v: Vec[u32] = [4294967295, 1];
+    let m = gpu.max(v);
+    match m {
+        Some(x) => {
+            println(f"{x}");
+            let halved: u32 = x / 2;
+            println(f"{halved}")
+        },
+        None => println("empty"),
+    }
+}

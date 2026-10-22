@@ -1,0 +1,12 @@
+struct FakeEnv {}
+impl FakeEnv { fn args(self) -> Vec[String] { ["a", "b"] } }
+fn main() {
+with_provider[Env](FakeEnv {}, || {
+let a = Env.args();
+println(a.len());
+println(a[0]);
+println(a[1]);
+});
+let outer = Env.args();
+println(outer.len() > 0);
+}

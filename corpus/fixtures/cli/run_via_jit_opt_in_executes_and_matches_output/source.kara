@@ -1,0 +1,5 @@
+fn main() {
+    let mut n = 0i64;
+    for i in 1..5 { n = n + i; }
+    println(f"sum={n}");
+}

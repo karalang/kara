@@ -1,0 +1,12 @@
+effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+                 fn pure_count(self) -> i64 { self.count }
+             }
+             fn main() {
+                 let h = Hub { count: 5 };
+                 let _ = h.pure_count();
+                 h.run();
+             }

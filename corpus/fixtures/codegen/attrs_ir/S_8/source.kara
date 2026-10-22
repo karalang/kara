@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[S] = [S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }];
+    let o: Option[Vec[S]] = Some(v);
+    match o { Some(t) => { println(f"s:{t.len()}") } None => { println("n") } }
+}

@@ -1,0 +1,13 @@
+enum V { List(Vec[i64]) }
+fn add(v: mut ref V) {
+let mut touched = 0;
+match v { List(xs) => { xs.push(99); touched = 1; } }
+println(touched);
+}
+fn size(v: ref V) -> i64 { match v { List(xs) => xs.len() as i64 } }
+fn main() {
+let mut xs: Vec[i64] = [1, 2];
+let mut t = V.List(xs);
+add(mut t);
+println(size(t));
+}

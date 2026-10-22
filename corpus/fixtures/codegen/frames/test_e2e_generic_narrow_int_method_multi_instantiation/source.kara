@@ -1,0 +1,19 @@
+struct Box[T] { v: T }
+impl[T] Box[T] {
+fn new(v: T) -> Box[T] { Box { v: v } }
+fn set(mut ref self, v: T) { self.v = v; }
+fn get(ref self) -> T { self.v }
+}
+fn main() {
+let mut a: Box[i16] = Box.new(1);
+let mut b: Box[i32] = Box.new(1);
+let mut c: Box[i64] = Box.new(1);
+a.set(30000); b.set(2000000000); c.set(9000000000);
+println(a.get()); println(b.get()); println(c.get());
+let mut d: Box[bool] = Box.new(false);
+d.set(true);
+println(d.get());
+let mut s: Box[String] = Box.new(f"hello");
+s.set(f"world");
+println(s.get());
+}

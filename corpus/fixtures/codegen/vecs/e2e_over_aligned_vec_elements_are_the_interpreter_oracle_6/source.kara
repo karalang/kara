@@ -1,0 +1,7 @@
+fn main() {
+let a: Vector[f64, 4] = Vector[f64, 4](1.5, 2.5, 3.5, 4.5);
+let mut v: Vec[Vector[f64, 4]] = [];
+for i in 0..7 { v.push(a); }
+let g = ref v[6];
+println(g.reduce_sum());
+}

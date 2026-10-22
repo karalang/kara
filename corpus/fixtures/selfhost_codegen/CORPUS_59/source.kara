@@ -1,0 +1,2 @@
+fn wrap(s: String) -> String { "[" + s + "]" }
+fn main() { println(wrap(wrap("x"))) }

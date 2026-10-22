@@ -1,0 +1,39 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Rh { id: i64, tag: String }
+impl Drop for Rh { fn drop(mut ref self) { println(f"dRh{self.id}") } }
+struct Ch { r: R, s: String }
+struct Cv { r: R, v: Vec[i64] }
+struct Cm { r: R, m: Map[String, i64] }
+struct Cn { r: R, n: i64 }
+struct Hold { r: Rh, n: i64 }
+struct Wide { r: R, s: String, k: i64, j: i64 }
+enum Ech { A(Ch), B }
+enum Ecv { A(Cv), B }
+enum Ecm { A(Cm), B }
+enum Ecn { A(Cn), B }
+enum Eh { A(Hold), B }
+enum Ew { A(Wide), B }
+fn one(b: Ech) -> i64 { let mut o: Ch = Ch { r: R { id: 11 }, s: f"OUT" }; match b { Ech.A(w) => { o = w; } Ech.B => { } } return o.r.id }
+fn two(b: Ecn) -> i64 { let mut o: Cn = Cn { r: R { id: 21 }, n: 0 }; match b { Ecn.A(w) => { o = w; } Ecn.B => { } } return o.r.id }
+fn three(b: Ecv) -> i64 { let mut o: Cv = Cv { r: R { id: 31 }, v: Vec.new() }; match b { Ecv.A(w) => { o = w; } Ecv.B => { } } return o.r.id }
+fn four(b: Ecm) -> i64 { let mut o: Cm = Cm { r: R { id: 41 }, m: Map.new() }; match b { Ecm.A(w) => { o = w; } Ecm.B => { } } return o.r.id }
+fn five() -> i64 { let mut o: Ch = Ch { r: R { id: 51 }, s: f"OUT" }; let w: Ch = Ch { r: R { id: 52 }, s: f"PAY" }; o = w; return o.r.id }
+fn six() -> i64 { let mut o: Cn = Cn { r: R { id: 61 }, n: 0 }; let w: Cn = Cn { r: R { id: 62 }, n: 1 }; o = w; return o.r.id }
+fn seven(b: Ech) -> i64 { match b { Ech.A(w) => { return w.r.id } Ech.B => { } } return 0 }
+fn eight(b: Ech) -> i64 { return 7 }
+fn nine(b: Eh) -> i64 { let mut o: Hold = Hold { r: Rh { id: 91, tag: f"OUTOUT" }, n: 1 }; match b { Eh.A(w) => { o = w; } Eh.B => { } } return o.n }
+fn ten(b: Ew) -> i64 { let mut o: Wide = Wide { r: R { id: 101 }, s: f"OUT", k: 0, j: 0 }; match b { Ew.A(w) => { o = w; } Ew.B => { } } return o.r.id }
+fn main() {
+    println(f"one:{one(Ech.A(Ch { r: R { id: 12 }, s: f"PAY" }))}");
+    println(f"two:{two(Ecn.A(Cn { r: R { id: 22 }, n: 1 }))}");
+    println(f"three:{three(Ecv.A(Cv { r: R { id: 32 }, v: Vec.new() }))}");
+    println(f"four:{four(Ecm.A(Cm { r: R { id: 42 }, m: Map.new() }))}");
+    println(f"five:{five()}");
+    println(f"six:{six()}");
+    println(f"seven:{seven(Ech.A(Ch { r: R { id: 72 }, s: f"PAY" }))}");
+    println(f"eight:{eight(Ech.A(Ch { r: R { id: 82 }, s: f"PAY" }))}");
+    println(f"nine:{nine(Eh.A(Hold { r: Rh { id: 92, tag: f"PAYPAYPAYPAY" }, n: 9 }))}");
+    println(f"ten:{ten(Ew.A(Wide { r: R { id: 102 }, s: f"PAY", k: 1, j: 2 }))}");
+    println("end")
+}

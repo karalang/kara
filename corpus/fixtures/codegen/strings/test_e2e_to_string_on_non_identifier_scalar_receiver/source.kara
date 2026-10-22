@@ -1,0 +1,13 @@
+fn main() {
+println('x'.to_string().to_uppercase());
+println(7.to_string().len());
+println(true.to_string().to_uppercase());
+println((7 + 1).to_string().len());
+println(3.5.to_string().len());
+println('x'.to_string().to_string());
+println((-7).to_string().len());
+println((7 as u8).to_string().len());
+let n = 7;
+println(n.to_string().len());
+println("hi".to_string().to_uppercase());
+}

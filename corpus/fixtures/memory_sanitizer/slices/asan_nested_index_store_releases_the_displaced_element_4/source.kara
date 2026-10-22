@@ -1,0 +1,8 @@
+struct D { s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"dD{self.s.len()}") } }
+             fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[Array[D, 1]]] = [[[D { s: f"one-aaaaaaaaaaaa-{n}" }]]];
+                 d[0][0] = [D { s: f"replaced-bbbbbbbbbbbb-{n}" }];
+                 println("end");
+             }

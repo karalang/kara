@@ -1,0 +1,12 @@
+fn main() {
+let mut m: Map[i64, String] = Map.new();
+match m.try_insert(1_i64, "hello") {
+Ok(o) => match o { None => println("fresh"), Some(v) => println(v) },
+Err(_) => println("oom"),
+}
+match m.try_insert(1_i64, "world") {
+Ok(o) => match o { None => println("fresh"), Some(v) => println(v) },
+Err(_) => println("oom"),
+}
+match m.get(1_i64) { Some(v) => println(v), None => println("none") }
+}

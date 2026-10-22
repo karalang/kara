@@ -1,0 +1,8 @@
+fn mk(n: i64) -> Array[Array[String, 2], 2] {
+    return [[f"aaaaaaaa{n}", f"bbbbbbbb{n}"], [f"cccccccc{n}", f"dddddddd{n}"]];
+}
+fn main() {
+    let x: Array[Array[String, 2], 2] = mk(0);
+    let y: Array[Array[String, 2], 2] = mk(0);
+    println(f"s:{x == y}");
+}

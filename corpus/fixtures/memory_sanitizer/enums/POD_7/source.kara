@@ -1,0 +1,4 @@
+struct R2 { s: String, t: String, u: String }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn show(x: Option[R2]) { match x { Option.Some(r) => { println(f"a:{r.s}"); }, Option.None => {} } }
+fn main() { let mut i = 0; while i < 3 { show(Option.Some(mkr(i))); i = i + 1; } println("end") }

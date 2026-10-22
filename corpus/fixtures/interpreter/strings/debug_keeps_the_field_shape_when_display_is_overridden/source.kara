@@ -1,0 +1,11 @@
+enum Ue { A { n: i64 }, B }
+        impl Display for Ue {
+            fn to_string(ref self) -> String {
+                match self { A { n } => f"aye {n}", B => "bee" }
+            }
+        }
+        fn main() {
+            let v = [Ue.A { n: 7 }, Ue.B];
+            println(f"disp={v}");
+            dbg(v);
+        }

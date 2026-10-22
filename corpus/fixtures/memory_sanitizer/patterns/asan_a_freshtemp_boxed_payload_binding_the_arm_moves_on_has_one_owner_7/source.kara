@@ -1,0 +1,9 @@
+fn eat21(t: (String, String)) -> i64 { return t.0.len(); }
+fn main() {
+    let mut m: Map[i64, (String, String)] = Map.new();
+    m.insert(1, (f"aaaaaaaaaaaa1", f"bbbbbbbbbbbb1"));
+    match m.remove(1) {
+        Some(a) => { println(f"r:{eat21(a)}"); }
+        None => { println("r:none"); }
+    }
+}

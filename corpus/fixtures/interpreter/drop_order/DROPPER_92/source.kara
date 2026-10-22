@@ -1,0 +1,2 @@
+impl B6 { fn pick(ref self, r: R, k: bool) -> R { if k { return R { id: 98 }; } r } }
+fn main() { let t = B6 { n: 1 }; let a = R { id: 7 }; let x = t.pick(a, true); println(f"{x.id}"); let b = R { id: 5 }; let y = t.pick(b, false); println(f"{y.id}") }

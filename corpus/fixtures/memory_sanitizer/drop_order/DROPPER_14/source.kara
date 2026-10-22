@@ -1,0 +1,2 @@
+fn take() -> H { let h = H { id: 41, name: f"n{41}" }; return h; }
+fn main() { let x = take(); println(f"{x.id}"); }

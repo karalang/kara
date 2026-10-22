@@ -1,0 +1,6 @@
+fn main() {
+let x: f16 = 1.5f16;
+let y: f16 = 2.25f16;
+println(x + y);
+println(3.0f16 * 4.0f16);
+}

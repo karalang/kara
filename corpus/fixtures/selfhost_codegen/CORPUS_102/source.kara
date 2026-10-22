@@ -1,0 +1,2 @@
+fn is_vowel(b: u8) -> bool { b == 97 or b == 101 or b == 105 or b == 111 or b == 117 }
+fn main() { let s = "banana"; let mut n = 0; for b in s.bytes() { if is_vowel(b) { n = n + 1; } } println(n.to_string()) }

@@ -1,0 +1,1 @@
+fn main() { let v = [E.B]; println(f"{v.len()}"); }

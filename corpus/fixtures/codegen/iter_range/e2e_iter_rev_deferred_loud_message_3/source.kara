@@ -1,0 +1,1 @@
+fn main() { let v = vec![1,2,3,4]; let w: Vec[i64] = v.iter().take(2).rev().collect(); println(w.get(0)); }

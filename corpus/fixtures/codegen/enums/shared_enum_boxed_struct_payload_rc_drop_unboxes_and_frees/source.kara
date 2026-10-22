@@ -1,0 +1,13 @@
+shared enum Expr { Str(String), Blk(Block), Error }
+struct Block { tail: Option[Expr] }
+fn render_block(b: Block) -> String {
+    let Block { tail } = b;
+    match tail { Some(e) => render_expr(e), None => "n".to_string() }
+}
+fn render_expr(e: Expr) -> String {
+    match e { Str(s) => s, Blk(b) => render_block(b), Error => "e".to_string() }
+}
+fn main() {
+    let blk = Block { tail: Some(Expr.Str("payload-string".to_string())) };
+    println(render_expr(Expr.Blk(blk)));
+}

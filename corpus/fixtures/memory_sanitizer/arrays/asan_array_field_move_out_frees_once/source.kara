@@ -1,0 +1,33 @@
+struct R { id: i64, tag: String }
+struct Ha { a: Array[R, 2] }
+struct Hs { a: Array[String, 2] }
+struct Hn { a: Array[i64, 2] }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag{n}" }; }
+fn structElem() {
+    let h = Ha { a: [mk(2), mk(3)] };
+    let x = h.a;
+    let e = ref x[0];
+    println(f"se{e.id}:{e.tag}")
+}
+fn strElem() {
+    let h = Hs { a: [f"one", f"two"] };
+    let x = h.a;
+    println(f"st{x[0]}:{x[1]}")
+}
+fn scalarElem() {
+    let h = Hn { a: [7, 9] };
+    let x = h.a;
+    println(f"sc{x[0]}:{x[1]}")
+}
+fn annotated() {
+    let h = Ha { a: [mk(4), mk(5)] };
+    let x: Array[R, 2] = h.a;
+    println(f"an{x[1].id}:{x[1].tag}")
+}
+fn main() {
+    structElem();
+    strElem();
+    scalarElem();
+    annotated();
+    println("end")
+}

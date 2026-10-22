@@ -1,0 +1,49 @@
+enum Tok { Word(String), Num(i64) }
+struct MHolder { m: Map[i64, i64] }
+struct SHolder { s: Set[i64] }
+struct MInner { m: Map[i64, i64] }
+struct MOuter { inner: MInner }
+struct GMInner[K, V] { m: Map[K, V] }
+struct GMOuter[K, V] { inner: GMInner[K, V] }
+struct VecMap { v: Vec[i64], m: Map[i64, i64] }
+struct VecMapOuter { inner: VecMap }
+struct EInner { t: Tok }
+struct EOuter { inner: EInner }
+fn main() {
+let mut mp: Map[i64, i64] = Map.new();
+mp.insert(1, 10); mp.insert(2, 20);
+let f: MHolder = MHolder { m: mp };
+let g: MHolder = f;
+println(g.m.len());
+let mut mp2: Map[i64, i64] = Map.new();
+mp2.insert(1, 1); mp2.insert(2, 2); mp2.insert(3, 3);
+let o: MOuter = MOuter { inner: MInner { m: mp2 } };
+let bound: MInner = o.inner;
+println(bound.m.len());
+let mut st: Set[i64] = Set.new();
+st.insert(7); st.insert(8);
+let sf: SHolder = SHolder { s: st };
+let sg: SHolder = sf;
+println(sg.s.len());
+let mut gm: Map[i64, i64] = Map.new();
+gm.insert(5, 50); gm.insert(6, 60); gm.insert(7, 70); gm.insert(8, 80);
+let go: GMOuter[i64, i64] = GMOuter { inner: GMInner { m: gm } };
+let gb: GMInner[i64, i64] = go.inner;
+println(gb.m.len());
+let mut vv: Vec[i64] = Vec.new();
+vv.push(1); vv.push(2); vv.push(3);
+let mut vm: Map[i64, i64] = Map.new();
+vm.insert(9, 90);
+let vmo: VecMapOuter = VecMapOuter { inner: VecMap { v: vv, m: vm } };
+let vb: VecMap = vmo.inner;
+println(vb.v.len());
+println(vb.m.len());
+let mut b: String = String.new();
+b.push_str("padded well past inline width to force heap alloc here");
+let eo: EOuter = EOuter { inner: EInner { t: Tok.Word(b) } };
+let eb: EInner = eo.inner;
+match eb.t {
+Tok.Word(w) => println(w.len()),
+Tok.Num(n) => println(n),
+}
+}

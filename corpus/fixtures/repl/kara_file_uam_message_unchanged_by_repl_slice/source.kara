@@ -1,0 +1,6 @@
+fn consume(s: String) {}
+fn main() {
+let s = "hi";
+consume(s);
+consume(s);
+}

@@ -1,0 +1,8 @@
+let mut LHS: Map[i64, i64] = Map.new();
+let mut RHS: Map[i64, i64] = Map.new();
+fn main() {
+LHS.insert(1, 100);
+RHS.insert(1, 200);
+println(LHS.get(1).unwrap_or(0));
+println(RHS.get(1).unwrap_or(0));
+}

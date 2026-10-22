@@ -1,0 +1,2 @@
+#[repr(C)] union FloatBits { f: f32, bits: u32 }
+fn main() { println(size_of[FloatBits]()); }

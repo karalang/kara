@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[i64, String] = Err(f"boom");
+println(r.map(|x| x + 1i64).unwrap_or(9i64));
+}

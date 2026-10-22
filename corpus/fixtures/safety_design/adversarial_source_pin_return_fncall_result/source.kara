@@ -1,0 +1,6 @@
+fn make() -> String { String.from("x") }
+fn bad() -> ref String { make() }
+fn main() {
+let r = bad();
+println(r.len());
+}

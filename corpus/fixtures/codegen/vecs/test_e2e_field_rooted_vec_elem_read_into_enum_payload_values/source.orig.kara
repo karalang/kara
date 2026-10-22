@@ -1,0 +1,28 @@
+enum Cmd { Insert(i64, String), Delete(i64, String) }
+struct Doc { lines: Vec[String] }
+fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+match c {
+Insert(at, text) => {
+d.lines.insert(at as usize, text);
+Cmd.Delete(at, d.lines[at as usize].clone())
+}
+Delete(at, _text) => {
+let gone = d.lines[at as usize].clone();
+d.lines.remove(at as usize);
+Cmd.Insert(at, gone)
+}
+}
+}
+fn main() {
+let mut l: Vec[String] = Vec.new();
+let mut a = String.new(); a.push_str("alpha");
+let mut b = String.new(); b.push_str("beta");
+l.push(a); l.push(b);
+let mut d = Doc { lines: l };
+let inv = apply(mut d, Cmd.Delete(1, "beta"));
+match inv { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }
+let i2 = apply(mut d, inv);
+match i2 { Insert(i, t) => { println(t); } Delete(i, t) => { println(t); } }
+println(d.lines.len());
+println(d.lines[0]);
+}

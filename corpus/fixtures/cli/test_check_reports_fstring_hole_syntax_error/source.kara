@@ -1,0 +1,5 @@
+fn main() {
+    let n = 3;
+    println(f"good={n}");
+    println(f"typo={n.}");
+}

@@ -1,0 +1,11 @@
+enum E { A(Array[String, 2], i64), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 8i64 {
+        let a: Array[String, 2] = [f"one-aaaaaaaaaaaaaaaa-{i}", f"two-bbbbbbbbbbbbbbbb-{i}"];
+        let g: E = A(a, 7i64);
+        println(f"t");
+        i = i + 1i64;
+    }
+    println(f"end");
+}

@@ -1,0 +1,7 @@
+#[target(wasm_browser)]
+pub fn gated(a: i32) -> i32 {
+    let s: String = a;
+    return s;
+}
+
+fn main() {}

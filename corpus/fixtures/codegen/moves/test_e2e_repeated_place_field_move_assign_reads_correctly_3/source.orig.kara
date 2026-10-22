@@ -1,0 +1,17 @@
+struct S { s: String }
+fn main() {
+let mut box_: Vec[S] = Vec.new();
+let mut i: i64 = 0;
+while i < 3 {
+let mut nm = String.new();
+nm.push_str("elem");
+box_.push(S { s: nm });
+i = i + 1;
+}
+let mut cur = String.new();
+cur = box_[0].s;
+cur = box_[1].s;
+cur = box_[1].s;
+cur = box_[2].s;
+println(cur);
+}

@@ -1,0 +1,6 @@
+fn main() {
+    let mut v = Vec[i64].new(); v.push(3); v.push(4); println(v.len());
+    let mut m = Map[String, i64].new(); m.insert("a", 1); println(m.len());
+    let mut s = Set[i64].new(); let _ = s.insert(7); println(s.len());
+    let mut w = Vec[i64].with_capacity(4); w.push(9); println(w.len());
+}

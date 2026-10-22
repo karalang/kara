@@ -1,0 +1,12 @@
+struct H { tag: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dW{self.tag.len()}"); } }
+enum Bx { Full(H), Empty(H) }
+impl Drop for Bx { fn drop(mut ref self) { println("dB"); } }
+fn mk(n: i64) -> Bx {
+if n < 1 { return Bx.Full(H { tag: "x" }); }
+return Bx.Empty(H { tag: "1234567" });
+}
+fn main() {
+    mk(1);
+    println("mid");
+}

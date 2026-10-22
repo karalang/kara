@@ -1,0 +1,17 @@
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+fn once() -> f32 {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },
+                             Body { mass: 3.0, speed: 4.0 }];
+    let sim = Sim { grid: gpu.upload(bodies), step: 0 };
+    gpu.sum(sim.grid.mass)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut bad: i64 = 0;
+    while i < 300 {
+        if once() != 4.0 { bad = bad + 1; }
+        i = i + 1;
+    }
+    println(f"{bad}");
+}

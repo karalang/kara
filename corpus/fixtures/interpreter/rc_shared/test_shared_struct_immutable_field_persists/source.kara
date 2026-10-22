@@ -1,0 +1,8 @@
+shared struct Node { id: i64, mut value: i64 }
+fn main() {
+let n = Node { id: 7, value: 0 };
+let m = n;
+m.value = 99;
+println(n.id);
+println(m.value);
+}

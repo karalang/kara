@@ -1,0 +1,1 @@
+fn main() { let v = match 2 { 1 => 10, 2 => 20, _ => 30 }; println(v.to_string()); let w = match 9 { 1 => 10, 2 => 20, _ => 30 }; println(w.to_string()) }

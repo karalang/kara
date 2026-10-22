@@ -1,0 +1,1 @@
+fn main() { println((256.0f64).wrapping_to_u8()); }

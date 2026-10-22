@@ -1,0 +1,6 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("k", 7_i64);
+println(m.get_or("k", 0_i64));
+println(m.get_or("missing", 99_i64));
+}

@@ -1,0 +1,22 @@
+shared enum Expr { Lit(LitNode), Call(CallNode) }
+struct LitNode { name: String, val: i64 }
+struct Arg { label: Option[String], value: Expr }
+struct CallNode { callee: Expr, args: Vec[Arg] }
+fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn sum(e: Expr) -> i64 {
+match e {
+Lit(n) => n.val,
+Call(c) => {
+let mut acc = sum(c.callee);
+for a in c.args { acc = acc + sum(a.value); }
+acc
+}
+}
+}
+fn main() {
+let mut args: Vec[Arg] = Vec.new();
+args.push(Arg { label: Some("label_one".to_string()), value: lit("v1".to_string(), 10) });
+args.push(Arg { label: None, value: lit("v2".to_string(), 20) });
+let call = Expr.Call(CallNode { callee: lit("callee".to_string(), 100), args: args });
+println(sum(call).to_string());
+}

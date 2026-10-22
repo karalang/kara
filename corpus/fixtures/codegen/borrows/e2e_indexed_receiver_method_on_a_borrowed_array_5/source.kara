@@ -1,0 +1,2 @@
+fn f(a: ref Vec[String]) -> i64 { return a[0].len(); }
+fn main() { let a: Vec[String] = ["abcdefghij", "abcdefghij"]; println(f"{f(a)}"); }

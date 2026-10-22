@@ -1,0 +1,17 @@
+#[derive(Hash, Eq)]
+struct K6c { a: String, b: String }
+fn mk() -> K6c { return K6c { a: f"aaaaaaaaaaaa0", b: f"bbbbbbbbbbbb0" }; }
+fn main() {
+    let mut m: Map[K6c, i64] = Map.new();
+    let k1 = mk();
+    let k2 = mk();
+    match m.try_insert(k1, 1) {
+        Ok(o) => { println("s:ok"); }
+        Err(e) => { println("s:err"); }
+    }
+    match m.try_insert(k2, 2) {
+        Ok(o) => { println("t:ok"); }
+        Err(e) => { println("t:err"); }
+    }
+    println(f"u:{m.len()}");
+}

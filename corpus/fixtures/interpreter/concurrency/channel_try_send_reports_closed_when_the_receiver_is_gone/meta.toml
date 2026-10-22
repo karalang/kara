@@ -1,0 +1,17 @@
+source = "tests/interpreter/concurrency.rs::channel_try_send_reports_closed_when_the_receiver_is_gone"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:par", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "3cd5f426"
+model_rev = "583cfb0d"
+model_src = "3cd5f426"

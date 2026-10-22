@@ -1,0 +1,6 @@
+shared struct Node { mut left: i64, mut right: i64 }
+fn main() {
+let n = Node { left: 1, right: 2 };
+n.left = 10;
+println(n.left + n.right);
+}

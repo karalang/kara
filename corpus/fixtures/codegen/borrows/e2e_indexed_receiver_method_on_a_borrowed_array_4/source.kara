@@ -1,0 +1,2 @@
+fn f(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn main() { let a: Array[String, 2] = ["abcdefghij", "abcdefghij"]; println(f"{f(a)}"); }

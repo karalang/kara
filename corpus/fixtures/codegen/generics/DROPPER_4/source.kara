@@ -1,0 +1,2 @@
+impl G1 { fn gm_pick[T](ref self, r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99, tag: f"z" } } } }
+fn main() { let g = G1 { n: 1 }; let a = g.gm_pick(R { id: 41, tag: f"a" }, true, 5); println(f"{a.id}"); }

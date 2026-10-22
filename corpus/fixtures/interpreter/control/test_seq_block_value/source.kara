@@ -1,0 +1,1 @@
+fn main() { let result = seq { let x = 42; x }; println(result); }

@@ -1,0 +1,12 @@
+fn main() {
+let mut cur = Some(3);
+let mut guard = 0;
+loop {
+if guard >= 9 { println("CYCLE"); break; }
+match cur {
+None => { println("end"); break; }
+Some(n) => { println(n); if n <= 1 { cur = None; } else { cur = Some(n - 1); } }
+}
+guard = guard + 1;
+}
+}

@@ -1,0 +1,4 @@
+fn main() {
+println(i64.MAX.to_string());
+println(i64.MIN.to_string());
+}

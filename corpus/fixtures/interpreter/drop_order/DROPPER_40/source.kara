@@ -1,0 +1,2 @@
+fn take(r: R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 99 } } } }
+fn main() { let x = take(R { id: 41 }, 2); println(f"{x.id}") }

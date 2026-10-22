@@ -1,0 +1,10 @@
+struct Parser { source: ref String, position: i64 }
+fn make_parser(s: ref String) -> Parser {
+Parser { source: s, position: 0 }
+}
+fn shout(x: ref String) { println(x); }
+fn main() {
+let s = String.from("input data");
+let p = make_parser(s);
+shout(p.source);
+}

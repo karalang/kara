@@ -1,0 +1,12 @@
+struct Pair { word: String, n: i64 }
+fn main() {
+    let k = 1;
+    let mut ps: Vec[Pair] = Vec.new();
+    ps.push(Pair { word: f"alpha{k}", n: 1 });
+    ps.push(Pair { word: f"beta{k}", n: 2 });
+    ps.swap(0, 1);
+    println(ps[0].word + " " + ps[1].word);
+    let c = Pair { word: f"gamma{k}", n: 3 };
+    ps[0] = c;
+    println(ps[0].word + " " + ps[1].word);
+}

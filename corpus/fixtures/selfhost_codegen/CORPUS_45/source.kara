@@ -1,0 +1,1 @@
+fn main() { let mut t = "a"; t = "b"; println(t) }

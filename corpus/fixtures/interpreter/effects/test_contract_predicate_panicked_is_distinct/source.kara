@@ -1,0 +1,2 @@
+fn at(v: Vec[i64], i: i64) -> i64 requires v[i] >= 0 { 0 }
+fn main() { let v: Vec[i64] = Vec[1, 2, 3]; let _ = at(v, 99); }

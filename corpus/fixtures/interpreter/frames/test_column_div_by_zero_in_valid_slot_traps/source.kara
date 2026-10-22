@@ -1,0 +1,5 @@
+fn main() {
+let a: Column[i64] = Column.from_vec([10i64, 20i64]);
+let b: Column[i64] = Column.from_vec([2i64, 0i64]);
+let _ = a / b;
+}

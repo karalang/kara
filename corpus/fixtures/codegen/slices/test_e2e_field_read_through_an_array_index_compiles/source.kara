@@ -1,0 +1,23 @@
+struct Plain { a: u8, n: i64 }
+struct Inner { q: i64 }
+struct Outer { i: Inner }
+struct HolderA { arr: Array[Plain, 2] }
+shared struct Sh { v: i64 }
+fn main() {
+let m = Plain { a: 200, n: 7 };
+let m2 = Plain { a: 5, n: 9 };
+let arr: Array[Plain, 2] = [m, m2];
+println(f"{arr[0].a} {arr[0].n}");
+let i = 1;
+println(f"{arr[i].a} {arr[i].n}");
+let o = Outer { i: Inner { q: 5 } };
+let oa: Array[Outer, 1] = [o];
+println(f"{oa[0].i.q}");
+let m3 = Plain { a: 9, n: 6 };
+let m4 = Plain { a: 4, n: 2 };
+let h = HolderA { arr: [m3, m4] };
+println(f"{h.arr[0].a} {h.arr[1].n}");
+let s = Sh { v: 42 };
+let sa: Array[Sh, 1] = [s];
+println(f"{sa[0].v}");
+}

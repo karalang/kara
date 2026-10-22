@@ -1,0 +1,10 @@
+fn main() {
+let e: (String, i64) = ("hello", 7);
+println(e.0.bytes().len());
+let mut m: Map[String, i64] = Map.new();
+let _ = m.insert("ab", 1);
+let _ = m.insert("cde", 2);
+let mut total: i64 = 0;
+for kv in m.entries() { total = total + kv.0.bytes().len(); }
+println(total);
+}

@@ -1,0 +1,8 @@
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+fn main() {
+let mut t: Vec[(i64, i64)] = Vec.new();
+t.push((1, 10)); t.push((2, 20));
+swap01(mut t);
+let z0 = t[0]; let z1 = t[1];
+println(f"{z0.0}:{z0.1} {z1.0}:{z1.1}");
+}

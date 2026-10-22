@@ -1,0 +1,2 @@
+fn give(x: Option[Rp]) -> Rp { match x { Some(r) => { return r } None => { return Rp { id: 0 } } } }
+fn main() { let k = give(Some(Rp { id: 1 })); println(f"k:{k.id}"); println("end") }

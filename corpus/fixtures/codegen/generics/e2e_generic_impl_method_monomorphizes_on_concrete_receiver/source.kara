@@ -1,0 +1,16 @@
+struct One { v: i64 }
+impl One {
+    fn wrap[A](ref self, x: A) -> A { x }
+    fn apply[A](ref self, init: A, f: Fn(A, i64) -> A) -> A { f(init, self.v) }
+}
+trait Wrapper { fn dup[A](ref self, x: A) -> A; }
+struct C { v: i64 }
+impl Wrapper for C { fn dup[A](ref self, x: A) -> A { x } }
+fn main() {
+    let o = One { v: 40 };
+    println(f"{o.wrap(7)}");
+    println(f"{o.wrap(2.5)}");
+    println(f"{o.apply(2, |a, x| a + x)}");
+    let c = C { v: 0 };
+    println(f"{c.dup(99)}");
+}

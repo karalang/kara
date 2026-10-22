@@ -1,0 +1,21 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(3); v.push(1); v.push(2);
+let s: Slice[i64] = v.as_slice();
+println(s.contains(2));
+println(s.contains(9));
+match s.first() { Some(x) => { println(x); } None => { println(-1); } }
+match s.last() { Some(x) => { println(x); } None => { println(-1); } }
+match s.get(1i64) { Some(x) => { println(x); } None => { println(-1); } }
+match s.get(9i64) { Some(x) => { println(x); } None => { println(-1); } }
+let mut w: Vec[String] = Vec.new();
+let mut a = String.new(); a.push_str("alpha"); w.push(a);
+let mut b = String.new(); b.push_str("beta"); w.push(b);
+let t: Slice[String] = w.as_slice();
+match t.first() { Some(x) => { println(x); } None => { println("none"); } }
+match t.get(1i64) { Some(x) => { println(x); } None => { println("none"); } }
+let mut cs = String.new(); cs.push_str("beta");
+println(t.contains(cs));
+println(v.len());
+println(w.len());
+}

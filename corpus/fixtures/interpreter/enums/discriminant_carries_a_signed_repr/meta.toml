@@ -1,0 +1,17 @@
+source = "tests/interpreter/enums.rs::discriminant_carries_a_signed_repr"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "04a0b86b"
+model_rev = "583cfb0d"
+model_src = "04a0b86b"

@@ -1,0 +1,17 @@
+shared enum Method { Get, Post, Delete }
+enum Request { Simple(Method, String), WithBody(Method, String) }
+fn method_name(m: ref Method) -> String {
+match m { Get => "GET", Post => "POST", Delete => "DELETE" }
+}
+fn handle(r: ref Request) -> String {
+match r {
+Simple(m, _path) => method_name(m),
+WithBody(_m, _path) => "withbody",
+}
+}
+fn main() {
+let mut reqs: Vec[Request] = Vec.new();
+reqs.push(Request.Simple(Method.Post, "/"));
+reqs.push(Request.WithBody(Method.Get, "/x"));
+for i in 0..reqs.len() { println(handle(reqs[i])); }
+}

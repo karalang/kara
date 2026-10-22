@@ -1,0 +1,16 @@
+struct R { id: i64, t: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, t: f"tag{n}" } }
+impl R {
+    fn peek(ref self) -> i64 { return self.id * 2 }
+    fn take(self) -> i64 { return self.id * 3 }
+}
+fn main() {
+    println(f"ref[{mk(1).peek()}]");
+    println(f"own[{mk(2).take()}]");
+    let v = mk(3).take();
+    println(f"stmt[{v}]");
+    let two = mk(4).take() + mk(5).take();
+    println(f"two[{two}]");
+    println("end");
+}

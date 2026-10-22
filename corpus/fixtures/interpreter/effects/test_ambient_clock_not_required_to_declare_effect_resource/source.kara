@@ -1,0 +1,4 @@
+fn main() {
+let t = Clock.now();
+if t > 0 { println("ok"); }
+}

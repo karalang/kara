@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[i64] = Vec.with_capacity(2305843009213693953);
+println(v.len());
+}

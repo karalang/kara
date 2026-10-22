@@ -1,0 +1,2 @@
+import helper.bad;
+fn main() { let _ = bad(); }

@@ -1,0 +1,5 @@
+fn main() {
+    let n: i64 = 100;
+    let w: i32 = 3;
+    println(f"{n + w}");
+}

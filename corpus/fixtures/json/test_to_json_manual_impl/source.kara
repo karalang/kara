@@ -1,0 +1,16 @@
+struct Point { x: i32, y: i32 }
+
+impl ToJson for Point {
+fn to_json(self) -> Json {
+let pairs = [
+("x", Json.Number(self.x as f64)),
+("y", Json.Number(self.y as f64)),
+];
+Json.Object(pairs)
+}
+}
+
+fn main() {
+let p = Point { x: 1, y: 2 };
+println(p.to_json().stringify());
+}

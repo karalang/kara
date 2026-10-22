@@ -1,0 +1,2 @@
+import providers.canned_value;
+fn main() { println(canned_value()); }

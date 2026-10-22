@@ -1,0 +1,12 @@
+a: ref-method fresh struct receiver
+drop 1 r1
+x=1
+b: owned-self consumed receiver
+drop 2 r2
+y=102
+c: bare ref-method statement
+drop 3 r3
+d: passthrough result owned by binding
+m=4
+drop 4 r4
+end

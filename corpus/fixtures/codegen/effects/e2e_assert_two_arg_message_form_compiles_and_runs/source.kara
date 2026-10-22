@@ -1,0 +1,5 @@
+fn main() {
+assert(1 == 1, "never fires");
+assert(2 > 1);
+println(42);
+}

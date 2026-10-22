@@ -1,0 +1,1 @@
+fn main() { let p = (Some(5), 7); println(f"ok{p.1}"); println("done") }

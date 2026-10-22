@@ -1,0 +1,10 @@
+fn down(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let sub = down(n - 1);
+    return sub + n;
+}
+fn main() {
+    println(f"{down(50000000i64)}");
+}

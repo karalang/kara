@@ -1,0 +1,7 @@
+fn main() {
+let xs = [3.0_f64, 1.0_f64, 2.0_f64];
+match Stats.min(xs) {
+Some(v) => println(v),
+None => println("none"),
+}
+}

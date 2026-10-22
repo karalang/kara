@@ -1,0 +1,17 @@
+source = "tests/interpreter/option_result.rs::test_result_err_question_mark_propagates"
+dedup_of = []
+expect = "error:E0238"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "de661c41"
+model_rev = "583cfb0d"
+model_src = "de661c41"

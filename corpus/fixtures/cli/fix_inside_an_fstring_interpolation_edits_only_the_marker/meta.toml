@@ -1,0 +1,17 @@
+source = "tests/cli.rs::fix_inside_an_fstring_interpolation_edits_only_the_marker"
+dedup_of = []
+expect = "error:E0219"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "3a858be7"
+model_rev = "583cfb0d"
+model_src = "3a858be7"

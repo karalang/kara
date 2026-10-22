@@ -1,0 +1,6 @@
+fn main() {
+let x = 1;
+let y = 'lbl: { let x = 50; break 'lbl x; };
+println(y.to_string());
+println(x.to_string());
+}

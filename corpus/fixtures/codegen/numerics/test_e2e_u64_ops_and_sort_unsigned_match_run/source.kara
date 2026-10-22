@@ -1,0 +1,8 @@
+fn main() {
+    let hi: u64 = 1u64 << 63;
+    println(f"{hi}");
+    println(f"{hi / 2u64}");
+    let mut xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62, 0u64];
+    xs.sort();
+    println(f"{xs[0]},{xs[3]}");
+}

@@ -1,0 +1,15 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m["alice"] = 1_i64;
+m["bob"] = 2_i64;
+m["alice"] = 100_i64;
+println(m["alice"]);
+println(m["bob"]);
+let mut mi: Map[i64, i64] = Map.new();
+mi[5_i64] = 50_i64;
+println(mi[5_i64]);
+let mut sm: SortedMap[String, i64] = SortedMap.new();
+sm["k"] = 7_i64;
+sm["k"] = 8_i64;
+println(sm["k"]);
+}

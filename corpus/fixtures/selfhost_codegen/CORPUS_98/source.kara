@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[String] = Vec.new(); v.push("keep"); let s = v[0].clone(); println(s + "-copy"); println(v[0]) }

@@ -1,0 +1,17 @@
+source = "tests/interpreter/control.rs::test_providers_block_binds_each_resource"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:provider", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0232"
+classified_with = "79705a229"
+extracted_src = "b74bf0af"
+model_rev = "583cfb0d"
+model_src = "b74bf0af"

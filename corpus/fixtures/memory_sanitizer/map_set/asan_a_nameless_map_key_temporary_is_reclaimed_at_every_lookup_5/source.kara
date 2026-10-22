@@ -1,0 +1,12 @@
+fn mka20(n: i64) -> Array[String, 2] { return Array[f"aaaaaaaaaaaa{n}", f"bbbbbbbbbbbb{n}"]; }
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 { m.insert(mka20(i), i); i = i + 1; }
+    let mut j: i64 = 0;
+    while j < 2 {
+        match m.get(mka20(j)) { Some(v) => { println(f"g:{v}"); } None => { println("miss"); } }
+        j = j + 1;
+    }
+    println(f"len:{m.len()}");
+}

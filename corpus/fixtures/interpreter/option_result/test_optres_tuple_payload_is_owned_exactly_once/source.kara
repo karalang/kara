@@ -1,0 +1,162 @@
+struct H { a: Vec[i64], b: i64 }
+fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn sinkt(t: (Vec[i64], i64)) -> i64 { return t.0[0i64]; }
+fn main() {
+    let base: i64 = 1i64;
+    let mut acc = 0i64;
+    let mut i = base;
+    while i < base + 100i64 {
+        // 1. Result[tuple] bound and READ, never moved — the leg the ungated
+        //    arm suppression broke.
+        let r1: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        match r1 {
+            Result.Ok(x) => { acc = acc + x.0[0i64] + x.1; }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // 2. Result[tuple] never matched at all — the let-site walk alone.
+        let r2: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        acc = acc + 1i64;
+        // 3. GUARDED arm — the `x.1 == 5` operator desugar.
+        let r3: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        match r3 {
+            Result.Ok(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }
+            _ => { acc = acc - 1i64; }
+        }
+        // 4. String element, read through its BYTES.
+        let r4: Result[(String, i64), i64] = Result.Ok((mks(i), 5i64));
+        match r4 {
+            Result.Ok(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // 5. Vec[String] element.
+        let mut vs: Vec[String] = Vec.new();
+        vs.push(mks(i));
+        vs.push(mks(i + 1i64));
+        let r5: Result[(Vec[String], i64), i64] = Result.Ok((vs, 5i64));
+        match r5 {
+            Result.Ok(x) => { acc = acc + x.0.len() + x.0[0i64].len(); }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // 6. Heap on the Err half.
+        let r6: Result[i64, (Vec[i64], i64)] = Result.Err((mkv(i), 5i64));
+        match r6 {
+            Result.Ok(v) => { acc = acc + v; }
+            Result.Err(e) => { acc = acc + e.0[0i64]; }
+        }
+        // 7. if-let, borrow-only and moving.
+        let r7: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        if let Result.Ok(x) = r7 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }
+        let r8: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        let mut g: Vec[i64] = Vec.new();
+        if let Result.Ok(x) = r8 { g = x.0; } else { acc = acc - 1i64; }
+        acc = acc + g[0i64] + g.len();
+        // 8. Moved out of the match into an owned-param callee.
+        let r9: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        match r9 {
+            Result.Ok(x) => { acc = acc + sinkt(x); }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // 9. Element MOVED out through the match value.
+        let r10: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        let g2: Vec[i64] = match r10 { Result.Ok(x) => x.0, Result.Err(e) => Vec.new() };
+        acc = acc + g2[1i64];
+        // --- CONTROLS: shapes that must NOT gain a second owner ---
+        // C1. Tuple PATTERN destructure — the elements own themselves.
+        let r11: Result[(Vec[i64], i64), i64] = Result.Ok((mkv(i), 5i64));
+        match r11 {
+            Result.Ok((v, k)) => { acc = acc + v[0i64] + k; }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // C2. STRUCT payload — must keep its unconditional arm suppression.
+        let r12: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });
+        match r12 {
+            Result.Ok(x) => { acc = acc + x.a[0i64] + x.b; }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        let r13: Result[H, i64] = Result.Ok(H { a: mkv(i), b: 5i64 });
+        match r13 {
+            Result.Ok(x) if x.b == 5i64 => { acc = acc + x.a[0i64]; }
+            _ => { acc = acc - 1i64; }
+        }
+        // C4. All-scalar tuple payload — must get no drop at all.
+        let r15: Result[(i64, i64), i64] = Result.Ok((i, 5i64));
+        match r15 {
+            Result.Ok(x) => { acc = acc + x.0 + x.1; }
+            Result.Err(e) => { acc = acc + e; }
+        }
+        // --- OPTION carrier (B-2026-08-05-3's own shape; second attempt) ---
+        // O1. Bound and READ, never moved.
+        let o1: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        match o1 {
+            Option.Some(x) => { acc = acc + x.0[0i64] + x.1; }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // O2. NEVER matched at all — the let-site walk alone. This is what
+        //     shows the bug is scope-exit, not arm binding.
+        let o2: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        acc = acc + 1i64;
+        // O3. GUARDED arm.
+        let o3: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        match o3 {
+            Option.Some(x) if x.1 == 5i64 => { acc = acc + x.0[0i64]; }
+            _ => { acc = acc - 1i64; }
+        }
+        // O4. String element, read through its BYTES.
+        let o4: Option[(String, i64)] = Option.Some((mks(i), 5i64));
+        match o4 {
+            Option.Some(x) => { if x.0.contains(dig(i)) { acc = acc + x.0.len(); } }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // O5. Vec[String] element.
+        let mut ovs: Vec[String] = Vec.new();
+        ovs.push(mks(i));
+        ovs.push(mks(i + 1i64));
+        let o5: Option[(Vec[String], i64)] = Option.Some((ovs, 5i64));
+        match o5 {
+            Option.Some(x) => { acc = acc + x.0.len() + x.0[0i64].len(); }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // O6. if-let, borrow-only and moving.
+        let o6: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        if let Option.Some(x) = o6 { acc = acc + x.0[0i64]; } else { acc = acc - 1i64; }
+        let o7: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        let mut og: Vec[i64] = Vec.new();
+        if let Option.Some(x) = o7 { og = x.0; } else { acc = acc - 1i64; }
+        acc = acc + og[0i64] + og.len();
+        // O8. Moved into an owned-param callee.
+        let o8: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        match o8 {
+            Option.Some(x) => { acc = acc + sinkt(x); }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // --- The two shapes that DEFEATED the first attempt at this leg. ---
+        // O9. Element MOVED out through the match value. The arm takes the
+        //     box's interior, so the box drop must retract to box-only.
+        let o9: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        let og2: Vec[i64] = match o9 { Option.Some(x) => x.0, Option.None => Vec.new() };
+        acc = acc + og2[1i64];
+        // O10. Tuple PATTERN destructure — the leaf bindings own their
+        //      elements, so the box drop must retract here too.
+        let o10: Option[(Vec[i64], i64)] = Option.Some((mkv(i), 5i64));
+        match o10 {
+            Option.Some((v, k)) => { acc = acc + v[0i64] + k; }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // O11. STRUCT payload control — a different channel owns it.
+        let o11: Option[H] = Option.Some(H { a: mkv(i), b: 5i64 });
+        match o11 {
+            Option.Some(x) => { acc = acc + x.a[0i64] + x.b; }
+            Option.None => { acc = acc - 1i64; }
+        }
+        // O12. All-scalar tuple payload — must get no drop at all.
+        let o12: Option[(i64, i64)] = Option.Some((i, 5i64));
+        match o12 {
+            Option.Some(x) => { acc = acc + x.0 + x.1; }
+            Option.None => { acc = acc - 1i64; }
+        }
+        i = i + 1i64;
+    }
+    println(f"acc={acc}");
+}

@@ -1,0 +1,26 @@
+fn make() -> (Vec[i64], Vec[i64]) {
+let mut a: Vec[i64] = Vec.new();
+a.push(10); a.push(20); a.push(30);
+let mut b: Vec[i64] = Vec.new();
+b.push(1);
+(a, b)
+}
+fn strs() -> (Vec[String], i64) {
+let mut a: Vec[String] = Vec.new();
+a.push("alpha"); a.push("beta");
+(a, 0)
+}
+fn main() {
+let t = make();
+let mut c = 0;
+for x in t.0.iter() { c = c + 1; }
+let s = t.0.iter().fold(0, |acc, x| acc + x);
+println(f"c={c} sum={s} len={t.0.len()}");
+let ta: (Vec[i64], Vec[i64]) = make();
+let s2 = ta.1.iter().fold(0, |acc, x| acc + x);
+println(f"s2={s2}");
+let h = strs();
+let mut chars = 0;
+for w in h.0.iter() { chars = chars + w.len(); }
+println(f"chars={chars}");
+}

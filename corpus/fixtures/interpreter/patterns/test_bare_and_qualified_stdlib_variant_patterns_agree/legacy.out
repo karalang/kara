@@ -1,0 +1,4 @@
+bare:a=Inherit
+bare:c=Piped
+qual:a=Inherit
+qual:c=Piped

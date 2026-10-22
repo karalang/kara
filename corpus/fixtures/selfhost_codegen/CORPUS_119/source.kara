@@ -1,0 +1,3 @@
+struct User { name: String, age: i64 }
+fn rename(u: mut ref User, n: String) { u.name = n + "!"; }
+fn main() { let mut u = User { name: "ada", age: 1 }; rename(mut u, "kay"); println(u.name) }

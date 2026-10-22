@@ -1,0 +1,17 @@
+fn main() {
+let mut index: Map[String, Vec[i64]] = Map.new();
+let w: String = "the";
+let i: i64 = 0;
+match index.get(w) {
+Some(existing) => {
+let mut hits: Vec[i64] = existing.clone();
+hits.push(i);
+let _ = index.insert(w, hits);
+}
+None => {
+let mut hits: Vec[i64] = Vec.new();
+hits.push(i);
+let _ = index.insert(w, hits);
+}
+}
+}

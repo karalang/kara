@@ -1,0 +1,5 @@
+import helper.{run};
+
+fn main() {
+    println(f"n={run()}");
+}

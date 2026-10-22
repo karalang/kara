@@ -1,0 +1,8 @@
+effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }
+             fn driver() { fetch(); }
+             fn main() {
+                 let _ = pure_helper(1);
+                 driver();
+             }

@@ -1,0 +1,9 @@
+fn main() {
+let a = 9007199254740993;
+let b = 9007199254740992;
+let xs: Vec[i64] = vec![a, b];
+match Stats.max(xs) { Some(v) => println(v), None => println(-1) }
+match Stats.argmax(xs) { Some(i) => println(i), None => println(-1) }
+let s: Vec[i64] = Stats.sort(xs);
+println(s[1]);
+}

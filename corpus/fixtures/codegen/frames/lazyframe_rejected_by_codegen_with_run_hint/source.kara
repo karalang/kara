@@ -1,0 +1,13 @@
+struct W { x: i64 }
+impl W {
+fn make(ref self) -> LazyExpr { LazyExpr.col("a") }
+}
+fn main() {
+let w = W { x: 1i64 };
+let e = w.make();
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64]));
+let plan = df.lazy().filter(e.gt(0));
+let out = plan.collect();
+println(out.height());
+}

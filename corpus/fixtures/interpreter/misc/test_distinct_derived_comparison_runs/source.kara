@@ -1,0 +1,6 @@
+#[derive(Eq, Ord)]
+distinct type UserId = i64;
+fn main() {
+println(UserId(3) < UserId(5));
+println(UserId(5) == UserId(5));
+}

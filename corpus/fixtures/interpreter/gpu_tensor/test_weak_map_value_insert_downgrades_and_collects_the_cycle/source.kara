@@ -1,0 +1,9 @@
+shared struct N { mut v: i64, mut kids: Map[i64, weak N] }
+             impl Drop for N { fn drop(mut ref self) { println(f"drop {self.v}"); } }
+             fn cycle() {
+                 let p = N { v: 1i64, kids: Map.new() };
+                 let c = N { v: 2i64, kids: Map.new() };
+                 c.kids.insert(0i64, p);
+                 p.kids.insert(0i64, c);
+             }
+             fn main() { println("start"); cycle(); println("end"); }

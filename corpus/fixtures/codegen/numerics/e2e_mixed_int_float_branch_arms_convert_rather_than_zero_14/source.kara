@@ -1,0 +1,1 @@
+fn main() { let b: u8 = 200; let a: f64 = if true { b } else { 0.0 }; println(a); }

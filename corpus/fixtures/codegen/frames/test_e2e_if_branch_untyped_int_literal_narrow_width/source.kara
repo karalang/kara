@@ -1,0 +1,15 @@
+fn pick(c: bool, x: u8) -> u8 { if c { 0 } else { x } }
+fn peek(b: ref Vec[u8], i: i64) -> u8 {
+if i >= b.len() { 0 } else { b[i] }
+}
+fn main() {
+let a: u8 = if false { 0 } else { 97u8 };
+println(a.to_string());            // 97
+let t: u8 = if true { 97u8 } else { 0 };
+println(t.to_string());            // 97 (taken branch typed)
+println(pick(false, 5u8).to_string()); // 5
+let mut v: Vec[u8] = Vec.new();
+v.push(65u8); v.push(66u8);
+println(peek(v, 0).to_string());   // 65 (was 0)
+println(peek(v, 9).to_string());   // 0  (oob -> the literal arm)
+}

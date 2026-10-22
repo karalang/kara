@@ -1,0 +1,7 @@
+#[track_caller]
+fn boom() {
+unreachable()
+}
+fn main() {
+boom();
+}

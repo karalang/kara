@@ -1,0 +1,1 @@
+fn main() { let a = 1; let b = 2; println((a < b and b < 3).to_string()) }

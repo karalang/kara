@@ -1,0 +1,11 @@
+import doer.{Impl as Widget, Doer as D, mk as build};
+fn run[T: D](t: ref T) -> i64 { t.go() }
+fn call(w: ref Widget) -> i64 { w.go() }
+fn main() {
+let a = Widget { n: 7 };
+println(run(a));
+let b = Widget { n: 5 };
+println(call(b));
+let c = build(9);
+println(c.n);
+}

@@ -1,0 +1,21 @@
+fn make() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 11);
+    let m2 = m;
+    m2
+}
+fn main() {
+    let got = make();
+    println(got.get(1).unwrap());
+    let mut a: Map[i64, i64] = Map.new();
+    a.insert(3, 30);
+    let b = a;
+    let mut c = b;
+    c.insert(4, 40);
+    println(c.len());
+    println(c.get(4).unwrap());
+    let mut s: Set[i64] = Set.new();
+    s.insert(9);
+    let s2 = s;
+    println(s2.contains(9));
+}

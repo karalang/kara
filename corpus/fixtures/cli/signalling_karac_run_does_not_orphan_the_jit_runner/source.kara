@@ -1,0 +1,7 @@
+fn main() {
+    let mut i = 0;
+    while true {
+        println(f"spin {i}");
+        i = i + 1;
+    }
+}

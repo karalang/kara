@@ -1,0 +1,19 @@
+fn s_eq_rb(a: ref String, b: String) -> bool { return a == b }
+fn s_eq_br(a: String, b: ref String) -> bool { return a == b }
+fn s_ne_rb(a: ref String, b: String) -> bool { return a != b }
+fn s_lt_rb(a: ref String, b: String) -> bool { return a < b }
+fn i_eq_rb(a: ref i64, b: i64) -> bool { return a == b }
+fn main() {
+    let key: String = "hello";
+    let same: String = "hello";
+    let diff: String = "world";
+    let apple: String = "apple";
+    let world2: String = "world";
+    println(s_eq_rb(key, same));
+    println(s_eq_br(apple, key));
+    println(s_ne_rb(key, diff));
+    println(s_lt_rb(key, world2));
+    let n: i64 = 42i64;
+    println(i_eq_rb(n, 42i64));
+    println(i_eq_rb(n, 7i64));
+}

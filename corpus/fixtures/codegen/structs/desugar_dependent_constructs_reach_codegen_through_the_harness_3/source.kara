@@ -1,0 +1,5 @@
+trait Shape { fn area(self) -> i64; }
+struct Sq { s: i64 }
+impl Shape for Sq { fn area(self) -> i64 { return self.s * self.s; } }
+fn show(x: impl Shape) { println(x.area()); }
+fn main() { show(Sq { s: 4 }); }

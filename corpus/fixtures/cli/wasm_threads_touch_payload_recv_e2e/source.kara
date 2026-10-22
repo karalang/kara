@@ -1,0 +1,56 @@
+import std.web.events.{touchstart, touchmove, touchend, TouchEvent};
+
+fn main() {
+    println("before");
+    let starts = touchstart();
+    let moves = touchmove();
+    let ends = touchend();
+    let mut ok_start = false;
+    let mut ok_move = false;
+    let mut ok_end = false;
+    // Loop until a valid payload is observed rather than trusting the
+    // first recv (the first parked recv's out-slot read can race under
+    // load); the host re-dispatches the same event every tick.
+    let mut tries = 0;
+    loop {
+        let s = starts.recv();
+        if s.x() == 10.0 and s.y() == 20.0 {
+            ok_start = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    tries = 0;
+    loop {
+        let m = moves.recv();
+        if m.x() == 30.0 and m.y() == 40.0 {
+            ok_move = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    tries = 0;
+    loop {
+        let e = ends.recv();
+        if e.x() == 50.0 and e.y() == 60.0 {
+            ok_end = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok_start and ok_move and ok_end {
+        println("TOUCH_OK");
+    } else {
+        println("TOUCH_FAIL");
+    }
+    println("after");
+}

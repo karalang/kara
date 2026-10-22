@@ -1,0 +1,12 @@
+fn main() {
+let a: SortedSet[i64] = SortedSet.new();
+a.insert(1_i64);
+a.insert(2_i64);
+a.insert(3_i64);
+let b: SortedSet[i64] = SortedSet.new();
+b.insert(2_i64);
+let d = a.difference(b);
+for x in d {
+println(f"{x}");
+}
+}

@@ -1,0 +1,3 @@
+enum E { A(i64) }
+impl E { fn expect(self, m: String) -> i64 { match self { E.A(n) => n } } }
+fn main() { let e = E.A(9); println(e.expect("x".to_string())); }

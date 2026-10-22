@@ -1,0 +1,7 @@
+fn main() {
+let mut xs: Vec[Json] = Vec.new();
+xs.push(Json.Number(1.0));
+xs.push(Json.Number(2.0));
+xs.push(Json.Number(3.0));
+println(Json.Array(xs).stringify());
+}

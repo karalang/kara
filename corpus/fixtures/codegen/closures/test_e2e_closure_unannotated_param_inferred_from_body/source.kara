@@ -1,0 +1,8 @@
+fn main() {
+let f = |x| x + 1;
+println(f(5));
+let g = |x| x * 2;
+println(g(10));
+let h = |y| y + 1.5;
+println(h(2.0));
+}

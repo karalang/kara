@@ -1,0 +1,9 @@
+fn sum_scaled(xs: mut ref Vec[i64]) -> i64 {
+    let mut total = 0i64;
+    for x in xs { x = x * 2; total = total + x; }
+    total
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);
+    println(f"{sum_scaled(mut v)}");
+}

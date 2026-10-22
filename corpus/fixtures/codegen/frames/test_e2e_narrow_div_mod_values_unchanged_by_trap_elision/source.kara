@@ -1,0 +1,10 @@
+fn main() {
+    let n: i64 = env.args().len();
+    let x: i32 = -2147483648i32 + ((n as i32) - (n as i32));
+    println(x % 10i32);
+    println(x / 10i32);
+    println((0i32 - 37i32) % 10i32);
+    println((0i32 - 37i32) / 10i32);
+    println(37i32 % 10i32);
+    println(37i32 / 10i32);
+}

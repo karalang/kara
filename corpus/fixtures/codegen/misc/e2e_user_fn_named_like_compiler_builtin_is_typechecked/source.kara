@@ -1,0 +1,12 @@
+struct Pair[A, B] { first: A, second: B }
+fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {
+    Pair { first: p.second, second: p.first }
+}
+fn main() {
+    let q = swap(Pair { first: 42, second: "x".to_string() });
+    println(q.first);
+    println(f"{q.second}");
+    let r = swap(Pair { first: true, second: 99 });
+    println(f"{r.first}");
+    println(f"{r.second}");
+}

@@ -1,0 +1,6 @@
+import conn;
+fn main() {
+    let open = || 42;
+    println(open());
+    println(conn.open());
+}

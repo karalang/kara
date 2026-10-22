@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut h = H { v: [S { s: f"one-aaaaaaaaaaaaaaaaaaaaaa-{n}", k: 1 }, S { s: f"two-bbbbbbbb-{n}", k: 5 }] }; h.v[0] = S { s: h.v[1].s, k: 2 }; println(f"r:{h.v[0].k}:{h.v[0].s}:{h.v[1].s}") }

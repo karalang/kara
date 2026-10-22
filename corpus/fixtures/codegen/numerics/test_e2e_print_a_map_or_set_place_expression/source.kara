@@ -1,0 +1,25 @@
+struct B { m: Map[String, i64], s: Set[String] }
+fn mkm() -> Map[String, i64] { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); m }
+fn mks() -> Set[String] { let mut s: Set[String] = Set.new(); s.insert("e"); s }
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert("k", 1);
+let mut st: Set[String] = Set.new();
+st.insert("e");
+let b = B { m: m, s: st };
+println(f"{b.m}");
+println(b.m);
+println(f"{b.s}");
+println(b.s);
+println(f"{mkm()}");
+println(f"{mks()}");
+let mut m2: Map[String, i64] = Map.new();
+m2.insert("k", 1);
+let t = (m2, 1);
+println(f"{t.0}");
+let mut m3: Map[String, i64] = Map.new();
+m3.insert("k", 1);
+let v: Vec[Map[String, i64]] = [m3];
+println(f"{v[0]}");
+println(f"{b.m}");
+}

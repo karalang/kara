@@ -1,0 +1,16 @@
+fn fresh() -> String { "zz" }
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push("aa"); v.push("bb"); v.push("cc");
+let mut n: Vec[Vec[i64]] = Vec.new();
+n.push([1, 2]); n.push([3, 4]);
+let a = if v.len() > 1 { v[1] } else { "x" };
+let b = if v.len() > 1 { v[1] } else { v[0] };
+let c = if v.len() > 9 { v[0] } else { fresh() };
+let d = match v.len() > 1 { true => v[2], false => "x" };
+let e = if v.len() > 2 { if v.len() > 9 { v[0] } else { v[1] } } else { "x" };
+let g = if n.len() > 1 { n[1] } else { n[0] };
+if v.len() > 0 { v[0] } else { v[1] };
+println(f"{a} {b} {c} {d} {e} {g[0]}");
+println(f"{v[0]} {v[1]} {v[2]} {n[1][1]}");
+}

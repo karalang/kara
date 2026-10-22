@@ -1,0 +1,42 @@
+struct Named { name: String, id: i64 }
+enum Ev { Nothing, Count(i64), Label(String) }
+fn show_ev(e: ref Ev) -> String {
+    match e {
+        Count(n) => {
+            return "count ".to_string() + n.to_string();
+        }
+        Label(s) => {
+            return "label ".to_string() + s;
+        }
+        Nothing => {}
+    }
+    return "nothing".to_string();
+}
+fn tag(n: ref Named) -> String {
+    return n.name;
+}
+fn wrap(s: ref String) -> String {
+    return "[".to_string() + s + "]";
+}
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < v.len() {
+        t = t + v[i];
+        i = i + 1;
+    }
+    return t;
+}
+fn build() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    v.push(4);
+    return v;
+}
+fn main() {
+    println(show_ev(Ev.Label("tick".to_string())));
+    println(show_ev(Ev.Count(9)));
+    println(tag(Named { name: "alpha".to_string(), id: 1 }));
+    println(wrap("mid".to_string() + "dle"));
+    println(total(build()).to_string());
+}

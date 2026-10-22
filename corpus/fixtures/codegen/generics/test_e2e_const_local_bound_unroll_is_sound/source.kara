@@ -1,0 +1,21 @@
+fn main() {
+    let k = 32i64;
+    let mut v: Vec[i64] = Vec.new();
+    let mut state = 7i64;
+    let mut z = 0i64;
+    while z < k {
+        state = (state * 1103515245i64 + 12345i64) & 2147483647i64;
+        v.push((state / 65536i64) % 40i64 + 1i64);
+        z = z + 1i64;
+    }
+    let mut min1 = 1000000000i64;
+    let mut idx1 = -1i64;
+    let mut min2 = 1000000000i64;
+    let mut j = 0i64;
+    while j < k {
+        if v[j] < min1 { min2 = min1; min1 = v[j]; idx1 = j; }
+        else { if v[j] < min2 { min2 = v[j]; } }
+        j = j + 1i64;
+    }
+    println(f"{min1} {idx1} {min2}");
+}

@@ -1,0 +1,9 @@
+fn main() {
+let e: Vec[i64] = [];
+let one: Vec[i64] = [7];
+let eq: Vec[i64] = [4, 4, 4];
+let asc: Vec[i64] = [1, 2, 3];
+let desc: Vec[i64] = [3, 2, 1];
+let dip: Vec[i64] = [1, 2, 3, 2, 4];
+println(f"{e.is_sorted()} {one.is_sorted()} {eq.is_sorted()} {asc.is_sorted()} {desc.is_sorted()} {dip.is_sorted()}");
+}

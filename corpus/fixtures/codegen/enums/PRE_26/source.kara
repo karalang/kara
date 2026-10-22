@@ -1,0 +1,2 @@
+struct Wi { xs: Vec[Re] }
+fn main() { let w = Wi { xs: [Re { id: 71, name: f"a" }] }; println("ok"); println("done") }

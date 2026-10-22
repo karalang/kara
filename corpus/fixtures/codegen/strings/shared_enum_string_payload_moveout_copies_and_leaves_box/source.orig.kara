@@ -1,0 +1,3 @@
+shared enum E { S(String), Other }
+fn get(e: E) -> String { match e { S(s) => s, Other => "o".to_string() } }
+fn main() { println(get(E.S("payload-string".to_string()))); }

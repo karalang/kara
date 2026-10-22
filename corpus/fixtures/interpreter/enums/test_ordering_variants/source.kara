@@ -1,0 +1,8 @@
+fn main() {
+let lt = Ordering.Less;
+let eq = Ordering.Equal;
+let gt = Ordering.Greater;
+println(lt);
+println(eq);
+println(gt);
+}

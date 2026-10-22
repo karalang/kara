@@ -1,0 +1,7 @@
+enum E { A(String, String), B }
+fn main() {
+let e: E = E.A(f"x", f"y");
+match e { E.A(ref p, ref q) => { println(p); println(q); } E.B => {} }
+match e { E.A(ref p, ref q) => { println(p); println(q); } E.B => {} }
+match e { E.A(p, q) => { println(p); println(q); } E.B => {} }
+}

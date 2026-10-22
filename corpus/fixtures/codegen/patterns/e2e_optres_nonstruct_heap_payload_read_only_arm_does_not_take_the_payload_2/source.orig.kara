@@ -1,0 +1,7 @@
+fn main() {
+let mut m0: Map[i64, String] = Map.new();
+m0.insert(1, f"mv");
+let a: Option[Map[i64, String]] = Some(m0);
+match a { Some(p) => { println(p.len()); } None => {} }
+match a { Some(q) => println(q.len()), None => println("none") }
+}

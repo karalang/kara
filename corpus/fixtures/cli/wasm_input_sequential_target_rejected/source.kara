@@ -1,0 +1,6 @@
+import std.web.events.{input, InputEvent};
+
+fn main() {
+    let vals = input();
+    vals.recv();
+}

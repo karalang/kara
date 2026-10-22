@@ -1,0 +1,2 @@
+enum Msg { Quit, Say(String) }
+fn main() { let m = Msg.Say("hello".to_string() + " there"); match m { Say(text) => { println(text); } Quit => { println("quit"); } } match Msg.Quit { Say(text) => { println(text); } Quit => { println("bye"); } } }

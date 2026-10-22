@@ -1,0 +1,4 @@
+fn seed() -> i64 { env.args().len() }
+fn mkstr(i: i64) -> String { return f"ssssssss{i}{seed()}"; }
+fn f(i: i64) -> (String, i64) { return (mkstr(i), 9); }
+fn main() { f(3); println("ok"); }

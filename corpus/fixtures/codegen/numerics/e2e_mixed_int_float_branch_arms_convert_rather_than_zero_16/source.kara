@@ -1,0 +1,1 @@
+fn main() { let n: i64 = 7; let a: i64 = if true { n } else { 0 }; println(a); }

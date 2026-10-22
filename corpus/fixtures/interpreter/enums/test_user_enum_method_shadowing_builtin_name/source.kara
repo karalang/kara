@@ -1,0 +1,3 @@
+enum E { A(String) }
+impl E { fn unwrap(self) -> String { match self { E.A(s) => s.clone() } } }
+fn main() { let e = E.A("hi".to_string()); println(e.unwrap()); }

@@ -1,0 +1,4 @@
+struct Wp { r: Rp }
+struct Sk { n: i64 }
+impl Sk { fn eat(w: Wp) { let m = w.r; println(f"m:{m.id}") } }
+fn main() { Sk.eat(Wp { r: Rp { id: 1 } }); println("end") }

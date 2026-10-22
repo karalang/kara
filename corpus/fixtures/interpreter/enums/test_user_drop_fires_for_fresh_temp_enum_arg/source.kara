@@ -1,0 +1,14 @@
+enum Sig { A(i64), B }
+impl Drop for Sig {
+fn drop(mut ref self) {
+println(1);
+}
+}
+fn consume(s: Sig) {
+println(0);
+}
+fn main() {
+consume(Sig.A(7));
+consume(Sig.B);
+println(99);
+}

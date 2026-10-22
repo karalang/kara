@@ -1,0 +1,23 @@
+struct H { data: Vec[Vec[i64]] }
+fn main() {
+let mut r0: Vec[i64] = Vec.new();
+r0.push(10i64); r0.push(20i64);
+let mut r1: Vec[i64] = Vec.new();
+r1.push(30i64); r1.push(40i64);
+let mut d: Vec[Vec[i64]] = Vec.new();
+d.push(r0); d.push(r1);
+let mut h = H { data: d };
+let mut i: i64 = 0;
+let mut total: i64 = 0;
+while i < 2 {
+let mut j: i64 = 0;
+while j < 2 {
+total = total + h.data[i][j];
+h.data[i][j] = h.data[i][j] + 1i64;
+j = j + 1;
+}
+i = i + 1;
+}
+println(f"{total}");
+println(f"{h.data[1][1]}");
+}

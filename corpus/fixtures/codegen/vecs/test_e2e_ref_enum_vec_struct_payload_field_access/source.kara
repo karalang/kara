@@ -1,0 +1,16 @@
+enum J { N, Obj(Vec[Ent]) }
+struct Ent { key: String, n: i64 }
+fn dump(v: ref J, out: mut ref String) {
+match v {
+N => { out.push_str("n"); }
+Obj(entries) => { for e in entries { out.push_str(e.key); out.push_str(f"{e.n}"); } }
+}
+}
+fn main() {
+let mut es: Vec[Ent] = Vec.new();
+es.push(Ent { key: "a", n: 1 });
+es.push(Ent { key: "b", n: 2 });
+let mut o: String = "";
+dump(J.Obj(es), mut o);
+println(o);
+}

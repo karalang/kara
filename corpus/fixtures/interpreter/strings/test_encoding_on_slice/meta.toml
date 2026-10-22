@@ -1,0 +1,17 @@
+source = "tests/interpreter/strings.rs::test_encoding_on_slice"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function BaseN.encode"
+classified_with = "79705a229"
+extracted_src = "f5fb5d8b"
+model_rev = "583cfb0d"
+model_src = "f5fb5d8b"

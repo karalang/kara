@@ -1,0 +1,17 @@
+source = "tests/interpreter/numerics.rs::test_map_prefix_literal_int_keys"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "c653ba1f"
+model_rev = "583cfb0d"
+model_src = "c653ba1f"

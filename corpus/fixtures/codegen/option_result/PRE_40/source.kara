@@ -1,0 +1,2 @@
+fn genf[T](x: Option[T]) { match x { Some(v) => { println("g") } None => { println("n") } } }
+fn main() { genf(Some(Rp { id: 1 })); println("end") }

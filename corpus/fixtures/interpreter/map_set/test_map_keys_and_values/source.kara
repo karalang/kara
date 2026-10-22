@@ -1,0 +1,9 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("a", 1_i64);
+m.insert("b", 2_i64);
+let ks = m.keys();
+let vs = m.values();
+println(ks.len());
+println(vs.len());
+}

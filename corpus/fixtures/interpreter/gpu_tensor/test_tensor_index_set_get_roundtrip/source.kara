@@ -1,0 +1,8 @@
+fn main() {
+let mut t: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
+t[0, 1] = 5.5;
+t[1, 0] = 2.5;
+println(t[0, 1]);
+println(t[1, 0]);
+println(t[0, 0]);
+}

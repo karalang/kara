@@ -1,0 +1,10 @@
+fn main() {
+    let mut n = 0;
+    for line in stdin.lines() {
+        match line {
+            Ok(s) => { println(s); n = n + 1; }
+            Err(_) => {}
+        }
+    }
+    println(n);
+}

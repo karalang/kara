@@ -1,0 +1,6 @@
+#[repr(i8)]
+enum Neg { Down = -128, Up = 127 }
+fn main() {
+let d: i8 = Neg.Down.discriminant();
+println(f"{d} {Neg.Up.discriminant()}");
+}

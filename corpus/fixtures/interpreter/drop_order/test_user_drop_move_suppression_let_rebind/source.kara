@@ -1,0 +1,9 @@
+struct R { tag: i64 }
+impl Drop for R {
+fn drop(mut ref self) { println(self.tag); }
+}
+fn main() {
+let f = R { tag: 7 };
+let g = f;
+println(g.tag);
+}

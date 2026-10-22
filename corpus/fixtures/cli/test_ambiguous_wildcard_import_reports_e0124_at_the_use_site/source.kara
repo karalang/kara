@@ -1,0 +1,3 @@
+import alpha.*;
+import beta.*;
+fn main() { println(dup()); }

@@ -1,0 +1,23 @@
+import std.web.events.{keydown, KeyEvent};
+
+fn spin(n: i64) -> i64 {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < n {
+        acc = (acc + i * 7) % 1000003;
+        i = i + 1;
+    }
+    acc
+}
+
+fn main() {
+    println("before");
+    {
+        let keys = keydown();
+        let k = keys.recv();
+        println(f"code {k.key_code()}");
+    }
+    println("dropped");
+    println(f"spin {spin(30000000)}");
+    println("after");
+}

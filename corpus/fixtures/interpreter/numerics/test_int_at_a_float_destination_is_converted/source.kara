@@ -1,0 +1,22 @@
+struct Bx { mut f: f64 }
+fn takef(x: f64) -> bool { x == 200.0 }
+fn retf(v: u8) -> f64 { v }
+impl Bx { fn echo(self, x: f64) -> bool { x == 200.0 } }
+fn main() {
+let v = 200u8;
+let la: f64 = v;
+println(la == 200.0);
+println(takef(v));
+println(retf(v) == 200.0);
+let sl = Bx { f: v };
+println(sl.f == 200.0);
+let mut fa = Bx { f: 0.0 };
+fa.f = v;
+println(fa.f == 200.0);
+let mb = Bx { f: 0.0 };
+println(mb.echo(v));
+let ta: (f64, f64) = (v, v);
+println(ta.0 == 200.0);
+let ae: Array[f64, 2] = [v, v];
+println(ae[0] == 200.0);
+}

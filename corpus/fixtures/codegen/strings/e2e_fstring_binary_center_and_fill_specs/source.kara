@@ -1,0 +1,20 @@
+fn main() {
+let x = 5i64;
+let big = 255i64;
+let neg = 42i64;
+let pi = 3.14159f64;
+let name = "kara";
+println(f"[{x:b}]");
+println(f"[{big:b}]");
+println(f"[{x:08b}]");
+println(f"[{neg:^6}]");
+println(f"[{name:^10}]");
+println(f"[{pi:^10.2}]");
+println(f"[{name:*^10}]");
+println(f"[{name:*<10}]");
+println(f"[{neg:*>8}]");
+println(f"[{pi:*^10.2}]");
+println(f"[{big:^8x}]");
+println(f"[{name:.^12}]");
+println(f"[{name:^2}]");
+}

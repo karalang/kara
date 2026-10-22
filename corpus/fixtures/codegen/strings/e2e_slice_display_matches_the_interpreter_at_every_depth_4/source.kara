@@ -1,0 +1,7 @@
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push("ab");
+                 v.push("cd");
+let s: Slice[String] = v.as_slice();
+println(f"{s}");
+             }

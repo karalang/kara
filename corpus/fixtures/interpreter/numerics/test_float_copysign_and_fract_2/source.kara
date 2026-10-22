@@ -1,0 +1,1 @@
+fn main() { println((-3.5f64).copysign(1.0f64)); }

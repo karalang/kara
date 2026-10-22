@@ -1,0 +1,6 @@
+import std.web.events.{pointer_moves, PointerEvent};
+
+fn main() {
+    let moves = pointer_moves();
+    moves.recv();
+}

@@ -1,0 +1,15 @@
+struct Pair { word: String, n: i64 }
+fn take(xs: Slice[Pair]) -> String { let w = xs[0].word.clone(); w }
+fn main() {
+let k = 1;
+let mut ps: Vec[Pair] = Vec.new();
+ps.push(Pair { word: f"a{k}", n: 7 });
+println(take(ps[0..1]));
+println(ps[0].word);
+let mut m: Map[String, Pair] = Map.new();
+m.insert(f"k{k}", Pair { word: f"c{k}", n: 8 });
+let mapped = m[f"k{k}"].word.clone();
+println(mapped);
+println(m[f"k{k}"].word);
+println(m[f"k{k}"].n);
+}

@@ -1,0 +1,5 @@
+struct R39 { s: String, t: String, u: String }
+enum Kw9 { A(R39), B }
+fn mkr(i: i64) -> R39 { return R39 { s: f"ssssssssssss{i}", t: f"tttttttttttt{i}", u: f"uuuuuuuuuuuu{i}" }; }
+fn nested(x: Option[Kw9]) { match x { Option.Some(Kw9.A(r)) => { println(f"n:{r.s.len()}") } Option.Some(Kw9.B) => {} Option.None => {} } }
+fn main() { for i in 0..3 { nested(Option.Some(Kw9.A(mkr(i)))); } println("end") }

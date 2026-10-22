@@ -1,0 +1,7 @@
+fn main() {
+let v: Vec[i64] = [1_i64, 2_i64];
+let w: Vec[i64] = v.clone();
+v.push(99_i64);
+println(v.len());
+println(w.len());
+}

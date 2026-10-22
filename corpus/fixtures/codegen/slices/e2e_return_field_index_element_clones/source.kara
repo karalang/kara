@@ -1,0 +1,12 @@
+struct H { xs: Vec[String] }
+impl H {
+    fn get(ref self, i: i64) -> String { self.xs[i].clone() }
+}
+fn getf(h: ref H, i: i64) -> String { h.xs[i].clone() }
+fn main() {
+    let h = H { xs: [f"alpha", f"bravo", f"charlie"] };
+    println(h.get(0));
+    let b: String = getf(h, 1);
+    println(b);
+    println(h.xs[2]);
+}

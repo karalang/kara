@@ -1,0 +1,10 @@
+shared struct Res { name: String }
+impl Drop for Res {
+fn drop(mut ref self) { print(f"c:{self.name}|"); }
+}
+fn main() {
+let p = Res { name: "P".to_string() };
+defer { print(f"d:{p.name}|"); }
+print(f"{p.name}|");
+print("end|");
+}

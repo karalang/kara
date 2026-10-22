@@ -1,0 +1,5 @@
+fn main() {
+println(f"{Some("a" + "b") == Some("ab")}");
+println(f"{Some(1) == Some(2)}");
+println(f"{Some("a" + "b") == Some("zz")}");
+}

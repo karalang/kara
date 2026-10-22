@@ -1,0 +1,6 @@
+struct R39 { s: String, t: String, u: String }
+enum Kw9 { A(R39), B }
+fn mkr(i: i64) -> R39 { return R39 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
+fn nested(x: Option[Kw9]) { match x { Option.Some(Kw9.A(r)) => { println(f"n:{r.s}") } Option.Some(Kw9.B) => {} Option.None => {} } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { nested(Option.Some(Kw9.A(mkr(1)))); println("end") }

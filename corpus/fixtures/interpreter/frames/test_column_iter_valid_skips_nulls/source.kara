@@ -1,0 +1,5 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10i64); c.push_null(); c.push(30i64);
+for v in c.iter_valid() { println(v); }
+}

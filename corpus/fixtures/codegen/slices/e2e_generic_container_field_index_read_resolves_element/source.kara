@@ -1,0 +1,9 @@
+struct H[T] { xs: Vec[T] }
+fn main() {
+    let hs: H[String] = H { xs: [f"hello", f"world"] };
+    println(hs.xs[0]); println(hs.xs[1]);
+    let hf: H[f64] = H { xs: [1.5, 2.5] };
+    println(f"{hf.xs[1]}");
+    let hi: H[i64] = H { xs: [7, 8] };
+    println(f"{hi.xs[0]}");
+}

@@ -1,0 +1,3 @@
+fn keeps(r: R) -> R { return r; }
+fn f(r: R) { let w = keeps(r); println(f"v={w.id}"); }
+fn main() { f(mkr(9)); println("end") }

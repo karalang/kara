@@ -1,0 +1,17 @@
+enum E { X }
+fn inner(n: i64) -> Result[Option[String], E] {
+if n < 0 { return Err(E.X); }
+Ok(Some(f"got-{n}"))
+}
+fn outer(n: i64) -> Result[String, E] {
+let opt = inner(n)?;
+match opt { Some(s) => Ok(s), None => Ok(f"empty") }
+}
+fn olen(n: i64) -> Result[i64, E] {
+let opt = inner(n)?;
+match opt { Some(s) => Ok(s.len()), None => Ok(0) }
+}
+fn main() {
+match outer(7) { Ok(v) => println(v), Err(_) => println("e") }
+match olen(7) { Ok(v) => println(v), Err(_) => println("e") }
+}

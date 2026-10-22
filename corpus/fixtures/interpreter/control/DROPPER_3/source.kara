@@ -1,0 +1,2 @@
+impl B5 { fn eat(ref self, r: R, k: bool) { if k { return; } println(f"kept {r.id}") } }
+fn main() { let b = B5 { n: 1 }; b.eat(R { id: 41 }, true); println("after") }

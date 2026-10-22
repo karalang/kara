@@ -1,0 +1,6 @@
+fn main() {
+let t: Tensor[f32, [4, 3]] = Tensor.zeros([4, 3]);
+let mut a: f32 = 0.0;
+for row in t.iter_axis(0) { a = a + row.sum(); }
+println(a.to_string());
+}

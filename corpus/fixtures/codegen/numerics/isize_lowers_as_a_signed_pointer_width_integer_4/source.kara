@@ -1,0 +1,7 @@
+fn main() {
+                     let c: i64 = 100;
+                     let a: isize = 7isize;
+                     println(c as isize);
+                     println(a as i64);
+                     println((-1isize) as u8);
+                 }

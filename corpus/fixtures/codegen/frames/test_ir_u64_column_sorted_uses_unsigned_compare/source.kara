@@ -1,0 +1,5 @@
+fn main() {
+    let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64]);
+    let s = c.sorted();
+    println(f"{s[0]}");
+}

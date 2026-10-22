@@ -1,0 +1,6 @@
+fn walk(word: ref String) -> String {
+    let mut out: String = "";
+    for ch in word.chars() { out.push(ch); }
+    return out;
+}
+fn main() { println(walk("ab".to_string())); }

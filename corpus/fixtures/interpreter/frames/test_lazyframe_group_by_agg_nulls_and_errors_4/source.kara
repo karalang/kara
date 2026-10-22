@@ -1,0 +1,6 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("k", Column.from_vec(["x"]));
+df.insert("v", Column.from_vec([1i64]));
+let _ = df.lazy().group_by(vec![LazyExpr.col("k")]).agg(vec![LazyExpr.col("v").sum()]).filter(LazyExpr.col("v").gt(0)).collect();
+}

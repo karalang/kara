@@ -1,0 +1,3 @@
+struct P { s: String, n: i64 }
+fn bump(s: mut ref String) { s.push_str("yy"); }
+fn main() { let mut a: Array[P, 2] = [P { s: f"x{1}", n: 1 }, P { s: f"z{2}", n: 2 }]; bump(mut a[1].s); println(f"{a[0].s} {a[1].s}"); }

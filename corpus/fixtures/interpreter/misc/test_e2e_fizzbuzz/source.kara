@@ -1,0 +1,12 @@
+fn fizzbuzz(n: i64) -> i64 {
+if n % 15 == 0 { 0 }
+else if n % 3 == 0 { 3 }
+else if n % 5 == 0 { 5 }
+else { n }
+}
+fn main() {
+println(fizzbuzz(15));
+println(fizzbuzz(9));
+println(fizzbuzz(10));
+println(fizzbuzz(7));
+}

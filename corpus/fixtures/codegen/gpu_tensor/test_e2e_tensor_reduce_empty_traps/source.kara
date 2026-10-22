@@ -1,0 +1,4 @@
+fn main() {
+let e: Tensor[f64, [0]] = Tensor.zeros([0]);
+println(e.max());
+}

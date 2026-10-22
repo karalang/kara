@@ -1,0 +1,36 @@
+fn main() {
+    let mut s = 0;
+    for i in 0..5 {
+        s = s + i;
+    }
+    println(s.to_string());
+    let mut c = 0;
+    for i in 0..3 {
+        for j in 0..3 {
+            c = c + 1;
+        }
+    }
+    println(c.to_string());
+    let mut b = 0;
+    for i in 0..10 {
+        if i == 4 {
+            break;
+        }
+        b = b + i;
+    }
+    println(b.to_string());
+    let mut k = 0;
+    for i in 0..6 {
+        if i % 2 == 0 {
+            continue;
+        }
+        k = k + i;
+    }
+    println(k.to_string());
+    let n = 4;
+    let mut t = 0;
+    for i in 0..n {
+        t = t + i;
+    }
+    println(t.to_string());
+}

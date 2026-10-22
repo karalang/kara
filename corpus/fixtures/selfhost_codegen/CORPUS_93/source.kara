@@ -1,0 +1,2 @@
+struct User { name: String, age: i64 }
+fn main() { let mut u = User { name: "one", age: 1 }; u = User { name: "two", age: 2 }; println(u.name); println(u.age.to_string()) }

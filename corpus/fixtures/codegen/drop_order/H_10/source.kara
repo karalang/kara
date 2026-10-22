@@ -1,0 +1,2 @@
+fn main() { let p = ((R { id: 41 }, R { id: 42 }), 1); let (inner, n) = p;
+             println(f"{n}") }

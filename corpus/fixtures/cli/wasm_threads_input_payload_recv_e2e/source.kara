@@ -1,0 +1,28 @@
+import std.web.events.{input, InputEvent};
+
+fn main() {
+    println("before");
+    let vals = input();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same value every tick.
+    loop {
+        let ev = vals.recv();
+        if ev.value() == 0.75 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("VAL_OK");
+    } else {
+        println("VAL_FAIL");
+    }
+    println("after");
+}

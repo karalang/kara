@@ -1,0 +1,2 @@
+fn take(w: W) -> i64 { let W { r, n } = w; n }
+fn main() { println(f"{take(mk())}") }

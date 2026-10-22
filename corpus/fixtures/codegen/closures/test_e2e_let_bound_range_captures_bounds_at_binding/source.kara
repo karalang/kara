@@ -1,0 +1,18 @@
+fn main() {
+let mut a = 2;
+let r = a..6;
+a = 10;
+let mut n = 0;
+for i in r { n = n + i; }
+println(n);
+let s = 0..5;
+let mut inner = 0;
+{
+let s = 0..2;
+for i in s { inner = inner + 1; }
+}
+let mut outer = 0;
+for i in s { outer = outer + 1; }
+println(inner);
+println(outer);
+}

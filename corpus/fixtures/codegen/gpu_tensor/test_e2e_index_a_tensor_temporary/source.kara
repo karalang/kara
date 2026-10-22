@@ -1,0 +1,12 @@
+fn main() {
+let t: Tensor[f64, [2]] = Tensor.from([1.0, 2.0]);
+println((t * 2)[0]);
+println((t + t)[1]);
+println((0.0 - t)[0]);
+println(Tensor.from([5.0, 6.0])[1]);
+println(((t + t) * 2)[0]);
+let m: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+println((m + m)[1, 0]);
+let r = t * 2;
+println(r[0]);
+}

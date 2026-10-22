@@ -1,0 +1,3 @@
+fn main() { let o: Option[E] = Some(E.B);
+             let k = match o { Some(e) => { e } None => { E.B } };
+             println("kept"); }

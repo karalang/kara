@@ -1,0 +1,8 @@
+enum Zebra { A, B }
+             enum Alpha { A, C }
+             fn main() {
+                 let z = Zebra.A;
+                 match z { A => println(1), B => println(2), }
+                 let a = Alpha.A;
+                 match a { A => println(3), C => println(4), }
+             }

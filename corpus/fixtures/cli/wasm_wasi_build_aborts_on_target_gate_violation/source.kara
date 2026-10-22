@@ -1,0 +1,9 @@
+import std.web.{Display};
+
+pub fn paint() with writes(Display) writes(Stdout) {
+    println("painting");
+}
+
+fn main() {
+    paint();
+}

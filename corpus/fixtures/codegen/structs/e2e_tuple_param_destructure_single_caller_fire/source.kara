@@ -1,0 +1,22 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+fn take(p: (Res, i64)) {
+    let (r, n) = p;
+    println(f"got {r.id} {n}");
+    println("take done");
+}
+fn main() {
+    println("a");
+    take((Res { id: 5, name: f"y{5}" }, 1));
+    println("b");
+    let q = (Res { id: 7, name: f"y{7}" }, 2);
+    take(q);
+    println("c");
+    let p = (Res { id: 9, name: f"y{9}" }, 3);
+    take(p);
+    println("end");
+}

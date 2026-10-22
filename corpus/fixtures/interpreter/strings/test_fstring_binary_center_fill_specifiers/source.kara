@@ -1,0 +1,11 @@
+fn main() {
+let n = 5;
+let big = 255;
+let neg = 42;
+let pi = 3.14159;
+let s = "kara";
+println(f"{n:b}|{big:b}|{n:08b}");
+println(f"{neg:^6}|{s:^10}|{pi:^10.2}");
+println(f"{s:*^10}|{s:*<10}|{neg:*>8}|{pi:*^10.2}");
+println(f"{big:^8x}|{s:.^12}|{s:^2}");
+}

@@ -1,0 +1,15 @@
+source = "tests/codegen/strings.rs::normalize_compatibility_forms_differ_from_canonical_ones"
+dedup_of = ["tests/interpreter/strings.rs::test_normalize_compatibility_forms_differ_from_canonical_ones"]
+expect = "stdout"
+exit = 0
+tags = ["deferred:normalize", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "516cf1b9"

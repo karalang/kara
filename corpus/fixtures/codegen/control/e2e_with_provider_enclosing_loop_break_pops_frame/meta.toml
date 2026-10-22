@@ -1,0 +1,17 @@
+source = "tests/codegen/control.rs::e2e_with_provider_enclosing_loop_break_pops_frame"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "post-m1:provider", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:this `break`"
+classified_with = "79705a229"
+extracted_src = "59a0220d"
+model_rev = "583cfb0d"
+model_src = "59a0220d"

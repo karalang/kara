@@ -1,0 +1,6 @@
+fn main() {
+let a: Vector[i64, 2] = Vector[i64, 2](3, 4);
+let mut v: Vec[Vector[i64, 2]] = [];
+for i in 0..9 { v.push(a); }
+println(v.len());
+}

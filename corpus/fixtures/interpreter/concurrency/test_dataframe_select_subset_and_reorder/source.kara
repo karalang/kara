@@ -1,0 +1,13 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 2i64]));
+df.insert("b", Column.from_vec([3i64, 4i64]));
+df.insert("c", Column.from_vec([5i64, 6i64]));
+let sub: DataFrame = df.select(["c", "a"]);
+println(sub.width());
+println(sub.height());
+for n in sub.column_names() { println(n); }
+let c0: Column[i64] = sub.column("c");
+match c0[1] { Some(v) => { println(v); } None => { println(-1i64); } }
+println(df.width());
+}

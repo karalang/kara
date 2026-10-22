@@ -1,0 +1,17 @@
+source = "tests/interpreter/structs.rs::size_of_padded_struct_and_primitives"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0200"
+classified_with = "79705a229"
+extracted_src = "bcb82d9d"
+model_rev = "583cfb0d"
+model_src = "bcb82d9d"

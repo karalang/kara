@@ -1,0 +1,13 @@
+fn main() {
+    let mut i = 0;
+    let mut out = "".to_string();
+    while i < 5 {
+        i = i + 1;
+        let s = match i % 2 {
+            0 => "e".to_string(),
+            _ => continue,
+        };
+        out = out + s;
+    }
+    println(out);
+}

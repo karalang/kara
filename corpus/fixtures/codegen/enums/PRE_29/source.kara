@@ -1,0 +1,2 @@
+struct Wl { xs: Vec[Option[Re]] }
+fn main() { let w = Wl { xs: [Some(Re { id: 71, name: f"a" })] }; println("ok"); println("done") }

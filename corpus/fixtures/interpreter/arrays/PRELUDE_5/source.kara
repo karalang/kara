@@ -1,0 +1,6 @@
+struct Pr { id: i64 }
+fn main() {
+    let a: Array[Pr, 2] = [Pr { id: 1 }, Pr { id: 2 }];
+    let o: Option[Array[Pr, 2]] = Some(a);
+    println("x");
+}

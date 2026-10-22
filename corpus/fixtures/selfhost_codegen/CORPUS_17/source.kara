@@ -1,0 +1,1 @@
+fn main() { let x = 2; let y = x * 10; println((y + x).to_string()) }

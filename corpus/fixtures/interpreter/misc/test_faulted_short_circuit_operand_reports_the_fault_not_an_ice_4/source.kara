@@ -1,0 +1,5 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+let n: i64 = 1i64;
+match n { x if v[3] > 0i64 => { println("a"); } _ => { println("b"); } }
+}

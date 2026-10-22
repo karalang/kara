@@ -1,0 +1,11 @@
+fn early(go: bool) {
+print("a");
+if go { return; }
+defer { print("late"); }
+print("b");
+}
+fn main() {
+early(true);
+print("|");
+early(false);
+}

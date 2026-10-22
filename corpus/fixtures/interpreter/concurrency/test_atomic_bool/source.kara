@@ -1,0 +1,4 @@
+fn main() {
+let flag = Atomic.new(false);
+println(flag.load(MemoryOrdering.SeqCst));
+}

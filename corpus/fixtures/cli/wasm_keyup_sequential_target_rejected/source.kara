@@ -1,0 +1,6 @@
+import std.web.events.{keyup, KeyEvent};
+
+fn main() {
+    let keys = keyup();
+    keys.recv();
+}

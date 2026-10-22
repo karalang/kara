@@ -1,0 +1,4 @@
+fn pass(o: Option[Val]) -> Option[Val] { o }
+fn f() -> i64 { let value = mk_val(); let mut vv = value; vv = pass(vv);
+   match vv { Some(v) => ident_len(v), None => 0 } }
+fn main() { println(f()); }

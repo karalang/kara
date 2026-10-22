@@ -1,0 +1,26 @@
+fn vsum(v: Vec[f64]) -> f64 {
+let mut acc = Vector[f64, 2](0.0, 0.0);
+let mut p: i64 = 0;
+while p + 1 < v.len() {
+let pair = Vector[f64, 2](v[p], v[p + 1]);
+acc = acc + pair;
+p = p + 2;
+}
+return acc.reduce_sum();
+}
+fn main() {
+let mut v: Vec[f64] = Vec.new();
+let mut i: i64 = 0;
+while i < 8 {
+v.push(i.to_f64() + 0.5);
+i = i + 1;
+}
+println(vsum(v));
+let w: Vec[f64] = [10.0, 20.0, 30.0];
+println(Vector[f64, 2](w[0], w[1]).reduce_sum());
+println(Vector[f64, 2](w[1], w[2]).reduce_sum());
+let a: Vec[i64] = [7, 8, 9];
+println(Vector[i64, 2](a[1], a[2]).reduce_sum());
+let q = Vector[f64, 4](w[0], w[1], w[2], 5.0);
+println(q.reduce_sum());
+}

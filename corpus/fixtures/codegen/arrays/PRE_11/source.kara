@@ -1,0 +1,2 @@
+fn takeA(x: Array[Ra, 2]) { println(f"t:{x[0].id}") }
+fn main() { takeA([Ra { id: 1 }, Ra { id: 2 }]); println("end") }

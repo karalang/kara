@@ -1,0 +1,4 @@
+enum MyOpt3 { Some(i64), Nothing }
+fn main() { let x: Option[Option[MyOpt3]] = Some(Some(MyOpt3.Some(71)));
+match x { Some(Some(Some(v))) => { println(f"a{v}") } Some(Some(Nothing)) => { println("ssn") } Some(None) => { println("sn") } None => { println("n") } }
+println("done") }

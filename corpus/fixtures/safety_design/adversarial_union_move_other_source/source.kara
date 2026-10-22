@@ -1,0 +1,11 @@
+fn longer(a: ref String, b: ref String) -> ref String {
+if a.len() > b.len() { a } else { b }
+}
+fn consume(s: String) -> i64 { s.len() }
+fn main() {
+let x = String.from("short");
+let y = String.from("a longer string");
+let z = longer(x, y);
+let _ = consume(x);
+println(z.len());
+}

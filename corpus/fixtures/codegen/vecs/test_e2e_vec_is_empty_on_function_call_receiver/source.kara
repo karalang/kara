@@ -1,0 +1,13 @@
+fn make_vec(n: i64) -> Vec[i64] {
+let mut v: Vec[i64] = Vec.new();
+let mut i: i64 = 0i64;
+while i < n {
+v.push(i);
+i = i + 1i64;
+}
+return v;
+}
+fn main() {
+if make_vec(0i64).is_empty() { println(1); } else { println(0); }
+if make_vec(5i64).is_empty() { println(1); } else { println(0); }
+}

@@ -1,0 +1,2 @@
+fn main() { let p = (R { id: 41 }, 1);
+            match p { (_, n) => { println(f"{n}") } } }

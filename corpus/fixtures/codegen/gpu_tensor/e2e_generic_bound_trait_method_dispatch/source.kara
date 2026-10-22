@@ -1,0 +1,21 @@
+trait Tagged {
+    fn tag(self) -> i64;
+    fn combine(self, other: i64) -> i64;
+}
+struct A { v: i64 }
+struct B { v: i64 }
+impl Tagged for A {
+    fn tag(self) -> i64 { 10 }
+    fn combine(self, other: i64) -> i64 { self.v + other }
+}
+impl Tagged for B {
+    fn tag(self) -> i64 { 20 }
+    fn combine(self, other: i64) -> i64 { self.v * other }
+}
+fn use_it[X: Tagged](x: X) -> i64 { x.tag() + x.combine(3) }
+fn forward[Y: Tagged](y: Y) -> i64 { use_it(y) }
+fn main() {
+    println(f"{use_it(A { v: 5 })}");
+    println(f"{use_it(B { v: 7 })}");
+    println(f"{forward(A { v: 2 })}");
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let s = "the quick brown fox jumps over the lazy dog";
+    let t = s.substring(0, 30);
+    println(t);
+}

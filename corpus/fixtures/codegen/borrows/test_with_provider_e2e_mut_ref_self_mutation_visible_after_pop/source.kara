@@ -1,0 +1,9 @@
+pub trait Recorder { fn record(mut ref self, value: i64); }
+pub struct Counter { n: i64 }
+impl Recorder for Counter { fn record(mut ref self, value: i64) { self.n = value; } }
+pub effect resource Metric: Recorder;
+fn main() {
+let mut p = Counter { n: 0 };
+with_provider[Metric](p, || { Metric.record(99); });
+println(p.n);
+}

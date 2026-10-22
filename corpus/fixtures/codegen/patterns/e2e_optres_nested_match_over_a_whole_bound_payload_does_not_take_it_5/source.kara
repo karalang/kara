@@ -1,0 +1,6 @@
+enum E { A(String), B }
+fn main() {
+let a: Option[E] = Some(E.A(f"tv"));
+match a { Some(ref p) => { match p { E.A(s) => { println(s); } E.B => {} } } None => {} }
+match a { Some(p) => { match p { E.A(s) => { println(s); } E.B => {} } } None => {} }
+}

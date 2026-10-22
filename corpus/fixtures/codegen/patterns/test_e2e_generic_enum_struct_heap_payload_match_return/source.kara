@@ -1,0 +1,12 @@
+struct Box { s: String }
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let b: Box = Box { s: f"inside" };
+    let db: Box = Box { s: f"dflt" };
+    let r: Box = get(Opt.Yes(b), db);
+    println(r.s);
+    let db2: Box = Box { s: f"fb" };
+    let r2: Box = get(Opt.No, db2);
+    println(r2.s);
+}

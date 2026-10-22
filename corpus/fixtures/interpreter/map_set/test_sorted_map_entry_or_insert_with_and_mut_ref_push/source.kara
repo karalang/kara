@@ -1,0 +1,9 @@
+fn main() {
+let mut groups: SortedMap[String, Vec[i64]] = SortedMap.new();
+groups.entry("even".to_string()).or_insert(Vec.new()).push(2);
+groups.entry("odd".to_string()).or_insert_with(|| Vec.new()).push(1);
+groups.entry("even".to_string()).or_insert(Vec.new()).push(4);
+for k in groups.keys() {
+println(f"{k}:{groups.get_or(k.clone(), Vec.new()).len()}");
+}
+}

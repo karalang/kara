@@ -1,0 +1,14 @@
+fn main() {
+let mut c: Column[String] = Column.new();
+c.push("alpha"); c.push_null(); c.push("gamma");
+let bytes = c.to_arrow_ipc();
+let d: Column[String] = Column.from_arrow_ipc(bytes);
+println(d.len());
+println(d.null_count());
+println(d.is_null(0));
+println(d.is_null(1));
+println(d.is_null(2));
+let vals = d.iter_valid();
+println(vals[0]);
+println(vals[1]);
+}

@@ -1,0 +1,11 @@
+fn main() {
+let v = [1, 2, 3, 4, 5];
+match v.iter().find_map(|x| if x > 2 { Some(x * 2) } else { None }) { Some(n) => println(n), None => println(-1) }
+let w: Vec[u8] = [10u8, 20u8, 30u8, 40u8];
+match w.iter().find_map(|x| if x > 25u8 { Some(x) } else { None }) { Some(n) => println(n), None => println(0u8) }
+let f: Vec[f64] = [1.0, 2.0, 3.0];
+match f.iter().find_map(|x| if x > 2.0 { Some(x + 2.0) } else { None }) { Some(n) => println(n), None => println(0.0) }
+match v.iter().find_map(|x| if x > 100 { Some(x) } else { None }) { Some(n) => println(n), None => println(-1) }
+let b = [1, 2, 3, 4, 5, 6];
+match b.iter().filter(|x| x % 2 == 0).find_map(|x| if x > 2 { Some(x * 2) } else { None }) { Some(n) => println(n), None => println(-1) }
+}

@@ -1,0 +1,4 @@
+struct W { a: i64, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.n}"); } }
+fn take(w: W) -> i64 { let W { a, n } = w; a }
+fn main() { take(W { a: 47, n: 5 }); println("end"); }

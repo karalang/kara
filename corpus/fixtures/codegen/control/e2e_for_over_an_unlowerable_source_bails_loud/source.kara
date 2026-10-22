@@ -1,0 +1,6 @@
+fn mk() -> Array[String, 2] { return [f"a", f"b"]; }
+fn main() {
+let mut n = 0;
+for s in mk() { n = n + 1; }
+println(n);
+}

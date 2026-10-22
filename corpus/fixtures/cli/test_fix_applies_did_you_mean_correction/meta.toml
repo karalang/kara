@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_fix_applies_did_you_mean_correction"
+dedup_of = ["tests/cli.rs::test_fix_dry_run_does_not_modify_file", "tests/cli.rs::test_check_json_includes_replacement_metadata"]
+expect = "error:E0100"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "c6e7de32"
+model_rev = "583cfb0d"
+model_src = "c6e7de32"

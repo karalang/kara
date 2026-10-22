@@ -1,0 +1,17 @@
+source = "tests/codegen/concurrency.rs::e2e_channel_try_send_and_recv_blocking"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:par", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "d10843f8"
+model_rev = "583cfb0d"
+model_src = "d10843f8"

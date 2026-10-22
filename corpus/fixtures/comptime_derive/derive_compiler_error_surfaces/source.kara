@@ -1,0 +1,10 @@
+
+comptime fn derive_check(comptime T: Type) -> Vec[Item] {
+    if T.fields().len() == 0 { compiler.error("derive_check needs fields"); }
+    [ast.item("impl " + T.name() + " { fn ok(self) -> bool { true } }")]
+}
+
+#[derive(Check)]
+struct Empty {}
+
+fn main() {}

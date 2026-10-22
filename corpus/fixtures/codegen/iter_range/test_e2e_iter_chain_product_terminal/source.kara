@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+println(f"{v.iter().product()}");
+println(f"{v.iter().map(|x| x + 1).product()}");
+println(f"{v.iter().filter(|x| x % 2 == 0).product()}");
+let f: Vec[f64] = [1.5, 2.0, 4.0];
+println(f"{f.iter().product()}");
+let e: Vec[i64] = [];
+println(f"{e.iter().product()}");
+println(f"{(1..5).product()}");
+}

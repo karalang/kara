@@ -1,0 +1,7 @@
+fn main() {
+    let s: String = "hello world";
+    println(s.ends_with("world"));
+    println(s.ends_with("hello"));
+    println(s.ends_with(""));
+    println(s.ends_with("this is far too long to fit"));
+}

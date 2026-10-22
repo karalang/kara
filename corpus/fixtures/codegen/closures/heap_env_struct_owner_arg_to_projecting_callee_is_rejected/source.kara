@@ -1,0 +1,4 @@
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn steal(h: H) -> Fn(i64) -> i64 { h.f }
+fn main() { let a = H { f: make(10i64) }; let g = steal(a); println(f"{g(5i64)}"); }

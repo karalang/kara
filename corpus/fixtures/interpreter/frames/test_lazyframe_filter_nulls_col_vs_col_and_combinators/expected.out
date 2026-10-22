@@ -1,0 +1,11 @@
+3
+1
+2
+2
+== logical plan ==
+FILTER (age < 40)
+  FILTER (age > 10)
+    SCAN [age, name, opt]
+== optimized ==
+FILTER ((age > 10) and (age < 40))
+  SCAN cols=[age]

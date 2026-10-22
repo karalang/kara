@@ -1,0 +1,7 @@
+fn main() {
+    let (tx, rx) = Channel.new();
+    tx.send(1); tx.send(2); tx.send(3);
+    println(rx.recv());
+    println(rx.recv());
+    println(rx.recv());
+}

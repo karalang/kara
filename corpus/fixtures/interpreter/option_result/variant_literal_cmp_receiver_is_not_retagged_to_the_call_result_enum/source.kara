@@ -1,0 +1,14 @@
+#[derive(Ord, Eq)]
+             enum E { A, B }
+             fn tag(o: Ordering) -> i64 {
+                 if o.is_lt() { return 0; }
+                 if o.is_eq() { return 1; }
+                 return 2;
+             }
+             fn main() {
+                 let a = E.A;
+                 let b = E.B;
+                 println(f"{tag(E.A.cmp(E.B))} {tag(E.B.cmp(E.A))} {tag(E.A.cmp(E.A))}");
+                 println(f"{tag(a.cmp(b))} {tag(b.cmp(a))} {tag(a.cmp(a))}");
+                 println(f"{tag(a.cmp(E.B))} {tag(b.cmp(E.A))} {tag(a.cmp(E.A))}");
+             }

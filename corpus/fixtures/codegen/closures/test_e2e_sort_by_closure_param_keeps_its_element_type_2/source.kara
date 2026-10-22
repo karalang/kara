@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push(f"ccc"); v.push(f"a"); v.push(f"bb");
+v.sort_by(|x, y| x.len().cmp(y.len()));
+println(f"{v[0]} {v[1]} {v[2]}");
+}

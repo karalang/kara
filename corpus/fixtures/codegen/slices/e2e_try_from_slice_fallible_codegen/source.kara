@@ -1,0 +1,7 @@
+fn main() {
+let src: Vec[i64] = Vec.filled(3_i64, 7_i64);
+match Vec.try_from_slice(src) {
+Ok(v) => { println("ok"); println(v.len()); println(v[0]); println(v[2]); }
+Err(_) => println("err"),
+}
+}

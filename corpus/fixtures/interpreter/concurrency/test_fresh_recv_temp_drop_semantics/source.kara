@@ -1,0 +1,34 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+impl Res {
+fn ident(ref self) -> i64 {
+return self.id;
+}
+fn eat(self) -> i64 {
+return self.id + 100;
+}
+fn me(self) -> Res {
+return self;
+}
+}
+fn mk(n: i64) -> Res {
+return Res { id: n, name: f"r{n}" };
+}
+fn main() {
+println("a: ref-method fresh struct receiver");
+let x = mk(1).ident();
+println(f"x={x}");
+println("b: owned-self consumed receiver");
+let y = mk(2).eat();
+println(f"y={y}");
+println("c: bare ref-method statement");
+mk(3).ident();
+println("d: passthrough result owned by binding");
+let m = mk(4).me();
+println(f"m={m.id}");
+println("end");
+}

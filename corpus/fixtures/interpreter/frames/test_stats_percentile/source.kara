@@ -1,0 +1,7 @@
+fn main() {
+let xs = [3.0_f64, 1.0_f64, 4.0_f64, 1.0_f64, 5.0_f64, 9.0_f64, 2.0_f64];
+println(Stats.percentile(xs, 50.0_f64));
+println(Stats.percentile(xs, 0.0_f64));
+println(Stats.percentile(xs, 100.0_f64));
+println(Stats.percentile(xs, 25.0_f64));
+}

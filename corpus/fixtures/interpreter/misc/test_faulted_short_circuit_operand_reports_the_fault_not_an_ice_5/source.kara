@@ -1,0 +1,7 @@
+struct It { data: Vec[Vec[i64]], row: i64, col: i64 }
+fn main() {
+let it: It = It { data: Vec.new(), row: 0i64, col: 0i64 };
+while it.col >= it.data[it.row].len() and it.row < it.data.len() {
+println("skip");
+}
+}

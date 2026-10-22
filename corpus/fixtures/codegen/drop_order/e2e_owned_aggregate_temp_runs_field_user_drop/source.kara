@@ -1,0 +1,17 @@
+struct A { t: i64 }
+impl Drop for A { fn drop(mut ref self) { println(f"dA{self.t}"); } }
+struct H { a: A }
+fn consume(h: H) { println("c"); }
+fn mk(t: i64) -> H { H { a: A { t: t } } }
+fn pass(h: H) -> H { h }
+fn main() {
+    consume(H { a: A { t: 1 } });
+    println("-");
+    consume(mk(2));
+    println("-");
+    mk(3);
+    println("-");
+    let p = pass(H { a: A { t: 4 } });
+    println(f"{p.a.t}");
+    println("end");
+}

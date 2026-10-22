@@ -1,0 +1,18 @@
+struct Acc { total: i64 }
+struct Src { val: i64 }
+impl Acc {
+    fn add(mut ref self, s: ref Src) { self.total = self.total + s.val; }
+    fn drain(mut ref self, s: mut ref Src) { self.total = self.total + s.val; s.val = 0; }
+}
+fn main() {
+    let mut a: Acc = Acc { total: 0 };
+    let mut s: Src = Src { val: 5 };
+    let mut i: i64 = 0;
+    while i < 4 { a.add(s); i = i + 1; }
+    println(f"{a.total}");
+    a.drain(s);
+    println(f"{a.total}");
+    println(f"{s.val}");
+    a.add(Src { val: 7 });
+    println(f"{a.total}");
+}

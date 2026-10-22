@@ -1,0 +1,15 @@
+#[derive(Display)]
+struct W { s: Slice[i64], n: i64 }
+#[derive(Display)]
+enum E { A(Slice[i64]), B }
+fn main() {
+let k = env.args().len() as i64;
+let mut v: Vec[i64] = Vec.new();
+v.push(k);
+                 v.push(k + 1);
+let s: Slice[i64] = v.as_slice();
+let w = W { s: s, n: 7 };
+println(f"{w}");
+let e = E.A(s);
+println(f"{e}");
+             }

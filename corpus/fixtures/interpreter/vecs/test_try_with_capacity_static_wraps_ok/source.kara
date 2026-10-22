@@ -1,0 +1,10 @@
+fn main() {
+match Vec.try_with_capacity(8_i64) {
+Ok(v) => {
+let mut vv = v;
+vv.push(1_i64);
+println(vv.len());
+},
+Err(e) => println("err"),
+}
+}

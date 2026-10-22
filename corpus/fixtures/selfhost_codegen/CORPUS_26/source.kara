@@ -1,0 +1,1 @@
+fn main() { println((not (1 == 2)).to_string()) }

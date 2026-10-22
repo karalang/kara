@@ -1,0 +1,12 @@
+struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+             struct Holder { xs: Vec[D] }
+             fn thru(a: mut ref Vec[D]) { let t: D = D { id: 42, s: f"dddddddddddddddddddddddddddddddddd-42" }; a[0] = t; println(f"four:{a[0].s.len()}"); }
+             fn main() {
+                 let mut h: Holder = Holder { xs: [D { id: 31, s: f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa-31" }] };
+                 let t: D = D { id: 32, s: f"ccccccccccccccccccccccccccccccc-32" };
+                 h.xs[0] = t;
+                 println(f"three:{h.xs[0].s.len()}");
+                 let mut a: Vec[D] = [D { id: 41, s: f"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-41" }];
+                 thru(mut a);
+             }

@@ -1,0 +1,1 @@
+fn main() { println(isize.MAX); println(isize.MIN); }

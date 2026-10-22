@@ -1,0 +1,6 @@
+#[repr(C)] union BitsLR { l: u32, r: u32 }
+fn main() {
+let u = BitsLR { l: 4242u32 };
+let v = unsafe { u.r };
+println(v);
+}

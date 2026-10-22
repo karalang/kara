@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct S { e: E }
+struct H1 { e: E }
+impl H1 { fn take(mut ref self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } }
+struct H2 { s: S }
+impl H2 { fn take(mut ref self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } }
+fn main() {
+    let mut a = H1 { e: E.A(R { id: 1 }) };
+    println(a.take());
+    let mut b = H2 { s: S { e: E.A(R { id: 2 }) } };
+    println(b.take());
+}

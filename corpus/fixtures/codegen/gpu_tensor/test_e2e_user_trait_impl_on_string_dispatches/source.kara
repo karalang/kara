@@ -1,0 +1,9 @@
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for String { fn describe(ref self) -> String { return f"s:{self}"; } }
+fn show[T: Zero](x: ref T) -> String { return x.describe(); }
+fn main() {
+let s: String = "hi";
+println(s.describe());
+println(show(s));
+println(s.len());
+}

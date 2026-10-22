@@ -1,0 +1,14 @@
+fn main() {
+    let s = c"ABCD";
+    let mut p = s.as_ptr();
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    unsafe {
+        while i < 4i64 {
+            sum = sum + (p.read() as i64);
+            p = p.offset(1i64);
+            i = i + 1i64;
+        }
+    }
+    println(sum);
+}

@@ -1,0 +1,13 @@
+fn main() {
+let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+let mut t: i64 = 0;
+for k in 0..24 {
+let mut pad: Vec[i64] = [];
+for j in 0..k { pad.push(j); }
+let mut v: Vec[Vector[i64, 4]] = [];
+v.push(a);
+let g = ref v[0];
+t = t + g.reduce_sum() + pad.len();
+}
+println(t);
+}

@@ -1,0 +1,6 @@
+enum E { A { s: String }, B }
+fn main() {
+let a: Option[E] = Some(E.A { s: f"il" });
+if let Some(ref p) = a { match p { E.A { s } => { println(s); } E.B => {} } }
+if let Some(p) = a { match p { E.A { s } => { println(s); } E.B => {} } } else { println("none"); }
+}

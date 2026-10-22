@@ -1,0 +1,1 @@
+fn main() { let gv = E.A(R { id: 5 }); println("mid") }

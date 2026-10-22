@@ -1,0 +1,19 @@
+trait Redu {
+    fn tsum(ref self) -> i64;
+    fn tprod(ref self) -> i64;
+}
+impl Redu for Vec[i64] {
+    fn tsum(ref self) -> i64 { let mut a = 0; for x in self { a = a + x; } a }
+    fn tprod(ref self) -> i64 { let mut a = 1; for x in self { a = a * x; } a }
+}
+fn callsum[C: Redu](c: ref C) -> i64 { c.tsum() }
+fn callprod[C: Redu](c: ref C) -> i64 { c.tprod() }
+fn both[C: Redu](c: ref C) -> i64 { c.tsum() + c.tprod() }
+fn main() {
+    let mut v = Vec.new();
+    v.push(1); v.push(2); v.push(3); v.push(4);
+    println(f"{v.tsum()}");
+    println(f"{callsum(v)}");
+    println(f"{callprod(v)}");
+    println(f"{both(v)}");
+}

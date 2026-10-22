@@ -1,0 +1,15 @@
+
+struct Inner { v: i64 }
+struct H { a: Map[String, i64], b: Map[i32, Inner], c: Map[String, Vec[u8]] }
+fn main() {
+    let r = comptime {
+        let mut s = "";
+        for f in H.fields() {
+            s = s + f.ty.key_type().name() + "=>" + f.ty.value_type().name();
+            if f.ty.value_type().is_struct() { s = s + "*"; }
+            s = s + ";";
+        }
+        s
+    };
+    println(r);
+}

@@ -1,0 +1,3 @@
+fn main() { let mut mp: Map[i64, String] = Map.new();
+mp.insert(1, "hi");
+match mp.get(1) { Some(x) => println(x), None => println("no") } }

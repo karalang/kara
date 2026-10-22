@@ -1,0 +1,8 @@
+fn main() {
+    let mut names = Vec.new();
+    names.push("alpha".to_string());
+    names.push("beta".to_string());
+    println(names.len().to_string());
+    println(names[0]);
+    println(names[1]);
+}

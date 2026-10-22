@@ -1,0 +1,3 @@
+fn f() { match mk(7) { E.A(n) => { if n > 0 { println(f"v{n}"); return } } E.B => {} }
+  println("AFTER") }
+fn main() { f(); println("done") }

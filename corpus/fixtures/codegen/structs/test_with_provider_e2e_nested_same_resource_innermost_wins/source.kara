@@ -1,0 +1,15 @@
+pub trait Reader { fn get(ref self) -> i64; }
+pub struct Data { x: i64 }
+impl Reader for Data { fn get(ref self) -> i64 { self.x } }
+pub effect resource D: Reader;
+fn main() {
+let outer = Data { x: 1 };
+let inner = Data { x: 2 };
+with_provider[D](outer, || {
+println(D.get());
+with_provider[D](inner, || {
+println(D.get());
+});
+println(D.get());
+});
+}

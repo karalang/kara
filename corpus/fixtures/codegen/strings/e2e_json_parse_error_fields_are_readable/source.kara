@@ -1,0 +1,18 @@
+import std.json.{Json, JsonError};
+
+fn describe(e: JsonError) -> String { return f"{e.line}:{e.column}:{e.message.len()}"; }
+fn main() {
+let bad = Json.parse("{bad");
+match bad {
+Ok(_v) => println("ok"),
+Err(e) => {
+println(e.line);
+println(f"col={e.column}");
+println(e.message.len() > 0);
+let outer_len = e.message.len();
+println(describe(e) == f"1:2:{outer_len}");
+}
+}
+let good = Json.parse("{\"a\": 1}");
+match good { Ok(_v) => println("parsed"), Err(e2) => println(e2.message) }
+}

@@ -1,0 +1,6 @@
+import db;
+
+fn main() {
+    let c = db.connection.open(9);
+    println(f"{c.id}");
+}

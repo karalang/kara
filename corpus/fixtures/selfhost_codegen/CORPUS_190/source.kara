@@ -1,0 +1,31 @@
+struct Lit {
+    v: i64,
+}
+struct Cal {
+    name: String,
+    args: Vec[E],
+}
+shared enum E {
+    N(Lit),
+    C(Cal),
+}
+fn total(e: E) -> i64 {
+    match e {
+        N(l) => l.v,
+        C(c) => {
+            let mut s = 0;
+            for a in c.args {
+                s = s + total(a);
+            }
+            s
+        }
+    }
+}
+fn main() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(E.N(Lit { v: 1 }));
+    xs.push(E.N(Lit { v: 2 }));
+    xs.push(E.N(Lit { v: 4 }));
+    let c = E.C(Cal { name: "f", args: xs });
+    println(total(c).to_string());
+}

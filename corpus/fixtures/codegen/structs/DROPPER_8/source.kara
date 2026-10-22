@@ -1,0 +1,7 @@
+struct Id { r: R }
+impl Drop for Id { fn drop(mut ref self) { println("drop Id"); } }
+struct Wd { inner: Id, n: i64 }
+#[allow(partial_move_of_drop_struct)]
+fn take(w: Wd) -> R { w.inner.r }
+fn main() { let x = take(Wd { inner: Id { r: R { id: 44 } }, n: 4 });
+             println(f"{x.id}"); }

@@ -1,0 +1,18 @@
+fn main() {
+let mut a: Vec[i64] = Vec.new();
+a.push(1); a.push(2); a.push(3); a.push(4); a.push(5); a.push(6);
+a.retain(|x| x % 2 == 0);
+println(a.len());
+println(a[0]); println(a[1]); println(a[2]);
+let mut s: Vec[String] = Vec.new();
+s.push("a"); s.push("bbb"); s.push("cc"); s.push("ddddd");
+s.retain(|w| w.len() >= 3);
+println(s.len());
+println(s[0]); println(s[1]);
+let mut n: Vec[i64] = Vec.new();
+n.push(10); n.push(5); n.push(20); n.push(3);
+let threshold: i64 = 6;
+n.retain(|x| x > threshold);
+println(n.len());
+println(n[0]); println(n[1]);
+}

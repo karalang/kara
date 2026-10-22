@@ -1,0 +1,10 @@
+fn pick(n: i64) -> i64 with panics {
+    if n < 0 {
+        panic("negative input");
+    }
+    n * 2
+}
+fn main() with panics {
+    println(pick(3).to_string());
+    println(pick(0).to_string());
+}

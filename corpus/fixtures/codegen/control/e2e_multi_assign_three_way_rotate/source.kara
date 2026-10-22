@@ -1,0 +1,5 @@
+fn main() {
+let mut x = 1i64; let mut y = 2i64; let mut z = 3i64;
+x, y, z = z, x, y;
+println(f"{x} {y} {z}");
+}

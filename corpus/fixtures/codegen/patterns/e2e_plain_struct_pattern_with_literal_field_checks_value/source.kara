@@ -1,0 +1,15 @@
+struct P { x: i64, y: i64 }
+fn name(p: P) -> String {
+match p {
+P { x: 0, y: 0 } => "origin",
+P { x: 0, y: _ } => "y-axis",
+P { x: _, y: 0 } => "x-axis",
+P { x: _, y: _ } => "other",
+}
+}
+fn main() {
+println(name(P { x: 0, y: 0 }));
+println(name(P { x: 0, y: 5 }));
+println(name(P { x: 5, y: 0 }));
+println(name(P { x: 5, y: 5 }));
+}

@@ -1,0 +1,2 @@
+import db.fetch_count;
+fn main() { println(fetch_count()); }

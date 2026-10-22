@@ -1,0 +1,14 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR[{self.s}]") } }
+struct P { r: R, n: i64 }
+struct C { mut i: i64 }
+impl C { fn next(mut ref self) -> Option[P] {
+    self.i = self.i + 1;
+    if self.i > 2 { return Option.None; }
+    return Option.Some(P { r: R { s: f"w{self.i}" }, n: self.i });
+} }
+fn main() {
+    let mut c = C { i: 0 };
+    while let Some(p) = c.next() { println(p.n) }
+    println("end");
+}

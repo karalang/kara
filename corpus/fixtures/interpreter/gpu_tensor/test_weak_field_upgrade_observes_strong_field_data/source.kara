@@ -1,0 +1,10 @@
+shared struct Parent { id: i64, mut count: i64 }
+shared struct Child { mut weak parent: Parent }
+fn main() {
+let p = Parent { id: 5, count: 100 };
+let c = Child { parent: p };
+match c.parent {
+Some(parent_ref) => { parent_ref.count = parent_ref.count + 1; println(p.count); },
+None => println("dangling"),
+}
+}

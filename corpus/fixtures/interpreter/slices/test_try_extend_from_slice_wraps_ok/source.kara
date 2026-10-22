@@ -1,0 +1,9 @@
+fn main() {
+let mut v: Vec[i64] = [1_i64];
+let src: Vec[i64] = [2_i64, 3_i64];
+match v.try_extend_from_slice(src) {
+Ok(_) => println("ok"),
+Err(e) => println("err"),
+}
+println(v.len());
+}

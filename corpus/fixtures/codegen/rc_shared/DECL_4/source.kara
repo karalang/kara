@@ -1,0 +1,4 @@
+struct H { xs: Vec[R] }
+fn main() { let h = H { xs: [R { id: 41, name: f"n{41}" }] };
+let mut out: Vec[String] = Vec.new(); out.push(h.xs[0].name);
+println(f"{out[0]}"); println(f"{h.xs[0].name}") }

@@ -1,0 +1,6 @@
+fn act(t: ref Tensor[f32, [64]]) -> Tensor[f32, [64]] { t.map(|x| x * 2.0) }
+fn main() {
+let t: Tensor[f32, [64]] = Tensor.ones([64]);
+let r = act(t);
+println(r.sum());
+}

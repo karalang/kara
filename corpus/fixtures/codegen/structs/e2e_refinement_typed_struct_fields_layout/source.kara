@@ -1,0 +1,8 @@
+pub type BoundedText = String where self.len() >= 1;
+pub type PositivePrice = f64 where self > 0.0;
+pub type PositiveQty = i64 where self > 0;
+pub struct Row { name: BoundedText, price: PositivePrice, qty: PositiveQty }
+fn main() {
+let r = Row { name: "widget" as BoundedText, price: 2.5 as PositivePrice, qty: 3 };
+println(f"{r.name} {r.price} x{r.qty}");
+}

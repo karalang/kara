@@ -1,0 +1,12 @@
+struct Holder { buckets: Map[i64, Vec[i64]], byname: SortedMap[String, Vec[i64]] }
+fn main() {
+let mut h = Holder { buckets: Map.new(), byname: SortedMap.new() };
+h.buckets.entry(1).or_insert(Vec.new()).push(43);
+h.buckets.entry(1).or_insert(Vec.new()).push(7);
+println(h.buckets[1][0]);
+println(h.buckets[1][1]);
+h.byname.entry("k").or_insert(Vec.new()).push(6);
+println(h.byname["k"][0]);
+let vv: Vec[Vec[i64]] = [[1, 2], [3, 4]];
+println(vv[1][0]);
+}

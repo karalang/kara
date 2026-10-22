@@ -1,0 +1,2 @@
+fn show(s: ref String) {}
+fn main() { show("lit") }

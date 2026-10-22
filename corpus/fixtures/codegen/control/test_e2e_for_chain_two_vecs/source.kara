@@ -1,0 +1,19 @@
+fn main() {
+let v: Vec[i64] = [1, 2];
+let w: Vec[i64] = [10, 20, 30];
+let mut s: i64 = 0;
+for x in v.iter().chain(w.iter()) { s = s + x; }
+println(s);
+let mut t: i64 = 0;
+for x in v.iter().chain(w.iter()) {
+if x == 2 { break; }
+t = t + x;
+}
+println(t);
+let mut u: i64 = 0;
+for x in v.iter().chain(w.iter()) {
+if x == 20 { continue; }
+u = u + x;
+}
+println(u);
+}

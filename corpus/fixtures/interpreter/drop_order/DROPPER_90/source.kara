@@ -1,0 +1,2 @@
+fn tupf(r: R) -> (R, i64) { (r, 9) }
+fn main() { let a = R { id: 17 }; let t = tupf(a); println(f"{t.1}") }

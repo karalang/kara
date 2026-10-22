@@ -1,0 +1,5 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64]));
+let _ = df.select(["a", "zzz"]);
+}

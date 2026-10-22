@@ -1,0 +1,16 @@
+fn unit_ok() -> Result[(), i64] { Ok(()) }
+fn unit_some() -> Option[()] { Some(()) }
+fn build() -> Result[(), i64] {
+unit_ok()?;
+Ok(())
+}
+fn main() {
+match build() {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+match unit_some() {
+Some(_) => println("some"),
+None => println("none"),
+}
+}

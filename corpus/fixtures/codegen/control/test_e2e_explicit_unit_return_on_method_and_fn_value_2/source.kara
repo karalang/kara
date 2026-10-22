@@ -1,0 +1,3 @@
+fn f(n: i64) -> () { println(f"g{n}"); }
+fn run(g: Fn(i64) -> () with writes(Stdout)) { g(1i64); }
+fn main() { println("before"); let h = f; h(7i64); run(f); println("after"); }

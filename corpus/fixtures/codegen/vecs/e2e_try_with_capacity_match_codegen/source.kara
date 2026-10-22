@@ -1,0 +1,11 @@
+fn main() {
+let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(4);
+match r {
+Ok(v) => {
+let mut v3 = v;
+v3.push(7_i64);
+println("ok"); println(v3.len()); println(v3[0]);
+}
+Err(_) => println("err"),
+}
+}

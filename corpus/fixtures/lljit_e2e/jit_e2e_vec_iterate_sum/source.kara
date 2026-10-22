@@ -1,0 +1,11 @@
+fn main() {
+  let v: Vec[i64] = Vec.new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  let mut sum: i64 = 0;
+  for x in v {
+    sum = sum + x;
+  }
+  println(sum);
+}

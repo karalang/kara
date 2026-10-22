@@ -1,0 +1,5 @@
+fn main() {
+    let mut m: Map[i64, Tg] = Map.new();
+    m.insert(3i64, mkd(0i64));
+    println(f"len:{m.len()}");
+}

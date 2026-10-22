@@ -1,0 +1,2 @@
+import db;
+fn main() { println(db.conn.open()); println(db.pool.open()); }

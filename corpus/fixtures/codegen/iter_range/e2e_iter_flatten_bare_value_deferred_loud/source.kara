@@ -1,0 +1,1 @@
+fn main() { let v: Vec[Vec[i64]] = [[1,2],[3]]; let it = v.iter().flatten(); for x in it { println(x); } }

@@ -1,0 +1,2 @@
+import mathx.geo.area;
+fn main() { println(area(3, 4)); }

@@ -1,0 +1,27 @@
+enum Color { Red, Green, Blue }
+        impl Display for Color {
+            fn to_string(ref self) -> String {
+                match self { Red => "red", Green => "green", Blue => "blue" }
+            }
+        }
+        enum Msg { Info(i64), Quit }
+        impl Display for Msg {
+            fn to_string(ref self) -> String {
+                match self { Info(c) => f"info#{c}", Quit => "quit" }
+            }
+        }
+        struct Point { x: i64, y: i64 }
+        impl Display for Point {
+            fn to_string(ref self) -> String { f"({self.x}, {self.y})" }
+        }
+        fn main() {
+            let c = Color.Green;
+            println(c.to_string());      // green
+            println(f"c={c}");           // c=green
+            println(c);                  // green
+            let m = Msg.Info(7);
+            let q = Msg.Quit;
+            println(f"{m} {q}");          // info#7 quit
+            let p = Point { x: 3, y: 4 };
+            println(f"p={p}");            // p=(3, 4)
+        }

@@ -1,0 +1,4 @@
+enum MyOptD { Some(i64), Nothing }
+fn main() { let x: MyOptD = MyOptD.Some(71);
+match x { Some(v) => { println(f"a{v}") } Nothing => { println("sn") } }
+println("done") }

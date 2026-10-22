@@ -1,0 +1,13 @@
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+fn probe(raw: u8) {
+match UsbClass.try_from(raw) {
+Ok(c) => println(f"ok{c.discriminant()}"),
+Err(e) => match e {
+DiscriminantError.OutOfRange { value } => println(f"no{value}"),
+},
+}
+}
+fn main() {
+probe(0u8); probe(1u8); probe(3u8); probe(8u8); probe(255u8);
+}

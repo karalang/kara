@@ -1,0 +1,4 @@
+enum MyE { Err(i64), Fine }
+fn main() { let x: Result[i64, MyE] = Result[i64, MyE].Err(MyE.Err(71));
+match x { Ok(v) => { println(f"ok{v}") } Err(Err(c)) => { println(f"e{c}") } Err(Fine) => { println("ef") } }
+println("done") }

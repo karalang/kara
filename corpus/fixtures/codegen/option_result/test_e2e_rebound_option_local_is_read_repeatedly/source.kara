@@ -1,0 +1,5 @@
+fn main() {
+let o: Option[String] = Some(f"hi");
+let p: Option[String] = o;
+match p { Some(v) => { println(v); } None => {} }
+}

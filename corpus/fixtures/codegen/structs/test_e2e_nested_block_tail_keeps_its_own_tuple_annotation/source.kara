@@ -1,0 +1,8 @@
+fn f() -> (i64, i64) {
+let b: u8 = 200u8;
+let d: u32 = 4000000000u32;
+let inner: (u8, u32) = { (b, d) };
+println(f"inner {inner.0} {inner.1}");
+return (b, d);
+}
+fn main() { let t = f(); println(f"outer {t.0} {t.1}"); }

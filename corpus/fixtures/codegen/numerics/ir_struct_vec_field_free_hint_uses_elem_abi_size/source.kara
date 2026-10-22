@@ -1,0 +1,5 @@
+struct Grid { cells: Vec[i64] }
+fn main() {
+let g = Grid { cells: Vec.filled(4i64, 7i64) };
+println(g.cells.len().to_string());
+}

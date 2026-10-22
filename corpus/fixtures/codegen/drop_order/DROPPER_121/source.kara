@@ -1,0 +1,6 @@
+struct Two { a: R, b: R }
+impl Drop for Two { fn drop(mut ref self) { println("drop Two"); } }
+#[allow(partial_move_of_drop_struct)]
+fn take(t: Two) -> R { let Two { a, b } = t; a }
+fn main() { let x = take(Two { a: R { id: 44 }, b: R { id: 45 } });
+             println(f"{x.id}"); }

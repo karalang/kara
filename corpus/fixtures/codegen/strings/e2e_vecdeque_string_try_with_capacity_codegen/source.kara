@@ -1,0 +1,17 @@
+fn bvd() -> Result[i64, AllocError] {
+let mut v: VecDeque[i64] = VecDeque.try_with_capacity(4)?;
+v.push_back(1_i64);
+v.push_front(2_i64);
+Ok(v[0] + v[1])
+}
+fn bstr() -> Result[i64, AllocError] {
+let mut s: String = String.try_with_capacity(8)?;
+s.push_str("hello");
+Ok(s.len())
+}
+fn main() {
+let rv: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(4);
+match rv { Ok(v) => println(v.len()), Err(_) => println("e") }
+match bvd() { Ok(n) => println(n), Err(_) => println("e") }
+match bstr() { Ok(n) => println(n), Err(_) => println("e") }
+}

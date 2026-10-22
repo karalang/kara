@@ -1,0 +1,48 @@
+#[derive(Clone)]
+struct Inner { data: Vec[i64] }
+struct Outer { inner: Inner, extra: Vec[i64] }
+struct GInner[T] { data: Vec[T] }
+struct GOuter[T] { inner: GInner[T] }
+struct Mid { inner: Inner }
+struct Deep { mid: Mid }
+struct Multi { a: Vec[i64], b: String }
+struct MOuter { m: Multi }
+struct Con { inner: Inner, tag: i64 }
+impl Con {
+fn take(self) -> Inner {
+let x: Inner = self.inner.clone();
+x
+}
+}
+fn main() {
+let mut d0: Vec[i64] = Vec.new();
+d0.push(1); d0.push(2); d0.push(3);
+let mut e0: Vec[i64] = Vec.new();
+e0.push(100); e0.push(200);
+let o: Outer = Outer { inner: Inner { data: d0 }, extra: e0 };
+let bound: Inner = o.inner;
+println(bound.data.len());
+println(o.extra.len());
+let mut gd: Vec[i64] = Vec.new();
+gd.push(7); gd.push(8); gd.push(9); gd.push(10);
+let g: GOuter[i64] = GOuter { inner: GInner { data: gd } };
+let gb: GInner[i64] = g.inner;
+println(gb.data.len());
+let mut dd: Vec[i64] = Vec.new();
+dd.push(5); dd.push(6);
+let d: Deep = Deep { mid: Mid { inner: Inner { data: dd } } };
+let m: Mid = d.mid;
+let mi: Inner = m.inner;
+println(mi.data.len());
+let mut ma: Vec[i64] = Vec.new();
+ma.push(1); ma.push(2); ma.push(3); ma.push(4); ma.push(5);
+let mo: MOuter = MOuter { m: Multi { a: ma, b: "tag" } };
+let mm: Multi = mo.m;
+println(mm.a.len());
+println(mm.b.len());
+let mut cd: Vec[i64] = Vec.new();
+cd.push(11); cd.push(22); cd.push(33);
+let c: Con = Con { inner: Inner { data: cd }, tag: 9 };
+let got: Inner = c.take();
+println(got.data.len());
+}

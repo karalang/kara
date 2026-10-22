@@ -1,0 +1,6 @@
+fn main() {
+let dims = [2, 3];
+let t: Tensor[i64, [2, 3]] = Tensor.zeros(dims);
+println(t[1, 2]);
+println(t.rank());
+}

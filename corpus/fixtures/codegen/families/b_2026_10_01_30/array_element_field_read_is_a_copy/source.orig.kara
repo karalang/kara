@@ -1,0 +1,7 @@
+struct S { s: String, k: i64 }
+struct T { s: String }
+struct U { t: T, k: i64 }
+struct D { s: String, k: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.k}:{self.s.len()}") } }
+struct H { v: Vec[S] }
+fn main() { let n = 7; let a: Array[S, 2] = [S { s: f"one-aaaaaaaaaaaaaaaaaaaaaa-{n}", k: 1 }, S { s: f"two-bbbbbbbb-{n}", k: 5 }]; let x = a[1].s; println(f"x:{x}") }

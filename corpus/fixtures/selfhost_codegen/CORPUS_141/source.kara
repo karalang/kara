@@ -1,0 +1,60 @@
+struct Token { kind: i64, text: String }
+struct Lexer { src: String, pos: i64 }
+fn is_wordch(c: String) -> bool {
+    if c >= "a" and c <= "z" {
+        return true;
+    }
+    if c >= "A" and c <= "Z" {
+        return true;
+    }
+    return c == "_";
+}
+fn is_digitch(c: String) -> bool {
+    return c >= "0" and c <= "9";
+}
+impl Lexer {
+    fn new(src: String) -> Lexer {
+        return Lexer { src: src, pos: 0 };
+    }
+    fn done(ref self) -> bool {
+        return self.pos >= self.src.len();
+    }
+    fn peek(ref self) -> String {
+        return self.src.substring(self.pos, self.pos + 1);
+    }
+    fn skip_ws(mut ref self) {
+        while self.pos < self.src.len() and self.peek() == " " {
+            self.pos = self.pos + 1;
+        }
+    }
+    fn next_token(mut ref self) -> Token {
+        self.skip_ws();
+        let start = self.pos;
+        if is_wordch(self.peek()) {
+            while self.pos < self.src.len() and (is_wordch(self.peek()) or is_digitch(self.peek())) {
+                self.pos = self.pos + 1;
+            }
+            let w = self.src.substring(start, self.pos);
+            if w == "let" or w == "fn" or w == "if" {
+                return Token { kind: 4, text: w };
+            }
+            return Token { kind: 1, text: w };
+        }
+        if is_digitch(self.peek()) {
+            while self.pos < self.src.len() and is_digitch(self.peek()) {
+                self.pos = self.pos + 1;
+            }
+            return Token { kind: 2, text: self.src.substring(start, self.pos) };
+        }
+        self.pos = self.pos + 1;
+        return Token { kind: 3, text: self.src.substring(start, self.pos) };
+    }
+}
+fn main() {
+    let mut lx = Lexer.new("let x1 = 42 + foo".to_string());
+    while not lx.done() {
+        let t = lx.next_token();
+        println(t.kind.to_string() + ":" + t.text);
+        lx.skip_ws();
+    }
+}

@@ -1,0 +1,6 @@
+fn main() {
+let t: Tensor[f64, [2]] = Tensor.from([0.0, 1.5]);
+let n = -t;
+println(n[0]);
+println(n[1]);
+}

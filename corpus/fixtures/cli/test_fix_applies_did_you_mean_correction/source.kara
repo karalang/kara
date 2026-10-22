@@ -1,0 +1,2 @@
+fn helper() -> i64 { 42 }
+fn main() { println(helpr()); }

@@ -1,0 +1,6 @@
+fn narrow[T](x: T) -> u8 { 255 }
+fn passthru[T](x: T) -> u8 { narrow(x) }
+fn main() {
+    println(f"{narrow(7)}");
+    println(f"{passthru(9)}");
+}

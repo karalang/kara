@@ -1,0 +1,1 @@
+fn main() { let p = (E.A(R { id: 7 }), 1); println(f"{p.1}"); }

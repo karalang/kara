@@ -1,0 +1,7 @@
+fn main() {
+let mut m0: Map[i64, String] = Map.new();
+m0.insert(1, f"rm");
+let a: Result[Map[i64, String], i64] = Ok(m0);
+match a { Ok(ref p) => { println(p.len()); } Err(_) => {} }
+match a { Ok(q) => println(q.len()), Err(_) => println("err") }
+}

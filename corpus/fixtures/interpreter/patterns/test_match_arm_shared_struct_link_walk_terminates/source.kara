@@ -1,0 +1,16 @@
+shared struct Node { mut val: i64, mut next: Option[Node] }
+fn main() {
+let a = Node { val: 1, next: None };
+let b = Node { val: 2, next: None };
+a.next = Some(b);
+let mut cur = Some(a);
+let mut guard = 0;
+loop {
+if guard >= 5 { println("CYCLE"); break; }
+match cur {
+None => { println("end"); break; }
+Some(n) => { println(n.val); cur = n.next; }
+}
+guard = guard + 1;
+}
+}

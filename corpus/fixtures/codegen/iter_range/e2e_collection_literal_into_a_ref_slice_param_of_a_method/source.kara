@@ -1,0 +1,34 @@
+trait Sink {
+fn write(mut ref self, b: ref Slice[u8]);
+fn write_val(mut ref self, b: Slice[u8]);
+fn total(ref self) -> u64;
+fn put(mut ref self, n: u8) { self.write([n]) }
+fn put_val(mut ref self, n: u8) { self.write_val([n]) }
+}
+struct Acc { n: u64 }
+impl Sink for Acc {
+fn write(mut ref self, b: ref Slice[u8]) {
+for x in b { self.n = self.n + (x as u64); }
+}
+fn write_val(mut ref self, b: Slice[u8]) {
+for x in b { self.n = self.n + (x as u64); }
+}
+fn total(ref self) -> u64 { self.n }
+}
+struct Own { n: u64 }
+impl Own {
+fn write(mut ref self, b: ref Slice[u8]) {
+for x in b { self.n = self.n + (x as u64); }
+}
+fn put(mut ref self, n: u8) { self.write([n]) }
+fn total(ref self) -> u64 { self.n }
+}
+fn main() {
+let mut a = Acc { n: 0u64 };
+a.put(3u8);
+a.put_val(4u8);
+println(a.total());
+let mut o = Own { n: 0u64 };
+o.put(5u8);
+println(o.total());
+}

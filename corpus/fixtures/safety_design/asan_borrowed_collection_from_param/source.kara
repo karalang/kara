@@ -1,0 +1,10 @@
+fn ok(s: ref String) -> Vec[ref String] {
+let mut v: Vec[ref String] = Vec.new();
+v.push(s);
+v
+}
+fn main() {
+let s = String.from("a longer payload string");
+let v = ok(s);
+println(v.len());
+}

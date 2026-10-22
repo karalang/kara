@@ -1,0 +1,7 @@
+fn walk() -> i64 {
+    let s: String = "héllo";
+    let mut n = 0i64;
+    for ch in s.chars() { n = n + 1i64; }
+    return n;
+}
+fn main() { println(walk()); }

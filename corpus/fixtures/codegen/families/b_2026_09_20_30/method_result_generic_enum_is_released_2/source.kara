@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 2 }; let mb = mk.make(); println("x")
+}

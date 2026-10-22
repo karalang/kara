@@ -1,0 +1,8 @@
+struct C { bytes: Vec[u8] }
+fn main() {
+let mut v: Vec[u8] = Vec.new();
+v.push(195u8); v.push(233u8); v.push(127u8);
+for b in v { println(b.to_string()); }        // plain Vec var
+let c = C { bytes: v };
+for b in c.bytes { println(b.to_string()); }  // struct-field Vec
+}

@@ -1,0 +1,17 @@
+source = "tests/safety_design.rs::adversarial_escape_via_struct_field_local"
+dedup_of = []
+expect = "error:E0213"
+exit = 1
+tags = ["ref-return", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "d53b9644"
+model_rev = "583cfb0d"
+model_src = "d53b9644"

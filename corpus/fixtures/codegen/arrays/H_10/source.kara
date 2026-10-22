@@ -1,0 +1,1 @@
+fn main() { let a: Array[J, 2] = [J.A(1), J.B]; println("mid"); }

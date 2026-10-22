@@ -1,0 +1,6 @@
+fn main() {
+let s = "first";
+let s = "second";
+println(s);
+println(s.len());
+}

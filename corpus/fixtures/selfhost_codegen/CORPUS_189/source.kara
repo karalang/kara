@@ -1,0 +1,22 @@
+shared enum E {
+    A(i64),
+    B(i64),
+}
+fn val(e: ref E) -> i64 {
+    match e {
+        A(n) => n,
+        B(n) => n * 10,
+    }
+}
+fn main() {
+    let mut v: Vec[E] = Vec.new();
+    v.push(E.A(1));
+    v.push(E.B(2));
+    v.push(E.A(3));
+    println(v.len().to_string());
+    let mut t = 0;
+    for e in v {
+        t = t + val(e);
+    }
+    println(t.to_string());
+}

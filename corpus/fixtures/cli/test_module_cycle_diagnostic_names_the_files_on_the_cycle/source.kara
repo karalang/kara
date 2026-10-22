@@ -1,0 +1,7 @@
+import a.f;
+fn main() {
+    println(f"{f()}");
+}
+pub fn z() -> i64 {
+    return 1;
+}

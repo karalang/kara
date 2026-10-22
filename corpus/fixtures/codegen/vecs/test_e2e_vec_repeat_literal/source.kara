@@ -1,0 +1,16 @@
+fn main() {
+let v: Vec[i64] = Vec[7; 4];
+let mut sum = 0;
+for x in v { sum = sum + x; }
+println(sum);
+println(v.len());
+let m = vec![3; 5];
+println(m.len());
+let n = 6;
+let r: Vec[i64] = Vec[2; n];
+println(r.len());
+let mut g: Vec[i64] = Vec[0; 3];
+g.push(99);
+println(g.len());
+println(g[3]);
+}

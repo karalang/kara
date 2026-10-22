@@ -1,0 +1,16 @@
+fn make() -> (Vec[i64], Vec[String]) {
+let mut a: Vec[i64] = Vec.new();
+a.push(1); a.push(2); a.push(3);
+let mut b: Vec[String] = Vec.new();
+b.push("x"); b.push("y");
+(a, b)
+}
+fn main() {
+let mut t = make();
+t.0[0] = 10;
+t.0[2] = 30;
+t.1[1] = "zebra";
+println(f"{t.0[0] + t.0[1] + t.0[2]}");
+println(t.1[0]);
+println(t.1[1]);
+}

@@ -1,0 +1,14 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10);
+c.push(20);
+c.push_null();
+c.push(40);
+println(c.len());
+println(c.null_count());
+println(c.valid_count());
+println(c.is_null(2));
+println(c.is_null(0));
+match c[1] { Some(v) => println(v), None => println(-1) }
+match c[2] { Some(v) => println(v), None => println(-1) }
+}

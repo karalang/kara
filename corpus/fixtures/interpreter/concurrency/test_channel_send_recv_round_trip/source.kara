@@ -1,0 +1,6 @@
+fn main() {
+let (sender, receiver) = Channel.new();
+sender.send(42_i64);
+let val = receiver.recv();
+println(f"{val}");
+}

@@ -1,0 +1,17 @@
+source = "tests/interpreter/closures.rs::test_let_bound_range_index_captures_its_bounds"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: invalid MIR:"
+classified_with = "79705a229"
+extracted_src = "afdc74c4"
+model_rev = "583cfb0d"
+model_src = "afdc74c4"

@@ -1,0 +1,13 @@
+shared struct Parent { id: i64 }
+shared struct Child { id: i64, mut weak parent: Parent }
+fn make_orphan() -> Child {
+let p = Parent { id: 7 };
+Child { id: 2, parent: p }
+}
+fn main() {
+let c = make_orphan();
+match c.parent {
+Some(parent_ref) => println(parent_ref.id),
+None => println("dangling"),
+}
+}

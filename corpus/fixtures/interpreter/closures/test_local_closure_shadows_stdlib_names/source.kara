@@ -1,0 +1,18 @@
+fn shadowed() -> i64 {
+let take = |x: i64| {
+let mut v: Vec[i64] = Vec.new();
+v.push(x);
+v.len()
+};
+take(9)
+}
+fn unshadowed() -> i64 {
+let mut z = 7;
+take(mut z)
+}
+fn main() {
+let spawn = |x: i64| { x + 1 };
+println(shadowed());
+println(unshadowed());
+println(spawn(4));
+}

@@ -1,0 +1,7 @@
+fn passthru[T](x: T) -> T { return x; }
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let b: Array[String, 2] = passthru(a);
+    println(f"s:{b[0]}");
+    println(f"t:{b[1]}");
+}

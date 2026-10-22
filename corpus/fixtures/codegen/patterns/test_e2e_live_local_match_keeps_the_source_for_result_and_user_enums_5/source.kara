@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[String, i64] = Ok(f"hi");
+match r.map(|s| s) { Ok(v) => { println(v); } Err(_) => {} }
+}

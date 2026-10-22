@@ -1,0 +1,3 @@
+fn wrap_first(k: i64, r: R) -> H { return H { r: r, n: k }; }
+                 fn f(r: R) { let h = wrap_first(6, r); println(f"v={h.r.id}"); }
+                 fn main() { f(mkr(9)); println("end") }

@@ -1,0 +1,9 @@
+fn pick() -> String {
+    let mut i: i64 = env.args().len() - 1;
+    loop {
+        i = i + 1;
+        let s = f"row{i}";
+        if i == 3 { break s }
+    }
+}
+fn main() { println(pick()); }

@@ -1,0 +1,2 @@
+fn take(v: Vec[String]) -> i64 { return v.len(); }
+fn main() { println(take(Vec[String].new())); }

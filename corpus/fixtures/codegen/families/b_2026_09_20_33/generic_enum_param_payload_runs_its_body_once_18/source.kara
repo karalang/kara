@@ -1,0 +1,3 @@
+fn sinkw(w: Wn) { println("sink") }
+fn g(b: Gen[Wn]) -> i64 { match b { Gen.A(w) => { sinkw(w); } Gen.B => { } }; println("ret"); 1 }
+fn main() { let r = g(Gen.A(Wn { a: R { id: 44 } })); println(f"r:{r}") }

@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 57 }; let c = true; let b: Box2[Sh] = if c { mk.make() } else { Box2.N }; println("x")
+}

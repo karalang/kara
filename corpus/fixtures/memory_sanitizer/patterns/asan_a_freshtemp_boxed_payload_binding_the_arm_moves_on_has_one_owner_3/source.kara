@@ -1,0 +1,10 @@
+struct Bx21 { a: (String, String), n: i64 }
+fn main() {
+    let mut m: Map[i64, (String, String)] = Map.new();
+    m.insert(1, (f"aaaaaaaaaaaa1", f"bbbbbbbbbbbb1"));
+    match m.remove(1) {
+        Some(a) => { let b = Bx21 { a: a, n: 5 }; println(f"s:{b.a.0}:{b.n}"); }
+        None => { println("none"); }
+    }
+    println(f"m:{m.len()}");
+}

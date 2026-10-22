@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn handle(r: R, ws: WebSocket, go: bool) {
+    let mut buf: Array[u8, 16] = [0u8; 16];
+    if go { let _x = ws.recv_text(mut buf); }
+    println(f"h{r.id}");
+}
+#[allow(unstable_api)]
+fn main() {
+    {
+        let mut tg: TaskGroup = TaskGroup.new();
+        let r = R { id: 4 };
+        let ws = WebSocket.from_fd(-1);
+        tg.spawn(|| handle(r, ws, false));
+    }
+    println("end");
+}

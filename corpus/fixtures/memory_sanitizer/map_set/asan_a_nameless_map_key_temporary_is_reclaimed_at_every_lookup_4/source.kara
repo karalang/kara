@@ -1,0 +1,12 @@
+fn mkx20(n: i64) -> (String, i64) { return (f"aaaaaaaaaaaa{n}", n); }
+fn main() {
+    let mut m: Map[(String, i64), i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 { m.insert(mkx20(i), i); i = i + 1; }
+    let mut j: i64 = 0;
+    while j < 2 {
+        match m.get(mkx20(j)) { Some(v) => { println(f"g:{v}"); } None => { println("miss"); } }
+        j = j + 1;
+    }
+    println(f"len:{m.len()}");
+}

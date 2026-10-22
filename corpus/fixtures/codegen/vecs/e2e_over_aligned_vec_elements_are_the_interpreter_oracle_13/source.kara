@@ -1,0 +1,5 @@
+fn main() {
+let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+let arr: Array[Vector[i64, 4], 3] = Array[a, a, a];
+for e in arr { println(e.reduce_sum()); }
+}

@@ -1,0 +1,4 @@
+struct O { a: Array[String, 2] }
+impl O { fn g(mut ref self) { bump(mut self.a[0]); } }
+fn bump(s: mut ref String) { s.push_str("yy"); }
+fn main() { let mut o = O { a: [f"a{1}", f"b{1}"] }; o.g(); println(f"{o.a[0]} {o.a[1]}"); }

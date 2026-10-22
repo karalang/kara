@@ -1,0 +1,8 @@
+fn f() -> i64 {
+let local = 42;
+local
+}
+fn main() {
+println(f());
+println(f());
+}

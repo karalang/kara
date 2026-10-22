@@ -1,0 +1,15 @@
+source = "tests/codegen/gpu_tensor.rs::test_e2e_u64_column_tensor_sort_unsigned_match_run"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:dataframe", "deferred:tensor", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "5d5a2ec8"

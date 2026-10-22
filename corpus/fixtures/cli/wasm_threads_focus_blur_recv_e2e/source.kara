@@ -1,0 +1,12 @@
+import std.web.events.{focus, blur};
+
+fn main() {
+    println("before");
+    let gained = focus();
+    let lost = blur();
+    gained.recv();
+    println("FOCUS_OK");
+    lost.recv();
+    println("BLUR_OK");
+    println("after");
+}

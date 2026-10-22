@@ -1,0 +1,25 @@
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+fn tail() -> GpuBuffer[Body] {
+    let v: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },
+                        Body { mass: 3.0, speed: 4.0 }];
+    let buf = gpu.upload(v);
+    buf
+}
+fn explicit() -> GpuBuffer[Body] {
+    let v: Vec[Body] = [Body { mass: 7.0, speed: 2.0 }];
+    let buf = gpu.upload(v);
+    return buf;
+}
+fn wrapped() -> Sim {
+    let v: Vec[Body] = [Body { mass: 5.0, speed: 6.0 }];
+    let buf = gpu.upload(v);
+    Sim { grid: buf, step: 0 }
+}
+fn main() {
+    println(f"{gpu.sum(tail().mass)}");
+    println(f"{gpu.sum(explicit().mass)}");
+    let s = wrapped();
+    println(f"{gpu.sum(s.grid.mass)}");
+    println(f"{gpu.sum(s.grid.speed)}");
+}

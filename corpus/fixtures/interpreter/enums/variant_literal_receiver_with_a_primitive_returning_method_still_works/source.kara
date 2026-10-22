@@ -1,0 +1,7 @@
+enum Color { Red, Green }
+             impl Color {
+                 fn code(self) -> i64 {
+                     match self { Red => return 10, Green => return 20, }
+                 }
+             }
+             fn main() { println(Color.Red.code()); println(Color.Green.code()); }

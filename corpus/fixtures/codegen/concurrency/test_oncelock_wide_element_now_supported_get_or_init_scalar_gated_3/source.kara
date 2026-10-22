@@ -1,0 +1,5 @@
+struct Rec { id: i64, name: String }
+fn main() {
+let c: OnceLock[Rec] = OnceLock.new();
+let r = c.get_or_init(|| Rec { id: 1i64, name: "hi".to_string() });
+}

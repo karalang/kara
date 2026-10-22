@@ -1,0 +1,6 @@
+enum Msg { Text(Vec[i64]), Empty }
+impl Drop for Msg { fn drop(mut ref self) { println("D"); } }
+fn mk(hit: bool) -> Msg { if hit { Msg.Text([1, 2, 3]) } else { Msg.Empty } }
+fn main() {
+if let Msg.Text(v) = mk(true) { println(f"{v.len()}"); } else { println("m"); }
+}

@@ -1,0 +1,2 @@
+struct H { xs: Vec[(String, i64)] }
+fn main() { let n = 7; let mut d: Vec[H] = [H { xs: [(f"one-aaaaaaaaaaaa-{n}", 1)] }]; d[0].xs[0] = (f"replaced-bbbbbbbbbbbb-{n}", 2); println(f"r:{d[0].xs[0].1}:{d[0].xs[0].0.len()}") }

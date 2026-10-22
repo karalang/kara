@@ -1,0 +1,2 @@
+fn boom(n: i64) -> i64 { let v = Vec[1, 2]; if n == 1 { let x = v[99]; return x } n * 2 }
+fn main() { let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) }; }

@@ -1,0 +1,17 @@
+source = "tests/interpreter/misc.rs::test_into_drives_user_from_impl"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "c7f0b379"
+model_rev = "583cfb0d"
+model_src = "c7f0b379"

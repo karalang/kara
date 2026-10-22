@@ -1,0 +1,2 @@
+fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }
+fn main() { println(f"{take((R { id: 41 }, 1))}") }

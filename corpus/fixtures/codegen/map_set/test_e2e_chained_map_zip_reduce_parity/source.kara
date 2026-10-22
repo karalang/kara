@@ -1,0 +1,8 @@
+fn dot(a: ref Tensor[f32, [4]], b: ref Tensor[f32, [4]]) -> f32 { a.zip_with(b, |x, y| x * y).sum() }
+fn main() {
+let a: Tensor[f32, [4]] = Tensor.from([1.0, 2.0, 3.0, 4.0]);
+let b: Tensor[f32, [4]] = Tensor.from([2.0, 0.0, 1.0, 1.0]);
+println(dot(a, b));
+let s: Tensor[f32, [4]] = Tensor.from([2.0, 4.0, 6.0, 8.0]);
+println(s.map(|x| x * 0.5).sum());
+}

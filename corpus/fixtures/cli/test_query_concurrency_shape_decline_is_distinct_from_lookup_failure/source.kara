@@ -1,0 +1,7 @@
+fn iter_form(raw: String) -> i64 { let mut t = 0i64; for ch in raw.chars() { t = t + (ch as i64); } return t; }
+fn inclusive(n: i64) -> i64 { let mut t = 0i64; for k in 0i64..=n { t = t + k; } return t; }
+fn tuple_pat(ps: Vec[(i64, i64)]) -> i64 { let mut t = 0i64; for (a, b) in ps { t = t + a + b; } return t; }
+fn while_no_init(n: i64) -> i64 { let mut t = 0i64; let mut i = 0i64; t = t + 1i64; while i < n { t = t + i; i = i + 1i64; } return t; }
+fn while_no_incr(n: i64) -> i64 { let mut i = 0i64; let mut t = 0i64; while i < n { i = i + 2i64; t = t + i; } return t; }
+fn counted(n: i64) -> i64 { let mut t = 0i64; for k in 0i64..n { t = t + k * k * k + (k / 3i64) * (k % 7i64); } return t; }
+fn main() { println(1); }

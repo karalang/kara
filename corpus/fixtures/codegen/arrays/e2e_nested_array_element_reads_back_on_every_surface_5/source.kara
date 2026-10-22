@@ -1,0 +1,4 @@
+fn plainR(x: Result[Array[Array[String, 2], 2], i64]) {
+    match x { Ok(t) => { println(f"s:{t[0][0]}") } Err(e) => { println(f"n:{e}") } }
+}
+fn main() { plainR(Err(7)); }

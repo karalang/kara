@@ -1,0 +1,5 @@
+fn boom(n: i64) -> i64 { if n == 1 { panic("branch died") } n * 2 }
+fn main() {
+let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) };
+println(f"joined {a} {b}");
+}

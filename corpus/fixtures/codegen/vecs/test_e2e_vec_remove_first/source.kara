@@ -1,0 +1,10 @@
+fn main() {
+let mut xs: Vec[i64] = Vec.new();
+xs.push(1);
+xs.push(2);
+xs.push(3);
+let _ = xs.remove(0);
+println(xs[0]);
+println(xs[1]);
+println(xs.len());
+}

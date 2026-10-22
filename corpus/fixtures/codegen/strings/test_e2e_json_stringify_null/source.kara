@@ -1,0 +1,3 @@
+import std.json.{Json};
+
+fn main() { println(Json.Null.stringify()); }

@@ -1,0 +1,1 @@
+fn main() { let k = 8i64; let mut acc = String.new(); let mut xs: Vec[String] = Vec.new(); xs.push("a"); let mut j = 0i64; while j < k { acc = acc + xs[0]; j = j + 1i64; } println(acc.len()); }

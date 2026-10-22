@@ -1,0 +1,9 @@
+fn main() {
+            let a = 3_i64;
+            let b = 5_i64;
+            match a.cmp(b) {
+                Ordering.Less => println("less"),
+                Ordering.Equal => println("equal"),
+                Ordering.Greater => println("greater"),
+            }
+        }

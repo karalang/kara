@@ -1,0 +1,11 @@
+fn first(v: ref Vec[i64]) -> Option[ref i64] {
+v.get(0)
+}
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(42);
+match first(v) {
+Some(n) => println(n),
+None => println(0),
+}
+}

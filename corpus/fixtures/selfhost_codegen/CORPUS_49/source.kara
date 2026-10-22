@@ -1,0 +1,1 @@
+fn main() { let name = "kara"; let n = 5; println(name); println(n.to_string()) }

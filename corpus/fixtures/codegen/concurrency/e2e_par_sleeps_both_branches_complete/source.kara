@@ -1,0 +1,6 @@
+fn main() {
+par {
+{ sleep_ms(20); println("left"); }
+{ sleep_ms(20); println("right"); }
+}
+}

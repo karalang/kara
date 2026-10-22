@@ -1,0 +1,1 @@
+fn main() { let x = 2; if x > 3 { println("big") } else { println("small") } }

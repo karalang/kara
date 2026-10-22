@@ -1,0 +1,2 @@
+fn boom() -> i64 { panic("branch died") }
+fn main() { let x = boom(); println(f"got {x}"); }

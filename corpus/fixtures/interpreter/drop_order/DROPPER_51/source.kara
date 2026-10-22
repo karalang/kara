@@ -1,0 +1,6 @@
+struct T { n: i64 }
+impl T { fn take(ref self, r: R, k: bool) -> R { if k { return r } R { id: 9 } } }
+fn main() { let t = T { n: 1 };
+   let a = t.take(R { id: 4 }, false); println(f"got {a.id}");
+   let b = t.take(R { id: 3 }, true); println(f"got {b.id}");
+   let c = t.take(R { id: 5 }, false); println(f"got {c.id}") }

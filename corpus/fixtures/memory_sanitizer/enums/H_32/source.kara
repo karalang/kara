@@ -1,0 +1,5 @@
+fn f() -> i64 { let value = mk_val(); let mut vv = value;
+   let k = if let Some(g) = vv { g } else { Val.Nothing };
+   vv = val_none();
+   ident_len(k) + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

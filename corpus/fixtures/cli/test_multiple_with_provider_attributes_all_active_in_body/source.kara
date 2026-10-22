@@ -1,0 +1,7 @@
+effect resource Clock;
+effect resource AuditLog;
+struct FakeClock { t: i64 }
+impl FakeClock { fn now(self) -> i64 { self.t } }
+struct FakeLog { n: i64 }
+impl FakeLog { fn count(self) -> i64 { self.n } }
+fn main() {}

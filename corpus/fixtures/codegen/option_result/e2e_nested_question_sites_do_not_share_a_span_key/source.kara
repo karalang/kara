@@ -1,0 +1,18 @@
+struct Big { name: String, n: i64 }
+             fn mk(n: i64) -> Option[Big] {
+                 if n < 0 { return None; }
+                 return Some(Big { name: "w", n: n });
+             }
+             fn label(b: Big) -> Option[String] {
+                 if b.n == 0 { return None; }
+                 return Some(b.name + b.n.to_string());
+             }
+             fn go(n: i64) -> Option[String] {
+                 let s = label(mk(n)?)?;
+                 return Some(s + "!");
+             }
+             fn main() {
+                 match go(3) { Some(s) => println(s), None => println("none") }
+                 match go(0) { Some(s) => println(s), None => println("none") }
+                 match go(-1) { Some(s) => println(s), None => println("none") }
+             }

@@ -1,0 +1,5 @@
+#[derive(Display)]
+struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn pickd[T: Display](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }
+fn main() { let x = pickd(D { id: 45, name: f"n45" }, true, D { id: 46, name: f"n46" }); println(f"{x.id}"); }

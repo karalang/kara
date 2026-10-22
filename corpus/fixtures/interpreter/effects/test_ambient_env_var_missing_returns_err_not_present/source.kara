@@ -1,0 +1,7 @@
+fn main() {
+let r = Env.var("KARAC_ENV_VAR_MISSING_TEST_XYZ");
+match r {
+Ok(_) => println("set"),
+Err(_) => println("unset"),
+}
+}

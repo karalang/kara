@@ -1,0 +1,5 @@
+struct R3n { s: String }
+struct Wid { a: String, b: String, c: String, d: String }
+enum Kmix { A(R3n), B(Wid) }
+#[allow(partial_move_of_drop_enum)]
+fn main() { let x: Option[Kmix] = Option.Some(Kmix.A(R3n { s: f"ssssssss1" })); match x { Option.Some(Kmix.A(r)) => { println(f"n:{r.s}") } Option.Some(Kmix.B(w)) => { println(f"b:{w.a}") } Option.None => {} } println("end") }

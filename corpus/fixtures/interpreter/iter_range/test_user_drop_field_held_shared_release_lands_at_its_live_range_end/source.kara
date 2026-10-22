@@ -1,0 +1,10 @@
+shared struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+struct Mx { r: R, s: S }
+fn main() {
+let a: Mx = Mx { r: R { id: 1 }, s: S { id: 2 } };
+println(f"v{a.s.id}");
+println("post");
+}

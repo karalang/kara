@@ -1,0 +1,6 @@
+fn main() {
+println(min(3, 5));
+println(max(3, 5));
+println(min(5, 3));
+println(max(5, 3));
+}

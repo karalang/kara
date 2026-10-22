@@ -1,0 +1,3 @@
+set=Set{bee}
+sset=SortedSet{bee}
+smap=SortedMap{bee: 1}

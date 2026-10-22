@@ -1,0 +1,16 @@
+fn main() {
+let m: u128 = 340282366920938463463374607431768211455u128;
+let h: u128 = 200000000000000000000000000000000000000u128;
+println(m);
+println(f"{m}");
+println(m.to_string());
+println(h > 5u128);
+println(h < 5u128);
+println(m >= h);
+println(h / 3u128);
+println(h % 7u128);
+println(m / 2u128);
+println(m >> 100u32);
+println(h - 5u128);
+println(m.count_ones());
+}

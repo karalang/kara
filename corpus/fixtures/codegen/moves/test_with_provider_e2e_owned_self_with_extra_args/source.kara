@@ -1,0 +1,8 @@
+pub trait Adder { fn add(self, x: i64) -> i64; }
+pub struct H { base: i64 }
+impl Adder for H { fn add(self, x: i64) -> i64 { self.base + x } }
+pub effect resource A: Adder;
+fn main() {
+let p = H { base: 10 };
+with_provider[A](p, || { println(A.add(5)); });
+}

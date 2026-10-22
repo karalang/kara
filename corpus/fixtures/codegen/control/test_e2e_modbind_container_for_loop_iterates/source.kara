@@ -1,0 +1,17 @@
+let mut MV: Vec[i64] = Vec.new();
+let mut MM: Map[String, i64] = Map.new();
+let mut MS: Set[String] = Set.new();
+fn main() {
+MV.push(10); MV.push(20);
+MM.insert("a", 1); MM.insert("b", 2);
+MS.insert("p"); MS.insert("q");
+let mut vs = 0;
+for x in MV { vs = vs + x; }
+println(vs);
+let mut ms = 0;
+for (k, v) in MM { ms = ms + v; }
+println(ms);
+let mut sc = 0;
+for s in MS { sc = sc + 1; }
+println(sc);
+}

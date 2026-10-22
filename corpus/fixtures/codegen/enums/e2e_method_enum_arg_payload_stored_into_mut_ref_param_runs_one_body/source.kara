@@ -1,0 +1,18 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+enum Box2 { Full(Res), Empty }
+struct T { n: i64 }
+impl T {
+    fn take(ref self, sink: mut ref Vec[Res], b: Box2) {
+        match b { Box2.Full(r) => { sink.push(r); } Box2.Empty => {} }
+    }
+}
+fn main() {
+    let t: T = T { n: 1 };
+    let mut sink: Vec[Res] = Vec.new();
+    let carg: Box2 = Box2.Full(Res { id: 7 });
+    t.take(mut sink, carg);
+    println(f"pushed {sink.len()}");
+}

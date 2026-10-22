@@ -1,0 +1,13 @@
+struct Big { name: String, n: i64 }
+             fn mk(n: i64) -> Option[Big] {
+                 if n < 0 { return None; }
+                 return Some(Big { name: "widget", n: n });
+             }
+             fn use_it(n: i64) -> Option[String] {
+                 let b = mk(n)?;
+                 return Some(b.name + "-" + b.n.to_string());
+             }
+             fn main() {
+                 match use_it(7) { Some(s) => println(s), None => println("none") }
+                 match use_it(-1) { Some(s) => println(s), None => println("none") }
+             }

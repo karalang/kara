@@ -1,0 +1,28 @@
+import std.web.events.{wheel, WheelEvent};
+
+fn main() {
+    println("before");
+    let wheels = wheel();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same event every tick.
+    loop {
+        let w = wheels.recv();
+        if w.x() == 120.0 and w.y() == 60.0 and w.delta_x() == 0.0 and w.delta_y() == -53.0 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("WHEEL_OK");
+    } else {
+        println("WHEEL_FAIL");
+    }
+    println("after");
+}

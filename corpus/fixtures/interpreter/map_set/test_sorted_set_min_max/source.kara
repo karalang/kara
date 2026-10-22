@@ -1,0 +1,14 @@
+fn main() {
+let s: SortedSet[i64] = SortedSet.new();
+s.insert(5_i64);
+s.insert(1_i64);
+s.insert(9_i64);
+match s.min() {
+Some(v) => println(f"{v}"),
+None    => println("empty"),
+}
+match s.max() {
+Some(v) => println(f"{v}"),
+None    => println("empty"),
+}
+}

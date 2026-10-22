@@ -1,0 +1,22 @@
+method_tuple
+  v=7
+  dQ1
+assoc_tuple
+  v=8
+  dQ2
+free_tuple
+  v=9
+  dQ3
+method_mints
+  v=1
+  dQ4
+method_eats
+  dQ5
+  v=2
+named_tuple_method
+  v=3
+  dQ6
+named_tuple_assoc
+  v=4
+  dQ7
+end

@@ -1,0 +1,18 @@
+source = "tests/codegen/structs.rs::test_ir_modbind_struct_emits_constant_struct"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["literal-unmatched", "src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: '@CORNER = internal constant { i64, i64 } { i64 3, i64 7 }'"
+bucket = "check-refuses:E_MODULE_LET"
+classified_with = "79705a229"
+extracted_src = "0cd9d565"
+model_rev = "583cfb0d"
+model_src = "0cd9d565"

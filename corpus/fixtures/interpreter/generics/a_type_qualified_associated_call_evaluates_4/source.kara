@@ -1,0 +1,6 @@
+enum Opt2[T] { Nothing, Just(T) }
+impl[T] Opt2[T] { fn none() -> Opt2[T] { return Opt2.Nothing; } }
+fn main() {
+let o = Opt2[i64].none();
+match o { Opt2.Nothing => println("nothing"), Opt2.Just(v) => println(f"just {v}") }
+}

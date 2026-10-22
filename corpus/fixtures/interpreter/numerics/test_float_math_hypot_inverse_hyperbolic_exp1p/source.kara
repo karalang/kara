@@ -1,0 +1,1 @@
+fn main() { println((3.0f64).hypot(4.0f64)); }

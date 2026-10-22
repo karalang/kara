@@ -1,0 +1,17 @@
+source = "tests/codegen/borrows.rs::e2e_generic_refinement_alias_projects_for_reads"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:refinement", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "f1e701d8"
+model_rev = "583cfb0d"
+model_src = "f1e701d8"

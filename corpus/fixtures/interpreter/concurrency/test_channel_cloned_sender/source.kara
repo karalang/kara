@@ -1,0 +1,8 @@
+fn main() {
+let (sender, receiver) = Channel.new();
+let s2 = sender.clone();
+sender.send(10_i64);
+s2.send(20_i64);
+println(f"{receiver.recv()}");
+println(f"{receiver.recv()}");
+}

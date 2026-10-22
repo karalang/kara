@@ -1,0 +1,7 @@
+fn left() -> i64 { dbg(11); 1 }
+fn right() -> i64 { dbg(22); 2 }
+fn main() {
+    let (a, b) = par { let a = left(); let b = right(); (a, b) };
+    dbg(a + b);
+    println(f"{a + b}");
+}

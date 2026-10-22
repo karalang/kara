@@ -1,0 +1,11 @@
+fn might_fail() {
+let r = Err(42);
+r?
+}
+fn main() {
+let result = might_fail();
+match result {
+Ok(v) => println(v),
+Err(e) => println(e),
+}
+}

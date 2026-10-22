@@ -1,0 +1,29 @@
+struct P { x: f32, y: f32 }
+fn pick(flag: bool) -> Option[f32] {
+if flag { Some(2.5f32) } else { None }
+}
+fn wrap(flag: bool) -> Option[P] {
+if flag { Some(P { x: 1.25f32, y: -3.5f32 }) } else { None }
+}
+fn halve(v: f32) -> Result[f32, String] {
+if v > 0.0f32 { Ok(v / 2.0f32) } else { Err("neg".to_string()) }
+}
+fn scan[N, D](corpus: ref Tensor[f32, [N, D]]) -> Vec[f32] {
+let mut out: Vec[f32] = Vec.new();
+for row in corpus.iter_axis(0) {
+let d = row.zip_with(row, |x, y| x * y).sum();
+out.push(d);
+}
+out
+}
+fn main() {
+match pick(true) { Some(v) => println(v), None => println(-1.0f32) }
+match wrap(true) { Some(p) => { println(p.x); println(p.y) }, None => println(-1.0f32) }
+match halve(5.0f32) { Ok(v) => println(v), Err(e) => println(e) }
+let vs: Vec[f32] = Vec[0.5f32, 1.5f32, 2.5f32];
+match vs.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0f32) }
+let c: Tensor[f32, [2, 2]] = Tensor.from([[1.0f32, 2.0f32], [3.0f32, 4.0f32]]);
+let r = scan(c);
+match r.get(0) { Some(v) => println(v), None => println(-1.0f32) }
+match r.get(1) { Some(v) => println(v), None => println(-1.0f32) }
+}

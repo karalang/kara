@@ -1,0 +1,9 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+match m.insert(1_i64, "one") { Some(p) => println(p), None => println("none") }
+match m.insert(1_i64, "ONE") { Some(p) => println(p), None => println("none") }
+match m.get(1_i64) { Some(v) => println(v), None => println("missing") }
+println(f"{m.contains_key(1_i64)}");
+println(f"{m.contains_key(2_i64)}");
+println(f"{m.len()}");
+}

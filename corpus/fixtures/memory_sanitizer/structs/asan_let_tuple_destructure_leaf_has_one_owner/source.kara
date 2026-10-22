@@ -1,0 +1,21 @@
+struct R { id: i64, name: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.name}:{self.xs.len()}") } }
+enum W { A(R), B }
+fn mk(id: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return R { id: id, name: f"n{id}", xs: v }
+}
+fn one(t: (R, i64)) { let (r, k) = t; let m = r; println(f"  one{m.xs.len()}:{m.name}") }
+fn chain(t: (R, i64)) { let (r, k) = t; let m = r; let m2 = m; println(f"  chain:{m2.name}") }
+fn two(t: (R, R)) { let (r, q) = t; let m = r; println(f"  two:{m.name}:{q.name}") }
+fn letelse(w: W) { let W.A(r) = w else { return }; let m = r; println(f"  le:{m.name}") }
+fn norebind(t: (R, i64)) { let (r, k) = t; println(f"  nr{r.xs.len()}:{r.name}") }
+fn main() {
+    one((mk(1), 0));
+    chain((mk(2), 0));
+    two((mk(3), mk(4)));
+    letelse(W.A(mk(5)));
+    norebind((mk(6), 0));
+    println("end")
+}

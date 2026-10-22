@@ -1,0 +1,17 @@
+source = "tests/interpreter/map_set.rs::test_try_insert_map_wraps_ok"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "fea58206"
+model_rev = "583cfb0d"
+model_src = "fea58206"

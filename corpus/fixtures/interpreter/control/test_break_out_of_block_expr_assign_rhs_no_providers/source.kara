@@ -1,0 +1,8 @@
+fn f() -> i64 {
+             let mut acc = 0;
+             for i in 0..5 {
+                 acc = acc + { if i == 3 { break; } i };
+             }
+             acc
+         }
+         fn main() { println(f"{f()}"); }

@@ -1,0 +1,15 @@
+struct Header { name: String, value: String }
+fn move_all(headers: Vec[Header]) -> Vec[Header] {
+    let mut out: Vec[Header] = Vec.new();
+    for h in headers {
+        out.push(h);
+    }
+    out
+}
+fn main() {
+    let stamp = "20150830T123600Z";
+    let mut hs: Vec[Header] = Vec.new();
+    hs.push(Header { name: "X-Amz-Date", value: stamp.clone() });
+    let moved = move_all(hs);
+    for h in moved { println(h.value); }
+}

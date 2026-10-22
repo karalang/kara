@@ -1,0 +1,1 @@
+fn main() { let m: Map[i64, i64] = Map.new(); m.insert(1, 2); }

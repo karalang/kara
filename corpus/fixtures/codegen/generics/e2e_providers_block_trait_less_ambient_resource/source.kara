@@ -1,0 +1,9 @@
+effect resource Ambient;
+struct FakeAmb { n: i64 }
+impl FakeAmb { fn now(ref self) -> i64 { self.n } }
+fn readamb() -> i64 with reads(Ambient) { Ambient.now() }
+fn main() {
+providers { Ambient => FakeAmb { n: 77 } } in {
+println(f"amb {readamb()}");
+}
+}

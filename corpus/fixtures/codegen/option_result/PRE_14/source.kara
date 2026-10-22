@@ -1,0 +1,1 @@
+fn main() { let o: Option[Rt] = None; let p = (o, 7); println("ok"); println("done") }

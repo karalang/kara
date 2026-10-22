@@ -1,0 +1,8 @@
+fn main() {
+    let mut mm: Map[i64, Map[i64, i64]] = Map.new();
+    let mut inner: Map[i64, i64] = Map.new();
+    inner.insert(5i64, 6i64);
+    mm.insert(1i64, inner);
+    mm[1i64][5i64] = 66i64;
+    println(f"{mm[1i64][5i64]}");
+}

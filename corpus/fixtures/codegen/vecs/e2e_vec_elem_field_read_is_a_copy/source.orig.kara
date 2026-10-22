@@ -1,0 +1,10 @@
+struct Pair { word: String, n: i64 }
+fn main() {
+    let k = 1;
+    let mut ps: Vec[Pair] = Vec.new();
+    ps.push(Pair { word: f"a{k}", n: 1 });
+    let mut w = ps[0].word;
+    w = w + "X";
+    println(w);
+    println(ps[0].word);
+}

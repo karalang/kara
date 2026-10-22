@@ -1,0 +1,3 @@
+fn inner() -> i64 { let v = Vec[1, 2]; v[99] }
+fn boom() -> i64 { return inner() }
+fn main() { let x = boom(); println(f"got {x}"); }

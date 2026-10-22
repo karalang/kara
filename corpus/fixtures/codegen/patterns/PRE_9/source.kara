@@ -1,0 +1,2 @@
+fn takeR(x: Option[Option[(Rv, Rv)]]) { match x { Some(Some((a, b))) => { println(f"a{a.id}") } Some(None) => { println("sn") } None => { println("n") } } }
+fn main() { takeR(Some(Some((Rv { id: 71, name: f"a" }, Rv { id: 72, name: f"b" })))); println("done") }

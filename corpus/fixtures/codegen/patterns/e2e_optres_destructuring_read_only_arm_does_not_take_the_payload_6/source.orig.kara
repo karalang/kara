@@ -1,0 +1,6 @@
+struct S { s: String }
+fn main() {
+let a: Result[S, i64] = Ok(S { s: f"res" });
+match a { Ok(S { s }) => { println(s); } Err(_) => {} }
+match a { Ok(S { s }) => println(s), Err(_) => println("err") }
+}

@@ -1,0 +1,9 @@
+fn main() {
+    let a: String = String.from(f"fs{1}");
+    println(a);
+    let s: String = f"own{2}";
+    let b: String = String.from(s);
+    println(b);
+    let c: String = String.from("lit");
+    println(c);
+}

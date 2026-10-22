@@ -1,0 +1,13 @@
+struct Bag { mut items: Vec[i64] }
+impl Bag {
+fn push(mut ref self, v: i64) { self.items.push(v); }
+fn get(ref self, i: u64) -> i64 { self.items[i] }
+fn set(mut ref self, i: u64, v: i64) { self.items[i] = v; }
+}
+fn main() {
+let mut b = Bag { items: Vec.new() };
+b.push(1); b.push(2);
+b.set(0, 7);
+println(b.get(0));
+println(b.get(1));
+}

@@ -1,0 +1,5 @@
+fn main() {
+let mut v: Vec[Vec[i64]] = Vec.new();
+let n = v[3].len();
+println(f"{n}");
+}

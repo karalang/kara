@@ -1,0 +1,16 @@
+source = "tests/gpu_e2e.rs::gpu_sum_agrees_with_the_interpreter_bit_for_bit"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:gpu", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'reduce_sum_order'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "37ba86e5"

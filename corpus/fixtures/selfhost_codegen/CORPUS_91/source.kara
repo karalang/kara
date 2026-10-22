@@ -1,0 +1,3 @@
+struct User { name: String, age: i64 }
+fn mk(n: String, a: i64) -> User { User { name: n, age: a } }
+fn main() { let u = mk("kara", 1); println(u.name); println(u.age.to_string()) }

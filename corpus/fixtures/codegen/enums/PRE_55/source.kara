@@ -1,0 +1,2 @@
+fn hg(g: G[W2]) { println("ig"); }
+fn main() { println("A"); let a = G.X(W2 { a: 1, b: 2 }); hg(a); println("end") }

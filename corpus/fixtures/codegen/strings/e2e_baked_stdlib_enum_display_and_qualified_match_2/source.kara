@@ -1,0 +1,14 @@
+fn classify(e: IoError) -> String {
+    match e {
+        IoError.NotFound => { "nf" }
+        IoError.PermissionDenied => { "pd" }
+        IoError.Other(m) => { f"other:{m}" }
+        _ => { "rest" }
+    }
+}
+fn main() {
+    println(classify(IoError.NotFound));
+    println(classify(IoError.PermissionDenied));
+    println(classify(IoError.Other("disk full")));
+    println(classify(IoError.Interrupted));
+}

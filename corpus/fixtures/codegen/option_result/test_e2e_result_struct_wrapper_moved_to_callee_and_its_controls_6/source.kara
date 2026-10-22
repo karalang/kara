@@ -1,0 +1,4 @@
+enum E { Missing(String) }
+fn mk() -> Result[Map[String, i64], E] { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); Ok(m) }
+fn take(m: Map[String, i64]) { println(f"{m.len()}"); }
+fn main() { match mk() { Ok(m) => take(m), Err(_e) => println("e") } }

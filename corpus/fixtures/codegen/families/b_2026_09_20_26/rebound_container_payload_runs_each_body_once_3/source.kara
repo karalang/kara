@@ -1,0 +1,1 @@
+fn main() { let e: EArr = EArr.A(mka()); if let EArr.A(v) = e { let u = v; println("in") } println("end") }

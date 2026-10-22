@@ -1,0 +1,18 @@
+struct P { x: i64, y: i64 }
+fn main() {
+let mut v: Vec[P] = Vec.new();
+v.push(P { x: 1, y: 2 });
+v.push(P { x: 3, y: 6 });
+let a: Vec[i64] = v.iter().map(|P { x, y }| x + y).collect();
+println(a[0]);
+println(a[1]);
+println(v.iter().fold(0, |acc, P { x, y }| acc + x + y));
+let r: Vec[i64] = v.iter().map(|P { x: x1, y: y1 }| x1 * y1).collect();
+println(r[0]);
+println(r[1]);
+let w: Vec[i64] = v.iter().map(|P { x, y: _ }| x).collect();
+println(w[0]);
+let ft: Vec[i64] = v.iter().filter(|P { x, y }| x + y > 5)
+.map(|P { x, y }| x + y).collect();
+println(ft[0]);
+}

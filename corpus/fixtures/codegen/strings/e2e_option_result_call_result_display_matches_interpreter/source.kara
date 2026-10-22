@@ -1,0 +1,10 @@
+fn get(k: i64) -> Option[i64] { if k == 1 { Some(10) } else { None } }
+fn tag(k: i64) -> Option[String] { if k == 1 { Some("hi") } else { None } }
+fn res(k: i64) -> Result[i64, String] { if k > 0 { Ok(k) } else { Err("boom") } }
+fn main() {
+println(f"a={get(1)} b={get(2)}");
+println(get(1));
+println(f"s={tag(1)}");
+println(f"r={res(7)} e={res(-1)}");
+println(res(-2));
+}

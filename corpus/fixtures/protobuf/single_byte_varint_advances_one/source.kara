@@ -1,0 +1,6 @@
+
+fn main() {
+    let mut r = ProtoReader.new(ProtoBuf.encode_varint(5u64));
+    println(r.read_varint());
+    println(r.at_end());
+}

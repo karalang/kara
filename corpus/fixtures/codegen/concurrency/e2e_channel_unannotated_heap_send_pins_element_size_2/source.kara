@@ -1,0 +1,6 @@
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();
+    let a = "alpha";
+    tx.send(a);
+    println(f"got {rx.recv()}");
+}

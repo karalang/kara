@@ -1,0 +1,11 @@
+
+fn main() {
+    let vals = Array[0, -1, 1, -150, 150, -2147483648, 2147483647];
+    let mut i = 0;
+    while i < vals.len() {
+        let enc = ProtoBuf.encode_varint(ProtoBuf.zigzag_encode(vals[i]));
+        let mut r = ProtoReader.new(enc);
+        println(r.read_zigzag());
+        i = i + 1;
+    }
+}

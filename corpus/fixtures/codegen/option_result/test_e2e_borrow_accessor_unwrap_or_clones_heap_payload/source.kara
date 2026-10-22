@@ -1,0 +1,5 @@
+fn main() {
+let mut m: Map[String, String] = Map.new();
+m.insert(f"k", f"alpha");
+println(m.get(f"k").unwrap_or(f"-"));
+}

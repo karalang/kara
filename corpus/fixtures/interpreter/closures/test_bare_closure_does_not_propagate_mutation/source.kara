@@ -1,0 +1,7 @@
+fn main() {
+let mut x = 0_i64;
+let f = || { let _y = x + 1; };
+f();
+f();
+println(x);
+}

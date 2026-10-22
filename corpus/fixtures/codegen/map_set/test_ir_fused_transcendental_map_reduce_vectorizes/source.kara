@@ -1,0 +1,2 @@
+fn d(t: ref Tensor[f32, [64]]) -> f32 { t.map(|x| x.exp()).sum() }
+fn main() { let t: Tensor[f32, [64]] = Tensor.ones([64]); println(d(t)); }

@@ -1,0 +1,43 @@
+fn mk(n: i64) -> String {
+    let mut s = String.new();
+    s.push_str("<");
+    s.push_str(f"{n}");
+    s.push_str(">");
+    return s;
+}
+fn side(n: i64, acc: mut ref Vec[i64]) -> String {
+    acc.push(n);
+    return f"s{n}";
+}
+fn main() {
+    let a = "A";
+    let b = "B";
+    let c = "C";
+    println(a + b);
+    println(a + b + c);
+    println(a + b + c + "D");
+    println(mk(1) + "+" + mk(2));
+    println(mk(3) + "-" + mk(4) + "!" + mk(5));
+    println("[" + "" + "]");
+    println("" + "" + "x");
+    let mut order: Vec[i64] = [];
+    let joined = side(1, mut order) + side(2, mut order) + side(3, mut order);
+    println(joined);
+    let mut i = 0;
+    let mut seen = String.new();
+    while i < order.len() {
+      seen.push_str(f"{order[i]}");
+      i = i + 1;
+    }
+    println(f"order {seen}");
+    let mut k = 0;
+    let mut last = String.new();
+    while k < 200 {
+      last = mk(k) + ":" + mk(k + 1) + ";";
+      k = k + 1;
+    }
+    println(last);
+    println(("x" + "y" + "z").len());
+    println((a + b) + (c + "D"));
+    println("end")
+}

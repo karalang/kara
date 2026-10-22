@@ -1,0 +1,9 @@
+fn main() {
+let v: Vec[i64] = Vec.filled(4, 7);
+// Safety: the index is proved in range by the literal bound
+// above, and the vector is freshly filled with a known length,
+// so the unchecked read cannot go out of bounds.
+unsafe {
+println(f"{v.get_unchecked(1)}");
+}
+}

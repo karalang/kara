@@ -1,0 +1,2 @@
+fn parse_int(_s: i64) -> Result[i64, String] { Ok(42) }
+fn main() -> Result[Unit, String] { let _x = parse_int(0)?; Ok(()) }

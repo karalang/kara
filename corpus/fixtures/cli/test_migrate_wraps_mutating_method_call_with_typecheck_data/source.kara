@@ -1,0 +1,8 @@
+shared struct Queue {
+    mut items: Vec[i64],
+}
+
+fn main() {
+    let q: Queue = Queue { items: [10, 20, 30] };
+    q.items.push(42);
+}

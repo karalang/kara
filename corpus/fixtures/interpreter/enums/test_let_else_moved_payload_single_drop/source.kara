@@ -1,0 +1,28 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+enum Box2 { Full(Res), Empty }
+fn check(w: Box2) {
+let Full(r2) = w else {
+println("nope");
+return
+}
+println(f"bound {r2.id}")
+}
+fn main() {
+let w = Box2.Full(Res { id: 52 });
+println("a");
+let Full(r2) = w else {
+println("nope");
+return
+}
+println(f"bound {r2.id}");
+println("b");
+check(Box2.Full(Res { id: 53 }));
+println("c");
+check(Box2.Empty);
+println("end");
+}

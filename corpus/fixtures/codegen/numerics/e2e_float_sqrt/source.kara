@@ -1,0 +1,8 @@
+fn main() {
+let a = (16.0).sqrt();
+let b = (2.0).sqrt();
+let h = (3.0 * 3.0 + 4.0 * 4.0).sqrt();
+println(f"{a}");
+println(f"{b}");
+println(f"{h}");
+}

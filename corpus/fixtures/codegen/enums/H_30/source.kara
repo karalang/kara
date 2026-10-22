@@ -1,0 +1,6 @@
+fn take(e: E) -> i64 { 7 }
+fn main() {
+   let mut i = 0;
+   while i < 3 { let _ = take(B); i = i + 1; }
+   println("end");
+ }

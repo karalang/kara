@@ -1,0 +1,8 @@
+fn main() {
+    let mut vm: Vec[Map[i64, i64]] = Vec.new();
+    let mut e: Map[i64, i64] = Map.new();
+    e.insert(3i64, 4i64);
+    vm.push(e);
+    vm[0][3i64] = 44i64;
+    println(f"{vm[0][3i64]}");
+}

@@ -1,0 +1,9 @@
+fn main() {
+let o: Option[isize] = Some(-5isize);
+println(o);
+let n: Option[isize] = None;
+println(n);
+let r: Result[isize, String] = Ok(7isize);
+println(r);
+println(f"{o}");
+}

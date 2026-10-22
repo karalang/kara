@@ -1,0 +1,10 @@
+trait Or { fn or_zero(self) -> i64; }
+impl Or for Option[i64] {
+fn or_zero(self) -> i64 { return self.unwrap_or(0); }
+}
+fn main() {
+let some: Option[i64] = Option.Some(9);
+let none: Option[i64] = None;
+println(some.or_zero().to_string());
+println(none.or_zero().to_string());
+}

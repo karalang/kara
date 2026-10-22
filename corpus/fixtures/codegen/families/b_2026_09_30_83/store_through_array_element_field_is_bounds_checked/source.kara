@@ -1,0 +1,2 @@
+struct P { n: i64 }
+fn main() { let mut a: Array[P, 2] = [P { n: 5 }, P { n: 6 }]; let i = 5 - 3; a[i].n = 9; println("unreached") }

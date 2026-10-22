@@ -1,0 +1,17 @@
+#[derive(Message)]
+struct Addr { city: String, zip: i64 }
+#[derive(Message)]
+struct User { name: String, age: i64, scores: Vec[i64], home: Addr }
+fn main() {
+let u = User {
+name: "Ada", age: 36, scores: [90, 85, 100],
+home: Addr { city: "London", zip: 12345 },
+};
+let back = User.decode(u.encode());
+println(back.name);
+println(back.age);
+println(back.scores.len());
+println(back.scores[2]);
+println(back.home.city);
+println(back.home.zip);
+}

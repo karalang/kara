@@ -1,0 +1,12 @@
+struct Rect { width: i64, height: i64 }
+impl Rect {
+fn area(self) -> i64 { self.width * self.height }
+fn is_square(self) -> bool { self.width == self.height }
+}
+fn main() {
+let r = Rect { width: 3, height: 4 };
+println(r.area());
+println(r.is_square());
+let s = Rect { width: 5, height: 5 };
+println(s.is_square());
+}

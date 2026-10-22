@@ -1,0 +1,10 @@
+pub trait Channel[T] { fn send(ref self, v: T) -> T; }
+pub effect resource RequestCh: Channel[i64];
+pub struct Echo { bump: i64 }
+impl Channel[i64] for Echo { fn send(ref self, v: i64) -> i64 { v + self.bump } }
+pub fn push(v: i64) -> i64 with reads(RequestCh) { RequestCh.send(v) }
+fn main() {
+with_provider[RequestCh](Echo { bump: 1 }, || {
+println(f"{push(41)}");
+});
+}

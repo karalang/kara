@@ -1,0 +1,8 @@
+let mut LHS: i64 = 0;
+let mut RHS: i64 = 0;
+fn main() {
+LHS = 7;
+RHS = 11;
+println(LHS);
+println(RHS);
+}

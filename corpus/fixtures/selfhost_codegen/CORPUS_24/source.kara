@@ -1,0 +1,1 @@
+fn main() { println(true.to_string()); println(false.to_string()) }

@@ -1,0 +1,2 @@
+impl i64 { fn two() -> i64 { return 42; } }
+fn main() { let x: i64 = i64.two(); println(x.to_string()); }

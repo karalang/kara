@@ -1,0 +1,4 @@
+struct Sm { a: Map[String, i64] }
+fn mk() -> Option[Sm] { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); return Some(Sm { a: m }); }
+fn take(s: Sm) { println(f"{s.a.len()}"); }
+fn main() { match mk() { Some(s) => take(s), None => println("n") } }

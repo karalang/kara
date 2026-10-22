@@ -1,0 +1,29 @@
+struct H { id: i64, xs: Vec[i64], name: String }
+struct D { id: i64, xs: Vec[i64], name: String }
+struct S { t: (H, i64) }
+impl Drop for D { fn drop(mut ref self) { println(f"  dD{self.id}:{self.xs.len()}:{self.name}") } }
+fn mk(id: i64) -> H {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return H { id: id, xs: v, name: f"n{id}" }
+}
+fn mkD(id: i64) -> D {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return D { id: id, xs: v, name: f"n{id}" }
+}
+fn whole(t: (H, i64)) { match t { (r, k) => { let m = r; println(f"  w{m.xs.len()}:{m.name}") } } }
+fn withBody(t: (D, i64)) { match t { (r, k) => { let m = r; println(f"  b{m.xs.len()}:{m.name}") } } }
+fn mid(t: (i64, H, i64)) { match t { (a, r, k) => { let m = r; println(f"  m{m.xs.len()}:{m.name}") } } }
+fn bare(h: H) { let m = h; println(f"  bare{m.xs.len()}:{m.name}") }
+fn noMove(t: (H, i64)) { match t { (r, k) => { println(f"  nm{r.xs.len()}:{r.name}") } } }
+fn viaProj(s: S) { match s.t { (r, k) => { let m = r; println(f"  p{m.xs.len()}:{m.name}") } } }
+fn main() {
+    whole((mk(1), 0));
+    withBody((mkD(2), 0));
+    mid((0, mk(3), 0));
+    bare(mk(4));
+    noMove((mk(5), 0));
+    viaProj(S { t: (mk(6), 0) });
+    println("end")
+}

@@ -1,0 +1,2 @@
+impl i64 { fn lt(self, other: i64) -> String { "user" } }
+fn main() { let c: u32 = 5u32; let d: u32 = 2u32; println(c.lt(d)); }

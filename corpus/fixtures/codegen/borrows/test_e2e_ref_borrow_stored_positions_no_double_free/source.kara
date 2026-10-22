@@ -1,0 +1,20 @@
+struct Parser { source: ref String, position: i64 }
+fn make_parser(s: ref String) -> Parser {
+Parser { source: s, position: 0 }
+}
+fn shout(x: ref String) { println(x); }
+fn wrap(s: ref String) -> Option[ref String] {
+Option.Some(s)
+}
+fn main() {
+let mut s: String = "";
+s.push_str("a longer payload string");
+match wrap(s) {
+Some(n) => println(n.len()),
+None => println(0),
+}
+println(s);
+let s2 = String.from("input data");
+let p = make_parser(s2);
+shout(p.source);
+}

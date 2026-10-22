@@ -1,0 +1,6 @@
+struct Heapy { tag: i8, name: String, items: Vec[i64], tail: bool }
+fn main() {
+    println(offset_of[Heapy](name));
+    println(offset_of[Heapy](items));
+    println(offset_of[Heapy](tail));
+}

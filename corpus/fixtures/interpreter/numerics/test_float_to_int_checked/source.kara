@@ -1,0 +1,1 @@
+fn main() { match (1.5f64).checked_to_i32() { Some(v) => println(v), None => println(-1) }; }

@@ -1,0 +1,13 @@
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn glen[T](s: Slice[T]) -> i64 { s.len() }
+fn main() {
+    let vi: Vec[i64] = [10, 20, 30];
+    let vu: Vec[u8] = [255u8, 1u8];
+    let vs: Vec[String] = ["alpha-long-enough-payload-string", "beta"];
+    let arr: Array[i64, 3] = [7, 8, 9];
+    println(f"{gsum(vi)}");
+    let u: u8 = gsum(vu);
+    println(f"{u}");
+    println(f"{glen(vs)}");
+    println(f"{gsum(arr)}");
+}

@@ -1,0 +1,1 @@
+fn main() { let v = Vector[f64, 2](1.5, 2.5); println(v.reduce_sum()); }

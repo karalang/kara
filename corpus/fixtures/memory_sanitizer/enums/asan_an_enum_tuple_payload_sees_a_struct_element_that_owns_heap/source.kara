@@ -1,0 +1,12 @@
+struct Rec2 { s: String }
+enum M { P((Rec2, i64)), Q }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let g: M = P((Rec2 { s: f"row-aaaaaaaaaaaaaaaa-{i}-{n}" }, 1i64));
+        println("t");
+        i = i + 1i64;
+    }
+    println("end");
+}

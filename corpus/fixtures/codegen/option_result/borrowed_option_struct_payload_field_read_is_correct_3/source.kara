@@ -1,0 +1,11 @@
+shared struct Node { val: i64, mut next: Option[Node] }
+fn any_negative(node: ref Option[Node]) -> bool {
+match node {
+None => false,
+Some(n) => { if n.val < 0i64 { return true; } any_negative(n.next) }
+}
+}
+fn main() {
+let list = Some(Node { val: 5i64, next: Some(Node { val: -3i64, next: None }) });
+println(any_negative(list));
+}

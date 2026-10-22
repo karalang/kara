@@ -1,0 +1,16 @@
+fn echo[T](x: T) -> T { x }
+fn main() {
+    let a: String = echo(f"aaa-fresh");
+    println(a);
+    let s: String = f"bbb-local";
+    let b: String = echo(s);
+    println(b);
+    let c: i64 = echo(777);
+    println(f"{c}");
+    let vi: Vec[i64] = echo([10, 20, 30]);
+    println(f"{vi[1]}");
+    let vs: Vec[String] = echo([f"pp", f"qq"]);
+    println(vs[0]);
+    let d: String = echo(echo(f"ccc-chain"));
+    println(d);
+}

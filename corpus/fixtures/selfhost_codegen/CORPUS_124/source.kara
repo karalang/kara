@@ -1,0 +1,3 @@
+struct Pair { tag: String, n: i64 }
+fn stamp(n: i64) -> Pair { let p = Pair { tag: "id-".to_string() + n.to_string(), n: n }; if n > 9 { return p; } let q = Pair { tag: "small".to_string(), n: n }; return q; }
+fn main() { let p1 = stamp(12); println(p1.tag); let p2 = stamp(3); println(p2.tag) }

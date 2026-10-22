@@ -1,0 +1,9 @@
+enum Bin { Packed(Array[String, 2]), Bare }
+fn peek(a: ref Array[String, 2]) { println(f"p:{a[1]}") }
+fn f(b: ref Bin) {
+    match b { Packed(a) => { peek(a) } Bare => { println("n") } }
+}
+fn main() {
+    let x: Bin = Bin.Packed([f"aaaaaaaa0", f"bbbbbbbb0"]);
+    f(x);
+}

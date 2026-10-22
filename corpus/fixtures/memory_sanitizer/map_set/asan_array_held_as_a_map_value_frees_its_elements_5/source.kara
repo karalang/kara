@@ -1,0 +1,5 @@
+fn main() {
+    let mut m: SortedMap[i64, Array[String, 2]] = SortedMap.new();
+    m.insert(1, [f"aaaaaaaa0", f"bbbbbbbb0"]);
+    println("s:ok");
+}

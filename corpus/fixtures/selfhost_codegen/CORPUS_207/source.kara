@@ -1,0 +1,24 @@
+enum Tok {
+    Word(String),
+    Stop,
+}
+fn pick(n: i64) -> Tok {
+    if n < 2 {
+        return Tok.Word("w".to_string());
+    }
+    Tok.Stop
+}
+fn main() {
+    let mut i = 0;
+    let mut out = "".to_string();
+    while i < 2 {
+        let w = match pick(i) {
+            Word(s) => s,
+            Stop => "".to_string(),
+        };
+        out = out + w;
+        i = i + 1;
+    }
+    println(out);
+    println(i.to_string());
+}

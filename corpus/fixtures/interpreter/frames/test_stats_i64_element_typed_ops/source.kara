@@ -1,0 +1,12 @@
+fn main() {
+let xs: Vec[i64] = vec![3, 1, 2];
+println(Stats.sum(xs));
+println(Stats.prod(xs));
+match Stats.min(xs) { Some(v) => println(v), None => println(-1) }
+match Stats.max(xs) { Some(v) => println(v), None => println(-1) }
+let s: Vec[i64] = Stats.sort(xs);
+println(s[0]);
+let a: Vec[i64] = Stats.argsort(xs);
+println(a[0]);
+match Stats.argmin(xs) { Some(i) => println(i), None => println(-1) }
+}

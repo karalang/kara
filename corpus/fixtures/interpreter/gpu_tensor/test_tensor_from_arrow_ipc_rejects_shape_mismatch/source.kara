@@ -1,0 +1,5 @@
+fn main() {
+let a: Tensor[i64, [2, 3]] = Tensor.zeros([2, 3]);
+let bad: Tensor[i64, [3, 2]] = Tensor.from_arrow_ipc(a.to_arrow_ipc());
+println(bad.rank());
+}

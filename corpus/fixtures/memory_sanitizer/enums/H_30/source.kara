@@ -1,0 +1,6 @@
+fn fresh(i: i64) -> Option[Val] { Some(Val.Ident(f"payload-moved-in-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaa")) }
+fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0; let mut i = 0;
+   while i < 6 { acc = acc + (match vv { Some(v) => ident_len(v), None => 0 });
+                 vv = fresh(i); i = i + 1; }
+   acc + (match vv { Some(v) => ident_len(v), None => 0 }) }
+fn main() { println(f()); }

@@ -1,0 +1,17 @@
+source = "tests/codegen/enums.rs::test_e2e_seek_from_prelude_enum_discriminates"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "c91cc797"
+model_rev = "583cfb0d"
+model_src = "c91cc797"

@@ -1,0 +1,9 @@
+fn work(n: i64) -> Result[i64, String] {
+if n > 0 { Result.Ok(n) } else { Result.Err("neg") }
+}
+fn main() {
+let a: i64 = 1;
+let fs: Vec[Fn() -> Result[i64, String]] = Vec[|| work(a)];
+let r: Vec[Result[i64, String]] = collect_all_vec(fs);
+let _n: i64 = r.len();
+}

@@ -1,0 +1,5 @@
+import widgets.{Widget};
+fn main() {
+let w = Widget.new(41);
+println(w.id);
+}

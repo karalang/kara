@@ -1,0 +1,5 @@
+fn main() {
+             let s = "hi";
+             let bad = s[0..9];
+             println(bad);
+         }

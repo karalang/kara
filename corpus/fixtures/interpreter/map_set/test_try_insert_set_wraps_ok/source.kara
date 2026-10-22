@@ -1,0 +1,8 @@
+fn main() {
+let mut s: Set[i64] = Set.new();
+match s.try_insert(7_i64) {
+Ok(added) => println(added),
+Err(e) => println("err"),
+}
+println(s.len());
+}

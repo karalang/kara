@@ -1,0 +1,14 @@
+fn mk(n: i64) -> Array[String, 2] { return Array[f"kaaaaaaa{n}", f"kbbbbbbb{n}"]; }
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let k1 = mk(1);
+    let k2 = mk(1);
+    m.insert(k1, 11);
+    m.insert(k2, 22);
+    let p: Array[String, 2] = mk(1);
+    match m.get(p) {
+        Some(v) => { println(f"s:{v}"); }
+        None => { println("s:missing"); }
+    }
+    println(f"t:{m.len()}");
+}

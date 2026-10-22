@@ -1,0 +1,48 @@
+struct Holder { opt: Option[String], vs: Option[Vec[i64]], n: i64 }
+fn render(h: ref Holder) -> String {
+match h.opt {
+Some(s) => { return "o:".to_string() + s; }
+None => { return "none".to_string(); }
+}
+return "?".to_string();
+}
+fn has(h: ref Holder) -> i64 {
+match h.opt {
+Some(_) => { return 1; }
+None => { return 0; }
+}
+return -1;
+}
+fn total(h: ref Holder) -> i64 {
+match h.vs {
+Some(v) => { return v.len() + v[0]; }
+None => { return 0; }
+}
+return -1;
+}
+fn ifl(h: ref Holder) -> String {
+if let Some(s) = h.opt {
+return "if:".to_string() + s;
+}
+return "none".to_string();
+}
+fn lel(h: ref Holder) -> String {
+let Some(s) = h.opt else {
+return "none".to_string();
+}
+return "le:".to_string() + s;
+}
+fn main() {
+let a = Holder { opt: Some("op".to_string()), vs: Some([10, 20]), n: 1 };
+println(render(a));
+println(render(a));
+println(has(a));
+println(total(a));
+println(total(a));
+println(ifl(a));
+println(lel(a));
+let e = Holder { opt: None, vs: None, n: 2 };
+println(render(e));
+println(ifl(e));
+println(lel(e));
+}

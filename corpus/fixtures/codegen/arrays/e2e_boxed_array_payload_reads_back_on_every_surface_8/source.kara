@@ -1,0 +1,8 @@
+fn peek(a: ref Array[String, 2]) { println(f"p:{a[0]}") }
+fn plainB(x: Option[Array[String, 2]]) {
+    match x { Some(t) => { peek(t) } None => { println("n") } }
+}
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    plainB(Some(a));
+}

@@ -1,0 +1,13 @@
+shared struct Node { val: i64 }
+fn main() {
+let pair: Option[(Node, i64)] = Some((Node { val: 3 }, 7));
+match pair {
+None => { println(0); }
+Some((current, d)) => { println(current.val + d); }
+}
+let none: Option[(Node, i64)] = None;
+match none {
+None => { println(-1); }
+Some((c, d)) => { println(c.val + d); }
+}
+}

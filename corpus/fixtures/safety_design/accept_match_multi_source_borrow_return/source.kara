@@ -1,0 +1,12 @@
+fn pick(a: ref String, b: ref String, which: i64) -> ref String {
+match which {
+0 => a,
+_ => b,
+}
+}
+fn main() {
+let x = String.from("left");
+let y = String.from("right");
+let z = pick(x, y, 0);
+println(z.len());
+}

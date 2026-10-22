@@ -1,0 +1,35 @@
+struct SBefore[T] { a: T, m: Map[i64, i64] }
+struct TwoHeap[T] { a: T, b: T, m: Map[i64, i64] }
+struct GInner[T] { a: T, m: Map[i64, i64] }
+struct GOuter[T] { inner: GInner[T] }
+fn main() {
+let mut m1: Map[i64, i64] = Map.new();
+m1.insert(1, 11);
+let s: String = "hello".to_string();
+let x1 = SBefore { a: s, m: m1 };
+println(x1.a.len());
+println(x1.m.get(1).unwrap());
+let mut m1b: Map[i64, i64] = Map.new();
+m1b.insert(1, 111);
+let vsa: Vec[String] = ["aa", "bb", "cc"];
+let x1b = SBefore { a: vsa, m: m1b };
+println(x1b.a[1]);
+println(x1b.m.get(1).unwrap());
+let mut m2: Map[i64, i64] = Map.new();
+m2.insert(2, 22);
+let v1: Vec[i64] = [1, 2, 3];
+let v2: Vec[i64] = [4, 5, 6, 7];
+let th = TwoHeap { a: v1, b: v2, m: m2 };
+let th2 = th;
+println(th2.a[2]);
+println(th2.b[3]);
+println(th2.m.get(2).unwrap());
+let mut mp: Map[i64, i64] = Map.new();
+mp.insert(9, 99);
+let vv: Vec[i64] = [7, 8, 9];
+let gi = GInner { a: vv, m: mp };
+let o = GOuter { inner: gi };
+let bound = o.inner;
+println(bound.a[0]);
+println(bound.m.get(9).unwrap());
+}

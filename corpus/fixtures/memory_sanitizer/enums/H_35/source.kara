@@ -1,0 +1,4 @@
+fn f() -> i64 { let value = mk_val(); let mut vv = value;
+   if let Some(g) = vv { g };
+   vv = val_none(); if vv.is_some() { 1 } else { 0 } }
+fn main() { println(f()); }

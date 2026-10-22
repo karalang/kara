@@ -1,0 +1,15 @@
+fn main() {
+let a: i64 = 1099511627776i64;
+println(a << 1u32);
+println(a >> 1u32);
+let n: u32 = 1u32;
+println(a << n);
+let b: i64 = 1i64;
+println(b << 40u32);
+let c: u64 = 18446744073709551615u64;
+println(c >> 32u32);
+let d: i64 = 0i64 - 8i64;
+println(d >> 1u32);
+let e: i32 = 0i32 - 8i32;
+println(e >> 1u32);
+}

@@ -1,0 +1,13 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+let names: Vec[String] = ["ann", "bob"];
+df.insert("name", Column.from_vec(names));
+df.insert("age", Column.from_vec([20, 30]));
+println(df.width());
+println(df.height());
+let back: Column[String] = df.column("name");
+for s in back.iter_valid() { println(s); }
+let sub: DataFrame = df.select(["age", "name"]);
+let sn: Column[String] = sub.column("name");
+for s in sn.iter_valid() { println(s); }
+}

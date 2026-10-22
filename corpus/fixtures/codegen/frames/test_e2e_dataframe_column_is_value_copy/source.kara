@@ -1,0 +1,10 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1, 2]));
+let mut c: Column[i64] = df.column("a");
+c.push(3);
+println(c.len());
+println(df.height());
+let d: Column[i64] = df.column("a");
+println(d.len());
+}

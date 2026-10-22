@@ -1,0 +1,20 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+struct Holder { r: Res }
+fn take(h: Holder) {
+let Holder { r } = h;
+println(f"got {r.id}");
+println("take done");
+}
+fn main() {
+println("a");
+let x = Holder { r: Res { id: 5, name: f"y{5}" } };
+take(x);
+println("b");
+take(Holder { r: Res { id: 7, name: f"y{7}" } });
+println("end");
+}

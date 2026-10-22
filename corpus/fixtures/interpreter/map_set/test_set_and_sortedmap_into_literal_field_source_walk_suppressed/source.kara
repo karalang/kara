@@ -1,0 +1,25 @@
+#[derive(Hash, Eq)]
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+struct SetHold { s: Set[Res], tag: i64 }
+struct SmHold { m: SortedMap[i64, Res], tag: i64 }
+fn main() {
+println("a");
+{
+let mut s: Set[Res] = Set.new();
+let _ = s.insert(Res { id: 3, name: f"s{3}" });
+let h = SetHold { s: s, tag: 1 };
+println(h.tag);
+}
+println("mid");
+{
+let mut m: SortedMap[i64, Res] = SortedMap.new();
+let _ = m.insert(2, Res { id: 4, name: f"m{4}" });
+let _ = m.insert(1, Res { id: 5, name: f"n{5}" });
+let g = SmHold { m: m, tag: 2 };
+println(g.tag);
+}
+println("end");
+}

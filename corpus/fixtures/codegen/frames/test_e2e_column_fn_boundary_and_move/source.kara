@@ -1,0 +1,8 @@
+fn take(c: Column[f64]) -> i64 { c.len() }
+fn main() {
+let g: Column[f64] = Column.from_vec([3.0, 4.0, 5.0]);
+println(take(g));
+let h: Column[i64] = Column.from_vec([7, 8]);
+let k = h;
+println(k.len());
+}

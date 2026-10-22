@@ -1,0 +1,5 @@
+struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn fs(o: Option[(S, S)]) -> S { match o { Some(t) => { return t.0; } None => { return S { id: 0 }; } } }
+fn sink(r: S) { println(f"sank{r.id}") }
+fn main() { sink(fs(Some((S { id: 5 }, S { id: 6 })))); }

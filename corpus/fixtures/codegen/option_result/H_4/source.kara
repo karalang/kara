@@ -1,0 +1,2 @@
+fn main() { let r: Result[E, i64] = Ok(E.A(R { id: 5 }));
+             println("mid"); }

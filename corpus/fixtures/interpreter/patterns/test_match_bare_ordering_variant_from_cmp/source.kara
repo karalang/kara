@@ -1,0 +1,8 @@
+fn tag(a: i64, b: i64) -> i64 {
+match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }
+}
+fn main() {
+println(tag(1, 2));
+println(tag(2, 1));
+println(tag(3, 3));
+}

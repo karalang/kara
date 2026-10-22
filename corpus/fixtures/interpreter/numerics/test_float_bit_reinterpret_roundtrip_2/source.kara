@@ -1,0 +1,1 @@
+fn main() { let f: f32 = 2.25; println(f.to_bits32().bits_as_f32() == f); }

@@ -1,0 +1,4 @@
+neg -5 inv -6 bits 37 nb 4 116 50 155 155 200 nr -1.5 pick 10 spins 3 g 7
+o1 5 flag false x 6 b 101
+neg -6 inv -7 bits 45 nb 5 117 50 154 154 202 nr -1.5 pick 20 spins 0 g 700
+o2 1004 flag false x 7 b 102

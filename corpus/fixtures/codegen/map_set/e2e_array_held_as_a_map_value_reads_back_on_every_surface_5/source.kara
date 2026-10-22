@@ -1,0 +1,13 @@
+fn mk() -> Map[i64, Array[String, 2]] {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    let e: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    m.insert(1, e);
+    return m;
+}
+fn main() {
+    let m = mk();
+    match m.get(1) {
+        Some(a) => { println(f"s:{a[0]}"); }
+        None => { println("s:missing"); }
+    }
+}

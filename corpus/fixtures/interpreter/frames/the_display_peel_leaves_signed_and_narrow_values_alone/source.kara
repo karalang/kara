@@ -1,0 +1,18 @@
+fn main() {
+let s: Option[i64] = Some(0i64 - 1i64);
+println(s);
+let mut si: Vec[i64] = vec![];
+si.push(0i64 - 7i64);
+println(si);
+let mut n8: Vec[u8] = vec![];
+n8.push(200u8);
+println(n8);
+let tn = (0i64 - 3i64, 4i32);
+println(tn);
+let f: Option[f64] = Some(1.5);
+println(f);
+let st: Option[String] = Some("hi");
+println(st);
+let b: Option[bool] = Some(true);
+println(b);
+}

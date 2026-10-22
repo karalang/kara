@@ -1,0 +1,1 @@
+fn main() { let t = (|x| x + 1i64, 7i64); println(f"{(t.0)(41i64)}"); }

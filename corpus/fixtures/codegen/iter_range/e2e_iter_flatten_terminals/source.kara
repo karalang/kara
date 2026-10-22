@@ -1,0 +1,12 @@
+fn main() {
+let n: Vec[Vec[i64]] = [[1, 2], [3, 4], [5]];
+let flat: Vec[i64] = n.iter().flatten().collect();
+println(flat.get(0));
+println(flat.get(4));
+println(n.iter().flatten().sum());
+println(n.iter().flatten().count());
+println(n.iter().flatten().fold(0, |acc, x| acc * 10 + x));
+let d: Vec[i64] = n.iter().flatten().map(|x| x * 2).collect();
+println(d.get(2));
+println(n.iter().flatten().filter(|x| x % 2 == 1).sum());
+}

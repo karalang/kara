@@ -1,0 +1,1 @@
+fn main() { let x = F32.from(2.5); println(x); }

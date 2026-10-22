@@ -1,0 +1,2 @@
+fn pos(x: i64) -> i64 requires x > 0 { x }
+fn main() { let _ = pos(-5); }

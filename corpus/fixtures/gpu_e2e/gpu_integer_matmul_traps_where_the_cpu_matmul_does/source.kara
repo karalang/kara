@@ -1,0 +1,5 @@
+fn main() {
+    let a: Tensor[i32, [?, ?]] = Tensor.from([[65536, 65536]]);
+    let b: Tensor[i32, [?, ?]] = Tensor.from([[65536], [65536]]);
+    println(f"{gpu.matmul(a, b)[0, 0]}");
+}

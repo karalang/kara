@@ -1,0 +1,16 @@
+fn main() {
+let mut src: Vec[u8] = Vec.new();
+let mut i = 0i64;
+while i < 40i64 {
+let mut p = 0i64;
+while p < 12i64 {
+src.push(97u8 + ((i + p) % 26i64) as u8);
+p = p + 1i64;
+}
+i = i + 1i64;
+}
+let mut k = 0i64;
+let mut s = 0i64;
+while k < src.len() { s = s + (src[k] as i64); k = k + 1i64; }
+println(f"{src.len()} {s}");
+}

@@ -1,0 +1,1 @@
+fn main() { let n: i64 = 7; let a: f64 = n; println(a); }

@@ -1,0 +1,10 @@
+fn nth(n: i64) -> char {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let mut i = 0i64;
+    for ch in alphabet.chars() {
+        if i == n { return ch; }
+        i = i + 1i64;
+    }
+    return 'a';
+}
+fn main() { println(nth(3i64)); }

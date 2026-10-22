@@ -1,0 +1,2 @@
+fn take(r: R, k: i64) -> R { if k == 1 { r } else if k == 2 { R { id: 98 } } else { R { id: 99 } } }
+fn main() { let x = take(R { id: 41 }, 3); println(f"{x.id}") }

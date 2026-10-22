@@ -1,0 +1,9 @@
+fn main() {
+    let a = 1_000i64;
+    let b = 0xFFi64;
+    let c = -5i64;
+    let d = 2.5f64;
+    let mut i = 0i64;
+    while i < 3i64 { i = i + 1i64; }
+    println(f"{a} {b} {c} {d} {i}");
+}

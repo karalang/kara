@@ -1,0 +1,6 @@
+struct S { s: String }
+fn main() {
+    let a: Array[S, 2] = [S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb1" }];
+    let b: Array[S, 2] = a;
+    println("done");
+}

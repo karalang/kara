@@ -1,0 +1,6 @@
+import std.web.events.{clicks, ClickEvent};
+
+fn main() {
+    let cs = clicks();
+    cs.recv();
+}

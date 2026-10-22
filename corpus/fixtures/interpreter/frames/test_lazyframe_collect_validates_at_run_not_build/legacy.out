@@ -1,0 +1,6 @@
+built-ok
+== logical plan ==
+SELECT [nope]
+  SCAN [a]
+== optimized ==
+INVALID PLAN: LazyFrame.select: no column named 'nope' at this plan step

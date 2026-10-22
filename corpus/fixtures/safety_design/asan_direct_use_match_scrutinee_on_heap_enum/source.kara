@@ -1,0 +1,11 @@
+enum E { A(String), B }
+fn pick(e: ref E) -> ref E { e }
+fn main() {
+let mut s: String = "";
+s.push_str("payload");
+let e: E = E.A(s);
+match pick(e) {
+A(_) => println("is-a"),
+_ => println("is-b"),
+}
+}

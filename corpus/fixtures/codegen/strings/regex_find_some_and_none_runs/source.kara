@@ -1,0 +1,11 @@
+fn main() {
+let re = Regex.compile("[0-9]+").unwrap();
+match re.find("abc123def") {
+Some(m) => { println(f"{m.text} {m.start} {m.end}"); }
+None => { println("none"); }
+}
+match re.find("no digits") {
+Some(m) => { println(f"{m.text}"); }
+None => { println("none"); }
+}
+}

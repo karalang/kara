@@ -1,0 +1,3 @@
+fn doubler(n: i64) -> i64 { n * 2i64 }
+struct H { f: Fn(i64) -> i64 }
+fn main() { let h = H { f: doubler }; let g = h.f; println(f"{g(21i64)}"); }

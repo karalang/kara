@@ -1,0 +1,5 @@
+fn main() {
+    let a: Array[Vec[i64], 2] = [[10, 11], [20]];
+    let b = a;
+    println(f"s:{b[0][1]}");
+}

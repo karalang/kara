@@ -1,0 +1,14 @@
+
+comptime fn derive_arity(comptime T: Type) -> Vec[Item] {
+    let n = T.name();
+    let c = T.variants().len();
+    [ast.item("impl " + n + " { fn arity(self) -> i64 { " + f"{c}" + " } }")]
+}
+
+#[derive(Arity)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let c = Color.Red;
+    println(c.arity());
+}

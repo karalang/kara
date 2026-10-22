@@ -1,0 +1,7 @@
+fn main() {
+let a = "e\u{0301}";
+let bound = NormalizationForm.Nfc;
+println(a.normalize(NormalizationForm.Nfc).len());
+println(a.normalize(NormalizationForm.Nfc).len());
+println(a.normalize(bound).len());
+}

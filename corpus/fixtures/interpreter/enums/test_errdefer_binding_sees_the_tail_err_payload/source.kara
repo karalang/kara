@@ -1,0 +1,5 @@
+fn body() -> Result[i64, String] {
+errdefer(e) { print(e); }
+Err("payload".to_string())
+}
+fn main() { let _ = body(); }

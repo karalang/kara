@@ -1,0 +1,7 @@
+fn take(b: E, p: R) -> i64 {
+let mut out: R = R { id: 0, tag: f"t0" };
+match b { E.A(r) => { out = r; } E.B => { } }
+println("m");
+return out.id + p.id;
+}
+fn main() { let c: E = E.A(R { id: 8, tag: f"t8" }); let v: i64 = take(c, R { id: 2, tag: f"t2" }); println(f"v{v}"); }

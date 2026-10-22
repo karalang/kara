@@ -1,0 +1,6 @@
+fn main() {
+let x = 100;
+let mut i = 0;
+while i < 2 { let x = i; i = i + 1; }
+println(x.to_string());
+}

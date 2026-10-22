@@ -1,0 +1,17 @@
+source = "tests/codegen/drop_order.rs::e2e_with_provider_early_return_drops_body_local_before_pop"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "post-m1:provider", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "b99e7c6a"
+model_rev = "583cfb0d"
+model_src = "b99e7c6a"

@@ -1,0 +1,9 @@
+fn half(n: i64) -> Result[i64, String] {
+if n % 2 != 0 { return Err("odd") }
+Ok(n / 2)
+}
+fn chain(n: i64) -> Result[i64, String] { let h = half(n)?; Ok(h + 1) }
+fn main() {
+match chain(9) { Ok(v) => println(f"ok {v}"), Err(e) => println(f"err {e}") }
+match chain(8) { Ok(v) => println(f"ok {v}"), Err(e) => println(f"err {e}") }
+}

@@ -1,0 +1,12 @@
+fn bump(c: ref Atomic[i64]) { let _ = c.fetch_add(1, MemoryOrdering.SeqCst); }
+fn setit(c: mut ref Atomic[i64]) { c.store(9, MemoryOrdering.SeqCst); }
+fn readit(c: ref Atomic[i64]) -> i64 { c.load(MemoryOrdering.SeqCst) }
+fn main() {
+let c = Atomic.new(0);
+bump(c);
+bump(c);
+println(c.load(MemoryOrdering.SeqCst));
+println(readit(c));
+setit(mut c);
+println(c.load(MemoryOrdering.SeqCst));
+}

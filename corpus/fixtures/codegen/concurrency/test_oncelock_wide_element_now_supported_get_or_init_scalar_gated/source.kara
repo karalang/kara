@@ -1,0 +1,4 @@
+fn main() {
+let c: OnceLock[String] = OnceLock.new();
+match c.set("hi".to_string()) { Ok(_) => {}, Err(_) => {}, }
+}

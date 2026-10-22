@@ -1,0 +1,20 @@
+
+comptime fn derive_field_eq(comptime T: Type) -> Vec[Item] {
+    let n = T.name();
+    let mut body = "true";
+    for f in T.fields() {
+        body = body + " and self." + f.name + " == other." + f.name;
+    }
+    [ast.item("impl " + n + " { fn field_eq(self, other: " + n + ") -> bool { " + body + " } }")]
+}
+
+#[derive(FieldEq)]
+struct Point { x: i64, y: i64 }
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = Point { x: 1, y: 2 };
+    let c = Point { x: 1, y: 9 };
+    println(a.field_eq(b));
+    println(a.field_eq(c));
+}

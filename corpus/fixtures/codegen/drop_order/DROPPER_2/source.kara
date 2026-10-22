@@ -1,0 +1,2 @@
+fn make() -> (R, i64) { return (R { id: 41 }, 1); }
+fn main() { let (r, n) = make(); println(f"{r.id + n}"); }

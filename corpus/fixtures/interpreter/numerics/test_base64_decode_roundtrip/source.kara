@@ -1,0 +1,6 @@
+fn main() {
+match Base64.decode("Zm9vYmFy") {
+Ok(bs) => println(bs.len()),
+Err(_) => println("err"),
+}
+}

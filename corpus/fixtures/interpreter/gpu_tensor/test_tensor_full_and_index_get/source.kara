@@ -1,0 +1,5 @@
+fn main() {
+let t: Tensor[i64, [2, 3]] = Tensor.full([2, 3], 7);
+println(t[0, 0]);
+println(t[1, 2]);
+}

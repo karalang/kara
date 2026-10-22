@@ -1,0 +1,21 @@
+struct Config { name: String, port: i64 }
+fn main() {
+let c: OnceLock[String] = OnceLock.new();
+let a = c.get_or_init(|| "first".to_string());
+println(a);
+let b = c.get_or_init(|| "second".to_string());
+println(b);
+println(a.len());
+let v: OnceCell[Vec[i64]] = OnceCell.new();
+let xs = v.get_or_init(|| Vec[10, 20, 30]);
+println(xs.len());
+match xs.get(1) { Some(n) => println(n), None => println(-1) }
+let k: OnceLock[Config] = OnceLock.new();
+let cfg = k.get_or_init(|| Config { name: "svc".to_string(), port: 8080 });
+println(cfg.name);
+println(cfg.port);
+let s: OnceLock[String] = OnceLock.new();
+match s.set("sealed".to_string()) { Ok(_) => {}, Err(_) => {}, }
+let t = s.get_or_init(|| "never".to_string());
+println(t);
+}

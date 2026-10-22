@@ -1,0 +1,13 @@
+struct H { name: String }
+impl H {
+fn label(ref self) -> ref String { self.name }
+}
+fn main() {
+let h = H { name: "kara".to_string() };
+println(h.label().len().to_string());
+println(h.label().starts_with("ka").to_string());
+println(h.label().to_uppercase());
+println(f"{h.label().len()}");
+let e = H { name: "".to_string() };
+println(e.label().is_empty().to_string());
+}

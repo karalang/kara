@@ -1,0 +1,25 @@
+struct C { name: String, zip: i64 }
+struct A { c: Option[C], other: String }
+fn main() {
+let a = Option.Some(A {
+c: Option.Some(C { name: "moved out payload", zip: 7 }),
+other: "untouched sibling",
+});
+let f = match a {
+Option.Some(x) => { x.c }
+Option.None => { Option.None }
+};
+match f {
+Option.Some(cc) => { println(cc.name); println(cc.zip); }
+Option.None => { println("none"); }
+}
+let b = Option.Some(A {
+c: Option.Some(C { name: "kept payload", zip: 3 }),
+other: "kept sibling",
+});
+let n = match b {
+Option.Some(y) => { y.other.len() }
+Option.None => { 0 }
+};
+println(n);
+}

@@ -1,0 +1,14 @@
+effect resource UserDB;
+         struct Db { tag: i64 }
+         impl Db { fn id(self) -> i64 { self.tag } }
+         fn main() {
+             with_provider[UserDB](Db { tag: 1 }, || {
+                 println(UserDB.id());
+                 providers {
+                     UserDB => Db { tag: 2 },
+                 } in {
+                     println(UserDB.id());
+                 }
+                 println(UserDB.id());
+             });
+         }

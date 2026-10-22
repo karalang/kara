@@ -1,0 +1,6 @@
+fn main() {
+let mut m: Map[String, String] = Map.new();
+m.insert(f"k", f"alpha");
+{ let keep: Map[String, String] = m.clone(); }
+match m.get(f"k") { Some(v) => println(v), None => println(f"-") }
+}

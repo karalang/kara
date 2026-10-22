@@ -1,0 +1,2 @@
+struct Pair { a: String, b: String }
+fn main() { let p = Pair { a: "x" + "1", b: "y" }; println(p.a + p.b) }

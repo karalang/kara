@@ -1,0 +1,8 @@
+fn main() {
+let s = "hello world";
+println(s[0..5]);
+println(s[6..]);
+println(s[..5]);
+println(s[0..=4]);
+println("[" + s[3..3] + "]");
+}

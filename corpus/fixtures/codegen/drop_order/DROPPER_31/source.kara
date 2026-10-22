@@ -1,0 +1,1 @@
+fn main() { let r = R { id: 41 }; let s = R { id: 99 }; let k = true; let y = if k { r } else { s }; println(f"{y.id}"); }

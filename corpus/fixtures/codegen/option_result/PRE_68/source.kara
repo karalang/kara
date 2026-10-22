@@ -1,0 +1,2 @@
+fn f(a: R, b: R) { let h = wrap_bodied(a); let k = wrap_bodied(b); println(f"v={h.r.id}{k.r.id}"); }
+fn main() { f(mkr(1), mkr(2)); println("end") }

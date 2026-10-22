@@ -1,0 +1,5 @@
+fn main() {
+    let mut a: Vec[(String, i64)] = [(f"aaaaaaaaaaaa1", 1), (f"bbbbbbbbbbbb2", 2)];
+    a[0] = (f"MUTATEDMUTATED3", 3);
+    println(f"a0:{a[0].1}");
+}

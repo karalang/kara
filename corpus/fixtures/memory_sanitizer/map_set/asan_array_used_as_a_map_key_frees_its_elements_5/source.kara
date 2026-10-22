@@ -1,0 +1,12 @@
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    let e: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    match m.try_insert(1, e) {
+        Ok(o) => { println("s:ok"); }
+        Err(x) => { println("s:err"); }
+    }
+    match m.get(1) {
+        Some(a) => { println(f"t:{a[0]}"); }
+        None => { println("t:missing"); }
+    }
+}

@@ -1,0 +1,7 @@
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+fn main() {
+let c = UsbClass.Hid;
+let byte: u8 = c.discriminant();
+println(f"{byte} {UsbClass.Audio.discriminant()} {UsbClass.MassStorage.discriminant()}");
+}

@@ -1,0 +1,12 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4, 5, 6];
+println(f"{v.iter().fold(0, |a, x| a + x)}");
+println(f"{v.iter().map(|x| x * x).fold(0, |a, x| a + x)}");
+println(f"{v.iter().filter(|x| x % 2 == 0).fold(0, |a, x| a + x)}");
+println(f"{v.iter().filter(|x| x > 2).map(|x| x * 10).fold(0, |a, x| a + x)}");
+println(f"{v.iter().fold(0, |a, x| if x > a { x } else { a })}");
+println(f"{v.iter().fold(100, |a, x| a - x)}");
+let e: Vec[i64] = [];
+println(f"{e.iter().fold(42, |a, x| a + x)}");
+println(f"{(0..5).fold(0, |a, x| a + x)}");
+}

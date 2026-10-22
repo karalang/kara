@@ -1,0 +1,3 @@
+struct User { name: String, age: i64 }
+fn describe(u: User) -> String { u.name + "/" + u.age.to_string() }
+fn main() { println(describe(User { name: "bo", age: 7 })) }

@@ -1,0 +1,5 @@
+fn main() {
+let c: Column[i64] = Column.from_vec([1, 2]);
+let i = 9;
+match c[i] { Some(v) => println(v), None => println(-1) }
+}

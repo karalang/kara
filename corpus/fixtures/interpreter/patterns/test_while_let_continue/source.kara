@@ -1,0 +1,11 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(1_i64);
+v.push(2_i64);
+v.push(3_i64);
+v.push(4_i64);
+while let Some(x) = v.pop() {
+if x == 3_i64 { continue; }
+println(x);
+}
+}

@@ -1,0 +1,1 @@
+fn main() { let a: i64 = 5; let r: i64 = not a; }

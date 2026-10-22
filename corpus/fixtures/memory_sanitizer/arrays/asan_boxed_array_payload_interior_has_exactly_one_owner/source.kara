@@ -1,0 +1,10 @@
+fn plainA(x: Option[Array[String, 2]]) -> i64 {
+    match x { Some(t) => { println(f"s:{t[0]}"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let mut s = 0;
+    for i in 0..3 {
+        s = s + plainA(Some([f"aaaaaaaa{i}", f"bbbbbbbb{i}"]));
+    }
+    println(f"n:{s}");
+}

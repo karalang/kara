@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new(); v.push(111); v.push(222);
+let o: Option[Vec[i64]] = Some(v);
+match o { Some(ref x) => { println(x[0]); } None => {} }
+match o { Some(x) => { println(x[0]); } None => {} }
+}

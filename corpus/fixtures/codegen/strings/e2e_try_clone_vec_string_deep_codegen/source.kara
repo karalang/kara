@@ -1,0 +1,11 @@
+fn main() {
+let mut src: Vec[String] = Vec.new();
+src.push("ab");
+src.push("cd");
+match src.try_clone() {
+Ok(c) => {
+println(c.len()); println(c[0]); println(c[1]);
+}
+Err(_) => println("err"),
+}
+}

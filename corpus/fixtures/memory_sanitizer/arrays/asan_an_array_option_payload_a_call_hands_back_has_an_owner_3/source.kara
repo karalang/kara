@@ -1,0 +1,13 @@
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 {
+        let o = m.insert(3, Array[f"raaaaaaaaaaaa{i}", f"cbbbbbbbbbbbb{i}"]);
+        match o {
+            Some(a) => { println(f"o:{a[0]}"); }
+            None => { println("o:fresh"); }
+        }
+        i = i + 1;
+    }
+    println(f"n:{m.len()}");
+}

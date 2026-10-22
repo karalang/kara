@@ -1,0 +1,8 @@
+enum Bin { Packed(Array[String, 2]), Bare }
+fn f(b: ref Bin) {
+    match b { Packed(a) => { println(f"s:{a[0]}") } Bare => { println("n") } }
+}
+fn main() {
+    let x: Bin = Bare;
+    f(x);
+}

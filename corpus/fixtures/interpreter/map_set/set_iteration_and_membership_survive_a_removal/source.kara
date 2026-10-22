@@ -1,0 +1,9 @@
+fn main() {
+let mut s: Set[i64] = Set.new();
+s.insert(9); s.insert(3); s.insert(7); s.insert(1);
+s.remove(3);
+for x in s { println(x); }
+if s.contains(1) { println("has1"); } else { println("LOST1"); }
+if s.contains(7) { println("has7"); } else { println("LOST7"); }
+if s.contains(3) { println("BAD3"); } else { println("gone3"); }
+}

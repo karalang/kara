@@ -1,0 +1,8 @@
+fn main() {
+    let p = ptr.null[u8]();
+    let d = ptr.dangling[i64]();
+    unsafe {
+        if p.is_null() { println("p-null"); } else { println("p-live"); }
+        if d.is_null() { println("d-null"); } else { println("d-live"); }
+    }
+}

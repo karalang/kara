@@ -1,0 +1,2 @@
+fn mk() -> R { let p = (R { id: 41, name: f"n{41}" }, 1); p.0 }
+fn main() { let x = mk(); println(f"{x.id} {x.name}") }

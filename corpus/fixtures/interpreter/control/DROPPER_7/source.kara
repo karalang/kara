@@ -1,0 +1,2 @@
+fn eatf(r: R) { println(f"saw {r.id}"); }
+fn main() { eatf(R { id: 41 }); println("after") }

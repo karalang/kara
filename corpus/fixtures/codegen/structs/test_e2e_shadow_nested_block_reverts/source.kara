@@ -1,0 +1,8 @@
+fn main() {
+let x = 11;
+{
+let x = 22;
+println(x.to_string());
+}
+println(x.to_string());
+}

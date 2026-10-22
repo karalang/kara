@@ -1,0 +1,8 @@
+enum Color { Red, Green, Blue }
+enum Msg { Info(i64), Quit }
+fn main() {
+let c = Color.Green;
+let m = Msg.Info(7);
+match m { Info(c) => println(f"got {c}"), Quit => println("quit") }
+match c { Green => println("green"), _ => println("other") }
+}

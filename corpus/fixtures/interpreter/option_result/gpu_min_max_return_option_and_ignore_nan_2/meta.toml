@@ -1,0 +1,15 @@
+source = "tests/interpreter/option_result.rs::gpu_min_max_return_option_and_ignore_nan"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "a81f3e03"

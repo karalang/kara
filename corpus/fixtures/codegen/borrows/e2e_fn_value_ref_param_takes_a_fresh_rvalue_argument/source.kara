@@ -1,0 +1,21 @@
+fn score(s: ref String, needle: ref String) -> i64 {
+if s.contains(needle) { return s.len(); }
+return 1i64;
+}
+fn mk(k: i64) -> String {
+let mut s: String = String.new();
+s.push_str(f"payload-row-{k}-tail");
+return s;
+}
+fn main() {
+let a: i64 = env.args().len();
+let f = score;
+let mut acc = 0i64;
+let mut i = 0i64;
+while i < 20i64 {
+let nd: String = mk(i + a);
+acc = acc + f(mk(i + a), nd);
+i = i + 1i64;
+}
+println(acc);
+}

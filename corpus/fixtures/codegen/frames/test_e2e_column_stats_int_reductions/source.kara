@@ -1,0 +1,7 @@
+fn main() {
+let c: Column[i64] = Column.from_iter_nullable([Some(2), None, Some(4), Some(6)]);
+println(c.sum());
+println(c.min());
+println(c.max());
+println(c.mean());
+}

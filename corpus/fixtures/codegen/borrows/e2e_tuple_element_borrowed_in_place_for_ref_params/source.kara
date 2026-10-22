@@ -1,0 +1,30 @@
+struct H { a: Vec[i64], b: i64 }
+fn mkv(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); v.push(k + 1i64); return v; }
+fn mks(k: i64) -> String { let mut s: String = String.new(); s.push_str(f"pay-{k}"); return s; }
+fn dig(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn peek(v: ref Vec[i64]) -> i64 { return v[0i64] + v.len(); }
+fn bump(v: mut ref Vec[i64]) { v.push(42i64); }
+fn slen(s: ref String) -> i64 { return s.len(); }
+fn main() {
+    let n: i64 = env.args().len();
+    // (a) ref param, TUPLE element — was a double free
+    let t1: (Vec[i64], i64) = (mkv(n), 5i64);
+    println(f"a:{peek(t1.0)}:{t1.0[1i64]}");
+    // (b) mut ref param, TUPLE element — the mutation was lost, then panicked
+    let mut t2: (Vec[i64], i64) = (mkv(n), 5i64);
+    bump(mut t2.0);
+    println(f"b:{t2.0.len()}:{t2.0[2i64]}");
+    // (c) ref param, tuple element in SECOND position
+    let t3: (i64, Vec[i64]) = (5i64, mkv(n));
+    println(f"c:{peek(t3.1)}");
+    // (d) ref param, STRING tuple element
+    let t4: (String, i64) = (mks(n), 5i64);
+    if t4.0.contains(dig(n)) { println(f"d:{slen(t4.0)}"); } else { println("d:BAD"); }
+    // CONTROL: the struct-FIELD spelling, correct since B-2026-07-12-1
+    let h1: H = H { a: mkv(n), b: 5i64 };
+    println(f"e:{peek(h1.a)}:{h1.a[1i64]}");
+    let mut h2: H = H { a: mkv(n), b: 5i64 };
+    bump(mut h2.a);
+    println(f"f:{h2.a.len()}:{h2.a[2i64]}");
+    println("end");
+}

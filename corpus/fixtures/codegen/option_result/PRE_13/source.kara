@@ -1,0 +1,1 @@
+fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f"a" }); let (x, y) = (o, 7); println(f"n{y}"); println("done") }

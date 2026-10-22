@@ -1,0 +1,2 @@
+fn take(p: (R, i64), f: bool) -> R { if f { return p.0; } p.0 }
+fn main() { let x = take((R { id: 41, name: f"n{41}" }, 1), true); println(f"{x.id} {x.name}") }

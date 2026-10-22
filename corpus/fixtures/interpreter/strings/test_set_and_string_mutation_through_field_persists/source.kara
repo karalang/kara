@@ -1,0 +1,8 @@
+struct S { seen: Set[i64] }
+fn main() {
+  let mut s = S { seen: Set.new() };
+  let _ = s.seen.insert(3);
+  let _ = s.seen.insert(3);
+  let _ = s.seen.insert(9);
+  println(s.seen.len());
+}

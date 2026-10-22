@@ -1,0 +1,7 @@
+struct H { m: Map[i64, Array[String, 2]] }
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    m.insert(1, [f"aaaaaaaa0", f"bbbbbbbb0"]);
+    let h: H = H { m: m };
+    println("s:ok");
+}

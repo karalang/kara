@@ -1,0 +1,5 @@
+struct Holder { value: i64 }
+fn main() {
+    let fs: Vec[i64] = [10i64, 20i64];
+    println(f"{fs[1]}");
+}

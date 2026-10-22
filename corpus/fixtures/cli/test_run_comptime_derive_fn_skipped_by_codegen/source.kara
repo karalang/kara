@@ -1,0 +1,7 @@
+comptime fn derive_double(comptime T: Type) -> Vec[Item] {
+let n = T.name();
+[ast.item("impl " + n + " { fn doubled(ref self) -> i64 { self.val * 2 } }")]
+}
+#[derive(Double)]
+struct W { val: i64 }
+fn main() { let w = W { val: 5 }; println(w.doubled()); }

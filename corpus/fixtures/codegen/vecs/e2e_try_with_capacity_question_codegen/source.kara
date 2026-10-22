@@ -1,0 +1,10 @@
+fn build() -> Result[i64, AllocError] {
+let mut v: Vec[i64] = Vec.try_with_capacity(3)?;
+v.push(10_i64);
+v.push(20_i64);
+v.push(30_i64);
+Ok(v[0] + v[1] + v[2])
+}
+fn main() {
+match build() { Ok(s) => println(s), Err(_) => println("err") }
+}

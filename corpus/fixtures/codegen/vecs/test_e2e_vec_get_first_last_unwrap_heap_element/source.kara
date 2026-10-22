@@ -1,0 +1,14 @@
+fn main() {
+let g: Vec[Vec[i64]] = [[1, 2, 3], [4, 5, 6], [7, 8]];
+let row = g.get(1).unwrap();
+println(row.len());
+println(row.get(2).unwrap());
+let f = g.first().unwrap();
+println(f.len());
+let l = g.last().unwrap();
+println(l.len());
+let words: Vec[String] = ["hello", "world"];
+let w = words.get(1).unwrap();
+println(w.len());
+println(w);
+}

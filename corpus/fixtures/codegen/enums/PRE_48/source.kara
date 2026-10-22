@@ -1,0 +1,2 @@
+fn plainD(x: Option[(Rq, Rq)]) { match x { Some(t) => { println("s") } None => { println("n") } } }
+fn main() { plainD(Some((Rq { id: 1 }, Rq { id: 2 }))); println("end") }

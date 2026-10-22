@@ -1,0 +1,12 @@
+fn main() {
+let v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];
+let d: Vec[i64] = v.iter()
+.map(|n| { if n == 2i64 { return 99i64; } n })
+.collect();
+let s: i64 = v.iter()
+.fold(0i64, |acc, n| { if n == 3i64 { return acc; } acc + n });
+let e: Vec[i64] = v.iter()
+.filter(|n| { if n == 1i64 { return true; } return n > 3i64; })
+.collect();
+println(f"{d[0]} {d[1]} {d[2]} {d[3]} | {s} | {e[0]} {e[1]}");
+}

@@ -1,0 +1,2 @@
+let SLOT: OnceLock[i64] = OnceLock.new();
+fn main() { println(1); }

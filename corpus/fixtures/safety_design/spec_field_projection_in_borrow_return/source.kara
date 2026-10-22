@@ -1,0 +1,9 @@
+struct User { name: String }
+fn user_name(user: ref User) -> ref String {
+user.name
+}
+fn main() {
+let u = User { name: String.from("alice") };
+let n = user_name(u);
+println(n.len());
+}

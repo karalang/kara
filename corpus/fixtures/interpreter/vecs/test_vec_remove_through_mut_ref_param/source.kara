@@ -1,0 +1,13 @@
+fn drain_first(v: mut ref Vec[i64]) -> i64 {
+v.remove(0)
+}
+fn main() {
+let mut xs: Vec[i64] = Vec.new();
+xs.push(10);
+xs.push(20);
+xs.push(30);
+let a = drain_first(mut xs);
+println(a);
+println(xs.len());
+println(xs[0]);
+}

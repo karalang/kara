@@ -1,0 +1,1 @@
+fn main() { let n: i64 = 42; println(n.to_string()); }

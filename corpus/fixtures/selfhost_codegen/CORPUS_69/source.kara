@@ -1,0 +1,2 @@
+struct P { x: i64, y: i64 }
+fn main() { let p = P { y: 9, x: 1 }; println((p.x + p.y).to_string()) }

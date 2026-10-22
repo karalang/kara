@@ -1,0 +1,15 @@
+fn cat(s: String, f: Fn(String) -> String) -> String {
+return f(s);
+}
+fn fold3[A](xs: Vec[i64], init: A, f: Fn(A, i64) -> A) -> A {
+let mut acc = init;
+for x in xs {
+acc = f(acc, x);
+}
+return acc;
+}
+fn main() {
+println(cat("ab", |a| f"{a}!"));
+println(fold3(vec![1, 2, 3], 0, |a, x| a + x));
+println(fold3(vec![1, 2, 3], "", |a, x| f"{a}{x}"));
+}

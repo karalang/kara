@@ -1,0 +1,3 @@
+struct Tk { kind: i64, text: String }
+fn toks() -> Vec[Tk] { let mut v: Vec[Tk] = Vec.new(); v.push(Tk { kind: 1, text: "x1".to_string() }); v.push(Tk { kind: 3, text: "=".to_string() }); return v; }
+fn main() { let ts = toks(); println(ts[0].text); println(ts[1].kind.to_string()); toks(); let ts2 = ts; println(ts2[1].text) }

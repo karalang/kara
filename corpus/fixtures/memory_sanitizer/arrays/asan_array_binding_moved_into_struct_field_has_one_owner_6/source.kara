@@ -1,0 +1,7 @@
+struct W { a: Array[String, 2] }
+fn main() {
+    let mut vs: Vec[W] = Vec.new();
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    vs.push(W { a: a });
+    println(f"s:{vs.len()}");
+}

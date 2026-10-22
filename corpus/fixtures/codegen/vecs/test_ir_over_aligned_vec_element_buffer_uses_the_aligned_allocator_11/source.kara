@@ -1,0 +1,5 @@
+fn main() {
+let mut v: Vec[i64] = [];
+for i in 0..9 { v.push(i); }
+println(v.len());
+}

@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Vec[Vec[i64]] = Vec.new();
+v.push([1i64, 2i64, 3i64]);
+let o: Option[i64] = Option.Some(7i64);
+println(f"{v[0].len()} {o.unwrap()}");
+}

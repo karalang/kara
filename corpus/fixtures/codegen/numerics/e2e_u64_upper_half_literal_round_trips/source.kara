@@ -1,0 +1,12 @@
+fn main() {
+    let a: u64 = 18446744073709551615u64;
+    println(a);
+    let b: u64 = 9223372036854775808u64;
+    println(b);
+    let c: u64 = 0xFFFFFFFFFFFFFFFFu64;
+    println(c);
+    println(a == u64.MAX);
+    println(b > 9223372036854775807u64);
+    let d: u64 = a / 2u64;
+    println(d);
+}

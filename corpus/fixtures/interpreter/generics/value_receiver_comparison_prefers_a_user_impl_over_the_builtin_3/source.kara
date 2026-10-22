@@ -1,0 +1,2 @@
+impl i64 { fn shout(self) -> String { "hi" } }
+fn main() { let a: i64 = 1; println(a.shout()); }

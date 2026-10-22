@@ -1,0 +1,9 @@
+fn main() {
+let v: Vec[i64] = [10, 20, 30, 40];
+match v.iter().find(|x| x > 15) { Some(e) => println(e), None => println(-1) }
+match v.iter().find(|x| x > 99) { Some(e) => println(e), None => println(-1) }
+match v.iter().find(|x| x > 0) { Some(e) => println(e), None => println(-1) }
+match v.iter().filter(|x| x % 20 == 0).find(|x| x > 25) { Some(e) => println(e), None => println(-1) }
+match v.iter().map(|x| x / 10).find(|x| x > 2) { Some(e) => println(e), None => println(-1) }
+match (0..10).find(|x| x > 5) { Some(e) => println(e), None => println(-1) }
+}

@@ -1,0 +1,1 @@
+fn main() { let (_, n) = (R { id: 41 }, 1); println(f"{n}") }

@@ -1,0 +1,2 @@
+let GREETING: StringSlice = "hello";
+fn main() { println(GREETING); }

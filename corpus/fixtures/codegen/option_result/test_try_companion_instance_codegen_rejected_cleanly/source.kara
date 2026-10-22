@@ -1,0 +1,5 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert("k", 1_i64);
+let _ = m.try_clone();
+}

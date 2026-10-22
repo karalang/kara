@@ -1,0 +1,2 @@
+fn take(p: (R, i64)) -> R { p.0 }
+fn main() { let x = take((R { id: 41, name: f"n{41}" }, 1)); println(f"{x.id} {x.name}") }

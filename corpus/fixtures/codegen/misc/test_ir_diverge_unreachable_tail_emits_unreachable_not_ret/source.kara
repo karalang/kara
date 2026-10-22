@@ -1,0 +1,3 @@
+struct FakeClock { t: i64 }
+fn boom() -> FakeClock { unreachable() }
+fn main() { let _c = boom(); }

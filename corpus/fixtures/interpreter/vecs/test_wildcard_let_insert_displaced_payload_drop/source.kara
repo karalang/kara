@@ -1,0 +1,14 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+fn main() {
+let mut m: Map[i64, Res] = Map.new();
+let _ = m.insert(1, Res { id: 7 });
+println("first insert done");
+let _ = m.insert(1, Res { id: 8 });
+println("displacing insert done");
+println("end");
+}

@@ -1,0 +1,2 @@
+fn pick(a: String, big: bool) -> String { let b = "zed".to_string(); if big { return b; } return a; }
+fn main() { println(pick("aa".to_string(), true)); println(pick("bb".to_string(), false)) }

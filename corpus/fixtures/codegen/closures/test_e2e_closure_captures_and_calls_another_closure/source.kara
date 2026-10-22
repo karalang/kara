@@ -1,0 +1,20 @@
+fn make_adder(n: i64) -> Fn(i64) -> i64 {
+|x| x + n
+}
+fn main() {
+let base = |x: i64| x + 1;
+let composed = |x: i64| base(x) * 10;
+println(composed(4));
+// 3-level capture chain
+let mid = |x: i64| base(x) * 2;
+let top = |x: i64| mid(x) + 100;
+println(top(4));
+// capture a returned closure and call it inside a closure
+let add5 = make_adder(5);
+let via = |x: i64| add5(x) + 1;
+println(via(10));
+// String-returning captured closure (return-type inference)
+let wrap = |s: String| f"[{s}]";
+let deco = |s: String| wrap(s);
+println(deco("x"));
+}

@@ -1,0 +1,8 @@
+fn main() {
+match '7'.to_digit(10) { Some(d) => println(d), None => println(99u32) }
+match 'a'.to_digit(16) { Some(d) => println(d), None => println(99u32) }
+match 'z'.to_digit(36) { Some(d) => println(d), None => println(99u32) }
+match 'x'.to_digit(10) { Some(d) => println(d), None => println(99u32) }
+let r: u32 = 2;
+match '1'.to_digit(r) { Some(d) => println(d), None => println(99u32) }
+}

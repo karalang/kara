@@ -1,0 +1,1 @@
+fn main() { let mut xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62, 0u64]; xs.sort(); println(f"{xs[0]}"); println(f"{xs[1]}"); println(f"{xs[2]}"); println(f"{xs[3]}"); }

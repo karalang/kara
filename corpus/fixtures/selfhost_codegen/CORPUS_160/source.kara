@@ -1,0 +1,26 @@
+struct Pt { x: i64, tag: String }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    let mut t = 0;
+    for x in v {
+        t = t + x;
+    }
+    println(t.to_string());
+    let mut ws: Vec[String] = Vec.new();
+    ws.push("al".to_string());
+    ws.push("be".to_string());
+    let mut acc = "".to_string();
+    for w in ws {
+        acc = acc + w + "|";
+    }
+    println(acc);
+    let mut ps: Vec[Pt] = Vec.new();
+    ps.push(Pt { x: 10, tag: "a".to_string() });
+    ps.push(Pt { x: 20, tag: "b".to_string() });
+    for p in ps {
+        println(p.tag + ":" + p.x.to_string());
+    }
+}

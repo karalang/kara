@@ -1,0 +1,8 @@
+enum Side { Left, Right }
+fn label(s: Side) -> i64 {
+match s {
+Side.Left => 1,
+Side.Right => 2,
+}
+}
+fn main() { println(label(Side.Left)); println(label(Side.Right)); }

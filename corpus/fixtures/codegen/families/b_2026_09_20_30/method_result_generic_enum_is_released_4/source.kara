@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 6 }; let r: Result[Sh, i64] = mk.res(); println("x")
+}

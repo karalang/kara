@@ -1,0 +1,5 @@
+len=4
+ok 10
+err neg:-2
+ok 30
+err neg:-4

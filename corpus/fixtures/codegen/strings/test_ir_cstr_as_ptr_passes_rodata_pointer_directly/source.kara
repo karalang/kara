@@ -1,0 +1,3 @@
+effect resource R;
+host fn sink(p: *const u8) with writes(R);
+pub fn main() with writes(R) { sink(c"x".as_ptr()); }

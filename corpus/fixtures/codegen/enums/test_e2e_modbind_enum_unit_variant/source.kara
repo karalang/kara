@@ -1,0 +1,17 @@
+enum Mode { Off, On, Auto }
+let DEFAULT_MODE: Mode = Mode.Off;
+let LIVE_MODE: Mode = Mode.Auto;
+fn main() {
+let m: Mode = DEFAULT_MODE;
+let a: Mode = LIVE_MODE;
+match m {
+Mode.Off => println(0),
+Mode.On => println(1),
+Mode.Auto => println(2),
+}
+match a {
+Mode.Off => println(0),
+Mode.On => println(1),
+Mode.Auto => println(2),
+}
+}

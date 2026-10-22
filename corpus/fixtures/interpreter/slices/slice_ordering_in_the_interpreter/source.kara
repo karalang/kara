@@ -1,0 +1,28 @@
+fn build(p: String) -> String {
+            let mut s = String.new();
+            s.push_str(p);
+            s.push_str("x");
+            return s;
+        }
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1); v.push(2); v.push(1); v.push(3);
+            let a: Slice[i64] = v[0..2];
+            let b: Slice[i64] = v[2..4];
+            let c: Slice[i64] = v[0..2];
+            println(f"{a < b}");
+            println(f"{b < a}");
+            println(f"{a < c}");
+            println(f"{a <= c}");
+            println(f"{b > a}");
+            let p: Slice[i64] = v[0..1];
+            println(f"{p < a}");
+            println(f"{a < p}");
+            let mut w: Vec[String] = Vec.new();
+            w.push(build("a")); w.push("m");
+            w.push(build("a")); w.push("n");
+            let x: Slice[String] = w[0..2];
+            let y: Slice[String] = w[2..4];
+            println(f"{x < y}");
+            println(f"{y < x}");
+        }

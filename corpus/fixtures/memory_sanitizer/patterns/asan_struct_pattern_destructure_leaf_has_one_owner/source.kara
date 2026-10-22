@@ -1,0 +1,25 @@
+struct R { id: i64, name: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.name}:{self.xs.len()}") } }
+struct S { r: R, k: i64 }
+struct Hs { r: R, name: String }
+struct Vs { r: R, ys: Vec[i64] }
+struct In { r: R }
+struct Ou { inner: In, k: i64 }
+fn mk(id: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return R { id: id, name: f"n{id}", xs: v }
+}
+fn plain(s: S) { let S { r, k } = s; let m = r; println(f"  p{m.xs.len()}:{m.name}") }
+fn heapstr(h: Hs) { let Hs { r, name } = h; let m = r; println(f"  o:{m.name}:{name}") }
+fn heapvec(v: Vs) { let Vs { r, ys } = v; let m = r; println(f"  v:{m.name}:{ys.len()}") }
+fn nested(o: Ou) { let Ou { inner, k } = o; let m = inner; println(f"  t:{m.r.name}") }
+fn norebind(s: S) { let S { r, k } = s; println(f"  nr{r.xs.len()}:{r.name}") }
+fn main() {
+    plain(S { r: mk(1), k: 0 });
+    heapstr(Hs { r: mk(2), name: "s" });
+    heapvec(Vs { r: mk(3), ys: [7, 8] });
+    nested(Ou { inner: In { r: mk(4) }, k: 0 });
+    norebind(S { r: mk(5), k: 0 });
+    println("end")
+}

@@ -1,0 +1,1 @@
+fn main() { let e: EArr = EArr.A(mka()); match e { EArr.A(v) => { let u = v; let w = u; println(f"w{w[1].id}") } EArr.B => { println("no") } } println("end") }

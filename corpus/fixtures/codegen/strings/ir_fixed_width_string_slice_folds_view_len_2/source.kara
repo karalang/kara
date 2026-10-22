@@ -1,0 +1,8 @@
+fn main() {
+let s = "abcd";
+let mut out: String = "";
+let a: i64 = 1;
+let b: i64 = 3;
+out.push_str(s[a..b]);
+println(out);
+}

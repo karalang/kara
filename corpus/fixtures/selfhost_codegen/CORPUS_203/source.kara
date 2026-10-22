@@ -1,0 +1,27 @@
+enum Tag {
+    Word,
+    Stop,
+}
+fn pick(n: i64) -> Tag {
+    if n < 2 {
+        return Tag.Word;
+    }
+    Tag.Stop
+}
+fn main() {
+    let mut i = 0;
+    let mut out = "".to_string();
+    loop {
+        if i >= 4 {
+            break;
+        }
+        let w = match pick(i) {
+            Word => "w".to_string(),
+            Stop => break,
+        };
+        out = out + w;
+        i = i + 1;
+    }
+    println(out);
+    println(i.to_string());
+}

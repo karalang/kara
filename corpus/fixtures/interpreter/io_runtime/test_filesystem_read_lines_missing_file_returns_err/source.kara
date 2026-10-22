@@ -1,0 +1,6 @@
+fn main() with reads(FileSystem) {
+                   match FileSystem.read_lines("/nonexistent_karac_rl_xyz.txt") {
+                       Ok(_) => println("ok"),
+                       Err(_) => println("err"),
+                   }
+               }

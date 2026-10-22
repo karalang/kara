@@ -1,0 +1,8 @@
+import std.json.{Json};
+
+fn main() {
+match Json.parse("\"\"") {
+Ok(j) => println(j.stringify()),
+Err(_) => println("err"),
+}
+}

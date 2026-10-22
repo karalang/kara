@@ -1,0 +1,3 @@
+fn dies(p: (R, i64)) -> i64 { let (r, n) = p; return n; }
+fn main() { for i in 0..2 { let q = dies((R { id: 60 + i }, 1));
+             println(f"iter {q}"); } }

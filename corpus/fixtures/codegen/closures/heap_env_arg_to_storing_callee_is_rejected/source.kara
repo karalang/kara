@@ -1,0 +1,3 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn keep(g: Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(g); v }
+fn main() { let f = make(3i64); let r = keep(f); println(f"{(r[0])(1i64)}"); }

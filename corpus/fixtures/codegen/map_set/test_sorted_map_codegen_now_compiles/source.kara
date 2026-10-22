@@ -1,0 +1,7 @@
+fn main() {
+let mut m: SortedMap[i64, String] = SortedMap.new();
+let _ = m.insert(1_i64, "one");
+let mut out: String = "";
+for (k, v) in m { out.push_str(v); }
+println(out);
+}

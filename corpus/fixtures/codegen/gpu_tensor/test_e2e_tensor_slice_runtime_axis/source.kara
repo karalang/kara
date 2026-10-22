@@ -1,0 +1,9 @@
+fn main() {
+let a = Tensor.from([[1, 2, 3, 4], [5, 6, 7, 8]]);
+let s = 1;
+let e = 3;
+let sl = a.slice(1, s, e);
+let sh = sl.shape();
+println(sh[0]); println(sh[1]);
+println(sl[0,0]); println(sl[0,1]); println(sl[1,1]);
+}

@@ -1,0 +1,23 @@
+fn main() {
+    let mut out = "".to_string();
+    out.push_str("ab");
+    out.push_str("c");
+    println(out);
+    let mut line = "start".to_string();
+    let mid = "-mid-".to_string();
+    line.push_str(mid);
+    line.push_str("end");
+    println(line);
+    let mut cat = "".to_string();
+    let p = "x".to_string();
+    cat.push_str(p + "y");
+    println(cat);
+    let mut acc = "".to_string();
+    let mut i = 0;
+    while i < 4 {
+        acc.push_str("ab");
+        i += 1;
+    }
+    println(acc);
+    println(acc.len().to_string());
+}

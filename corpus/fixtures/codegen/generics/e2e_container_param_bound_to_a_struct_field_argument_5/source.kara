@@ -1,0 +1,11 @@
+struct Bag[=T] { xs: Vec[T] }
+fn first[T: Clone](v: ref Vec[T]) -> T { return v[0].clone(); }
+impl[T: Clone] Bag[T] {
+fn head(ref self) -> T { return first(self.xs); }
+}
+fn main() {
+let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+a.xs.push((1, 10)); a.xs.push((2, 20));
+let h = a.head();
+println(f"{h.0}:{h.1}");
+}

@@ -1,0 +1,1 @@
+fn main() { let n = env.args().len() as i64; let k = n + 8i64; let mut j = 0i64; let mut s = 0i64; while j < k { s = s + j; j = j + 1i64; } println(s); }

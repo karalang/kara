@@ -1,0 +1,5 @@
+--after temp arg--
+--after named arg--
+pushed 2
+drop 1
+drop 2

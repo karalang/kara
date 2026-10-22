@@ -1,0 +1,9 @@
+a: rebuild-chain
+x=11
+drop 11 r1
+b: passthrough self
+y=2
+drop 2 r2
+c: chain then ref-method
+z=3
+end

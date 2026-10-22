@@ -1,0 +1,6 @@
+fn main() {
+    let b: String = "y".to_string();
+    let c: String = "y ".to_string();
+    println(("p:".to_string() + b).to_uppercase().len());
+    println(("  q".to_string() + c).trim().len());
+}

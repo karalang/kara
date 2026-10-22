@@ -1,0 +1,62 @@
+struct G {
+    n: i64,
+}
+struct H {
+    label: String,
+    k: i64,
+}
+struct Node {
+    gp: Option[G],
+    k: i64,
+}
+shared enum E {
+    V(Node),
+}
+fn gsum(g: Option[G]) -> i64 {
+    match g {
+        None => 0,
+        Some(x) => x.n,
+    }
+}
+fn hname(h: Option[H]) -> String {
+    match h {
+        None => "none".to_string(),
+        Some(x) => x.label,
+    }
+}
+fn mk(n: i64) -> Option[G] {
+    if n > 0 {
+        return Some(G { n: n });
+    }
+    None
+}
+fn main() {
+    println(gsum(Some(G { n: 5 })).to_string());
+    println(gsum(None).to_string());
+    println(hname(Some(H { label: "hi".to_string(), k: 1 })));
+    println(hname(None));
+    println(gsum(mk(9)).to_string());
+    println(gsum(mk(0)).to_string());
+    let nd = Node { gp: Some(G { n: 3 }), k: 7 };
+    println(gsum(nd.gp).to_string());
+    let nd2 = Node { gp: None, k: 8 };
+    println(gsum(nd2.gp).to_string());
+    let a = E.V(Node { gp: Some(G { n: 11 }), k: 1 });
+    match a {
+        V(x) => {
+            println(x.k.to_string());
+            println(gsum(x.gp).to_string());
+        }
+    }
+    let b = E.V(Node { gp: None, k: 2 });
+    match b {
+        V(x) => {
+            println(gsum(x.gp).to_string());
+        }
+    }
+    let hv = Some(H { label: "own".to_string(), k: 4 });
+    match hv {
+        None => println("none"),
+        Some(x) => println(x.label),
+    }
+}

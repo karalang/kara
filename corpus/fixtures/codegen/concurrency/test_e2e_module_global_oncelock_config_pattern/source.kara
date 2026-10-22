@@ -1,0 +1,13 @@
+let CONFIG: OnceLock[i64] = OnceLock.new();
+fn show() {
+match CONFIG.get() { Some(v) => println(v), None => println(-1), }
+}
+fn main() {
+println(CONFIG.is_set());
+show();
+match CONFIG.set(1234) { Ok(_) => println(1), Err(_) => println(0), }
+println(CONFIG.is_set());
+show();
+match CONFIG.set(9999) { Ok(_) => println(1), Err(_) => println(0), }
+show();
+}

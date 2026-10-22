@@ -1,0 +1,7 @@
+struct D { s: String }
+fn dl(d: D) -> i64 { slen(d.s) }
+fn nn() -> Option[D] { Option.None }
+fn f() -> i64 { let mut vv: Option[D] = Some(D { s: payload() });
+   let n = match vv { Some(d) => dl(d), None => 0 };
+   vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

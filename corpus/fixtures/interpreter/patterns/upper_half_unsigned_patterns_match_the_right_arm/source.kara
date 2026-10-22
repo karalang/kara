@@ -1,0 +1,14 @@
+fn classify(n: u64) -> i64 {
+                 match n {
+                     18446744073709551615u64 => 1,
+                     18446744073709551610u64..=18446744073709551614u64 => 2,
+                     0u64 => 3,
+                     _ => 4,
+                 }
+             }
+             fn main() {
+                 println(classify(18446744073709551615u64));
+                 println(classify(18446744073709551612u64));
+                 println(classify(0u64));
+                 println(classify(7u64));
+             }

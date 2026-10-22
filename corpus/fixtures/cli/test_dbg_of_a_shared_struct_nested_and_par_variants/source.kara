@@ -1,0 +1,9 @@
+shared struct P { x: i64, tag: String }
+sync struct C { a: i64, b: String }
+fn main() {
+    let v = [P { x: 1, tag: "a\"q" }, P { x: 2, tag: "b" }];
+    dbg(v);
+    let c = C { a: 1, b: "z" };
+    dbg(c);
+    println("done");
+}

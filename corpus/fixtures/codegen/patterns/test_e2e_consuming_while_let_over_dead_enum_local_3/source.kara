@@ -1,0 +1,10 @@
+enum E { A(String), B }
+fn main() {
+let mut e: E = E.A(f"a1");
+let mut n: i64 = 0;
+while let E.A(v) = e {
+let k: String = v; println(k); n = n + 1;
+if n < 3 { e = E.A(f"a{n + 1}"); } else { e = E.B; }
+}
+println(f"done");
+}

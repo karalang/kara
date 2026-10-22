@@ -1,0 +1,12 @@
+fn main() {
+println((-7i64).div_euclid(3i64));
+println((-7i64).rem_euclid(3i64));
+println((7i64).div_euclid(3i64));
+println((7i64).rem_euclid(3i64));
+println((-7i64).div_euclid(-3i64));
+println((-7i64).rem_euclid(-3i64));
+println((7i64).div_euclid(-3i64));
+println((7i64).rem_euclid(-3i64));
+println((6i64).div_euclid(3i64));
+println((6i64).rem_euclid(3i64));
+}

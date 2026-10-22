@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[String] = Vec.new(); let w = "split me up"; let mut i = 0; let mut st = 0; for b in w.bytes() { if b == 32 { v.push(w.substring(st, i)); st = i + 1; } i = i + 1; } v.push(w.substring(st, i)); let mut j = 0; while j < v.len() { println(v[j]); j = j + 1; } }

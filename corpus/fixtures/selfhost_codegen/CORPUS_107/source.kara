@@ -1,0 +1,5 @@
+#[derive(Clone)]
+struct Token { kind: i64, text: String }
+fn is_digit(b: u8) -> bool { b >= 48 and b <= 57 }
+fn is_alpha(b: u8) -> bool { (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 }
+fn main() { let src = "x1 = 42 + foo7"; let mut toks: Vec[Token] = Vec.new(); let mut i = 0; let mut start = 0 - 1; let mut num = false; for b in src.bytes() { if is_alpha(b) or is_digit(b) { if start < 0 { start = i; num = is_digit(b); } } else { if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } start = 0 - 1; } if b != 32 { toks.push(Token { kind: 3, text: src.substring(i, i + 1) }); } } i = i + 1; } if start >= 0 { if num { toks.push(Token { kind: 2, text: src.substring(start, i) }); } else { toks.push(Token { kind: 1, text: src.substring(start, i) }); } } let mut j = 0; while j < toks.len() { let t = toks[j].clone(); println(t.kind.to_string() + " " + t.text); j = j + 1; } }

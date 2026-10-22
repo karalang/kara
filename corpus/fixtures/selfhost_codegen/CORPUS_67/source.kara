@@ -1,0 +1,1 @@
+fn main() { println((0 - 99).to_string() + "/" + (7 * 6).to_string()) }

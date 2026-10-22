@@ -1,0 +1,6 @@
+fn main() {
+match Url.decode("a%20b%2Fc") {
+Ok(s) => println(s),
+Err(_) => println("err"),
+}
+}

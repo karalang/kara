@@ -1,0 +1,2 @@
+fn main() { let v: VecDeque[Vec[i64]] = [[1], [2]];
+                              println(f"n:{v.len()} x:{v[0].len()}"); }

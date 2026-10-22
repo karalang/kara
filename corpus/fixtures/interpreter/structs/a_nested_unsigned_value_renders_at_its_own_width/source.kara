@@ -1,0 +1,21 @@
+fn main() {
+let big: u64 = 18446744073709551615u64;
+let o: Option[u64] = Some(big);
+println(o);
+let r: Result[u64, String] = Ok(big);
+println(r);
+let mut v: Vec[u64] = vec![];
+v.push(big);
+v.push(5u64);
+println(v);
+let t = (big, 5i64);
+println(t);
+let mut vo: Vec[Option[u64]] = vec![];
+vo.push(Some(big));
+vo.push(None);
+println(vo);
+let mut mp: Map[String, u64] = Map.new();
+mp.insert("k", big);
+println(mp);
+println(f"{o} {v}");
+}

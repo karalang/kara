@@ -1,0 +1,2 @@
+fn eat(o: Option[(Tr, i64)]) -> Tr { match o { Some(t) => { return t.0; } None => { return Tr { tag: 0 }; } } }
+fn main() { let g: Tr = eat(Some((Tr { tag: 5 }, 9))); println(f"g:{g.tag}"); println("end") }

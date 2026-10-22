@@ -1,0 +1,6 @@
+struct Counter { count: Atomic[i64] }
+fn main() {
+let c = Counter { count: Atomic.new(0) };
+c.count.store(123, MemoryOrdering.Release);
+println(c.count.load(MemoryOrdering.Acquire));
+}

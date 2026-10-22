@@ -1,0 +1,6 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+println(m.is_empty());
+m.insert("a", 1_i64);
+println(m.is_empty());
+}

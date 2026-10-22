@@ -1,0 +1,18 @@
+fn rstr(o: Result[String, i64]) -> String { o.unwrap_or("fb") }
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+m.insert(1, 2);
+println(m.get(1).unwrap_or(0));
+println(m.get(9).unwrap_or(-1));
+let a: Option[i64] = Some(5);
+let b: Option[i64] = None;
+println(a.unwrap_or(0));
+println(b.unwrap_or(7));
+let mut n: Map[i64, i32] = Map.new();
+n.insert(3, 30);
+println(n.get(8).unwrap_or(-9));
+println(rstr(Result.Ok("got")));
+println(rstr(Result.Err(404)));
+let s: Option[String] = None;
+println(s.unwrap_or("def"));
+}

@@ -1,0 +1,3 @@
+struct W { r: R, n: i64 }
+fn main() { let w = W { r: R { id: 41 }, n: 1 };
+             let W { r: _, n } = w; println(f"{n}") }

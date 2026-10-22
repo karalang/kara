@@ -1,0 +1,10 @@
+vecpop:
+drop 1 a1
+0
+mapremove:
+drop 2 b2
+0
+boundpop:
+0
+drop 3 c3
+end

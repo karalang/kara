@@ -1,0 +1,51 @@
+struct S {
+    name: String,
+    n: i64,
+}
+enum T {
+    Leaf(String),
+    Other,
+}
+fn main() {
+    let a = "deep".to_string();
+    let b = a.clone();
+    println(b);
+    println(a);
+    let s = S {
+        name: "fld".to_string(),
+        n: 3,
+    };
+    let c = s.name.clone();
+    println(c);
+    let d = s.n.clone();
+    println(d.to_string());
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    v.push(4);
+    let w = v.clone();
+    println((w[0] + w[1]).to_string());
+    println(v.len().to_string());
+    let mut vs: Vec[String] = Vec.new();
+    vs.push("one".to_string());
+    let ws = vs.clone();
+    println(ws[0]);
+    println(vs.len().to_string());
+    let t = T.Leaf("pl".to_string());
+    match t {
+        Leaf(x) => {
+            let y = x.clone();
+            println(y);
+        }
+        Other => println("o"),
+    }
+    let f = 2.5;
+    let g = f.clone();
+    println(g.to_string());
+    let bo = true;
+    let bc = bo.clone();
+    if bc {
+        println("yes");
+    } else {
+        println("no");
+    }
+}

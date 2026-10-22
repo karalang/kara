@@ -1,0 +1,2 @@
+let mut QUEUE: VecDeque[i64] = VecDeque.new();
+fn main() {}

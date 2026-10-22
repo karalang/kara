@@ -1,0 +1,7 @@
+struct Inner { x: i64 }
+struct Outer { inner: Inner }
+fn main() {
+let mut o = Outer { inner: Inner { x: 1 } };
+o.inner.x = 99;
+println(o.inner.x);
+}

@@ -1,0 +1,25 @@
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+enum Stmt { Empty }
+shared enum Expr { Num(i64), Blk(Block), Error }
+struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: Span }
+fn mk() -> Block {
+let s: Vec[Stmt] = [];
+let e = Expr.Num(7);
+let tail: Option[Expr] = Some(e);
+Block { stmts: s, tail: tail, span: Span { line: 0, column: 0, offset: 0, length: 5 } }
+}
+fn render_block(b: Block) -> String {
+let Block { stmts, tail, span } = b;
+match tail { Some(e) => render_expr(e), None => "no-tail".to_string() }
+}
+fn render_expr(e: Expr) -> String {
+match e {
+Num(n) => n.to_string(),
+Blk(b) => render_block(b),
+Error => "error".to_string(),
+}
+}
+fn main() {
+let blk = mk();
+println(render_expr(Expr.Blk(blk)));
+}

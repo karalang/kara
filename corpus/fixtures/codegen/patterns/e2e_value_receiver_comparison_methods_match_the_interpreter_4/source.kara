@@ -1,0 +1,2 @@
+fn main() { let a: bool = false; let b: bool = true;
+println(f"{a.lt(b)} {a.gt(b)} {b.lt(a)}"); }

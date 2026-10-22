@@ -1,0 +1,8 @@
+struct H { t: Tensor[i64, [2, 3]], n: i64 }
+fn mk(n: i64) -> H { return H { t: Tensor.from([[n, 2, 3], [4, 5, 6]]), n: n }; }
+fn main() {
+    let mut hs: Vec[H] = [];
+    hs.push(mk(1));
+    hs.push(mk(2));
+    println(hs[1].n);
+}

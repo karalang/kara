@@ -1,0 +1,7 @@
+struct Column[T] { data: Vec[T] }
+fn from_vec[T](v: Vec[T]) -> Column[T] { return Column { data: v }; }
+fn main() {
+let v: Vec[u32] = [1, 2, 3];
+let c: Column[u32] = from_vec(v);
+println(c.data.len().to_string());
+}

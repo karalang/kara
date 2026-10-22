@@ -1,0 +1,17 @@
+source = "tests/codegen/map_set.rs::test_e2e_offset_of_first_field_is_0"
+dedup_of = ["tests/interpreter/map_set.rs::offset_of_first_field_is_0"]
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:the expression kind `OffsetOf`"
+classified_with = "79705a229"
+extracted_src = "3656b6a1"
+model_rev = "583cfb0d"
+model_src = "3656b6a1"

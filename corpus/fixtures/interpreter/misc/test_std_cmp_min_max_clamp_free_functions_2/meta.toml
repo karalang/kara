@@ -1,0 +1,17 @@
+source = "tests/interpreter/misc.rs::test_std_cmp_min_max_clamp_free_functions"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function clamp"
+classified_with = "79705a229"
+extracted_src = "5d5b041f"
+model_rev = "583cfb0d"
+model_src = "5d5b041f"

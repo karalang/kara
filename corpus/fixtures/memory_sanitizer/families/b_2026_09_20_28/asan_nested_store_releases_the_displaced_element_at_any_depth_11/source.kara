@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[Vec[String]]] = [[[f"one-aaaaaaaaaaaa-{n}"]]]; d[0][0][0] = f"replaced-bbbbbbbbbbbb-{n}"; println(d[0][0][0]) }

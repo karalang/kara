@@ -1,0 +1,29 @@
+struct Row {
+    tag: String,
+    ns: Vec[i64],
+}
+shared enum Box2 {
+    Empty,
+    Full(Row),
+}
+fn sum(b: ref Box2) -> i64 {
+    match b {
+        Empty => 0,
+        Full(r) => {
+            let mut s = 0;
+            for n in r.ns {
+                s = s + n;
+            }
+            s
+        }
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5);
+    v.push(6);
+    let b = Box2.Full(Row { tag: "r", ns: v });
+    println(sum(b).to_string());
+    let e = Box2.Empty;
+    println(sum(e).to_string());
+}

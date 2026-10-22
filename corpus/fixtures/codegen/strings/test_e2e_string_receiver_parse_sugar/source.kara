@@ -1,0 +1,17 @@
+fn to_opt(s: String) -> Option[i64] { s.parse() }
+fn takes(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1 } }
+fn main() {
+let a: Option[i64] = "42".parse();
+match a { Some(n) => println(n), None => println(-1) }
+let b: Option[i64] = "nope".parse();
+match b { Some(n) => println(n), None => println(-1) }
+let f: Option[f64] = "3.5".parse();
+match f { Some(x) => println(x), None => println(-1.0) }
+let u: Option[u32] = "7".parse();
+match u { Some(x) => println(x), None => println(0) }
+let s: String = "99";
+let v: Option[i64] = s.parse();
+match v { Some(n) => println(n), None => println(-1) }
+match to_opt("123") { Some(n) => println(n), None => println(-1) }
+println(takes("55".parse()));
+}

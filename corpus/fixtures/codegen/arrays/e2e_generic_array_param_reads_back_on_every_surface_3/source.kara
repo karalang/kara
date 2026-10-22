@@ -1,0 +1,10 @@
+struct H { k: i64 }
+impl H {
+    fn pass[T](ref self, x: T) -> T { return x; }
+}
+fn main() {
+    let h: H = H { k: 1 };
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let b: Array[String, 2] = h.pass(a);
+    println(f"s:{b[1]}");
+}

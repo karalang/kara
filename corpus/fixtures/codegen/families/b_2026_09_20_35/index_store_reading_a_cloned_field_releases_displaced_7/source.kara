@@ -1,0 +1,2 @@
+fn set(a: mut ref Vec[S]) { a[0] = S { s: a[1].s, k: 2 }; }
+fn main() { let n = 7; let mut a: Vec[S] = [S { s: f"one-aaaaaaaaaaaaaaaaaaaaaa-{n}", k: 1 }, S { s: f"two-bbbbbbbb-{n}", k: 5 }]; set(mut a); println(f"r:{a[0].k}:{a[0].s}:{a[1].s}") }

@@ -1,0 +1,10 @@
+fn main() {
+let mut s: String = "hi";
+match s.try_clone() {
+Ok(c) => {
+s.push_str("!!");
+println(c); println(c.len()); println(s);
+}
+Err(_) => println("err"),
+}
+}

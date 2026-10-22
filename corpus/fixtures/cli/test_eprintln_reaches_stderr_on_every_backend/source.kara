@@ -1,0 +1,52 @@
+struct Money { cents: i64 }
+impl Display for Money {
+    fn to_string(ref self) -> String { f"${self.cents}" }
+}
+enum Color { Red, Green }
+impl Display for Color {
+    fn to_string(ref self) -> String {
+        match self { Color.Red => "red", Color.Green => "green" }
+    }
+}
+fn main() {
+    let n = 7;
+    let s = "str";
+    let v = [1, 2, 3];
+    let mut m = Map[String, i64].new();
+    m.insert("k", 1);
+    let mut q = Set[i64].new();
+    q.insert(9);
+    let o = Some(4);
+    let non: Option[i64] = None;
+    let r: Result[i64, String] = Ok(5);
+    let t = (1, "two");
+    let d = Money { cents: 250 };
+    let c = Color.Red;
+    let big: i128 = 99;
+    let neg: i32 = -12;
+    let u: u8 = 200;
+    eprintln("E-lit");
+    eprintln(n);
+    eprintln(1.5);
+    eprintln(true);
+    eprintln('z');
+    eprintln(s);
+    eprintln(v);
+    eprintln(m);
+    eprintln(q);
+    eprintln(o);
+    eprintln(non);
+    eprintln(r);
+    eprintln(t);
+    eprintln(d);
+    eprintln(c);
+    eprintln(big);
+    eprintln(neg);
+    eprintln(u);
+    eprintln([9, 8]);
+    eprintln(f"E-fstr-{n}-{s}");
+    eprintln();
+    print("O-part ");
+    println("O-line");
+    eprintln("E-last");
+}

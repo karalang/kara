@@ -1,0 +1,10 @@
+shared enum T2 { Node(i64, T2), Leaf(i64) }
+shared enum Tree { Wrap(Tree), Tip }
+fn main() {
+    let l = T2.Leaf(99);
+    let m = T2.Node(7, l);
+    let n = T2.Node(3, m);
+    dbg(n);
+    dbg(Tree.Wrap(Tree.Tip));
+    println("done");
+}

@@ -1,0 +1,8 @@
+fn echo(s: ref String) -> ref String { s }
+fn consume(s: String) -> i64 { s.len() }
+fn main() {
+let s = String.from("hello");
+let r = echo(s);
+let _ = consume(s);
+println(r.len());
+}

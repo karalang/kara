@@ -1,0 +1,15 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}/{self.tag}") } }
+enum W { A(R), N }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+fn uvArg(t: (W, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn mixArg(t: (Option[R], R)) -> i64 { println(f"  in{t.1.id}"); return 0; }
+
+fn main() {
+    println("bareuv");    { let _ = uvArg((A(mk(16)), 7)); println("  x") }
+    println("qualuv");    { let _ = uvArg((W.A(mk(17)), 7)); println("  x") }
+    println("mixed");     { let _ = mixArg((Some(mk(18)), mk(19))); println("  x") }
+    println("qualmixed"); { let _ = mixArg((Option.Some(mk(20)), mk(21))); println("  x") }
+    println("unitvar");   { let _ = uvArg((N, 7)); println("  x") }
+    println("end")
+}

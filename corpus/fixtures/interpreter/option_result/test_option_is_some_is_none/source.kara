@@ -1,0 +1,6 @@
+fn main() {
+let a = Some(1);
+let b = None;
+println(a.is_some());
+println(b.is_none());
+}

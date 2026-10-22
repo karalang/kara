@@ -1,0 +1,8 @@
+fn main() {
+   let mut wm: Map[String, W] = Map.new();
+   let _ = wm.insert("w", W.V(Wide { a: mk(), b: mk(), n: 7 }));
+   let mut i = 0;
+   while i < 3 {
+     match wm.get("w") { None => {} Some(W.V(x)) => { println(f"n:{x.n}") } Some(W.E) => {} }
+     i = i + 1; }
+   println("end") }

@@ -1,0 +1,39 @@
+struct H2 { opt: Option[String], n: i64 }
+struct H3 { res: Result[String, i64], n: i64 }
+fn main() {
+let a = H2 { opt: Some("ma".to_string()), n: 1 };
+match a.opt {
+Some(s) => { println("m:".to_string() + s); }
+None => { println("none".to_string()); }
+}
+let b = H2 { opt: Some("if".to_string()), n: 2 };
+if let Some(s) = b.opt {
+println("i:".to_string() + s);
+}
+let c = H2 { opt: Some("le".to_string()), n: 3 };
+let Some(t) = c.opt else {
+return;
+}
+println("l:".to_string() + t);
+let d = H2 { opt: Some("mv".to_string()), n: 4 };
+let x = d.opt;
+if let Some(s) = x {
+println("x:".to_string() + s);
+}
+let e = H2 { opt: Some("as".to_string()), n: 5 };
+let mut y: Option[String] = None;
+y = e.opt;
+if let Some(s) = y {
+println("y:".to_string() + s);
+}
+let g = H3 { res: Ok("rr".to_string()), n: 6 };
+match g.res {
+Ok(s) => { println("g:".to_string() + s); }
+Err(e2) => { println(e2.to_string()); }
+}
+let h = H2 { opt: Some("wc".to_string()), n: 7 };
+match h.opt {
+Some(_) => { println("has".to_string()); }
+None => { println("no".to_string()); }
+}
+}

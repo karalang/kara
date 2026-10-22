@@ -1,0 +1,8 @@
+fn tag(a: String, b: String) -> i64 {
+match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }
+}
+fn main() {
+println(tag("abc", "abd"));
+println(tag("abd", "abc"));
+println(tag("abc", "abc"));
+}

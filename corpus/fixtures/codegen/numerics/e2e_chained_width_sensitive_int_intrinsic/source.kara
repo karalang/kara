@@ -1,0 +1,9 @@
+fn main() {
+let x: u8 = 1;
+println(x.leading_zeros());
+println(x.leading_zeros().leading_zeros());
+let y: u8 = 200;
+println(y.rotate_left(1).count_ones());
+let z: u16 = 1;
+println(z.leading_zeros().leading_zeros());
+}

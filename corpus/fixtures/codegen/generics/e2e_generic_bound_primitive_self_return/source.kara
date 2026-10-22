@@ -1,0 +1,13 @@
+trait Dbl { fn dbl(self) -> Self; }
+impl Dbl for i8  { fn dbl(self) -> Self { self + self } }
+impl Dbl for i32 { fn dbl(self) -> Self { self + self } }
+impl Dbl for f64 { fn dbl(self) -> Self { self + self } }
+fn dbl_it[T: Dbl](x: T) -> T { x.dbl() }
+fn main() {
+    let a: i8 = 5;
+    let c: i32 = 70000;
+    let d: f64 = 1.5;
+    println(dbl_it(a));
+    println(dbl_it(c));
+    println(dbl_it(d));
+}

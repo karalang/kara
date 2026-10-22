@@ -1,0 +1,16 @@
+source = "tests/codegen/gpu_tensor.rs::test_e2e_tensor_construction_dim_mismatch_panics"
+dedup_of = []
+expect = "skip"
+exit = 101
+tags = ["deferred:tensor", "literal-unmatched", "panic", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'runtime dim 0 does not match the annotated static dim'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "b5e672be"

@@ -1,0 +1,7 @@
+struct Holder[T] { data: Vec[T] }
+fn from_vec[T](v: Vec[T]) -> Holder[T] { return Holder { data: v }; }
+fn main() {
+let v: Vec[u32] = [1, 2, 3];
+let h: Holder[u32] = from_vec(v);
+println(h.data.len().to_string());
+}

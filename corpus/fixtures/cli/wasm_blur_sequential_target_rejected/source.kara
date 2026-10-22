@@ -1,0 +1,6 @@
+import std.web.events.{blur};
+
+fn main() {
+    let lost = blur();
+    lost.recv();
+}

@@ -1,0 +1,1 @@
+fn main() { let (_, n) = (B, 1); println(f"{n}") }

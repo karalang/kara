@@ -1,0 +1,64 @@
+fn echo(s: ref String) -> String {
+    let mut out: String = "";
+    for ch in s.chars() { out.push(ch); }
+    return out;
+}
+fn cps(s: ref String) -> i64 {
+    let mut a = 0i64;
+    for ch in s.chars() { a = a + (ch as i64); }
+    return a;
+}
+fn skip(s: ref String) -> i64 {
+    let mut a = 0i64;
+    for ch in s.chars() {
+        if ch == 'a' { continue; }
+        if ch == 'é' { continue; }
+        a = a + (ch as i64);
+    }
+    return a;
+}
+fn stop_at(s: ref String, k: char) -> i64 {
+    let mut a = 0i64;
+    for ch in s.chars() {
+        if ch == k { break; }
+        a = a + (ch as i64);
+    }
+    return a;
+}
+fn at(s: ref String, pos: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0i64;
+    for ch in s.chars() {
+        if i == pos { out.push('Q'); } else { out.push(ch); }
+        i = i + 1i64;
+    }
+    return out;
+}
+fn outer_jump(s: ref String) -> i64 {
+    let mut a = 0i64;
+    let mut r = 0i64;
+    'rounds: while r < 2i64 {
+        r = r + 1i64;
+        for ch in s.chars() {
+            if ch == 'z' { continue 'rounds; }
+            if ch == 'ß' { break 'rounds; }
+            a = a + (ch as i64);
+        }
+        a = a + 1000i64;
+    }
+    return a;
+}
+fn probe(s: ref String) {
+    println(f"{echo(s)}|{cps(s)}|{skip(s)}|{stop_at(s, 'c')}|{at(s, 2i64)}|{outer_jump(s)}");
+}
+fn main() {
+    probe("");
+    probe("a");
+    probe("é");
+    probe("abécd");
+    probe("éabcd");
+    probe("abcdé");
+    probe("aééb");
+    probe("a€b𝄞cßd");
+    probe("azbßc");
+}

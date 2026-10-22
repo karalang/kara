@@ -1,0 +1,10 @@
+fn divide(a: i64, b: i64) -> i64 {
+if b == 0 { return Err(0); }
+Ok(a / b)
+}
+fn main() {
+let r1 = divide(10, 2);
+println(r1.unwrap());
+let r2 = divide(10, 0);
+println(r2.is_err());
+}

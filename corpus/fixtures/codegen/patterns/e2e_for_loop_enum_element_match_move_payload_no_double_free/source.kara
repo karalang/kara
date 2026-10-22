@@ -1,0 +1,16 @@
+enum Part { Text(String), Empty }
+fn use_str(s: String) -> i64 { s.len() }
+fn main() {
+let mut parts: Vec[Part] = Vec.new();
+let mut a = "".to_string(); a.push_str("hello");
+let mut b = "".to_string(); b.push_str("world!!");
+parts.push(Part.Text(a)); parts.push(Part.Empty); parts.push(Part.Text(b));
+let mut n = 0;
+for p in parts {
+match p {
+Part.Text(t) => { n = n + use_str(t); }
+Part.Empty => { n = n + 1; }
+}
+}
+println(n);
+}

@@ -1,0 +1,2 @@
+fn make() -> String { "a" + "b" }
+fn main() { let s = make(); println(s) }

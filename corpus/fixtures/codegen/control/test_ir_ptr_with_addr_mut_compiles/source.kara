@@ -1,0 +1,1 @@
+fn caller(p: *mut i64, a: usize) -> *mut i64 { ptr.with_addr_mut(p, a) } fn main() {}

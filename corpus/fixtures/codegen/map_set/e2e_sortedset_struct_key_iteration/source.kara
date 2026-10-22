@@ -1,0 +1,11 @@
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+fn main() {
+    let mut set: SortedSet[P] = SortedSet.new();
+    set.insert(P { a: 2, s: f"zz{2}" });
+    set.insert(P { a: 1, s: f"bb{1}" });
+    set.insert(P { a: 1, s: f"aa{1}" });
+    for x in set {
+        println(f"{x.a} {x.s}");
+    }
+}

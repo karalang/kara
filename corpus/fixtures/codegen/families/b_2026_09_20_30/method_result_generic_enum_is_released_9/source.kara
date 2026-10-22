@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 40 }; for i in 0..2 { let b = mk.make(); println(f"i{i}") }; println("x")
+}

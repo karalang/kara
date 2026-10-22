@@ -1,0 +1,9 @@
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: String }
+struct Holder { tag: i64, body: Option[Wide] }
+fn mk() -> Wide { Wide { a: 1, b: 2, c: 3, d: 4, e: "x".to_string() } }
+fn build(flag: bool) -> Holder {
+    let mut body: Option[Wide] = None;
+    if flag { body = Some(mk()); }
+    Holder { tag: 0, body: body }
+}
+fn main() { let h = build(true); println(h.tag); }

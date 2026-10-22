@@ -1,0 +1,16 @@
+fn main() {
+    let a: Result[String, i64] = Result.Ok("okstr");
+    let ca = a.clone();
+    match ca { Result.Ok(s) => println(s), Result.Err(e) => println(f"{e}"), }
+    match a  { Result.Ok(s) => println(s), Result.Err(e) => println(f"{e}"), }
+    let b: Result[i64, String] = Result.Err("errstr");
+    let cb = b.clone();
+    match cb { Result.Ok(n) => println(f"{n}"), Result.Err(e) => println(e), }
+    let c: Result[i64, i64] = Result.Ok(9);
+    let cc = c.clone();
+    match cc { Result.Ok(n) => println(f"{n}"), Result.Err(e) => println(f"{e}"), }
+    let d: Result[Vec[String], i64] = Result.Ok(vec!["x", "y"]);
+    let cd = d.clone();
+    match cd { Result.Ok(v) => println(f"{v.len()}"), Result.Err(e) => println(f"{e}"), }
+    match d  { Result.Ok(v) => println(f"{v.len()}"), Result.Err(e) => println(f"{e}"), }
+}

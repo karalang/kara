@@ -1,0 +1,8 @@
+struct Wide { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+let c: OnceLock[Wide] = OnceLock.new();
+match c.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => { println("set ok"); }, Err(_) => { println("set err"); }, }
+match c.get() { Some(w) => { println((w.a + w.b + w.c + w.d).to_string()); }, None => { println("none"); }, }
+match c.set(Wide { a: 9i64, b: 9i64, c: 9i64, d: 9i64 }) { Ok(_) => { println("2 ok"); }, Err(_) => { println("2 rejected"); }, }
+match c.get() { Some(w) => { println((w.a + w.b + w.c + w.d).to_string()); }, None => { println("none"); }, }
+}

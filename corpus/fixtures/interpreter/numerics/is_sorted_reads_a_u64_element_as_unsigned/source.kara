@@ -1,0 +1,8 @@
+fn main() {
+let v: Vec[u64] = [1u64, 18446744073709551615u64];
+let w: Vec[u64] = [18446744073709551615u64, 1u64];
+println(f"{v.is_sorted()} {w.is_sorted()}");
+let mut s: Vec[u64] = [9223372036854775809u64, 3u64, 1u64];
+s.sort();
+println(s.is_sorted());
+}

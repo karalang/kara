@@ -1,0 +1,7 @@
+fn main() {
+println("a");
+sleep_ms(20);
+println("b");
+sleep_ms(20);
+println("c");
+}

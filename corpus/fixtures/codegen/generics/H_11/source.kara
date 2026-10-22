@@ -1,0 +1,2 @@
+fn main() { let (e, n) = src(R { id: 50 });
+             println(f"{e.v.id}"); println(f"{n}"); }

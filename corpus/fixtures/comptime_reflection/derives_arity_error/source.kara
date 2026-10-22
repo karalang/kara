@@ -1,0 +1,3 @@
+
+struct P { x: i64 }
+fn main() { let _ = comptime { P.derives() }; }

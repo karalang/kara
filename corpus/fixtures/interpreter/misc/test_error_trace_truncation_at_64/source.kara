@@ -1,0 +1,7 @@
+fn main() {
+let result = func64();
+match result {
+Ok(v) => println(v),
+Err(e) => println(e),
+}
+}

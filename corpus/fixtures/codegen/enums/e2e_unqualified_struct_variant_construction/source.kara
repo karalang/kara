@@ -1,0 +1,13 @@
+enum Shape { Circle { r: i64 }, Rect { w: i64, h: i64 } }
+fn area(s: Shape) -> i64 {
+match s {
+Circle { r } => r * r * 3,
+Rect { w, h } => w * h,
+}
+}
+fn main() {
+let a: Shape = Circle { r: 2 };
+let b: Shape = Rect { w: 3, h: 4 };
+println(f"{area(a)}");
+println(f"{area(b)}");
+}

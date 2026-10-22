@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vec[f32] = [];
+    println(f"{gpu.prod(v)}")
+}

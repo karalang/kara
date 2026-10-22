@@ -1,0 +1,6 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert(f"k", 7i64);
+{ let keep: Map[String, i64] = m; }
+println(m.get(f"k").unwrap_or(0i64));
+}

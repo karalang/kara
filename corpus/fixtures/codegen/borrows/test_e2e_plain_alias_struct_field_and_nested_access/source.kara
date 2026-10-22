@@ -1,0 +1,13 @@
+type Name = String;
+type Ints = Vec[i64];
+type Pt = Point;
+struct Point { x: i64, y: i64 }
+struct Holder { label: Name, nums: Ints, pt: Pt }
+fn dist(p: Pt) -> i64 { p.x + p.y }
+fn main() {
+let h = Holder { label: "L", nums: vec![1, 2], pt: Point { x: 3, y: 4 } };
+println(h.label);
+println(h.nums.len());
+println(h.pt.x);
+println(dist(h.pt));
+}

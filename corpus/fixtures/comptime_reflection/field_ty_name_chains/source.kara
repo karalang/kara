@@ -1,0 +1,10 @@
+
+struct Mixed { count: i64, label: String }
+fn main() {
+    let tys = comptime {
+        let mut s = "";
+        for f in Mixed.fields() { s = s + f.ty.name() + ";"; }
+        s
+    };
+    println(tys);
+}

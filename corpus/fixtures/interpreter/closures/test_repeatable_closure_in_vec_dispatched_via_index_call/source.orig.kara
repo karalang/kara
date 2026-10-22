@@ -1,0 +1,9 @@
+fn main() {
+let n = 5;
+let f = ref || n + 1;
+let g = ref || n + 2;
+let callbacks = Vec[f, g];
+println(callbacks[0]());
+println(callbacks[1]());
+println(callbacks[0]());
+}

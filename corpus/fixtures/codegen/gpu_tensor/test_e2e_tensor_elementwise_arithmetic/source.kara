@@ -1,0 +1,17 @@
+fn main() {
+let a: Tensor[f64, [2, 2]] = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+let b: Tensor[f64, [2, 2]] = Tensor.from([[10.0, 20.0], [30.0, 40.0]]);
+let c = a + b;
+println(c[0, 0]); println(c[1, 1]);
+let d = a * b - a;
+println(d[0, 1]);
+let s = a + 100.0;
+println(s[0, 0]);
+let p = a + 2;
+println(p[0, 0]);
+let n = -a;
+println(n[1, 0]);
+let sl = 100.0 - a;
+println(sl[0, 0]);
+println(a[0, 0]);
+}

@@ -1,0 +1,9 @@
+fn main() {
+let a: Vec[i64] = [1, 2, 3, 4];
+let b: Vec[i64] = [10, 20, 30];
+let mut s: i64 = 0;
+for pair in a.iter().zip(b.iter()) {
+s = s + pair.0 * pair.1;
+}
+println(s);
+}

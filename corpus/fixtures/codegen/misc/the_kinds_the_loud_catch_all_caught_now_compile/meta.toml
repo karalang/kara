@@ -1,0 +1,17 @@
+source = "tests/codegen/misc.rs::the_kinds_the_loud_catch_all_caught_now_compile"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "e6ffb71f"
+model_rev = "583cfb0d"
+model_src = "e6ffb71f"

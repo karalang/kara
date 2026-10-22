@@ -1,0 +1,18 @@
+fn classify(v: Option[Option[i64]]) -> String {
+match v {
+Option.Some(Option.Some(x)) => f"inner {x}",
+Option.Some(Option.None) => "inner none",
+Option.None => "outer none",
+}
+}
+fn main() {
+println(classify(Option.Some(Option.Some(42))));
+println(classify(Option.Some(Option.None)));
+println(classify(Option.None));
+// wildcard fallthrough — the exact wrong-arm repro
+let nested: Option[Option[i64]] = Option.Some(Option.Some(7));
+match nested {
+Option.Some(Option.Some(x)) => println(f"got {x}"),
+_ => println("other"),
+}
+}

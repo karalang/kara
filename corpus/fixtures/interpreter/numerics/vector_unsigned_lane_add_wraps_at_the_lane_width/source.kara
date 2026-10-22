@@ -1,0 +1,5 @@
+fn main() {
+let v: Vector[u8, 4] = Vector[u8, 4].splat(200);
+let w = v + v;
+println(w[0] as i64);
+}

@@ -1,0 +1,7 @@
+fn main() {
+let mut c: Column[String] = Column.new();
+c.push("hi");
+c.push_null();
+match c[0] { Some(v) => { println(v); } None => { println("<none>"); } }
+match c[1] { Some(v) => { println(v); } None => { println("<none>"); } }
+}

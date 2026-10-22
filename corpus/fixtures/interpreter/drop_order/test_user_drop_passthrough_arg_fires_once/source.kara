@@ -1,0 +1,11 @@
+struct Guard { id: i64 }
+impl Drop for Guard {
+fn drop(mut ref self) {
+println(self.id);
+}
+}
+fn pass(g: Guard) -> Guard { g }
+fn main() {
+let x = pass(Guard { id: 7 });
+println(x.id);
+}

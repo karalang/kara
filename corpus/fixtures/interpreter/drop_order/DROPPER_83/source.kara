@@ -1,0 +1,2 @@
+impl B6 { fn take(ref self, r: R) -> R { return r; } }
+fn main() { let b = B6 { n: 1 }; let a = R { id: 41 }; let x = b.take(a); println(f"{x.id}") }

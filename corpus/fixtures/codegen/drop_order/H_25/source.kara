@@ -1,0 +1,6 @@
+struct Res { id: i64, tag: String }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop res {self.id} {self.tag}") } }
+struct R { res: Res }
+struct W { r: R, n: i64 }
+fn main() { let w = W { r: R { res: Res { id: 41, tag: f"t{1}" } }, n: 1 };
+             let W { r, n } = w; println(f"{r.res.id + n}") }

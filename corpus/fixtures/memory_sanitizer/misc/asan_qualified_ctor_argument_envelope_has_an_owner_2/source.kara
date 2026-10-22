@@ -1,0 +1,10 @@
+struct W { o: Option[Option[i64]] }
+fn cls(x: Result[W, i64]) {
+    match x { Ok(w) => { println("ok") } Err(e) => { println("er") } }
+}
+fn main() {
+    for i in 0..4 {
+        cls(Ok(W { o: Option.Some(Option.Some(i)) }));
+    }
+    println("end");
+}

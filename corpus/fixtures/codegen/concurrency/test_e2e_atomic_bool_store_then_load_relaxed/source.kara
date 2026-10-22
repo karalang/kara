@@ -1,0 +1,5 @@
+fn main() {
+let mut a = Atomic.new(false);
+a.store(true, MemoryOrdering.Relaxed);
+println(a.load(MemoryOrdering.Relaxed));
+}

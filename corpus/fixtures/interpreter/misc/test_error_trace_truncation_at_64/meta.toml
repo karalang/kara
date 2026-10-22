@@ -1,0 +1,17 @@
+source = "tests/interpreter/misc.rs::test_error_trace_truncation_at_64"
+dedup_of = []
+expect = "error:E0100"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "bbc779ad"
+model_rev = "583cfb0d"
+model_src = "bbc779ad"

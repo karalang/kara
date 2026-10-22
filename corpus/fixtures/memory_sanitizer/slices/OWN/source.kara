@@ -1,0 +1,4 @@
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkt(n: i64) -> (String, i64) { return (payload(), n); }
+fn main() { println(go()); }

@@ -1,0 +1,17 @@
+source = "tests/interpreter/effects.rs::test_ambient_stdin_with_provider_overrides_default"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "io:stdin", "post-m1:provider", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:an expression with no recorded type"
+classified_with = "79705a229"
+extracted_src = "b257baaa"
+model_rev = "583cfb0d"
+model_src = "b257baaa"

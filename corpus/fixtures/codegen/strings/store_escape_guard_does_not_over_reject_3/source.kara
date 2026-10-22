@@ -1,0 +1,2 @@
+fn make(k: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(k); return v; }
+fn main() { let v = make(21i64); println(f"{v[0]}"); }

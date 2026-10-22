@@ -1,0 +1,2 @@
+fn idf(r: R) -> R { r }
+fn main() { let b = idf(R { id: 32, tag: f"h" }); println(f"{b.id}") }

@@ -1,0 +1,5 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+println(f"{m.len()}");
+println(f"{m.is_empty()}");
+}

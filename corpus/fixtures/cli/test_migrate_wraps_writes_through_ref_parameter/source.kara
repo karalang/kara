@@ -1,0 +1,13 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn bump(c: ref Counter) {
+    c.count = c.count + 1;
+}
+
+fn reset(c: mut ref Counter) {
+    c.count = 0;
+}
+
+fn main() {}

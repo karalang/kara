@@ -1,0 +1,20 @@
+struct Res { id: i64, tag: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.tag}"); }
+}
+struct Wrap { r: Res }
+fn via_let(sink: mut ref Vec[Res], r: Res) -> Option[Wrap] {
+    if r.id > 200 { let w: Wrap = Wrap { r: r }; return Some(w); }
+    if r.id > 100 { sink.push(r); }
+    return None;
+}
+fn main() {
+    let mut s: Vec[Res] = Vec.new();
+    let a: Option[Wrap] = via_let(mut s, Res { id: 301, tag: "esc" });
+    println("1");
+    let b: Option[Wrap] = via_let(mut s, Res { id: 151, tag: "store" });
+    println("2");
+    let c: Option[Wrap] = via_let(mut s, Res { id: 6, tag: "die" });
+    println("3");
+    println(f"len {s.len()}");
+}

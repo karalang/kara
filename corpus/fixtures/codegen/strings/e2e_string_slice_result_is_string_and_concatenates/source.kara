@@ -1,0 +1,5 @@
+fn main() {
+let s = "hello world";
+let mid = s[6..11];
+println(mid + "!");
+}

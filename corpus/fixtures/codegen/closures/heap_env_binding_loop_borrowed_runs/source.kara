@@ -1,0 +1,3 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn sumcalls(g: Fn(i64) -> i64, n: i64) -> i64 { let mut s = 0i64; let mut i = 0i64; while i < n { s = s + g(i); i = i + 1i64; } s }
+fn main() { let f = make(5i64); println(f"{sumcalls(f, 4i64)}"); }

@@ -1,0 +1,44 @@
+struct Full { name: String, buf: Vec[i64] }
+struct Narrow { name: String }
+fn mk(i: i64) -> Full {
+let mut v: Vec[i64] = Vec.new();
+v.push(i);
+return Full { name: f"pay-{i}", buf: v };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[i64, Full] { return Result.Err(mk(i)); }
+fn main() {
+let o: Option[Full] = Option.Some(mk(1i64));
+match o {
+Option.Some(Full { name, buf }) => { println(f"a:{name}:{buf.len()}"); }
+Option.None => { println("a:none"); }
+}
+match opt(2i64) {
+Option.Some(Full { name, buf }) => { println(f"b:{name}:{buf.len()}"); }
+Option.None => { println("b:none"); }
+}
+match res(3i64) {
+Result.Ok(v) => { println(f"c:ok{v}"); }
+Result.Err(Full { name, buf }) => { println(f"c:{name}:{buf.len()}"); }
+}
+let o4: Option[Full] = Option.Some(mk(4i64));
+match o4 {
+Option.Some(Full { name, buf: _ }) => { println(f"d:{name}"); }
+Option.None => { println("d:none"); }
+}
+let o5: Option[Full] = Option.Some(mk(5i64));
+if let Option.Some(Full { name, buf }) = o5 {
+println(f"e:{name}:{buf.len()}");
+}
+let mut v6: Vec[Full] = Vec.new();
+v6.push(mk(6i64));
+while let Option.Some(Full { name, buf }) = v6.pop() {
+println(f"f:{name}:{buf.len()}");
+}
+let o7: Option[Narrow] = Option.Some(Narrow { name: f"nar-{7i64}" });
+match o7 {
+Option.Some(Narrow { name }) => { println(f"g:{name}"); }
+Option.None => { println("g:none"); }
+}
+println("end");
+}

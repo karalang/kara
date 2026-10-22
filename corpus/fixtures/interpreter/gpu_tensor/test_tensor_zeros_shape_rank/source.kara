@@ -1,0 +1,7 @@
+fn main() {
+let t: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);
+println(t.rank());
+let s = t.shape();
+println(s[0]);
+println(s[1]);
+}

@@ -1,0 +1,17 @@
+fn main() {
+let vals = [10, 20, 30];
+let mut sum = 0i64;
+for (i, v) in vals.iter().enumerate() { sum = sum + v + i; }
+println(sum);
+let nums = [2, 7, 11, 15];
+let mut seen: Map[i64, i64] = Map.new();
+let mut found = -1i64;
+for (i, num) in nums.iter().enumerate() {
+match seen.get(9 - num) {
+Some(j) => { found = j; }
+None => { let _ = seen.insert(num, i); }
+}
+}
+println(found);
+println(seen.len());
+}

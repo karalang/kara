@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut a: Vec[(String, i64)] = [(f"one-aaaaaaaaaaaaaaaaaaaaaa-{n}", 1), (f"two-bbbbbbbb-{n}", 5)]; a[0] = (a[1].0.clone(), 3); println(f"r:{a[0].1}:{a[0].0}:{a[1].0}") }

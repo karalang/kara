@@ -1,0 +1,7 @@
+#[derive(Clone)]
+struct H { name: String }
+fn main() {
+let h = H { name: f"alpha" };
+{ let keep: H = h.clone(); }
+println(h.name);
+}

@@ -1,0 +1,10 @@
+fn main() {
+let m = MemoryOrdering.SeqCst;
+match m {
+MemoryOrdering.Relaxed => println("Relaxed"),
+MemoryOrdering.Acquire => println("Acquire"),
+MemoryOrdering.Release => println("Release"),
+MemoryOrdering.AcqRel => println("AcqRel"),
+MemoryOrdering.SeqCst => println("SeqCst"),
+}
+}

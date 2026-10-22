@@ -1,0 +1,18 @@
+source = "tests/codegen/concurrency.rs::test_ir_module_global_oncelock_static_init"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["literal-unmatched", "src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: '@CONFIG = internal global ptr null'"
+bucket = "check-refuses:E_MODULE_LET"
+classified_with = "79705a229"
+extracted_src = "ea5119b2"
+model_rev = "583cfb0d"
+model_src = "ea5119b2"

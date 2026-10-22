@@ -1,0 +1,2 @@
+impl B2 { fn eat(mut ref self, r: R) -> i64 { self.n = self.n + 1; 8 } }
+fn main() { let mut c = B2 { n: 1 }; let v = c.eat(R { id: 2 }); println(f"{v}") }

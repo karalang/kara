@@ -1,0 +1,12 @@
+struct Mute {}
+impl Mute {
+fn println(self, s: String) { }
+fn print(self, s: String) { }
+}
+fn main() {
+with_provider[Stdout](Mute {}, || {
+println("hidden");
+println("also hidden");
+});
+println("visible");
+}

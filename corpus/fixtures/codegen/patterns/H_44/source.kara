@@ -1,0 +1,9 @@
+fn main() {
+  let mut i = 0;
+  while i < 2 {
+    i = i + 1;
+    match mk(7) { E.A(n) => { println(f"v{n}"); continue } E.B => {} }
+    println("AFTER");
+  }
+  println("done")
+}

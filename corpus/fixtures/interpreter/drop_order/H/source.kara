@@ -1,0 +1,2 @@
+fn outer2(y: R) -> (BoxR, i64) { return src2(y); }
+fn main() { let (a, n) = outer2(R { id: 49 }); println(f"{n}") }

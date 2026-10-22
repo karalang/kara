@@ -1,0 +1,8 @@
+import std.web.time.{after, Duration};
+
+fn main() {
+    println("before");
+    let rx = after(Duration.ms(40));
+    rx.recv();
+    println("after");
+}

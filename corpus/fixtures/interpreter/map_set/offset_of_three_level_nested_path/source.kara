@@ -1,0 +1,7 @@
+struct Inner { x: i32, y: i32 }
+struct Outer { a: i32, inner: Inner, c: i32 }
+struct Nest2 { pad: i8, o: Outer, z: i64 }
+fn main() {
+    println(offset_of[Nest2](o.inner.x));
+    println(offset_of[Nest2](z));
+}

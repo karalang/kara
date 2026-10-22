@@ -1,0 +1,4 @@
+fn main() { let n = env.args().len() as i64;
+let a: Array[Array[String, 2], 2] = [[f"p-{n}", f"q-{n}"], [f"r-{n}", f"s-{n}"]];
+let b: Array[Array[String, 2], 2] = a.clone();
+let i2: Array[String, 2] = b[1].clone(); println(f"{i2[0]}"); }

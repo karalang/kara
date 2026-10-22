@@ -1,0 +1,2 @@
+fn f() -> i64 { let o = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x = o.h.r; return 7; }
+fn main() { println(f()) }

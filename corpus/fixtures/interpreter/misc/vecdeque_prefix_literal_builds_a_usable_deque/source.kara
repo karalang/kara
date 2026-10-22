@@ -1,0 +1,1 @@
+fn main() { let d = VecDeque[1, 2, 3]; print(d.len()); }

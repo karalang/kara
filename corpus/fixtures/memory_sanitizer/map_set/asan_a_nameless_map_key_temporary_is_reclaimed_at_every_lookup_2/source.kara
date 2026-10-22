@@ -1,0 +1,12 @@
+fn mk20(n: i64) -> (String, String) { return (f"aaaaaaaaaaaa{n}", f"bbbbbbbbbbbb{n}"); }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 3 { m.insert(mk20(i), i); i = i + 1; }
+    let mut j: i64 = 0;
+    while j < 2 {
+        if m.contains_key(mk20(j)) { println("yes"); } else { println("no"); }
+        j = j + 1;
+    }
+    println(f"len:{m.len()}");
+}

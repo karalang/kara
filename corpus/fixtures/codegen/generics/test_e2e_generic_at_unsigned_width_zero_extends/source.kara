@@ -1,0 +1,22 @@
+struct Boxg[T] { v: T }
+impl[T] Boxg[T] { fn get(ref self) -> T { return self.v; } }
+fn idg[T](x: T) -> T { return x; }
+fn main() {
+println(idg(200u8));
+println(idg(60000u16));
+println(idg(4000000000u32));
+println(idg(18446744073709551615u64));
+println(idg(-56i8));
+let g: Boxg[u8] = Boxg { v: 200u8 };
+println(g.v);
+println(g.get());
+let k: Boxg[i8] = Boxg { v: -56i8 };
+println(k.v);
+let mut vg: Vec[Boxg[u8]] = Vec.new();
+vg.push(Boxg { v: 200u8 });
+println(vg[0i64].v);
+println(idg(200u8) as i64);
+println(idg(-56i8) as i64);
+let direct = 200u8;
+println(direct);
+}

@@ -1,0 +1,7 @@
+fn main() {
+let v: Vec[f64] = vec![];
+println(Stats.sum(v));
+println(Stats.prod(v));
+match Stats.min(v) { Some(m) => println(m), None => println(-1.0), };
+match Stats.max(v) { Some(m) => println(m), None => println(-1.0), };
+}

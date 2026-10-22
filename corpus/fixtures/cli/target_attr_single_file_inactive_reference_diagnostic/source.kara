@@ -1,0 +1,6 @@
+#[target(wasm_browser)]
+struct DomNode { id: i64 }
+
+fn main() {
+    let n = DomNode { id: 1 };
+}

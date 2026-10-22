@@ -1,0 +1,4 @@
+fn main() {
+let x: Option[i64] = Some(99_i64);
+println(x.to_string());
+}

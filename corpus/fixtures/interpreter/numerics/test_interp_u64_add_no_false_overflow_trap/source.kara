@@ -1,0 +1,1 @@
+fn main() { let big: u64 = (1u64 << 63) + 5u64; println(f"{big}"); }

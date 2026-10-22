@@ -1,0 +1,6 @@
+fn name_of(u: ref String) -> ref String { u }
+fn main() {
+let s = String.from("hello");
+let n = name_of(s);
+println(n);
+}

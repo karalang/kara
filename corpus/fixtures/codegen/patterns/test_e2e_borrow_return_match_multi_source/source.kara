@@ -1,0 +1,13 @@
+fn pick(a: ref String, b: ref String, c: ref String, which: i32) -> ref String {
+    match which {
+        0 => a,
+        1 => b,
+        _ => c,
+    }
+}
+fn main() {
+    let x = "alpha"; let y = "beta"; let z = "gamma";
+    let p0 = pick(x, y, z, 0); println(p0);
+    let p1 = pick(x, y, z, 1); println(p1);
+    let p2 = pick(x, y, z, 2); println(p2);
+}

@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_link_directive_resolves_real_library_e2e"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:an expression with no recorded type"
+classified_with = "79705a229"
+extracted_src = "0f8745d2"
+model_rev = "583cfb0d"
+model_src = "0f8745d2"

@@ -1,0 +1,5 @@
+fn main() {
+let mut reg: VolatileCell[i32] = VolatileCell.new(7);
+reg.write(42);
+println(reg.read());
+}

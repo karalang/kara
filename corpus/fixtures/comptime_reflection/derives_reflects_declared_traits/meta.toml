@@ -1,0 +1,16 @@
+source = "tests/comptime_reflection.rs::derives_reflects_declared_traits"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:comptime", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'true'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "d6c61b2c"

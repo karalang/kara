@@ -1,0 +1,7 @@
+fn main() {
+let s: String = "kara";
+let mut m: Map[String, i64] = Map.new();
+m.insert("kara", 1);
+println(StableHash.siphash24(s.bytes(), 0u64, 0u64) == 0);
+println(m.len());
+}

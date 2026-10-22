@@ -1,0 +1,7 @@
+import doer.{mk as build};
+fn helper(build: i64) -> i64 { build + 1 }
+fn main() {
+let build: i64 = 42;
+println(build);
+println(helper(4));
+}

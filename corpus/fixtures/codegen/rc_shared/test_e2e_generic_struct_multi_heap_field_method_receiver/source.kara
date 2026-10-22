@@ -1,0 +1,19 @@
+struct Pair[A, B] { first: A, second: B }
+struct Rec[A, B] { a: A, b: B, c: A }
+fn main() {
+let mut p: Pair[Vec[i64], Vec[i64]] = Pair { first: [10, 20], second: [1, 2, 3] };
+println(p.first.len());
+println(p.second.len());
+p.second.push(99);
+p.first.push(30);
+println(p.first.len());
+println(p.second.len());
+println(p.second[3]);
+println(p.first[2]);
+let mut r: Rec[Vec[i64], String] = Rec { a: [1, 2], b: "mid", c: [7, 8, 9, 10] };
+r.c.push(11);
+println(r.a.len());
+println(r.b.len());
+println(r.c.len());
+println(r.c[4]);
+}

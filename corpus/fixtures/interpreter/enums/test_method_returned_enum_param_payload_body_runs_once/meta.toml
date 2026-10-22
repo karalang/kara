@@ -1,0 +1,17 @@
+source = "tests/interpreter/enums.rs::test_method_returned_enum_param_payload_body_runs_once"
+dedup_of = []
+expect = "error:E0104"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "0929697a"
+model_rev = "583cfb0d"
+model_src = "0929697a"

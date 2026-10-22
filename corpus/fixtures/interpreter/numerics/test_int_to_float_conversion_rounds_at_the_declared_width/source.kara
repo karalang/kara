@@ -1,0 +1,7 @@
+fn main() {
+let big = 2147483647i32;
+let wide: f64 = big;
+let narrow: f32 = big;
+println(wide);
+println(narrow);
+}

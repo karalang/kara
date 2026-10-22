@@ -1,0 +1,13 @@
+
+fn main() {
+    let total = comptime {
+        let mut acc = 0;
+        let mut i = 1;
+        while i <= 10 {
+            acc = acc + i;
+            i = i + 1;
+        }
+        acc
+    };
+    println(total);
+}

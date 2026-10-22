@@ -1,0 +1,46 @@
+struct P { x: i64, y: i64 }
+fn starts(p: String) -> Fn(ref String) -> bool { |s| s.starts_with(p) }
+fn ends(p: String) -> Fn(ref String) -> bool { |s| s.ends_with(p) }
+fn forbids(b: String) -> Fn(ref String) -> bool { |s| not s.contains(b) }
+fn keyed(k: String) -> Fn(ref Map[String, i64]) -> bool { |m| m.contains_key(k) }
+fn member(e: String) -> Fn(ref Set[String]) -> bool { |st| st.contains(e) }
+fn msize() -> Fn(ref Map[String, i64]) -> i64 { |m| m.len() }
+fn ssize() -> Fn(ref Set[String]) -> i64 { |st| st.len() }
+fn nocap() -> Fn(ref String) -> bool { |s| s.starts_with("ab") }
+fn vecat() -> Fn(ref Vec[u8], i64) -> u8 { |w, i| w[i] }
+fn slen() -> Fn(ref String) -> i64 { |s| s.len() }
+fn psum() -> Fn(ref P) -> i64 { |p| p.x + p.y }
+fn vlen() -> Fn(ref Vec[String]) -> i64 { |v| v.len() }
+fn main() {
+let a = "abxyc";
+let b = "hello";
+let g1 = starts("ab");  println(f"{g1(a)} {g1(b)} {g1(a)}");
+let g2 = ends("lo");    println(f"{g2(a)} {g2(b)}");
+let g3 = forbids("xy"); println(f"{g3(a)} {g3(b)}");
+let g4 = nocap();       println(f"{g4(a)} {g4(b)}");
+let mut m: Map[String, i64] = Map.new();
+let _ = m.insert("k", 1);
+let _ = m.insert("j", 2);
+let g5 = keyed("k");
+let g6 = keyed("q");
+println(f"{g5(m)} {g6(m)} {g5(m)}");
+let g7 = msize();
+println(f"{g7(m)}");
+let mut st: Set[String] = Set.new();
+let _ = st.insert("z");
+let g8 = member("z");
+let g9 = member("q");
+println(f"{g8(st)} {g9(st)}");
+let g10 = ssize();
+println(f"{g10(st)}");
+let v: Vec[u8] = [7u8, 8u8, 9u8];
+println(f"{vecat()(v, 1)}");
+let s2 = "abcd";
+println(f"{slen()(s2)}");
+let p = P { x: 3, y: 4 };
+println(f"{psum()(p)}");
+let mut vs: Vec[String] = Vec.new();
+vs.push("a"); vs.push("b");
+println(f"{vlen()(vs)}");
+println(f"{m.len()} {st.len()}");
+}

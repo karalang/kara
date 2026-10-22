@@ -1,0 +1,9 @@
+fn mk() -> (String, String) { return (f"aaaaaaaaaaaa0", f"bbbbbbbbbbbb0"); }
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    let k1 = mk();
+    let k2 = mk();
+    m.insert(k1, 1);
+    m.insert(k2, 2);
+    println(f"s:{m.len()}");
+}

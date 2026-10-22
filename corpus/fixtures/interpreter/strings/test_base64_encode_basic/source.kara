@@ -1,0 +1,4 @@
+fn main() {
+let bs = [102u8, 111u8, 111u8, 98u8, 97u8, 114u8];
+println(Base64.encode(bs));
+}

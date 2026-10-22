@@ -1,0 +1,17 @@
+source = "tests/codegen/numerics.rs::isize_lowers_as_a_signed_pointer_width_integer"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "f4f87592"
+model_rev = "583cfb0d"
+model_src = "f4f87592"

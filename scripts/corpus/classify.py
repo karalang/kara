@@ -40,7 +40,8 @@ the tags, and `classified_with` (the karac commit, or `<base>+local`). `expected
 for a, b, c and e-spec (never for an open e or a gap); an e-spec entry's
 `expected_from` becomes `spec`. The report,
 `corpus/CLASSIFICATION.md`, holds the gate: passing / classified, over the
-deduplicated entries in the slice (not post-m1, not bench, not d), with the
+deduplicated entries in the slice (not post-m1, not bench, not d, not
+src:legacy-tests, which has its own line), with the
 denominator by bucket, the same number without lib:/io:, all non-deferred
 entries for context, bench's own pass/timeout line, and the list of
 auto-resolved e-spec entries.
@@ -60,7 +61,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from corpus_lib import (ROOT, Origin, entries, execute, read_toml, render_template,  # noqa: E402
+from corpus_lib import (ROOT, Origin, entries, execute, matches_filter, read_toml, render_template,  # noqa: E402
                         template_stdout, write_toml)
 
 PASSING = {"a", "b", "c"}
@@ -425,7 +426,14 @@ def write_back(entry: Path, r: dict, sha: str):
 
 
 def in_slice(tags) -> bool:
-    return not any(t.startswith("post-m1:") or t == "bench" for t in tags)
+    return not any(t.startswith("post-m1:") or t in ("bench", LEGACY_TESTS) for t in tags)
+
+
+# Programs from the test targets that go with legacy (M3 item 9). They stay
+# outside the M1 gate, whose definition is fixed, and have their own line;
+# M3 asks that each failure among them has a disposition (review thread,
+# 2026-10-22).
+LEGACY_TESTS = "src:legacy-tests"
 
 
 def report(corpus: Path) -> str:
@@ -439,6 +447,8 @@ def report(corpus: Path) -> str:
     core = [(r, m) for r, m in sl if not any(t.startswith(("lib:", "io:")) for t in m.get("tags", []))]
     allc = [(r, m) for r, m in rows if m.get("class") not in ("d", "unknown")]
     bench = [(r, m) for r, m in rows if "bench" in m.get("tags", []) and m.get("class") not in ("d", "unknown")]
+    lt = [(r, m) for r, m in allc if LEGACY_TESTS in m.get("tags", [])
+          and not any(t.startswith("post-m1:") or t == "bench" for t in m.get("tags", []))]
     pct = lambda xs: (f"{sum(passed(m) for _, m in xs)} / {len(xs)} = "  # noqa: E731
                       f"{100 * sum(passed(m) for _, m in xs) / len(xs):.1f}%") if xs else "0 / 0"
     def head(b):
@@ -447,6 +457,7 @@ def report(corpus: Path) -> str:
             return "b->" + head(b[3:])
         return re.sub(r":.*", "", b) if b.startswith(("mir-gap", "e-", "check", "b-")) else b
     by = collections.Counter(head(m.get("bucket", "?")) for _, m in sl)
+    lt_by = collections.Counter(head(m.get("bucket", "?")) for _, m in lt if not passed(m))
     gaps = collections.Counter(m["bucket"][8:] for _, m in sl if m.get("bucket", "").startswith("mir-gap:"))
     post = collections.Counter(t for _, m in allc for t in m.get("tags", []) if t.startswith("post-m1:"))
     lines = [
@@ -461,8 +472,10 @@ def report(corpus: Path) -> str:
         f"- Every classified non-deferred program (context): {pct(allc)}.",
         f"- Bench variants (outside the gate): {pct(bench)}; timeouts "
         f"{sum(m.get('bucket') == 'timeout' for _, m in bench)}.",
+        f"- Legacy test programs (`{LEGACY_TESTS}`, M3 item 9, outside the gate): {pct(lt)}; failing "
+        + (", ".join(f"{k} {v}" for k, v in lt_by.most_common()) or "none") + ".",
         f"- Deferred (class d): {sum(m.get('class') == 'd' for _, m in rows)}; "
-        f"outside the slice (`post-m1:*`): {sum(not in_slice(m.get('tags', [])) and 'bench' not in m.get('tags', []) for _, m in allc)}.",
+        f"outside the slice (`post-m1:*`): {sum(any(t.startswith('post-m1:') for t in m.get('tags', [])) and 'bench' not in m.get('tags', []) for _, m in allc)}.",
     ]
     # mir-llvm is measured separately (`run.py --backend mir-llvm`, judged as
     # the runner judges); its slice count is recorded in mir-llvm.toml.
@@ -538,7 +551,7 @@ def main() -> int:
         sha = compiler_commit()
         rev = model_rev()
         todo = [e for e in entries(corpus)
-                if (not args.filter or any(f in str(e.relative_to(corpus)) for f in args.filter))
+                if (not args.filter or matches_filter(str(e.relative_to(corpus)), args.filter))
                 and (not args.bucket
                      or any(str(read_toml(e / "meta.toml").get("bucket", "")).startswith(b) for b in args.bucket))
                 and not (args.resume and read_toml(e / "meta.toml").get("classified_with") == sha)

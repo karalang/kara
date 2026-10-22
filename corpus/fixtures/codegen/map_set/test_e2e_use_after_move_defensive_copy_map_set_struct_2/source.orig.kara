@@ -1,0 +1,6 @@
+fn main() {
+let mut st: Set[i64] = Set.new();
+st.insert(9i64);
+{ let keep: Set[i64] = st; }
+println(st.contains(9i64));
+}

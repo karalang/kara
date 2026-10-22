@@ -1,0 +1,2 @@
+fn g(b: G2[Cn]) -> i64 { match b { G2.A(w, k) => { println(f"rd{w.n}{k}"); } G2.B => { } }; println("ret"); 1 }
+fn main() { println(f"r:{g(G2.A(Cn { r: R { id: 8 }, n: 1 }, 3))}") }

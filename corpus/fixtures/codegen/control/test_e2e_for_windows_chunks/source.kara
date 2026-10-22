@@ -1,0 +1,38 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4, 5];
+for w in v.iter().windows(2) { println(w[0] + w[1]); }
+let mut n: i64 = 0;
+let mut t: i64 = 0;
+for w in v.iter().windows(3) {
+n = n + 1;
+for y in w { t = t + y; }
+}
+println(n);
+println(t);
+let mut a: i64 = 0;
+for w in v.iter().windows(9) { a = a + 1; }
+println(a);
+let mut b: i64 = 0;
+for w in v.iter().windows(0) { b = b + 1; }
+println(b);
+for c in v.iter().chunks(2) {
+let mut s: i64 = 0;
+for y in c { s = s + y; }
+println(f"{c.len()}:{s}");
+}
+let mut d: i64 = 0;
+for c in v.iter().chunks(0) { d = d + c.len(); }
+println(d);
+let mut e: i64 = 0;
+for w in v.iter().windows(2) {
+if w[0] == 3 { break; }
+e = e + w[1];
+}
+println(e);
+let mut f2: i64 = 0;
+for c in v.iter().chunks(2) {
+if c.len() == 1 { continue; }
+f2 = f2 + c[0];
+}
+println(f2);
+}

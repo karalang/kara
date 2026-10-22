@@ -1,0 +1,8 @@
+
+fn main() {
+    let t = ProtoBuf.encode_tag(5, ProtoBuf.wire_len_delim());
+    let mut r = ProtoReader.new(t);
+    let (field, wt) = r.read_tag();
+    println(field);
+    println(wt);
+}

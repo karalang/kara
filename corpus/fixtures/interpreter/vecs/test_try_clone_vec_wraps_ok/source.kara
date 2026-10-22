@@ -1,0 +1,7 @@
+fn main() {
+let v: Vec[i64] = [1_i64, 2_i64, 3_i64];
+match v.try_clone() {
+Ok(c) => println(c.len()),
+Err(e) => println("err"),
+}
+}

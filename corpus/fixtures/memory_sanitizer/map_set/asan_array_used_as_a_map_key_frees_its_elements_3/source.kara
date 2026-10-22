@@ -1,0 +1,9 @@
+fn mk() -> Array[String, 2] { return Array[f"aaaaaaaa0", f"bbbbbbbb0"]; }
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let k1 = mk();
+    let k2 = mk();
+    m.insert(k1, 1);
+    m.insert(k2, 2);
+    println(f"s:{m.len()}");
+}

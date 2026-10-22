@@ -1,0 +1,4 @@
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build2(g: Fn(i64) -> i64) -> H { let local = make(5i64); let h = H { f: local }; let _u = g(0i64); h }
+fn main() { let f = make(3i64); let r = build2(f); println(f"{(r.f)(4i64)}"); }

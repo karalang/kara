@@ -1,0 +1,4 @@
+fn main() {
+let c: Column[f64] = Column.from_vec([1.0, 2.0, 3.0]);
+println(c.quantile(1.5));
+}

@@ -1,0 +1,9 @@
+fn main() {
+let u = Tensor.from([[[7, 8, 9]]]);
+let q = u.squeeze();
+println(q.rank());
+println(q[2]);
+let one = u.squeeze(0);
+println(one.rank());
+println(one[0, 1]);
+}

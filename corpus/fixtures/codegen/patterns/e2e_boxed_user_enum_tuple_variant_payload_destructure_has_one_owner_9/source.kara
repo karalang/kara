@@ -1,0 +1,6 @@
+enum Ks25 { A(String, String, String, String), B }
+impl Drop for Ks25 { fn drop(mut ref self) { println("dKs25") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Ks25], acc: mut ref Vec[String]) { match x { Option.Some(Ks25.A(s, t, u, v)) => { acc.push(s); acc.push(t); acc.push(u); acc.push(v) } Option.Some(Ks25.B) => {} Option.None => {} } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { let mut acc: Vec[String] = []; show(Option.Some(Ks25.A(f"a", f"b", f"c", f"d")), mut acc); println(f"len:{acc.len()}"); println("end") }

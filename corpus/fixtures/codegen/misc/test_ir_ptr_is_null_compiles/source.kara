@@ -1,0 +1,1 @@
+fn caller(p: *const i32) -> bool { ptr.is_null(p) } fn main() {}

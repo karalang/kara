@@ -1,0 +1,9 @@
+struct Item { v: i64 }
+fn main() {
+let mut items = Vec.new();
+items.push(Item { v: 10 });
+items.push(Item { v: 20 });
+items[1].v = 99;
+println(items[0].v);
+println(items[1].v);
+}

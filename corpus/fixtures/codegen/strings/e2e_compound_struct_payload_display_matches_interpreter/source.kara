@@ -1,0 +1,15 @@
+struct P { x: i64, y: i64 }
+impl Display for P { fn to_string(ref self) -> String { f"({self.x},{self.y})" } }
+fn main() {
+let p = P { x: 3, y: 4 };
+println(p);
+let o: Option[P] = Some(P { x: 3, y: 4 });
+println(o);
+let n: Option[P] = None;
+println(n);
+let r: Result[P, i64] = Ok(P { x: 1, y: 2 });
+println(r);
+let v = [P { x: 5, y: 6 }];
+println(v);
+println(f"got {o}");
+}

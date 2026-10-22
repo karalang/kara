@@ -1,0 +1,6 @@
+enum E { A(String), B }
+fn main() {
+let e: E = E.A(f"hi");
+if let E.A(v) = e { println(v); }
+if let E.A(v) = e { println(v); }
+}

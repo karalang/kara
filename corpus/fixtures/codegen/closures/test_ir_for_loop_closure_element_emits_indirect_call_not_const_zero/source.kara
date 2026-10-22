@@ -1,0 +1,6 @@
+fn main() {
+let ops = [|x| x + 1, |x| x * 10];
+let mut v = 5;
+for op in ops { v = op(v); }
+println(v);
+}

@@ -1,0 +1,6 @@
+fn main() {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 1000 { acc = acc + i; i = i + 1; }
+    println(acc);
+}

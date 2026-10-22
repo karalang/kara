@@ -1,0 +1,2 @@
+enum Bin { Packed(Array[Ra, 2]), Bare }
+fn main() { let b: Bin = Bin.Packed([Ra { id: 1 }, Ra { id: 2 }]); println("end") }

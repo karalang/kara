@@ -1,0 +1,6 @@
+shared struct Shr { w: String }
+fn main() {
+let a: Option[Shr] = Some(Shr { w: f"sh" });
+match a { Some(p) => { println(p.w); } None => {} }
+match a { Some(q) => println(q.w), None => println("none") }
+}

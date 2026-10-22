@@ -1,0 +1,9 @@
+struct P { n: i64, s: String }
+struct S { a: Array[P, 2], v: Vec[P], t: (Array[P, 1], i64) }
+impl S { fn set(mut ref self, i: i64) { self.a[i].n = 9; self.v[i].s = f"new{i}"; self.v[0].n = 8; self.t.0[0].n = 4; } }
+fn main() {
+    let mut v: Vec[P] = Vec.new(); v.push(P { n: 5, s: f"a{1}" }); v.push(P { n: 6, s: f"b{2}" });
+    let mut s = S { a: [P { n: 1, s: f"c{1}" }, P { n: 2, s: f"d{2}" }], v: v, t: ([P { n: 3, s: f"e{3}" }], 7) };
+    s.set(1);
+    println(f"r:{s.a[1].n} {s.v[1].s} {s.v[0].n} {s.t.0[0].n} {s.a[0].n}")
+}

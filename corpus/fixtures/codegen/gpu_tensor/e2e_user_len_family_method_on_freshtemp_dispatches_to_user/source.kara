@@ -1,0 +1,14 @@
+shared struct Bag { items: Vec[i64] }
+impl Bag {
+fn count(self) -> i64 { self.items.len() * 10 }
+fn is_empty(self) -> bool { false }
+}
+struct Plain { n: i64 }
+impl Plain { fn len(self) -> i64 { self.n + 7 } }
+fn bag() -> Bag { let mut v: Vec[i64] = Vec.new(); v.push(1); v.push(2); Bag { items: v } }
+fn plain() -> Plain { Plain { n: 5 } }
+fn main() {
+println(bag().count());
+println(bag().is_empty());
+println(plain().len());
+}

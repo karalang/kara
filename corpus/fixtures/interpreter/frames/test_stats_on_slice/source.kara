@@ -1,0 +1,6 @@
+fn main() {
+let v: Vec[f64] = vec![3.0, 1.0, 4.0];
+let sl: Slice[f64] = v.as_slice();
+println(Stats.sum(sl));
+println(Stats.mean(sl));
+}

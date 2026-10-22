@@ -1,0 +1,12 @@
+fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }
+             fn spin(n: i64) -> i64 { let mut s: i64 = 0; let mut i: i64 = 0; while i < n { s = s + i; i = i + 1; } return s; }
+             fn main() {
+                 let mut a: Column[i64] = Column.new();
+                 a.push(10); a.push_null(); a.push(30);
+                 let x = a * 2;
+                 println(fst(x, 0));
+                 let y = a * 3;
+                 let heavy = spin(8);
+                 println(fst(y, 0));
+                 println(heavy - heavy);
+             }

@@ -1,0 +1,5 @@
+struct Point { x: i64, y: i64 }
+let ORIGIN: Point = Point { x: 5, y: 9 };
+fn main() {
+println(ORIGIN.x.to_string());
+}

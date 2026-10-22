@@ -1,0 +1,5 @@
+fn main() {
+let a = RandomSource.next_u64();
+let b = RandomSource.next_u64();
+println(a != b);
+}

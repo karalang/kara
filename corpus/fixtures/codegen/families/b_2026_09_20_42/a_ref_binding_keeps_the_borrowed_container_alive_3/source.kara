@@ -1,0 +1,1 @@
+fn main() { let d: Vec[Vec[D]] = [[D { id: 3 }]]; let e: ref Vec[D] = ref d[0]; if e.len() > 0 { println(f"in-if:{e[0].id}"); } mid(4); }

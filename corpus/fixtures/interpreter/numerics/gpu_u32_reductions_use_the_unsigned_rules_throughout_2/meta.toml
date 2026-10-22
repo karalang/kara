@@ -1,0 +1,15 @@
+source = "tests/interpreter/numerics.rs::gpu_u32_reductions_use_the_unsigned_rules_throughout"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "9f2e08c7"

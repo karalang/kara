@@ -1,0 +1,12 @@
+#[repr(transparent)] distinct type Fd = i32;
+#[repr(transparent)] struct Handle { inner: i32 }
+unsafe extern "C" { fn abs(v: i32) -> i32; }
+fn main() {
+    let fd: Fd = Fd(-7i32);
+    println(unsafe { abs(fd.raw()) });
+    let h = Handle { inner: -12i32 };
+    println(unsafe { abs(h.inner) });
+    println(size_of[Fd]());
+    println(size_of[Handle]());
+    println(size_of[i32]());
+}

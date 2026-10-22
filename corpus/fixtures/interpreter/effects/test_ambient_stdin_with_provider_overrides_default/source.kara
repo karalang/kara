@@ -1,0 +1,14 @@
+struct CannedStdin {}
+impl CannedStdin {
+fn read_line(self) -> Result[String, String] {
+Ok("piped line")
+}
+}
+fn main() {
+with_provider[Stdin](CannedStdin {}, || {
+match Stdin.read_line() {
+Ok(s)  => println(s),
+Err(_) => println("err"),
+}
+});
+}

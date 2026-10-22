@@ -1,0 +1,16 @@
+fn main() {
+let mut v: Vec[i64] = [1, 1, 2, 3, 3, 3, 1];
+v.dedup();
+println(v.len());
+println(v[0]); println(v[2]); println(v[3]);
+let mut s: Vec[String] = ["a", "a", "bb", "bb", "a"];
+s.dedup();
+println(s.len());
+println(s[0]); println(s[1]); println(s[2]);
+let mut e: Vec[i64] = [7, 7, 7];
+e.dedup();
+println(e.len());
+let mut n: Vec[i64] = [1, 2, 3];
+n.dedup();
+println(n.len());
+}

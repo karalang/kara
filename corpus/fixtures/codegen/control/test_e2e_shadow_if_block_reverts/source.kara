@@ -1,0 +1,5 @@
+fn main() {
+let x = 1;
+if true { let x = 99; println(x.to_string()); }
+println(x.to_string());
+}

@@ -1,0 +1,6 @@
+enum Shape { Dot, Line(i64, i64), Label(String) }
+struct HasEnum { pre: i8, sh: Shape, post: i32 }
+fn main() {
+    println(offset_of[HasEnum](sh));
+    println(offset_of[HasEnum](post));
+}

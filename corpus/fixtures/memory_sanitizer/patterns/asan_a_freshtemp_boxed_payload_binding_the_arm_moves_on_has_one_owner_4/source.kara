@@ -1,0 +1,10 @@
+fn mk21(n: i64) -> Option[(String, String)] {
+    if n < 0 { return None; }
+    return Some((f"aaaaaaaaaaaa{n}", f"bbbbbbbbbbbb{n}"));
+}
+fn main() {
+    match mk21(1) {
+        Some(a) => { let b = a; println(f"r:{b.0}"); }
+        None => { println("r:none"); }
+    }
+}

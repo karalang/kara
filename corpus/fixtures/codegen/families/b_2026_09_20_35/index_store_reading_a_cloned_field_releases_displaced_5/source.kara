@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut a: Vec[U] = [U { t: T { s: f"one-aaaaaaaaaaaaaaaaaaaaaa-{n}" }, k: 1 }, U { t: T { s: f"two-bbbbbbbb-{n}" }, k: 5 }]; a[0] = U { t: T { s: a[1].t.s }, k: 2 }; println(f"r:{a[0].k}:{a[0].t.s}:{a[1].t.s}") }

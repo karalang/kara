@@ -1,0 +1,1 @@
+fn main() { let xs = [1.0_f64, 2.0_f64, 3.0_f64, 4.0_f64]; println(Stats.median(xs)); }

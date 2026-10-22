@@ -1,0 +1,9 @@
+effect resource UserDB;
+         struct Db { tag: i64 }
+         impl Db { fn id(self) -> i64 { self.tag } }
+         fn main() {
+             let x = with_provider[UserDB](Db { tag: 99 }, || {
+                 UserDB.id()
+             });
+             println(x);
+         }

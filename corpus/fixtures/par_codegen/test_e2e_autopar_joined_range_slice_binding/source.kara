@@ -1,0 +1,47 @@
+#[derive(Clone)]
+struct Entry { service: String, weight: i64 }
+fn f_range(nums: Vec[i64]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let s = nums[0..2];
+return s.len();
+}
+fn f_range_vars(nums: Vec[i64], a: i64, b: i64) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let s = nums[a..b];
+return s.len() + s[0];
+}
+fn f_str_slice(txt: String) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let t = txt[0..3];
+return t.len();
+}
+fn f_both(nums: Vec[i64], entries: Vec[Entry]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let s = nums[0..3];
+let e = entries[1].clone();
+return s.len() + e.weight;
+}
+fn f_elem_only(entries: Vec[Entry]) -> String {
+let mut index: Map[String, usize] = Map.new();
+let e = entries[0].clone();
+return e.service;
+}
+fn f_two_ranges(nums: Vec[i64]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let s = nums[0..2];
+let u = nums[1..4];
+return s.len() * 10 + u.len();
+}
+fn main() {
+let nums: Vec[i64] = [7, 8, 9, 10, 11];
+println(f_range(nums.clone()));
+println(f_range_vars(nums.clone(), 1, 4));
+println(f_str_slice("abcdefgh"));
+let mut es: Vec[Entry] = Vec.new();
+es.push(Entry { service: "alpha", weight: 3 });
+es.push(Entry { service: "betamax", weight: 5 });
+println(f_both(nums.clone(), es.clone()));
+println(f_elem_only(es.clone()));
+println(f_two_ranges(nums.clone()));
+println(nums.len());
+}

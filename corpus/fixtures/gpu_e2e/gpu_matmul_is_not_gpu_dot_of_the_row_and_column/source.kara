@@ -1,0 +1,13 @@
+fn main() {
+    let row: Vec[f32] = [1.0, 0.00000006, 1.0, 0.00000006];
+    let ones: Vec[f32] = [1.0, 1.0, 1.0, 1.0];
+    let a: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.00000006, 1.0, 0.00000006]]);
+    let b: Tensor[f32, [?, ?]] = Tensor.from([[1.0], [1.0], [1.0], [1.0]]);
+    let mm = gpu.matmul(a, b)[0, 0];
+    let dt = gpu.dot(row, ones);
+    if mm == dt {
+        println("agree");
+    } else {
+        println("differ");
+    }
+}

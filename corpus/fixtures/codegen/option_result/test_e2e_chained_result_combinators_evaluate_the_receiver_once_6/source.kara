@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[i64, i64] = Ok(20i64);
+match r.map_err(|e| e + 1i64).map(|x| x * 2i64) { Ok(v) => { println(v); } Err(e) => { println(e); } }
+}

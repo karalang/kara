@@ -1,0 +1,5 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+let v = m.entry("x").or_insert_with(|| 99_i64);
+println(v);
+}

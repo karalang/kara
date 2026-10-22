@@ -1,0 +1,2 @@
+fn show(x: Option[K]) { match x { Option.Some(k) => { match k { K.A(r) => { println(f"a:{r.s}"); }, K.B => {} } }, Option.None => {} } }
+fn main() { let mut i = 0; while i < 3 { show(Option.Some(K.A(mkr(i)))); i = i + 1; } println("end") }

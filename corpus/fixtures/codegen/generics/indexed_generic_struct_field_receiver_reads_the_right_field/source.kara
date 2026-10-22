@@ -1,0 +1,11 @@
+struct Pair[A, B] { first: A, second: B }
+fn main() {
+let mut a: Vec[i64] = Vec.new();
+a.push(1);
+let mut b: Vec[i64] = Vec.new();
+b.push(10); b.push(20);
+let mut v: Vec[Pair[Vec[i64], Vec[i64]]] = Vec.new();
+v.push(Pair { first: a, second: b });
+println(v[0].first.len().to_string());
+println(v[0].second.len().to_string());
+}

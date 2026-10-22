@@ -1,0 +1,6 @@
+struct Flag { ready: Atomic[bool] }
+fn main() {
+let f = Flag { ready: Atomic.new(false) };
+f.ready.store(true, MemoryOrdering.Release);
+println(f.ready.load(MemoryOrdering.Acquire));
+}

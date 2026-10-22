@@ -1,0 +1,2 @@
+fn firstn(cap: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); let mut i = 0; while i < 10 { if i == cap { return v; } v.push(i); i = i + 1; } return v; }
+fn main() { let v = firstn(3); println(v.len().to_string()); println((v[0] + v[1] + v[2]).to_string()) }

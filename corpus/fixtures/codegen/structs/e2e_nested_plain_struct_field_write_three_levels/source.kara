@@ -1,0 +1,8 @@
+struct A { x: i64 }
+struct B { a: A }
+struct C { b: B }
+fn main() {
+let mut c = C { b: B { a: A { x: 1 } } };
+c.b.a.x = 42;
+println(c.b.a.x);
+}

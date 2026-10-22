@@ -1,0 +1,10 @@
+struct User { name: String, age: i64 }
+impl User {
+    fn name(ref self) -> ref String { self.name }
+    fn age(ref self) -> ref i64 { self.age }
+}
+fn main() {
+    let u = User { name: "alice", age: 30 };
+    let n = u.name(); println(n);
+    let a = u.age(); println(a);
+}

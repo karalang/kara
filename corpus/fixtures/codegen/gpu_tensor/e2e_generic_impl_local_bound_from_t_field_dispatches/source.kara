@@ -1,0 +1,36 @@
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for i64 { fn describe(ref self) -> String { return f"i64:{self}"; } }
+struct P { n: i64 }
+impl Zero for P { fn describe(ref self) -> String { return f"P:{self.n}"; } }
+struct Grid[T] { cells: Vec[T] }
+impl[T: Zero] Grid[T] {
+    fn get(ref self, i: i64) -> Result[T, String] {
+        if i < 0 { return Result.Err("oob"); }
+        return Result.Ok(self.cells[i]);
+    }
+    fn show(ref self, i: i64) -> Result[String, String] {
+        let a = self.get(i)?;
+        return Result.Ok(a.describe());
+    }
+    fn show_match(ref self, i: i64) -> String {
+        match self.get(i) {
+            Result.Ok(v) => { return v.describe(); }
+            Result.Err(e) => { return f"err:{e}"; }
+        }
+    }
+    fn direct(ref self) -> String { let a = ref self.cells[0]; return a.describe(); }
+}
+fn main() {
+    let mut cs: Vec[i64] = Vec.new();
+    cs.push(7);
+    let g: Grid[i64] = Grid { cells: cs };
+    match g.show(0) { Result.Ok(s) => println(s), Result.Err(e) => println(e) }
+    println(g.show_match(0));
+    println(g.direct());
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { n: 5 });
+    let h: Grid[P] = Grid { cells: ps };
+    match h.show(0) { Result.Ok(s) => println(s), Result.Err(e) => println(e) }
+    println(h.show_match(0));
+    println(h.direct());
+}

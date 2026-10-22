@@ -1,0 +1,7 @@
+fn main() {
+let mut s: String = "";
+s.push('h');
+s.push('i');
+println(s);
+println(s.len());
+}

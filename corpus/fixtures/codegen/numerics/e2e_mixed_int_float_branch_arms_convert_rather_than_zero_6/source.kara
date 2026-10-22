@@ -1,0 +1,1 @@
+fn main() { let u: u64 = 18446744073709551615u64; let a: f64 = if true { u } else { 0.0 }; println(a); }

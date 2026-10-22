@@ -1,0 +1,9 @@
+enum AppErr { NotFound(String), Denied }
+impl Display for AppErr {
+    fn to_string(ref self) -> String {
+        match self { AppErr.NotFound(w) => { f"not found: {w}" } AppErr.Denied => { "denied".to_string() } }
+    }
+}
+fn main() -> Result[(), AppErr] {
+    return Err(AppErr.NotFound("cfg".to_string()))
+}

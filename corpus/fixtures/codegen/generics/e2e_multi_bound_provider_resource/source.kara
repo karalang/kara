@@ -1,0 +1,17 @@
+trait DatabaseProvider { fn lookup(ref self, id: i64) -> i64; }
+trait HealthCheckable { fn healthy(ref self) -> bool; }
+effect resource UserDB: DatabaseProvider + HealthCheckable;
+struct InMemoryDB { offset: i64 }
+impl DatabaseProvider for InMemoryDB {
+fn lookup(ref self, id: i64) -> i64 { id + self.offset }
+}
+impl HealthCheckable for InMemoryDB {
+fn healthy(ref self) -> bool { self.offset > 0 }
+}
+fn fetch(id: i64) -> i64 with reads(UserDB) { UserDB.lookup(id) }
+fn check() -> bool with reads(UserDB) { UserDB.healthy() }
+fn main() {
+with_provider[UserDB](InMemoryDB { offset: 100 }, || {
+println(f"{fetch(7)} {check()}");
+});
+}

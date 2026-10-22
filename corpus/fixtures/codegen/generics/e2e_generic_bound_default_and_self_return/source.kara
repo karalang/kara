@@ -1,0 +1,23 @@
+trait Greeter {
+    fn name(self) -> String;
+    fn greeting(self) -> String { "hi " + self.name() }
+}
+struct Person { id: i64 }
+impl Greeter for Person {
+    fn name(self) -> String { "person-with-a-long-enough-name" }
+}
+fn describe[G: Greeter](g: G) -> String { g.greeting() }
+trait Bumpable {
+    fn bump(self) -> Self;
+    fn val(self) -> i64;
+}
+struct Ctr { n: i64 }
+impl Bumpable for Ctr {
+    fn bump(self) -> Self { Ctr { n: self.n + 1 } }
+    fn val(self) -> i64 { self.n }
+}
+fn run_it[W: Bumpable](w: W) -> i64 { let b = w.bump(); b.val() }
+fn main() {
+    println(f"{describe(Person { id: 1 })}");
+    println(f"{run_it(Ctr { n: 41 })}");
+}

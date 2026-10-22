@@ -1,0 +1,2 @@
+enum E { A(R), B }
+fn main() { let (_, n) = (E.A(R { id: 41 }), 1); println(f"{n}") }

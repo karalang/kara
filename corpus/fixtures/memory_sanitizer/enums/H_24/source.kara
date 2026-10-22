@@ -1,0 +1,3 @@
+fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0;
+   while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); } acc }
+fn main() { println(f()); }

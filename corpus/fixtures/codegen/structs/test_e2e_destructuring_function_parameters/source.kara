@@ -1,0 +1,18 @@
+struct Point { x: i64, y: i64 }
+struct H { s: String, n: i64 }
+fn add((a, b): (i64, i64)) -> i64 { a + b }
+fn y_only((_, y): (i64, i64)) -> i64 { y }
+fn only_a((a, _): (i64, i64)) -> i64 { a }
+fn nested(((a, b), c): ((i64, i64), i64)) -> i64 { a + b + c }
+fn px(Point { x, y }: Point) -> i64 { x + y }
+fn distance(Point { x: x1, y: y1 }: Point, Point { x: x2, y: y2 }: Point) -> i64 { (x2 - x1) + (y2 - y1) }
+fn take(H { s, n }: H) -> String { s + n.to_string() }
+fn main() {
+println(add((3, 4)));
+println(y_only((3, 4)));
+println(only_a((3, 4)));
+println(nested(((1, 2), 3)));
+println(px(Point { x: 1, y: 2 }));
+println(distance(Point { x: 1, y: 1 }, Point { x: 4, y: 6 }));
+println(take(H { s: "v", n: 9 }));
+}

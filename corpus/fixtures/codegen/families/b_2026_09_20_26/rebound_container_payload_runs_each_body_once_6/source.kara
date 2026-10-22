@@ -1,0 +1,2 @@
+enum E2 { A(Array[R, 2], i64), B }
+fn main() { let e = E2.A(mka(), 7); match e { E2.A(v, k) => { let u = v; println(f"au{u[0].id} {k}") } E2.B => { println("no") } } println("end") }

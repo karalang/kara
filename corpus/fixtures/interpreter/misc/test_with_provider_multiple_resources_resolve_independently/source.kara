@@ -1,0 +1,14 @@
+effect resource UserDB;
+         effect resource AuditLog;
+         struct Db { tag: i64 }
+         impl Db { fn id(self) -> i64 { self.tag } }
+         struct Log { count: i64 }
+         impl Log { fn count(self) -> i64 { self.count } }
+         fn main() {
+             with_provider[UserDB](Db { tag: 42 }, || {
+                 with_provider[AuditLog](Log { count: 7 }, || {
+                     println(UserDB.id());
+                     println(AuditLog.count());
+                 });
+             });
+         }

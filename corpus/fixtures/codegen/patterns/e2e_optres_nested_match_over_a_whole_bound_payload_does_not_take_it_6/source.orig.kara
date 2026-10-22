@@ -1,0 +1,7 @@
+struct R { id: i64, tag: String }
+enum E { A { r: R }, B }
+fn main() {
+let a: Option[E] = Some(E.A { r: R { id: 7, tag: f"t" } });
+match a { Some(p) => { match p { E.A { r } => { println(r.id); } E.B => {} } } None => {} }
+match a { Some(p) => { match p { E.A { r } => { println(r.tag); } E.B => {} } } None => {} }
+}

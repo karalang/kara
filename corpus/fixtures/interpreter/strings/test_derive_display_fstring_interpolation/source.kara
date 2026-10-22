@@ -1,0 +1,6 @@
+#[derive(Display)]
+enum Color { Red, Green, Blue }
+fn main() {
+let c = Color.Green;
+println(f"color={c.to_string()}");
+}

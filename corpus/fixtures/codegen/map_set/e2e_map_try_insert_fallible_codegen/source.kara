@@ -1,0 +1,18 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+match m.try_insert(1_i64, 10_i64) {
+Ok(o) => match o { None => println("fresh"), Some(v) => println(v) },
+Err(_) => println("oom"),
+}
+match m.try_insert(1_i64, 20_i64) {
+Ok(o) => match o { None => println("fresh"), Some(v) => println(v) },
+Err(_) => println("oom"),
+}
+let mut i = 0_i64;
+while i < 100_i64 { let _ = m.try_insert(i, i * 2_i64); i = i + 1_i64; }
+println(m.len());
+match m.try_insert(50_i64, 999_i64) {
+Ok(o) => match o { None => println("fresh"), Some(v) => println(v) },
+Err(_) => println("oom"),
+}
+}

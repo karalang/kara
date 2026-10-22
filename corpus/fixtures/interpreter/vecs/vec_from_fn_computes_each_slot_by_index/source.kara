@@ -1,0 +1,4 @@
+fn main() {
+let evens = Vec.from_fn(5, |i| i * 2);
+println(f"{evens[0]} {evens[1]} {evens[2]} {evens[3]} {evens[4]} len={evens.len()}");
+}

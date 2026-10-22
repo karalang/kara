@@ -1,0 +1,8 @@
+fn take(a: Array[String, 2]) { println(f"t:{a[0]}") }
+fn plainE(x: Result[i64, Array[String, 2]]) {
+    match x { Ok(v) => { println(f"v:{v}") } Err(t) => { take(t) } }
+}
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    plainE(Err(a));
+}

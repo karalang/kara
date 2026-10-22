@@ -1,0 +1,5 @@
+fn main() {
+let s = 5i64;
+let s = "world";
+println(s);
+}

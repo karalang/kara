@@ -1,0 +1,34 @@
+#[derive(Clone)]
+struct CStr { bytes: Vec[i64], source_len: i64 }
+fn sum_bytes(c: ref CStr) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < c.bytes.len() {
+        t = t + c.bytes[i];
+        i = i + 1;
+    }
+    return t;
+}
+fn mk(a: i64, b: i64) -> CStr {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(a);
+    v.push(b);
+    v.push(a + b);
+    return CStr { bytes: v, source_len: 3 };
+}
+fn main() {
+    let c = mk(10, 20);
+    println(sum_bytes(c).to_string());
+    println(c.source_len.to_string());
+    let d = c;
+    println(sum_bytes(d).to_string());
+    let mut cs: Vec[CStr] = Vec.new();
+    cs.push(mk(1, 2));
+    cs.push(mk(5, 6));
+    let mut i = 0;
+    while i < cs.len() {
+        let e = cs[i].clone();
+        println(sum_bytes(e).to_string());
+        i = i + 1;
+    }
+}

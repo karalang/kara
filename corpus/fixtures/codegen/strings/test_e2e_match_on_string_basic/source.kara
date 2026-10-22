@@ -1,0 +1,12 @@
+fn classify(s: String) -> i64 {
+match s {
+"alpha" => 1,
+"beta" => 2,
+_ => 0,
+}
+}
+fn main() {
+println(classify("alpha"));
+println(classify("beta"));
+println(classify("other"));
+}

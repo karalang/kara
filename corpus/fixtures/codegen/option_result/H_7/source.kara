@@ -1,0 +1,2 @@
+fn main() { let r: Result[H, i64] = Ok(H.A(R { id: 7 }));
+             println("mid"); }

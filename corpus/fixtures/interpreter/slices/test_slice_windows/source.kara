@@ -1,0 +1,6 @@
+fn main() {
+         let v = [1, 2, 3, 4];
+         let s = v.as_slice();
+         let ws = s.windows(3);
+         println(ws.len());
+     }

@@ -1,0 +1,2 @@
+fn keep() -> i64 { 7 }
+fn main() { println(keep()); }

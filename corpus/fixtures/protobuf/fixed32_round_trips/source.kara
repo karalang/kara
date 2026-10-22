@@ -1,0 +1,7 @@
+
+fn main() {
+    let enc = ProtoBuf.encode_fixed32(3735928559u32);
+    println(enc.len());
+    let mut r = ProtoReader.new(enc);
+    println(r.read_fixed32());
+}

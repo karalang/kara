@@ -1,0 +1,1 @@
+fn main() { par { }; println("ok"); }

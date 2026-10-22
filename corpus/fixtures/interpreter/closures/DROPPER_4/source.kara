@@ -1,0 +1,6 @@
+fn main() {
+    let g = R { id: 41 };
+    let f = |r: ref R| { r.id };
+    println(f"{f(g)}");
+    println("end");
+}

@@ -1,0 +1,17 @@
+source = "tests/memory_sanitizer/moves.rs::asan_discarded_tuple_temp_frees_its_interior"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0200"
+classified_with = "79705a229"
+extracted_src = "96091d5d"
+model_rev = "583cfb0d"
+model_src = "96091d5d"

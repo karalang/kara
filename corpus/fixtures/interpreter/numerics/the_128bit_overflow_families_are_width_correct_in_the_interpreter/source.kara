@@ -1,0 +1,13 @@
+fn main() {
+let neg: i128 = -1267650600228229401496703205376i128;
+println(neg.saturating_mul(1000000000000i128));
+let mx: i128 = 170141183460469231731687303715884105727i128;
+println(mx.saturating_add(1i128));
+match mx.checked_add(1i128) { Some(v) => println(v), None => println("ovf") }
+let u: u128 = 1267650600228229401496703205376u128;
+match u.checked_mul(2u128) { Some(v) => println(v), None => println("ovf") }
+println(u.saturating_sub(1u128));
+println(u.wrapping_mul(3u128));
+let t = u.overflowing_add(1u128);
+println(t.0);
+}

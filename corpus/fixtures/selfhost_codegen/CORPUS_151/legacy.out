@@ -1,0 +1,34 @@
+kw fn
+1+2
+ident add
+4+3
+sym
+7+1
+ident a
+8+1
+sym
+9+1
+ident i64
+11+3
+sym
+14+1
+ident b
+16+1
+sym
+17+1
+sym
+19+1
+kw return
+21+6
+ident a
+28+1
+sym
+30+1
+ident b
+32+1
+sym
+34+1
+int 42 '42'
+36+2
+sym
+39+1

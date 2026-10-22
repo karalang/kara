@@ -1,0 +1,22 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) { println(s); }
+let mut t: i64 = 0;
+for y in v.iter().scan(1, |acc, x| Some((acc * 2, acc * x))) { t = t + y; }
+println(t);
+let mut u: i64 = 0;
+for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) {
+if s > 5 { break; }
+u = u + s;
+}
+println(u);
+let mut w: i64 = 0;
+for s in v.iter().scan(0, |acc, x| Some((acc + x, acc + x))) {
+if s % 2 == 1 { continue; }
+w = w + s;
+}
+println(w);
+let mut z: i64 = 0;
+for s in v.iter().filter(|q| q % 2 == 0).scan(0, |acc, x| Some((acc + x, acc + x))) { z = z + s; }
+println(z);
+}

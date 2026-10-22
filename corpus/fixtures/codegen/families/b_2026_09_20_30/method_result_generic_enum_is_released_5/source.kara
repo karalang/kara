@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 6 }; let r = mk.res(); match r { Ok(s) => println(f"ok{s.n}"), Err(e) => println("e") }; println("x")
+}

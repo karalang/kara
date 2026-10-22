@@ -1,0 +1,19 @@
+#[derive(Eq, Ord)]
+struct Rect { width: i64, height: i64 }
+#[derive(Eq, Ord)]
+struct Named { name: String, age: i64 }
+fn main() {
+    let mut v: Vec[Rect] = Vec.new();
+    v.push(Rect { width: 2, height: 1 });
+    v.push(Rect { width: 1, height: 9 });
+    v.sort();
+    let mut i = 0;
+    while i < v.len() { let r = ref v[i]; println(f"{r.width},{r.height}"); i = i + 1; };
+    let mut n: Vec[Named] = Vec.new();
+    n.push(Named { name: "bob-long-payload-string-here", age: 30 });
+    n.push(Named { name: "amy-long-payload-string-here", age: 99 });
+    n.push(Named { name: "amy-long-payload-string-here", age: 20 });
+    n.sort();
+    let mut j = 0;
+    while j < n.len() { let p = ref n[j]; println(f"{p.age}"); j = j + 1; };
+}

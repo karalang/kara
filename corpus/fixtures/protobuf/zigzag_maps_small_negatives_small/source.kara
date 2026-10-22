@@ -1,0 +1,8 @@
+
+fn main() {
+    println(ProtoBuf.zigzag_encode(0));
+    println(ProtoBuf.zigzag_encode(-1));
+    println(ProtoBuf.zigzag_encode(1));
+    println(ProtoBuf.zigzag_encode(-2));
+    println(ProtoBuf.zigzag_encode(2147483647));
+}

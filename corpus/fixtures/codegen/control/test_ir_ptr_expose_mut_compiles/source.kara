@@ -1,0 +1,1 @@
+fn caller(p: *mut i64) -> usize { ptr.expose_mut(p) } fn main() {}

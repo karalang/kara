@@ -1,0 +1,3 @@
+struct Sk2 { n: i64 }
+impl Sk2 { fn pick(r: R) -> R { return r } }
+fn main() { let x = Sk2.pick(R { id: 1 }); println(f"{x.id}") }

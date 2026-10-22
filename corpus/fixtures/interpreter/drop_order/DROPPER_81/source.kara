@@ -1,0 +1,2 @@
+fn takef(r: R) -> R { return r; }
+fn main() { let a = R { id: 41 }; let x = takef(a); println(f"{x.id}") }

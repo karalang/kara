@@ -1,0 +1,2 @@
+fn boom() -> i64 { panic("same text") }
+fn main() { let x = boom(); }

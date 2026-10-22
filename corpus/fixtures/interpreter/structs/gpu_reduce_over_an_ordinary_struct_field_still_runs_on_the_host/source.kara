@@ -1,0 +1,5 @@
+struct Rec { values: Vec[f32] }
+fn main() {
+let r = Rec { values: [1.0, 2.0, 3.5] };
+println(f"{gpu.sum(r.values)}");
+}

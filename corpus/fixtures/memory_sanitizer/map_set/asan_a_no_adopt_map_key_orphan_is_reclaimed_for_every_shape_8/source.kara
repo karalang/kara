@@ -1,0 +1,11 @@
+#[derive(Hash, Eq, Ord)]
+struct K6e { a: i64, s: String }
+fn main() {
+    let mut ks: Vec[K6e] = Vec.new();
+    ks.push(K6e { a: 1, s: f"ssssssssssss1" });
+    ks.push(K6e { a: 1, s: f"ssssssssssss1" });
+    let mut m: Map[K6e, i64] = Map.new();
+    let mut i: i64 = 0;
+    for k in ks.into_iter() { m.insert(k, i); i = i + 1; }
+    println(f"s:{m.len()}");
+}

@@ -1,0 +1,7 @@
+let mut STATE: i64 = 0;
+fn read() -> i64 { STATE }
+fn main() {
+println(read());
+STATE = 100;
+println(read());
+}

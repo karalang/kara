@@ -1,0 +1,2 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(1i64)); v.push(make(2i64)); v.push(make(3i64)); let mut i = 0i64; while i < 3i64 { v[i] = make(i * 100i64); i = i + 1i64; } println(f"{(v[0i64])(0i64) + (v[1i64])(0i64) + (v[2i64])(0i64)}"); }

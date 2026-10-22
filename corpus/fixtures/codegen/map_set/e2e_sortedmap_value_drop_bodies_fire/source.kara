@@ -1,0 +1,15 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn main() {
+    let mut sm: SortedMap[i64, Res] = SortedMap.new();
+    sm.insert(2, Res { id: 72 });
+    sm.insert(1, Res { id: 71 });
+    println("a");
+    let _ = sm.insert(1, Res { id: 73 });
+    println("b");
+    println("end");
+}

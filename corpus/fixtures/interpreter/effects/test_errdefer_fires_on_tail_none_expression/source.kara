@@ -1,0 +1,6 @@
+fn body() -> Option[i64] {
+defer { print("d"); }
+errdefer { print("e"); }
+None
+}
+fn main() { let _ = body(); }

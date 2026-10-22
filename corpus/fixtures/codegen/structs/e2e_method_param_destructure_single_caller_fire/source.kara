@@ -1,0 +1,26 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+struct Holder { r: Res }
+struct W { v: i64 }
+impl W {
+    fn tup(ref self, p: (Res, i64)) {
+        let (r, n) = p;
+        println(f"tup {r.id} {n} {self.v}");
+    }
+    fn strc(ref self, h: Holder) {
+        let Holder { r } = h;
+        println(f"strc {r.id} {self.v}");
+    }
+}
+fn main() {
+    let w = W { v: 100 };
+    println("a");
+    w.tup((Res { id: 5, name: f"y{5}" }, 1));
+    println("b");
+    w.strc(Holder { r: Res { id: 7, name: f"y{7}" } });
+    println("end");
+}

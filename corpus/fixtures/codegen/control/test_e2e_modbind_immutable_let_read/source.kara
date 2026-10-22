@@ -1,0 +1,2 @@
+let MAX: i64 = 100;
+fn main() { println(MAX); }

@@ -1,0 +1,7 @@
+fn main() {
+let mut out: Vec[String] = Vec.new();
+let mut k = 0i64; while k < 4i64 { out.push("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); k = k + 1i64; }
+let s: String = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+out[1i64] = s;
+println(out[1i64]);
+}

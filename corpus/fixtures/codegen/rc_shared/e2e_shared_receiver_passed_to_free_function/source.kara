@@ -1,0 +1,17 @@
+shared struct Inner { v: i64 }
+             fn byref(i: ref Inner) -> i64 { i.v * 2 }
+             fn byval(i: Inner) -> i64 { i.v * 3 }
+             fn frz(i: frozen Inner) -> i64 { i.v * 5 }
+             impl Inner {
+                 fn a(ref self) -> i64 { byref(self) }
+                 fn b(self) -> i64 { byval(self) }
+                 fn c(ref self) -> i64 { frz(self) }
+                 fn d(frozen self) -> i64 { frz(self) }
+                 fn me(ref self) -> Inner { self }
+             }
+             fn main() {
+                 let n = env.args().len() as i64;
+                 let x = Inner { v: n };
+                 println(x.a() + x.b() + x.c() + x.d());
+                 println(x.me().v);
+             }

@@ -1,0 +1,6 @@
+struct E { s: String, id: i64 }
+fn main() {
+    let mut a: Array[E, 2] = [E { s: f"aaaaaaaaaaaa1", id: 1 }, E { s: f"bbbbbbbbbbbb2", id: 2 }];
+    a[0] = E { s: f"MUTATEDMUTATED3", id: 3 };
+    println(f"a0:{a[0].id}");
+}

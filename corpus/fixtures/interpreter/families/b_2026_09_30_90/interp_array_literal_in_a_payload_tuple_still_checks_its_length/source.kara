@@ -1,0 +1,1 @@
+fn main() { let a: Option[(Array[i64, 3], i64)] = Some(([4, 5], 7)); }

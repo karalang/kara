@@ -1,0 +1,5 @@
+struct S3 { n: i64 }
+fn plainV(x: Option[Vec[S3]]) {
+    match x { Some(t) => { println(f"s:{t.len()}") } None => { println("n") } }
+}
+fn main() { plainV(Some([S3 { n: 1 }, S3 { n: 2 }])); }

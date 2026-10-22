@@ -1,0 +1,7 @@
+fn main() {
+let mut s0: Set[String] = Set.new();
+s0.insert(f"sv");
+let a: Option[Set[String]] = Some(s0);
+match a { Some(p) => { println(p.len()); } None => {} }
+match a { Some(q) => println(q.len()), None => println("none") }
+}

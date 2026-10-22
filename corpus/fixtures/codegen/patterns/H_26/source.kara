@@ -1,0 +1,3 @@
+fn main() { let o: Option[G] = Some(G.A(f"z{9}"));
+             match o { Some(g) => { let q = g; println("bound") }
+                       None => { println("none") } } }

@@ -1,0 +1,7 @@
+struct D { s: String }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn other() -> String { f"other-{seed()}-bbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+fn slen(s: String) -> i64 { if s.contains("payload") { s.len() } else { 0 } }
+fn pass(s: String) -> String { s }
+fn main() { println(go()); }

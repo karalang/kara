@@ -1,0 +1,18 @@
+trait Wrap[T] {
+    fn first(ref self) -> T;
+}
+struct Box2 { n: i64 }
+impl Wrap[i64] for Box2 {
+    fn first(ref self) -> i64 { return self.n; }
+}
+impl Box2 {
+    fn last(ref self) -> i64 { return self.n * 10; }
+    fn get_unchecked(ref self) -> i64 { return self.n + 1; }
+}
+fn main() {
+    let b = Box2 { n: 7 };
+    println(b.first());
+    println(b.first() + 1);
+    println(b.last());
+    println(b.get_unchecked());
+}

@@ -1,0 +1,8 @@
+fn main() {
+let a: Option[i64] = Some(9);
+match a { Some(p) => { println(p); } None => {} }
+match a { Some(q) => println(q), None => println("none") }
+let b: Option[u8] = Some(9u8);
+match b { Some(p) => { println(p); } None => {} }
+match b { Some(q) => println(q), None => println("none") }
+}

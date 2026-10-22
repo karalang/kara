@@ -1,0 +1,10 @@
+fn bump(c: ref Counter) {
+    c.count = 1;
+    c.total += 1;
+}
+
+fn snapshot(c: ref Counter) -> i64 {
+    c.count
+}
+
+fn main() {}

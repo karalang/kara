@@ -1,0 +1,25 @@
+fn shadowed() -> i64 {
+    let take = |x: i64| {
+        let mut v: Vec[i64] = Vec.new();
+        v.push(x);
+        v.len()
+    };
+    take(9)
+}
+fn heap_shadowed() -> i64 {
+    let take = |x: String| {
+        let mut v: Vec[String] = Vec.new();
+        v.push(x);
+        v.len()
+    };
+    take(String.from("a"))
+}
+fn unshadowed() -> i64 {
+    let mut z = 7;
+    take(mut z)
+}
+fn main() {
+    println(shadowed());
+    println(heap_shadowed());
+    println(unshadowed());
+}

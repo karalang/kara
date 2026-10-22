@@ -1,0 +1,5 @@
+fn main() {
+let s = f"outer";
+{ let s = f"inner"; println(s); }
+println(s);
+}

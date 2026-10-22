@@ -1,0 +1,14 @@
+fn mk_mat(r: i64, c: i64) -> Tensor[i64, [?, ?]] {
+let t: Tensor[i64, [?, ?]] = Tensor.full([r, c], 2);
+t
+}
+fn mk_row(n: i64) -> Tensor[i64, [1, ?]] {
+let t: Tensor[i64, [1, ?]] = Tensor.full([1, n], 5);
+t
+}
+fn main() {
+let m: Tensor[i64, [?, ?]] = mk_mat(2, 3);
+let row: Tensor[i64, [1, ?]] = mk_row(3);
+let r = m.broadcast_add(row);
+println(r[0, 0]); println(r[1, 2]);
+}

@@ -1,0 +1,27 @@
+m1: plain reassign
+loud drop
+drop 1 l1
+loud drop
+drop 2 l2
+m1 end
+m2: reassign after whole-value move
+loud drop
+drop 3 l3
+m2 end
+m3: reassign after payload move-out
+took 5
+drop 5 l5
+loud drop
+drop 6 l6
+m3 end
+m4: self-mention
+loud drop
+drop 7 l7
+m4 end
+m5: quiet-to-full and full-to-quiet
+loud drop
+drop 8 l8
+loud drop
+loud drop
+drop 9 l9
+end

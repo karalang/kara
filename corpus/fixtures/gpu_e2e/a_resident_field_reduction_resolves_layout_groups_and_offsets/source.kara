@@ -1,0 +1,28 @@
+struct Body { x: f32, y: f32, vx: f32, vy: f32 }
+layout bodies: Vec[Body] {
+    group pos { x, y }
+    group vel { vx, vy }
+}
+fn main() {
+    let mut bodies: Vec[Body] = Vec.new();
+    bodies.push(Body { x: 1.0, y: 2.0, vx: 3.0, vy: 4.0 });
+    bodies.push(Body { x: 10.0, y: 20.0, vx: 30.0, vy: 40.0 });
+    bodies.push(Body { x: 100.0, y: 200.0, vx: 300.0, vy: 400.0 });
+    let buf = gpu.upload(bodies);
+    println(f"{gpu.sum(buf.x)}");
+    println(f"{gpu.sum(buf.y)}");
+    println(f"{gpu.sum(buf.vx)}");
+    println(f"{gpu.sum(buf.vy)}");
+    match gpu.max(buf.vy) {
+        Some(m) => println(f"{m}"),
+        None => println("none"),
+    }
+    match gpu.min(buf.x) {
+        Some(m) => println(f"{m}"),
+        None => println("none"),
+    }
+    match gpu.mean(buf.y) {
+        Some(m) => println(f"{m}"),
+        None => println("none"),
+    }
+}

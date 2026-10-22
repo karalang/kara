@@ -1,0 +1,8 @@
+fn main() {
+let mut counter = 0;
+let bump = || { counter = counter + 1; };
+bump();
+bump();
+bump();
+println(counter);
+}

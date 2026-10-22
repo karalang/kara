@@ -1,0 +1,7 @@
+fn main() {
+let lig = "\u{FB01}";
+println(lig.normalize(NormalizationForm.Nfc));
+println(lig.normalize(NormalizationForm.Nfd));
+println(lig.normalize(NormalizationForm.Nfkc));
+println(lig.normalize(NormalizationForm.Nfkd));
+}

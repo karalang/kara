@@ -1,0 +1,6 @@
+fn main() {
+         let v = [1, 2, 3, 4, 5];
+         let s = v.as_slice();
+         match s.binary_search(3) { Some(i) => println(i), None => println("not found") }
+         match s.binary_search(9) { Some(i) => println(i), None => println("not found") }
+     }

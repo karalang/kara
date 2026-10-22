@@ -1,0 +1,4 @@
+enum Color { Red, Blue(i64) }
+fn main() {
+match Color.Blue(7) { Red => println(0), Blue(n) => println(n) }
+}

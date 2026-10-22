@@ -1,0 +1,11 @@
+fn main() {
+    let (tx, rx) = Channel.bounded(2);
+    tx.send(1); tx.send(2);
+    println(rx.recv());
+    tx.send(3);
+    println(rx.recv());
+    println(rx.recv());
+    let (qx, qr) = Channel[i64].bounded(3);
+    qx.send(7);
+    println(qr.recv());
+}

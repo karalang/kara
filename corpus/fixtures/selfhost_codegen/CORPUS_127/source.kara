@@ -1,0 +1,4 @@
+enum Tok { Plus, Num(i64), Ident(String) }
+fn classify(w: String) -> Tok { if w == "+" { return Tok.Plus; } if w == "42" { return Tok.Num(42); } return Tok.Ident(w); }
+fn name_of(t: ref Tok) -> String { match t { Ident(name) => { return "<".to_string() + name + ">"; } Num(n) => { return "#".to_string() + n.to_string(); } Plus => {} } return "+".to_string(); }
+fn main() { let mut t = classify("foo".to_string()); println(name_of(t)); let u = t; println(name_of(u)); t = classify("42".to_string()); println(name_of(t)); t = classify("+".to_string()); println(name_of(t)); let mut i = 0; while i < 3 { let w = classify("loop".to_string()); println(name_of(w)); i = i + 1; } }

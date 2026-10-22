@@ -1,0 +1,7 @@
+fn main() {
+let (_sender, receiver) = Channel.new();
+match receiver.try_recv() {
+Some(v) => println(f"{v}"),
+None    => println("empty"),
+}
+}

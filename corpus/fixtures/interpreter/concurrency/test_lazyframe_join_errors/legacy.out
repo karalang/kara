@@ -1,0 +1,6 @@
+built-ok
+== logical plan ==
+JOIN on=[a] right=(SCAN [b])
+  SCAN [a]
+== optimized ==
+INVALID PLAN: LazyFrame.join: no column named 'a' on the RIGHT side

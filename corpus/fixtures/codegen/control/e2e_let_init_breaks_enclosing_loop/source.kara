@@ -1,0 +1,11 @@
+fn t() -> i64 {
+let mut acc = 0;
+for i in 0..5 {
+if i == 3 {
+let x = { break; };
+}
+acc = acc + i;
+}
+acc
+}
+fn main() { println(f"{t()}"); }

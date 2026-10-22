@@ -1,0 +1,13 @@
+fn forbids(bad: String) -> Fn(ref String) -> bool { |s| not s.contains(bad) }
+fn has_ref(v: Vec[String], s: ref String) -> bool { return v.contains(s); }
+fn main() {
+let f = forbids("xy");
+let a = "abxyc";
+let b = "hello";
+println(f"{f(a)} {f(b)} {f(a)}");
+let mut v: Vec[String] = Vec.new();
+v.push("one");
+let n = "one";
+let r = has_ref(v, n);
+println(f"{r} {n.len()}");
+}

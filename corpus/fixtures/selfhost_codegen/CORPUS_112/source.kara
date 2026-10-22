@@ -1,0 +1,2 @@
+fn bump(n: mut ref i64) { n = n + 7; }
+fn main() { let mut c = 10; bump(mut c); bump(mut c); println(c.to_string()) }

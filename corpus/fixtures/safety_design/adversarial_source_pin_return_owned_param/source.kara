@@ -1,0 +1,6 @@
+fn bad(s: String) -> ref String { s }
+fn main() {
+let s = String.from("hi");
+let r = bad(s);
+println(r.len());
+}

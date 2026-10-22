@@ -1,0 +1,79 @@
+#[derive(Clone)]
+struct Token { kind: i64, text: String, offset: i64, length: i64 }
+fn is_word(b: u8) -> bool {
+    if b >= 97 and b <= 122 {
+        return true;
+    }
+    if b >= 65 and b <= 90 {
+        return true;
+    }
+    return b == 95;
+}
+fn is_digit(b: u8) -> bool {
+    return b >= 48 and b <= 57;
+}
+fn is_kw(w: ref String) -> bool {
+    if w == "let" {
+        return true;
+    }
+    if w == "fn" {
+        return true;
+    }
+    return w == "if";
+}
+fn lex(src: String) -> Vec[Token] {
+    let mut toks: Vec[Token] = Vec.new();
+    let mut start = 0 - 1;
+    let mut kind = 0;
+    let mut i = 0;
+    for b in src.bytes() {
+        if start >= 0 {
+            let mut cont = false;
+            if kind == 1 and (is_word(b) or is_digit(b)) {
+                cont = true;
+            }
+            if kind == 2 and is_digit(b) {
+                cont = true;
+            }
+            if not cont {
+                let w = src.substring(start, i);
+                let mut k = kind;
+                if kind == 1 and is_kw(w) {
+                    k = 4;
+                }
+                toks.push(Token { kind: k, text: w, offset: start, length: i - start });
+                start = 0 - 1;
+            }
+        }
+        if start < 0 {
+            if is_word(b) {
+                start = i;
+                kind = 1;
+            } else if is_digit(b) {
+                start = i;
+                kind = 2;
+            } else if b != 32 {
+                toks.push(Token { kind: 3, text: src.substring(i, i + 1), offset: i, length: 1 });
+            }
+        }
+        i = i + 1;
+    }
+    if start >= 0 {
+        let w = src.substring(start, src.len());
+        let mut k = kind;
+        if kind == 1 and is_kw(w) {
+            k = 4;
+        }
+        toks.push(Token { kind: k, text: w, offset: start, length: src.len() - start });
+    }
+    return toks;
+}
+fn main() {
+    let toks = lex("let x1 = 42 + foo * 7".to_string());
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i].clone();
+        println(t.kind.to_string() + "@" + t.offset.to_string() + "+" + t.length.to_string() + ":" + t.text);
+        i = i + 1;
+    }
+}

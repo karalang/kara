@@ -1,0 +1,7 @@
+fn main() {
+println(f"{(0.0 - 1.0).to_bits()}");
+println(f"{(0.0 - 2.5).to_bits()}");
+println(f"{(1.0).to_bits()}");
+println(f"{(0.0 - 1.0).to_bits32()}");
+println((0.0 - 1.0).to_bits());
+}

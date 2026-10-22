@@ -1,0 +1,17 @@
+source = "tests/interpreter/iter_range.rs::collect_all_vec_gathers_all_results_without_fail_fast"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "b-fix-incomplete:E0520"
+classified_with = "79705a229"
+extracted_src = "cdd769bb"
+model_rev = "583cfb0d"
+model_src = "cdd769bb"

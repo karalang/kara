@@ -1,0 +1,6 @@
+fn main() {
+let xs = [3.0_f64, 1.0_f64, 2.0_f64];
+let s: Vec[f64] = Stats.sort(xs);
+println(s[0]);
+println(s[2]);
+}

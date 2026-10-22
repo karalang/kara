@@ -1,0 +1,10 @@
+let REPS: Array[i64, 4] = [7; 4];
+fn main() {
+let mut s: i64 = 0;
+let mut i: i64 = 0;
+while i < 4 {
+s = s + REPS[i];
+i = i + 1;
+}
+println(s);
+}

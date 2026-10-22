@@ -1,0 +1,12 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+m.insert(10_i64, "ten");
+m.insert(20_i64, "twenty");
+m.insert(30_i64, "thirty");
+match m.floor(15_i64)   { Some(p) => println(f"{p.0}"), None => println("none") }
+match m.ceiling(15_i64) { Some(p) => println(f"{p.0}"), None => println("none") }
+match m.floor(20_i64)   { Some(p) => println(f"{p.0}"), None => println("none") }
+match m.ceiling(20_i64) { Some(p) => println(f"{p.0}"), None => println("none") }
+match m.floor(5_i64)    { Some(p) => println(f"{p.0}"), None => println("none") }
+match m.ceiling(35_i64) { Some(p) => println(f"{p.0}"), None => println("none") }
+}

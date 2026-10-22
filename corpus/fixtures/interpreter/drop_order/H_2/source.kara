@@ -1,0 +1,4 @@
+struct Box2[T] { v: T }
+fn src[T](x: T) -> (Box2[T], i64) { return (Box2[T] { v: x }, 1); }
+fn outerg[U](y: U) -> (Box2[U], i64) { return src(y); }
+fn main() { let (b, n) = outerg(R { id: 51 }); println(f"{n}") }

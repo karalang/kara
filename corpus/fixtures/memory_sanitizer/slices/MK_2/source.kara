@@ -1,0 +1,9 @@
+fn main() {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"deep-payload-deep");
+    let mut mid: Vec[Vec[String]] = Vec.new();
+    mid.push(inner);
+    let mut a: Array[Vec[Vec[String]], 2] = [mid, Vec.new()];
+    a[0] = Vec.new();
+    println(f"a0:{a[0].len()}");
+}

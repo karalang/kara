@@ -1,0 +1,1 @@
+fn main() { let bytes: Vec[u8] = Vec.new(); let d: Column[i64] = Column.from_arrow_ipc(bytes); println(d.len()); }

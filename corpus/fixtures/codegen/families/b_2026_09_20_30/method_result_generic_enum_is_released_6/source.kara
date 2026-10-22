@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 8 }; let b = mk.pass(freemk(9)); println("x")
+}

@@ -1,0 +1,27 @@
+enum Msg { Ping(i64), Named(String), Pair(i64, i64), Nothing }
+struct P { n: i64, m: i64 }
+enum Holder { H(P) }
+fn m1(v: Msg) -> String {
+match v {
+Msg.Ping(0) => "ping0",
+Msg.Ping(n) => "pingN",
+Msg.Named("hi") => "hi",
+Msg.Named(s) => "namedN",
+Msg.Pair(1, 2) => "p12",
+Msg.Pair(1, y) => "p1y",
+Msg.Pair(x, y) => "pXY",
+Msg.Nothing => "none",
+}
+}
+fn m2(v: Holder) -> String {
+match v { Holder.H(P { n: 1, m: _ }) => "n1", Holder.H(p) => "nX" }
+}
+fn at(v: Option[i64]) -> String { match v { Some(x @ 5) => "at5", _ => "o" } }
+fn main() {
+println(m1(Msg.Ping(0))); println(m1(Msg.Ping(9)));
+println(m1(Msg.Named("hi"))); println(m1(Msg.Named("yo")));
+println(m1(Msg.Pair(1,2))); println(m1(Msg.Pair(1,3))); println(m1(Msg.Pair(4,5)));
+println(m1(Msg.Nothing));
+println(m2(Holder.H(P { n: 1, m: 2 }))); println(m2(Holder.H(P { n: 7, m: 2 })));
+println(at(Some(5i64))); println(at(Some(6i64)));
+}

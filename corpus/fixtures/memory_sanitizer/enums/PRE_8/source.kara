@@ -1,0 +1,5 @@
+struct W { a: i64, b: i64, c: i64, d: i64, e: i64, g: i64 }
+fn seed() -> i64 { env.args().len() }
+fn show(x: Option[W]) {
+   match x { Option.Some(w) => { println(f"a:{w.a}"); } _ => { println("other"); } } }
+fn main() { let mut i = 0; while i < 2 { show(Option.Some(W { a: seed(), b: 2, c: 3, d: 4, e: 5, g: 6 })); i = i + 1; } }

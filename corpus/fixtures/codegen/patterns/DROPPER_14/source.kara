@@ -1,0 +1,2 @@
+fn mk() -> (R, i64) { (R { id: 41 }, 1) }
+fn main() { let (_, n) = mk(); println(f"{n}") }

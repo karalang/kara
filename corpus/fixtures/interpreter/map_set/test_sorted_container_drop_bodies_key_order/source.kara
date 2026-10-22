@@ -1,0 +1,25 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+#[derive(Hash, Eq, Ord)]
+struct Tag { id: i64 }
+impl Drop for Tag {
+fn drop(mut ref self) {
+println(f"tag {self.id}")
+}
+}
+fn main() {
+println("a");
+let mut m: SortedMap[i64, Res] = SortedMap.new();
+let _ = m.insert(6, Res { id: 6, name: f"s{6}" });
+let _ = m.insert(5, Res { id: 5, name: f"s{5}" });
+let _ = m.insert(7, Res { id: 7, name: f"s{7}" });
+println("b");
+let mut s: SortedSet[Tag] = SortedSet.new();
+s.insert(Tag { id: 6 });
+s.insert(Tag { id: 5 });
+println("end");
+}

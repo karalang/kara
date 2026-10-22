@@ -1,0 +1,8 @@
+fn main() {
+let a: u8 = 200u8; let b: u8 = 100u8;
+println(f"{a < b} {a.lt(b)} {a > b} {a.gt(b)}");
+let c: bool = false; let d: bool = true;
+println(f"{c < d} {c.lt(d)}");
+let s: String = "abc"; let t: String = "abd";
+println(f"{s < t} {s.lt(t)} {s == t} {s.eq(t)}");
+}

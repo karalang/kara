@@ -1,0 +1,7 @@
+let mut ACC: i64 = 5;
+fn main() {
+ACC += 10;
+ACC -= 3;
+ACC *= 2;
+println(ACC);
+}

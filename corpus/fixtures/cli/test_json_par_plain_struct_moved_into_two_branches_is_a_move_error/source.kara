@@ -1,0 +1,8 @@
+#[derive(Copy)]
+struct State { id: i64, mut count: i64 }
+fn use_a(s: own State) { }
+fn use_b(s: own State) { }
+fn main() {
+let s = State { id: 0, count: 0 };
+par { use_a(s), use_b(s) };
+}

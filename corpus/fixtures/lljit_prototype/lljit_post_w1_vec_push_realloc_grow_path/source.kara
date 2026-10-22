@@ -1,0 +1,1 @@
+fn main() { let v: Vec[i64] = Vec.new(); let mut i: i64 = 0; while i < 64 { v.push(i); i = i + 1; } }

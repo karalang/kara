@@ -1,0 +1,5 @@
+fn t() -> i64 {
+let x = { return 5; };
+7
+}
+fn main() { println(f"{t()}"); }

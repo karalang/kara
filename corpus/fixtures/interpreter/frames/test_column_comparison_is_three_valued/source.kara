@@ -1,0 +1,9 @@
+fn main() {
+let a: Column[i64] = Column.from_iter_nullable([Some(10i64), None, Some(30i64)]);
+let b: Column[i64] = Column.from_iter_nullable([Some(1i64), Some(2i64), None]);
+let cmp = a == b;
+for x in cmp.iter() { match x { Some(v) => { println(v); } None => { println("null"); } } }
+let n: Column[i64] = Column.from_iter_nullable([None, Some(5i64)]);
+let eq = n == n;
+for x in eq.iter() { match x { Some(v) => { println(v); } None => { println("null"); } } }
+}

@@ -1,0 +1,7 @@
+fn main() {
+let s = "e\u{0301}fg";
+let n = s.normalize(NormalizationForm.Nfc);
+println(n.len());
+println(n.to_uppercase());
+println(s.normalize(NormalizationForm.Nfc).to_uppercase().len());
+}

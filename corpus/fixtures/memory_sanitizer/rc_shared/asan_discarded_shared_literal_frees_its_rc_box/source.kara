@@ -1,0 +1,14 @@
+shared struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+fn mks(n: i64) -> S { return S { id: n, name: f"n{n}" }; }
+fn main() {
+let mut i = 0i64;
+while i < 20i64 {
+let _ = S { id: i, name: f"a{i}" };
+S { id: i + 100i64, name: f"b{i}" };
+let _ = if i % 2i64 == 0i64 { S { id: i + 200i64, name: f"c{i}" } } else { S { id: i + 300i64, name: f"d{i}" } };
+let _ = mks(i + 400i64);
+i = i + 1i64;
+}
+println("done");
+}

@@ -1,0 +1,12 @@
+fn main() {
+let words: Vec[String] = ["apple", "banana", "avocado", "cherry", "apricot"];
+let (a, other): (Vec[String], Vec[String]) = words.iter().partition(|w| w.starts_with("a"));
+println(a.len());
+println(a.get(0));
+println(a.get(2));
+println(other.len());
+println(other.get(0));
+// source survives
+println(words.len());
+println(words.get(0));
+}

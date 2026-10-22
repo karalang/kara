@@ -1,0 +1,10 @@
+fn passthru[T](x: Option[T]) -> Option[T] { return x; }
+fn takesOpt[T: Display](x: Option[T]) -> i64 {
+    match x { Some(t) => { println(f"o:{t}"); 1 } None => { println("n"); 0 } }
+}
+fn main() {
+    let e: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let back = passthru(Some(e));
+    let c = takesOpt(back);
+    println(f"c{c}");
+}

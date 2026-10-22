@@ -1,0 +1,15 @@
+fn main() {
+    let n: i64 = 1;
+    let a: f16 = ((n + 3) as f32) as f16;
+    let b: f16 = ((n + 5) as f32) as f16;
+    let c: f16 = ((n + 6) as f32) as f16;
+    let d: f16 = ((n + 19) as f32) as f16;
+    let v: Vector[f16, 4] = Vector[f16, 4](a, b, c, d);
+    println(f"vt {v.tanh()[0]} {v.tanh()[1]} {v.tanh()[2]} {v.tanh()[3]}");
+    println(f"st {a.tanh()} {b.tanh()} {c.tanh()} {d.tanh()}");
+    let e: f16 = ((n + 1) as f32) as f16;
+    let s: Vector[f16, 4] = Vector[f16, 4](e, b, c, d);
+    println(f"sg {s.sigmoid()[0]} {s.sigmoid()[1]}");
+    println(f"ve {v.exp()[0]} {v.ln()[1]} {v.sqrt()[2]}");
+    println(f"se {a.exp()} {b.ln()} {c.sqrt()}");
+}

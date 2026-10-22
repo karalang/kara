@@ -1,0 +1,10 @@
+struct Vec2 { x: i64, y: i64 }
+impl Vec2 {
+fn new(x: i64, y: i64) -> Vec2 { Vec2 { x: x, y: y } }
+fn dot(self, other: Vec2) -> i64 { self.x * other.x + self.y * other.y }
+}
+fn main() {
+let a = Vec2.new(3, 4);
+let b = Vec2.new(1, 2);
+println(a.dot(b));
+}

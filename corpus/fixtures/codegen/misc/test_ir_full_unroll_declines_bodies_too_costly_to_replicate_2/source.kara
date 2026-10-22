@@ -1,0 +1,1 @@
+fn f(x: i64) -> i64 { x * 3i64 } fn main() { let k = 8i64; let mut j = 0i64; let mut s = 0i64; while j < k { s = s + f(j); j = j + 1i64; } println(s); }

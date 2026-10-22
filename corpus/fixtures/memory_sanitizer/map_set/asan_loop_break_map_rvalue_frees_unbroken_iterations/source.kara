@@ -1,0 +1,15 @@
+fn make_map(n: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{n}", n * 7);
+    m
+}
+fn pick() -> Map[String, i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let mut scratch: Map[String, i64] = Map.new();
+        scratch.insert(f"s{i}", i);
+        if i == 3 { break make_map(i) }
+    }
+}
+fn main() { let m = pick(); println(m.get(f"k3").unwrap()); }

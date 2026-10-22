@@ -1,0 +1,6 @@
+struct S { s: String }
+fn main() {
+let a: Option[S] = Some(S { s: f"il" });
+if let Some(S { s: ref s }) = a { println(s); }
+if let Some(S { s }) = a { println(s); } else { println("none"); }
+}

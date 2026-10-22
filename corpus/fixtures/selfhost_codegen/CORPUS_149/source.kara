@@ -1,0 +1,24 @@
+fn area(w: f64, h: f64) -> f64 {
+    return w * h;
+}
+fn main() {
+    let x = 1.5;
+    let y = 2.25;
+    println((x + y).to_string());
+    println((x * y).to_string());
+    println((y - x).to_string());
+    println((y / x).to_string());
+    println((x < y).to_string());
+    println((x == 1.5).to_string());
+    println(area(3.5, 2.0).to_string());
+    let z = 0.1;
+    println((z + 0.2).to_string());
+    let mut acc = 0.0;
+    let mut i = 0;
+    while i < 4 {
+        acc = acc + 0.25;
+        i = i + 1;
+    }
+    println(acc.to_string());
+    println(42.0.to_string());
+}

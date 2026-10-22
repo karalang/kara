@@ -1,0 +1,7 @@
+fn firstof[T, U](x: T, y: U) -> T { return x; }
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let k: i64 = 3;
+    let b: Array[String, 2] = firstof(a, k);
+    println(f"s:{b[0]}");
+}

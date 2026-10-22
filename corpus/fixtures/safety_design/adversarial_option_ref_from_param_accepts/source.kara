@@ -1,0 +1,10 @@
+fn wrap(s: ref String) -> Option[ref String] {
+Option.Some(s)
+}
+fn main() {
+let s = String.from("hi");
+match wrap(s) {
+Some(n) => println(n.len()),
+None => println(0),
+}
+}

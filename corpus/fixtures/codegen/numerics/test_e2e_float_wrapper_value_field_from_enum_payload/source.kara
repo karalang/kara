@@ -1,0 +1,18 @@
+enum Num { I(i64), F(F32) }
+enum Dbl { I(i64), D(F64) }
+fn show(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value } }
+fn show_ref(n: ref Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value } }
+fn show_first(n: Num) -> f64 { match n { F(f) => f.value, I(x) => x as f64 } }
+fn show_arith(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value + 1.0 } }
+fn show_d(n: Dbl) -> f64 { match n { I(x) => x as f64, D(d) => d.value } }
+fn main() {
+let a = Num.F(F32 { value: 2.5 });
+println(show(a));
+println(show(Num.I(7)));
+let b = Num.F(F32 { value: 4.0 });
+println(show_ref(b));
+println(show_first(Num.F(F32 { value: 1.5 })));
+println(show_arith(Num.F(F32 { value: 2.5 })));
+println(show_d(Dbl.D(F64 { value: 3.25 })));
+println(show_d(Dbl.I(9)));
+}

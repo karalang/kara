@@ -1,0 +1,6 @@
+fn main() {
+    let mut v: Vec[f32] = [];
+    for i in 0..4097 { v.push(1.0) }
+    let p = gpu.prefix_sum(v);
+    println(f"{p.len()} {p[0]} {p[63]} {p[64]} {p[4095]} {p[4096]}");
+}

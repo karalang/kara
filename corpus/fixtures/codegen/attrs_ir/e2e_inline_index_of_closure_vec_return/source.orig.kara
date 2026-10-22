@@ -1,0 +1,10 @@
+fn fp(v: Vec[i64]) -> i64 { let g = || v; g()[1] }
+fn fl() -> i64 { let v = [10, 20, 30]; let g = || v; g()[2] }
+fn fs(v: Vec[String]) -> String { let g = || v; g()[0] }
+fn fb(v: Vec[i64]) -> i64 { let g = || { let n = 1; v }; g()[0] }
+fn main() {
+println(fp([4, 5, 6]));
+println(fl());
+println(fs(["a".to_string(), "b".to_string()]));
+println(fb([7, 8]));
+}

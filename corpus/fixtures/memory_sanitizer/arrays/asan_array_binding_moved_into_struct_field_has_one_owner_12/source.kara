@@ -1,0 +1,6 @@
+struct W { a: Array[i64, 2] }
+fn main() {
+    let a: Array[i64, 2] = [11, 22];
+    let w: W = W { a: a };
+    println(f"s:{w.a[0]}");
+}

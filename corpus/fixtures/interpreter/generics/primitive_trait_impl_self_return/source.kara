@@ -1,0 +1,9 @@
+trait Dbl { fn dbl(self) -> Self; }
+        impl Dbl for u8  { fn dbl(self) -> Self { self + self } }
+        impl Dbl for i64 { fn dbl(self) -> Self { self + self } }
+        fn main() {
+            let a: u8 = 100;
+            let b: i64 = 21;
+            println(a.dbl());
+            println(b.dbl());
+        }

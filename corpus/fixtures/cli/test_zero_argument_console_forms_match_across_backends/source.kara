@@ -1,0 +1,8 @@
+fn main() {
+    print("a");
+    print();
+    print("b");
+    println();
+    eprintln();
+    println("end");
+}

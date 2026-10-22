@@ -1,0 +1,8 @@
+enum Opt[T] { Yes(T), No }
+fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn main() {
+    let r: String = get(Opt.No, f"def");
+    println(r);
+    let s: String = get(Opt.Yes(f"data"), f"x");
+    println(s);
+}

@@ -1,0 +1,14 @@
+struct Person { n: String, tags: Vec[i64] }
+impl Person {
+fn name(ref self) -> String { self.n }
+fn take_tags(mut ref self) -> Vec[i64] { self.tags }
+}
+fn main() {
+let mut p = Person { n: "alice".to_string(), tags: [1i64, 2i64, 3i64] };
+let a = p.name();
+println(a);
+println(p.n);
+let t = p.take_tags();
+println(f"{t.len()}");
+println(f"{p.tags.len()}");
+}

@@ -1,0 +1,10 @@
+struct W { a: Array[String, 2] }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+        let w: W = W { a: a };
+        println(f"s:{w.a[0]}");
+        i = i + 1;
+    }
+}

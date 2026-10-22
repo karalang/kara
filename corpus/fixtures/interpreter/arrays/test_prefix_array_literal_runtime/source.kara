@@ -1,0 +1,1 @@
+fn main() { let a = Array[4, 5, 6]; println(a[0]); }

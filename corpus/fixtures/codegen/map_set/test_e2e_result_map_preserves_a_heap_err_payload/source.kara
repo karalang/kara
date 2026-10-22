@@ -1,0 +1,15 @@
+fn main() {
+let a: Result[String, String] = Err(f"boom");
+let ra = a.map(|x| x);
+match ra { Ok(x) => { println(x); } Err(e) => { println(e); } }
+let b: Result[String, String] = Err(f"bang");
+match b.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(e); } }
+let c: Result[String, String] = Err(f"crash");
+match c.map(|x: String| x.to_uppercase()) { Ok(x) => { println(x); } Err(e) => { println(e); } }
+let d: Result[String, Vec[i64]] = Err(vec![7, 8]);
+match d.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(f"{e[1]}"); } }
+let ok: Result[String, String] = Ok(f"fine");
+match ok.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(e); } }
+let sc: Result[String, i64] = Err(7);
+match sc.map(|x| x) { Ok(x) => { println(x); } Err(e) => { println(f"{e}"); } }
+}

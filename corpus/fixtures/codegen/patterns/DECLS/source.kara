@@ -1,0 +1,1 @@
+fn main() { let n = 1; let s = Option.Some(f"a{n}"); match takef(s) { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } } }

@@ -1,0 +1,12 @@
+fn read_var() -> Result[String, IoError] with reads(Env) {
+             let s: String = env.var("__KARAC_FROM_VAR_TO_IO_NO_SUCH_VAR__")?;
+             Ok(s)
+         }
+         fn main() {
+             match read_var() {
+                 Ok(v) => println(v),
+                 Err(IoError.NotFound) => println("not_found"),
+                 Err(IoError.InvalidUtf8) => println("invalid_utf8"),
+                 Err(_) => println("other_io_err"),
+             }
+         }

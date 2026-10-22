@@ -1,0 +1,6 @@
+import std.web.events.{resize, ResizeEvent};
+
+fn main() {
+    let rs = resize();
+    rs.recv();
+}

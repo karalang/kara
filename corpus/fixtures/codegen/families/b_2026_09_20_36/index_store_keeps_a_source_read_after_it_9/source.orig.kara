@@ -1,0 +1,1 @@
+fn main() { let mut a: Vec[Vec[i64]] = [[0]]; let v: Vec[i64] = [4, 5]; a[0] = v; println(f"v:{v.len()}"); println(f"a:{a[0].len()}"); println("end") }

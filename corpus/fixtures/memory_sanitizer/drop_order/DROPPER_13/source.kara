@@ -1,0 +1,4 @@
+fn take(k: bool) -> H { let mut h = H { id: 41, name: f"n{41}" };
+   if k { return h; }
+   h = H { id: 99, name: f"n{99}" }; h }
+fn main() { let x = take(false); println(f"{x.id}"); }

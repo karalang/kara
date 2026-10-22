@@ -1,0 +1,1 @@
+fn main() { let v = Vector[f64, 2](1.0, 2.0); let _ = v.reduce_and(); }

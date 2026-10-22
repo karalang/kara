@@ -1,0 +1,5 @@
+struct Box3 { xs: Vec[R] }
+impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }
+struct G2 { n: i64 }
+impl G2 { fn eat(ref self, q: R) -> i64 { 3 } }
+fn main() { let mut bx = Box3 { xs: Vec.new() }; bx.add(R { id: 11 }); println("added"); let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f"{v}") }

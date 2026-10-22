@@ -1,0 +1,11 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let k1 = f"kaaaaaaa1";
+    let k2 = f"kaaaaaaa1";
+    m.insert(k1, 11);
+    m.insert(k2, 22);
+    match m.get(f"kaaaaaaa1") {
+        Some(v) => { println(f"s:{v}"); }
+        None => { println("s:missing"); }
+    }
+}

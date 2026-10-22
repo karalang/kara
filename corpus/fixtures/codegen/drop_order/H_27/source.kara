@@ -1,0 +1,1 @@
+fn main() { let W { r, n } = mk(); println(f"{n}") }

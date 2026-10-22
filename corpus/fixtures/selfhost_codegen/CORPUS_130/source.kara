@@ -1,0 +1,3 @@
+fn words() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("alpha".to_string()); v.push("beta".to_string()); return v; }
+fn join(v: ref Vec[String]) -> String { let mut s = "".to_string(); let mut i = 0; while i < v.len() { s = s + v[i] + "|"; i = i + 1; } return s; }
+fn main() { let ws = words(); println(ws[0]); println(join(ws)); println(ws[1]) }

@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[(N, i64)]] = [[(N { k: 1 }, 0)]]; d[0][0] = (N { k: 2 }, 0); println("end") }

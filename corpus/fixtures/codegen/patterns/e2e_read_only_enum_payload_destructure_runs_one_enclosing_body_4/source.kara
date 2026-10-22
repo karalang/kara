@@ -1,0 +1,7 @@
+struct R2 { s: String, id: i64 }
+enum K { A(R2), B }
+impl Drop for K { fn drop(mut ref self) { println("dK") } }
+fn show(x: Option[K]) -> i64 {
+match x { Option.Some(K.A(r)) => { return r.id; } Option.Some(K.B) => { return 0; } Option.None => { return 0; } }
+}
+fn main() { println(f"n:{show(Option.Some(K.A(R2 { s: f"z", id: 7 })))}"); println("end") }

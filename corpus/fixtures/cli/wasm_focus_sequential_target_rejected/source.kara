@@ -1,0 +1,6 @@
+import std.web.events.{focus};
+
+fn main() {
+    let gained = focus();
+    gained.recv();
+}

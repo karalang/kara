@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[f64] = vec![1.0, 2.0, 3.0];
+println(Stats.percentile(v, 150.0));
+}

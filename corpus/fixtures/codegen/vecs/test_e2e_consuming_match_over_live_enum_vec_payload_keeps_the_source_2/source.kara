@@ -1,0 +1,10 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+enum E { A(R), B }
+fn main() {
+let e: E = E.A(R { id: 7 });
+match e { E.A(v) => { println(f"got {v.id}"); } E.B => {} }
+println(f"end");
+}

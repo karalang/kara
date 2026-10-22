@@ -1,0 +1,7 @@
+fn main() {
+         let mut v = [1, 2, 3];
+         let mut s = v.as_slice_mut();
+         s.fill(0);
+         println(s.is_empty());
+         println(s.len());
+     }

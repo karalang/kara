@@ -1,0 +1,6 @@
+#[thread_local]
+let mut TLS_COUNTER: i64 = 0;
+fn main() {
+TLS_COUNTER = 42;
+println(TLS_COUNTER);
+}

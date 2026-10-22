@@ -1,0 +1,15 @@
+enum ParseError { Unexpected { got: String }, OutOfRange { value: i64 } }
+impl Display for ParseError {
+fn to_string(ref self) -> String {
+match self {
+Unexpected { got } => f"unexpected: {got}",
+OutOfRange { value } => f"out of range: {value}",
+}
+}
+}
+fn main() {
+let e1: ParseError = ParseError.Unexpected { got: "tok" };
+let e2: ParseError = ParseError.OutOfRange { value: 9 };
+println(f"{e1}");
+println(f"{e2}");
+}

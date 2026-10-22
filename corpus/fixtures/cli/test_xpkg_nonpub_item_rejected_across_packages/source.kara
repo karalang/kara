@@ -1,0 +1,2 @@
+import mathx.internal_only;
+fn main() { println(internal_only(1)); }

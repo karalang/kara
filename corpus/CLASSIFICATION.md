@@ -6,9 +6,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9091 / 9297 = 97.8%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7493 / 7664 = 97.8%.
-- Every classified non-deferred program (context): 9834 / 10744 = 91.5%.
+- Every classified non-deferred program (context): 13659 / 15786 = 86.5%.
 - Bench variants (outside the gate): 205 / 835 = 24.6%; timeouts 571.
-- Deferred (class d): 239; outside the slice (`post-m1:*`): 612.
+- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 3624 / 4703 = 77.1%; failing check-refuses 354, e-differs 318, mir-gap 201, e-model-rejects 175, b-fix-incomplete 29, e-both-differ-from-spec 2.
+- Deferred (class d): 683; outside the slice (`post-m1:*`): 951.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
 ## Denominator by bucket (slice)
@@ -67,16 +68,16 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | tag | programs |
 |---|---|
-| post-m1:par | 189 |
-| post-m1:simd | 137 |
-| post-m1:net | 114 |
-| post-m1:escaping | 76 |
+| post-m1:par | 251 |
+| post-m1:escaping | 201 |
+| post-m1:simd | 198 |
+| post-m1:net | 117 |
+| post-m1:provider | 89 |
+| post-m1:contract | 67 |
 | post-m1:process | 41 |
-| post-m1:contract | 39 |
-| post-m1:provider | 37 |
-| post-m1:refinement | 24 |
+| post-m1:refinement | 34 |
 
-## Auto-resolved e-spec (2966): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (2987): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -500,6 +501,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `drop-matrix/vec__stored_in_struct`
 - `drop-matrix/vec__temp_by_value_arg`
 - `drop-matrix/vec__two_locals`
+- `fixtures/cli/a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving`
+- `fixtures/cli/map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces`
+- `fixtures/cli/test_user_drop_on_aggregate_field_run_build_parity`
 - `fixtures/cli/wasm_bf16_aggregate_params_build_and_match_native`
 - `fixtures/cli/wasm_f16_conversion_build_and_run_e2e`
 - `fixtures/cli/wasm_f16_generic_arithmetic_build_and_run_e2e`
@@ -905,6 +909,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/io_runtime/test_e2e_file_seek_positions_and_reads`
 - `fixtures/codegen/io_runtime/test_e2e_file_sync_all_and_sync_data_persist_contents`
 - `fixtures/codegen/io_runtime/test_e2e_fs_read_lines_splits_file_into_vec`
+- `fixtures/codegen/io_runtime/the_two_hashers_order_the_same_keys_differently_in_one_process`
 - `fixtures/codegen/iter_range/e2e_iter_adaptor_collect_stateful_passthrough_codegen`
 - `fixtures/codegen/iter_range/e2e_named_struct_optres_payload_part_drops_at_its_own_live_range_end`
 - `fixtures/codegen/iter_range/test_e2e_trunc_to_in_range_and_to_float`
@@ -920,6 +925,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/misc/e2e_named_local_into_a_storing_method`
 - `fixtures/codegen/misc/e2e_named_local_through_a_forwarding_hop`
 - `fixtures/codegen/misc/e2e_param_wrapped_through_local_hands_back_once`
+- `fixtures/codegen/misc/e2e_track_caller_redirects_stdlib_emitters_4`
+- `fixtures/codegen/misc/e2e_track_caller_redirects_stdlib_emitters_5`
 - `fixtures/codegen/misc/test_e2e_container_bodies_walks_fire_at_the_nll_point`
 - `fixtures/codegen/misc/test_e2e_declined_copy_param_rebind_keeps_the_callers_ownership_2`
 - `fixtures/codegen/misc/test_e2e_implicit_unsigned_widening_matches_interpreter`
@@ -953,6 +960,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/numerics/e2e_compile_time_known_float_math_is_not_folded_at_double_precision`
 - `fixtures/codegen/numerics/e2e_int_bf16_conversions_are_lowered_through_f32`
 - `fixtures/codegen/numerics/e2e_spec_float_holes_render_exactly_and_never_past_the_buffer`
+- `fixtures/codegen/numerics/e2e_with_capacity_count_overflow_panics`
 - `fixtures/codegen/numerics/scalar_bf16_math_methods_emit_no_native_bfloat_intrinsic`
 - `fixtures/codegen/numerics/test_assert_eq_int_fail_formats_operands`
 - `fixtures/codegen/numerics/test_e2e_display_set_i64_singleton`
@@ -1130,6 +1138,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/coro_e2e/SPAWN_MULTI_CAPTURE_SRC`
 - `fixtures/coro_e2e/SPAWN_NONBLOCK_SRC`
 - `fixtures/coro_e2e/SRC`
+- `fixtures/drop_differential/matched_param_payload_is_discharged_by_the_caller`
 - `fixtures/http_server/test_client_get_bytes_end_to_end_binary_body`
 - `fixtures/http_server/test_client_get_end_to_end_against_rust_origin`
 - `fixtures/http_server/test_client_get_header_end_to_end`
@@ -1163,10 +1172,16 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/drop_order/interp_method_array_param_dying_on_some_exits_runs_its_bodies`
 - `fixtures/interpreter/drop_order/interp_param_moved_into_local_through_branch_is_dropped_once`
 - `fixtures/interpreter/drop_order/test_monomorph_body_answers_drop_ownership_from_its_own_params`
+- `fixtures/interpreter/drop_order/test_user_drop_body_fires_at_nll_endpoint`
+- `fixtures/interpreter/drop_order/test_user_drop_interleaves_with_defer_at_scope_exit`
+- `fixtures/interpreter/drop_order/test_user_drop_no_premature_fire_when_moved_into_struct_literal`
 - `fixtures/interpreter/effects/test_tracing_with_span_nesting_restores_outer`
+- `fixtures/interpreter/enums/test_a_lowercase_sub_binding_is_still_a_binding_not_a_variant_test`
 - `fixtures/interpreter/enums/test_boxed_tuple_payload_elem_move_runs_each_body_once`
 - `fixtures/interpreter/enums/test_duplicate_assoc_fn_name_keeps_one_payload_part_drop_body`
 - `fixtures/interpreter/enums/test_method_call_keeps_an_unmoved_payload_parts_drop_body`
+- `fixtures/interpreter/enums/test_user_drop_enum_move_fires_once`
+- `fixtures/interpreter/enums/test_user_drop_fires_for_value_enum_binding`
 - `fixtures/interpreter/enums/test_user_enum_struct_payload_owns_its_heap`
 - `fixtures/interpreter/families/b_2026_09_21_7/interp_struct_field_moved_by_one_arm_keeps_its_body_on_the_others`
 - `fixtures/interpreter/families/b_2026_09_27_97/interp_container_param_handed_back_on_some_exits_runs_bodies_once`
@@ -1193,6 +1208,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/interpreter/iter_range/test_iter_scan_short_circuit_does_not_re_fire`
 - `fixtures/interpreter/iter_range/test_iter_scan_short_circuits_on_none`
 - `fixtures/interpreter/iter_range/test_iter_sum_terminal`
+- `fixtures/interpreter/map_set/map_iteration_visits_every_entry_exactly_once`
+- `fixtures/interpreter/map_set/map_remove_keeps_the_survivors_findable`
+- `fixtures/interpreter/map_set/set_iteration_and_membership_survive_a_removal`
 - `fixtures/interpreter/map_set/test_for_loop_on_map_iter_destructures_kv`
 - `fixtures/interpreter/misc/test_f64_parse_interpreter`
 - `fixtures/interpreter/moves/generic_tuple_param_element_is_owned_once`
@@ -1254,6 +1272,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/drop_order/asan_scalar_read_through_drop_field_is_balanced`
 - `fixtures/memory_sanitizer/enums/asan_boxed_tuple_enum_payload_is_freed_in_every_position`
 - `fixtures/memory_sanitizer/enums/asan_enum_arg_on_the_return_route_frees_its_orphan`
+- `fixtures/memory_sanitizer/enums/asan_enum_container_payload_in_struct_field_keeps_one_owner`
 - `fixtures/memory_sanitizer/enums/asan_enum_ctor_arg_passthrough_original_freed`
 - `fixtures/memory_sanitizer/enums/asan_enum_reassign_displaced_payload_heap_freed`
 - `fixtures/memory_sanitizer/enums/asan_freshtemp_generic_enum_scrutinee_payload_has_exactly_one_owner`
@@ -1392,6 +1411,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/structs/asan_place_struct_arg_escaping_field_frees_once`
 - `fixtures/memory_sanitizer/structs/asan_projection_source_struct_destructure_leaves_memory_alone`
 - `fixtures/memory_sanitizer/structs/asan_self_receiver_destructure_frees_each_field_once`
+- `fixtures/memory_sanitizer/vecs/asan_declared_vec_enum_payload_elements_keep_one_owner`
 - `fixtures/memory_sanitizer/vecs/asan_file_inside_a_nested_vec_is_closed_at_every_level`
 - `fixtures/memory_sanitizer/vecs/asan_file_moved_into_a_vec_is_closed_by_the_vec`
 - `fixtures/mir_borrow_flags/ALIAS`
@@ -1552,6 +1572,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/par_codegen/test_e2e_par_block_result_single_err_overrides_join`
 - `fixtures/par_codegen/test_e2e_par_block_result_source_order_earliest_branch_wins`
 - `fixtures/parser/well_formed_interp_holes_report_nothing_2`
+- `fixtures/selfhost_codegen/CORPUS_149`
+- `fixtures/selfhost_codegen/CORPUS_158`
 - `fixtures/tcp_listener/bind_returns_result_ok_and_err`
 - `fixtures/tcp_listener/test_tcp_listener_bind_accept_round_trip`
 - `fixtures/tcp_stream/test_tcp_stream_read_round_trip`

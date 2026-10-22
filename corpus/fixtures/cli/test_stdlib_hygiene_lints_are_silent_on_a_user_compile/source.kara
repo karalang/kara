@@ -1,0 +1,5 @@
+import std.web.time.{animation_frames};
+
+fn main() {
+println("hi");
+}

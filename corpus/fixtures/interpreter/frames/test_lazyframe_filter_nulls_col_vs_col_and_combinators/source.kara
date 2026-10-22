@@ -1,0 +1,13 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([30i64, 15i64, 41i64, 8i64]));
+df.insert("name", Column.from_vec(["ada", "bob", "eve", "kid"]));
+let nn: Vec[Option[i64]] = vec![Some(30i64), None, Some(41i64), Some(8i64)];
+df.insert("opt", Column.from_iter_nullable(nn));
+println(df.lazy().filter(LazyExpr.col("opt").eq(LazyExpr.col("age"))).collect().height());
+println(df.lazy().filter(LazyExpr.col("name").ne("bob").not_()).collect().height());
+println(df.lazy().filter(LazyExpr.col("age").lt(10).or_(LazyExpr.col("age").gt(40))).collect().height());
+let fused = df.lazy().filter(LazyExpr.col("age").gt(10)).filter(LazyExpr.col("age").lt(40));
+println(fused.collect().height());
+println(fused.explain());
+}

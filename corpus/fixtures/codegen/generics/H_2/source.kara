@@ -1,0 +1,2 @@
+fn make() -> (Box2[R], i64) { return (Box2[R] { v: R { id: 42 } }, 1); }
+fn main() { let (b, n) = make(); println(f"{n}"); }

@@ -1,0 +1,3 @@
+struct Sk { n: i64 }
+impl Sk { fn eat(x: Result[i64, Rp]) { match x { Ok(n) => { println("ok") } Err(r) => { println(f"e:{r.id}") } } } }
+fn main() { Sk.eat(Err(Rp { id: 1 })); println("end") }

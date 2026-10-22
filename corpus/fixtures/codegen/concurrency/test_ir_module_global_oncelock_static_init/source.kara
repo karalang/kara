@@ -1,0 +1,2 @@
+let CONFIG: OnceLock[i64] = OnceLock.new();
+fn main() { let _ = CONFIG.set(7); }

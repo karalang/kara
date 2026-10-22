@@ -1,0 +1,6 @@
+import std.web.events.{contextmenu, ClickEvent};
+
+fn main() {
+    let cm = contextmenu();
+    cm.recv();
+}

@@ -1,0 +1,5 @@
+fn main() {
+let r: Result[String, i64] = Ok(f"hi");
+match r { Ok(ref v) => { println(v); } Err(_) => {} }
+match r { Ok(v) => { println(v); } Err(_) => {} }
+}

@@ -1,0 +1,16 @@
+fn main() {
+let mut fx: Map[String, i64, FxBuildHasher] = Map.new();
+let mut sip: Map[String, i64, SipHash13BuildHasher] = Map.new();
+let names = ["zulu", "alpha", "mike", "bravo", "yankee",
+"charlie", "xray", "delta", "whiskey", "echo"];
+for n in names {
+fx.insert(n.to_string(), 1);
+sip.insert(n.to_string(), 1);
+}
+let mut a = "";
+for k in fx.keys() { a = a + k + " "; }
+println(a);
+let mut b = "";
+for k in sip.keys() { b = b + k + " "; }
+println(b);
+}

@@ -1,0 +1,11 @@
+fn main() {
+let a: f32 = 1.1f32;
+let b: f64 = 1.1;
+let wide: f64 = (a as f64) * b;
+println(wide);
+let narrow: f32 = a * (b as f32);
+println(narrow);
+let h: f16 = 1.5f16;
+let up: f32 = (h as f32) * a;
+println(up);
+}

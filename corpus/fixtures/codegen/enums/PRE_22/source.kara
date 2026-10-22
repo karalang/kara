@@ -1,0 +1,3 @@
+enum Ee { A(Re), B }
+struct Wd { o: Option[Option[Ee]] }
+fn main() { let w = Wd { o: Some(Some(Ee.A(Re { id: 71, name: f"a" }))) }; println("ok"); println("done") }

@@ -1,0 +1,2 @@
+fn f() -> i64 { let s = HasE { e: E.A(mk(4)), r: mk(5) }; let x = s.r; return 7; }
+fn main() { println(f()) }

@@ -1,0 +1,23 @@
+fn make() -> VecDeque[i64] {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(5);
+    q.push_back(6);
+    q
+}
+fn total(d: VecDeque[i64]) -> i64 {
+    let mut acc = 0;
+    let mut d2 = d;
+    while not d2.is_empty() {
+        match d2.pop_front() { Some(x) => { acc = acc + x; } None => {} }
+    }
+    acc
+}
+fn main() {
+    let got = make();
+    println(total(got));
+    let mut r: VecDeque[i64] = VecDeque.new();
+    r.push_back(7);
+    r.push_back(8);
+    println(r[0]);
+    match r.pop_front() { Some(x) => { println(x); } None => {} }
+}

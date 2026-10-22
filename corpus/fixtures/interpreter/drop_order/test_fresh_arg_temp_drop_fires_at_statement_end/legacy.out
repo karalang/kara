@@ -1,0 +1,9 @@
+a
+drop 1 r1
+x=101
+b
+drop 2 r2
+y=2
+c
+drop 3 r3
+end

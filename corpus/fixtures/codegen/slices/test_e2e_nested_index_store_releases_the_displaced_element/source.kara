@@ -1,0 +1,8 @@
+fn main() {
+let mut r: Vec[String] = Vec.new();
+r.push(f"aa"); r.push(f"bb");
+let mut d: Vec[Vec[String]] = Vec.new();
+d.push(r);
+d[0][0] = f"zz";
+println(f"{d[0][0]} {d[0][1]}");
+}

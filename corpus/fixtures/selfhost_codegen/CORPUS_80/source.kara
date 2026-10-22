@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[bool] = Vec.new(); v.push(false); v[0] = true; if v[0] { println("t"); } }

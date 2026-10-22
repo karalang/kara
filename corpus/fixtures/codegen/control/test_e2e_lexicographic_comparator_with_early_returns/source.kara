@@ -1,0 +1,17 @@
+fn main() {
+let mut v: Vec[Vec[i64]] = Vec.new();
+let mut a: Vec[i64] = Vec.new(); a.push(2i64); a.push(6i64);
+let mut b: Vec[i64] = Vec.new(); b.push(2i64); b.push(2i64);
+let mut c: Vec[i64] = Vec.new(); c.push(1i64);
+v.push(a); v.push(b); v.push(c);
+v.sort_by(|x, y| {
+let mut i: i64 = 0i64;
+while i < x.len() and i < y.len() {
+if x[i] < y[i] { return Ordering.Less; }
+if x[i] > y[i] { return Ordering.Greater; }
+i = i + 1i64;
+}
+return x.len().cmp(y.len());
+});
+println(f"{v[0][0]} {v[1][0]}{v[1][1]} {v[2][0]}{v[2][1]}");
+}

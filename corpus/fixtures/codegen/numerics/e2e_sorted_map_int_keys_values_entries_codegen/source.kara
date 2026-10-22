@@ -1,0 +1,15 @@
+fn main() {
+let mut m: SortedMap[i64, String] = SortedMap.new();
+let _ = m.insert(5_i64, "five"); let _ = m.insert(1_i64, "one");
+let _ = m.insert(3_i64, "three"); let _ = m.try_insert(1_i64, "ONE");
+let mut ks: String = "";
+for k in m.keys() { ks.push_str(f"{k},"); }
+println(ks);
+let mut vs: String = "";
+for v in m.values() { vs.push_str(f"{v},"); }
+println(vs);
+let mut es: String = "";
+for (k, v) in m { es.push_str(f"{k}={v};"); }
+println(es);
+match m.get(3_i64) { Some(v) => println(v), None => println("none") }
+}

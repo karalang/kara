@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[N]] = [[N { k: 1 }], [N { k: 2 }]]; let t = d[1].pop(); match t { Some(x) => { d[0][0] = x; }, None => {} }; println("end") }

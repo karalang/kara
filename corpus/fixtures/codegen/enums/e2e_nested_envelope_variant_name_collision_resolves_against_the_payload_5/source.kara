@@ -1,0 +1,4 @@
+enum MyRes { Ok(i64), Bad }
+fn main() { let x: Result[MyRes, i64] = Result[MyRes, i64].Ok(MyRes.Ok(71));
+match x { Ok(Ok(v)) => { println(f"a{v}") } Ok(Bad) => { println("ob") } Err(e) => { println("n") } }
+println("done") }

@@ -1,0 +1,18 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+fn mkopt(n: i64) -> Option[Res] {
+    return Option.Some(Res { id: n, name: f"o{n}" });
+}
+fn main() {
+    println("a");
+    let _ = mkopt(1);
+    println("b");
+    mkopt(2);
+    println("c");
+    Option.Some(Res { id: 3, name: f"o3" });
+    println("end");
+}

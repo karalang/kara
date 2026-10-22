@@ -1,0 +1,24 @@
+import std.lazy.{col};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("city", Column.from_vec(["oslo", "rome", "oslo", "rome", "oslo"]));
+df.insert("name", Column.from_vec(["a", "b", "c", "d", "e"]));
+df.insert("pop", Column.from_vec([10i64, 20i64, 30i64, 40i64, 50i64]));
+let plan = df.lazy()
+.filter(col("pop").gt(15))
+.group_by(vec![col("city")])
+.agg(vec![col("name").count().alias_("cnt"), col("pop").sum(), col("pop").mean()])
+.sort(vec![col("pop_sum").desc()]);
+println(plan.explain());
+let out = plan.collect();
+println(out.width()); println(out.height());
+for n in out.column_names() { println(n); }
+let cities: Column[String] = out.column("city");
+let sums: Column[i64] = out.column("pop_sum");
+let means: Column[f64] = out.column("pop_mean");
+match cities[0] { Some(v) => println(v), None => println("null") }
+match sums[0] { Some(v) => println(v), None => println(-1i64) }
+match means[0] { Some(v) => println(v), None => println(-1.0) }
+match cities[1] { Some(v) => println(v), None => println("null") }
+match sums[1] { Some(v) => println(v), None => println(-1i64) }
+}

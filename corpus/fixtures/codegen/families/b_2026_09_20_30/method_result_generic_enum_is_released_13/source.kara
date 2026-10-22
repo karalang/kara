@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 58 }; let c = true; let r: Result[Sh, i64] = if c { mk.res() } else { Err(0) }; println("x")
+}

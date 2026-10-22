@@ -1,0 +1,17 @@
+struct Cfg { name: StringSlice, retries: i64 }
+struct Inner { label: StringSlice }
+struct Outer { inner: Inner, n: i64 }
+let CONFIG: Cfg = Cfg { name: "karac", retries: 3 };
+let TUP: (StringSlice, i64) = ("tup", 7);
+let ARR: Array[StringSlice, 2] = ["a", "b"];
+let DEEP: Outer = Outer { inner: Inner { label: "deep" }, n: 1 };
+fn main() {
+println(CONFIG.name);
+println(CONFIG.retries);
+let t = TUP;
+println(t.0);
+println(ARR[0]);
+println(ARR[1]);
+let d = DEEP;
+println(d.inner.label);
+}

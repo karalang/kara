@@ -1,0 +1,11 @@
+struct G { name: String, id: i64 }
+impl Drop for G { fn drop(mut ref self) { println(f"dG{self.id}"); } }
+fn pass(g: G) -> G { g }
+fn mk(i: i64) -> G { G { name: "a padded payload string here", id: i } }
+fn main() {
+let p = pass(G { name: "a padded payload string here", id: 1 });
+println(f"{p.id}");
+let q = pass(mk(2));
+println(f"{q.id}");
+println("end");
+}

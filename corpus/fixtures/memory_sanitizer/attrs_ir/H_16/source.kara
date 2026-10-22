@@ -1,0 +1,6 @@
+shared struct N { s: String }
+fn nn() -> Option[N] { Option.None }
+fn f() -> i64 { let mut vv: Option[N] = Some(N { s: payload() });
+   let n = match vv { Some(x) => (if x.s.contains("payload") { x.s.len() } else { 0 }), None => 0 };
+   vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

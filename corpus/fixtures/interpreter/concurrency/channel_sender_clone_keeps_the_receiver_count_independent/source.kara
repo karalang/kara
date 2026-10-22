@@ -1,0 +1,12 @@
+fn orphan() -> Sender[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let extra = tx.clone();
+    return extra;
+}
+fn main() {
+    match orphan().try_send(9) {
+        Ok(u) => println("sent"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+    }
+}

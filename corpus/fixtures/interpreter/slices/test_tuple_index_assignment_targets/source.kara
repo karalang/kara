@@ -1,0 +1,15 @@
+struct Pu { id: i64, name: String }
+struct Ow { t: (Pu, i64) }
+fn main() {
+let mut t = (1, f"a{2}");
+t.0 = 5;
+println(f"t0 {t.0}");
+let mut u = (Pu { id: 9, name: f"z{9}" }, 3);
+u.0.id = 6;
+println(f"u {u.0.id} {u.0.name}");
+let mut o = Ow { t: (Pu { id: 9, name: f"z{9}" }, 3) };
+o.t.0 = Pu { id: 7, name: f"y{5}" };
+o.t.0.id = 8;
+println(f"o {o.t.0.id} {o.t.0.name}");
+println("end");
+}

@@ -1,0 +1,15 @@
+== logical plan ==
+LIMIT 3
+  SELECT [name]
+    SORT [dept, score desc]
+      SCAN [dept, score, name]
+== optimized ==
+SELECT [name]
+  LIMIT 3
+    SORT [dept, score desc]
+      SCAN cols=[dept, score, name]
+w
+y
+x
+nine
+none

@@ -1,0 +1,17 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+fn peek(r: ref Res) -> i64 {
+    return r.id;
+}
+fn main() {
+    println("a");
+    let z = peek(Res { id: 4, name: f"r4" });
+    println(f"z={z}");
+    println("b");
+    peek(Res { id: 5, name: f"r5" });
+    println("end");
+}

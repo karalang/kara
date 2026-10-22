@@ -1,0 +1,17 @@
+fn main() {
+let mut o: Option[i64] = Some(5);
+let t = o.take();
+println(t.unwrap_or(0));
+println(o.unwrap_or(0 - 1));
+let mut p: Option[i64] = Some(9);
+let a = p.take();
+let b = p.take();
+println(a.unwrap_or(0));
+println(b.unwrap_or(0 - 3));
+let mut s: Option[i64] = Some(5);
+println(s.get_or_insert(9));
+println(s.unwrap_or(0 - 1));
+let mut n: Option[i64] = None;
+println(n.get_or_insert(9));
+println(n.unwrap_or(0 - 1));
+}

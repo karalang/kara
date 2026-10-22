@@ -1,0 +1,7 @@
+fn mk() -> Array[Array[String, 2], 2] {
+    return [[f"aaaaaaaa0", f"bbbbbbbb0"], [f"cccccccc0", f"dddddddd0"]];
+}
+fn main() {
+    let a = mk();
+    println(f"s:{a[1][0]}");
+}

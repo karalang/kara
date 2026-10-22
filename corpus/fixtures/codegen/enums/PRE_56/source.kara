@@ -1,0 +1,2 @@
+fn hg(g: G[String]) { println("ig"); }
+fn main() { println("A"); let a = G.X(f"zz{1}"); hg(a); println("end") }

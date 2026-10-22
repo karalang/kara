@@ -1,0 +1,26 @@
+struct Pair { a: String, b: String }
+struct Node { tags: Vec[String], name: String }
+fn pick_a(p: Pair) -> String { p.a }
+fn pick_a_destructured(p: Pair) -> String { let Pair { a, b } = p; a }
+fn join_tags(n: Node) -> String {
+    let Node { tags, name } = n;
+    let mut out = name;
+    for t in tags { out.push_str(t); }
+    out
+}
+fn main() {
+    let mut i = 0;
+    while i < 50 {
+        let p1 = Pair { a: "pair-a-field-payload-long-enough-string".to_string(), b: "pair-b-field-payload-long-enough-string".to_string() };
+        let r1 = pick_a(p1);
+        let p2 = Pair { a: "destructure-a-payload-long-enough-string".to_string(), b: "destructure-b-payload-long-enough-string".to_string() };
+        let r2 = pick_a_destructured(p2);
+        let mut tags: Vec[String] = Vec.new();
+        tags.push("tag-element-payload-long-enough-string-one".to_string());
+        tags.push("tag-element-payload-long-enough-string-two".to_string());
+        let n = Node { tags: tags, name: "node-name-payload-long-enough-string".to_string() };
+        let r3 = join_tags(n);
+        i = i + 1;
+    }
+    println("done");
+}

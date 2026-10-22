@@ -1,0 +1,5 @@
+enum Tok7 { Float(i64), Other }
+enum Exp7 { Float(i64), Blank }
+fn main() { let x: Option[Tok7] = Some(Tok7.Float(71));
+match x { Some(Float(v)) => { println(f"t{v}") } Some(Other) => { println("o") } None => { println("n") } }
+println("done") }

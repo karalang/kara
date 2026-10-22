@@ -1,0 +1,1 @@
+fn main() { let x: u64 = 5000000000u64; println(x); }

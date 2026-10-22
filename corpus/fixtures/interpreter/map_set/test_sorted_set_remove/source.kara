@@ -1,0 +1,9 @@
+fn main() {
+let s: SortedSet[i64] = SortedSet.new();
+s.insert(5_i64);
+let removed = s.remove(5_i64);
+println(f"{removed}");
+let again = s.remove(5_i64);
+println(f"{again}");
+println(f"{s.is_empty()}");
+}

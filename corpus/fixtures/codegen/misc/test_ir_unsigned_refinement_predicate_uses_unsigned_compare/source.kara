@@ -1,0 +1,2 @@
+distinct type P = u16 where self >= 1 and self <= 65535;
+fn main() { let p = P(80); println("built"); }

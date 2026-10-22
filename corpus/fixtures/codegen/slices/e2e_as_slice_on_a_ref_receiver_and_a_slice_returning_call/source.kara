@@ -1,0 +1,14 @@
+fn probe(v: ref Vec[i64]) -> i64 {
+    let s = v.as_slice();
+    return s.len();
+}
+fn owned(v: Vec[i64]) -> i64 {
+    let s = v.as_slice();
+    return s.len();
+}
+fn main() {
+    let v: Vec[i64] = [10, 20, 30];
+    println(f"{probe(v)}");
+    let w: Vec[i64] = [1, 2];
+    println(f"{owned(w)}");
+}

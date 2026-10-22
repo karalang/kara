@@ -1,0 +1,3 @@
+import helper;
+
+fn main() { println(helper.myConfig); }

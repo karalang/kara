@@ -1,0 +1,10 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("k", 1_i64);
+let n: Map[String, i64] = m.clone();
+m.insert("k", 99_i64);
+match n.get("k") {
+Some(v) => println(v),
+None => println("missing"),
+}
+}

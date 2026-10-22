@@ -1,0 +1,17 @@
+source = "tests/interpreter/enums.rs::test_contract_constructor_impl_invariant_faults"
+dedup_of = []
+expect = "error:E0221"
+exit = 1
+tags = ["post-m1:contract", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "47cbb02e"
+model_rev = "583cfb0d"
+model_src = "47cbb02e"

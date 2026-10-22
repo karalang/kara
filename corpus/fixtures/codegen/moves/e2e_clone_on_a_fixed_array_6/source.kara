@@ -1,0 +1,4 @@
+fn main() { let n = env.args().len() as i64;
+let mut a: Array[String, 2] = [f"aa-{n}", f"bb-{n}"];
+let b: Array[String, 2] = a.clone();
+a[0] = f"MUT-{n}"; println(f"{a[0]}|{b[0]}"); }

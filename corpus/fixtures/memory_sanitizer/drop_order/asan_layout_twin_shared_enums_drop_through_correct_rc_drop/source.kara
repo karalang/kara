@@ -1,0 +1,27 @@
+shared enum Alfa { ALeaf(String), ANode(NodeA) }
+shared enum Bravo { BLeaf(String), BNode(NodeB) }
+struct NodeA { kids: Vec[Alfa], name: String }
+struct NodeB { kids: Vec[Bravo], name: String }
+fn make_a(d: i64) -> Alfa {
+    if d <= 0 { return Alfa.ALeaf("alfa-leaf-payload-string-long".to_string()); }
+    let mut kids: Vec[Alfa] = Vec.new();
+    kids.push(make_a(d - 1));
+    kids.push(make_a(d - 1));
+    Alfa.ANode(NodeA { kids: kids, name: "alfa-node-name-payload".to_string() })
+}
+fn make_b(d: i64) -> Bravo {
+    if d <= 0 { return Bravo.BLeaf("bravo-leaf-payload-string-long".to_string()); }
+    let mut kids: Vec[Bravo] = Vec.new();
+    kids.push(make_b(d - 1));
+    kids.push(make_b(d - 1));
+    Bravo.BNode(NodeB { kids: kids, name: "bravo-node-name-payload".to_string() })
+}
+fn main() {
+    let mut i = 0;
+    while i < 20 {
+        let a = make_a(4);
+        let b = make_b(4);
+        i = i + 1;
+    }
+    println("done");
+}

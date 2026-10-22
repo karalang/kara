@@ -1,0 +1,4 @@
+struct Pair[=K, =V] { ks: Vec[K], vs: Vec[V] }
+impl[K, V] Pair[K, V] { fn nv(ref self) -> i64 { let v = self.vs; return v.len(); } }
+fn main() { let mut a: Pair[i64, String] = Pair { ks: Vec.new(), vs: Vec.new() };
+a.vs.push("x"); a.vs.push("y"); println(f"{a.nv()}"); }

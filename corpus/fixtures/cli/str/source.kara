@@ -1,0 +1,3 @@
+import alpha.a;
+import beta.b;
+fn main() { println(a()); println(b()); }

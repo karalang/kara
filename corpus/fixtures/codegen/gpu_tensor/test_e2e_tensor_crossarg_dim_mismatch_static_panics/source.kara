@@ -1,0 +1,10 @@
+fn mm[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]]) -> f64 { 99.0 }
+fn mk(rows: i64, cols: i64) -> Tensor[f64, [3, ?]] {
+let t: Tensor[f64, [3, ?]] = Tensor.zeros([rows, cols]);
+t
+}
+fn main() {
+let a: Tensor[f64, [3, ?]] = mk(3, 7);
+let b: Tensor[f64, [4, 5]] = Tensor.zeros([4, 5]);
+println(mm(a, b));
+}

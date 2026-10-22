@@ -1,0 +1,6 @@
+fn pair(a: i64; b: i64 = 10, c: i64 = 20) -> i64 { a + b + c }
+fn main() {
+println(pair(1));
+println(pair(1, b: 5));
+println(pair(1, b: 5, c: 7));
+}

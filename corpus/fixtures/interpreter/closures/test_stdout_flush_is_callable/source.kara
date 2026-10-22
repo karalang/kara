@@ -1,0 +1,1 @@
+fn main() { Stdout.flush(); println("ok"); }

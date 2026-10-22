@@ -1,0 +1,33 @@
+fn main() {
+let n = env.args().len();
+let z = (n as f64) - (n as f64);
+let c: F64 = F64 { value: 0.0 / 0.0 };
+let r: F64 = F64.from(z / z);
+let one: F64 = F64 { value: 1.0 };
+let inf: F64 = F64 { value: 1.0 / 0.0 };
+println(c == r);
+println(c < one);
+println(r < one);
+println(r > inf);
+let mut v: Vec[F64] = Vec.new();
+v.push(r);
+v.push(one);
+v.push(c);
+v.push(F64 { value: 0.0 - 1.0 });
+v.sort();
+println(v[0].value);
+println(v[1].value);
+println(v[3].value);
+let mut m: Map[F64, i64] = Map.new();
+let _ = m.insert(c, 1);
+let _ = m.insert(r, 2);
+println(m.len());
+match m.get(r) { Some(x) => println(x), None => println(0 - 1) }
+let n0: F64 = F64 { value: 0.0 * (0.0 - 1.0) };
+let p0: F64 = F64 { value: 0.0 };
+println(n0 < p0);
+println(n0 == p0);
+let c32: F32 = F32 { value: 0.0 / 0.0 };
+let r32: F32 = F32.from((z / z) as f32);
+println(c32 == r32);
+}

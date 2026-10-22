@@ -104,6 +104,25 @@ def unescape(s: str) -> str:
     return "".join(out)
 
 
+# The test targets that go with legacy at M3 (review m3-plan item 9: they run
+# only the legacy interpreter, codegen, JIT or REPL). Their ordinary-string
+# programs are extracted so the behaviour they pin stays checked on v2; the
+# suites that survive keep checking their own.
+LEGACY_TEST_TARGETS = {
+    "abi_repr_c_struct", "book_snippets", "call_site_type_args", "cli", "codegen",
+    "comptime", "comptime_ast", "comptime_derive", "comptime_reflection", "contextual_keywords",
+    "coro_e2e", "disjoint_differential", "drop_differential", "elision", "example_packages",
+    "extern_keep_list", "gpu_e2e", "http_client_codegen", "http_server", "interpreter", "json",
+    "karac_jit_runner_repl", "lljit_e2e", "lljit_prototype", "mcjit_prototype",
+    "memory_sanitizer", "own_params", "par_codegen", "parallax", "parallax_bench",
+    "parallax_lite", "park_and_wake", "protobuf", "protobuf_derive", "protobuf_proto",
+    "relay_bench", "repl", "repl_jit", "safety_design", "safety_design_loop", "scaffold",
+    "selfhost_codegen", "shared_ownership_matrix", "spawn_e2e", "stdlib_span_table_isolation",
+    "tangle_corpus", "tcp_listener", "tcp_stream", "test_main_synth", "tls_codegen",
+    "wasm_codegen", "ws_framing",
+}
+
+
 def fixture_area(path: Path, tests: Path) -> str:
     rel = path.relative_to(tests).with_suffix("")
     parts = list(rel.parts)
@@ -112,9 +131,17 @@ def fixture_area(path: Path, tests: Path) -> str:
     return "fixtures/" + "/".join(slug(p) for p in parts)
 
 
-def fixture_programs(tests: Path):
-    """Yield dicts: area, holder, file, line, src, template, candidates."""
+def fixture_programs(tests: Path, kind: str = "raw"):
+    """Yield dicts: area, holder, file, line, src, template, candidates.
+
+    `kind` is the literal the programs are read from: "raw" for raw strings,
+    "str" for ordinary `"..."` strings in LEGACY_TEST_TARGETS, unescaped as rustc does (escapes and
+    `\\` + newline continuations). main() reads the raw ones first and the
+    ordinary ones in a second pass, so adding the second pass left every
+    earlier entry's directory name as it was."""
     for path in sorted(tests.rglob("*.rs")):
+        if kind == "str" and path.relative_to(tests).parts[0].removesuffix(".rs") not in LEGACY_TEST_TARGETS:
+            continue
         text = path.read_text()
         holders: list[list] = []  # [name, start, tokens]
         cur = ["(file)", 0, []]
@@ -127,24 +154,36 @@ def fixture_programs(tests: Path):
         holders.append(cur)
         for k, (name, start, toks) in enumerate(holders):
             end = holders[k + 1][1] if k + 1 < len(holders) else len(text)
-            progs = [t for t in toks if t[0] == "raw" and "fn main" in t[2]]
+            progs = [(t[0], t[1], t[2] if t[0] == "raw" else unescape(t[2]))
+                     for t in toks if t[0] == kind and "fn main" in t[2]]
             if not progs:
                 continue
             cands = []
             for t in toks:
-                if t[0] == "raw" and "fn main" not in t[2]:
+                if t[0] == kind and "fn main" in t[2]:
+                    continue
+                if t[0] == "raw":
                     cands.append(t[2])
                 elif t[0] == "str":
                     cands.append(unescape(t[2]))
             for m in STR_ARRAY.finditer(text, start, end):
                 items = [unescape(x) for x in STR_LIT.findall(m.group(1))]
                 cands.append("\n".join(items))
+            if re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                # A `const` program is run by the tests that name it, so
+                # their literals are its candidates too.
+                use = re.compile(r"\b" + name + r"\b")
+                for j, (_, ostart, otoks) in enumerate(holders):
+                    oend = holders[j + 1][1] if j + 1 < len(holders) else len(text)
+                    if j != k and use.search(text, ostart, oend):
+                        cands += [t[2] if t[0] == "raw" else unescape(t[2]) for t in otoks
+                                  if t[0] in ("raw", "str") and "fn main" not in t[2]]
             # A tests/mir_*.rs program run by `assert_runs(src, <literal>)`
             # is pinned by that literal: the helper asserts exit 0 and exactly
             # that stdout from the MIR pipeline, so it is a v2 pin, written
             # for v2, where the legacy run is only a record.
             pin_text = None
-            if path.name.startswith("mir_") and len(progs) == 1:
+            if kind == "raw" and path.name.startswith("mir_") and len(progs) == 1:
                 call = ASSERT_RUNS.search(text, start, end)
                 lits = [t for t in toks if t[0] in ("raw", "str")]
                 at = None
@@ -353,10 +392,13 @@ def main() -> int:
             add("drop-matrix", d.name, m["source"], (d / "main.kara").read_text(), "drop-matrix",
                 {"meta": meta, "tags": ["drop"], "pin_expected": d / "expected.out"})
 
-    for p in fixture_programs(Path(args.tests)):
-        tags = ["format-template"] if p["template"] else []
-        add(p["area"], p["holder"], f"{p['file']}::{p['holder']}", p["src"], "fixture",
-            {"tags": tags, "candidates": p["candidates"], "pin_text": p["pin_text"]})
+    for kind in ("raw", "str"):
+        for p in fixture_programs(Path(args.tests), kind):
+            tags = ["format-template"] if p["template"] else []
+            if Path(p["file"]).parts[1].removesuffix(".rs") in LEGACY_TEST_TARGETS:
+                tags.append("src:legacy-tests")  # outside the M1 gate (classify.py)
+            add(p["area"], p["holder"], f"{p['file']}::{p['holder']}", p["src"], "fixture",
+                {"tags": tags, "candidates": p["candidates"], "pin_text": p["pin_text"]})
 
     if args.katas:
         kroot = Path(args.katas)
@@ -424,7 +466,9 @@ def main() -> int:
         else:
             for k, v in prev.items():
                 if k not in ("source", "dedup_of", "extracted_src"):
-                    meta[k] = v if k != "tags" else list(v) + sorted(set(meta["tags"]) - set(v))
+                    # src:legacy-tests marks only entries first extracted
+                    # for M3 item 9; the gate's existing entries keep theirs.
+                    meta[k] = v if k != "tags" else list(v) + sorted(set(meta["tags"]) - set(v) - {"src:legacy-tests"})
         if meta.get("note") == "":
             del meta["note"]
         if e["pin"] is not None:

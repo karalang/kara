@@ -1,0 +1,2 @@
+fn main() { println(make_outer(1).inner.tag);
+             let c = make(2); println(c.tag); }

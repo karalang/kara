@@ -1,0 +1,5 @@
+fn main() {
+let e: Vec[f64] = vec![10.0, 20.0, 30.0, 40.0];
+println(Stats.median(e));
+println(Stats.sum(vec![100.0, 200.0]));
+}

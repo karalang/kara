@@ -1,0 +1,7 @@
+fn main() {
+let t = Tensor.from([[1, 2], [3, 4]]);
+let mut r = t.reshape([4]);
+r[0] = 99;
+println(r[0]);
+println(t[0, 0]);
+}

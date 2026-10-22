@@ -1,0 +1,2 @@
+fn boom(d: i64) -> i64 { return 10 / d }
+fn main() { let x = boom(0); println(f"got {x}"); }

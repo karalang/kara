@@ -1,0 +1,6 @@
+struct R2 { s: String }
+enum K { A(R2), B }
+impl Drop for K { fn drop(mut ref self) { println("dK") } }
+fn main() { let v: Vec[K] = [K.A(R2 { s: f"z" })];
+for e in v { match e { K.A(r) => { println(f"a:{r.s}") } K.B => {} } }
+println("end") }

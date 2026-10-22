@@ -1,0 +1,7 @@
+fn main() {
+    let a: u8 = 5;
+    let v: Vector[u8, 4] = Vector[u8, 4](a, a, a, a);
+    let w: Vector[u8, 4] = ~v;
+    println(w[0]);
+    println(w[3]);
+}

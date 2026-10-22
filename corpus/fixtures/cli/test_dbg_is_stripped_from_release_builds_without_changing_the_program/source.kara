@@ -1,0 +1,6 @@
+fn main() {
+    let mut vs: Vec[i64] = [];
+    vs.push(10);
+    let a = dbg(vs);
+    println(f"{a.len()}");
+}

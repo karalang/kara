@@ -1,0 +1,1 @@
+fn main() { let v = [10, 20, 30, 40]; let s = v[1..3]; println(s.len()); }

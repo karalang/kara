@@ -1,0 +1,11 @@
+pub struct In { q: i64 }
+pub struct Out { q: i64, doubled: i64 }
+pub fn f(x: In) -> Out
+ensures(result) result.q == old(x.q)
+{
+Out { q: x.q, doubled: x.q * 2 }
+}
+fn main() {
+let o = f(In { q: 21 });
+println(f"{o.q} {o.doubled}");
+}

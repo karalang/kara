@@ -1,0 +1,10 @@
+fn first_len(m: mut ref Vec[Vec[i64]]) -> i64 {
+    let row = ref m[0i64];
+    row.len()
+}
+fn main() {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new(); a.push(7i64); a.push(8i64);
+    m.push(a);
+    println(f"{first_len(mut m)}");
+}

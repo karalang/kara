@@ -1,0 +1,7 @@
+fn main() {
+let big = -9223372036854775807;
+let mut c: Column[i64] = Column.new();
+c.push(big - 1);
+let m = -c;
+match m[0] { Some(v) => { println(v); }, None => { println(-1); } }
+}

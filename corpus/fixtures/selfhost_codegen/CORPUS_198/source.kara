@@ -1,0 +1,53 @@
+struct A {
+    s: String,
+}
+struct B {
+    t: String,
+}
+struct Cc {
+    u: String,
+}
+enum St {
+    Aa(A),
+    Bb(B),
+    Never(Cc),
+}
+struct Blk {
+    stmts: Vec[St],
+    k: i64,
+}
+shared enum E {
+    V(Blk),
+}
+fn render(e: ref E) -> String {
+    match e {
+        V(b) => {
+            let mut out = "".to_string();
+            for s in b.stmts {
+                match s {
+                    Aa(a) => {
+                        out = out + a.s;
+                    }
+                    Bb(x) => {
+                        out = out + x.t;
+                    }
+                    Never(y) => {
+                        out = out + y.u;
+                    }
+                }
+            }
+            out
+        }
+    }
+}
+fn main() {
+    let mut v: Vec[St] = Vec.new();
+    v.push(St.Aa(A { s: "one".to_string() }));
+    v.push(St.Bb(B { t: "two".to_string() }));
+    v.push(St.Aa(A { s: "three".to_string() }));
+    let x = E.V(Blk { stmts: v, k: 3 });
+    println(render(x));
+    match x {
+        V(b) => println(b.stmts.len().to_string()),
+    }
+}

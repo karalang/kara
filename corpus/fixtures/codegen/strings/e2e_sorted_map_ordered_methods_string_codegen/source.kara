@@ -1,0 +1,10 @@
+fn main() {
+let mut m: SortedMap[String, String] = SortedMap.new();
+let _ = m.insert("banana", "yellow"); let _ = m.insert("apple", "red");
+let _ = m.insert("cherry", "dark");
+match m.min() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+match m.max() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+match m.floor("boo") { Some(kv) => println(f"{kv.0}"), None => println("n") }
+match m.ceiling("boo") { Some(kv) => println(f"{kv.0}"), None => println("n") }
+let r = m.range("apple", "banana"); println(f"{r.len()}");
+}

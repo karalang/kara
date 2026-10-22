@@ -1,0 +1,1 @@
+fn main() { let r: Result[i64, E] = Err(E.B); println("mid"); }

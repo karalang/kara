@@ -1,0 +1,6 @@
+import std.web.events.{touchend, TouchEvent};
+
+fn main() {
+    let ends = touchend();
+    ends.recv();
+}

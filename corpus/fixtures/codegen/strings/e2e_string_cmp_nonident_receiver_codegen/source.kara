@@ -1,0 +1,9 @@
+fn main() {
+let lit = match "abd".cmp("abc") { Less => 0, Equal => 1, Greater => 2 };
+println(f"{lit}");
+let v: Vec[String] = ["nat", "abc", "zzz"];
+let i0 = match v[0].cmp(v[1]) { Less => 0, Equal => 1, Greater => 2 };
+println(f"{i0}");
+let i1 = match v[1].cmp(v[2]) { Less => 0, Equal => 1, Greater => 2 };
+println(f"{i1}");
+}

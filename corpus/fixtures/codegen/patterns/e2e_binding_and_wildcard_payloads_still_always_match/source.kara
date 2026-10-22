@@ -1,0 +1,6 @@
+fn b(p: Option[i64]) -> String { match p { Some(x) => f"got {x}", None => "none" } }
+fn w(p: Option[i64]) -> String { match p { Some(_) => "some", None => "none" } }
+fn main() {
+println(b(Some(5i64))); println(b(None));
+println(w(Some(5i64))); println(w(None));
+}

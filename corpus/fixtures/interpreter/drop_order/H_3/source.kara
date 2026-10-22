@@ -1,0 +1,3 @@
+fn uses(x: R) -> i64 { return x.id; }
+fn consumer(y: R) -> i64 { return uses(y); }
+fn main() { println(f"{consumer(R { id: 50 })}") }

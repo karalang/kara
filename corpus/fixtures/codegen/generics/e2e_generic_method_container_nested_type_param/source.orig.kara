@@ -1,0 +1,21 @@
+struct H[T] { xs: Vec[T] }
+impl[T] H[T] {
+    fn new() -> H[T] { H { xs: Vec.new() } }
+    fn add(mut ref self, x: T) { self.xs.push(x); }
+    fn get(ref self, i: i64) -> T { self.xs[i] }
+    fn take(mut ref self) -> Option[T] { self.xs.pop() }
+    fn n(ref self) -> i64 { self.xs.len() }
+}
+fn main() {
+    let mut hs: H[String] = H.new();
+    hs.add("a"); hs.add("b");
+    println(hs.get(0));
+    println(f"{hs.n()}");
+    match hs.take() { Some(v) => println(v), None => println("none") }
+    let mut hf: H[f64] = H.new();
+    hf.add(1.5); hf.add(2.5);
+    println(f"{hf.get(1)}");
+    let mut hi: H[i64] = H.new();
+    hi.add(7);
+    println(f"{hi.get(0)}");
+}

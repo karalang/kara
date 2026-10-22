@@ -1,0 +1,2 @@
+fn main() { let a: Array[i64, 3] = [1, 2, 3];
+let b: Array[i64, 3] = a.clone(); println(f"{b[2]}"); }

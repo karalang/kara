@@ -1,0 +1,16 @@
+shared struct DNode { key: i64, val: i64 }
+fn main() {
+let mut m: Map[i64, DNode] = Map.new();
+m.insert(1, DNode { key: 1, val: 10 });
+m.insert(1, DNode { key: 1, val: 11 });
+m.insert(2, DNode { key: 2, val: 20 });
+m.remove(1);
+m.remove(99);
+println(m.len());
+let removed = m.remove(2);
+match removed {
+Some(n) => println(n.val),
+None => println(-1),
+}
+println(m.len());
+}

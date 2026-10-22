@@ -1,0 +1,7 @@
+struct T { buf: String }
+fn main() {
+  let mut t = T { buf: "" };
+  t.buf.push('a');
+  t.buf.push_str("bc");
+  println(t.buf);
+}

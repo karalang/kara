@@ -1,0 +1,5 @@
+struct R { v: i64, p: i64 }
+fn parse_primary(toks: ref Vec[i64], pos: i64) -> R { R { v: toks[pos], p: pos + 1 } }
+fn parse_term(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_primary(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 42 or toks[p] == 0 - 47) { let op = toks[p]; let rhs = parse_primary(toks, p + 1); if op == 0 - 42 { v = v * rhs.v; } else { v = v / rhs.v; } p = rhs.p; } R { v: v, p: p } }
+fn parse_expr(toks: ref Vec[i64], pos: i64) -> R { let r0 = parse_term(toks, pos); let mut v = r0.v; let mut p = r0.p; while p < toks.len() and (toks[p] == 0 - 43 or toks[p] == 0 - 45) { let op = toks[p]; let rhs = parse_term(toks, p + 1); if op == 0 - 43 { v = v + rhs.v; } else { v = v - rhs.v; } p = rhs.p; } R { v: v, p: p } }
+fn main() { let mut toks: Vec[i64] = Vec.new(); toks.push(2); toks.push(0 - 43); toks.push(3); toks.push(0 - 42); toks.push(4); toks.push(0 - 45); toks.push(6); toks.push(0 - 47); toks.push(2); let r = parse_expr(toks, 0); println(r.v.to_string()) }

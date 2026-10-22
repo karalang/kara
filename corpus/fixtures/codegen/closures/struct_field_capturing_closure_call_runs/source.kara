@@ -1,0 +1,2 @@
+struct H { f: Fn(i64) -> i64 }
+fn main() { let m = 3i64; let h = H { f: |x| x * m }; println(f"{(h.f)(14i64)}"); }

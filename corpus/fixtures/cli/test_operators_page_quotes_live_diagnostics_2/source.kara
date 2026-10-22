@@ -1,0 +1,2 @@
+distinct type UserId = i64;
+fn main() { let a = UserId(3); let c = a + UserId(1); }

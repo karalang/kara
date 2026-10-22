@@ -1,0 +1,5 @@
+fn main() {
+println(clamp(-2, 0, 10));
+println(clamp(7, 0, 10));
+println(clamp(15, 0, 10));
+}

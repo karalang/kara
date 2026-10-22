@@ -1,0 +1,9 @@
+fn main() {
+    let mut v: Vec[f32] = [];
+    for i in 0..200 { v.push(7.0) }
+    let a = gpu.variance(v);
+    match a {
+        Some(x) => println(f"{x}"),
+        None => println("empty"),
+    }
+}

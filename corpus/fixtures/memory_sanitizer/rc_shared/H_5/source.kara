@@ -1,0 +1,1 @@
+fn main() { for i in 0..3 { let a = make_outer(i).inner; println(a.tag); } }

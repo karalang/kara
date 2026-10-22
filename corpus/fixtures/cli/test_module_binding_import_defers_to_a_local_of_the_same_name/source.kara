@@ -1,0 +1,10 @@
+import db.connection;
+
+struct Holder {
+    pub v: i64,
+}
+
+fn main() {
+    let connection = Holder { v: 11 };
+    println(f"{connection.v}");
+}

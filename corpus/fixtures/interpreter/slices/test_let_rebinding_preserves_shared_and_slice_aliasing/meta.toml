@@ -1,0 +1,17 @@
+source = "tests/interpreter/slices.rs::test_let_rebinding_preserves_shared_and_slice_aliasing"
+dedup_of = []
+expect = "error:E0506"
+exit = 1
+tags = ["shared", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "4629bd2a"
+model_rev = "583cfb0d"
+model_src = "4629bd2a"

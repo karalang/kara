@@ -1,0 +1,4 @@
+struct W { r: R, n: i64 }
+fn take(w: W) -> i64 { let W { r, n } = w; n }
+fn main() { let x = take(W { r: R { id: 41, name: f"n{41}" }, n: 1 });
+             println(f"{x}"); }

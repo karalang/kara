@@ -1,0 +1,9 @@
+fn main() {
+let hi: u64 = 9223372036854775808u64;
+let all: u64 = 18446744073709551615u64;
+let neg: i64 = 0i64 - 1i64;
+println(f"{hi}");
+println(hi.to_string());
+println(all.to_string());
+println(neg.to_string());
+}

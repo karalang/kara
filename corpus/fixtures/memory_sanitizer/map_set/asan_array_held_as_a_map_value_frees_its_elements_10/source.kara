@@ -1,0 +1,7 @@
+fn main() {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"aaaaaaaa0");
+    let mut m: Map[i64, Vec[String]] = Map.new();
+    m.insert(1, inner);
+    println("s:ok");
+}

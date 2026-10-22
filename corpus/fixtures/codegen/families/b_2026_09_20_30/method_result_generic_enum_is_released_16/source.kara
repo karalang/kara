@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 30 }; let b = retm(mk); println("x")
+}

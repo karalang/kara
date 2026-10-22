@@ -1,0 +1,18 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4, 5, 6];
+let mut a = 0;
+for x in v.iter().map(|x| x * 10) { a = a + x; }
+println(f"{a}");
+let mut b = 0;
+for x in v.iter().filter(|x| x % 2 == 0) { b = b + x; }
+println(f"{b}");
+let mut c = 0;
+for x in v.iter().filter(|x| x > 2).map(|x| x * x) { c = c + x; }
+println(f"{c}");
+let mut d = 0;
+for x in v.iter().map(|x| x * 2) { if x > 8 { break; } d = d + x; }
+println(f"{d}");
+let mut e = 0;
+for x in v.iter().map(|x| x * 2) { if x == 4 { continue; } e = e + x; }
+println(f"{e}");
+}

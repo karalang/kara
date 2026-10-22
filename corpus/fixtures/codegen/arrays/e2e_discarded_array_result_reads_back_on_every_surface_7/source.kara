@@ -1,0 +1,7 @@
+struct W { a: Array[String, 2] }
+fn get(w: ref W) -> Array[String, 2] { return w.a.clone(); }
+fn main() {
+    let w: W = W { a: [f"aaaaaaaa0", f"bbbbbbbb0"] };
+    get(w);
+    println("s:ok");
+}

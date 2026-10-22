@@ -1,0 +1,28 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+impl Box2 {
+    fn tag(ref self) -> i64 {
+        match self {
+            Box2.Full(r) => { return 1; }
+            Box2.Empty => { return 0; }
+        }
+    }
+}
+fn mk_e(n: i64) -> Box2 {
+    return Box2.Full(Res { id: n, name: f"e{n}" });
+}
+fn main() {
+    println("a: ref-self match on fresh receiver");
+    let t = mk_e(5).tag();
+    println(f"t={t}");
+    println("b: ref-self match on named binding");
+    let bx = mk_e(8);
+    let u = bx.tag();
+    println(f"u={u}");
+    println("end");
+}

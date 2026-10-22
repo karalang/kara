@@ -1,0 +1,8 @@
+fn main() {
+let r = MemoryOrdering.Relaxed;
+let a = MemoryOrdering.Acquire;
+let rel = MemoryOrdering.Release;
+println(r);
+println(a);
+println(rel);
+}

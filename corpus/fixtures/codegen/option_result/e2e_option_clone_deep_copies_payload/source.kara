@@ -1,0 +1,11 @@
+fn main() {
+    let o: Option[String] = Option.Some("inner");
+    let p = o.clone();
+    println(p.unwrap());
+    let q: Option[i64] = Option.Some(5);
+    let r = q.clone();
+    println(f"{r.unwrap()}");
+    let n: Option[String] = Option.None;
+    let m = n.clone();
+    println(f"{m.is_none()}");
+}

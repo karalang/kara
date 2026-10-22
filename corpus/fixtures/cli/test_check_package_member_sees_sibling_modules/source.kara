@@ -1,0 +1,6 @@
+import db.connection.Connection;
+
+fn main() {
+    let c = Connection { id: 5 };
+    println(f"{c.id}");
+}

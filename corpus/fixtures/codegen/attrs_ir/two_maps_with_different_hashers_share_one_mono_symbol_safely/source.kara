@@ -1,0 +1,14 @@
+fn main() {
+    let mut d: Map[i64, i64] = Map.new();
+    let mut f: Map[i64, i64, FxBuildHasher] = Map.new();
+    let mut i = 0;
+    while i < 500 { d.insert(i, i); f.insert(i, i * 2); i = i + 1; }
+    let mut bad = 0;
+    let mut j = 0;
+    while j < 500 {
+        if d.get(j).unwrap_or(-1) != j { bad = bad + 1; }
+        if f.get(j).unwrap_or(-1) != j * 2 { bad = bad + 1; }
+        j = j + 1;
+    }
+    println(bad);
+}

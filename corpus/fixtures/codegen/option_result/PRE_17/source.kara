@@ -1,0 +1,2 @@
+fn eat(o: Option[Rt]) { println("in") }
+fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f"a" }); eat(o); println("done") }

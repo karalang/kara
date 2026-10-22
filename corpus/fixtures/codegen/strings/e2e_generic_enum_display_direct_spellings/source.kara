@@ -1,0 +1,28 @@
+#[derive(Display)]
+enum MyOpt[T] { Has(T), Empty }
+#[derive(Display)]
+enum Pair2[A, B] { Both(A, B), Left(A), Neither }
+#[derive(Display)]
+enum Plain { X(i64), Y }
+fn main() {
+let a: MyOpt[i64] = MyOpt.Has(5i64);
+println(a);
+let b: MyOpt[String] = MyOpt.Has("hi");
+println(b);
+let c: MyOpt[i64] = MyOpt.Empty;
+println(c);
+let d: MyOpt[u64] = MyOpt.Has(18446744073709551615u64);
+println(d);
+let e: Pair2[i64, String] = Pair2.Both(7i64, "s");
+println(e);
+let f: Pair2[String, i64] = Pair2.Left("q");
+println(f);
+let g: Plain = Plain.X(3i64);
+println(g);
+let mut inner: Vec[i64] = vec![];
+inner.push(9i64);
+let h: MyOpt[Vec[i64]] = MyOpt.Has(inner);
+println(h);
+println(f"{a} {b} {e}");
+println(a.to_string());
+}

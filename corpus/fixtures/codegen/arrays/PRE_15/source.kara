@@ -1,0 +1,2 @@
+enum Vbin { V(Vec[Ra]), Z }
+fn main() { let v: Vbin = Vbin.V(Vec[Ra { id: 1 }, Ra { id: 2 }]); println("end") }

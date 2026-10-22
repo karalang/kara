@@ -1,0 +1,4 @@
+fn main() {
+    let n = 7;
+    let mut a: Vec[(String, i64)] = [(f"one-aaaaaaaaaaaa-{n}", 1)]; a[0] = (f"rep-bbbbbbbbbbbb-{n}", a[0].0.len()); println(f"{a[0].1} {a[0].0}")
+}

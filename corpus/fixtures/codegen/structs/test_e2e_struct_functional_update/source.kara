@@ -1,0 +1,6 @@
+struct P { x: i64, y: i64, z: i64 }
+fn main() {
+let b = P { x: 1, y: 2, z: 3 };
+let p = P { x: 10, ..b };
+println(f"{p.x} {p.y} {p.z}");
+}

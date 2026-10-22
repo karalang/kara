@@ -1,0 +1,11 @@
+fn first[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn firstc(s: Slice[String]) -> String { s[0].clone() }
+fn make() -> Vec[String] { ["mk-alpha", "mk-beta"] }
+fn main() {
+    let vs: Vec[String] = ["own-" + "a", "own-" + "b"];
+    println(f"[{first(vs.clone())}]");
+    println(f"[{firstc(vs.clone())}]");
+    println(f"[{first(make())}]");
+    let ns: Vec[i64] = [7, 8];
+    println(f"[{first(ns.clone())}]");
+}

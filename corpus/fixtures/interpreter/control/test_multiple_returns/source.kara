@@ -1,0 +1,10 @@
+fn sign(x: i64) -> i64 {
+if x > 0 { return 1; }
+if x < 0 { return -1; }
+0
+}
+fn main() {
+println(sign(42));
+println(sign(-7));
+println(sign(0));
+}

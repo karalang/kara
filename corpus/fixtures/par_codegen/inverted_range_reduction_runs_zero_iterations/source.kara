@@ -1,0 +1,1 @@
+fn main() { println(f"{kernel(5, 3)}"); }

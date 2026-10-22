@@ -1,0 +1,4 @@
+fn main() {
+let a: Atomic[bool] = Atomic.new(false);
+println(a.load(MemoryOrdering.SeqCst));
+}

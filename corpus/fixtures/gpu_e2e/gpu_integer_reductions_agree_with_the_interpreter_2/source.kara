@@ -1,0 +1,5 @@
+fn main() {
+    let mut v: Vec[i32] = [];
+    for i in 0..4096 { v.push(((i % 11) - 5) as i32) }
+    println(f"{gpu.sum(v)}")
+}

@@ -1,0 +1,7 @@
+struct I { a: i64, b: i64 }
+struct O { inner: I }
+fn main() {
+let o = O { inner: I { a: 1, b: 2 } };
+let q = I { a: 5, ..o.inner };
+println(f"{q.a} {q.b}");
+}

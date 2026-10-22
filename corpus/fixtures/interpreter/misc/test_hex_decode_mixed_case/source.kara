@@ -1,0 +1,6 @@
+fn main() {
+match Hex.decode("FfaA") {
+Ok(bs) => println(bs.len()),
+Err(_) => println("err"),
+}
+}

@@ -1,0 +1,30 @@
+struct S { k: i64, nxt: Option[E] }
+shared enum E { V(S) }
+fn sum(e: ref E) -> i64 {
+    match e {
+        V(s) => {
+            match s.nxt {
+                None => s.k,
+                Some(inner) => s.k + sum(inner),
+            }
+        }
+    }
+}
+fn depth(e: ref E) -> i64 {
+    match e {
+        V(s) => {
+            match s.nxt {
+                None => 0,
+                Some(inner) => 1 + depth(inner),
+            }
+        }
+    }
+}
+fn main() {
+    let a = E.V(S { k: 1, nxt: None });
+    let b = E.V(S { k: 10, nxt: Some(a) });
+    let c = E.V(S { k: 100, nxt: Some(b) });
+    println(sum(c).to_string());
+    println(sum(c).to_string());
+    println(depth(c).to_string());
+}

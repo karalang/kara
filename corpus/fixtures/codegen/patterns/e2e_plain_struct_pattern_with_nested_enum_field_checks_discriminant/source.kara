@@ -1,0 +1,14 @@
+enum Shape { Circle(f64), Rect(f64, f64), Point }
+struct Item { shape: Shape, count: i64 }
+fn classify(it: ref Item) -> String {
+match it {
+Item { shape: Shape.Circle(r), count: _ } => f"circle r={r}",
+Item { shape: Shape.Rect(w, h), count: _ } => f"rect {w}x{h}",
+Item { shape: Shape.Point, count: _ } => "point",
+}
+}
+fn main() {
+println(classify(Item { shape: Shape.Circle(5.0), count: 1 }));
+println(classify(Item { shape: Shape.Rect(3.0, 6.0), count: 1 }));
+println(classify(Item { shape: Shape.Point, count: 9 }));
+}

@@ -1,0 +1,12 @@
+trait Greet { fn greet(self) -> i64; }
+        struct Person { id: i64 }
+        struct Robot { serial: i64 }
+        impl Greet for Person { fn greet(self) -> i64 { 100 } }
+        impl Greet for Robot { fn greet(self) -> i64 { 200 } }
+        fn do_greet[T: Greet](x: T) -> i64 { x.greet() }
+        fn main() {
+            let p = Person { id: 1 };
+            let r = Robot { serial: 2 };
+            println(do_greet(p));
+            println(do_greet(r));
+        }

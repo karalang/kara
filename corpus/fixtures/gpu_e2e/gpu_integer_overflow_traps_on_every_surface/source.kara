@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vec[i32] = [2147483647, 1];
+    println(f"{gpu.sum(v)}")
+}

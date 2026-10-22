@@ -1,0 +1,2 @@
+struct P { n: i64 }
+fn main() { let mut v: Vec[P] = Vec.new(); v.push(P { n: 5 }); v[0].n = 9; println(f"r:{v[0].n}") }

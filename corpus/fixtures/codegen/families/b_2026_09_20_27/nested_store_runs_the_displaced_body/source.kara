@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[S]] = [[S { s: f"one-{n}", k: 1 }]]; d[0][0] = S { s: f"replaced-{n}", k: 2 }; println("end") }

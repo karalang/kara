@@ -1,0 +1,13 @@
+fn main() {
+let mut out: Vec[Vec[i64]] = Vec.new();
+let mut b: Vec[i64] = Vec.new(); b.push(0i64);
+let mut k = 0i64; while k < 100i64 { out.push(b.clone()); k = k + 1i64; }
+let mut acc = 0i64; let mut j = 0i64;
+while j < 100i64 {
+let mut nb: Vec[i64] = Vec.new(); nb.push(j);
+out[j] = nb;
+acc = acc + out[j][0i64];
+j = j + 1i64;
+}
+println(f"{acc}");
+}

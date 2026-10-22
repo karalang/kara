@@ -1,0 +1,12 @@
+fn half(n: u64) -> String {
+match n {
+0u64..=9223372036854775807u64 => return "lo",
+9223372036854775808u64..=18446744073709551615u64 => return "hi",
+}
+}
+fn main() {
+println(half(0u64));
+println(half(9223372036854775807u64));
+println(half(9223372036854775808u64));
+println(half(18446744073709551615u64));
+}

@@ -1,0 +1,8 @@
+#[derive(Display)]
+        struct Plain { n: i64 }
+        fn main() {
+            let p = Plain { n: 5 };
+            println(f"top={p}");
+            println(f"vec={[Plain { n: 5 }]}");
+            println(f"opt={Some(Plain { n: 5 })}");
+        }

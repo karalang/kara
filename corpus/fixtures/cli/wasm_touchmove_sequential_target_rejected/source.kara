@@ -1,0 +1,6 @@
+import std.web.events.{touchmove, TouchEvent};
+
+fn main() {
+    let moves = touchmove();
+    moves.recv();
+}

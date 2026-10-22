@@ -1,0 +1,3 @@
+enum Cache { None, Warm }
+             fn take(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1, } }
+             fn main() { println(take(None)); println(take(Some(9))); }

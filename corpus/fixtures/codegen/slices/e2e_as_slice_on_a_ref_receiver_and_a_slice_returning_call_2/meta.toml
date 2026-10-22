@@ -1,0 +1,17 @@
+source = "tests/codegen/slices.rs::e2e_as_slice_on_a_ref_receiver_and_a_slice_returning_call"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "57bade2a"
+model_rev = "583cfb0d"
+model_src = "57bade2a"

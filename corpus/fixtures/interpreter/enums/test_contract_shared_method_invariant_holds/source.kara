@@ -1,0 +1,3 @@
+shared struct Scell { n: i64, invariant self.n >= 0 }
+impl Scell { pub fn get(ref self) -> i64 { self.n } }
+fn main() { let c = Scell { n: 5 }; let _ = c.get(); }

@@ -1,0 +1,9 @@
+fn main() {
+println(2i64.pow(10u32));
+println(3i64.pow(0u32));
+println(5i64.pow(3u32));
+let e: u32 = 6;
+println(2i64.pow(e));
+let b: u64 = 1000000;
+println(b.pow(2u32));
+}

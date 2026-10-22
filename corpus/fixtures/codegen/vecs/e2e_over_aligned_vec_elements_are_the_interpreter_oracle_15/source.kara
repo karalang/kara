@@ -1,0 +1,10 @@
+fn main() {
+let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+let mut m: Map[i64, Vector[i64, 4]] = Map.new();
+for i in 0..9 { m.insert(i, a); }
+println(m.len());
+match m.get(7) {
+Some(g) => { println(g.reduce_sum()); }
+None => { println(-1); }
+}
+}

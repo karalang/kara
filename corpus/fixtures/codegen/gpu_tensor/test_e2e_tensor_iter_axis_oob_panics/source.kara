@@ -1,0 +1,6 @@
+fn main() {
+let a = Tensor.from([[1, 2], [3, 4]]);
+let ax = 5;
+let parts = a.iter_axis(ax);
+println(parts.len());
+}

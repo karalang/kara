@@ -1,0 +1,11 @@
+fn bump(v: mut ref Vec[i64], x: i64) { v.push(x); }
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+let f = bump;
+let mut i = 0i64;
+while i < 5i64 { f(mut v, i * 2i64); i = i + 1i64; }
+let mut s = 0i64;
+let mut j = 0i64;
+while j < v.len() { s = s + v[j]; j = j + 1i64; }
+println(s);
+}

@@ -1,0 +1,6 @@
+import std.web.time.{every, Duration};
+
+fn main() {
+    let rx = every(Duration.ms(15));
+    rx.recv();
+}

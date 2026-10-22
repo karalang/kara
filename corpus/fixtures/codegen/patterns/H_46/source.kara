@@ -1,0 +1,7 @@
+fn g(x: i64) -> Result[i64, String] { if x > 5 { return Err("big") } return Ok(x) }
+fn f() -> Result[i64, String] {
+  match mk(7) { E.A(n) => { println(f"v{n}"); let q = g(n)?; return Ok(q) } E.B => {} }
+  println("AFTER");
+  return Ok(0)
+}
+fn main() { match f() { Ok(v) => { println(f"ok{v}") } Err(e) => { println(f"err{e}") } } }

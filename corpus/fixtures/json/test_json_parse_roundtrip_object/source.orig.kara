@@ -1,0 +1,6 @@
+fn main() {
+match Json.parse("{\"a\": 1, \"b\": \"hello\", \"c\": [true, null]}") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+}

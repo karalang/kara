@@ -1,0 +1,4 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn relay1(k: i64) -> Fn(i64) -> i64 { let f = make(k); f }
+fn relay2(k: i64) -> Fn(i64) -> i64 { let g = relay1(k); g }
+fn main() { let r = relay2(20i64); println(f"{r(22i64)}"); }

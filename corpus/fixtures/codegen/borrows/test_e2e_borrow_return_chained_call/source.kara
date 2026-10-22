@@ -1,0 +1,15 @@
+fn echo(s: ref String) -> ref String { s }
+fn echo_twice(s: ref String) -> ref String {
+    let t = echo(s);
+    echo(t)
+}
+fn echo_thrice(s: ref String) -> ref String {
+    let t = echo(s);
+    return echo_twice(t);
+}
+fn main() {
+    let s = String.from("chained");
+    let r = echo_twice(s); println(r); println(r.len());
+    let q = String.from("again");
+    let w = echo_thrice(q); println(w);
+}

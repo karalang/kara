@@ -1,0 +1,7 @@
+shared struct Node { v: i64 }
+fn get(n: Node) -> i64 { return n.v; }
+fn main() {
+let n: Node = Node { v: 41i64 };
+let f = get;
+println(f(n) + 1i64);
+}

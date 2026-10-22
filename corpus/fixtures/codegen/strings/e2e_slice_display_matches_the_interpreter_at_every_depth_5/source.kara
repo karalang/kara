@@ -1,0 +1,9 @@
+fn show(t: mut Slice[i64]) { println(f"{t}"); }
+fn main() {
+let n = env.args().len() as i64;
+let mut v: Vec[i64] = Vec.new();
+v.push(n);
+                 v.push(n + 1);
+                 v.push(n + 2);
+show(mut v[0..2]);
+             }

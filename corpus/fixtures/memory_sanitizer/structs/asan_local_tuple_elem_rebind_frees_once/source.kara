@@ -1,0 +1,21 @@
+struct D { id: i64, xs: Vec[i64], name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"  dD{self.id}:{self.xs.len()}:{self.name}") } }
+fn mkD(id: i64) -> D {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return D { id: id, xs: v, name: f"n{id}" }
+}
+fn sinkD(d: D) -> i64 { d.xs.len() }
+fn rebind()   { let t = (mkD(1), 0); match t { (r, k) => { let m = r; println(f"  rb{m.xs.len()}:{m.name}") } } }
+fn twoElem()  { let t = (mkD(2), mkD(3)); match t { (r, q) => { let m = r; println(f"  te{m.xs.len()}:{m.name}") } } }
+fn readOnly() { let t = (mkD(5), 0); match t { (r, k) => { println(f"  ro{r.xs.len()}:{r.name}") } } }
+fn toCallee() { let t = (mkD(6), 0); match t { (r, k) => { println(f"  tc{sinkD(r)}") } } }
+fn mid()      { let t = (0, mkD(7), 0); match t { (a, r, k) => { let m = r; println(f"  md{m.xs.len()}:{m.name}") } } }
+fn main() {
+    rebind();
+    twoElem();
+    readOnly();
+    toCallee();
+    mid();
+    println("end")
+}

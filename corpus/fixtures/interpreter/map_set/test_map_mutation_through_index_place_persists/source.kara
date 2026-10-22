@@ -1,0 +1,8 @@
+fn main() {
+  let m0: Map[i64, i64] = Map.new();
+  let mut v: Vec[Map[i64, i64]] = Vec.new();
+  v.push(m0);
+  let _ = v[0].insert(5, 50);
+  let _ = v[0].insert(6, 60);
+  println(v[0].len());
+}

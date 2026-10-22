@@ -1,0 +1,11 @@
+fn main() {
+println((1u32).is_power_of_two());
+println((2u32).is_power_of_two());
+println((3u32).is_power_of_two());
+println((0u32).is_power_of_two());
+let big: u64 = 1;
+println(big.rotate_left(63).is_power_of_two());
+println((128u8).is_power_of_two());
+println((129u8).is_power_of_two());
+println((1024u16).is_power_of_two());
+}

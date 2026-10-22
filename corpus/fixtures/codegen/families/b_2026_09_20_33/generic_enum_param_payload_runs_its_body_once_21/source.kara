@@ -1,0 +1,2 @@
+fn g(b: Gen[Wd]) { match b { Gen.A(v) => { println(f"db {v.a.id}/{v.b}") } Gen.B => { println("none") } } }
+fn main() { { let a: Gen[Wd] = Gen.A(Wd { a: R { id: 47 }, b: f"b", c: f"c" }); g(a) }; println("end") }

@@ -1,0 +1,1 @@
+fn main() { let c: G[Vec[String]] = G.Y([f"v-{1}"]); println(f"m:{c.rshow()}"); println(f"m:{c.keep()}"); }

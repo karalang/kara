@@ -1,0 +1,1 @@
+fn round_trip(p: *const i64) -> bool { let a: usize = ptr.addr(p); let q: *const i64 = ptr.with_addr(p, a); ptr.addr(q) == a } fn main() {}

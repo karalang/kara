@@ -1,0 +1,5 @@
+fn main() {
+let e: Vec[i64] = Vec.from_fn(0, |i| i);
+let s: Vec[String] = Vec.from_fn(3, |i| f"n{i}");
+println(f"{e.len()} {s[0]} {s[2]}");
+}

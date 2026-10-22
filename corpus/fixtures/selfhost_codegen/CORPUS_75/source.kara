@@ -1,0 +1,1 @@
+fn main() { let v = Vec.new(); println(v.len().to_string()) }

@@ -1,0 +1,2 @@
+fn peek(p: ref (R, i64)) -> i64 { p.0.id }
+fn main() { let p = (R { id: 41, name: f"n{41}" }, 1); println(f"{peek(p)}"); println(f"{p.0.name}") }

@@ -1,0 +1,18 @@
+fn classify(n: i64) -> String {
+match n { 0 => f"zero", x if x < 0 => f"neg", x if x < 10 => f"small", _ => f"big" }
+}
+fn g(o: Option[i64]) -> i64 { match o { Some(x) if x > 5 => 1, Some(_) => 2, None => 3 } }
+fn h(n: i64) -> i64 { match n { x if x > 100 => 1, x if x > 10 => 2, x => x } }
+fn pick(o: Option[String]) -> String {
+match o { Some(s) if s.len() > 3 => s, Some(_) => f"short", None => f"none" }
+}
+fn main() {
+println(classify(0));
+println(classify(0 - 3));
+println(classify(5));
+println(classify(100));
+println(f"{g(Some(10))} {g(Some(2))} {g(None)}");
+println(f"{h(500)} {h(50)} {h(5)}");
+println(pick(Some(f"hello")));
+println(pick(Some(f"hi")));
+}

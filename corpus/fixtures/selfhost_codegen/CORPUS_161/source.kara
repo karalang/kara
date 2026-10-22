@@ -1,0 +1,48 @@
+fn main() {
+    let mut i = 0;
+    let mut sum = 0;
+    loop {
+        if i >= 5 {
+            break;
+        }
+        sum = sum + i;
+        i = i + 1;
+    }
+    println(sum.to_string());
+    let mut j = 0;
+    let mut evens = 0;
+    while j < 10 {
+        j = j + 1;
+        if j % 2 == 1 {
+            continue;
+        }
+        evens = evens + j;
+    }
+    println(evens.to_string());
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    let mut acc = 0;
+    for x in v {
+        if x == 4 {
+            break;
+        }
+        if x % 2 == 0 {
+            continue;
+        }
+        acc = acc + x;
+    }
+    println(acc.to_string());
+    let src = "abcdef";
+    let mut cnt = 0;
+    for b in src.bytes() {
+        if b == 100 {
+            break;
+        }
+        cnt = cnt + 1;
+    }
+    println(cnt.to_string());
+}

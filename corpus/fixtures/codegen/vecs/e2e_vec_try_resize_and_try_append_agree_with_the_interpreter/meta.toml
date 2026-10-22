@@ -1,0 +1,17 @@
+source = "tests/codegen/vecs.rs::e2e_vec_try_resize_and_try_append_agree_with_the_interpreter"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0236"
+classified_with = "79705a229"
+extracted_src = "02ba8664"
+model_rev = "583cfb0d"
+model_src = "02ba8664"

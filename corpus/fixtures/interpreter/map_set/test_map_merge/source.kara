@@ -1,0 +1,10 @@
+fn main() {
+let a: Map[String, i64] = Map.new();
+a.insert("p", 1_i64);
+let b: Map[String, i64] = Map.new();
+b.insert("q", 2_i64);
+let c = a.merge(b);
+println(c.len());
+println(c.contains_key("p"));
+println(c.contains_key("q"));
+}

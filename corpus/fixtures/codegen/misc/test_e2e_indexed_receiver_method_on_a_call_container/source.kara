@@ -1,0 +1,33 @@
+struct Hold { arr: Array[String, 2], v: Vec[String] }
+impl Hold {
+    fn pa(ref self) -> ref Array[String, 2] { return self.arr; }
+    fn pv(ref self) -> ref Vec[String] { return self.v; }
+}
+struct Mk {}
+impl Mk {
+    fn arr(ref self, n: i64) -> Array[String, 2] {
+        return Array[f"marr-{n}", f"mbrr-{n}"];
+    }
+}
+fn pav(h: ref Hold) -> ref Vec[String] { return h.v; }
+fn mkv(n: i64) -> Vec[String] { return [f"free-{n}", f"beta-{n}"]; }
+fn mkn(n: i64) -> Vec[Vec[i64]] { return [[n, n + 1, n + 2], [n]]; }
+fn shout(n: i64) -> Vec[String] { println("once"); return [f"sh-{n}"]; }
+fn main() {
+    let k = 7;
+    let h = Hold {
+        arr: [f"harr-{k}", f"hbrr-{k}"],
+        v: [f"hvec-{k}", f"hwec-{k}"],
+    };
+    let m = Mk {};
+    println(f"ownfree:{mkv(k)[0].len()}");
+    println(f"ownmeth:{m.arr(k)[1].to_uppercase()}");
+    println(f"borrmeth:{h.pa()[0].len()}");
+    println(f"borrvec:{h.pv()[1].to_uppercase()}");
+    println(f"borrfree:{pav(h)[0].len()}");
+    let a: ref Array[String, 2] = h.pa();
+    println(f"boundarr:{a[1].len()}");
+    println(f"nested:{mkn(k)[0].len()}");
+    println(f"once:{shout(k)[0].len()}");
+    println(f"orig:{h.arr[0]}/{h.v[1]}");
+}

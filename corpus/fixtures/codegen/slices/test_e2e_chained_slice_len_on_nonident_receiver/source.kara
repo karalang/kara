@@ -1,0 +1,9 @@
+fn main() {
+let v: Vec[String] = ["abc", "de"];
+println(f"{v[0].bytes().len()}");
+let s: String = "hello";
+println(f"{s.bytes().len()}");
+println(f"{s.bytes().is_empty()}");
+let e: String = "";
+println(f"{e.bytes().is_empty()}");
+}

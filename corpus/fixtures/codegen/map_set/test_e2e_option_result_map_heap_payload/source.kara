@@ -1,0 +1,20 @@
+fn shout(s: String) -> String { s.to_uppercase() }
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(10); v.push(20); v.push(30);
+let opt: Option[Vec[i64]] = Some(v);
+println(f"{opt.map(|xs| xs.len()).unwrap_or(-1)}");
+let s: Option[String] = Some(f"hello");
+println(f"{s.map(|x| x.len()).unwrap_or(-1)}");
+let mv: Option[String] = Some(f"kept");
+let same = mv.map(|x| x);
+match same { Some(x) => { println(f"{x.len()}"); } None => { println("none"); } }
+let ok: Result[String, i64] = Ok(f"data");
+println(f"{ok.map(|d| d.len()).unwrap_or(-1)}");
+let up: Option[String] = Some(f"hi");
+match up.map(|x: String| x.to_uppercase()) { Some(x) => { println(x); } None => { println("none"); } }
+let nf: Option[String] = Some(f"yo");
+match nf.map(shout) { Some(x) => { println(x); } None => { println("none"); } }
+let none: Option[String] = None;
+println(f"{none.map(|x| x.len()).unwrap_or(-1)}");
+}

@@ -1,0 +1,1 @@
+fn main() { let s = "hello world"; println(s.substring(0, 5)); println(s.substring(6, 11)) }

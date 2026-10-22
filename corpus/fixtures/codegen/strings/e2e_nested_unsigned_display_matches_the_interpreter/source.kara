@@ -1,0 +1,36 @@
+#[derive(Display)]
+struct Pair { pub u: u128, pub v: u64 }
+fn main() {
+let big: u64 = 18446744073709551615u64;
+let o: Option[u64] = Some(big);
+println(o);
+let r: Result[u64, String] = Ok(big);
+println(r);
+let mut v: Vec[u64] = vec![];
+v.push(big);
+v.push(5u64);
+println(v);
+let t = (big, 5i64);
+println(t);
+let mut vo: Vec[Option[u64]] = vec![];
+vo.push(Some(big));
+vo.push(None);
+println(vo);
+let mut mp: Map[String, u64] = Map.new();
+mp.insert("k", big);
+println(mp);
+println(f"{o} {v}");
+let m: u128 = 340282366920938463463374607431768211455u128;
+let p = Pair { u: m, v: big };
+println(p);
+let ou: Option[u128] = Some(m);
+println(ou);
+let mut vv: Vec[Option[u128]] = vec![];
+vv.push(Some(m));
+println(vv);
+let s: Option[i64] = Some(0i64 - 1i64);
+println(s);
+let mut n8: Vec[u8] = vec![];
+n8.push(200u8);
+println(n8);
+}

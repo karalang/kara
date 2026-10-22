@@ -1,0 +1,13 @@
+fn might_fail() -> i64 {
+let r = Err(0);
+let v = r?;
+v
+}
+fn check() -> i64 {
+let result = might_fail();
+match result {
+Ok(v) => v,
+Err(e) => -1,
+}
+}
+fn main() { println(check()); }

@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[i64] = Vec.filled(64i64, 0i64); let mut s = 0i64; let mut c = 0i64; while c < 64i64 { s = s + v[c]; c = c + 1i64; } println(s); }

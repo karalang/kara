@@ -1,0 +1,3 @@
+struct Wf { r: Re }
+struct Wg { o: Option[Option[Wf]] }
+fn main() { let w = Wg { o: Some(Some(Wf { r: Re { id: 71, name: f"a" } })) }; println("ok"); println("done") }

@@ -1,0 +1,42 @@
+struct Pt { s: String, x: i64 }
+struct Pair { a: String, b: String, x: i64 }
+struct Mid { p: Pt }
+struct Holder { inner: Pt, pair: Pair, mid: Mid, n: i64 }
+fn render(h: ref Holder) -> String {
+match h.inner {
+Pt { s, x } => { return "p:".to_string() + s + ":" + x.to_string(); }
+}
+return "?".to_string();
+}
+fn peek(h: ref Holder) -> i64 {
+match h.inner {
+Pt { s, x } => { return s.len() + x; }
+}
+return -1;
+}
+fn take_a(h: ref Holder) -> String {
+match h.pair {
+Pair { a, b: _, x: _ } => { return a.clone(); }
+}
+return "?".to_string();
+}
+fn deep(h: ref Holder) -> String {
+match h.mid.p {
+Pt { s, x } => { return s + ":" + x.to_string(); }
+}
+return "?".to_string();
+}
+fn main() {
+let a = Holder {
+inner: Pt { s: "sp".to_string(), x: 7 },
+pair: Pair { a: "left".to_string(), b: "right".to_string(), x: 9 },
+mid: Mid { p: Pt { s: "dp".to_string(), x: 2 } },
+n: 1,
+};
+println(render(a));
+println(render(a));
+println(peek(a));
+println(take_a(a));
+println(take_a(a));
+println(deep(a));
+}

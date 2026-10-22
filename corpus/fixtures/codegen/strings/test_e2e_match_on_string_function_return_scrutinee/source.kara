@@ -1,0 +1,19 @@
+fn label_for(n: i64) -> String {
+match n {
+1 => "one",
+2 => "two",
+_ => "other",
+}
+}
+fn classify(n: i64) -> i64 {
+match label_for(n) {
+"one" => 10,
+"two" => 20,
+_ => 99,
+}
+}
+fn main() {
+println(classify(1));
+println(classify(2));
+println(classify(5));
+}

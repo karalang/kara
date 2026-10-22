@@ -1,0 +1,3 @@
+struct T { tag: i64 }
+impl T { fn take(ref self, r: R) -> i64 { let w = W.One(r); 7 } }
+fn main() { let t = T { tag: 0 }; let v = t.take(R { id: 1 }); println(f"v={v}") }

@@ -1,0 +1,23 @@
+struct Hh { grid: Vec[Vec[i64]] }
+fn main() {
+    let av: Array[Vec[i64], 1] = Array[[1, 2]];
+    let g1 = ref av[0][1];
+    println(f"arrayvec {g1}");
+    let b: Vec[Vec[i64]] = [[3, 4]];
+    let sl: Slice[Vec[i64]] = b.as_slice();
+    let g2 = ref sl[0][1];
+    println(f"slicevec {g2}");
+    let va: Vec[Array[i64, 2]] = [Array[5, 6]];
+    let g3 = ref va[0][1];
+    println(f"vecarray {g3}");
+    let aa: Array[Array[i64, 2], 1] = Array[Array[7, 8]];
+    let g4 = ref aa[0][1];
+    println(f"arrayarray {g4}");
+    let h: Hh = Hh { grid: [[9, 10]] };
+    let g5 = ref h.grid[0][1];
+    println(f"field {g5}");
+    let mut m: Vec[Array[i64, 2]] = [Array[1, 2]];
+    let ga = ref m[0][1];
+    m[0][1] = 66;
+    println(f"alias {ga}");
+}

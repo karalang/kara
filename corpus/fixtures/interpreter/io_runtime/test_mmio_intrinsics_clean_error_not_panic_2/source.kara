@@ -1,0 +1,1 @@
+fn main() { let cell: i32 = 0; unsafe { volatile_write(ptr.mut(cell), 5); } }

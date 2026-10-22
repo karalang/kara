@@ -1,0 +1,30 @@
+struct Holder { buckets: Map[i64, Vec[i64]], counts: Map[i64, i64] }
+struct FreqStack { freq: Map[i64, i64], buckets: Map[i64, Vec[i64]], maxfreq: i64 }
+impl FreqStack {
+fn push_val(mut ref self, v: i64) {
+let f = self.freq.get_or(v, 0) + 1;
+self.freq.insert(v, f);
+if f > self.maxfreq { self.maxfreq = f; }
+self.buckets.entry(f).or_insert(Vec.new()).push(v);
+}
+}
+fn main() {
+let mut local: Map[i64, Vec[i64]] = Map.new();
+local.entry(1).or_insert(Vec.new()).push(7);
+local.entry(1).or_insert(Vec.new()).push(8);
+println(local[1].len());
+let mut h = Holder { buckets: Map.new(), counts: Map.new() };
+h.buckets.entry(1).or_insert(Vec.new()).push(7);
+h.buckets.entry(1).or_insert(Vec.new()).push(8);
+println(h.buckets[1].len());
+h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+println(h.counts[2]);
+h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+println(h.counts[2]);
+h.buckets.entry(3).or_insert_with(|| Vec.new()).push(42);
+println(h.buckets[3].len());
+let mut s = FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+s.push_val(5); s.push_val(7); s.push_val(5);
+println(s.buckets[1].len());
+println(s.buckets[2].len());
+}

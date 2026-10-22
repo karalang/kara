@@ -1,0 +1,16 @@
+source = "tests/interpreter/frames.rs::test_column_from_arrow_ipc_rejects_element_type_mismatch"
+dedup_of = []
+expect = "skip"
+exit = 101
+tags = ["deferred:dataframe", "literal-unmatched", "panic", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'do not convert to the declared element type'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "72a51fc5"

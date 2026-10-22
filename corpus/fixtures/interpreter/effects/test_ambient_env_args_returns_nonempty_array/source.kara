@@ -1,0 +1,4 @@
+fn main() {
+let a = Env.args();
+println(a.len() > 0);
+}

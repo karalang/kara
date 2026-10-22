@@ -1,0 +1,9 @@
+shared struct Node { val: i64 }
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+fn show(t: Option[Node]) -> i64 {
+match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+fn main() {
+let a = make(1);
+println(f"{show(a)} {show(a)} {show(a)}");
+}

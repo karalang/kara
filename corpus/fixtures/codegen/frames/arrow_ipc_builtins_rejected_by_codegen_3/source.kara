@@ -1,0 +1,1 @@
+fn main() { let t = Tensor.from([[1, 2], [3, 4]]); let b = t.to_arrow_ipc(); println(b.len()); }

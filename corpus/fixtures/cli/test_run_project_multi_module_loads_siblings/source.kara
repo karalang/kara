@@ -1,0 +1,6 @@
+import util.{Rates, greet};
+fn main() {
+println(greet("world"));
+let r = Rates.new(2.5);
+println(f"r={r.get()}");
+}

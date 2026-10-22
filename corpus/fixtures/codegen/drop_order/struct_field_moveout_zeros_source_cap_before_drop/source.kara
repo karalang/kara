@@ -1,0 +1,3 @@
+struct Pair { a: String, b: String }
+fn f(p: Pair) -> String { p.a.clone() }
+fn main() { println(f(Pair { a: "x".to_string(), b: "y".to_string() })); }

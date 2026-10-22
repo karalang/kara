@@ -1,0 +1,5 @@
+shared struct Q { x: i64 }
+fn main() {
+    let q = Q { x: 1 };
+    println(q);
+}

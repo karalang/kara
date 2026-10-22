@@ -1,0 +1,2 @@
+enum Bin { Packed(Array[Ra, 2]), Bare }
+fn main() { let b: Bin = Bare; println("end") }

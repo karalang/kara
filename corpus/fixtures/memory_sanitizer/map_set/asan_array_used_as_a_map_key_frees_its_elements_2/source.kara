@@ -1,0 +1,14 @@
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 2 {
+        let k: Array[String, 2] = [f"kaaaaaaa{i}", f"kbbbbbbb{i}"];
+        m.insert(k, i);
+        i = i + 1;
+    }
+    let probe: Array[String, 2] = [f"kaaaaaaa1", f"kbbbbbbb1"];
+    match m.get(probe) {
+        Some(v) => { println(f"s:{v}"); }
+        None => { println("s:missing"); }
+    }
+}

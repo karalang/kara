@@ -1,0 +1,14 @@
+enum Dir { North, South, East, West }
+        impl Dir {
+            fn code(self) -> i64 {
+                match self { Dir.North => 0, Dir.South => 1, Dir.East => 2, Dir.West => 3 }
+            }
+            fn opposite(self) -> i64 { self.code() + 100 }
+        }
+        fn main() {
+            println(Dir.North.code().to_string());
+            println(Dir.West.code().to_string());
+            let z = Dir.East.code() + 5;
+            println(z.to_string());
+            println(Dir.South.opposite().to_string());
+        }

@@ -1,0 +1,6 @@
+fn main() {
+         let v = [10, 20, 30];
+         let s = v.as_slice();
+         match s.first() { Some(x) => println(x), None => println("none") }
+         match s.last()  { Some(x) => println(x), None => println("none") }
+     }

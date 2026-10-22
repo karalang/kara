@@ -1,0 +1,1 @@
+fn main() { let e: EVec = EVec.V(mkv()); match e { EVec.V(v) => { let u = v; println(f"au{u[0].id}") } EVec.B => { println("no") } } println("end") }

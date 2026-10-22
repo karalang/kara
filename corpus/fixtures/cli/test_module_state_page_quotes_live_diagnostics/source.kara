@@ -1,0 +1,2 @@
+pub let HOST: String = "localhost";
+fn main() { println(HOST); }

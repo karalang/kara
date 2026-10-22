@@ -1,0 +1,5 @@
+enum E { Missing(String) }
+struct Sv { a: Vec[String] }
+fn mk() -> Result[Sv, E] { let mut v: Vec[String] = Vec.new(); v.push("k"); Ok(Sv { a: v }) }
+fn take(s: Sv) { println(f"{s.a.len()}"); }
+fn main() { match mk() { Ok(s) => take(s), Err(_e) => println("e") } }

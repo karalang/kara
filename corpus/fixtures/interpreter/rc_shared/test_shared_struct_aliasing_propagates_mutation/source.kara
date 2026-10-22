@@ -1,0 +1,7 @@
+shared struct Counter { mut value: i64 }
+fn main() {
+let a = Counter { value: 1 };
+let b = a;
+b.value = 42;
+println(a.value);
+}

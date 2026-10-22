@@ -1,0 +1,7 @@
+struct A { x: i64 }
+struct B { y: i64 }
+fn main() {
+let p = A { x: 1i64 };
+let p = B { y: 2i64 };
+println(p.y);
+}

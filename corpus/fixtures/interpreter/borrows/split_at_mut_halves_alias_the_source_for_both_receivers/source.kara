@@ -1,0 +1,7 @@
+fn main() {
+let mut v: Vec[i64] = [1i64, 2i64, 3i64, 4i64];
+let mut p: (mut Slice[i64], mut Slice[i64]) = v.split_at_mut(2i64);
+p.0[0] = 10i64;
+p.1[0] = 30i64;
+println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+}

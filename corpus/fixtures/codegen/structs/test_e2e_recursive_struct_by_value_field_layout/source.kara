@@ -1,0 +1,7 @@
+struct Wrap { inner: Inner, tag: i64 }
+shared enum Link { Leaf(i64), Chain(Wrap) }
+struct Inner { value: i64, next: Link }
+fn main() {
+let w = Wrap { inner: Inner { value: 5, next: Link.Leaf(9) }, tag: 7 };
+println(w.tag.to_string());
+}

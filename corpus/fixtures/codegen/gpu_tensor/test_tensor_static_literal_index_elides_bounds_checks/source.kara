@@ -1,0 +1,5 @@
+fn main() {
+let t: Tensor[f64, [2, 3]] = Tensor.zeros([2, 3]);
+let x = t[1, 2];
+println(x);
+}

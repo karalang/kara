@@ -1,0 +1,18 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum C1 { X(Array[R, 2]) }
+enum C2 { X(Array[R, 2], i64) }
+fn mkarr(b: i64) -> Array[R, 2] {
+    return [R { id: b, s: f"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}" },
+            R { id: b + 1, s: f"pay-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-{b}" }];
+}
+fn eat1(w: C1) -> i64 { match w { C1.X(a) => { return a[0].id } } }
+fn eat2(w: C2) -> i64 { match w { C2.X(a, n) => { return a[0].id + n } } }
+fn main() {
+    { let w: C1 = C1.X(mkarr(1)); println(f"r{eat1(w)}") }
+    println("mid");
+    { let v: C2 = C2.X(mkarr(3), 20); println(f"s{eat2(v)}") }
+    println("mid2");
+    { let u: C2 = C2.X(mkarr(5), 1); println("held") }
+    println("end");
+}

@@ -1,0 +1,7 @@
+struct Data { value: i64 }
+fn consume(d: Data) -> i64 { d.value }
+fn main() {
+let d = Data { value: 1 };
+let _ = consume(d);
+let _ = consume(d);
+}

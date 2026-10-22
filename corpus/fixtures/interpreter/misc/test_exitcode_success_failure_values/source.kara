@@ -1,0 +1,6 @@
+fn main() {
+let ok = ExitCode.SUCCESS;
+let bad = ExitCode.FAILURE;
+println(ok.raw());
+println(bad.raw());
+}

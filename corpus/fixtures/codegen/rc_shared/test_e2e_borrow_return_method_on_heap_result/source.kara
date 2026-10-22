@@ -1,0 +1,8 @@
+fn name_of(u: ref String) -> ref String { u }
+fn main() {
+    let mut s: String = "";
+    s.push_str("hello");
+    println(name_of(s).len());
+    println(name_of(s).is_empty());
+    println(s);
+}

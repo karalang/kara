@@ -1,0 +1,16 @@
+source = "tests/interpreter/concurrency.rs::test_lazyframe_join_errors"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'built-ok'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "7a752f04"

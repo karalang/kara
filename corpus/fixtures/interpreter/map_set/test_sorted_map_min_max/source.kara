@@ -1,0 +1,8 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+m.insert(5_i64, "five");
+m.insert(1_i64, "one");
+m.insert(9_i64, "nine");
+match m.min() { Some(p) => println(f"{p.0}:{p.1}"), None => println("empty") }
+match m.max() { Some(p) => println(f"{p.0}:{p.1}"), None => println("empty") }
+}

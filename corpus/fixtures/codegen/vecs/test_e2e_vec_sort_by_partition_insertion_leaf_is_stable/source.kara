@@ -1,0 +1,28 @@
+struct R { key: i64, ord: i64 }
+fn main() {
+let mut v: Vec[R] = Vec.new();
+let mut seed: i64 = 987654321;
+let mut i: i64 = 0;
+while i < 9000 {
+seed = (seed * 1103515245 + 12345) % 2147483648;
+v.push(R { key: (seed / 65536) % 300, ord: i });
+i = i + 1;
+}
+v.sort_by(|a, b| a.key.cmp(b.key));
+let mut inv: i64 = 0;
+let mut unstable: i64 = 0;
+let mut dups: i64 = 0;
+let mut j: i64 = 1;
+while j < 9000 {
+if v[j].key < v[j - 1].key { inv = inv + 1; }
+if v[j].key == v[j - 1].key {
+dups = dups + 1;
+if v[j].ord < v[j - 1].ord { unstable = unstable + 1; }
+}
+j = j + 1;
+}
+let mut sum: i64 = 0;
+let mut q: i64 = 0;
+while q < 9000 { sum = sum + v[q].ord; q = q + 1; }
+println(f"{inv} {unstable} {dups > 8000} {sum}");
+}

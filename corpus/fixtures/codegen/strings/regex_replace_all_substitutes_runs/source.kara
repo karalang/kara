@@ -1,0 +1,5 @@
+fn main() {
+let re = Regex.compile("[0-9]+").unwrap();
+println(re.replace_all("a1b22c333", "#"));
+println(re.replace_all("no digits", "#"));
+}

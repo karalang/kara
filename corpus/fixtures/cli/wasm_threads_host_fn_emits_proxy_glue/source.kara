@@ -1,0 +1,8 @@
+effect resource Reporter;
+
+host fn report(value: i64) -> i64 with writes(Reporter);
+
+fn main() with writes(Reporter) {
+    let r = report(42);
+    println(r);
+}

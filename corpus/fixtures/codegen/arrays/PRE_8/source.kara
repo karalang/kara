@@ -1,0 +1,3 @@
+struct Pa { id: i64 }
+fn plainD(x: Option[Array[Pa, 2]]) { match x { Some(t) => { println(f"s:{t[0].id}") } None => { println("n") } } }
+fn main() { plainD(Some([Pa { id: 1 }, Pa { id: 2 }])); println("end") }

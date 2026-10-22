@@ -1,0 +1,12 @@
+fn main() {
+let mut cur = Some(1);
+let flag = Some(7);
+match cur {
+None => {}
+Some(n) => {
+println(n);
+match flag { None => {} Some(f) => { cur = Some(n + f); } }
+}
+}
+match cur { None => { println("none") } Some(m) => { println(m) } }
+}

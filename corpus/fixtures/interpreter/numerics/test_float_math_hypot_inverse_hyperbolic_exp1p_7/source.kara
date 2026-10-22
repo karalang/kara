@@ -1,0 +1,1 @@
+fn main() { println((0.7f64).asinh()); }

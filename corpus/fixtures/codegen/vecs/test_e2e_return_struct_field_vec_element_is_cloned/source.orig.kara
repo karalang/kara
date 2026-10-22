@@ -1,0 +1,17 @@
+struct S { xs: Vec[String] }
+impl S {
+    fn get(ref self, i: i64) -> String { return self.xs[i]; }
+    fn tail(ref self, i: i64) -> String { self.xs[i] }
+}
+fn free_get(s: ref S, i: i64) -> String { return s.xs[i]; }
+fn main() {
+    let mut s = S { xs: Vec.new() };
+    s.xs.push("a".to_string());
+    s.xs.push("b".to_string());
+    println(s.get(0));
+    println(free_get(s, 1));
+    println(s.tail(0));
+    println(s.get(0));
+    println(s.xs[0]);
+    println(s.xs.len());
+}

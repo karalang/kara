@@ -1,0 +1,7 @@
+fn take(m: ref Map[String, B], acc: mut ref Vec[String]) {
+   match m.get("k") { None => {} Some(B.S(w)) => { acc.push(w) } Some(B.C) => {} } }
+fn main() {
+   let mut m: Map[String, B] = Map.new(); fill(mut m);
+   let mut acc: Vec[String] = [];
+   take(m, mut acc);
+   println(f"len:{acc.len()}"); println("end") }

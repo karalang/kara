@@ -1,0 +1,4 @@
+fn main() -> Result[(), Option[Slice[i64]]] {
+    let a: Array[i64, 2] = [1, 2];
+    return Err(Some(a[0..2]));
+}

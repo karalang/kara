@@ -1,0 +1,8 @@
+enum E { A, B(i64) }
+impl E { fn make() -> E { E.B(3) } }
+struct W {}
+impl W { fn g(self) -> Result[i64, String] { Result.Ok(42) } }
+fn main() {
+match (W{}).g() { Ok(n) => println(n), Err(e) => println(0) }
+match E.make() { A => println(0), B(n) => println(n) }
+}

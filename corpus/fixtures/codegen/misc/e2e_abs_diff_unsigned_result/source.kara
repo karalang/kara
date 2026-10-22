@@ -1,0 +1,20 @@
+fn main() {
+let a: i32 = 5;
+let b: i32 = 3;
+println(a.abs_diff(b));
+println(b.abs_diff(a));
+let n: i32 = -5;
+println(n.abs_diff(b));
+let u: u32 = 3;
+let v: u32 = 10;
+println(u.abs_diff(v));
+let x: u8 = 200;
+let y: u8 = 10;
+println(x.abs_diff(y));
+let big: i64 = -9223372036854775807;
+let top: i64 = 9223372036854775807;
+println(big.abs_diff(top));
+let s1: i8 = -128;
+let s2: i8 = 127;
+println(s1.abs_diff(s2));
+}

@@ -1,0 +1,1 @@
+fn main() { let mut v: Vec[P] = []; let p = P { id: 2, s: f"two" }; v.push(p); println(f"p:{p.s}"); println(f"v:{v[0].s}"); println("end") }

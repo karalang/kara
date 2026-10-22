@@ -1,0 +1,36 @@
+enum Num { Zero, Real(f64), Float(f64, String) }
+fn describe(n: ref Num) -> String {
+    match n {
+        Real(x) => {
+            return "real ".to_string() + x.to_string();
+        }
+        Float(y, lex) => {
+            return "float ".to_string() + y.to_string() + " '" + lex + "'";
+        }
+        Zero => {}
+    }
+    return "zero".to_string();
+}
+fn dbl(n: ref Num) -> f64 {
+    match n {
+        Real(x) => {
+            return x * 2.0;
+        }
+        Float(y, lex) => {
+            return y + 1.0;
+        }
+        Zero => {}
+    }
+    return 0.0;
+}
+fn main() {
+    let a = Num.Real(3.5);
+    println(describe(a));
+    println(dbl(a).to_string());
+    let b = Num.Float(0.1, "0.1".to_string());
+    println(describe(b));
+    println(dbl(b).to_string());
+    println(describe(Num.Zero));
+    let c = b;
+    println(describe(c));
+}

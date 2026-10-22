@@ -1,0 +1,15 @@
+fn main() {
+let s = "abcababc";
+let mut m: Map[String, i64] = Map.new();
+let n = s.len();
+let mut i = 0i64;
+while i + 2 <= n {
+let c = match m.get(s[i..i+2]) { Some(v) => v, None => 0i64 };
+m.insert(s[i..i+2], c + 1);
+i = i + 1;
+}
+println(m.len());
+match m.get("ab") { Some(v) => println(v), None => println(-1) }
+match m.get("bc") { Some(v) => println(v), None => println(-1) }
+match m.get("zz") { Some(v) => println(v), None => println(-1) }
+}

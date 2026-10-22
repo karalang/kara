@@ -1,0 +1,20 @@
+source = "tests/codegen/misc.rs::test_ir_modbind_vecdeque_new_emits_empty_aggregate"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["literal-unmatched", "src:legacy-tests", "lib:vecdeque"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: '@QUEUE = internal global { ptr, i64, i64 } zeroinitializer'"
+bucket = "check-refuses:E_MODULE_LET"
+classified_with = "79705a229"
+extracted_src = "8243fded"
+model_exit = 0
+model_rev = "583cfb0d"
+model_src = "8243fded"
+model_verdict = "SAME"

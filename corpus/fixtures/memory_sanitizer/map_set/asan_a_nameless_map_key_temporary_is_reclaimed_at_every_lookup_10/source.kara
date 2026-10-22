@@ -1,0 +1,7 @@
+fn mkv20(n: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(f"aaaaaaaaaaaa{n}"); return v; }
+fn main() {
+    let mut m: Map[Vec[String], i64] = Map.new();
+    m.insert(mkv20(0), 0);
+    match m.get(mkv20(0)) { Some(v) => { println(f"g:{v}"); } None => { println("miss"); } }
+    println(f"len:{m.len()}");
+}

@@ -1,0 +1,8 @@
+fn main() {
+let s: Set[i64] = Set.new();
+s.insert(1_i64);
+let t: Set[i64] = s.clone();
+s.insert(2_i64);
+println(t.len());
+println(s.len());
+}

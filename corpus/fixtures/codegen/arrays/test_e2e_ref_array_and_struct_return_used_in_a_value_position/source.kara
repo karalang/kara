@@ -1,0 +1,30 @@
+struct Pair { a: String, b: String }
+struct Hold { arr: Array[String, 2] }
+struct Nums { arr: Array[i64, 2] }
+struct Named { p: Pair }
+struct Seq { v: Vec[String] }
+impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }
+impl Nums { fn peek(ref self) -> ref Array[i64, 2] { return self.arr; } }
+impl Named { fn peek(ref self) -> ref Pair { return self.p; } }
+impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }
+fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }
+fn peekn(n: ref Named) -> ref Pair { return n.p; }
+fn main() {
+    let k = 40 + 2;
+    let h = Hold { arr: [f"arr-left-{k}", f"arr-right-{k}"] };
+    println(f"arr0:{h.peek()[0]}");
+    println(f"arr1:{h.peek()[1]}");
+    println(f"arrfree:{peekh(h)[0]}");
+    let ab: ref Array[String, 2] = h.peek();
+    println(f"arrbound:{ab[1]}");
+    println(f"arrorig:{h.arr[0]}");
+    let s = Nums { arr: [k, k + 1] };
+    println(f"num:{s.peek()[1]}");
+    let n = Named { p: Pair { a: f"pair-a-{k}", b: f"pair-b-{k}" } };
+    println(f"fld:{n.peek().a}");
+    println(f"fldfree:{peekn(n).b}");
+    let pb: ref Pair = n.peek();
+    println(f"fldbound:{pb.a}");
+    let q = Seq { v: [f"vec-zero-{k}", f"vec-one-{k}"] };
+    println(f"vec:{q.peek()[1]}");
+}

@@ -1,0 +1,2 @@
+impl B5 { fn swapout(ref self, r: R) -> R { println(f"saw {r.id}"); return R { id: 99 }; } }
+fn main() { let b = B5 { n: 1 }; let x = b.swapout(R { id: 41 }); println(f"{x.id}") }

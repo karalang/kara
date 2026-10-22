@@ -1,0 +1,9 @@
+fn main() {
+let mut a: Tensor[f32, [4]] = Tensor.zeros(vec![4]);
+a[0] = 5.0; a[1] = 6.5;
+let k: i64 = 2;
+a[k] = 1.25;
+a[3] = 3.0f32;
+println(a[0]); println(a[1]); println(a[2]); println(a[3]);
+println(a.sum());
+}

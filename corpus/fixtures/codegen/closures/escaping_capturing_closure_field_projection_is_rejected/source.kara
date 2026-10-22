@@ -1,0 +1,3 @@
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { let h = H { f: |x| x + k }; return h.f; }
+fn main() { let g = make(21i64); println(f"{g(21i64)}"); }

@@ -1,0 +1,15 @@
+struct Guard { id: i64 }
+impl Drop for Guard {
+fn drop(mut ref self) {
+println(self.id);
+}
+}
+fn make() -> Guard { Guard { id: 7 } }
+fn consume(g: Guard) { println(100); }
+fn mint(g: Guard) -> Guard { Guard { id: g.id + 1 } }
+fn main() {
+consume(make());
+make();
+let x = mint(Guard { id: 20 });
+println(x.id);
+}

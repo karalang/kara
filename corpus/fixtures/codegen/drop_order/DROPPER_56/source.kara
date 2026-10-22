@@ -1,0 +1,2 @@
+fn take(r: R) -> R { r }
+fn main() { let x = take(R { id: 41 }); println(f"{x.id}"); }

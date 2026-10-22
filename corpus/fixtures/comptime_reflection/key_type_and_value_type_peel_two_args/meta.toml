@@ -1,0 +1,15 @@
+source = "tests/comptime_reflection.rs::key_type_and_value_type_peel_two_args"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:comptime", "lib:map", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "d460ecae"

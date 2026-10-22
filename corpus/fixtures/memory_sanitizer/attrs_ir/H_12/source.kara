@@ -1,0 +1,5 @@
+fn nn() -> Option[String] { Option.None }
+fn take(s: String) -> i64 { slen(s) }
+fn f() -> i64 { let mut vv: Option[String] = Some(payload()); let mut acc = 0;
+   while let Some(s) = vv { acc = acc + take(s); vv = nn(); } acc }
+fn main() { println(f()); }

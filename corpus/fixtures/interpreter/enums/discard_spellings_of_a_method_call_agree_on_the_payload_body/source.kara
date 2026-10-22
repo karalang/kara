@@ -1,0 +1,17 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+enum MyBox { Full(R), Empty }
+struct K { n: i64 }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+impl K {
+    fn userenum(ref self, r: R) -> MyBox { return MyBox.Full(r); }
+    fn opt(ref self, r: R) -> Option[R] { return Option.Some(r); }
+}
+fn main() {
+    let k: K = K { n: 1 };
+    k.userenum(mk(1));
+    let _ = k.userenum(mk(2));
+    k.opt(mk(3));
+    let _ = k.opt(mk(4));
+    println("end");
+}

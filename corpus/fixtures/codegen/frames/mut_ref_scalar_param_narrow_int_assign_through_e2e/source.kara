@@ -1,0 +1,4 @@
+fn inc(x: mut ref i32) { x = x + 1; }
+fn main() {
+    let mut n: i32 = 41; inc(mut n); println(n);
+}

@@ -1,0 +1,10 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(self.id); } }
+struct W { r: Res }
+fn main() {
+    { let t: (Res, i64) = (Res { id: 21 }, 7); println(t.1); }
+    { let u: (i64, Res, Res) = (1, Res { id: 22 }, Res { id: 23 }); println(u.0); }
+    { let w: (W, i64) = (W { r: Res { id: 24 } }, 0); println(w.1); }
+    { let p: (i64, i64) = (1, 2); println(p.0); }
+    println(999);
+}

@@ -1,0 +1,1 @@
+fn main() { let o: Option[Rt] = Some(Rt { id: 71, name: f"a" }); println(f"s{o.is_some()}"); let p = (o, 7); println("ok"); println("done") }

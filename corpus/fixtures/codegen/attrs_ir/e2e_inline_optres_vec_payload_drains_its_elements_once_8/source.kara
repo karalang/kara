@@ -1,0 +1,8 @@
+enum E { A(Vec[Vec[String]]), B }
+fn plainE(x: E) {
+    match x { E.A(t) => { println(f"s:{t[0][0]}") } E.B => { println("n") } }
+}
+fn main() {
+    let v: Vec[Vec[String]] = [[f"aaaaaaaa0", f"aaaaaaaa1"], [f"bbbbbbbb0"]];
+    plainE(E.A(v));
+}

@@ -1,0 +1,15 @@
+fn f(b: bool) -> bool {
+    b == false
+}
+fn main() {
+    let t = true;
+    let g = false;
+    println((t == true).to_string());
+    println((t == false).to_string());
+    println((g == false).to_string());
+    println((t != g).to_string());
+    println(f(false).to_string());
+    if t == true {
+        println("yes");
+    }
+}

@@ -1,0 +1,10 @@
+struct X1 { a: Option[i64], s: String }
+enum W { T(X1), U(i64) }
+fn mkx(i: i64) -> X1 { return X1 { a: Option.Some(i), s: f"s{i}" }; }
+fn main() {
+    match W.T(mkx(1)) { W.T(x) => println(f"t{x.a.unwrap_or(0)}"), W.U(n) => println("u") }
+    let w = W.T(mkx(2));
+    match w { W.T(x) => println(f"l{x.a.unwrap_or(0)}"), W.U(n) => println("u") }
+    match W.T(mkx(3)) { W.T(_) => println("w"), W.U(n) => println("u") }
+    println("end")
+}

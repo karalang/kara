@@ -1,0 +1,14 @@
+fn first[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn second[T: Clone](s: Slice[T]) -> T { s[1].clone() }
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("heap-owned-" + "alpha");
+    println(f"[{first(a)}]");
+    let mut b: Vec[String] = Vec.new();
+    b.push("filler" + "-0");
+    b.push("heap-owned-" + "beta");
+    println(f"[{second(b)}]");
+    let mut ns: Vec[i64] = Vec.new();
+    ns.push(41 + 1);
+    println(f"[{first(ns)}]");
+}

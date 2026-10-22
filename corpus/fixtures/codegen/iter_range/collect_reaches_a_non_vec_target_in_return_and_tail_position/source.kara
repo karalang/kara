@@ -1,0 +1,23 @@
+fn build_ret(v: Vec[i64]) -> Set[i64] {
+return v.iter().map(|x| x * 2).collect();
+}
+fn build_tail(v: Vec[i64]) -> VecDeque[i64] {
+v.iter().map(|x| x + 1).collect()
+}
+fn apply(f: Fn(i64) -> Vec[i64], n: i64) -> Vec[i64] { return f(n); }
+fn closure_return_is_the_closures(v: Vec[i64]) -> Set[i64] {
+let f = |x: i64| { return v.iter().map(|y| y + x).collect(); };
+let inner = apply(f, 10);
+let mut out: Set[i64] = Set.new();
+for e in inner { out.insert(e); }
+return out;
+}
+fn main() {
+let v: Vec[i64] = [1, 2, 3];
+let a = build_ret(v);
+println(a.len().to_string());
+let b = build_tail(v);
+println(b.len().to_string());
+let c = closure_return_is_the_closures(v);
+println(c.len().to_string());
+}

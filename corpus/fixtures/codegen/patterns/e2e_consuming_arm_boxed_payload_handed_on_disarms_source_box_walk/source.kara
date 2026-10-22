@@ -1,0 +1,7 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+fn main() {
+let o: Option[R] = Some(R { id: 1, name: f"n1" });
+let k = match o { Some(r) => { r } None => { R { id: 9, name: f"n9" } } };
+println(f"kept {k.id}");
+}

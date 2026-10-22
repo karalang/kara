@@ -1,0 +1,20 @@
+fn make() -> Tensor[f64, [2, 2]] {
+let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], 9.0);
+t
+}
+fn first(t: Tensor[f64, [2, 2]]) -> f64 {
+t[0, 0]
+}
+fn main() {
+let d: Tensor[f64, [2, ?]] = Tensor.zeros([2, 5]);
+let s = d.shape();
+println(s[1]);
+println(d[1, 4]);
+let m = make();
+println(m[1, 1]);
+let x = first(make());
+println(x);
+let a = Tensor.from([[1, 2], [3, 4]]);
+let b = a;
+println(b[1, 0]);
+}

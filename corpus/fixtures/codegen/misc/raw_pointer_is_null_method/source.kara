@@ -1,0 +1,7 @@
+fn main() {
+    let s = c"AB";
+    let p = s.as_ptr();
+    let n: *const u8 = ptr.null();
+    if p.is_null() { println("p-null"); } else { println("p-live"); }
+    if n.is_null() { println("n-null"); } else { println("n-live"); }
+}

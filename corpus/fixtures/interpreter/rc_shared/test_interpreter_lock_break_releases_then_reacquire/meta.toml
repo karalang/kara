@@ -1,0 +1,17 @@
+source = "tests/interpreter/rc_shared.rs::test_interpreter_lock_break_releases_then_reacquire"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "f6f4fb9b"
+model_rev = "583cfb0d"
+model_src = "f6f4fb9b"

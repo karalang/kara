@@ -1,0 +1,17 @@
+source = "tests/codegen/vecs.rs::e2e_over_aligned_vec_elements_are_the_interpreter_oracle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:simd", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "fee55ec7"
+model_rev = "583cfb0d"
+model_src = "fee55ec7"

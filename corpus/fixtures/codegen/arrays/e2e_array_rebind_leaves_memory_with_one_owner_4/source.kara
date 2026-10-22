@@ -1,0 +1,5 @@
+fn main() {
+    let a: Array[Vec[String], 2] = [[f"aaaaaaaa0"], [f"bbbbbbbb1"]];
+    let b: Array[Vec[String], 2] = a;
+    println("done");
+}

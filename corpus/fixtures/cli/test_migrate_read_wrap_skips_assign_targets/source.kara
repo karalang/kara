@@ -1,0 +1,9 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn bump(c: ref Counter) {
+    c.count = c.count + 1;
+}
+
+fn main() {}

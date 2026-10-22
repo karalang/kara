@@ -1,0 +1,17 @@
+source = "tests/codegen/iter_range.rs::test_standalone_array_literal_range_slice_fails_loud"
+dedup_of = []
+expect = "error:E_SLICE_FROM_TEMPORARY_ESCAPES"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "8dabc259"
+model_rev = "583cfb0d"
+model_src = "8dabc259"

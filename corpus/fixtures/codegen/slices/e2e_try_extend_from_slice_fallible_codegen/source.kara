@@ -1,0 +1,12 @@
+fn main() {
+let src: Vec[i64] = Vec.filled(4_i64, 5_i64);
+let mut dst: Vec[i64] = Vec.with_capacity(2);
+dst.push(1_i64);
+match dst.try_extend_from_slice(src) {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+println(dst.len());
+println(dst[0]);
+println(dst[4]);
+}

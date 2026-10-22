@@ -1,0 +1,4 @@
+fn main() {
+let a: i64 = 10i64; let b: i64 = 0i64;
+print(f"{a / b + 5i64}");
+}

@@ -1,0 +1,12 @@
+fn main() {
+    let mut s: String = String.new();
+    let bytes = "dog".bytes();
+    let mut i = 0i64;
+    while i < bytes.len() {
+        s.push(bytes[i] as char);
+        i = i + 1i64;
+    }
+    println(s);
+    let c = 100u8 as char;
+    println(f"{c}");
+}

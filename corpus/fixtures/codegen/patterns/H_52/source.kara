@@ -1,0 +1,3 @@
+fn f() { match mkH(7) { H.A(n) => { println(f"v{n}"); return } H.B => {} }
+  println("AFTER") }
+fn main() { f() }

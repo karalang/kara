@@ -1,0 +1,10 @@
+struct P { x: i64, y: i64 }
+impl Display for P { fn to_string(ref self) -> String { f"({self.x}, {self.y})" } }
+fn describe[T: Display](item: T) -> String { f"item is {item}" }
+fn tag[T](item: T) -> String { f"constant tail here" }
+fn main() {
+println(describe(P { x: 1i64, y: 2i64 }));
+println(describe(42i64));
+println(describe("hi".to_string()));
+println(tag(7i64));
+}

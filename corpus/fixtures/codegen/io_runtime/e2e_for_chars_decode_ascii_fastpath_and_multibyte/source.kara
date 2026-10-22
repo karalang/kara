@@ -1,0 +1,7 @@
+fn main() {
+let s: String = "aé€🦀z";
+let mut n = 0i64;
+let mut sum = 0i64;
+for c in s.chars() { n = n + 1i64; sum = sum + (c as i64); }
+println(f"{n} {sum}");
+}

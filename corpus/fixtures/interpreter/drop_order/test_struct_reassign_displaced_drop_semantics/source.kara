@@ -1,0 +1,21 @@
+struct G { id: i64, s: String }
+impl Drop for G {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+fn consume(g: G) -> G {
+G { id: g.id + 10, s: g.s }
+}
+fn main() {
+let mut a = G { id: 1, s: "first".to_string() };
+a = G { id: 2, s: "second".to_string() };
+println("after overwrite");
+let mut x = G { id: 3, s: "xxx".to_string() };
+let y = G { id: 4, s: "yyy".to_string() };
+x = y;
+println("after move");
+let mut c = G { id: 5, s: "ccc".to_string() };
+c = consume(c);
+println("after consume");
+}

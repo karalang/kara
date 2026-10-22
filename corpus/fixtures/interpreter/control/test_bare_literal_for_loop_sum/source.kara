@@ -1,0 +1,6 @@
+fn main() {
+let v = [1, 2, 3, 4];
+let mut s = 0;
+for x in v { s = s + x; }
+println(s);
+}

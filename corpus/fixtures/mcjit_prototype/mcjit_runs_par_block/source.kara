@@ -1,0 +1,6 @@
+fn main() {
+  par {
+    spawn; { let _x = 1; }
+    spawn; { let _y = 2; }
+  }
+}

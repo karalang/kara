@@ -1,0 +1,16 @@
+source = "tests/gpu_e2e.rs::gpu_integer_matmul_equals_the_cpu_matmul"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:gpu", "deferred:tensor", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'int_matmul_small'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "6d2d67f7"

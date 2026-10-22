@@ -1,0 +1,5 @@
+fn main() {
+let r: Result[String, String] = Ok(f"hi");
+match r { Ok(ref v) => { println(v); } Err(ref e) => { println(e); } }
+match r { Ok(v) => { println(v); } Err(e) => { println(e); } }
+}

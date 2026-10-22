@@ -1,0 +1,6 @@
+struct H { a: Array[Vec[i64], 2] }
+fn main() {
+    let mut h = H { a: [[10, 11], [20]] };
+    h.a[0][1] = 99;
+    println(f"{h.a[0][1]}");
+}

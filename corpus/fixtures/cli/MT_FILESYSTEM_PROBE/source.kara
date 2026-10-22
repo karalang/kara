@@ -1,0 +1,7 @@
+pub fn save() with writes(FileSystem) {
+    let _x = 1;
+}
+
+fn main() {
+    save();
+}

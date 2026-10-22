@@ -1,0 +1,15 @@
+fn main() {
+println((0u32).next_power_of_two());
+println((1u32).next_power_of_two());
+println((2u32).next_power_of_two());
+println((3u32).next_power_of_two());
+println((5u32).next_power_of_two());
+println((100u32).next_power_of_two());
+println((128u8).next_power_of_two());
+let h: u32 = 1u32 << 31;
+println(h.next_power_of_two());
+let i: u64 = 1u64 << 63;
+println(i.next_power_of_two());
+let j: u64 = (1u64 << 63) - 1;
+println(j.next_power_of_two());
+}

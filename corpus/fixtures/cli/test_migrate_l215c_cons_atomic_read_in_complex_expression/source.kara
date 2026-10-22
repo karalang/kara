@@ -1,0 +1,13 @@
+fn add_one(c: ref Counter) -> i64 {
+    c.count + 1
+}
+
+fn is_positive(c: ref Counter) -> bool {
+    c.count > 0
+}
+
+fn bump(c: ref Counter) {
+    c.count = 7;
+}
+
+fn main() {}

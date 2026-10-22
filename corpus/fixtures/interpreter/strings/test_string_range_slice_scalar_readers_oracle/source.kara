@@ -1,0 +1,14 @@
+fn count(s: ref String) -> i64 {
+let mut n = 0;
+n = n + s[0..5].len();
+if s[0..5].starts_with("he") { n = n + 1; }
+if s[6..11].contains("or") { n = n + 1; }
+if s[0..5].is_empty() { n = n + 100; }
+return n;
+}
+fn main() {
+let src: String = "hello world";
+println(count(src).to_string());
+println(src[0..5].char_count().to_string());
+println(src.len().to_string());
+}

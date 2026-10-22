@@ -1,0 +1,7 @@
+fn f(o: ref Option[Array[String, 2]]) {
+    match o { Some(a) => { println(f"s:{a[0]}") } None => { println("n") } }
+}
+fn main() {
+    let x: Option[Array[String, 2]] = Some([f"aaaaaaaa0", f"bbbbbbbb0"]);
+    f(x);
+}

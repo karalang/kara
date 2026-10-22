@@ -1,0 +1,27 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }
+struct HeapRes { name: String, id: i64 }
+impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }
+fn main() {
+let mut m: Map[i64, Res] = Map.new();
+m.insert(1, Res { id: 1 });
+println(1);
+let mut m2: Map[i64, Res] = Map.new();
+m2.insert(5, Res { id: 5 });
+let out = m2.remove(5);
+println(2);
+let mut m3: Map[i64, Res] = Map.new();
+m3.insert(7, Res { id: 7 });
+let m4 = m3;
+println(3);
+let mut m5: Map[i64, Res] = Map.new();
+let r = Res { id: 4 };
+m5.insert(4, r);
+println(4);
+let mut m6: Map[i64, HeapRes] = Map.new();
+m6.insert(9, HeapRes { name: "value-payload-string", id: 9 });
+println(5);
+let mut m7: Map[i64, i64] = Map.new();
+m7.insert(2, 2);
+println(6);
+}

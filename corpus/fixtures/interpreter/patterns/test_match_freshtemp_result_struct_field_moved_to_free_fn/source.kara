@@ -1,0 +1,7 @@
+struct W { s: String }
+fn use_s(x: String) -> i64 { x.len() }
+fn f() -> Result[W, i64] { Ok(W { s: "boom".to_string() }) }
+fn main() {
+match f() { Ok(w) => println(w.s), Err(e) => println(e.to_string()) }
+match f() { Ok(w) => println(use_s(w.s).to_string()), Err(e) => println(e.to_string()) }
+}

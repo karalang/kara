@@ -1,0 +1,1 @@
+fn main() { let mut i = 0; let mut acc = ""; while i < 3 { acc = acc + i.to_string(); i = i + 1; } println(acc) }

@@ -1,0 +1,4 @@
+fn main() {
+let a = Atomic.new(true);
+println(a.load(MemoryOrdering.SeqCst));
+}

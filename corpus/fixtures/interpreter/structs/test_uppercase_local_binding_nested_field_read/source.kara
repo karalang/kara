@@ -1,0 +1,6 @@
+struct Inner { field: i64 }
+struct Outer { inner: Inner }
+fn main() {
+let OUTER = Outer { inner: Inner { field: 9 } };
+println(OUTER.inner.field);
+}

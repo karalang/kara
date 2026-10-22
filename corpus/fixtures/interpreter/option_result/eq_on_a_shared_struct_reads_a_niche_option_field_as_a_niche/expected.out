@@ -1,0 +1,7 @@
+none-none=true
+some-some=true
+some-none=false
+deep=true
+deep-ne=false
+padded=true
+padded-ne=false

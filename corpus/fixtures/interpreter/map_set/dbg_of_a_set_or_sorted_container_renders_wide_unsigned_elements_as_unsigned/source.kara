@@ -1,0 +1,14 @@
+fn main() {
+            let big: u64 = 18446744073709551615u64;
+            let mut s: Set[u64] = Set.new(); s.insert(big);
+            let mut ss: SortedSet[u64] = SortedSet.new(); ss.insert(big);
+            let mut sm: SortedMap[u64, u64] = SortedMap.new(); sm.insert(big, big);
+            let mut m: Map[u64, u64] = Map.new(); m.insert(big, big);
+            dbg(s); dbg(ss); dbg(sm); dbg(m);
+            let neg: i64 = -1;
+            let mut si: Set[i64] = Set.new(); si.insert(neg);
+            dbg(si);
+            let mut st: Set[String] = Set.new(); st.insert(f"a");
+            let mut smt: SortedMap[String, String] = SortedMap.new(); smt.insert(f"k", f"v");
+            dbg(st); dbg(smt);
+        }

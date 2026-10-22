@@ -1,0 +1,13 @@
+struct Buf { v: Vec[i64] }
+impl Buf {
+    fn view(ref self) -> Slice[i64] {
+        return self.v.as_slice();
+    }
+}
+fn main() {
+    let b = Buf { v: [7, 8, 9] };
+    println(f"{b.view()[2]}");
+    let s = b.view();
+    println(f"{s.len()}");
+    println(f"{b.view().len()}");
+}

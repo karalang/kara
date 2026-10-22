@@ -1,0 +1,10 @@
+#[repr(C)]
+         struct E { x: i64, y: i64 }
+         layout es: Vec[E] {
+             group pos { x, y }
+         }
+         fn main() {
+             let mut v: Vec[E] = Vec.new();
+             v.push(E { x: 1, y: 2 });
+             println(v[0].x);
+         }

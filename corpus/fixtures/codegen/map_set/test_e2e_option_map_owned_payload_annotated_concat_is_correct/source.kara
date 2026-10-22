@@ -1,0 +1,4 @@
+fn main() {
+let s: Option[String] = Some(f"hi");
+match s.map(|x: String| x + "!") { Some(x) => { println(x); } None => {} }
+}

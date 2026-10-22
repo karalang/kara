@@ -1,0 +1,14 @@
+struct Data { value: i64 }
+fn consume(d: Data) {}
+fn use_d(d: Data) {}
+#[allow(rc_fallback)]
+fn process(d: Data) {
+match d.value {
+0 => consume(d),
+_ => {}
+}
+use_d(d);
+}
+fn main() {
+process(Data { value: 0 });
+}

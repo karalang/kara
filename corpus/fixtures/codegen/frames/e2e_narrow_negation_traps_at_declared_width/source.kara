@@ -1,0 +1,10 @@
+fn main() {
+    let a: i32 = -2147483647i32;
+    println(-a);
+    let b: i16 = -32767i16;
+    println(-b);
+    let c: i8 = -127i8;
+    println(-c);
+    let d: i64 = -9223372036854775807i64;
+    println(-d);
+}

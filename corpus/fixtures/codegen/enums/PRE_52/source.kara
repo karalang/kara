@@ -1,0 +1,4 @@
+enum Md[T] { A(T), B }
+impl[T] Md[T] { fn make(n: T) -> Md[T] { return A(n) } }
+fn takeit(x: Md[i64]) { match x { A(n) => { println(f"a:{n}") } B => { println("b") } } }
+fn main() { takeit(Md[i64].make(3)); println("end") }

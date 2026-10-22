@@ -1,0 +1,14 @@
+fn main() {
+let neg: i128 = -1267650600228229401496703205376i128;
+println(neg.saturating_mul(1000000000000i128));
+let mx: i128 = 170141183460469231731687303715884105727i128;
+println(mx.saturating_add(1i128));
+println(neg.saturating_sub(mx));
+println((127i8).saturating_add(1i8));
+println((-128i8).saturating_mul(2i8));
+println((-2147483648i32).saturating_mul(3i32));
+println((250u8).saturating_add(20u8));
+println((3u8).saturating_sub(10u8));
+let um: u128 = 1267650600228229401496703205376u128;
+println(um.saturating_sub(1u128));
+}

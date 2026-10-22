@@ -1,0 +1,16 @@
+source = "tests/gpu_e2e.rs::gpu_dot_equals_the_sum_of_the_products_on_the_device"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:gpu", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'reduce_dot_vs_sum'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "ac608582"

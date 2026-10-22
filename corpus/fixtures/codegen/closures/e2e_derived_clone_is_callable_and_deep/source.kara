@@ -1,0 +1,22 @@
+#[derive(Clone)]
+struct S { n: i64, s: String, v: Vec[i64] }
+#[derive(Clone)]
+enum E { A(i64), B(String) }
+fn dup[T: Clone](x: T) -> T { x.clone() }
+fn main() {
+    let mut a = S { n: 1, s: "hi", v: Vec.new() };
+    a.v.push(10);
+    let mut b = a.clone();
+    b.v.push(20);
+    b.n = 99;
+    println(f"{a.n} {a.v.len()} {b.n} {b.v.len()} {b.s}");
+    let c = dup(a);
+    println(f"{c.s} {c.v.len()}");
+    let e = E.B("payload");
+    let f = dup(e);
+    match f {
+        E.A(k) => println(f"{k}"),
+        E.B(t) => println(t),
+    }
+    println(f"{dup(7)}");
+}

@@ -1,0 +1,1 @@
+fn main() { let x: u8 = 200u8; println(x); }

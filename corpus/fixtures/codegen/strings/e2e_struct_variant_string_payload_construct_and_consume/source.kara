@@ -1,0 +1,16 @@
+pub enum E { Empty, NoAt { value: String } }
+impl Display for E {
+fn to_string(ref self) -> String {
+match self { Empty => "empty", NoAt { value } => f"no-at '{value}'" }
+}
+}
+pub fn make(raw: String) -> E {
+let v = raw.clone();
+if not v.contains("@") { return E.NoAt { value: v }; }
+E.Empty
+}
+fn main() {
+let data = "a@b.com,bad-no-at";
+let inputs = data.split(',');
+for s in inputs { let e = make(s); println(f"{e}"); }
+}

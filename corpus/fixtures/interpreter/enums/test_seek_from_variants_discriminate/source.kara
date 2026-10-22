@@ -1,0 +1,12 @@
+fn name(w: SeekFrom) -> String {
+                   match w {
+                       SeekFrom.Start => { return "start"; }
+                       SeekFrom.Current => { return "current"; }
+                       SeekFrom.End => { return "end"; }
+                   }
+               }
+               fn main() {
+                   println(name(SeekFrom.Start));
+                   println(name(SeekFrom.Current));
+                   println(name(SeekFrom.End));
+               }

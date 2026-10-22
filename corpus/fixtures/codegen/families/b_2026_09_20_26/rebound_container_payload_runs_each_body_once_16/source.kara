@@ -1,0 +1,2 @@
+enum Slot[T] { S(T), N }
+fn main() { let e: Slot[Array[R, 2]] = Slot.S(mka()); match e { Slot.S(v) => { let u = v; println(f"au{u[0].id}") } Slot.N => { println("no") } } println("end") }

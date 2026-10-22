@@ -1,0 +1,3 @@
+fn take2(p: (R, R)) -> R { let (a, b) = p; return a; }
+fn main() { let y = take2((R { id: 42 }, R { id: 52 }));
+             println("after2"); println(f"{y.id}"); }

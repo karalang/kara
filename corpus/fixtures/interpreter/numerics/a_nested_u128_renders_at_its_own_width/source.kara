@@ -1,0 +1,22 @@
+#[derive(Display)]
+struct Pair { pub u: u128, pub v: u64 }
+fn main() {
+let m: u128 = 340282366920938463463374607431768211455u128;
+let big: u64 = 18446744073709551615u64;
+let o: Option[u128] = Some(m);
+println(o);
+let mut v: Vec[u128] = vec![];
+v.push(m);
+v.push(5u128);
+println(v);
+let p = Pair { u: m, v: big };
+println(p);
+let mut vv: Vec[Option[u128]] = vec![];
+vv.push(Some(m));
+println(vv);
+let mut mp: Map[String, Vec[u64]] = Map.new();
+let mut inner: Vec[u64] = vec![];
+inner.push(big);
+mp.insert("k", inner);
+println(mp);
+}

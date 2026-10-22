@@ -1,0 +1,2 @@
+fn show[T: Display](x: Option[T]) { println(f"{x}") }
+fn main() { let v: Vec[i64] = [1]; show(Some(v)) }

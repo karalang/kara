@@ -1,0 +1,2 @@
+fn f(r: R) { let h = H { r: r, n: 3 }; println(f"v={h.r.id}"); }
+fn main() { f(mkr(9)); println("end") }

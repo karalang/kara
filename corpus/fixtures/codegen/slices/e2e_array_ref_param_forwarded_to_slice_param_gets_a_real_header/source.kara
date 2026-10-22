@@ -1,0 +1,13 @@
+fn firstg[T: Clone](s: ref Slice[T]) -> T { s[0].clone() }
+fn firstc(s: ref Slice[String]) -> String { s[0].clone() }
+fn sizeg[T](s: ref Slice[T]) -> i64 { s.len() }
+fn via_generic(a: ref Array[String, 3]) -> String { firstg(a) }
+fn via_concrete(a: ref Array[String, 3]) -> String { firstc(a) }
+fn via_len(a: ref Array[i64, 4]) -> i64 { sizeg(a) }
+fn main() {
+    let ss: Array[String, 3] = ["own-" + "x", "own-" + "y", "own-" + "z"];
+    println(f"[{via_generic(ss)}]");
+    println(f"[{via_concrete(ss)}]");
+    let ns: Array[i64, 4] = [100, 7, 3, 4];
+    println(f"[{via_len(ns)}]");
+}

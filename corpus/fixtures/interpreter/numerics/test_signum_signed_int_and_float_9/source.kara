@@ -1,0 +1,1 @@
+fn main() { let n: f64 = (0.0 - 1.0).sqrt(); println(n.signum()); }

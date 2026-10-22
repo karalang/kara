@@ -1,0 +1,7 @@
+shared struct Counter { mut n: i64 }
+fn bump(c: Counter) -> i64 { c.n = c.n + 1; c.n }
+fn main() {
+    let c = Counter { n: 0 };
+    let v = dbg(bump(c));
+    println(f"calls={c.n} got={v} sum={dbg(41) + 1}");
+}

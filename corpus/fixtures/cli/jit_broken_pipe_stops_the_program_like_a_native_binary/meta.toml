@@ -1,0 +1,16 @@
+source = "tests/cli.rs::jit_broken_pipe_stops_the_program_like_a_native_binary"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["needs-driver", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "legacy run timed out after 60s"
+bucket = "skip:legacy run timed out after 60s"
+classified_with = "79705a229"
+extracted_src = "604e9840"

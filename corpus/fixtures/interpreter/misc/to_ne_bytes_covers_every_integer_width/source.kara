@@ -1,0 +1,15 @@
+fn main() {
+let a: u8 = 7u8;
+let b: u16 = 7u16;
+let c: u32 = 7u32;
+let d: u64 = 7u64;
+let e: i16 = 7i16;
+let f: i64 = 7i64;
+let ab = a.to_ne_bytes();
+let bb = b.to_ne_bytes();
+let cb = c.to_ne_bytes();
+let db = d.to_ne_bytes();
+let eb = e.to_ne_bytes();
+let fb = f.to_ne_bytes();
+println(f"{ab.len()} {bb.len()} {cb.len()} {db.len()} {eb.len()} {fb.len()}");
+}

@@ -1,0 +1,8 @@
+enum Vbin { V(Vec[String]), Z }
+fn f(b: ref Vbin) {
+    match b { V(v) => { println(f"s:{v[0]}") } Z => { println("n") } }
+}
+fn main() {
+    let x: Vbin = Vbin.V(Vec[f"aaaaaaaa0", f"bbbbbbbb0"]);
+    f(x);
+}

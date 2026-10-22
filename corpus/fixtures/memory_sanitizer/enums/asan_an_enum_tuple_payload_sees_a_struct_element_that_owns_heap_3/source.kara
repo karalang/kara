@@ -1,0 +1,11 @@
+struct Rec2 { s: String }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let p: (Rec2, i64) = (Rec2 { s: f"row-aaaaaaaaaaaaaaaa-{i}-{n}" }, 1i64);
+        println("t");
+        i = i + 1i64;
+    }
+    println("end");
+}

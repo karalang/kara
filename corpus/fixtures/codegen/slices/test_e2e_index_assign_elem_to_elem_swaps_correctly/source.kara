@@ -1,0 +1,15 @@
+struct Pair { word: String, n: i64 }
+fn main() {
+let k = 1;
+let mut qs: Vec[Pair] = Vec.new();
+qs.push(Pair { word: f"a{k}", n: 1 });
+qs.push(Pair { word: f"b{k}", n: 2 });
+qs.swap(0, 1);
+println(qs[0].word + " " + qs[1].word);
+println(qs[0].n + qs[1].n * 10);
+let mut ps: Vec[Pair] = Vec.new();
+ps.push(Pair { word: f"x{k}", n: 7 });
+ps.swap(0, 0);
+println(ps[0].word);
+println(ps[0].n);
+}

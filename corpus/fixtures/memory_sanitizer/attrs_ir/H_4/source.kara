@@ -1,0 +1,5 @@
+fn nn() -> Option[Vec[String]] { Option.None }
+fn f() -> i64 { let mut vv: Option[Vec[String]] = Some([payload(), payload()]);
+   let n = match vv { Some(v) => (if v[0].contains("payload") { v[0].len() + v.len() } else { 0 }), None => 0 };
+   vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }
+fn main() { println(f()); }

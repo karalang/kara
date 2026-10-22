@@ -1,0 +1,2 @@
+fn nums(n: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); let mut i = 0; while i < n { v.push(i * 10); i = i + 1; } return v; }
+fn main() { let ns = nums(4); let mut t = 0; let mut i = 0; while i < ns.len() { t = t + ns[i]; i = i + 1; } println(t.to_string()) }

@@ -1,0 +1,11 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn wr() { let t = (mk(10), Option.Some(mk(110))); let (r, _) = t; println(f"rd{r.id}") }
+fn wboth() { let t = (mk(12), Option.Some(mk(112))); let (_, _) = t; println("wb") }
+fn resw() { let t: (R, Result[R, String]) = (mk(40), Result[R, String].Ok(mk(140))); let (r, _) = t; println(f"rw{r.id}") }
+fn nestw() { let t = ((mk(70), Option.Some(mk(170))), 3); let ((_, _), n) = t; println(f"nw{n}") }
+fn bind() { let t = (mk(21), Option.Some(mk(221))); let (a, b) = t; println(f"bd{a.id}") }
+fn bothstruct() { let t = (mk(50), mk(150)); let (_, _) = t; println("bs") }
+fn optstr() { let t = (mk(60), Option.Some(f"x60")); let (r, _) = t; println(f"os{r.id}") }
+fn main() { wr(); wboth(); resw(); nestw(); bind(); bothstruct(); optstr(); }

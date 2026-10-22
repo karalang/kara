@@ -1,0 +1,5 @@
+fn main() {
+let x = 100;
+for i in 0..2 { let x = i * 5; }
+println(x.to_string());
+}

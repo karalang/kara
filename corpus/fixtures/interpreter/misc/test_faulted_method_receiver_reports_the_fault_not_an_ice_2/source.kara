@@ -1,0 +1,5 @@
+fn main() {
+let o: Option[String] = Option.None;
+let n = o.unwrap().len();
+println(f"{n}");
+}

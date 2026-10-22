@@ -1,0 +1,7 @@
+fn digit_char(d: i64) -> char {
+match char.try_from(b'0' + d as u8) {
+Ok(c)  => c,
+Err(_) => '?',
+}
+}
+fn main() { println(digit_char(5).to_string()); }

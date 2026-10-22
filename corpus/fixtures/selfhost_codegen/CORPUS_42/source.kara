@@ -1,0 +1,2 @@
+fn sign(n: i64) -> i64 { if n > 0 { return 1; } if n < 0 { return 0 - 1; } 0 }
+fn main() { println(sign(42).to_string()); println(sign(0 - 7).to_string()); println(sign(0).to_string()) }

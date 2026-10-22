@@ -1,0 +1,20 @@
+struct Box { v: i64 }
+struct H { acc: i64 }
+impl H {
+fn peek(ref self, x: ref i64) -> i64 { x + 1 }
+fn bump(mut ref self, x: mut ref i64) -> i64 {
+self.acc = self.acc + 1;
+x = x + 10;
+x
+}
+}
+fn main() {
+let mut h = H { acc: 0 };
+let b = Box { v: 4 };
+println(h.peek(b.v));
+println(b.v);
+let mut c = Box { v: 1 };
+println(h.bump(mut c.v));
+println(c.v);
+println(h.acc);
+}

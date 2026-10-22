@@ -1,0 +1,17 @@
+struct Body { mass: f32, speed: f32 }
+fn total(b: GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }
+fn once() -> f32 {
+    let v: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },
+                        Body { mass: 3.0, speed: 4.0 }];
+    let buf = gpu.upload(v);
+    total(buf)
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut bad: i64 = 0;
+    while i < 300 {
+        if once() != 4.0 { bad = bad + 1; }
+        i = i + 1;
+    }
+    println(f"{bad}");
+}

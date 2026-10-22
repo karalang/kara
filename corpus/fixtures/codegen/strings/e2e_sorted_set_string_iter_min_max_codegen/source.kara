@@ -1,0 +1,11 @@
+fn main() {
+let mut s: SortedSet[String] = SortedSet.new();
+let _ = s.insert("banana"); let _ = s.insert("apple");
+let _ = s.insert("cherry"); let _ = s.insert("apple");
+let mut out: String = "";
+for w in s { out.push_str(f"{w} "); }
+println(out);
+match s.min() { Some(v) => println(v), None => println("none") }
+match s.max() { Some(v) => println(v), None => println("none") }
+println(s.len());
+}

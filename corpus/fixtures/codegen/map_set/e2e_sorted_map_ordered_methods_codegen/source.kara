@@ -1,0 +1,14 @@
+fn main() {
+let mut m: SortedMap[i64, i64] = SortedMap.new();
+let _ = m.insert(5_i64, 50_i64); let _ = m.insert(1_i64, 10_i64);
+let _ = m.insert(3_i64, 30_i64);
+match m.min() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+match m.max() { Some(kv) => println(f"{kv.0}={kv.1}"), None => println("n") }
+match m.floor(4_i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+match m.ceiling(2_i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+match m.floor(0_i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+match m.ceiling(9_i64) { Some(kv) => println(f"{kv.0}"), None => println("n") }
+let r = m.range(2_i64, 5_i64); println(f"{r.len()}");
+let mut e: SortedMap[i64, i64] = SortedMap.new();
+match e.min() { Some(kv) => println(f"{kv.0}"), None => println("empty") }
+}

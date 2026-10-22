@@ -1,0 +1,14 @@
+let mut MV: Vec[i64] = Vec.new();
+fn main() {
+MV.push(10); MV.push(20);
+let mut direct = 0;
+for x in MV { direct = direct + x; }
+let mut indexed = 0;
+for i in 0..MV.len() { indexed = indexed + MV[i]; }
+let copy = MV.clone();
+let mut cloned = 0;
+for x in copy { cloned = cloned + x; }
+println(direct);
+println(indexed);
+println(cloned);
+}

@@ -1,0 +1,13 @@
+fn same_opt(x: Option[String], y: Option[String]) -> bool { x == y }
+fn same_res(x: Result[String, i64], y: Result[String, i64]) -> bool { x == y }
+fn main() {
+let a: Option[String] = Some("a" + "b");
+let a2: Option[String] = Some("a" + "b");
+let b: Option[String] = Some("ab");
+let c: Option[String] = Some("zz");
+println(f"{same_opt(a, b)}");
+println(f"{same_opt(a2, c)}");
+let r: Result[String, i64] = Ok("x" + "y");
+let s: Result[String, i64] = Ok("xy");
+println(f"{same_res(r, s)}");
+}

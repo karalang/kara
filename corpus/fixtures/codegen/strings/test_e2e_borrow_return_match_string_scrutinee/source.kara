@@ -1,0 +1,9 @@
+fn pick(s: ref String, a: ref String, b: ref String) -> ref String {
+    match s {
+        _ => a,
+    }
+}
+fn main() {
+    let scrut = "ignored"; let a = "chosen"; let b = "zzz";
+    println(pick(scrut, a, b));
+}

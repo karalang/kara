@@ -1,0 +1,21 @@
+fn main() {
+let a: Option[String] = Some("a" + "b");
+let b: Option[String] = Some("ab");
+let c: Option[String] = Some("xy");
+let n: Option[String] = None;
+println(f"{a == b}");
+println(f"{a == c}");
+println(f"{a == n}");
+println(f"{n == n}");
+let r: Result[String, i64] = Ok("a" + "b");
+let s: Result[String, i64] = Ok("ab");
+println(f"{r == s}");
+let e1: Result[i64, String] = Err("x" + "y");
+let e2: Result[i64, String] = Err("xy");
+let e3: Result[i64, String] = Err("zz");
+println(f"{e1 == e2}");
+println(f"{e1 == e3}");
+let g: Option[i64] = Some(7);
+let h: Option[i64] = Some(7);
+println(f"{g == h}");
+}

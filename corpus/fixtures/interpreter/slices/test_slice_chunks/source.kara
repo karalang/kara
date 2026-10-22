@@ -1,0 +1,6 @@
+fn main() {
+         let v = [1, 2, 3, 4, 5];
+         let s = v.as_slice();
+         let cs = s.chunks(2);
+         println(cs.len());
+     }

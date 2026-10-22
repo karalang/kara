@@ -1,0 +1,33 @@
+struct H { mut f: f64 }
+fn main() {
+let v = 200u8;
+let n = -5i8;
+let mut vc: Vec[f64] = Vec.new();
+vc.push(v);
+println(vc.contains(200.0));
+println(vc.contains(v));
+let mut vd: Vec[f64] = Vec.new();
+vd.push(200.0);
+println(vd.contains(v));
+let mut ve: Vec[f64] = Vec.new();
+ve.push(0.0);
+ve[0i64] = v;
+println(ve.contains(200.0));
+let mut arr: Array[f64, 2] = [0.0, 0.0];
+arr[0i64] = v;
+println(arr[0i64]);
+let mut x: f64 = 0.0;
+x = v;
+println(x == 200.0);
+let mut vn: Vec[f64] = Vec.new();
+vn.push(n);
+println(vn.contains(-5.0));
+let mut y: f64 = 0.0;
+y = n;
+println(y == -5.0);
+let mut vf: Vec[f64] = Vec.new();
+vf.push(1.5);
+println(vf.contains(1.5));
+let h = H { f: 0.0 };
+println(h.f == 0.0);
+}

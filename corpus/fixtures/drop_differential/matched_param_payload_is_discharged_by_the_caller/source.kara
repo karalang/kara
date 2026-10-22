@@ -1,0 +1,14 @@
+struct Held { tag: i64, buf: String }
+impl Drop for Held { fn drop(mut ref self) { println(f"dH:{self.tag}") } }
+fn mk(i: i64) -> Held { return Held { tag: i, buf: f"bbbbbbbbbbbbbbbb{i}" } }
+fn eat(o: Option[Held]) -> i64 {
+    match o {
+        Option.Some(t) => { return t.tag }
+        Option.None => { return 0 }
+    }
+}
+fn main() {
+    let ot: Option[Held] = Option.Some(mk(1));
+    let n = eat(ot);
+    println(f"n:{n}");
+}

@@ -1,0 +1,4 @@
+fn main() {
+let bs = [255u8, 0u8, 16u8];
+println(Hex.encode(bs));
+}

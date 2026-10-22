@@ -1,0 +1,7 @@
+#[gpu]
+fn triple(x: i32) -> i32 { x * 3 }
+fn main() {
+let buf: Vec[i32] = [1, 2, 3];
+let out = gpu.dispatch(triple, buf);
+for v in out { println(f"{v}"); }
+}

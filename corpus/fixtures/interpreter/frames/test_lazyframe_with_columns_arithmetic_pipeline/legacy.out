@@ -1,0 +1,36 @@
+== logical plan ==
+WITH [(a * 2) as a2, (b + a) as ab, name as label]
+  SCAN [a, b, name]
+== optimized ==
+WITH [(a * 2) as a2, (b + a) as ab, name as label]
+  SCAN cols=[a, b, name]
+6
+a
+b
+name
+a2
+ab
+label
+6
+11.5
+a
+b
+name
+101
+10
+null
+== logical plan ==
+FILTER (a3 > 3)
+  WITH [(a * (2 + 1)) as a3]
+    SELECT [a, b]
+      SCAN [a, b, name]
+== optimized ==
+FILTER (a3 > 3)
+  WITH [(a * 3) as a3]
+    SELECT [a, b]
+      SCAN cols=[a, b]
+2
+6
+false
+true
+3

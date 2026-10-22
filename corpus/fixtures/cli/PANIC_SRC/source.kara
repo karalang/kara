@@ -1,0 +1,5 @@
+fn main() {
+    println("before");
+    let o: Option[i64] = None;
+    println(f"{o.unwrap()}");
+}

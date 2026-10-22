@@ -1,0 +1,5 @@
+fn f() -> i64 { let mut vv: Result[String, i64] = Ok(payload());
+   let n = match vv { Ok(s) => slen(s), Err(_) => 0 };
+   vv = Ok("zz".to_string());
+   n + (match vv { Ok(s) => s.len(), Err(_) => 0 }) }
+fn main() { println(f()); }

@@ -1,0 +1,16 @@
+fn count_alpha(s: ref String) -> i64 {
+let mut n = 0i64;
+for c in s {
+if c.is_alphabetic() { n = n + 1i64; }
+}
+n
+}
+fn main() {
+let s: String = "aB3 z9";
+let mut digits = 0i64;
+for c in s {
+if c.is_numeric() { digits = digits + 1i64; }
+}
+println(f"{digits}");
+println(f"{count_alpha(s)}");
+}

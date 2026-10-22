@@ -1,0 +1,2 @@
+impl G1 { fn gm_dies[T](ref self, r: R, t: T) -> i64 { 3 } }
+fn main() { let g = G1 { n: 1 }; let a = g.gm_dies(R { id: 31, tag: f"g" }, 5); println(f"{a}") }

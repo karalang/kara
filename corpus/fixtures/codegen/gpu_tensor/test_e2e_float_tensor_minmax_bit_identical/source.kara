@@ -1,0 +1,11 @@
+fn main() {
+let mut t: Tensor[f32, [1000]] = Tensor.zeros(vec![1000]);
+for i in 0..1000 { t[i] = ((i * 37) % 101) as f32 - 50.5; }
+println(t.min()); println(t.max());
+let mut d: Tensor[f64, [777]] = Tensor.zeros(vec![777]);
+for i in 0..777 { d[i] = ((i * 53) % 97) as f64 * 0.25 - 12.0; }
+println(d.min()); println(d.max());
+let mut it: Tensor[i64, [500]] = Tensor.zeros(vec![500]);
+for i in 0..500 { it[i] = ((i * 41) % 89) - 44; }
+println(it.min()); println(it.max());
+}

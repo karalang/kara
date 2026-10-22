@@ -65,6 +65,11 @@ def entries(corpus: Path) -> list[Path]:
     return sorted(p.parent for p in corpus.rglob("source.kara"))
 
 
+def matches_filter(rel: str, filters: list[str]) -> bool:
+    """`--filter` as the scripts read it: a substring of the entry's path."""
+    return any(f in rel for f in filters)
+
+
 # A front-end or backend refusal prints `error[<phase>]: ...` / `error: ...`
 # before the program runs; a runtime panic prints differently and exits 101.
 REFUSAL = re.compile(rb"^error(\[[A-Za-z_-]+\])?:", re.M)
@@ -283,9 +288,34 @@ class Origin:
 def execute(cmd: list, cwd: Path, env: dict, timeout: float, driver):
     """Run the program, or, for an entry with a `driver.toml`, serve it."""
     if driver is None:
-        return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL)
+        return run_capped(cmd, cwd, env, timeout)
     return drive(cmd, cwd, env, timeout, driver)
+
+
+# A program that prints without end (a test that stops it with a closed pipe
+# or a signal) would fill memory before its timeout: past this many bytes of
+# output it is stopped and counts as timed out.
+OUTPUT_CAP = 64 << 20
+
+
+def run_capped(cmd: list, cwd: Path, env: dict, timeout: float) -> subprocess.CompletedProcess:
+    """subprocess.run with captured output, stdin closed and `timeout`, which
+    raises TimeoutExpired also when stdout or stderr passes OUTPUT_CAP."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
+        deadline = time.monotonic() + timeout
+        pause = 0.001
+        while p.poll() is None:
+            if time.monotonic() > deadline or os.fstat(out.fileno()).st_size > OUTPUT_CAP \
+                    or os.fstat(err.fileno()).st_size > OUTPUT_CAP:
+                p.kill()
+                p.wait()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            time.sleep(pause)
+            pause = min(pause * 2, 0.02)
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(cmd, p.returncode, out.read(), err.read())
 
 
 BOUND_PORT = re.compile(rb"BOUND_PORT=(\d+)")

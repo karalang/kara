@@ -1,0 +1,32 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+enum Box2 { Full(Res), Empty }
+impl Box2 {
+    fn into_id(self) -> i64 {
+        match self {
+            Box2.Full(r) => { return r.id; }
+            Box2.Empty => { return 0; }
+        }
+    }
+    fn just_three(self) -> i64 {
+        return 3;
+    }
+}
+fn mk_e(n: i64) -> Box2 {
+    return Box2.Full(Res { id: n, name: f"e{n}" });
+}
+fn main() {
+    println("a: owned-self match-consume fires once via the arm");
+    let b = mk_e(7);
+    let v = b.into_id();
+    println(f"v={v}");
+    println("b: owned-self non-consuming — runs its payload body");
+    let c = mk_e(8);
+    let w = c.just_three();
+    println(f"w={w}");
+    println("end");
+}

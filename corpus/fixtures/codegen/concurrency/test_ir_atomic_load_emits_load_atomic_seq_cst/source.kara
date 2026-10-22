@@ -1,0 +1,4 @@
+fn main() {
+let a = Atomic.new(42);
+let _ = a.load(MemoryOrdering.SeqCst);
+}

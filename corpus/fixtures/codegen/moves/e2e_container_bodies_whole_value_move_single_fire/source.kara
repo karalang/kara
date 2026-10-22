@@ -1,0 +1,30 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }
+enum Slot { Empty, Held(Res) }
+fn make() -> Slot {
+    let m = Slot.Held(Res { id: 3 });
+    return m;
+}
+fn consume(s: Slot) {
+    println(70);
+}
+fn main() {
+    let a = Slot.Held(Res { id: 1 });
+    let a2 = a;
+    println(1);
+    let t = (Res { id: 2 }, 10);
+    let t2 = t;
+    println(2);
+    let c = make();
+    println(3);
+    let v: Vec[Res] = [Res { id: 4 }];
+    let v2 = v;
+    println(4);
+    let mut f = Slot.Held(Res { id: 5 });
+    let g = Slot.Held(Res { id: 6 });
+    f = g;
+    println(5);
+    let b = Slot.Held(Res { id: 7 });
+    consume(b);
+    println(6);
+}

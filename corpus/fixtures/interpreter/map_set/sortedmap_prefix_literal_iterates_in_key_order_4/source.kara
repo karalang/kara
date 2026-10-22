@@ -1,0 +1,1 @@
+fn main() { let m = SortedMap["a": 1, "a": 9]; print(m); }

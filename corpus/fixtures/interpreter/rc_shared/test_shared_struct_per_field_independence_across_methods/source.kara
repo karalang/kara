@@ -1,0 +1,11 @@
+shared struct Node { mut left: i64, mut right: i64 }
+impl Node {
+fn write_left(ref self, x: i64) { self.left = x; }
+fn read_right(ref self) -> i64 { self.right }
+}
+fn main() {
+let n = Node { left: 0, right: 7 };
+n.write_left(99);
+println(n.read_right());
+println(n.left);
+}

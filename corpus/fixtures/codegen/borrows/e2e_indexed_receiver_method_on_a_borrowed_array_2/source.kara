@@ -1,0 +1,2 @@
+fn f(a: mut ref Array[String, 2]) -> i64 { return a[1].len(); }
+fn main() { let mut a: Array[String, 2] = ["abcdefghij", "abcdefghij"]; println(f"{f(mut a)}"); }

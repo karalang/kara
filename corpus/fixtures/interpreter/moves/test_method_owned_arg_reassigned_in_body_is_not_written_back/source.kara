@@ -1,0 +1,12 @@
+struct H { acc: i64 }
+impl H { fn owned(ref self, x: i64) -> i64 { x = 9; x } }
+fn free_owned(x: i64) -> i64 { x = 9; x }
+fn main() {
+let h = H { acc: 0 };
+let mut n = 5;
+println(h.owned(n));
+println(n);
+let mut m = 5;
+println(free_owned(m));
+println(m);
+}

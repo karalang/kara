@@ -1,0 +1,8 @@
+struct Point { x: i64, y: i64 }
+fn main() {
+let c: OnceLock[Point] = OnceLock.new();
+let p = c.get_or_init(|| Point { x: 3i64, y: 4i64 });
+println((p.x + p.y).to_string());
+let q = c.get_or_init(|| Point { x: 99i64, y: 99i64 });
+println((q.x + q.y).to_string());
+}

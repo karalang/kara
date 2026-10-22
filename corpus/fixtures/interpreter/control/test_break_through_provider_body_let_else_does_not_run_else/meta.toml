@@ -1,0 +1,17 @@
+source = "tests/interpreter/control.rs::test_break_through_provider_body_let_else_does_not_run_else"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "post-m1:provider", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:this `break`"
+classified_with = "79705a229"
+extracted_src = "cae1baad"
+model_rev = "583cfb0d"
+model_src = "cae1baad"

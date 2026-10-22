@@ -1,0 +1,4 @@
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn keep(h: H) -> H { h }
+fn main() { let a = H { f: make(10i64) }; let b = keep(a); println(f"{(b.f)(5i64)}"); }

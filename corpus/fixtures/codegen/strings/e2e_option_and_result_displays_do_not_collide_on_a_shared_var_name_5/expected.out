@@ -1,0 +1,4 @@
+a Some(1)
+b Ok(2)
+c Some(s)
+d Ok(t)

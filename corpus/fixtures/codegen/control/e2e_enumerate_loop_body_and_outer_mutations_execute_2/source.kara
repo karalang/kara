@@ -1,0 +1,7 @@
+struct Bag { items: Vec[i64] }
+fn main() {
+let b = Bag { items: [5, 6, 7] };
+let mut sum = 0i64;
+for (i, x) in b.items.iter().enumerate() { sum = sum + x + i; }
+println(sum);
+}

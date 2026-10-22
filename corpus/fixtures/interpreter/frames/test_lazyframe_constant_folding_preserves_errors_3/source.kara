@@ -1,0 +1,6 @@
+import std.lazy.{lit};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64]));
+let _ = df.lazy().filter(lit(1).eq("x")).collect();
+}

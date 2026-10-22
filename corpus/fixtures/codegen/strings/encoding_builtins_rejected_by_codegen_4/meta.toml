@@ -1,0 +1,17 @@
+source = "tests/codegen/strings.rs::encoding_builtins_rejected_by_codegen"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Hex.encode_upper"
+classified_with = "79705a229"
+extracted_src = "dcc23155"
+model_rev = "583cfb0d"
+model_src = "dcc23155"

@@ -1,0 +1,5 @@
+fn eat(a: Array[Array[i64, 2], 2]) { println(f"e:{a[1][0]}") }
+fn main() {
+    let a: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];
+    eat(a);
+}

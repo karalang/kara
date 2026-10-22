@@ -1,0 +1,16 @@
+fn f(x: i64) -> i64 { return 1i64; }
+fn n() -> i64 { return 3i64; }
+fn main() {
+let bound = n();
+let mut a: i64 = 1i64;
+let mut b: i64 = 0i64;
+let mut c: i64 = 0i64;
+let mut i: i64 = 0i64;
+while i < bound {
+c = c + f(i);
+a = a + 1i64;
+b = b + 2i64;
+i = i + 1i64;
+}
+println(f"{a} {b} {c}");
+}

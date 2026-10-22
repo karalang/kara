@@ -1,0 +1,6 @@
+fn main() {
+let mut w: Vec[String] = Vec.new();
+w.push(f"alpha");
+{ let keep: Vec[String] = w.clone(); }
+println(w[0]);
+}

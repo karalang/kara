@@ -1,0 +1,17 @@
+source = "tests/codegen/closures.rs::capturing_closure_same_frame_and_passed_down_still_run"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "a1fb476f"
+model_rev = "583cfb0d"
+model_src = "a1fb476f"

@@ -1,0 +1,243 @@
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+enum Token {
+    Fn,
+    Let,
+    If,
+    LeftParen,
+    RightParen,
+    Plus,
+    Star,
+    Equal,
+    Dot,
+    Ident(String),
+    Integer(i64, String),
+    Float(f64, String),
+    Eof,
+}
+struct SpannedToken { token: Token, span: Span }
+struct Lexer { src: String, pos: i64, col: i64 }
+fn is_word_start(c: String) -> bool {
+    if c >= "a" and c <= "z" {
+        return true;
+    }
+    if c >= "A" and c <= "Z" {
+        return true;
+    }
+    return c == "_";
+}
+fn is_word_cont(c: String) -> bool {
+    if is_word_start(c) {
+        return true;
+    }
+    return c >= "0" and c <= "9";
+}
+fn is_digit(c: String) -> bool {
+    return c >= "0" and c <= "9";
+}
+fn digit_val(c: String) -> i64 {
+    if c == "1" {
+        return 1;
+    }
+    if c == "2" {
+        return 2;
+    }
+    if c == "3" {
+        return 3;
+    }
+    if c == "4" {
+        return 4;
+    }
+    if c == "5" {
+        return 5;
+    }
+    if c == "6" {
+        return 6;
+    }
+    if c == "7" {
+        return 7;
+    }
+    if c == "8" {
+        return 8;
+    }
+    if c == "9" {
+        return 9;
+    }
+    return 0;
+}
+fn keyword_of(w: ref String) -> i64 {
+    if w == "fn" {
+        return 1;
+    }
+    if w == "let" {
+        return 2;
+    }
+    if w == "if" {
+        return 3;
+    }
+    return 0;
+}
+fn kw_token(k: i64) -> Token {
+    if k == 1 {
+        return Token.Fn;
+    }
+    if k == 2 {
+        return Token.Let;
+    }
+    return Token.If;
+}
+fn sym_token(c: ref String) -> Token {
+    if c == "(" {
+        return Token.LeftParen;
+    }
+    if c == ")" {
+        return Token.RightParen;
+    }
+    if c == "+" {
+        return Token.Plus;
+    }
+    if c == "*" {
+        return Token.Star;
+    }
+    if c == "=" {
+        return Token.Equal;
+    }
+    return Token.Dot;
+}
+impl Lexer {
+    fn new(src: String) -> Lexer {
+        return Lexer { src: src, pos: 0, col: 1 };
+    }
+    fn done(ref self) -> bool {
+        return self.pos >= self.src.len();
+    }
+    fn peek(ref self) -> String {
+        return self.src.substring(self.pos, self.pos + 1);
+    }
+    fn advance(mut ref self) {
+        self.pos = self.pos + 1;
+        self.col = self.col + 1;
+    }
+    fn skip_ws(mut ref self) {
+        while self.pos < self.src.len() and self.peek() == " " {
+            self.advance();
+        }
+    }
+    fn next(mut ref self) -> SpannedToken {
+        self.skip_ws();
+        let start = self.pos;
+        let start_col = self.col;
+        if self.pos >= self.src.len() {
+            return SpannedToken {
+                token: Token.Eof,
+                span: Span { line: 1, column: start_col, offset: start, length: 0 },
+            };
+        }
+        if is_word_start(self.peek()) {
+            while self.pos < self.src.len() and is_word_cont(self.peek()) {
+                self.advance();
+            }
+            let w = self.src.substring(start, self.pos);
+            let ln = self.pos - start;
+            let k = keyword_of(w);
+            if k > 0 {
+                return SpannedToken {
+                    token: kw_token(k),
+                    span: Span { line: 1, column: start_col, offset: start, length: ln },
+                };
+            }
+            return SpannedToken {
+                token: Token.Ident(w),
+                span: Span { line: 1, column: start_col, offset: start, length: ln },
+            };
+        }
+        if is_digit(self.peek()) {
+            let mut ival = 0;
+            while self.pos < self.src.len() and is_digit(self.peek()) {
+                ival = ival * 10 + digit_val(self.peek());
+                self.advance();
+            }
+            if self.pos < self.src.len() and self.peek() == "." {
+                self.advance();
+                let mut frac = 0.0;
+                let mut scale = 0.1;
+                while self.pos < self.src.len() and is_digit(self.peek()) {
+                    let dv = digit_val(self.peek());
+                    frac = frac + scale * dv.to_f64();
+                    scale = scale * 0.1;
+                    self.advance();
+                }
+                let lex = self.src.substring(start, self.pos);
+                let fval = ival.to_f64() + frac;
+                return SpannedToken {
+                    token: Token.Float(fval, lex),
+                    span: Span { line: 1, column: start_col, offset: start, length: self.pos - start },
+                };
+            }
+            let lex = self.src.substring(start, self.pos);
+            return SpannedToken {
+                token: Token.Integer(ival, lex),
+                span: Span { line: 1, column: start_col, offset: start, length: self.pos - start },
+            };
+        }
+        self.advance();
+        let c = self.src.substring(start, self.pos);
+        return SpannedToken {
+            token: sym_token(c),
+            span: Span { line: 1, column: start_col, offset: start, length: 1 },
+        };
+    }
+}
+fn render(st: ref SpannedToken) -> String {
+    let mut head = "?".to_string();
+    match st.token {
+        Ident(name) => {
+            head = "id:".to_string() + name;
+        }
+        Integer(v, lex) => {
+            head = "int:".to_string() + v.to_string() + "(" + lex + ")";
+        }
+        Float(f, lex) => {
+            head = "float:".to_string() + f.to_string() + "(" + lex + ")";
+        }
+        Fn => {
+            head = "kw:fn".to_string();
+        }
+        Let => {
+            head = "kw:let".to_string();
+        }
+        If => {
+            head = "kw:if".to_string();
+        }
+        LeftParen => {
+            head = "(".to_string();
+        }
+        RightParen => {
+            head = ")".to_string();
+        }
+        Plus => {
+            head = "+".to_string();
+        }
+        Star => {
+            head = "*".to_string();
+        }
+        Equal => {
+            head = "=".to_string();
+        }
+        Dot => {
+            head = ".".to_string();
+        }
+        Eof => {
+            head = "eof".to_string();
+        }
+    }
+    let col = st.span.column;
+    return head + "@" + col.to_string();
+}
+fn main() {
+    let mut lx = Lexer.new("let x = 42 + y * 3.5".to_string());
+    while not lx.done() {
+        let t = lx.next();
+        println(render(t));
+        lx.skip_ws();
+    }
+}

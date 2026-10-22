@@ -1,0 +1,28 @@
+fn scan(names: ref Vec[String], name: ref String) -> i64 {
+    let mut i = 0;
+    loop {
+        if i >= names.len() { return -1; }
+        if names[i] == name { return i; }
+        i = i + 1;
+    }
+}
+fn addall(v: mut ref Vec[i64], n: i64) {
+    let mut i = 0;
+    loop { if i >= v.len() { return; } v[i] = v[i] + n; i = i + 1; }
+}
+struct T { names: Vec[String], xs: Vec[i64] }
+impl T {
+    fn find(ref self, q: ref String) -> i64 { scan(self.names, q) }
+    fn bump(mut ref self, n: i64) { addall(mut self.xs, n) }
+}
+fn main() {
+    let mut t = T { names: Vec.new(), xs: Vec.new() };
+    t.names.push("a".to_string());
+    t.names.push("b".to_string());
+    t.xs.push(10); t.xs.push(20);
+    let q = "b".to_string();
+    println(t.find(q).to_string());
+    t.bump(5);
+    println(t.xs[0].to_string());
+    println(t.xs[1].to_string());
+}

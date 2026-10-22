@@ -1,0 +1,3 @@
+struct P { x: i64 }
+fn get(k: i64) -> Option[P] { if k == 1 { return Some(P { x: 5 }); } return None; }
+fn main() { match get(1)?.x { Some(v) => { println(v); } None => { println("none"); } } }

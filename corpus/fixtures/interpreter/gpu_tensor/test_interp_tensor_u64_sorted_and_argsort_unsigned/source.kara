@@ -1,0 +1,1 @@
+fn main() { let t: Tensor[u64, [3]] = Tensor.from([1u64 << 63, 5u64, 1u64 << 62]); let s = t.sorted(); println(f"{s[0]},{s[1]},{s[2]}"); let a = t.argsort(); println(f"{a[0]},{a[1]},{a[2]}"); }

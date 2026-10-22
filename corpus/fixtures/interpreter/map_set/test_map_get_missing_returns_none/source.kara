@@ -1,0 +1,8 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+let v = m.get("z");
+match v {
+Some(x) => println(x),
+None => println("none"),
+}
+}

@@ -1,0 +1,1 @@
+fn main() { let n: i64 = vec![1,2,3].iter().rev().sum(); println(n); }

@@ -1,0 +1,8 @@
+fn main() {
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    let e0: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let e1: Array[String, 2] = [f"cccccccc0", f"dddddddd0"];
+    v.push(e0);
+    v.push(e1);
+    println(f"s:{v.len()}");
+}

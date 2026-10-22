@@ -1,0 +1,9 @@
+#[repr(C)] union Slot { c: *const u8, m: *mut i64, n: i64 }
+#[derive(Copy, Clone)] struct Handle { p: *mut u8, tag: i64 }
+fn main() {
+println(size_of[Slot]());
+let mut buf: Array[u8, 2] = [1u8, 2u8];
+let h = Handle { p: buf.as_mut_ptr(), tag: 7 };
+let g = h;
+println(g.tag + h.tag);
+}

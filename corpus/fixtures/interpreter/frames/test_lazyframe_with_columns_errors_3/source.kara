@@ -1,0 +1,6 @@
+import std.lazy.{col};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 0i64]));
+let _ = df.lazy().with_columns(vec![col("a").div(col("a")).alias_("q")]).collect();
+}

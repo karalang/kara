@@ -1,0 +1,16 @@
+enum V {
+    Num(i64),
+    Nothing,
+}
+fn show(v: ref V) -> String {
+    match v {
+        Num(n) => n.to_string(),
+        Nothing => "none".to_string(),
+    }
+}
+fn main() {
+    let a = V.Num(7);
+    println(show(a));
+    let e = V.Nothing;
+    println(show(e));
+}

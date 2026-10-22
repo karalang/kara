@@ -1,0 +1,4 @@
+fn main() {
+let c: Column[f64] = Column.from_vec([3.0]);
+println(c.var());
+}

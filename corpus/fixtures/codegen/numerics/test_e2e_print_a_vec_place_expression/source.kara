@@ -1,0 +1,16 @@
+struct B { xs: Vec[String], ns: Vec[i64], nested: Vec[Vec[i64]] }
+shared struct S { xs: Vec[String] }
+fn mk() -> Vec[String] { ["x", "y"] }
+fn main() {
+let b = B { xs: ["a", "b"], ns: [1, 2, 3], nested: [[1, 2], [3]] };
+let s = S { xs: ["p", "q"] };
+println(b.xs);
+println(f"{b.xs}");
+println(b.ns);
+println(f"{b.nested}");
+println(f"{b.nested[0]}");
+println(f"{s.xs}");
+println([9, 8]);
+println(mk());
+println(f"{b.xs}");
+}

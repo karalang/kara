@@ -1,0 +1,9 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("k", 5_i64);
+let old = m.insert("k", 10_i64);
+match old {
+Some(v) => println(v),
+None => println("none"),
+}
+}

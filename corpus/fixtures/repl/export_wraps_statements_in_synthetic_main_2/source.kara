@@ -1,0 +1,2 @@
+expected the `let x` cell inside `fn main()` body; got body:
+{body}

@@ -1,0 +1,5 @@
+host fn labs(x: i64) -> i64 with reads(Env);
+fn main() {
+println(f"{labs(0 - 42)}");
+println(f"{labs(7)}");
+}

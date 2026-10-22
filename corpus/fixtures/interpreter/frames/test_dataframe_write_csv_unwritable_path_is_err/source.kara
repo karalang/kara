@@ -1,0 +1,8 @@
+fn main() with writes(FileSystem) {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64]));
+match df.write_csv("/nonexistent-dir-kara/x.csv") {
+Ok(_) => println("ok"),
+Err(_) => println("io-err"),
+}
+}

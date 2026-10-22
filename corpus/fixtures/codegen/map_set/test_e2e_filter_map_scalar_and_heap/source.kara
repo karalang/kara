@@ -1,0 +1,25 @@
+enum Tok { Word(String), Num(i64) }
+fn main() {
+let a = [1, 2, 3, 4];
+let sc: Vec[i64] = a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }).collect();
+println(sc.len());
+let mut s = 0;
+for n in a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }) { s = s + n; }
+println(s);
+let t = [Tok.Word("hi".to_string()), Tok.Num(3), Tok.Word("yo".to_string())];
+let w: Vec[String] = t.iter().filter_map(|k| match k { Tok.Word(z) => Some(z.to_uppercase()), Tok.Num(_) => None }).collect();
+println(w.join(","));
+let hv = ["hello".to_string(), "".to_string(), "world".to_string()];
+let mut out = "".to_string();
+for hs in hv.iter().filter_map(|m| if m.len() > 0 { Some(m.to_uppercase()) } else { None }) { out.push_str(f"{hs}|"); }
+println(out);
+let c: Vec[i64] = a.iter().filter_map(|x| if x > 2 { Some(x * 2) } else { None }).map(|y| y + 4).collect();
+let mut cs = 0;
+for cn in c { cs = cs + cn; }
+println(cs);
+let b = [1, 2, 3, 4, 5, 6];
+let d: Vec[i64] = b.iter().filter(|x| x % 2 == 0).filter_map(|x| if x > 2 { Some(x * 2) } else { None }).collect();
+let mut ds = 0;
+for dn in d { ds = ds + dn; }
+println(ds);
+}

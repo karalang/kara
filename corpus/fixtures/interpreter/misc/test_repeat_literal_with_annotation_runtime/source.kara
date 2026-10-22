@@ -1,0 +1,4 @@
+fn main() {
+                 let a: Array[i64, 4] = [9; 4];
+                 println(a[1]);
+             }

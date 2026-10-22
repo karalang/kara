@@ -1,0 +1,6 @@
+enum E { A(String), B }
+fn main() {
+let mut e: E = E.A(f"hi");
+while let E.A(v) = e { let k: String = v; println(k); e = E.B; }
+println(f"done");
+}

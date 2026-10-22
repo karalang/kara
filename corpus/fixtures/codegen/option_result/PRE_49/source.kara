@@ -1,0 +1,6 @@
+struct R2q { s: String }
+                 enum Kq { A(R2q), B }
+                 impl Drop for Kq { fn drop(mut ref self) { println("dKq") } }
+                 struct Sk2 { n: i64 }
+                 impl Sk2 { fn show(x: Option[Kq]) { match x { Option.Some(Kq.A(r)) => { println(f"a:{r.s}") } Option.Some(Kq.B) => {} Option.None => {} } } }
+                 fn main() { Sk2.show(Option.Some(Kq.A(R2q { s: f"z" }))); println("end") }

@@ -1,0 +1,14 @@
+fn main() {
+let m: Map[String, Vec[i64]] = Map.new();
+m.entry("x").or_insert(Vec.new()).push(1_i64);
+m.entry("x").or_insert(Vec.new()).push(2_i64);
+m.entry("y").or_insert(Vec.new()).push(3_i64);
+match m.get("x") {
+Some(v) => println(v),
+None => println("none"),
+}
+match m.get("y") {
+Some(v) => println(v),
+None => println("none"),
+}
+}

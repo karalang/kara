@@ -1,0 +1,8 @@
+fn reset(slot: mut ref i64) -> i64 {
+let mut z = 0i64; swap(slot, mut z); z
+}
+fn main() {
+let mut n = 77i64;
+let prev = reset(mut n);
+println(f"{n} {prev}");
+}

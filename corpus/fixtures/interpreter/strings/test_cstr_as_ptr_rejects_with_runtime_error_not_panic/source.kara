@@ -1,0 +1,4 @@
+fn main() {
+let p = c"abc".as_ptr();
+println("unreached");
+}

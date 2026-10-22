@@ -1,0 +1,1 @@
+fn main() { let v: Vec[Option[Option[Rn]]] = [Some(Some(Rn { id: 71, name: f"a" }))]; println("ok"); println("done") }

@@ -1,0 +1,8 @@
+enum First { A, B }
+             enum Second { A, B }
+             impl First { fn tag(ref self) -> i64 { 1 } }
+             impl Second { fn tag(ref self) -> i64 { 2 } }
+             fn main() {
+                 println(First.A.tag());
+                 println(Second.A.tag());
+             }

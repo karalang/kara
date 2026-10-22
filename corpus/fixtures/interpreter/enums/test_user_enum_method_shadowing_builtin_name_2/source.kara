@@ -1,0 +1,3 @@
+struct R { v: String }
+impl R { fn unwrap(self) -> String { self.v.clone() } }
+fn main() { let r = R { v: "q".to_string() }; println(r.unwrap()); }

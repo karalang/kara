@@ -1,0 +1,2 @@
+fn pickf(r: R, flag: bool) -> R { if flag { return r } return R { id: 9 } }
+fn main() { let x = pickf(R { id: 1 }, false); println(f"{x.id}"); }

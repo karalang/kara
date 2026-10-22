@@ -1,0 +1,21 @@
+#[derive(Clone)]
+struct C { name: String, zip: i64 }
+struct A { c: Option[C], other: String }
+impl Drop for A {
+fn drop(mut ref self) { println(f"dropA other={self.other}"); }
+}
+#[allow(partial_move_of_drop_struct)]
+fn main() {
+let a = Option.Some(A {
+c: Option.Some(C { name: "moved out payload", zip: 7 }),
+other: "untouched sibling",
+});
+let f = match a {
+Option.Some(x) => { x.c.clone() }
+Option.None => { Option.None }
+};
+match f {
+Option.Some(cc) => { println(cc.name); println(cc.zip); }
+Option.None => { println("none"); }
+}
+}

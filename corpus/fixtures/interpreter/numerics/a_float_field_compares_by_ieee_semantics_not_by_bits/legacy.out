@@ -1,0 +1,9 @@
+scalar-negzero=true
+scalar-nan=false
+shared-negzero=true
+shared-nan=false
+sharedvec-negzero=true
+sharedvec-nan=false
+plainvec-negzero=true
+plainvec-nan=false
+nested-negzero=true

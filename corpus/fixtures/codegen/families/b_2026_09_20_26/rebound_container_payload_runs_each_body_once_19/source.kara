@@ -1,0 +1,2 @@
+struct Hp { e: EArr, n: i64 }
+fn main() { let h = Hp { e: EArr.A(mka()), n: 0 }; match h.e { EArr.A(v) => println(f"r{v[1].id}"), EArr.B => println("b") } println("x") }

@@ -1,0 +1,9 @@
+struct FakeClock {}
+impl FakeClock { fn now(self) -> i64 { 42 } }
+fn main() {
+with_provider[Clock](FakeClock {}, || {
+println(Clock.now());
+});
+let t = Clock.now();
+println(t > 1_000_000_000);
+}

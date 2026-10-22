@@ -1,0 +1,26 @@
+fn make_int() -> i64 { 42i64 }
+struct Conn { fd: i64, port: i64 }
+fn make_conn() -> Conn { Conn { fd: 3i64, port: 8080i64 } }
+fn main() {
+    let p: Pool[i64] = Pool.new(make_int, 1i64, 2i64);
+    match p.acquire(0i64) {
+        Ok(c1) => { println(c1.val.to_string()); p.release(c1); }
+        Err(_e) => println("t1"),
+    }
+    match p.acquire(0i64) {
+        Ok(c2) => {
+            match p.acquire(0i64) {
+                Ok(_c3) => println("unexpected"),
+                Err(_e) => println("atcap"),
+            }
+            println(c2.val.to_string());
+            p.release(c2);
+        }
+        Err(_e) => println("t2"),
+    }
+    let sp: Pool[Conn] = Pool.new(make_conn, 2i64, 4i64);
+    match sp.acquire(0i64) {
+        Ok(sc) => { println(f"{sc.val.fd}"); println(f"{sc.val.port}"); sp.release(sc); }
+        Err(_e) => println("t3"),
+    }
+}

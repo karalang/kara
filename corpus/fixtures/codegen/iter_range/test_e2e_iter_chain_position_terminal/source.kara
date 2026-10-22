@@ -1,0 +1,11 @@
+fn main() {
+let v: Vec[i64] = [10, 20, 30, 40];
+match v.iter().position(|x| x == 30) { Some(i) => println(i), None => println(-1) }
+match v.iter().position(|x| x == 99) { Some(i) => println(i), None => println(-1) }
+match v.iter().position(|x| x == 10) { Some(i) => println(i), None => println(-1) }
+match v.iter().filter(|x| x % 20 == 0).position(|x| x == 40) { Some(i) => println(i), None => println(-1) }
+match v.iter().map(|x| x / 10).position(|x| x == 3) { Some(i) => println(i), None => println(-1) }
+let s: Vec[String] = ["a", "bb", "ccc"];
+match s.iter().position(|w| w.len() == 3) { Some(i) => println(i), None => println(-1) }
+match (0..10).position(|x| x == 7) { Some(i) => println(i), None => println(-1) }
+}

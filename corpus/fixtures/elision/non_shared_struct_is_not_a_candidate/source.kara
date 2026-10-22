@@ -1,0 +1,5 @@
+struct Plain { v: i64 }
+fn main() {
+let p = Plain { v: 1 };
+println(p.v);
+}

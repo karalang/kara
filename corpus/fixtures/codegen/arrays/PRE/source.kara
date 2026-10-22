@@ -1,0 +1,2 @@
+fn plainD(x: Option[Array[Ra, 2]]) { match x { Some(t) => { println(f"s:{t[0].id}") } None => { println("n") } } }
+fn main() { let a: Array[Ra, 2] = [Ra { id: 1 }, Ra { id: 2 }]; plainD(Some(a)); println("end") }

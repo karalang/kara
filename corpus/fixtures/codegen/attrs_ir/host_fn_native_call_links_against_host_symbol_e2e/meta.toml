@@ -1,0 +1,17 @@
+source = "tests/codegen/attrs_ir.rs::host_fn_native_call_links_against_host_symbol_e2e"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function labs"
+classified_with = "79705a229"
+extracted_src = "4ff9f1b6"
+model_rev = "583cfb0d"
+model_src = "4ff9f1b6"

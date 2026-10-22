@@ -1,0 +1,8 @@
+struct S5 { s: String }
+fn plainAS(x: Option[Array[S5, 2]]) {
+    match x { Some(t) => { let u: Array[S5, 2] = t; println(f"s:{u[0].s}") } None => { println("n") } }
+}
+fn main() {
+    let a: Array[S5, 2] = [S5 { s: f"aaaaaaaa0" }, S5 { s: f"bbbbbbbb0" }];
+    plainAS(Some(a));
+}

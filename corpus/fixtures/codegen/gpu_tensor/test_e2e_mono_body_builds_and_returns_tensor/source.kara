@@ -1,0 +1,17 @@
+fn matmul[M, K, N](a: Tensor[f64, [M, K]], b: Tensor[f64, [K, N]], m: i64, k: i64, n: i64) -> Tensor[f64, [M, N]] {
+let mut out: Tensor[f64, [?, ?]] = Tensor.zeros([m, n]);
+for i in 0..m {
+for j in 0..n {
+let mut acc = 0.0;
+for p in 0..k { acc = acc + a[i, p] * b[p, j]; }
+out[i, j] = acc;
+}
+}
+out
+}
+fn main() {
+let a: Tensor[f64, [2, 3]] = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+let b: Tensor[f64, [3, 2]] = Tensor.from([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
+let c = matmul(a, b, 2, 3, 2);
+println(c[0, 0]); println(c[0, 1]); println(c[1, 0]); println(c[1, 1]);
+}

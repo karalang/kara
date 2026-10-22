@@ -1,0 +1,2 @@
+struct W { p: (E, i64) }
+fn main() { let w = W { p: (E.B, 1) }; println("hi"); }

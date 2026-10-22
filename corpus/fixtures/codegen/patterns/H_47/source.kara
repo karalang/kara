@@ -1,0 +1,5 @@
+fn f() {
+  match mk(1) { E.A(a) => { match mk(2) { E.A(b) => { println(f"v{a}{b}"); return } E.B => {} } } E.B => {} }
+  println("AFTER")
+}
+fn main() { f(); println("done") }

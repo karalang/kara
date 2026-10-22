@@ -1,0 +1,7 @@
+fn main() {
+let s = "hello";
+match s.try_clone() {
+Ok(t) => println(t),
+Err(e) => println("err"),
+}
+}

@@ -1,0 +1,1 @@
+fn main() { let b = Bx { n: 1 }; let p = Option.Some(f"d{b.n}"); let q = Option.Some(f"e{b.n}"); let o = b.second(p, q); match o { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } } }

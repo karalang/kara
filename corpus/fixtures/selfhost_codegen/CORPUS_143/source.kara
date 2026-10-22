@@ -1,0 +1,39 @@
+fn parse_num(s: String) -> Result[i64, String] {
+    if s == "42" {
+        return Ok(42);
+    }
+    return Err("bad: ".to_string() + s);
+}
+fn render(r: Result[i64, String]) -> String {
+    match r {
+        Ok(n) => {
+            return "ok ".to_string() + n.to_string();
+        }
+        Err(e) => {
+            return "err ".to_string() + e;
+        }
+    }
+    return "".to_string();
+}
+fn flip(r: Result[String, i64]) -> String {
+    match r {
+        Ok(s) => {
+            return s;
+        }
+        Err(c) => {
+            return "code".to_string() + c.to_string();
+        }
+    }
+    return "".to_string();
+}
+fn main() {
+    println(render(parse_num("42".to_string())));
+    println(render(parse_num("xx".to_string())));
+    println(flip(Ok("fine".to_string())));
+    println(flip(Err(7)));
+    let held: Result[i64, String] = Err("kept".to_string());
+    println(render(held));
+    let mut sw: Result[i64, String] = Ok(1);
+    sw = Err("swapped".to_string());
+    println(render(sw));
+}

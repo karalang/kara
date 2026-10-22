@@ -1,0 +1,11 @@
+fn main() {
+    let a: Tensor[i32, [?, ?]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let b: Tensor[i32, [?, ?]] = Tensor.from([[7, 8], [9, 10], [11, 12]]);
+    let g = gpu.matmul(a, b);
+    let c = a.matmul(b);
+    println(f"{g[0, 0]} {g[0, 1]} {g[1, 0]} {g[1, 1]}");
+    println(f"{g[0, 0] == c[0, 0]} {g[1, 1] == c[1, 1]}");
+    let u: Tensor[u32, [?, ?]] = Tensor.from([[2u32, 3u32]]);
+    let v: Tensor[u32, [?, ?]] = Tensor.from([[10u32], [100u32]]);
+    println(f"{gpu.matmul(u, v)[0, 0]}");
+}

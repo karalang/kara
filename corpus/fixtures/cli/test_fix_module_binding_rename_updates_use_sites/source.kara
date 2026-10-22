@@ -1,0 +1,5 @@
+let MyLimit: i64 = 3;
+fn main() {
+    println(MyLimit);
+    println(MyLimit + 1);
+}

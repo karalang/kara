@@ -1,0 +1,9 @@
+fn bad(s: ref String) -> ref String {
+let local = String.from("x");
+local
+}
+fn main() {
+let s = String.from("hi");
+let r = bad(s);
+println(r.len());
+}

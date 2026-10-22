@@ -1,0 +1,2 @@
+fn use_n(w: W) -> i64 { return w.n; }
+fn main() { let k = use_n(W { r: R { id: 46 }, n: 4 }); println(f"{k}"); }

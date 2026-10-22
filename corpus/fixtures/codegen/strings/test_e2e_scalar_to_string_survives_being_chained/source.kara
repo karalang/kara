@@ -1,0 +1,16 @@
+struct P { v: i64 }
+fn f() -> i64 { return 999i64; }
+fn main() {
+let n: i64 = 12345;
+let x: f64 = 1.5;
+let b: bool = true;
+let c: char = 'q';
+println(n.to_string().to_string());
+println(n.to_string().len());
+println(x.to_string().len());
+println(b.to_string().len());
+println(c.to_string().len());
+let p = P { v: 4242 };
+println(p.v.to_string().len());
+println(f().to_string().len());
+}

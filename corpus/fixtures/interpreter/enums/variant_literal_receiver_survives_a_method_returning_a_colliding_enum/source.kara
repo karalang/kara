@@ -1,0 +1,14 @@
+enum Color { Red, Green }
+             enum Fruit { Red, Apple }
+             impl Color {
+                 fn to_fruit(self) -> Fruit {
+                     match self { Red => return Fruit.Apple, Green => return Fruit.Red, }
+                 }
+             }
+             fn fruit_tag(f: Fruit) -> i64 {
+                 match f { Red => return 0, Apple => return 1, }
+             }
+             fn main() {
+                 println(fruit_tag(Color.Red.to_fruit()));
+                 println(fruit_tag(Color.Green.to_fruit()));
+             }

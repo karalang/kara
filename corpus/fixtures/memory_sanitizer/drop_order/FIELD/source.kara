@@ -1,0 +1,9 @@
+struct S { v: String }
+impl Drop for S { fn drop(mut ref self) { println(f"drop S {self.v.len()}"); } }
+struct P { a: S, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: S { v: payload() }, b: n }; }
+fn takep(p: P) -> i64 { return p.b; }
+fn takes(s: S) -> i64 { return s.v.len(); }
+fn main() { println(go()); }

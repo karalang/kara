@@ -1,0 +1,1 @@
+fn main() { let r#union = 1; let r#reads = r#union + 1; }

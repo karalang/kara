@@ -1,0 +1,15 @@
+fn main() {
+let a = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);
+let b = Vector[f64, 4](2.0, 2.0, 2.0, 2.0);
+println(a.reduce_sum().to_string());
+println(a.reduce_product().to_string());
+println(a.reduce_min().to_string());
+println(a.reduce_max().to_string());
+println(a.dot(b).to_string());
+println(a.reverse().reduce_max().to_string());
+let c = Vector[i64, 4](1, 2, 3, 4);
+println(c.reduce_and().to_string());
+println(c.reduce_or().to_string());
+println(c.reduce_xor().to_string());
+println((a.reduce_sum() + b.reduce_sum()).to_string());
+}

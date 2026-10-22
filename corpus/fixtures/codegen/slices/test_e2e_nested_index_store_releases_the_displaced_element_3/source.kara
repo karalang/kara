@@ -1,0 +1,10 @@
+fn main() {
+let mut r: Vec[String] = Vec.new();
+r.push(f"aa"); r.push(f"bb");
+let mut d: Vec[Vec[String]] = Vec.new();
+d.push(r);
+d[0].swap(0, 0);
+let row: Vec[String] = d[0].clone();
+d[0][1] = row[0].clone();
+println(f"{d[0][0]} {d[0][1]}");
+}

@@ -1,0 +1,8 @@
+enum Val { S(String), N(i64) }
+fn render(e: Val) -> String {
+    match e { S(s) => s, N(k) => "(" + "n" + ")" }
+}
+fn main() {
+    let a = Val.S("abc");
+    println(render(a));
+}

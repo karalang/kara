@@ -1,0 +1,1 @@
+fn main() { println((-3.7f64).saturating_to_i32()); }

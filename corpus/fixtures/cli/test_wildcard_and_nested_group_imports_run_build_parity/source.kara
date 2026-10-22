@@ -1,0 +1,9 @@
+import util.*;
+import db.{conn.{open, close}, pool.size};
+fn main() {
+    println(tag());
+    println(scale(3));
+    println(open(4));
+    println(close(4));
+    println(size());
+}

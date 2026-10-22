@@ -1,0 +1,5 @@
+struct W { r: R, n: i64 }
+fn keep(w: W) -> R { let W { r, n } = w; r }
+fn eat(w: W) -> i64 { let W { r, n } = w; n }
+fn main() { let a = keep(W { r: R { id: 41 }, n: 1 }); println(f"{a.id}");
+             let b = eat(W { r: R { id: 42 }, n: 2 }); println(f"{b}"); }

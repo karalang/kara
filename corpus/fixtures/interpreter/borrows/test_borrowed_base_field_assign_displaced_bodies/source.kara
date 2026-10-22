@@ -1,0 +1,40 @@
+struct Rs { id: i64, name: String }
+impl Drop for Rs {
+fn drop(mut ref self) {
+println(f"dS{self.id}")
+}
+}
+fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
+struct Bs { mut one: Rs }
+struct Outer { mut inner: Bs }
+impl Bs {
+fn set(mut ref self, r: Rs) { self.one = r; }
+fn set_lit(mut ref self) { self.one = mks(9); }
+}
+impl Outer {
+fn set_deep(mut ref self, r: Rs) { self.inner.one = r; }
+}
+fn setf(h: mut ref Bs, r: Rs) { h.one = r; }
+fn main() {
+println("c1");
+let mut a = Bs { one: mks(1) };
+a.set(mks(7));
+println(f"o{a.one.id}");
+println("c2");
+let mut b = Bs { one: mks(1) };
+b.one = mks(7);
+println(f"o{b.one.id}");
+println("c3");
+let mut c = Bs { one: mks(1) };
+setf(mut c, mks(7));
+println(f"o{c.one.id}");
+println("c4");
+let mut d = Bs { one: mks(1) };
+d.set_lit();
+println(f"o{d.one.id}");
+println("c5");
+let mut e = Outer { inner: Bs { one: mks(1) } };
+e.set_deep(mks(7));
+println(f"o{e.inner.one.id}");
+println("end");
+}

@@ -1,0 +1,8 @@
+fn bump(d: mut ref Vec[Vec[Vec[i64]]]) {
+    d[0][0][0] = d[0][0][0] + 1i64;
+}
+fn main() {
+    let mut d: Vec[Vec[Vec[i64]]] = [[[5]]];
+    bump(mut d);
+    println(f"{d[0][0][0]}");
+}

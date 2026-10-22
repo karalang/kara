@@ -1,0 +1,4 @@
+fn main() {}
+fn checked(x: i64) -> i64 requires x > 100 { x }
+fn deref_at(v: ref Vec[i64], i: i64) -> bool { v[i] >= 0 }
+fn at(v: ref Vec[i64], i: i64) -> i64 requires deref_at(v, i) { 0 }

@@ -1,0 +1,12 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(self.id); } }
+enum Slot { Empty, Full(Res) }
+fn main() {
+{ let s = Slot.Full(Res { id: 31 });
+match s { Slot.Full(r) => println(r.id), Slot.Empty => println(0) } }
+{ let t = Slot.Full(Res { id: 32 });
+match t { Slot.Full(_) => println(100), Slot.Empty => println(0) } }
+{ let u = Slot.Full(Res { id: 33 });
+if let Slot.Full(q) = u { println(q.id) } }
+println(999);
+}

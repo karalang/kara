@@ -1,0 +1,3 @@
+struct P { x: i64, y: i64 }
+fn shift(p: P, d: i64) -> P { P { x: p.x + d, y: p.y + d } }
+fn main() { let p = shift(P { x: 1, y: 2 }, 10); println((p.x + p.y).to_string()) }

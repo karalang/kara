@@ -1,0 +1,56 @@
+struct Q { v: i64 }
+struct P { q: Q }
+struct F { v: f64 }
+struct B { v: bool }
+struct S { v: i64 }
+struct V { a: Vec[i64] }
+fn bump(x: mut ref i64) { x = x + 1i64; }
+fn bumpf(x: mut ref f64) { x = x + 1.0; }
+fn setb(x: mut ref bool) { x = true; }
+fn setq(x: mut ref Q) { x.v = 9i64; }
+fn setg[T](x: mut ref T, d: T) { x = d; }
+fn fwd(p: mut ref S) { bump(p.v); }
+fn push2(v: mut ref Vec[i64]) { v.push(42i64); }
+fn main() {
+let n: i64 = 1i64;
+let mut a: S = S { v: n + 6i64 };
+bump(mut a.v);
+println(f"a:{a.v}");
+let mut b: P = P { q: Q { v: n + 6i64 } };
+bump(mut b.q.v);
+println(f"b:{b.q.v}");
+let mut c: (i64, i64) = (n + 6i64, 0i64);
+bump(mut c.0);
+println(f"c:{c.0}");
+let mut d: Vec[i64] = Vec.new();
+d.push(n + 6i64);
+bump(mut d[0i64]);
+println(f"d:{d[0i64]}");
+let mut e: Vec[S] = Vec.new();
+e.push(S { v: n + 6i64 });
+bump(mut e[0i64].v);
+println(f"e:{e[0i64].v}");
+let mut f: P = P { q: Q { v: n + 6i64 } };
+setq(mut f.q);
+println(f"f:{f.q.v}");
+let mut g: F = F { v: 7.0 };
+bumpf(mut g.v);
+println(f"g:{g.v as i64}");
+let mut h: B = B { v: false };
+setb(mut h.v);
+println(f"h:{h.v}");
+let mut i2: S = S { v: n + 6i64 };
+fwd(mut i2);
+println(f"i:{i2.v}");
+let mut j: S = S { v: n + 6i64 };
+setg(mut j.v, n + 7i64);
+println(f"j:{j.v}");
+let mut k: V = V { a: Vec.new() };
+k.a.push(n);
+push2(mut k.a);
+println(f"k:{k.a.len()}:{k.a[1i64]}");
+let mut l: (Vec[i64], i64) = (Vec.new(), 0i64);
+l.0.push(n);
+push2(mut l.0);
+println(f"l:{l.0.len()}:{l.0[1i64]}");
+}

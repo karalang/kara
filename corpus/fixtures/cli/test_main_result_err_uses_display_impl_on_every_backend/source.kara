@@ -1,0 +1,5 @@
+struct Shown { a: i64, b: i64 }
+impl Display for Shown { fn to_string(ref self) -> String { f"S({self.a},{self.b})" } }
+fn main() -> Result[(), Shown] {
+    return Err(Shown { a: 1, b: 2 })
+}

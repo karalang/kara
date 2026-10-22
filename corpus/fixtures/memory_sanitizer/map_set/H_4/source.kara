@@ -1,0 +1,4 @@
+fn main() {
+   let mut m: Map[String, B] = Map.new(); fill(mut m);
+   match m.get("k") { None => println("n"), Some(_) => println("s") }
+   println("end") }

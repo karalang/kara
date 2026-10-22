@@ -1,0 +1,2 @@
+fn f() -> i64 { let s = S3 { a: mk(5), b: mk(6) }; let x = s.a; return 7; }
+fn main() { println(f()) }

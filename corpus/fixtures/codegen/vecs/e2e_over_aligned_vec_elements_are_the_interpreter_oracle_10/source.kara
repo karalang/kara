@@ -1,0 +1,9 @@
+struct H { v: Vector[i64, 4] }
+fn main() {
+let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+let mut hs: Vec[H] = [];
+for i in 0..9 { hs.push(H { v: a }); }
+println(hs.len());
+let g = ref hs[8];
+println(g.v.reduce_sum());
+}

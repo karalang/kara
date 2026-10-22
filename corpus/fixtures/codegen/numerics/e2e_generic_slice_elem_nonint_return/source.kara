@@ -1,0 +1,10 @@
+fn gsum[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn gat[T: Clone](s: Slice[T], i: i64) -> T { s[i].clone() }
+fn main() {
+    let vs: Vec[String] = ["first-payload-long-enough-string", "second-payload-also-long-here"];
+    let vs2: Vec[String] = ["first-payload-long-enough-string", "second-payload-also-long-here"];
+    let arr: Array[String, 2] = ["array-elem-zero-long-payload", "array-elem-one-long-payload"];
+    println(f"{gsum(vs)}");
+    println(f"{gat(vs2, 1)}");
+    println(f"{gsum(arr)}");
+}

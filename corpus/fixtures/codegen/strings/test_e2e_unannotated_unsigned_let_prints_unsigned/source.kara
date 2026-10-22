@@ -1,0 +1,13 @@
+fn u64_fn() -> u64 { return 18446744073709551615u64; }
+fn main() {
+let a = 18446744073709551615u64;
+let b = u64_fn();
+let c = 9223372036854775808u64 + 0u64;
+let x: f64 = 1.5;
+let d = x.to_bits();
+let e = (18446744073709551615u64).reverse_bits();
+let ann: u64 = 18446744073709551615u64;
+let neg = 0 - 1;
+println(f"{a} {b} {c} {d} {e}");
+println(f"{ann} {x.to_bits()} {neg}");
+}

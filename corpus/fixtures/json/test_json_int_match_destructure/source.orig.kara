@@ -1,0 +1,22 @@
+fn describe(j: Json) -> String {
+match j {
+Json.Null => "null",
+Json.Bool(b) => "bool",
+Json.Number(f) => "num",
+Json.Int(i) => "int:" + i.to_string(),
+Json.String(s) => "str",
+Json.Array(xs) => "arr",
+Json.Object(kv) => "obj",
+}
+}
+fn main() {
+match Json.parse("41") {
+Ok(j) => println(describe(j)),
+Err(e) => println("err"),
+}
+match Json.parse("4.5") {
+Ok(j) => println(describe(j)),
+Err(e) => println("err"),
+}
+println(describe(Json.Int(99)));
+}

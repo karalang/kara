@@ -1,0 +1,6 @@
+struct DateRange { start: i64, end: i64, invariant self.start <= self.end }
+impl DateRange {
+fn break_priv(self) -> DateRange { DateRange { start: 10, end: 0 } }
+pub fn via(self) -> i64 { let _b = self.break_priv(); 99 }
+}
+fn main() { let r = DateRange { start: 1, end: 5 }; let _ = r.via(); }

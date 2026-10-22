@@ -1,0 +1,26 @@
+struct Err6 { msg: String, codes: Vec[i64] }
+struct Err4 { msg: String, code: i64 }
+fn mk6(i: i64) -> Err6 {
+    let mut c: Vec[i64] = Vec.new();
+    c.push(i);
+    return Err6 { msg: f"wide-err-{i}", codes: c };
+}
+fn mk4(i: i64) -> Err4 { return Err4 { msg: f"mid-err-{i}", code: i }; }
+fn fail6(i: i64) -> Result[i64, Err6] { return Result.Err(mk6(i)); }
+fn fail4(i: i64) -> Result[i64, Err4] { return Result.Err(mk4(i)); }
+fn prop6(i: i64) -> Result[i64, Err6] { let v = fail6(i)?; return Result.Ok(v); }
+fn prop4(i: i64) -> Result[i64, Err4] { let v = fail4(i)?; return Result.Ok(v); }
+fn main() {
+    match prop6(3i64) {
+        Result.Ok(v) => { println(f"a:ok{v}"); }
+        Result.Err(e) => { println(f"a:{e.msg}:{e.codes.len()}"); }
+    }
+    match prop4(4i64) {
+        Result.Ok(v) => { println(f"b:ok{v}"); }
+        Result.Err(e) => { println(f"b:{e.msg}:{e.code}"); }
+    }
+    match fail4(5i64) {
+        Result.Ok(v) => { println(f"c:ok{v}"); }
+        Result.Err(e) => { println(f"c:{e.msg}:{e.code}"); }
+    }
+}

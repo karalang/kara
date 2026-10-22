@@ -1,0 +1,4 @@
+fn main() {
+let x = 42;
+println(f"the answer is {x}");
+}

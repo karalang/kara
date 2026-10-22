@@ -1,0 +1,7 @@
+fn main() {
+let mut counter = 10_i64;
+let bump = mut ref || { counter += 5; };
+bump();
+bump();
+println(counter);
+}

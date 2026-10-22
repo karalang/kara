@@ -1,0 +1,17 @@
+struct S { n: i64 }
+
+impl S {
+    fn take(own self) -> i64 { self.n }
+    fn peek(ref self) -> i64 { self.n }
+}
+
+trait Eat {
+    fn eat(own self, other: own S) -> i64;
+}
+
+fn apply(x: own S, f: Fn(own S, i64) -> i64) -> i64 { f(x, 1) }
+
+fn main() {
+    let s = S { n: 41 };
+    println(apply(s, |t: S, k: i64| t.take() + k));
+}

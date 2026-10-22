@@ -1,0 +1,7 @@
+a: ref-self match on fresh receiver
+drop 5 e5
+t=1
+b: ref-self match on named binding
+u=1
+end
+drop 8 e8

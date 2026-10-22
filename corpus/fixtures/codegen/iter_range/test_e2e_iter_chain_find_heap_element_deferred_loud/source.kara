@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[String] = ["a", "bb", "ccc"];
+match v.iter().find(|s| s.len() == 2) { Some(e) => println(e), None => println("none") }
+}

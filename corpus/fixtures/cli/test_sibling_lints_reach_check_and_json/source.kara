@@ -1,0 +1,7 @@
+fn main() {
+let v: Vec[i64] = Vec.filled(4, 7);
+// just an ordinary comment, not a justification
+unsafe {
+println(f"{v.get_unchecked(1)}");
+}
+}

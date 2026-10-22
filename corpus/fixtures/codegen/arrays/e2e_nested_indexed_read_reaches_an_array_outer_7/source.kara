@@ -1,0 +1,4 @@
+fn plainV(x: Option[Array[i64, 3]]) {
+    match x { Some(t) => { println(f"s:{t[2]}") } None => { println("n") } }
+}
+fn main() { plainV(Some([7, 8, 9])); }

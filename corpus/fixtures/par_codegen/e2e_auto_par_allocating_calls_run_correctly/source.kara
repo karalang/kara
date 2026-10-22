@@ -1,0 +1,11 @@
+fn make(n: i64) -> Vec[i64] {
+let mut v: Vec[i64] = Vec.new();
+v.push(n);
+v.push(n + 1);
+return v;
+}
+fn main() {
+let a = make(10);
+let b = make(20);
+println(a[0] + a[1] + b[0] + b[1]);
+}

@@ -1,0 +1,17 @@
+source = "tests/interpreter/numerics.rs::test_deque_head_read_group_lane_consistency"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:vecdeque", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "cd1f7b3f"
+model_rev = "583cfb0d"
+model_src = "cd1f7b3f"

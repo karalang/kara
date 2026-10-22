@@ -1,0 +1,12 @@
+struct Rec { id: i64, s: String }
+impl Drop for Rec { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum M { P((bool, Rec)), Q }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let g: M = P((true, Rec { id: i, s: f"row-aaaaaaaaaaaaaaaa-{i}" }));
+        println(f"t");
+        i = i + 1i64;
+    }
+    println(f"end");
+}

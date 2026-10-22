@@ -1,0 +1,8 @@
+shared enum Shape { Circle(i64), Rect(i64, i64), Empty, Named { w: i64, label: String } }
+fn main() {
+    dbg(Shape.Circle(5));
+    dbg(Shape.Rect(3, 4));
+    dbg(Shape.Empty);
+    dbg(Shape.Named { w: 7, label: "hi" });
+    println("done");
+}

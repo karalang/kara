@@ -1,0 +1,7 @@
+struct W { a: Array[String, 2] }
+enum E { Full(W), Empty }
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let e: E = E.Full(W { a: a });
+    println("s:ok");
+}

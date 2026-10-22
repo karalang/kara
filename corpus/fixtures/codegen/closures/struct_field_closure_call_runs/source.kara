@@ -1,0 +1,2 @@
+struct H { f: Fn(i64) -> i64 }
+fn main() { let h = H { f: |x| x * 2i64 }; println(f"{(h.f)(21i64)}"); }

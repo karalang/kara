@@ -1,0 +1,6 @@
+struct Owned { x: i64 }
+fn main() {
+let o = Owned { x: 1 };
+let f = || o.x + 1;
+let _ = f();
+}

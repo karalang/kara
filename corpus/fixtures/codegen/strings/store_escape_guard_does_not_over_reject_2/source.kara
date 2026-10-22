@@ -1,0 +1,2 @@
+fn run(k: i64) -> i64 { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x: i64| x + k); return (v[0])(5i64); }
+fn main() { println(f"{run(21i64)}"); }

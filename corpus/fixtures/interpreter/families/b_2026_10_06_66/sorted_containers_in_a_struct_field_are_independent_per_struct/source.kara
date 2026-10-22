@@ -1,0 +1,12 @@
+#[derive(Clone)]
+struct H { m: SortedMap[i64, i64], s: SortedSet[i64] }
+fn main() {
+let mut a = H { m: SortedMap.new(), s: SortedSet.new() };
+a.m.insert(1, 1);
+a.s.insert(1);
+let mut b = a.clone();
+b.m.insert(2, 2);
+b.s.insert(2);
+b.m.clear();
+println(f"a={a.m.len()},{a.s.len()} b={b.m.len()},{b.s.len()}");
+}

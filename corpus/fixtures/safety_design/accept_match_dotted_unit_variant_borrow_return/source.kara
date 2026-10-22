@@ -1,0 +1,14 @@
+enum Side { Left, Right }
+fn pick(s: ref Side, a: ref String, b: ref String) -> ref String {
+match s {
+Side.Left => a,
+Side.Right => b,
+}
+}
+fn main() {
+let sd: Side = Side.Left;
+let x = String.from("L");
+let y = String.from("R");
+let r = pick(sd, x, y);
+println(r.len());
+}

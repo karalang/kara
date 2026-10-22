@@ -1,0 +1,17 @@
+fn classify(x: i64) -> i64 {
+if x > 100 {
+3
+} else if x > 10 {
+2
+} else if x > 0 {
+1
+} else {
+0
+}
+}
+fn main() {
+println(classify(200));
+println(classify(50));
+println(classify(5));
+println(classify(-1));
+}

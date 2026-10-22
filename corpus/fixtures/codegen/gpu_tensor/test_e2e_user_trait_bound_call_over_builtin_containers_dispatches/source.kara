@@ -1,0 +1,27 @@
+trait Zero { fn describe(ref self) -> String; }
+impl Zero for Map[String, i64] { fn describe(ref self) -> String { return "m"; } }
+impl Zero for Set[i64] { fn describe(ref self) -> String { return "s"; } }
+impl Zero for Slice[i64] { fn describe(ref self) -> String { return "l"; } }
+impl Zero for Vec[i64] { fn describe(ref self) -> String { return "v"; } }
+impl Zero for String { fn describe(ref self) -> String { return "t"; } }
+fn show[T: Zero](x: ref T) -> String { return x.describe(); }
+fn outer[T: Zero](x: ref T) -> String { return show(x) + "!"; }
+fn pair[A: Zero, B: Zero](x: ref A, y: ref B) -> String {
+return x.describe() + y.describe();
+}
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+m.insert("k", 1);
+let mut s: Set[i64] = Set.new();
+s.insert(7);
+let mut v: Vec[i64] = Vec.new();
+v.push(3);
+v.push(4);
+let t: String = "hi";
+let sl = v[0..2];
+println(show(m) + show(s) + show(sl) + show(v) + show(t));
+println(show(v[0..2]));
+println(outer(m) + outer(s));
+println(pair(m, s) + pair(s, m));
+println(m.describe() + s.describe() + v.describe() + t.describe());
+}

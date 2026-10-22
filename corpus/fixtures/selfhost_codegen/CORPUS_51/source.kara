@@ -1,0 +1,1 @@
+fn main() { let a = "x"; let b = "y"; let c = a + b; println(c) }

@@ -1,0 +1,2 @@
+import mathx.local_thing;
+fn main() { println(local_thing()); }

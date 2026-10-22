@@ -1,0 +1,15 @@
+fn main() {
+let mut names: Column[String] = Column.new();
+names.push("ann"); names.push_null(); names.push("cat");
+let mut df = DataFrame.new();
+df.insert("name", names);
+let bytes = df.to_arrow_ipc();
+let d = DataFrame.from_arrow_ipc(bytes);
+let n: Column[String] = d.column("name");
+println(n.len());
+println(n.null_count());
+println(n.is_null(1));
+let vals = n.iter_valid();
+println(vals[0]);
+println(vals[1]);
+}

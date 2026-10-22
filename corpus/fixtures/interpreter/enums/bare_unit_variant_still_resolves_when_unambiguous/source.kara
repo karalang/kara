@@ -1,0 +1,7 @@
+enum Only { A, B }
+             impl Only { fn tag(ref self) -> i64 { 42 } }
+             fn main() {
+                 let x = A;
+                 println(x.tag());
+                 match x { A => println(1), B => println(2), }
+             }

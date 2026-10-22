@@ -1,0 +1,15 @@
+fn first[T](s: ref Slice[T]) -> T { s[0] }
+fn size[T](s: ref Slice[T]) -> i64 { s.len() }
+fn firstc(s: ref Slice[String]) -> String { s[0] }
+fn firstv[T](s: Slice[T]) -> T { s[0] }
+fn main() {
+    let ns: Array[i64, 4] = [100i64, 7i64, 3i64, 4i64];
+    println(f"[{size(ns)}]");
+    println(f"[{first(ns)}]");
+    let ss: Array[String, 2] = ["lit-x", "lit-y"];
+    println(f"[{first(ss)}]");
+    println(f"[{firstc(ss)}]");
+    println(f"[{firstv(ss)}]");
+    let vs: Vec[String] = ["vec-x", "vec-y"];
+    println(f"[{first(vs)}]");
+}

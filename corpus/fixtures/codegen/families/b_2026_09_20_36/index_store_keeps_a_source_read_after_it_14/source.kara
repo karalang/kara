@@ -1,0 +1,1 @@
+fn main() { let mut m: Map[i64, P] = Map.new(); let p = P { id: 3, s: f"three" }; m.insert(9, p); println(f"p:{p.s}"); println("end") }

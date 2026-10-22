@@ -1,0 +1,12 @@
+fn main() {
+    let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64, 1u64 << 62]);
+    let s = c.sorted();
+    println(f"{s[0]},{s[1]},{s[2]}");
+    let a = c.argsort();
+    println(f"{a[0]},{a[1]},{a[2]}");
+    let t: Tensor[u64, [3]] = Tensor.from([1u64 << 63, 5u64, 1u64 << 62]);
+    let ts = t.sorted();
+    println(f"{ts[0]},{ts[1]},{ts[2]}");
+    let ta = t.argsort();
+    println(f"{ta[0]},{ta[1]},{ta[2]}");
+}

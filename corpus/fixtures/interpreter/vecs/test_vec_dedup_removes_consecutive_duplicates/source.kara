@@ -1,0 +1,10 @@
+fn main() {
+            let mut xs: Vec[i64] = [1, 1, 2, 3, 3, 3, 1];
+            xs.dedup();
+            println(xs.len());
+            for x in xs.iter() { println(x); }
+            let mut ss: Vec[String] = ["a", "a", "bb", "a"];
+            ss.dedup();
+            println(ss.len());
+            for s in ss.iter() { println(s); }
+        }

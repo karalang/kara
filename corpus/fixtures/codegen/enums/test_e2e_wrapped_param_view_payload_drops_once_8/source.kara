@@ -1,0 +1,7 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+enum W2 { Two(R, R), None3 }
+fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2 }); 7 }
+fn main() { let v = take(R { id: 1 }); println(f"v={v}"); }

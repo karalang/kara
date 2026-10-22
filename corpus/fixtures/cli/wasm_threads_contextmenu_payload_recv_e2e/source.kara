@@ -1,0 +1,28 @@
+import std.web.events.{contextmenu, ClickEvent};
+
+fn main() {
+    println("before");
+    let cm = contextmenu();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same event every tick.
+    loop {
+        let c = cm.recv();
+        if c.x() == 310.0 and c.y() == 95.0 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("CTX_OK");
+    } else {
+        println("CTX_FAIL");
+    }
+    println("after");
+}

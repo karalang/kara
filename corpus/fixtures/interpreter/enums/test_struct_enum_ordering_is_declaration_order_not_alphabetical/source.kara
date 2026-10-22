@@ -1,0 +1,20 @@
+#[derive(Eq, Ord)]
+struct Rect { width: i64, height: i64 }
+#[derive(Eq, Ord)]
+enum Priority { Low, Med, High }
+fn rank(p: Priority) -> i64 {
+match p { Priority.Low => 0, Priority.Med => 1, Priority.High => 2 }
+}
+fn main() {
+let mut v: Vec[Rect] = Vec.new();
+v.push(Rect { width: 2, height: 1 });
+v.push(Rect { width: 1, height: 9 });
+v.sort();
+let mut i = 0;
+while i < v.len() { let r = v[i]; println(f"{r.width},{r.height}"); i = i + 1; };
+let mut ss: SortedSet[Priority] = SortedSet.new();
+ss.insert(Priority.High);
+ss.insert(Priority.Low);
+ss.insert(Priority.Med);
+for p in ss { println(f"{rank(p)}"); };
+}

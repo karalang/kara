@@ -1,0 +1,28 @@
+import std.web.events.{dblclick, ClickEvent};
+
+fn main() {
+    println("before");
+    let ds = dblclick();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same event every tick.
+    loop {
+        let c = ds.recv();
+        if c.x() == 220.0 and c.y() == 140.0 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("DBLCLICK_OK");
+    } else {
+        println("DBLCLICK_FAIL");
+    }
+    println("after");
+}

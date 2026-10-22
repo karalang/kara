@@ -1,0 +1,3 @@
+fn min_len(n: i64) -> Fn(ref String) -> bool { |s| (s.len() as i64) >= n }
+fn use_it(f: Fn(ref String) -> bool) -> bool { let s = "abcd"; return f(s); }
+fn main() { println(f"{use_it(min_len(3))}"); }

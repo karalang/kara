@@ -1,0 +1,6 @@
+struct H { name: String }
+fn main() {
+let h = H { name: f"alpha" };
+{ let keep: H = h; }
+println(h.name);
+}

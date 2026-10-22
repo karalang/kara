@@ -1,0 +1,3 @@
+struct Counter { n: i64 }
+impl Counter { pub fn step(self, by: i64) -> i64 requires by > 0 { self.n + by } }
+fn main() { let c = Counter { n: 5 }; let _ = c.step(-1); }

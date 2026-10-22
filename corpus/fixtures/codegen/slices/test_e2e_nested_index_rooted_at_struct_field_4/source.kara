@@ -1,0 +1,13 @@
+struct H { data: Vec[Vec[i64]] }
+fn read(h: ref H, i: i64, j: i64) -> i64 { return h.data[i][j]; }
+fn bump(h: mut ref H) { h.data[0][0] = h.data[0][0] + 1i64; }
+fn main() {
+let mut r: Vec[i64] = Vec.new();
+r.push(5i64);
+let mut d: Vec[Vec[i64]] = Vec.new();
+d.push(r);
+let mut h = H { data: d };
+println(f"{read(h, 0i64, 0i64)}");
+bump(mut h);
+println(f"{read(h, 0i64, 0i64)}");
+}

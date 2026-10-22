@@ -1,0 +1,3 @@
+fn words() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("alpha".to_string()); v.push("beta".to_string()); return v; }
+fn total_len(v: Vec[String]) -> i64 { let mut n = 0; let mut i = 0; while i < v.len() { let w = v[i].clone(); n = n + w.len(); i = i + 1; } return n; }
+fn main() { println(total_len(words()).to_string()); let ws = words(); println(total_len(ws).to_string()) }

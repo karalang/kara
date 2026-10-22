@@ -1,0 +1,15 @@
+fn append_plus_eq(s: mut ref String) { s += "abc"; }
+fn append_push(s: mut ref String) { s.push_str("abc"); }
+fn append_assign(s: mut ref String) { s = s + "abc"; }
+fn append_loop(s: mut ref String) {
+let mut i = 0i64;
+while i < 3i64 { s += "z"; i = i + 1i64; }
+}
+fn bump(n: mut ref i64) { n += 5i64; }
+fn main() {
+let mut a = "X"; append_plus_eq(mut a); println(a);
+let mut b = "X"; append_push(mut b); println(b);
+let mut c = "X"; append_assign(mut c); println(c);
+let mut d = "X"; append_loop(mut d); println(d);
+let mut n = 1i64; bump(mut n); println(n);
+}

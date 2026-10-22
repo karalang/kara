@@ -1,0 +1,6 @@
+fn main() {
+            let mut xs: Vec[i64] = Vec.new();
+            xs.push(3i64); xs.push(1i64); xs.push(4i64); xs.push(1i64); xs.push(5i64);
+            xs.sort_by(|a, b| b.cmp(a));
+            for x in xs.iter() { println(x); }
+        }

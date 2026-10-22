@@ -1,0 +1,49 @@
+enum Tok { Num(i64), Word(String), Sym }
+fn classify(t: ref Tok) -> String {
+    match t {
+        Num(n) if n > 100 => {
+            return "big".to_string();
+        }
+        Num(n) if n < 0 => {
+            return "neg".to_string();
+        }
+        Num(n) => {
+            return "small ".to_string() + n.to_string();
+        }
+        Word(w) if w == "if" => {
+            return "kw".to_string();
+        }
+        Word(w) => {
+            return "w ".to_string() + w;
+        }
+        Sym => {
+            return "sym".to_string();
+        }
+    }
+    return "?".to_string();
+}
+fn grade(n: i64) -> String {
+    match n {
+        x if x >= 90 => {
+            return "A".to_string();
+        }
+        x if x >= 80 => {
+            return "B".to_string();
+        }
+        _ => {
+            return "F".to_string();
+        }
+    }
+    return "?".to_string();
+}
+fn main() {
+    println(classify(Tok.Num(500)));
+    println(classify(Tok.Num(0 - 5)));
+    println(classify(Tok.Num(7)));
+    println(classify(Tok.Word("if".to_string())));
+    println(classify(Tok.Word("foo".to_string())));
+    println(classify(Tok.Sym));
+    println(grade(95));
+    println(grade(85));
+    println(grade(50));
+}

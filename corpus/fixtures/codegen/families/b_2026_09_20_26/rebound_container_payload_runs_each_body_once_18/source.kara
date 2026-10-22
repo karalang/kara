@@ -1,0 +1,2 @@
+enum En { A(Array[Array[R, 1], 2]), B }
+fn main() { let e = En.A([[R { id: 1 }], [R { id: 2 }]]); match e { En.A(v) => { println("au") } En.B => { println("no") } } println("end") }

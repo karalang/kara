@@ -1,0 +1,28 @@
+struct A { mut lines: Vec[String] }
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push(f"beta");
+let t: (Vec[String], i64) = (v, 2);
+let r = t.0;
+println(r.len());
+let mut v2: Vec[String] = Vec.new();
+v2.push(f"one");
+v2.push(f"two");
+let t2: (Vec[String], i64) = (v2, 3);
+let mut r2 = t2.0.clone();
+r2.push(f"three");
+let chk = t2.0;
+println(f"{r2.len()} {chk.len()} {chk[0]}");
+let mut iv: Vec[i64] = Vec.new();
+iv.push(1);
+let mut vv: Vec[Vec[i64]] = Vec.new();
+vv.push(iv);
+let t3: (Vec[Vec[i64]], i64) = (vv, 4);
+let r3 = t3.0;
+println(f"{r3.len()} {r3[0].len()}");
+let mut v4: Vec[String] = Vec.new();
+v4.push(f"x");
+let a = A { lines: v4 };
+let b = a;
+println(b.lines.len());
+}

@@ -1,0 +1,3 @@
+fn f(a: f16, b: f16) -> f16 { a + b }
+fn g(a: bf16, b: bf16) -> bf16 { a * b }
+fn main() { let _ = f(1.0f16, 2.0f16); let _ = g(1.0bf16, 2.0bf16); }

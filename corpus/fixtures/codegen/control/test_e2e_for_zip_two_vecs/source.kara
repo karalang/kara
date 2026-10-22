@@ -1,0 +1,16 @@
+fn main() {
+let a: Vec[i64] = [1, 2, 3, 4];
+let b: Vec[i64] = [10, 20, 30];
+let mut s: i64 = 0;
+for (x, y) in a.iter().zip(b.iter()) {
+s = s + x * y;
+}
+println(s);
+let c: Vec[f64] = [0.5, 1.5];
+let d: Vec[f64] = [2.0, 4.0, 8.0];
+let mut fs = 0.0;
+for (p, q) in c.iter().zip(d.iter()) {
+fs = fs + p * q;
+}
+println(fs);
+}

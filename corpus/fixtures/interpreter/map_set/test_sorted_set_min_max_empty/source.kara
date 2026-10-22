@@ -1,0 +1,7 @@
+fn main() {
+let s: SortedSet[i64] = SortedSet.new();
+match s.min() {
+Some(v) => println(f"{v}"),
+None    => println("empty"),
+}
+}

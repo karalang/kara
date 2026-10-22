@@ -1,0 +1,7 @@
+struct Cache { index: Map[i64, u64] }
+fn main() {
+  let mut c = Cache { index: Map.new() };
+  let _ = c.index.insert(5, 9);
+  let _ = c.index.insert(6, 10);
+  println(c.index.len());
+}

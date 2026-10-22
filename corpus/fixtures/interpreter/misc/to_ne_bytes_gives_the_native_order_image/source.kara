@@ -1,0 +1,7 @@
+fn main() {
+let n: u16 = 4660u16;
+let b = n.to_ne_bytes();
+let w: u32 = 16909060u32;
+let c = w.to_ne_bytes();
+println(f"{b.len()} {b[0]} {b[1]} | {c.len()} {c[0]} {c[3]}");
+}

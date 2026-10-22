@@ -1,0 +1,5 @@
+unsafe extern "C" { fn zlibVersion() -> *const u8; }
+fn main() {
+    let v = unsafe { zlibVersion() };
+    if unsafe { ptr.addr(v) } != 0 { println("zlib-linked") } else { println("null") }
+}

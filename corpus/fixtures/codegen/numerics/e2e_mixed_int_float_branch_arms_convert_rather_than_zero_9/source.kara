@@ -1,0 +1,2 @@
+fn f(c: bool, n: i64) -> f64 { if c { n } else { 0.5 } }
+fn main() { println(f(true, 7)); println(f(false, 7)); }

@@ -1,0 +1,9 @@
+struct Holder { r: ref String }
+fn bad() -> ref Holder {
+let local = String.from("x");
+Holder { r: local }
+}
+fn main() {
+let h = bad();
+println(h.r.len());
+}

@@ -1,0 +1,1 @@
+fn main() { let (b, n) = (Box2[i64] { v: 9 }, 1); println(f"{n}"); }

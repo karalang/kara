@@ -1,0 +1,44 @@
+fn pv(x: ref Vec[i64]) { println(x); println(f"{x}"); }
+fn pm(x: ref Map[String, i64]) { println(x); println(f"{x}"); }
+fn ps(x: ref Set[i64]) { println(x); println(f"{x}"); }
+fn po(x: ref Option[String]) { println(x); println(f"{x}"); }
+fn pr(x: ref Result[String, String]) { println(x); println(f"{x}"); }
+fn mv(x: mut ref Vec[i64]) { println(x); println(f"{x}"); }
+fn mo(x: mut ref Option[i64]) { println(x); println(f"{x}"); }
+fn pa(a: ref Array[i64, 3]) { println(a); println(f"{a}"); }
+fn pas(a: ref Array[String, 2]) { println(f"{a}"); }
+fn ma(a: mut ref Array[i64, 2]) { println(f"{a}"); }
+fn psl(s: ref Slice[i64]) { println(s); println(f"{s}"); }
+fn pt(t: ref (i64, String)) { println(t); println(f"{t}"); }
+fn mt(t: mut ref (i64, String)) { println(f"{t}"); }
+fn main() {
+let v: Vec[i64] = [1i64, 2i64, 3i64];
+pv(v);
+let mut m: Map[String, i64] = Map.new();
+m.insert("a", 1i64);
+pm(m);
+let mut s: Set[i64] = Set.new();
+s.insert(9i64);
+ps(s);
+let o: Option[String] = Some("pay0");
+po(o);
+let r: Result[String, String] = Ok("pay1");
+pr(r);
+let mut mv0: Vec[i64] = [7i64];
+mv(mut mv0);
+let mut mo0: Option[i64] = Some(4i64);
+mo(mut mo0);
+let arr: Array[i64, 3] = [1i64, 2i64, 3i64];
+pa(arr);
+let arrs: Array[String, 2] = ["p", "q"];
+pas(arrs);
+let mut marr: Array[i64, 2] = [8i64, 9i64];
+ma(mut marr);
+let sv: Vec[i64] = [4i64, 5i64];
+let sl = sv[0..2];
+psl(sl);
+let tup = (3i64, "t");
+pt(tup);
+let mut mtup = (4i64, "u");
+mt(mut mtup);
+}

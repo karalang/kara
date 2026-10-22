@@ -1,0 +1,6 @@
+fn main() {
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    m.insert([f"aaaaaaaa0", f"bbbbbbbb0"], 1);
+    m.insert([f"aaaaaaaa0", f"bbbbbbbb0"], 2);
+    println(f"s:{m.len()}");
+}

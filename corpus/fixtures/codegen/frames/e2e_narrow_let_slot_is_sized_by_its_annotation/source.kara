@@ -1,0 +1,33 @@
+fn main() {
+    // (a) unsuffixed narrow shift == suffixed narrow shift
+    let a: u8 = 200u8;
+    println(a << 4u8);
+    let b: u8 = 200;
+    println(b << 4);
+    // (b) same for a signed narrow sign-bit flip
+    let c: i32 = 1i32;
+    println(c << 31i32);
+    let d: i32 = 1;
+    println(d << 31);
+    // (c) …so an `i32` binding can no longer exceed i32::MAX
+    println(d << 31 > 2147483647);
+    // (d) the value still round-trips as its declared type
+    let e: u8 = 255;
+    println(e);
+    let f: i8 = -128;
+    println(f);
+    // (e) a NEGATED unsuffixed literal (a lowered `neg` call)
+    let g: i8 = -100;
+    println(g << 1);
+    let h: i8 = -100i8;
+    println(h << 1i8);
+    // (f) the WIDENING direction still widens
+    let i: u8 = 200;
+    let j: i64 = i;
+    println(j);
+    // (g) 64-bit and pointer-width annotations are untouched
+    let k: u64 = 5;
+    println(k);
+    let l: usize = 5;
+    println(l);
+}

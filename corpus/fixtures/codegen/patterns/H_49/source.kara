@@ -1,0 +1,2 @@
+fn f() { if let E.A(n) = mk(7) { println(f"v{n}"); return } println("AFTER") }
+fn main() { f() }

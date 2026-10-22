@@ -1,0 +1,14 @@
+fn main() {
+let s: String = "ab";
+println(s.repeat(3));
+println(s.repeat(1));
+println(s.repeat(0));
+println(s.repeat(-2));
+let e: String = "";
+println(e.repeat(5));
+let u: String = "λ";
+println(u.repeat(3));
+let mut out: String = "x";
+out.push_str(s.repeat(2));
+println(out);
+}

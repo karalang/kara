@@ -1,0 +1,15 @@
+fn main() {
+let mut a: Vec[u64] = vec![];
+a.push(18446744073709551615u64);
+a.push(5u64);
+a.sort();
+println(a[0]);
+let mut b: Vec[u128] = vec![];
+b.push(340282366920938463463374607431768211455u128);
+b.push(200000000000000000000000000000000000000u128);
+b.push(5u128);
+b.sort();
+println(b[0]);
+println(b[1]);
+println(b[2]);
+}

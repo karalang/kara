@@ -1,0 +1,4 @@
+enum Bin { Packed(Array[Ra, 2]), Bare }
+fn main() { let b: Bin = Packed([Ra { id: 1 }, Ra { id: 2 }]);
+    match b { Packed(a) => { println(f"s:{a[0].id}") } Bare => { println("n") } }
+    println("end") }

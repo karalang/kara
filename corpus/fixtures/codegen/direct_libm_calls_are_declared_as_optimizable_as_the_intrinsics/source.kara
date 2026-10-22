@@ -1,0 +1,5 @@
+fn main() {
+let n = env.args().len() as i64;
+let x: f32 = (n as f32);
+println(f"{x.cosh()} {x.log10()}");
+}

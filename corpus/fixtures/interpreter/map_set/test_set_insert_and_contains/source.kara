@@ -1,0 +1,7 @@
+fn main() {
+let s: Set[i64] = Set.new();
+s.insert(1_i64);
+s.insert(2_i64);
+println(s.contains(1_i64));
+println(s.contains(3_i64));
+}

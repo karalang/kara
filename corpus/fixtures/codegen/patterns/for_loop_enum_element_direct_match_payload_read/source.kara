@@ -1,0 +1,20 @@
+struct Named { name: String, tags: Vec[i64] }
+enum Item { A(Named), B }
+fn total(items: ref Vec[Item]) -> i64 {
+    let mut n = 0;
+    for it in items {
+        match it {
+            A(x) => { n = n + x.name.len(); for t in x.tags { n = n + t; } }
+            B => {}
+        }
+    }
+    n
+}
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    let mut tg: Vec[i64] = Vec.new(); tg.push(10); tg.push(20);
+    v.push(Item.A(Named { name: "hello", tags: tg }));
+    v.push(Item.B);
+    println(total(v));
+    println(v.len());
+}

@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Array[Array[N, 1], 1] = [[N { k: 1 }]]; d[0][0] = N { k: 2 }; println("end") }

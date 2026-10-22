@@ -1,0 +1,4 @@
+fn main() {
+let s: SortedSet[i64] = SortedSet.new();
+println(f"{s.len()}");
+}

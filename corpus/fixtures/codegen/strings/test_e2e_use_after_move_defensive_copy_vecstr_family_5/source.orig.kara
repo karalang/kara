@@ -1,0 +1,6 @@
+struct H { name: String }
+fn main() {
+let s: String = f"alpha";
+{ let h = H { name: s }; println(h.name); }
+println(s);
+}

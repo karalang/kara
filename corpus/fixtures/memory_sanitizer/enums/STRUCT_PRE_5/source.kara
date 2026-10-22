@@ -1,0 +1,6 @@
+struct W { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+fn seed() -> i64 { env.args().len() }
+fn w_none() -> Option[W] { Option.None }
+fn f(value: Option[W]) -> i64 { let mut acc = 0;
+   while let Some(w) = value { acc = acc + w.a + w.f; value = w_none(); } acc }
+fn main() { println(f(Option.Some(W { a: seed(), b: 2, c: 3, d: 4, e: 5, f: 6 }))); }

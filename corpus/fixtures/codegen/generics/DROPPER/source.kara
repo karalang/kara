@@ -1,0 +1,2 @@
+impl G1 { fn gm_ret[T](ref self, r: R, t: T) -> R { r } }
+fn main() { let h = G1 { n: 1 }; let b = h.gm_ret(R { id: 32, tag: f"h" }, 5); println(f"{b.id}"); }

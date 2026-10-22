@@ -1,0 +1,29 @@
+struct Res { id: i64, s: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+fn main() {
+    let mut v: Vec[Res] = Vec.new();
+    v.push(Res { id: 1, s: f"one-{1}" });
+    v.push(Res { id: 2, s: f"two-{2}" });
+    println("a");
+    while let Option.Some(r) = v.pop() {
+        println(f"got {r.id} len {r.s.len()}");
+    }
+    println("b");
+    let mut w: Vec[Res] = Vec.new();
+    w.push(Res { id: 3, s: f"three-{3}" });
+    if let Option.Some(r) = w.pop() {
+        println(f"iflet {r.id} len {r.s.len()}");
+    }
+    println("c");
+    let mut u: Vec[Res] = Vec.new();
+    u.push(Res { id: 4, s: f"four-{4}" });
+    match u.pop() {
+        Option.Some(r) => { println(f"match {r.id} len {r.s.len()}"); }
+        Option.None => { println("none"); }
+    }
+    println("end");
+}

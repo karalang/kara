@@ -1,0 +1,4 @@
+fn main() {
+    let deep: Vec[Vec[Vec[i64]]] = [[[5, 6]]];
+    println(f"{deep[0][0][1]}");
+}

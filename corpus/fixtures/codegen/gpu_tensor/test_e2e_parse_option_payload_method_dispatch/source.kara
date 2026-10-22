@@ -1,0 +1,7 @@
+fn main() {
+match i64.parse("42") { Some(v) => println(v.to_string()), None => println("x") }
+let o = i64.parse("7");
+match o { Some(v) => { let w = v + 1; println(w.to_string()) } None => println("x") }
+match u8.parse("255") { Some(v) => println(v.to_string()), None => println("x") }
+match i64.from_str_radix("ff", 16) { Some(v) => println(v.to_string()), None => println("x") }
+}

@@ -1,0 +1,11 @@
+fn make_csv() -> String { return "a,bb,,ccc"; }
+fn main() {
+let a = "x,y,z".split(',');
+println(f"{a.len()}");
+println(a[1]);
+let lit_has = "hello world".contains("wor");
+println(f"{lit_has}");
+let c = make_csv().split(',');
+println(f"{c.len()}");
+println(c[3]);
+}

@@ -1,0 +1,12 @@
+shared struct Shd { v: i64 }
+enum M { P((Shd, i64)), Q }
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let g: M = P((Shd { v: n }, 1i64));
+        println("t");
+        i = i + 1i64;
+    }
+    println("end");
+}

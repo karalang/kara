@@ -1,0 +1,1 @@
+fn main() { let hi: u64 = 1u64 << 63; println(f"{hi}"); }

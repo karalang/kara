@@ -1,0 +1,6 @@
+struct Timer { ticks: i64 }
+impl Timer { fn now(ref self) -> i64 { self.ticks } }
+fn main() {
+let clock = Timer { ticks: 42 };
+println(clock.now());
+}

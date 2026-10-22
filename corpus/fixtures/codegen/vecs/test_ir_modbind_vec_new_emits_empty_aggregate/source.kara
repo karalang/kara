@@ -1,0 +1,3 @@
+let mut TODOS: Vec[i64] = Vec.new();
+let EMPTY: Vec[i64] = Vec.new();
+fn main() {}

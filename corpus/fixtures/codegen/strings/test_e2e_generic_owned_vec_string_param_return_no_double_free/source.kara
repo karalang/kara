@@ -1,0 +1,7 @@
+fn id[T](x: T) -> T { x }
+fn main() {
+    let mut v: Vec[String] = Vec.new(); v.push(f"aa"); v.push(f"bb");
+    let w = id(v);
+    println(w[1]);
+    println(w.len().to_string());
+}

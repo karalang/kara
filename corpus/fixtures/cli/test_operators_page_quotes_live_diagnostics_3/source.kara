@@ -1,0 +1,2 @@
+struct Q { x: i64 }
+fn main() { let a = Q { x: 1 }; println(a == Q { x: 1 }); }

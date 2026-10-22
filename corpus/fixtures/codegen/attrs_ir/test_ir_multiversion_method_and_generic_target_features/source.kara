@@ -1,0 +1,12 @@
+struct Acc { base: i64 }
+impl Acc {
+#[multiversion(baseline, "avx2")]
+fn dot(ref self, x: i64) -> i64 { self.base + x }
+}
+#[multiversion(baseline, "avx512f")]
+fn gadd[T: Add](a: T, b: T) -> T { a + b }
+fn main() {
+let a = Acc { base: 1 };
+let _ = a.dot(2);
+let _ = gadd(3, 4);
+}

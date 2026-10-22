@@ -1,0 +1,28 @@
+import std.web.events.{pointer_moves, PointerEvent};
+
+fn main() {
+    println("before");
+    let moves = pointer_moves();
+    let mut ok = false;
+    let mut tries = 0;
+    // Loop until a valid payload is observed rather than trusting the
+    // very first recv (the first parked recv's out-slot read can race
+    // under load); the host re-dispatches the same event every tick.
+    loop {
+        let p = moves.recv();
+        if p.x() == 300.0 and p.y() == 400.0 and p.pressed() and p.buttons() == 1 {
+            ok = true;
+            break;
+        }
+        tries = tries + 1;
+        if tries >= 64 {
+            break;
+        }
+    }
+    if ok {
+        println("PTR_OK");
+    } else {
+        println("PTR_FAIL");
+    }
+    println("after");
+}

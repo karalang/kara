@@ -1,0 +1,1 @@
+fn main() { let a: i64 = 3; println(not a); }

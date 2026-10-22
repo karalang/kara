@@ -1,0 +1,22 @@
+fn blen(v: Slice[i64]) -> i64 { v.len() }
+fn bidx(v: Slice[i64]) -> i64 { v[1] }
+fn bfirst(v: Slice[String]) -> String { v[0] }
+fn via_refslice_len(v: ref Slice[i64]) -> i64 { blen(v) }
+fn via_refslice_idx(v: ref Slice[i64]) -> i64 { bidx(v) }
+fn via_refvec_len(v: ref Vec[i64]) -> i64 { blen(v) }
+fn via_refvec_idx(v: ref Vec[i64]) -> i64 { bidx(v) }
+fn via_refslice_str(v: ref Slice[String]) -> String { bfirst(v) }
+fn main() {
+    let a: Array[i64, 4] = [100i64, 7i64, 3i64, 4i64];
+    println(f"{via_refslice_len(a)}");
+    println(f"{via_refslice_idx(a)}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100i64); v.push(7i64); v.push(3i64); v.push(4i64);
+    println(f"{via_refslice_len(v)}");
+    println(f"{via_refvec_len(v)}");
+    println(f"{via_refvec_idx(v)}");
+    let mut s: Vec[String] = Vec.new();
+    s.push("own-" + "x");
+    s.push("own-" + "y");
+    println(f"[{via_refslice_str(s)}]");
+}

@@ -1,0 +1,25 @@
+trait T {
+    fn base(self) -> i64;
+    fn plus_one(self) -> i64 { self.base() + 1 }
+    fn plus_two(self) -> i64 { self.plus_one() + 1 }
+    fn constant(self) -> i64 { 42 }
+}
+struct A { n: i64 }
+struct B { n: i64 }
+impl T for A { fn base(self) -> i64 { self.n } }
+impl T for B {
+    fn base(self) -> i64 { self.n }
+    fn constant(self) -> i64 { 100 }
+}
+fn main() {
+    let a = A { n: 10 };
+    println(f"{a.plus_one()}");
+    let a2 = A { n: 10 };
+    println(f"{a2.plus_two()}");
+    let a3 = A { n: 10 };
+    println(f"{a3.constant()}");
+    let b = B { n: 20 };
+    println(f"{b.plus_two()}");
+    let b2 = B { n: 20 };
+    println(f"{b2.constant()}");
+}

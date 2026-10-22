@@ -1,0 +1,23 @@
+trait Counter { fn get(ref self) -> i64; }
+effect resource A: Counter;
+effect resource B: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn ra() -> i64 with reads(A) { A.get() }
+fn rb() -> i64 with reads(B) { B.get() }
+fn main() {
+providers { A => InMem { n: 1 }, B => InMem { n: 2 } } in {
+println(f"multi {ra()} {rb()}");
+}
+providers { A => InMem { n: 10 }, B => InMem { n: 20 } } in {
+providers { A => InMem { n: 99 } } in {
+println(f"nested {ra()} {rb()}");
+}
+println(f"restored {ra()} {rb()}");
+}
+providers { A => InMem { n: 5 } } in {
+providers { A => InMem { n: 7 }, B => InMem { n: ra() } } in {
+println(f"order {ra()} {rb()}");
+}
+}
+}

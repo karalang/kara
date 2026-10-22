@@ -1,0 +1,8 @@
+fn main() {
+    let mut d: Vec[Vec[Vec[i64]]] = [[[0, 0]], [[0, 0]]];
+    let i: i64 = 1;
+    let j: i64 = 0;
+    let k: i64 = 1;
+    d[i][j][k] = 77i64;
+    println(f"{d[1][0][1]} {d[0][0][0]}");
+}

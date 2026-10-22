@@ -1,0 +1,2 @@
+fn f(v: Vec[i64]) -> i64 ensures(result) v[result] >= 0 { 99 }
+fn main() { let v: Vec[i64] = Vec[1, 2, 3]; let _ = f(v); }

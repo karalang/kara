@@ -1,0 +1,58 @@
+enum Tok { Plus, Ident(String) }
+struct Pt { s: String, x: i64 }
+struct Holder { inner: Pt, tok: Tok, name: String, items: Vec[i64],
+strs: Vec[String], opt: Option[String], n: i64 }
+fn f_struct(h: ref Holder) -> String {
+let p = ref h.inner;
+return "l:".to_string() + p.s + ":" + p.x.to_string();
+}
+fn f_enum(h: ref Holder) -> String {
+let t = ref h.tok;
+match t {
+Ident(nm) => { return "t:".to_string() + nm; }
+Plus => { return "+".to_string(); }
+}
+return "?".to_string();
+}
+fn f_str(h: ref Holder) -> String {
+let s = h.name.clone();
+return "n:".to_string() + s;
+}
+fn f_vec(h: ref Holder) -> i64 {
+let v = h.items.clone();
+return v.len() + v[0];
+}
+fn f_vstr(h: ref Holder) -> String {
+let v = h.strs.clone();
+return v[0] + v[1];
+}
+fn f_opt(h: ref Holder) -> i64 {
+let o = h.opt.clone();
+match o {
+Some(s) => { return s.len(); }
+None => { return 0; }
+}
+return -1;
+}
+fn main() {
+let a = Holder {
+inner: Pt { s: "ld".to_string(), x: 6 },
+tok: Tok.Ident("mv".to_string()),
+name: "st".to_string(),
+items: [7, 8],
+strs: ["ab", "cd"],
+opt: Some("xy".to_string()),
+n: 1,
+};
+println(f_struct(a));
+println(f_struct(a));
+println(f_enum(a));
+println(f_enum(a));
+println(f_str(a));
+println(f_str(a));
+println(f_vec(a));
+println(f_vstr(a));
+println(f_vstr(a));
+println(f_opt(a));
+println(f_opt(a));
+}

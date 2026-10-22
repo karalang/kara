@@ -1,0 +1,4 @@
+#[derive(Clone)]
+struct V { id: i64, xs: Vec[i64] }
+fn take(p: (V, i64)) -> V { p.0.clone() }
+fn main() { let x = take((V { id: 41, xs: [1, 2] }, 1)); println(f"{x.id} {x.xs.len()}") }

@@ -1,0 +1,2 @@
+enum Shape { Dot, Line(i64, i64), Label(String) }
+fn main() { println(size_of[Shape]()); println(align_of[Shape]()); }

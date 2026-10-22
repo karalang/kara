@@ -1,0 +1,7 @@
+fn takes(b: E) -> R {
+let mut out: R = R { id: 0, tag: f"t0" };
+match b { E.A(r) => { out = r; } E.B => { } }
+println("mid");
+return out;
+}
+fn main() { let c1: E = E.A(R { id: 8, tag: f"t8" }); let v1: R = takes(c1); println("post-call"); println(f"v{v1.id}"); }

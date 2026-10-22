@@ -1,0 +1,28 @@
+struct Stack[T] { items: Vec[T] }
+impl[T] Stack[T] {
+fn new() -> Stack[T] { Stack { items: Vec.new() } }
+fn push(mut ref self, v: T) { self.items.push(v); }
+fn pop_wrapped(mut ref self) -> Option[Option[T]] {
+if self.items.len() == 0 { return None; }
+Some(self.items.pop())
+}
+}
+fn main() {
+let mut s: Stack[i64] = Stack.new();
+s.push(10);
+s.push(20);
+match s.pop_wrapped() {
+Some(inner) => {
+match inner {
+Some(v) => { println(f"got {v}"); }
+None => { println("inner none"); }
+}
+}
+None => { println("outer none"); }
+}
+let _ = s.pop_wrapped();
+match s.pop_wrapped() {
+Some(_) => { println("unexpected some"); }
+None => { println("empty -> outer none"); }
+}
+}

@@ -1,0 +1,11 @@
+struct H { acc: i64 }
+impl H {
+fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x }
+fn forward(ref self, x: mut ref i64) -> i64 { self.bump(x) }
+}
+fn main() {
+let h = H { acc: 0 };
+let mut f = 100;
+println(h.forward(mut f));
+println(f);
+}

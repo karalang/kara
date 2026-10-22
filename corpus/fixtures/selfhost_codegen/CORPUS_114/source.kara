@@ -1,0 +1,2 @@
+fn add_word(v: mut ref Vec[String], w: String) { v.push(w + "!") }
+fn main() { let mut v: Vec[String] = Vec.new(); add_word(mut v, "hey"); add_word(mut v, "ho"); println(v[0]); println(v[1]) }

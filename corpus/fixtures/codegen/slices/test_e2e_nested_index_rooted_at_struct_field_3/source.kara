@@ -1,0 +1,15 @@
+struct G { grid: Vec[Vec[i64]] }
+impl G {
+    fn get(ref self, i: i64, j: i64) -> i64 { return self.grid[i][j]; }
+    fn set(mut ref self, i: i64, j: i64, v: i64) { self.grid[i][j] = v; }
+}
+fn main() {
+let mut r0: Vec[i64] = Vec.new();
+r0.push(1i64); r0.push(2i64);
+let mut g0: Vec[Vec[i64]] = Vec.new();
+g0.push(r0);
+let mut g = G { grid: g0 };
+println(f"{g.get(0i64, 1i64)}");
+g.set(0i64, 1i64, 99i64);
+println(f"{g.get(0i64, 1i64)}");
+}

@@ -1,0 +1,5 @@
+enum E { Missing(String) }
+struct Ss { a: Set[String] }
+fn mk() -> Result[Ss, E] { let mut s: Set[String] = Set.new(); s.insert("k"); Ok(Ss { a: s }) }
+fn take(s: Ss) { println(f"{s.a.len()}"); }
+fn main() { match mk() { Ok(s) => take(s), Err(_e) => println("e") } }

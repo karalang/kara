@@ -1,0 +1,11 @@
+fn passthru(x: Array[String, 2], c: bool) -> Array[String, 2] {
+    match c {
+        true => { return x; }
+        false => { return x; }
+    }
+}
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    passthru(a, true);
+    println("s:ok");
+}

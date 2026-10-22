@@ -1,0 +1,7 @@
+#[gpu]
+fn affine(x: f32) -> f32 { x * 3.0 + 1.0 }
+fn main() {
+let buf: Vec[f32] = [0.0, 1.0, 2.0];
+let out = gpu.dispatch(affine, buf);
+for v in out { println(f"{v}"); }
+}

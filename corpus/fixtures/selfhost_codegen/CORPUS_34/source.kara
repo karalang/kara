@@ -1,0 +1,1 @@
+fn main() { let mut i = 0; while i < 0 { println("never"); i = i + 1; } println("done") }

@@ -1,0 +1,3 @@
+struct G1 { n: i64 }
+impl G1 { fn gm[T](ref self, r: R, t: T) -> i64 { 3 } }
+fn main() { let g = G1 { n: 1 }; let a = g.gm(R { id: 31 }, 5); println(f"{a}"); }

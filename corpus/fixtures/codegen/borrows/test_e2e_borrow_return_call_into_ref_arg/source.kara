@@ -1,0 +1,14 @@
+fn pickv(v: ref Vec[i64]) -> ref Vec[i64] { v }
+fn firstv(v: ref Vec[i64]) -> i64 { v[0] }
+fn picks(s: ref String) -> ref String { s }
+fn lens(s: ref String) -> i64 { s.len() }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10); v.push(20);
+    println(firstv(pickv(v)));
+    println(v[1]);
+    let mut s: String = "";
+    s.push_str("hello");
+    println(lens(picks(s)));
+    println(s);
+}

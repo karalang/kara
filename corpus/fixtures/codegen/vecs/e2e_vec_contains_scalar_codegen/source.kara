@@ -1,0 +1,8 @@
+fn main() {
+let mut xs: Vec[i64] = Vec.new();
+xs.push(10);
+xs.push(20);
+xs.push(30);
+println(xs.contains(20));
+println(xs.contains(25));
+}

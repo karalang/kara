@@ -1,0 +1,2 @@
+fn first_word(ws: ref Vec[String]) -> String { ws[0].clone() }
+fn main() { let mut v: Vec[String] = Vec.new(); v.push("lead"); v.push("tail"); println(first_word(v)); println(v[1]) }

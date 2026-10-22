@@ -1,0 +1,2 @@
+fn build() -> i32 { let mut r: i32 = 0i32; r = r + 21i32; r }
+fn main() { println(build()); }

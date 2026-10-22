@@ -1,0 +1,3 @@
+fn wrap_mixed(r: R, k: i64) -> H { return H { r: r, n: k }; }
+                 fn f(r: R) { let h = wrap_mixed(r, 5); println(f"v={h.r.id}"); }
+                 fn main() { f(mkr(9)); println("end") }

@@ -1,0 +1,7 @@
+fn body() {
+defer { print("d"); }
+print("a");
+return;
+print("unreached");
+}
+fn main() { body(); }

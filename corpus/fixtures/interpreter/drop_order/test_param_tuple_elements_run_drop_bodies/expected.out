@@ -1,0 +1,16 @@
+a
+callee sees 10
+drop 41
+b
+callee sees res 42
+drop 42
+c
+callee sees res 43
+drop 43
+d
+callee sees 20
+drop 44
+e
+callee sees 30
+drop 45
+end

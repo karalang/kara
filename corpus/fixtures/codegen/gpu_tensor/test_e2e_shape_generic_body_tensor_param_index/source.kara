@@ -1,0 +1,9 @@
+fn trace_diag[N](a: Tensor[f64, [N, N]], n: i64) -> f64 {
+let mut s = 0.0;
+for i in 0..n { s = s + a[i, i]; }
+s
+}
+fn main() {
+let a: Tensor[f64, [3, 3]] = Tensor.from([[1.0,2.0,3.0],[4.0,5.0,6.0],[7.0,8.0,9.0]]);
+println(trace_diag(a, 3));
+}

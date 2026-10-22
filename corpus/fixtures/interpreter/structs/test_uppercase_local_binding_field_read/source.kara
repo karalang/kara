@@ -1,0 +1,6 @@
+struct Foo { value: i64 }
+fn main() {
+let F = Foo { value: 5 };
+let x: i64 = F.value;
+println(x);
+}

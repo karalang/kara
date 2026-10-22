@@ -1,0 +1,5 @@
+fn main() {
+sleep_ms(20);
+sleep_ms(20);
+println("done");
+}

@@ -1,0 +1,41 @@
+struct Inner { w: i64 }
+struct Box { v: i64, inner: Inner }
+struct Pair { t: (i64, i64) }
+struct H { acc: i64 }
+impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }
+fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }
+fn main() {
+let h = H { acc: 0 };
+let mut g1 = Box { v: 1, inner: Inner { w: 1 } };
+free_bump(mut g1.inner.w);
+let mut g2 = Box { v: 1, inner: Inner { w: 1 } };
+h.bump(mut g2.inner.w);
+println(g1.inner.w);
+println(g2.inner.w);
+let mut t1 = (1, 2);
+free_bump(mut t1.0);
+let mut t2 = (1, 2);
+h.bump(mut t2.0);
+println(t1.0);
+println(t2.0);
+let mut p1 = Pair { t: (1, 2) };
+free_bump(mut p1.t.1);
+let mut p2 = Pair { t: (1, 2) };
+h.bump(mut p2.t.1);
+println(p1.t.1);
+println(p2.t.1);
+let mut a1 = [1, 1];
+free_bump(mut a1[0]);
+let mut a2 = [1, 1];
+h.bump(mut a2[0]);
+println(a1[0]);
+println(a2[0]);
+let mut v1 = Vec.new();
+v1.push(1);
+free_bump(mut v1[0]);
+let mut v2 = Vec.new();
+v2.push(1);
+h.bump(mut v2[0]);
+println(v1[0]);
+println(v2[0]);
+}

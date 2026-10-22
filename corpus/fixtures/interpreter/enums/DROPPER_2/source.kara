@@ -1,0 +1,2 @@
+fn takef(b: Option[Res]) -> i64 { match b { Option.Some(r) => { return r.id; } Option.None => { return 0; } } }
+fn main() { let b: Option[Res] = Option.Some(Res { id: 7, name: f"e7" }); let v: i64 = takef(b); println(f"v={v}") }

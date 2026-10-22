@@ -1,0 +1,27 @@
+fn row_scan(v: ref Vec[i64], base: i64, len: i64) -> i64 {
+let mut lo = 0i64;
+let mut hi = len - 1i64;
+let mut acc = 0i64;
+while lo <= hi {
+acc = acc + v[base + lo] - v[base + hi];
+lo = lo + 1i64;
+hi = hi - 1i64;
+}
+return acc;
+}
+fn main() {
+let n = 7i64;
+let len = 5i64;
+let mut v: Vec[i64] = Vec.new();
+let mut k = 0i64;
+while k < n * len {
+v.push(k * k + 1i64);
+k = k + 1i64;
+}
+let mut acc = 0i64;
+let mut i = 0i64;
+while i < n {
+acc = acc + row_scan(v, i * len, len);
+i = i + 1i64;
+}
+println(acc);

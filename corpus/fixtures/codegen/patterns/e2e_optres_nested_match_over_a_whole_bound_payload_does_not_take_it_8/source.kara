@@ -1,0 +1,5 @@
+enum E { A { s: String }, B }
+fn main() {
+let a: Option[E] = Some(E.A { s: f"whole" });
+match a { Some(p) => { let q: E = p; match q { E.A { s } => println(s), E.B => {} } } None => {} }
+}

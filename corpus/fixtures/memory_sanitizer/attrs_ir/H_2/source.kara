@@ -1,0 +1,5 @@
+fn f() -> i64 { let mut vv: Option[String] = Some(payload());
+   let n = match vv { Some(s) => slen(s), None => 0 };
+   vv = Some("zz".to_string());
+   n + (match vv { Some(s) => s.len(), None => 0 }) }
+fn main() { println(f()); }

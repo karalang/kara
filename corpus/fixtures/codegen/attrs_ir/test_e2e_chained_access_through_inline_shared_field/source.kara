@@ -1,0 +1,15 @@
+shared struct Leaf { v: i64 }
+struct Holder { x: i64, a: Leaf, y: i64 }
+fn main() {
+let h = Holder { x: 7, a: Leaf { v: 5 }, y: 9 };
+// `h.a.v` read as a VALUE (not a method receiver — chained
+// field-receiver method calls are a separate deferred item).
+let chained: i64 = h.a.v;       // chained through shared field
+let bound = h.a;
+let via_bind: i64 = bound.v;    // binding-out form
+println(h.x);                   // 7  (sibling i64 before)
+println(h.y);                   // 9  (sibling i64 after)
+println(chained);               // 5  (the load-through-RC fix)
+println(via_bind);              // 5  (already worked)
+println(chained + via_bind);    // 10 (both reads sound)
+}

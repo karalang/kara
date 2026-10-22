@@ -1,0 +1,18 @@
+#[derive(Hash, Eq, PartialEq, Ord)]
+        enum Ue { A { n: i64 }, B }
+        impl Display for Ue {
+            fn to_string(ref self) -> String {
+                match self { A { n } => f"aye {n}", B => "bee" }
+            }
+        }
+        fn main() {
+            let mut s: Set[Ue] = Set.new();
+            s.insert(Ue.B);
+            println(f"set={s}");
+            let mut ss: SortedSet[Ue] = SortedSet.new();
+            ss.insert(Ue.B);
+            println(f"sset={ss}");
+            let mut sm: SortedMap[Ue, i64] = SortedMap.new();
+            sm.insert(Ue.B, 1);
+            println(f"smap={sm}");
+        }

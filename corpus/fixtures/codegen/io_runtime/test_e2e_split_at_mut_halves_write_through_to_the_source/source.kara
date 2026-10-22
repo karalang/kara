@@ -1,0 +1,11 @@
+fn fill(s: mut Slice[u8], v: u8) {
+let mut i: i64 = 0i64;
+while i < s.len() { s[i] = v; i = i + 1i64; }
+}
+fn main() {
+let mut buf: Vec[u8] = [0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+let mut parts: (mut Slice[u8], mut Slice[u8]) = buf.split_at_mut(2i64);
+fill(parts.0, 7u8);
+fill(parts.1, 9u8);
+println(f"{buf[0]} {buf[1]} {buf[2]} {buf[5]}");
+}

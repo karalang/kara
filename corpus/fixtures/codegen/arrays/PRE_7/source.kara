@@ -1,0 +1,4 @@
+struct Rh { id: i64, name: String }
+impl Drop for Rh { fn drop(mut ref self) { println(f"dRh{self.id}") } }
+fn plainD(x: Option[Array[Rh, 2]]) { match x { Some(t) => { println(f"s:{t[0].id}") } None => { println("n") } } }
+fn main() { plainD(Some([Rh { id: 1, name: f"a" }, Rh { id: 2, name: f"b" }])); println("end") }

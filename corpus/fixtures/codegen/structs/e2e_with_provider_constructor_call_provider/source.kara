@@ -1,0 +1,11 @@
+pub trait Rate { fn factor(ref self) -> i64; }
+pub effect resource Fx: Rate;
+pub struct Fixed { f: i64 }
+impl Fixed { pub fn new(f: i64) -> Fixed { Fixed { f: f } } }
+impl Rate for Fixed { fn factor(ref self) -> i64 { self.f } }
+pub fn scale(x: i64) -> i64 with reads(Fx) { x * Fx.factor() }
+fn main() {
+with_provider[Fx](Fixed.new(3), || {
+println(f"{scale(14)}");
+});
+}

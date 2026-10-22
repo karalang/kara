@@ -1,0 +1,4 @@
+trait Tag { fn take_first(self) -> String; }
+impl Tag for Array[String, 2] { fn take_first(self) -> String { return self[0].clone(); } }
+fn mk() -> Array[String, 2] { return ["abc", "de"]; }
+fn main() { println(mk().take_first()); }

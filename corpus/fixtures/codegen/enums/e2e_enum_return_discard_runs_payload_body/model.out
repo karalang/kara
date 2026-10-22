@@ -1,0 +1,17 @@
+a
+drop 1 h1
+b
+drop 2 h2
+c
+drop 3 m3
+drop 4 m4
+d
+loud drop
+drop 5 l5
+loud drop
+drop 6 l6
+e
+drop 7 g7
+drop 8 g8
+f
+end

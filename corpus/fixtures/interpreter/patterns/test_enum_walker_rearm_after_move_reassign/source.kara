@@ -1,0 +1,27 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+enum SBox { Full(Res), Empty }
+fn mk(n: i64) -> SBox {
+return SBox.Full(Res { id: n, name: f"s{n}" });
+}
+fn use_res(r: Res) {
+println(f"took {r.id}");
+}
+fn main() {
+println("a");
+let mut b = mk(3);
+let c = b;
+b = mk(4);
+println("m");
+let mut d = mk(5);
+match d {
+SBox.Full(r) => { use_res(r); }
+SBox.Empty => {}
+}
+d = mk(6);
+println("end");
+}

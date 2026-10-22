@@ -1,0 +1,7 @@
+struct R25 { s: String }
+enum Ks5 { A { r: R25 }, B }
+impl Drop for Ks5 { fn drop(mut ref self) { println("dKs5") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Ks5], acc: mut ref Vec[R25]) { match x { Option.Some(Ks5.A { r }) => { acc.push(r) } Option.Some(Ks5.B) => {} Option.None => {} } }
+#[allow(partial_move_of_drop_enum)]
+fn main() { let mut acc: Vec[R25] = []; show(Option.Some(Ks5.A { r: R25 { s: f"z" } }), mut acc); println(f"len:{acc.len()}"); println("end") }

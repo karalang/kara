@@ -1,0 +1,4 @@
+fn main() {
+let r: Result[String, i64] = Err(7i64);
+match r.map(|x| x.to_uppercase()) { Ok(v) => { println(v); } Err(e) => { println(e); } }
+}

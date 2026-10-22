@@ -1,0 +1,3 @@
+import a.from_a;
+import b.from_b;
+fn main() { println(from_a()); println(from_b()); }

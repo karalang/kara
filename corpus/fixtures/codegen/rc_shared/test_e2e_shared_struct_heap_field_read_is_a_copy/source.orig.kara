@@ -1,0 +1,17 @@
+shared struct Inner { word: String }
+struct Holder { inner: Inner, tag: i64 }
+fn main() {
+let k = 1;
+let i = Inner { word: f"a{k}" };
+let w = i.word;
+println(w);
+println(i.word);
+let j = i;
+println(j.word);
+let mut hs: Vec[Holder] = Vec.new();
+hs.push(Holder { inner: Inner { word: f"c{k}" }, tag: 2 });
+let hop = hs[0].inner.word;
+println(hop);
+println(hs[0].inner.word);
+println(hs[0].tag);
+}

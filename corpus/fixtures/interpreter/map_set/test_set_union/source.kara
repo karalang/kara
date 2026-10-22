@@ -1,0 +1,12 @@
+fn main() {
+let a: Set[i64] = Set.new();
+a.insert(1_i64);
+a.insert(2_i64);
+let b: Set[i64] = Set.new();
+b.insert(2_i64);
+b.insert(3_i64);
+let c = a.union(b);
+println(c.len());
+println(c.contains(1_i64));
+println(c.contains(3_i64));
+}

@@ -1,0 +1,1 @@
+fn main() { let o: Option[Vec[i64]] = Some([1, 2, 3]); let p = (o, 7); println(f"ok{p.1}"); println("done") }

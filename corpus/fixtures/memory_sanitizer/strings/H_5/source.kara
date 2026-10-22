@@ -1,0 +1,3 @@
+fn main() { let mut i = 0; let mut n = 0;
+   while i < 50 { let s = mk(i) + ":" + mk(i + 1) + ";"; n = n + s.len(); i = i + 1; }
+   println(f"n:{n > 0}"); println("end") }

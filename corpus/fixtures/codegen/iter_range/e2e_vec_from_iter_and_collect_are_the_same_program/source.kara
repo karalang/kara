@@ -1,0 +1,4 @@
+fn main() {
+let a: Vec[i64] = Vec.from_iter((0..8).map(|x| x * 3));
+println(f"{a.len()} {a[0]} {a[7]}");
+}

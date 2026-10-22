@@ -1,0 +1,16 @@
+enum Wrap {
+W(Option[i64]),
+Empty,
+}
+fn describe(w: Wrap) -> String {
+match w {
+Wrap.W(Option.Some(x)) => f"some {x}",
+Wrap.W(Option.None) => "w none",
+Wrap.Empty => "empty",
+}
+}
+fn main() {
+println(describe(Wrap.W(Option.Some(5))));
+println(describe(Wrap.W(Option.None)));
+println(describe(Wrap.Empty));
+}

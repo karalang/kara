@@ -1,0 +1,1 @@
+fn main() { let x: f32 = f32.MAX; let y: f32 = x; println(y); }

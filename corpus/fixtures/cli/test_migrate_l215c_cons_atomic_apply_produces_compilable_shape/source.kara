@@ -1,0 +1,9 @@
+fn bump(c: ref Counter) {
+    c.count = 42;
+}
+
+fn read(c: ref Counter) -> i64 {
+    c.count
+}
+
+fn main() {}

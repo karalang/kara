@@ -1,0 +1,2 @@
+fn plainD(x: Option[Option[Rq]]) { match x { Some(o) => { println("s") } None => { println("n") } } }
+fn main() { plainD(Option[Option[Rq]].Some(Option[Rq].Some(Rq { id: 1 }))); println("end") }

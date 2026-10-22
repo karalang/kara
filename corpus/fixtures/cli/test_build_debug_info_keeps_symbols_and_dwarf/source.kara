@@ -1,0 +1,19 @@
+fn collatz_len(start: i64) -> i64 {
+    let mut n: i64 = start;
+    let mut steps: i64 = 0i64;
+    while n > 1i64 {
+        if n % 2i64 == 0i64 { n = n / 2i64; } else { n = 3i64 * n + 1i64; }
+        steps = steps + 1i64;
+    }
+    steps
+}
+fn main() {
+    let mut best: i64 = 0i64;
+    let mut i: i64 = 1i64;
+    while i < 5000i64 {
+        let s = collatz_len(i);
+        if s > best { best = s; }
+        i = i + 1i64;
+    }
+    println(best);
+}

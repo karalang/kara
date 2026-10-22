@@ -1,0 +1,13 @@
+fn dbl(n: i64) -> i64 { n * 2 }
+fn main() {
+let ok: Result[i64, String] = Ok(21);
+println(f"{ok.map(dbl).unwrap_or(-1)}");
+let eb: Result[i64, String] = Err(f"boom-b");
+println(f"{eb.map(dbl).unwrap_or(-99)}");
+let ea: Result[i64, String] = Err(f"boom-a");
+let r: Result[i64, String] = ea.map(dbl);
+println(f"{r.unwrap_or(-98)}");
+let ec: Result[i64, String] = Err(f"boom-c");
+ec.map(dbl);
+println("discarded-ok");
+}

@@ -1,0 +1,6 @@
+fn echo(s: ref String) -> ref String { s }
+fn main() {
+let s = String.from("hello");
+let t = echo(s);
+println(t.len());
+}

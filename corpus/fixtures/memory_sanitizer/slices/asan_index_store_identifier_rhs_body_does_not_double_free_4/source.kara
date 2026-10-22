@@ -1,0 +1,9 @@
+struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+             struct Bag { xs: Vec[D] }
+             impl Bag { fn put(mut ref self, t: D) { self.xs[0] = t; } }
+             fn main() {
+                 let mut b: Bag = Bag { xs: [D { id: 81, s: f"ffffffffffffffffffffffffffffffffffff-81" }] };
+                 b.put(D { id: 82, s: f"gggggggggggggggggggggggggggggggggggggg-82" });
+                 println(f"eight:{b.xs[0].s.len()}");
+             }

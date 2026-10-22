@@ -1,0 +1,20 @@
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5000000 {
+        v.push(1.0);
+        i = i + 1;
+    }
+    v[4999999] = 7.0;
+    println(f"{gpu.sum(v)}");
+    let m = gpu.max(v);
+    match m {
+        Some(x) => println(f"{x}"),
+        None => println("none"),
+    }
+    let a = gpu.argmax(v);
+    match a {
+        Some(k) => println(f"{k}"),
+        None => println("none"),
+    }
+}

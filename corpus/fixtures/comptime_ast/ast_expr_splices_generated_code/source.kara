@@ -1,0 +1,6 @@
+
+fn main() {
+    let x = 10;
+    let y = comptime { ast.expr("x * 3") };
+    println(y);
+}

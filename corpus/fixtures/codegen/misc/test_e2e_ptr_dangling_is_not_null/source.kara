@@ -1,0 +1,1 @@
+fn main() { let p: *const u8 = ptr.dangling(); if ptr.is_null(p) { println(1); } else { println(0); } }

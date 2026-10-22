@@ -1,0 +1,8 @@
+fn t(c: bool) -> i64 {
+let x = if c { return 1; } else { return 2; };
+9
+}
+fn main() {
+println(f"{t(true)}");
+println(f"{t(false)}");
+}

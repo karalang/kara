@@ -1,0 +1,25 @@
+struct Rec { id: i64, s: String }
+fn mk(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        v.push(f"item-{i}-payload");
+        i = i + 1;
+    }
+    v
+}
+fn mk_recs(n: i64) -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        v.push(Rec { id: i, s: f"rec-{i}-payload" });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    println(f"{mk(3).len()}");
+    println(f"{mk(2).is_empty()}");
+    println(f"{mk_recs(2).len()}");
+    println(f"{Env.args().len() >= 1}");
+}

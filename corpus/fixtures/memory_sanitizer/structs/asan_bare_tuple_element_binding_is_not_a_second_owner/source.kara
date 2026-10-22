@@ -1,0 +1,22 @@
+struct H { id: i64, xs: Vec[i64], name: String }
+fn mk(id: i64) -> H {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return H { id: id, xs: v, name: f"n{id}" }
+}
+enum E { A(H), B }
+fn noread(t: (H, i64)) { match t { (r, k) => { println("noread") } } }
+fn readboth(t: (H, i64)) { match t { (r, k) => { println(f"  rb{r.xs.len()}:{r.name}") } } }
+fn loc() { let t = (mk(3), 0); match t { (r, k) => { println(f"  loc{r.id}") } } }
+fn bare(h: H) { println(f"  bare{h.id}") }
+fn letd(t: (H, i64)) { let (r, k) = t; println(f"  letd{r.id}") }
+fn enu(e: E) { match e { E.A(r) => { println(f"  enu{r.id}") } E.B => { } } }
+fn main() {
+    noread((mk(1), 0));
+    readboth((mk(2), 0));
+    loc();
+    bare(mk(4));
+    letd((mk(5), 0));
+    enu(E.A(mk(6)));
+    println("end")
+}

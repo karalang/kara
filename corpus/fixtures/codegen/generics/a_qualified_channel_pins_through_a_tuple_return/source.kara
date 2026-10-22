@@ -1,0 +1,5 @@
+fn main() {
+    let (tx, rx) = Channel[i64].new();
+    tx.send(5);
+    println(rx.recv());
+}

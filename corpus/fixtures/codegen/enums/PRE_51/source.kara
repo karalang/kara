@@ -1,0 +1,2 @@
+fn wrap(x: Option[Rq]) -> (Option[Rq], i64) { return (x, 7) }
+fn main() { let t = wrap(Option[Rq].Some(Rq { id: 1 })); match t.0 { Some(r) => { println(f"w:{r.id}") } None => { println("wn") } } println("end") }

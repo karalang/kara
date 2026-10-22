@@ -1,0 +1,3 @@
+enum Sh[T] { S { v: T }, E }
+fn takeit(x: Sh[i64]) { match x { S { v } => { println(f"{v}") } E => { println("e") } } }
+fn main() { takeit(Sh[i64].S { v: 3 }); }

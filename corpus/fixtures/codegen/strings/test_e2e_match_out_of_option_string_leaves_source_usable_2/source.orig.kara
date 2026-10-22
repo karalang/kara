@@ -1,0 +1,5 @@
+fn main() {
+let o: Option[String] = Some(f"hi");
+if let Some(v) = o { println(v); }
+if let Some(v) = o { println(v); }
+}

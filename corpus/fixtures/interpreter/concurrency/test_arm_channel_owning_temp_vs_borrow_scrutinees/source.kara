@@ -1,0 +1,40 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+fn main() {
+let mut v: Vec[Res] = Vec.new();
+v.push(Res { id: 61 });
+println("a");
+match v.pop() {
+Option.Some(r) => { println(f"got {r.id}"); }
+Option.None => { println("none"); }
+}
+println("b");
+let mut w: Vec[Res] = Vec.new();
+w.push(Res { id: 62 });
+if let Option.Some(r) = w.pop() {
+println(f"iflet got {r.id}");
+}
+println("c");
+let mut u: Vec[Res] = Vec.new();
+u.push(Res { id: 63 });
+while let Option.Some(r) = u.pop() {
+println(f"wlet got {r.id}");
+}
+println("d");
+let mut m: Map[i64, Res] = Map.new();
+m.insert(1, Res { id: 81 });
+if let Option.Some(r) = m.get(1) {
+println(f"see {r.id}");
+}
+println("e");
+let mut f: Vec[Res] = Vec.new();
+f.push(Res { id: 82 });
+if let Option.Some(r) = f.first() {
+println(f"first {r.id}");
+}
+println("end");
+}

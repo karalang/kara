@@ -1,0 +1,3 @@
+struct T { n: i64 }
+impl T { fn take(ref self, r: R, k: bool) -> R { if k { return r; } return R { id: 98 }; } }
+fn main() { let t = T { n: 1 }; let a = t.take(R { id: 7 }, false); println(f"got {a.id}"); }

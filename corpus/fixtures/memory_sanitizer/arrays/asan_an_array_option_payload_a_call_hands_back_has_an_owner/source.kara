@@ -1,0 +1,11 @@
+fn main() {
+    let mut m: Map[i64, Array[String, 2]] = Map.new();
+    let mut i: i64 = 0;
+    while i < 4 {
+        m.insert(i, Array[f"raaaaaaaaaaaa{i}", f"cbbbbbbbbbbbb{i}"]);
+        i = i + 1;
+    }
+    m.remove(0);
+    let _ = m.remove(1);
+    println(f"n:{m.len()}");
+}

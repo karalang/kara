@@ -1,0 +1,17 @@
+source = "tests/interpreter/effects.rs::test_ambient_env_args_returns_nonempty_array"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["io:env", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "b3a63a2c"
+model_rev = "583cfb0d"
+model_src = "b3a63a2c"

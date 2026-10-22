@@ -1,0 +1,1 @@
+fn main() { println(("hi" == "hi").to_string()); println(("hi" == "ho").to_string()); println(("a" != "b").to_string()); println(("ab" == "abc").to_string()) }

@@ -1,0 +1,12 @@
+struct Res { name: String, buf: Vec[i64] }
+impl Drop for Res { fn drop(mut ref self) { println(f"D {self.buf.len()}"); } }
+fn mkres() -> Res {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1i64);
+    return Res { name: "payload", buf: b };
+}
+fn main() {
+    let d: Result[Res, i64] = Result.Ok(mkres());
+    println("d");
+    println("end");
+}

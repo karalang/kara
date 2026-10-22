@@ -1,0 +1,11 @@
+fn main() {
+let n = 3i64;
+let mut dp: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 0i64));
+let mut i = 0i64;
+while i < n {
+let mut j = 0i64;
+while j < n { dp[i][j] = i * 10i64 + j; j = j + 1i64; }
+i = i + 1i64;
+}
+println(f"{dp[0][0]} {dp[1][2]} {dp[2][1]} {dp[0][2]}");
+}

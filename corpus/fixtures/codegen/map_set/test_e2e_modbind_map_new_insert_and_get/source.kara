@@ -1,0 +1,7 @@
+let mut REGISTRY: Map[String, i64] = Map.new();
+fn put() { REGISTRY.insert("answer", 42); }
+fn main() {
+put();
+println(REGISTRY.get("answer").unwrap_or(0));
+println(REGISTRY.get("missing").unwrap_or(-1));
+}

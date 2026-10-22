@@ -1,0 +1,18 @@
+struct ParseError { msg: String }
+struct AppError { msg: String }
+impl From for AppError {
+fn from(e: ParseError) -> AppError {
+AppError { msg: e.msg.clone() }
+}
+}
+fn produce() -> Result[i64, ParseError] { Err(ParseError { msg: "bad" }) }
+fn run_it() -> Result[i64, AppError] {
+let x: i64 = produce()?;
+Ok(x)
+}
+fn main() {
+match run_it() {
+Ok(_) => println("ok"),
+Err(e) => println(e.msg),
+}
+}

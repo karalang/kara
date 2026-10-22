@@ -1,0 +1,6 @@
+struct S { s: String, k: i64 }
+struct T { s: String }
+struct U { t: T, k: i64 }
+struct D { s: String, k: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.k}") } }
+fn main() { let n = 7; let a: Array[D, 2] = [D { s: f"one-{n}", k: 1 }, D { s: f"two-{n}", k: 5 }]; let x = a[1].s.clone(); println(f"x:{x}:{a[1].s}") }

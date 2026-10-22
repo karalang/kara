@@ -1,0 +1,7 @@
+fn plainC(x: Option[Array[Vec[String], 2]]) {
+    match x { Some(t) => { let u = t; let v = u; println(f"s:{v[0][0]}") } None => { println("n") } }
+}
+fn main() {
+    let a: Array[Vec[String], 2] = [[f"aaaaaaaa0", f"aaaaaaaa1"], [f"bbbbbbbb0"]];
+    plainC(Some(a));
+}

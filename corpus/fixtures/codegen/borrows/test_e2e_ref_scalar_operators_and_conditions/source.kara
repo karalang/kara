@@ -1,0 +1,43 @@
+fn ops(flag: mut ref bool, x: mut ref i64, b: mut ref u8, r: ref f64, seen: ref bool) -> i64 {
+let mut out = 0;
+if flag { out = out + 1; }
+if not flag { out = out + 1000; }
+if flag and seen { out = out + 2; }
+if seen or flag { out = out + 4; }
+let neg = -x;
+let inv = ~x;
+let bits = (x & 6) + (x | 1) + (x ^ 3) + (x << 2) + (x >> 1);
+let nb1 = b & 15;
+let nb2 = b | 16;
+let nb3 = b >> 1;
+let nb4 = ~b;
+let nb5 = b ^ 255;
+let nb6 = b << 1;
+let nr = -r;
+let pick = if flag { 10 } else { 20 };
+let mut spins = 0;
+while flag {
+spins = spins + 1;
+if spins == 3 { flag = false; }
+}
+let g = match 7 {
+v if seen => v * 100,
+v => v,
+};
+println(f"neg {neg} inv {inv} bits {bits} nb {nb1} {nb2} {nb3} {nb4} {nb5} {nb6} nr {nr} pick {pick} spins {spins} g {g}");
+x = x + 1;
+b = b + 1;
+return out;
+}
+
+fn main() {
+let mut flag = true;
+let mut x = 5;
+let mut b: u8 = 100;
+let r = 1.5;
+let seen = false;
+let o1 = ops(mut flag, mut x, mut b, r, seen);
+println(f"o1 {o1} flag {flag} x {x} b {b}");
+let o2 = ops(mut flag, mut x, mut b, r, true);
+println(f"o2 {o2} flag {flag} x {x} b {b}");
+}

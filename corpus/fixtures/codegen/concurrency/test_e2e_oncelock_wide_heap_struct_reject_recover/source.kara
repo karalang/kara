@@ -1,0 +1,9 @@
+struct Rec { id: i64, name: String }
+fn main() {
+let c: OnceLock[Rec] = OnceLock.new();
+match c.set(Rec { id: 1i64, name: "first".to_string() }) { Ok(_) => { println("1 ok"); }, Err(_) => { println("1 err"); }, }
+match c.set(Rec { id: 2i64, name: "second".to_string() }) {
+Ok(_) => { println("2 ok"); },
+Err(e) => { println(f"rejected {e.rejected.id}:{e.rejected.name}"); },
+}
+}

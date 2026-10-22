@@ -1,0 +1,2 @@
+fn pick[T](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }
+fn main() { let x = pick(H { id: 41, name: f"n41" }, true, H { id: 42, name: f"n42" }); println(f"{x.id}") }

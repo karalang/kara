@@ -1,0 +1,6 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("x", 10_i64);
+let es = m.entries();
+println(es.len());
+}

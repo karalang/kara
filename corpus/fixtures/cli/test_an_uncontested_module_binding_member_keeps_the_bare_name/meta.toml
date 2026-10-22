@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_an_uncontested_module_binding_member_keeps_the_bare_name"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:a type that failed to check"
+classified_with = "79705a229"
+extracted_src = "9d18a2cc"
+model_rev = "583cfb0d"
+model_src = "9d18a2cc"

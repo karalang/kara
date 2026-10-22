@@ -1,0 +1,22 @@
+fn main() {
+let xs: Vec[i64] = [1, 2, 3, 10, 4];
+let mut lim: i64 = 5;
+let mut s: i64 = 0;
+for x in xs.iter().filter(|v| v < lim) {
+lim = lim - 1;
+s = s + x;
+}
+println(s);
+let ys: Vec[i64] = [1, 2, 3, 4, 5, 6];
+let mut seen: i64 = 0;
+let mut t: i64 = 0;
+for x in ys.iter().take_while(|v| seen < 3) {
+seen = seen + 1;
+t = t + x;
+}
+println(t);
+let mut k: i64 = 1;
+let f = |x| x + k;
+k = 10;
+println(f(1));
+}

@@ -1,0 +1,10 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+m.insert("a", 42_i64);
+let old = m.remove("a");
+match old {
+Some(v) => println(v),
+None => println("none"),
+}
+println(m.len());
+}

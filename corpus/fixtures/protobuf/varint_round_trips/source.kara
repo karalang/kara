@@ -1,0 +1,10 @@
+
+fn main() {
+    let vals = Array[0u64, 1u64, 127u64, 128u64, 300u64, 16384u64, 4294967295u64];
+    let mut i = 0;
+    while i < vals.len() {
+        let mut r = ProtoReader.new(ProtoBuf.encode_varint(vals[i]));
+        println(r.read_varint());
+        i = i + 1;
+    }
+}

@@ -1,0 +1,5 @@
+fn path() -> String { "/todos/42" }
+fn main() {
+let p: String = path();
+if p.starts_with("/todos/") { println("hit"); } else { println("miss"); }
+}

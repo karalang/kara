@@ -1,0 +1,12 @@
+fn main() {
+let mut s: SortedSet[i64] = SortedSet.new();
+let _ = s.insert(5_i64); let _ = s.insert(1_i64);
+let _ = s.insert(3_i64); let _ = s.try_insert(1_i64);
+let mut out: String = "";
+for x in s { out.push_str(f"{x},"); }
+println(out);
+match s.min() { Some(v) => println(v), None => println("none") }
+match s.max() { Some(v) => println(v), None => println("none") }
+let mut e: SortedSet[i64] = SortedSet.new();
+match e.min() { Some(v) => println(v), None => println("none") }
+}

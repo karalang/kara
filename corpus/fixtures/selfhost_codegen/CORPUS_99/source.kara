@@ -1,0 +1,1 @@
+fn main() { let s = "abcabc"; let mut n = 0; for b in s.bytes() { if b == 97 { n = n + 1; } } println(n.to_string()) }

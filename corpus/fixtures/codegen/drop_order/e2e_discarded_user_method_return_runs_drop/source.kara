@@ -1,0 +1,22 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id}")
+    }
+}
+struct Fac { n: i64 }
+impl Fac {
+    fn make(ref self) -> Res {
+        return Res { id: self.n };
+    }
+}
+fn main() {
+    let f = Fac { n: 13 };
+    println("a");
+    f.make();
+    println("b");
+    let _ = f.make();
+    println("c");
+    let r = f.make();
+    println("end");
+}

@@ -1,0 +1,26 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+fn mk(n: i64) -> Res {
+    return Res { id: n, name: f"r{n}" };
+}
+fn consume(r: Res) -> i64 {
+    return r.id + 100;
+}
+fn peek(r: ref Res) -> i64 {
+    return r.id;
+}
+fn main() {
+    println("a");
+    let x = consume(mk(1));
+    println(f"x={x}");
+    println("b");
+    let y = peek(mk(2));
+    println(f"y={y}");
+    println("c");
+    consume(mk(3));
+    println("end");
+}

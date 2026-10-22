@@ -1,0 +1,13 @@
+fn main() {
+let a: Vec[i64] = [10, 20, 30];
+let mut s: i64 = 0;
+for p in a.iter().enumerate() {
+s = s + p.0 * p.1;
+}
+println(s);
+let mut t: i64 = 0;
+for (i, x) in a.iter().enumerate() {
+t = t + i + x;
+}
+println(t);
+}

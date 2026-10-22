@@ -1,0 +1,15 @@
+fn main() {
+let mut src: Vec[String] = Vec.new();
+src.push("ab");
+src.push("cd");
+let mut dst: Vec[String] = Vec.new();
+dst.push("x");
+match dst.try_extend_from_slice(src) {
+Ok(_) => println("ok"),
+Err(_) => println("err"),
+}
+println(dst.len());
+println(dst[0]);
+println(dst[1]);
+println(dst[2]);
+}

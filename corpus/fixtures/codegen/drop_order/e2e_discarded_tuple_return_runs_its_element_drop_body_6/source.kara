@@ -1,0 +1,2 @@
+fn g(i: i64) -> (i64, i64) { return (i, 9); }
+fn main() { g(5); println("ok"); }

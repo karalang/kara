@@ -1,0 +1,1 @@
+fn main() { let v: Vec[Vec[i64]] = [[1, 2], [3, 4]]; println(v[1][0]); }

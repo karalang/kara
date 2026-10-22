@@ -1,0 +1,17 @@
+source = "tests/interpreter/strings.rs::compile_errors"
+dedup_of = []
+expect = "error:E0232"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "b4aa5cc1"
+model_rev = "583cfb0d"
+model_src = "b4aa5cc1"

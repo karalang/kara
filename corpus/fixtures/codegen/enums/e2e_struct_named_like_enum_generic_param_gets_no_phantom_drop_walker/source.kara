@@ -1,0 +1,8 @@
+struct T { t: i64, name: String }
+impl Drop for T { fn drop(mut ref self) { println(f"d{self.t}"); } }
+fn mk(t: i64) -> T { return T { t: t, name: "payload-string-data" }; }
+fn main() {
+    { let p: Option[T] = Some(mk(2)); println("a"); }
+    { let mut q: Option[T] = Some(mk(3)); q = Some(mk(4)); println("b"); }
+    println("end");
+}

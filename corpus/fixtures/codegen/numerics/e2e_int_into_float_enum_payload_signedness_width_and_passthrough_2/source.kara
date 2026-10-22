@@ -1,0 +1,1 @@
+fn main() { let n: i64 = 7; let o: Option[f32] = Some(n); match o { Some(x) => println(x), None => println(-1.0) } }

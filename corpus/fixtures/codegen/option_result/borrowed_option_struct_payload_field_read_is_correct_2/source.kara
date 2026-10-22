@@ -1,0 +1,3 @@
+struct P { val: i64 }
+fn getval(o: mut ref Option[P]) -> i64 { match o { None => 999i64, Some(n) => n.val } }
+fn main() { let mut x = Some(P { val: 7i64 }); println(getval(mut x)); }

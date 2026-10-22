@@ -1,0 +1,2 @@
+fn divide[T: Div](a: T, b: T) -> T { a / b }
+fn main() { let b: u64 = 18446744073709551615u64; let t: u64 = 2u64; println(divide(b, t)); }

@@ -1,0 +1,10 @@
+shared struct Counter { val: i64, mut count: i64, mut tag: i64 }
+fn use_a(c: Counter) { }
+fn use_b(c: Counter) { }
+fn main() {
+let c = Counter { val: 0, count: 0, tag: 0 };
+par {
+use_a(c);
+use_b(c);
+}
+}

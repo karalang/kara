@@ -1,0 +1,3 @@
+struct W { e: E, n: i64 }
+fn main() { let w = W { e: B, n: 1 };
+             let W { e: _, n } = w; println(f"{n}") }

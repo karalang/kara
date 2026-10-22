@@ -1,0 +1,6 @@
+fn main() {
+let e: Vec[i64] = vec![];
+println(Stats.sum(e));
+println(Stats.prod(e));
+match Stats.min(e) { Some(v) => println(v), None => println(-1) }
+}

@@ -1,0 +1,16 @@
+enum Tok { Empty, Word(String) }
+fn build() -> Vec[Tok] {
+let mut v: Vec[Tok] = Vec.new();
+let mut i = 0;
+while i < 6 { v.push(Tok.Word("forloop_enum_element_whole_move_payload_theta_xx".to_string())); i = i + 1; }
+v
+}
+fn main() {
+let items = build();
+let mut n: i64 = 0;
+for a in items {
+let x = a;
+match x { Tok.Word(s) => { n = n + s.len(); } Tok.Empty => {} }
+}
+println(n);
+}

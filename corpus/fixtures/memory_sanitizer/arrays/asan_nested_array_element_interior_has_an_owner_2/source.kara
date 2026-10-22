@@ -1,0 +1,6 @@
+fn eat(a: Array[Array[String, 2], 2]) { println(f"e:{a[0][0]}") }
+fn main() {
+    let a: Array[Array[String, 2], 2] =
+        [[f"aaaaaaaa0", f"bbbbbbbb0"], [f"cccccccc0", f"dddddddd0"]];
+    eat(a);
+}

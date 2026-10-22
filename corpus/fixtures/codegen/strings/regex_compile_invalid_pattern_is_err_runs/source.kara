@@ -1,0 +1,4 @@
+fn main() {
+let r = Regex.compile("[unterminated");
+println(f"{r.is_err()}");
+}

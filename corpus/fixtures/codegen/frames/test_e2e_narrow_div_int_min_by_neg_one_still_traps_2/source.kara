@@ -1,0 +1,5 @@
+fn main() {
+    let n: i64 = env.args().len();
+    let lo: i32 = -2147483648i32 + ((n as i32) - (n as i32));
+    println(lo / (0i32 - 1i32));
+}

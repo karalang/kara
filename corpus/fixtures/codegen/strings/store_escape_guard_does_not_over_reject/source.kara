@@ -1,0 +1,2 @@
+fn make() -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x| x * 2i64); return v; }
+fn main() { let fs = make(); println(f"{(fs[0])(21i64)}"); }

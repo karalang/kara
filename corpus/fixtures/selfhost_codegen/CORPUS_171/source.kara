@@ -1,0 +1,25 @@
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.pop();
+    v.pop();
+    v.push(99);
+    println(v.len().to_string());
+    println(v[0].to_string());
+    println(v[1].to_string());
+    let mut e: Vec[i64] = Vec.new();
+    e.pop();
+    println(e.len().to_string());
+    let mut s: Vec[String] = Vec.new();
+    s.push("a".to_string());
+    s.push("b".to_string());
+    s.push("c".to_string());
+    s.pop();
+    let mut i = 0;
+    while i < s.len() as i64 {
+        println(s[i as i64]);
+        i += 1;
+    }
+}

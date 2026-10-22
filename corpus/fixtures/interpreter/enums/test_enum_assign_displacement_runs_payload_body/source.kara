@@ -1,0 +1,26 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+println("a: full -> empty");
+let mut b = Box2.Full(Res { id: 5 });
+b = Box2.Empty;
+println("b: full -> full");
+let mut c = Box2.Full(Res { id: 6 });
+c = Box2.Full(Res { id: 7 });
+println("c: empty -> full (no old body)");
+let mut d = Box2.Empty;
+d = Box2.Full(Res { id: 8 });
+println("d: moved-out then reassign (no double)");
+let mut e = Box2.Full(Res { id: 9 });
+match e {
+Box2.Full(r) => { println(f"took {r.id}"); }
+Box2.Empty => {}
+}
+e = Box2.Empty;
+println("end");
+}

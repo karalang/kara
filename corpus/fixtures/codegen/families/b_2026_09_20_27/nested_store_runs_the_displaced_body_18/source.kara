@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[N]] = [[N { k: 1 }, N { k: 2 }]]; d[0].swap(0, 1); println("end") }

@@ -1,0 +1,9 @@
+fn longer(a: ref String, b: ref String) -> ref String {
+    if a.len() > b.len() { a } else { b }
+}
+fn main() {
+    let x = "hi"; let y = "wordy";
+    let n = longer(x, y); println(n);
+    let p = "aaaaaa"; let q = "bb";
+    let m = longer(p, q); println(m);
+}

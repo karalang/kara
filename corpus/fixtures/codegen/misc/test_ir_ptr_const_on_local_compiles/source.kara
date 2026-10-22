@@ -1,0 +1,1 @@
+fn main() { let x: i32 = 7; let p: *const i32 = ptr.const(x); }

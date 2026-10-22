@@ -1,0 +1,5 @@
+fn main() {
+let big = 9223372036854775807;
+let xs: Vec[i64] = vec![big, 1];
+println(Stats.sum(xs));
+}

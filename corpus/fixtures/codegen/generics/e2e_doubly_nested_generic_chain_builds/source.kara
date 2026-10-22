@@ -1,0 +1,16 @@
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+struct Box[T] { v: T }
+impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn main() {
+    let n: i64 = env.args().len();
+    let inner = Box { v: Wide { a: n, b: 2i64, c: 3i64, d: 4i64, e: 5i64, f: 6i64 } };
+    let outer: Box[Box[Wide]] = Box { v: inner };
+    println(outer.take().take().f);
+    // the fully-bound twin, on its own value — `take(self)`
+    // consumes, so it cannot re-use `outer`.
+    let inner2 = Box { v: Wide { a: n, b: 2i64, c: 3i64, d: 4i64, e: 5i64, f: 6i64 } };
+    let outer2: Box[Box[Wide]] = Box { v: inner2 };
+    let m = outer2.take();
+    let q = m.take();
+    println(q.f);
+}

@@ -1,0 +1,5 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push_null();
+println(c.sum());
+}

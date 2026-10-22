@@ -1,0 +1,33 @@
+enum Box128 { W(i128), Pair(i128, i64), Nothing }
+fn main() {
+let a: Option[i128] = Some(1267650600228229401496703205376i128);
+match a { Some(x) => println(x), None => println("none-a") }
+let b: Option[i128] = Some(-1267650600228229401496703205376i128);
+match b { Some(x) => println(x), None => println("none-b") }
+let c: Option[u128] = Some(170141183460469231731687303715884105727u128);
+match c { Some(x) => println(x), None => println("none-c") }
+let d: Result[i128, String] = Ok(170141183460469231731687303715884105727i128);
+match d { Ok(x) => println(x), Err(e) => println(e) }
+let f: Box128 = Box128.W(-170141183460469231731687303715884105727i128);
+match f {
+Box128.W(x) => println(x),
+Box128.Pair(p, q) => println(p),
+Box128.Nothing => println("nb"),
+}
+let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);
+match g {
+Box128.W(x) => println(x),
+Box128.Pair(p, q) => { println(p); println(q) }
+Box128.Nothing => println("nb"),
+}
+let h: Option[i128] = Some(1267650600228229401496703205376i128);
+match h { Some(x) => println(x + 1i128), None => println("none-h") }
+let i: Option[i128] = None;
+match i { Some(x) => println(x), None => println("none-i") }
+let mx: i128 = 170141183460469231731687303715884105727i128;
+match mx.checked_add(1i128) { Some(v) => println(v), None => println("ovf") }
+let m: i128 = 1267650600228229401496703205376i128;
+match m.checked_mul(2i128) { Some(v) => println(v), None => println("ovf") }
+let uu: u128 = 1267650600228229401496703205376u128;
+match uu.checked_mul(2u128) { Some(v) => println(v), None => println("ovf") }
+}

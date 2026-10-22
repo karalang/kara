@@ -1,0 +1,32 @@
+struct Leaf { v: i64 }
+struct Node2 { l: Tree, r: Tree }
+
+shared enum Tree {
+    L(Leaf),
+    N(Node2),
+}
+
+fn sum(t: Tree) -> i64 {
+    match t {
+        L(x) => x.v,
+        N(n) => sum(n.l) + sum(n.r),
+    }
+}
+
+fn build(d: i64) -> Tree {
+    if d == 0 {
+        return Tree.L(Leaf { v: 1 });
+    }
+    Tree.N(Node2 { l: build(d - 1), r: build(d - 1) })
+}
+
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 200 {
+        let t = build(6);
+        total = total + sum(t);
+        i = i + 1;
+    }
+    println(total.to_string());
+}

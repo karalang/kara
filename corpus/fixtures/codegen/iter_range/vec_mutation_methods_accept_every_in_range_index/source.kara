@@ -1,0 +1,18 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(11i64);
+v.push(22i64);
+v.insert(2i64, 33i64);
+v.insert(0i64, 0i64);
+println(v.len());
+let a = v.remove(0i64);
+let b = v.remove(v.len() - 1i64);
+let c = v.swap_remove(0i64);
+println(a);
+println(b);
+println(c);
+println(v.len());
+let mut e: Vec[i64] = Vec.new();
+e.insert(0i64, 7i64);
+println(e[0]);
+}

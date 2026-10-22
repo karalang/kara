@@ -1,0 +1,33 @@
+enum MapBox { Table(Map[String, i64]) }
+enum SetBox { Items(Set[i64]) }
+enum SmapBox { T(SortedMap[i64, i64]) }
+enum SsetBox { S(SortedSet[i64]) }
+fn map_len_ref(v: ref MapBox) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn map_len_val(v: MapBox) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn set_len_ref(v: ref SetBox) -> i64 { match v { Items(s) => s.len() as i64 } }
+fn set_has_ref(v: ref SetBox, x: i64) -> bool { match v { Items(s) => s.contains(x) } }
+fn smap_len_ref(v: ref SmapBox) -> i64 { match v { T(m) => m.len() as i64 } }
+fn sset_len_ref(v: ref SsetBox) -> i64 { match v { S(s) => s.len() as i64 } }
+fn main() {
+let mut mp: Map[String, i64] = Map.new();
+let _ = mp.insert("a", 1);
+let _ = mp.insert("b", 2);
+let t = MapBox.Table(mp);
+println(map_len_ref(t));
+let mut mp2: Map[String, i64] = Map.new();
+let _ = mp2.insert("x", 9);
+println(map_len_val(MapBox.Table(mp2)));
+let mut st: Set[i64] = Set.new();
+st.insert(1); st.insert(2); st.insert(2);
+let sv = SetBox.Items(st);
+println(set_len_ref(sv));
+println(set_has_ref(sv, 2));
+println(set_has_ref(sv, 5));
+let mut sm: SortedMap[i64, i64] = SortedMap.new();
+let _ = sm.insert(3, 1);
+let _ = sm.insert(1, 2);
+println(smap_len_ref(SmapBox.T(sm)));
+let mut ss: SortedSet[i64] = SortedSet.new();
+ss.insert(7); ss.insert(4); ss.insert(7);
+println(sset_len_ref(SsetBox.S(ss)));
+}

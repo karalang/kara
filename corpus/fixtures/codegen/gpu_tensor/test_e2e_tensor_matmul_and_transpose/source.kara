@@ -1,0 +1,26 @@
+fn main() {
+let a = Tensor.from([[1.0, 2.0], [3.0, 4.0]]);
+let b = Tensor.from([[5.0, 6.0], [7.0, 8.0]]);
+let c = a.matmul(b);
+println(c[0, 0]); println(c[0, 1]); println(c[1, 0]); println(c[1, 1]);
+let w = Tensor.from([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+let x = Tensor.from([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]);
+let y = w.matmul(x);
+println(y[0, 0]); println(y[0, 1]); println(y[1, 0]); println(y[1, 1]);
+let ia = Tensor.from([[1, 2], [3, 4]]);
+let ib = Tensor.from([[5, 6], [7, 8]]);
+let ic = ia.matmul(ib);
+println(ic[0, 0]); println(ic[1, 1]);
+let t = w.transpose();
+let ts = t.shape();
+println(ts[0]); println(ts[1]);
+println(t[0, 0]); println(t[0, 1]); println(t[2, 1]);
+let t3 = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);
+let t3t = t3.transpose();
+println(t3t[0, 0, 0]); println(t3t[1, 0, 0]); println(t3t[0, 1, 1]);
+let chained = a.matmul(b).transpose();
+println(chained[0, 1]); println(chained[1, 0]);
+let v = Tensor.from([9.0, 8.0]);
+let vt = v.transpose();
+println(vt[1]);
+}

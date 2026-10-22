@@ -1,0 +1,13 @@
+struct Box { v: i64 }
+struct H { acc: i64 }
+impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }
+fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }
+fn main() {
+let mut a = Box { v: 4 };
+println(free_bump(mut a.v));
+println(a.v);
+let h = H { acc: 0 };
+let mut b = Box { v: 4 };
+println(h.bump(mut b.v));
+println(b.v);
+}

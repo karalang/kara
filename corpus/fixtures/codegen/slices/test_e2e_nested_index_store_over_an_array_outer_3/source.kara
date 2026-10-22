@@ -1,0 +1,5 @@
+fn main() {
+    let mut a: Array[Vec[Vec[i64]], 2] = [[[1, 2, 3]], [[4]]];
+    a[0][0][2] = 99;
+    println(f"{a[0][0][2]}");
+}

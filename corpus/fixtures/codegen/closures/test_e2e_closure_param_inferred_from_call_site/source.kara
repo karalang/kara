@@ -1,0 +1,7 @@
+fn main() {
+let id = |x| x;
+let n: i64 = id(5);
+println(n + 1);
+let s = |y| y;
+println(s("hello"));
+}

@@ -1,0 +1,2 @@
+fn bump(s: mut ref String) { s.push_str("yy"); }
+fn main() { let mut a: Array[String, 1] = [f"x{1}"]; bump(mut a[0]); println(a[0]); }

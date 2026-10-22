@@ -1,0 +1,3 @@
+enum Verdict { Pass, Fail(i64) }
+fn judge(v: Verdict) -> String { let label = "case ".to_string(); match v { Fail(code) => { return label + "failed-" + code.to_string(); } Pass => {} } return label + "ok"; }
+fn main() { println(judge(Verdict.Fail(7))); println(judge(Verdict.Pass)) }

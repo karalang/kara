@@ -1,0 +1,6 @@
+import metrics.emit_answer;
+
+fn main() {
+    emit_answer();
+    println("done");
+}

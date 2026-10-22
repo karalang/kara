@@ -1,0 +1,9 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+let v = m.entry("a").or_insert(7_i64);
+println(v);
+match m.get("a") {
+Some(x) => println(x),
+None => println("missing"),
+}
+}

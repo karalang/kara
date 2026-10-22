@@ -1,0 +1,5 @@
+fn main() {
+let a: Tensor[f64, [?]] = Tensor.zeros([3]);
+let b: Tensor[f64, [?]] = Tensor.zeros([4]);
+let c = a + b;
+}

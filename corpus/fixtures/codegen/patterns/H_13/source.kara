@@ -1,0 +1,1 @@
+fn main() { let mut v = Vec.new(); v.push(E.B); println(f"{v.len()}"); }

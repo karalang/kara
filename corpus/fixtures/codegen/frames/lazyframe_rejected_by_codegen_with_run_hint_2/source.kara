@@ -1,0 +1,15 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("k", Column.from_vec(["a", "b"]));
+df.insert("v", Column.from_vec([1i64, 2i64]));
+let plan = df.lazy()
+.with_columns(vec![LazyExpr.col("v").mul(2).alias_("v2")])
+.sort(vec![LazyExpr.col("v2").desc()])
+.group_by(vec![LazyExpr.col("k")])
+.agg(vec![LazyExpr.col("v2").sum(), LazyExpr.col("v2").count(), LazyExpr.col("v2").mean(), LazyExpr.col("v2").min(), LazyExpr.col("v2").max()]);
+let mut r: DataFrame = DataFrame.new();
+r.insert("k", Column.from_vec(["a"]));
+let joined = plan.join(r.lazy(), vec!["k"]);
+let out = joined.collect();
+println(out.height());
+}

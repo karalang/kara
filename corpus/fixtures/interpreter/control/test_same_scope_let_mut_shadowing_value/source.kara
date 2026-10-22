@@ -1,0 +1,1 @@
+fn main() { let mut y = 10; let y = y * 2; println(y); }

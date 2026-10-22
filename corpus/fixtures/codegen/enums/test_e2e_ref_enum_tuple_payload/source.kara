@@ -1,0 +1,18 @@
+enum M { P((i64, i64)), Q }
+enum Slot[T] { Filled(T), Blank }
+fn mono(s: ref M) -> i64 {
+match s { P(x) => { return x.0 + x.1; } Q => { return -1; } }
+}
+fn opt(s: ref Option[(i64, i64)]) -> i64 {
+match s { Some(x) => { return x.0 + x.1; } None => { return -1; } }
+}
+fn boxd(s: ref Slot[(i64, i64)]) -> i64 {
+match s { Filled(x) => { return x.0 + x.1; } Blank => { return -1; } }
+}
+fn main() {
+let n = env.args().len() as i64;
+let a: M = M.P((41 + n, 7));
+let b: Option[(i64, i64)] = Some((41 + n, 7));
+let c: Slot[(i64, i64)] = Filled((41 + n, 7));
+println(f"{mono(a)}:{opt(b)}:{boxd(c)}");
+}

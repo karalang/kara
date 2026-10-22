@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[Vec[i64]] = [[10, 11], [20]];
+    let w: Vec[Vec[i64]] = v;
+    println("done");
+}

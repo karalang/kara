@@ -1,0 +1,10 @@
+fn main() {
+let names: Vec[String] = [f"alpha"];
+let mut out: String = f"";
+{
+let n = names[0].clone();
+let _keep: String = n;
+out = n;
+}
+println(out);
+}

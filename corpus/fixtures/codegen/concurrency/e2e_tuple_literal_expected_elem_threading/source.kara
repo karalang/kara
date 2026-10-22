@@ -1,0 +1,10 @@
+struct Sw { t: (Vec[i64], i64) }
+fn main() {
+    let mut t: (Vec[i64], i64) = (Vec.new(), 3);
+    t.0.push(10);
+    println(f"a {t.0.len()} {t.0[0]} {t.1}");
+    let mut o = Sw { t: (Vec.new(), 3) };
+    o.t.0.push(7);
+    println(f"b {o.t.0.len()} {o.t.0[0]}");
+    println("end");
+}

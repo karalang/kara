@@ -1,0 +1,17 @@
+source = "tests/interpreter/patterns.rs::test_bare_and_qualified_stdlib_variant_patterns_agree"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0236"
+classified_with = "79705a229"
+extracted_src = "49f42a2e"
+model_rev = "583cfb0d"
+model_src = "49f42a2e"

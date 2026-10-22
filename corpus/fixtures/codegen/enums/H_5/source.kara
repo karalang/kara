@@ -1,0 +1,9 @@
+#[derive(Hash, Eq, PartialEq, Ord)]
+enum Tg { Named { s: String }, Num { n: i64 } }
+impl Drop for Tg { fn drop(mut ref self) { println("dD") } }
+fn mkd(n: i64) -> Tg { return Tg.Named { s: f"aaaaaaaaaaaaaaaa-{n}" }; }
+fn main() {
+    let mut s: SortedSet[Tg] = SortedSet.new();
+    s.insert(mkd(0i64));
+    println(f"len:{s.len()}");
+}

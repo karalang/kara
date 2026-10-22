@@ -1,0 +1,13 @@
+fn main() {
+    let mut m: Map[i64, (String, String)] = Map.new();
+    m.insert(1, (f"aaaaaaaaaaaa1", f"bbbbbbbbbbbb1"));
+    match m.remove(1) {
+        Some(a) => { m.insert(2, a); }
+        None => { println("none"); }
+    }
+    match m.get(2) {
+        Some(v) => { println(f"g:{v.0}"); }
+        None => { println("g:missing"); }
+    }
+    println(f"m:{m.len()}");
+}

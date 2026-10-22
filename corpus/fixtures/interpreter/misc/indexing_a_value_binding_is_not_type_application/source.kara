@@ -1,0 +1,7 @@
+fn add1(x: i64) -> i64 { return x + 1i64; }
+fn add2(x: i64) -> i64 { return x + 2i64; }
+fn main() {
+let fs: Vec[Fn(i64) -> i64] = [add1, add2];
+println(f"{fs[0](10i64)}");
+println(f"{fs[1](10i64)}");
+}

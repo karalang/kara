@@ -1,0 +1,9 @@
+enum Opt { Some(i64), None }
+fn check(o: Opt) -> i64 {
+match o {
+Some(x) if x > 10 => 1,
+Some(x) => 2,
+None => 3,
+}
+}
+fn main() { println(check(Some(5))); }

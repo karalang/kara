@@ -1,0 +1,4 @@
+trait Two { fn two() -> Self; }
+impl Two for bool { fn two() -> bool { return true; } }
+impl Two for f64 { fn two() -> f64 { return 45.5; } }
+fn main() { println(bool.two().to_string()); println(f64.two().to_string()); }

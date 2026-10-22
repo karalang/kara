@@ -1,0 +1,12 @@
+a
+got 2 len 5
+drop 2
+got 1 len 5
+drop 1
+b
+iflet 3 len 7
+drop 3
+c
+match 4 len 6
+drop 4
+end

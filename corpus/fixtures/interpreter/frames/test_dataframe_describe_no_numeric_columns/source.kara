@@ -1,0 +1,7 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("name", Column.from_vec(["a", "b"]));
+let d: DataFrame = df.describe();
+println(d.width());
+println(d.height());
+}

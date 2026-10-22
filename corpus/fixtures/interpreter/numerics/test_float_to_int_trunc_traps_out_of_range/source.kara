@@ -1,0 +1,1 @@
+fn main() { println((1e30f64).trunc_to_i32()); }

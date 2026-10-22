@@ -1,0 +1,9 @@
+trait Sized2 { fn size(ref self) -> i64; }
+impl Sized2 for Slice[i64] { fn size(ref self) -> i64 { return self.len(); } }
+fn show[T: Sized2](x: ref T) -> i64 { return x.size(); }
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(10); v.push(20); v.push(30); v.push(40);
+println(show(v[0..2]));
+println(show(v[1..4]));
+}

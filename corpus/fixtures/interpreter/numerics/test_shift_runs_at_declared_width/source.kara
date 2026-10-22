@@ -1,0 +1,12 @@
+fn main() {
+    let a: i32 = 1i32;
+    println(a << 31i32);
+    let b: i32 = 1000000i32;
+    let s: i32 = b << 20i32;
+    println(s);
+    println(s > 2147483647i32);
+    let u: u8 = 200u8;
+    println(u << 4u8);
+    let n: i32 = -8i32;
+    println(n >> 1i32);
+}

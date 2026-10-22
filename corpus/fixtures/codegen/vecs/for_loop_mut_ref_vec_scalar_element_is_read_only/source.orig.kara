@@ -1,0 +1,8 @@
+fn double_all(xs: mut ref Vec[i64]) {
+    for x in xs { x = x * 2; }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);
+    double_all(mut v);
+    println(v[0]); println(v[1]);
+}

@@ -1,0 +1,14 @@
+fn main() {
+    let a: u64 = u64.MAX;
+    let one: u64 = 1u64;
+    println(a - one);
+    println(a & a);
+    println(a | one);
+    println(a ^ one);
+    println(~one);
+    println(f"{a - one}");
+    println(a / 2u64);
+    println(a >> 1u64);
+    let s: i64 = -5i64;
+    println(s - 1i64);
+}

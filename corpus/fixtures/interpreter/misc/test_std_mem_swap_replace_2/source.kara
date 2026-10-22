@@ -1,0 +1,7 @@
+fn main() {
+let mut s = "hello".to_string();
+let mut t = "world".to_string();
+swap(mut s, mut t);
+let prev = replace(mut s, "new".to_string());
+println(f"{s} {t} {prev}");
+}

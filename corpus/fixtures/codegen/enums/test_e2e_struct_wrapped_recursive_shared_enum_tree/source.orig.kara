@@ -1,0 +1,46 @@
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+fn eval(e: Expr) -> i64 {
+match e {
+Num(n) => n,
+Add(b) => eval(b.left) + eval(b.right),
+Neg(u) => 0 - eval(u.operand),
+Call(c) => {
+let mut acc = eval(c.callee);
+for a in c.args { acc = acc + eval(a); }
+acc
+}
+}
+}
+fn fold(e: Expr) -> Expr {
+match e {
+Num(n) => Num(n),
+Neg(u) => Neg(Unary { operand: fold(u.operand) }),
+Add(b) => Add(BinOp { left: fold(b.left), right: fold(b.right) }),
+Call(c) => Call(c),
+}
+}
+fn build(n: i64) -> Expr {
+if n <= 0 { Num(1) }
+else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+let inner = Add(BinOp { left: Num(2), right: Num(3) });
+let t = Neg(Unary { operand: Add(BinOp { left: Num(1), right: inner }) });
+println(eval(t).to_string());            // -(1+(2+3)) = -6
+let mut args: Vec[Expr] = Vec.new();
+let mut i: i64 = 0;
+while i < 5 { args.push(Num(i)); i = i + 1; }
+let call = Call(CallExpr { callee: Num(100), args: args });
+println(eval(call).to_string());         // 100+0+1+2+3+4 = 110
+let folded = fold(build(10));            // by-value transform
+println(eval(folded).to_string());       // 10+9+..+1+1 = 56
+let mut v: Vec[Expr] = Vec.new();
+let mut j: i64 = 0;
+while j < 4 { v.push(build(j)); j = j + 1; }
+let mut total: i64 = 0;
+for e in v { total = total + eval(fold(e)); }
+println(total.to_string());              // 1+2+4+7 = 14
+}

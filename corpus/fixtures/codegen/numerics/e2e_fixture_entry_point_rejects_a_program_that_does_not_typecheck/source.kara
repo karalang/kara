@@ -1,0 +1,6 @@
+struct H { f: i64 }
+fn main() {
+    let a: i64 = 1;
+    let h = H { a };
+    println("end");
+}

@@ -1,0 +1,8 @@
+fn mk() -> E { return E.A(R { id: 8, tag: f"t8" }); }
+fn main() {
+let mut out: R = R { id: 0, tag: f"t0" };
+match mk() { E.A(r) => { out = r; } E.B => { } }
+println("m");
+println(f"v{out.id}");
+println("end");
+}

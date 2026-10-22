@@ -1,0 +1,7 @@
+fn describe(x: i64) -> i64 {
+match x {
+0 => 100,
+_ => 200,
+}
+}
+fn main() { println(describe(5)); }

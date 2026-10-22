@@ -1,0 +1,2 @@
+fn show(x: Result[K, i64]) { match x { Result.Ok(K.A(r)) => { println(f"a:{r.s}"); }, Result.Ok(K.B) => {}, Result.Err(e) => {} } }
+fn main() { let mut i = 0; while i < 3 { show(Result.Ok(K.A(mkr(i)))); i = i + 1; } println("end") }

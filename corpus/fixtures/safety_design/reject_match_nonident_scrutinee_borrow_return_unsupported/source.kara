@@ -1,0 +1,14 @@
+fn id(s: Result[i64, String]) -> Result[i64, String] { s }
+fn pick(r: Result[i64, String], a: ref String, b: ref String) -> ref String {
+match id(r) {
+Ok(_) => a,
+_ => b,
+}
+}
+fn main() {
+let ok: Result[i64, String] = Result.Ok(1);
+let x = String.from("yes");
+let y = String.from("no");
+let z = pick(ok, x, y);
+println(z.len());
+}

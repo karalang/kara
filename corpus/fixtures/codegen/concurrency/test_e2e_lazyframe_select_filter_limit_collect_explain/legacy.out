@@ -1,0 +1,13 @@
+== logical plan ==
+LIMIT 2
+  SELECT [name, age]
+    FILTER ((age > 10) and (score >= 3.5))
+      SCAN [age, name, score]
+== optimized ==
+SELECT [name, age]
+  LIMIT 2
+    FILTER ((age > 10) and (score >= 3.5))
+      SCAN cols=[age, name, score]
+2
+ada
+bob

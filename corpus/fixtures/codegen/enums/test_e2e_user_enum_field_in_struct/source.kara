@@ -1,0 +1,18 @@
+enum Token { Ident(String), Num(i64), Pair(i64, String), Eof }
+struct Spanned { start: i64, tok: Token, end: i64 }
+fn show(sp: Spanned) {
+print(f"{sp.start}:");
+match sp.tok {
+Ident(name) => { print("Id("); print(name); print(")"); }
+Num(n) => { print(f"Num({n})"); }
+Pair(a, s) => { print("Pair("); print(f"{a},"); print(s); print(")"); }
+Eof => { print("Eof"); }
+}
+println(f":{sp.end}");
+}
+fn main() {
+show(Spanned { start: 0, tok: Token.Ident("foo"), end: 3 });
+show(Spanned { start: 3, tok: Token.Num(42), end: 5 });
+show(Spanned { start: 5, tok: Token.Pair(7, "bar"), end: 9 });
+show(Spanned { start: 9, tok: Token.Eof, end: 9 });
+}

@@ -1,0 +1,16 @@
+iter 1
+iter 3
+iter 5
+iter 6
+iter 8
+iter 4
+iter 2
+iter 7
+drop 1
+drop 3
+drop 5
+drop 6
+drop 8
+drop 4
+drop 2
+drop 7

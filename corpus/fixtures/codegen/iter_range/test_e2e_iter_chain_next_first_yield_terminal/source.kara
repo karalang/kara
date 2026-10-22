@@ -1,0 +1,11 @@
+fn main() {
+let s = "Zebra".to_string();
+println(s.chars().next().unwrap());
+let c = s.chars().next().unwrap();
+println(c);
+let v: Vec[i64] = [4, 9, 1, 7];
+match v.iter().filter(|x| x > 5).next() { Some(n) => println(n), None => println(-1) }
+match v.iter().filter(|x| x > 100).next() { Some(n) => println(n), None => println(-1) }
+match v.iter().map(|x| x * 3).next() { Some(n) => println(n), None => println(-1) }
+match (3..8).next() { Some(n) => println(n), None => println(-1) }
+}

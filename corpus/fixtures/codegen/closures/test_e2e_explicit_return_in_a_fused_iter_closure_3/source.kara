@@ -1,0 +1,6 @@
+fn main() {
+println(f"before");
+let v: Vec[i64] = [1i64, 2i64, 3i64];
+let s: i64 = v.iter().fold(0i64, |acc, n| { return acc + n; });
+println(f"after {s}");
+}

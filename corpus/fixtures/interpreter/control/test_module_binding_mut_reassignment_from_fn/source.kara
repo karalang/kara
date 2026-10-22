@@ -1,0 +1,7 @@
+let mut TOTAL: i64 = 0i64;
+fn add(n: i64) { TOTAL = TOTAL + n; }
+fn main() {
+add(10i64);
+add(5i64);
+println(TOTAL);
+}

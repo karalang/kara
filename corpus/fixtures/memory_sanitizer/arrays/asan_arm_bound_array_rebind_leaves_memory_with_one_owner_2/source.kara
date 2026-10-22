@@ -1,0 +1,5 @@
+fn main() {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    let b: Array[String, 2] = a;
+    println(f"s:{b[0]}");
+}

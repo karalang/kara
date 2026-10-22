@@ -1,0 +1,5 @@
+fn main() {
+let before = 10;
+{ let inner = 20; }
+println(before);
+}

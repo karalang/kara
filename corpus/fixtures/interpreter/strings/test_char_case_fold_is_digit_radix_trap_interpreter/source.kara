@@ -1,0 +1,1 @@
+fn main() { println(f"{'z'.is_digit(37)}"); }

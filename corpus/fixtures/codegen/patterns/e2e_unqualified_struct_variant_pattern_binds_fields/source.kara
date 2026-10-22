@@ -1,0 +1,13 @@
+enum E { A { n: i64 }, C { x: i64, y: i64 }, B }
+fn f(e: E) -> i64 {
+match e {
+A { n } => n,
+C { x, y } => x + y,
+B => 0,
+}
+}
+fn main() {
+println(f"{f(E.A { n: 5 })}");
+println(f"{f(E.C { x: 3, y: 4 })}");
+println(f"{f(E.B)}");
+}

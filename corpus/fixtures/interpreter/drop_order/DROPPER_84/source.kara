@@ -1,0 +1,2 @@
+impl B6 { fn keep(ref self, r: R) -> R { r } }
+fn main() { let b = B6 { n: 1 }; let a = R { id: 41 }; let x = b.keep(a); println(f"{x.id}") }

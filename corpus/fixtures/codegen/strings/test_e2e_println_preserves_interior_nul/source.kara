@@ -1,0 +1,8 @@
+fn main() {
+println("AB\0CD");
+println('\0');
+println(f"pre \0 post");
+let a = "AB\0";
+print(a + "CD");
+println("");
+}

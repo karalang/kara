@@ -1,0 +1,20 @@
+enum E { A(i64), B }
+enum P { Two(i64, i64), N }
+fn err_a() -> Result[i64, E] { Result.Err(E.A(42)) }
+fn err_b() -> Result[i64, E] { Result.Err(E.B) }
+fn opt(w: i64) -> Option[E] { if w == 0 { Option.Some(E.A(7)) } else { Option.Some(E.B) } }
+fn ok_p() -> Result[P, i64] { Result.Ok(P.Two(3, 4)) }
+fn show_e(r: Result[i64, E]) {
+match r {
+Result.Ok(_) => { println(0 - 1); }
+Result.Err(E.A(c)) => { println(c); }
+Result.Err(E.B) => { println(0 - 2); }
+}
+}
+fn main() {
+show_e(err_a());
+show_e(err_b());
+match opt(0) { Option.Some(E.A(c)) => { println(c); } Option.Some(E.B) => { println(0 - 3); } Option.None => { println(0 - 4); } }
+match opt(1) { Option.Some(E.A(c)) => { println(c); } Option.Some(E.B) => { println(0 - 3); } Option.None => { println(0 - 4); } }
+match ok_p() { Result.Ok(P.Two(a, b)) => { println(a + b); } Result.Ok(P.N) => { println(0 - 5); } Result.Err(_) => { println(0 - 6); } }
+}

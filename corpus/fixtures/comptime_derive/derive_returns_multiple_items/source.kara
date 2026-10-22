@@ -1,0 +1,15 @@
+
+comptime fn derive_pair(comptime T: Type) -> Vec[Item] {
+    let n = T.name();
+    [ast.item("impl " + n + " { fn a(self) -> i64 { 1 } }"),
+     ast.item("impl " + n + " { fn b(self) -> i64 { 2 } }")]
+}
+
+#[derive(Pair)]
+struct Z { x: i64 }
+
+fn main() {
+    let z = Z { x: 0 };
+    println(z.a());
+    println(z.b());
+}

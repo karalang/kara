@@ -1,0 +1,6 @@
+#[derive(Display(snake_case))]
+enum Status { Active, InProgress, Done }
+fn main() {
+let s = Status.InProgress;
+println(s.to_string());
+}

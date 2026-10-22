@@ -1,0 +1,7 @@
+fn main() {
+let result = {
+let x = 7;
+x + 1
+};
+println(result);
+}

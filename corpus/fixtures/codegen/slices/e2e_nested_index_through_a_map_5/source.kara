@@ -1,0 +1,7 @@
+struct Holder { buckets: Map[i64, Vec[i64]] }
+fn main() {
+    let mut h = Holder { buckets: Map.new() };
+    h.buckets.insert(1i64, [1i64, 2i64]);
+    h.buckets[1i64][0] = 21i64;
+    println(f"{h.buckets[1i64][0]} {h.buckets[1i64][1]}");
+}

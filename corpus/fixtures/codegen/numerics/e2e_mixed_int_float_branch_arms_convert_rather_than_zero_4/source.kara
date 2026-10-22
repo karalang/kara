@@ -1,0 +1,1 @@
+fn main() { let n: i64 = 7; let a: f64 = match 1 { 0 => 0.0, _ => n }; println(a); }

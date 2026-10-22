@@ -1,0 +1,5 @@
+fn main() {
+let s = "hello";
+let t = s.clone();
+println(t);
+}

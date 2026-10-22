@@ -1,0 +1,2 @@
+impl T2 { fn take(ref self, r: R) -> R { return r; } }
+fn main() { let t = T2 { n: 1 }; let a = R { id: 32, tag: f"h" }; let b = t.take(a); println(f"{b.id}"); }

@@ -1,0 +1,5 @@
+enum K2 { A(R3), B }
+struct R3 { id: i64, name: String }
+impl Drop for R3 { fn drop(mut ref self) { println(f"drop R{self.name}") } }
+fn main() { let r: Result[K2, i64] = Ok(K2.A(R3 { id: 5, name: f"n{5}" }));
+             println("mid"); }

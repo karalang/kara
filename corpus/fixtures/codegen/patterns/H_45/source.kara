@@ -1,0 +1,12 @@
+fn main() {
+  let mut i = 0;
+  'outer: while i < 3 {
+    let mut j = 0;
+    while j < 3 {
+      match mk(7) { E.A(n) => { println(f"v{n}"); break 'outer; } E.B => {} };
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  println("done")
+}

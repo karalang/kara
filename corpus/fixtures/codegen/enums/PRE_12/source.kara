@@ -1,0 +1,2 @@
+fn takeR(x: Option[(Rt, Rt)]) { match x { Some(t) => { println("ok") } None => { println("n") } } }
+fn main() { let o: Option[(Rt, Rt)] = Some((Rt { id: 71, name: f"a" }, Rt { id: 72, name: f"b" })); takeR(o); println("done") }

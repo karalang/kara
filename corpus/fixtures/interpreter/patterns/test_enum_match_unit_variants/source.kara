@@ -1,0 +1,9 @@
+enum Color { Red, Green, Blue }
+fn name(c: Color) -> i64 {
+match c {
+Red => 1,
+Green => 2,
+Blue => 3,
+}
+}
+fn main() { println(name(Red)); }

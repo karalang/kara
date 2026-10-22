@@ -1,0 +1,8 @@
+struct Point { x: i64 }
+fn make(n: i64) -> Point {
+    match n {
+        0 => Point { x: 42 },
+        _ => unreachable(),
+    }
+}
+fn main() { let p = make(0); println(p.x); }

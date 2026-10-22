@@ -1,0 +1,17 @@
+struct R { id: i64, tag: String }
+struct Ha { a: Array[R, 2] }
+struct Hs { a: Array[String, 2] }
+struct Hn { a: Array[i64, 2] }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag{n}" }; }
+fn main() {
+let h = Ha { a: [mk(2), mk(3)] };
+let x = h.a;
+let e = ref x[0];
+println(f"struct {e.id}/{e.tag}");
+let hs = Hs { a: [f"one", f"two"] };
+let xs = hs.a;
+println(f"string {xs[0]}/{xs[1]}");
+let hn = Hn { a: [7, 9] };
+let xn = hn.a;
+println(f"scalar {xn[0]}/{xn[1]}");
+}

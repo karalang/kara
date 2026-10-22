@@ -1,0 +1,7 @@
+let-rhs:
+3
+drop 1 a1
+call-arg:
+1
+drop 2 b2
+end

@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
+fn mkd(i: i64) -> D { return D { id: i, s: f"tttttttttttttttt{i}" } }
+struct H { f: Vec[Array[D, 2]] }
+fn main() {
+    let h: H = H { f: [[mkd(1), mkd(2)], [mkd(3), mkd(4)]] };
+    println("end");
+}

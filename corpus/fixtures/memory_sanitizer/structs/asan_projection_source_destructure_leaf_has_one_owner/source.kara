@@ -1,0 +1,21 @@
+struct R { id: i64, name: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.name}:{self.xs.len()}") } }
+struct H { pe: (R, i64) }
+struct Hs { pe: (R, i64), name: String }
+struct G { h: H }
+fn mk(id: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    return R { id: id, name: f"n{id}", xs: v }
+}
+fn plain(h: H) { let (r, k) = h.pe; let m = r; println(f"  p{m.xs.len()}:{m.name}") }
+fn ownstr(hs: Hs) { let (r, k) = hs.pe; let m = r; println(f"  o:{m.name}:{hs.name}") }
+fn twohop(g: G) { let (r, k) = g.h.pe; let m = r; println(f"  t:{m.name}") }
+fn norebind(h: H) { let (r, k) = h.pe; println(f"  nr{r.xs.len()}:{r.name}") }
+fn main() {
+    plain(H { pe: (mk(1), 0) });
+    ownstr(Hs { pe: (mk(2), 0), name: "s" });
+    twohop(G { h: H { pe: (mk(3), 0) } });
+    norebind(H { pe: (mk(4), 0) });
+    println("end")
+}

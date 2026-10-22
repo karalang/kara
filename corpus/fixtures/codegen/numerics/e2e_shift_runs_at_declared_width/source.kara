@@ -1,0 +1,17 @@
+fn main() {
+    // (a) sign-bit flip at the declared width — legal, per spec
+    let a: i32 = 1i32;
+    println(a << 31i32);
+    // (b) a narrow shift stays inside the declared width
+    let b: i32 = 1000000i32;
+    let s: i32 = b << 20i32;
+    println(s);
+    // (c) …so an `i32` binding can no longer exceed i32::MAX
+    println(s > 2147483647i32);
+    // (d) unsigned narrow: re-narrowing is a mask
+    let u: u8 = 200u8;
+    println(u << 4u8);
+    // (e) right shift keeps its arithmetic/logical split
+    let n: i32 = -8i32;
+    println(n >> 1i32);
+}

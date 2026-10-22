@@ -1,0 +1,5 @@
+struct P { x: i64, y: i64 }
+fn main() {
+let d: OnceLock[P] = OnceLock.new();
+let _p = d.get_or_init(|| P { x: 7i64, y: 8i64 });
+}

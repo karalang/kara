@@ -1,0 +1,16 @@
+#[derive(Eq)]
+enum Msg { Text(String), Code(i64), Empty }
+fn main() {
+let a = Msg.Text("a" + "b");
+let b = Msg.Text("ab");
+let c = Msg.Text("xy");
+let d = Msg.Code(5);
+let e = Msg.Code(5);
+let f = Msg.Empty;
+println(f"{a == b}");
+println(f"{a == c}");
+println(f"{d == e}");
+println(f"{a == d}");
+println(f"{f == f}");
+println(f"{a == f}");
+}

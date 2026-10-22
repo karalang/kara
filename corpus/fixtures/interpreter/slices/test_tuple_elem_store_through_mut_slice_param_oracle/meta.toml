@@ -1,0 +1,17 @@
+source = "tests/interpreter/slices.rs::test_tuple_elem_store_through_mut_slice_param_oracle"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "85d2d892"
+model_rev = "583cfb0d"
+model_src = "85d2d892"

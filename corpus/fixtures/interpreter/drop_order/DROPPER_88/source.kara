@@ -1,0 +1,3 @@
+struct Hh { r: R }
+fn wrapf(r: R) -> Hh { return Hh { r: r }; }
+fn main() { let a = R { id: 41 }; let h = wrapf(a); println(f"{h.r.id}") }

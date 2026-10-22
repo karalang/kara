@@ -1,0 +1,4 @@
+enum MyResO { Ok(i64), Bad }
+fn main() { let x: Option[MyResO] = Some(MyResO.Ok(71));
+match x { Some(Ok(v)) => { println(f"a{v}") } Some(Bad) => { println("ob") } None => { println("n") } }
+println("done") }

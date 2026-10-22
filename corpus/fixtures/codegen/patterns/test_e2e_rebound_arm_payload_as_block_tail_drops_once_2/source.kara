@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R {
+    fn drop(mut ref self) { println(f"dR{self.id}") }
+}
+fn take(o: Option[R]) -> R {
+    match o { Some(r) => { let m = r; m } None => { R { id: 0 } } }
+}
+fn main() {
+    let o: Option[R] = Some(R { id: 1 });
+    let k = take(o);
+    println(f"C k={k.id}");
+}

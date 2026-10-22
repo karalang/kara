@@ -1,0 +1,6 @@
+struct Inner { a: String, b: String }
+struct W { inner: Inner, n: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkw(n: i64) -> W { return W { inner: Inner { a: payload(), b: payload() }, n: n }; }
+fn main() { println(go()); }

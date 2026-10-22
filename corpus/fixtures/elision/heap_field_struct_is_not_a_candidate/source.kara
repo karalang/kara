@@ -1,0 +1,5 @@
+shared struct Node { val: i64, mut next: Option[Node] }
+fn main() {
+let n = Node { val: 1, next: None };
+println(n.val);
+}

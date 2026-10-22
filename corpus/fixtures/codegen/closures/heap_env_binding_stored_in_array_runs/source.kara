@@ -1,0 +1,2 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() { let f = make(20i64); let a: Array[Fn(i64) -> i64, 1] = [f]; let x = f(1i64); let y = (a[0])(0i64); println(f"{x + y + 1i64}"); }

@@ -1,0 +1,2 @@
+fn pick(r: R, k: bool) -> R { if k { return R { id: 98, tag: f"z" }; } r }
+fn main() { let a = R { id: 7, tag: f"h" }; let x = pick(a, true); println(f"{x.id}"); let b = R { id: 5, tag: f"h" }; let y = pick(b, false); println(f"{y.id}"); }

@@ -1,0 +1,4 @@
+struct Plain { a: i64 }
+fn main() -> Result[(), Plain] {
+    return Err(Plain { a: 1 });
+}

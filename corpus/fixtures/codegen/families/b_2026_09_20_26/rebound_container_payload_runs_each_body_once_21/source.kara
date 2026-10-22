@@ -1,0 +1,2 @@
+fn f(a: Array[R, 2]) -> i64 { let o = EArr.A(a); match o { EArr.A(v) => { println("r"); return 1 }, EArr.B => { return 0 } } }
+fn main() { let a = mka(); let z = f(a); println("x") }

@@ -1,0 +1,7 @@
+struct Holder { m: Map[i64, Vec[i64]] }
+fn main() {
+let mut h = Holder { m: Map.new() };
+h.m.insert(1, [43, 7]);
+println(h.m[1][0]);
+println(h.m[1][1]);
+}

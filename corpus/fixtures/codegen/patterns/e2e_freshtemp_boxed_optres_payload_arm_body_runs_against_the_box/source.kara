@@ -1,0 +1,41 @@
+struct Full { name: String, buf: Vec[i64] }
+impl Drop for Full {
+    fn drop(mut ref self) { for x in self.buf { println(f"D{x}"); } self.buf.clear(); }
+}
+struct Wide { tag: i64, a: String, buf: Vec[i64] }
+impl Drop for Wide {
+    fn drop(mut ref self) { for x in self.buf { println(f"W{x}"); } self.buf.clear(); }
+}
+fn mk(i: i64) -> Full {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Full { name: "payload-string-data", buf: b };
+}
+fn mkw(i: i64) -> Wide {
+    let mut b: Vec[i64] = Vec.new();
+    b.push(i);
+    return Wide { tag: i, a: "payload-string-data", buf: b };
+}
+fn opt(i: i64) -> Option[Full] { return Option.Some(mk(i)); }
+fn res(i: i64) -> Result[Wide, i64] { return Result.Ok(mkw(i)); }
+fn main() {
+    match opt(1i64) {
+        Option.Some(r) => { println(f"a{r.buf[0]}"); }
+        Option.None => { println("a-none"); }
+    }
+    println("a-end");
+    if let Option.Some(r) = opt(2i64) { println(f"b{r.buf[0]}"); }
+    println("b-end");
+    match res(4i64) {
+        Result.Ok(r) => { println(f"d{r.buf[0]}"); }
+        Result.Err(e) => { println(f"d-err{e}"); }
+    }
+    println("d-end");
+    let mut v: Vec[Full] = Vec.new();
+    v.push(mk(5i64));
+    while let Option.Some(r) = v.pop() {
+        println(f"e{r.buf[0]}");
+    }
+    println("e-end");
+    println("end");
+}

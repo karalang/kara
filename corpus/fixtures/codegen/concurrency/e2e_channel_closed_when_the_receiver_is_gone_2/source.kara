@@ -1,0 +1,9 @@
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    match tx.try_send(9) {
+        Ok(u) => println("sent"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+    }
+    match rx.try_recv() { Some(v) => println(v), None => println("empty") }
+}

@@ -1,0 +1,28 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn main() {
+println("vecpop:");
+{
+let mut v: Vec[Res] = Vec.new();
+v.push(Res { id: 1, name: f"a{1}" });
+v.pop();
+println(v.len());
+}
+println("mapremove:");
+{
+let mut m: Map[i64, Res] = Map.new();
+m.insert(5, Res { id: 2, name: f"b{2}" });
+m.remove(5);
+println(m.len());
+}
+println("boundpop:");
+{
+let mut w: Vec[Res] = Vec.new();
+w.push(Res { id: 3, name: f"c{3}" });
+let p = w.pop();
+println(w.len());
+}
+println("end");
+}

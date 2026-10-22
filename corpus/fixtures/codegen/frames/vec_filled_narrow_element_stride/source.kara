@@ -1,0 +1,8 @@
+fn main() {
+    let a: Vec[i32] = Vec.filled(5, 7);
+    println(a[1] as i64); println(a[2] as i64); println(a[3] as i64);
+    let b: Vec[u8] = Vec.filled(4, 200);
+    println(b[1] as i64); println(b[3] as i64);
+    let c: Vec[i32] = [9; 4];
+    println(c[1] as i64); println(c[3] as i64);
+}

@@ -1,0 +1,22 @@
+import std.lazy.{col};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("dept", Column.from_vec(["b", "a", "b", "a", "b"]));
+df.insert("score", Column.from_vec([3i64, 9i64, 7i64, 9i64, 3i64]));
+df.insert("name", Column.from_vec(["v", "w", "x", "y", "z"]));
+let plan = df.lazy().sort(vec![col("dept"), col("score").desc()]).select(vec!["name"]).limit(3);
+println(plan.explain());
+let out = plan.collect();
+let names: Column[String] = out.column("name");
+match names[0] { Some(v) => println(v), None => println("null") }
+match names[1] { Some(v) => println(v), None => println("null") }
+match names[2] { Some(v) => println(v), None => println("null") }
+let mut d2: DataFrame = DataFrame.new();
+let nn: Vec[Option[i64]] = vec![Some(5i64), None, Some(9i64)];
+d2.insert("k", Column.from_iter_nullable(nn));
+d2.insert("tag", Column.from_vec(["five", "none", "nine"]));
+let s2 = d2.lazy().sort(vec![col("k").desc()]).collect();
+let tags: Column[String] = s2.column("tag");
+match tags[0] { Some(v) => println(v), None => println("null") }
+match tags[2] { Some(v) => println(v), None => println("null") }
+}

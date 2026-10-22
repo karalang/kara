@@ -1,0 +1,12 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn make_counter() -> Counter {
+    Counter { count: 0 }
+}
+
+fn main() {
+    let c = make_counter();
+    c.count = 5;
+}

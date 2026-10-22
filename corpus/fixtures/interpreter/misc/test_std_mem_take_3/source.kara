@@ -1,0 +1,6 @@
+fn steal(slot: mut ref String) -> String { take(slot) }
+fn main() {
+let mut s = "owned".to_string();
+let got = steal(mut s);
+println(f"{got} [{s}]");
+}

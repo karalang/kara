@@ -1,0 +1,1 @@
+fn main() { let n: Vec[i64] = [10, 20, 30]; println(f"{n[0..2].to_vec()[1]}"); }

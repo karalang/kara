@@ -1,0 +1,11 @@
+unsafe extern "C" { fn malloc(n: usize) -> *mut i64; fn free(p: *mut i64); }
+fn main() {
+    let p: *mut i64 = unsafe { malloc(24) };
+    unsafe { p.write(10); }
+    let q: *mut i64 = unsafe { p.offset(1) };
+    unsafe { q.write(20); }
+    unsafe { p.offset(2).write(30); }
+    let s = unsafe { p.read() + p.offset(1).read() + p.offset(2).read() };
+    println(s);
+    unsafe { free(p); }
+}

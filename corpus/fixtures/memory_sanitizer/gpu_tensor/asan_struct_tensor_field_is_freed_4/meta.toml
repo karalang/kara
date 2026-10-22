@@ -1,0 +1,16 @@
+source = "tests/memory_sanitizer/gpu_tensor.rs::asan_struct_tensor_field_is_freed"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:tensor", "literal-unmatched", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: '2'"
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "f876003f"

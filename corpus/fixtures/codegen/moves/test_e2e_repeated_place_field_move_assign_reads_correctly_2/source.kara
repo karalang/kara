@@ -1,0 +1,12 @@
+struct S { xs: Vec[i64] }
+fn main() {
+let mut box_: Vec[S] = Vec.new();
+let mut inner: Vec[i64] = Vec.new();
+inner.push(4); inner.push(5); inner.push(6);
+box_.push(S { xs: inner });
+let mut got: Vec[i64] = Vec.new();
+got = box_[0].xs.clone();
+got = box_[0].xs.clone();
+got = box_[0].xs.clone();
+println(f"{got.len()} {got[0]} {got[2]}");
+}

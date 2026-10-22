@@ -1,0 +1,3 @@
+fn main() { let f = |p: (R, R)| { let (a, b) = p; a.id + b.id };
+             println(f"{f((R { id: 41 }, R { id: 42 }))}");
+             println("end"); }

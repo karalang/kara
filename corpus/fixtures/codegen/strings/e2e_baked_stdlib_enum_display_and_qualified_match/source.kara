@@ -1,0 +1,8 @@
+fn main() {
+    let e = IoError.Other("disk full");
+    println(f"{e}");
+    let n = IoError.NotFound;
+    println(f"{n}");
+    let v = VarError.NotPresent;
+    println(f"{v}");
+}

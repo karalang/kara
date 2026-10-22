@@ -1,0 +1,4 @@
+fn main() {
+let _ = RandomSource.next_u64();
+println("ok");
+}

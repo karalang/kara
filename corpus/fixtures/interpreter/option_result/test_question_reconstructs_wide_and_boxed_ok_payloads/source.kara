@@ -1,0 +1,47 @@
+struct Full { name: String, buf: Vec[i64] }
+struct Mid { name: String, pad: i64 }
+fn mkf(i: i64) -> Full {
+let mut b: Vec[i64] = Vec.new();
+b.push(i);
+let mut s: String = String.new();
+s.push_str("wide-");
+s.push_str(f"{i}");
+return Full { name: s, buf: b };
+}
+fn mkm(i: i64) -> Mid {
+let mut s: String = String.new();
+s.push_str("mid-");
+s.push_str(f"{i}");
+return Mid { name: s, pad: i };
+}
+fn resf(i: i64) -> Result[Full, String] { return Result.Ok(mkf(i)); }
+fn optf(i: i64) -> Option[Full] { return Option.Some(mkf(i)); }
+fn optm(i: i64) -> Option[Mid] { return Option.Some(mkm(i)); }
+fn resm(i: i64) -> Result[Mid, String] { return Result.Ok(mkm(i)); }
+fn run_res(i: i64) -> Result[i64, String] {
+let a = resf(i)?;
+println(f"a:{a.name}:{a.buf.len()}");
+let b = resm(i)?;
+println(f"b:{b.name}:{b.pad}");
+let c = resf(i)?;
+let Full { name, buf: _ } = c;
+println(f"c:{name}");
+return Result.Ok(1i64);
+}
+fn run_opt(i: i64) -> Option[i64] {
+let d = optf(i)?;
+println(f"d:{d.name}:{d.buf.len()}");
+let e = optm(i)?;
+println(f"e:{e.name}:{e.pad}");
+return Option.Some(2i64);
+}
+fn main() {
+match run_res(3i64) {
+Result.Ok(v) => { println(f"res:{v}"); }
+Result.Err(er) => { println(f"err:{er}"); }
+}
+match run_opt(4i64) {
+Option.Some(v) => { println(f"opt:{v}"); }
+Option.None => { println("opt:none"); }
+}
+}

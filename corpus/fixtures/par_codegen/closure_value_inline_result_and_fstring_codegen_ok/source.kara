@@ -1,0 +1,7 @@
+fn main() {
+let base: i64 = 100;
+let ok: Fn() -> Result[i64, String] = || Result.Ok(base + 1);
+let err: Fn() -> Result[i64, String] = || Result.Err(f"bad{base}");
+let _a: Result[i64, String] = ok();
+let _b: Result[i64, String] = err();
+}

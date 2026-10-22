@@ -1,0 +1,49 @@
+== logical plan ==
+SELECT [a]
+  FILTER ((a > 2) and true)
+    SCAN [a, b]
+== optimized ==
+SELECT [a]
+  FILTER (a > 2)
+    SCAN cols=[a]
+2
+== logical plan ==
+SELECT [b]
+  FILTER true
+    SCAN [a, b]
+== optimized ==
+SCAN cols=[b]
+3
+== logical plan ==
+FILTER false
+  SCAN [a, b]
+== optimized ==
+FILTER false
+  SCAN cols=[*]
+0
+2
+== logical plan ==
+FILTER (a > 2)
+  FILTER (a > 2)
+    SCAN [a, b]
+== optimized ==
+FILTER (a > 2)
+  SCAN cols=[a]
+2
+== logical plan ==
+FILTER ((a > 2) or true)
+  SCAN [a, b]
+== optimized ==
+SCAN cols=[*]
+3
+== logical plan ==
+FILTER (not (3 > 4))
+  SCAN [a, b]
+== optimized ==
+SCAN cols=[*]
+== logical plan ==
+FILTER ((a > 2) and (a > 2))
+  SCAN [a, b]
+== optimized ==
+FILTER (a > 2)
+  SCAN cols=[a]

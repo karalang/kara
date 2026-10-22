@@ -1,0 +1,18 @@
+#[derive(Clone)]
+enum Tk { A, Id(String) }
+struct Sp { tok: Tk }
+struct P { toks: Vec[Sp], pos: i64 }
+impl P {
+fn take(mut ref self) -> String {
+match self.toks[self.pos].tok {
+Id(s) => { self.pos = self.pos + 1; s.clone() }
+A => { self.pos = self.pos + 1; "a".to_string() }
+}
+}
+}
+fn main() {
+let mut w: Vec[Sp] = Vec.new();
+w.push(Sp { tok: Tk.Id("hello".to_string()) });
+let mut p = P { toks: w, pos: 0 };
+println(p.take());
+}

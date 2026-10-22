@@ -1,0 +1,14 @@
+fn s() -> Result[i64, AllocError] {
+let r: Result[String, AllocError] = Ok("hello");
+let st: String = r?;
+Ok(st.len())
+}
+fn v() -> Result[i64, AllocError] {
+let src: Vec[i64] = Vec.filled(2_i64, 5_i64);
+let vv: Vec[i64] = Vec.try_from_slice(src)?;
+Ok(vv.len())
+}
+fn main() {
+match s() { Ok(n) => println(n), Err(_) => println("e") }
+match v() { Ok(n) => println(n), Err(_) => println("e") }
+}

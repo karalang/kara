@@ -1,0 +1,2 @@
+fn keepf(r: R) -> R { r }
+fn main() { let a = R { id: 32, tag: f"h" }; let b = keepf(a); println(f"{b.id}"); }

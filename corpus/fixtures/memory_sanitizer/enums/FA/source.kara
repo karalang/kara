@@ -1,0 +1,12 @@
+struct Sp4n { a: i64, b: i64, c: i64, d: i64 }
+shared enum E { Lit(i64), Iff(IfNode) }
+struct IfNode { cond: E, tags: Vec[String], pad: Option[String], sp: Sp4n }
+fn mk() -> E {
+    let mut w: Vec[String] = Vec.new(); w.push(f"t{20}"); w.push(f"u{21}");
+    return E.Iff(IfNode { cond: E.Lit(7), tags: w, pad: Option.Some(f"p{1}"), sp: Sp4n { a: 5, b: 0, c: 0, d: 0 } });
+}
+fn main() {
+    let ife = mk();
+    match ife { E.Lit(n) => println(f"{n}"), E.Iff(nd) => { println(f"v{nd.sp.a}"); } }
+    println("end");
+}

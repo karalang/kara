@@ -1,0 +1,6 @@
+fn main() {
+let mut w: Vec[i64] = Vec.new();
+w.push(11i64); w.push(22i64);
+{ let keep: Vec[i64] = w; }
+println(w[1]);
+}

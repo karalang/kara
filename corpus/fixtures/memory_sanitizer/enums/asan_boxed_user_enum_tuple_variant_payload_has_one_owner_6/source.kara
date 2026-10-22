@@ -1,0 +1,6 @@
+struct R2z { s: String }
+enum Kzs { A { r: R2z }, B }
+impl Drop for Kzs { fn drop(mut ref self) { println("dKzs") } }
+#[allow(partial_move_of_drop_enum)]
+fn show(x: Option[Kzs], acc: mut ref Vec[R2z]) { match x { Option.Some(Kzs.A { r }) => { acc.push(r) } Option.Some(Kzs.B) => {} Option.None => {} } }
+fn main() { let mut acc: Vec[R2z] = []; for i in 0..3 { show(Option.Some(Kzs.A { r: R2z { s: f"jjjjjjjjjjjjjjjjjjjj-{i}" } }), mut acc); } println(f"len:{acc.len()}") }

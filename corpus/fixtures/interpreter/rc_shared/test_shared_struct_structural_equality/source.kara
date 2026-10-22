@@ -1,0 +1,9 @@
+#[derive(Eq, PartialEq)]
+shared struct P { x: i64, y: i64 }
+fn main() {
+let a = P { x: 1, y: 2 };
+let b = P { x: 1, y: 2 };
+let c = P { x: 9, y: 2 };
+if a == b { println("eq"); }
+if a != c { println("ne"); }
+}

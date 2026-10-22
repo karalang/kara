@@ -1,0 +1,12 @@
+fn main() {
+let mut s: String = "";
+s.push('a');
+s.push('é');
+s.push('€');
+s.push('🦀');
+s.push('z');
+println(s);
+let mut n = 0i64;
+for c in s.chars() { n = n + 1i64; }
+println(f"{n}");
+}

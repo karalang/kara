@@ -1,0 +1,7 @@
+let mut TODOS: Vec[i64] = Vec.new();
+fn main() {
+TODOS.push(100);
+TODOS.push(200);
+println(TODOS[0]);
+println(TODOS[1]);
+}

@@ -1,0 +1,1 @@
+fn main() { let x = comptime { 1 + 2 }; println(x); }

@@ -1,0 +1,10 @@
+fn main() {
+    let mut m: Map[i64, (String, String)] = Map.new();
+    m.insert(1, (f"aaaaaaaaaaaa1", f"bbbbbbbbbbbb1"));
+    let o = m.remove(1);
+    match o {
+        Some(a) => { let b = a; println(f"r:{b.0}"); }
+        None => { println("r:none"); }
+    }
+    println(f"m:{m.len()}");
+}

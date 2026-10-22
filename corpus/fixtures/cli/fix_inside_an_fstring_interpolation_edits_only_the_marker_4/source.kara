@@ -1,0 +1,5 @@
+fn f(xs: Slice[i64]) -> i64 { return xs.len(); }
+fn g(xs: mut Slice[i64]) {
+    println(f"{f(xs: xs)}");
+}
+fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }

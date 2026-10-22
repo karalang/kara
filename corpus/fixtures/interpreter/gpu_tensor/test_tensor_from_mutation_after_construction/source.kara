@@ -1,0 +1,6 @@
+fn main() {
+let mut t = Tensor.from([[1, 2], [3, 4]]);
+t[0, 1] = 99;
+println(t[0, 1]);
+println(t[1, 1]);
+}

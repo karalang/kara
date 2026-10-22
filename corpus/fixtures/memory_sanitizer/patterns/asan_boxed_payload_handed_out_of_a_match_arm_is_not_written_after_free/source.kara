@@ -1,0 +1,20 @@
+struct X1 { a: Option[i64], s: String }
+struct Ctl { s: String, n: i64 }
+enum W { T(X1), U(i64) }
+enum C { T(Ctl), U(i64) }
+fn mkx(i: i64) -> X1 { return X1 { a: Option.Some(i), s: f"s{i}" }; }
+fn mkc(i: i64) -> Ctl { return Ctl { s: f"c{i}", n: i }; }
+fn payout(w: W) -> X1 { return match w { W.T(x) => x, W.U(n) => mkx(n) }; }
+fn payoutc(c: C) -> Ctl { return match c { C.T(x) => x, C.U(n) => mkc(n) }; }
+fn store(w: W, out: mut ref Vec[W]) { out.push(w); }
+fn main() {
+// THE DEFECT: hand a boxed, copy-declined payload out of the arm.
+let p = payout(W.T(mkx(23))); println(f"a={p.a.unwrap_or(0)}");
+// the U arm of the same callee -- no payload box to free at all
+let q = payout(W.U(24)); println(f"b={q.a.unwrap_or(0)}");
+// COPY-SUPPORTED twin: entry-copied, the envelope is the callee's own
+let r = payoutc(C.T(mkc(25))); println(f"c={r.n}");
+// a neighbour that was already clean and must stay clean
+let mut v: Vec[W] = Vec.new(); store(W.T(mkx(27)), mut v); println(f"e={v.len()}");
+println("end")
+}

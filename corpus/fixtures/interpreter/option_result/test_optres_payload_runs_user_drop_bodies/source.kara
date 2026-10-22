@@ -1,0 +1,36 @@
+struct Res { id: i64 }
+impl Drop for Res { fn drop(mut ref self) { println(90 + self.id); } }
+struct HeapRes { name: String, id: i64 }
+impl Drop for HeapRes { fn drop(mut ref self) { println(80 + self.id); } }
+fn mk(i: i64) -> Option[HeapRes] {
+return Option.Some(HeapRes { name: "payload-string-data", id: i });
+}
+fn main() {
+let a = Option.Some(Res { id: 1 });
+println(1);
+let b: Result[i64, Res] = Err(Res { id: 2 });
+println(2);
+let c = mk(3);
+println(3);
+let d: Option[Res] = Option.None;
+println(4);
+let e = Option.Some(Res { id: 5 });
+match e {
+Some(r) => { println(20 + r.id); }
+None => { println(0); }
+}
+println(5);
+let f = Option.Some(Res { id: 6 });
+match f {
+Some(_) => { println(40); }
+None => { println(0); }
+}
+println(6);
+let g = Option.Some(Res { id: 7 });
+let r7 = g.unwrap();
+println(10 + r7.id);
+println(7);
+let h = Res { id: 8 };
+let s = Option.Some(h);
+println(8);
+}

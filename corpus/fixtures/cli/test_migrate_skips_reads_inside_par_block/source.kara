@@ -1,0 +1,12 @@
+shared struct Counter {
+    mut count: i64,
+}
+
+fn main() {
+    let c: Counter = Counter { count: 0 };
+    let outside: i64 = c.count;
+    par {
+        let inside_a: i64 = c.count;
+        let inside_b: i64 = c.count;
+    }
+}

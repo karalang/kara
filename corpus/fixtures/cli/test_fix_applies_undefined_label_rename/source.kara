@@ -1,0 +1,7 @@
+fn main() {
+    'outer: loop {
+        loop {
+            continue 'otuer;
+        }
+    }
+}

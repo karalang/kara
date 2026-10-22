@@ -1,0 +1,15 @@
+
+struct Inner { v: i64 }
+struct Holder { nums: Vec[i64], items: Vec[Inner], raw: Vec[u8] }
+fn main() {
+    let r = comptime {
+        let mut s = "";
+        for f in Holder.fields() {
+            s = s + f.ty.element_type().name();
+            if f.ty.element_type().is_struct() { s = s + "*"; }
+            s = s + ";";
+        }
+        s
+    };
+    println(r);
+}

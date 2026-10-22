@@ -1,0 +1,3 @@
+fn main() { let o: Option[E] = Some(E.A(R { id: 1 }));
+             match o { Some(_) => { println("some") }
+                       None => { println("none") } } }

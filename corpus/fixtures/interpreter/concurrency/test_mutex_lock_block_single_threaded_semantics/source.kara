@@ -1,0 +1,11 @@
+struct Cell { v: Mutex[i64] }
+impl Cell {
+fn get(ref self) -> i64 { lock self.v x { x } }
+fn add(ref self, d: i64) { lock self.v x { x = x + d; } }
+}
+fn main() {
+let c = Cell { v: Mutex.new(10) };
+println(c.get());
+c.add(5);
+println(c.get());
+}

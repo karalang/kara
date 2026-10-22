@@ -1,0 +1,1 @@
+fn main() { let s = comptime { "hi" }; println(s); }

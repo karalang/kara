@@ -1,0 +1,10 @@
+struct R { s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.xs.len()}:{self.s}") } }
+struct H { r: R, n: i64 }
+impl Drop for H { fn drop(mut ref self) { println("dH") } }
+fn main() {
+    let h = H { r: R { s: "payload", xs: [1, 2, 3] }, n: 4 };
+    let q = h.n;
+    println(f"{q}");
+    println("end");
+}

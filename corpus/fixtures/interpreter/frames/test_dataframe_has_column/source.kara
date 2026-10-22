@@ -1,0 +1,6 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("x", Column.from_vec([1i64]));
+println(df.has_column("x"));
+println(df.has_column("y"));
+}

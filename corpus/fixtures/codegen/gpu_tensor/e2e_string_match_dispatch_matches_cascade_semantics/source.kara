@@ -1,0 +1,26 @@
+fn classify(s: String) -> i64 {
+match s {
+"fn" => 1,
+"for" => 2,
+"fun" => 3,
+"struct" => 4,
+"static" => 5,
+"x" => 6,
+"" => 7,
+other => 99,
+}
+}
+fn check(s: String) { let r = classify(s); println(f"{r}"); }
+fn main() {
+check("fn");
+check("for");
+check("fun");
+check("struct");
+check("static");
+check("x");
+check("");
+check("forge");
+check("fo");
+check("y");
+check("structs");
+}

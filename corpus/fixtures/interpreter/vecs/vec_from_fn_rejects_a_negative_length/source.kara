@@ -1,0 +1,5 @@
+fn main() {
+let n = -1i64;
+let v: Vec[i64] = Vec.from_fn(n, |i| i);
+println(v.len());
+}

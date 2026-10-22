@@ -1,0 +1,10 @@
+struct Mixed { a: bool, b: i32, c: i8, d: i64, e: i16 }
+fn main() {
+    println(size_of[Mixed]());
+    println(align_of[Mixed]());
+    println(size_of[i32]());
+    println(align_of[i32]());
+    println(size_of[bool]());
+    println(size_of[char]());
+    println(size_of[String]());
+}

@@ -1,0 +1,5 @@
+fn main() {
+let s: String = f"alpha";
+{ let keep: String = s.clone(); }
+println(s);
+}

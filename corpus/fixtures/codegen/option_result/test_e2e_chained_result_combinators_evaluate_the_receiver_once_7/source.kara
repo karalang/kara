@@ -1,0 +1,4 @@
+fn main() {
+let o: Option[String] = Some(f"hi");
+match o.map(|x| x.to_uppercase()).map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => { println("-"); } }
+}

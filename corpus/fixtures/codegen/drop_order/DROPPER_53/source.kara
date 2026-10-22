@@ -1,0 +1,2 @@
+fn take[T](h: H, k: bool, t: T) -> H { if k { h } else { H { id: 99, name: f"n99" } } }
+fn main() { let x = take(H { id: 41, name: f"n41" }, false, 7); println(f"{x.id}"); }

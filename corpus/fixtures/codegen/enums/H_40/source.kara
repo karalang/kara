@@ -1,0 +1,3 @@
+enum S { X, Y }
+impl Drop for S { fn drop(mut ref self) { println("drop S") } }
+fn main() { let _ = S.X; println("end") }

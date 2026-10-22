@@ -1,0 +1,14 @@
+fn handle(p: String) -> String {
+match p {
+"/a" => "AAA",
+"/b" => "BBB",
+"/c" => "CCC",
+_ => "404",
+}
+}
+fn main() {
+println(handle("/a"));
+println(handle("/b"));
+println(handle("/c"));
+println(handle("/z"));
+}

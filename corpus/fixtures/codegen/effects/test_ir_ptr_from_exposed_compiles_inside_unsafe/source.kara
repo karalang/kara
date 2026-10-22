@@ -1,0 +1,1 @@
+fn caller(a: usize) -> *const i64 { unsafe { ptr.from_exposed(a) } } fn main() {}

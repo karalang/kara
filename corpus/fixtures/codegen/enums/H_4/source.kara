@@ -1,0 +1,6 @@
+struct Holder { mut s: Set[Tg] }
+fn main() {
+    let mut h = Holder { s: Set.new() };
+    h.s.insert(mkd(0i64));
+    println(f"len:{h.s.len()}");
+}

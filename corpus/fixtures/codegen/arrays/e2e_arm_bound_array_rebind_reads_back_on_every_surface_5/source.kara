@@ -1,0 +1,7 @@
+fn plainR(x: Result[Array[Vec[String], 2], i64]) {
+    match x { Ok(t) => { let u = t; println(f"s:{u[0][0]}") } Err(e) => { println(f"e:{e}") } }
+}
+fn main() {
+    let a: Array[Vec[String], 2] = [[f"aaaaaaaa0", f"aaaaaaaa1"], [f"bbbbbbbb0"]];
+    plainR(Result.Ok(a));
+}

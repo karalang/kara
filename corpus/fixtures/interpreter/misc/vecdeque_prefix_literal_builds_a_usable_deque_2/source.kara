@@ -1,0 +1,1 @@
+fn main() { let mut d = VecDeque[1, 2, 3]; d.push_front(0); for x in d { print(x); } }

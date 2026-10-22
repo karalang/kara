@@ -1,0 +1,2 @@
+fn label(n: i64, tag: String) -> String { tag + n.to_string() }
+fn main() { println(label(7, "v")) }

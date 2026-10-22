@@ -1,0 +1,6 @@
+
+comptime fn square(n: i64) -> i64 { n * n }
+fn main() {
+    let x = comptime { square(8) };
+    println(x);
+}

@@ -1,0 +1,14 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id} {self.name}")
+}
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+println("a");
+Box2.Full(Res { id: 24, name: f"h{24}" });
+println("b");
+Box2.Empty;
+println("end");
+}

@@ -1,0 +1,19 @@
+shared struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+struct W { s: S }
+struct H { s: S }
+shared struct Sh { s: S }
+struct G { w: W }
+fn pick(w: W) -> S { return w.s }
+fn pick2(w: W) -> S { w.s }
+fn pickr(w: ref W) -> S { return w.s }
+fn main() {
+    { let w: W = W { s: S { id: 1 } }; let h: H = H { s: w.s }; println(f"v{h.s.id}{w.s.id}"); println("one"); }
+    { let w: W = W { s: S { id: 2 } }; let h: Sh = Sh { s: w.s }; println(f"v{h.s.id}{w.s.id}"); println("two"); }
+    { let g: G = G { w: W { s: S { id: 3 } } }; let h: H = H { s: g.w.s }; println(f"v{h.s.id}{g.w.s.id}"); println("three"); }
+    { let w: W = W { s: S { id: 4 } }; let mut v: Vec[S] = []; v.push(w.s); println(f"v{v[0].id}{w.s.id}"); println("four"); }
+    { let w: W = W { s: S { id: 5 } }; let s: S = pick(w); println(f"v{s.id}"); println("five"); }
+    { let w: W = W { s: S { id: 6 } }; let s: S = pick2(w); println(f"v{s.id}"); println("six"); }
+    { let w: W = W { s: S { id: 7 } }; let s: S = pickr(w); println(f"v{s.id}{w.s.id}"); println("seven"); }
+    println("end");
+}

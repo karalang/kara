@@ -1,0 +1,39 @@
+struct Pv { name: String, value: String }
+struct Holder { values: Vec[Pv] }
+impl Holder {
+    fn direct(ref self) -> String {
+        match self.values.get(0) {
+            Some(pv) => { return pv.value.clone(); }
+            None => { return "none"; }
+        }
+    }
+    fn via_let(ref self) -> String {
+        match self.values.get(1) {
+            Some(pv) => { let s = pv.value.clone(); return s; }
+            None => { return "none"; }
+        }
+    }
+    fn collect(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.values.len() {
+            match self.values.get(i) {
+                Some(pv) => { out.push(pv.value.clone()); }
+                None => {}
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+}
+fn main() {
+    let mut v: Vec[Pv] = Vec.new();
+    v.push(Pv { name: f"k{1}", value: f"a{1}" });
+    v.push(Pv { name: f"k{2}", value: f"b{2}" });
+    let h = Holder { values: v };
+    println(h.direct());
+    println(h.via_let());
+    let got = h.collect();
+    for g in got { println(g); }
+    println(h.direct());
+}

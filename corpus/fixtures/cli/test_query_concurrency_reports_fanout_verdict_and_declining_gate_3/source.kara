@@ -1,0 +1,10 @@
+fn main() {
+                 let n: i64 = 4000000i64;
+                 let mut nums: Vec[i64] = Vec.filled(n, 0i64);
+                 let mut i: i64 = 0i64;
+                 while i < n { nums[i] = (i * 7i64 + 11i64) % 977i64; i = i + 1i64; }
+                 let mut m: i64 = nums[0i64];
+                 let mut j: i64 = 1i64;
+                 while j < n { let x = nums[j]; if x < m { m = x; } j = j + 1i64; }
+                 println(m);
+             }

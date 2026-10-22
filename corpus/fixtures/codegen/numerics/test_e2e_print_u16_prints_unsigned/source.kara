@@ -1,0 +1,1 @@
+fn main() { let x: u16 = 60000u16; println(x); }

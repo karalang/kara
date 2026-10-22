@@ -1,0 +1,6 @@
+struct S { s: String, n: i64 }
+fn main() {
+let a: Option[S] = Some(S { s: f"sn", n: 5 });
+match a { Some(S { s: ref s, .. }) => { println(s); } None => {} }
+match a { Some(S { s, .. }) => println(s), None => println("none") }
+}

@@ -1,0 +1,1 @@
+fn main() { let b: i64 = 10; println(b.pow(19u32)); }

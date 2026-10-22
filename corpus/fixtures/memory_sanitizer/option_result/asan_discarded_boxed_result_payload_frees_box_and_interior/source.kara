@@ -1,0 +1,20 @@
+struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { a: String, b: String, c: i64, d: i64, e: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.c}:{self.a}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn mkw(n: i64) -> W { return W { a: f"a{n}", b: f"b{n}", c: n, d: 0, e: 0 }; }
+fn rstruct(n: i64) -> Result[W, i64] { return Result.Ok(mkw(n)); }
+fn rtuple(n: i64) -> Result[(R, String), i64] { return Result.Ok((mk(n), f"x{n}")); }
+fn rerr(n: i64) -> Result[i64, W] { return Result.Err(mkw(n)); }
+fn rinline(n: i64) -> Result[(R, i64), i64] { return Result.Ok((mk(n), 9)); }
+fn main() {
+    let mut n = 0;
+    while n < 3 {
+        let _ = rstruct(n + 10);
+        let _ = rtuple(n + 20);
+        let _ = rerr(n + 30);
+        let _ = rinline(n + 40);
+        n = n + 1;
+    }
+}

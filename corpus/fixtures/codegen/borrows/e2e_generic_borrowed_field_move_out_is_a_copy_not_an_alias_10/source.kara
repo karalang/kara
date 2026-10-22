@@ -1,0 +1,4 @@
+struct Bag[=T] { name: String, xs: Vec[T] }
+impl[T] Bag[T] { fn nm(ref self) -> i64 { let s = self.name.clone(); return s.len(); } }
+fn main() { let a: Bag[i64] = Bag { name: "hello", xs: Vec.new() };
+println(f"{a.nm()}"); println(f"{a.name}"); }

@@ -1,0 +1,41 @@
+struct A {
+    s: String,
+    n: i64,
+}
+struct B {
+    t: String,
+}
+struct C {
+    u: String,
+}
+enum St {
+    Aa(A),
+    Bb(B),
+    Cc(C),
+}
+struct Blk {
+    st: St,
+    k: i64,
+}
+shared enum E {
+    V(Blk),
+}
+fn label(e: ref E) -> String {
+    match e {
+        V(b) => {
+            match b.st {
+                Aa(a) => a.s.clone(),
+                Bb(x) => x.t.clone(),
+                Cc(y) => y.u.clone(),
+            }
+        }
+    }
+}
+fn main() {
+    let x = E.V(Blk { st: St.Aa(A { s: "aa".to_string(), n: 1 }), k: 1 });
+    println(label(x));
+    let y = E.V(Blk { st: St.Bb(B { t: "bb".to_string() }), k: 2 });
+    println(label(y));
+    let z = E.V(Blk { st: St.Cc(C { u: "cc".to_string() }), k: 3 });
+    println(label(z));
+}

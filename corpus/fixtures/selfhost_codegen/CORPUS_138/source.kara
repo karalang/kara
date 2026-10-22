@@ -1,0 +1,2 @@
+fn is_digit_s(f: String) -> bool { return f >= "0" and f <= "9"; }
+fn main() { let s = "a7"; println(is_digit_s(s.substring(0, 1)).to_string()); println(is_digit_s(s.substring(1, 2)).to_string()) }

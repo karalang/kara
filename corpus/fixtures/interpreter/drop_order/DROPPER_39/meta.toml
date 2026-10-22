@@ -1,0 +1,17 @@
+source = "tests/interpreter/drop_order.rs::DROPPER"
+dedup_of = ["tests/interpreter/drop_order.rs::DROPPER"]
+expect = "error:E0104"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "c5353a1c"
+model_rev = "583cfb0d"
+model_src = "c5353a1c"

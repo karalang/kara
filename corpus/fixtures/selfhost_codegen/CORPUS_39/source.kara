@@ -1,0 +1,2 @@
+fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }
+fn main() { println(max(3, 9).to_string()); println(max(9, 3).to_string()) }

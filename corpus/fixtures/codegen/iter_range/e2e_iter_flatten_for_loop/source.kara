@@ -1,0 +1,18 @@
+fn main() {
+let n: Vec[Vec[i64]] = [[1, 2, 3], [4, 5], [6]];
+for x in n.iter().flatten() { print(x); }
+println("");
+let words: Vec[Vec[String]] = [["a", "b"], ["c"], ["d", "e"]];
+for w in words.iter().flatten() { print(w); }
+println("");
+let e: Vec[Vec[i64]] = [[], [1], [], [2, 3], []];
+let mut sum: i64 = 0;
+for x in e.iter().flatten() { sum = sum + x; }
+println(sum);
+let mut first_big: i64 = -1;
+for x in n.iter().flatten() { if x >= 4 { first_big = x; break; } }
+println(first_big);
+let mut odds: i64 = 0;
+for x in n.iter().flatten() { if x % 2 == 0 { continue; } odds = odds + x; }
+println(odds);
+}

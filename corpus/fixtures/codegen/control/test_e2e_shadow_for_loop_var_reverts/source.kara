@@ -1,0 +1,7 @@
+fn main() {
+let i = 999;
+let mut sum = 0;
+for i in 0..4 { sum = sum + i; }
+println(sum.to_string());
+println(i.to_string());
+}

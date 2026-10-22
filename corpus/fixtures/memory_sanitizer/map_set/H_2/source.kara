@@ -1,0 +1,5 @@
+fn main() {
+   let mut m: Map[String, B] = Map.new(); fill(mut m);
+   let mut held = String.new();
+   match m.get("k") { None => {} Some(B.S(w)) => { held = w; } Some(B.C) => {} }
+   println(f"h:{held.len()}"); println("end") }

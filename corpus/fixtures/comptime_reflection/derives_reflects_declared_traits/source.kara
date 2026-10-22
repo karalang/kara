@@ -1,0 +1,9 @@
+
+#[derive(Eq)]
+struct P { x: i64 }
+struct Q { y: i64 }
+fn main() {
+    println(comptime { P.derives("Eq") });
+    println(comptime { P.derives("Hash") });
+    println(comptime { Q.derives("Eq") });
+}

@@ -1,0 +1,30 @@
+fn main() {
+    let a: u8 = 5;
+    println(~a);
+    let b: u16 = 5;
+    println(~b);
+    let c: u32 = 5;
+    println(~c);
+    let d: u8 = 5;
+    let rd: u8 = ~d;
+    println(rd);
+    let e: u8 = 5u8;
+    println(~e);
+    let f: u8 = 5u8;
+    let rf: u8 = ~f;
+    println(rf);
+    let g: i8 = 5;
+    println(~g);
+    let h: i32 = 5;
+    println(~h);
+    let i: u64 = 5;
+    println(~i);
+    let z: u8 = 0;
+    println(~z);
+    let m: u8 = 255;
+    println(~m);
+    let lo: i8 = -128;
+    println(~lo);
+    let n: u8 = 250;
+    println(~n == 5);
+}

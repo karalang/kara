@@ -1,0 +1,1 @@
+fn main() { let e: EArr = EArr.A(mka()); while let EArr.A(v) = e { let u = v; println("in"); break } println("end") }

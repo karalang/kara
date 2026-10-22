@@ -1,0 +1,4 @@
+fn main() {
+    let a: Array[Vec[String], 2] = [[f"aaaaaaaa0", f"aaaaaaaa1"], [f"bbbbbbbb0"]];
+    println(f"s:{a[0][0]}");
+}

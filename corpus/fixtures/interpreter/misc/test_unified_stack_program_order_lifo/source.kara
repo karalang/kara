@@ -1,0 +1,6 @@
+fn main() {
+let _x = 1;
+defer { print("d1"); }
+let _y = 2;
+defer { print("d2"); }
+}

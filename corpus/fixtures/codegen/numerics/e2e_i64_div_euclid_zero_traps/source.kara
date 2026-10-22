@@ -1,0 +1,1 @@
+fn main() { let mut z = 3i64; z = z - 3i64; println((5i64).div_euclid(z)); }

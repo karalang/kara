@@ -1,0 +1,4 @@
+fn plus1(x: ref i64) -> i64 { x + 1i64 }
+fn main() {
+    let n: i64 = 10i64; println(plus1(n));
+}

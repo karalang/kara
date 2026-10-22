@@ -1,0 +1,6 @@
+fn main() {
+let i: Tensor[i64, [2]] = Tensor.from([10, 20]);
+let z: Tensor[i64, [2]] = Tensor.from([2, 0]);
+let q = i / z;
+println(q[0]);
+}

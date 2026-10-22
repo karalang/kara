@@ -1,0 +1,2 @@
+fn hr(r: Result[W9, i64]) { println("ig"); }
+fn main() { println("A"); let a: Result[W9, i64] = Result.Ok(W9 { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }); hr(a); println("end") }

@@ -1,0 +1,40 @@
+fn main() {
+let vv: Vec[Vec[i64]] = [[1, 2], [3], [4, 5]];
+let mut c: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter()) { c = c + y; }
+println(c);
+let mut d: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter()) {
+if y == 3 { break; }
+d = d + y;
+}
+println(d);
+let mut e: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter()) {
+if y % 2 == 1 { continue; }
+e = e + y;
+}
+println(e);
+let mut f: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter()) {
+for k in 0..5 {
+if k == 2 { break; }
+f = f + 1;
+}
+f = f + y;
+}
+println(f);
+let mut g: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter().map(|v| v * 2)) { g = g + y; }
+println(g);
+let words: Vec[Vec[String]] = [[f"a", f"bb"], [f"ccc"]];
+let mut h: i64 = 0;
+for w in words.iter().flat_map(|ws| ws.iter()) { h = h + w.len(); }
+println(h);
+let mut i2: i64 = 0;
+for y in vv.iter().filter(|row| row.len() > 1).flat_map(|row| row.iter()) { i2 = i2 + y; }
+println(i2);
+let mut j: i64 = 0;
+for y in vv.iter().flat_map(|row| row.iter().take_while(|v| v < 5)) { j = j + y; }
+println(j);
+}

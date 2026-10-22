@@ -1,0 +1,26 @@
+#[derive(Clone)]
+struct A { mut lines: Vec[String] }
+struct H { mut pe: (A, i64) }
+fn main() {
+let mut seed = A { lines: Vec.new() };
+seed.lines.push(f"x");
+let t: (A, i64) = (seed, 1);
+let mut r = t.0.clone();
+r.lines.push(f"y");
+let chk = t.0;
+println(f"{r.lines.len()} {chk.lines.len()}");
+let mut v: Vec[i64] = Vec.new();
+v.push(1);
+let t2: (Vec[i64], i64) = (v, 2);
+let mut r2 = t2.0.clone();
+r2.push(2);
+let chk2 = t2.0;
+println(f"{r2.len()} {chk2.len()}");
+let mut v3: Vec[String] = Vec.new();
+v3.push(f"x");
+let h = H { pe: (A { lines: v3 }, 3) };
+let mut r3 = h.pe.0.clone();
+r3.lines.push(f"y");
+let chk3 = h.pe.0;
+println(f"{r3.lines.len()} {chk3.lines.len()}");
+}

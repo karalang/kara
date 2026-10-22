@@ -1,0 +1,1 @@
+fn main() { let x = u64.MAX; println(x); }

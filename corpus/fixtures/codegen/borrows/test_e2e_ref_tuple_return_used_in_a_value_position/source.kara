@@ -1,0 +1,26 @@
+struct Hold { pr: (String, String) }
+struct Sc { pr: (i64, i64) }
+impl Hold { fn peek(ref self) -> ref (String, String) { return self.pr; } }
+impl Sc { fn peek(ref self) -> ref (i64, i64) { return self.pr; } }
+fn peekf(h: ref Hold) -> ref (String, String) { return h.pr; }
+fn main() {
+    let h = Hold { pr: (f"left-{40 + 2}", f"right-{7 * 6}") };
+    println(f"proj:{h.peek().0}");
+    let p: ref (String, String) = h.peek();
+    println(f"bound:{p.1}");
+    println(f"free:{peekf(h).0}");
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert((f"left-{40 + 2}", f"right-{7 * 6}"), 9);
+    match m.get(h.peek()) {
+        Some(v) => { println(f"mapheap:{v}"); }
+        None => { println("mapheap:missing"); }
+    }
+    let s = Sc { pr: (11, 12) };
+    let mut sm: Map[(i64, i64), i64] = Map.new();
+    sm.insert((11, 12), 5);
+    match sm.get(s.peek()) {
+        Some(v) => { println(f"mapscalar:{v}"); }
+        None => { println("mapscalar:missing"); }
+    }
+    println(f"scalarproj:{s.peek().1}");
+}

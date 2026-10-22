@@ -1,0 +1,4 @@
+fn f() -> i64 { let mut s: String = payload();
+   let n = if s.contains("payload") { s.len() } else { 0 };
+   s = "zz".to_string(); n + s.len() }
+fn main() { println(f()); }

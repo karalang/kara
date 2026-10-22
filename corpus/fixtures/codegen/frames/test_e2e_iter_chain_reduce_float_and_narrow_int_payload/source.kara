@@ -1,0 +1,10 @@
+fn main() {
+let f: Vec[f64] = [1.5, 2.5, 0.5];
+match f.iter().reduce(|a, x| if x > a { x } else { a }) { Some(s) => println(s), None => println(-1.0) }
+match f.iter().reduce(|a, x| a + x) { Some(s) => println(s), None => println(-1.0) }
+let w: Vec[F64] = f.iter().map(F64.from).collect();
+let hi: F64 = w.max().unwrap_or(F64.from(0.0));
+let lo: F64 = w.min().unwrap_or(F64.from(0.0));
+println(hi.value);
+println(lo.value)
+}

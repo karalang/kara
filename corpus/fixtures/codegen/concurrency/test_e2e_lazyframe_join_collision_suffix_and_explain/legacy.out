@@ -1,0 +1,22 @@
+== logical plan ==
+JOIN on=[city] right=(SCAN [city, pop, name])
+  SCAN [id, name, city]
+== optimized ==
+JOIN on=[city] right=(SCAN cols=[*])
+  SCAN cols=[*]
+5
+3
+id
+name
+city
+pop
+name_right
+ada
+Roma
+60
+bob
+Oslo
+80
+cyd
+Roma
+60

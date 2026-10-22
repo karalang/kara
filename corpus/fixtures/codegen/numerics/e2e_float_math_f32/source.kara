@@ -1,0 +1,7 @@
+fn main() {
+let a: f32 = (0.0f32).cos();
+let b: f32 = (0.0f32).tan();
+let c: f32 = (2.0f32).pow(3.0f32);
+let d: f32 = (0.0f32).atan2(1.0f32);
+println(f"{a}"); println(f"{b}"); println(f"{c}"); println(f"{d}");
+}

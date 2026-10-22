@@ -1,0 +1,6 @@
+fn main() {
+                 let v = [0; 5];
+                 let mut sum = 0;
+                 for x in v { sum = sum + x + 1; }
+                 println(sum);
+             }

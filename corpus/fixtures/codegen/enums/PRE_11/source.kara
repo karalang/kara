@@ -1,0 +1,2 @@
+fn takeR(x: Option[(Rt, i64)]) { match x { Some(t) => { println("ok") } None => { println("n") } } }
+fn main() { takeR(Some((Rt { id: 71, name: f"a" }, 5))); println("done") }

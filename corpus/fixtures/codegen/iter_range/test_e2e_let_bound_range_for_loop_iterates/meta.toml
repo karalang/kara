@@ -1,0 +1,17 @@
+source = "tests/codegen/iter_range.rs::test_e2e_let_bound_range_for_loop_iterates"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "b69efc1e"
+model_rev = "583cfb0d"
+model_src = "b69efc1e"

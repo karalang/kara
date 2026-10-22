@@ -1,0 +1,30 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+fn mk(n: i64) -> Res {
+Res { id: n }
+}
+fn take_tuple(t: (Res, i64)) {
+println(f"callee sees {t.1}")
+}
+fn take_res(r: Res) {
+println(f"callee sees res {r.id}")
+}
+fn main() {
+println("a");
+take_tuple((Res { id: 41 }, 10));
+println("b");
+take_res(Res { id: 42 });
+println("c");
+let g = Res { id: 43 };
+take_res(g);
+println("d");
+let h = Res { id: 44 };
+take_tuple((h, 20));
+println("e");
+take_tuple((mk(45), 30));
+println("end");
+}

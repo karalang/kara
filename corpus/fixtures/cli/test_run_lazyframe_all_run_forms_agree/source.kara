@@ -1,0 +1,6 @@
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("a", Column.from_vec([1i64, 2i64, 3i64]));
+    let out = df.lazy().filter(LazyExpr.col("a").gt(1)).collect();
+    println(out.height());
+}

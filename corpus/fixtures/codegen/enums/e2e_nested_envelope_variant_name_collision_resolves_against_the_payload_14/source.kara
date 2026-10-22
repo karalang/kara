@@ -1,0 +1,4 @@
+enum MyOptP { Some(i64), Nothing }
+fn main() { let x: Option[MyOptP] = Some(MyOptP.Some(71));
+match x { Some(inner) => { match inner { Some(v) => { println(f"a{v}") } Nothing => { println("sn") } } } None => { println("n") } }
+println("done") }

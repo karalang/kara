@@ -1,0 +1,15 @@
+enum Box128 { W(i128), Pair(i128, i64), Nothing }
+fn main() {
+let a: Option[i128] = Some(1267650600228229401496703205376i128);
+match a { Some(x) => println(x), None => println("none-a") }
+let d: Result[i128, String] = Ok(-1267650600228229401496703205376i128);
+match d { Ok(x) => println(x), Err(e) => println(e) }
+let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);
+match g {
+Box128.W(x) => println(x),
+Box128.Pair(p, q) => { println(p); println(q) }
+Box128.Nothing => println("nb"),
+}
+let i: Option[i128] = None;
+match i { Some(x) => println(x), None => println("none-i") }
+}

@@ -1,0 +1,2 @@
+struct P { n: i64, m: i64 }
+fn main() { let mut a: Array[P, 2] = [P { n: 5, m: 1 }, P { n: 6, m: 2 }]; a[1].m = 9; println(f"r:{a[1].m} {a[1].n} {a[0].m}") }

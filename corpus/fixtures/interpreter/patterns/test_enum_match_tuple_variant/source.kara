@@ -1,0 +1,8 @@
+enum Shape { Circle(i64), Rect(i64, i64) }
+fn area(s: Shape) -> i64 {
+match s {
+Circle(r) => r * r,
+Rect(w, h) => w * h,
+}
+}
+fn main() { println(area(Rect(3, 4))); }

@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 2 }; let mb = mk.make(); match mb { Box2.V(s) => println(f"v{s.n}"), Box2.N => println("n") }; println("x")
+}

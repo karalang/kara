@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_check_package_member_reports_a_private_cross_directory_import"
+dedup_of = ["tests/cli.rs::test_run_package_member_refuses_a_private_cross_directory_import", "tests/cli.rs::test_check_with_no_file_checks_the_whole_package"]
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:a type that failed to check"
+classified_with = "79705a229"
+extracted_src = "d6b8c77a"
+model_rev = "583cfb0d"
+model_src = "d6b8c77a"

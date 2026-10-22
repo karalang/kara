@@ -1,0 +1,5 @@
+fn main() {
+let a = 1;
+let b = seq { let inner = 10; inner + a };
+println(b);
+}

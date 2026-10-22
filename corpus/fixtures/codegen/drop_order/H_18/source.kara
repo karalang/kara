@@ -1,0 +1,3 @@
+fn take(r: R) -> i64 { r.id }
+fn main() { let w = W { r: R { id: 41 }, n: 1 };
+             let W { r, n } = w; println(f"{take(r) + n}") }

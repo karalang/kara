@@ -1,0 +1,2 @@
+import host.{run};
+fn main() { run(); }

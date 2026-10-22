@@ -1,0 +1,8 @@
+struct StableHash { }
+impl StableHash {
+fn siphash24(bytes: Slice[u8], k0: u64, k1: u64) -> u64 { 42 }
+}
+fn main() {
+let v: Vec[u8] = [1u8, 2u8, 3u8];
+println(StableHash.siphash24(v, 0u64, 0u64));
+}

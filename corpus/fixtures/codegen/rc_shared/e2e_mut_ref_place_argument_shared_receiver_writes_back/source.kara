@@ -1,0 +1,35 @@
+shared struct N { mut val: i64 }
+shared struct T { mut s: String }
+shared struct Inner { mut v: i64 }
+shared struct Outer { mut inner: Inner }
+impl N {
+    fn go(ref self) { bump(mut self.val); }
+}
+fn bump(x: mut ref i64) { x = x + 1i64; }
+fn app(x: mut ref String) { x = x + "b"; }
+fn viaref(n: ref N) -> i64 { bump(mut n.val); return n.val; }
+fn main() {
+    let n: i64 = env.args().len();
+    // (a) bare shared local receiver
+    let a = N { val: n + 6i64 };
+    bump(mut a.val);
+    println(f"a:{a.val}");
+    // (b) shared `ref` PARAMETER receiver — the slot holds the
+    //     borrow, so the handle is one extra load in
+    let b = N { val: n + 6i64 };
+    println(f"b:{viaref(b)}");
+    // (c) `self` inside a shared method
+    let c = N { val: n + 6i64 };
+    c.go();
+    println(f"c:{c.val}");
+    // (d) NESTED shared chain — two handle loads
+    let di = Inner { v: n + 6i64 };
+    let d = Outer { inner: di };
+    bump(mut d.inner.v);
+    println(f"d:{d.inner.v}");
+    // (e) HEAP payload — the displaced old value reclaims
+    //     through a different path than a scalar
+    let e = T { s: "a" };
+    app(mut e.s);
+    println(f"e:{e.s}:{e.s.len()}");
+}

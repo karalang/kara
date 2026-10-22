@@ -1,0 +1,1 @@
+fn main() { let mut a: Array[P, 1] = [P { id: 0, s: f"zero" }]; let p = P { id: 4, s: f"four" }; a[0] = p; println(f"p:{p.s}"); println(f"a:{a[0].s}"); println("end") }

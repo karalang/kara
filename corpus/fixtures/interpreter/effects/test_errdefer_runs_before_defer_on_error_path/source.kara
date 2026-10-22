@@ -1,0 +1,8 @@
+fn body() -> Result[i64, String] {
+defer { print("d1"); }
+errdefer { print("e1"); }
+defer { print("d2"); }
+errdefer { print("e2"); }
+return Err("x");
+}
+fn main() { let _ = body(); }

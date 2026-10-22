@@ -1,0 +1,14 @@
+fn print_opt(o: Option[i64]) {
+match o { Some(i) => println(i), None => println(-1i64) }
+}
+fn main() {
+let dup: Vec[i64] = vec![1, 2, 2, 2, 2, 3, 4];
+print_opt(dup.binary_search(2));
+let alleq: Vec[i64] = vec![5, 5, 5, 5];
+print_opt(alleq.binary_search(5));
+let u: Vec[u8] = vec![10u8, 50u8, 200u8, 250u8];
+print_opt(u.binary_search(200u8));
+print_opt(u.binary_search(11u8));
+let s: Vec[String] = vec!["apple", "banana", "cherry"];
+print_opt(s.binary_search("banana"));
+}

@@ -1,0 +1,6 @@
+import std.web.events.{wheel, WheelEvent};
+
+fn main() {
+    let wheels = wheel();
+    wheels.recv();
+}

@@ -1,0 +1,18 @@
+fn main() {
+let mut c: Column[i64] = Column.new();
+c.push(10);
+c.push_null();
+c.push(30);
+c.push_null();
+let f = c.fillna(99);
+println(f.len());
+println(f.null_count());
+match f[1] { Some(v) => println(v), None => println(-1) }
+match f[2] { Some(v) => println(v), None => println(-1) }
+let d = c.dropna();
+println(d.len());
+println(d.null_count());
+match d[0] { Some(v) => println(v), None => println(-1) }
+match d[1] { Some(v) => println(v), None => println(-1) }
+println(c.null_count());
+}

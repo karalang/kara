@@ -1,0 +1,3 @@
+fn whole(p: (R, i64)) -> (R, i64) { return p; }
+fn main() { let (z, n) = whole((R { id: 43 }, 1)); println("after3");
+             println(f"{z.id}"); }

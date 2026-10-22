@@ -1,0 +1,22 @@
+struct Counter { n: i64, tag: String }
+impl Counter {
+    fn new(tag: String) -> Counter {
+        return Counter { n: 0, tag: tag };
+    }
+    fn bump(mut ref self, by: i64) {
+        self.n = self.n + by;
+    }
+    fn label(ref self) -> String {
+        return self.tag + "=" + self.n.to_string();
+    }
+    fn consume(self) -> i64 {
+        return self.n * 10;
+    }
+}
+fn main() {
+    let mut c = Counter.new("hits".to_string());
+    c.bump(3);
+    c.bump(4);
+    println(c.label());
+    println(c.consume().to_string());
+}

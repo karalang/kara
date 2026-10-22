@@ -1,0 +1,2 @@
+fn giveback(x: Option[Rq]) -> Option[Rq] { return x }
+fn main() { let z = giveback(Option[Rq].Some(Rq { id: 1 })); match z { Some(r) => { println(f"z:{r.id}") } None => { println("zn") } } println("end") }

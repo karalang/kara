@@ -1,0 +1,1 @@
+fn main() { let mut a: Vec[String] = [f"zero"]; let s = f"four"; a[0] = s; println(f"s:{s}"); println(f"a:{a[0]}"); println("end") }

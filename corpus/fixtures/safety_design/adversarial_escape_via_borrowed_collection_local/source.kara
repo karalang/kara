@@ -1,0 +1,11 @@
+fn bad() -> Vec[ref String] {
+let mut local: String = "";
+local.push_str("payload data here");
+let mut v: Vec[ref String] = Vec.new();
+v.push(local);
+v
+}
+fn main() {
+let v = bad();
+println(v.len());
+}

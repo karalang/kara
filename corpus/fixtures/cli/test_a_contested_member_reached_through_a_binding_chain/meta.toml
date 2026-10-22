@@ -1,0 +1,17 @@
+source = "tests/cli.rs::test_a_contested_member_reached_through_a_binding_chain"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:a type that failed to check"
+classified_with = "79705a229"
+extracted_src = "018a7b0c"
+model_rev = "583cfb0d"
+model_src = "018a7b0c"

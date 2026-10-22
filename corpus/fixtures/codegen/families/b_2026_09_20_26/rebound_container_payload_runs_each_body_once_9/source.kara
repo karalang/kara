@@ -1,0 +1,1 @@
+fn main() { let mut i = 0; while i < 2 { let e: EArr = if i == 0 { EArr.A(mka()) } else { EArr.B }; match e { EArr.A(v) => { let u = v; println(f"au{u[0].id}") } EArr.B => { println("no") } } i = i + 1; } println("end") }

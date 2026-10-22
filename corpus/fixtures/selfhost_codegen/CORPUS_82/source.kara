@@ -1,0 +1,3 @@
+enum Op { Add(i64), Neg(i64), Zero }
+fn eval(o: Op) -> i64 { match o { Add(n) => n, Neg(n) => 0 - n, Zero => 0 } }
+fn main() { println(eval(Op.Add(5)).to_string()); println(eval(Op.Neg(3)).to_string()); println(eval(Op.Zero).to_string()) }

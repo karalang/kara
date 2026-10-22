@@ -1,0 +1,20 @@
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) {
+        println(f"drop {self.id} {self.name}")
+    }
+}
+fn mk(n: i64) -> Res {
+    return Res { id: n, name: f"r{n}" };
+}
+fn main() {
+    println("a: all-fresh tuple discard");
+    let _ = (mk(1), 10);
+    println("b: mixed fresh+place tuple discard");
+    let r = mk(2);
+    let _ = (r, 20);
+    println("c: place still-owned after");
+    let s = mk(3);
+    let _ = (s.id, 30);
+    println("end");
+}

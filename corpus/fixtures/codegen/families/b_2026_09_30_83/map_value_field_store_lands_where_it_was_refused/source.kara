@@ -1,0 +1,2 @@
+struct P { n: i64 }
+fn main() { let mut m: Map[i64, P] = Map.new(); m.insert(1, P { n: 5 }); m[1].n = 9; println(f"r:{m[1].n}"); }

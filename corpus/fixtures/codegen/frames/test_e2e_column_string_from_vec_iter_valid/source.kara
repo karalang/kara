@@ -1,0 +1,8 @@
+fn main() {
+let v: Vec[String] = ["alpha", "beta", "gamma"];
+let c: Column[String] = Column.from_vec(v);
+println(c.len());
+println(c.null_count());
+println(c.valid_count());
+for s in c.iter_valid() { println(s); }
+}

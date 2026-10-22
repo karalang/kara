@@ -1,0 +1,5 @@
+import db.connection;
+
+fn main() {
+    println("quiet");
+}

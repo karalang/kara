@@ -1,0 +1,11 @@
+struct Parser { items: Vec[i64], pos: i64 }
+impl Parser {
+fn new(items: Vec[i64]) -> Parser { Parser { items: items, pos: 0 } }
+fn first(ref self) -> i64 { self.items[self.pos] }
+}
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+v.push(7);
+let p = Parser.new(v);
+println(p.first().to_string());
+}

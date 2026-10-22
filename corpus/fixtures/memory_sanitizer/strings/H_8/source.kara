@@ -1,0 +1,3 @@
+fn main() { let s = mk(); let mut a = s[0..30];
+   a.push_str("-tail-tail-tail-tail");
+   println(f"n:{a.len()}"); println("end") }

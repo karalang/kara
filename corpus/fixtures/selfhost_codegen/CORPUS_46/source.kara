@@ -1,0 +1,1 @@
+fn main() { let s = "x"; let t = s; println(t) }

@@ -1,0 +1,8 @@
+struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+             fn main() {
+                 let mut a: Vec[D] = [D { id: 11, s: f"aaaaaaaaaaaaaaaaa-11" }];
+                 let t: D = D { id: 12, s: f"bbbbbbbbbbbbbbbbbbbbb-12" };
+                 a[0] = t;
+                 println(f"one:{a[0].id}:{a[0].s.len()}");
+             }

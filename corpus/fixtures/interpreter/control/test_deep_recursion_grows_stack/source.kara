@@ -1,0 +1,5 @@
+fn countdown(n: i64) -> i64 {
+if n <= 0 { return 0; }
+countdown(n - 1) + 1
+}
+fn main() { println(countdown(5000)); }

@@ -1,0 +1,7 @@
+struct F { id: i64 }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+fn main() {
+    let mut a: Array[F, 2] = [F { id: 1 }, F { id: 2 }];
+    a[0] = F { id: 3 };
+    println(f"a0:{a[0].id}");
+}

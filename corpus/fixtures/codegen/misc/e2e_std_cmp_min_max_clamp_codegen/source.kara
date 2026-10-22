@@ -1,0 +1,9 @@
+fn main() {
+println(f"{min(3i64, 5i64)}");
+println(f"{max(3i64, 5i64)}");
+println(f"{min(5i64, 3i64)}");
+println(f"{max(5i64, 3i64)}");
+println(f"{clamp(-2i64, 0i64, 10i64)}");
+println(f"{clamp(7i64, 0i64, 10i64)}");
+println(f"{clamp(15i64, 0i64, 10i64)}");
+}

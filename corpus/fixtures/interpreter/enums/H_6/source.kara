@@ -1,0 +1,9 @@
+#[derive(Hash, Eq, PartialEq)]
+struct Dk { s: String }
+impl Drop for Dk { fn drop(mut ref self) { println("dD") } }
+fn mks(n: i64) -> Dk { return Dk { s: f"aaaaaaaaaaaaaaaa-{n}" }; }
+fn main() {
+    let mut m: Map[Dk, i64] = Map.new();
+    m.insert(mks(0i64), 7i64);
+    println(f"len:{m.len()}");
+}

@@ -1,0 +1,2 @@
+expected an empty `fn main()` wrapper for the item-only session; got:
+{exported}

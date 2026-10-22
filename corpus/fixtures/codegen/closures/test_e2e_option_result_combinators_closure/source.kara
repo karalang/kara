@@ -1,0 +1,32 @@
+fn main() {
+let s: Option[i64] = Some(5);
+println(s.map_or(0, |x: i64| x + 1));
+let n: Option[i64] = None;
+println(n.map_or(0, |x: i64| x + 1));
+let s2: Option[i64] = Some(5);
+println(s2.and_then(|x: i64| Some(x + 1)).unwrap_or(0));
+let n2: Option[i64] = None;
+println(n2.and_then(|x: i64| Some(x + 1)).unwrap_or(0 - 7));
+let s3: Option[i64] = Some(5);
+println(s3.filter(|x: i64| x > 3).unwrap_or(0));
+let s4: Option[i64] = Some(2);
+println(s4.filter(|x: i64| x > 3).unwrap_or(0 - 1));
+let r: Result[i64, i64] = Ok(5);
+println(r.and_then(|x: i64| Ok(x * 2)).unwrap_or(0));
+let er: Result[i64, i64] = Err(3);
+println(er.map_err(|x: i64| x * 10).unwrap_err());
+let ok: Result[i64, i64] = Ok(7);
+println(ok.map_err(|x: i64| x * 10).unwrap_or(0));
+let no: Option[i64] = None;
+println(no.unwrap_or_else(|| 42));
+let so: Option[i64] = Some(5);
+println(so.map_or_else(|| 0, |x: i64| x * 2));
+let no2: Option[i64] = None;
+println(no2.or_else(|| Some(9)).unwrap_or(0));
+let re: Result[i64, i64] = Err(7);
+println(re.unwrap_or_else(|x: i64| x + 1));
+let re2: Result[i64, i64] = Err(3);
+println(re2.map_or_else(|x: i64| x * 100, |x: i64| x + 1));
+let re3: Result[i64, i64] = Err(9);
+println(re3.or_else(|x: i64| Ok(x * 2)).unwrap_or(0));
+}

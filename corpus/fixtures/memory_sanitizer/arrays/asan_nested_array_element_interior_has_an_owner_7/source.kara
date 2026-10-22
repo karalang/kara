@@ -1,0 +1,6 @@
+struct S { s: String }
+fn main() {
+    let a: Array[Array[S, 2], 2] =
+        [[S { s: f"aaaaaaaa0" }, S { s: f"bbbbbbbb0" }], [S { s: f"cccccccc0" }, S { s: f"dddddddd0" }]];
+    println("s:ok");
+}

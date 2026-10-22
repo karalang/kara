@@ -1,0 +1,17 @@
+source = "tests/interpreter/strings.rs::test_string_slice_inclusive_and_empty"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0208"
+classified_with = "79705a229"
+extracted_src = "ac53dd83"
+model_rev = "583cfb0d"
+model_src = "ac53dd83"

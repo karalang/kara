@@ -1,0 +1,9 @@
+fn main() {
+let mut s: String = "";
+s.try_push('a');
+match s.try_push_str("bc") {
+Ok(_) => println("ok"),
+Err(e) => println("err"),
+}
+println(s);
+}

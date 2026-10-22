@@ -1,0 +1,7 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+m.insert(1, 1);
+m.insert(2, 2);
+m.insert(1, 99);
+for (k, v) in m { println(f"{k}={v}"); }
+}

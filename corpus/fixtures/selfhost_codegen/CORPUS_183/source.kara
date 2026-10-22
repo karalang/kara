@@ -1,0 +1,9 @@
+shared enum Expr { Name(String), Bin(Expr) }
+fn render(e: Expr) -> String {
+    match e { Name(s) => s.clone(), Bin(b) => "(" + render(b) + ")" }
+}
+fn main() {
+    let a = Expr.Name("a");
+    let s = Expr.Bin(a);
+    println(render(s));
+}

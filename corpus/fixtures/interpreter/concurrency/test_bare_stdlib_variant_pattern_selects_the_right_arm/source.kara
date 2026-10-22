@@ -1,0 +1,8 @@
+fn main() {
+let e = IoError.PermissionDenied;
+match e {
+NotFound => println("NotFound"),
+PermissionDenied => println("PermissionDenied"),
+_ => println("other"),
+}
+}

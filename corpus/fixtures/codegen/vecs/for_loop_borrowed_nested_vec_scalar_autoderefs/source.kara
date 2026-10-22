@@ -1,0 +1,12 @@
+fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
+    let mut total = 0i64;
+    for row in g { for x in row { total = total + x; } }
+    total
+}
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new(); r0.push(1i64); r0.push(2i64);
+    let mut r1: Vec[i64] = Vec.new(); r1.push(3i64); r1.push(4i64);
+    grid.push(r0); grid.push(r1);
+    println(f"{cell_sum(grid)}");
+}

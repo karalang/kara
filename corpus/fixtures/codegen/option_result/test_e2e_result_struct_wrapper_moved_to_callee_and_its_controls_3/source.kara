@@ -1,0 +1,4 @@
+struct Er { m: Map[String, i64] }
+fn mk() -> Result[i64, Er] { let mut m: Map[String, i64] = Map.new(); m.insert("k", 1); return Err(Er { m: m }); }
+fn take(e: Er) { println(f"{e.m.len()}"); }
+fn main() { match mk() { Ok(v) => println(f"{v}"), Err(e) => take(e) } }

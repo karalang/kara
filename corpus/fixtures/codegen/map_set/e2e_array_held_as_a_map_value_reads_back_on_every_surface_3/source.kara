@@ -1,0 +1,8 @@
+fn main() {
+    let mut m: Map[i64, Array[Array[String, 2], 2]] = Map.new();
+    m.insert(1, [[f"aaaaaaaa0", f"bbbbbbbb0"], [f"cccccccc0", f"dddddddd0"]]);
+    match m.get(1) {
+        Some(a) => { println("s:ok"); }
+        None => { println("s:missing"); }
+    }
+}

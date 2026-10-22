@@ -1,0 +1,8 @@
+fn main() {
+    let mut m: Map[(String, String), i64] = Map.new();
+    m.insert((f"aaaaaaaaaaaa0", f"bbbbbbbbbbbb0"), 0);
+    let a: String = f"aaaaaaaaaaaa0";
+    let b: String = f"bbbbbbbbbbbb0";
+    match m.get((a, b)) { Some(v) => { println(f"g:{v}"); } None => { println("miss"); } }
+    println(f"after:{a.len()}:{b.len()}");
+}

@@ -1,0 +1,7 @@
+enum E { A(String), B }
+fn main() {
+let mut e: E = E.A(f"hi");
+let mut n: i64 = 0;
+while let E.A(ref v) = e { let k: String = v.clone(); println(k); n = n + 1; if n > 0 { break } }
+println(f"done");
+}

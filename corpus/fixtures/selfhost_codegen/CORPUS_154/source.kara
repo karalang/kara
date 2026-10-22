@@ -1,0 +1,18 @@
+struct Named { name: String, id: i64 }
+enum Ev { Nothing, At(i64), Label(String) }
+fn show_ev(e: ref Ev) -> String {
+    match e {
+        At(n) => {
+            return "at ".to_string() + n.to_string();
+        }
+        Label(s) => {
+            return "label ".to_string() + s;
+        }
+        Nothing => {}
+    }
+    return "nothing".to_string();
+}
+fn main() {
+    println(show_ev(Ev.Label("tick".to_string())));
+    println(show_ev(Ev.At(5)));
+}

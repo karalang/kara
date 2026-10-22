@@ -1,0 +1,6 @@
+fn main() {
+    let b: i64 = 65i64;
+    let c = b as char;
+    println(c);
+    println("unreachable past the cast");
+}

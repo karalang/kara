@@ -1,0 +1,10 @@
+struct Joiner { left: ref String, right: ref String }
+fn bad(a: ref String) -> ref Joiner {
+let local = String.from("x");
+Joiner { left: a, right: local }
+}
+fn main() {
+let a = String.from("hi");
+let j = bad(a);
+println(j.left.len());
+}

@@ -1,0 +1,4 @@
+effect resource Db;
+fn load() -> i64 with reads(Db) { 1 }
+pub fn risky() -> i64 { return load(); }
+fn main() { println(risky()); }

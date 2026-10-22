@@ -1,0 +1,19 @@
+fn main() {
+let mut a: Vec[u16] = Vec.new();
+let mut b: Vec[u32] = Vec.new();
+let mut i = 0i64;
+while i < 40i64 {
+let mut p = 0i64;
+while p < 4i64 {
+a.push(1000u16 + ((i + p) % 26i64) as u16);
+b.push(100000u32 + ((i + p) % 26i64) as u32);
+p = p + 1i64;
+}
+i = i + 1i64;
+}
+let mut k = 0i64;
+let mut sa = 0i64;
+let mut sb = 0i64;
+while k < a.len() { sa = sa + (a[k] as i64); sb = sb + (b[k] as i64); k = k + 1i64; }
+println(f"{a.len()} {sa} {sb}");
+}

@@ -1,0 +1,13 @@
+enum E { V(String) }
+enum W { X(Vec[i64]) }
+impl E { fn extract(self) -> String { match self { E.V(s) => s } } }
+impl E { fn length(self) -> i64 { match self { E.V(s) => s.len() } } }
+impl W { fn firstval(self) -> i64 { match self { W.X(v) => v[0] } } }
+fn main() {
+let e = E.V("hi".to_string());
+println(e.extract());
+let e2 = E.V("abcd".to_string());
+println(e2.length());
+let w = W.X([7, 8]);
+println(w.firstval());
+}

@@ -1,0 +1,11 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+match v.try_push(5_i64) {
+Ok(_) => println("ok"),
+Err(e) => println("err"),
+}
+v.try_push(6_i64);
+println(v.len());
+println(v[0]);
+println(v[1]);
+}

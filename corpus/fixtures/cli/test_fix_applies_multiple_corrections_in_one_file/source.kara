@@ -1,0 +1,3 @@
+fn alpha() -> i64 { 1 }
+fn beta() -> i64 { 2 }
+fn main() { println(alphq() + betq()); }

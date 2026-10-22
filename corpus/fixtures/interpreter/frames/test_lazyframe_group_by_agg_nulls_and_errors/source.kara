@@ -1,0 +1,12 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("k", Column.from_vec(["x", "x", "y"]));
+let nn: Vec[Option[i64]] = vec![Some(1i64), None, None];
+df.insert("v", Column.from_iter_nullable(nn));
+let out = df.lazy().group_by(vec![LazyExpr.col("k")]).agg(vec![LazyExpr.col("v").count(), LazyExpr.col("v").sum()]).collect();
+let cnts: Column[i64] = out.column("v_count");
+let sums: Column[i64] = out.column("v_sum");
+match cnts[0] { Some(v) => println(v), None => println(-1i64) }
+match cnts[1] { Some(v) => println(v), None => println(-1i64) }
+match sums[1] { Some(v) => println(v), None => println("null-ok") }
+}

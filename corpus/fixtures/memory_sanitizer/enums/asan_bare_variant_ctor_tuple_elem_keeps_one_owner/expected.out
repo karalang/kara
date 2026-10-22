@@ -1,0 +1,22 @@
+bareuv
+  in7
+  dR16/t16
+  x
+qualuv
+  in7
+  dR17/t17
+  x
+mixed
+  in19
+  dR18/t18
+  dR19/t19
+  x
+qualmixed
+  in21
+  dR20/t20
+  dR21/t21
+  x
+unitvar
+  in7
+  x
+end

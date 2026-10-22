@@ -1,0 +1,2 @@
+fn divide[T: Div](a: T, b: T) -> T { a / b }
+fn main() { let s: i64 = -9; println(divide(s, 3)); }

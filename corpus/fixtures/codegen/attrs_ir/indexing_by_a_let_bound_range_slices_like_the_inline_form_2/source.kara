@@ -1,0 +1,2 @@
+fn main() { let v = [10, 20, 30, 40]; let mut a = 1; let r = a..3; a = 0;
+let s = v[r]; println(s.len()); println(s[0]); }

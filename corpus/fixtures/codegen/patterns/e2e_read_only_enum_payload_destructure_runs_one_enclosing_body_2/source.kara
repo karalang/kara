@@ -1,0 +1,7 @@
+struct R2 { s: String }
+enum K2 { A(R2, R2), B }
+impl Drop for K2 { fn drop(mut ref self) { println("dK2") } }
+fn show(x: Option[K2]) {
+match x { Option.Some(K2.A(p, q)) => { println(f"{p.s}/{q.s}") } Option.Some(K2.B) => {} Option.None => {} }
+}
+fn main() { show(Option.Some(K2.A(R2 { s: f"p" }, R2 { s: f"q" }))); println("end") }

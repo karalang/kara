@@ -1,0 +1,62 @@
+struct S {
+    name: String,
+    a: i64,
+    b: i64,
+}
+fn idof(name: ref String) -> i64 {
+    if name == "x" {
+        return 1;
+    }
+    return 0;
+}
+fn consume(s: S) -> i64 {
+    let S { name, a, b } = s;
+    return idof(name) + a * 100 + b;
+}
+struct C {
+    tag: i64,
+}
+impl C {
+    fn idof2(ref self, name: ref String) -> i64 {
+        if name == "y" {
+            return 7;
+        }
+        return 0;
+    }
+    fn check(mut ref self, s: S) -> i64 {
+        let S { name, a, b } = s;
+        let sid = self.idof2(name);
+        return sid + a + b;
+    }
+}
+fn main() {
+    let s1 = S {
+        name: "x".to_string(),
+        a: 3,
+        b: 4,
+    };
+    println(consume(s1).to_string());
+    let mut c = C { tag: 0 };
+    let s2 = S {
+        name: "y".to_string(),
+        a: 1,
+        b: 2,
+    };
+    println(c.check(s2).to_string());
+    let s3 = S {
+        name: "hello".to_string(),
+        a: 7,
+        b: 5,
+    };
+    let S { name, a, b } = s3;
+    println(name);
+    println((a + b).to_string());
+    let s4 = S {
+        name: "z".to_string(),
+        a: 2,
+        b: 9,
+    };
+    let S { name: nm, a: x, b: y } = s4;
+    println(nm);
+    println((x * 10 + y).to_string());
+}

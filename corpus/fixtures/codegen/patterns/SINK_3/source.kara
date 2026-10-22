@@ -1,0 +1,6 @@
+#[derive(Clone)]
+struct W { a: i64, b: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a}") } }
+fn fw(o: Option[(W, W)]) -> W { match o { Some(t) => { return t.0.clone(); } None => { return W { a: 0, b: 0 }; } } }
+fn sink(r: W) { println(f"sank{r.a}") }
+fn main() { sink(fw(Some((W { a: 5, b: 50 }, W { a: 6, b: 60 })))); }

@@ -1,0 +1,1 @@
+fn main() { let p = (Option[Rq].Some(Rq { id: 71, name: f"a" }), 7); println("ok"); println("done") }

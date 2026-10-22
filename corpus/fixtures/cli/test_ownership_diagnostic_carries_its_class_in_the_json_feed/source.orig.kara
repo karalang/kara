@@ -1,0 +1,10 @@
+fn take(v: own Vec[i64]) -> i64 {
+    return v.len();
+}
+
+fn main() {
+    let v = [1, 2, 3];
+    let a = take(v);
+    let b = take(v);
+    println(f"{a} {b}");
+}

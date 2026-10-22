@@ -1,0 +1,34 @@
+#[derive(Clone)]
+struct A { mut lines: Vec[String] }
+struct B { mut a: A }
+fn main() {
+let mut a1 = A { lines: Vec.new() };
+a1.lines.push(f"x");
+let mut r1 = a1.clone();
+r1.lines.push(f"y");
+println(f"{r1.lines.len()} {a1.lines.len()}");
+let mut a2 = A { lines: Vec.new() };
+a2.lines.push(f"x");
+let mut r2 = a2.lines.clone();
+r2.push(f"y");
+println(f"{r2.len()} {a2.lines.len()}");
+let mut inner = A { lines: Vec.new() };
+inner.lines.push(f"x");
+let mut b3 = B { a: inner };
+let mut r3 = b3.a.clone();
+r3.lines.push(f"y");
+let chk3 = b3.a;
+println(f"{r3.lines.len()} {chk3.lines.len()}");
+let mut v4: Vec[A] = Vec.new();
+v4.push(A { lines: Vec.new() });
+v4[0].lines.push(f"x");
+let mut r4 = v4[0].clone();
+r4.lines.push(f"y");
+println(f"{r4.lines.len()} {v4[0].lines.len()}");
+let mut m6: Map[i64, Vec[i64]] = Map.new();
+let _ = m6.insert(1, Vec.new());
+m6[1].push(1);
+let mut r6 = m6.clone();
+r6[1].push(2);
+println(f"{r6[1].len()} {m6[1].len()}");
+}

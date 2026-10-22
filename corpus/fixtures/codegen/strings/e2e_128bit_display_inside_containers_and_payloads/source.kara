@@ -1,0 +1,21 @@
+fn main() {
+let a: Option[i128] = Some(1267650600228229401496703205376i128);
+println(a);
+let b: Option[i128] = None;
+println(b);
+let c: Result[i128, String] = Ok(-1267650600228229401496703205376i128);
+println(c);
+let d: Option[u128] = Some(340282366920938463463374607431768211455u128);
+println(d);
+let e: Option[u64] = Some(18446744073709551615u64);
+println(e);
+let mut v: Vec[i128] = vec![];
+v.push(1267650600228229401496703205376i128);
+v.push(0i128 - 1i128);
+println(v);
+let mut w: Vec[u128] = vec![];
+w.push(340282366920938463463374607431768211455u128);
+w.push(5u128);
+w.sort();
+println(w);
+}

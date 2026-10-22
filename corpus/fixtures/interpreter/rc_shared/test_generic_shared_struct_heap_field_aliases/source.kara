@@ -1,0 +1,8 @@
+shared struct Box[T] { mut v: T }
+        fn main() {
+            let a = Box { v: "hi" };
+            let b = a;
+            b.v = "bye";
+            println(a.v);
+            println(b.v);
+        }

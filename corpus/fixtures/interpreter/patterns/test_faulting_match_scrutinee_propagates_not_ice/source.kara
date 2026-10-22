@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[i64] = Vec.new();
+match v[5] { 0 => println(1i64), 1 => println(2i64) }
+}

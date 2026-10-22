@@ -1,0 +1,5 @@
+fn fresh(i: i64) -> Option[String] { Some(f"payload-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa") }
+fn f() -> i64 { let mut vv: Option[String] = Some(payload()); let mut acc = 0; let mut i = 0;
+   while i < 6 { acc = acc + (match vv { Some(s) => slen(s), None => 0 }); vv = fresh(i); i = i + 1; }
+   acc + (match vv { Some(s) => slen(s), None => 0 }) }
+fn main() { println(f()); }

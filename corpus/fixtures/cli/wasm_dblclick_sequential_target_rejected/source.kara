@@ -1,0 +1,6 @@
+import std.web.events.{dblclick, ClickEvent};
+
+fn main() {
+    let ds = dblclick();
+    ds.recv();
+}

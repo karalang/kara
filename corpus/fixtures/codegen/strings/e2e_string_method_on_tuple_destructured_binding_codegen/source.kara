@@ -1,0 +1,15 @@
+fn mk() -> (Vec[i64], String) {
+let mut v: Vec[i64] = Vec.new();
+v.push(10);
+v.push(20);
+(v, "hi")
+}
+fn main() {
+let (nums, s) = mk();
+println(nums.len());
+println(nums[0] + nums[1]);
+println(s.repeat(2));
+println(s.substring(0, 1));
+let (a, _) = ("x", "y");
+println(a.repeat(3));
+}

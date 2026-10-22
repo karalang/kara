@@ -1,0 +1,7 @@
+fn show(x: Option[K]) {
+   match x {
+     Option.Some(K.A(r)) => { println(f"a:{r.s}") }
+     Option.Some(K.B) => {}
+     Option.None => {}
+   } }
+fn main() { show(Option.Some(K.A(R2 { s: f"z" }))); println("end") }

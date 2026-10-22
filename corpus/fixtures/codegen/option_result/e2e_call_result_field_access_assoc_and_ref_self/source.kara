@@ -1,0 +1,22 @@
+struct Cnt { n: i64 }
+struct P { a: i64, b: i64 }
+fn make() -> Cnt { Cnt { n: 7 } }
+fn make_p() -> P { P { a: 3, b: 9 } }
+struct Gen { seed: i64 }
+impl Gen {
+    fn goref(ref self) -> Cnt { Cnt { n: self.seed + 2 } }
+}
+impl Cnt {
+    fn zero() -> Cnt { Cnt { n: 0 } }
+    fn forty() -> Cnt { Cnt { n: 40 } }
+}
+fn main() {
+    print(make().n);
+    println(f"{make().n + 100}");
+    println(f"{make_p().a}");
+    println(f"{make_p().b}");
+    println(f"{Cnt.zero().n}");
+    println(f"{Cnt.forty().n}");
+    let g = Gen { seed: 5 };
+    println(f"{g.goref().n}");
+}

@@ -1,0 +1,12 @@
+fn main() {
+let m: SortedMap[i64, String] = SortedMap.new();
+m.insert(3_i64, "c");
+m.insert(1_i64, "a");
+m.insert(2_i64, "b");
+for k in m.keys() { print(f"{k}"); }
+println("");
+for v in m.values() { print(v); }
+println("");
+for pair in m { print(f"{pair.0}={pair.1};"); }
+println("");
+}

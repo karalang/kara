@@ -1,0 +1,6 @@
+pub fn risky(v: ref Vec[i64]) -> i64 with panics { return v[0]; }
+pub fn safe(a: i64, b: i64) -> i64 { return a + b; }
+fn main() {
+let v: Vec[i64] = Vec.filled(2i64, 5i64);
+println(risky(v) + safe(1i64, 2i64));
+}

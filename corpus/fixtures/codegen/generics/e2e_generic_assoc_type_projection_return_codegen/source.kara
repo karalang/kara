@@ -1,0 +1,16 @@
+trait Container { type Item; fn first(ref self) -> Self.Item; }
+struct IntBox { v: i64 }
+impl Container for IntBox { type Item = i64; fn first(ref self) -> i64 { self.v } }
+struct VecMaker { }
+impl Container for VecMaker { type Item = Vec[i64]; fn first(ref self) -> Vec[i64] { [10i64, 20i64, 30i64] } }
+struct Greeter { }
+impl Container for Greeter { type Item = String; fn first(ref self) -> String { "hello".to_string() } }
+fn get_first[C: Container](c: C) -> C.Item { c.first() }
+fn main() {
+let a = get_first(IntBox { v: 7i64 });
+println(f"{a}");
+let v = get_first(VecMaker {});
+println(f"{v.len()}");
+let s = get_first(Greeter {});
+println(s);
+}

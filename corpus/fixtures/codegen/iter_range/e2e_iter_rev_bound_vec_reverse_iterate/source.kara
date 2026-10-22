@@ -1,0 +1,16 @@
+fn main() {
+let v: Vec[i64] = [1, 2, 3, 4];
+for x in v.iter().rev() { println(x); }
+let a: Vec[i64] = v.iter().rev().collect();
+println(a.get(0));
+println(v.iter().rev().fold(0, |acc, x| acc * 10 + x));
+let s: i64 = v.iter().rev().sum();
+println(s);
+println(v.iter().rev().count());
+let b: Vec[i64] = v.iter().map(|x| x * 10).rev().collect();
+println(b.get(0));
+let c: Vec[i64] = v.iter().rev().filter(|x| x % 2 == 0).collect();
+println(c.get(0));
+let sv: Vec[String] = ["a", "b", "c"];
+for w in sv.iter().rev() { println(w); }
+}

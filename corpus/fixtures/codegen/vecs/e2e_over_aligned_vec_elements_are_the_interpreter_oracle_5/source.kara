@@ -1,0 +1,7 @@
+fn main() {
+let a: Vector[i32, 8] = Vector[i32, 8](1, 2, 3, 4, 5, 6, 7, 8);
+let mut v: Vec[Vector[i32, 8]] = [];
+for i in 0..5 { v.push(a); }
+let g = ref v[4];
+println(g.reduce_sum());
+}

@@ -1,0 +1,7 @@
+fn main() {
+let m: SortedMap[String, i64] = SortedMap.new();
+m.insert("banana", 2_i64);
+m.insert("apple", 1_i64);
+m.insert("cherry", 3_i64);
+for k in m.keys() { println(k); }
+}

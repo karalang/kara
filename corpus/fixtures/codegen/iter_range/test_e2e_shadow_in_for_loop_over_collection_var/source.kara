@@ -1,0 +1,9 @@
+fn main() {
+let s = "outer";
+let mut sum = 0i64;
+for s in [1i64, 2i64, 3i64] {
+println(s);
+sum = sum + s;
+}
+println(sum);
+}

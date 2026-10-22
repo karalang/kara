@@ -1,0 +1,15 @@
+source = "tests/cli.rs::test_run_derive_generated_body_typechecked_under_codegen"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:comptime", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "fe1f4766"

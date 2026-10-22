@@ -1,0 +1,21 @@
+shared enum Expr {
+    Int(IntLit),
+    Add(AddExpr),
+}
+
+struct IntLit { value: i64 }
+struct AddExpr { lhs: Expr, rhs: Expr }
+
+fn eval(e: Expr) -> i64 {
+    match e {
+        Int(l) => l.value,
+        Add(a) => eval(a.lhs) + eval(a.rhs),
+    }
+}
+
+fn main() {
+    let one = Expr.Int(IntLit { value: 1 });
+    let two = Expr.Int(IntLit { value: 2 });
+    let sum = Expr.Add(AddExpr { lhs: one, rhs: two });
+    println(eval(sum).to_string());
+}

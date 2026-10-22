@@ -1,0 +1,17 @@
+trait Tag { fn tag(self) -> i64; }
+impl Tag for i8  { fn tag(self) -> i64 { -8 } }
+impl Tag for i16 { fn tag(self) -> i64 { -16 } }
+impl Tag for i32 { fn tag(self) -> i64 { -32 } }
+impl Tag for u8  { fn tag(self) -> i64 { 8 } }
+impl Tag for u16 { fn tag(self) -> i64 { 16 } }
+impl Tag for u32 { fn tag(self) -> i64 { 32 } }
+impl Tag for f32 { fn tag(self) -> i64 { 320 } }
+impl Tag for f64 { fn tag(self) -> i64 { 640 } }
+fn main() {
+    let a: i8 = 1; let b: i16 = 1; let c: i32 = 1;
+    let d: u8 = 1; let e: u16 = 1; let f: u32 = 1;
+    let g: f32 = 1.0; let h: f64 = 1.0;
+    println(a.tag()); println(b.tag()); println(c.tag());
+    println(d.tag()); println(e.tag()); println(f.tag());
+    println(g.tag()); println(h.tag());
+}

@@ -1,0 +1,11 @@
+enum Color { Red, Green }
+             struct Tag { n: i64 }
+             impl Color {
+                 fn to_tag(self) -> Tag {
+                     match self { Red => return Tag { n: 1 }, Green => return Tag { n: 2 }, }
+                 }
+             }
+             fn main() {
+                 println(Color.Red.to_tag().n);
+                 println(Color.Green.to_tag().n);
+             }

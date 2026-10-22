@@ -1,0 +1,10 @@
+struct D { id: i64, s: String }
+             impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
+             fn main() {
+                 let mut a: Vec[D] = [D { id: 61, s: f"hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh-61" }];
+                 let p: D = D { id: 62, s: f"iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii-62" };
+                 let q: D = D { id: 63, s: f"jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj-63" };
+                 a[0] = p;
+                 a[0] = q;
+                 println(f"six:{a[0].s.len()}");
+             }

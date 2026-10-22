@@ -1,0 +1,8 @@
+fn main() {
+let mut xs: Vec[i64] = Vec[1, 2];
+xs.push(3);
+xs.push(4);
+println(xs.len());
+println(xs[2]);
+println(xs[3]);
+}

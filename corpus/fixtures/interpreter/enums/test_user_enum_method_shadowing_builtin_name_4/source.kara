@@ -1,0 +1,6 @@
+fn main() {
+let o: Option[i64] = Some(42);
+println(o.unwrap());
+let r: Result[i64, String] = Err("bad".to_string());
+println(r.unwrap_err());
+}

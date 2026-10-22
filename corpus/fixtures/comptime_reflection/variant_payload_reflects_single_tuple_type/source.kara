@@ -1,0 +1,10 @@
+
+enum E { None, Num(i64), Text(String), Pair(i64, i64) }
+fn main() {
+    let r = comptime {
+        let mut s = "";
+        for v in E.variants() { s = s + v.name + "=" + v.payload + ";"; }
+        s
+    };
+    println(r);
+}

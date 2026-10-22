@@ -1,0 +1,10 @@
+pub trait Recorder { fn record(value: i64); }
+pub struct Counter { n: i64 }
+impl Recorder for Counter { fn record(value: i64) { } }
+pub effect resource Net: Recorder;
+pub effect resource Mem: Recorder;
+pub effect resource Disk: Recorder;
+fn main() {
+let p = Counter { n: 0 };
+with_provider[Disk](p, || { 0 });
+}

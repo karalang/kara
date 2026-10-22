@@ -1,0 +1,7 @@
+fn plainV(x: Option[Vec[String]]) {
+    match x { Some(t) => { println(f"s:{t[0]}") } None => { println("n") } }
+}
+fn main() {
+    let v: Vec[String] = [f"aaaaaaaa0", f"bbbbbbbb1"];
+    plainV(Some(v));
+}

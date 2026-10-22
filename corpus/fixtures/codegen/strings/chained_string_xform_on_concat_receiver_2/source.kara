@@ -1,0 +1,4 @@
+fn main() {
+    let b: String = "y".to_string();
+    println(("p:".to_string() + b).to_uppercase());
+}

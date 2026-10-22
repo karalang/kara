@@ -1,0 +1,16 @@
+shared struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+struct Sw { s: S }
+struct Mx { r: R, s: S }
+fn build(k: i64) -> Sw {
+    let s: S = S { id: k };
+    return Sw { s: s }
+}
+fn main() {
+    { let a: Sw = build(14); println(f"v{a.s.id}"); println("one"); }
+    { let m: Mx = Mx { r: R { id: 1 }, s: S { id: 2 } }; println(f"v{m.s.id}"); println("two"); }
+    { let s: S = S { id: 3 }; let w1: Sw = Sw { s: s }; let w2: Sw = Sw { s: s }; println(f"v{w1.s.id}{w2.s.id}"); println("three"); }
+    println("end");
+}

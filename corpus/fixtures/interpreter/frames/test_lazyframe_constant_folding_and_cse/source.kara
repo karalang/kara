@@ -1,0 +1,27 @@
+import std.lazy.{col, lit};
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("a", Column.from_vec([1i64, 5i64, 9i64]));
+df.insert("b", Column.from_vec([10i64, 20i64, 30i64]));
+let enabled = true;
+let plan = df.lazy().filter(col("a").gt(2).and_(lit(enabled))).select(vec!["a"]);
+println(plan.explain());
+println(plan.collect().height());
+let t = df.lazy().filter(lit(true)).select(vec!["b"]);
+println(t.explain());
+println(t.collect().height());
+let f = df.lazy().filter(lit(false));
+println(f.explain());
+println(f.collect().height());
+println(f.collect().width());
+let dup = df.lazy().filter(col("a").gt(2)).filter(col("a").gt(2));
+println(dup.explain());
+println(dup.collect().height());
+let dom = df.lazy().filter(col("a").gt(2).or_(lit(true)));
+println(dom.explain());
+println(dom.collect().height());
+let cmpf = df.lazy().filter(lit(3).gt(4).not_());
+println(cmpf.explain());
+let inner = df.lazy().filter(col("a").gt(2).and_(col("a").gt(2)));
+println(inner.explain());
+}

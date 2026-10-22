@@ -1,0 +1,6 @@
+fn main() {
+let mut v: Tensor[f64, [4]] = Tensor.ones([4]);
+v[2] = 9.0;
+println(v[2]);
+println(v[0]);
+}

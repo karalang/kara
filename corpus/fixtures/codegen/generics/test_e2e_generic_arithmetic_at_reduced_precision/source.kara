@@ -1,0 +1,35 @@
+fn g_add[T: Add](a: T, b: T) -> T { a + b }
+fn g_sub[T: Sub](a: T, b: T) -> T { a - b }
+fn g_mul[T: Mul](a: T, b: T) -> T { a * b }
+fn g_div[T: Div](a: T, b: T) -> T { a / b }
+fn g_rem[T: Rem](a: T, b: T) -> T { a % b }
+fn g_neg[T: Neg](a: T) -> T { -a }
+fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }
+fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {
+let mut acc = zero;
+for x in xs { acc = acc + x; }
+acc
+}
+fn main() {
+let n: i64 = env.args().len() as i64;
+let one: f32 = n as f32;
+let p: f16 = (one * 0.1f32) as f16;
+let q: f16 = (one * 0.3f32) as f16;
+let bp: bf16 = (one * 0.1f32) as bf16;
+let bq: bf16 = (one * 0.3f32) as bf16;
+let sp: f32 = one * 0.1f32;
+let sq: f32 = one * 0.3f32;
+println(f"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_rem(p,q)} {g_neg(p)}");
+println(f"b {g_add(bp,bq)} {g_sub(bp,bq)} {g_mul(bp,bq)} {g_div(bp,bq)} {g_rem(bp,bq)} {g_neg(bp)}");
+println(f"s {g_add(sp,sq)} {g_sub(sp,sq)} {g_mul(sp,sq)} {g_div(sp,sq)} {g_rem(sp,sq)} {g_neg(sp)}");
+let big: f16 = (one * 65504.0f32) as f16;
+let three: f16 = (one * 3.0f32) as f16;
+let tiny: f16 = (one * 0.00001f32) as f16;
+println(f"o {g_mul(big,three)} {g_mul(tiny,tiny)}");
+println(f"y {g_poly(p,q)} {g_poly(bp,bq)} {g_poly(sp,sq)}");
+let mut hx: Vec[f16] = vec![];
+let mut bx: Vec[bf16] = vec![];
+let mut i: i64 = 0;
+while i < 10 { hx.push(p); bx.push(bp); i = i + 1; }
+println(f"a {g_sum(hx, (one * 0.0f32) as f16)} {g_sum(bx, (one * 0.0f32) as bf16)}");
+}

@@ -1,0 +1,19 @@
+fn list_primes_under(n: i64) -> Vec[i64] {
+let mut primes: Vec[i64] = Vec.new();
+let mut k: i64 = 2i64;
+while k < n {
+let mut is_prime: bool = true;
+let mut d: i64 = 2i64;
+while (d * d) <= k {
+if (k % d) == 0i64 { is_prime = false; }
+d = d + 1i64;
+}
+if is_prime { primes.push(k); }
+k = k + 1i64;
+}
+return primes;
+}
+fn main() {
+println(list_primes_under(10i64).len());
+println(list_primes_under(100i64).len());
+}

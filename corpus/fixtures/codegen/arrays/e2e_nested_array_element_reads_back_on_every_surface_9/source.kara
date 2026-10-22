@@ -1,0 +1,7 @@
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d:{self.s}") } }
+fn main() {
+    let a: Array[R, 2] = [R { s: f"a0" }, R { s: f"a1" }];
+    println("s:ok");
+    println("end");
+}

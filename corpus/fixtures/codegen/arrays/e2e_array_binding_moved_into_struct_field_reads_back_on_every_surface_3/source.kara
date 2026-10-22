@@ -1,0 +1,9 @@
+struct W { a: Array[String, 2] }
+fn mk() -> W {
+    let a: Array[String, 2] = [f"aaaaaaaa0", f"bbbbbbbb0"];
+    return W { a: a };
+}
+fn main() {
+    let w: W = mk();
+    println(f"s:{w.a[0]}");
+}

@@ -1,0 +1,10 @@
+at 3:9
+count 7
+label tick
+nothing
+at 3:9
+42
+42
+-1
+v at 1
+v count 5

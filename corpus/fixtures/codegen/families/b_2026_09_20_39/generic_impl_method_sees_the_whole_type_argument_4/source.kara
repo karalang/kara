@@ -1,0 +1,1 @@
+fn main() { let c: G[Array[i64, 2]] = G.Y([1, 2]); println(f"m:{c.rshow()}"); println(f"m:{c.show()}"); }

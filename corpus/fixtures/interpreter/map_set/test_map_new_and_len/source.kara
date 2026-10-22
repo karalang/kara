@@ -1,0 +1,4 @@
+fn main() {
+let m: Map[String, i64] = Map.new();
+println(m.len());
+}

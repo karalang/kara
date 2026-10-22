@@ -1,0 +1,1 @@
+fn main() { let mut a: Vec[Q] = [Q { id: 0, s: f"zero" }]; let q = Q { id: 4, s: f"four" }; a[0] = q; println(f"q:{q.s}"); println(f"a:{a[0].s}"); println("end") }

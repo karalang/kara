@@ -1,0 +1,4 @@
+o Some(7)
+r Ok(7)
+r Err(9)
+o None

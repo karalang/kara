@@ -1,0 +1,4 @@
+fn main() {
+let arr = [10, 20, 30];
+println(arr[1]);
+}

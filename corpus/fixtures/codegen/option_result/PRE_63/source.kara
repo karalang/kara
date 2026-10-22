@@ -1,0 +1,4 @@
+struct H3 { r: R }
+fn wrap_free(r: R) -> H3 { return H3 { r: r }; }
+fn f(r: R) { let h = wrap_free(r); println(f"v={h.r.id}"); }
+fn main() { f(mkr(9)); println("end") }

@@ -1,0 +1,8 @@
+struct Holder { name: String }
+fn pick(h: Holder, f: bool) -> String {
+    if f { h.name.clone() } else { "(" + "x" + ")" }
+}
+fn main() {
+    let hh = Holder { name: "abc" };
+    println(pick(hh, false));
+}

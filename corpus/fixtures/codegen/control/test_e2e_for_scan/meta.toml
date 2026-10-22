@@ -1,0 +1,17 @@
+source = "tests/codegen/control.rs::test_e2e_for_scan"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "src:legacy-tests"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "42962a3c"
+model_rev = "583cfb0d"
+model_src = "42962a3c"

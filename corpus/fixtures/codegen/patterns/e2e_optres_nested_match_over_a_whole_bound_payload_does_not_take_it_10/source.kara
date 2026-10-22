@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+enum E { A { r: R }, B }
+fn main() {
+let a: Option[E] = Some(E.A { r: R { id: 8 } });
+match a { Some(p) => { match p { E.A { r } => { println(r.id); } E.B => {} } } None => {} }
+println("end");
+}

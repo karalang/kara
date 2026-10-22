@@ -1,0 +1,7 @@
+fn main() {
+let mut v: Vec[i64] = [1i64, 2i64, 3i64];
+let mut t: (mut Slice[i64], i64) = (v.as_slice_mut(), 5i64);
+let r: i64 = t.0[1];
+t.0[0] = 9i64;
+println(f"{r} {v[0]} {v[1]}");
+}

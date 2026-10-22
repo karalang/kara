@@ -1,0 +1,1 @@
+fn main() { let c = false; let mut v: Vec[i64]; if c { v = [1, 2]; } else { v = Vec.new(); } v.push(7); println(v.len() + v[0]); }

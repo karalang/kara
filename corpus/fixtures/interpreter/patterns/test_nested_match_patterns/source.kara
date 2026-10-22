@@ -1,0 +1,13 @@
+enum Outer { A(i64), B }
+fn check(o: Outer) -> i64 {
+match o {
+A(0) => 100,
+A(n) => n,
+B => -1,
+}
+}
+fn main() {
+println(check(A(0)));
+println(check(A(42)));
+println(check(B));
+}

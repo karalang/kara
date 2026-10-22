@@ -1,0 +1,21 @@
+struct Res { id: i64 }
+impl Drop for Res {
+fn drop(mut ref self) {
+println(f"drop {self.id}")
+}
+}
+enum Box2 { Full(Res), Empty }
+fn main() {
+let b = Box2.Full(Res { id: 4 });
+match b {
+Box2.Full(r) => { println(f"arm sees {r.id}"); }
+Box2.Empty => {}
+}
+println("between");
+let c = Box2.Full(Res { id: 9 });
+match c {
+Box2.Full(r) => println(r.id),
+Box2.Empty => {}
+}
+println("end");
+}

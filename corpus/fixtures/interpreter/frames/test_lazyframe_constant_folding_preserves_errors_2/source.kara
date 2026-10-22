@@ -1,0 +1,5 @@
+import std.lazy.{lit};
+fn main() {
+let v: Vec[i64] = vec![1i64];
+let _ = lit(v);
+}

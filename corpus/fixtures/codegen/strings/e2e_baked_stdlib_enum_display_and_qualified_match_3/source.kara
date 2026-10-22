@@ -1,0 +1,3 @@
+fn main() -> Result[(), IoError] {
+    Err(IoError.Other("disk full"))
+}

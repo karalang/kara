@@ -1,0 +1,2 @@
+impl B2 { fn id(ref self, r: R) -> R { r } }
+fn main() { let b = B2 { n: 1 }; let x = b.id(R { id: 41 }); println(f"{x.id}"); }

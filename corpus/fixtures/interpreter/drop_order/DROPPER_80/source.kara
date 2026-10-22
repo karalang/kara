@@ -1,0 +1,2 @@
+fn eat2(r: R) -> i64 { 7 }
+fn main() { let v = eat2(R { id: 41 }); println(f"{v}") }

@@ -1,0 +1,10 @@
+struct W { a: Array[Vec[String], 2] }
+fn main() {
+    let mut v0: Vec[String] = Vec.new();
+    v0.push(f"aaaaaaaa0");
+    let mut v1: Vec[String] = Vec.new();
+    v1.push(f"bbbbbbbb0");
+    let a: Array[Vec[String], 2] = [v0, v1];
+    let w: W = W { a: a };
+    println("s:ok");
+}

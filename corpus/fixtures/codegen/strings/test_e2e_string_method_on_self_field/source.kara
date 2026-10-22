@@ -1,0 +1,14 @@
+struct Lexer { src: String, start: i64, current: i64 }
+impl Lexer {
+fn token_text(ref self) -> String {
+self.src.substring(self.start, self.current)
+}
+fn has_cd(ref self) -> bool { self.src.contains("cd") }
+fn srclen(ref self) -> i64 { self.src.len() }
+}
+fn main() {
+let lx = Lexer { src: "abcdef", start: 1, current: 4 };
+println(lx.token_text());
+println(lx.has_cd().to_string());
+println(lx.srclen().to_string());
+}

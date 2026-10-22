@@ -1,0 +1,3 @@
+fn take(w: W) -> i64 { w.n }
+fn main() { let g = take(W { inner: I { r: R { id: 46 } }, n: 6 });
+            println(f"{g}") }

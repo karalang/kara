@@ -1,0 +1,20 @@
+fn showall[A](xs: Vec[i64], tag: A) -> A {
+println(xs.len());
+println(xs[1]);
+for x in xs {
+println(x);
+}
+return tag;
+}
+fn showref[A](xs: ref Vec[i64], tag: A) -> A {
+println(xs.len());
+for x in xs {
+println(x);
+}
+return tag;
+}
+fn main() {
+println(showall(vec![5, 6], 9));
+let v = vec![7, 8];
+println(showref(v, 3));
+}

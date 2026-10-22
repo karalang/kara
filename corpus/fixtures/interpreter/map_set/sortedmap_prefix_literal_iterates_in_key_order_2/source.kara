@@ -1,0 +1,1 @@
+fn main() { let m: SortedMap[String, i64] = SortedMap["c": 3, "a": 1]; for (k, v) in m { print(k); print(v); } }

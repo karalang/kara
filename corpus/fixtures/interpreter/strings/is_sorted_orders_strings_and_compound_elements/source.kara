@@ -1,0 +1,9 @@
+struct P { a: i64, b: i64 }
+fn main() {
+let s: Vec[String] = ["apple", "banana"];
+let s2: Vec[String] = ["banana", "apple"];
+let t: Vec[(i64, i64)] = [(1, 2), (1, 3), (2, 0)];
+let n: Vec[Vec[i64]] = [[1, 2], [1, 3]];
+let p: Vec[P] = [P { a: 1, b: 2 }, P { a: 1, b: 1 }];
+println(f"{s.is_sorted()} {s2.is_sorted()} {t.is_sorted()} {n.is_sorted()} {p.is_sorted()}");
+}

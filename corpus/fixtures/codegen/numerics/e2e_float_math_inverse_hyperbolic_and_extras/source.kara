@@ -1,0 +1,12 @@
+fn main() {
+println(f"{(0.0f64).asin()}");
+println(f"{(1.0f64).acos()}");
+println(f"{(0.0f64).atan()}");
+println(f"{(0.0f64).sinh()}");
+println(f"{(0.0f64).cosh()}");
+println(f"{(0.0f64).tanh()}");
+println(f"{(3.0f64).exp2()}");
+println(f"{(1000.0f64).log10()}");
+println(f"{(2.7f64).trunc()}");
+println(f"{(-2.7f64).trunc()}");
+}

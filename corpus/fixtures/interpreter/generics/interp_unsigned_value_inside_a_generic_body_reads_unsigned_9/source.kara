@@ -1,0 +1,2 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn main() { let c: u8 = 200; println(show(c)); }

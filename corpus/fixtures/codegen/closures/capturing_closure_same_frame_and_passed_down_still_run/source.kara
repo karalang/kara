@@ -1,0 +1,1 @@
+fn main() { let base = 10i64; let f = |x| x + base; println(f"{f(5i64)}"); }

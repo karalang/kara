@@ -1,0 +1,51 @@
+enum Tok { Plus, Ident(String) }
+struct Pt { s: String, x: i64 }
+struct Holder { tok: Tok, inner: Pt, n: i64 }
+fn iflet_enum(h: ref Holder) -> String {
+if let Ident(name) = h.tok {
+return "ie:".to_string() + name;
+}
+return "+".to_string();
+}
+fn iflet_struct(h: ref Holder) -> String {
+if let Pt { s, x } = h.inner {
+return "is:".to_string() + s + ":" + x.to_string();
+}
+return "?".to_string();
+}
+fn whilelet_enum(h: ref Holder) -> String {
+while let Ident(name) = h.tok {
+return "we:".to_string() + name;
+}
+return "+".to_string();
+}
+fn letelse_enum(h: ref Holder) -> String {
+let Ident(name) = h.tok else {
+return "+".to_string();
+}
+return "le:".to_string() + name;
+}
+fn letelse_struct(h: ref Holder) -> String {
+let Pt { s, x } = h.inner else {
+return "?".to_string();
+}
+return "ls:".to_string() + s + ":" + x.to_string();
+}
+fn main() {
+let a = Holder {
+tok: Tok.Ident("tk".to_string()),
+inner: Pt { s: "pt".to_string(), x: 5 },
+n: 1,
+};
+println(iflet_enum(a));
+println(iflet_enum(a));
+println(iflet_struct(a));
+println(whilelet_enum(a));
+println(whilelet_enum(a));
+println(letelse_enum(a));
+println(letelse_struct(a));
+let p = Holder { tok: Tok.Plus, inner: Pt { s: "z".to_string(), x: 0 }, n: 2 };
+println(iflet_enum(p));
+println(whilelet_enum(p));
+println(letelse_enum(p));
+}

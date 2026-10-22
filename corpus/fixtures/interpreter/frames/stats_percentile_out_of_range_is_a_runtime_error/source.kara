@@ -1,0 +1,1 @@
+fn main() { let v: Vec[f64] = [1.0]; println(Stats.percentile(v, 150.0)); }

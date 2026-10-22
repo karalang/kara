@@ -1,0 +1,5 @@
+struct R2 { s: String, t: String, u: String }
+shared enum Ks { A(R2), B }
+fn mkr(i: i64) -> R2 { return R2 { s: f"ss{i}", t: f"tt{i}", u: f"uu{i}" }; }
+fn show(x: Result[Ks, i64]) { match x { Result.Ok(Ks.A(r)) => { println(f"a:{r.s}"); }, Result.Ok(Ks.B) => {}, Result.Err(e) => {} } }
+fn main() { let mut i = 0; while i < 3 { show(Result.Ok(Ks.A(mkr(i)))); i = i + 1; } }

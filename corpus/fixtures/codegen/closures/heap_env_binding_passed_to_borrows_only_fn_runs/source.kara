@@ -1,0 +1,4 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }
+fn apply_twice(g: Fn(i64) -> i64, x: i64) -> i64 { g(g(x)) }
+fn main() { let f = make(10i64); let a = apply(f, 5i64); let b = apply_twice(f, 1i64); let c = f(100i64); println(f"{a + b + c}"); }

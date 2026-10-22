@@ -1,0 +1,21 @@
+== logical plan ==
+SORT [pop_sum desc]
+  GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]
+    FILTER (pop > 15)
+      SCAN [city, name, pop]
+== optimized ==
+SORT [pop_sum desc]
+  GROUP BY [city] AGG [count(name) as cnt, sum(pop), mean(pop)]
+    FILTER (pop > 15)
+      SCAN cols=[city, name, pop]
+4
+2
+city
+cnt
+pop_sum
+pop_mean
+oslo
+80
+40
+rome
+60

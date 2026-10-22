@@ -1,0 +1,7 @@
+fn work(n: i64) -> i64 {
+     let mut acc = 0i64;
+     let mut i = 0i64;
+     while i < n { acc = acc + i * 3i64; i = i + 1i64; }
+     return acc;
+}
+fn main() { println(work(1000i64)); }

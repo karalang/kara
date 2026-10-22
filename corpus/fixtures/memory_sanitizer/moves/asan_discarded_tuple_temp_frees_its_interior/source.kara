@@ -1,0 +1,7 @@
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn seed() -> i64 { env.args().len() }
+fn mk(i: i64) -> R { return R { id: i, name: f"hhhhhhhh{i}{seed()}", inner: Inner { v: i } }; }
+fn f(r: R) -> (R, i64) { return (r, 9); }
+fn main() { f(mk(20)); println("ok"); }

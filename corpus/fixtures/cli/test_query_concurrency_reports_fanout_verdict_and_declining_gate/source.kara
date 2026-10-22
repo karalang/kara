@@ -1,0 +1,10 @@
+fn work(v: i64) -> i64 {
+                 let mut a: i64 = v; let mut j: i64 = 0i64;
+                 while j < 40i64 { a = (a * 31i64 + j) % 1000003i64; j = j + 1i64; }
+                 a
+             }
+             fn main() {
+                 let mut sum: i64 = 0i64; let mut k: i64 = 0i64;
+                 while k < 100000i64 { sum = sum + work(k); k = k + 1i64; }
+                 println(sum);
+             }

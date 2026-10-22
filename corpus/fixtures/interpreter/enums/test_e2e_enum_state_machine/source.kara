@@ -1,0 +1,25 @@
+enum State { Idle, Running(i64), Done }
+fn step(s: State) -> State {
+match s {
+Idle => Running(0),
+Running(n) => {
+if n >= 3 { Done } else { Running(n + 1) }
+},
+Done => Done,
+}
+}
+fn is_done(s: State) -> bool {
+match s {
+Done => true,
+_ => false,
+}
+}
+fn main() {
+let s1 = step(Idle);
+println(is_done(s1));
+let s2 = step(s1);
+let s3 = step(s2);
+let s4 = step(s3);
+let s5 = step(s4);
+println(is_done(s5));
+}

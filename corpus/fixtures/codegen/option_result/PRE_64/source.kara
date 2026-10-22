@@ -1,0 +1,3 @@
+fn mkUses(i: i64) -> R { return R { id: i, name: f"u{i}" }; }
+fn f() { let x = mkUses(4); println(f"v={x.id}"); }
+fn main() { f(); println("end") }

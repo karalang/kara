@@ -1,0 +1,5 @@
+fn main() {
+let mut a = Atomic.new(false);
+let flag = true;
+a.store(flag, MemoryOrdering.Release);
+}

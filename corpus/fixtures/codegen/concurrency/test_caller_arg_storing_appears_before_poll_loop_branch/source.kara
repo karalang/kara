@@ -1,0 +1,4 @@
+effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }
+             fn main() { driver(7); }

@@ -1,0 +1,15 @@
+source = "tests/interpreter/structs.rs::gpu_reduce_over_an_ordinary_struct_field_still_runs_on_the_host"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["deferred:gpu", "src:legacy-tests"]
+class = "d"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "79705a229"
+extracted_src = "ca9260b9"

@@ -1,0 +1,6 @@
+fn main() {
+let z: Tensor[f64, [2]] = Tensor.zeros([2]);
+println(z[0]);
+let o: Tensor[f32, [2]] = Tensor.ones([2]);
+println(o[0] / 2.0);
+}

@@ -1,0 +1,16 @@
+fn main() {
+let z: f64 = 0.0;
+let nan: f64 = z / z;
+let mut c: Column[f64] = Column.new();
+c.push(1.5); c.push_null(); c.push(nan); c.push(4.0);
+let a = c.fillna(0.0);
+println(a.null_count());
+match a[1] { Some(v) => println(v), None => println(-1.0) }
+match a[2] { Some(v) => println(v), None => println(-1.0) }
+let b = c.fillna(0.0, treat_nan_as_null: true);
+match b[1] { Some(v) => println(v), None => println(-1.0) }
+match b[2] { Some(v) => println(v), None => println(-1.0) }
+let d = c.fillna(7.0, true);
+match d[2] { Some(v) => println(v), None => println(-1.0) }
+println(c.null_count());
+}

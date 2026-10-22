@@ -1,0 +1,12 @@
+fn keep(x: Option[Vec[String]], acc: mut ref Vec[Option[Vec[String]]]) {
+    acc.push(x);
+    println("k");
+}
+fn main() {
+    let mut acc: Vec[Option[Vec[String]]] = [];
+    for i in 0..3 {
+        let vs: Vec[String] = [f"cccccccccccccccccccc-{i}", f"dddddddddddddddddddd-{i}"];
+        keep(Option[Vec[String]].Some(vs), mut acc);
+    }
+    println(f"len:{acc.len()}");
+}

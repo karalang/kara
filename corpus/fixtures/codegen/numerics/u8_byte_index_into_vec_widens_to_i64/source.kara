@@ -1,0 +1,11 @@
+fn main() {
+    let b = "AB".bytes();
+    let c0 = b[0i64];
+    let c1 = b[1i64];
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 128i64 { v.push(0i64); i = i + 1i64; }
+    v[c0] = 10i64;
+    v[c1] = v[c0] + 5i64;
+    println(f"{v[c1]}");
+}

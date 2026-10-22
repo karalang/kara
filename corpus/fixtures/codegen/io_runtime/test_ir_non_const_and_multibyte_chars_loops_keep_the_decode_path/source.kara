@@ -1,0 +1,6 @@
+fn walk(s: String) -> i64 {
+    let mut n = 0i64;
+    for ch in s.chars() { n = n + 1i64; }
+    return n;
+}
+fn main() { println(walk("ab".to_string())); }

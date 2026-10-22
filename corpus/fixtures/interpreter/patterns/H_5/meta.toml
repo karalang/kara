@@ -1,0 +1,17 @@
+source = "tests/interpreter/patterns.rs::H"
+dedup_of = []
+expect = "error:E0100"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "c0b29224"
+model_rev = "583cfb0d"
+model_src = "c0b29224"

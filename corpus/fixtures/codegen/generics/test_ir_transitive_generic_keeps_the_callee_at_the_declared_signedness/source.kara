@@ -1,0 +1,6 @@
+fn show[T](x: T) -> String { f"{x}" }
+fn wrap[T](x: T) -> String { show(x) }
+fn main() {
+let v: u32 = 4294967295u32;
+println(wrap(v));
+}

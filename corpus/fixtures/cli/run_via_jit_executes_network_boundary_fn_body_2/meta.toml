@@ -1,0 +1,17 @@
+source = "tests/cli.rs::run_via_jit_executes_network_boundary_fn_body"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "drop", "par", "post-m1:net", "post-m1:par", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E_DEFERRED_M4A"
+classified_with = "79705a229"
+extracted_src = "5554c57e"
+model_rev = "583cfb0d"
+model_src = "5554c57e"

@@ -1,0 +1,18 @@
+struct Res { id: i64 }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+struct Bag { xs: Vec[Res] }
+impl Bag {
+    fn add(mut ref self, r: Res) { if r.id > 100 { self.xs.push(r); } }
+}
+fn nested(sink: mut ref Vec[Res], r: Res) { if r.id > 0 { if r.id > 100 { sink.push(r); } } }
+fn main() {
+    let mut b: Bag = Bag { xs: Vec.new() };
+    b.add(Res { id: 5 });
+    println("m-miss");
+    let mut s: Vec[Res] = Vec.new();
+    nested(mut s, Res { id: 6 });
+    println("n-miss");
+    println(f"b={b.xs.len()} s={s.len()}");
+}

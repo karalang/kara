@@ -1,0 +1,1 @@
+fn main() { let r: Result[Rt, i64] = Result[Rt, i64].Ok(Rt { id: 71, name: f"a" }); let p: (Result[Rt, i64], i64) = (r, 7); println("ok"); println("done") }

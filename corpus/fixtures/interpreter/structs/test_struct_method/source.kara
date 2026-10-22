@@ -1,0 +1,8 @@
+struct Counter { value: i64 }
+impl Counter {
+fn get(self) -> i64 { self.value }
+}
+fn main() {
+let c = Counter { value: 42 };
+println(c.get());
+}

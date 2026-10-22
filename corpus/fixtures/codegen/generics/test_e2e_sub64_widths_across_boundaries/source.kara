@@ -1,0 +1,36 @@
+struct P { v: i64 }
+impl P {
+fn add_small(self, k: i8) -> i8 {
+        return k + 1;
+    }
+}
+fn ret_i32() -> i32 {
+    return 0;
+}
+fn tail_i32() -> i32 {
+    7
+}
+fn ret_i16() -> i16 {
+    return 3;
+}
+fn u8_var() -> u8 {
+    let x: u8 = 200;
+    return x;
+}
+fn i8_inc(x: i8) -> i8 {
+    return x + 1;
+}
+fn f32_op(x: f32) -> f32 {
+    return x + 1.5;
+}
+fn main() {
+println(ret_i32());
+println(tail_i32());
+println(ret_i16());
+println(u8_var());
+println(i8_inc(5));
+println(i8_inc((0 - 2) as i8));
+let p = P { v: 0 };
+println(p.add_small(4));
+println(f32_op(2.0));
+}

@@ -1,0 +1,3 @@
+fn main() {
+    let mk = Maker { k: 56 }; let b: Box2[Sh] = { mk.make() }; println("x")
+}

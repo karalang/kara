@@ -1,0 +1,2 @@
+fn widen(x: i32) -> i64 { x.into() }
+fn main() { println(widen(7)); }

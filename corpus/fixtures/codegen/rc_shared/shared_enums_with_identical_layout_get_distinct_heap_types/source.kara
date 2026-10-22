@@ -1,0 +1,17 @@
+shared enum Alfa { ALeaf(String), ANode(NodeA) }
+shared enum Bravo { BLeaf(String), BNode(NodeB) }
+struct NodeA { kids: Vec[Alfa], name: String }
+struct NodeB { kids: Vec[Bravo], name: String }
+fn mk_a() -> Alfa { Alfa.ALeaf("payload-string-long-enough".to_string()) }
+fn mk_b() -> Bravo { Bravo.BLeaf("payload-string-long-enough".to_string()) }
+fn use_a() {
+    let mut v: Vec[Alfa] = Vec.new();
+    v.push(mk_a());
+    v.push(mk_a());
+}
+fn use_b() {
+    let mut v: Vec[Bravo] = Vec.new();
+    v.push(mk_b());
+    v.push(mk_b());
+}
+fn main() { use_a(); use_b(); }

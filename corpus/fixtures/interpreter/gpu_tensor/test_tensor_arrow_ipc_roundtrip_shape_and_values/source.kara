@@ -1,0 +1,11 @@
+fn main() {
+let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+let bytes = t.to_arrow_ipc();
+println(bytes.len() > 8);
+let u: Tensor[i64, [2, 3]] = Tensor.from_arrow_ipc(bytes);
+println(u.rank());
+let s = u.shape();
+println(s[0]);
+println(s[1]);
+println(u.sum());
+}

@@ -1,0 +1,17 @@
+source = "tests/interpreter/numerics.rs::test_vector_unary_math_rounds_lanes_to_element_width"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["post-m1:simd", "src:legacy-tests"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "79705a229"
+extracted_src = "fb07d93c"
+model_rev = "583cfb0d"
+model_src = "fb07d93c"

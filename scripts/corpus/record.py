@@ -56,7 +56,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from corpus_lib import ROOT, entries, read_toml, run_program, write_toml  # noqa: E402
+from corpus_lib import ROOT, entries, matches_filter, read_toml, run_program, write_toml  # noqa: E402
 
 DEFERRED = [
     ("gpu", re.compile(r"\bgpu\.")),
@@ -361,7 +361,7 @@ def main() -> int:
     corpus = Path(args.corpus)
     manifest = json.loads((Path(args.work) / "manifest.json").read_text())
     cands = {m["dir"]: m["candidates"] for m in manifest}
-    todo = [e for e in entries(corpus) if not args.filter or any(f in str(e.relative_to(corpus)) for f in args.filter)]
+    todo = [e for e in entries(corpus) if not args.filter or matches_filter(str(e.relative_to(corpus)), args.filter)]
     counts: dict[str, int] = {}
     done = 0
     if args.model:

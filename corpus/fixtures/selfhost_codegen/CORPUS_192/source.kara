@@ -1,0 +1,18 @@
+struct Lit {
+    v: i64,
+}
+struct Cal {
+    name: String,
+    args: Vec[E],
+}
+shared enum E {
+    N(Lit),
+    C(Cal),
+}
+fn main() {
+    let a = E.N(Lit { v: 9 });
+    match a {
+        N(l) => println(l.v.to_string()),
+        C(c) => println(c.name),
+    }
+}

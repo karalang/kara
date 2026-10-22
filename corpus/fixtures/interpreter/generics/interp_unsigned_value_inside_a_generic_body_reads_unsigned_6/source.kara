@@ -1,0 +1,2 @@
+fn less[T: Ord](a: T, b: T) -> bool { a < b }
+fn main() { let b: u128 = 340282366920938463463374607431768211455u128; let t: u128 = 2u128; println(less(b, t)); }

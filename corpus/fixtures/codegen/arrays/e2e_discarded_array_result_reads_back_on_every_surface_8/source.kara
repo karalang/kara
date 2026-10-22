@@ -1,0 +1,6 @@
+fn passthru(x: Array[i64, 2]) -> Array[i64, 2] { return x; }
+fn main() {
+    let a: Array[i64, 2] = [11, 22];
+    passthru(a);
+    println("s:ok");
+}

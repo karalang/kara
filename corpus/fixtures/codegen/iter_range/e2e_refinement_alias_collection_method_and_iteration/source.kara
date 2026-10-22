@@ -1,0 +1,13 @@
+pub type NonEmpty[T] = Vec[T] where self.len() > 0;
+pub struct Row { v: i64 }
+pub fn total(rows: NonEmpty[Row]) -> i64 {
+let mut n = 0;
+for r in rows { n = n + r.v; }
+n
+}
+fn main() {
+let mut xs: Vec[Row] = Vec.new();
+xs.push(Row { v: 10 });
+xs.push(Row { v: 32 });
+println(f"len={xs.len()} total={total(xs as NonEmpty[Row])}");
+}

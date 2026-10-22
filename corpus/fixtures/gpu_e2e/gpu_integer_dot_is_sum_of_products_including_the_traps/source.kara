@@ -1,0 +1,7 @@
+fn main() {
+    let a: Vec[i32] = [7 as i32, 11 as i32, 13 as i32];
+    let b: Vec[i32] = [3 as i32, 5 as i32, 2 as i32];
+    let mut p: Vec[i32] = [];
+    for i in 0..3 { p.push(a[i] * b[i]) }
+    println(f"{gpu.dot(a, b) == gpu.sum(p)}");
+}

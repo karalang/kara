@@ -1,0 +1,3 @@
+enum Tok { Plus, Num(i64), Ident(String) }
+fn show(t: Tok) -> String { match t { Ident(name) => { return "id:".to_string() + name; } Num(n) => { return "num:".to_string() + n.to_string(); } Plus => {} } return "plus".to_string(); }
+fn main() { let a = Tok.Ident("foo".to_string()); println(show(a)); println(show(Tok.Num(42))); println(show(Tok.Plus)) }

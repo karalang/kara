@@ -1,0 +1,2 @@
+fn main() { let a = mk(1); let s = a + "-" + mk(2);
+   println(f"n:{s.len() > 0}"); println("end") }

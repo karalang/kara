@@ -1,0 +1,1 @@
+fn main() { let (b, n) = src(9); println(f"{n}"); }

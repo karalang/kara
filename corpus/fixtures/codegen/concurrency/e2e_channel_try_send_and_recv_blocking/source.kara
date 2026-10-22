@@ -1,0 +1,14 @@
+fn main() {
+    let (tx, rx) = Channel.bounded(1);
+    match tx.try_send(1) {
+        Ok(u) => println("sent 1"),
+        Err(SendError.Full(v)) => println(f"full, got back {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    match tx.try_send(2) {
+        Ok(u) => println("sent 2"),
+        Err(SendError.Full(v)) => println(f"full, got back {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    println(f"drained {rx.recv_blocking()}");
+}

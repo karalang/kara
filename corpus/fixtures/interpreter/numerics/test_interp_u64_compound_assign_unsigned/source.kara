@@ -1,0 +1,1 @@
+fn main() { let mut a: u64 = 1u64 << 63; a >>= 1u64; println(f"{a}"); let mut b: u64 = 1u64 << 63; b /= 4u64; println(f"{b}"); let mut c: u64 = 1u64 << 63; c %= 7u64; println(f"{c}"); }

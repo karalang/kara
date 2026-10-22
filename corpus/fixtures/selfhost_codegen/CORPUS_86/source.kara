@@ -1,0 +1,2 @@
+enum Op { Add(i64), Zero }
+fn main() { let x = match Op.Add(20) { Add(n) => n * 2, Zero => 0 }; println(x.to_string()) }

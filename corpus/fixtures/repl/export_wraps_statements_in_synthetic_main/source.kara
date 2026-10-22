@@ -1,0 +1,2 @@
+items must appear before `fn main()` in the export; got:
+{exported}

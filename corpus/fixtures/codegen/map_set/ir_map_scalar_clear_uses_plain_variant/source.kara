@@ -1,0 +1,6 @@
+fn main() {
+let mut m: Map[i64, i64] = Map.new();
+m.insert(1, 2);
+m.clear();
+println(m.len());
+}

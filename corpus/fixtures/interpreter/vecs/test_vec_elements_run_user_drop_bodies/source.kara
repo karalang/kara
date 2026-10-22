@@ -1,0 +1,9 @@
+struct A { t: i64 }
+impl Drop for A { fn drop(mut ref self) { println(f"dA{self.t}"); } }
+struct W { a: A }
+fn main() {
+{ let v: Vec[A] = [A { t: 1 }, A { t: 2 }]; println(f"{v.len()}"); }
+{ let w: Vec[W] = [W { a: A { t: 3 } }]; println(f"{w.len()}"); }
+{ let mut p: Vec[A] = [A { t: 4 }]; let g = p.pop(); println(f"{p.len()}"); }
+println("end");
+}

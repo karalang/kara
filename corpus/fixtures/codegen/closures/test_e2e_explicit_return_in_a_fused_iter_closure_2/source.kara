@@ -1,0 +1,8 @@
+fn main() {
+let v: Vec[i64] = [1i64, 2i64, 3i64];
+let a: bool = v.iter().any(|n| { return n > 2i64; });
+let b: bool = v.iter().all(|n| { return n > 0i64; });
+let mut w: Vec[i64] = v;
+w.retain(|n| { return n > 1i64; });
+println(f"{a} {b} {w.len()}");
+}

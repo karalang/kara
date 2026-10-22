@@ -1,0 +1,21 @@
+fn res() -> Result[i64, String] {
+    defer { println("d1"); }
+    errdefer { println("e1"); }
+    defer { println("d2"); }
+    errdefer { println("e2"); }
+    Err("boom")
+}
+fn opt() -> Option[i64] {
+    errdefer { println("eo"); }
+    None
+}
+fn good() -> Result[i64, String] {
+    errdefer { println("NEVER"); }
+    Ok(1)
+}
+fn main() {
+    let _ = res();
+    let _ = opt();
+    let _ = good();
+    println("done");
+}

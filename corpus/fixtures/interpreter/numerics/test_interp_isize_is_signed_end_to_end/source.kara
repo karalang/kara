@@ -1,0 +1,8 @@
+fn f(a: isize, b: isize) -> isize { a / b }
+         fn main() {
+             let a: isize = -7isize;
+             println(a);
+             println(f(a, 2isize));
+             println(a < 0isize);
+             println(a.abs());
+         }

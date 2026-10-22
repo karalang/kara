@@ -1,0 +1,3 @@
+fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));
+   match vv { Ok(Some(s)) => slen(s), _ => 0 } }
+fn main() { println(f()); }

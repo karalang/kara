@@ -1,0 +1,13 @@
+fn main() {
+let o: Json = Json.Object(Vec[("id", Json.Int(1))]);
+println(o.stringify());
+match Json.parse("{\"n\":9007199254740993}") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+match Json.parse("[7, 2.5, 1.0]") {
+Ok(j) => println(j.stringify()),
+Err(e) => println("err"),
+}
+println(Json.Int(-42).stringify());
+}

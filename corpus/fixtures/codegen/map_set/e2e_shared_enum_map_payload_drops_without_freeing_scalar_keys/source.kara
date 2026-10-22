@@ -1,0 +1,11 @@
+shared enum Store { Empty, Full(Map[i64, u64]) }
+fn build() -> Store {
+let mut m = Map.new();
+let _ = m.insert(5, 9);
+let _ = m.insert(7, 3);
+Store.Full(m)
+}
+fn main() {
+let _s = build();
+println(1);
+}

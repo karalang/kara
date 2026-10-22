@@ -1,0 +1,8 @@
+import std.web.Display as Screen;
+
+fn paint() with writes(Screen) {
+}
+
+fn main() {
+    paint();
+}

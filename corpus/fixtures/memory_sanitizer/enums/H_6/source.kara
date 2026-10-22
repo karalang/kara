@@ -1,0 +1,5 @@
+enum E2 { A(R2), B }
+struct R2 { id: i64, name: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"drop R{self.name}") } }
+fn main() { let p = (E2.A(R2 { id: 5, name: f"n{5}" }), 1);
+             println(f"{p.1}"); }

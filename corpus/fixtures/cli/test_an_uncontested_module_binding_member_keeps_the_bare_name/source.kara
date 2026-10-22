@@ -1,0 +1,2 @@
+import conn;
+fn main() { println(conn.open()); }

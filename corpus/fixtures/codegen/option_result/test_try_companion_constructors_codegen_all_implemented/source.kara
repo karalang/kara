@@ -1,0 +1,9 @@
+fn vd() -> Result[i64, AllocError] {
+let r: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(8);
+match r { Ok(v) => Ok(v.len()), Err(_) => Ok(0_i64) }
+}
+fn st() -> Result[i64, AllocError] {
+let r: Result[String, AllocError] = String.try_with_capacity(8);
+match r { Ok(s) => Ok(s.len()), Err(_) => Ok(0_i64) }
+}
+fn main() { let _ = vd(); let _ = st(); }

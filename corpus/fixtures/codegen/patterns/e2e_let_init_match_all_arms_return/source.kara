@@ -1,0 +1,11 @@
+fn t(n: i64) -> i64 {
+let x = match n {
+0 => { return 10; }
+_ => { return 20; }
+};
+99
+}
+fn main() {
+println(f"{t(0)}");
+println(f"{t(4)}");
+}

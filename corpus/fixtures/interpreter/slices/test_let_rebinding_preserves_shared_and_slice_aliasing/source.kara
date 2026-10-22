@@ -1,0 +1,14 @@
+shared struct Counter { mut n: i64 }
+fn main() {
+let c = Counter { n: 0 };
+let d = c;
+d.n = 5;
+println(c.n);
+let mut v: Vec[i64] = Vec.new();
+v.push(1);
+v.push(2);
+let s = v.as_slice_mut();
+let s2 = s;
+s2[0] = 9;
+println(v[0]);
+}

@@ -1,0 +1,16 @@
+fn mk(n: i64) -> Option[Array[String, 2]] {
+    if n < 0 { return None; }
+    return Some(Array[f"raaaaaaaaaaaa{n}", f"cbbbbbbbbbbbb{n}"]);
+}
+fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let o = mk(i);
+        match o {
+            Some(a) => { println(f"n:{eat(a)}"); }
+            None => { println("n:none"); }
+        }
+        i = i + 1;
+    }
+}

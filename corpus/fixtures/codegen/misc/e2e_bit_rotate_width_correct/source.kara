@@ -1,0 +1,10 @@
+fn main() {
+println((1u8).rotate_left(1));
+println((128u8).rotate_left(1));
+println((1u8).rotate_right(1));
+println((16u32).rotate_right(4));
+println((5u8).rotate_left(8));
+println((1i8).rotate_right(1));
+let big: u64 = 1;
+println(big.rotate_left(63));
+}

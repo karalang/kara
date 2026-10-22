@@ -1,0 +1,34 @@
+fn add_gen[T: Add](a: T, b: T) -> T { a + b }
+fn neg_gen[T: Neg](a: T) -> T { -a }
+trait Foldy[T: Add + Mul] {
+    fn a(ref self) -> T;
+    fn b(ref self) -> T;
+    fn sum2(ref self) -> T { self.a() + self.b() }
+    fn prod2(ref self) -> T {
+        let x: T = self.a();
+        x * self.b()
+    }
+}
+struct IPair { x: i64, y: i64 }
+impl Foldy[i64] for IPair {
+    fn a(ref self) -> i64 { self.x }
+    fn b(ref self) -> i64 { self.y }
+}
+struct FPair { x: f64, y: f64 }
+impl Foldy[f64] for FPair {
+    fn a(ref self) -> f64 { self.x }
+    fn b(ref self) -> f64 { self.y }
+}
+fn main() {
+    println(f"{add_gen(10, 20)}");
+    println(f"{add_gen(1.5, 2.0)}");
+    println(f"{neg_gen(5)}");
+    let s = add_gen("op_bound_prefix_aaaa", "_op_bound_suffix_bbbb");
+    println(f"{s}");
+    let p = IPair { x: 6, y: 7 };
+    println(f"{p.sum2()}");
+    println(f"{p.prod2()}");
+    let q = FPair { x: 1.5, y: 4.0 };
+    println(f"{q.sum2()}");
+    println(f"{q.prod2()}");
+}

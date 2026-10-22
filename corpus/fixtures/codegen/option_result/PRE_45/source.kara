@@ -1,0 +1,3 @@
+struct Sk { n: i64 }
+impl Sk { fn take(mut ref self, x: Option[Rp], acc: mut ref Vec[Rp]) { match x { Some(r) => { acc.push(r) } None => { println("n") } } } }
+fn main() { let mut s = Sk { n: 0 }; let mut acc: Vec[Rp] = []; s.take(Some(Rp { id: 1 }), mut acc); println(f"len:{acc.len()}"); println("end") }

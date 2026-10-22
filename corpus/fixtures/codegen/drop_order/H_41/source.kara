@@ -1,0 +1,2 @@
+fn f() -> i64 { let s = Inner { r: mk(6), q: mk(9) }; let x = s.r; return 7; }
+fn main() { println(f()) }

@@ -1,0 +1,8 @@
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let mut a = 10;
+    let mut b = 20;
+    (v[0], v[2]) = (v[2], v[0]);
+    (a, b) = (b, a + 1);
+    println(f"{v[0]} {v[2]} {a} {b}");
+}

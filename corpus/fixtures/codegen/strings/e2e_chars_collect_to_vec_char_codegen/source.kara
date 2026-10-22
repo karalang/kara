@@ -1,0 +1,21 @@
+fn longest_run(s: ref String) -> i64 {
+let chars: Vec[char] = s.chars().collect();
+let n = chars.len();
+let mut best = 0i64;
+let mut i = 0i64;
+while i < n {
+let mut j = i;
+while j < n and chars[j] == chars[i] { j = j + 1i64; }
+if j - i > best { best = j - i; }
+i = j;
+}
+best
+}
+fn main() {
+let s: String = "aabbbbc";
+let cs: Vec[char] = s.chars().collect();
+println(f"{cs.len()}");
+let v = (cs[2] as i64) - ('0' as i64) + 1i64;
+println(f"{v}");
+println(f"{longest_run(s)}");
+}

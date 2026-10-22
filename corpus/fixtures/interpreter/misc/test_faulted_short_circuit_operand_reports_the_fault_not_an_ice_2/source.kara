@@ -1,0 +1,4 @@
+fn main() {
+let mut v: Vec[i64] = Vec.new();
+if v[3] > 0i64 or true { println("y"); }
+}

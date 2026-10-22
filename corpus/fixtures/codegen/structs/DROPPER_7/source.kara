@@ -1,0 +1,3 @@
+fn take(w: W) -> R { let W { inner, n } = w; let I { r } = inner; r }
+fn main() { let x = take(W { inner: I { r: R { id: 43 } }, n: 3 });
+             println(f"{x.id}"); }

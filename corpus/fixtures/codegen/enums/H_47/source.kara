@@ -1,0 +1,1 @@
+fn main() { let v: i64 = eatf(E.A(R { id: 8, tag: f"t8" })); println(f"v{v}") }

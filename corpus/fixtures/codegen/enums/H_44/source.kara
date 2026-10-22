@@ -1,0 +1,2 @@
+fn main() { let t: T = T { n: 1 };
+let v: i64 = t.eat(E.A(R { id: 8, tag: f"t8" })); println(f"v{v}") }

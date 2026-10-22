@@ -1,0 +1,1 @@
+fn main() { let n = 7; let mut d: Vec[Vec[N]] = [[N { k: 1 }, N { k: 2 }]]; for i in 0..2 { d[0][i] = N { k: 10 + i }; }; println("end") }

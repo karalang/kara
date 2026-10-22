@@ -1,0 +1,58 @@
+#[derive(Clone)]
+struct Entry { service: String, weight: i64 }
+shared struct Node { label: String }
+fn agg(entries: Vec[Entry]) -> String {
+let mut index: Map[String, usize] = Map.new();
+let e = entries[0].clone();
+return e.service;
+}
+fn agg_method(entries: Vec[Entry]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let e = entries[1].clone();
+return e.service.len() + e.weight;
+}
+fn agg_shared(ns: Vec[Node]) -> String {
+let mut seen: Set[String] = Set.new();
+let n = ns[0];
+return n.label.clone();
+}
+fn agg_prim(nums: Vec[i64]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let n = nums[1];
+return n + 100;
+}
+fn agg_field(entries: Vec[Entry]) -> i64 {
+let mut index: Map[String, usize] = Map.new();
+let w = entries[1].weight;
+return w;
+}
+fn agg_nested(rows: Vec[Vec[Entry]]) -> String {
+let mut index: Map[String, usize] = Map.new();
+let inner = rows[0].clone();
+let e = inner[1].clone();
+return e.service;
+}
+fn agg_two(entries: Vec[Entry]) -> String {
+let mut index: Map[String, usize] = Map.new();
+let a = entries[0].clone();
+let b = entries[1].clone();
+return a.service + "-" + b.service;
+}
+fn main() {
+let mut es: Vec[Entry] = Vec.new();
+es.push(Entry { service: "alpha", weight: 3 });
+es.push(Entry { service: "betamax", weight: 5 });
+println(agg(es.clone()));
+println(agg_method(es.clone()));
+let mut ns: Vec[Node] = Vec.new();
+ns.push(Node { label: "gamma" });
+println(agg_shared(ns));
+let nums: Vec[i64] = [7, 8, 9];
+println(agg_prim(nums));
+println(agg_field(es.clone()));
+let mut rows: Vec[Vec[Entry]] = Vec.new();
+rows.push(es.clone());
+println(agg_nested(rows));
+println(agg_two(es.clone()));
+println(es[1].service);
+}

@@ -1,0 +1,18 @@
+source = "tests/interpreter/strings.rs::user_impl_display_wins_at_every_depth_not_just_the_top_level"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "literal-unmatched", "src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'top=aye 7'"
+bucket = "a"
+classified_with = "79705a229"
+extracted_src = "e1a3e7d7"
+model_rev = "583cfb0d"
+model_src = "e1a3e7d7"

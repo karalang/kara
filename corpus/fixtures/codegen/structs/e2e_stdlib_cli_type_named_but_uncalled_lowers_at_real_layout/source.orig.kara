@@ -1,0 +1,14 @@
+struct Holder { p: Parser, n: i64 }
+fn mk(nm: String) -> Parser {
+    return Parser { program_name: nm, about_text: "abt",
+        version_text: "1.0", args: Vec.new(), flags: Vec.new(),
+        subcommands: Vec.new() };
+}
+fn name_of(h: Holder) -> String { return h.p.program_name; }
+fn main() {
+    let h = Holder { p: mk("demo"), n: 7 };
+    println(name_of(h));
+    let p2 = mk("second");
+    println(p2.about_text);
+    println(p2.version_text);
+}

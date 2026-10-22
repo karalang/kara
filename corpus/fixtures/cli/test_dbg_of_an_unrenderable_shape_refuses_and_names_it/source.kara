@@ -1,0 +1,6 @@
+fn add(a: i64) -> i64 { a }
+fn main() {
+    let g = add;
+    dbg(g);
+    println("after");
+}

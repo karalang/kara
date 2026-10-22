@@ -1,0 +1,1 @@
+fn main() { let xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62]; let s = xs.sorted(); println(f"{s[0]}"); println(f"{s[1]}"); println(f"{s[2]}"); }

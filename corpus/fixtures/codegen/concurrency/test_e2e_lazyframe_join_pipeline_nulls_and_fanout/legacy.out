@@ -1,0 +1,31 @@
+== logical plan ==
+SELECT [name, pop]
+  FILTER (pop > 50)
+    JOIN on=[city] right=(SELECT [city, pop] <- SCAN [city, pop, name])
+      SCAN [id, name, city]
+== optimized ==
+SELECT [name, pop]
+  FILTER (pop > 50)
+    JOIN on=[city] right=(SCAN cols=[city, pop])
+      SCAN cols=[*]
+3
+== logical plan ==
+JOIN on=[city] right=(SCAN [city, pop, name])
+  SELECT [name, city]
+    SCAN [id, name, city]
+== optimized ==
+JOIN on=[city] right=(SCAN cols=[*])
+  SELECT [name, city]
+    SCAN cols=[*]
+4
+1
+100
+4
+ada
+a
+ada
+b
+cyd
+a
+cyd
+b

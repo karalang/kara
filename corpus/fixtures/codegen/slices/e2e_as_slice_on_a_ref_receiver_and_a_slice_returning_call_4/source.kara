@@ -1,0 +1,10 @@
+fn pick(v: ref Vec[i64]) -> Slice[i64] {
+    return v.as_slice();
+}
+fn main() {
+    let v: Vec[i64] = [10, 20, 30];
+    let s = pick(v);
+    for x in s {
+        println(f"{x}");
+    }
+}

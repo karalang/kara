@@ -1,0 +1,7 @@
+shared struct State {
+    mut count: i64,
+    name: String,
+    mut total: f64,
+}
+
+fn main() {}

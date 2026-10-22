@@ -1,0 +1,22 @@
+struct P { x: i64, y: i64 }
+struct N { name: String, id: i64 }
+impl P {
+    fn shift(self) -> P { P { x: self.x + 1, y: self.y + 10 } }
+}
+impl N {
+    fn relabel(self) -> N { N { name: "chained heap field ok", id: self.id + 1 } }
+}
+fn mk(n: i64) -> P { P { x: n, y: n * 2 } }
+fn main() {
+    let p = P { x: 1, y: 2 };
+    println(f"{p.shift().x}");
+    let p2 = P { x: 1, y: 2 };
+    println(f"{p2.shift().y}");
+    let p3 = P { x: 1, y: 2 };
+    println(f"{p3.shift().shift().x}");
+    println(f"{mk(7).y}");
+    let n = N { name: "start", id: 5 };
+    println(f"{n.relabel().name}");
+    let n2 = N { name: "start", id: 5 };
+    println(f"{n2.relabel().id}");
+}

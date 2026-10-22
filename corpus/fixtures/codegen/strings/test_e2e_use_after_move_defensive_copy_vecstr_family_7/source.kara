@@ -1,0 +1,7 @@
+struct H { items: Vec[String] }
+fn main() {
+let mut v: Vec[String] = Vec.new();
+v.push(f"alpha");
+{ let h = H { items: v.clone() }; println(h.items[0]); }
+println(v[0]);
+}

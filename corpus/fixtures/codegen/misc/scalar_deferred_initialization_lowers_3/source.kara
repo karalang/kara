@@ -1,0 +1,1 @@
+fn main() { let f: f64; f = 2.5; let b: bool; b = f > 2.0; println(f"{f} {b}"); }

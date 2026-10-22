@@ -1,0 +1,17 @@
+source = "tests/interpreter/borrows.rs::test_deref_read_mut_ref_param"
+dedup_of = []
+expect = "error:E0218"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79705a229"
+extracted_src = "4b60aa62"
+model_rev = "583cfb0d"
+model_src = "4b60aa62"

@@ -1,0 +1,16 @@
+fn main() {
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([20, 30, 40, 50]));
+let names: Vec[String] = ["a", "b", "c", "d"];
+df.insert("name", Column.from_vec(names));
+let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);
+df.insert("score", score);
+let d: DataFrame = df.describe();
+println(d.width());
+println(d.height());
+for n in d.column_names() { println(n); }
+let a: Column[f64] = d.column("age");
+for v in a.iter_valid() { println(v); }
+let sc: Column[f64] = d.column("score");
+for v in sc.iter_valid() { println(v); }
+}

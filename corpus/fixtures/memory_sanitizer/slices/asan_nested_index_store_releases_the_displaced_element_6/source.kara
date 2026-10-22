@@ -1,0 +1,6 @@
+fn main() {
+                 let n = 7;
+                 let mut d: Vec[Vec[Vec[i64]]] = [[[1, n]]];
+                 d[0][0] = [2, 3, 4];
+                 println(f"r:{d[0].len()}:{d[0][0][2]}");
+             }

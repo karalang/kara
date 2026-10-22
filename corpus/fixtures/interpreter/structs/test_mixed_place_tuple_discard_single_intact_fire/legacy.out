@@ -1,0 +1,7 @@
+a: all-fresh tuple discard
+drop 1 r1
+b: mixed fresh+place tuple discard
+drop 2 r2
+c: place still-owned after
+drop 3 r3
+end

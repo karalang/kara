@@ -1,0 +1,10 @@
+shared struct S { id: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}"); } }
+struct Holder { s: S }
+fn main() {
+{ let v: Vec[S] = [S { id: 1 }]; println(f"v{v[0].id}"); println("one"); }
+{ let v: Vec[(S, i64)] = [(S { id: 2 }, 3)]; println(f"v{v[0].0.id}"); println("two"); }
+{ let v: Vec[Holder] = [Holder { s: S { id: 3 } }]; println(f"v{v[0].s.id}"); println("three"); }
+{ let s: S = S { id: 4 }; let v: Vec[S] = [s]; println(f"v{v[0].id}{s.id}"); println("four"); }
+println("end");
+}

@@ -1,0 +1,9 @@
+shared struct Person { name: String, age: i64 }
+shared struct Team { mut members: Vec[Person] }
+fn main() {
+let t = Team { members: Vec.new() };
+t.members.push(Person { name: "Ana", age: 30 });
+t.members.push(Person { name: "Bob", age: 25 });
+println(t.members[0].name);
+println(f"{t.members[1].age}");
+}

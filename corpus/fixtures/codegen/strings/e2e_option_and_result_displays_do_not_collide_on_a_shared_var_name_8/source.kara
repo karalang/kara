@@ -1,0 +1,2 @@
+fn showr[T: Display](x: Result[T, i64]) { println(f"r {x}"); }
+fn main() { showr(Ok(7)); }

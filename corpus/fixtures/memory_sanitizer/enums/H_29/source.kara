@@ -1,0 +1,5 @@
+fn f() -> i64 { let value = mk_val(); let mut vv = value;
+   let n = match vv { Some(v) => ident_len(v), None => 0 };
+   vv = Some(Val.Nothing);
+   n + (match vv { Some(v) => ident_len(v), None => 0 }) }
+fn main() { println(f()); }

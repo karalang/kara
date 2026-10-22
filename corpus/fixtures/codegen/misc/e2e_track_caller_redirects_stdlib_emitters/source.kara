@@ -1,0 +1,11 @@
+fn none_val() -> Option[i32] {
+None
+}
+#[track_caller]
+fn force(o: Option[i32]) -> i32 {
+o.unwrap()
+}
+fn main() {
+let n = none_val();
+force(n);
+}

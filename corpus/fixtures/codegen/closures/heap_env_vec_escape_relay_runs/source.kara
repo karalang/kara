@@ -1,0 +1,4 @@
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v }
+fn relay(k: i64) -> Vec[Fn(i64) -> i64] { let r = build(k); r }
+fn main() { let q = relay(20i64); println(f"{(q[0])(22i64)}"); }

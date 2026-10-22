@@ -1,0 +1,11 @@
+fn main() {
+let mut m: Map[String, i64] = Map.new();
+match m.try_insert("k", 1_i64) {
+Ok(prev) => match prev {
+Some(p) => println(p),
+None => println("no-prev"),
+},
+Err(e) => println("err"),
+}
+println(m.len());
+}

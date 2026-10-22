@@ -1,0 +1,3 @@
+fn half(x: f64) -> f64 { x / 2.0 }
+fn applyf(f: Fn(f64) -> f64, x: f64) -> f64 { f(x) }
+fn main() { println(f"{applyf(half, 84.0)}"); }

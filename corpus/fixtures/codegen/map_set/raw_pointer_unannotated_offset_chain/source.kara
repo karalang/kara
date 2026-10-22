@@ -1,0 +1,10 @@
+fn main() {
+    let s = c"ABC";
+    let p = s.as_ptr();
+    unsafe {
+        let p1 = p.offset(1i64);
+        let p2 = p1.offset(1i64);
+        println(p1.read());
+        println(p2.read());
+    }
+}

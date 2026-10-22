@@ -1,0 +1,20 @@
+named
+  v=1
+  dR1
+named_rebind
+  v=2
+  dR2
+fresh_temp
+  v=3
+  dR3
+copyable
+  v=4
+  dP4
+dies_inside
+  v=5
+  dR5
+two_in_a_row
+  v=67
+  dR7
+  dR6
+end

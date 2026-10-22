@@ -1,0 +1,4 @@
+fn main() {
+let v: Vec[f64] = vec![];
+println(Stats.stddev(v));
+}

@@ -1,0 +1,12 @@
+struct H { acc: i64 }
+impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }
+fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }
+fn main() {
+let h = H { acc: 0 };
+let mut n = 5;
+println(h.bump(mut n));
+println(n);
+let mut m = 5;
+println(free_bump(mut m));
+println(m);
+}

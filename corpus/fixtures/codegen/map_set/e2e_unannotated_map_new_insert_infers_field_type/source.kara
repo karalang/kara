@@ -1,0 +1,10 @@
+struct S { m: Map[String, i64] }
+fn main() {
+let mut m = Map.new();
+m.insert("a", 1);
+m.insert("b", 2);
+let s = S { m: m };
+println(s.m.len());
+match s.m.get("a") { Some(v) => println(v), None => println(-1) }
+match s.m.get("b") { Some(v) => println(v), None => println(-1) }
+}

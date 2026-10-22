@@ -1,0 +1,20 @@
+fn main() {
+let a: i128 = 1267650600228229401496703205376i128;
+println(a);
+println(a * 2i128);
+println(a / 7i128);
+println(a.wrapping_add(1i128));
+println(a.saturating_add(1i128));
+println(a.count_ones());
+let n: i128 = 0i128 - 1i128;
+println(n.count_ones());
+let p: i128 = 2i128;
+println(p.pow(100u32));
+println(f"{a}");
+println(a.to_string());
+let mx: i128 = 170141183460469231731687303715884105727i128;
+println(mx);
+println(a.swap_bytes().swap_bytes());
+let u: u128 = 18446744073709551616u128;
+println(u);
+}

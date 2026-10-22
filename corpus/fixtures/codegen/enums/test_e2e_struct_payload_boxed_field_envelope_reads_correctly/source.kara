@@ -1,0 +1,38 @@
+struct V { a: i64, o: Option[Option[i64]] }
+struct U { o: Option[Option[i64]], z: i64 }
+fn takev(r: Result[V, i64]) -> i64 {
+match r {
+Result.Ok(v) => match v.o {
+Option.Some(Option.Some(n)) => v.a + n,
+_ => -1,
+},
+Result.Err(e) => e,
+}
+}
+fn takeu(r: Result[U, i64]) -> i64 {
+match r {
+Result.Ok(u) => match u.o {
+Option.Some(Option.Some(n)) => u.z + n,
+_ => -1,
+},
+Result.Err(e) => e,
+}
+}
+fn main() {
+let bound: Result[V, i64] = Result.Ok(V { a: 1, o: Option.Some(Option.Some(30)) });
+println(takev(bound));
+println(takev(Result.Ok(V { a: 5, o: Option.Some(Option.Some(70)) })));
+println(takeu(Result.Ok(U { o: Option.Some(Option.Some(400)), z: 9 })));
+let m: Result[V, i64] = Result.Ok(V { a: 100, o: Option.Some(Option.Some(11)) });
+println(match m {
+Result.Ok(v) => match v.o {
+Option.Some(Option.Some(n)) => v.a + n,
+_ => -1,
+},
+Result.Err(e) => e,
+});
+let absent: Result[V, i64] = Result.Ok(V { a: 7, o: Option.None });
+println(match absent { Result.Ok(v) => v.a, Result.Err(e) => e });
+let errside: Result[V, i64] = Result.Err(42);
+println(match errside { Result.Ok(v) => v.a, Result.Err(e) => e });
+}

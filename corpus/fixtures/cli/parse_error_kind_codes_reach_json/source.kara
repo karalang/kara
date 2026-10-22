@@ -1,0 +1,3 @@
+fn main() {
+    let mut trait = 1;
+}

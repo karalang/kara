@@ -1,0 +1,10 @@
+struct R2 { id: i64, s: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mkr(i: i64) -> R2 { return R2 { id: i, s: f"ssssssssssssssss{i}" } }
+fn f(p: (Array[R2, 2], i64)) -> R2 { return p.0[0]; }
+fn main() {
+    let t: (Array[R2, 2], i64) = ([mkr(1), mkr(2)], 7);
+    let r = f(t);
+    println(f"got:{r.id}");
+    println("end");
+}
