@@ -1261,3 +1261,29 @@ fn main() {
         r.stderr
     );
 }
+
+/// The MIR pipeline and its backend call nothing in the legacy tree-walk
+/// interpreter, which M3 deletes: helpers both use live in shared modules
+/// (`host_cpu`, `ident_case`).
+#[test]
+fn the_mir_pipeline_does_not_call_the_legacy_interpreter() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    let mut dirs = vec![root.join("src/mir"), root.join("src/codegen/mir")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a source directory") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).expect("a source file");
+                for (i, line) in text.lines().enumerate() {
+                    if line.contains("crate::interpreter") {
+                        found.push(format!("{}:{}", path.display(), i + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "legacy interpreter calls: {found:#?}");
+}

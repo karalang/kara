@@ -1404,7 +1404,7 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} takes a feature name"));
                 };
                 let n = self.string_at(n)?;
-                Ok(Value::Bool(crate::interpreter::host_cpu_supports(&n)))
+                Ok(Value::Bool(crate::host_cpu::host_cpu_supports(&n)))
             }
             // The guard of `critical_section.acquire()`: interrupts were
             // never masked, so there is nothing to restore.
@@ -9346,7 +9346,7 @@ impl<'a> Interp<'a> {
                 };
                 let vname = if self.program.display_styles.get(&a) == Some(&DisplayStyle::SnakeCase)
                 {
-                    crate::interpreter::pascal_to_snake(&var.name)
+                    crate::ident_case::pascal_to_snake(&var.name)
                 } else {
                     var.name.clone()
                 };

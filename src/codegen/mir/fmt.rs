@@ -491,7 +491,7 @@ impl<'ctx> Cx<'ctx, '_> {
             self.builder.position_at_end(*bb);
             let name = adt.variants[k].name.clone();
             let name = if style == Some(DisplayStyle::SnakeCase) {
-                crate::interpreter::pascal_to_snake(&name)
+                crate::ident_case::pascal_to_snake(&name)
             } else {
                 name
             };

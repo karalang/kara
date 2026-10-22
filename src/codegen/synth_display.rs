@@ -2963,7 +2963,7 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or(false);
         if is_snake {
-            crate::interpreter::pascal_to_snake(variant)
+            crate::ident_case::pascal_to_snake(variant)
         } else {
             variant.to_string()
         }

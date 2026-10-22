@@ -11,51 +11,9 @@ use std::sync::{Arc, RwLock};
 use super::eval_expr::cast_value;
 use super::exec::ControlFlow;
 use super::helpers::{kara_json_to_serde_json, value_compare};
-use super::pascal_to_snake;
 use super::value::narrow_to_i64;
 use super::value::{try_write_or_panic, EnumData, Value};
-
-/// Host CPU-feature probe for the interpreter's `cpu.supports(name)` — the
-/// tree-walk twin of the runtime `karac_cpu_supports` (`runtime/src/cpu.rs`).
-/// Deliberately mirrors that function's recognised-name set per architecture,
-/// so `karac run --interp` and `karac build`/JIT report the same features on the
-/// machine they run on. An unknown name is `false`.
-#[cfg(target_arch = "x86_64")]
-pub(crate) fn host_cpu_supports(name: &str) -> bool {
-    match name {
-        "sse4.2" => std::is_x86_feature_detected!("sse4.2"),
-        "avx" => std::is_x86_feature_detected!("avx"),
-        "avx2" => std::is_x86_feature_detected!("avx2"),
-        "fma" => std::is_x86_feature_detected!("fma"),
-        "bmi1" => std::is_x86_feature_detected!("bmi1"),
-        "bmi2" => std::is_x86_feature_detected!("bmi2"),
-        "avx512f" => std::is_x86_feature_detected!("avx512f"),
-        "avx512bw" => std::is_x86_feature_detected!("avx512bw"),
-        "avx512vl" => std::is_x86_feature_detected!("avx512vl"),
-        "avx512dq" => std::is_x86_feature_detected!("avx512dq"),
-        "avx512cd" => std::is_x86_feature_detected!("avx512cd"),
-        _ => false,
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-pub(crate) fn host_cpu_supports(name: &str) -> bool {
-    match name {
-        "neon" => std::arch::is_aarch64_feature_detected!("neon"),
-        "dotprod" => std::arch::is_aarch64_feature_detected!("dotprod"),
-        "fp16" => std::arch::is_aarch64_feature_detected!("fp16"),
-        "sve" => std::arch::is_aarch64_feature_detected!("sve"),
-        "sve2" => std::arch::is_aarch64_feature_detected!("sve2"),
-        "i8mm" => std::arch::is_aarch64_feature_detected!("i8mm"),
-        "bf16" => std::arch::is_aarch64_feature_detected!("bf16"),
-        _ => false,
-    }
-}
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-pub(crate) fn host_cpu_supports(_name: &str) -> bool {
-    false
-}
+use super::{host_cpu_supports, pascal_to_snake};
 
 /// Clone a method receiver for a by-value category dispatcher in
 /// `eval_method_call`.

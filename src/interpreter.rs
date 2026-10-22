@@ -22,9 +22,10 @@ mod exec;
 // cfg-gated: codegen is the only consumer of the re-export (the
 // interpreter's own user imports straight from `exec`), so CI's
 // featureless clippy flags it unused without the gate.
+pub(crate) use crate::host_cpu::host_cpu_supports;
+pub(crate) use crate::ident_case::pascal_to_snake;
 #[cfg(feature = "llvm")]
 pub(crate) use exec::{compute_block_last_use, last_use_fires_at};
-pub(crate) use method_call::host_cpu_supports;
 
 /// B-2026-09-23-24 — see `Interpreter::let_view_tail_frames`: the frame depth,
 /// the arm-tail spans that hand a param view over, and whether one was reached.
@@ -1354,19 +1355,6 @@ pub(crate) fn dbg_json_escape(s: &str) -> String {
     }
     out.push('"');
     out
-}
-
-/// Convert a PascalCase identifier to lower_snake_case.
-/// `InProgress` → `in_progress`, `Up` → `up`, `HTTPError` → `h_t_t_p_error`.
-pub(crate) fn pascal_to_snake(s: &str) -> String {
-    let mut result = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() && i > 0 {
-            result.push('_');
-        }
-        result.extend(ch.to_lowercase());
-    }
-    result
 }
 
 /// True when `ty` is a concurrency primitive (`Atomic[T]` / `Mutex[T]`) — a
