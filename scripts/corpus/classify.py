@@ -98,6 +98,9 @@ POST_M1 = [
     # with kara-data (deferred.md § M4c data), `Url` with the services
     # track, layout control past v1 (design.md § 15: `offset_of`, FFI
     # unions, volatile access), and the browser surface with the wasm track.
+    # A later ruling (2026-10-22) takes `Stats` out of std altogether: its
+    # entries also carry `v2_reject`, and the tag keeps them out of the gate
+    # until check refuses them.
     ("stats", r"\bStats\."),
     ("url", r"\bUrl\."),
     ("layout", r"\boffset_of\s*\[|\bunion\s+[A-Z]|\bVolatileCell\b"),

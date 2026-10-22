@@ -1,0 +1,68 @@
+// LeetCode #862: Shortest Subarray with Sum at Least K -- bench program,
+// the ★ arm (prefix sums and a deque of candidate starts).
+//
+// 100,000 values from -100,000 to 100,000, LeetCode's largest input, built
+// once, and k = 5,000,000. Each of 300 rounds changes one value, finds the
+// shortest subarray, and changes the value back.
+
+fn shortest_subarray(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut p: Vec[i64] = [0];
+    for x in nums.iter() {
+        p.push(p[p.len() - 1] + *x);
+    }
+    let mut best = n + 1;
+    let mut starts: VecDeque[i64] = VecDeque.new();
+    for j in 0..n + 1 {
+        while let Some(i) = starts.front() {
+            if p[j] - p[*i] >= k {
+                best = best.min(j - *i);
+                starts.pop_front();
+            } else {
+                break;
+            }
+        }
+        while let Some(i) = starts.back() {
+            if p[*i] >= p[j] {
+                starts.pop_back();
+            } else {
+                break;
+            }
+        }
+        starts.push_back(j);
+    }
+    if best <= n { best } else { -1 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from -100,000 to 100,000
+fn random_value(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 200001 - 100000
+}
+
+fn main() {
+    let n = 100000;
+    let k = 5000000;
+    let rounds = 300;
+    let mut seed = 862;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(random_value(mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let i = (next_random(mut seed) * 32768 + next_random(mut seed)) % n;
+        let old = nums[i];
+        nums[i] = random_value(mut seed);
+        let got = shortest_subarray(nums, k);
+        nums[i] = old;
+        total += got;
+        check = (check * 31 + got + 2) % 1000000007;
+    }
+    println(f"{rounds} rounds on {n} values, k = {k}: lengths sum to {total}, checksum {check}");
+}

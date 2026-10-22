@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/862-shortest-subarray-with-sum-at-least-k/bench/shortest_subarray.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:vecdeque", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "75ca16cf2+local"
+extracted_src = "5644cb93"
+model_rev = "aafbe785"
+model_src = "5644cb93"

@@ -1,0 +1,315 @@
+// LeetCode #862: Shortest Subarray with Sum at Least K -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: the length of the shortest non-empty run of consecutive
+// values whose sum is at least k, or -1 when there is none. The literal
+// reading sums every subarray from scratch, shortest lengths first.
+
+// ---- the ★ arm: prefix sums and a deque of candidate starts ------------------
+fn star_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut p: Vec[i64] = [0];
+    for x in nums.iter() {
+        p.push(p[p.len() - 1] + *x);
+    }
+    let mut best = n + 1;
+    let mut starts: VecDeque[i64] = VecDeque.new();
+    for j in 0..n + 1 {
+        while let Some(i) = starts.front() {
+            if p[j] - p[*i] >= k {
+                best = best.min(j - *i);
+                starts.pop_front();
+            } else {
+                break;
+            }
+        }
+        while let Some(i) = starts.back() {
+            if p[*i] >= p[j] {
+                starts.pop_back();
+            } else {
+                break;
+            }
+        }
+        starts.push_back(j);
+    }
+    if best <= n { best } else { -1 }
+}
+
+// ---- a heap of starts by prefix sum ------------------------------------------
+fn heap_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = n + 1;
+    let mut waiting: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    waiting.push((0, 0));
+    let mut sum = 0;
+    for j in 1..n + 1 {
+        sum += nums[j - 1];
+        while let Some((s, i)) = waiting.peek() {
+            if sum - *s >= k {
+                best = best.min(j - *i);
+                waiting.pop();
+            } else {
+                break;
+            }
+        }
+        waiting.push((sum, j));
+    }
+    if best <= n { best } else { -1 }
+}
+
+// ---- an increasing stack and a binary search ---------------------------------
+fn search_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut p: Vec[i64] = [0];
+    for x in nums.iter() {
+        p.push(p[p.len() - 1] + *x);
+    }
+    let mut best = n + 1;
+    let mut stack: Vec[i64] = Vec.new();
+    for j in 0..n + 1 {
+        // the last position on the stack with p[stack[pos]] <= p[j] - k
+        let mut lo = 0;
+        let mut hi = stack.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if p[stack[mid]] <= p[j] - k {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo > 0 {
+            best = best.min(j - stack[lo - 1]);
+        }
+        while stack.len() > 0 and p[stack[stack.len() - 1]] >= p[j] {
+            stack.pop();
+        }
+        stack.push(j);
+    }
+    if best <= n { best } else { -1 }
+}
+
+// ---- every start -------------------------------------------------------------
+fn brute_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = n + 1;
+    for i in 0..n {
+        let mut sum = 0;
+        for j in i..n {
+            sum += nums[j];
+            if sum >= k {
+                best = best.min(j - i + 1);
+                break;
+            }
+        }
+    }
+    if best <= n { best } else { -1 }
+}
+
+// ---- a binary search over the length -----------------------------------------
+fn lengths_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut p: Vec[i64] = [0];
+    for x in nums.iter() {
+        p.push(p[p.len() - 1] + *x);
+    }
+    if not lengths_reaches(p, k, n) {
+        return -1;
+    }
+    let mut lo = 1;
+    let mut hi = n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if lengths_reaches(p, k, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// some subarray of length at most `len` sums to k or more
+fn lengths_reaches(p: Vec[i64], k: i64, len: i64) -> bool {
+    let mut window: Vec[i64] = Vec.new();
+    let mut head = 0;
+    for j in 1..p.len() {
+        // start j - 1 enters the window, start j - len - 1 leaves it
+        while window.len() > head and p[window[window.len() - 1]] >= p[j - 1] {
+            window.pop();
+        }
+        window.push(j - 1);
+        if window[head] < j - len {
+            head += 1;
+        }
+        if p[j] - p[window[head]] >= k {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// every subarray summed from scratch; the shortest that reaches k
+fn literal_shortest(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = -1;
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let mut sum = 0;
+            for t in i..i + len {
+                sum += nums[t];
+            }
+            if sum >= k and best < 0 {
+                best = len;
+            }
+        }
+    }
+    best
+}
+
+// ---- the properties --------------------------------------------------------
+
+fn arms(nums: Vec[i64], k: i64) -> Vec[i64] {
+    [star_shortest(nums, k), heap_shortest(nums, k), search_shortest(nums, k), brute_shortest(nums, k),
+     lengths_shortest(nums, k)]
+}
+
+// checks made, and failures by property (index 0 holds P1)
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+// every arm answers `want`
+fn expect(t: mut ref Tally, p: i64, nums: Vec[i64], k: i64, want: i64) {
+    let got = arms(nums, k);
+    for a in 0..got.len() {
+        t.checks += 1;
+        if got[a] != want {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+// every arm finds a subarray, of length at most `most`
+fn expect_found(t: mut ref Tally, p: i64, nums: Vec[i64], k: i64, most: i64) {
+    let got = arms(nums, k);
+    for a in 0..got.len() {
+        t.checks += 1;
+        if got[a] < 1 or got[a] > most {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+fn properties(t: mut ref Tally, nums: Vec[i64], k: i64) -> i64 {
+    let want = literal_shortest(nums, k);
+    let n = nums.len();
+    // P1: the statement's answer
+    expect(mut t, 1, nums, k, want);
+    // P2: a smaller k never needs a longer subarray
+    if want > 0 and k > 1 {
+        expect_found(mut t, 2, nums, k - 1, want);
+    }
+    // P3: the array reversed gives the same answer
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(nums[n - 1 - i]);
+    }
+    expect(mut t, 3, reversed, k, want);
+    // P4: a value added at either end never needs a longer subarray
+    if want > 0 {
+        let mut longer = nums.clone();
+        longer.push(-3);
+        expect_found(mut t, 4, longer, k, want);
+        let mut front: Vec[i64] = [-3];
+        for x in nums.iter() {
+            front.push(*x);
+        }
+        expect_found(mut t, 4, front, k, want);
+    }
+    // P5: the answer is 1 exactly when some value reaches k alone
+    let mut alone = false;
+    for x in nums.iter() {
+        if *x >= k {
+            alone = true;
+        }
+    }
+    if alone {
+        expect(mut t, 5, nums, k, 1);
+    } else {
+        let got = arms(nums, k);
+        for a in 0..got.len() {
+            t.checks += 1;
+            if got[a] == 1 {
+                t.failures[4] += 1;
+            }
+        }
+    }
+    // P6: every value and k doubled gives the same answer
+    let mut doubled: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        doubled.push(2 * *x);
+    }
+    expect(mut t, 6, doubled, 2 * k, want);
+    want
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut queries = 0;
+    let mut found = 0;
+    // every array of one to five values from -2 to 2, with k from 1 to 4
+    let mut count = 5;
+    for n in 1..6 {
+        for code in 0..count {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                nums.push(c % 5 - 2);
+                c = c / 5;
+            }
+            for k in 1..5 {
+                queries += 1;
+                if properties(mut t, nums, k) > 0 {
+                    found += 1;
+                }
+            }
+        }
+        count = count * 5;
+    }
+    // random arrays of up to 30 values from -20 to 20, k up to 60
+    let mut seed = 862;
+    for _ in 0..1380 {
+        let n = 1 + next_random(mut seed) % 30;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 41 - 20);
+        }
+        let k = 1 + next_random(mut seed) % 60;
+        queries += 1;
+        if properties(mut t, nums, k) > 0 {
+            found += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{queries} queries, {found} with a subarray, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

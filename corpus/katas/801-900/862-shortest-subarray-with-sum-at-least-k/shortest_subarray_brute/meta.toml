@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/862-shortest-subarray-with-sum-at-least-k/shortest_subarray_brute.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "75ca16cf2+local"
+extracted_src = "5176e004"
+model_rev = "aafbe785"
+model_src = "5176e004"

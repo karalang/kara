@@ -1,0 +1,99 @@
+// LeetCode #862: Shortest Subarray with Sum at Least K -- a heap of
+// starts by prefix sum.
+//
+// Every start i waits in a min-first heap keyed by its prefix sum p[i].
+// At end j, while the smallest waiting sum is at most p[j] - k, that start
+// gives a subarray of length j - i and leaves the heap, since a later end
+// would only be longer. O(n log n) time, O(n) space.
+
+fn shortest_subarray(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = n + 1;
+    let mut waiting: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    waiting.push((0, 0));
+    let mut sum = 0;
+    for j in 1..n + 1 {
+        sum += nums[j - 1];
+        while let Some((s, i)) = waiting.peek() {
+            if sum - *s >= k {
+                best = best.min(j - *i);
+                waiting.pop();
+            } else {
+                break;
+            }
+        }
+        waiting.push((sum, j));
+    }
+    if best <= n { best } else { -1 }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"{nums}, k = {k} -> {shortest_subarray(nums, k)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([1], 1);
+    show([1, 2], 4);
+    show([2, -1, 2], 3);
+    show([5], 5);
+    show([-5], 1);
+    show([1, 1, 1, 1], 4);
+    show([1, -1, 1, -1, 5], 5);
+    show([10, -20, 10, 10], 20);
+    show([84, -37, 32, 40, 95], 167);
+    show([-28, 81, -20, 28, -29], 89);
+    show([17, 85, 93, -45, -21], 150);
+    show([2, -1, 2, -1, 2, -1, 2], 4);
+    show([3, -2, 5, -9, 4, 4], 8);
+    show([1, 2, 3, -100, 1, 2, 3, 4], 10);
+    // every array of one to five values from -2 to 2, with k from 1 to 4
+    let mut queries = 0;
+    let mut none = 0;
+    let mut sum = 0;
+    let mut count = 5;
+    for n in 1..6 {
+        for code in 0..count {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                nums.push(c % 5 - 2);
+                c = c / 5;
+            }
+            for k in 1..5 {
+                let got = shortest_subarray(nums, k);
+                queries += 1;
+                if got < 0 {
+                    none += 1;
+                } else {
+                    sum += got;
+                }
+            }
+        }
+        count = count * 5;
+    }
+    println(f"all {queries} small queries: {none} without a subarray, the rest sum to {sum}");
+    let mut seed = 862;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 100;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 201 - 100);
+        }
+        let k = 1 + next_random(mut seed) % 1000;
+        let got = shortest_subarray(nums, k);
+        if got > 0 {
+            found += 1;
+        }
+        check = (check * 31 + got + 2) % 1000000007;
+    }
+    println(f"500 random arrays: {found} with a subarray, checksum {check}");
+}
