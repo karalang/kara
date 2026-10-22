@@ -1,0 +1,226 @@
+== contains | >=1.2.3 1.2.3 none
+  True
+== contains | >=1.2.3 1.2.2 none
+  False
+== contains | >=1.2.3 1.3 none
+  True
+== contains | >=1.2.3 2.0 none
+  True
+== contains | >=1.2.3 1.3.0a1 none
+  True
+== contains | >=1.2.3 1.2.3a1 none
+  False
+== contains | >=1.2.3 1.3.0a1 false
+  False
+== contains | <=2.0 2.0 none
+  True
+== contains | <=2.0 2.0.0 none
+  True
+== contains | <=2.0 2.0.1 none
+  False
+== contains | <=2.0 1.9 none
+  True
+== contains | <=2.0 2.0a1 none
+  True
+== contains | <1.0 0.9 none
+  True
+== contains | <1.0 1.0 none
+  False
+== contains | <1.0 1.0a1 none
+  False
+== contains | <1.0 1.0.dev1 none
+  False
+== contains | <1.0 0.9.9 none
+  True
+== contains | <1.0a2 1.0a1 none
+  True
+== contains | <1.0a2 1.0a2 none
+  False
+== contains | <1.0a2 0.9 none
+  True
+== contains | >1.0 1.0 none
+  False
+== contains | >1.0 1.0.post1 none
+  False
+== contains | >1.0 1.0.1 none
+  True
+== contains | >1.0 1.1 none
+  True
+== contains | >1.0 2.0 none
+  True
+== contains | >1.0.post1 1.0.post1 none
+  False
+== contains | >1.0.post1 1.0.post2 none
+  True
+== contains | >1.0.post1 1.1 none
+  True
+== contains | ==1.2.3 1.2.3 none
+  True
+== contains | ==1.2.3 1.2.3.0 none
+  True
+== contains | ==1.2.3 1.2.3.1 none
+  False
+== contains | ==1.2.3 1.2 none
+  False
+== contains | !=1.2.3 1.2.3 none
+  False
+== contains | !=1.2.3 1.2.4 none
+  True
+== contains | !=1.2.3 1.2.3.0 none
+  False
+== contains | ==1.2.* 1.2 none
+  True
+== contains | ==1.2.* 1.2.5 none
+  True
+== contains | ==1.2.* 1.3 none
+  False
+== contains | ==1.2.* 1.1.9 none
+  False
+== contains | ==1.2.* 1.2.0 none
+  True
+== contains | !=1.4.* 1.4 none
+  False
+== contains | !=1.4.* 1.4.7 none
+  False
+== contains | !=1.4.* 1.5 none
+  True
+== contains | !=1.4.* 1.3.9 none
+  True
+== contains | ~=2.2 2.2 none
+  True
+== contains | ~=2.2 2.5 none
+  True
+== contains | ~=2.2 3.0 none
+  False
+== contains | ~=2.2 2.1 none
+  False
+== contains | ~=2.2 2.2.9 none
+  True
+== contains | ~=1.4.5 1.4.5 none
+  True
+== contains | ~=1.4.5 1.4.9 none
+  True
+== contains | ~=1.4.5 1.5 none
+  False
+== contains | ~=1.4.5 1.4.4 none
+  False
+== contains | ~=1.4.5 1.5.0 none
+  False
+== contains | ===1.0.0 1.0.0 none
+  True
+== contains | ===1.0.0 1.0 none
+  False
+== contains | ===1.0.0 1.0.0+local none
+  False
+== contains | ===1.0.0 foobar none
+  False
+== contains | ===foobar foobar none
+  True
+== contains | ===foobar FOOBAR none
+  True
+== contains | ===foobar foo none
+  False
+== contains | ==2!1.0 2!1.0 none
+  True
+== contains | ==2!1.0 1.0 none
+  False
+== contains | ==2!1.0 2!1.0.0 none
+  True
+== contains | >=1!0 1!0 none
+  True
+== contains | >=1!0 99 none
+  False
+== contains | >=1!0 1!0.1 none
+  True
+== contains | >=1.0b2 1.0b2 none
+  True
+== contains | >=1.0b2 1.0rc1 none
+  True
+== contains | >=1.0b2 1.0 none
+  True
+== contains | >=1.0b2 1.0b1 none
+  False
+== contains | >=1.0b2 1.0a9 none
+  False
+== contains | >=1.0,<2.0 1.0 none
+  True
+== contains | >=1.0,<2.0 1.5 none
+  True
+== contains | >=1.0,<2.0 2.0 none
+  False
+== contains | >=1.0,<2.0 0.9 none
+  False
+== contains | >=1.0,<2.0 1.9.9 none
+  True
+== contains | >=1.0,!=1.5,<2.0 1.4 none
+  True
+== contains | >=1.0,!=1.5,<2.0 1.5 none
+  False
+== contains | >=1.0,!=1.5,<2.0 1.6 none
+  True
+== contains | >=1.0,!=1.5,<2.0 2.0 none
+  False
+== contains | ~=1.4,!=1.4.5 1.4.0 none
+  True
+== contains | ~=1.4,!=1.4.5 1.4.5 none
+  False
+== contains | ~=1.4,!=1.4.5 1.4.6 none
+  True
+== contains | ~=1.4,!=1.4.5 1.5 none
+  True
+== contains | >=1.0,<2.0 1.5a1 none
+  True
+== contains | >=1.0,<2.0 1.5a1 true
+  True
+== contains | >=1.0,<2.0 1.5a1 false
+  False
+== contains |  1.0 none
+  True
+== contains |  2.0a1 none
+  True
+== contains |  lolwat none
+  True
+== contains | ==1.0 1.0.0 none
+  True
+== contains | ==1.0 1!1.0 none
+  False
+== contains | ==1.0 v1.0 none
+  True
+== contains | >1.0a1 1.0alpha2 none
+  True
+== contains | >1.0a1 1.0a1 none
+  False
+== contains | >1.0a1 1.0c1 none
+  True
+== contains | >1.0a1 1.0preview1 none
+  True
+== contains | >=1.0 lolwat none
+  False
+== contains | >=1.0 1..2 none
+  False
+== contains | >=1.0  none
+  False
+== filter | >=1.2.3 none 1.2,1.3,1.5a1
+  1.3
+== filter | >=1.2.3 none 1.2,1.5a1
+  1.5a1
+== filter | >=1.2.3 true 1.3,1.5a1
+  1.3 1.5a1
+== filter | >=1.2.3 false 1.3,1.5a1,1.4
+  1.3 1.4
+== filter | >=1.0,<2.0 none 0.9,1.0,1.5,1.9,2.0,1.7b1
+  1.0 1.5 1.9
+== filter | ~=1.4 none 1.3,1.4,1.4.9,1.5,2.0
+  1.4 1.4.9 1.5
+== filter | ==1.2.* none 1.1,1.2,1.2.9,1.3,1.2a1
+  1.2 1.2.9
+== filter | >=2.0b1 none 2.0a1,2.0b1,2.0b2,2.0,1.9
+  2.0b1 2.0b2 2.0
+== filter |  none 1.3,1.5a1
+  1.3
+== filter |  true 1.3,1.5a1
+  1.3 1.5a1
+== filter |  false 1.3,1.5a1
+  1.3
+== filter | !=1.5 none 1.4,1.5,1.6,1.5a1
+  1.4 1.6

@@ -1,0 +1,718 @@
+// mini_specifiers — a port of packaging.specifiers 26.3 (Apache-2.0 OR
+// BSD-2-Clause, Donald Stufft & contributors): the SpecifierSet that every
+// `pip install foo>=1.2,<2` resolves against. A SpecifierSet answers two
+// questions — does a version satisfy a requirement (`contains`), and which of
+// a list of versions do (`filter`).
+//
+// The port reimplements the PEP 440 Version it leans on (epoch, release,
+// a/b/rc pre, post, dev — with alpha/beta/c/pre/preview/rev/r normalization and
+// the `v` prefix / `N!` epoch / implicit-`-N` post spellings), its comparison
+// key (trailing-zero-insensitive release, the six-field pre/post/dev suffix),
+// and then each of the eight operators as pure range membership: >=, <=, the
+// <V / >V pre- and post-release carve-outs, == / != (release-zero-insensitive),
+// the ==V.* / !=V.* prefix wildcards, the ~= compatible release, and the ===
+// arbitrary case-insensitive string identity. On top sit the PEP 440
+// pre-release rules: `contains` admits a pre-release unless prereleases=False;
+// `filter` yields pre-releases only when no final release matches, and a spec
+// that names a pre-release opts its set into pre mode.
+//
+// Local versions (`1.0+ubuntu1`) are out of scope: they appear in `==`/`!=`
+// specifiers rarely and need the local-family boundary algebra; the jobs avoid
+// them, and such an input simply fails to parse (so a standard operator reports
+// no match, which is the library's behaviour for an unparsable input anyway).
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct V {
+    valid: bool,
+    epoch: i64,
+    rel: Vec[i64],
+    pre_kind: i64, // 0=a 1=b 2=rc 3=none
+    pre_n: i64,
+    has_post: bool,
+    post_n: i64,
+    has_dev: bool,
+    dev_n: i64,
+}
+
+struct Spec { op: String, wild: bool, v: V, raw: String }
+
+struct PreM { idx: i64, kind: i64, n: i64 }
+struct SegM { idx: i64, n: i64, has: bool }
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn is_digit(c: i64) -> bool { c >= 48 and c <= 57 }
+fn is_sep(c: i64) -> bool { c == 45 or c == 95 or c == 46 }
+fn lower_byte(c: i64) -> i64 { if c >= 65 and c <= 90 { c + 32 } else { c } }
+
+fn atoi(b: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let mut acc = 0;
+    let mut i = lo;
+    while i < hi { acc = acc * 10 + (b[i] - 48); i = i + 1; }
+    acc
+}
+
+// Case-insensitive match of literal `w` at position i; returns index past the
+// match, or -1.
+fn match_word(b: ref Vec[i64], i: i64, w: ref String) -> i64 {
+    let wb = bytes_of(w);
+    let wl = wb.len();
+    let n = b.len();
+    if i + wl > n { return -1; }
+    let mut k = 0;
+    while k < wl {
+        if lower_byte(b[i + k]) != wb[k] { return -1; }
+        k = k + 1;
+    }
+    i + wl
+}
+
+// ---- Version parsing ----------------------------------------------------
+
+fn try_pre(b: ref Vec[i64], i0: i64) -> PreM {
+    let n = b.len();
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let mut idx = -1;
+    let mut kind = 3;
+    let ra = match_word(b, si, "alpha"); if ra >= 0 { idx = ra; kind = 0; }
+    if idx < 0 { let r = match_word(b, si, "a"); if r >= 0 { idx = r; kind = 0; } }
+    if idx < 0 { let r = match_word(b, si, "beta"); if r >= 0 { idx = r; kind = 1; } }
+    if idx < 0 { let r = match_word(b, si, "b"); if r >= 0 { idx = r; kind = 1; } }
+    if idx < 0 { let r = match_word(b, si, "preview"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "pre"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "c"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "rc"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { return PreM { idx: -1, kind: 3, n: 0 }; }
+    let mut k = idx;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    PreM { idx: k, kind: kind, n: num }
+}
+
+fn try_post(b: ref Vec[i64], i0: i64) -> SegM {
+    let n = b.len();
+    // bare "-N" implicit post
+    if i0 < n and b[i0] == 45 {
+        let ds = i0 + 1;
+        let mut j = ds;
+        while j < n and is_digit(b[j]) { j = j + 1; }
+        if j > ds { return SegM { idx: j, n: atoi(b, ds, j), has: true }; }
+    }
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let mut after = -1;
+    let rp = match_word(b, si, "post"); if rp >= 0 { after = rp; }
+    if after < 0 { let r = match_word(b, si, "rev"); if r >= 0 { after = r; } }
+    if after < 0 { let r = match_word(b, si, "r"); if r >= 0 { after = r; } }
+    if after < 0 { return SegM { idx: i0, n: 0, has: false }; }
+    let mut k = after;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    SegM { idx: k, n: num, has: true }
+}
+
+fn try_dev(b: ref Vec[i64], i0: i64) -> SegM {
+    let n = b.len();
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let rd = match_word(b, si, "dev");
+    if rd < 0 { return SegM { idx: i0, n: 0, has: false }; }
+    let mut k = rd;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    SegM { idx: k, n: num, has: true }
+}
+
+fn invalid_ver() -> V {
+    V { valid: false, epoch: 0, rel: Vec.new(), pre_kind: 3, pre_n: 0,
+        has_post: false, post_n: 0, has_dev: false, dev_n: 0 }
+}
+
+fn parse_ver(s: ref String) -> V {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut i = 0;
+    if n == 0 { return invalid_ver(); }
+    if b[0] == 118 or b[0] == 86 { i = 1; } // leading v / V
+    // epoch: a digit run immediately followed by '!'
+    let mut epoch = 0;
+    let mut j = i;
+    while j < n and is_digit(b[j]) { j = j + 1; }
+    if j < n and j > i and b[j] == 33 { epoch = atoi(b, i, j); i = j + 1; }
+    // release: >=1 numeric component, '.'-separated
+    if not (i < n and is_digit(b[i])) { return invalid_ver(); }
+    let mut rel: Vec[i64] = Vec.new();
+    let mut more = true;
+    while more {
+        let ds = i;
+        while i < n and is_digit(b[i]) { i = i + 1; }
+        rel.push(atoi(b, ds, i));
+        if i < n and b[i] == 46 and i + 1 < n and is_digit(b[i + 1]) { i = i + 1; }
+        else { more = false; }
+    }
+    // pre, post, dev (in order), each with an optional separator
+    let mut pre_kind = 3;
+    let mut pre_n = 0;
+    let pm = try_pre(b, i);
+    if pm.idx >= 0 { pre_kind = pm.kind; pre_n = pm.n; i = pm.idx; }
+    let mut has_post = false;
+    let mut post_n = 0;
+    let po = try_post(b, i);
+    if po.has { has_post = true; post_n = po.n; i = po.idx; }
+    let mut has_dev = false;
+    let mut dev_n = 0;
+    let dv = try_dev(b, i);
+    if dv.has { has_dev = true; dev_n = dv.n; i = dv.idx; }
+    if i != n { return invalid_ver(); } // trailing junk (incl. +local)
+    V { valid: true, epoch: epoch, rel: rel, pre_kind: pre_kind, pre_n: pre_n,
+        has_post: has_post, post_n: post_n, has_dev: has_dev, dev_n: dev_n }
+}
+
+// ---- Version comparison -------------------------------------------------
+
+fn rel_cmp(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let la = a.len();
+    let lb = b.len();
+    let m = if la > lb { la } else { lb };
+    let mut i = 0;
+    while i < m {
+        let av = if i < la { a[i] } else { 0 };
+        let bv = if i < lb { b[i] } else { 0 };
+        if av < bv { return -1; }
+        if av > bv { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn pre_rank(v: ref V) -> i64 {
+    if v.pre_kind < 3 { return v.pre_kind; }
+    if (not v.has_post) and v.has_dev { return -1; } // dev-only sorts first
+    3
+}
+
+fn vcmp(a: ref V, b: ref V) -> i64 {
+    if a.epoch != b.epoch { if a.epoch < b.epoch { return -1; } return 1; }
+    let c = rel_cmp(a.rel, b.rel);
+    if c != 0 { return c; }
+    let ar = pre_rank(a);
+    let br = pre_rank(b);
+    if ar != br { if ar < br { return -1; } return 1; }
+    let an = if a.pre_kind < 3 { a.pre_n } else { 0 };
+    let bn = if b.pre_kind < 3 { b.pre_n } else { 0 };
+    if an != bn { if an < bn { return -1; } return 1; }
+    let apr = if a.has_post { 1 } else { 0 };
+    let bpr = if b.has_post { 1 } else { 0 };
+    if apr != bpr { if apr < bpr { return -1; } return 1; }
+    let apn = if a.has_post { a.post_n } else { 0 };
+    let bpn = if b.has_post { b.post_n } else { 0 };
+    if apn != bpn { if apn < bpn { return -1; } return 1; }
+    let adr = if a.has_dev { 0 } else { 1 };
+    let bdr = if b.has_dev { 0 } else { 1 };
+    if adr != bdr { if adr < bdr { return -1; } return 1; }
+    let adn = if a.has_dev { a.dev_n } else { 0 };
+    let bdn = if b.has_dev { b.dev_n } else { 0 };
+    if adn != bdn { if adn < bdn { return -1; } return 1; }
+    0
+}
+
+fn is_pre(v: ref V) -> bool { v.pre_kind < 3 or v.has_dev }
+
+// same public release and pre segment (epoch, trimmed release, pre).
+fn same_base(p: ref V, v: ref V) -> bool {
+    if p.epoch != v.epoch { return false; }
+    if rel_cmp(p.rel, v.rel) != 0 { return false; }
+    if p.pre_kind != v.pre_kind { return false; }
+    let pn = if p.pre_kind < 3 { p.pre_n } else { 0 };
+    let vn = if v.pre_kind < 3 { v.pre_n } else { 0 };
+    pn == vn
+}
+
+// ---- Derived versions used as range boundaries --------------------------
+
+fn clone_rel(r: ref Vec[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let n = r.len();
+    let mut i = 0;
+    while i < n { v.push(r[i]); i = i + 1; }
+    v
+}
+
+fn clone_ver(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n,
+        has_dev: v.has_dev, dev_n: v.dev_n }
+}
+
+fn with_dev0(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n, has_dev: true, dev_n: 0 }
+}
+
+fn with_dev_inc(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n, has_dev: true,
+        dev_n: v.dev_n + 1 }
+}
+
+fn with_post_inc(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: true, post_n: v.post_n + 1, has_dev: true, dev_n: 0 }
+}
+
+// epoch!rel.dev0 with no pre/post.
+fn ver_rel_dev0(epoch: i64, rel: own Vec[i64]) -> V {
+    V { valid: true, epoch: epoch, rel: rel, pre_kind: 3, pre_n: 0,
+        has_post: false, post_n: 0, has_dev: true, dev_n: 0 }
+}
+
+// the .dev0 of the next prefix: rel (a1,...,ak) -> (a1,...,a(k-1)+1).dev0.
+fn ver_next_prefix(epoch: i64, rel: ref Vec[i64]) -> V {
+    let n = rel.len();
+    let mut nr: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n - 1 { nr.push(rel[i]); i = i + 1; }
+    nr.push(rel[n - 1] + 1);
+    ver_rel_dev0(epoch, nr)
+}
+
+fn le_min(v: ref V) -> bool {
+    let mut z: Vec[i64] = Vec.new();
+    z.push(0);
+    let m = ver_rel_dev0(0, z);
+    vcmp(v, m) <= 0
+}
+
+// ---- Operator range membership (standard ops; no pre-release policy) -----
+
+fn in_bounds(sp: ref Spec, p: ref V) -> bool {
+    if sp.wild {
+        let lo = ver_rel_dev0(sp.v.epoch, clone_rel(sp.v.rel));
+        let hi = ver_next_prefix(sp.v.epoch, sp.v.rel);
+        let inlo = vcmp(p, lo) >= 0;
+        let inhi = vcmp(p, hi) < 0;
+        if sp.op == "==" { return inlo and inhi; }
+        return (not inlo) or (not inhi); // !=V.* : outside [lo, hi)
+    }
+    if sp.op == ">=" { return vcmp(p, sp.v) >= 0; }
+    if sp.op == "<=" { return vcmp(p, sp.v) <= 0; }
+    if sp.op == "==" { return vcmp(p, sp.v) == 0; }
+    if sp.op == "!=" { return vcmp(p, sp.v) != 0; }
+    if sp.op == "~=" {
+        let n = sp.v.rel.len();
+        let mut prefix: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < n - 1 { prefix.push(sp.v.rel[i]); i = i + 1; }
+        let hi = ver_next_prefix(sp.v.epoch, prefix);
+        return (vcmp(p, sp.v) >= 0) and (vcmp(p, hi) < 0);
+    }
+    if sp.op == "<" {
+        let bound = if is_pre(sp.v) { clone_ver(sp.v) } else { with_dev0(sp.v) };
+        if le_min(bound) { return false; }
+        return vcmp(p, bound) < 0;
+    }
+    if sp.op == ">" {
+        if sp.v.has_dev {
+            let bound = with_dev_inc(sp.v);
+            return vcmp(p, bound) >= 0;
+        }
+        if sp.v.has_post {
+            let bound = with_post_inc(sp.v);
+            return vcmp(p, bound) >= 0;
+        }
+        if vcmp(sp.v, p) >= 0 { return false; }
+        if same_base(p, sp.v) { return false; }
+        return true;
+    }
+    false
+}
+
+// ---- Specifier-set parsing ----------------------------------------------
+
+fn eq_ci(a: ref String, b: ref String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    if ab.len() != bb.len() { return false; }
+    let n = ab.len();
+    let mut i = 0;
+    while i < n {
+        if lower_byte(ab[i]) != lower_byte(bb[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn trim(s: ref String) -> String {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut lo = 0;
+    while lo < n and (b[lo] == 32 or b[lo] == 9) { lo = lo + 1; }
+    let mut hi = n;
+    while hi > lo and (b[hi - 1] == 32 or b[hi - 1] == 9) { hi = hi - 1; }
+    s.substring(lo, hi)
+}
+
+fn parse_spec(raw_in: ref String) -> Spec {
+    let s = trim(raw_in);
+    let n = s.bytes().len() as i64;
+    let mut op = String.new();
+    let mut rest_lo = 0;
+    if n >= 3 and s.substring(0, 3) == "===" { op.push_str("==="); rest_lo = 3; }
+    else if n >= 2 and s.substring(0, 2) == "~=" { op.push_str("~="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "==" { op.push_str("=="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "!=" { op.push_str("!="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "<=" { op.push_str("<="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == ">=" { op.push_str(">="); rest_lo = 2; }
+    else if n >= 1 and s.substring(0, 1) == "<" { op.push_str("<"); rest_lo = 1; }
+    else if n >= 1 and s.substring(0, 1) == ">" { op.push_str(">"); rest_lo = 1; }
+    else { op.push_str("=="); rest_lo = 0; }
+    let verpart = trim(s.substring(rest_lo, n));
+    if op == "===" {
+        return Spec { op: op, wild: false, v: invalid_ver(), raw: verpart };
+    }
+    let vn = verpart.bytes().len() as i64;
+    let mut wild = false;
+    let base = if vn >= 2 and verpart.substring(vn - 2, vn) == ".*" {
+        wild = true;
+        verpart.substring(0, vn - 2)
+    } else {
+        verpart.clone()
+    };
+    let pv = parse_ver(base);
+    Spec { op: op, wild: wild, v: pv, raw: verpart }
+}
+
+fn parse_set(s: ref String) -> Vec[Spec] {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut specs: Vec[Spec] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 44 { // ','
+            let piece = trim(s.substring(start, i));
+            if piece.bytes().len() > 0 { specs.push(parse_spec(piece)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    specs
+}
+
+// ---- contains / filter --------------------------------------------------
+
+fn set_contains(specs: ref Vec[Spec], item: ref String, pre_mode: i64) -> bool {
+    let p = parse_ver(item);
+    if pre_mode == 2 and p.valid and is_pre(p) { return false; }
+    for sp in specs {
+        if sp.op == "===" {
+            if not eq_ci(item, sp.raw) { return false; }
+        } else {
+            if not p.valid { return false; }
+            if not in_bounds(sp, p) { return false; }
+        }
+    }
+    true
+}
+
+fn item_in_set(specs: ref Vec[Spec], item: ref String) -> bool {
+    let p = parse_ver(item);
+    for sp in specs {
+        if sp.op == "===" {
+            if not eq_ci(item, sp.raw) { return false; }
+        } else {
+            if not p.valid { return false; }
+            if not in_bounds(sp, p) { return false; }
+        }
+    }
+    true
+}
+
+fn spec_is_pre(sp: ref Spec) -> bool {
+    if sp.op == "!=" { return false; }
+    if sp.op == "===" { return false; }
+    if sp.op == "==" and sp.wild { return false; }
+    if not sp.v.valid { return false; }
+    is_pre(sp.v)
+}
+
+fn set_is_pre(specs: ref Vec[Spec]) -> bool {
+    for sp in specs { if spec_is_pre(sp) { return true; } }
+    false
+}
+
+fn join_sp(items: ref Vec[String]) -> String {
+    if items.len() == 0 { return "(none)"; }
+    let mut s = String.new();
+    let mut i = 0;
+    let n = items.len();
+    while i < n {
+        if i > 0 { s.push_str(" "); }
+        s.push_str(items[i].clone());
+        i = i + 1;
+    }
+    s
+}
+
+fn filter_run(specs: ref Vec[Spec], items: ref Vec[String], pre_mode: i64) -> String {
+    let mut m = pre_mode;
+    if m == 0 and set_is_pre(specs) { m = 1; }
+    let mut res: Vec[String] = Vec.new();
+    if m == 1 {
+        for it in items {
+            if item_in_set(specs, it) { res.push(it.clone()); }
+        }
+    } else if m == 2 {
+        for it in items {
+            let p = parse_ver(it);
+            if p.valid and (not is_pre(p)) and item_in_set(specs, it) { res.push(it.clone()); }
+        }
+    } else {
+        let mut found = false;
+        let mut buf: Vec[String] = Vec.new();
+        for it in items {
+            if item_in_set(specs, it) {
+                let p = parse_ver(it);
+                if p.valid and (not is_pre(p)) { found = true; res.push(it.clone()); }
+                else if p.valid and is_pre(p) { if not found { buf.push(it.clone()); } }
+            }
+        }
+        if not found {
+            let mut i = 0;
+            let bn = buf.len();
+            while i < bn { res.push(buf[i].clone()); i = i + 1; }
+        }
+    }
+    join_sp(res)
+}
+
+fn pmode(s: ref String) -> i64 {
+    if s == "true" { 1 } else if s == "false" { 2 } else { 0 }
+}
+
+fn split_commas(s: ref String) -> Vec[String] {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 44 {
+            out.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ---- driver -------------------------------------------------------------
+
+fn run_job(fields: ref Vec[String]) -> String {
+    let op = fields[0].clone();
+    if op == "contains" {
+        let spec_s = fields[1].clone();
+        let specs = parse_set(spec_s);
+        let version = fields[2].clone();
+        let pre_s = fields[3].clone();
+        let pm = pmode(pre_s);
+        if set_contains(specs, version, pm) { return "True"; }
+        return "False";
+    }
+    if op == "filter" {
+        let spec_s = fields[1].clone();
+        let specs = parse_set(spec_s);
+        let pre_s = fields[2].clone();
+        let pm = pmode(pre_s);
+        let list_s = fields[3].clone();
+        let items = split_commas(list_s);
+        return filter_run(specs, items, pm);
+    }
+    "unknown op"
+}
+
+fn split_fields(line: ref String) -> Vec[String] {
+    let v = bytes_of(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                let op = fields[0].clone();
+                let mut args = String.new();
+                let mut k = 1;
+                let fc = fields.len();
+                while k < fc {
+                    if k > 1 { args.push_str(" "); }
+                    args.push_str(fields[k].clone());
+                    k = k + 1;
+                }
+                out.push_str("== ");
+                out.push_str(op);
+                out.push_str(" | ");
+                out.push_str(args);
+                out.push_str("\n  ");
+                out.push_str(run_job(fields));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("contains\t>=1.2.3\t1.2.3\tnone\n");
+    s.push_str("contains\t>=1.2.3\t1.2.2\tnone\n");
+    s.push_str("contains\t>=1.2.3\t1.3\tnone\n");
+    s.push_str("contains\t>=1.2.3\t2.0\tnone\n");
+    s.push_str("contains\t>=1.2.3\t1.3.0a1\tnone\n");
+    s.push_str("contains\t>=1.2.3\t1.2.3a1\tnone\n");
+    s.push_str("contains\t>=1.2.3\t1.3.0a1\tfalse\n");
+    s.push_str("contains\t<=2.0\t2.0\tnone\n");
+    s.push_str("contains\t<=2.0\t2.0.0\tnone\n");
+    s.push_str("contains\t<=2.0\t2.0.1\tnone\n");
+    s.push_str("contains\t<=2.0\t1.9\tnone\n");
+    s.push_str("contains\t<=2.0\t2.0a1\tnone\n");
+    s.push_str("contains\t<1.0\t0.9\tnone\n");
+    s.push_str("contains\t<1.0\t1.0\tnone\n");
+    s.push_str("contains\t<1.0\t1.0a1\tnone\n");
+    s.push_str("contains\t<1.0\t1.0.dev1\tnone\n");
+    s.push_str("contains\t<1.0\t0.9.9\tnone\n");
+    s.push_str("contains\t<1.0a2\t1.0a1\tnone\n");
+    s.push_str("contains\t<1.0a2\t1.0a2\tnone\n");
+    s.push_str("contains\t<1.0a2\t0.9\tnone\n");
+    s.push_str("contains\t>1.0\t1.0\tnone\n");
+    s.push_str("contains\t>1.0\t1.0.post1\tnone\n");
+    s.push_str("contains\t>1.0\t1.0.1\tnone\n");
+    s.push_str("contains\t>1.0\t1.1\tnone\n");
+    s.push_str("contains\t>1.0\t2.0\tnone\n");
+    s.push_str("contains\t>1.0.post1\t1.0.post1\tnone\n");
+    s.push_str("contains\t>1.0.post1\t1.0.post2\tnone\n");
+    s.push_str("contains\t>1.0.post1\t1.1\tnone\n");
+    s.push_str("contains\t==1.2.3\t1.2.3\tnone\n");
+    s.push_str("contains\t==1.2.3\t1.2.3.0\tnone\n");
+    s.push_str("contains\t==1.2.3\t1.2.3.1\tnone\n");
+    s.push_str("contains\t==1.2.3\t1.2\tnone\n");
+    s.push_str("contains\t!=1.2.3\t1.2.3\tnone\n");
+    s.push_str("contains\t!=1.2.3\t1.2.4\tnone\n");
+    s.push_str("contains\t!=1.2.3\t1.2.3.0\tnone\n");
+    s.push_str("contains\t==1.2.*\t1.2\tnone\n");
+    s.push_str("contains\t==1.2.*\t1.2.5\tnone\n");
+    s.push_str("contains\t==1.2.*\t1.3\tnone\n");
+    s.push_str("contains\t==1.2.*\t1.1.9\tnone\n");
+    s.push_str("contains\t==1.2.*\t1.2.0\tnone\n");
+    s.push_str("contains\t!=1.4.*\t1.4\tnone\n");
+    s.push_str("contains\t!=1.4.*\t1.4.7\tnone\n");
+    s.push_str("contains\t!=1.4.*\t1.5\tnone\n");
+    s.push_str("contains\t!=1.4.*\t1.3.9\tnone\n");
+    s.push_str("contains\t~=2.2\t2.2\tnone\n");
+    s.push_str("contains\t~=2.2\t2.5\tnone\n");
+    s.push_str("contains\t~=2.2\t3.0\tnone\n");
+    s.push_str("contains\t~=2.2\t2.1\tnone\n");
+    s.push_str("contains\t~=2.2\t2.2.9\tnone\n");
+    s.push_str("contains\t~=1.4.5\t1.4.5\tnone\n");
+    s.push_str("contains\t~=1.4.5\t1.4.9\tnone\n");
+    s.push_str("contains\t~=1.4.5\t1.5\tnone\n");
+    s.push_str("contains\t~=1.4.5\t1.4.4\tnone\n");
+    s.push_str("contains\t~=1.4.5\t1.5.0\tnone\n");
+    s.push_str("contains\t===1.0.0\t1.0.0\tnone\n");
+    s.push_str("contains\t===1.0.0\t1.0\tnone\n");
+    s.push_str("contains\t===1.0.0\t1.0.0+local\tnone\n");
+    s.push_str("contains\t===1.0.0\tfoobar\tnone\n");
+    s.push_str("contains\t===foobar\tfoobar\tnone\n");
+    s.push_str("contains\t===foobar\tFOOBAR\tnone\n");
+    s.push_str("contains\t===foobar\tfoo\tnone\n");
+    s.push_str("contains\t==2!1.0\t2!1.0\tnone\n");
+    s.push_str("contains\t==2!1.0\t1.0\tnone\n");
+    s.push_str("contains\t==2!1.0\t2!1.0.0\tnone\n");
+    s.push_str("contains\t>=1!0\t1!0\tnone\n");
+    s.push_str("contains\t>=1!0\t99\tnone\n");
+    s.push_str("contains\t>=1!0\t1!0.1\tnone\n");
+    s.push_str("contains\t>=1.0b2\t1.0b2\tnone\n");
+    s.push_str("contains\t>=1.0b2\t1.0rc1\tnone\n");
+    s.push_str("contains\t>=1.0b2\t1.0\tnone\n");
+    s.push_str("contains\t>=1.0b2\t1.0b1\tnone\n");
+    s.push_str("contains\t>=1.0b2\t1.0a9\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.0\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.5\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t2.0\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t0.9\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.9.9\tnone\n");
+    s.push_str("contains\t>=1.0,!=1.5,<2.0\t1.4\tnone\n");
+    s.push_str("contains\t>=1.0,!=1.5,<2.0\t1.5\tnone\n");
+    s.push_str("contains\t>=1.0,!=1.5,<2.0\t1.6\tnone\n");
+    s.push_str("contains\t>=1.0,!=1.5,<2.0\t2.0\tnone\n");
+    s.push_str("contains\t~=1.4,!=1.4.5\t1.4.0\tnone\n");
+    s.push_str("contains\t~=1.4,!=1.4.5\t1.4.5\tnone\n");
+    s.push_str("contains\t~=1.4,!=1.4.5\t1.4.6\tnone\n");
+    s.push_str("contains\t~=1.4,!=1.4.5\t1.5\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.5a1\tnone\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.5a1\ttrue\n");
+    s.push_str("contains\t>=1.0,<2.0\t1.5a1\tfalse\n");
+    s.push_str("contains\t\t1.0\tnone\n");
+    s.push_str("contains\t\t2.0a1\tnone\n");
+    s.push_str("contains\t\tlolwat\tnone\n");
+    s.push_str("contains\t==1.0\t1.0.0\tnone\n");
+    s.push_str("contains\t==1.0\t1!1.0\tnone\n");
+    s.push_str("contains\t==1.0\tv1.0\tnone\n");
+    s.push_str("contains\t>1.0a1\t1.0alpha2\tnone\n");
+    s.push_str("contains\t>1.0a1\t1.0a1\tnone\n");
+    s.push_str("contains\t>1.0a1\t1.0c1\tnone\n");
+    s.push_str("contains\t>1.0a1\t1.0preview1\tnone\n");
+    s.push_str("contains\t>=1.0\tlolwat\tnone\n");
+    s.push_str("contains\t>=1.0\t1..2\tnone\n");
+    s.push_str("contains\t>=1.0\t\tnone\n");
+    s.push_str("filter\t>=1.2.3\tnone\t1.2,1.3,1.5a1\n");
+    s.push_str("filter\t>=1.2.3\tnone\t1.2,1.5a1\n");
+    s.push_str("filter\t>=1.2.3\ttrue\t1.3,1.5a1\n");
+    s.push_str("filter\t>=1.2.3\tfalse\t1.3,1.5a1,1.4\n");
+    s.push_str("filter\t>=1.0,<2.0\tnone\t0.9,1.0,1.5,1.9,2.0,1.7b1\n");
+    s.push_str("filter\t~=1.4\tnone\t1.3,1.4,1.4.9,1.5,2.0\n");
+    s.push_str("filter\t==1.2.*\tnone\t1.1,1.2,1.2.9,1.3,1.2a1\n");
+    s.push_str("filter\t>=2.0b1\tnone\t2.0a1,2.0b1,2.0b2,2.0,1.9\n");
+    s.push_str("filter\t\tnone\t1.3,1.5a1\n");
+    s.push_str("filter\t\ttrue\t1.3,1.5a1\n");
+    s.push_str("filter\t\tfalse\t1.3,1.5a1\n");
+    s.push_str("filter\t!=1.5\tnone\t1.4,1.5,1.6,1.5a1\n");
+    s
+}
