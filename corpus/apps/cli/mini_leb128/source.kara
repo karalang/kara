@@ -1,0 +1,333 @@
+// mini_leb128 — a port of leb128 1.0.9 (MIT; Mohanson), the LEB128
+// (Little-Endian Base 128) variable-length integer codec. LEB128 stores an
+// integer in as few 7-bit groups as its magnitude needs, each byte carrying a
+// high continuation bit; it is how the DWARF debug format and the WebAssembly
+// binary format write every integer literal, and the same scheme (its unsigned
+// half) is Protocol Buffers' varint. This port follows leb128/__init__.py for
+// both the unsigned codec (`u`) and the signed one (`i`): the same 7-bit loop,
+// the signed encoder's two-sided stop test on bit 6, and the signed decoder's
+// sign extension. The library uses Python big integers; this port is i64, which
+// is the documented boundary (arbitrary precision aside, it is exact — Kāra's
+// i64 `>>`, `&` and `|` match Python's on the two's-complement bits, negatives
+// included). Values are given as decimal (encode) or hex bytes (decode). See
+// README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn hex_digit(n: i64) -> u8 {
+    if n < 10 {
+        (48 + n) as u8
+    } else {
+        (87 + n) as u8
+    }
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v = bytes[i] as i64;
+        out.push(hex_digit(v >> 4));
+        out.push(hex_digit(v & 15));
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+fn parse_hex(s: String) -> Vec[u8] {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < m {
+        let hi = hex_nibble(b[i]);
+        let lo = hex_nibble(b[i + 1]);
+        out.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+    out
+}
+
+// Decimal (with optional leading '-') to i64.
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut neg = false;
+    let mut i = 0;
+    if m > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + ((b[i] as i64) - 48);
+        i = i + 1;
+    }
+    if neg {
+        0 - v
+    } else {
+        v
+    }
+}
+
+// i64 to decimal (with a leading '-' when negative).
+fn itoa(n0: i64) -> String {
+    if n0 == 0 {
+        return "0";
+    }
+    let mut n = n0;
+    let mut neg = false;
+    if n < 0 {
+        neg = true;
+        n = 0 - n;
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    while n > 0 {
+        digits.push((48 + (n % 10)) as u8);
+        n = n / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45);
+    }
+    let mut j = digits.len();
+    while j > 0 {
+        j = j - 1;
+        out.push(digits[j]);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// Unsigned LEB128 encode (x >= 0).
+fn u_encode(x0: i64) -> Vec[u8] {
+    let mut x = x0;
+    let mut r: Vec[u8] = Vec.new();
+    let mut done = false;
+    while not done {
+        let b = x & 0x7f;
+        x = x >> 7;
+        if x == 0 {
+            r.push(b as u8);
+            done = true;
+        } else {
+            r.push((0x80 | b) as u8);
+        }
+    }
+    r
+}
+
+fn u_decode(bs: ref Vec[u8]) -> i64 {
+    let mut r: i64 = 0;
+    let mut i = 0;
+    while i < bs.len() {
+        let e = bs[i] as i64;
+        r = r + ((e & 0x7f) << (i * 7));
+        i = i + 1;
+    }
+    r
+}
+
+// Signed LEB128 encode: stop once the sign bit of the group matches the sign of
+// the remaining value (bit 6 clear when the rest is 0, set when the rest is -1).
+fn i_encode(x0: i64) -> Vec[u8] {
+    let mut x = x0;
+    let mut r: Vec[u8] = Vec.new();
+    let mut done = false;
+    while not done {
+        let b = x & 0x7f;
+        x = x >> 7;
+        if (x == 0 and (b & 0x40) == 0) or (x == -1 and (b & 0x40) != 0) {
+            r.push(b as u8);
+            done = true;
+        } else {
+            r.push((0x80 | b) as u8);
+        }
+    }
+    r
+}
+
+// Signed LEB128 decode: reassemble, then sign-extend if bit 6 of the last byte
+// is set.
+fn i_decode(bs: ref Vec[u8]) -> i64 {
+    let mut r: i64 = 0;
+    let mut i = 0;
+    while i < bs.len() {
+        let e = bs[i] as i64;
+        r = r + ((e & 0x7f) << (i * 7));
+        i = i + 1;
+    }
+    let k = bs.len() - 1;
+    let last = bs[k] as i64;
+    if (last & 0x40) != 0 {
+        r = r | (0 - (1 << (k * 7 + 7)));
+    }
+    r
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                if f[0] == "ue" {
+                    let v = parse_int(f[1].clone());
+                    let e = u_encode(v);
+                    out.push_str(to_hex(e));
+                } else if f[0] == "ud" {
+                    let bs = parse_hex(f[1].clone());
+                    out.push_str(itoa(u_decode(bs)));
+                } else if f[0] == "se" {
+                    let v = parse_int(f[1].clone());
+                    let e = i_encode(v);
+                    out.push_str(to_hex(e));
+                } else if f[0] == "sd" {
+                    let bs = parse_hex(f[1].clone());
+                    out.push_str(itoa(i_decode(bs)));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("ue\t0\n");
+    s.push_str("ue\t1\n");
+    s.push_str("ue\t63\n");
+    s.push_str("ue\t64\n");
+    s.push_str("ue\t100\n");
+    s.push_str("ue\t127\n");
+    s.push_str("ue\t128\n");
+    s.push_str("ue\t129\n");
+    s.push_str("ue\t255\n");
+    s.push_str("ue\t256\n");
+    s.push_str("ue\t300\n");
+    s.push_str("ue\t624485\n");
+    s.push_str("ue\t16383\n");
+    s.push_str("ue\t16384\n");
+    s.push_str("ue\t2097151\n");
+    s.push_str("ue\t2097152\n");
+    s.push_str("ue\t1000000000\n");
+    s.push_str("ue\t1099511627776\n");
+    s.push_str("ue\t281474976710655\n");
+    s.push_str("ue\t999999999999\n");
+    s.push_str("ud\t00\n");
+    s.push_str("ud\t01\n");
+    s.push_str("ud\t3f\n");
+    s.push_str("ud\t40\n");
+    s.push_str("ud\t64\n");
+    s.push_str("ud\t7f\n");
+    s.push_str("ud\t8001\n");
+    s.push_str("ud\t8101\n");
+    s.push_str("ud\tff01\n");
+    s.push_str("ud\t8002\n");
+    s.push_str("ud\tac02\n");
+    s.push_str("ud\te58e26\n");
+    s.push_str("ud\tff7f\n");
+    s.push_str("ud\t808001\n");
+    s.push_str("ud\tffff7f\n");
+    s.push_str("ud\t80808001\n");
+    s.push_str("ud\t8094ebdc03\n");
+    s.push_str("ud\t808080808020\n");
+    s.push_str("ud\tffffffffffff3f\n");
+    s.push_str("ud\tff9f94a58d1d\n");
+    s.push_str("se\t0\n");
+    s.push_str("se\t1\n");
+    s.push_str("se\t-1\n");
+    s.push_str("se\t63\n");
+    s.push_str("se\t64\n");
+    s.push_str("se\t-63\n");
+    s.push_str("se\t-64\n");
+    s.push_str("se\t-65\n");
+    s.push_str("se\t127\n");
+    s.push_str("se\t-128\n");
+    s.push_str("se\t-129\n");
+    s.push_str("se\t128\n");
+    s.push_str("se\t300\n");
+    s.push_str("se\t-300\n");
+    s.push_str("se\t624485\n");
+    s.push_str("se\t-624485\n");
+    s.push_str("se\t-123456\n");
+    s.push_str("se\t1000000000\n");
+    s.push_str("se\t-1000000000\n");
+    s.push_str("se\t1099511627775\n");
+    s.push_str("se\t-1099511627776\n");
+    s.push_str("se\t-2\n");
+    s.push_str("se\t2\n");
+    s.push_str("se\t-2097152\n");
+    s.push_str("sd\t00\n");
+    s.push_str("sd\t01\n");
+    s.push_str("sd\t7f\n");
+    s.push_str("sd\t3f\n");
+    s.push_str("sd\tc000\n");
+    s.push_str("sd\t41\n");
+    s.push_str("sd\t40\n");
+    s.push_str("sd\tbf7f\n");
+    s.push_str("sd\tff00\n");
+    s.push_str("sd\t807f\n");
+    s.push_str("sd\tff7e\n");
+    s.push_str("sd\t8001\n");
+    s.push_str("sd\tac02\n");
+    s.push_str("sd\td47d\n");
+    s.push_str("sd\te58e26\n");
+    s.push_str("sd\t9bf159\n");
+    s.push_str("sd\tc0bb78\n");
+    s.push_str("sd\t8094ebdc03\n");
+    s.push_str("sd\t80ec94a37c\n");
+    s.push_str("sd\tffffffffff1f\n");
+    s.push_str("sd\t808080808060\n");
+    s.push_str("sd\t7e\n");
+    s.push_str("sd\t02\n");
+    s.push_str("sd\t8080807f\n");
+    s
+}
