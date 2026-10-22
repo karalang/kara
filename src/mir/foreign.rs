@@ -59,6 +59,31 @@ fn candidates(name: &str, search_paths: &[String]) -> Vec<String> {
 }
 
 fn open_all() -> Result<Vec<Handle>, String> {
+    let mut handles = open_libs(RTLD_NOW)?;
+    // SAFETY: a null name opens the process itself.
+    let own = unsafe { dlopen(std::ptr::null(), RTLD_NOW) };
+    if own.is_null() {
+        return Err(last_error());
+    }
+    handles.push(Handle(own));
+    Ok(handles)
+}
+
+/// `RTLD_GLOBAL`: a library's symbols join the process's own.
+const RTLD_GLOBAL: c_int = if cfg!(target_os = "macos") {
+    0x8
+} else {
+    0x100
+};
+
+/// Opens the `[link]` table's libraries into the process's own symbols, for
+/// `karac_jit_runner`, whose JIT resolves a compiled program's `extern "C"`
+/// calls by looking in the process (the mir-llvm backend, B-2026-10-22-10).
+pub fn load_link_libraries_globally() -> Result<(), String> {
+    open_libs(RTLD_NOW | RTLD_GLOBAL).map(|_| ())
+}
+
+fn open_libs(flags: c_int) -> Result<Vec<Handle>, String> {
     let mut handles = Vec::new();
     if let Some(link) = crate::target::native_link_config() {
         for lib in &link.libs {
@@ -67,7 +92,7 @@ fn open_all() -> Result<Vec<Handle>, String> {
             for file in candidates(lib, &link.search_paths) {
                 let c = CString::new(file).map_err(|e| e.to_string())?;
                 // SAFETY: a NUL-terminated file name.
-                let h = unsafe { dlopen(c.as_ptr(), RTLD_NOW) };
+                let h = unsafe { dlopen(c.as_ptr(), flags) };
                 if h.is_null() {
                     why = last_error();
                 } else {
@@ -85,12 +110,6 @@ fn open_all() -> Result<Vec<Handle>, String> {
             }
         }
     }
-    // SAFETY: a null name opens the process itself.
-    let own = unsafe { dlopen(std::ptr::null(), RTLD_NOW) };
-    if own.is_null() {
-        return Err(last_error());
-    }
-    handles.push(Handle(own));
     Ok(handles)
 }
 

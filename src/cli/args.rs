@@ -102,18 +102,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             });
             crate::mir::interp::set_source_name(path);
-            // The libraries an `extern "C"` call is looked up in: the
-            // `[link]` table of the manifest the file is under, if it has
-            // one that loads (a run needs no manifest).
-            let dir = std::path::Path::new(path)
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(std::path::Path::new("."));
-            if let Some(m) = crate::manifest::discover_project_root(dir)
-                .and_then(|root| crate::manifest::load_from_root(&root).ok())
-            {
-                crate::target::set_native_link_config(m.link_libs, m.link_search_paths);
-            }
+            install_manifest_link(path);
             // The MIR interpreter drops a long chain (a 100 000-node list)
             // by recursion, so it runs on a thread with room for that.
             let result = std::thread::Builder::new()
@@ -158,6 +147,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             });
             crate::mir::interp::set_source_name(path);
+            install_manifest_link(path);
             let ir = crate::mir::lower::build_source(&src).and_then(|l| {
                 crate::mir::lower::compiled_check(&l)?;
                 crate::codegen::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
@@ -180,7 +170,10 @@ pub fn parse_args(args: &[String]) -> Command {
                 eprintln!("error[mir]: llvm: {}: {e}", ll.display());
                 process::exit(3);
             }
-            let status = process::Command::new(runner).arg(&ll).status();
+            let mut cmd = process::Command::new(runner);
+            jit_link_env(&mut cmd);
+            program_args_env(&mut cmd);
+            let status = cmd.arg(&ll).status();
             let _ = std::fs::remove_file(&ll);
             match status {
                 Ok(s) => process::exit(s.code().unwrap_or(101)),
@@ -206,6 +199,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             });
             crate::mir::interp::set_source_name(path);
+            install_manifest_link(path);
             let fail = |e: String| -> ! {
                 eprintln!("error[mir]: {e}");
                 process::exit(3);
@@ -240,6 +234,7 @@ pub fn parse_args(args: &[String]) -> Command {
                     cmd.env(var, "exitcode=86");
                 }
             }
+            program_args_env(&mut cmd);
             let status = cmd.status();
             let _ = std::fs::remove_dir_all(&dir);
             match status {
@@ -2311,6 +2306,46 @@ fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec
         file.to_string(),
         crate::call_graph::TargetSpec::Function(name),
     )
+}
+
+/// Installs the `[link]` table of the manifest `path` is under, if it has
+/// one that loads (a single file needs no manifest): the libraries an
+/// `extern "C"` call is looked up in, by the MIR interpreter's `dlopen` and
+/// the compiled backend's link line (B-2026-10-22-10).
+pub(crate) fn install_manifest_link(path: &str) {
+    let dir = std::path::Path::new(path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    if let Some(m) = crate::manifest::discover_project_root(dir)
+        .and_then(|root| crate::manifest::load_from_root(&root).ok())
+    {
+        if !m.link_libs.is_empty() || !m.link_search_paths.is_empty() {
+            crate::target::set_native_link_config(m.link_libs, m.link_search_paths);
+        }
+    }
+}
+
+/// Hands the installed `[link]` table to a `karac_jit_runner` about to run a
+/// compiled program, which opens the libraries before the JIT resolves the
+/// program's `extern "C"` calls (unit-separator joined, as
+/// `KARAC_PROGRAM_ARGS` is).
+#[cfg(feature = "llvm")]
+pub(crate) fn jit_link_env(cmd: &mut process::Command) {
+    if let Some(link) = crate::target::native_link_config() {
+        cmd.env("KARAC_JIT_LINK_LIBS", link.libs.join("\u{1F}"));
+        cmd.env("KARAC_JIT_LINK_PATHS", link.search_paths.join("\u{1F}"));
+    }
+}
+
+/// The program's `Env.args()` under the hidden MIR runners: what the MIR
+/// interpreter reports when nothing set them (`["main"]`), unless the caller
+/// passed `KARAC_PROGRAM_ARGS` itself (B-2026-10-22-27).
+#[cfg(feature = "llvm")]
+fn program_args_env(cmd: &mut process::Command) {
+    if std::env::var_os("KARAC_PROGRAM_ARGS").is_none() {
+        cmd.env("KARAC_PROGRAM_ARGS", "main");
+    }
 }
 
 #[cfg(test)]

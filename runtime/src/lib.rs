@@ -240,6 +240,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_print_end,
         mir::karac_mir_fmt_end_string,
         mir::karac_mir_string_from,
+        mir::karac_mir_env_args,
         mir::karac_mir_vec_reserve,
         mir::karac_mir_vec_alloc,
         mir::karac_mir_bytes_eq,

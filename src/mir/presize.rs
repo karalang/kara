@@ -568,29 +568,31 @@ fn plan(
             Operand::Copy(p) if p.projection.is_empty() => copied_const(body, p.local),
             _ => None,
         };
-        let bound = match &bound {
-            _ if let Some(raw) = lit => {
-                let room = signed_value(raw, bits, signed) + delta;
-                if room <= 0 || room > MAX_LITERAL_ROOM {
-                    continue;
-                }
-                Operand::Const(Const {
-                    ty: tys.intern(TyKind::Int(super::ty::IntTy::I64)),
-                    kind: ConstKind::Scalar((room - delta) as u128),
-                })
+        // (`if let` rather than a guard: the MSRV floor has no `if let` guards.)
+        let bound = if let Some(raw) = lit {
+            let room = signed_value(raw, bits, signed) + delta;
+            if room <= 0 || room > MAX_LITERAL_ROOM {
+                continue;
             }
-            Operand::Copy(p) if p.projection.is_empty() => {
-                let Some(b) = settled(body, idom, nb, p.local)
-                    .or_else(|| copied_from(body, p.local, |x| settled(body, idom, nb, x)))
-                else {
-                    continue;
-                };
-                if !matches!(tys.kind(body.local(b).ty), TyKind::Int(t) if t.bits() <= 64) {
-                    continue;
+            Operand::Const(Const {
+                ty: tys.intern(TyKind::Int(super::ty::IntTy::I64)),
+                kind: ConstKind::Scalar((room - delta) as u128),
+            })
+        } else {
+            match &bound {
+                Operand::Copy(p) if p.projection.is_empty() => {
+                    let Some(b) = settled(body, idom, nb, p.local)
+                        .or_else(|| copied_from(body, p.local, |x| settled(body, idom, nb, x)))
+                    else {
+                        continue;
+                    };
+                    if !matches!(tys.kind(body.local(b).ty), TyKind::Int(t) if t.bits() <= 64) {
+                        continue;
+                    }
+                    Operand::Copy(Place::local(b))
                 }
-                Operand::Copy(Place::local(b))
+                _ => continue,
             }
-            _ => continue,
         };
         out.push(Plan {
             new_block: nb,

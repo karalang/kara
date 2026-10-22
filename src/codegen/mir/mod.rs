@@ -36,6 +36,7 @@ mod deque;
 mod drop;
 mod flag;
 mod fmt;
+mod foreign;
 mod io;
 mod key;
 mod num;

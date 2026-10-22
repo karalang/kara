@@ -2440,6 +2440,72 @@ fn extern_c_calls_run_on_the_mir_interpreter() {
     );
 }
 
+/// The same calls compiled (B-2026-10-22-10): on the MIR→LLVM JIT, which
+/// loads the `[link]` table's libraries into its runner, and built by
+/// `build --mir`, which links them; the float signature is refused on both.
+#[cfg(feature = "llvm")]
+#[test]
+fn extern_c_calls_run_compiled() {
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let dir = Scratch::new("extern_c_compiled");
+    let libc = dir.path().join("libc.kara");
+    std::fs::write(&libc, EXTERN_LIBC).unwrap();
+    let float = dir.path().join("float.kara");
+    std::fs::write(&float, EXTERN_FLOAT).unwrap();
+    let zlib = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/interop-zlib/src/main.kara");
+    let zlib_out =
+        "original: 1440 bytes\ncompressed: smaller than original\nround-trip length: OK\n\
+                    crc32 in:  1141850752\ncrc32 out: 1141850752\nround-trip: OK\n";
+    for (file, want) in [(&libc, "7\n9000000000\n5\n"), (&zlib, zlib_out)] {
+        let jit = Command::new(karac)
+            .args(["__mir-llvm-run", file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            jit.status.success(),
+            "{}: {}",
+            file.display(),
+            String::from_utf8_lossy(&jit.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&jit.stdout), want);
+        let exe = dir.path().join(format!(
+            "{}.bin",
+            file.file_stem().unwrap().to_string_lossy()
+        ));
+        let built = Command::new(karac)
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let linked = common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&built.stderr).to_string())
+        });
+        if linked.is_some() {
+            let run = Command::new(&exe).output().unwrap();
+            assert!(
+                run.status.success(),
+                "{}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&run.stdout), want);
+        }
+    }
+    let out = Command::new(karac)
+        .args(["__mir-llvm-run", float.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the `extern \"C\"` function `sqrt`"), "{err}");
+}
+
 /// A call on a program-rooted resource outside any `with_provider` goes to
 /// its default provider (core-semantics §14.7): `Env.var` and `env.var` are
 /// `OsEnv.var` on a fresh `OsEnv {}`, and so on, with the ambient output.

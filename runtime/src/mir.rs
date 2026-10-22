@@ -369,6 +369,41 @@ pub unsafe extern "C" fn karac_mir_string_of_u64(out: *mut RawVec, v: u64) {
     unsafe { string_of(out, &d[i..]) };
 }
 
+/// `Env.args()`: the program's arguments as a `Vec[String]` at `out`. Under
+/// `karac run` the hosting process is the JIT runner, so the program's argv
+/// comes from `KARAC_PROGRAM_ARGS` (unit-separator joined, as
+/// `karac_runtime_env_args_into` reads it); a built binary's is its own.
+///
+/// # Safety
+/// `out` is writable for a `Vec[String]`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_env_args(out: *mut RawVec) {
+    let args: Vec<String> = match std::env::var("KARAC_PROGRAM_ARGS") {
+        Ok(packed) => packed.split('\u{1F}').map(str::to_string).collect(),
+        Err(_) => std::env::args_os()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+    };
+    let size = std::mem::size_of::<RawVec>();
+    let ptr = if args.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        karac_realloc_or_panic(std::ptr::null_mut(), args.len() * size)
+    };
+    for (i, a) in args.iter().enumerate() {
+        // SAFETY: `ptr` has room for `args.len()` strings.
+        unsafe { string_of(ptr.add(i * size).cast(), a.as_bytes()) };
+    }
+    // SAFETY: the caller's contract.
+    unsafe {
+        out.write(RawVec {
+            ptr,
+            len: args.len(),
+            cap: args.len(),
+        })
+    };
+}
+
 /// `String.from(s)`: a copy of the `str` `ptr[..len]`.
 ///
 /// # Safety

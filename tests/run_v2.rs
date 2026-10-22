@@ -184,6 +184,51 @@ fn run_v2_interp_env_args_is_the_programs_argv() {
     );
 }
 
+/// The same on the compiled lanes (B-2026-10-22-27): `karac run`'s JIT,
+/// and a `karac build --mir` binary, whose first argument is its own path.
+#[cfg(feature = "llvm")]
+#[test]
+fn run_v2_compiled_env_args_is_the_programs_argv() {
+    let path = write(
+        "args_llvm",
+        "fn main() {\n    let a = env.args();\n    println(f\"{a.len()}\");\n    for x in a { println(x); }\n}\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .env_remove("KARAC_LEGACY")
+        .arg("run")
+        .arg(&path)
+        .args(["--", "one", "two words"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        text(&out.stdout),
+        format!("3\n{}\none\ntwo words\n", path.display()),
+        "{}",
+        text(&out.stderr)
+    );
+    let exe = path.with_extension("bin");
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["build", "--mir"])
+        .arg(&path)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    if !built.status.success() {
+        // No runtime archive: nothing to run.
+        eprintln!("skipped the built leg: {}", text(&built.stderr));
+        return;
+    }
+    let out = Command::new(&exe)
+        .args(["one", "two words"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        text(&out.stdout),
+        format!("3\n{}\none\ntwo words\n", exe.display())
+    );
+}
+
 #[test]
 fn run_v2_refuses_sequential_by_name() {
     let path = write("seq", "fn main() {\n    println(\"hi\");\n}\n");

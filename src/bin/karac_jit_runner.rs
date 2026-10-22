@@ -397,6 +397,11 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
         }
     };
 
+    if let Err(e) = load_link_libraries() {
+        eprintln!("karac_jit_runner: {e}");
+        return ExitCode::from(2);
+    }
+
     let engine = match LLJITEngine::new() {
         Ok(e) => e,
         Err(e) => {
@@ -1097,4 +1102,23 @@ fn write_cell_setup_error(id: u64, msg: &str) {
 
 fn write_protocol_error(msg: &str) {
     eprintln!("karac_jit_runner: protocol error: {msg}");
+}
+
+/// Opens the libraries of the program's `[link]` table, which `karac` hands
+/// over in `KARAC_JIT_LINK_LIBS` / `KARAC_JIT_LINK_PATHS`, into this
+/// process's symbols, where the JIT looks for an `extern "C"` function the
+/// program calls (B-2026-10-22-10).
+fn load_link_libraries() -> Result<(), String> {
+    let Ok(libs) = std::env::var("KARAC_JIT_LINK_LIBS") else {
+        return Ok(());
+    };
+    let split = |s: String| -> Vec<String> {
+        s.split('\u{1F}')
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let paths = std::env::var("KARAC_JIT_LINK_PATHS").unwrap_or_default();
+    karac::target::set_native_link_config(split(libs), split(paths));
+    karac::mir::foreign::load_link_libraries_globally()
 }

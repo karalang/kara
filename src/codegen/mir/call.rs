@@ -34,6 +34,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 if program.bodies.contains_key(&inst.name) {
                     self.call_body(&inst.name, args, dest)?;
+                } else if let Some(sig) = program.externs.get(&inst.name) {
+                    self.foreign_call(&inst.name, sig, args, dest)?;
                 } else {
                     self.native(&inst.name, args, dest)?;
                 }
@@ -1220,10 +1222,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Env", "args") => {
                 let d = self.place_ptr(dest)?;
-                self.vec_alloc(d, self.i64(1), 24)?;
-                let buf = self.load_ptr(d)?;
-                let (s, n) = self.str_const("main")?;
-                self.rt("string_from", &[buf.into(), s.into(), n.into()])
+                self.rt("env_args", &[d.into()])
             }
             (
                 "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque",

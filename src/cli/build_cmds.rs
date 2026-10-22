@@ -4277,6 +4277,9 @@ pub(super) fn cmd_build_mir(
             }
         }
         crate::mir::interp::set_source_name(filename);
+        // The `[link]` table's libraries, for the program's `extern "C"`
+        // functions (B-2026-10-22-10).
+        super::args::install_manifest_link(filename);
         let opt = match std::env::var("KARAC_MIR_OPT") {
             Ok(v) => v
                 .parse::<u8>()
