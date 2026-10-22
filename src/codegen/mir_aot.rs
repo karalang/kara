@@ -17,6 +17,7 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::AddressSpace;
 use std::path::Path;
 
+mod select_branch;
 mod split;
 
 /// Compile `ir` to a native object at `obj`.
@@ -148,6 +149,8 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         module
             .run_passes(&passes, tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;
+        // SAFETY: the module is live for the call.
+        unsafe { select_branch::mark_index_steps(module.as_mut_ptr()) };
     }
     Ok(())
 }
