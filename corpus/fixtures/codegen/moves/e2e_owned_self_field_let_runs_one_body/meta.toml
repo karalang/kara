@@ -13,5 +13,5 @@ env = {}
 note = "a pin from the drop model, read off the program: `borrowedlet(mut ref self)` binds `let e = ref self.e`, a borrow, so nothing drops in it, and `a8`, the only local still owning a value at the end of `main`, drops once after `end`, the enum's body (`dE`) before its payload's (`dR8`). legacy.out and the codegen test's literal drop `a8` twice inside `borrowedlet` and never at the end (a legacy double drop; legacy is frozen). Equal to the MIR pipeline's stdout at ea2a2da2be e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "db0aa9a19"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "71a17b17"

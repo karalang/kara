@@ -14,5 +14,5 @@ note = "served through driver.toml (the request its test sends); expected.out is
 bucket = "e-spec"
 classified_with = "f6f2efb14"
 extracted_src = "52fa5190"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "52fa5190"

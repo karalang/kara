@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'h:{} dc{}' e-spec: legacy differs fr
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 model_exit = 0
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "83b68c57"
 model_verdict = "ORDER"

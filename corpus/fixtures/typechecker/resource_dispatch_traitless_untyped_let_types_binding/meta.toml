@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'is_some/unwrap side-table must popul
 bucket = "a"
 classified_with = "d5daf8420"
 extracted_src = "99d0fc34"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "c65e9b3f"

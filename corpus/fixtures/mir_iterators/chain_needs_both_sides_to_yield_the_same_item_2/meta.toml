@@ -14,5 +14,5 @@ note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at e
 bucket = "e-spec"
 classified_with = "9875e6b3f"
 extracted_src = "d6d33c20"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "d6d33c20"

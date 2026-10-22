@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "e84def23"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e84def23"
 v2_reject = "B-2026-10-15-6: a v2 `Child` comes only from `Command.spawn`; it has no `pid` field to build one from (Thread C, 2026-10-15)"

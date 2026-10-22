@@ -9,8 +9,8 @@ wlet got 63
 drop 63
 d
 see 81
-drop 81
 e
 first 82
-drop 82
 end
+drop 82
+drop 81

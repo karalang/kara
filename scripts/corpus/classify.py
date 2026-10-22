@@ -94,6 +94,14 @@ POST_M1 = [
                  # a type invariant (design.md § Keywords: deferred with contracts)
                  r"|(?:^|[{,])[ \t]*(?:impl[ \t]+)?invariant[ \t]+self\b"),
     ("refinement", r"\btype\s+[A-Z]\w*(?:\[[^\]]*\])?\s*=[^\n;]*\bwhere\b"),
+    # Review-thread rulings on M3 item 9 batch 1 (2026-10-22): `Stats` goes
+    # with kara-data (deferred.md § M4c data), `Url` with the services
+    # track, layout control past v1 (design.md § 15: `offset_of`, FFI
+    # unions, volatile access), and the browser surface with the wasm track.
+    ("stats", r"\bStats\."),
+    ("url", r"\bUrl\."),
+    ("layout", r"\boffset_of\s*\[|\bunion\s+[A-Z]|\bVolatileCell\b"),
+    ("wasm", r"\bstd\.web\b|\bhost\s+fn\b"),
 ]
 LIB = [("map", r"\bMap\b"), ("set", r"\bSet\b"), ("sortedmap", r"\bSortedMap\b"),
        ("sortedset", r"\bSortedSet\b"), ("vecdeque", r"\bVecDeque\b"), ("heap", r"\bBinaryHeap\b")]

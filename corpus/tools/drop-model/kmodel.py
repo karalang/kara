@@ -147,7 +147,9 @@ def err(v):
 
 
 def is_err_result(v) -> bool:
-    return isinstance(v, Enum) and v.ty == "Result" and v.var == "Err"
+    """The failure variant of a `Result` or `Option` return: `errdefer` runs
+    on it however it was produced, a tail `None` included (core §7.7)."""
+    return isinstance(v, Enum) and ((v.ty == "Result" and v.var == "Err") or (v.ty == "Option" and v.var == "None"))
 
 
 class Scope:
@@ -540,7 +542,7 @@ class Model:
         v = self.get(c, path)
         while True:
             if isinstance(v, Ref):
-                c, path, b = v.cell, list(v.path), "ref"
+                c, path, b = v.cell, list(v.path), "mutref" if v.mut else "ref"
                 if self._wlog is not None:
                     self._wlog.append("mutref" if v.mut else "ref")
             elif isinstance(v, Handle):
@@ -932,6 +934,7 @@ class Model:
             is_err = is_err_result(v)
         except Ret as r:
             v, is_err = r.v, r.is_err
+        v = self.as_declared(v, fdef.ret)  # `fn f(b: u8) -> f64 { return b; }` widens (design.md § 5)
         if isinstance(v, Ref) and not frame.ret_ref and fdef.ret is not None and not self.generic_ret(fdef):
             # an owned return type: a reference flowing out is read (Copy), counted (handle) or a C3 move
             r = self.read_through_ref(self.deref_refs(v))
@@ -1933,6 +1936,9 @@ class Model:
         if pl[0] == "mapins":  # `m[k] = v` on a fresh key inserts (legacy behaviour; design.md is silent)
             _, m, k = pl
             v = self.value(rhs)
+            mt = self.lookup(place[1][1]).ty if place[1][0] == "var" else None
+            if mt and mt[0] == "app" and mt[1] in ("Map", "SortedMap") and len(mt[2]) == 2:
+                v = self.as_declared(v, mt[2][1])
             self.map_add(m, self.clone_value(k) if isinstance(k, Str) else k, v)
             return UNIT
         c, p, b = pl
@@ -1943,6 +1949,8 @@ class Model:
         v = self.value(rhs)
         if op == "=":
             old = self.raw(c, p)
+            if isinstance(old, Prim) and old.kind == "float" and isinstance(v, Prim) and v.kind == "int":
+                v = Prim(float(v.v), "float")  # an int stored into a float place widens (design.md § 5)
             self.set_raw(c, p, MOVED)
             if old is not MOVED:
                 self.drop_value(old)
@@ -2040,8 +2048,9 @@ class Model:
                 nc = Cell(self.use(c, p, b))
                 nc.refbind = isinstance(nc.v, Ref)
             elif b:
-                # a binding into a borrowed scrutinee is a reference (§4.6)
-                nc = Cell(Ref(c, p), refbind=True)
+                # a binding into a borrowed scrutinee is a reference of the
+                # scrutinee's mode: `mut ref` parts of a `mut ref` (§4.6)
+                nc = Cell(Ref(c, p, b == "mutref"), refbind=True)
             else:
                 nc = Cell(self.use(c, p, b))
             sc.bind(name, nc)
@@ -2290,7 +2299,10 @@ class Model:
             y = self.read(args[0]).v
             return Prim(min(x, y) if name == "min" else max(x, y), v.kind)
         if name == "pow":
-            return Prim(x ** self.read(args[0]).v, v.kind)
+            r = x ** self.read(args[0]).v
+            if v.kind == "int" and not -2 ** 63 <= r < 2 ** 63:
+                raise KPanic("integer overflow")
+            return Prim(r, v.kind)
         if name == "is_some":
             raise Unsupported("is_some on prim")
         if name == "cmp":
@@ -2376,6 +2388,8 @@ class Model:
             et = self.elem_types(v.kind)
             if et:
                 x = self.store_owned(x, et[0], "collection element")
+            if not 0 <= i <= len(v.elems):
+                raise KPanic("index out of bounds")
             v.elems.insert(i, x)
             return UNIT
         if name in ("remove", "swap_remove"):

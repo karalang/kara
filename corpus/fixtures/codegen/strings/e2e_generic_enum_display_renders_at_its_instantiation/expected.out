@@ -1,7 +1,7 @@
 [Some(5), None]
 [Ok(5), Err(bad)]
 {k: Some(5)}
-Set{Some(5)}
+{Some(5)}
 [Has(5), Empty]
 [Has(x)]
 [Some(9)]

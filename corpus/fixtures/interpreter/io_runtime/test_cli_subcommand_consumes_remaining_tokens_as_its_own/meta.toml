@@ -13,5 +13,5 @@ env = {}
 bucket = "b-fix-incomplete:E0500"
 classified_with = "d5daf8420"
 extracted_src = "e653d9bd"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e53998bc"

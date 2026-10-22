@@ -14,5 +14,5 @@ note = "Display decision (2026-10-08): collections print `{..}` / `[..]` with no
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "727d0420"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "727d0420"

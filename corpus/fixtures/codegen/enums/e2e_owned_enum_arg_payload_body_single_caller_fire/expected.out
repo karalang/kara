@@ -8,9 +8,9 @@ drop 9 l9
 c
 got 53
 match done
-drop 53 x53
 d
 if 6
 iflet done
 drop 6 x6
 end
+drop 53 x53

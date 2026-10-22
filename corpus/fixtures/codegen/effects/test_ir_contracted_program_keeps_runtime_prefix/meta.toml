@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'call ptr @karac_runtime_panic_prefix
 bucket = "a"
 classified_with = "db0aa9a19"
 extracted_src = "08189912"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "08189912"

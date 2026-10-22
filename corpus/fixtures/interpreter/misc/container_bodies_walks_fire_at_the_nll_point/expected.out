@@ -1,19 +1,19 @@
 [vec 1]
-V1
 |vec
+V1
 [tup 7]
-V2
 |tup
-V3
+V2
 [enum]
 |enum
+V3
 [opt true]
-V4
 |opt
+V4
 [map 1]
+|map
 K5
 V5
-|map
 [set 1]
-K6
 |set
+K6

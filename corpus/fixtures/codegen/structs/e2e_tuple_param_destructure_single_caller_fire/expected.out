@@ -5,9 +5,9 @@ drop 5 y5
 b
 got 7 2
 take done
-drop 7 y7
 c
 got 9 3
 take done
-drop 9 y9
 end
+drop 9 y9
+drop 7 y7

@@ -14,5 +14,5 @@ note = "migrated to a trait-bound resource (core-semantics §14.1 refuses a trai
 bucket = "a"
 classified_with = "d5daf8420"
 extracted_src = "25f158f5"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "b71124aa"

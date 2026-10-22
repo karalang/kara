@@ -1,8 +1,8 @@
 struct-elem:
-drop 1 a1
 2
+drop 1 a1
 drop 2 bb2
 option-elem:
-drop 3 ccc3
 30
+drop 3 ccc3
 end

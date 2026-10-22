@@ -14,5 +14,5 @@ note = "legacy fails on this program; expected.out is the kata's Python mirror, 
 bucket = "e-spec"
 classified_with = "c877ae87a"
 extracted_src = "d0c6cd7d"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "d0c6cd7d"

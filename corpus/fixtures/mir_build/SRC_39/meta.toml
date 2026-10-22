@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'true true 5 true' e-spec: legacy dif
 bucket = "e-spec"
 classified_with = "491112bd5"
 extracted_src = "ba37816a"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "ba37816a"

@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'one 1' expected.out at the spec form
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "b20f98f3"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "b20f98f3"

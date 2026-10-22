@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'join-str-num' e-spec: legacy differs
 bucket = "e-spec"
 classified_with = "9875e6b3f"
 extracted_src = "e7d3f223"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e7d3f223"

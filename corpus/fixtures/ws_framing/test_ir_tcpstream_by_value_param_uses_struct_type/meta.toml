@@ -13,5 +13,5 @@ env = {}
 note = "served through driver.toml (the connections its test makes); expected.out is the transcript, the same on mir-interp, mir-llvm and mir-llvm-asan, and it carries every line its test asserts (ADR-4 plan step 4) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "80ced416a+local"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "7e92690f"

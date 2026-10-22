@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'work done err 1 err 1' e-spec: legac
 bucket = "e-spec"
 classified_with = "491112bd5"
 extracted_src = "e75c0f91"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e75c0f91"

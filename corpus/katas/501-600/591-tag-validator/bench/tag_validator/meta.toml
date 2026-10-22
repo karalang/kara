@@ -13,5 +13,5 @@ env = {}
 bucket = "e-not-refused:E0515"
 classified_with = "9875e6b3f"
 extracted_src = "b45b2b75"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "b45b2b75"

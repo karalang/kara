@@ -1,7 +1,7 @@
 a: owned-self match-consume fires once via the arm
-drop 7 e7
 v=7
 b: owned-self non-consuming — runs its payload body
-drop 8 e8
 w=3
 end
+drop 8 e8
+drop 7 e7

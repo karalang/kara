@@ -13,5 +13,5 @@ env = {}
 bucket = "timeout"
 classified_with = "9875e6b3f"
 extracted_src = "a5f51c29"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "a5f51c29"

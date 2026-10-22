@@ -14,5 +14,5 @@ note = "first literal of the holding test: '3:bravo-b044-payload-bbbbbbbbbbbbbbb
 bucket = "b-fix-incomplete:E0200"
 classified_with = "db0aa9a19"
 extracted_src = "0dcc1d93"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "0dcc1d93"

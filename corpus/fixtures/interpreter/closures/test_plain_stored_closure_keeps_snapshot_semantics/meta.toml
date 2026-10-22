@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "289087a1"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "289087a1"
 v2_reject = "core-semantics §9.1: a closure borrows the Copy locals it captures, so `k = 10` while `f` is still used is a write to a borrowed place (E0516); legacy printed the snapshot value (kata thread, 2026-10-11)"

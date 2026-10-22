@@ -1,4 +1,5 @@
 a
 x z9 new y5
-drop 9 z9
 end
+drop 9 z9
+drop 5 y5

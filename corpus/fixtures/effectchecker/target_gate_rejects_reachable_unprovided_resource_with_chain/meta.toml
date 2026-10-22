@@ -14,5 +14,5 @@ note = "the holding test asserts the `E0411` refusal; it was extracted as a stdo
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "4d08b491"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "4d08b491"

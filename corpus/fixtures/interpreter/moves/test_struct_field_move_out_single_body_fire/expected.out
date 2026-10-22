@@ -1,12 +1,12 @@
 option-field:
-drop 1 a1
 10
+drop 1 a1
 vec-field:
-drop 2 bb2
 20
+drop 2 bb2
 struct-field:
-drop 3 ccc3
 30
+drop 3 ccc3
 sibling-survives:
 40
 drop 4 dddd4

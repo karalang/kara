@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'SortedMap{applesapplesapples: 2, zeb
 bucket = "e-spec"
 classified_with = "db0aa9a19"
 extracted_src = "7e8b1198"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "7e8b1198"

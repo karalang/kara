@@ -5,6 +5,6 @@ mapremove:
 drop 2 b2
 0
 boundpop:
-drop 3 c3
 0
+drop 3 c3
 end

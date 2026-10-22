@@ -17,6 +17,6 @@ fixed_by_classify = true
 fixed_src = "0b799c10"
 model_note = "write through a ref (§5.9): an assignment"
 model_overruled = "B-2026-10-22-15"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "0b799c10"
 model_verdict = "V2-REJECT"

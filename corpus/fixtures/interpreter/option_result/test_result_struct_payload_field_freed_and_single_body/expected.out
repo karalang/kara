@@ -8,8 +8,8 @@ byvalue:
 30
 drop 3 ccc3
 moveout:
-drop 4 dddd4
 40
+drop 4 dddd4
 local-match:
 drop 5 eeeee5
 5

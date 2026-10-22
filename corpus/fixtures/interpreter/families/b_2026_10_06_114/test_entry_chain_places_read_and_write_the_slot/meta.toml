@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
 extracted_src = "4f164795"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "4f164795"
 v2_reject = "core-semantics §8.2: the place is evaluated first, so the `mut ref` from `or_insert` is live while the value reads the map; legacy's output relies on value-first order (kata thread, 2026-10-09)"

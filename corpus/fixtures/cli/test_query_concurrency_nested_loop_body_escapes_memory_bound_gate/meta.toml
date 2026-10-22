@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'karac-cli-query-nested-membound-{}-{
 bucket = "a"
 classified_with = "79705a229"
 extracted_src = "f2f4671d"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "f2f4671d"

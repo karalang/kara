@@ -12,5 +12,5 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "9875e6b3f"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e25ec9be"

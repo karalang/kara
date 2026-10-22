@@ -1,9 +1,9 @@
 a
 bound 52
-drop 52
 b
 bound 53
 drop 53
 c
 nope
 end
+drop 52

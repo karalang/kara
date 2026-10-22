@@ -3,8 +3,8 @@ dR1:n1:1
   chain:n2
 dR2:n2:1
   two:n3:n4
-dR3:n3:1
 dR4:n4:1
+dR3:n3:1
   le:n5
 dR5:n5:1
   nr1:n6

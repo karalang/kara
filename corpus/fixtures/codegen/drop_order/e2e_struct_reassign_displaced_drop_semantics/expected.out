@@ -1,8 +1,9 @@
 drop 1
-drop 2
 after overwrite
 drop 3
-drop 4
 after move
-drop 15
+drop 5
 after consume
+drop 15
+drop 4
+drop 2

@@ -1,21 +1,21 @@
-  dD1:1:n1
-  dD2:1:n2
   oh
+  dD2:1:n2
+  dD1:1:n1
   nd
-  dD5:1:n5
   se
-  dD6:1:n6
-  dD7:1:n7
+  dD5:1:n5
   cp
-  dD8:1:n8
+  dD7:1:n7
+  dD6:1:n6
   cs
-  dD9:1:n9
+  dD8:1:n8
   co
-  dD10:1:n10
+  dD9:1:n9
   cn
+  dD10:1:n10
   tk
   dD11:1:n11
   ao
-  dD12:1:n12
   cz
+  dD12:1:n12
 end

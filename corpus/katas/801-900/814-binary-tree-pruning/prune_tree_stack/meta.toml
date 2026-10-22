@@ -13,5 +13,5 @@ env = {}
 bucket = "a"
 classified_with = "f697e0284"
 extracted_src = "e0abd4c1"
-model_rev = "583cfb0d"
+model_rev = "5c9fbd42"
 model_src = "e0abd4c1"
