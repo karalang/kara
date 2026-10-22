@@ -1,0 +1,580 @@
+// mini_omdict — a port of orderedmultidict 1.0.2 (Unlicense, Ansgar Grunseid),
+// the omdict ordered multivalue dictionary behind the furl URL library. An
+// omdict keeps one key -> many values while remembering full insertion order,
+// the structure a query-string or HTTP-header model needs: ?a=1&a=2&b=3 keeps
+// both a-values and their order, and keys() still reports each key once.
+//
+// The library stores a doubly linked itemlist plus a map key -> node list. This
+// port is observationally identical with two plain vectors — ks/vs, the global
+// (key, value) items in insertion order — plus korder, the distinct keys in
+// first-insertion order. The split matters for reverse(): it flips the item
+// order but leaves keys() order alone, so values() then takes the new first
+// value of each key (the library reverses its itemlist and each per-key node
+// list, but never reorders the map's keys). set / setlist follow the library
+// branch for branch: setlist replaces a key's values in place at their existing
+// positions, appends any extras at the end, drops any surplus, and an empty
+// list deletes the key; set(k, v) is setlist(k, [v]).
+//
+// Each job drives one evolving omdict and prints a line (see README / mk.py):
+//   a/al/s/sl/rv -> the resulting allitems() as [(k v), ...]
+//   g <k>  -> <v> | miss        gl <k> -> [v, ...]
+//   p <k>  -> <first v> | miss  (removes every value of k)   pl -> [v, ...] | miss
+//   pv/pf <k> -> popvalue last/first -> <v> | miss
+//   h <k>  -> yes | no          l -> size (total items)
+//   ks/vs/it -> unique views    ai/ak/av -> all-items views
+//
+// Keys are lowercase ASCII, values small ints. Scope: the omdict core above.
+// The MapMutation-less builder, update/updateall, fromkeys, lists/listitems,
+// popitem, setdefault and slicing are out of scope (see README). jobs_text()
+// carries data/jobs.tsv verbatim.
+
+struct Omd {
+    ks: Vec[String],    // item keys, insertion order
+    vs: Vec[i64],       // item values, parallel to ks
+    korder: Vec[String], // distinct keys, first-insertion order
+}
+
+fn omd_new() -> Omd {
+    let a: Vec[String] = Vec.new();
+    let b: Vec[i64] = Vec.new();
+    let c: Vec[String] = Vec.new();
+    Omd { ks: a, vs: b, korder: c }
+}
+
+fn has_key(o: ref Omd, k: Str) -> bool {
+    let mut i = 0;
+    while i < o.korder.len() {
+        if o.korder[i] == k {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn in_items(o: ref Omd, k: Str) -> bool {
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] == k {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn first_val(o: ref Omd, k: Str) -> i64 {
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] == k {
+            return o.vs[i];
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn getlist(o: ref Omd, k: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] == k {
+            out.push(o.vs[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn drop_key_order(o: mut ref Omd, k: Str) {
+    let mut no: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < o.korder.len() {
+        if o.korder[i] != k {
+            no.push(o.korder[i].clone());
+        }
+        i = i + 1;
+    }
+    o.korder = no;
+}
+
+fn omd_add(o: mut ref Omd, k: Str, v: i64) {
+    if not has_key(o, k) {
+        o.korder.push(k.to_string());
+    }
+    o.ks.push(k.to_string());
+    o.vs.push(v);
+}
+
+fn remove_all(o: mut ref Omd, k: Str) {
+    let mut nk: Vec[String] = Vec.new();
+    let mut nv: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] != k {
+            nk.push(o.ks[i].clone());
+            nv.push(o.vs[i]);
+        }
+        i = i + 1;
+    }
+    o.ks = nk;
+    o.vs = nv;
+    drop_key_order(mut o, k);
+}
+
+fn omd_setlist(o: mut ref Omd, k: Str, values: ref Vec[i64]) {
+    if values.len() == 0 and has_key(o, k) {
+        remove_all(mut o, k);
+        return;
+    }
+    // indices of k in the item list
+    let mut idxs: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] == k {
+            idxs.push(i);
+        }
+        i = i + 1;
+    }
+    // zip_longest(idxs, values): replace in place, mark surplus, collect extras
+    let mut remove: Vec[bool] = Vec.new();
+    let mut r = 0;
+    while r < o.ks.len() {
+        remove.push(false);
+        r = r + 1;
+    }
+    let mut appends: Vec[i64] = Vec.new();
+    let mut n = idxs.len();
+    if values.len() > n {
+        n = values.len();
+    }
+    let mut j = 0;
+    while j < n {
+        let has_node = j < idxs.len();
+        let has_val = j < values.len();
+        if has_node and has_val {
+            o.vs[idxs[j]] = values[j];
+        } else if not has_node {
+            appends.push(values[j]);
+        } else {
+            remove[idxs[j]] = true;
+        }
+        j = j + 1;
+    }
+    // rebuild without removed items
+    let mut nk: Vec[String] = Vec.new();
+    let mut nv: Vec[i64] = Vec.new();
+    let mut m = 0;
+    while m < o.ks.len() {
+        if not remove[m] {
+            nk.push(o.ks[m].clone());
+            nv.push(o.vs[m]);
+        }
+        m = m + 1;
+    }
+    o.ks = nk;
+    o.vs = nv;
+    // append extras (adding the key to korder if newly present)
+    if not has_key(o, k) and appends.len() > 0 {
+        o.korder.push(k.to_string());
+    }
+    let mut p = 0;
+    while p < appends.len() {
+        o.ks.push(k.to_string());
+        o.vs.push(appends[p]);
+        p = p + 1;
+    }
+}
+
+fn omd_reverse(o: mut ref Omd) {
+    let mut nk: Vec[String] = Vec.new();
+    let mut nv: Vec[i64] = Vec.new();
+    let mut i = o.ks.len();
+    while i > 0 {
+        i = i - 1;
+        nk.push(o.ks[i].clone());
+        nv.push(o.vs[i]);
+    }
+    o.ks = nk;
+    o.vs = nv;
+    // korder is left unchanged, matching the library
+}
+
+// popvalue: remove first (last=false) or last (last=true) occurrence of k.
+// Returns (ok, value); ok=false means the key was absent.
+struct PopRes {
+    ok: bool,
+    val: i64,
+}
+
+fn omd_popvalue(o: mut ref Omd, k: Str, last: bool) -> PopRes {
+    if not has_key(o, k) {
+        return PopRes { ok: false, val: 0 };
+    }
+    let mut target: i64 = -1;
+    let mut i = 0;
+    while i < o.ks.len() {
+        if o.ks[i] == k {
+            if last {
+                target = i;
+            } else if target == -1 {
+                target = i;
+            }
+        }
+        i = i + 1;
+    }
+    let v = o.vs[target];
+    let mut nk: Vec[String] = Vec.new();
+    let mut nv: Vec[i64] = Vec.new();
+    let mut m = 0;
+    while m < o.ks.len() {
+        if m != target {
+            nk.push(o.ks[m].clone());
+            nv.push(o.vs[m]);
+        }
+        m = m + 1;
+    }
+    o.ks = nk;
+    o.vs = nv;
+    if not in_items(o, k) {
+        drop_key_order(mut o, k);
+    }
+    PopRes { ok: true, val: v }
+}
+
+// ---- formatting ----
+
+fn fmt_items(o: ref Omd) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < o.ks.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str("(");
+        s.push_str(o.ks[i].clone());
+        s.push_str(" ");
+        s.push_str(itoa(o.vs[i]));
+        s.push_str(")");
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn fmt_unique_items(o: ref Omd) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < o.korder.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str("(");
+        s.push_str(o.korder[i].clone());
+        s.push_str(" ");
+        s.push_str(itoa(first_val(o, o.korder[i].clone())));
+        s.push_str(")");
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn fmt_keys(ks: ref Vec[String]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < ks.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(ks[i].clone());
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn fmt_ivals(vs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    s.push_str("[");
+    let mut i = 0;
+    while i < vs.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(itoa(vs[i]));
+        i = i + 1;
+    }
+    s.push_str("]");
+    s
+}
+
+fn unique_vals(o: ref Omd) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < o.korder.len() {
+        out.push(first_val(o, o.korder[i].clone()));
+        i = i + 1;
+    }
+    out
+}
+
+// ---- line / field helpers ----
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn csv_ints(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if s.len() == 0 {
+        return out;
+    }
+    let parts = split_fields(s, 44); // ','
+    let mut i = 0;
+    while i < parts.len() {
+        out.push(parse_uint(parts[i].clone()));
+        i = i + 1;
+    }
+    out
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut o = omd_new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "a" {
+                    omd_add(mut o, f[1].clone(), parse_uint(f[2].clone()));
+                    out.push_str(fmt_items(o));
+                } else if op == "al" {
+                    let vals = csv_ints(f[2].clone());
+                    let mut j = 0;
+                    while j < vals.len() {
+                        omd_add(mut o, f[1].clone(), vals[j]);
+                        j = j + 1;
+                    }
+                    out.push_str(fmt_items(o));
+                } else if op == "s" {
+                    let mut one: Vec[i64] = Vec.new();
+                    one.push(parse_uint(f[2].clone()));
+                    omd_setlist(mut o, f[1].clone(), one);
+                    out.push_str(fmt_items(o));
+                } else if op == "sl" {
+                    let vals = csv_ints(f[2].clone());
+                    omd_setlist(mut o, f[1].clone(), vals);
+                    out.push_str(fmt_items(o));
+                } else if op == "rv" {
+                    omd_reverse(mut o);
+                    out.push_str(fmt_items(o));
+                } else if op == "g" {
+                    if in_items(o, f[1].clone()) {
+                        out.push_str(itoa(first_val(o, f[1].clone())));
+                    } else {
+                        out.push_str("miss");
+                    }
+                } else if op == "gl" {
+                    let gl = getlist(o, f[1].clone());
+                    out.push_str(fmt_ivals(gl));
+                } else if op == "p" {
+                    if has_key(o, f[1].clone()) {
+                        let gl = getlist(o, f[1].clone());
+                        remove_all(mut o, f[1].clone());
+                        out.push_str(itoa(gl[0]));
+                    } else {
+                        out.push_str("miss");
+                    }
+                } else if op == "pl" {
+                    if has_key(o, f[1].clone()) {
+                        let gl = getlist(o, f[1].clone());
+                        remove_all(mut o, f[1].clone());
+                        out.push_str(fmt_ivals(gl));
+                    } else {
+                        out.push_str("miss");
+                    }
+                } else if op == "pv" {
+                    let r = omd_popvalue(mut o, f[1].clone(), true);
+                    if r.ok {
+                        out.push_str(itoa(r.val));
+                    } else {
+                        out.push_str("miss");
+                    }
+                } else if op == "pf" {
+                    let r = omd_popvalue(mut o, f[1].clone(), false);
+                    if r.ok {
+                        out.push_str(itoa(r.val));
+                    } else {
+                        out.push_str("miss");
+                    }
+                } else if op == "h" {
+                    if has_key(o, f[1].clone()) {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "l" {
+                    out.push_str(itoa(o.ks.len()));
+                } else if op == "ks" {
+                    out.push_str(fmt_keys(o.korder));
+                } else if op == "vs" {
+                    let uv = unique_vals(o);
+                    out.push_str(fmt_ivals(uv));
+                } else if op == "it" {
+                    out.push_str(fmt_unique_items(o));
+                } else if op == "ai" {
+                    out.push_str(fmt_items(o));
+                } else if op == "ak" {
+                    out.push_str(fmt_keys(o.ks));
+                } else if op == "av" {
+                    out.push_str(fmt_ivals(o.vs));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("a\ta\t1\n");
+    s.push_str("a\ta\t11\n");
+    s.push_str("a\ta\t111\n");
+    s.push_str("a\tb\t2\n");
+    s.push_str("a\tc\t3\n");
+    s.push_str("a\tb\t22\n");
+    s.push_str("ai\n");
+    s.push_str("al\tc\t33,333\n");
+    s.push_str("al\td\t4\n");
+    s.push_str("ai\n");
+    s.push_str("ks\n");
+    s.push_str("vs\n");
+    s.push_str("it\n");
+    s.push_str("ak\n");
+    s.push_str("av\n");
+    s.push_str("l\n");
+    s.push_str("g\ta\n");
+    s.push_str("gl\ta\n");
+    s.push_str("h\ta\n");
+    s.push_str("g\tb\n");
+    s.push_str("gl\tb\n");
+    s.push_str("h\tb\n");
+    s.push_str("g\tc\n");
+    s.push_str("gl\tc\n");
+    s.push_str("h\tc\n");
+    s.push_str("g\td\n");
+    s.push_str("gl\td\n");
+    s.push_str("h\td\n");
+    s.push_str("g\tz\n");
+    s.push_str("gl\tz\n");
+    s.push_str("h\tz\n");
+    s.push_str("s\ta\t9\n");
+    s.push_str("ai\n");
+    s.push_str("sl\tb\t20,200,2000\n");
+    s.push_str("ai\n");
+    s.push_str("sl\tc\t30\n");
+    s.push_str("ai\n");
+    s.push_str("sl\te\t5,55\n");
+    s.push_str("ai\n");
+    s.push_str("sl\td\t\n");
+    s.push_str("ai\n");
+    s.push_str("ks\n");
+    s.push_str("l\n");
+    s.push_str("rv\n");
+    s.push_str("ks\n");
+    s.push_str("vs\n");
+    s.push_str("it\n");
+    s.push_str("gl\tb\n");
+    s.push_str("pv\tb\n");
+    s.push_str("ai\n");
+    s.push_str("pf\tb\n");
+    s.push_str("ai\n");
+    s.push_str("gl\tb\n");
+    s.push_str("pl\ta\n");
+    s.push_str("ai\n");
+    s.push_str("p\te\n");
+    s.push_str("ai\n");
+    s.push_str("p\tz\n");
+    s.push_str("pl\tz\n");
+    s.push_str("pv\tc\n");
+    s.push_str("ks\n");
+    s.push_str("pv\tc\n");
+    s.push_str("ks\n");
+    s.push_str("h\tc\n");
+    s.push_str("ai\n");
+    s.push_str("l\n");
+    s
+}
