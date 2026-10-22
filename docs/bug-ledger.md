@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 291 |
 | false-positive | 285 |
 | other | 198 |
-| diagnostics | 191 |
+| diagnostics | 192 |
 | perf | 183 |
 | soundness | 137 |
 | crash | 129 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3040 |
 | interp | 1048 |
-| typecheck | 574 |
+| typecheck | 575 |
 | ownership | 132 |
 | other | 127 |
 | cli | 92 |
@@ -193,6 +193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-44 | 2026-10-22 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and reports neither operand, so the `test_fail` event has only `message` and `location`, where the legacy runner gives `"left":"4","right":"5"` (design §14 runner output; deferred.md's `test_fail` row makes both fields part of the event) | — |
 | B-2026-10-22-45 | 2026-10-22 | cli | medium | `karac repl` runs on the legacy interpreter only. M3 item 3: the REPL on v2 (each entry checked as `karac check` checks a program and run on MIR), with the old path behind `--legacy` until legacy is deleted (M3 item 11) | — |
 | B-2026-10-22-46 | 2026-10-22 | typecheck | medium | `karac check` accepts a bare enum variant used to BUILD a value (`enum E { A(String), B } fn main() { let p = B; ... }`), and v2 runs it as `E.B`; design.md:1310 says a variant is built with its qualified name, and only a pattern may leave the enum name out | — |
+| B-2026-10-22-48 | 2026-10-22 | typecheck | low | `karac check` accepts `VecDeque`'s `push_front` / `push_back` / `pop_front` / `pop_back` on a `Vec`, which collections.md does not give `Vec`, so the program passes check and both MIR backends stop with "call of unknown function Vec[i64].push_front" | — |
 
 ### Relocated
 
