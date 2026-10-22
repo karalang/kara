@@ -1,0 +1,17 @@
+source = "examples/shortener/shortener.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "post-m1:net", "lib:map"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "8ab0cd7bf"
+extracted_src = "69c71f42"
+model_rev = "205d5cda"
+model_src = "69c71f42"

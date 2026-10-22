@@ -1,0 +1,94 @@
+// examples/leetcode/lru_cache.kara
+//
+// LeetCode #146: LRU Cache
+// Design a data structure that follows the constraints of a
+// Least Recently Used (LRU) cache.
+//
+// Demonstrates: struct + impl, Map, Option/Result, method dispatch,
+//               mutable state, generic-free design
+
+struct LruEntry {
+    key: i64,
+    value: i64,
+}
+
+struct LruCache {
+    capacity: u64,
+    entries: Vec[LruEntry],     // ordered: most recent at the end
+    index: Map[i64, u64],   // key → position in entries
+}
+
+impl LruCache {
+    fn new(capacity: u64) -> LruCache {
+        LruCache {
+            capacity,
+            entries: Vec.new(),
+            index: Map.new(),
+        }
+    }
+
+    fn get(mut ref self, key: i64) -> Option[i64] {
+        match self.index.get(key) {
+            None => None,
+            Some(pos) => {
+                let entry = self.entries.remove(pos);
+                let value = entry.value;
+
+                // Move to end (most recently used)
+                self.entries.push(entry);
+                self.rebuild_index();
+
+                Some(value)
+            }
+        }
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        // If key exists, remove old entry
+        match self.index.get(key) {
+            Some(pos) => {
+                self.entries.remove(pos);
+            }
+            None => {
+                // If at capacity, evict least recently used (front)
+                if self.entries.len() == self.capacity {
+                    self.entries.remove(0);
+                }
+            }
+        }
+
+        // Insert at end (most recently used)
+        self.entries.push(LruEntry { key, value });
+        self.rebuild_index();
+    }
+
+    fn rebuild_index(mut ref self) {
+        self.index.clear();
+        for (i, entry) in self.entries.iter().enumerate() {
+            self.index.insert(entry.key, i);
+        }
+    }
+}
+
+fn main() {
+    let mut cache = LruCache.new(2);
+
+    cache.put(1, 1);
+    cache.put(2, 2);
+    println(f"get(1) = {cache.get(1)}");    // Some(1)
+
+    cache.put(3, 3);                         // evicts key 2 (LRU)
+    println(f"get(2) = {cache.get(2)}");    // None
+
+    cache.put(4, 4);                         // evicts key 1 (LRU)
+    println(f"get(1) = {cache.get(1)}");    // None
+    println(f"get(3) = {cache.get(3)}");    // Some(3)
+    println(f"get(4) = {cache.get(4)}");    // Some(4)
+}
+
+// Expected output:
+// get(1) = Some(1)
+// get(2) = None
+// get(1) = None
+// get(3) = Some(3)
+// get(4) = Some(4)

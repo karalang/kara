@@ -1,0 +1,12 @@
+// Prints the program's own argv, one element per line, prefixed so a test can
+// assert on exact positions. Backs the `env.args()` executor-parity tests
+// (B-2026-07-29-18).
+fn main() {
+    let args = env.args();
+    println(f"count={args.len()}");
+    let mut i: i64 = 0;
+    while i < args.len() {
+        println(f"arg{i}={args[i]}");
+        i = i + 1;
+    }
+}

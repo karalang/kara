@@ -1,0 +1,226 @@
+// Relay bench — Kāra reference impl: a single-upstream HTTP/1.1 KEEP-ALIVE
+// reverse proxy.
+//
+// This is the bench-runnable, slice-1 *shape* of `examples/relay/relay.kara`
+// stripped to the bare reverse-proxy critical path so the measurement is raw
+// proxy overhead, apples-to-apples with the Go (`httputil.ReverseProxy`) and
+// Node (manual `http.request` pipe) comparators:
+//
+//   * NO per-request `println` / metrics-report spam (relay.kara reports every
+//     10 requests — that I/O would dominate a microbench),
+//   * NO path-routing / UTF-8 request-line decode (relay.kara's slice-4
+//     `from_utf8` + `split` work is feature surface, not proxy overhead),
+//   * NO round-robin LB — one fixed upstream.
+//
+// The feature artifact (`examples/relay/relay.kara`) stays untouched; this is
+// the clean passthrough variant for the benchmark.
+//
+// **Keep-alive (this revision).** The original bench proxy served one request
+// per connection and read the upstream to EOF — but `wrk` drives persistent
+// HTTP/1.1 connections, so that shape forced a reconnect per request and the
+// measured throughput tracked connection count rather than real proxy work
+// (recorded as the honest finding in this dir's README). This revision speaks
+// HTTP/1.1 keep-alive on BOTH legs: it opens ONE persistent upstream
+// connection per client connection and loops servicing requests on the client
+// socket until the client closes. Each response is framed by its
+// `Content-Length` (parsed from the first response chunk) so the proxy knows
+// where one response ends and can go back to reading the next request without
+// closing — exactly what a real reverse proxy does.
+//
+// The thesis it carries is unchanged: effect-driven event-loop networking with
+// no `async fn`. Every `TcpStream.read`/`.write_all` carries
+// `sends(Network) receives(Network)`, so codegen parks the spawned handler on
+// fd-readiness instead of thread-blocking it — thousands of in-flight proxied
+// connections ride a handful of reactor threads, and the handler body reads
+// like a straight-line blocking program. The Go differentiator: no goroutine
+// lifecycle to manage; the compiler manages the event loop.
+//
+// **Framing assumption.** The shared bench upstream (`../upstream/`, Go
+// net/http) returns a small fixed response that arrives in one loopback TCP
+// segment, so the response headers (and thus `Content-Length`) are always
+// present in the first chunk. A response whose headers spanned multiple
+// segments would need cross-chunk header reassembly — not exercised by this
+// controlled upstream, and called out here rather than hidden.
+//
+// **Upstream address.** Read from `RELAY_UPSTREAM` (an `IP:port` literal),
+// defaulting to `127.0.0.1:9000` if unset so the server is runnable
+// standalone. `bench.sh` launches the shared upstream first, discovers its
+// ephemeral port, then exports `RELAY_UPSTREAM=127.0.0.1:<port>` before
+// launching this proxy.
+//
+// **BOUND_PORT convention.** Binding to `127.0.0.1:0` makes the runtime print
+// `BOUND_PORT=<port>\n` to stdout on bind (see `runtime/stdlib/tcp.kara`), so
+// `bench.sh`'s one port-discovery helper works across all three impls.
+//
+// Build & run:
+//   karac build examples/relay/bench/kara/server.kara
+//   RELAY_UPSTREAM=127.0.0.1:9000 ./server   # listens on an ephemeral port
+
+// Resolve the single upstream address: `RELAY_UPSTREAM` env var, or the
+// `127.0.0.1:9000` default. Consumes nothing; returns a fresh owned String.
+fn upstream_addr() -> String {
+    match Env.var("RELAY_UPSTREAM") {
+        Ok(addr) => { return addr; }
+        Err(_) => { return "127.0.0.1:9000"; }
+    }
+}
+
+// Listen address: `RELAY_BIND` env var, or `127.0.0.1:0` (ephemeral loopback,
+// the local-bench default). The cross-host harness sets `RELAY_BIND` to a
+// routable `0.0.0.0:<port>` so a client on another host can reach the proxy.
+fn bind_addr() -> String {
+    match Env.var("RELAY_BIND") {
+        Ok(a) => { return a; }
+        Err(_) => { return "127.0.0.1:0"; }
+    }
+}
+
+// Extract a `Content-Length` value from a header block under the given spelling
+// (`needle` must end in `:`), or -1 if that spelling is absent. The value is
+// the first run of digits after the marker on its line, which tolerates the
+// leading space in `Content-Length: 2` without a `trim`. It reads the digits
+// itself rather than through `split` and `parse`, whose types differ between
+// the frozen legacy pipeline this file's smoke test builds on (`Vec[String]`,
+// `Option`) and the library's (`Str` views, `Result`).
+fn clen_for(headers: ref String, needle: String) -> i64 {
+    let mlen = needle.len();
+    match headers.find(needle) {
+        Some(pos) => {
+            let rest = headers.substring(pos + mlen, headers.len());
+            let mut v: i64 = 0;
+            let mut seen = false;
+            for c in rest.chars() {
+                if c >= '0' and c <= '9' {
+                    v = v * 10 + (c as i64 - '0' as i64);
+                    seen = true;
+                } else if seen or c == '\r' or c == '\n' {
+                    break;
+                }
+            }
+            if seen { return v; }
+            return -1;
+        }
+        None => { return -1; }
+    }
+}
+
+// Content-Length under either the canonical or lowercase spelling, or -1.
+// A fully case-insensitive scan would want `String.to_lowercase()`; these two
+// spellings cover the bench upstream (Go net/http) and typical origins.
+fn content_length(headers: ref String) -> i64 {
+    let v = clen_for(headers, "Content-Length:");
+    if v >= 0 { return v; }
+    return clen_for(headers, "content-length:");
+}
+
+// Total byte length of one HTTP response (header block + body) given the first
+// response chunk: the offset of the end-of-headers "\r\n\r\n", plus 4, plus the
+// Content-Length. Returns -1 if the headers / Content-Length aren't present in
+// `chunk`. Consumes the chunk bytes.
+fn response_len(chunk: own Vec[u8]) -> i64 {
+    match String.from_utf8(chunk) {
+        Ok(text) => {
+            match text.find("\r\n\r\n") {
+                Some(hdr_end) => {
+                    let clen = content_length(text);
+                    if clen < 0 { return -1; }
+                    return hdr_end + 4 + clen;
+                }
+                None => { return -1; }
+            }
+        }
+        Err(_) => { return -1; }
+    }
+}
+
+// Service one client connection for its full keep-alive lifetime: open one
+// persistent upstream connection, then loop forwarding each request and
+// streaming back exactly one response, until the client closes (read returns 0)
+// or an error occurs. The connection closes when this function returns.
+//
+// **Why the request loop AND the per-response streaming loop both live here,
+// inline, rather than the response loop being a `relay_response(...) -> bool`
+// helper.** The earlier revision factored the response leg into such a helper,
+// called as `if not relay_response(...) { return; }` — the natural shape, and
+// the one that surfaced (and is now fixed) the *non-unit coroutine return*
+// codegen bug (B-2026-06-19, `tests/coro_e2e.rs::coroutine_bool_return_*`): an
+// inline-driven suspending `-> bool` callee discarded its real return and
+// yielded a hard-coded `i64 0`, which failed LLVM verification when branched on.
+// That bug IS fixed. But the helper shape ALSO surfaced a *second, deeper*
+// runtime limitation the fix does not resolve: `handle` is driven non-blocking
+// on the reactor (the density-optimal `spawn_coro` tail-call path), so when its
+// resumed body calls another suspending coroutine and blocks on that callee's
+// completion slot (`park_slot_wait`), it blocks the reactor thread itself — and
+// the reactor is exactly who must resume the callee, so the two deadlock.
+// Nested *inline* coroutine-await from a reactor-resident coroutine needs a
+// suspend-and-chain lowering (resume the caller on the callee's completion
+// instead of thread-blocking) that does not yet exist — its own slice, tracked
+// in `docs/dogfooding.md`. Until then the proxy keeps both legs inline in the
+// one `handle` coroutine: every `read`/`write_all` park is `handle`'s OWN park,
+// which suspends cleanly to the reactor with no nested block-wait.
+fn handle(client: own TcpStream, upstream_addr: own String) {
+    match TcpStream.connect(upstream_addr) {
+        Ok(upstream) => {
+            let mut buf: Array[u8, 4096] = [0u8; 4096];
+            // Request loop: one iteration per keep-alive request on this client
+            // connection. `read` returning 0 (client closed) or any error ends it.
+            loop {
+                match client.read(mut buf) {
+                    Ok(n) => {
+                        if n == 0 { return; }
+                        match upstream.write_all(buf[0..n]) {
+                            Ok(_) => {}
+                            Err(_) => { return; }
+                        }
+                        // Response leg (inlined): stream exactly one upstream
+                        // response back, framed by its Content-Length (parsed
+                        // from the first chunk), then fall back to the request
+                        // loop to read the next keep-alive request without
+                        // closing. `total`/`expected` reset per response.
+                        let mut total: i64 = 0;
+                        let mut expected: i64 = -1;
+                        loop {
+                            match upstream.read(mut buf) {
+                                Ok(m) => {
+                                    if m == 0 { return; }
+                                    match client.write_all(buf[0..m]) {
+                                        Ok(_) => {}
+                                        Err(_) => { return; }
+                                    }
+                                    total = total + m;
+                                    if expected < 0 {
+                                        expected = response_len(Vec.from_slice(buf[0..m]));
+                                    }
+                                    if expected >= 0 {
+                                        if total >= expected { break; }
+                                    }
+                                }
+                                Err(_) => { return; }
+                            }
+                        }
+                    }
+                    Err(_) => { return; }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+}
+
+fn main() {
+    let addr = upstream_addr();
+    let listener = TcpListener.bind(bind_addr()).unwrap();
+    let mut tg: TaskGroup = TaskGroup.new();
+    loop {
+        match listener.accept() {
+            Ok(client) => {
+                // Each handler captures its own clone of the upstream address;
+                // the spawned task forwards to it. No shared mutable state —
+                // the passthrough variant carries no metrics counters.
+                let target = addr.clone();
+                tg.spawn(|| handle(client, target));
+            }
+            Err(_) => {}
+        }
+    }
+}

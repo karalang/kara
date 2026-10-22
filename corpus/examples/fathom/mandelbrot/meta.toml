@@ -1,0 +1,17 @@
+source = "examples/fathom/mandelbrot.kara"
+dedup_of = []
+expect = "error:E0411"
+exit = 1
+tags = ["closure", "par", "post-m1:par", "post-m1:escaping", "post-m1:simd", "post-m1:wasm", "lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "8ab0cd7bf"
+extracted_src = "4284bd0c"
+model_rev = "205d5cda"
+model_src = "4284bd0c"

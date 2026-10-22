@@ -1,0 +1,8 @@
+uppercase in "abCba": 1
+same_ends "racecar": true
+same_ends "hello": false
+palindrome "racecar": true
+palindrome "hello": false
+palindrome "A": true
+palindrome "": true
+palindrome "abCba": true

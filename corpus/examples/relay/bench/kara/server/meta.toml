@@ -1,0 +1,16 @@
+source = "examples/relay/bench/kara/server.kara"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["closure", "needs-driver", "par", "shared", "post-m1:par", "post-m1:net", "io:env", "bench"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "legacy run timed out after 60s"
+bucket = "skip:legacy run timed out after 60s"
+classified_with = "8ab0cd7bf"
+extracted_src = "99edeac6"

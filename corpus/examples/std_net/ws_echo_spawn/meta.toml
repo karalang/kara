@@ -1,0 +1,17 @@
+source = "examples/std_net/ws_echo_spawn.kara"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["closure", "panic", "par", "post-m1:par", "post-m1:net"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E_DEFERRED_M4A"
+classified_with = "8ab0cd7bf"
+extracted_src = "06febe41"
+model_rev = "205d5cda"
+model_src = "06febe41"

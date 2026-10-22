@@ -1,0 +1,17 @@
+source = "examples/mend/examples/concurrent_emails/solution.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "post-m1:par"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0418"
+classified_with = "8ab0cd7bf"
+extracted_src = "f9f15bce"
+model_rev = "205d5cda"
+model_src = "f9f15bce"

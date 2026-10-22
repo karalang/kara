@@ -1,0 +1,17 @@
+source = "tests/snapshots/type_error.kara"
+dedup_of = []
+expect = "error:E0202"
+exit = 1
+tags = ["src:legacy-tests"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "8ab0cd7bf"
+extracted_src = "7b2adfed"
+model_rev = "205d5cda"
+model_src = "7b2adfed"

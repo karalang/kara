@@ -1,0 +1,450 @@
+// Fathom — a browser Mandelbrot explorer, one Kāra source, compiled to
+// `--target=wasm_browser --features wasm-threads`.
+//
+// The whole front-end story in one loop: a plain blocking render loop drives
+// the screen, the per-frame pixel compute fans out across a real Web Worker
+// pool with no `async`/`await` and no callback coloring, and the finished
+// framebuffer is blitted to a `<canvas>` through a single host fn.
+//
+//   * `animation_frames()` (std.web.time) is a channel that yields once per
+//     `requestAnimationFrame`. `frames.recv()` blocks the worker until the
+//     host fires the next frame — there is no `await`; the worker parks and
+//     the host wakes it (design.md § Async Host APIs on WASM).
+//   * `TaskGroup.spawn` splits the rows of each frame across the pool. Halve
+//     the pool (fewer workers) and the framerate visibly halves — the
+//     parallelism is real, measurable, in a browser tab.
+//   * `put_pixels` hands the framebuffer's bytes to JS, which does the
+//     `ctx.putImageData` blit. `Vec[u8].as_ptr()` is the FFI handoff.
+//   * `wheel()`, `pointer_moves()`, `keydown()`, `dblclick()`, and
+//     `contextmenu()` (std.web.events) make it interactive: scroll to zoom
+//     toward the cursor, drag to pan, arrow keys / `+`/`-` / `R` from the
+//     keyboard, double-click to zoom IN on a point, right-click to zoom OUT on
+//     it (the native context menu is suppressed for us). Each arrives as a
+//     typed channel the loop drains with a non-blocking `try_recv` each frame —
+//     live input, still no `await`, still no callback coloring.
+//   * `touchstart()` / `touchmove()` / `touchend()` (std.web.events) add
+//     single-finger touch-pan — the mobile analogue of the pointer drag.
+//     `touchstart` records the finger's anchor and the view centre at grab,
+//     `touchmove` pans so the grabbed point stays under the finger (the SAME
+//     keep-the-point-fixed transform the pointer drag uses), `touchend` ends
+//     the gesture. `touchmove`'s host listener suppresses the page scroll and
+//     the canvas sets `touch-action: none`, so a drag pans the fractal instead
+//     of scrolling the page; touch and the mouse drag coexist. Single primary
+//     touch at v1 — no pinch-zoom (a multi-touch payload the fixed-size channel
+//     spine does not carry yet).
+//   * `focus()` / `blur()` (std.web.events) gate the work: while the tab is
+//     unfocused (`blur`) the loop still spins and drains input, but SKIPS the
+//     parallel `render_frame` — a backgrounded tab stops driving the worker
+//     pool. `focus` resumes it. These are UNIT `()` channels: the token's mere
+//     arrival is the whole signal, no payload.
+//   * `resize()` (std.web.events) makes the canvas responsive: each event
+//     carries the window's CURRENT `innerWidth`/`innerHeight` (read off the
+//     window, not the event — a DOM resize carries no dimensions), and the loop
+//     reflows the framebuffer to match. `scale` (complex units per pixel) is
+//     held fixed, so a bigger window simply reveals more of the plane. The
+//     framebuffer width/height are runtime state from here on, not constants.
+//
+// Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
+// Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
+
+import std.web.time.{animation_frames};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur, resize, ResizeEvent, touchstart, touchmove, touchend, TouchEvent};
+
+// The canvas this program paints. A user-defined host capability — like
+// `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
+effect resource Display;
+
+// The framebuffer blit. The browser provides the body in JS (see index.html):
+// it reads `len` bytes of RGBA starting at `ptr` out of the shared wasm
+// memory and `ctx.putImageData`s them onto the canvas. The pointer comes
+// from `Vec[u8].as_ptr()`; the call is synchronous (the worker blocks until
+// JS has read the bytes), so the buffer never dangles while in use.
+host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
+
+// The INITIAL frame geometry — the size before the first `resize` event. Kept
+// modest so a single worker still renders smoothly; the pool then multiplies
+// the framerate rather than rescuing it. After startup the live width/height
+// are runtime state (`cur_w`/`cur_h` in `main`), reflowed by `resize`, and the
+// threaded through `render_frame`/`render_rows`. The canvas is displayed 1:1
+// (CSS size == internal size; see index.html), so a wheel / pointer / click
+// event's element-relative CSS pixel coordinates map straight onto internal
+// pixels — no rescale in the math below. The width is always kept EVEN (the
+// resize handler floors it) for the two-pixels-per-SIMD-pair inner loop.
+fn default_width() -> i64 { 640 }
+fn default_height() -> i64 { 420 }
+fn max_iter() -> i64 { 200 }
+
+// Escape-time iteration count for the point (cr, ci): how many steps of
+// z = z^2 + c before |z|^2 exceeds 4, capped at `max`. The classic Mandelbrot
+// kernel — now **two pixels at a time** in one `Vector[f64, 2]` lane pair.
+//
+// `escape2(cr0, cr1, ci, max)` iterates the two horizontally-adjacent points
+// (cr0, ci) and (cr1, ci) together: every `zr`/`zi` is a `Vector[f64, 2]`, so
+// the squares, the magnitude, and the `z = z^2 + c` step are each ONE WASM
+// SIMD-128 (`v128`) instruction covering both pixels — same source, no flag
+// (the lowering ships by default on wasm_browser). The escape test is a
+// comparison→mask→select: `mag <= 4` yields a `Vector[bool, 2]` of lanes still
+// inside the disc, and `mask.select(1, 0)` increments only those lanes' counts,
+// so each lane's count freezes the instant it escapes — lane-for-lane
+// identical to the scalar loop this replaces. The loop runs until BOTH lanes
+// have escaped (no `.all()` on a bool vector yet, so the termination test
+// extracts the two lanes) or `max`.
+fn escape2(cr0: f64, cr1: f64, ci: f64, max: i64) -> (i64, i64) {
+    let cr = Vector[f64, 2](cr0, cr1);
+    let civ = Vector[f64, 2].splat(ci);
+    let four = Vector[f64, 2].splat(4.0);
+    let two = Vector[f64, 2].splat(2.0);
+    let one = Vector[i64, 2].splat(1);
+    let zero = Vector[i64, 2].splat(0);
+    let mut zr = Vector[f64, 2].splat(0.0);
+    let mut zi = Vector[f64, 2].splat(0.0);
+    let mut counts = Vector[i64, 2].splat(0);
+    let mut n = 0;
+    while n < max {
+        let zr2 = zr * zr;
+        let zi2 = zi * zi;
+        let mag = zr2 + zi2;
+        let active = mag <= four; // Vector[bool, 2]: lanes still inside the disc
+        if not active[0] and not active[1] {
+            return (counts[0], counts[1]);
+        }
+        counts = counts + active.select(one, zero); // +1 only for inside lanes
+        zi = two * zr * zi + civ;
+        zr = zr2 - zi2 + cr;
+        n = n + 1;
+    }
+    (counts[0], counts[1])
+}
+
+// Map an escape count to an RGBA byte quad. Points in the set (n == max)
+// are black; escaping points get a smooth blue→cyan→white ramp by depth.
+fn color_r(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    ((n * 5) % 256) as u8
+}
+fn color_g(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    ((n * 7) % 256) as u8
+}
+fn color_b(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    (128 + ((n * 3) % 128)) as u8
+}
+
+// Render rows [y0, y1) of the frame into a fresh RGBA buffer and return it.
+// This is the per-task unit: each spawned worker owns its chunk's output and
+// hands it back at join — no shared mutable buffer, so no aliasing question.
+fn render_rows(y0: i64, y1: i64, w: i64, h: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
+    let mx = max_iter();
+    let half_w = (w as f64) / 2.0;
+    let half_h = (h as f64) / 2.0;
+    let mut out: Vec[u8] = Vec.new();
+    for y in y0..y1 {
+        let ci = cy + ((y as f64) - half_h) * scale;
+        // Two pixels per step — `w` is even (the resize handler floors it), so
+        // each SIMD pair covers a full (x, x+1) column couple, no scalar
+        // remainder.
+        let mut x = 0;
+        while x < w {
+            let cr0 = cx + ((x as f64) - half_w) * scale;
+            let cr1 = cx + (((x + 1) as f64) - half_w) * scale;
+            let (n0, n1) = escape2(cr0, cr1, ci, mx);
+            out.push(color_r(n0, mx));
+            out.push(color_g(n0, mx));
+            out.push(color_b(n0, mx));
+            out.push(255u8);
+            out.push(color_r(n1, mx));
+            out.push(color_g(n1, mx));
+            out.push(color_b(n1, mx));
+            out.push(255u8);
+            x = x + 2;
+        }
+    }
+    out
+}
+
+// Compute one full frame across the worker pool, then blit it. The rows are
+// split into `workers` contiguous bands; each band is a spawned task. The
+// `TaskGroup` joins them in order at the end of the function, and the bands
+// are concatenated into one framebuffer for the single `put_pixels` call.
+fn render_frame(w: i64, h: i64, cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display) {
+    let band = (h + workers - 1) / workers;
+
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[u8]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, w, h, cx, cy, scale));
+            handles.push(handle);
+        }
+        k = k + 1;
+    }
+
+    // Join every band in order and concatenate into one RGBA framebuffer.
+    let mut frame: Vec[u8] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[u8] = handle.join();
+        for byte in chunk {
+            frame.push(byte);
+        }
+    }
+
+    put_pixels(frame.as_ptr(), frame.len(), w, h);
+}
+
+// The render loop. A plain blocking loop over the frame clock — no `await`.
+// Each tick: fold in the latest scroll (zoom toward the cursor) and the latest
+// pointer move (grab-pan), recompute the frame in parallel, blit. Both inputs
+// are drained with a NON-blocking `try_recv`, so the loop never stalls waiting
+// on a human and the render keeps its cadence whether or not anyone is
+// touching it. Private `fn main` (the `_start` entry the host's `run()`
+// invokes) — effects are inferred, so it needs no `with` clause for the frame
+// clock's `writes(Timer)` / `suspends` or the inputs' `writes(Input)`.
+fn main() {
+    let workers = 8;
+
+    // Live framebuffer size — runtime state, reflowed by `resize`. Seeded from
+    // the initial geometry; `cur_w` is always kept even (the resize handler
+    // floors it) so the SIMD pair loop never has a scalar remainder.
+    let mut cur_w = default_width();
+    let mut cur_h = default_height();
+
+    // View transform: (cx, cy) is the complex point at screen centre, `scale`
+    // the complex-plane distance per pixel (so screen pixel (px, py) maps to
+    // cx + (px - half_w) * scale, cy + (py - half_h) * scale — the same map
+    // render_rows uses). Start framed on the whole set. `start_scale` references
+    // the INITIAL width so 'R'-reset and the zoom ceiling keep a stable
+    // frame-the-whole-set reference even after the canvas reflows.
+    let start_scale = 3.5 / (default_width() as f64);
+    let mut cx = -0.75;
+    let mut cy = 0.0;
+    let mut scale = start_scale;
+    // Render gate: set while the tab is unfocused so the loop idles the worker
+    // pool (it keeps spinning and draining input, but skips `render_frame`).
+    let mut paused = false;
+
+    let frames = animation_frames();
+    let wheels = wheel();
+    let moves = pointer_moves();
+    let keys = keydown();
+    let dbls = dblclick();
+    let rights = contextmenu();
+    let foc = focus();
+    let unfoc = blur();
+    let resizes = resize();
+    let touch_starts = touchstart();
+    let touch_moves = touchmove();
+    let touch_ends = touchend();
+
+    // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
+    let mut last_px = 0.0;
+    let mut last_py = 0.0;
+    let mut have_last = false;
+
+    // Single-finger touch-pan gesture state (the touchscreen analogue of the
+    // pointer drag, kept on its OWN variables so a finger and a mouse never
+    // fight over the view). On `touchstart` we record the finger's anchor
+    // (element-relative CSS px) AND the view centre at grab; `touchmove` then
+    // sets (cx, cy) to that grab centre minus the finger's TOTAL delta since the
+    // anchor, mapped through `scale` — the same keep-the-grabbed-point-fixed map
+    // the pointer drag uses, but expressed against the gesture's grab rather
+    // than the previous sample, so a coalesced/dropped move never accumulates
+    // drift. `touching` gates the move so a stray move outside a gesture is
+    // ignored.
+    let mut touching = false;
+    let mut touch_anchor_x = 0.0;
+    let mut touch_anchor_y = 0.0;
+    let mut touch_grab_cx = 0.0;
+    let mut touch_grab_cy = 0.0;
+
+    loop {
+        frames.recv();
+
+        // Window resize → reflow the framebuffer to the window's CURRENT size.
+        // The DOM resize event carries no dimensions, so `ResizeEvent` is filled
+        // from the window's innerWidth/innerHeight at fire time, coalesced to the
+        // latest settled size. `scale` is held fixed, so a bigger window just
+        // reveals more of the plane — the natural reflow. Width is forced EVEN
+        // for the SIMD pair loop, and both dims are floored so a zero/garbage
+        // size can't make a degenerate buffer. Drained first so this frame's
+        // input math and render both see the new size.
+        match resizes.try_recv() {
+            Some(rz) => {
+                let mut nw = rz.width();
+                let mut nh = rz.height();
+                if nw < 2 { nw = 2; }
+                if nh < 1 { nh = 1; }
+                if nw % 2 == 1 { nw = nw - 1; }
+                cur_w = nw;
+                cur_h = nh;
+            }
+            None => {}
+        }
+
+        // Screen-centre half-extents for THIS frame's size — they shift whenever
+        // a resize changes (cur_w, cur_h), and every input handler below maps
+        // cursor coords through them.
+        let half_w = (cur_w as f64) / 2.0;
+        let half_h = (cur_h as f64) / 2.0;
+
+        // Scroll → zoom toward the cursor: scale the view while holding the
+        // complex point under the cursor fixed on screen. delta_y < 0 (scroll
+        // up) shrinks `scale` = zoom in. Host-coalesced, so one sample/frame.
+        match wheels.try_recv() {
+            Some(ev) => {
+                let mut f = 1.0 + ev.delta_y() * 0.0015;
+                if f < 0.6 { f = 0.6; }
+                if f > 1.4 { f = 1.4; }
+                cx = cx + (ev.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (ev.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                // Floor at f64's resolving power; ceiling at the full view.
+                if scale < 0.0000000000001 { scale = 0.0000000000001; }
+                if scale > start_scale { scale = start_scale; }
+            }
+            None => {}
+        }
+
+        // Pointer drag → pan: while a button is held (`p.pressed()`), drag the
+        // view by the pointer's per-frame delta so the fractal tracks the
+        // cursor — true click-drag, not hover-pan. The last position is updated
+        // every move (held or not) so a fresh drag never jumps. `PointerEvent`
+        // carries the DOM `buttons` bitmask, so the gate is just `p.pressed()`.
+        match moves.try_recv() {
+            Some(p) => {
+                if p.pressed() and have_last {
+                    cx = cx - (p.x() - last_px) * scale;
+                    cy = cy - (p.y() - last_py) * scale;
+                }
+                last_px = p.x();
+                last_py = p.y();
+                have_last = true;
+            }
+            None => {}
+        }
+
+        // Touch drag → pan: the single-finger analogue of the pointer drag
+        // above, for a touchscreen. `touchstart` opens the gesture, recording
+        // the finger's anchor and the view centre at grab. `touchmove` pans —
+        // (cx, cy) is the grab centre minus the finger's total delta since the
+        // anchor, mapped through `scale`, so the complex point grabbed under the
+        // finger tracks it exactly (identical keep-the-point-fixed math to the
+        // pointer pan, anchored at the gesture's grab). `touchend` closes the
+        // gesture; the next `touchstart` begins a fresh grab. Three streams, one
+        // gesture: `touching` gates the move so a move outside a gesture is
+        // ignored, and the state is independent of the pointer drag's, so a
+        // mouse and a finger coexist without fighting. The host coalesces each
+        // stream, so the loop sees at most one of each per frame, drained with
+        // the same non-blocking `try_recv` as every other input.
+        match touch_starts.try_recv() {
+            Some(t) => {
+                touching = true;
+                touch_anchor_x = t.x();
+                touch_anchor_y = t.y();
+                touch_grab_cx = cx;
+                touch_grab_cy = cy;
+            }
+            None => {}
+        }
+        match touch_moves.try_recv() {
+            Some(t) => {
+                if touching {
+                    cx = touch_grab_cx - (t.x() - touch_anchor_x) * scale;
+                    cy = touch_grab_cy - (t.y() - touch_anchor_y) * scale;
+                }
+            }
+            None => {}
+        }
+        match touch_ends.try_recv() {
+            Some(_) => { touching = false; }
+            None => {}
+        }
+
+        // Keyboard → pan / zoom / reset. Host-coalesced (one key per frame);
+        // arrows pan, `+`/`-` zoom toward centre, `R` resets to the full view.
+        // Key codes are DOM `KeyEvent.key_code()` (physical-key based).
+        match keys.try_recv() {
+            Some(k) => {
+                let code = k.key_code();
+                let step = scale * 60.0;
+                if code == 37 { cx = cx - step; }   // ArrowLeft
+                if code == 39 { cx = cx + step; }   // ArrowRight
+                if code == 38 { cy = cy - step; }   // ArrowUp
+                if code == 40 { cy = cy + step; }   // ArrowDown
+                if code == 187 {                    // '='/'+': zoom in
+                    scale = scale * 0.8;
+                    if scale < 0.0000000000001 { scale = 0.0000000000001; }
+                }
+                if code == 189 {                    // '-': zoom out
+                    scale = scale * 1.25;
+                    if scale > start_scale { scale = start_scale; }
+                }
+                if code == 82 {                     // 'R': reset to full view
+                    cx = -0.75;
+                    cy = 0.0;
+                    scale = start_scale;
+                }
+            }
+            None => {}
+        }
+
+        // Double-click → zoom IN toward the clicked point. Same keep-the-point-
+        // fixed transform as the wheel handler (hold the complex point under the
+        // cursor still while `scale` shrinks), but a chunky discrete step so each
+        // double-click visibly dives in. `ClickEvent` carries element-relative
+        // CSS px == internal px at 1:1, so (x, y) drop straight into the map.
+        match dbls.try_recv() {
+            Some(c) => {
+                let f = 0.5;
+                cx = cx + (c.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (c.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                if scale < 0.0000000000001 { scale = 0.0000000000001; }
+            }
+            None => {}
+        }
+
+        // Right-click → zoom OUT at the clicked point: the exact inverse of the
+        // double-click dive (f = 2.0), ceilinged at the full-set view. The glue
+        // calls `preventDefault()` for us, so the native context menu never
+        // appears over the canvas — the right button is ours to repurpose.
+        match rights.try_recv() {
+            Some(c) => {
+                let f = 2.0;
+                cx = cx + (c.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (c.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                if scale > start_scale { scale = start_scale; }
+            }
+            None => {}
+        }
+
+        // Focus / blur → gate the render. `blur()` (we lost focus) sets `paused`;
+        // `focus()` (we got it back) clears it. Both are UNIT `()` channels, so
+        // the match binds nothing — the token's arrival IS the signal. Drain
+        // `blur` first, then `focus`, so if both land in one frame `focus` wins
+        // and we keep painting. While paused the loop above still ran every
+        // input `try_recv` (cheap, keeps the view state live) — only the
+        // `render_frame` below, the parallel per-frame compute and the one real
+        // cost, is skipped, so an unfocused tab stops driving the worker pool.
+        // On `focus` the next frame paints the accumulated state at once. (A real
+        // browser also throttles `requestAnimationFrame` when the tab is hidden;
+        // this additionally idles a tab that is merely unfocused but visible.)
+        match unfoc.try_recv() {
+            Some(_) => { paused = true; }
+            None => {}
+        }
+        match foc.try_recv() {
+            Some(_) => { paused = false; }
+            None => {}
+        }
+
+        if not paused {
+            render_frame(cur_w, cur_h, cx, cy, scale, workers);
+        }
+    }
+}

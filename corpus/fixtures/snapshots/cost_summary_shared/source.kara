@@ -1,0 +1,10 @@
+// Cost-summary fixture: a `shared struct` with two `mut` fields and one
+// non-mut field. The cost-surface aggregator counts `borrow_flag_fields`
+// as one per `mut` field on a `shared struct` — expect totals=2.
+shared struct Counter {
+    mut hits: i64,
+    mut misses: i64,
+    label: i64,
+}
+
+fn main() {}

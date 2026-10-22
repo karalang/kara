@@ -1,0 +1,17 @@
+source = "examples/leetcode/max_depth_binary_tree.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "8ab0cd7bf"
+extracted_src = "acba4c6d"
+model_rev = "205d5cda"
+model_src = "acba4c6d"

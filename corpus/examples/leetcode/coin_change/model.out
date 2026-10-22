@@ -1,0 +1,13 @@
+--- Top-down (recursive + memo) ---
+amount=0  → 0  (expected 0)
+amount=11  → 2  (expected 2)
+amount=30  → 2  (expected 2)
+amount=3  → 3  (expected 3)
+amount=7  → 3  (expected 3)
+
+--- Bottom-up (tabulation) ---
+amount=0  → 0  (expected 0)
+amount=11  → 2  (expected 2)
+amount=30  → 2  (expected 2)
+amount=3  → 3  (expected 3)
+amount=7  → 3  (expected 3)

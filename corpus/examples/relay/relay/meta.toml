@@ -1,0 +1,17 @@
+source = "examples/relay/relay.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "par", "shared", "post-m1:par", "post-m1:net"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "8ab0cd7bf"
+extracted_src = "ee517a41"
+model_rev = "205d5cda"
+model_src = "ee517a41"

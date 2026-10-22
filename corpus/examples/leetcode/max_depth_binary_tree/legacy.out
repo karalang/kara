@@ -1,0 +1,9 @@
+DFS (recursive) max depth: 3
+DFS (recursive) max depth: 2
+DFS (recursive) max depth: 0
+DFS (iterative) max depth: 3
+DFS (iterative) max depth: 2
+DFS (iterative) max depth: 0
+BFS max depth: 3
+BFS max depth: 2
+BFS max depth: 0

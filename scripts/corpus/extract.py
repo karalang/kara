@@ -392,10 +392,28 @@ def main() -> int:
             add("katas/" + "/".join(parts), f.stem, f"kara-katas/{relp}", src, "kata", {"tags": tags})
 
     if args.examples:
-        for f in sorted(Path(args.examples).glob("*.kara")):
+        eroot = Path(args.examples)
+        for f in sorted(eroot.glob("*.kara")):
             src = f.read_text()
             if HAS_MAIN.search(src):
                 add("examples", f.stem, f"examples/{f.name}", src, "example", {})
+        # One-file programs in subdirectories (examples/leetcode/, examples/plume/,
+        # ...). A directory with a kara.toml up to the root is a project of
+        # several files, which one corpus entry cannot hold, so it is left out.
+        for f in sorted(eroot.glob("*/**/*.kara")):
+            rel = f.relative_to(eroot)
+            if any((eroot / Path(*rel.parts[:i]) / "kara.toml").exists() for i in range(1, len(rel.parts))):
+                continue
+            src = f.read_text()
+            if HAS_MAIN.search(src):
+                add("examples/" + "/".join(slug(x) for x in rel.parent.parts), f.stem, f"examples/{rel}", src, "example", {})
+
+    # Programs the legacy test targets read from files of their own.
+    for f in sorted((Path(args.tests) / "snapshots").glob("*.kara")):
+        src = f.read_text()
+        if HAS_MAIN.search(src):
+            add("fixtures/snapshots", f.stem, f"tests/snapshots/{f.name}", src, "fixture",
+                {"tags": ["src:legacy-tests"]})
 
     states = {"new": 0, "changed": 0, "same": 0, "kept": 0}
     kept = []

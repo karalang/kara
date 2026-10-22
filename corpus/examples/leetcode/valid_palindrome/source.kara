@@ -1,0 +1,98 @@
+// examples/leetcode/valid_palindrome.kara
+//
+// LeetCode #125: Valid Palindrome (simplified — alphanumeric filtering omitted
+// to keep focus on string indexing patterns)
+//
+// Demonstrates: the three String access patterns and when to use each:
+//   1. `for c in s`          — simple iteration, O(n) total
+//   2. `s.char_at(i)`        — occasional single access, O(n) per call
+//   3. `Vec[char]` + index   — repeated indexed access, O(1) per access after O(n) setup
+
+// Pattern 1 — iteration: count how many characters are uppercase.
+// Use `for c in s` when you need every character in order.
+fn count_uppercase(s: ref String) -> i64 {
+    let mut count = 0;
+    for c in s {
+        if c.is_uppercase() {
+            count = count + 1;
+        }
+    }
+    count
+}
+
+// Pattern 2 — single access: peek at the first and last characters.
+// `s.char_at(i)` is fine when you need one or two specific positions —
+// it is O(n) per call, but O(n) once is not a problem.
+fn same_ends(s: ref String) -> bool {
+    let n = s.char_count();
+    if n == 0 {
+        return true;
+    }
+    // char_at returns Option[char]; both indices are in-bounds so unwrap is safe.
+    s.char_at(0).unwrap() == s.char_at(n - 1).unwrap()
+}
+
+// Pattern 2 misused — naive palindrome using `char_at` in a loop.
+// Each `char_at` call scans from the start: total cost is O(n²).
+// Shown here only to illustrate the footgun; prefer `is_palindrome` below.
+fn is_palindrome_naive(s: ref String) -> bool {
+    let n = s.char_count();
+    let mut i = 0;
+    while i < n / 2 {
+        // Two O(n) scans per iteration → O(n²) overall.
+        if s.char_at(i).unwrap() != s.char_at(n - 1 - i).unwrap() {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// Pattern 3 — repeated indexed access: two-pointer palindrome check.
+// Convert to Vec[char] first (O(n) once), then each index is O(1).
+// Total: O(n). This is the right pattern whenever a loop needs s[i] and s[j].
+fn is_palindrome(s: ref String) -> bool {
+    let chars: Vec[char] = s.chars().collect();
+    let mut lo = 0;
+    let mut hi = chars.len() - 1;
+    while lo < hi {
+        if chars[lo] != chars[hi] {
+            return false;
+        }
+        lo = lo + 1;
+        hi = hi - 1;
+    }
+    true
+}
+
+fn main() {
+    let s1 = "racecar";
+    let s2 = "hello";
+    let s3 = "A";
+    let s4 = "";
+    let s5 = "abCba";
+
+    // count_uppercase
+    println(f"uppercase in \"{s5}\": {count_uppercase(s5)}");   // 1
+
+    // same_ends
+    println(f"same_ends \"{s1}\": {same_ends(s1)}");            // true
+    println(f"same_ends \"{s2}\": {same_ends(s2)}");            // false
+
+    // is_palindrome_naive vs is_palindrome — same answers, different cost
+    println(f"palindrome \"{s1}\": {is_palindrome(s1)}");       // true
+    println(f"palindrome \"{s2}\": {is_palindrome(s2)}");       // false
+    println(f"palindrome \"{s3}\": {is_palindrome(s3)}");       // true
+    println(f"palindrome \"{s4}\": {is_palindrome(s4)}");       // true
+    println(f"palindrome \"{s5}\": {is_palindrome(s5)}");       // false — case-sensitive
+}
+
+// Expected output:
+// uppercase in "abCba": 1
+// same_ends "racecar": true
+// same_ends "hello": false
+// palindrome "racecar": true
+// palindrome "hello": false
+// palindrome "A": true
+// palindrome "": true
+// palindrome "abCba": false
