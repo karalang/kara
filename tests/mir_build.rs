@@ -4215,6 +4215,41 @@ fn main() {
     }
 }
 
+/// `std.encoding`'s percent-encoding (docs/library/encoding.md): RFC 3986's
+/// unreserved bytes kept, the rest `%XX` in uppercase, decoding in either
+/// case with `+` kept, and a short or bad escape `InvalidByte` at its `%`;
+/// identical on the MIR interpreter and both opt levels.
+#[test]
+fn mir_std_encoding_percent_round_trips() {
+    const SRC: &str = r#"import std.encoding.{percent_encode, percent_decode, DecodeError};
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok:{String.from_utf8(v.as_slice()).unwrap_or("?".to_string())}",
+        Err(e) => f"err:{e}",
+    }
+}
+fn main() {
+    for s in ["", "abcXYZ019-._~", "a b&c=d/e?f", "h\u{e9}llo", "100%", "a+b"].iter() {
+        let e = percent_encode(s.bytes());
+        println(f"[{s}] {e} {show(percent_decode(e.as_str()))}");
+    }
+    println(show(percent_decode("%e2%82%AC+%20.")));
+    println(show(percent_decode("ab%4")));
+    println(show(percent_decode("ab%")));
+    println(show(percent_decode("x%G1")));
+    println(show(percent_decode("%41%")));
+}
+"#;
+    let want = "[]  ok:\n[abcXYZ019-._~] abcXYZ019-._~ ok:abcXYZ019-._~\n[a b&c=d/e?f] a%20b%26c%3Dd%2Fe%3Ff ok:a b&c=d/e?f\n[h\u{e9}llo] h%C3%A9llo ok:h\u{e9}llo\n[100%] 100%25 ok:100%\n[a+b] a%2Bb ok:a+b\nok:\u{20ac}+ .\nerr:invalid byte at offset 2\nerr:invalid byte at offset 2\nerr:invalid byte at offset 1\nerr:invalid byte at offset 3\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// A wildcard import of a gated module names its public items, and the
 /// program's own `join` beats the wildcard's (design.md § Wildcards).
 #[test]

@@ -1,4 +1,5 @@
-// `std.encoding`: Base64 and hex (docs/library/encoding.md; B-2026-10-15-17).
+// `std.encoding`: Base64, hex and percent-encoding (docs/library/encoding.md;
+// B-2026-10-15-17).
 
 /// Why a decode found no bytes.
 #[non_exhaustive]
@@ -149,22 +150,81 @@ pub fn hex_decode(text: Str) -> Result[Vec[u8], DecodeError] {
     let mut i = 0;
     let mut hi = 0;
     while i < n {
-        let c = bs[i] as i64;
-        let v = if c >= 48 and c <= 57 {
-            c - 48
-        } else if c >= 97 and c <= 102 {
-            c - 87
-        } else if c >= 65 and c <= 70 {
-            c - 55
-        } else {
+        let v = hex_value(bs[i]);
+        if v < 0 {
             return Err(DecodeError.InvalidByte(i));
-        };
+        }
         if i % 2 == 0 {
             hi = v;
         } else {
             out.push(((hi << 4) | v) as u8);
         }
         i = i + 1;
+    }
+    Ok(out)
+}
+
+/// The value of a hex digit in either case, or -1.
+fn hex_value(c: u8) -> i64 {
+    let c = c as i64;
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else {
+        -1
+    }
+}
+
+/// `data` with every byte outside RFC 3986's unreserved set (`A`-`Z`,
+/// `a`-`z`, `0`-`9`, `-`, `.`, `_`, `~`) as `%` and two uppercase hex digits.
+pub fn percent_encode(data: Slice[u8]) -> String {
+    let digits = "0123456789ABCDEF".bytes();
+    let mut out: Vec[u8] = Vec.with_capacity(data.len());
+    for b in data.iter() {
+        let v = *b as i64;
+        let unreserved = (v >= 65 and v <= 90)
+            or (v >= 97 and v <= 122)
+            or (v >= 48 and v <= 57)
+            or v == 45
+            or v == 46
+            or v == 95
+            or v == 126;
+        if unreserved {
+            out.push(*b);
+        } else {
+            out.push(37u8);
+            out.push(digits[v >> 4]);
+            out.push(digits[v & 15]);
+        }
+    }
+    // Every byte pushed is ASCII.
+    String.from_utf8(out.as_slice()).unwrap_or(String.new())
+}
+
+/// Percent-encoded text back to bytes: `%` and two hex digits in either case
+/// are that byte, and every other byte, `+` included, is itself. A `%`
+/// without two hex digits after it is `InvalidByte` at the `%`.
+pub fn percent_decode(text: Str) -> Result[Vec[u8], DecodeError] {
+    let bs = text.bytes();
+    let n = bs.len();
+    let mut out: Vec[u8] = Vec.with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        if bs[i] == 37 {
+            let hi = if i + 2 < n { hex_value(bs[i + 1]) } else { -1 };
+            let lo = if i + 2 < n { hex_value(bs[i + 2]) } else { -1 };
+            if hi < 0 or lo < 0 {
+                return Err(DecodeError.InvalidByte(i));
+            }
+            out.push(((hi << 4) | lo) as u8);
+            i = i + 3;
+        } else {
+            out.push(bs[i]);
+            i = i + 1;
+        }
     }
     Ok(out)
 }
