@@ -1,8 +1,8 @@
 struct Hold { pr: (String, String) }
 struct Sc { pr: (i64, i64) }
-impl Hold { fn peek(ref self) -> ref (String, String) { return self.pr; } }
+impl Hold { fn peek(ref self) -> ref (String, String) { return ref self.pr; } }
 impl Sc { fn peek(ref self) -> ref (i64, i64) { return self.pr; } }
-fn peekf(h: ref Hold) -> ref (String, String) { return h.pr; }
+fn peekf(h: ref Hold) -> ref (String, String) { return ref h.pr; }
 fn main() {
     let h = Hold { pr: (f"left-{40 + 2}", f"right-{7 * 6}") };
     println(f"proj:{h.peek().0}");

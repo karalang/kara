@@ -10020,9 +10020,9 @@ fn a_returned_reference_lends_its_element_and_traces_a_method_call() {
         "ref-return-lends",
         "struct Bag { items: Vec[String], name: String }\n\
          impl Bag {\n\
-             fn first(self) -> ref String { self.items[0] }\n\
-             fn pick(self, i: i64) -> ref String { if i > 0 { self.items[0] } else { self.name } }\n\
-             fn early(self) -> ref String { if self.items.len() == 0 { return self.name; } return self.items[0]; }\n\
+             fn first(self) -> ref String { ref self.items[0] }\n\
+             fn pick(self, i: i64) -> ref String { if i > 0 { ref self.items[0] } else { ref self.name } }\n\
+             fn early(self) -> ref String { if self.items.len() == 0 { return ref self.name; } return ref self.items[0]; }\n\
              fn got(self) -> ref String { self.items.get(0).unwrap_or(self.name) }\n\
              fn or(self, d: String) -> ref String { self.items.get(0) ?? d }\n\
          }\n\
@@ -11707,4 +11707,100 @@ fn iterator_chunks_and_windows_point_at_the_slice_methods() {
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// design.md § returning a reference: "The `ref` is written". A non-`Copy`
+/// place returned bare into a `ref` / `mut ref` slot of the return type moves
+/// out of a borrowed place; `karac fix` writes the `ref` (B-2026-10-22-28).
+#[test]
+fn a_returned_place_writes_its_ref() {
+    let src = "enum Side { Left, Right }
+struct Pair { first: String, second: String }
+fn choose(s: ref Side, p: ref Pair) -> ref String {
+    match s {
+        Side.Left => p.first,
+        Side.Right => p.second,
+    }
+}
+struct Bag { items: Vec[String], n: i64 }
+impl Bag {
+    fn first(ref self) -> ref String { self.items[0] }
+    fn first_mut(mut ref self) -> mut ref String { self.items[0] }
+    fn pair(ref self) -> (ref String, i64) { (self.items[0], self.n) }
+    fn maybe_mut(mut ref self) -> Option[mut ref String] { if self.n > 0 { Some(self.items[0]) } else { None } }
+}
+fn main() {
+    let p = Pair { first: \"a\", second: \"b\" };
+    println(choose(Side.Right, p));
+    let mut b = Bag { items: [\"x\"], n: 1 };
+    println(b.first());
+    println(b.first_mut());
+    println(b.pair().0);
+    println(b.maybe_mut().is_some());
+}
+";
+    rejected_then_fixed_by(
+        "bare-ref-return",
+        src,
+        "the function returns a reference, and the return type does not borrow for you",
+        "Side.Right => ref p.second,",
+    );
+    let (dir, path) = fixture("bare-ref-return-fixed", src);
+    karac().arg("fix").arg(&path).output().unwrap();
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    for edit in [
+        "{ ref self.items[0] }",
+        "{ mut ref self.items[0] }",
+        "(ref self.items[0], self.n)",
+        "Some(mut self.items[0])",
+    ] {
+        assert!(fixed.contains(edit), "fix must write `{edit}`: {fixed}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // `ref` is not written on a call argument, so a `ref` slot of an
+    // `Option` is borrowed into a binding first: help, no edit.
+    let src = "struct Bag { items: Vec[String] }
+impl Bag {
+    fn maybe(ref self) -> Option[ref String] { Some(self.items[0]) }
+}
+fn main() { println(Bag { items: [\"x\"] }.maybe().is_some()); }
+";
+    let (dir, path) = fixture("bare-ref-return-some", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains(
+            "borrow it into a binding first (`let r = ref <place>;`) and return `Some(r)`"
+        ),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What B-2026-10-22-28 leaves alone: a `Copy` place, a borrowed parameter
+/// returned as it is, a call returning a reference and a literal default.
+#[test]
+fn a_returned_borrow_or_copy_needs_no_ref() {
+    accepted(
+        "ref-return-unchanged",
+        "struct Pair { first: String, n: i64 }
+struct Bag { p: Pair }
+impl Bag {
+    fn count(ref self) -> ref i64 { self.p.n }
+    fn pair(ref self) -> ref Pair { ref self.p }
+}
+fn same(p: ref Pair) -> ref Pair { p }
+fn via(b: ref Bag) -> ref Pair { b.pair() }
+fn dflt(m: ref Map[String, String], k: ref String) -> ref String { m.get(k).unwrap_or(\"\") }
+fn main() {
+    let b = Bag { p: Pair { first: \"a\", n: 2 } };
+    println(b.count());
+    println(same(b.pair()).first);
+    println(via(b).n);
+    let m: Map[String, String] = Map.new();
+    println(dflt(m, \"k\"));
+}
+",
+    );
 }

@@ -415,6 +415,54 @@ impl<'a> super::OwnershipChecker<'a> {
                 consume_span: None,
             });
         }
+        // design.md § returning a reference (B-2026-10-22-28).
+        let mut seen = HashSet::new();
+        for bare in &self.core_bare_ref_returns {
+            let span = &bare.span;
+            if !seen.insert(SpanKey::from_span(span)) {
+                continue;
+            }
+            let op = if bare.is_mut { "mut ref" } else { "ref" };
+            // `ref` is not written on a call argument, so a place handed to
+            // `Some(..)` for a `ref` slot is borrowed into a binding first; a
+            // `mut ref` slot takes the call-site `mut` marker.
+            let (suggestion, replacement) = if bare.in_arg && bare.is_mut {
+                (
+                    "write `mut` to lend it to `Some(..)` mutably".to_string(),
+                    Some(Box::new(crate::resolver::TextEdit {
+                        offset: span.offset,
+                        length: 0,
+                        replacement: "mut ".to_string(),
+                    })),
+                )
+            } else if bare.in_arg {
+                (
+                    format!("borrow it into a binding first (`let r = {op} <place>;`) and return `Some(r)`"),
+                    None,
+                )
+            } else {
+                (
+                    format!("write `{op}` to return a borrow of it"),
+                    Some(Box::new(crate::resolver::TextEdit {
+                        offset: span.offset,
+                        length: 0,
+                        replacement: format!("{op} "),
+                    })),
+                )
+            };
+            out.push(OwnershipError {
+                message: format!(
+                    "cannot move a non-`Copy` value out of a borrowed place: the function \
+                     returns a reference, and the return type does not borrow for you \
+                     (the place it returns is borrowed with `{op}`)"
+                ),
+                span: *span,
+                kind: OwnershipErrorKind::MoveOutOfPlace,
+                suggestion: Some(suggestion),
+                replacement,
+                consume_span: None,
+            });
+        }
         out.sort_by_key(|e| e.span.offset);
         out
     }

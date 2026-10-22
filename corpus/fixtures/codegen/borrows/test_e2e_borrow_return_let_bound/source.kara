@@ -1,5 +1,5 @@
 struct User { name: String, age: i64 }
-fn name_of(u: ref User) -> ref String { u.name }
+fn name_of(u: ref User) -> ref String { ref u.name }
 fn age_of(p: ref User) -> ref i64 { p.age }
 fn fwd(s: ref String) -> ref String { s }
 fn main() {

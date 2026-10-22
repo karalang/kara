@@ -1,7 +1,7 @@
 
 struct Hold { pr: (String, String) }
-impl Hold { fn peek(ref self) -> ref (String, String) { return self.pr; } }
-fn peekf(h: ref Hold) -> ref (String, String) { return h.pr; }
+impl Hold { fn peek(ref self) -> ref (String, String) { return ref self.pr; } }
+fn peekf(h: ref Hold) -> ref (String, String) { return ref h.pr; }
 
 fn main() {
     let mut i: i64 = 0;

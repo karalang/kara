@@ -1,4 +1,4 @@
 struct Box { v: String }
-impl Box { fn peek(ref self) -> ref String { return self.v; } }
+impl Box { fn peek(ref self) -> ref String { return ref self.v; } }
 fn take(f: Fn() -> String) -> String { return f(); }
 fn main() { let b = Box { v: "hi" }; println(take(|| b.peek())); }

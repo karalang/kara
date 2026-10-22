@@ -1664,6 +1664,10 @@ pub struct OwnershipChecker<'a> {
     /// [`crate::cfg::Classification::core_borrow_moves`], across every
     /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
     pub(crate) core_borrow_moves: Vec<Span>,
+    /// Non-`Copy` places returned bare into a `ref` / `mut ref` slot of the
+    /// return type (B-2026-10-22-28); turned into `MoveOutOfPlace` errors by
+    /// `core_move_errors`.
+    pub(crate) core_bare_ref_returns: Vec<ref_return::BareRefReturn>,
     /// [`crate::cfg::Classification::core_projection_consumes`], across
     /// every function.
     pub(crate) core_projection_consumes: FxHashMap<SpanKey, (Span, String)>,
@@ -2062,6 +2066,7 @@ impl<'a> OwnershipChecker<'a> {
             core_non_move_sources: HashSet::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
+            core_bare_ref_returns: Vec::new(),
             core_projection_consumes: FxHashMap::default(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
@@ -3041,11 +3046,29 @@ impl<'a> OwnershipChecker<'a> {
         // v2 core §5.4: a function that returns a reference returns a borrow
         // of the place its result names, so an element there is lent, not
         // moved out of its collection (B-2026-10-19-37).
-        let lent = if core_rules() {
+        let mut lent = if core_rules() {
             ref_return::core_returned_places(f)
         } else {
             HashSet::new()
         };
+        // design.md § returning a reference: "The `ref` is written". A
+        // non-`Copy` place returned bare into a `ref` slot moves out of a
+        // borrowed place; reported once, with the `ref` to write, and not
+        // also as a move out of its collection (B-2026-10-22-28).
+        if core_rules() {
+            for bare in ref_return::core_bare_ref_returns(f) {
+                let key = SpanKey::from_span(&bare.span);
+                let copy = match self.typecheck_result.expr_types.get(&key) {
+                    Some(Type::Ref(t) | Type::MutRef(t)) => self.is_copy_type(t),
+                    Some(t) => self.is_copy_type(t),
+                    None => true,
+                };
+                if !copy {
+                    lent.insert(key);
+                    self.core_bare_ref_returns.push(bare);
+                }
+            }
+        }
         self.core_index_moves.extend(
             classification
                 .core_index_moves

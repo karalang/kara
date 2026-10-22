@@ -1,6 +1,6 @@
 struct User { name: String }
 fn user_name(user: ref User) -> ref String {
-user.name
+ref user.name
 }
 fn main() {
 let u = User { name: String.from("alice") };

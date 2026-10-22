@@ -5,7 +5,7 @@ fn firstrow(t: ref Tensor[i64, [2, 3]]) -> ref Tensor[i64, [2, 3]] {
 struct Holder { t: Tensor[i64, [2, 3]] }
 impl Holder {
     fn view(ref self) -> ref Tensor[i64, [2, 3]] {
-        self.t
+        ref self.t
     }
 }
 fn main() {

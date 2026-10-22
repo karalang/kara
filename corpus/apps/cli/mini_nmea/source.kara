@@ -1608,7 +1608,7 @@ fn convert(conv: ref String, v: ref String) -> Option[Val] {
 // ------------------------------------------------------------ attributes
 
 fn cls_of(lib: ref Lib, m: ref Msg) -> ref Cls {
-    lib.classes[m.cls]
+    ref lib.classes[m.cls]
 }
 
 // NMEASentence.__getattr__

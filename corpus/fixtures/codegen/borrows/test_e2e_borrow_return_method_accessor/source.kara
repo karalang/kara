@@ -1,6 +1,6 @@
 struct User { name: String, age: i64 }
 impl User {
-    fn name(ref self) -> ref String { self.name }
+    fn name(ref self) -> ref String { ref self.name }
     fn age(ref self) -> ref i64 { self.age }
 }
 fn main() {

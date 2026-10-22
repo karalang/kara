@@ -1,7 +1,7 @@
 struct Hold { arr: Array[String, 2], v: Vec[String] }
 impl Hold {
-    fn pa(ref self) -> ref Array[String, 2] { return self.arr; }
-    fn pv(ref self) -> ref Vec[String] { return self.v; }
+    fn pa(ref self) -> ref Array[String, 2] { return ref self.arr; }
+    fn pv(ref self) -> ref Vec[String] { return ref self.v; }
 }
 struct Mk {}
 impl Mk {
@@ -9,7 +9,7 @@ impl Mk {
         return Array[f"marr-{n}", f"mbrr-{n}"];
     }
 }
-fn pav(h: ref Hold) -> ref Vec[String] { return h.v; }
+fn pav(h: ref Hold) -> ref Vec[String] { return ref h.v; }
 fn mkv(n: i64) -> Vec[String] { return [f"free-{n}", f"beta-{n}"]; }
 fn mkn(n: i64) -> Vec[Vec[i64]] { return [[n, n + 1, n + 2], [n]]; }
 fn shout(n: i64) -> Vec[String] { println("once"); return [f"sh-{n}"]; }

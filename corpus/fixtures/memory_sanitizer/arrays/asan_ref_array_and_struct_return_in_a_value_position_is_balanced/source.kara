@@ -3,10 +3,10 @@ struct Pair { a: String, b: String }
 struct Hold { arr: Array[String, 2] }
 struct Named { p: Pair }
 struct Seq { v: Vec[String] }
-impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }
-impl Named { fn peek(ref self) -> ref Pair { return self.p; } }
-impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }
-fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }
+impl Hold { fn peek(ref self) -> ref Array[String, 2] { return ref self.arr; } }
+impl Named { fn peek(ref self) -> ref Pair { return ref self.p; } }
+impl Seq { fn peek(ref self) -> ref Vec[String] { return ref self.v; } }
+fn peekh(h: ref Hold) -> ref Array[String, 2] { return ref h.arr; }
 
 fn main() {
     let mut i: i64 = 0;

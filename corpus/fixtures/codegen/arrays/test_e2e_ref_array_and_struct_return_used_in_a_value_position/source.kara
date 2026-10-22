@@ -3,12 +3,12 @@ struct Hold { arr: Array[String, 2] }
 struct Nums { arr: Array[i64, 2] }
 struct Named { p: Pair }
 struct Seq { v: Vec[String] }
-impl Hold { fn peek(ref self) -> ref Array[String, 2] { return self.arr; } }
+impl Hold { fn peek(ref self) -> ref Array[String, 2] { return ref self.arr; } }
 impl Nums { fn peek(ref self) -> ref Array[i64, 2] { return self.arr; } }
-impl Named { fn peek(ref self) -> ref Pair { return self.p; } }
-impl Seq { fn peek(ref self) -> ref Vec[String] { return self.v; } }
-fn peekh(h: ref Hold) -> ref Array[String, 2] { return h.arr; }
-fn peekn(n: ref Named) -> ref Pair { return n.p; }
+impl Named { fn peek(ref self) -> ref Pair { return ref self.p; } }
+impl Seq { fn peek(ref self) -> ref Vec[String] { return ref self.v; } }
+fn peekh(h: ref Hold) -> ref Array[String, 2] { return ref h.arr; }
+fn peekn(n: ref Named) -> ref Pair { return ref n.p; }
 fn main() {
     let k = 40 + 2;
     let h = Hold { arr: [f"arr-left-{k}", f"arr-right-{k}"] };

@@ -1,7 +1,7 @@
 
 struct S { name: String }
 impl S {
-    fn name_ref(ref self) -> ref String { self.name }
+    fn name_ref(ref self) -> ref String { ref self.name }
     fn pick[U](ref self, f: own Fn(ref S) -> U) -> U { f(self) }
 }
 fn main() {

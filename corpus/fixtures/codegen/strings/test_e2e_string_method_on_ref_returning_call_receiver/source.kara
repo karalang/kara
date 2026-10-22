@@ -1,6 +1,6 @@
 struct H { name: String }
 impl H {
-fn label(ref self) -> ref String { self.name }
+fn label(ref self) -> ref String { ref self.name }
 }
 fn main() {
 let h = H { name: "kara".to_string() };

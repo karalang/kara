@@ -1393,6 +1393,120 @@ fn type_holds_ref(t: &Type) -> bool {
 /// v2 core §5.4 (B-2026-10-19-37): the places a `-> ref T` or
 /// `-> mut ref T` function's result names at its return sites. The result
 /// lends them, so none is a move out of its collection.
+/// One place [`core_bare_ref_returns`] found.
+#[derive(Clone, Copy)]
+pub(crate) struct BareRefReturn {
+    pub span: crate::token::Span,
+    /// The slot is `mut ref`.
+    pub is_mut: bool,
+    /// The place is a call argument (`Some(p.first)`), where `ref` is not
+    /// written (design.md Feature 4): a `mut ref` slot takes the call-site
+    /// `mut` marker, and a `ref` slot is borrowed into a binding first.
+    pub in_arg: bool,
+}
+
+/// design.md § returning a reference, B-2026-10-22-28: the places a
+/// function returns bare where its return type has a `ref` / `mut ref`
+/// slot (the whole type, or a slot of an `Option` or a tuple). "The `ref` is written": a bare
+/// `p.first` there would move out of a borrowed place, so each is
+/// reported once its type is known not to be `Copy`.
+pub(super) fn core_bare_ref_returns(f: &Function) -> Vec<BareRefReturn> {
+    let mut out = Vec::new();
+    let Some(ret) = &f.return_type else {
+        return out;
+    };
+    let mut returns: Vec<&Expr> = Vec::new();
+    collect_return_exprs_in_block(&f.body, &mut returns);
+    if let Some(tail) = &f.body.final_expr {
+        if !matches!(tail.kind, ExprKind::Return(_)) {
+            returns.push(tail);
+        }
+    }
+    for e in returns {
+        bare_ref_slots(e, ret, false, &mut out);
+    }
+    out
+}
+
+fn bare_ref_slots(e: &Expr, ty: &TypeExpr, in_arg: bool, out: &mut Vec<BareRefReturn>) {
+    match &e.kind {
+        ExprKind::Return(Some(v)) => return bare_ref_slots(v, ty, in_arg, out),
+        ExprKind::Block(b) => {
+            if let Some(t) = &b.final_expr {
+                bare_ref_slots(t, ty, in_arg, out);
+            }
+            return;
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(t) = &then_block.final_expr {
+                bare_ref_slots(t, ty, in_arg, out);
+            }
+            if let Some(eb) = else_branch {
+                bare_ref_slots(eb, ty, in_arg, out);
+            }
+            return;
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                bare_ref_slots(&arm.body, ty, in_arg, out);
+            }
+            return;
+        }
+        _ => {}
+    }
+    match &ty.kind {
+        TypeKind::Ref(_) | TypeKind::MutRef(_) => {
+            if matches!(
+                e.kind,
+                ExprKind::Index { .. } | ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+            ) {
+                out.push(BareRefReturn {
+                    span: e.span,
+                    is_mut: matches!(ty.kind, TypeKind::MutRef(_)),
+                    in_arg,
+                });
+            }
+        }
+        TypeKind::Tuple(slots) => {
+            if let ExprKind::Tuple(elems) = &e.kind {
+                if elems.len() == slots.len() {
+                    for (el, slot) in elems.iter().zip(slots) {
+                        bare_ref_slots(el, slot, in_arg, out);
+                    }
+                }
+            }
+        }
+        TypeKind::Path(p) if p.segments.last().is_some_and(|s| s == "Option") => {
+            let Some([GenericArg::Type(inner)]) = p.generic_args.as_deref() else {
+                return;
+            };
+            if let ExprKind::Call { callee, args } = &e.kind {
+                let is_some = matches!(
+                    &callee.kind,
+                    ExprKind::Identifier(n) if n == "Some"
+                ) || matches!(
+                    &callee.kind,
+                    ExprKind::Path { segments, .. } if segments.last().is_some_and(|s| s == "Some")
+                );
+                // `Some(mut self[key])` already lends its place mutably.
+                if is_some && args.len() == 1 && !args[0].mut_marker {
+                    bare_ref_slots(&args[0].value, inner, true, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn core_returned_places(f: &Function) -> HashSet<SpanKey> {
     let mut out = HashSet::new();
     let Some(ret) = &f.return_type else {
