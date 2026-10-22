@@ -177,7 +177,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-7 | 2026-10-22 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Null.stringify());` passes `karac check` and stops `__mir-run` and `__mir-llvm-run` with "the builtin `Json.Null.stringify` is not lowered yet"; without the variant it prints `null` | — |
 | B-2026-10-22-8 | 2026-10-22 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No mutable globals"): a `let` should be refused with a machine-applicable `karac fix` to `const NAME: T = e;`, a `let mut` refused with a message to create the value in `main` and pass it down | — |
-| B-2026-10-22-9 | 2026-10-22 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.recv().unwrap(); if stop { return v; } v }, { tx.send(7); 1 } }` deadlocks); and `break`/`continue` aimed at a loop outside the `par` are accepted by `karac check` | — |
 
 ### Relocated
 
@@ -4381,6 +4380,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-3 | effect+ownership | medium | `karac check` refuses ANY write to a local `let mut` from a `par {}` branch, one branch alone included, with a legacy effect error that recommends `A… | 9c60de56c4 |
 | B-2026-10-22-4 | codegen | medium | mir-llvm: kata 6 zigzag row_buffers runs 3x legacy since the early argpromotion round (c9f3bee58), at the SAME instruction count: promoting convert_o… | bcbc9d43fd |
 | B-2026-10-22-5 | typecheck+cli | medium | E0516 on a `shared` value borrowed out of a Map and held across an insert into that Map has no `karac fix` fix-it, though the fix is mechanical: kata… | dd13906b92 |
+| B-2026-10-22-9 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.r… | 63fa8a3df7 |
 
 </details>
 
