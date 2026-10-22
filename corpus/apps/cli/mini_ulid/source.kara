@@ -1,0 +1,552 @@
+// mini_ulid — the codec core of python-ulid 4.0.1 (MIT), ported to Kara v2.
+//
+// Reads data/jobs.tsv (one job per line, `<op>\t<arg>`) and runs each op
+// through the Crockford base32 codec and the from_*/to_* conversions, matching
+// the vendored library byte for byte. Everything is integer and string work;
+// the 128-bit ULID integer is handled as its 16 bytes with its own base-256 /
+// base-10 conversion, so no value ever overflows i64 and no float is formed.
+
+fn encode_alphabet() -> String { "0123456789ABCDEFGHJKMNPQRSTVWXYZ" }
+fn hex_digits() -> String { "0123456789abcdef" }
+
+// Crockford base32 decode value for an ASCII code, or 255 if not in the
+// alphabet (uppercase letters and digits only, as the library's ENCODE set).
+fn dec_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 { return c - 48; }
+    if c >= 65 and c <= 72 { return c - 65 + 10; }
+    if c == 74 { return 18; }
+    if c == 75 { return 19; }
+    if c == 77 { return 20; }
+    if c == 78 { return 21; }
+    if c >= 80 and c <= 84 { return c - 80 + 22; }
+    if c >= 86 and c <= 90 { return c - 86 + 27; }
+    255
+}
+
+fn codes_of(s: String) -> Vec[i64] {
+    let mut v = Vec[i64].new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn enc_char(v: i64) -> String {
+    encode_alphabet().substring(v, v + 1)
+}
+
+// 16 raw bytes -> 26-char canonical ULID string.
+fn encode(b: Vec[i64]) -> String {
+    let b0 = b[0]; let b1 = b[1]; let b2 = b[2]; let b3 = b[3];
+    let b4 = b[4]; let b5 = b[5];
+    let mut s = String.new();
+    s.push_str(enc_char((b0 & 224) >> 5));
+    s.push_str(enc_char(b0 & 31));
+    s.push_str(enc_char((b1 & 248) >> 3));
+    s.push_str(enc_char(((b1 & 7) << 2) | ((b2 & 192) >> 6)));
+    s.push_str(enc_char((b2 & 62) >> 1));
+    s.push_str(enc_char(((b2 & 1) << 4) | ((b3 & 240) >> 4)));
+    s.push_str(enc_char(((b3 & 15) << 1) | ((b4 & 128) >> 7)));
+    s.push_str(enc_char((b4 & 124) >> 2));
+    s.push_str(enc_char(((b4 & 3) << 3) | ((b5 & 224) >> 5)));
+    s.push_str(enc_char(b5 & 31));
+    let r0 = b[6]; let r1 = b[7]; let r2 = b[8]; let r3 = b[9]; let r4 = b[10];
+    let r5 = b[11]; let r6 = b[12]; let r7 = b[13]; let r8 = b[14]; let r9 = b[15];
+    s.push_str(enc_char((r0 & 248) >> 3));
+    s.push_str(enc_char(((r0 & 7) << 2) | ((r1 & 192) >> 6)));
+    s.push_str(enc_char((r1 & 62) >> 1));
+    s.push_str(enc_char(((r1 & 1) << 4) | ((r2 & 240) >> 4)));
+    s.push_str(enc_char(((r2 & 15) << 1) | ((r3 & 128) >> 7)));
+    s.push_str(enc_char((r3 & 124) >> 2));
+    s.push_str(enc_char(((r3 & 3) << 3) | ((r4 & 224) >> 5)));
+    s.push_str(enc_char(r4 & 31));
+    s.push_str(enc_char((r5 & 248) >> 3));
+    s.push_str(enc_char(((r5 & 7) << 2) | ((r6 & 192) >> 6)));
+    s.push_str(enc_char((r6 & 62) >> 1));
+    s.push_str(enc_char(((r6 & 1) << 4) | ((r7 & 240) >> 4)));
+    s.push_str(enc_char(((r7 & 15) << 1) | ((r8 & 128) >> 7)));
+    s.push_str(enc_char((r8 & 124) >> 2));
+    s.push_str(enc_char(((r8 & 3) << 3) | ((r9 & 224) >> 5)));
+    s.push_str(enc_char(r9 & 31));
+    s
+}
+
+// 26-char string -> 16 raw bytes, with the library's three ValueErrors.
+fn decode(enc: String) -> Result[Vec[i64], String] {
+    if enc.len() != 26 {
+        return Err("Encoded ULID has to be exactly 26 characters long.".to_string());
+    }
+    let c = codes_of(enc);
+    let mut i = 0;
+    while i < c.len() {
+        if dec_val(c[i]) == 255 {
+            return Err("Encoded ULID can only consist of letters in 0123456789ABCDEFGHJKMNPQRSTVWXYZ.".to_string());
+        }
+        i = i + 1;
+    }
+    if dec_val(c[0]) > 7 {
+        return Err("Timestamp value " + enc.substring(0, 10) + " is too large and will overflow 128-bits.");
+    }
+    let v0 = dec_val(c[0]); let v1 = dec_val(c[1]); let v2 = dec_val(c[2]);
+    let v3 = dec_val(c[3]); let v4 = dec_val(c[4]); let v5 = dec_val(c[5]);
+    let v6 = dec_val(c[6]); let v7 = dec_val(c[7]); let v8 = dec_val(c[8]);
+    let v9 = dec_val(c[9]);
+    let mut out = Vec[i64].new();
+    out.push(((v0 << 5) | v1) & 255);
+    out.push(((v2 << 3) | (v3 >> 2)) & 255);
+    out.push(((v3 << 6) | (v4 << 1) | (v5 >> 4)) & 255);
+    out.push(((v5 << 4) | (v6 >> 1)) & 255);
+    out.push(((v6 << 7) | (v7 << 2) | (v8 >> 3)) & 255);
+    out.push(((v8 << 5) | v9) & 255);
+    let w0 = dec_val(c[10]); let w1 = dec_val(c[11]); let w2 = dec_val(c[12]);
+    let w3 = dec_val(c[13]); let w4 = dec_val(c[14]); let w5 = dec_val(c[15]);
+    let w6 = dec_val(c[16]); let w7 = dec_val(c[17]); let w8 = dec_val(c[18]);
+    let w9 = dec_val(c[19]); let w10 = dec_val(c[20]); let w11 = dec_val(c[21]);
+    let w12 = dec_val(c[22]); let w13 = dec_val(c[23]); let w14 = dec_val(c[24]);
+    let w15 = dec_val(c[25]);
+    out.push(((w0 << 3) | (w1 >> 2)) & 255);
+    out.push(((w1 << 6) | (w2 << 1) | (w3 >> 4)) & 255);
+    out.push(((w3 << 4) | (w4 >> 1)) & 255);
+    out.push(((w4 << 7) | (w5 << 2) | (w6 >> 3)) & 255);
+    out.push(((w6 << 5) | w7) & 255);
+    out.push(((w8 << 3) | (w9 >> 2)) & 255);
+    out.push(((w9 << 6) | (w10 << 1) | (w11 >> 4)) & 255);
+    out.push(((w11 << 4) | (w12 >> 1)) & 255);
+    out.push(((w12 << 7) | (w13 << 2) | (w14 >> 3)) & 255);
+    out.push(((w14 << 5) | w15) & 255);
+    Ok(out)
+}
+
+// 16 bytes -> lowercase 32-char hex.
+fn hex_of(b: Vec[i64]) -> String {
+    let d = hex_digits();
+    let mut s = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let byte = b[i];
+        s.push_str(d.substring(byte >> 4, (byte >> 4) + 1));
+        s.push_str(d.substring(byte & 15, (byte & 15) + 1));
+        i = i + 1;
+    }
+    s
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 { return c - 48; }
+    if c >= 97 and c <= 102 { return c - 97 + 10; }
+    if c >= 65 and c <= 70 { return c - 65 + 10; }
+    -1
+}
+
+// 32-char hex (dashes already stripped) -> bytes; -1 entries on a bad digit.
+fn bytes_from_hex(h: String) -> Vec[i64] {
+    let c = codes_of(h);
+    let mut out = Vec[i64].new();
+    let mut i = 0;
+    while i + 1 < c.len() {
+        let hi = hex_val(c[i]);
+        let lo = hex_val(c[i + 1]);
+        out.push((hi << 4) | lo);
+        i = i + 2;
+    }
+    out
+}
+
+// 16 big-endian bytes -> decimal string (the ULID integer form).
+fn bytes_to_dec(b: Vec[i64]) -> String {
+    let mut digits = Vec[i64].new();
+    digits.push(0);
+    let mut i = 0;
+    while i < b.len() {
+        let mut carry = b[i];
+        let mut j = 0;
+        while j < digits.len() {
+            let cur = digits[j] * 256 + carry;
+            digits[j] = cur % 10;
+            carry = cur / 10;
+            j = j + 1;
+        }
+        while carry > 0 {
+            digits.push(carry % 10);
+            carry = carry / 10;
+        }
+        i = i + 1;
+    }
+    let mut hi = digits.len() - 1;
+    while hi > 0 and digits[hi] == 0 {
+        hi = hi - 1;
+    }
+    let d = hex_digits();
+    let mut s = String.new();
+    let mut k = hi;
+    loop {
+        s.push_str(d.substring(digits[k], digits[k] + 1));
+        if k == 0 { break; }
+        k = k - 1;
+    }
+    s
+}
+
+// Decimal string -> `nbytes` big-endian bytes, or Err on overflow.
+fn dec_to_bytes(s: String, nbytes: i64) -> Result[Vec[i64], String] {
+    let cs = codes_of(s);
+    let mut dec = Vec[i64].new();
+    let mut i = 0;
+    while i < cs.len() {
+        dec.push(cs[i] - 48);
+        i = i + 1;
+    }
+    let mut little = Vec[i64].new();
+    loop {
+        let mut allzero = true;
+        let mut t = 0;
+        while t < dec.len() {
+            if dec[t] != 0 { allzero = false; }
+            t = t + 1;
+        }
+        if allzero { break; }
+        let mut rem = 0;
+        let mut k = 0;
+        while k < dec.len() {
+            let cur = rem * 10 + dec[k];
+            dec[k] = cur / 256;
+            rem = cur % 256;
+            k = k + 1;
+        }
+        little.push(rem);
+    }
+    if little.len() > nbytes {
+        return Err("int too big to convert".to_string());
+    }
+    let mut res = Vec[i64].new();
+    let pad = nbytes - little.len();
+    let mut p = 0;
+    while p < pad {
+        res.push(0);
+        p = p + 1;
+    }
+    let mut q = little.len();
+    while q > 0 {
+        q = q - 1;
+        res.push(little[q]);
+    }
+    Ok(res)
+}
+
+fn is_all_digits(s: String) -> bool {
+    let c = codes_of(s);
+    if c.len() == 0 { return false; }
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] < 48 or c[i] > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// first 6 bytes big-endian -> milliseconds (fits in i64).
+fn milliseconds(b: Vec[i64]) -> i64 {
+    let mut ms = 0;
+    let mut i = 0;
+    while i < 6 {
+        ms = (ms << 8) | b[i];
+        i = i + 1;
+    }
+    ms
+}
+
+fn pad2(n: i64) -> String {
+    let mut s = String.new();
+    if n < 10 { s.push_str("0"); }
+    s + dec_str(n)
+}
+
+fn dec_str(n: i64) -> String {
+    if n == 0 { return "0".to_string(); }
+    let d = hex_digits();
+    let mut digs = Vec[i64].new();
+    let mut m = n;
+    while m > 0 {
+        digs.push(m % 10);
+        m = m / 10;
+    }
+    let mut s = String.new();
+    let mut k = digs.len();
+    while k > 0 {
+        k = k - 1;
+        s.push_str(d.substring(digs[k], digs[k] + 1));
+    }
+    s
+}
+
+fn pad4(n: i64) -> String {
+    let mut s = dec_str(n);
+    while s.len() < 4 {
+        s = "0" + s;
+    }
+    s
+}
+
+// ISO-8601 UTC datetime from whole-second milliseconds (proleptic Gregorian).
+fn iso_from_ms(ms: i64) -> String {
+    let secs = ms / 1000;
+    let days = secs / 86400;
+    let sod = secs % 86400;
+    let hh = sod / 3600;
+    let mm = (sod % 3600) / 60;
+    let ss = sod % 60;
+    // civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mut mo = mp + 3;
+    if mp >= 10 { mo = mp - 9; }
+    if mo <= 2 { y = y + 1; }
+    pad4(y) + "-" + pad2(mo) + "-" + pad2(d) + "T" + pad2(hh) + ":" + pad2(mm) + ":" + pad2(ss) + "+00:00"
+}
+
+// 16 bytes -> dashed uuid string (lowercase).
+fn uuid_of(b: Vec[i64]) -> String {
+    let h = hex_of(b);
+    h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20, 32)
+}
+
+fn clone_bytes(b: Vec[i64]) -> Vec[i64] {
+    let mut out = Vec[i64].new();
+    let mut i = 0;
+    while i < b.len() {
+        out.push(b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn uuid_versioned(b: Vec[i64], ver: i64) -> String {
+    let mut x = clone_bytes(b);
+    x[6] = (x[6] & 15) | (ver << 4);
+    x[8] = (x[8] & 63) | 128;
+    uuid_of(x)
+}
+
+// Compliant UUIDv7: version 7 in bits 76-79, the top 12 randomness bits as
+// rand_a in bits 64-75, variant 0b10 in bits 62-63, lower 62 bits unchanged.
+fn uuid7_compliant(b: Vec[i64]) -> String {
+    let mut x = clone_bytes(b);
+    let rand_a = (b[6] << 4) | (b[7] >> 4);
+    x[6] = 112 | ((rand_a >> 8) & 15);
+    x[7] = rand_a & 255;
+    x[8] = (b[8] & 63) | 128;
+    uuid_of(x)
+}
+
+// uuid string -> 16 bytes (dashes removed).
+fn bytes_from_uuid(u: String) -> Vec[i64] {
+    let c = codes_of(u);
+    let mut h = String.new();
+    let d = hex_digits();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] != 45 {
+            h.push_str(d.substring(hex_val(c[i]), hex_val(c[i]) + 1));
+        }
+        i = i + 1;
+    }
+    bytes_from_hex(h)
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "s2int" {
+        match decode(arg) {
+            Ok(b) => { return "int=" + bytes_to_dec(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "s2hex" {
+        match decode(arg) {
+            Ok(b) => { return "hex=" + hex_of(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "ms" {
+        match decode(arg) {
+            Ok(b) => { return "ms=" + dec_str(milliseconds(b)); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "iso" {
+        match decode(arg) {
+            Ok(b) => { return "iso=" + iso_from_ms(milliseconds(b)); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "uuid" {
+        match decode(arg) {
+            Ok(b) => { return "uuid=" + uuid_of(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "uuid4" {
+        match decode(arg) {
+            Ok(b) => { return "uuid4=" + uuid_versioned(b, 4); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "uuid7" {
+        match decode(arg) {
+            Ok(b) => { return "uuid7=" + uuid_of(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "uuid7c" {
+        match decode(arg) {
+            Ok(b) => { return "uuid7c=" + uuid7_compliant(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "int2str" {
+        match dec_to_bytes(arg, 16) {
+            Ok(b) => { return "str=" + encode(b); }
+            Err(e) => { return "error=" + e; }
+        }
+    }
+    if op == "hex2str" {
+        let b = bytes_from_hex(arg);
+        if b.len() != 16 {
+            return "error=ULID has to be exactly 16 bytes long.".to_string();
+        }
+        return "str=" + encode(b);
+    }
+    if op == "fromuuid" {
+        return "str=" + encode(bytes_from_uuid(arg));
+    }
+    if op == "fromuuid7" {
+        return "str=" + encode(bytes_from_uuid(arg));
+    }
+    if op == "parse" {
+        let n = arg.len();
+        if n == 37 and is_all_digits(arg) {
+            match dec_to_bytes(arg, 16) {
+                Ok(b) => { return "parse=" + encode(b); }
+                Err(e) => { return "error=" + e; }
+            }
+        }
+        if n == 36 {
+            return "parse=" + encode(bytes_from_uuid(arg));
+        }
+        if n == 32 {
+            let b = bytes_from_hex(arg);
+            if b.len() != 16 {
+                return "error=ULID has to be exactly 16 bytes long.".to_string();
+            }
+            return "parse=" + encode(b);
+        }
+        if n == 26 {
+            match decode(arg) {
+                Ok(b) => { return "parse=" + encode(b); }
+                Err(e) => { return "error=" + e; }
+            }
+        }
+        return "error=Cannot parse ULID from string of length " + dec_str(n);
+    }
+    if op == "sort" {
+        let mut parts: Vec[String] = arg.split(",").map(|p| p.to_string()).collect();
+        // insertion sort, lexicographic by the fixed-length base32 string
+        let mut i = 1;
+        while i < parts.len() {
+            let mut j = i;
+            while j > 0 {
+                let left = parts[j - 1].clone();
+                let right = parts[j].clone();
+                if not (left > right) { break; }
+                parts[j - 1] = right;
+                parts[j] = left;
+                j = j - 1;
+            }
+            i = i + 1;
+        }
+        let mut s = String.new();
+        let mut k = 0;
+        while k < parts.len() {
+            if k > 0 { s.push_str(","); }
+            s.push_str(parts[k].clone());
+            k = k + 1;
+        }
+        return "sorted=" + s;
+    }
+    if op == "cmp" {
+        let parts: Vec[String] = arg.split(",").map(|p| p.to_string()).collect();
+        let a = parts[0].clone();
+        let b = parts[1].clone();
+        let mut lt = "false";
+        let mut eq = "false";
+        if a < b { lt = "true"; }
+        if a == b { eq = "true"; }
+        return "lt=" + lt + " eq=" + eq;
+    }
+    "error=unknown op".to_string()
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let text = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    for line in text.lines() {
+        if line.len() == 0 { continue; }
+        let fields: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str("== " + fields[0].clone() + " | " + fields[1].clone() + "\n");
+        out.push_str("  " + run(fields[0].clone(), fields[1].clone()) + "\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("s2int\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("s2int\t01ARZ3NDEKTSV4RRFFQ69G5FAV\n");
+    s.push_str("s2int\t00000000000000000000000000\n");
+    s.push_str("s2int\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("s2hex\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("s2hex\t01ARZ3NDEKTSV4RRFFQ69G5FAV\n");
+    s.push_str("s2hex\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("ms\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("ms\t01HF7YAT00ZZQDVK5VNACRGXV6\n");
+    s.push_str("ms\t00000000000000000000000000\n");
+    s.push_str("ms\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("ms\t014QKJWY0028T5CY4TQKFF1ZPW\n");
+    s.push_str("iso\t01HF7YAT00ZZQDVK5VNACRGXV6\n");
+    s.push_str("iso\t00000000000000000000000000\n");
+    s.push_str("iso\t014QKJWY0028T5CY4TQKFF1ZPW\n");
+    s.push_str("uuid\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("uuid\t01HF7YAT00ZZQDVK5VNACRGXV6\n");
+    s.push_str("uuid\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("uuid4\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("uuid4\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("uuid7\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("uuid7c\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("uuid7c\t00000000000000000000000000\n");
+    s.push_str("int2str\t1920085146408319967821013699776743690\n");
+    s.push_str("hex2str\t0171cb81b5080102030405060708090a\n");
+    s.push_str("fromuuid\t0171cb81-b508-0102-0304-05060708090a\n");
+    s.push_str("fromuuid7\t0171cb81-b508-0102-0304-05060708090a\n");
+    s.push_str("parse\t01E75R3D88041061050R3GG28A\n");
+    s.push_str("parse\t0171cb81b5080102030405060708090a\n");
+    s.push_str("parse\t0171cb81-b508-0102-0304-05060708090a\n");
+    s.push_str("parse\t1234567890123456789012345678901234567\n");
+    s.push_str("sort\t00000000000000000000000000,7ZZZZZZZZZZZZZZZZZZZZZZZZZ,01E75R3D88041061050R3GG28A,01HF7YAT00ZZQDVK5VNACRGXV6\n");
+    s.push_str("cmp\t01E75R3D88041061050R3GG28A,01HF7YAT00ZZQDVK5VNACRGXV6\n");
+    s.push_str("cmp\t7ZZZZZZZZZZZZZZZZZZZZZZZZZ,00000000000000000000000000\n");
+    s.push_str("cmp\t01E75R3D88041061050R3GG28A,01E75R3D88041061050R3GG28A\n");
+    s.push_str("s2int\tTOOSHORT\n");
+    s.push_str("s2int\t01ARZ3NDEKTSV4RRFFQ69G5FAI\n");
+    s.push_str("s2int\t8ZZZZZZZZZZZZZZZZZZZZZZZZZ\n");
+    s.push_str("hex2str\t0102030405060708090a0b0c0d0e\n");
+    s.push_str("int2str\t999999999999999999999999999999999999999\n");
+    s.push_str("parse\tSHORTVALUE\n");
+    s
+}
