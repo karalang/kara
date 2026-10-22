@@ -1,0 +1,40 @@
+== pair | kitten|sitting
+  ham=3 lev=3 dam=3 lcsseq=4 lcsstr=3
+== pair | Saturday|Sunday
+  ham=7 lev=3 dam=3 lcsseq=5 lcsstr=3
+== pair | flaw|lawn
+  ham=4 lev=2 dam=2 lcsseq=3 lcsstr=3
+== pair | abc|abc
+  ham=0 lev=0 dam=0 lcsseq=3 lcsstr=3
+== pair | |abc
+  ham=3 lev=3 dam=3 lcsseq=0 lcsstr=0
+== pair | abc|
+  ham=3 lev=3 dam=3 lcsseq=0 lcsstr=0
+== pair | |
+  ham=0 lev=0 dam=0 lcsseq=0 lcsstr=0
+== pair | ba|ab
+  ham=2 lev=2 dam=1 lcsseq=1 lcsstr=1
+== pair | ca|abc
+  ham=3 lev=3 dam=3 lcsseq=1 lcsstr=1
+== pair | CA|ABC
+  ham=3 lev=3 dam=3 lcsseq=1 lcsstr=1
+== pair | karolin|kathrin
+  ham=3 lev=3 dam=3 lcsseq=5 lcsstr=2
+== pair | 1011101|1001001
+  ham=2 lev=2 dam=2 lcsseq=5 lcsstr=2
+== pair | hello|world
+  ham=4 lev=4 dam=4 lcsseq=1 lcsstr=1
+== pair | abcdef|zabcf
+  ham=6 lev=3 dam=3 lcsseq=4 lcsstr=3
+== pair | AGCAT|GAC
+  ham=4 lev=3 dam=3 lcsseq=2 lcsstr=1
+== pair | ABCDEF|ABDDEF
+  ham=1 lev=1 dam=1 lcsseq=5 lcsstr=3
+== pair | a quick fox|a quik fox
+  ham=6 lev=1 dam=1 lcsseq=10 lcsstr=5
+== pair | abcdxyz|xyzabcd
+  ham=7 lev=6 dam=6 lcsseq=4 lcsstr=4
+== pair | GeeksforGeeks|GeeksQuiz
+  ham=8 lev=8 dam=8 lcsseq=5 lcsstr=5
+== pair | 12345|135
+  ham=4 lev=2 dam=2 lcsseq=3 lcsstr=1
