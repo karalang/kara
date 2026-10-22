@@ -11769,74 +11769,59 @@ impl<'a> Interp<'a> {
 
     /// Sends `req`: `Ok` of a `Response`, or `Err` of an `HttpError`
     /// carrying `ureq`'s message (a non-2xx status is one, as legacy's).
+    /// Redirects are followed here rather than by `ureq`, as the compiled
+    /// client follows them (runtime/src/lib.rs `http_fetch_redirects`), so
+    /// each hop goes through the proxy its own URL names.
     #[cfg(not(target_arch = "wasm32"))]
     fn http_send(&mut self, req: HttpBuilder, with_body: bool, ret: Ty) -> R<Value> {
-        // A URL without a scheme is a bare authority to the runtime's client
-        // (`hyper::Uri`), so it fails at the connect, as the compiled
-        // program reports it, before `ureq` would refuse it as a bad URL.
-        if !req.url.contains("://") {
-            let authority = req.url.split('/').next().unwrap_or_default();
-            let (host, port) = match authority.rsplit_once(':') {
-                Some((h, p)) => (h, p.parse().unwrap_or(80)),
-                None => (authority, 80),
-            };
-            if let Err(e) = std::net::TcpStream::connect((host, port)) {
-                return self.http_error(format!("{}: connect failed: {e}", req.url), ret);
-            }
-        }
-        let agent = match http_agent() {
-            Ok(a) => a,
-            Err(msg) => return self.http_error(msg.clone(), ret),
-        };
-        let mut r = agent.request(&req.method, &req.url);
-        for (k, v) in &req.headers {
-            r = r.set(k, v);
-        }
-        if req.timeout_ms > 0 {
-            r = r.timeout(std::time::Duration::from_millis(req.timeout_ms as u64));
-        }
-        let result = if with_body {
-            r.send_string(&req.body)
-        } else {
-            r.call()
-        };
-        match result {
-            Ok(resp) => {
-                let status = i128::from(resp.status());
-                let headers: Vec<(String, String)> = resp
-                    .headers_names()
-                    .into_iter()
-                    .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
-                    .collect();
-                // The body as it came, which `bytes()` returns: a body that is
-                // not UTF-8 keeps its bytes there, as the compiled backend's does.
-                let mut raw = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
-                let text = String::from_utf8_lossy(&raw).into_owned();
-                let body = self.alloc_box("String", Value::Str(text));
-                if let Value::Box(id) = body {
-                    self.http_headers.insert(id, headers);
-                    self.http_bodies.insert(id, raw);
-                }
-                let response = Value::Agg(vec![Value::Int(status), body]);
-                self.variant_named(ret, None, "Ok", vec![response])
-            }
-            Err(ureq::Error::Transport(t))
-                if matches!(
-                    t.kind(),
-                    ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Dns
-                ) =>
+        let mut method = req.method.clone();
+        let mut url = req.url.clone();
+        let mut body = with_body.then(|| req.body.clone());
+        let mut headers = req.headers.clone();
+        for _hop in 0..=5 {
+            let resp = match http_exchange(&method, &url, &headers, body.as_deref(), req.timeout_ms)
             {
-                // The runtime's wording, which the compiled program prints.
-                use std::error::Error;
-                let cause = match t.source() {
-                    Some(io) => io.to_string(),
-                    None => t.to_string(),
-                };
-                self.http_error(format!("{}: connect failed: {cause}", req.url), ret)
+                Ok(resp) => resp,
+                Err(msg) => return self.http_error(msg, ret),
+            };
+            let status = resp.status();
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                if let Some(loc) = resp.header("location") {
+                    url = http_resolve_location(&url, loc);
+                    let demote = status == 303
+                        || (status == 301 || status == 302)
+                            && !method.eq_ignore_ascii_case("GET")
+                            && !method.eq_ignore_ascii_case("HEAD");
+                    if demote {
+                        method = "GET".to_string();
+                        body = None;
+                    }
+                    // `ureq`'s rule, which this client kept: the caller's
+                    // credentials are not sent on to where a redirect points.
+                    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+                    continue;
+                }
             }
-            Err(e) => self.http_error(e.to_string(), ret),
+            let status = i128::from(status);
+            let headers: Vec<(String, String)> = resp
+                .headers_names()
+                .into_iter()
+                .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
+                .collect();
+            // The body as it came, which `bytes()` returns: a body that is
+            // not UTF-8 keeps its bytes there, as the compiled backend's does.
+            let mut raw = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut resp.into_reader(), &mut raw);
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            let body = self.alloc_box("String", Value::Str(text));
+            if let Value::Box(id) = body {
+                self.http_headers.insert(id, headers);
+                self.http_bodies.insert(id, raw);
+            }
+            let response = Value::Agg(vec![Value::Int(status), body]);
+            return self.variant_named(ret, None, "Ok", vec![response]);
         }
+        self.http_error(format!("{url}: too many redirects"), ret)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -13557,43 +13542,205 @@ fn announced_port(at: std::net::SocketAddr, l: &std::net::TcpListener) -> Option
     l.local_addr().ok().map(|a| a.port())
 }
 
+/// One request of `http_send`'s, redirects not followed: the
+/// response, or the error message the compiled client gives for it.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_exchange(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+    timeout_ms: i128,
+) -> Result<ureq::Response, String> {
+    // A URL without a scheme is a bare authority to the runtime's client
+    // (`hyper::Uri`), so it fails at the connect, as the compiled
+    // program reports it, before `ureq` would refuse it as a bad URL.
+    if !url.contains("://") {
+        let authority = url.split('/').next().unwrap_or_default();
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse().unwrap_or(80)),
+            None => (authority, 80),
+        };
+        if let Err(e) = std::net::TcpStream::connect((host, port)) {
+            return Err(format!("{url}: connect failed: {e}"));
+        }
+    }
+    // The proxy the environment names for this URL, read at each request
+    // (docs/library/io.md § HTTP client, `src/http_proxy.rs`).
+    let route = match crate::http_proxy::url_scheme_host(url) {
+        Some((scheme, host)) => crate::http_proxy::proxy_for(&scheme, &host)
+            .map_err(|e| format!("{url}: {e}"))?
+            .map(|r| (scheme, r)),
+        None => None,
+    };
+    let agent = match &route {
+        None => http_agent()?,
+        Some((_, r)) => http_agent_through(r)?,
+    };
+    let mut r = agent.request(method, url);
+    for (k, v) in headers {
+        r = r.set(k, v);
+    }
+    // `ureq` puts the proxy's credentials on a CONNECT only; an http
+    // request carries them itself, as the compiled client sends them.
+    if let Some(("http", auth)) = route
+        .as_ref()
+        .and_then(|(scheme, r)| r.authorization().map(|a| (scheme.as_str(), a)))
+    {
+        r = r.set("Proxy-Authorization", &auth);
+    }
+    if timeout_ms > 0 {
+        r = r.timeout(std::time::Duration::from_millis(timeout_ms as u64));
+    }
+    let result = match body {
+        Some(body) => r.send_string(body),
+        None => r.call(),
+    };
+    use std::error::Error;
+    match result {
+        Ok(resp) => Ok(resp),
+        Err(ureq::Error::Transport(t))
+            if matches!(
+                t.kind(),
+                ureq::ErrorKind::ProxyConnect | ureq::ErrorKind::ProxyUnauthorized
+            ) =>
+        {
+            // `ureq` drops the proxy's status; ask the proxy again for it,
+            // so the message is the compiled client's.
+            let (_, r) = route.as_ref().expect("a proxy error has a proxy");
+            let msg = connect_refusal_of(r, url).unwrap_or_else(|| t.to_string());
+            Err(format!("{url}: {msg}"))
+        }
+        Err(ureq::Error::Transport(t))
+            if matches!(
+                t.kind(),
+                ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Dns
+            ) =>
+        {
+            // The runtime's wording, which the compiled program prints.
+            let cause = t
+                .source()
+                .map_or_else(|| t.to_string(), |io| io.to_string());
+            Err(match &route {
+                Some((_, r)) => {
+                    format!("{url}: {}", crate::http_proxy::proxy_unreachable(r, &cause))
+                }
+                None => format!("{url}: connect failed: {cause}"),
+            })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// `loc`, a redirect's `Location`, against the URL `current` it answered, as
+/// the compiled client resolves it (runtime/src/lib.rs
+/// `http_resolve_location`): an absolute URL as it is, `//authority/...` in
+/// the current scheme, a rooted path at the current authority, and anything
+/// else beside the current path's last segment.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_resolve_location(current: &str, loc: &str) -> String {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return loc.to_string();
+    }
+    let (scheme, rest) = current.split_once("://").unwrap_or(("http", current));
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    if let Some(rest) = loc.strip_prefix("//") {
+        return format!("{scheme}://{rest}");
+    }
+    if loc.starts_with('/') {
+        return format!("{scheme}://{authority}{loc}");
+    }
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
+    let dir = path.rfind('/').map_or("/", |i| &path[..=i]);
+    format!("{scheme}://{authority}{dir}{loc}")
+}
+
 /// The HTTP client's agent, trusting what the compiled program's client
 /// trusts (runtime/src/lib.rs `http_client_tls_config`): the bundled Mozilla
 /// roots plus the PEM certificates at `KARAC_HTTP_EXTRA_CA`, over rustls
 /// with `ring`. Only HTTP/1.1 is offered, the one protocol `ureq` speaks.
-/// Built once; the variable is read on first use, as the runtime reads it.
+/// The TLS configuration is built once; the variable is read on first use,
+/// as the runtime reads it.
 #[cfg(not(target_arch = "wasm32"))]
-fn http_agent() -> &'static Result<ureq::Agent, String> {
-    static AGENT: std::sync::OnceLock<Result<ureq::Agent, String>> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        let mut roots = rustls::RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
-        if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
-            let pem = std::fs::read(&path)
-                .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
-            for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
-                let cert =
-                    cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
-                roots
-                    .add(cert)
-                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}"))?;
-            }
+fn http_agent() -> Result<ureq::Agent, String> {
+    http_tls_config().map(|config| http_agent_builder(config).build())
+}
+
+/// The agent for a request through the proxy `route`: the same TLS
+/// configuration, so a certificate is checked against the target host as it
+/// is without a proxy, and `ureq`'s CONNECT tunnel for an https URL.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_agent_through(route: &crate::http_proxy::ProxyRoute) -> Result<ureq::Agent, String> {
+    let url = match &route.credentials {
+        Some(c) => format!("http://{c}@{}", route.authority()),
+        None => format!("http://{}", route.authority()),
+    };
+    let proxy = ureq::Proxy::new(url).map_err(|e| e.to_string())?;
+    http_tls_config().map(|config| http_agent_builder(config).proxy(proxy).build())
+}
+
+/// Why the proxy at `route` refuses a tunnel to `url`'s host, asked again:
+/// `ureq` reports a refused CONNECT without the proxy's status, which the
+/// compiled client's message carries. `None` when the second answer opens
+/// the tunnel or the proxy cannot be asked.
+#[cfg(not(target_arch = "wasm32"))]
+fn connect_refusal_of(route: &crate::http_proxy::ProxyRoute, url: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let (scheme, host) = crate::http_proxy::url_scheme_host(url)?;
+    let port = crate::http_proxy::url_port(url, &scheme)?;
+    let mut tcp = std::net::TcpStream::connect((route.host.as_str(), route.port)).ok()?;
+    let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    tcp.write_all(crate::http_proxy::connect_request(route, &host, port).as_bytes())
+        .ok()?;
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && head.len() < 64 * 1024 {
+        match tcp.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => break,
         }
-        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-        let mut config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(|e| e.to_string())?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        // Five redirects, as io.md has it: `ureq` counts the request that
-        // would follow the fifth.
-        Ok(ureq::AgentBuilder::new()
-            .tls_config(std::sync::Arc::new(config))
-            .redirects(6)
-            .build())
-    })
+    }
+    crate::http_proxy::connect_refusal(&head)
+}
+
+/// The agent follows no redirect: `http_send` follows them, so each hop
+/// goes through the proxy its own URL names.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_agent_builder(config: std::sync::Arc<rustls::ClientConfig>) -> ureq::AgentBuilder {
+    ureq::AgentBuilder::new().tls_config(config).redirects(0)
+}
+
+/// The client's TLS configuration, built once.
+#[cfg(not(target_arch = "wasm32"))]
+fn http_tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    type Config = Result<std::sync::Arc<rustls::ClientConfig>, String>;
+    static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            if let Ok(path) = std::env::var("KARAC_HTTP_EXTRA_CA") {
+                let pem = std::fs::read(&path)
+                    .map_err(|e| format!("KARAC_HTTP_EXTRA_CA: cannot read '{path}': {e}"))?;
+                for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+                    let cert =
+                        cert.map_err(|e| format!("KARAC_HTTP_EXTRA_CA: bad PEM in '{path}': {e}"))?;
+                    roots.add(cert).map_err(|e| {
+                        format!("KARAC_HTTP_EXTRA_CA: rejected cert in '{path}': {e}")
+                    })?;
+                }
+            }
+            let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+            let mut config = rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| e.to_string())?
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            config.alpn_protocols = vec![b"http/1.1".to_vec()];
+            Ok(std::sync::Arc::new(config))
+        })
+        .clone()
 }
 
 #[cfg(test)]

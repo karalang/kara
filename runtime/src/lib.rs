@@ -7040,7 +7040,16 @@ fn http_resolve_location(current: &str, loc: &str) -> Result<String, String> {
     Ok(format!("{scheme}://{auth}{dir}{loc}"))
 }
 
-/// One request/response exchange on a fresh connection: TCP connect,
+// Which proxy a request goes through (docs/library/io.md § HTTP client),
+// shared with the MIR interpreter (`src/http_proxy.rs`, by `#[path]`).
+#[cfg(feature = "tls")]
+#[path = "../../src/http_proxy.rs"]
+// The URL helpers serve the interpreter, which has no `hyper::Uri`.
+#[allow(dead_code)]
+mod http_proxy;
+
+/// One request/response exchange on a fresh connection: TCP connect (to the
+/// proxy the environment names, if any, through a CONNECT tunnel for https),
 /// TLS + ALPN when `https`, then hyper h2 or h1 `client::conn` by the
 /// negotiated protocol.
 #[cfg(feature = "tls")]
@@ -7059,10 +7068,25 @@ async fn http_fetch_once(
     let port = uri
         .port_u16()
         .unwrap_or(if scheme == "https" { 443 } else { 80 });
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
-        .await
-        .map_err(|e| format!("{url}: connect failed: {e}"))?;
+    let route = http_proxy::proxy_for(&scheme, &host).map_err(|e| format!("{url}: {e}"))?;
+    let tcp = match &route {
+        None => tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .map_err(|e| format!("{url}: connect failed: {e}"))?,
+        Some(r) => tokio::net::TcpStream::connect((r.host.as_str(), r.port))
+            .await
+            .map_err(|e| {
+                format!(
+                    "{url}: {}",
+                    http_proxy::proxy_unreachable(r, &e.to_string())
+                )
+            })?,
+    };
     if scheme == "https" {
+        let tcp = match &route {
+            Some(r) => http_connect_tunnel(tcp, r, &host, port, url).await?,
+            None => tcp,
+        };
         let config = http_client_tls_config()?;
         let connector = tokio_rustls::TlsConnector::from(config);
         let sni = rustls::pki_types::ServerName::try_from(host.clone())
@@ -7075,16 +7099,70 @@ async fn http_fetch_once(
         if negotiated_h2 {
             http_exchange_h2(tls, method, &uri, url, body, headers).await
         } else {
-            http_exchange_h1(tls, method, &uri, &host, port, &scheme, url, body, headers).await
+            http_exchange_h1(
+                tls, method, &uri, &host, port, &scheme, url, body, headers, false,
+            )
+            .await
         }
+    } else if let Some(r) = &route {
+        // An http request goes to the proxy in absolute form, with the
+        // proxy's credentials beside the caller's headers.
+        let mut headers = headers.to_vec();
+        if let Some(auth) = r.authorization() {
+            headers.push(("Proxy-Authorization".to_string(), auth));
+        }
+        http_exchange_h1(
+            tcp, method, &uri, &host, port, &scheme, url, body, &headers, true,
+        )
+        .await
     } else {
-        http_exchange_h1(tcp, method, &uri, &host, port, &scheme, url, body, headers).await
+        http_exchange_h1(
+            tcp, method, &uri, &host, port, &scheme, url, body, headers, false,
+        )
+        .await
+    }
+}
+
+/// Opens a tunnel to `host:port` through the proxy `tcp` is connected to: the
+/// CONNECT request, then the proxy's answer up to its blank line, read a byte
+/// at a time so nothing of the tunnelled stream is consumed. A non-2xx answer
+/// is an error carrying the proxy's status.
+#[cfg(feature = "tls")]
+async fn http_connect_tunnel(
+    mut tcp: tokio::net::TcpStream,
+    route: &http_proxy::ProxyRoute,
+    host: &str,
+    port: u16,
+    url: &str,
+) -> Result<tokio::net::TcpStream, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let unreachable = |e: std::io::Error| {
+        format!(
+            "{url}: {}",
+            http_proxy::proxy_unreachable(route, &e.to_string())
+        )
+    };
+    tcp.write_all(http_proxy::connect_request(route, host, port).as_bytes())
+        .await
+        .map_err(unreachable)?;
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && head.len() < 65536 {
+        if tcp.read(&mut byte).await.map_err(unreachable)? == 0 {
+            break;
+        }
+        head.push(byte[0]);
+    }
+    match http_proxy::connect_refusal(&head) {
+        Some(why) => Err(format!("{url}: {why}")),
+        None => Ok(tcp),
     }
 }
 
 /// HTTP/1.1 exchange over any duplex IO (plain TCP or a TLS stream that
-/// negotiated `http/1.1`). Origin-form request target + explicit `Host`
-/// (with port when non-default).
+/// negotiated `http/1.1`). Origin-form request target (absolute-form when
+/// `absolute`, for a request through a proxy) + explicit `Host` (with port
+/// when non-default).
 #[cfg(feature = "tls")]
 #[allow(clippy::too_many_arguments)]
 async fn http_exchange_h1<T>(
@@ -7097,6 +7175,7 @@ async fn http_exchange_h1<T>(
     url: &str,
     body: &[u8],
     headers: &[(String, String)],
+    absolute: bool,
 ) -> Result<HttpFetched, String>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -7114,10 +7193,13 @@ where
     } else {
         format!("{host}:{port}")
     };
-    let target = uri
-        .path_and_query()
-        .map(|p| p.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string());
+    let target = if absolute {
+        uri.to_string()
+    } else {
+        uri.path_and_query()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| "/".to_string())
+    };
     let req = http_build_request(method, &target, Some(&host_header), body, headers, url)?;
     let resp = sender
         .send_request(req)

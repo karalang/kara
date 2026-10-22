@@ -1908,8 +1908,13 @@ fn default_providers_and_panicking_trait_defaults_match_on_both_backends() {
 /// ends. Returns its port and the certificate's PEM, for
 /// `KARAC_HTTP_EXTRA_CA`.
 fn https_origin(body: &'static str) -> (u16, String) {
+    https_origin_for("localhost", body)
+}
+
+/// [`https_origin`] with a certificate for `name`.
+fn https_origin_for(name: &str, body: &'static str) -> (u16, String) {
     use std::io::{Read, Write};
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let cert = rcgen::generate_simple_self_signed(vec![name.to_string()]).unwrap();
     let pem = cert.cert.pem();
     let der = cert.cert.der().clone();
     let key = rustls::pki_types::PrivateKeyDer::try_from(cert.signing_key.serialize_der()).unwrap();
@@ -2016,6 +2021,243 @@ fn https_client_matches_on_both_backends() {
     if linked.is_some() {
         assert_eq!(run(&mut Command::new(&exe)), want);
     }
+}
+
+/// A forward proxy on loopback that resolves no name. An absolute-form
+/// request it answers itself, echoing its request line and credentials. A
+/// CONNECT to `example.invalid:443` carrying `auth` is tunnelled to the
+/// loopback `origin`; one without it is answered 407, and a CONNECT anywhere
+/// else 403. A request in origin form, made to it directly, is redirected to
+/// `https://example.invalid/y`. Returns its port and a count of the
+/// connections it took.
+fn loopback_proxy(
+    origin: u16,
+    auth: &'static str,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let taken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = taken.clone();
+    std::thread::spawn(move || {
+        for tcp in listener.incoming() {
+            let Ok(mut tcp) = tcp else { return };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let (mut head, mut byte) = (Vec::new(), [0u8; 1]);
+                while !head.ends_with(b"\r\n\r\n") {
+                    match tcp.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let mut words = head.split_whitespace();
+                let (method, target) = (words.next().unwrap(), words.next().unwrap());
+                let credentials = head
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.eq_ignore_ascii_case("proxy-authorization")
+                            .then(|| v.trim().to_string())
+                    })
+                    .unwrap_or_else(|| "none".to_string());
+                if target.starts_with('/') {
+                    // Asked directly, as an origin: a redirect to the
+                    // https origin behind the proxy.
+                    let reply = "HTTP/1.1 302 Found\r\nlocation: https://example.invalid/y\r\n\
+                                 content-length: 0\r\nconnection: close\r\n\r\n";
+                    let _ = tcp.write_all(reply.as_bytes());
+                    return;
+                }
+                if method != "CONNECT" {
+                    let body = format!("{method} {target} {credentials}");
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = tcp.write_all(reply.as_bytes());
+                    return;
+                }
+                let answer = if target != "example.invalid:443" {
+                    "403 Forbidden"
+                } else if !credentials.eq_ignore_ascii_case(auth) {
+                    "407 Proxy Authentication Required"
+                } else {
+                    let _ = tcp.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+                    let mut up = std::net::TcpStream::connect(("127.0.0.1", origin)).unwrap();
+                    let (mut down, mut up_w) = (tcp.try_clone().unwrap(), up.try_clone().unwrap());
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut down, &mut up_w);
+                    });
+                    let _ = std::io::copy(&mut up, &mut tcp);
+                    let _ = tcp.shutdown(std::net::Shutdown::Both);
+                    return;
+                };
+                let reply = format!("HTTP/1.1 {answer}\r\ncontent-length: 0\r\n\r\n");
+                let _ = tcp.write_all(reply.as_bytes());
+            });
+        }
+    });
+    (port, taken)
+}
+
+/// Every proxy variable the client reads, so a run sees only its own.
+const PROXY_VARS: &[&str] = &[
+    "http_proxy",
+    "HTTP_PROXY",
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+];
+
+/// A program fetching each of `urls` in turn, printing the status and body
+/// or the error.
+fn fetch_program(urls: &[&str]) -> String {
+    let calls: String = urls
+        .iter()
+        .map(|u| format!("    fetch(\"{u}\");\n"))
+        .collect();
+    format!(
+        r#"
+fn fetch(url: own String) {{
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(r) => {{
+            println(r.status());
+            println(r.body());
+        }}
+        Err(e) => println(f"error: {{e.message()}}"),
+    }}
+}}
+
+fn main() {{
+{calls}}}
+"#
+    )
+}
+
+/// The HTTP client goes through the proxy the environment names, on both MIR
+/// backends (docs/library/io.md § HTTP client): an http URL in absolute form
+/// with the proxy's credentials, an https URL through a CONNECT tunnel whose
+/// certificate is checked against the target, a refused tunnel as an error
+/// carrying the proxy's status, a redirect whose hop takes the proxy its own
+/// URL names, the lowercase variable over the uppercase one, an unsupported
+/// proxy scheme as an error naming the variable, and `NO_PROXY` as a direct
+/// connection.
+#[test]
+fn http_client_goes_through_the_environment_proxy_on_both_backends() {
+    let dir = Scratch::new("proxy");
+    let (origin, pem) = https_origin_for("example.invalid", "over tls");
+    let ca = dir.path().join("ca.pem");
+    std::fs::write(&ca, pem).unwrap();
+    let auth = "Basic dUB4OnA6c3M=";
+    let (proxy, taken) = loopback_proxy(origin, auth);
+    let karac = env!("CARGO_BIN_EXE_karac");
+    // Each program, built once, and the runs of it on both backends.
+    let backends = |name: &str, urls: &[&str]| -> Vec<Command> {
+        let file = dir.path().join(format!("{name}.kara"));
+        std::fs::write(&file, fetch_program(urls)).unwrap();
+        let mut runs = vec![{
+            let mut c = Command::new(karac);
+            c.args(["__mir-run", file.to_str().unwrap()]);
+            c
+        }];
+        let exe = dir.path().join(name);
+        let built = Command::new(karac)
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        if common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&built.stderr).to_string())
+        })
+        .is_some()
+        {
+            runs.push(Command::new(&exe));
+        }
+        runs
+    };
+    let output = |cmd: &mut Command, vars: &[(&str, String)]| -> String {
+        for v in PROXY_VARS {
+            cmd.env_remove(v);
+        }
+        cmd.env("KARAC_HTTP_EXTRA_CA", &ca)
+            .envs(vars.iter().cloned());
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let with_creds = format!("http://u%40x:p%3Ass@127.0.0.1:{proxy}");
+    let through = [
+        ("http_proxy", with_creds.clone()),
+        ("https_proxy", with_creds.clone()),
+        ("HTTP_PROXY", "socks5://127.0.0.1:1".to_string()),
+        ("HTTPS_PROXY", "socks5://127.0.0.1:1".to_string()),
+    ];
+    let want = format!(
+        "200\nGET http://example.invalid/x?q=1 {auth}\n200\nover tls\n\
+         error: https://refused.invalid/z: the proxy refused the tunnel: 403 Forbidden\n\
+         200\nover tls\n"
+    );
+    // The last goes direct to loopback, and its redirect's hop through the
+    // proxy: each hop's own URL decides.
+    let hop = format!("http://127.0.0.1:{proxy}/hop");
+    let urls = [
+        "http://example.invalid/x?q=1",
+        "https://example.invalid/y",
+        "https://refused.invalid/z",
+        hop.as_str(),
+    ];
+    for mut run in backends("through", &urls) {
+        assert_eq!(output(&mut run, &through), want);
+    }
+    // A CONNECT without the credentials is refused with the proxy's status.
+    let anonymous = [("https_proxy", format!("127.0.0.1:{proxy}"))];
+    for mut run in backends("anonymous", &["https://example.invalid/y"]) {
+        assert_eq!(
+            output(&mut run, &anonymous),
+            "error: https://example.invalid/y: the proxy refused the tunnel: \
+             407 Proxy Authentication Required\n"
+        );
+    }
+    // An unsupported proxy is an error, never a direct connection.
+    let socks = [("HTTPS_PROXY", "socks5://127.0.0.1:1".to_string())];
+    for mut run in backends("socks", &["https://example.invalid/y"]) {
+        assert_eq!(
+            output(&mut run, &socks),
+            "error: https://example.invalid/y: HTTPS_PROXY names a `socks5://` proxy, \
+             and only an `http://` proxy is supported\n"
+        );
+    }
+    // `NO_PROXY` sends the request direct, past a working proxy.
+    let before = taken.load(std::sync::atomic::Ordering::SeqCst);
+    let bypass = [
+        ("HTTPS_PROXY", with_creds.clone()),
+        ("NO_PROXY", "other.test,.invalid".to_string()),
+    ];
+    for mut run in backends("bypass", &["https://example.invalid/y"]) {
+        let out = output(&mut run, &bypass);
+        assert!(
+            out.starts_with("error: https://example.invalid/y: connect failed:"),
+            "{out}"
+        );
+    }
+    assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), before);
 }
 
 /// A call on a program-rooted resource outside any `with_provider` goes to
