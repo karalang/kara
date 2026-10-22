@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 280 |
 | other | 194 |
 | diagnostics | 185 |
-| perf | 182 |
+| perf | 183 |
 | soundness | 133 |
 | crash | 129 |
 | use-after-free | 92 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3024 |
+| codegen | 3025 |
 | interp | 1035 |
 | typecheck | 558 |
 | ownership | 131 |
@@ -178,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
 | B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
 | B-2026-10-22-3 | 2026-10-22 | effect+ownership | medium | `karac check` refuses ANY write to a local `let mut` from a `par {}` branch, one branch alone included, with a legacy effect error that recommends `Arc`, `RwLock` and `#[thread_local]` (none of them v1 Kāra); core-semantics.md §11.2 forbids only a CONFLICT between two branches, the MIR effects check accepts a lone writer and names both branches for a real conflict, and check should do the same | — |
+| B-2026-10-22-4 | 2026-10-22 | codegen | medium | mir-llvm: kata 6 zigzag row_buffers runs 3x legacy since the early argpromotion round (c9f3bee58), at the SAME instruction count: promoting convert_off's scalar params lets O2 fold the row step `if going_down { cur + 1 } else { cur - 1 }` into `cur + select(c, 1, -1)`, which x86 lowers as setne+lea, so the next push's rows[cur] address waits on a serial compare chain; turning the round off (KARAC_MIR_EARLY_PROMOTE=0) fixes 6 but puts 276 paint_enum back at ~2.6x, so neither setting meets the no-bench-over-2x bar | — |
 
 ### Relocated
 
