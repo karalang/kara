@@ -2032,12 +2032,17 @@ impl Pipeline {
                 _ => crate::typechecker::TypeErrorKind::BorrowConflict,
             };
             let class = crate::typechecker::class_for_type_error_kind(&kind);
+            let fix_it = if e.code == "E0516" && self.renames.is_empty() {
+                held_borrow_copy_fix(&src, typed, &e)
+            } else {
+                None
+            };
             typed.errors.push(crate::typechecker::TypeError {
                 message: mir_check_message(&e),
                 span,
                 kind,
                 lint_name: None,
-                fix_it: None,
+                fix_it,
                 class,
                 expected: None,
                 got: None,
@@ -3117,6 +3122,95 @@ fn source_span_at(src: &str, at: Option<(usize, usize)>) -> Option<crate::token:
 
 /// A MIR check's error in the program's terms: the places it names as the
 /// program spells them, and no block positions.
+/// B-2026-10-22-5: the machine-applicable repair for an E0516 whose borrow
+/// is a `let` initializer, `let h = m.get(k).unwrap();`,
+/// when copying the borrowed value keeps its meaning: a `shared` value is
+/// retained (`.clone()`), a `Copy` one is read out (`*`), and an
+/// `Option[ref T]` of either becomes `.cloned()`. The binding then owns its
+/// value and holds no borrow. Anything else, a plain value whose copy would
+/// be a deep clone included, gets no fix-it.
+fn held_borrow_copy_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    use crate::typechecker::types::Type;
+    e.holder.as_ref()?;
+    let (line, column) = e.loan_at?;
+    let line_start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    let offset = line_start + column.checked_sub(1)?;
+    // The initializer: the widest typed expression starting at the borrow
+    // and ending at the statement's `;`.
+    let (len, ty) = typed
+        .expr_types
+        .iter()
+        .filter(|(k, _)| k.0 == offset && k.1 > 0)
+        .max_by_key(|(k, _)| k.1)
+        .map(|(k, t)| (k.1, t))?;
+    let end = offset + len;
+    if !src.get(end..)?.trim_start().starts_with(';') {
+        return None;
+    }
+    // ... bound by `let [mut] holder [: T] =`, alone on the line before it.
+    let head = src.get(line_start..offset)?.trim_end().strip_suffix('=')?;
+    if head.ends_with(['=', '!', '<', '>']) {
+        return None;
+    }
+    let head = head.trim().strip_prefix("let ")?.trim_start();
+    let head = head.strip_prefix("mut ").unwrap_or(head);
+    // The holder may be the binding itself or one taken out of it later
+    // (`Some(node) => ..` over `let found = m.get(k);`): either way the
+    // borrow is this initializer, and an owned value ends it.
+    let name = head.split(':').next()?.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let copyable = |t: &Type| -> Option<bool> {
+        let shared = match t {
+            Type::Shared(_) => true,
+            Type::Named { name, .. } => typed
+                .struct_info
+                .get(name)
+                .map(|s| s.is_shared)
+                .or_else(|| typed.enum_info.get(name).map(|en| en.is_shared))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if shared {
+            Some(true)
+        } else if crate::ownership::is_copy_type_in_scope(t, typed, &Default::default()) {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let at = |offset: usize| crate::token::Span {
+        offset,
+        length: 0,
+        line,
+        column: column + (offset - (line_start + column - 1)),
+    };
+    let fix = |offset: usize, text: &str| crate::typechecker::FixIt {
+        span: at(offset),
+        replacement: text.to_string(),
+    };
+    match ty {
+        Type::Ref(inner) => match copyable(inner)? {
+            true => Some(fix(end, ".clone()")),
+            false => Some(fix(offset, "*")),
+        },
+        Type::Named { name, args } if name == "Option" && args.len() == 1 => match &args[0] {
+            Type::Ref(inner) => copyable(inner).map(|_| fix(end, ".cloned()")),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn mir_check_message(e: &crate::mir::BorrowError) -> String {
     let place = e.place.as_deref().map(|p| format!("`{p}`"));
     let at = |p: Option<(usize, usize)>| p.map(|(l, c)| format!(" at {l}:{c}")).unwrap_or_default();

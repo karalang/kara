@@ -11392,3 +11392,66 @@ fn imported_regex_and_json_items_and_own_names_are_accepted() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-22-5: an E0516 whose borrow is a `let` initializer gets a
+/// machine-applicable copy when copying keeps the meaning: a `shared` value
+/// is retained, a `Copy` one is read out, an `Option[ref T]` is `.cloned()`.
+/// A plain value, whose copy would be a deep clone, gets none.
+#[test]
+fn a_held_borrow_of_a_shared_or_copy_value_is_fixed_by_a_copy() {
+    rejected_then_fixed_by(
+        "held-shared-borrow",
+        "shared struct Node { val: i64, mut seen: i64 }\n\
+         fn main() {\n\
+         \x20   let mut m: Map[i64, Node] = Map.new();\n\
+         \x20   m.insert(1, Node { val: 1, seen: 0 });\n\
+         \x20   let cur = m.get(1).unwrap();\n\
+         \x20   m.insert(2, Node { val: 2, seen: 0 });\n\
+         \x20   cur.seen = cur.seen + 1;\n\
+         \x20   println(f\"{cur.val} {m.len()}\");\n\
+         }\n",
+        "[E0516]",
+        "m.get(1).unwrap().clone();",
+    );
+    rejected_then_fixed_by(
+        "held-copy-borrow",
+        "fn main() {\n\
+         \x20   let mut v = vec![3, 4];\n\
+         \x20   let first = v.get(0).unwrap();\n\
+         \x20   v.push(5);\n\
+         \x20   println(f\"{first} {v.len()}\");\n\
+         }\n",
+        "[E0516]",
+        "let first = *v.get(0).unwrap();",
+    );
+    rejected_then_fixed_by(
+        "held-option-borrow",
+        "shared struct Node { val: i64 }\n\
+         fn main() {\n\
+         \x20   let mut m: Map[i64, Node] = Map.new();\n\
+         \x20   m.insert(1, Node { val: 1 });\n\
+         \x20   let found = m.get(1);\n\
+         \x20   m.insert(2, Node { val: 2 });\n\
+         \x20   match found {\n\
+         \x20       Some(n) => println(f\"{n.val}\"),\n\
+         \x20       None => println(\"none\"),\n\
+         \x20   }\n\
+         }\n",
+        "[E0516]",
+        "m.get(1).cloned();",
+    );
+    let src = "fn main() {\n\
+               \x20   let mut v = vec![String.from(\"a\")];\n\
+               \x20   let first = v.get(0).unwrap();\n\
+               \x20   v.push(String.from(\"b\"));\n\
+               \x20   println(f\"{first} {v.len()}\");\n\
+               }\n";
+    let (dir, path) = fixture("held-plain-borrow", src);
+    karac().arg("fix").arg(&path).output().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        src,
+        "no fix for a plain value"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
