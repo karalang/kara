@@ -1,0 +1,258 @@
+// mini_base58 — a port of the base58 library (David Keijser, MIT): encode a
+// byte string with Bitcoin's Base58 alphabet and decode it back. Base58 is the
+// encoding behind Bitcoin addresses, IPFS CIDs and Flickr short URLs: base-64
+// without the characters (0, O, I, l, +, /) that are easy to confuse or that
+// break a double-click selection.
+//
+// The library converts the bytes to one big integer and changes its base with
+// repeated divmod. Kara has no big integers, so the number lives in a Vec[i64]
+// of base-B digits (big-endian) and the base change is repeated long division
+// of that array by the target base — identical arithmetic, so the output is
+// byte-identical to the library's. Leading zero bytes map to leading '1's on
+// encode and back to zero bytes on decode.
+//
+// Each input line is a lowercase hex string (the raw bytes). The job prints the
+// Base58 encoding and then the hex of decoding it back (which equals the
+// input). Only the plain b58encode / b58decode path is ported — not the
+// SHA256-based check variants, nor alternate alphabets or autofix.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// The Bitcoin Base58 alphabet, index -> character byte.
+fn alphabet() -> Vec[u8] {
+    str_bytes("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+}
+
+// value of a lowercase hex digit byte
+fn hexval(b: u8) -> i64 {
+    let c = b as i64;
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    c - 97 + 10
+}
+
+// index of a Base58 character byte in the alphabet, or -1
+fn b58val(alpha: ref Vec[u8], b: u8) -> i64 {
+    let n = alpha.len();
+    let mut i = 0;
+    while i < n {
+        if alpha[i] == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn hex2(b: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut v: Vec[u8] = Vec.new();
+    v.push(digs[b / 16]);
+    v.push(digs[b % 16]);
+    String.from_utf8(v).unwrap_or("")
+}
+
+// Long-divide a big-endian base-`base` digit array by `divisor`.
+// Overwrites `digits` with the stripped quotient; returns the remainder.
+fn divmod_digits(digits: mut ref Vec[i64], base: i64, divisor: i64) -> i64 {
+    let n = digits.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let mut i = 0;
+    while i < n {
+        let acc = carry * base + digits[i];
+        out.push(acc / divisor);
+        carry = acc % divisor;
+        i = i + 1;
+    }
+    // strip leading zeros of the quotient
+    let mut lead = 0;
+    while lead < out.len() and out[lead] == 0 {
+        lead = lead + 1;
+    }
+    let mut q: Vec[i64] = Vec.new();
+    let mut j = lead;
+    while j < out.len() {
+        q.push(out[j]);
+        j = j + 1;
+    }
+    digits.clear();
+    let mut k = 0;
+    while k < q.len() {
+        digits.push(q[k]);
+        k = k + 1;
+    }
+    carry
+}
+
+fn b58encode(data: ref Vec[u8]) -> String {
+    let alpha = alphabet();
+    let n = data.len();
+    // count leading zero bytes
+    let mut nz = 0;
+    while nz < n and data[nz] == 0 {
+        nz = nz + 1;
+    }
+    // base-256 digits of the remainder, big-endian
+    let mut digits: Vec[i64] = Vec.new();
+    let mut i = nz;
+    while i < n {
+        digits.push(data[i] as i64);
+        i = i + 1;
+    }
+    // repeated divmod by 58, collecting Base58 digits least-significant first
+    let mut rem: Vec[i64] = Vec.new();
+    while digits.len() > 0 {
+        let r = divmod_digits(mut digits, 256, 58);
+        rem.push(r);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut z = 0;
+    while z < nz {
+        out.push(alpha[0]);
+        z = z + 1;
+    }
+    // reverse rem into the output, mapped through the alphabet
+    let mut j = rem.len();
+    while j > 0 {
+        j = j - 1;
+        out.push(alpha[rem[j]]);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn b58decode(s: String) -> Vec[u8] {
+    let alpha = alphabet();
+    let sb = str_bytes(s);
+    let n = sb.len();
+    // count leading '1' characters
+    let one = alpha[0];
+    let mut nz = 0;
+    while nz < n and sb[nz] == one {
+        nz = nz + 1;
+    }
+    // base-58 digits, big-endian
+    let mut digits: Vec[i64] = Vec.new();
+    let mut i = nz;
+    while i < n {
+        digits.push(b58val(alpha, sb[i]));
+        i = i + 1;
+    }
+    // repeated divmod by 256, collecting bytes least-significant first
+    let mut rem: Vec[i64] = Vec.new();
+    while digits.len() > 0 {
+        let r = divmod_digits(mut digits, 58, 256);
+        rem.push(r);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut z = 0;
+    while z < nz {
+        out.push(0);
+        z = z + 1;
+    }
+    let mut j = rem.len();
+    while j > 0 {
+        j = j - 1;
+        out.push(rem[j] as u8);
+    }
+    out
+}
+
+fn run_job(line: String) -> String {
+    // parse the hex line into bytes
+    let hb = str_bytes(line);
+    let hn = hb.len();
+    let mut data: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < hn {
+        let hi = hexval(hb[i]);
+        let lo = hexval(hb[i + 1]);
+        data.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+
+    let enc = b58encode(data);
+    let dec = b58decode(enc.clone());
+
+    let mut hexs = String.new();
+    let mut d = 0;
+    let dn = dec.len();
+    while d < dn {
+        hexs.push_str(hex2(dec[d] as i64));
+        d = d + 1;
+    }
+
+    let mut out = String.new();
+    out.push_str("enc ");
+    out.push_str(enc);
+    out.push_str("\ndec ");
+    out.push_str(hexs);
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("00\n");
+    s.push_str("0000\n");
+    s.push_str("000000\n");
+    s.push_str("01\n");
+    s.push_str("ff\n");
+    s.push_str("ffff\n");
+    s.push_str("00ff\n");
+    s.push_str("0000ff00\n");
+    s.push_str("61\n");
+    s.push_str("616263\n");
+    s.push_str("68656c6c6f20776f726c64\n");
+    s.push_str("48656c6c6f2c20426974636f696e21\n");
+    s.push_str("00112233445566778899aabbccddeeff\n");
+    s.push_str("0011111111111111111111111111111111111111deadbeef\n");
+    s.push_str("deadbeef\n");
+    s.push_str("cafebabe\n");
+    s.push_str("0001020304050607\n");
+    s.push_str("fffefdfcfbfa\n");
+    s.push_str("7f80\n");
+    s.push_str("80\n");
+    s.push_str("0080\n");
+    s.push_str("123456789abcdef0\n");
+    s.push_str("000000000000000001\n");
+    s.push_str("ffffffffffffffffffffffffffffffff\n");
+    s.push_str("10\n");
+    s.push_str("0010\n");
+    s.push_str("6162636465666768696a6b6c6d6e6f70\n");
+    s.push_str("00000000deadbeefcafe\n");
+    s.push_str("2a\n");
+    s
+}
