@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -302,13 +303,17 @@ def run_capped(cmd: list, cwd: Path, env: dict, timeout: float) -> subprocess.Co
     """subprocess.run with captured output, stdin closed and `timeout`, which
     raises TimeoutExpired also when stdout or stderr passes OUTPUT_CAP."""
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=err, stdin=subprocess.DEVNULL)
+        # its own session, so a timeout kills what it started as well: a
+        # `karac run` killed alone left its program looping, reparented to
+        # init, for hours
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
+                             start_new_session=True)
         deadline = time.monotonic() + timeout
         pause = 0.001
         while p.poll() is None:
             if time.monotonic() > deadline or os.fstat(out.fileno()).st_size > OUTPUT_CAP \
                     or os.fstat(err.fileno()).st_size > OUTPUT_CAP:
-                p.kill()
+                os.killpg(p.pid, signal.SIGKILL)
                 p.wait()
                 raise subprocess.TimeoutExpired(cmd, timeout)
             time.sleep(pause)

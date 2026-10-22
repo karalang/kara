@@ -1,0 +1,599 @@
+// LeetCode #863: All Nodes Distance K in Binary Tree -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: the values of every node whose distance from the target
+// node is k, the distance being the number of edges between them. The
+// literal reading measures every pair's distance with Floyd-Warshall.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: parents, then a breadth-first search -------------------------
+fn star_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut parent: Map[i64, TreeNode] = Map.new();
+    let mut start: Option[TreeNode] = None;
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(node) = stack.pop() {
+        if node.val == target {
+            start = Some(node);
+        }
+        if let Some(child) = node.left {
+            parent.insert(child.val, node);
+            stack.push(child);
+        }
+        if let Some(child) = node.right {
+            parent.insert(child.val, node);
+            stack.push(child);
+        }
+    }
+    let mut found: Vec[i64] = Vec.new();
+    let Some(s) = start else {
+        return found;
+    };
+    let mut seen: Set[i64] = Set.new();
+    seen.insert(s.val);
+    let mut level: Vec[TreeNode] = [s];
+    for _ in 0..k {
+        let mut next: Vec[TreeNode] = Vec.new();
+        for node in level.iter() {
+            let mut near: Vec[TreeNode] = Vec.new();
+            if let Some(child) = node.left {
+                near.push(child);
+            }
+            if let Some(child) = node.right {
+                near.push(child);
+            }
+            if let Some(up) = parent.get(node.val) {
+                near.push(*up);
+            }
+            for m in near {
+                if not seen.contains(m.val) {
+                    seen.insert(m.val);
+                    next.push(m);
+                }
+            }
+        }
+        level = next;
+    }
+    for node in level.iter() {
+        found.push(node.val);
+    }
+    found.sort();
+    found
+}
+
+// ---- the tree as an adjacency list -------------------------------------------
+fn graph_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    let mut top = target;
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(node) = stack.pop() {
+        top = top.max(node.val);
+        for child in [node.left, node.right] {
+            if let Some(c) = child {
+                edges.push((node.val, c.val));
+                stack.push(c);
+            }
+        }
+    }
+    let mut adjacent: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..top + 1 {
+        adjacent.push(Vec.new());
+    }
+    for (a, b) in edges.iter() {
+        adjacent[*a].push(*b);
+        adjacent[*b].push(*a);
+    }
+    let mut dist: Vec[i64] = Vec.filled(top + 1, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    if root.is_some() {
+        dist[target] = 0;
+        queue.push_back(target);
+    }
+    while let Some(v) = queue.pop_front() {
+        for w in adjacent[v].iter() {
+            if dist[*w] < 0 {
+                dist[*w] = dist[v] + 1;
+                queue.push_back(*w);
+            }
+        }
+    }
+    let mut found: Vec[i64] = Vec.new();
+    for v in 0..top + 1 {
+        if dist[v] == k {
+            found.push(v);
+        }
+    }
+    found
+}
+
+// ---- one recursive search, no parents kept -----------------------------------
+fn search_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut found: Vec[i64] = Vec.new();
+    search_below(root, target, k, mut found);
+    found.sort();
+    found
+}
+
+fn search_below(node: Option[TreeNode], target: i64, k: i64, found: mut ref Vec[i64]) -> i64 {
+    let Some(n) = node else {
+        return -1;
+    };
+    if n.val == target {
+        search_collect(node, k, mut found);
+        return 0;
+    }
+    let below_left = search_below(n.left, target, k, mut found);
+    if below_left >= 0 {
+        let d = below_left + 1;
+        if d == k {
+            found.push(n.val);
+        } else if d < k {
+            search_collect(n.right, k - d - 1, mut found);
+        }
+        return d;
+    }
+    let below_right = search_below(n.right, target, k, mut found);
+    if below_right >= 0 {
+        let d = below_right + 1;
+        if d == k {
+            found.push(n.val);
+        } else if d < k {
+            search_collect(n.left, k - d - 1, mut found);
+        }
+        return d;
+    }
+    -1
+}
+
+// every node `depth` levels below `node`
+fn search_collect(node: Option[TreeNode], depth: i64, found: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if depth == 0 {
+            found.push(n.val);
+        } else {
+            search_collect(n.left, depth - 1, mut found);
+            search_collect(n.right, depth - 1, mut found);
+        }
+    }
+}
+
+// ---- along the path from the root --------------------------------------------
+fn path_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut path: Vec[TreeNode] = Vec.new();
+    let mut found: Vec[i64] = Vec.new();
+    if not path_find_path(root, target, mut path) {
+        return found;
+    }
+    let top = path.len() - 1;
+    for d in 0..path.len() {
+        if d > k {
+            break;
+        }
+        let a = path[top - d];
+        if d == k {
+            found.push(a.val);
+        } else if d == 0 {
+            found.extend(path_levels_down(Some(a), k));
+        } else {
+            let from = path[top - d + 1];
+            let other = if a.left.is_some() and a.left.unwrap().val == from.val { a.right } else { a.left };
+            found.extend(path_levels_down(other, k - d - 1));
+        }
+    }
+    found.sort();
+    found
+}
+
+// the nodes from the root to the one holding `target`, if there is one
+fn path_find_path(node: Option[TreeNode], target: i64, path: mut ref Vec[TreeNode]) -> bool {
+    let Some(n) = node else {
+        return false;
+    };
+    path.push(n);
+    if n.val == target or path_find_path(n.left, target, mut path) or path_find_path(n.right, target, mut path) {
+        return true;
+    }
+    path.pop();
+    false
+}
+
+// the values `depth` levels below `node`, walked one level at a time
+fn path_levels_down(node: Option[TreeNode], depth: i64) -> Vec[i64] {
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(n) = node {
+        level.push(n);
+    }
+    for _ in 0..depth {
+        let mut next: Vec[TreeNode] = Vec.new();
+        for n in level.iter() {
+            if let Some(c) = n.left {
+                next.push(c);
+            }
+            if let Some(c) = n.right {
+                next.push(c);
+            }
+        }
+        level = next;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for n in level.iter() {
+        vals.push(n.val);
+    }
+    vals
+}
+
+// ---- every node's distance through its lowest common ancestor ----------------
+fn lca_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut ups: Vec[(i64, i64, i64)] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, -1, 0));
+    }
+    let mut top = 0;
+    while let Some((node, up, depth)) = stack.pop() {
+        vals.push(node.val);
+        ups.push((node.val, up, depth));
+        top = top.max(node.val);
+        if let Some(c) = node.left {
+            stack.push((c, node.val, depth + 1));
+        }
+        if let Some(c) = node.right {
+            stack.push((c, node.val, depth + 1));
+        }
+    }
+    let mut found: Vec[i64] = Vec.new();
+    if target > top {
+        return found;
+    }
+    let mut parent: Vec[i64] = Vec.filled(top + 1, -2);
+    let mut depth: Vec[i64] = Vec.filled(top + 1, 0);
+    for (v, up, d) in ups.iter() {
+        parent[*v] = *up;
+        depth[*v] = *d;
+    }
+    if parent[target] == -2 {
+        return found;
+    }
+    for v in vals.iter() {
+        let mut a = *v;
+        let mut b = target;
+        let mut steps = 0;
+        while a != b {
+            if depth[a] >= depth[b] {
+                a = parent[a];
+            } else {
+                b = parent[b];
+            }
+            steps += 1;
+        }
+        if steps == k {
+            found.push(*v);
+        }
+    }
+    found.sort();
+    found
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// The distance between two nodes is the number of edges on the path
+// between them: every edge of the tree goes into a matrix, and
+// Floyd-Warshall gives every pair's distance.
+fn literal_distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut edges: Vec[(i64, i64)] = Vec.new();
+    let mut vals: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(node) = stack.pop() {
+        vals.push(node.val);
+        if let Some(c) = node.left {
+            edges.push((node.val, c.val));
+            stack.push(c);
+        }
+        if let Some(c) = node.right {
+            edges.push((node.val, c.val));
+            stack.push(c);
+        }
+    }
+    let mut size = target + 1;
+    for v in vals.iter() {
+        size = size.max(*v + 1);
+    }
+    let far = 1000000;
+    let mut d: Vec[Vec[i64]] = Vec.new();
+    for i in 0..size {
+        let mut row: Vec[i64] = Vec.filled(size, far);
+        row[i] = 0;
+        d.push(row);
+    }
+    for (a, b) in edges.iter() {
+        d[*a][*b] = 1;
+        d[*b][*a] = 1;
+    }
+    for m in 0..size {
+        for i in 0..size {
+            for j in 0..size {
+                if d[i][m] + d[m][j] < d[i][j] {
+                    d[i][j] = d[i][m] + d[m][j];
+                }
+            }
+        }
+    }
+    let mut found: Vec[i64] = Vec.new();
+    let mut present = false;
+    for v in vals.iter() {
+        if *v == target {
+            present = true;
+        }
+    }
+    if not present {
+        return found;
+    }
+    for v in vals.iter() {
+        if d[target][*v] == k {
+            found.push(*v);
+        }
+    }
+    found.sort();
+    found
+}
+
+// ---- the properties --------------------------------------------------------
+
+fn arms(root: Option[TreeNode], target: i64, k: i64) -> Vec[Vec[i64]] {
+    [star_distance_k(root, target, k), graph_distance_k(root, target, k), search_distance_k(root, target, k),
+     path_distance_k(root, target, k), lca_distance_k(root, target, k)]
+}
+
+// checks made, and failures by property (index 0 holds P1)
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn expect(t: mut ref Tally, p: i64, root: Option[TreeNode], target: i64, k: i64, want: Vec[i64]) {
+    let got = arms(root, target, k);
+    for a in 0..got.len() {
+        t.checks += 1;
+        if not same(got[a], want) {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+// the tree with every left and right child swapped, as a new tree
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirror(n.right), right: mirror(n.left) }),
+    }
+}
+
+// the tree with every value raised by `by`, as a new tree
+fn shifted(node: Option[TreeNode], by: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val + by, left: shifted(n.left, by), right: shifted(n.right, by) }),
+    }
+}
+
+fn properties(t: mut ref Tally, root: Option[TreeNode], n: i64, target: i64, k: i64) -> i64 {
+    let want = literal_distance_k(root, target, k);
+    // P1: the statement's answer
+    expect(mut t, 1, root, target, k, want);
+    // P2: at distance 0 there is the target alone
+    if k == 0 {
+        expect(mut t, 2, root, target, 0, [target]);
+    }
+    // P3: distance is symmetric, so the target is at distance k from each
+    // node found
+    let got = arms(root, target, k);
+    for a in 0..got.len() {
+        for v in got[a].iter() {
+            t.checks += 1;
+            if not literal_distance_k(root, *v, k).contains(target) {
+                t.failures[2] += 1;
+            }
+        }
+    }
+    // P4: the mirrored tree gives the same answer
+    expect(mut t, 4, mirror(root), target, k, want);
+    // P5: every value raised by n, the target too, raises every value found
+    // by n
+    let mut raised: Vec[i64] = Vec.new();
+    for v in want.iter() {
+        raised.push(*v + n);
+    }
+    expect(mut t, 5, shifted(root, n), target + n, k, raised);
+    want.len()
+}
+
+// P6: over every k from 0 to n - 1, each node is found exactly once
+fn partition(t: mut ref Tally, root: Option[TreeNode], n: i64, target: i64) {
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..5 {
+        count.push(Vec.filled(n, 0));
+    }
+    for k in 0..n {
+        let got = arms(root, target, k);
+        for a in 0..got.len() {
+            for v in got[a].iter() {
+                count[a][*v] += 1;
+            }
+        }
+    }
+    for a in 0..5 {
+        t.checks += 1;
+        for v in 0..n {
+            if count[a][v] != 1 {
+                t.failures[5] += 1;
+                break;
+            }
+        }
+    }
+}
+
+// A random tree of n nodes holding the values 0 to n - 1 in a random
+// order: each new node hangs from a random node with a free side.
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..n {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// every binary tree shape with n nodes, in preorder: 1 for a node, 0 for a
+// missing child
+fn shapes(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n == 0 {
+        out.push([0]);
+        return out;
+    }
+    for left in 0..n {
+        for l in shapes(left).iter() {
+            for r in shapes(n - 1 - left).iter() {
+                let mut code: Vec[i64] = [1];
+                for b in l.iter() {
+                    code.push(*b);
+                }
+                for b in r.iter() {
+                    code.push(*b);
+                }
+                out.push(code);
+            }
+        }
+    }
+    out
+}
+
+// the tree a shape code describes, the k-th node in preorder holding
+// vals[k]; `at` walks the code
+fn build(code: Vec[i64], at: mut ref i64, vals: Vec[i64], next: mut ref i64) -> Option[TreeNode] {
+    let bit = code[*at];
+    *at += 1;
+    if bit == 0 {
+        return None;
+    }
+    let node = TreeNode { val: vals[*next], left: None, right: None };
+    *next += 1;
+    node.left = build(code, mut at, vals, mut next);
+    node.right = build(code, mut at, vals, mut next);
+    Some(node)
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..n {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    vals
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut trees = 0;
+    let mut queries = 0;
+    let mut found = 0;
+    let mut seed = 863;
+    // every shape of one to six nodes, every target, every k up to n
+    for n in 1..7 {
+        for code in shapes(n).iter() {
+            let mut at = 0;
+            let mut next = 0;
+            let root = build(code, mut at, shuffled(mut seed, n), mut next);
+            trees += 1;
+            for target in 0..n {
+                for k in 0..n + 1 {
+                    queries += 1;
+                    found += properties(mut t, root, n, target, k);
+                }
+            }
+            partition(mut t, root, n, next_random(mut seed) % n);
+        }
+    }
+    // random trees of up to twelve nodes
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let root = random_tree(mut seed, n);
+        trees += 1;
+        for target in 0..n {
+            for k in 0..5 {
+                queries += 1;
+                found += properties(mut t, root, n, target, k);
+            }
+        }
+        partition(mut t, root, n, next_random(mut seed) % n);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{trees} trees, {queries} queries, {found} nodes found, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

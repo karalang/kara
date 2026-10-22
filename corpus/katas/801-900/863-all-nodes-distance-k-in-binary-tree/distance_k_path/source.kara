@@ -1,0 +1,223 @@
+// LeetCode #863: All Nodes Distance K in Binary Tree -- along the path
+// from the root.
+//
+// The path from the root down to the target is found first. A node at
+// distance k is either below the target, k levels down, or reached
+// through one of the target's ancestors: d steps up the path and then
+// k - d - 1 levels down the ancestor's child that is not on the path, or
+// the ancestor itself when d is k. Each ancestor is tried in turn with a
+// level-by-level walk down. O(n) time.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn distance_k(root: Option[TreeNode], target: i64, k: i64) -> Vec[i64] {
+    let mut path: Vec[TreeNode] = Vec.new();
+    let mut found: Vec[i64] = Vec.new();
+    if not find_path(root, target, mut path) {
+        return found;
+    }
+    let top = path.len() - 1;
+    for d in 0..path.len() {
+        if d > k {
+            break;
+        }
+        let a = path[top - d];
+        if d == k {
+            found.push(a.val);
+        } else if d == 0 {
+            found.extend(levels_down(Some(a), k));
+        } else {
+            let from = path[top - d + 1];
+            let other = if a.left.is_some() and a.left.unwrap().val == from.val { a.right } else { a.left };
+            found.extend(levels_down(other, k - d - 1));
+        }
+    }
+    found.sort();
+    found
+}
+
+// the nodes from the root to the one holding `target`, if there is one
+fn find_path(node: Option[TreeNode], target: i64, path: mut ref Vec[TreeNode]) -> bool {
+    let Some(n) = node else {
+        return false;
+    };
+    path.push(n);
+    if n.val == target or find_path(n.left, target, mut path) or find_path(n.right, target, mut path) {
+        return true;
+    }
+    path.pop();
+    false
+}
+
+// the values `depth` levels below `node`, walked one level at a time
+fn levels_down(node: Option[TreeNode], depth: i64) -> Vec[i64] {
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(n) = node {
+        level.push(n);
+    }
+    for _ in 0..depth {
+        let mut next: Vec[TreeNode] = Vec.new();
+        for n in level.iter() {
+            if let Some(c) = n.left {
+                next.push(c);
+            }
+            if let Some(c) = n.right {
+                next.push(c);
+            }
+        }
+        level = next;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for n in level.iter() {
+        vals.push(n.val);
+    }
+    vals
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, "null" for a missing child, with the
+// trailing nulls dropped.
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(", ")}]"
+}
+
+fn show(vals: Vec[Option[i64]], target: i64, k: i64) {
+    let root = from_level_order(vals);
+    println(f"root = {to_level_order(root)}, target = {target}, k = {k} -> {distance_k(root, target, k)}");
+}
+
+// A random tree of n nodes holding the values 0 to n - 1 in a random
+// order: each new node hangs from a random node with a free side.
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..n {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+// folds one answer into a checksum
+fn fold(check: i64, found: Vec[i64]) -> i64 {
+    let mut c = check;
+    for v in found.iter() {
+        c = (c * 31 + *v + 1) % 1000000007;
+    }
+    (c * 31 + 1000) % 1000000007
+}
+
+fn main() {
+    let example = [Some(3), Some(5), Some(1), Some(6), Some(2), Some(0), Some(8), None, None, Some(7), Some(4)];
+    show(example, 5, 2);
+    show([Some(1)], 1, 3);
+    show(example, 5, 0);
+    show(example, 3, 1);
+    show(example, 7, 3);
+    show(example, 8, 4);
+    show(example, 0, 5);
+    show(example, 4, 1000);
+    show([Some(0), Some(1), None, Some(2), None, Some(3)], 2, 2);
+    show([Some(0), None, Some(1), None, Some(2), None, Some(3), None, Some(4)], 0, 4);
+    // LeetCode's largest: 500 nodes
+    let mut seed = 863;
+    let big = random_tree(mut seed, 500);
+    for k in [1, 3, 10, 1000] {
+        let target = next_random(mut seed) % 500;
+        let found = distance_k(big, target, k);
+        println(f"500 nodes, target = {target}, k = {k} -> {found.len()} found, checksum {fold(0, found)}");
+    }
+    // every target and k from 0 to 5 in random trees of 1 to 40 nodes
+    let mut queries = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 40;
+        let root = random_tree(mut seed, n);
+        for target in 0..n {
+            for k in 0..6 {
+                let found = distance_k(root, target, k);
+                queries += 1;
+                total += found.len();
+                check = fold(check, found);
+            }
+        }
+    }
+    println(f"{queries} random queries: {total} nodes found, checksum {check}");
+}

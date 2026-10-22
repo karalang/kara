@@ -1,0 +1,15 @@
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 5, k = 2 -> [1, 4, 7]
+root = [1], target = 1, k = 3 -> []
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 5, k = 0 -> [5]
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 3, k = 1 -> [1, 5]
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 7, k = 3 -> [3, 6]
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 8, k = 4 -> [2, 6]
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 0, k = 5 -> [4, 7]
+root = [3, 5, 1, 6, 2, 0, 8, null, null, 7, 4], target = 4, k = 1000 -> []
+root = [0, 1, null, 2, null, 3], target = 2, k = 2 -> [0]
+root = [0, null, 1, null, 2, null, 3, null, 4], target = 0, k = 4 -> [4]
+500 nodes, target = 6, k = 1 -> 3 found, checksum 4430745
+500 nodes, target = 386, k = 3 -> 1 found, checksum 5619
+500 nodes, target = 222, k = 10 -> 6 found, checksum 955864946
+500 nodes, target = 207, k = 1000 -> 0 found, checksum 1000
+23778 random queries: 55711 nodes found, checksum 196064290
