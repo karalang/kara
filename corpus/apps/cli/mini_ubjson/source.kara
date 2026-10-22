@@ -1,0 +1,764 @@
+// mini_ubjson — a port of py-ubjson 0.16.1 (Apache-2.0, Iotic Labs):
+// the Universal Binary JSON codec, a compact typed binary encoding of JSON
+// data used where a self-describing wire format is wanted without JSON's text
+// overhead. `dumpb(value)` encodes to bytes and `loadb(bytes)` decodes back.
+//
+// Each job is `<op>\t<payload>`:
+//   enc <json>  → the UBJSON wire bytes for the JSON value, as lowercase hex
+//                 (what dumpb(value).hex() prints);
+//   dec <hex>   → the JSON value a UBJSON byte string decodes to (loadb),
+//                 serialized as canonical JSON.
+//
+// Values live in a flat arena (tag 0 null, 1 bool, 2 int, 3 str, 4 list, 5
+// dict). The encoder reproduces py-ubjson's default options (no container
+// counts, no float32, keys in insertion order): null `Z`, true `T`, false
+// `F`; integers pick the smallest width on an unsigned-first ladder — uint8
+// `U` for 0..255, int8 `i` for -128..-1, then int16 `I`, int32 `l`, int64 `L`
+// (big-endian two's complement); a one-byte string is a `C` CHAR, any other
+// string is `S` + a typed length + bytes; arrays are `[ … ]` and objects are
+// `{ (typed-len key, value)* }`, both terminator-delimited. The decoder is the
+// exact inverse, dispatching on each marker and sign-extending the fixed-width
+// integers. Byte extraction uses Kāra's `>>`/`&` (arithmetic shift, so a
+// negative two's-complement value masks correctly at any width).
+//
+// Scope: the JSON value types. py-ubjson's float32/float64 (`d`/`D`, which
+// need IEEE-754 bit layout), high-precision `H`, the strongly-typed counted
+// containers (`$`/`#`), the no-op `N` and raw byte arrays are out of scope
+// (see README). Job strings avoid JSON string escapes and use ASCII text.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct M {
+    b: Vec[i64],
+    pos: i64,
+    src: String,
+    tag: Vec[i64],
+    ival: Vec[i64],
+    sval: Vec[String],
+    kstart: Vec[i64],
+    klen: Vec[i64],
+    kids: Vec[i64],
+    keys: Vec[String],
+    root: i64,
+    ub: Vec[i64],
+}
+
+fn new_m() -> M {
+    M {
+        b: Vec.new(),
+        pos: 0,
+        src: String.new(),
+        tag: Vec.new(),
+        ival: Vec.new(),
+        sval: Vec.new(),
+        kstart: Vec.new(),
+        klen: Vec.new(),
+        kids: Vec.new(),
+        keys: Vec.new(),
+        root: 0,
+        ub: Vec.new(),
+    }
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn int_to_str(v: i64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut n = v;
+    let mut neg = false;
+    if n < 0 {
+        neg = true;
+        n = -n;
+    }
+    let mut digs: Vec[i64] = Vec.new();
+    while n > 0 {
+        digs.push(n % 10);
+        n = n / 10;
+    }
+    let tbl = "0123456789".to_string();
+    let mut o = String.new();
+    if neg {
+        o.push_str("-");
+    }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        o.push_str(tbl.substring(digs[i], digs[i] + 1));
+    }
+    o
+}
+
+fn parse_int_str(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut acc = 0;
+    while i < n {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg {
+        -acc
+    } else {
+        acc
+    }
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    c - 97 + 10
+}
+
+fn hex_decode(s: Str) -> Vec[i64] {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i + 1 < n + 1 {
+        if i + 1 >= n {
+            break;
+        }
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i = i + 2;
+    }
+    out
+}
+
+fn hex_encode(bytes: ref Vec[i64]) -> String {
+    let tbl = "0123456789abcdef".to_string();
+    let mut o = String.new();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        let hi = b / 16;
+        let lo = b % 16;
+        o.push_str(tbl.substring(hi, hi + 1));
+        o.push_str(tbl.substring(lo, lo + 1));
+        i = i + 1;
+    }
+    o
+}
+
+fn byte_to_str(b: i64) -> String {
+    let mut bytes: Vec[u8] = Vec.new();
+    bytes.push(b as u8);
+    String.from_utf8(bytes).unwrap_or("".to_string())
+}
+
+impl M {
+    fn add_node(mut ref self, tg: i64, iv: i64, sv: own String, ks: i64, kl: i64) -> i64 {
+        let idx = self.tag.len();
+        self.tag.push(tg);
+        self.ival.push(iv);
+        self.sval.push(sv);
+        self.kstart.push(ks);
+        self.klen.push(kl);
+        idx
+    }
+
+    fn mk_null(mut ref self) -> i64 {
+        self.add_node(0, 0, "".to_string(), 0, 0)
+    }
+    fn mk_bool(mut ref self, v: i64) -> i64 {
+        self.add_node(1, v, "".to_string(), 0, 0)
+    }
+    fn mk_int(mut ref self, v: i64) -> i64 {
+        self.add_node(2, v, "".to_string(), 0, 0)
+    }
+    fn mk_str(mut ref self, s: own String) -> i64 {
+        self.add_node(3, 0, s, 0, 0)
+    }
+
+    fn mk_list(mut ref self, vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push("".to_string());
+            i = i + 1;
+        }
+        self.add_node(4, 0, "".to_string(), ks, n)
+    }
+
+    fn mk_dict(mut ref self, keys: ref Vec[String], vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push(keys[i].clone());
+            i = i + 1;
+        }
+        self.add_node(5, 0, "".to_string(), ks, n)
+    }
+
+    // ---- JSON parser (for the `enc` payload) ----
+    fn peek(mut ref self) -> i64 {
+        if self.pos < self.b.len() {
+            self.b[self.pos]
+        } else {
+            -1
+        }
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 {
+                self.pos = self.pos + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn parse_into(mut ref self, src: Str) -> i64 {
+        self.src = src.to_string();
+        self.b = str_bytes(src);
+        self.pos = 0;
+        self.p_value()
+    }
+
+    fn p_value(mut ref self) -> i64 {
+        self.skip_ws();
+        let c = self.peek();
+        if c == 91 {
+            return self.p_list();
+        }
+        if c == 123 {
+            return self.p_dict();
+        }
+        if c == 34 {
+            let s = self.p_string();
+            return self.mk_str(s);
+        }
+        self.p_atom()
+    }
+
+    fn p_list(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut items: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 93 {
+            self.pos = self.pos + 1;
+            return self.mk_list(items);
+        }
+        let mut more = true;
+        while more {
+            let v = self.p_value();
+            items.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_list(items)
+    }
+
+    fn p_dict(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut dkeys: Vec[String] = Vec.new();
+        let mut dvals: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 125 {
+            self.pos = self.pos + 1;
+            return self.mk_dict(dkeys, dvals);
+        }
+        let mut more = true;
+        while more {
+            self.skip_ws();
+            let k = self.p_string();
+            self.skip_ws();
+            self.pos = self.pos + 1; // ':'
+            let v = self.p_value();
+            dkeys.push(k);
+            dvals.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_dict(dkeys, dvals)
+    }
+
+    fn p_string(mut ref self) -> String {
+        self.pos = self.pos + 1;
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n and self.b[self.pos] != 34 {
+            self.pos = self.pos + 1;
+        }
+        let end = self.pos;
+        self.pos = self.pos + 1;
+        self.src.substring(start, end)
+    }
+
+    fn p_atom(mut ref self) -> i64 {
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 or c == 44 or c == 93 or c == 125 {
+                break;
+            }
+            self.pos = self.pos + 1;
+        }
+        let tok = self.src.substring(start, self.pos);
+        if tok == "null" {
+            return self.mk_null();
+        }
+        if tok == "true" {
+            return self.mk_bool(1);
+        }
+        if tok == "false" {
+            return self.mk_bool(0);
+        }
+        self.mk_int(parse_int_str(tok))
+    }
+
+    // ---- UBJSON encode (into self.ub) ----
+    fn push_be(mut ref self, v: i64, w: i64) {
+        let mut k = w - 1;
+        while k >= 0 {
+            self.ub.push((v >> (8 * k)) & 255);
+            k = k - 1;
+        }
+    }
+
+    fn enc_int(mut ref self, v: i64) {
+        if v >= 0 {
+            if v < 256 {
+                self.ub.push(85); // 'U'
+                self.ub.push(v);
+            } else if v < 32768 {
+                self.ub.push(73); // 'I'
+                self.push_be(v, 2);
+            } else if v < 2147483648 {
+                self.ub.push(108); // 'l'
+                self.push_be(v, 4);
+            } else {
+                self.ub.push(76); // 'L'
+                self.push_be(v, 8);
+            }
+        } else if v >= -128 {
+            self.ub.push(105); // 'i'
+            self.ub.push(v & 255);
+        } else if v >= -32768 {
+            self.ub.push(73);
+            self.push_be(v, 2);
+        } else if v >= -2147483648 {
+            self.ub.push(108);
+            self.push_be(v, 4);
+        } else {
+            self.ub.push(76);
+            self.push_be(v, 8);
+        }
+    }
+
+    fn enc_len(mut ref self, n: i64) {
+        if n < 256 {
+            self.ub.push(85); // 'U'
+            self.ub.push(n);
+        } else {
+            self.enc_int(n);
+        }
+    }
+
+    fn enc_string(mut ref self, node: i64) {
+        let sb = str_bytes(self.sval[node].clone());
+        let blen = sb.len();
+        if blen == 1 {
+            self.ub.push(67); // 'C'
+            self.ub.push(sb[0]);
+            return;
+        }
+        self.ub.push(83); // 'S'
+        self.enc_len(blen);
+        let mut j = 0;
+        while j < blen {
+            self.ub.push(sb[j]);
+            j = j + 1;
+        }
+    }
+
+    fn enc_value(mut ref self, node: i64) {
+        let t = self.tag[node];
+        if t == 0 {
+            self.ub.push(90); // 'Z'
+            return;
+        }
+        if t == 1 {
+            if self.ival[node] == 1 {
+                self.ub.push(84); // 'T'
+            } else {
+                self.ub.push(70); // 'F'
+            }
+            return;
+        }
+        if t == 2 {
+            self.enc_int(self.ival[node]);
+            return;
+        }
+        if t == 3 {
+            self.enc_string(node);
+            return;
+        }
+        if t == 4 {
+            self.ub.push(91); // '['
+            let n = self.klen[node];
+            let ks = self.kstart[node];
+            let mut i = 0;
+            while i < n {
+                self.enc_value(self.kids[ks + i]);
+                i = i + 1;
+            }
+            self.ub.push(93); // ']'
+            return;
+        }
+        self.ub.push(123); // '{'
+        let n = self.klen[node];
+        let ks = self.kstart[node];
+        let mut i = 0;
+        while i < n {
+            let kb = str_bytes(self.keys[ks + i].clone());
+            let m = kb.len();
+            self.enc_len(m);
+            let mut j = 0;
+            while j < m {
+                self.ub.push(kb[j]);
+                j = j + 1;
+            }
+            self.enc_value(self.kids[ks + i]);
+            i = i + 1;
+        }
+        self.ub.push(125); // '}'
+    }
+
+    // ---- UBJSON decode (from self.ub at self.pos) ----
+    fn read_signed(mut ref self, w: i64) -> i64 {
+        let mut acc = 0;
+        let mut k = 0;
+        while k < w {
+            acc = (acc << 8) | self.ub[self.pos];
+            self.pos = self.pos + 1;
+            k = k + 1;
+        }
+        if w < 8 {
+            let bits = 8 * w;
+            let signbit = 1 << (bits - 1);
+            if (acc & signbit) != 0 {
+                acc = acc - (1 << bits);
+            }
+        }
+        acc
+    }
+
+    fn read_len(mut ref self) -> i64 {
+        let m = self.ub[self.pos];
+        self.pos = self.pos + 1;
+        if m == 85 {
+            let v = self.ub[self.pos];
+            self.pos = self.pos + 1;
+            return v;
+        }
+        if m == 105 {
+            return self.read_signed(1);
+        }
+        if m == 73 {
+            return self.read_signed(2);
+        }
+        if m == 108 {
+            return self.read_signed(4);
+        }
+        self.read_signed(8)
+    }
+
+    fn read_utf8(mut ref self, len: i64) -> String {
+        let mut bytes: Vec[u8] = Vec.new();
+        let mut k = 0;
+        while k < len {
+            bytes.push(self.ub[self.pos] as u8);
+            self.pos = self.pos + 1;
+            k = k + 1;
+        }
+        String.from_utf8(bytes).unwrap_or("".to_string())
+    }
+
+    fn dec_value(mut ref self) -> i64 {
+        let m = self.ub[self.pos];
+        self.pos = self.pos + 1;
+        if m == 90 {
+            return self.mk_null();
+        }
+        if m == 84 {
+            return self.mk_bool(1);
+        }
+        if m == 70 {
+            return self.mk_bool(0);
+        }
+        if m == 85 {
+            let v = self.ub[self.pos];
+            self.pos = self.pos + 1;
+            return self.mk_int(v);
+        }
+        if m == 105 {
+            let v = self.read_signed(1);
+            return self.mk_int(v);
+        }
+        if m == 73 {
+            let v = self.read_signed(2);
+            return self.mk_int(v);
+        }
+        if m == 108 {
+            let v = self.read_signed(4);
+            return self.mk_int(v);
+        }
+        if m == 76 {
+            let v = self.read_signed(8);
+            return self.mk_int(v);
+        }
+        if m == 67 {
+            let b = self.ub[self.pos];
+            self.pos = self.pos + 1;
+            return self.mk_str(byte_to_str(b));
+        }
+        if m == 83 {
+            let len = self.read_len();
+            let s = self.read_utf8(len);
+            return self.mk_str(s);
+        }
+        if m == 91 {
+            let mut items: Vec[i64] = Vec.new();
+            while self.ub[self.pos] != 93 {
+                items.push(self.dec_value());
+            }
+            self.pos = self.pos + 1; // ']'
+            return self.mk_list(items);
+        }
+        // '{'
+        let mut dkeys: Vec[String] = Vec.new();
+        let mut dvals: Vec[i64] = Vec.new();
+        while self.ub[self.pos] != 125 {
+            let klen = self.read_len();
+            let k = self.read_utf8(klen);
+            let v = self.dec_value();
+            dkeys.push(k);
+            dvals.push(v);
+        }
+        self.pos = self.pos + 1; // '}'
+        self.mk_dict(dkeys, dvals)
+    }
+
+    // ---- serialization (canonical JSON, json.dumps default separators) ----
+    fn ser(mut ref self, idx: i64) -> String {
+        let t = self.tag[idx];
+        if t == 0 {
+            return "null".to_string();
+        }
+        if t == 1 {
+            if self.ival[idx] == 1 {
+                return "true".to_string();
+            }
+            return "false".to_string();
+        }
+        if t == 2 {
+            return int_to_str(self.ival[idx]);
+        }
+        if t == 3 {
+            let mut o = String.new();
+            o.push_str("\"");
+            o.push_str(self.sval[idx].clone());
+            o.push_str("\"");
+            return o;
+        }
+        if t == 4 {
+            let n = self.klen[idx];
+            let ks = self.kstart[idx];
+            let mut o = String.new();
+            o.push_str("[");
+            let mut i = 0;
+            while i < n {
+                if i > 0 {
+                    o.push_str(", ");
+                }
+                let child = self.kids[ks + i];
+                o.push_str(self.ser(child));
+                i = i + 1;
+            }
+            o.push_str("]");
+            return o;
+        }
+        let n = self.klen[idx];
+        let ks = self.kstart[idx];
+        let mut o = String.new();
+        o.push_str("{");
+        let mut i = 0;
+        while i < n {
+            if i > 0 {
+                o.push_str(", ");
+            }
+            o.push_str("\"");
+            o.push_str(self.keys[ks + i].clone());
+            o.push_str("\": ");
+            let child = self.kids[ks + i];
+            o.push_str(self.ser(child));
+            i = i + 1;
+        }
+        o.push_str("}");
+        o
+    }
+}
+
+fn run_job(op: Str, payload: Str) -> String {
+    let mut m = new_m();
+    if op == "enc" {
+        let root = m.parse_into(payload);
+        m.enc_value(root);
+        return hex_encode(m.ub);
+    }
+    m.ub = hex_decode(payload);
+    m.pos = 0;
+    let node = m.dec_value();
+    m.ser(node)
+}
+
+fn split_fields(line: Str) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                let op = fields[0].clone();
+                let payload = fields[1].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                out.push_str(" ");
+                out.push_str(payload.clone());
+                out.push_str("\n  ");
+                out.push_str(run_job(op, payload));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\tnull\n");
+    s.push_str("dec\t5a\n");
+    s.push_str("enc\ttrue\n");
+    s.push_str("dec\t54\n");
+    s.push_str("enc\tfalse\n");
+    s.push_str("dec\t46\n");
+    s.push_str("enc\t0\n");
+    s.push_str("dec\t5500\n");
+    s.push_str("enc\t1\n");
+    s.push_str("dec\t5501\n");
+    s.push_str("enc\t255\n");
+    s.push_str("dec\t55ff\n");
+    s.push_str("enc\t256\n");
+    s.push_str("dec\t490100\n");
+    s.push_str("enc\t300\n");
+    s.push_str("dec\t49012c\n");
+    s.push_str("enc\t32767\n");
+    s.push_str("dec\t497fff\n");
+    s.push_str("enc\t32768\n");
+    s.push_str("dec\t6c00008000\n");
+    s.push_str("enc\t70000\n");
+    s.push_str("dec\t6c00011170\n");
+    s.push_str("enc\t2147483647\n");
+    s.push_str("dec\t6c7fffffff\n");
+    s.push_str("enc\t2147483648\n");
+    s.push_str("dec\t4c0000000080000000\n");
+    s.push_str("enc\t5000000000\n");
+    s.push_str("dec\t4c000000012a05f200\n");
+    s.push_str("enc\t-1\n");
+    s.push_str("dec\t69ff\n");
+    s.push_str("enc\t-128\n");
+    s.push_str("dec\t6980\n");
+    s.push_str("enc\t-129\n");
+    s.push_str("dec\t49ff7f\n");
+    s.push_str("enc\t-300\n");
+    s.push_str("dec\t49fed4\n");
+    s.push_str("enc\t-70000\n");
+    s.push_str("dec\t6cfffeee90\n");
+    s.push_str("enc\t-5000000000\n");
+    s.push_str("dec\t4cfffffffed5fa0e00\n");
+    s.push_str("enc\t\"a\"\n");
+    s.push_str("dec\t4361\n");
+    s.push_str("enc\t\"\"\n");
+    s.push_str("dec\t535500\n");
+    s.push_str("enc\t\"hello\"\n");
+    s.push_str("dec\t53550568656c6c6f\n");
+    s.push_str("enc\t\"hi there\"\n");
+    s.push_str("dec\t5355086869207468657265\n");
+    s.push_str("enc\t[1,2,3]\n");
+    s.push_str("dec\t5b5501550255035d\n");
+    s.push_str("enc\t[true,null,\"x\"]\n");
+    s.push_str("dec\t5b545a43785d\n");
+    s.push_str("enc\t[[1],[2,3]]\n");
+    s.push_str("dec\t5b5b55015d5b550255035d5d\n");
+    s.push_str("enc\t{\"a\":1,\"b\":2}\n");
+    s.push_str("dec\t7b550161550155016255027d\n");
+    s.push_str("enc\t{\"name\":\"x\",\"vals\":[1,2]}\n");
+    s.push_str("dec\t7b55046e616d654378550476616c735b550155025d7d\n");
+    s.push_str("enc\t{\"u\":{\"v\":1}}\n");
+    s.push_str("dec\t7b5501757b55017655017d7d\n");
+    s.push_str("enc\t{\"id\":256,\"tags\":[\"a\",\"bb\"],\"ok\":true}\n");
+    s.push_str("dec\t7b550269644901005504746167735b436153550262625d55026f6b547d\n");
+    s
+}
