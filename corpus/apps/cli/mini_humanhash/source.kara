@@ -1,0 +1,235 @@
+// mini_humanhash — a port of humanhash3 0.0.6 (Public Domain; the Unlicense),
+// which renders a hex digest as a short, memorable phrase like
+// `equal-monkey-lake-beryllium`. It compresses an arbitrary-length digest down
+// to a fixed number of bytes and maps each to one of 256 words, so the same
+// digest always renders the same phrase — the point is that people compare and
+// remember phrases far more reliably than hex, which is why it is used to show
+// key fingerprints, commit ids and the like. This port follows humanhash.py:
+// the digest's hex pairs become bytes, `compress` folds them into `words`
+// segments with an XOR checksum, and each segment byte indexes the wordlist.
+// The segment assignment is the library's own float computation —
+// `floor(i / (length / words))` in f64 — reproduced exactly (Kāra's f64 is
+// IEEE-754, bit-identical to Python's, so the cases where it disagrees with the
+// integer form `(i*words)/length` match the library too). See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+// Pairs of hex characters to byte values; a trailing odd nibble is dropped, as
+// the library's `zip(hexdigest[::2], hexdigest[1::2])` drops it.
+fn parse_hex(s: String) -> Vec[u8] {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < m {
+        let hi = hex_nibble(b[i]);
+        let lo = hex_nibble(b[i + 1]);
+        out.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+    out
+}
+
+// Decimal to i64.
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut v: i64 = 0;
+    let mut i = 0;
+    while i < m {
+        v = v * 10 + ((b[i] as i64) - 48);
+        i = i + 1;
+    }
+    v
+}
+
+// Fold `bs` into `target` segments with an XOR checksum. If there are no more
+// bytes than segments, the bytes pass through unchanged. The segment index is
+// the library's f64 floor(i / (length/target)), clamped to the last segment.
+fn compress(bs: ref Vec[u8], target: i64) -> Vec[i64] {
+    let length = bs.len();
+    let mut segs: Vec[i64] = Vec.new();
+    if target >= length {
+        let mut i = 0;
+        while i < length {
+            segs.push(bs[i] as i64);
+            i = i + 1;
+        }
+        return segs;
+    }
+    let ss: f64 = (length as f64) / (target as f64);
+    let mut t = 0;
+    while t < target {
+        segs.push(0);
+        t = t + 1;
+    }
+    let mut i = 0;
+    while i < length {
+        let mut seg = ((i as f64) / ss) as i64;
+        if seg > target - 1 {
+            seg = target - 1;
+        }
+        segs[seg] = segs[seg] ^ (bs[i] as i64);
+        i = i + 1;
+    }
+    segs
+}
+
+// Render a hex digest as `words` hyphen-joined words from the wordlist.
+fn humanize(hexd: String, words: i64, wl: ref Vec[String]) -> String {
+    let bs = parse_hex(hexd);
+    let comp = compress(bs, words);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < comp.len() {
+        if i > 0 {
+            out.push_str("-");
+        }
+        let idx = comp[i];
+        out.push_str(wl[idx].clone());
+        i = i + 1;
+    }
+    out
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The 256-word default wordlist, split from a single space-separated literal.
+fn wordlist() -> Vec[String] {
+    split_fields("ack alabama alanine alaska alpha angel apart april arizona arkansas artist asparagus aspen august autumn avocado bacon bakerloo batman beer berlin beryllium black blossom blue bluebird bravo bulldog burger butter california carbon cardinal carolina carpet cat ceiling charlie chicken coffee cola cold colorado comet connecticut crazy cup dakota december delaware delta diet don double early earth east echo edward eight eighteen eleven emma enemy equal failed fanta fifteen fillet finch fish five fix floor florida football four fourteen foxtrot freddie friend fruit gee georgia glucose golf green grey hamper happy harry hawaii helium high hot hotel hydrogen idaho illinois india indigo ink iowa island item jersey jig johnny juliet july jupiter kansas kentucky kilo king kitten lactose lake lamp lemon leopard lima lion lithium london louisiana low magazine magnesium maine mango march mars maryland massachusetts may mexico michigan mike minnesota mirror mississippi missouri mobile mockingbird monkey montana moon mountain muppet music nebraska neptune network nevada nine nineteen nitrogen north november nuts october ohio oklahoma one orange oranges oregon oscar oven oxygen papa paris pasta pennsylvania pip pizza pluto potato princess purple quebec queen quiet red river robert robin romeo rugby sad salami saturn september seven seventeen shade sierra single sink six sixteen skylark snake social sodium solar south spaghetti speaker spring stairway steak stream summer sweet table tango ten tennessee tennis texas thirteen three timing triple twelve twenty two uncle undress uniform uranus utah vegan venus vermont victor video violet virginia washington west whiskey white william winner winter wisconsin wolfram wyoming xray yankee yellow zebra zulu", 32)
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let wl = wordlist();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                if f[0] == "h" {
+                    let w = parse_int(f[1].clone());
+                    out.push_str(humanize(f[2].clone(), w, wl));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("h\t2\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t3\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t4\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t6\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t8\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t1\t60ad8d0d871b6095808297\n");
+    s.push_str("h\t2\t0cd9a2ff\n");
+    s.push_str("h\t3\t0cd9a2ff\n");
+    s.push_str("h\t4\t0cd9a2ff\n");
+    s.push_str("h\t6\t0cd9a2ff\n");
+    s.push_str("h\t8\t0cd9a2ff\n");
+    s.push_str("h\t1\t0cd9a2ff\n");
+    s.push_str("h\t2\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t3\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t4\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t6\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t8\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t1\tdeadbeefcafe0123456789ab\n");
+    s.push_str("h\t2\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t3\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t4\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t6\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t8\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t1\tffffffffffffffffffffffffffffffff\n");
+    s.push_str("h\t2\t00000000000000000000000000000000\n");
+    s.push_str("h\t3\t00000000000000000000000000000000\n");
+    s.push_str("h\t4\t00000000000000000000000000000000\n");
+    s.push_str("h\t6\t00000000000000000000000000000000\n");
+    s.push_str("h\t8\t00000000000000000000000000000000\n");
+    s.push_str("h\t1\t00000000000000000000000000000000\n");
+    s.push_str("h\t2\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t3\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t4\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t6\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t8\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t1\t0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+    s.push_str("h\t2\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t3\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t4\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t6\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t8\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t1\ta94a8fe5ccb19ba61c4c0873d391e987982fbbd3\n");
+    s.push_str("h\t2\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t3\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t4\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t6\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t8\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t1\t9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n");
+    s.push_str("h\t2\t0102\n");
+    s.push_str("h\t3\t0102\n");
+    s.push_str("h\t4\t0102\n");
+    s.push_str("h\t6\t0102\n");
+    s.push_str("h\t8\t0102\n");
+    s.push_str("h\t1\t0102\n");
+    s.push_str("h\t2\tabcdef\n");
+    s.push_str("h\t3\tabcdef\n");
+    s.push_str("h\t4\tabcdef\n");
+    s.push_str("h\t6\tabcdef\n");
+    s.push_str("h\t8\tabcdef\n");
+    s.push_str("h\t1\tabcdef\n");
+    s.push_str("h\t14\t0b30557a9fc4e90e33587da2c7ec11365b80\n");
+    s.push_str("h\t21\t0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cd\n");
+    s.push_str("h\t18\t0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f8\n");
+    s.push_str("h\t20\t0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42\n");
+    s.push_str("h\t4\t0102\n");
+    s.push_str("h\t10\tabcdef\n");
+    s.push_str("h\t20\t60ad8d0d871b6095808297\n");
+    s
+}
