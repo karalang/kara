@@ -640,6 +640,18 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(());
         }
         match (base, method) {
+            // `forget(x)` takes `x` and runs no drop: what it owns stays
+            // allocated. The runtime keeps a copy of its bytes so a leak
+            // checker still sees that memory as reachable (B-2026-10-22-38).
+            ("forget", "") if args.len() == 1 => {
+                let t = self.operand_type(&args[0])?;
+                let size = self.layout(t)?.size;
+                if self.tys.needs_drop(t) && size > 0 {
+                    let p = self.operand_ptr(&args[0])?;
+                    self.rt("forget", &[p.into(), self.i64(size).into()])?;
+                }
+                Ok(())
+            }
             ("println" | "print" | "eprintln" | "eprint", "") => {
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;

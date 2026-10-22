@@ -2231,6 +2231,25 @@ unsafe fn merge_widths<const N: usize>(
     }
 }
 
+/// The bytes of the values `forget` took, kept so that what they own stays
+/// reachable for a leak checker: `forget` leaks by design, and LeakSanitizer
+/// under `__mir-llvm-asan` would otherwise report it (B-2026-10-22-38).
+static FORGOTTEN: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::new());
+
+/// `forget(x)`: keeps a copy of `x`'s `n` bytes at `p` and runs no drop.
+///
+/// # Safety
+/// `p` is readable for `n` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: usize) {
+    // SAFETY: the caller's contract.
+    let bytes = unsafe { std::slice::from_raw_parts(p, n) }.to_vec();
+    FORGOTTEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(bytes);
+}
+
 /// Ends a `panic_message` format: its text is the next abort's message.
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {

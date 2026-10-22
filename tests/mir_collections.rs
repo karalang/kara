@@ -959,3 +959,33 @@ fn a_char_radix_out_of_range_panics_on_both_backends() {
         0,
     );
 }
+
+const FORGET: &str = r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    forget(a);
+    println("after forget");
+    let v = vec![R { id: 3 }, R { id: 4 }];
+    forget(v);
+    forget(String.from("text"));
+    println("end");
+}
+"#;
+
+/// `forget(x)` takes `x` and runs no drop on both backends
+/// (B-2026-10-22-38).
+#[test]
+fn forget_drops_nothing_on_both_backends() {
+    agrees(FORGET, "after forget\nend\ndrop 2\n", 0);
+}
+
+/// What `forget` leaks by design is not reported as a leak by the ASan lane.
+#[test]
+fn forget_is_clean_under_asan() {
+    if let Some(out) = under_asan(FORGET) {
+        assert_eq!(out, "after forget\nend\ndrop 2\n");
+    }
+}
