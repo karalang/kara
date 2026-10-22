@@ -1,0 +1,94 @@
+// LeetCode #849: Maximize Distance to Closest Person -- the ★ arm (one
+// pass, remembering the last person).
+//
+// Walking the row, each person ends a stretch of empty seats. Before
+// the first person the best seat is the far end, as far away as the
+// stretch is long; between two people it is the middle, half the gap
+// away, rounded down; after the last person it is the other end. One
+// pass keeps where the last person sat. O(n) time, O(1) space.
+
+fn max_dist_to_closest(seats: Vec[i64]) -> i64 {
+    let n = seats.len();
+    let mut last = -1;
+    let mut best = 0;
+    for i in 0..n {
+        if seats[i] == 1 {
+            if last < 0 {
+                best = i;
+            } else {
+                best = best.max((i - last) / 2);
+            }
+            last = i;
+        }
+    }
+    best.max(n - 1 - last)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(seats: Vec[i64]) {
+    println(f"{seats} -> {max_dist_to_closest(seats)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([1, 0, 0, 0, 1, 0, 1]);
+    show([1, 0, 0, 0]);
+    show([0, 1]);
+    show([1, 0]);
+    show([0, 0, 1]);
+    show([1, 0, 1]);
+    show([1, 0, 0, 1]);
+    show([1, 0, 0, 0, 0, 1]);
+    show([0, 0, 1, 0, 0, 0, 0, 1, 0]);
+    show([0, 1, 1, 1, 0]);
+    show([1, 1, 0, 1, 1]);
+    show([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+    // LeetCode's longest rows, 2 * 10^4 seats
+    let n = 20000;
+    let mut first: Vec[i64] = Vec.filled(n, 0);
+    first[0] = 1;
+    println(f"one person at the front of 20000: {max_dist_to_closest(first)}");
+    let mut middle: Vec[i64] = Vec.filled(n, 0);
+    middle[n / 2] = 1;
+    println(f"one person in the middle: {max_dist_to_closest(middle)}");
+    let mut ends: Vec[i64] = Vec.filled(n, 0);
+    ends[0] = 1;
+    ends[n - 1] = 1;
+    println(f"people at both ends: {max_dist_to_closest(ends)}");
+    let mut alternate: Vec[i64] = Vec.new();
+    for i in 0..n {
+        alternate.push(i % 2);
+    }
+    println(f"every other seat: {max_dist_to_closest(alternate)}");
+    let mut seed = 849;
+    let mut sparse: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        sparse.push(if next_random(mut seed) % 500 == 0 { 1 } else { 0 });
+    }
+    sparse[n - 1] = 1;
+    println(f"about one in 500 seats taken: {max_dist_to_closest(sparse)}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..600 {
+        let n = 2 + next_random(mut seed) % 30;
+        let density = 1 + next_random(mut seed) % 6;
+        let mut seats: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seats.push(if next_random(mut seed) % 8 < density { 1 } else { 0 });
+        }
+        // at least one person and one empty seat
+        let taken = next_random(mut seed) % n;
+        let empty = (taken + 1 + next_random(mut seed) % (n - 1)) % n;
+        seats[taken] = 1;
+        seats[empty] = 0;
+        let d = max_dist_to_closest(seats);
+        total += d;
+        check = (check * 31 + d) % 1000000007;
+    }
+    println(f"600 random rows: distances sum to {total}, checksum {check}");
+}

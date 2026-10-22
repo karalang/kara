@@ -1,0 +1,18 @@
+[1, 0, 0, 0, 1, 0, 1] -> 2
+[1, 0, 0, 0] -> 3
+[0, 1] -> 1
+[1, 0] -> 1
+[0, 0, 1] -> 2
+[1, 0, 1] -> 1
+[1, 0, 0, 1] -> 1
+[1, 0, 0, 0, 0, 1] -> 2
+[0, 0, 1, 0, 0, 0, 0, 1, 0] -> 2
+[0, 1, 1, 1, 0] -> 1
+[1, 1, 0, 1, 1] -> 1
+[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1] -> 3
+one person at the front of 20000: 19999
+one person in the middle: 10000
+people at both ends: 9999
+every other seat: 1
+about one in 500 seats taken: 955
+600 random rows: distances sum to 1842, checksum 780358379
