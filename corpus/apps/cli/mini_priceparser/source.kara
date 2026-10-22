@@ -1,0 +1,280 @@
+// mini_priceparser — the number-parsing core of price-parser 0.5.1 (BSD-3,
+// Scrapinghub), the library Scrapy/price extraction uses to read a messy price
+// string into a Decimal.
+//
+// Ports price_parser.parser.parse_number and get_decimal_separator: given a raw
+// number string (currency and surrounding text already stripped) and an
+// optional forced decimal separator, guess the decimal and thousand
+// separators and return a canonical Decimal. The separator guess follows the
+// library's rule — the first `.`/`,`/`€` whose following run of digits (to the
+// end of the string) numbers one, two, or four-or-more (three digits read as a
+// thousand group) is the decimal separator — and the four separator modes
+// (none, `.`, `,`, `€`) do the same replacements the library does. The result
+// is rendered exactly as CPython's `str(Decimal(...))`, so there is no float
+// anywhere; an input that is not a valid number returns None.
+//
+// Currency-symbol extraction and pulling the price out of surrounding prose are
+// price-parser's table and regex layers and are not part of this port.
+
+fn is_ws(x: i64) -> bool {
+    x == 32 or x == 9 or x == 10 or x == 13 or x == 12 or x == 11
+}
+
+fn is_dig(x: i64) -> bool {
+    x >= 48 and x <= 57
+}
+
+fn to_bytes(s: String) -> Vec[i64] {
+    let mut v = Vec.new();
+    for c in s.bytes() {
+        v.push(c as i64);
+    }
+    v
+}
+
+fn bytes_to_str(b: Vec[i64]) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    let n = b.len();
+    while k < n {
+        s.push(char.try_from(b[k]).unwrap_or('?'));
+        k = k + 1;
+    }
+    s
+}
+
+// Separator code at byte i: 1='.', 2=',', 3='€' (3 bytes E2 82 AC), 0=none.
+fn sep_at(b: Vec[i64], i: i64, n: i64) -> i64 {
+    if b[i] == 46 {
+        return 1;
+    }
+    if b[i] == 44 {
+        return 2;
+    }
+    if i + 3 <= n and b[i] == 226 and b[i + 1] == 130 and b[i + 2] == 172 {
+        return 3;
+    }
+    0
+}
+
+fn sep_len(code: i64) -> i64 {
+    if code == 3 { 3 } else { 1 }
+}
+
+// price_parser.get_decimal_separator: the first sep whose trailing run of
+// digits to end-of-string has length 1, 2, or >=4. Returns the sep code or 0.
+fn get_decimal_separator(b: Vec[i64], n: i64) -> i64 {
+    let mut i = 0;
+    while i < n {
+        let code = sep_at(b, i, n);
+        if code != 0 {
+            let rem = i + sep_len(code);
+            let mut all_d = true;
+            let mut k = rem;
+            while k < n {
+                if not is_dig(b[k]) {
+                    all_d = false;
+                    k = n;
+                } else {
+                    k = k + 1;
+                }
+            }
+            let cnt = n - rem;
+            if all_d and cnt >= 1 and (cnt <= 2 or cnt >= 4) {
+                return code;
+            }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// Render a cleaned digit/`.` string as CPython str(Decimal(...)) would; None if
+// it is not a valid plain decimal literal.
+fn canon_decimal(b: Vec[i64], n: i64) -> Option[String] {
+    let mut dots = 0;
+    let mut digits = 0;
+    let mut dot_at = -1;
+    let mut k = 0;
+    while k < n {
+        if b[k] == 46 {
+            dots = dots + 1;
+            dot_at = k;
+        } else if is_dig(b[k]) {
+            digits = digits + 1;
+        } else {
+            return None;
+        }
+        k = k + 1;
+    }
+    if dots > 1 or digits == 0 {
+        return None;
+    }
+    let has_dot = dot_at >= 0;
+    let int_end = if has_dot { dot_at } else { n };
+    // integer part with leading zeros stripped (keep at least one digit)
+    let mut istart = 0;
+    while istart < int_end - 1 and b[istart] == 48 {
+        istart = istart + 1;
+    }
+    let mut intcanon = String.new();
+    if int_end == 0 {
+        intcanon = "0".to_string();
+    } else {
+        let mut j = istart;
+        while j < int_end {
+            intcanon.push(char.try_from(b[j]).unwrap_or('0'));
+            j = j + 1;
+        }
+    }
+    // fractional part, verbatim (trailing zeros kept)
+    let mut frac = String.new();
+    if has_dot {
+        let mut j = dot_at + 1;
+        while j < n {
+            frac.push(char.try_from(b[j]).unwrap_or('0'));
+            j = j + 1;
+        }
+    }
+    if has_dot and frac.len() > 0 {
+        Some(f"{intcanon}.{frac}")
+    } else {
+        Some(intcanon)
+    }
+}
+
+// price_parser.parse_number. dec: -1 guess, 1='.', 2=',', 3='€'.
+fn parse_number(num: String, dec: i64) -> Option[String] {
+    let raw = to_bytes(num);
+    let rn = raw.len();
+    // strip() + replace(" ","") == drop every ASCII whitespace byte.
+    let mut cleaned = Vec.new();
+    let mut i = 0;
+    while i < rn {
+        if not is_ws(raw[i]) {
+            cleaned.push(raw[i]);
+        }
+        i = i + 1;
+    }
+    let cn = cleaned.len();
+    if cn == 0 {
+        return None;
+    }
+    let sep = if dec == -1 {
+        get_decimal_separator(cleaned, cn)
+    } else {
+        dec
+    };
+    // Apply the mode's replacements, producing digits and at most one '.'.
+    let mut outb = Vec.new();
+    let mut k = 0;
+    while k < cn {
+        let code = sep_at(cleaned, k, cn);
+        if code == 1 {
+            // '.'
+            if sep == 1 {
+                outb.push(46);
+            }
+            // modes 0,2,3 drop '.'
+            k = k + 1;
+        } else if code == 2 {
+            // ','
+            if sep == 2 {
+                outb.push(46);
+            }
+            // modes 0,1,3 drop ','
+            k = k + 1;
+        } else if code == 3 {
+            // '€'
+            if sep == 3 {
+                outb.push(46);
+            }
+            k = k + 3;
+        } else {
+            outb.push(cleaned[k]);
+            k = k + 1;
+        }
+    }
+    canon_decimal(outb, outb.len())
+}
+
+fn dec_code(s: String) -> i64 {
+    let b = to_bytes(s);
+    if b.len() == 0 {
+        return -1;
+    }
+    if b[0] == 46 {
+        return 1;
+    }
+    if b[0] == 44 {
+        return 2;
+    }
+    if b.len() >= 3 and b[0] == 226 and b[1] == 130 and b[2] == 172 {
+        return 3;
+    }
+    -1
+}
+
+fn run_job(fields: Vec[String]) -> String {
+    let num = fields[0].clone();
+    let dec = dec_code(fields[1].clone());
+    let r = parse_number(num, dec);
+    match r {
+        Some(v) => f"  result={v}",
+        None => "  result=None".to_string(),
+    }
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let fields: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        out.push_str("== ");
+        out.push_str(fields.join(" | "));
+        out.push_str("\n");
+        out.push_str(run_job(fields));
+        out.push_str("\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("1,234\t-\n");
+    s.push_str("12,34\t-\n");
+    s.push_str("12,345\t-\n");
+    s.push_str("1,1\t-\n");
+    s.push_str("1.1\t-\n");
+    s.push_str("1234\t-\n");
+    s.push_str("12.99\t-\n");
+    s.push_str("12.999\t-\n");
+    s.push_str("3,0000\t-\n");
+    s.push_str(".75\t-\n");
+    s.push_str("12.50\t-\n");
+    s.push_str("12€34\t-\n");
+    s.push_str("12€ 34\t-\n");
+    s.push_str("1 234.99\t-\n");
+    s.push_str("1,235€99\t-\n");
+    s.push_str("1 235€99\t-\n");
+    s.push_str("1.235€99\t-\n");
+    s.push_str("1,234,567\t-\n");
+    s.push_str("1.234.567,89\t-\n");
+    s.push_str("1 000 000\t-\n");
+    s.push_str("007\t-\n");
+    s.push_str("0\t-\n");
+    s.push_str("1.000\t-\n");
+    s.push_str("140.000\t,\n");
+    s.push_str("140.000\t.\n");
+    s.push_str("1.000\t.\n");
+    s.push_str("1.000\t,\n");
+    s.push_str("12,34\t€\n");
+    s.push_str("\t-\n");
+    s.push_str("foo\t-\n");
+    s
+}
