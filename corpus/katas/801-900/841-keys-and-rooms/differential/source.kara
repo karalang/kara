@@ -1,0 +1,294 @@
+// LeetCode #841: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to five properties on random rooms,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn can_visit_all_rooms_star(rooms: Vec[Vec[i64]]) -> bool {
+    let n = rooms.len();
+    let mut opened: Vec[bool] = Vec.filled(n, false);
+    opened[0] = true;
+    let mut count = 1;
+    let mut stack: Vec[i64] = [0];
+    while let Some(room) = stack.pop() {
+        for k in 0..rooms[room].len() {
+            let key = rooms[room][k];
+            if not opened[key] {
+                opened[key] = true;
+                count += 1;
+                stack.push(key);
+            }
+        }
+    }
+    count == n
+}
+
+// ---- queue arm ------------------------------------------------------
+
+fn can_visit_all_rooms_queue(rooms: Vec[Vec[i64]]) -> bool {
+    let mut seen: Vec[bool] = Vec.filled(rooms.len(), false);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    seen[0] = true;
+    queue.push_back(0);
+    while not queue.is_empty() {
+        let room = queue.pop_front() ?? 0;
+        for key in rooms[room].iter() {
+            if not seen[*key] {
+                seen[*key] = true;
+                queue.push_back(*key);
+            }
+        }
+    }
+    seen.iter().all(|s| s)
+}
+
+// ---- recursive arm --------------------------------------------------
+
+fn visit_recursive(rooms: Vec[Vec[i64]], marked: mut ref Vec[bool], room: i64) {
+    marked[room] = true;
+    for key in rooms[room].iter() {
+        if not marked[*key] {
+            visit_recursive(rooms, mut marked, *key);
+        }
+    }
+}
+
+fn can_visit_all_rooms_recursive(rooms: Vec[Vec[i64]]) -> bool {
+    let mut marked: Vec[bool] = Vec.filled(rooms.len(), false);
+    visit_recursive(rooms, mut marked, 0);
+    for m in marked.iter() {
+        if not *m {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- sweeps arm -----------------------------------------------------
+
+fn can_visit_all_rooms_sweeps(rooms: Vec[Vec[i64]]) -> bool {
+    let n = rooms.len();
+    let mut open: Vec[bool] = Vec.filled(n, false);
+    open[0] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for room in 0..n {
+            if open[room] {
+                for key in rooms[room].iter() {
+                    if not open[*key] {
+                        open[*key] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    let shut = open.iter().filter(|o| not o).count();
+    shut == 0
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: a room can be reached when it is room 0
+// or a reachable room holds its key. Reachability is worked out as the
+// closure of "holds the key to" over all rooms, and every room can be
+// visited when room 0 reaches them all.
+fn statement(rooms: Vec[Vec[i64]]) -> bool {
+    let n = rooms.len();
+    let mut reach: Vec[Vec[bool]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[bool] = Vec.filled(n, false);
+        row[i] = true;
+        for key in rooms[i].iter() {
+            row[*key] = true;
+        }
+        reach.push(row);
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if reach[i][k] and reach[k][j] {
+                    reach[i][j] = true;
+                }
+            }
+        }
+    }
+    let mut all = true;
+    for j in 0..n {
+        if not reach[0][j] {
+            all = false;
+        }
+    }
+    all
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, rooms: Vec[Vec[i64]]) -> bool {
+    if arm == 0 {
+        can_visit_all_rooms_star(rooms)
+    } else if arm == 1 {
+        can_visit_all_rooms_queue(rooms)
+    } else if arm == 2 {
+        can_visit_all_rooms_recursive(rooms)
+    } else {
+        can_visit_all_rooms_sweeps(rooms)
+    }
+}
+
+// n rooms and `keys` keys, each to a random room, put in random rooms,
+// no room holding two keys to the same room; then, if `thread`, the
+// rooms are threaded in a shuffled order, each holding a key to the next
+fn random_rooms(seed: mut ref i64, n: i64, keys: i64, thread: bool) -> Vec[Vec[i64]] {
+    let mut rooms: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        rooms.push(Vec.new());
+    }
+    for _ in 0..keys {
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
+        if not rooms[from].contains(to) {
+            rooms[from].push(to);
+        }
+    }
+    if thread {
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (2..n).rev() {
+            let j = 1 + next_random(mut seed) % i;
+            order.swap(i, j);
+        }
+        for i in 0..n - 1 {
+            if not rooms[order[i]].contains(order[i + 1]) {
+                rooms[order[i]].push(order[i + 1]);
+            }
+        }
+    }
+    rooms
+}
+
+// rooms 1 to n - 1 relabelled by a random shuffle, room 0 kept
+fn relabelled(seed: mut ref i64, rooms: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = rooms.len();
+    let mut label: Vec[i64] = (0..n).collect();
+    for i in (2..n).rev() {
+        let j = 1 + next_random(mut seed) % i;
+        label.swap(i, j);
+    }
+    let mut out: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for i in 0..n {
+        let mut keys: Vec[i64] = Vec.new();
+        for key in rooms[i].iter() {
+            keys.push(label[*key]);
+        }
+        out[label[i]] = keys;
+    }
+    out
+}
+
+// every room's keys in the opposite order
+fn reversed_keys(rooms: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in rooms.iter() {
+        let mut keys: Vec[i64] = Vec.new();
+        for i in (0..r.len()).rev() {
+            keys.push(r[i]);
+        }
+        out.push(keys);
+    }
+    out
+}
+
+// a key to room 0 put in every room without one
+fn keys_home(rooms: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in rooms.iter() {
+        let mut keys = r.clone();
+        if not keys.contains(0) {
+            keys.push(0);
+        }
+        out.push(keys);
+    }
+    out
+}
+
+// a new room, holding no key, whose key is put in room 0
+fn annexed(rooms: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out = rooms.clone();
+    out[0].push(rooms.len());
+    out.push(Vec.new());
+    out
+}
+
+fn main() {
+    let names = ["star", "queue", "recursive", "sweeps"];
+    let properties = ["answer", "relabelled", "reversed keys", "keys home", "annexed"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut yes = 0;
+    let mut seed = 841;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let rooms = if kind == 0 {
+            // a few rooms, any number of keys
+            let n = 2 + next_random(mut seed) % 5;
+            let keys = next_random(mut seed) % (2 * n + 1);
+            random_rooms(mut seed, n, keys, next_random(mut seed) % 3 == 0)
+        } else if kind == 1 {
+            // up to 12 rooms with few keys
+            let n = 2 + next_random(mut seed) % 11;
+            random_rooms(mut seed, n, next_random(mut seed) % (n + 1), false)
+        } else if kind == 2 {
+            // threaded rooms with one key then taken away
+            let n = 2 + next_random(mut seed) % 11;
+            let mut r = random_rooms(mut seed, n, next_random(mut seed) % (n + 1), true);
+            let from = next_random(mut seed) % n;
+            if r[from].len() > 0 {
+                let k = next_random(mut seed) % r[from].len();
+                r[from].remove(k);
+            }
+            r
+        } else {
+            // up to 12 rooms with many keys
+            let n = 2 + next_random(mut seed) % 11;
+            random_rooms(mut seed, n, next_random(mut seed) % (3 * n + 1), false)
+        };
+        let want = statement(rooms);
+        if want {
+            yes += 1;
+        }
+        let moved = relabelled(mut seed, rooms);
+        for arm in 0..4 {
+            let got = answer(arm, rooms);
+            let oks = [
+                got == want,
+                answer(arm, moved) == got,
+                answer(arm, reversed_keys(rooms)) == got,
+                answer(arm, keys_home(rooms)) == got,
+                answer(arm, annexed(rooms)) == got,
+            ];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {rooms} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {yes} with every room visited, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, queue {by_arm[1]}, recursive {by_arm[2]}, sweeps {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, relabelled {by_property[1]}, reversed keys {by_property[2]}, keys home {by_property[3]}, annexed {by_property[4]}");
+}

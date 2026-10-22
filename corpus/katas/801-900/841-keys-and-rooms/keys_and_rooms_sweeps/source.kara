@@ -1,0 +1,118 @@
+// LeetCode #841: Keys and Rooms -- sweeps until nothing opens.
+//
+// The keys in hand open rooms, and the rooms opened give up more keys.
+// Sweep after sweep over all the rooms, every open room's keys open the
+// rooms they fit, until a sweep opens nothing. Every room can be visited
+// when then none is shut. O(n (n + keys)) at worst, one sweep for each
+// room a chain of keys has to pass.
+
+fn can_visit_all_rooms(rooms: Vec[Vec[i64]]) -> bool {
+    let n = rooms.len();
+    let mut open: Vec[bool] = Vec.filled(n, false);
+    open[0] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for room in 0..n {
+            if open[room] {
+                for key in rooms[room].iter() {
+                    if not open[*key] {
+                        open[*key] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    let shut = open.iter().filter(|o| not o).count();
+    shut == 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n rooms and `keys` keys, each to a random room, put in random rooms,
+// no room holding two keys to the same room; then, if `thread`, the
+// rooms are threaded in a shuffled order, each holding a key to the next
+fn random_rooms(seed: mut ref i64, n: i64, keys: i64, thread: bool) -> Vec[Vec[i64]] {
+    let mut rooms: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        rooms.push(Vec.new());
+    }
+    for _ in 0..keys {
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
+        if not rooms[from].contains(to) {
+            rooms[from].push(to);
+        }
+    }
+    if thread {
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (2..n).rev() {
+            let j = 1 + next_random(mut seed) % i;
+            order.swap(i, j);
+        }
+        for i in 0..n - 1 {
+            if not rooms[order[i]].contains(order[i + 1]) {
+                rooms[order[i]].push(order[i + 1]);
+            }
+        }
+    }
+    rooms
+}
+
+fn show(rooms: Vec[Vec[i64]]) {
+    println(f"{rooms} -> {can_visit_all_rooms(rooms)}");
+}
+
+fn main() {
+    show([[1], [2], [3], []]);
+    show([[1, 3], [3, 0, 1], [2], [0]]);
+    show([[1], []]);
+    show([[], [0]]);
+    show([[3], [0], [1], [2]]);
+    show([[0], [1]]);
+    show([[1, 2, 3], [], [], []]);
+    show([[1], [0], [3], [2]]);
+    show([[2], [], [1]]);
+    show([[1], [2], [1], [0, 1, 2]]);
+    // LeetCode's most rooms, 1000, and most keys, 3000
+    let mut seed = 841;
+    let mut chain: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 {
+        // B-2026-10-21-82: the natural form is
+        // `chain.push(if i < 999 { [i + 1] } else { [] });`
+        let room: Vec[i64] = if i < 999 { [i + 1] } else { [] };
+        chain.push(room);
+    }
+    println(f"1000 rooms in a chain: {can_visit_all_rooms(chain)}");
+    let mut backward: Vec[Vec[i64]] = [[999]];
+    for i in 1..1000 {
+        backward.push([i - 1]);
+    }
+    println(f"1000 rooms in a chain read backwards: {can_visit_all_rooms(backward)}");
+    for (keys, thread) in [(3000, false), (2000, true), (999, true)] {
+        let rooms = random_rooms(mut seed, 1000, keys, thread);
+        let mut held = 0;
+        for r in rooms.iter() {
+            held += r.len();
+        }
+        println(f"1000 rooms, {held} keys, threaded {thread}: {can_visit_all_rooms(rooms)}");
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for case in 0..300 {
+        let n = 2 + next_random(mut seed) % 30;
+        let keys = next_random(mut seed) % (2 * n);
+        let all = can_visit_all_rooms(random_rooms(mut seed, n, keys, case % 3 == 0));
+        if all {
+            yes += 1;
+        }
+        check = (check * 31 + if all { case } else { 7 }) % 1000000007;
+    }
+    println(f"300 random cases: {yes} with every room visited, checksum {check}");
+}

@@ -1,0 +1,114 @@
+// LeetCode #841: Keys and Rooms -- depth first, by recursion.
+//
+// Visiting a room marks it and then visits, in turn, every room it holds
+// a key to that is not yet marked. Every room can be visited when the
+// visit from room 0 has marked them all. O(n + keys).
+
+fn visit(rooms: Vec[Vec[i64]], marked: mut ref Vec[bool], room: i64) {
+    marked[room] = true;
+    for key in rooms[room].iter() {
+        if not marked[*key] {
+            visit(rooms, mut marked, *key);
+        }
+    }
+}
+
+fn can_visit_all_rooms(rooms: Vec[Vec[i64]]) -> bool {
+    let mut marked: Vec[bool] = Vec.filled(rooms.len(), false);
+    visit(rooms, mut marked, 0);
+    for m in marked.iter() {
+        if not *m {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n rooms and `keys` keys, each to a random room, put in random rooms,
+// no room holding two keys to the same room; then, if `thread`, the
+// rooms are threaded in a shuffled order, each holding a key to the next
+fn random_rooms(seed: mut ref i64, n: i64, keys: i64, thread: bool) -> Vec[Vec[i64]] {
+    let mut rooms: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        rooms.push(Vec.new());
+    }
+    for _ in 0..keys {
+        let from = next_random(mut seed) % n;
+        let to = next_random(mut seed) % n;
+        if not rooms[from].contains(to) {
+            rooms[from].push(to);
+        }
+    }
+    if thread {
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (2..n).rev() {
+            let j = 1 + next_random(mut seed) % i;
+            order.swap(i, j);
+        }
+        for i in 0..n - 1 {
+            if not rooms[order[i]].contains(order[i + 1]) {
+                rooms[order[i]].push(order[i + 1]);
+            }
+        }
+    }
+    rooms
+}
+
+fn show(rooms: Vec[Vec[i64]]) {
+    println(f"{rooms} -> {can_visit_all_rooms(rooms)}");
+}
+
+fn main() {
+    show([[1], [2], [3], []]);
+    show([[1, 3], [3, 0, 1], [2], [0]]);
+    show([[1], []]);
+    show([[], [0]]);
+    show([[3], [0], [1], [2]]);
+    show([[0], [1]]);
+    show([[1, 2, 3], [], [], []]);
+    show([[1], [0], [3], [2]]);
+    show([[2], [], [1]]);
+    show([[1], [2], [1], [0, 1, 2]]);
+    // LeetCode's most rooms, 1000, and most keys, 3000
+    let mut seed = 841;
+    let mut chain: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 {
+        // B-2026-10-21-82: the natural form is
+        // `chain.push(if i < 999 { [i + 1] } else { [] });`
+        let room: Vec[i64] = if i < 999 { [i + 1] } else { [] };
+        chain.push(room);
+    }
+    println(f"1000 rooms in a chain: {can_visit_all_rooms(chain)}");
+    let mut backward: Vec[Vec[i64]] = [[999]];
+    for i in 1..1000 {
+        backward.push([i - 1]);
+    }
+    println(f"1000 rooms in a chain read backwards: {can_visit_all_rooms(backward)}");
+    for (keys, thread) in [(3000, false), (2000, true), (999, true)] {
+        let rooms = random_rooms(mut seed, 1000, keys, thread);
+        let mut held = 0;
+        for r in rooms.iter() {
+            held += r.len();
+        }
+        println(f"1000 rooms, {held} keys, threaded {thread}: {can_visit_all_rooms(rooms)}");
+    }
+    let mut yes = 0;
+    let mut check = 0;
+    for case in 0..300 {
+        let n = 2 + next_random(mut seed) % 30;
+        let keys = next_random(mut seed) % (2 * n);
+        let all = can_visit_all_rooms(random_rooms(mut seed, n, keys, case % 3 == 0));
+        if all {
+            yes += 1;
+        }
+        check = (check * 31 + if all { case } else { 7 }) % 1000000007;
+    }
+    println(f"300 random cases: {yes} with every room visited, checksum {check}");
+}

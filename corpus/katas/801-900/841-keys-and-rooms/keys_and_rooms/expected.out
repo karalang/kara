@@ -1,0 +1,16 @@
+[[1], [2], [3], []] -> true
+[[1, 3], [3, 0, 1], [2], [0]] -> false
+[[1], []] -> true
+[[], [0]] -> false
+[[3], [0], [1], [2]] -> true
+[[0], [1]] -> false
+[[1, 2, 3], [], [], []] -> true
+[[1], [0], [3], [2]] -> false
+[[2], [], [1]] -> true
+[[1], [2], [1], [0, 1, 2]] -> false
+1000 rooms in a chain: true
+1000 rooms in a chain read backwards: true
+1000 rooms, 2998 keys, threaded false: false
+1000 rooms, 2995 keys, threaded true: true
+1000 rooms, 1995 keys, threaded true: true
+300 random cases: 104 with every room visited, checksum 641465310

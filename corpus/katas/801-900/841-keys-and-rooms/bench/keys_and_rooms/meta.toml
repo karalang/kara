@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/841-keys-and-rooms/bench/keys_and_rooms.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "502e55cb6"
+extracted_src = "f521bffa"
+model_rev = "583cfb0d"
+model_src = "f521bffa"
