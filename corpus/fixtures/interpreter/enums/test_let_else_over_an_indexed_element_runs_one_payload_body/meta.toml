@@ -1,6 +1,6 @@
 source = "tests/interpreter/enums.rs::test_let_else_over_an_indexed_element_runs_one_payload_body"
 dedup_of = []
-expect = "error:E0200"
+expect = "error:E0515"
 exit = 1
 tags = ["drop"]
 class = "a"
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "db0aa9a19"
+classified_with = "9875e6b3f"
 extracted_src = "6605e7c2"
 model_note = "use of a moved place"
 model_rev = "583cfb0d"

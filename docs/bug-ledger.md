@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 332 |
+| missing-feature | 333 |
 | codegen-gap | 289 |
 | false-positive | 283 |
 | other | 196 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3029 |
 | interp | 1039 |
-| typecheck | 563 |
+| typecheck | 564 |
 | ownership | 131 |
 | other | 126 |
 | cli | 90 |
@@ -187,6 +187,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-19 | 2026-10-22 | typecheck | medium | `karac check` accepts a `const` whose initializer is a function call (`const LIMIT: i64 = compute();`), which design.md § Constants forbids ("Function calls. Calls to `const fn` come with the comptime track"); a module `let` with the same initializer is refused with E_MODULE_BINDING_EFFECTFUL_INIT, so the `const` form is the looser of the two | — |
 | B-2026-10-22-20 | 2026-10-22 | cli | high | Compile-time evaluation (`#[derive]` expansion and `comptime {}`) runs on the LEGACY tree-walk interpreter (src/comptime.rs), reached from the v2 MIR builder's derive expansion and from Pipeline::lower, so `check`, `fix`, `query` and `build --mir` all depend on src/interpreter* for any program with a derive or a comptime block; M3 deletes that interpreter | — |
 | B-2026-10-22-21 | 2026-10-22 | cli | medium | Features that go to the archive with the legacy backend (wasm component and browser bindings, the exported C ABI `--crate-type staticlib/cdylib`, GPU `gpu.dispatch`, auto-par) have no v2 refusal by name: after legacy is deleted a user would meet an unknown-flag or unknown-name error instead of a diagnostic that says the feature is deferred, as the M4a refusals for TLS server and WebSocket already do | — |
+| B-2026-10-22-22 | 2026-10-22 | typecheck | low | v2's check has no `Iterator.chunks` / `Iterator.windows` (legacy had both; `Vec`/`Slice` chunks and windows exist): `v.iter().chunks(2)` refuses with E0236 "no method 'chunks' on type 'VecIter'" | — |
 
 ### Relocated
 

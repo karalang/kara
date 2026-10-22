@@ -1,6 +1,6 @@
 source = "tests/interpreter/enums.rs::test_owned_self_projection_scrutinee_runs_one_payload_body"
 dedup_of = []
-expect = "error:E0200"
+expect = "error:E0289"
 exit = 1
 tags = ["drop", "move-from-borrow"]
 class = "a"
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "db0aa9a19"
+classified_with = "9875e6b3f"
 model_note = "move out of the payload of a type with a Drop body (C3)"
 model_rev = "583cfb0d"
 model_src = "d7ac7c39"

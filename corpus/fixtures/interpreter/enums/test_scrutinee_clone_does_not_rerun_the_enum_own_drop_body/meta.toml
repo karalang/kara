@@ -1,6 +1,6 @@
 source = "tests/interpreter/enums.rs::test_scrutinee_clone_does_not_rerun_the_enum_own_drop_body"
 dedup_of = []
-expect = "error:E0200"
+expect = "error:E0289"
 exit = 1
 tags = ["drop", "move-from-borrow"]
 class = "a"
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "db0aa9a19"
+classified_with = "9875e6b3f"
 extracted_src = "fdb40b32"
 model_note = "move out of the payload of a type with a Drop body (C3)"
 model_rev = "583cfb0d"

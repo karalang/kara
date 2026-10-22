@@ -80,7 +80,9 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     if backend in ("mir-interp", "legacy-interp") and "bench" in meta.get("tags", []):
         # A kata's bench variant measures the compiled backend; no interpreter finishes it.
         return {**base, "verdict": "SKIP", "why": "AOT throughput workload", "ran": False}
-    if mir and meta.get("model_verdict") == "V2-REJECT" and not expect.startswith("error"):
+    if mir and meta.get("model_verdict") == "V2-REJECT" and not expect.startswith("error") \
+            and not meta.get("model_overruled"):
+        # `model_overruled` names the ledger row that ruled the model wrong.
         if check_refuses(entry, args):
             return {**base, "verdict": "PASS", "why": "", "ran": True}
         return {**base, "verdict": "MREJ", "why": f"model: {meta.get('model_note', '')}", "ran": True}

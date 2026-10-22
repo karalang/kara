@@ -230,7 +230,18 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     template = read_toml(entry / "template.toml") or None
     origin = Origin(template["origin"]) if template and "origin" in template else None
     try:
-        return classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin)
+        res = classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin)
+        # The drop model refuses what check accepts (run.py's MREJ): a
+        # disagreement between two readings of the spec, which counts against
+        # the gate until a ledger row rules the model wrong and the entry names
+        # that row in `model_overruled`. run.py runs exactly those entries.
+        # (`error:codegen` is judged on its output, as run.py judges it.)
+        if meta.get("model_verdict") == "V2-REJECT" and res["bucket"] != "a:refused" \
+                and (not expect.startswith("error") or expect == "error:codegen") \
+                and not meta.get("model_overruled") \
+                and (res["class"] in ("a", "b", "c") or res["bucket"].endswith("e-spec")):
+            return {**res, "class": "e", "bucket": "e-model-rejects"}
+        return res
     finally:
         if origin is not None:
             origin.stop()
@@ -250,12 +261,20 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
             codes = [e.get("code") for e in errs]
             if errs and (want in ("", "codegen") or want in codes):
                 return {**out, "class": "a", "bucket": "a:refused"}
+            # A refusal under another code is not the recorded rule: run.py
+            # fails it ("refused, but without <code>"), and so does the gate.
+            # Re-record the code only after reading the holding test.
+            if errs and want != "codegen":
+                return {**out, "class": "e", "bucket": f"e-code-differs:{want}"}
             r = mir_run(args.karac, d, env, args.timeout, driver)
             # A MIR refusal is a static check (move or borrow check), not a
-            # construct the builder cannot lower or a run-time failure.
+            # construct the builder cannot lower or a run-time failure. It
+            # carries no check code, so it stands only for an uncoded refusal.
             if r is not None and r.returncode == 3 and b"error[mir]: build" not in r.stderr \
                     and b"error[mir]: run" not in r.stderr:
-                return {**out, "class": "a", "bucket": "a:refused"}
+                if want in ("", "codegen"):
+                    return {**out, "class": "a", "bucket": "a:refused"}
+                return {**out, "class": "e", "bucket": f"e-code-differs:{want}"}
             if want != "codegen":
                 return {**out, "class": "e", "bucket": f"e-not-refused:{want or 'any'}"}
             # `error:codegen` records only that legacy-build's codegen declined
