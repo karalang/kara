@@ -1,0 +1,40 @@
+
+a
+b | a
+d | b,c | a
+3,5,7 | 11,8 | 10,9 | 2
+z | y | x
+lex | parse | compile | build
+ERR
+a
+ERR
+cache,db | api,web
+root | c1,c2 | leaf
+a | b | c | d
+only
+q | r | p
+p | o | n | m
+5 | 4 | 3 | 2 | 1
+d | c | b | a | e
+s
+ERR
+
+a
+b a
+d b c a
+3 5 7 11 8 10 9 2
+z y x
+lex parse compile build
+ERR
+a
+ERR
+cache db api web
+root c1 c2 leaf
+a b c d
+only
+q r p
+p o n m
+5 4 3 2 1
+d c b a e
+s
+ERR

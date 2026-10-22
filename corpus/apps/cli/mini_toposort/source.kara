@@ -1,0 +1,356 @@
+// mini_toposort — a port of toposort 1.10 (Apache-2.0; True Blade Systems), the
+// topological-sort library used to order build steps, migrations and dependency
+// graphs. This port follows toposort/__init__.py: a dependency map (each item
+// mapped to the set of items it depends on) is sorted into successive levels —
+// the first level is every item with no dependencies, each later level the items
+// whose dependencies are all in earlier levels — and a leftover means a circular
+// dependency. `l` emits the levels (items sorted within each, the library's sets
+// being unordered); `f` emits toposort_flatten(sort=True), the single sorted
+// order. Self-dependencies are discarded and items that appear only as a
+// dependency are added with no dependencies, both exactly as the library does.
+// A circular dependency is reported with the canonical token "ERR" rather than
+// CircularDependencyError's message (which embeds a per-process set repr). See
+// README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// a < b lexicographically by bytes (a shorter prefix sorts first)
+fn str_lt(a: String, b: String) -> bool {
+    let ab = str_bytes(a);
+    let bb = str_bytes(b);
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] != bb[i] {
+            return ab[i] < bb[i];
+        }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+// Split s on a single-byte separator, keeping empty fields (like Python split).
+fn split(s: String, sep: u8) -> Vec[String] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    let mut start = 0;
+    while i <= n {
+        if i == n or b[i] == sep {
+            out.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn find_key(keys: ref Vec[String], s: String) -> i64 {
+    let mut i = 0;
+    while i < keys.len() {
+        if keys[i] == s {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// Sort a vector of key indices ascending by their key string (insertion sort).
+fn sort_level(keys: ref Vec[String], idxs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < idxs.len() {
+        out.push(idxs[i]);
+        i = i + 1;
+    }
+    let mut a = 1;
+    while a < out.len() {
+        let cur = out[a];
+        let mut b = a;
+        while b > 0 and str_lt(keys[cur].clone(), keys[out[b - 1]].clone()) {
+            out[b] = out[b - 1];
+            b = b - 1;
+        }
+        out[b] = cur;
+        a = a + 1;
+    }
+    out
+}
+
+struct Graph {
+    ok: bool,
+    levels_as_text: String,     // " | "-joined, each level ","-joined (op l)
+    flat_as_text: String,       // space-joined sorted order (op f)
+}
+
+fn toposort_spec(spec: String) -> Graph {
+    // ---- parse "key:dep1,dep2;key2:..." into keys + dep-string lists ----
+    let mut keys: Vec[String] = Vec.new();
+    let mut dep_strs: Vec[Vec[String]] = Vec.new();
+    let entries = split(spec.clone(), 59);   // ';'
+    let mut ei = 0;
+    while ei < entries.len() {
+        let entry = entries[ei].clone();
+        if str_bytes(entry.clone()).len() > 0 {
+            let eb = str_bytes(entry.clone());
+            let mut colon = -1;
+            let mut t = 0;
+            while t < eb.len() {
+                if eb[t] == 58 {   // ':'
+                    colon = t;
+                    t = eb.len();
+                } else {
+                    t = t + 1;
+                }
+            }
+            let mut key = entry.clone();
+            let mut depstr = String.new();
+            if colon >= 0 {
+                key = entry.substring(0, colon);
+                depstr = entry.substring(colon + 1, eb.len());
+            }
+            // collect non-empty dep tokens
+            let raw = split(depstr.clone(), 44);   // ','
+            let mut these: Vec[String] = Vec.new();
+            let mut ri = 0;
+            while ri < raw.len() {
+                if str_bytes(raw[ri].clone()).len() > 0 {
+                    these.push(raw[ri].clone());
+                }
+                ri = ri + 1;
+            }
+            let existing = find_key(keys, key.clone());
+            if existing < 0 {
+                keys.push(key.clone());
+                dep_strs.push(these);
+            } else {
+                // repeated key: last-wins on deps (toposort's dict overwrite)
+                dep_strs[existing] = these;
+            }
+        }
+        ei = ei + 1;
+    }
+
+    // ---- add items that appear only as a dependency, with no deps ----
+    let mut k = 0;
+    while k < dep_strs.len() {
+        let mut di = 0;
+        while di < dep_strs[k].len() {
+            let d = dep_strs[k][di].clone();
+            if find_key(keys, d.clone()) < 0 {
+                keys.push(d.clone());
+                let empty: Vec[String] = Vec.new();
+                dep_strs.push(empty);
+            }
+            di = di + 1;
+        }
+        k = k + 1;
+    }
+
+    // ---- resolve dep strings to indices, discarding self-dependencies ----
+    let nkeys = keys.len();
+    let mut deps: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < nkeys {
+        let mut row: Vec[i64] = Vec.new();
+        let mut di = 0;
+        while di < dep_strs[i].len() {
+            let d = dep_strs[i][di].clone();
+            if not (d == keys[i]) {
+                let j = find_key(keys, d.clone());
+                // avoid duplicate dep indices
+                let mut seen = false;
+                let mut s = 0;
+                while s < row.len() {
+                    if row[s] == j {
+                        seen = true;
+                    }
+                    s = s + 1;
+                }
+                if not seen {
+                    row.push(j);
+                }
+            }
+            di = di + 1;
+        }
+        deps.push(row);
+        i = i + 1;
+    }
+
+    // ---- level extraction ----
+    let mut removed: Vec[bool] = Vec.new();
+    let mut r = 0;
+    while r < nkeys {
+        removed.push(false);
+        r = r + 1;
+    }
+    let mut levels_txt = String.new();
+    let mut flat_txt = String.new();
+    let mut first_level = true;
+    let mut first_flat = true;
+    let mut circular = false;
+    let mut done = false;
+    while not done {
+        // collect ready nodes (not removed, all deps removed)
+        let mut ready: Vec[i64] = Vec.new();
+        let mut n = 0;
+        while n < nkeys {
+            if not removed[n] {
+                let mut ok = true;
+                let mut di = 0;
+                while di < deps[n].len() {
+                    if not removed[deps[n][di]] {
+                        ok = false;
+                    }
+                    di = di + 1;
+                }
+                if ok {
+                    ready.push(n);
+                }
+            }
+            n = n + 1;
+        }
+        if ready.len() == 0 {
+            done = true;
+        } else {
+            let sorted = sort_level(keys, ready);
+            // emit this level
+            if not first_level {
+                levels_txt.push_str(" | ");
+            }
+            first_level = false;
+            let mut si = 0;
+            while si < sorted.len() {
+                if si > 0 {
+                    levels_txt.push_str(",");
+                }
+                levels_txt.push_str(keys[sorted[si]].clone());
+                if not first_flat {
+                    flat_txt.push_str(" ");
+                }
+                first_flat = false;
+                flat_txt.push_str(keys[sorted[si]].clone());
+                removed[sorted[si]] = true;
+                si = si + 1;
+            }
+        }
+    }
+    // any node left unremoved => circular dependency
+    let mut left = 0;
+    let mut c = 0;
+    while c < nkeys {
+        if not removed[c] {
+            left = left + 1;
+        }
+        c = c + 1;
+    }
+    if left != 0 {
+        circular = true;
+    }
+
+    if circular {
+        Graph { ok: false, levels_as_text: String.new(), flat_as_text: String.new() }
+    } else {
+        Graph { ok: true, levels_as_text: levels_txt, flat_as_text: flat_txt }
+    }
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    let g = toposort_spec(arg.clone());
+                    if not g.ok {
+                        out.push_str("ERR");
+                    } else if op == "l" {
+                        out.push_str(g.levels_as_text);
+                    } else if op == "f" {
+                        out.push_str(g.flat_as_text);
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("l\t\n");
+    s.push_str("l\ta:\n");
+    s.push_str("l\ta:b;b:\n");
+    s.push_str("l\ta:b,c;b:d;c:d;d:\n");
+    s.push_str("l\t2:11,10;9:11,8;10:11,3;11:7,5;8:7,3;7:;5:;3:\n");
+    s.push_str("l\tx:y;y:z;z:\n");
+    s.push_str("l\tbuild:compile;compile:parse;parse:lex;lex:\n");
+    s.push_str("l\ta:b;b:c;c:a\n");
+    s.push_str("l\ta:a\n");
+    s.push_str("l\ta:b;b:a\n");
+    s.push_str("l\tweb:db,cache;api:db;db:;cache:\n");
+    s.push_str("l\troot:;c1:root;c2:root;leaf:c1,c2\n");
+    s.push_str("l\td:a,b,c;a:;b:a;c:b\n");
+    s.push_str("l\tonly:\n");
+    s.push_str("l\tp:q,r;q:;r:q\n");
+    s.push_str("l\tm:n;n:o;o:p;p:\n");
+    s.push_str("l\t1:2;2:3;3:4;4:5;5:\n");
+    s.push_str("l\ta:b,c,d;b:c;c:d;d:;e:a\n");
+    s.push_str("l\ts:\n");
+    s.push_str("l\tcycle3:x;x:y;y:cycle3\n");
+    s.push_str("f\t\n");
+    s.push_str("f\ta:\n");
+    s.push_str("f\ta:b;b:\n");
+    s.push_str("f\ta:b,c;b:d;c:d;d:\n");
+    s.push_str("f\t2:11,10;9:11,8;10:11,3;11:7,5;8:7,3;7:;5:;3:\n");
+    s.push_str("f\tx:y;y:z;z:\n");
+    s.push_str("f\tbuild:compile;compile:parse;parse:lex;lex:\n");
+    s.push_str("f\ta:b;b:c;c:a\n");
+    s.push_str("f\ta:a\n");
+    s.push_str("f\ta:b;b:a\n");
+    s.push_str("f\tweb:db,cache;api:db;db:;cache:\n");
+    s.push_str("f\troot:;c1:root;c2:root;leaf:c1,c2\n");
+    s.push_str("f\td:a,b,c;a:;b:a;c:b\n");
+    s.push_str("f\tonly:\n");
+    s.push_str("f\tp:q,r;q:;r:q\n");
+    s.push_str("f\tm:n;n:o;o:p;p:\n");
+    s.push_str("f\t1:2;2:3;3:4;4:5;5:\n");
+    s.push_str("f\ta:b,c,d;b:c;c:d;d:;e:a\n");
+    s.push_str("f\ts:\n");
+    s.push_str("f\tcycle3:x;x:y;y:cycle3\n");
+    s
+}
