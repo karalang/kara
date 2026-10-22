@@ -1,0 +1,176 @@
+== size_fmt | 0 | 0 | 0
+  0 bytes
+== size_fmt | 1 | 0 | 0
+  1 byte
+== size_fmt | 5 | 0 | 0
+  5 bytes
+== size_fmt | 999 | 0 | 0
+  999 bytes
+== size_fmt | 1000 | 0 | 0
+  1 KB
+== size_fmt | 1000 | 0 | 1
+  1.00 KB
+== size_fmt | 1024 | 1 | 0
+  1 KiB
+== size_fmt | 1500000000 | 0 | 0
+  1.5 GB
+== size_fmt | 4000000000 | 0 | 0
+  4 GB
+== size_fmt | 1536 | 1 | 0
+  1.5 KiB
+== size_fmt | 1234567 | 0 | 0
+  1.23 MB
+== size_fmt | 2500000 | 0 | 0
+  2.5 MB
+== size_fmt | 1073741824 | 1 | 0
+  1 GiB
+== size_fmt | 5000000000000 | 0 | 0
+  5 TB
+== size_fmt | 2000000000000000 | 0 | 0
+  2 PB
+== size_parse | 42 | 0
+  42
+== size_parse | 13b | 0
+  13
+== size_parse | 5 bytes | 0
+  5
+== size_parse | 1 KB | 0
+  1000
+== size_parse | 1 kilobyte | 0
+  1000
+== size_parse | 1 KiB | 0
+  1024
+== size_parse | 1 KB | 1
+  1024
+== size_parse | 1.5 GB | 0
+  1500000000
+== size_parse | 1.5 GB | 1
+  1610612736
+== size_parse | 2 TB | 0
+  2000000000000
+== size_parse | 1 MiB | 0
+  1048576
+== size_parse | 3 mebibyte | 0
+  3145728
+== size_parse | 1 EB | 0
+  1000000000000000000
+== size_parse | nonsense | 0
+  err=Failed to parse size! (input 'nonsense' was tokenized as ['nonsense'])
+== size_parse | 1 flooble | 0
+  err=Failed to parse size! (input '1 flooble' was tokenized as [1, 'flooble'])
+== len_fmt | 0 | 0
+  0.0 metres
+== len_fmt | 1 | 0
+  1 metre
+== len_fmt | 5 | 0
+  5 metres
+== len_fmt | 1000 | 0
+  1 km
+== len_fmt | 0.004 | 0
+  4 mm
+== len_fmt | 0.153 | 0
+  15.3 cm
+== len_fmt | 2500 | 0
+  2.5 km
+== len_fmt | 1 | 1
+  1.00 metre
+== len_parse | 42 | 0
+  42
+== len_parse | 1 km | 0
+  1000
+== len_parse | 5mm | 0
+  0.005
+== len_parse | 15.3cm | 0
+  0.153
+== len_parse | 2 m | 0
+  2
+== len_parse | bad | 0
+  err=Failed to parse length! (input 'bad' was tokenized as ['bad'])
+== time_fmt | 0 | 0 | 3
+  0 seconds
+== time_fmt | 1 | 0 | 3
+  1 second
+== time_fmt | 5 | 0 | 3
+  5 seconds
+== time_fmt | 60 | 0 | 3
+  1 minute
+== time_fmt | 3600 | 0 | 3
+  1 hour
+== time_fmt | 86400 | 0 | 3
+  1 day
+== time_fmt | 90 | 0 | 3
+  1 minute and 30 seconds
+== time_fmt | 3661 | 0 | 3
+  1 hour, 1 minute and 1 second
+== time_fmt | 31449600 | 0 | 3
+  1 year
+== time_fmt | 31622400 | 0 | 3
+  1 year and 2 days
+== time_fmt | 31622640 | 0 | 3
+  1 year, 2 days and 4 minutes
+== time_fmt | 31622640 | 0 | 2
+  1 year and 2 days
+== time_fmt | 604800 | 0 | 3
+  1 week
+== time_parse | 42 | 0
+  42
+== time_parse | 42s | 0
+  42
+== time_parse | 1m | 0
+  60
+== time_parse | 1h | 0
+  3600
+== time_parse | 1d | 0
+  86400
+== time_parse | 90m | 0
+  5400
+== time_parse | 1.5h | 0
+  5400
+== time_parse | 2w | 0
+  1209600
+== time_parse | 3 hours | 0
+  10800
+== time_parse | bogus | 0
+  err=Failed to parse timespan! (input 'bogus' was tokenized as ['bogus'])
+== num | 6000000 | 2
+  6,000,000
+== num | 1234 | 2
+  1,234
+== num | 100 | 2
+  100
+== num | -6000000 | 2
+  -6,000,000
+== num | 999 | 2
+  999
+== num | 1000000000 | 0
+  1,000,000,000
+== round | 1 | 0
+  1
+== round | 3.14159 | 0
+  3.14
+== round | 5.001 | 0
+  5
+== round | 1.5 | 0
+  1.5
+== round | 1 | 1
+  1.00
+== round | 2.5 | 0
+  2.5
+== bool | 1
+  True
+== bool | yes
+  True
+== bool | TRUE
+  True
+== bool | on
+  True
+== bool | 0
+  False
+== bool | no
+  False
+== bool | false
+  False
+== bool | off
+  False
+== bool | maybe
+  err=Failed to coerce string to boolean! ('maybe')

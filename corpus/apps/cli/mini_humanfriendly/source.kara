@@ -1,0 +1,860 @@
+// mini_humanfriendly — the size / length / timespan / number parse-and-format
+// core of humanfriendly 10.0 (humanfriendly/__init__.py + text.py), the
+// toolkit many command-line programs use to print "3.2 MB", "1 minute and
+// 30 seconds" or "6,000,000" and to read "1.5 GB" or "90m" back. It ports
+// format_size / parse_size (decimal and binary), format_length / parse_length,
+// format_timespan / parse_timespan, format_number, round_number and
+// coerce_boolean, with the shared tokenize / pluralize / concatenate helpers,
+// reproducing the library's exact strings and its InvalidSize / InvalidLength /
+// InvalidTimespan / ValueError messages (CPython repr included).
+//
+// round_number is `'%.2f' % x` with trailing zeros stripped; Kāra has no
+// float format spec, so it is reproduced as round-half-to-even fixed point.
+// Numbers returned by parse_length / parse_timespan are presented through
+// num_str (integer when whole, else six stripped decimals) so the output
+// never depends on float repr; that presentation is the harness's, the
+// computation the library's. jobs_text() holds data/jobs.tsv.
+
+// ----------------------------------------------------------- small helpers
+
+fn itoa(n: i64) -> String {
+    f"{n}"
+}
+
+fn to_i64(s: ref String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn parse_f64(s: ref String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn b2s(b: ref Vec[u8], start: i64, end: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+fn strip_ws(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut lo = 0;
+    let mut hi = b.len();
+    while lo < hi and (b[lo] == b' ' or b[lo] == b'\t') {
+        lo += 1;
+    }
+    while hi > lo and (b[hi - 1] == b' ' or b[hi - 1] == b'\t') {
+        hi -= 1;
+    }
+    b2s(b, lo, hi)
+}
+
+fn lower_ascii(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c >= b'A' and c <= b'Z' {
+            out.push(c + 32);
+        } else {
+            out.push(c);
+        }
+    }
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+fn zpad(n: i64, width: i64) -> String {
+    let mut s = itoa(n);
+    while s.len() < width {
+        s = "0".to_string() + s;
+    }
+    s
+}
+
+// Python str repr: single quotes unless the string holds a ' and no ",
+// escaping backslash, the quote, \t \n \r and bytes outside 0x20..0x7e.
+fn py_str_repr(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut has_s = false;
+    let mut has_d = false;
+    for c in b {
+        if c == 39 {
+            has_s = true;
+        }
+        if c == 34 {
+            has_d = true;
+        }
+    }
+    let quote: u8 = if has_s and not has_d { 34 } else { 39 };
+    let mut out: Vec[u8] = Vec.new();
+    out.push(quote);
+    for c in b {
+        if c == 92 {
+            out.push(92);
+            out.push(92);
+        } else if c == quote {
+            out.push(92);
+            out.push(quote);
+        } else if c == b'\t' {
+            out.push(92);
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(92);
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(92);
+            out.push(b'r');
+        } else if c < 0x20 or c >= 0x7f {
+            out.push(92);
+            out.push(b'x');
+            let hi = c / 16;
+            let lo = c % 16;
+            out.push(hexd(hi));
+            out.push(hexd(lo));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+fn hexd(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + (n - 10) }
+}
+
+// ----------------------------------------------------------- rounding
+
+// round x (>= 0) scaled by `powf`, half to even, as an integer.
+fn round_scaled(x: f64, powf: f64) -> i64 {
+    let scaled = x * powf;
+    let fl = scaled as i64;
+    let frac = scaled - (fl as f64);
+    if frac > 0.5 {
+        fl + 1
+    } else if frac < 0.5 {
+        fl
+    } else if fl % 2 == 0 {
+        fl
+    } else {
+        fl + 1
+    }
+}
+
+// Fixed-point string of x with `nd` decimals (powi=10^nd, powf=powi as f64),
+// round-half-to-even, with a leading '-' for a negative non-zero result.
+fn fmt_fixed(x: f64, nd: i64, powi: i64, powf: f64) -> String {
+    let neg = x < 0.0;
+    let ax = if neg { -x } else { x };
+    let r = round_scaled(ax, powf);
+    let ip = r / powi;
+    let dp = r % powi;
+    let mut s = f"{ip}.{zpad(dp, nd)}";
+    if neg and r != 0 {
+        s = "-".to_string() + s;
+    }
+    s
+}
+
+fn strip_round(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut hi = b.len();
+    while hi > 0 and b[hi - 1] == b'0' {
+        hi -= 1;
+    }
+    if hi > 0 and b[hi - 1] == b'.' {
+        hi -= 1;
+    }
+    b2s(b, 0, hi)
+}
+
+// '%.2f' % x then strip trailing zeros and dot unless keep_width.
+fn round_number(x: f64, keep: bool) -> String {
+    let s = fmt_fixed(x, 2, 100, 100.0);
+    if keep {
+        s
+    } else {
+        strip_round(s)
+    }
+}
+
+fn is_one_ratio(x: f64) -> bool {
+    round_scaled(x, 100.0) == 100
+}
+
+fn num_str(x: f64) -> String {
+    let t = x as i64;
+    if (t as f64) == x {
+        itoa(t)
+    } else {
+        let s = fmt_fixed(x, 6, 1000000, 1000000.0);
+        strip_round(s)
+    }
+}
+
+fn pluralize(count: String, is_one: bool, singular: String, plural: String) -> String {
+    let word = if is_one { singular } else { plural };
+    f"{count} {word}"
+}
+
+fn concatenate(items: ref Vec[String]) -> String {
+    let n = items.len();
+    if n == 0 {
+        return String.new();
+    }
+    if n == 1 {
+        return items[0].clone();
+    }
+    let mut head = String.new();
+    let mut i = 0;
+    while i < n - 1 {
+        if i > 0 {
+            head.push_str(", ");
+        }
+        head.push_str(items[i].clone());
+        i += 1;
+    }
+    f"{head} and {items[n - 1]}"
+}
+
+// ----------------------------------------------------------- tokenize
+
+struct Tok {
+    is_num: bool,
+    is_float: bool,
+    ival: i64,
+    fval: f64,
+    sval: String,
+}
+
+fn tokenize(s: ref String) -> Vec[Tok] {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c >= b'0' and c <= b'9' {
+            let start = i;
+            while i < n and b[i] >= b'0' and b[i] <= b'9' {
+                i += 1;
+            }
+            let mut isf = false;
+            if i < n and b[i] == b'.' and i + 1 < n and b[i + 1] >= b'0' and b[i + 1] <= b'9' {
+                isf = true;
+                i += 1;
+                while i < n and b[i] >= b'0' and b[i] <= b'9' {
+                    i += 1;
+                }
+            }
+            let numstr = b2s(b, start, i);
+            if isf {
+                toks.push(Tok { is_num: true, is_float: true, ival: 0, fval: parse_f64(numstr), sval: String.new() });
+            } else {
+                let iv = to_i64(numstr);
+                toks.push(Tok { is_num: true, is_float: false, ival: iv, fval: iv as f64, sval: String.new() });
+            }
+        } else {
+            let start = i;
+            while i < n and not (b[i] >= b'0' and b[i] <= b'9') {
+                i += 1;
+            }
+            let seg = b2s(b, start, i);
+            let segt = strip_ws(seg);
+            if segt.len() > 0 {
+                toks.push(Tok { is_num: false, is_float: false, ival: 0, fval: 0.0, sval: segt });
+            }
+        }
+    }
+    toks
+}
+
+// Python repr of a token list.
+fn toks_repr(toks: ref Vec[Tok]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for t in toks.iter() {
+        if t.is_num {
+            if t.is_float {
+                parts.push(num_str(t.fval));
+            } else {
+                parts.push(itoa(t.ival));
+            }
+        } else {
+            parts.push(py_str_repr(t.sval));
+        }
+    }
+    let mut body = String.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if i > 0 {
+            body.push_str(", ");
+        }
+        body.push_str(parts[i].clone());
+        i += 1;
+    }
+    f"[{body}]"
+}
+
+// ----------------------------------------------------------- unit tables
+
+// decimal / binary dividers as f64 (all 8), and as i64 where they fit (-1
+// otherwise), plus symbols and names, for the eight disk size units.
+fn dec_div_f(k: i64) -> f64 {
+    let mut v = 1.0;
+    let mut i = 0;
+    while i <= k {
+        v = v * 1000.0;
+        i += 1;
+    }
+    v
+}
+
+fn bin_div_f(k: i64) -> f64 {
+    let mut v = 1.0;
+    let mut i = 0;
+    while i <= k {
+        v = v * 1024.0;
+        i += 1;
+    }
+    v
+}
+
+fn dec_div_i(k: i64) -> i64 {
+    if k > 5 {
+        return -1;
+    }
+    let mut v = 1;
+    let mut i = 0;
+    while i <= k {
+        v = v * 1000;
+        i += 1;
+    }
+    v
+}
+
+fn bin_div_i(k: i64) -> i64 {
+    if k > 5 {
+        return -1;
+    }
+    let mut v = 1;
+    let mut i = 0;
+    while i <= k {
+        v = v * 1024;
+        i += 1;
+    }
+    v
+}
+
+fn dec_sym(k: i64) -> String {
+    let a = vec!["KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+    a[k].to_string()
+}
+
+fn dec_name(k: i64) -> String {
+    let a = vec!["kilobyte", "megabyte", "gigabyte", "terabyte", "petabyte", "exabyte", "zettabyte", "yottabyte"];
+    a[k].to_string()
+}
+
+fn bin_sym(k: i64) -> String {
+    let a = vec!["KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"];
+    a[k].to_string()
+}
+
+fn bin_name(k: i64) -> String {
+    let a = vec!["kibibyte", "mebibyte", "gibibyte", "tebibyte", "pebibyte", "exbibyte", "zebibyte", "yobibyte"];
+    a[k].to_string()
+}
+
+// length units (prefix, divider, singular, plural), smallest first.
+fn len_prefix(k: i64) -> String {
+    let a = vec!["nm", "mm", "cm", "m", "km"];
+    a[k].to_string()
+}
+
+fn len_div(k: i64) -> f64 {
+    let a: Vec[f64] = vec![0.000000001, 0.001, 0.01, 1.0, 1000.0];
+    a[k]
+}
+
+fn len_sing(k: i64) -> String {
+    let a = vec!["nm", "mm", "cm", "metre", "km"];
+    a[k].to_string()
+}
+
+fn len_plur(k: i64) -> String {
+    let a = vec!["nm", "mm", "cm", "metres", "km"];
+    a[k].to_string()
+}
+
+// time units (divider, singular, plural), smallest first; abbrevs via fn.
+fn time_div(k: i64) -> i64 {
+    let a: Vec[i64] = vec![1, 60, 3600, 86400, 604800, 31449600];
+    a[k]
+}
+
+fn time_sing(k: i64) -> String {
+    let a = vec!["second", "minute", "hour", "day", "week", "year"];
+    a[k].to_string()
+}
+
+fn time_plur(k: i64) -> String {
+    let a = vec!["seconds", "minutes", "hours", "days", "weeks", "years"];
+    a[k].to_string()
+}
+
+fn time_match(unit: ref String, k: i64) -> bool {
+    if unit == time_sing(k) or unit == time_plur(k) {
+        return true;
+    }
+    let abbr = if k == 0 {
+        vec!["s", "sec", "secs"]
+    } else if k == 1 {
+        vec!["m", "min", "mins"]
+    } else if k == 2 {
+        vec!["h"]
+    } else if k == 3 {
+        vec!["d"]
+    } else if k == 4 {
+        vec!["w"]
+    } else {
+        vec!["y"]
+    };
+    for a in abbr.iter() {
+        if unit == a.to_string() {
+            return true;
+        }
+    }
+    false
+}
+
+// ----------------------------------------------------------- size
+
+fn format_size(num_bytes: i64, keep: bool, binary: bool) -> String {
+    let nf = num_bytes as f64;
+    let mut k = 7;
+    while k >= 0 {
+        if binary and nf >= bin_div_f(k) {
+            let number = round_number(nf / bin_div_f(k), keep);
+            let sym = bin_sym(k);
+            return pluralize(number, false, sym.clone(), sym);
+        } else if (not binary) and nf >= dec_div_f(k) {
+            let number = round_number(nf / dec_div_f(k), keep);
+            let sym = dec_sym(k);
+            return pluralize(number, false, sym.clone(), sym);
+        }
+        k -= 1;
+    }
+    pluralize(itoa(num_bytes), num_bytes == 1, "byte".to_string(), "bytes".to_string())
+}
+
+fn parse_size(size: ref String, binary: bool) -> Result[i64, String] {
+    let toks = tokenize(size);
+    if toks.len() >= 1 and toks[0].is_num {
+        let mut nu = String.new();
+        if toks.len() == 2 and not toks[1].is_num {
+            nu = lower_ascii(toks[1].sval);
+        }
+        if toks.len() == 1 or starts_with(nu, "b") {
+            return Ok(size_int(toks[0]));
+        }
+        if nu.len() > 0 {
+            let nu2 = rstrip_s(nu);
+            let mut k = 0;
+            while k < 8 {
+                let bsym = lower_ascii(make_str(bin_sym(k)));
+                let bnam = lower_ascii(make_str(bin_name(k)));
+                if nu2 == bsym or nu2 == bnam {
+                    return Ok(mul_div(toks[0], bin_div_i(k), bin_div_f(k)));
+                }
+                let dsym = lower_ascii(make_str(dec_sym(k)));
+                let dnam = lower_ascii(make_str(dec_name(k)));
+                let dsym0 = first_char_lower(dec_sym(k));
+                if nu2 == dsym or nu2 == dnam or starts_with(nu2, dsym0) {
+                    if binary {
+                        return Ok(mul_div(toks[0], bin_div_i(k), bin_div_f(k)));
+                    } else {
+                        return Ok(mul_div(toks[0], dec_div_i(k), dec_div_f(k)));
+                    }
+                }
+                k += 1;
+            }
+        }
+    }
+    Err(f"Failed to parse size! (input {py_str_repr(size)} was tokenized as {toks_repr(toks)})")
+}
+
+fn size_int(t: ref Tok) -> i64 {
+    if t.is_float {
+        t.fval as i64
+    } else {
+        t.ival
+    }
+}
+
+fn mul_div(t: ref Tok, div_i: i64, div_f: f64) -> i64 {
+    if (not t.is_float) and div_i >= 0 {
+        t.ival * div_i
+    } else {
+        (t.fval * div_f) as i64
+    }
+}
+
+// ----------------------------------------------------------- length
+
+fn format_length(num_metres: f64, keep: bool) -> String {
+    let mut k = 4;
+    while k >= 0 {
+        if num_metres >= len_div(k) {
+            let number = round_number(num_metres / len_div(k), keep);
+            return pluralize(number, is_one_ratio(num_metres / len_div(k)), len_sing(k), len_plur(k));
+        }
+        k -= 1;
+    }
+    pluralize(float_simple(num_metres), num_metres == 1.0, "metre".to_string(), "metres".to_string())
+}
+
+fn float_simple(x: f64) -> String {
+    let t = x as i64;
+    if (t as f64) == x {
+        f"{t}.0"
+    } else {
+        let s = fmt_fixed(x, 6, 1000000, 1000000.0);
+        strip_round(s)
+    }
+}
+
+fn parse_length(length: ref String) -> Result[f64, String] {
+    let toks = tokenize(length);
+    if toks.len() >= 1 and toks[0].is_num {
+        if toks.len() == 1 {
+            return Ok(toks[0].fval);
+        }
+        if toks.len() == 2 and not toks[1].is_num {
+            let nu = lower_ascii(toks[1].sval);
+            let mut k = 0;
+            while k < 5 {
+                if starts_with(nu, len_prefix(k)) {
+                    return Ok(toks[0].fval * len_div(k));
+                }
+                k += 1;
+            }
+        }
+    }
+    Err(f"Failed to parse length! (input {py_str_repr(length)} was tokenized as {toks_repr(toks)})")
+}
+
+// ----------------------------------------------------------- timespan
+
+fn format_timespan(num_seconds: i64, max_units: i64) -> String {
+    if num_seconds < 60 {
+        return pluralize(round_number(num_seconds as f64, false), num_seconds == 1, "second".to_string(), "seconds".to_string());
+    }
+    let mut result: Vec[String] = Vec.new();
+    let mut remaining = num_seconds;
+    let mut idx = 5;
+    while idx >= 0 {
+        let d = time_div(idx);
+        if idx > 0 {
+            let c = remaining / d;
+            remaining = remaining % d;
+            if c != 0 {
+                result.push(pluralize(itoa(c), c == 1, time_sing(idx), time_plur(idx)));
+            }
+        } else {
+            let c = remaining;
+            let rn = round_number(c as f64, false);
+            if rn != "0".to_string() {
+                result.push(pluralize(rn, c == 1, time_sing(idx), time_plur(idx)));
+            }
+        }
+        idx -= 1;
+    }
+    if result.len() == 1 {
+        return result[0].clone();
+    }
+    let mut trimmed: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < result.len() and i < max_units {
+        trimmed.push(result[i].clone());
+        i += 1;
+    }
+    concatenate(trimmed)
+}
+
+fn parse_timespan(timespan: ref String) -> Result[f64, String] {
+    let toks = tokenize(timespan);
+    if toks.len() >= 1 and toks[0].is_num {
+        if toks.len() == 1 {
+            return Ok(toks[0].fval);
+        }
+        if toks.len() == 2 and not toks[1].is_num {
+            let nu = lower_ascii(toks[1].sval);
+            let mut k = 0;
+            while k < 6 {
+                if time_match(nu, k) {
+                    return Ok(toks[0].fval * (time_div(k) as f64));
+                }
+                k += 1;
+            }
+        }
+    }
+    Err(f"Failed to parse timespan! (input {py_str_repr(timespan)} was tokenized as {toks_repr(toks)})")
+}
+
+// ----------------------------------------------------------- number
+
+fn format_number(number: i64) -> String {
+    let neg = number < 0;
+    let mag = if neg { -number } else { number };
+    let digits = itoa(mag);
+    let b = digits.bytes().to_vec();
+    let mut grouped: Vec[u8] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 and (n - i) % 3 == 0 {
+            grouped.push(b','); // thousands separator
+        }
+        grouped.push(b[i]);
+        i += 1;
+    }
+    let mut s = String.from_utf8(grouped).unwrap_or("?".to_string());
+    if neg {
+        s = "-".to_string() + s;
+    }
+    s
+}
+
+// ----------------------------------------------------------- bool
+
+fn coerce_boolean(value: ref String) -> Result[bool, String] {
+    let norm = lower_ascii(strip_ws(value));
+    if norm == "1".to_string() or norm == "yes".to_string() or norm == "true".to_string() or norm == "on".to_string() {
+        Ok(true)
+    } else if norm == "0".to_string() or norm == "no".to_string() or norm == "false".to_string() or norm == "off".to_string() or norm == "".to_string() {
+        Ok(false)
+    } else {
+        Err(f"Failed to coerce string to boolean! ({py_str_repr(value)})")
+    }
+}
+
+// ----------------------------------------------------------- string utils
+
+fn make_str(s: own String) -> String {
+    s
+}
+
+fn starts_with(s: ref String, prefix: String) -> bool {
+    let b = s.bytes().to_vec();
+    let p = prefix.bytes().to_vec();
+    if p.len() > b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < p.len() {
+        if b[i] != p[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn rstrip_s(s: ref String) -> String {
+    let b = s.bytes().to_vec();
+    let mut hi = b.len();
+    while hi > 0 and b[hi - 1] == b's' {
+        hi -= 1;
+    }
+    b2s(b, 0, hi)
+}
+
+fn first_char_lower(s: String) -> String {
+    let b = s.bytes().to_vec();
+    if b.len() == 0 {
+        return String.new();
+    }
+    let mut c = b[0];
+    if c >= b'A' and c <= b'Z' {
+        c = c + 32;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(c);
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+// ----------------------------------------------------------- dispatch
+
+fn run_job(f: ref Vec[String]) -> String {
+    let k = ref f[0];
+    if k == "size_fmt" {
+        format_size(to_i64(f[1]), f[3] == "1", f[2] == "1")
+    } else if k == "size_parse" {
+        match parse_size(f[1], f[2] == "1") {
+            Ok(v) => itoa(v),
+            Err(m) => f"err={m}",
+        }
+    } else if k == "len_fmt" {
+        format_length(parse_f64(f[1]), f[2] == "1")
+    } else if k == "len_parse" {
+        match parse_length(f[1]) {
+            Ok(v) => num_str(v),
+            Err(m) => f"err={m}",
+        }
+    } else if k == "time_fmt" {
+        format_timespan(to_i64(f[1]), to_i64(f[3]))
+    } else if k == "time_parse" {
+        match parse_timespan(f[1]) {
+            Ok(v) => num_str(v),
+            Err(m) => f"err={m}",
+        }
+    } else if k == "num" {
+        format_number(to_i64(f[1]))
+    } else if k == "round" {
+        round_number(parse_f64(f[1]), f[2] == "1")
+    } else {
+        match coerce_boolean(f[1]) {
+            Ok(b) => if b { "True".to_string() } else { "False".to_string() },
+            Err(m) => f"err={m}",
+        }
+    }
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        out.push_str(f"  {run_job(f)}\n");
+    }
+    print(out);
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("size_fmt\t0\t0\t0\n");
+    s.push_str("size_fmt\t1\t0\t0\n");
+    s.push_str("size_fmt\t5\t0\t0\n");
+    s.push_str("size_fmt\t999\t0\t0\n");
+    s.push_str("size_fmt\t1000\t0\t0\n");
+    s.push_str("size_fmt\t1000\t0\t1\n");
+    s.push_str("size_fmt\t1024\t1\t0\n");
+    s.push_str("size_fmt\t1500000000\t0\t0\n");
+    s.push_str("size_fmt\t4000000000\t0\t0\n");
+    s.push_str("size_fmt\t1536\t1\t0\n");
+    s.push_str("size_fmt\t1234567\t0\t0\n");
+    s.push_str("size_fmt\t2500000\t0\t0\n");
+    s.push_str("size_fmt\t1073741824\t1\t0\n");
+    s.push_str("size_fmt\t5000000000000\t0\t0\n");
+    s.push_str("size_fmt\t2000000000000000\t0\t0\n");
+    s.push_str("size_parse\t42\t0\n");
+    s.push_str("size_parse\t13b\t0\n");
+    s.push_str("size_parse\t5 bytes\t0\n");
+    s.push_str("size_parse\t1 KB\t0\n");
+    s.push_str("size_parse\t1 kilobyte\t0\n");
+    s.push_str("size_parse\t1 KiB\t0\n");
+    s.push_str("size_parse\t1 KB\t1\n");
+    s.push_str("size_parse\t1.5 GB\t0\n");
+    s.push_str("size_parse\t1.5 GB\t1\n");
+    s.push_str("size_parse\t2 TB\t0\n");
+    s.push_str("size_parse\t1 MiB\t0\n");
+    s.push_str("size_parse\t3 mebibyte\t0\n");
+    s.push_str("size_parse\t1 EB\t0\n");
+    s.push_str("size_parse\tnonsense\t0\n");
+    s.push_str("size_parse\t1 flooble\t0\n");
+    s.push_str("len_fmt\t0\t0\n");
+    s.push_str("len_fmt\t1\t0\n");
+    s.push_str("len_fmt\t5\t0\n");
+    s.push_str("len_fmt\t1000\t0\n");
+    s.push_str("len_fmt\t0.004\t0\n");
+    s.push_str("len_fmt\t0.153\t0\n");
+    s.push_str("len_fmt\t2500\t0\n");
+    s.push_str("len_fmt\t1\t1\n");
+    s.push_str("len_parse\t42\t0\n");
+    s.push_str("len_parse\t1 km\t0\n");
+    s.push_str("len_parse\t5mm\t0\n");
+    s.push_str("len_parse\t15.3cm\t0\n");
+    s.push_str("len_parse\t2 m\t0\n");
+    s.push_str("len_parse\tbad\t0\n");
+    s.push_str("time_fmt\t0\t0\t3\n");
+    s.push_str("time_fmt\t1\t0\t3\n");
+    s.push_str("time_fmt\t5\t0\t3\n");
+    s.push_str("time_fmt\t60\t0\t3\n");
+    s.push_str("time_fmt\t3600\t0\t3\n");
+    s.push_str("time_fmt\t86400\t0\t3\n");
+    s.push_str("time_fmt\t90\t0\t3\n");
+    s.push_str("time_fmt\t3661\t0\t3\n");
+    s.push_str("time_fmt\t31449600\t0\t3\n");
+    s.push_str("time_fmt\t31622400\t0\t3\n");
+    s.push_str("time_fmt\t31622640\t0\t3\n");
+    s.push_str("time_fmt\t31622640\t0\t2\n");
+    s.push_str("time_fmt\t604800\t0\t3\n");
+    s.push_str("time_parse\t42\t0\n");
+    s.push_str("time_parse\t42s\t0\n");
+    s.push_str("time_parse\t1m\t0\n");
+    s.push_str("time_parse\t1h\t0\n");
+    s.push_str("time_parse\t1d\t0\n");
+    s.push_str("time_parse\t90m\t0\n");
+    s.push_str("time_parse\t1.5h\t0\n");
+    s.push_str("time_parse\t2w\t0\n");
+    s.push_str("time_parse\t3 hours\t0\n");
+    s.push_str("time_parse\tbogus\t0\n");
+    s.push_str("num\t6000000\t2\n");
+    s.push_str("num\t1234\t2\n");
+    s.push_str("num\t100\t2\n");
+    s.push_str("num\t-6000000\t2\n");
+    s.push_str("num\t999\t2\n");
+    s.push_str("num\t1000000000\t0\n");
+    s.push_str("round\t1\t0\n");
+    s.push_str("round\t3.14159\t0\n");
+    s.push_str("round\t5.001\t0\n");
+    s.push_str("round\t1.5\t0\n");
+    s.push_str("round\t1\t1\n");
+    s.push_str("round\t2.5\t0\n");
+    s.push_str("bool\t1\n");
+    s.push_str("bool\tyes\n");
+    s.push_str("bool\tTRUE\n");
+    s.push_str("bool\ton\n");
+    s.push_str("bool\t0\n");
+    s.push_str("bool\tno\n");
+    s.push_str("bool\tfalse\n");
+    s.push_str("bool\toff\n");
+    s.push_str("bool\tmaybe\n");
+    s
+}
