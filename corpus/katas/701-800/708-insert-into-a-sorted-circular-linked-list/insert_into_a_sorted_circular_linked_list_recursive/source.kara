@@ -88,7 +88,7 @@ impl CircularList {
     fn values(self) -> Vec[i64] {
         let mut out: Vec[i64] = Vec.new();
         if let Some(head) = self.head {
-            let mut at = head;
+            let mut at = head.clone();
             loop {
                 out.push(at.val);
                 at = at.next.expect("a ring has no end");

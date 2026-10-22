@@ -1,0 +1,72 @@
+// LeetCode #858: Mirror Reflection -- the rooms across and up from the
+// greatest common divisor.
+//
+// The unfolded ray meets its first corner after p / g rooms across and
+// q / g rooms up, for g the greatest common divisor of p and q, found by
+// Euclid's algorithm; the parities of the two counts name the corner.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+fn mirror_reflection(p: i64, q: i64) -> i64 {
+    let g = gcd(p, q);
+    let across = p / g;
+    let up = q / g;
+    if across % 2 == 0 {
+        2
+    } else if up % 2 == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(p: i64, q: i64) {
+    println(f"p = {p}, q = {q} -> {mirror_reflection(p, q)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(2, 1);
+    show(3, 1);
+    show(1, 1);
+    show(4, 2);
+    show(6, 4);
+    show(5, 5);
+    show(1000, 1);
+    show(999, 1);
+    show(1000, 999);
+    show(1000, 250);
+    show(750, 500);
+    show(999, 333);
+    show(1000, 1000);
+    let mut counts = [0, 0, 0];
+    for p in 1..101 {
+        for q in 1..p + 1 {
+            counts[mirror_reflection(p, q)] += 1;
+        }
+    }
+    println(f"all 5050 rooms of side up to 100: receptor 0 {counts[0]} times, 1 {counts[1]}, 2 {counts[2]}");
+    let mut seed = 858;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let p = 1 + next_random(mut seed) % 1000;
+        let q = 1 + next_random(mut seed) % p;
+        let r = mirror_reflection(p, q);
+        total += r;
+        check = (check * 31 + r * 1000 + q) % 1000000007;
+    }
+    println(f"300 random rooms of side up to 1000: receptors sum to {total}, checksum {check}");
+}

@@ -1,0 +1,15 @@
+p = 2, q = 1 -> 2
+p = 3, q = 1 -> 1
+p = 1, q = 1 -> 1
+p = 4, q = 2 -> 2
+p = 6, q = 4 -> 0
+p = 5, q = 5 -> 1
+p = 1000, q = 1 -> 2
+p = 999, q = 1 -> 1
+p = 1000, q = 999 -> 2
+p = 1000, q = 250 -> 2
+p = 750, q = 500 -> 0
+p = 999, q = 333 -> 1
+p = 1000, q = 1000 -> 1
+all 5050 rooms of side up to 100: receptor 0 1622 times, 1 1722, 2 1706
+300 random rooms of side up to 1000: receptors sum to 309, checksum 284921759

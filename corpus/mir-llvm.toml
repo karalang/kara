@@ -1,12 +1,14 @@
 # The corpus on mir-llvm, from `scripts/corpus/run.py --backend mir-llvm` with a
-# debug llvm karac; classify.py's report quotes it. slice_pass counts the M1
-# slice entries the runner passed; both also need the mir-interp gate's pass.
-# This run is the review thread's (2026-10-15), relayed and not re-run here;
-# both = 7495 was of 7656 gate passes at the time.
-karac = "3908b27a2c"
-date = "2026-10-15"
-slice = 7935
-slice_pass = 7593
-both = 7495
-executed = 8968
-pass = 8437
+# release llvm karac; classify.py's report quotes it. slice_pass counts the M1
+# slice entries the runner passed, of the slice entries it executed (MREJ
+# entries are not executed); both also need the mir-interp gate's pass. The
+# kata thread's run of 2026-10-22, for the review thread (M3 item 7): the one
+# slice program that passes on mir-interp and fails on mir-llvm is
+# fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend.
+karac = "d42264fd85"
+date = "2026-10-22"
+slice = 9218
+slice_pass = 9036
+both = 8995
+executed = 10808
+pass = 10168

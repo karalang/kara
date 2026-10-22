@@ -1,0 +1,220 @@
+// LeetCode #858: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on every room of side
+// up to 40 and random rooms up to 1000, against the statement read
+// literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn mirror_reflection_star(p: i64, q: i64) -> i64 {
+    let mut p = p;
+    let mut q = q;
+    while p % 2 == 0 and q % 2 == 0 {
+        p /= 2;
+        q /= 2;
+    }
+    if p % 2 == 0 {
+        2
+    } else if q % 2 == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+// ---- unfold arm -----------------------------------------------------
+
+fn mirror_reflection_unfold(p: i64, q: i64) -> i64 {
+    let mut k = 1;
+    while k * q % p != 0 {
+        k += 1;
+    }
+    let m = k * q / p;
+    if m % 2 == 0 {
+        0
+    } else if k % 2 == 1 {
+        1
+    } else {
+        2
+    }
+}
+
+// ---- gcd arm --------------------------------------------------------
+
+fn gcd_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd_gcd(b, a % b)
+    }
+}
+
+fn mirror_reflection_gcd(p: i64, q: i64) -> i64 {
+    let g = gcd_gcd(p, q);
+    let across = p / g;
+    let up = q / g;
+    if across % 2 == 0 {
+        2
+    } else if up % 2 == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+// ---- trace arm ------------------------------------------------------
+
+fn mirror_reflection_trace(p: i64, q: i64) -> i64 {
+    let mut y = 0;
+    let mut up = true;
+    let mut east = false;
+    loop {
+        if up {
+            y += q;
+            if y > p {
+                y = 2 * p - y;
+                up = false;
+            }
+        } else {
+            y -= q;
+            if y < 0 {
+                y = -y;
+                up = true;
+            }
+        }
+        east = not east;
+        if y == p {
+            return if east { 1 } else { 2 };
+        }
+        // the south-west corner is never reached, so this is the east wall
+        if y == 0 {
+            return 0;
+        }
+    }
+}
+
+// ---- the statement, read literally ---------------------------------------
+
+// The room drawn to scale, with every length multiplied by q along the
+// x-axis and by p along the y-axis: the walls are p * q wide and p * p
+// tall, and the ray, which crosses p to the east while it rises q, now
+// moves one unit east or west for each unit up or down, so it stays on
+// whole coordinates. It goes straight to the next wall, turns back off
+// each wall it meets, and stops at a corner.
+fn statement(p: i64, q: i64) -> i64 {
+    let width = p * q;
+    let height = p * p;
+    let mut x = 0;
+    let mut y = 0;
+    let mut dx = 1;
+    let mut dy = 1;
+    loop {
+        let to_x = if dx > 0 { width - x } else { x };
+        let to_y = if dy > 0 { height - y } else { y };
+        let step = if to_x < to_y { to_x } else { to_y };
+        x += dx * step;
+        y += dy * step;
+        let on_side = x == 0 or x == width;
+        let on_floor = y == 0 or y == height;
+        if on_side and on_floor {
+            if x == width and y == 0 {
+                return 0;
+            }
+            if x == width and y == height {
+                return 1;
+            }
+            if x == 0 and y == height {
+                return 2;
+            }
+            return -1;
+        }
+        if on_side {
+            dx = -dx;
+        }
+        if on_floor {
+            dy = -dy;
+        }
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, p: i64, q: i64) -> i64 {
+    if which == 0 {
+        mirror_reflection_star(p, q)
+    } else if which == 1 {
+        mirror_reflection_unfold(p, q)
+    } else if which == 2 {
+        mirror_reflection_gcd(p, q)
+    } else {
+        mirror_reflection_trace(p, q)
+    }
+}
+
+fn main() {
+    let names = ["star", "unfold", "gcd", "trace"];
+    let props = ["answer", "scaled", "q to p - q", "twice as wide", "wider by q", "a receptor"];
+    let mut by_arm = [0, 0, 0, 0];
+    let mut by_prop = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 858;
+    let mut rooms: Vec[(i64, i64)] = Vec.new();
+    for p in 1..41 {
+        for q in 1..p + 1 {
+            rooms.push((p, q));
+        }
+    }
+    while rooms.len() < 1600 {
+        let p = 1 + next_random(mut seed) % 1000;
+        let q = 1 + next_random(mut seed) % p;
+        rooms.push((p, q));
+    }
+    for room in rooms.iter() {
+        let (p, q) = *room;
+        let want = statement(p, q);
+        cases += 1;
+        total += want;
+        let c = 2 + next_random(mut seed) % 4;
+        for a in 0..4 {
+            let got = arm(a, p, q);
+            let mut bad = [false, false, false, false, false, false];
+            bad[0] = got != want;
+            bad[1] = arm(a, c * p, c * q) != got;
+            if q < p {
+                // the receptor stays 2, and otherwise 0 and 1 trade places
+                let other = arm(a, p, p - q);
+                bad[2] = if got == 2 { other != 2 } else { other != 1 - got };
+            }
+            if q % 2 == 1 {
+                bad[3] = arm(a, 2 * p, q) != 2;
+            }
+            // the receptor stays 0, and otherwise 1 and 2 trade places
+            let wider = arm(a, p + q, q);
+            bad[4] = if got == 0 { wider != 0 } else { wider != 3 - got };
+            bad[5] = got < 0 or got > 2;
+            for i in 0..6 {
+                if (i != 2 or q < p) and (i != 3 or q % 2 == 1) {
+                    checks += 1;
+                }
+                if bad[i] {
+                    by_arm[a] += 1;
+                    by_prop[i] += 1;
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for f in by_arm.iter() {
+        failures += *f;
+    }
+    println(f"{cases} rooms, receptors sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: {names[0]} {by_arm[0]}, {names[1]} {by_arm[1]}, {names[2]} {by_arm[2]}, {names[3]} {by_arm[3]}");
+    println(f"by property: {props[0]} {by_prop[0]}, {props[1]} {by_prop[1]}, {props[2]} {by_prop[2]}, {props[3]} {by_prop[3]}, {props[4]} {by_prop[4]}, {props[5]} {by_prop[5]}");
+}

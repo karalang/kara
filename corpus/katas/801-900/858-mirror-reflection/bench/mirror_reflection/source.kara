@@ -1,0 +1,45 @@
+// Benchmark for #858: Mirror Reflection -- the trace arm (the ray traced
+// from wall to wall), in every room LeetCode allows: all sides p up to
+// 1000 and every q from 1 to p, 500,500 rooms and 243,908,332 crossings.
+
+fn mirror_reflection(p: i64, q: i64) -> i64 {
+    let mut y = 0;
+    let mut up = true;
+    let mut east = false;
+    loop {
+        if up {
+            y += q;
+            if y > p {
+                y = 2 * p - y;
+                up = false;
+            }
+        } else {
+            y -= q;
+            if y < 0 {
+                y = -y;
+                up = true;
+            }
+        }
+        east = not east;
+        if y == p {
+            return if east { 1 } else { 2 };
+        }
+        // the south-west corner is never reached, so this is the east wall
+        if y == 0 {
+            return 0;
+        }
+    }
+}
+
+fn main() {
+    let mut counts = [0, 0, 0];
+    let mut check = 0;
+    for p in 1..1001 {
+        for q in 1..p + 1 {
+            let r = mirror_reflection(p, q);
+            counts[r] += 1;
+            check = (check * 3 + r) % 1000000007;
+        }
+    }
+    println(f"500500 rooms: receptor 0 {counts[0]} times, 1 {counts[1]}, 2 {counts[2]}, checksum {check}");
+}

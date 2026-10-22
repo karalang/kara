@@ -98,8 +98,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 331 |
 | codegen-gap | 289 |
-| false-positive | 281 |
-| other | 194 |
+| false-positive | 283 |
+| other | 195 |
 | diagnostics | 186 |
 | perf | 183 |
 | soundness | 133 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 1039 |
 | typecheck | 562 |
 | ownership | 131 |
-| other | 123 |
+| other | 126 |
 | cli | 87 |
 | runtime | 86 |
 | parser | 77 |
@@ -181,6 +181,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-12 | 2026-10-22 | cli | medium | `karac run` still runs the legacy JIT (with the legacy tree-walk interpreter as fallback and as `--interp`); v2 runs only through the hidden `__mir-run` / `__mir-llvm-run`. M3 item 1: the default becomes the mir-llvm JIT, `--interp` the MIR interpreter, keeping `--output=json/jsonl`, `--timeout`, `--sequential`, `--example`, the manifest flags and `--` program args, with the old path behind `--legacy` | — |
 | B-2026-10-22-13 | 2026-10-22 | cli | medium | `karac test` runs each case on the legacy JIT (src/test_jit_dispatch.rs) with the legacy interpreter as fallback; nothing in test_cmd.rs reaches MIR. M3 item 2: discovery and the JSONL output stay, each case runs on MIR (mir-llvm by default, `--interp` the MIR interpreter), `#[with_provider]` on a test works (B-2026-10-21-5), and the old path stays behind `--legacy` | — |
 | B-2026-10-22-14 | 2026-10-22 | cli | medium | `karac build` defaults to legacy; `--mir` builds one named file only (src/cli/args.rs refuses it in project mode: "--mir builds a single file; name one") and keeps only the file, output, `--release` and `-o`, dropping the other build flags. M3 item 4, CLI half: v2 by default, project mode and `install` on v2, every other build flag carried or refused by name, the old path behind `--legacy` (plain wasm32 targets are the drop schedule's half) | — |
+| B-2026-10-22-15 | 2026-10-22 | other | medium | The drop model refuses 61 programs that check accepts, all one shape: a cursor local initialised from a borrowed handle aggregate and reassigned (`let mut cur = head; ... cur = n.next`), which §6.1 makes a counted copy; the model's §5.9 "write through a ref: an assignment" is wrong | — |
+| B-2026-10-22-16 | 2026-10-22 | other | low | The drop model refuses 10 more programs that check accepts: 4 count a Copy value (`Str`, a `T: Copy` parameter) as moved, 1 is an unparsed construct reported as a rejection, 5 not yet traced | — |
+| B-2026-10-22-17 | 2026-10-22 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gate pass and run.py fails them | — |
 
 ### Relocated
 
