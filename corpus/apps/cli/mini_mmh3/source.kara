@@ -1,0 +1,497 @@
+// mini_mmh3 — a port of the x86 MurmurHash3 functions of pymmh3 0.0.5 (CC0, a
+// pure-Python MurmurHash3 that reproduces the canonical mmh3 C extension
+// exactly — cross-checked for every input in this kata). MurmurHash3 is the
+// non-cryptographic hash behind Bloom filters, count-min sketches, feature
+// hashing and shard/partition keys across databases and data pipelines.
+//
+// Each job is `<op>\t<seed>\t<text>`:
+//   h32  <seed> <text>  → MurmurHash3 x86_32 as a signed 32-bit decimal
+//                         (the value mmh3.hash returns);
+//   h128 <seed> <text>  → MurmurHash3 x86 128-bit as 32 lowercase hex digits
+//                         (big-endian over the h4,h3,h2,h1 lanes).
+//
+// Both the 32-bit and the x86 128-bit variant use only 32-bit arithmetic, so
+// every multiply is a 32-bit multiply taken modulo 2^32. Kāra checks integer
+// overflow, and a 32x32 product overflows i64, so mul32 splits the second
+// operand into 16-bit halves — a * (b & 0xFFFF) and a * (b >> 16), each well
+// inside i64 — and recombines them modulo 2^32. The x64 128-bit variant (which
+// needs 64-bit multiplies) is out of scope (see README).
+//
+// jobs_text() carries data/jobs.tsv verbatim.
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+// signed-i64 decimal
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = 0 - x;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    if neg {
+        o.push_str("-");
+    }
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+// 8 lowercase hex digits of a 32-bit value
+fn hex8(v: i64) -> String {
+    let tbl = "0123456789abcdef".to_string();
+    let mut o = String.new();
+    let mut shift = 28;
+    while shift >= 0 {
+        let d = (v >> shift) & 15;
+        o.push_str(tbl.substring(d, d + 1));
+        shift = shift - 4;
+    }
+    o
+}
+
+// (a * b) mod 2^32, for a, b in [0, 2^32) — splits b into 16-bit halves so no
+// intermediate product overflows i64.
+fn mul32(a: i64, b: i64) -> i64 {
+    let lo = b & 65535;
+    let hi = (b >> 16) & 65535;
+    (a * lo + ((a * hi) & 65535) * 65536) & 4294967295
+}
+
+fn rotl32(x: i64, r: i64) -> i64 {
+    ((x << r) | (x >> (32 - r))) & 4294967295
+}
+
+fn fmix32(h0: i64) -> i64 {
+    let mut h = h0;
+    h = h ^ (h >> 16);
+    h = mul32(h, 2246822507); // 0x85ebca6b
+    h = h ^ (h >> 13);
+    h = mul32(h, 3266489909); // 0xc2b2ae35
+    h = h ^ (h >> 16);
+    h
+}
+
+fn hash32(key: Vec[i64], seed: i64) -> i64 {
+    let n = key.len();
+    let nblocks = n / 4;
+    let mut h1 = seed & 4294967295;
+    let c1 = 3432918353; // 0xcc9e2d51
+    let c2 = 461845907; // 0x1b873593
+    let mut i = 0;
+    while i < nblocks {
+        let o = i * 4;
+        let mut k1 = key[o] | (key[o + 1] << 8) | (key[o + 2] << 16) | (key[o + 3] << 24);
+        k1 = mul32(k1, c1);
+        k1 = rotl32(k1, 15);
+        k1 = mul32(k1, c2);
+        h1 = h1 ^ k1;
+        h1 = rotl32(h1, 13);
+        h1 = (h1 * 5 + 3864292196) & 4294967295; // 0xe6546b64
+        i = i + 1;
+    }
+    let ti = nblocks * 4;
+    let ts = n & 3;
+    let mut k1 = 0;
+    if ts >= 3 {
+        k1 = k1 ^ (key[ti + 2] << 16);
+    }
+    if ts >= 2 {
+        k1 = k1 ^ (key[ti + 1] << 8);
+    }
+    if ts >= 1 {
+        k1 = k1 ^ key[ti + 0];
+    }
+    if ts > 0 {
+        k1 = mul32(k1, c1);
+        k1 = rotl32(k1, 15);
+        k1 = mul32(k1, c2);
+        h1 = h1 ^ k1;
+    }
+    h1 = h1 ^ n;
+    h1 = fmix32(h1);
+    h1
+}
+
+// x86 128-bit: returns the four 32-bit lanes h1..h4 (the 128-bit value is
+// h4<<96 | h3<<64 | h2<<32 | h1).
+fn hash128_x86(key: Vec[i64], seed: i64) -> Vec[i64] {
+    let n = key.len();
+    let nblocks = n / 16;
+    let mut h1 = seed & 4294967295;
+    let mut h2 = seed & 4294967295;
+    let mut h3 = seed & 4294967295;
+    let mut h4 = seed & 4294967295;
+    let c1 = 597399067; // 0x239b961b
+    let c2 = 2869860233; // 0xab0e9789
+    let c3 = 951274213; // 0x38b34ae5
+    let c4 = 2716044179; // 0xa1e38b93
+    let mut i = 0;
+    while i < nblocks {
+        let o = i * 16;
+        let mut k1 = key[o] | (key[o + 1] << 8) | (key[o + 2] << 16) | (key[o + 3] << 24);
+        let mut k2 = key[o + 4] | (key[o + 5] << 8) | (key[o + 6] << 16) | (key[o + 7] << 24);
+        let mut k3 = key[o + 8] | (key[o + 9] << 8) | (key[o + 10] << 16) | (key[o + 11] << 24);
+        let mut k4 = key[o + 12] | (key[o + 13] << 8) | (key[o + 14] << 16) | (key[o + 15] << 24);
+
+        k1 = mul32(k1, c1);
+        k1 = rotl32(k1, 15);
+        k1 = mul32(k1, c2);
+        h1 = h1 ^ k1;
+        h1 = rotl32(h1, 19);
+        h1 = (h1 + h2) & 4294967295;
+        h1 = (h1 * 5 + 1444728091) & 4294967295; // 0x561ccd1b
+
+        k2 = mul32(k2, c2);
+        k2 = rotl32(k2, 16);
+        k2 = mul32(k2, c3);
+        h2 = h2 ^ k2;
+        h2 = rotl32(h2, 17);
+        h2 = (h2 + h3) & 4294967295;
+        h2 = (h2 * 5 + 197830471) & 4294967295; // 0x0bcaa747
+
+        k3 = mul32(k3, c3);
+        k3 = rotl32(k3, 17);
+        k3 = mul32(k3, c4);
+        h3 = h3 ^ k3;
+        h3 = rotl32(h3, 15);
+        h3 = (h3 + h4) & 4294967295;
+        h3 = (h3 * 5 + 2530024501) & 4294967295; // 0x96cd1c35
+
+        k4 = mul32(k4, c4);
+        k4 = rotl32(k4, 18);
+        k4 = mul32(k4, c1);
+        h4 = h4 ^ k4;
+        h4 = rotl32(h4, 13);
+        h4 = (h1 + h4) & 4294967295;
+        h4 = (h4 * 5 + 850148119) & 4294967295; // 0x32ac3b17
+        i = i + 1;
+    }
+
+    let ti = nblocks * 16;
+    let ts = n & 15;
+    let mut k1 = 0;
+    let mut k2 = 0;
+    let mut k3 = 0;
+    let mut k4 = 0;
+
+    if ts >= 15 {
+        k4 = k4 ^ (key[ti + 14] << 16);
+    }
+    if ts >= 14 {
+        k4 = k4 ^ (key[ti + 13] << 8);
+    }
+    if ts >= 13 {
+        k4 = k4 ^ key[ti + 12];
+    }
+    if ts > 12 {
+        k4 = mul32(k4, c4);
+        k4 = rotl32(k4, 18);
+        k4 = mul32(k4, c1);
+        h4 = h4 ^ k4;
+    }
+
+    if ts >= 12 {
+        k3 = k3 ^ (key[ti + 11] << 24);
+    }
+    if ts >= 11 {
+        k3 = k3 ^ (key[ti + 10] << 16);
+    }
+    if ts >= 10 {
+        k3 = k3 ^ (key[ti + 9] << 8);
+    }
+    if ts >= 9 {
+        k3 = k3 ^ key[ti + 8];
+    }
+    if ts > 8 {
+        k3 = mul32(k3, c3);
+        k3 = rotl32(k3, 17);
+        k3 = mul32(k3, c4);
+        h3 = h3 ^ k3;
+    }
+
+    if ts >= 8 {
+        k2 = k2 ^ (key[ti + 7] << 24);
+    }
+    if ts >= 7 {
+        k2 = k2 ^ (key[ti + 6] << 16);
+    }
+    if ts >= 6 {
+        k2 = k2 ^ (key[ti + 5] << 8);
+    }
+    if ts >= 5 {
+        k2 = k2 ^ key[ti + 4];
+    }
+    if ts > 4 {
+        k2 = mul32(k2, c2);
+        k2 = rotl32(k2, 16);
+        k2 = mul32(k2, c3);
+        h2 = h2 ^ k2;
+    }
+
+    if ts >= 4 {
+        k1 = k1 ^ (key[ti + 3] << 24);
+    }
+    if ts >= 3 {
+        k1 = k1 ^ (key[ti + 2] << 16);
+    }
+    if ts >= 2 {
+        k1 = k1 ^ (key[ti + 1] << 8);
+    }
+    if ts >= 1 {
+        k1 = k1 ^ key[ti + 0];
+    }
+    if ts > 0 {
+        k1 = mul32(k1, c1);
+        k1 = rotl32(k1, 15);
+        k1 = mul32(k1, c2);
+        h1 = h1 ^ k1;
+    }
+
+    h1 = h1 ^ n;
+    h2 = h2 ^ n;
+    h3 = h3 ^ n;
+    h4 = h4 ^ n;
+
+    h1 = (h1 + h2) & 4294967295;
+    h1 = (h1 + h3) & 4294967295;
+    h1 = (h1 + h4) & 4294967295;
+    h2 = (h1 + h2) & 4294967295;
+    h3 = (h1 + h3) & 4294967295;
+    h4 = (h1 + h4) & 4294967295;
+
+    h1 = fmix32(h1);
+    h2 = fmix32(h2);
+    h3 = fmix32(h3);
+    h4 = fmix32(h4);
+
+    h1 = (h1 + h2) & 4294967295;
+    h1 = (h1 + h3) & 4294967295;
+    h1 = (h1 + h4) & 4294967295;
+    h2 = (h1 + h2) & 4294967295;
+    h3 = (h1 + h3) & 4294967295;
+    h4 = (h1 + h4) & 4294967295;
+
+    let mut out: Vec[i64] = Vec.new();
+    out.push(h1);
+    out.push(h2);
+    out.push(h3);
+    out.push(h4);
+    out
+}
+
+fn run_job(op: Str, seed: i64, text: Str) -> String {
+    let key = str_bytes(text);
+    if op == "h32" {
+        let u = hash32(key, seed);
+        // signed 32-bit interpretation
+        let mut signed = u;
+        if (u & 2147483648) != 0 {
+            signed = u - 4294967296;
+        }
+        return itoa(signed);
+    }
+    let lanes = hash128_x86(key, seed);
+    let mut o = String.new();
+    o.push_str(hex8(lanes[3]));
+    o.push_str(hex8(lanes[2]));
+    o.push_str(hex8(lanes[1]));
+    o.push_str(hex8(lanes[0]));
+    o
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                let seed_s = f[1].clone();
+                let text = f[2].clone();
+                out.push_str("== ");
+                out.push_str(op.clone());
+                out.push_str(" ");
+                out.push_str(seed_s.clone());
+                out.push_str(" ");
+                out.push_str(text.clone());
+                out.push_str("\n");
+                out.push_str(run_job(op.clone(), parse_uint(seed_s.clone()), text.clone()));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("h32\t0\t\n");
+    s.push_str("h32\t0\ta\n");
+    s.push_str("h32\t0\tab\n");
+    s.push_str("h32\t0\tabc\n");
+    s.push_str("h32\t0\tabcd\n");
+    s.push_str("h32\t0\tabcde\n");
+    s.push_str("h32\t0\tabcdef\n");
+    s.push_str("h32\t0\tabcdefg\n");
+    s.push_str("h32\t0\tabcdefgh\n");
+    s.push_str("h32\t0\thello\n");
+    s.push_str("h32\t0\thello, world\n");
+    s.push_str("h32\t0\tThe quick brown fox\n");
+    s.push_str("h32\t0\t0123456789abcdef\n");
+    s.push_str("h32\t0\t0123456789abcdefg\n");
+    s.push_str("h32\t0\tmurmur3 x86 128\n");
+    s.push_str("h32\t0\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h32\t0\tThe quick brown fox jumps over\n");
+    s.push_str("h32\t0\ta-really-long-partition-key-value-0001\n");
+    s.push_str("h32\t42\t\n");
+    s.push_str("h32\t42\ta\n");
+    s.push_str("h32\t42\tab\n");
+    s.push_str("h32\t42\tabc\n");
+    s.push_str("h32\t42\tabcd\n");
+    s.push_str("h32\t42\tabcde\n");
+    s.push_str("h32\t42\tabcdef\n");
+    s.push_str("h32\t42\tabcdefg\n");
+    s.push_str("h32\t42\tabcdefgh\n");
+    s.push_str("h32\t42\thello\n");
+    s.push_str("h32\t42\thello, world\n");
+    s.push_str("h32\t42\tThe quick brown fox\n");
+    s.push_str("h32\t42\t0123456789abcdef\n");
+    s.push_str("h32\t42\t0123456789abcdefg\n");
+    s.push_str("h32\t42\tmurmur3 x86 128\n");
+    s.push_str("h32\t42\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h32\t42\tThe quick brown fox jumps over\n");
+    s.push_str("h32\t42\ta-really-long-partition-key-value-0001\n");
+    s.push_str("h32\t2504183948\t\n");
+    s.push_str("h32\t2504183948\ta\n");
+    s.push_str("h32\t2504183948\tab\n");
+    s.push_str("h32\t2504183948\tabc\n");
+    s.push_str("h32\t2504183948\tabcd\n");
+    s.push_str("h32\t2504183948\tabcde\n");
+    s.push_str("h32\t2504183948\tabcdef\n");
+    s.push_str("h32\t2504183948\tabcdefg\n");
+    s.push_str("h32\t2504183948\tabcdefgh\n");
+    s.push_str("h32\t2504183948\thello\n");
+    s.push_str("h32\t2504183948\thello, world\n");
+    s.push_str("h32\t2504183948\tThe quick brown fox\n");
+    s.push_str("h32\t2504183948\t0123456789abcdef\n");
+    s.push_str("h32\t2504183948\t0123456789abcdefg\n");
+    s.push_str("h32\t2504183948\tmurmur3 x86 128\n");
+    s.push_str("h32\t2504183948\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h32\t2504183948\tThe quick brown fox jumps over\n");
+    s.push_str("h32\t2504183948\ta-really-long-partition-key-value-0001\n");
+    s.push_str("h128\t0\t\n");
+    s.push_str("h128\t0\ta\n");
+    s.push_str("h128\t0\tab\n");
+    s.push_str("h128\t0\tabc\n");
+    s.push_str("h128\t0\tabcd\n");
+    s.push_str("h128\t0\tabcde\n");
+    s.push_str("h128\t0\tabcdef\n");
+    s.push_str("h128\t0\tabcdefg\n");
+    s.push_str("h128\t0\tabcdefgh\n");
+    s.push_str("h128\t0\thello\n");
+    s.push_str("h128\t0\thello, world\n");
+    s.push_str("h128\t0\tThe quick brown fox\n");
+    s.push_str("h128\t0\t0123456789abcdef\n");
+    s.push_str("h128\t0\t0123456789abcdefg\n");
+    s.push_str("h128\t0\tmurmur3 x86 128\n");
+    s.push_str("h128\t0\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h128\t0\tThe quick brown fox jumps over\n");
+    s.push_str("h128\t0\ta-really-long-partition-key-value-0001\n");
+    s.push_str("h128\t42\t\n");
+    s.push_str("h128\t42\ta\n");
+    s.push_str("h128\t42\tab\n");
+    s.push_str("h128\t42\tabc\n");
+    s.push_str("h128\t42\tabcd\n");
+    s.push_str("h128\t42\tabcde\n");
+    s.push_str("h128\t42\tabcdef\n");
+    s.push_str("h128\t42\tabcdefg\n");
+    s.push_str("h128\t42\tabcdefgh\n");
+    s.push_str("h128\t42\thello\n");
+    s.push_str("h128\t42\thello, world\n");
+    s.push_str("h128\t42\tThe quick brown fox\n");
+    s.push_str("h128\t42\t0123456789abcdef\n");
+    s.push_str("h128\t42\t0123456789abcdefg\n");
+    s.push_str("h128\t42\tmurmur3 x86 128\n");
+    s.push_str("h128\t42\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h128\t42\tThe quick brown fox jumps over\n");
+    s.push_str("h128\t42\ta-really-long-partition-key-value-0001\n");
+    s.push_str("h128\t2504183948\t\n");
+    s.push_str("h128\t2504183948\ta\n");
+    s.push_str("h128\t2504183948\tab\n");
+    s.push_str("h128\t2504183948\tabc\n");
+    s.push_str("h128\t2504183948\tabcd\n");
+    s.push_str("h128\t2504183948\tabcde\n");
+    s.push_str("h128\t2504183948\tabcdef\n");
+    s.push_str("h128\t2504183948\tabcdefg\n");
+    s.push_str("h128\t2504183948\tabcdefgh\n");
+    s.push_str("h128\t2504183948\thello\n");
+    s.push_str("h128\t2504183948\thello, world\n");
+    s.push_str("h128\t2504183948\tThe quick brown fox\n");
+    s.push_str("h128\t2504183948\t0123456789abcdef\n");
+    s.push_str("h128\t2504183948\t0123456789abcdefg\n");
+    s.push_str("h128\t2504183948\tmurmur3 x86 128\n");
+    s.push_str("h128\t2504183948\txxxxxxxxxxxxxxxxx\n");
+    s.push_str("h128\t2504183948\tThe quick brown fox jumps over\n");
+    s.push_str("h128\t2504183948\ta-really-long-partition-key-value-0001\n");
+    s
+}
