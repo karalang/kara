@@ -1,0 +1,2395 @@
+// mini_more_itertools: a port of more-itertools 11.2.1, run over a job list.
+//
+// Each job names a more-itertools function and its inputs; the result is
+// printed as the Python repr of the list (or scalar) the function gives,
+// so the output matches `oracle.py` byte for byte. Inputs are small, so
+// every adapter here is eager (it returns a `Vec`), but the observable
+// result is identical to the lazy library: the job materialises a list
+// anyway, and the two infinite sources (`repeat_last`, `padnone`) take
+// their bound as a job field.
+
+// ------------------------------------------------------------ parsing
+
+fn num(field: ref String) -> i64 {
+    match i64.parse(field.clone()).ok() {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn ints(field: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if field == "" or field == "-" {
+        return out;
+    }
+    for part in field.split(",") {
+        out.push(num(part.to_string()));
+    }
+    out
+}
+
+fn lists(field: ref String) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for part in field.split(";") {
+        out.push(ints(part.to_string()));
+    }
+    out
+}
+
+fn chars(field: ref String) -> Vec[char] {
+    field.chars().collect()
+}
+
+// ------------------------------------------------------------ repr
+
+fn jl(v: ref Vec[i64]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn jt(v: ref Vec[i64]) -> String {
+    if v.len() == 1 {
+        return f"({v[0]},)";
+    }
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"({parts.join(", ")})"
+}
+
+fn jll(v: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| jl(x)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn jlt(v: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| jt(x)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn jb(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn cl(v: ref Vec[char]) -> String {
+    let parts: Vec[String] = v.iter().map(|c| f"'{c}'").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn ct(v: ref Vec[char]) -> String {
+    if v.len() == 1 {
+        return f"('{v[0]}',)";
+    }
+    let parts: Vec[String] = v.iter().map(|c| f"'{c}'").collect();
+    f"({parts.join(", ")})"
+}
+
+fn str_of(cs: ref Vec[char]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(c);
+    }
+    s
+}
+
+// ------------------------------------------------------------ small helpers
+
+fn has(v: ref Vec[i64], x: i64) -> bool {
+    for y in v.iter() {
+        if *y == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = if a < 0 { -a } else { a };
+    let mut y = if b < 0 { -b } else { b };
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn factorial(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 2;
+    while i <= n {
+        r *= i;
+        i += 1;
+    }
+    r
+}
+
+// ------------------------------------------------------------ grouping
+
+fn chunked(xs: ref Vec[i64], n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        let mut c: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < n and i + j < xs.len() {
+            c.push(xs[i + j]);
+            j += 1;
+        }
+        out.push(c);
+        i += n;
+    }
+    out
+}
+
+fn chunked_even(xs: ref Vec[i64], n: i64) -> Vec[Vec[i64]] {
+    let len = xs.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if len == 0 {
+        return out;
+    }
+    let num_lists = (len + n - 1) / n;
+    let q = len / num_lists;
+    let r = len % num_lists;
+    let mut start = 0;
+    let mut i = 0;
+    while i < num_lists {
+        let size = if i < r { q + 1 } else { q };
+        let mut c: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < size {
+            c.push(xs[start + j]);
+            j += 1;
+        }
+        out.push(c);
+        start += size;
+        i += 1;
+    }
+    out
+}
+
+fn distribute(n: i64, xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut c: Vec[i64] = Vec.new();
+        let mut k = i;
+        while k < xs.len() {
+            c.push(xs[k]);
+            k += n;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn divide(n: i64, xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let len = xs.len();
+    let q = len / n;
+    let r = len % n;
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut stop = 0;
+    let mut i = 1;
+    while i <= n {
+        let start = stop;
+        stop += if i <= r { q + 1 } else { q };
+        let mut c: Vec[i64] = Vec.new();
+        let mut k = start;
+        while k < stop {
+            c.push(xs[k]);
+            k += 1;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn split_at(xs: ref Vec[i64], sep: i64, maxsplit: i64, keep: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut splits = 0;
+    for x in xs.iter() {
+        if *x == sep and (maxsplit < 0 or splits < maxsplit) {
+            out.push(cur);
+            if keep {
+                let mut s: Vec[i64] = Vec.new();
+                s.push(*x);
+                out.push(s);
+            }
+            cur = Vec.new();
+            splits += 1;
+        } else {
+            cur.push(*x);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_before(xs: ref Vec[i64], val: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if *x == val and not cur.is_empty() {
+            out.push(cur);
+            cur = Vec.new();
+        }
+        cur.push(*x);
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn split_after(xs: ref Vec[i64], val: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        cur.push(*x);
+        if *x == val {
+            out.push(cur);
+            cur = Vec.new();
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// split when pred(a, b) = a > b.
+fn split_when(xs: ref Vec[i64], maxsplit: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if xs.is_empty() {
+        return out;
+    }
+    let mut cur: Vec[i64] = Vec.new();
+    cur.push(xs[0]);
+    let mut left = maxsplit;
+    let mut i = 1;
+    while i < xs.len() {
+        let a = xs[i - 1];
+        let b = xs[i];
+        if a > b and left != 0 {
+            out.push(cur);
+            if left == 1 {
+                let mut tail: Vec[i64] = Vec.new();
+                let mut k = i;
+                while k < xs.len() {
+                    tail.push(xs[k]);
+                    k += 1;
+                }
+                out.push(tail);
+                return out;
+            }
+            cur = Vec.new();
+            left -= 1;
+        }
+        cur.push(b);
+        i += 1;
+    }
+    out.push(cur);
+    out
+}
+
+fn split_into(xs: ref Vec[i64], sizes: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut pos = 0;
+    for size in sizes.iter() {
+        let mut c: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < *size and pos < xs.len() {
+            c.push(xs[pos]);
+            pos += 1;
+            j += 1;
+        }
+        out.push(c);
+    }
+    out
+}
+
+// grouper, incomplete in {"fill","ignore","strict"}; jobs never trigger the
+// strict error (inputs are divisible), and fillvalue is 0.
+fn grouper(xs: ref Vec[i64], n: i64, incomplete: ref String) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        let mut c: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < n and i + j < xs.len() {
+            c.push(xs[i + j]);
+            j += 1;
+        }
+        if c.len() == n {
+            out.push(c);
+        } else if incomplete == "fill" {
+            while c.len() < n {
+                c.push(0);
+            }
+            out.push(c);
+        }
+        i += n;
+    }
+    out
+}
+
+// partition(even): (odds, evens) -> [falses, trues].
+fn partition_even(xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut falses: Vec[i64] = Vec.new();
+    let mut trues: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if *x % 2 == 0 {
+            trues.push(*x);
+        } else {
+            falses.push(*x);
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    out.push(falses);
+    out.push(trues);
+    out
+}
+
+// ------------------------------------------------------------ windowing
+
+fn windowed(xs: ref Vec[i64], n: i64, fill: i64, step: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n <= 0 {
+        return out;
+    }
+    // first window
+    let mut window: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n and i < xs.len() {
+        window.push(xs[i]);
+        i += 1;
+    }
+    if window.is_empty() {
+        return out;
+    }
+    if window.len() < n {
+        let mut w = window.clone();
+        while w.len() < n {
+            w.push(fill);
+        }
+        out.push(w);
+        return out;
+    }
+    out.push(window.clone());
+    // stream: the rest, then padding
+    let padlen = if step >= n { n - 1 } else { step - 1 };
+    let mut stream: Vec[i64] = Vec.new();
+    let mut k = n;
+    while k < xs.len() {
+        stream.push(xs[k]);
+        k += 1;
+    }
+    let mut p = 0;
+    while p < padlen {
+        stream.push(fill);
+        p += 1;
+    }
+    let mut nextpick = step - 1;
+    let mut idx = 0;
+    for x in stream.iter() {
+        window.push(*x);
+        window = window[1..].to_vec();
+        if idx == nextpick {
+            out.push(window.clone());
+            nextpick += step;
+        }
+        idx += 1;
+    }
+    out
+}
+
+fn triplewise(xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    windowed(xs, 3, 0, 1)
+}
+
+fn sliding_window(xs: ref Vec[i64], n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if xs.len() < n {
+        return out;
+    }
+    let mut i = 0;
+    while i + n <= xs.len() {
+        let mut w: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < n {
+            w.push(xs[i + j]);
+            j += 1;
+        }
+        out.push(w);
+        i += 1;
+    }
+    out
+}
+
+// zip_offset over several columns; offset < 0 prepends fills, > 0 skips.
+fn zip_offset_rows(cols: ref Vec[Vec[i64]], offsets: ref Vec[i64], longest: bool, fill: i64) -> Vec[Vec[i64]] {
+    let mut stag: Vec[Vec[i64]] = Vec.new();
+    let mut c = 0;
+    while c < cols.len() {
+        let off = offsets[c];
+        let mut s: Vec[i64] = Vec.new();
+        if off < 0 {
+            let mut p = 0;
+            while p < -off {
+                s.push(fill);
+                p += 1;
+            }
+            for x in cols[c].iter() {
+                s.push(*x);
+            }
+        } else {
+            let mut k = off;
+            while k < cols[c].len() {
+                s.push(cols[c][k]);
+                k += 1;
+            }
+        }
+        stag.push(s);
+        c += 1;
+    }
+    let mut bound = -1;
+    let mut j = 0;
+    while j < stag.len() {
+        let l = stag[j].len();
+        if longest {
+            if l > bound {
+                bound = l;
+            }
+        } else if bound < 0 or l < bound {
+            bound = l;
+        }
+        j += 1;
+    }
+    if bound < 0 {
+        bound = 0;
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0;
+    while k < bound {
+        let mut row: Vec[i64] = Vec.new();
+        let mut t = 0;
+        while t < stag.len() {
+            if k < stag[t].len() {
+                row.push(stag[t][k]);
+            } else {
+                row.push(fill);
+            }
+            t += 1;
+        }
+        out.push(row);
+        k += 1;
+    }
+    out
+}
+
+fn stagger(xs: ref Vec[i64], offsets: ref Vec[i64], longest: bool, fill: i64) -> Vec[Vec[i64]] {
+    let mut cols: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < offsets.len() {
+        cols.push(xs.clone());
+        i += 1;
+    }
+    zip_offset_rows(cols, offsets, longest, fill)
+}
+
+// ------------------------------------------------------------ augmenting
+
+fn intersperse(e: i64, xs: ref Vec[i64], n: i64) -> Vec[i64] {
+    let groups = chunked(xs, n);
+    let mut out: Vec[i64] = Vec.new();
+    let mut first = true;
+    for g in groups.iter() {
+        if not first {
+            out.push(e);
+        }
+        first = false;
+        for x in g.iter() {
+            out.push(*x);
+        }
+    }
+    out
+}
+
+fn padded(xs: ref Vec[i64], fill: i64, n: i64, next_multiple: bool) -> Vec[i64] {
+    let mut out = xs.clone();
+    let target = if next_multiple {
+        let len = xs.len();
+        if len % n == 0 { len } else { (len / n + 1) * n }
+    } else {
+        n
+    };
+    while out.len() < target {
+        out.push(fill);
+    }
+    out
+}
+
+fn repeat_each(xs: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        let mut i = 0;
+        while i < n {
+            out.push(*x);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn ncycles(xs: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        for x in xs.iter() {
+            out.push(*x);
+        }
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ combining
+
+// collapse: all integer tokens of the field, left to right (full flatten).
+fn collapse(field: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let cs: Vec[char] = field.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        let is_digit = c >= '0' and c <= '9';
+        let neg = c == '-' and i + 1 < cs.len() and cs[i + 1] >= '0' and cs[i + 1] <= '9';
+        if is_digit or neg {
+            let mut j = i;
+            let mut s = String.new();
+            if neg {
+                s.push('-');
+                j += 1;
+            }
+            while j < cs.len() and cs[j] >= '0' and cs[j] <= '9' {
+                s.push(cs[j]);
+                j += 1;
+            }
+            out.push(num(s));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn flatten(lls: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for l in lls.iter() {
+        for x in l.iter() {
+            out.push(*x);
+        }
+    }
+    out
+}
+
+fn interleave(lls: ref Vec[Vec[i64]], longest: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut bound = -1;
+    for l in lls.iter() {
+        let n = l.len();
+        if longest {
+            if n > bound { bound = n; }
+        } else if bound < 0 or n < bound {
+            bound = n;
+        }
+    }
+    if bound < 0 { bound = 0; }
+    let mut k = 0;
+    while k < bound {
+        for l in lls.iter() {
+            if k < l.len() {
+                out.push(l[k]);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+fn interleave_evenly(lls: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let dims = lls.len();
+    let mut out: Vec[i64] = Vec.new();
+    if dims == 0 {
+        return out;
+    }
+    // stable sort indices by length descending
+    let mut perm: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < dims {
+        perm.push(i);
+        i += 1;
+    }
+    let mut a = 1;
+    while a < perm.len() {
+        let key = perm[a];
+        let klen = lls[key].len();
+        let mut b = a - 1;
+        let mut done = false;
+        while not done {
+            if lls[perm[b]].len() < klen {
+                perm[b + 1] = perm[b];
+                if b == 0 {
+                    perm[0] = key;
+                    done = true;
+                } else {
+                    b -= 1;
+                }
+            } else {
+                perm[b + 1] = key;
+                done = true;
+            }
+        }
+        a += 1;
+    }
+    // cursors into each column (in perm order)
+    let mut cur: Vec[i64] = Vec.new();
+    let mut total = 0;
+    let mut j = 0;
+    while j < dims {
+        cur.push(0);
+        total += lls[j].len();
+        j += 1;
+    }
+    let delta_primary = lls[perm[0]].len();
+    let mut errors: Vec[i64] = Vec.new();
+    let mut e = 1;
+    while e < dims {
+        errors.push(delta_primary / dims);
+        e += 1;
+    }
+    let mut to_yield = total;
+    while to_yield > 0 {
+        let pi = perm[0];
+        out.push(lls[pi][cur[0]]);
+        cur[0] += 1;
+        to_yield -= 1;
+        let mut s = 0;
+        while s < dims - 1 {
+            errors[s] -= lls[perm[s + 1]].len();
+            s += 1;
+        }
+        let mut t = 0;
+        while t < dims - 1 {
+            if errors[t] < 0 {
+                let ci = perm[t + 1];
+                out.push(lls[ci][cur[t + 1]]);
+                cur[t + 1] += 1;
+                to_yield -= 1;
+                errors[t] += delta_primary;
+            }
+            t += 1;
+        }
+    }
+    out
+}
+
+fn roundrobin(lls: ref Vec[Vec[i64]]) -> Vec[i64] {
+    interleave(lls, true)
+}
+
+fn dotproduct(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    let mut i = 0;
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+fn convolve(sig: ref Vec[i64], ker: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if sig.is_empty() or ker.is_empty() {
+        return out;
+    }
+    let total = sig.len() + ker.len() - 1;
+    let mut i = 0;
+    while i < total {
+        let mut acc = 0;
+        let mut j = 0;
+        while j < sig.len() {
+            let m = i - j;
+            if m >= 0 and m < ker.len() {
+                acc += sig[j] * ker[m];
+            }
+            j += 1;
+        }
+        out.push(acc);
+        i += 1;
+    }
+    out
+}
+
+fn transpose(lls: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if lls.is_empty() {
+        return out;
+    }
+    let mut cols = lls[0].len();
+    for l in lls.iter() {
+        if l.len() < cols {
+            cols = l.len();
+        }
+    }
+    let mut j = 0;
+    while j < cols {
+        let mut row: Vec[i64] = Vec.new();
+        for l in lls.iter() {
+            row.push(l[j]);
+        }
+        out.push(row);
+        j += 1;
+    }
+    out
+}
+
+fn reshape(lls: ref Vec[Vec[i64]], cols: i64) -> Vec[Vec[i64]] {
+    let flat = flatten(lls);
+    chunked(flat, cols)
+}
+
+// sort_together by key row; stable insertion sort of the columns.
+fn sort_together(rows: ref Vec[Vec[i64]], key: i64) -> Vec[Vec[i64]] {
+    let cols = transpose(rows);
+    let mut order = cols.clone();
+    let mut a = 1;
+    while a < order.len() {
+        let item = order[a].clone();
+        let kv = item[key];
+        let mut b = a - 1;
+        let mut done = false;
+        while not done {
+            if order[b][key] > kv {
+                order[b + 1] = order[b].clone();
+                if b == 0 {
+                    order[0] = item.clone();
+                    done = true;
+                } else {
+                    b -= 1;
+                }
+            } else {
+                order[b + 1] = item.clone();
+                done = true;
+            }
+        }
+        a += 1;
+    }
+    transpose(order)
+}
+
+// ------------------------------------------------------------ summarizing
+
+fn take(n: i64, xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n and i < xs.len() {
+        out.push(xs[i]);
+        i += 1;
+    }
+    out
+}
+
+fn is_sorted(xs: ref Vec[i64], strict: bool) -> bool {
+    let mut i = 1;
+    while i < xs.len() {
+        if strict {
+            if not (xs[i - 1] < xs[i]) {
+                return false;
+            }
+        } else if xs[i] < xs[i - 1] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn all_equal(xs: ref Vec[i64]) -> bool {
+    let mut i = 1;
+    while i < xs.len() {
+        if xs[i] != xs[0] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn all_unique(xs: ref Vec[i64]) -> bool {
+    let mut seen: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if has(seen, *x) {
+            return false;
+        }
+        seen.push(*x);
+    }
+    true
+}
+
+fn quantify_even(xs: ref Vec[i64]) -> i64 {
+    let mut n = 0;
+    for x in xs.iter() {
+        if *x % 2 == 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn count_nz(xs: ref Vec[i64]) -> i64 {
+    let mut n = 0;
+    for x in xs.iter() {
+        if *x != 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn map_reduce_sum(xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        sums.push(0);
+        i += 1;
+    }
+    for x in xs.iter() {
+        let k = ((*x % 3) + 3) % 3;
+        sums[k] += *x;
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        let mut pair: Vec[i64] = Vec.new();
+        pair.push(k);
+        pair.push(sums[k]);
+        out.push(pair);
+        k += 1;
+    }
+    out
+}
+
+fn consecutive_groups(xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if xs.is_empty() {
+        return out;
+    }
+    let mut cur: Vec[i64] = Vec.new();
+    cur.push(xs[0]);
+    let mut i = 1;
+    while i < xs.len() {
+        if xs[i] == xs[i - 1] + 1 {
+            cur.push(xs[i]);
+        } else {
+            out.push(cur);
+            cur = Vec.new();
+            cur.push(xs[i]);
+        }
+        i += 1;
+    }
+    out.push(cur);
+    out
+}
+
+fn locate(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        if xs[i] != 0 {
+            out.push(i);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn rlocate(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = xs.len() - 1;
+    while i >= 0 {
+        if xs[i] != 0 {
+            out.push(i);
+        }
+        i -= 1;
+    }
+    out
+}
+
+fn replace(xs: ref Vec[i64], val: i64, subs: ref Vec[i64], count: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut n = 0;
+    for x in xs.iter() {
+        if *x == val and (count < 0 or n < count) {
+            for s in subs.iter() {
+                out.push(*s);
+            }
+            n += 1;
+        } else {
+            out.push(*x);
+        }
+    }
+    out
+}
+
+fn running_max(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut best = 0;
+    let mut first = true;
+    for x in xs.iter() {
+        if first or *x > best {
+            best = *x;
+        }
+        first = false;
+        out.push(best);
+    }
+    out
+}
+
+fn running_min(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut best = 0;
+    let mut first = true;
+    for x in xs.iter() {
+        if first or *x < best {
+            best = *x;
+        }
+        first = false;
+        out.push(best);
+    }
+    out
+}
+
+// ------------------------------------------------------------ dedup / selecting
+
+fn unique_everseen(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if not has(out, *x) {
+            out.push(*x);
+        }
+    }
+    out
+}
+
+fn unique_justseen(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut first = true;
+    let mut prev = 0;
+    for x in xs.iter() {
+        if first or *x != prev {
+            out.push(*x);
+        }
+        prev = *x;
+        first = false;
+    }
+    out
+}
+
+fn unique_in_window(xs: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut window: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if window.len() == n {
+            window = window[1..].to_vec();
+        }
+        if not has(window, *x) {
+            out.push(*x);
+        }
+        window.push(*x);
+    }
+    out
+}
+
+fn duplicates_everseen(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut seen: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    for x in xs.iter() {
+        if has(seen, *x) {
+            out.push(*x);
+        } else {
+            seen.push(*x);
+        }
+    }
+    out
+}
+
+fn duplicates_justseen(xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut first = true;
+    let mut prev = 0;
+    for x in xs.iter() {
+        if not first and *x == prev {
+            out.push(*x);
+        }
+        prev = *x;
+        first = false;
+    }
+    out
+}
+
+// ------------------------------------------------------------ combinatorics
+
+fn powerset(xs: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let n = xs.len();
+    let mut r = 0;
+    while r <= n {
+        // index-combinations of length r, lexicographic
+        let mut idx: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < r {
+            idx.push(i);
+            i += 1;
+        }
+        if r == 0 {
+            out.push(Vec.new());
+        } else {
+            let mut done = false;
+            while not done {
+                let mut combo: Vec[i64] = Vec.new();
+                let mut j = 0;
+                while j < r {
+                    combo.push(xs[idx[j]]);
+                    j += 1;
+                }
+                out.push(combo);
+                // advance
+                let mut k = r - 1;
+                let mut moved = false;
+                while k >= 0 and not moved {
+                    if idx[k] != k + n - r {
+                        idx[k] += 1;
+                        let mut m = k + 1;
+                        while m < r {
+                            idx[m] = idx[m - 1] + 1;
+                            m += 1;
+                        }
+                        moved = true;
+                    } else {
+                        k -= 1;
+                    }
+                }
+                if not moved {
+                    done = true;
+                }
+            }
+        }
+        r += 1;
+    }
+    out
+}
+
+// distinct r-length permutations in lexicographic order, over the sorted
+// multiset. Equivalent to sorted(set(permutations(sorted(xs), r))).
+fn distinct_permutations(xs: ref Vec[i64], r: i64) -> Vec[Vec[i64]] {
+    // sorted distinct values and their counts
+    let mut sorted = xs.clone();
+    let mut a = 1;
+    while a < sorted.len() {
+        let v = sorted[a];
+        let mut b = a - 1;
+        let mut done = false;
+        while not done {
+            if sorted[b] > v {
+                sorted[b + 1] = sorted[b];
+                if b == 0 {
+                    sorted[0] = v;
+                    done = true;
+                } else {
+                    b -= 1;
+                }
+            } else {
+                sorted[b + 1] = v;
+                done = true;
+            }
+        }
+        a += 1;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut cnts: Vec[i64] = Vec.new();
+    for x in sorted.iter() {
+        if not vals.is_empty() and vals[vals.len() - 1] == *x {
+            cnts[cnts.len() - 1] += 1;
+        } else {
+            vals.push(*x);
+            cnts.push(1);
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut chosen: Vec[i64] = Vec.new();
+    dperm_rec(vals, mut cnts, r, mut chosen, mut out);
+    out
+}
+
+fn dperm_rec(vals: ref Vec[i64], cnts: mut ref Vec[i64], r: i64, chosen: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    if chosen.len() == r {
+        out.push(chosen.clone());
+        return;
+    }
+    let mut i = 0;
+    while i < vals.len() {
+        if cnts[i] > 0 {
+            cnts[i] -= 1;
+            chosen.push(vals[i]);
+            dperm_rec(vals, mut cnts, r, mut chosen, mut out);
+            let _ = chosen.pop();
+            cnts[i] += 1;
+        }
+        i += 1;
+    }
+}
+
+// distinct combinations of length r, lexicographic by first occurrence.
+fn distinct_combinations(xs: ref Vec[i64], r: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if r == 0 {
+        out.push(Vec.new());
+        return out;
+    }
+    let mut chosen: Vec[i64] = Vec.new();
+    dcomb_rec(xs, 0, r, mut chosen, mut out);
+    out
+}
+
+fn dcomb_rec(xs: ref Vec[i64], start: i64, r: i64, chosen: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    if chosen.len() == r {
+        out.push(chosen.clone());
+        return;
+    }
+    let mut seen: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < xs.len() {
+        if not has(seen, xs[i]) {
+            seen.push(xs[i]);
+            chosen.push(xs[i]);
+            dcomb_rec(xs, i + 1, r, mut chosen, mut out);
+            let _ = chosen.pop();
+        }
+        i += 1;
+    }
+}
+
+fn circular_shifts(xs: ref Vec[i64], steps: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let n = xs.len();
+    if n == 0 {
+        return out;
+    }
+    let mut buf = rotate(xs, steps);
+    let st = -steps;
+    let reps = n / gcd(n, st);
+    let mut i = 0;
+    while i < reps {
+        buf = rotate(buf, st);
+        out.push(buf.clone());
+        i += 1;
+    }
+    out
+}
+
+// rotate right by `steps` (negative = left).
+fn rotate(xs: ref Vec[i64], steps: i64) -> Vec[i64] {
+    let n = xs.len();
+    let mut out: Vec[i64] = Vec.new();
+    if n == 0 {
+        return out;
+    }
+    let r = (((steps % n) + n) % n);
+    let mut i = 0;
+    while i < n {
+        out.push(xs[((i - r) % n + n) % n]);
+        i += 1;
+    }
+    out
+}
+
+// nth_product over pools (reversed, then index math).
+fn nth_product(index: i64, pools: ref Vec[Vec[i64]]) -> Vec[i64] {
+    let mut res: Vec[i64] = Vec.new();
+    let mut idx = index;
+    let mut p = pools.len() - 1;
+    while p >= 0 {
+        let n = pools[p].len();
+        res.push(pools[p][idx % n]);
+        idx /= n;
+        p -= 1;
+    }
+    // reverse
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = res.len() - 1;
+    while i >= 0 {
+        out.push(res[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn comb_count(n: i64, r: i64) -> i64 {
+    if r < 0 or r > n {
+        return 0;
+    }
+    let mut num = 1;
+    let mut den = 1;
+    let mut i = 0;
+    while i < r {
+        num *= n - i;
+        den *= i + 1;
+        i += 1;
+    }
+    num / den
+}
+
+fn nth_combination(pool: ref Vec[i64], r: i64, index: i64) -> Vec[i64] {
+    let n = pool.len();
+    let mut c = comb_count(n, r);
+    let mut nn = n;
+    let mut rr = r;
+    let mut idx = index;
+    if idx < 0 {
+        idx += c;
+    }
+    let mut res: Vec[i64] = Vec.new();
+    while rr > 0 {
+        c = c * rr / nn;
+        nn -= 1;
+        rr -= 1;
+        while idx >= c {
+            idx -= c;
+            c = c * (nn - rr) / nn;
+            nn -= 1;
+        }
+        res.push(pool[n - 1 - nn]);
+    }
+    res
+}
+
+fn nth_permutation(pool: ref Vec[i64], r: i64, index: i64) -> Vec[i64] {
+    let n = pool.len();
+    // perm(n, r) = n!/(n-r)!
+    let mut c = 1;
+    let mut i = n - r + 1;
+    while i <= n {
+        c *= i;
+        i += 1;
+    }
+    let mut idx = index;
+    if idx < 0 {
+        idx += c;
+    }
+    let mut result: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < r {
+        result.push(0);
+        k += 1;
+    }
+    let mut q = idx;
+    let mut d = n - r + 1;
+    while d <= n {
+        let i2 = q % d;
+        q /= d;
+        result[n - d] = i2;
+        if q == 0 {
+            d = n + 1;
+        } else {
+            d += 1;
+        }
+    }
+    // map pool.pop(result[k])
+    let mut avail = pool.clone();
+    let mut out: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < r {
+        let pos = result[j];
+        out.push(avail[pos]);
+        avail = remove_at(avail, pos);
+        j += 1;
+    }
+    out
+}
+
+fn remove_at(xs: ref Vec[i64], pos: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < xs.len() {
+        if i != pos {
+            out.push(xs[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+// gray_product (Knuth Algorithm H) over pools, each length >= 2.
+fn gray_product(pools: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let cnt = pools.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    let mut fcur: Vec[i64] = Vec.new();
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cnt {
+        a.push(0);
+        fcur.push(i);
+        o.push(1);
+        i += 1;
+    }
+    fcur.push(cnt);
+    let mut running = true;
+    while running {
+        let mut tup: Vec[i64] = Vec.new();
+        let mut k = 0;
+        while k < cnt {
+            tup.push(pools[k][a[k]]);
+            k += 1;
+        }
+        out.push(tup);
+        let j = fcur[0];
+        fcur[0] = 0;
+        if j == cnt {
+            running = false;
+        } else {
+            a[j] = a[j] + o[j];
+            if a[j] == 0 or a[j] == pools[j].len() - 1 {
+                o[j] = -o[j];
+                fcur[j] = fcur[j + 1];
+                fcur[j + 1] = j + 1;
+            }
+        }
+    }
+    out
+}
+
+fn partial_product(pools: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let cnt = pools.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for p in pools.iter() {
+        if p.is_empty() {
+            return out;
+        }
+    }
+    let mut prod: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cnt {
+        prod.push(pools[i][0]);
+        i += 1;
+    }
+    out.push(prod.clone());
+    let mut k = 0;
+    while k < cnt {
+        let mut j = 1;
+        while j < pools[k].len() {
+            prod[k] = pools[k][j];
+            out.push(prod.clone());
+            j += 1;
+        }
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ math
+
+fn sum_of_squares(xs: ref Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in xs.iter() {
+        let v = *x;
+        s += v * v;
+    }
+    s
+}
+
+fn polynomial_eval(coeffs: ref Vec[i64], x: i64) -> i64 {
+    let mut r = 0;
+    for c in coeffs.iter() {
+        r = r * x + *c;
+    }
+    r
+}
+
+fn polynomial_from_roots(roots: ref Vec[i64]) -> Vec[i64] {
+    let mut poly: Vec[i64] = Vec.new();
+    poly.push(1);
+    for root in roots.iter() {
+        let mut next: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < poly.len() + 1 {
+            next.push(0);
+            i += 1;
+        }
+        let mut k = 0;
+        while k < poly.len() {
+            next[k] += poly[k];
+            next[k + 1] += -*root * poly[k];
+            k += 1;
+        }
+        poly = next;
+    }
+    poly
+}
+
+fn polynomial_derivative(coeffs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = coeffs.len() - 1;
+    let mut i = 0;
+    while i < coeffs.len() - 1 {
+        out.push(coeffs[i] * (n - i));
+        i += 1;
+    }
+    out
+}
+
+fn matmul(a: ref Vec[Vec[i64]], b: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let inner = b.len();
+    let cols = if b.is_empty() { 0 } else { b[0].len() };
+    let mut i = 0;
+    while i < a.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j < cols {
+            let mut acc = 0;
+            let mut k = 0;
+            while k < inner {
+                acc += a[i][k] * b[k][j];
+                k += 1;
+            }
+            row.push(acc);
+            j += 1;
+        }
+        out.push(row);
+        i += 1;
+    }
+    out
+}
+
+fn factor(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut m = n;
+    let mut d = 2;
+    while d * d <= m {
+        while m % d == 0 {
+            out.push(d);
+            m /= d;
+        }
+        d += 1;
+    }
+    if m > 1 {
+        out.push(m);
+    }
+    out
+}
+
+fn is_prime(n: i64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn sieve(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 2;
+    while k < n {
+        if is_prime(k) {
+            out.push(k);
+        }
+        k += 1;
+    }
+    out
+}
+
+fn totient(n: i64) -> i64 {
+    let mut result = n;
+    let mut m = n;
+    let mut p = 2;
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0 {
+                m /= p;
+            }
+            result -= result / p;
+        }
+        p += 1;
+    }
+    if m > 1 {
+        result -= result / m;
+    }
+    result
+}
+
+fn multinomial(xs: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in xs.iter() {
+        total += *x;
+    }
+    let mut r = factorial(total);
+    for x in xs.iter() {
+        r /= factorial(*x);
+    }
+    r
+}
+
+// ------------------------------------------------------------ jobs
+
+fn run(f: ref Vec[String]) -> String {
+    let k = f[0].clone();
+    if k == "chunked" {
+        return jll(chunked(ints(f[1]), num(f[2])));
+    } else if k == "chunked_even" {
+        return jll(chunked_even(ints(f[1]), num(f[2])));
+    } else if k == "distribute" {
+        return jll(distribute(num(f[1]), ints(f[2])));
+    } else if k == "divide" {
+        return jll(divide(num(f[1]), ints(f[2])));
+    } else if k == "sliced" {
+        return jll(chunked(ints(f[1]), num(f[2])));
+    } else if k == "split_at" {
+        return jll(split_at(ints(f[1]), 0, num(f[2]), f[3] == "1"));
+    } else if k == "split_before" {
+        return jll(split_before(ints(f[1]), num(f[2])));
+    } else if k == "split_after" {
+        return jll(split_after(ints(f[1]), num(f[2])));
+    } else if k == "split_when" {
+        let ms = if f[2] == "gt2" { 2 } else { -1 };
+        return jll(split_when(ints(f[1]), ms));
+    } else if k == "split_into" {
+        return jll(split_into(ints(f[1]), ints(f[2])));
+    } else if k == "grouper" {
+        return jlt(grouper(ints(f[1]), num(f[2]), f[3]));
+    } else if k == "partition" {
+        return jll(partition_even(ints(f[1])));
+    } else if k == "bucket" {
+        let xs = ints(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut key = 0;
+        while key < 3 {
+            let mut vals: Vec[i64] = Vec.new();
+            for x in xs.iter() {
+                if ((*x % 3) + 3) % 3 == key {
+                    vals.push(*x);
+                }
+            }
+            if not vals.is_empty() {
+                parts.push(f"({key}, {jl(vals)})");
+            }
+            key += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "windowed" {
+        return jlt(windowed(ints(f[1]), num(f[2]), 0, num(f[3])));
+    } else if k == "substrings" {
+        let cs = chars(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut n = 1;
+        while n <= cs.len() {
+            let mut i = 0;
+            while i + n <= cs.len() {
+                let mut sub: Vec[char] = Vec.new();
+                let mut j = 0;
+                while j < n {
+                    sub.push(cs[i + j]);
+                    j += 1;
+                }
+                parts.push(ct(sub));
+                i += 1;
+            }
+            n += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "substrings_indexes" {
+        let cs = chars(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut n = 1;
+        while n <= cs.len() {
+            let mut i = 0;
+            while i + n <= cs.len() {
+                let mut sub: Vec[char] = Vec.new();
+                let mut j = 0;
+                while j < n {
+                    sub.push(cs[i + j]);
+                    j += 1;
+                }
+                let end = i + n;
+                parts.push(f"('{str_of(sub)}', {i}, {end})");
+                i += 1;
+            }
+            n += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "stagger" {
+        let offs = stagger_offsets(f[2]);
+        return jlt(stagger(ints(f[1]), offs, f[3] == "1", 0));
+    } else if k == "windowed_complete" {
+        let seq = ints(f[1]);
+        let n = num(f[2]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i + n <= seq.len() {
+            let mut beg: Vec[i64] = Vec.new();
+            let mut mid: Vec[i64] = Vec.new();
+            let mut end: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < seq.len() {
+                if j < i {
+                    beg.push(seq[j]);
+                } else if j < i + n {
+                    mid.push(seq[j]);
+                } else {
+                    end.push(seq[j]);
+                }
+                j += 1;
+            }
+            parts.push(f"({jt(beg)}, {jt(mid)}, {jt(end)})");
+            i += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "triplewise" {
+        return jlt(triplewise(ints(f[1])));
+    } else if k == "sliding_window" {
+        return jlt(sliding_window(ints(f[1]), num(f[2])));
+    } else if k == "subslices" {
+        let cs = chars(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < cs.len() {
+            let mut j = i + 1;
+            while j <= cs.len() {
+                let mut sub: Vec[char] = Vec.new();
+                let mut t = i;
+                while t < j {
+                    sub.push(cs[t]);
+                    t += 1;
+                }
+                parts.push(cl(sub));
+                j += 1;
+            }
+            i += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "count_cycle" {
+        let xs = ints(f[1]);
+        let n = num(f[2]);
+        let mut rows: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            for x in xs.iter() {
+                let mut pair: Vec[i64] = Vec.new();
+                pair.push(i);
+                pair.push(*x);
+                rows.push(pair);
+            }
+            i += 1;
+        }
+        return jlt(rows);
+    } else if k == "intersperse" {
+        return jl(intersperse(num(f[1]), ints(f[2]), num(f[3])));
+    } else if k == "padded" {
+        return jl(padded(ints(f[1]), num(f[2]), num(f[3]), f[4] == "1"));
+    } else if k == "repeat_each" {
+        return jl(repeat_each(ints(f[1]), num(f[2])));
+    } else if k == "repeat_last" {
+        let xs = ints(f[1]);
+        let count = num(f[2]);
+        let mut out: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < count {
+            let pos = if i < xs.len() { i } else { xs.len() - 1 };
+            out.push(xs[pos]);
+            i += 1;
+        }
+        return jl(out);
+    } else if k == "ncycles" {
+        return jl(ncycles(ints(f[1]), num(f[2])));
+    } else if k == "mark_ends" {
+        let xs = ints(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < xs.len() {
+            let isf = jb(i == 0);
+            let isl = jb(i == xs.len() - 1);
+            parts.push(f"({isf}, {isl}, {xs[i]})");
+            i += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "padnone" {
+        let xs = ints(f[1]);
+        let count = num(f[2]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < count {
+            if i < xs.len() {
+                parts.push(f"{xs[i]}");
+            } else {
+                parts.push("None".to_string());
+            }
+            i += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "collapse" {
+        return jl(collapse(f[1]));
+    } else if k == "flatten" {
+        return jl(flatten(lists(f[1])));
+    } else if k == "interleave" {
+        return jl(interleave(lists(f[1]), false));
+    } else if k == "interleave_longest" {
+        return jl(interleave(lists(f[1]), true));
+    } else if k == "interleave_evenly" {
+        return jl(interleave_evenly(lists(f[1])));
+    } else if k == "roundrobin" {
+        return jl(roundrobin(lists(f[1])));
+    } else if k == "zip_offset" {
+        return jlt(zip_offset_rows(lists(f[1]), ints(f[2]), f[3] == "1", 0));
+    } else if k == "dotproduct" {
+        return f"{dotproduct(ints(f[1]), ints(f[2]))}";
+    } else if k == "convolve" {
+        return jl(convolve(ints(f[1]), ints(f[2])));
+    } else if k == "sort_together" {
+        return jlt(sort_together(lists(f[1]), num(f[2])));
+    } else if k == "transpose" {
+        return jlt(transpose(lists(f[1])));
+    } else if k == "unzip" {
+        return jll(transpose(lists(f[1])));
+    } else if k == "reshape" {
+        return jlt(reshape(lists(f[1]), num(f[2])));
+    } else if k == "ilen" {
+        let xs = ints(f[1]);
+        return f"{xs.len()}";
+    } else if k == "take" {
+        return jl(take(num(f[1]), ints(f[2])));
+    } else if k == "first" {
+        let xs = ints(f[1]);
+        if xs.is_empty() {
+            return f"{num(f[2])}";
+        }
+        return f"{xs[0]}";
+    } else if k == "last" {
+        let xs = ints(f[1]);
+        if xs.is_empty() {
+            return f"{num(f[2])}";
+        }
+        return f"{xs[xs.len() - 1]}";
+    } else if k == "nth" {
+        let xs = ints(f[1]);
+        let i = num(f[2]);
+        if i < xs.len() {
+            return f"{xs[i]}";
+        }
+        return f"{num(f[3])}";
+    } else if k == "nth_or_last" {
+        let xs = ints(f[1]);
+        let i = num(f[2]);
+        if i < xs.len() {
+            return f"{xs[i]}";
+        }
+        return f"{xs[xs.len() - 1]}";
+    } else if k == "only" {
+        let xs = ints(f[1]);
+        if xs.is_empty() {
+            return f"{num(f[2])}";
+        } else if xs.len() == 1 {
+            return f"{xs[0]}";
+        }
+        return f"Expected exactly one item in iterable, but got {xs[0]}, {xs[1]}, and perhaps more.";
+    } else if k == "one" {
+        let xs = ints(f[1]);
+        if xs.is_empty() {
+            return "too few items in iterable (expected 1)".to_string();
+        } else if xs.len() == 1 {
+            return f"{xs[0]}";
+        }
+        return f"Expected exactly one item in iterable, but got {xs[0]}, {xs[1]}, and perhaps more.";
+    } else if k == "all_equal" {
+        return jb(all_equal(ints(f[1])));
+    } else if k == "all_unique" {
+        return jb(all_unique(ints(f[1])));
+    } else if k == "first_true" {
+        let xs = ints(f[1]);
+        for x in xs.iter() {
+            if *x % 2 == 1 {
+                return f"{x}";
+            }
+        }
+        return "-1".to_string();
+    } else if k == "quantify" {
+        return f"{quantify_even(ints(f[1]))}";
+    } else if k == "is_sorted" {
+        return jb(is_sorted(ints(f[1]), f[2] == "1"));
+    } else if k == "minmax" {
+        let xs = ints(f[1]);
+        let mut lo = xs[0];
+        let mut hi = xs[0];
+        for x in xs.iter() {
+            if *x < lo { lo = *x; }
+            if *x > hi { hi = *x; }
+        }
+        let mut p: Vec[i64] = Vec.new();
+        p.push(lo);
+        p.push(hi);
+        return jt(p);
+    } else if k == "iequals" {
+        let ls = lists(f[1]);
+        let mut eq = true;
+        let mut i = 1;
+        while i < ls.len() {
+            if ls[i].len() != ls[0].len() {
+                eq = false;
+            } else {
+                let mut j = 0;
+                while j < ls[i].len() {
+                    if ls[i][j] != ls[0][j] {
+                        eq = false;
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+        return jb(eq);
+    } else if k == "map_reduce" {
+        let rows = map_reduce_sum(ints(f[1]));
+        return jlt(rows);
+    } else if k == "exactly_n" {
+        let xs = ints(f[1]);
+        return jb(count_nz(xs) == num(f[2]));
+    } else if k == "run_length_encode" {
+        let cs = chars(f[1]);
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < cs.len() {
+            let c = cs[i];
+            let mut cnt = 0;
+            while i < cs.len() and cs[i] == c {
+                cnt += 1;
+                i += 1;
+            }
+            parts.push(f"('{c}', {cnt})");
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "run_length_decode" {
+        let cs = chars(f[1]);
+        let mut out: Vec[char] = Vec.new();
+        let mut i = 0;
+        while i + 1 < cs.len() {
+            let c = cs[i];
+            let n = ((cs[i + 1] as u32) as i64) - (('0' as u32) as i64);
+            let mut j = 0;
+            while j < n {
+                out.push(c);
+                j += 1;
+            }
+            i += 2;
+        }
+        return cl(out);
+    } else if k == "consecutive_groups" {
+        return jll(consecutive_groups(ints(f[1])));
+    } else if k == "locate" {
+        return jl(locate(ints(f[1])));
+    } else if k == "rlocate" {
+        return jl(rlocate(ints(f[1])));
+    } else if k == "replace" {
+        return jl(replace(ints(f[1]), num(f[2]), ints(f[3]), num(f[4])));
+    } else if k == "longest_common_prefix" {
+        let mut strs: Vec[Vec[char]] = Vec.new();
+        for part in f[1].split(";") {
+            strs.push(part.chars().collect());
+        }
+        let mut out: Vec[char] = Vec.new();
+        if not strs.is_empty() {
+            let mut col = 0;
+            let mut going = true;
+            while going {
+                if col >= strs[0].len() {
+                    going = false;
+                } else {
+                    let c = strs[0][col];
+                    let mut same = true;
+                    for s in strs.iter() {
+                        if col >= s.len() or s[col] != c {
+                            same = false;
+                        }
+                    }
+                    if same {
+                        out.push(c);
+                        col += 1;
+                    } else {
+                        going = false;
+                    }
+                }
+            }
+        }
+        return cl(out);
+    } else if k == "argminmax" {
+        let xs = ints(f[1]);
+        let mut amin = 0;
+        let mut amax = 0;
+        let mut i = 1;
+        while i < xs.len() {
+            if xs[i] < xs[amin] { amin = i; }
+            if xs[i] > xs[amax] { amax = i; }
+            i += 1;
+        }
+        let mut p: Vec[i64] = Vec.new();
+        p.push(amin);
+        p.push(amax);
+        return jt(p);
+    } else if k == "running_max" {
+        return jl(running_max(ints(f[1])));
+    } else if k == "running_min" {
+        return jl(running_min(ints(f[1])));
+    } else if k == "unique_everseen" {
+        return jl(unique_everseen(ints(f[1])));
+    } else if k == "unique_justseen" {
+        return jl(unique_justseen(ints(f[1])));
+    } else if k == "unique_in_window" {
+        return jl(unique_in_window(ints(f[1]), num(f[2])));
+    } else if k == "duplicates_everseen" {
+        return jl(duplicates_everseen(ints(f[1])));
+    } else if k == "duplicates_justseen" {
+        return jl(duplicates_justseen(ints(f[1])));
+    } else if k == "classify_unique" {
+        let cs = chars(f[1]);
+        let mut seen: Vec[char] = Vec.new();
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        let mut prev = ' ';
+        while i < cs.len() {
+            let c = cs[i];
+            let just = i == 0 or c != prev;
+            let mut found = false;
+            for s in seen.iter() {
+                if *s == c { found = true; }
+            }
+            let ever = not found;
+            if ever {
+                seen.push(c);
+            }
+            parts.push(f"('{c}', {jb(just)}, {jb(ever)})");
+            prev = c;
+            i += 1;
+        }
+        return f"[{parts.join(", ")}]";
+    } else if k == "powerset" {
+        return jlt(powerset(ints(f[1])));
+    } else if k == "partitions" {
+        let cs = chars(f[1]);
+        return partitions_repr(cs);
+    } else if k == "set_partitions" {
+        let cs = chars(f[1]);
+        let kk = num(f[2]);
+        let mut all: Vec[Vec[Vec[char]]] = Vec.new();
+        if kk < 0 {
+            let mut t = 1;
+            while t <= cs.len() {
+                set_partitions_helper(cs, t, mut all);
+                t += 1;
+            }
+        } else {
+            if kk <= cs.len() {
+                set_partitions_helper(cs, kk, mut all);
+            }
+        }
+        return partitionset_repr(all);
+    } else if k == "circular_shifts" {
+        return jlt(circular_shifts(ints(f[1]), num(f[2])));
+    } else if k == "distinct_permutations" {
+        let r0 = if f[2] == "-1" { ints(f[1]).len() } else { num(f[2]) };
+        return jlt(distinct_permutations(ints(f[1]), r0));
+    } else if k == "distinct_combinations" {
+        return jlt(distinct_combinations(ints(f[1]), num(f[2])));
+    } else if k == "nth_product" {
+        return jt(nth_product(num(f[1]), lists(f[2])));
+    } else if k == "nth_combination" {
+        return jt(nth_combination(ints(f[1]), num(f[2]), num(f[3])));
+    } else if k == "nth_permutation" {
+        return jt(nth_permutation(ints(f[1]), num(f[2]), num(f[3])));
+    } else if k == "gray_product" {
+        return jlt(gray_product(lists(f[1])));
+    } else if k == "partial_product" {
+        return jlt(partial_product(lists(f[1])));
+    } else if k == "sum_of_squares" {
+        return f"{sum_of_squares(ints(f[1]))}";
+    } else if k == "polynomial_eval" {
+        return f"{polynomial_eval(ints(f[1]), num(f[2]))}";
+    } else if k == "polynomial_from_roots" {
+        return jl(polynomial_from_roots(ints(f[1])));
+    } else if k == "polynomial_derivative" {
+        return jl(polynomial_derivative(ints(f[1])));
+    } else if k == "matmul" {
+        return jlt(matmul(lists(f[1]), lists(f[2])));
+    } else if k == "factor" {
+        return jl(factor(num(f[1])));
+    } else if k == "is_prime" {
+        return jb(is_prime(num(f[1])));
+    } else if k == "sieve" {
+        return jl(sieve(num(f[1])));
+    } else if k == "totient" {
+        return f"{totient(num(f[1]))}";
+    } else if k == "multinomial" {
+        return f"{multinomial(ints(f[1]))}";
+    }
+    f"unknown job {k}"
+}
+
+fn stagger_offsets(code: ref String) -> Vec[i64] {
+    let cs: Vec[char] = code.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == 'm' {
+            out.push(-(((cs[i + 1] as u32) as i64) - (('0' as u32) as i64)));
+            i += 2;
+        } else {
+            out.push(((cs[i] as u32) as i64) - (('0' as u32) as i64));
+            i += 1;
+        }
+    }
+    out
+}
+
+// partitions: order-preserving splits, driven by the subsets of cut points.
+fn partitions_repr(seq: ref Vec[char]) -> String {
+    let n = seq.len();
+    // cut-point positions are 1..n-1; enumerate their powerset in the same
+    // order as powerset(range(1, n)): r ascending, lexicographic.
+    let mut cutsets: Vec[Vec[i64]] = Vec.new();
+    let mut r = 0;
+    while r <= n - 1 {
+        let mut idx: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < r {
+            idx.push(1 + i);
+            i += 1;
+        }
+        if r == 0 {
+            cutsets.push(Vec.new());
+        } else {
+            let mut done = false;
+            while not done {
+                cutsets.push(idx.clone());
+                let mut kk = r - 1;
+                let mut moved = false;
+                while kk >= 0 and not moved {
+                    // max value for position kk is (n-1) - (r-1-kk)
+                    if idx[kk] != (n - 1) - (r - 1 - kk) {
+                        idx[kk] += 1;
+                        let mut m = kk + 1;
+                        while m < r {
+                            idx[m] = idx[m - 1] + 1;
+                            m += 1;
+                        }
+                        moved = true;
+                    } else {
+                        kk -= 1;
+                    }
+                }
+                if not moved {
+                    done = true;
+                }
+            }
+        }
+        r += 1;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for cuts in cutsets.iter() {
+        let mut blocks: Vec[String] = Vec.new();
+        let mut prev = 0;
+        let mut ci = 0;
+        while ci <= cuts.len() {
+            let stop = if ci < cuts.len() { cuts[ci] } else { n };
+            let mut b = String.new();
+            let mut t = prev;
+            while t < stop {
+                b.push(seq[t]);
+                t += 1;
+            }
+            blocks.push(f"'{b}'");
+            prev = stop;
+            ci += 1;
+        }
+        parts.push(f"[{blocks.join(", ")}]");
+    }
+    f"[{parts.join(", ")}]"
+}
+
+fn set_partitions_helper(seq: ref Vec[char], k: i64, out: mut ref Vec[Vec[Vec[char]]]) {
+    let n = seq.len();
+    if k == 1 {
+        let mut block: Vec[char] = Vec.new();
+        for c in seq.iter() {
+            block.push(*c);
+        }
+        let mut part: Vec[Vec[char]] = Vec.new();
+        part.push(block);
+        out.push(part);
+    } else if n == k {
+        let mut part: Vec[Vec[char]] = Vec.new();
+        for c in seq.iter() {
+            let mut b: Vec[char] = Vec.new();
+            b.push(*c);
+            part.push(b);
+        }
+        out.push(part);
+    } else {
+        let e = seq[0];
+        let mut rest: Vec[char] = Vec.new();
+        let mut i = 1;
+        while i < n {
+            rest.push(seq[i]);
+            i += 1;
+        }
+        // [[e], *p] for p in helper(rest, k-1)
+        let mut sub1: Vec[Vec[Vec[char]]] = Vec.new();
+        set_partitions_helper(rest, k - 1, mut sub1);
+        for p in sub1.iter() {
+            let mut part: Vec[Vec[char]] = Vec.new();
+            let mut eb: Vec[char] = Vec.new();
+            eb.push(e);
+            part.push(eb);
+            for block in p.iter() {
+                part.push(block.clone());
+            }
+            out.push(part);
+        }
+        // insert e into each block of p for p in helper(rest, k)
+        let mut sub2: Vec[Vec[Vec[char]]] = Vec.new();
+        set_partitions_helper(rest, k, mut sub2);
+        for p in sub2.iter() {
+            let mut bi = 0;
+            while bi < p.len() {
+                let mut part: Vec[Vec[char]] = Vec.new();
+                let mut j = 0;
+                while j < p.len() {
+                    if j == bi {
+                        let mut nb: Vec[char] = Vec.new();
+                        nb.push(e);
+                        for c in p[j].iter() {
+                            nb.push(*c);
+                        }
+                        part.push(nb);
+                    } else {
+                        part.push(p[j].clone());
+                    }
+                    j += 1;
+                }
+                out.push(part);
+                bi += 1;
+            }
+        }
+    }
+}
+
+fn partitionset_repr(all: ref Vec[Vec[Vec[char]]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for part in all.iter() {
+        let mut blocks: Vec[String] = Vec.new();
+        for block in part.iter() {
+            blocks.push(f"'{str_of(block)}'");
+        }
+        parts.push(f"[{blocks.join(", ")}]");
+    }
+    f"[{parts.join(", ")}]"
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        out.push_str(f"  {run(f)}\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("chunked\t1,2,3,4,5,6\t3\t0\n");
+    s.push_str("chunked\t1,2,3,4,5\t3\t0\n");
+    s.push_str("chunked\t1,2,3,4,5,6\t3\t1\n");
+    s.push_str("chunked\t-\t3\t0\n");
+    s.push_str("chunked_even\t1,2,3,4,5,6,7\t3\n");
+    s.push_str("chunked_even\t1,2,3,4,5,6\t3\n");
+    s.push_str("chunked_even\t1,2,3\t5\n");
+    s.push_str("chunked_even\t-\t3\n");
+    s.push_str("distribute\t3\t1,2,3,4,5,6,7\n");
+    s.push_str("distribute\t2\t1,2,3,4,5,6\n");
+    s.push_str("distribute\t5\t1,2,3\n");
+    s.push_str("divide\t3\t1,2,3,4,5,6,7\n");
+    s.push_str("divide\t2\t1,2,3,4,5,6\n");
+    s.push_str("divide\t5\t1,2,3\n");
+    s.push_str("sliced\t1,2,3,4,5,6,7,8\t3\n");
+    s.push_str("split_at\t1,2,3,0,4,5,0,6\t-1\t0\n");
+    s.push_str("split_at\t1,2,3,0,4,5,0,6\t1\t0\n");
+    s.push_str("split_at\t1,2,3,0,4,5,0,6\t-1\t1\n");
+    s.push_str("split_before\t1,2,3,1,2,1\t1\n");
+    s.push_str("split_after\t1,2,3,1,2,1\t1\n");
+    s.push_str("split_when\t1,2,3,3,2,5,2,4,2\tgt\n");
+    s.push_str("split_when\t1,2,3,3,2,5,2,4,2\tgt2\n");
+    s.push_str("split_into\t1,2,3,4,5,6\t1,2,3\n");
+    s.push_str("split_into\t1,2,3,4\t1,2,3,4\n");
+    s.push_str("split_into\t1,2,3,4,5,6\t2,3\n");
+    s.push_str("grouper\t1,2,3,4,5,6\t3\tfill\n");
+    s.push_str("grouper\t1,2,3,4,5\t3\tfill\n");
+    s.push_str("grouper\t1,2,3,4,5\t3\tignore\n");
+    s.push_str("grouper\t1,2,3,4,5,6\t3\tstrict\n");
+    s.push_str("partition\t1,2,3,4,5,6,7,8\n");
+    s.push_str("bucket\t10,21,32,13,24,5,16\n");
+    s.push_str("windowed\t1,2,3,4,5\t3\t1\n");
+    s.push_str("windowed\t1,2,3,4,5\t3\t2\n");
+    s.push_str("windowed\t1,2,3,4,5\t2\t3\n");
+    s.push_str("windowed\t1,2,3\t5\t1\n");
+    s.push_str("substrings\tabc\n");
+    s.push_str("substrings_indexes\tabc\n");
+    s.push_str("stagger\t0,1,2,3\tm101\t0\n");
+    s.push_str("stagger\t0,1,2,3,4,5,6,7\t024\t0\n");
+    s.push_str("stagger\t0,1,2,3\tm101\t1\n");
+    s.push_str("windowed_complete\t0,1,2,3,4,5,6\t3\n");
+    s.push_str("triplewise\t1,2,3,4,5\n");
+    s.push_str("sliding_window\t1,2,3,4,5\t3\n");
+    s.push_str("subslices\tabc\n");
+    s.push_str("count_cycle\t1,2,3\t2\n");
+    s.push_str("intersperse\t0\t1,2,3,4,5\t1\n");
+    s.push_str("intersperse\t0\t1,2,3,4,5\t2\n");
+    s.push_str("padded\t1,2,3\t0\t6\t0\n");
+    s.push_str("padded\t1,2,3\t0\t4\t1\n");
+    s.push_str("repeat_each\t1,2,3\t2\n");
+    s.push_str("repeat_last\t1,2,3\t6\n");
+    s.push_str("ncycles\t1,2,3\t3\n");
+    s.push_str("mark_ends\t1,2,3\n");
+    s.push_str("mark_ends\t7\n");
+    s.push_str("padnone\t1,2,3\t5\n");
+    s.push_str("collapse\t1,[2,[3,4],5],6\n");
+    s.push_str("collapse\t[1,[2,[3,[4,[5]]]]]\n");
+    s.push_str("flatten\t1,2;3,4;;5,6,7\n");
+    s.push_str("interleave\t1,2,3;4,5,6;7,8,9\n");
+    s.push_str("interleave\t1,2;3,4,5,6;7\n");
+    s.push_str("interleave_longest\t1,2;3,4,5,6;7\n");
+    s.push_str("interleave_evenly\t1,2,3,4,5;6,7\n");
+    s.push_str("interleave_evenly\t1,2,3;4,5;6,7,8\n");
+    s.push_str("roundrobin\t1,2,3;4;5,6\n");
+    s.push_str("zip_offset\t1,2,3;4,5,6\t0,1\t0\t0\n");
+    s.push_str("zip_offset\t1,2,3;4,5,6\t0,1\t1\t0\n");
+    s.push_str("dotproduct\t1,2,3\t4,5,6\n");
+    s.push_str("convolve\t1,2,3\t2,1\n");
+    s.push_str("sort_together\t3,1,2;7,8,9\t0\n");
+    s.push_str("sort_together\t3,1,2;0,1,0\t1\n");
+    s.push_str("transpose\t1,2,3;4,5,6\n");
+    s.push_str("unzip\t1,4;2,5;3,6\n");
+    s.push_str("reshape\t0,1;2,3;4,5\t3\n");
+    s.push_str("ilen\t1,2,3,4,5\n");
+    s.push_str("take\t3\t1,2,3,4,5\n");
+    s.push_str("take\t9\t1,2,3\n");
+    s.push_str("first\t1,2,3\t-1\n");
+    s.push_str("first\t-\t-1\n");
+    s.push_str("last\t1,2,3\t-1\n");
+    s.push_str("last\t-\t-1\n");
+    s.push_str("nth\t1,2,3,4\t2\t-1\n");
+    s.push_str("nth\t1,2,3,4\t9\t-1\n");
+    s.push_str("nth_or_last\t1,2,3\t1\n");
+    s.push_str("nth_or_last\t1,2,3\t9\n");
+    s.push_str("only\t5\t-1\n");
+    s.push_str("only\t-\t-1\n");
+    s.push_str("only\t5,6\t-1\n");
+    s.push_str("one\t5\n");
+    s.push_str("one\t-\n");
+    s.push_str("one\t5,6\n");
+    s.push_str("all_equal\t2,2,2\n");
+    s.push_str("all_equal\t2,2,3\n");
+    s.push_str("all_equal\t-\n");
+    s.push_str("all_unique\t1,2,3\n");
+    s.push_str("all_unique\t1,2,2\n");
+    s.push_str("first_true\t2,4,6,7,8\todd\n");
+    s.push_str("first_true\t2,4,6\todd\n");
+    s.push_str("quantify\t1,2,3,4,5,6\teven\n");
+    s.push_str("is_sorted\t1,2,2,3\t0\n");
+    s.push_str("is_sorted\t1,2,2,3\t1\n");
+    s.push_str("is_sorted\t3,2,1\t0\n");
+    s.push_str("minmax\t3,1,5,2,4\n");
+    s.push_str("iequals\t1,2,3;1,2,3\n");
+    s.push_str("iequals\t1,2,3;1,3,2\n");
+    s.push_str("iequals\t1,2,3;1,2\n");
+    s.push_str("map_reduce\t10,11,12,13,14,15\n");
+    s.push_str("exactly_n\t1,0,1,0,1\t2\tnz\n");
+    s.push_str("exactly_n\t1,0,1,0,1\t3\tnz\n");
+    s.push_str("run_length_encode\tabbcccdddd\n");
+    s.push_str("run_length_decode\ta1b2c3\n");
+    s.push_str("consecutive_groups\t1,10,11,12,20,30,31,32,33,40\n");
+    s.push_str("locate\t0,1,1,0,1\tnz\n");
+    s.push_str("rlocate\t0,1,1,0,1\tnz\n");
+    s.push_str("replace\t1,1,0,1,1,0,1,1\t0\t8,9\t-1\n");
+    s.push_str("replace\t1,1,0,1,1,0,1,1,0\t0\t7\t2\n");
+    s.push_str("longest_common_prefix\tflower;flow;flight\n");
+    s.push_str("longest_common_prefix\tdog;cat\n");
+    s.push_str("argminmax\t3,1,4,1,5,9,2,6\n");
+    s.push_str("running_max\t1,3,2,5,4,6\n");
+    s.push_str("running_min\t5,3,4,1,2,0\n");
+    s.push_str("unique_everseen\t1,2,2,3,3,3,1\n");
+    s.push_str("unique_justseen\t1,2,2,3,3,3,1\n");
+    s.push_str("unique_in_window\t0,1,0,2,3,0\t3\n");
+    s.push_str("duplicates_everseen\t3,3,1,2,2,3\n");
+    s.push_str("duplicates_justseen\t3,3,1,2,2,3\n");
+    s.push_str("classify_unique\totto\n");
+    s.push_str("powerset\t1,2,3\n");
+    s.push_str("partitions\tabc\n");
+    s.push_str("set_partitions\tabc\t-1\n");
+    s.push_str("set_partitions\tabcd\t2\n");
+    s.push_str("circular_shifts\t0,1,2,3\t1\n");
+    s.push_str("circular_shifts\t0,1,2,3\t2\n");
+    s.push_str("distinct_permutations\t1,0,1\t-1\n");
+    s.push_str("distinct_permutations\t0,1,2\t2\n");
+    s.push_str("distinct_combinations\t0,0,1\t2\n");
+    s.push_str("nth_product\t8\t0,1;0,1;0,1;0,1\n");
+    s.push_str("nth_combination\t0,1,2,3,4\t3\t5\n");
+    s.push_str("nth_permutation\t0,1,2,3,4\t2\t5\n");
+    s.push_str("gray_product\t1,2;3,4\n");
+    s.push_str("partial_product\t1,2;3;4,5,6\n");
+    s.push_str("sum_of_squares\t1,2,3,4\n");
+    s.push_str("polynomial_eval\t1,2,3\t2\n");
+    s.push_str("polynomial_from_roots\t1,2,3\n");
+    s.push_str("polynomial_derivative\t3,2,1\n");
+    s.push_str("matmul\t1,2;3,4\t5,6;7,8\n");
+    s.push_str("factor\t360\n");
+    s.push_str("is_prime\t97\n");
+    s.push_str("is_prime\t91\n");
+    s.push_str("sieve\t30\n");
+    s.push_str("totient\t36\n");
+    s.push_str("multinomial\t2,1,1\n");
+    s
+}
