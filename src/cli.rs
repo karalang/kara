@@ -1795,6 +1795,16 @@ impl Pipeline {
             if let Some(e) = self.effects.as_mut() {
                 e.errors
                     .retain(|e| e.kind != crate::effectchecker::EffectErrorKind::DropBodyMayPanic);
+                // B-2026-10-22-3: a local written in a `par` branch is a
+                // conflict only when another branch uses it (§11.2), which
+                // the MIR effect pass reports with both branches named. The
+                // legacy rule refused every such write, one branch alone
+                // included, and pointed at `Arc`, `RwLock` and
+                // `#[thread_local]`.
+                e.errors.retain(|e| {
+                    e.kind != crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar
+                        || !e.message.starts_with("local let mut '")
+                });
             }
         }
         // Populate `Program.callee_effectful` from the effect-check result so
@@ -1888,6 +1898,18 @@ impl Pipeline {
                 .notes
                 .retain(|n| n.kind != crate::ownership::OwnershipErrorKind::RcFallbackNote);
             ownership.errors.extend(core);
+            // §11.2/§11.3 (B-2026-10-22-3): two branches that use one place
+            // conflict only as the MIR effect pass decides, and it names
+            // both branches; a `shared` handle in a branch is the
+            // typechecker's E_NOT_CROSS_TASK. The legacy per-binding count
+            // (and its `sync struct` migration advice) is not the v2 rule.
+            ownership.errors.retain(|e| {
+                !matches!(
+                    e.kind,
+                    crate::ownership::OwnershipErrorKind::ConcurrentPlainStruct { .. }
+                        | crate::ownership::OwnershipErrorKind::ConcurrentSharedStruct { .. }
+                )
+            });
             let non_moves = &ownership.core_non_move_sources;
             let ref_copies = &self.typed.as_ref().unwrap().core_ref_copy_spans;
             ownership.errors.retain(|e| {

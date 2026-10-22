@@ -17780,8 +17780,12 @@ fn test_cache_info_help_flag() {
 // the struct has any `mut` fields. Cross-checks the cli emitter wires
 // the sibling `error_fix_diffs` map through correctly.
 
+/// v2 `karac check` (core §11.3, B-2026-10-19-46): a `shared` handle in a
+/// `par` branch is `E_NOT_CROSS_TASK`. The legacy per-binding
+/// `E_CONCURRENT_SHARED_STRUCT` and its `Mutex[` fix-diff are not the v2
+/// rule, so check no longer emits them.
 #[test]
-fn test_json_concurrent_shared_struct_carries_fix_diff_array() {
+fn test_json_par_shared_handle_is_not_cross_task() {
     let tmp_dir = std::env::temp_dir();
     let fixture = tmp_dir.join("karac_l197_shared_fix_diff.kara");
     std::fs::write(
@@ -17791,10 +17795,7 @@ fn test_json_concurrent_shared_struct_carries_fix_diff_array() {
          fn use_b(c: Counter) { }\n\
          fn main() {\n\
              let c = Counter { val: 0, count: 0 };\n\
-             par {\n\
-                 use_a(c);\n\
-                 use_b(c);\n\
-             }\n\
+             par { use_a(c), use_b(c) };\n\
          }\n",
     )
     .expect("write fixture");
@@ -17806,25 +17807,20 @@ fn test_json_concurrent_shared_struct_carries_fix_diff_array() {
     let _ = std::fs::remove_file(&fixture);
     assert!(!out.status.success());
     assert!(
-        stdout.contains("E_CONCURRENT_SHARED_STRUCT"),
-        "expected E_CONCURRENT_SHARED_STRUCT code in JSON; got: {stdout}",
+        stdout.contains("E_NOT_CROSS_TASK") && stdout.contains("cannot enter a `par` branch"),
+        "expected E_NOT_CROSS_TASK in JSON; got: {stdout}",
     );
     assert!(
-        stdout.contains("\"fix_diff\":["),
-        "expected fix_diff array in JSON envelope; got: {stdout}",
-    );
-    assert!(
-        stdout.contains("\"text\":\"Mutex[\""),
-        "expected `Mutex[` prefix insertion edit; got: {stdout}",
-    );
-    assert!(
-        stdout.contains("\"text\":\"]\""),
-        "expected `]` suffix insertion edit; got: {stdout}",
+        !stdout.contains("E_CONCURRENT_SHARED_STRUCT"),
+        "the legacy diagnostic is not the v2 rule; got: {stdout}",
     );
 }
 
+/// v2 `karac check` (core §11.2, B-2026-10-22-3): moving one plain value
+/// into two `par` branches is a use after move, not the legacy
+/// `E_CONCURRENT_PLAIN_STRUCT` with its `sync struct` migration.
 #[test]
-fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
+fn test_json_par_plain_struct_moved_into_two_branches_is_a_move_error() {
     let tmp_dir = std::env::temp_dir();
     let fixture = tmp_dir.join("karac_l197_plain_fix_diff.kara");
     std::fs::write(
@@ -17834,10 +17830,7 @@ fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
          fn use_b(s: own State) { }\n\
          fn main() {\n\
              let s = State { id: 0, count: 0 };\n\
-             par {\n\
-                 use_a(s);\n\
-                 use_b(s);\n\
-             }\n\
+             par { use_a(s), use_b(s) };\n\
          }\n",
     )
     .expect("write fixture");
@@ -17849,12 +17842,12 @@ fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
     let _ = std::fs::remove_file(&fixture);
     assert!(!out.status.success());
     assert!(
-        stdout.contains("E_CONCURRENT_PLAIN_STRUCT"),
-        "expected E_CONCURRENT_PLAIN_STRUCT code in JSON; got: {stdout}",
+        stdout.contains("\"code\":\"E0500\""),
+        "expected a use-after-move error in JSON; got: {stdout}",
     );
     assert!(
-        stdout.contains("\"fix_diff\":["),
-        "expected fix_diff array in JSON envelope; got: {stdout}",
+        !stdout.contains("E_CONCURRENT_PLAIN_STRUCT"),
+        "the legacy diagnostic is not the v2 rule; got: {stdout}",
     );
 }
 

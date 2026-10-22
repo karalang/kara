@@ -154,11 +154,22 @@ impl<'a> super::TypeChecker<'a> {
     /// the "check fires at five sites" commitment in design.md § Structured
     /// Concurrency Lifetime Guarantees.
     pub(super) fn check_cross_task_safe_par_block(&mut self, block: &Block, par_span: &Span) {
+        self.check_cross_task_safe_branch(block, HashSet::new(), par_span);
+    }
+
+    /// [`Self::check_cross_task_safe_par_block`] for a branch body whose own
+    /// bindings `bound` (a `par for`'s item pattern) are not captures.
+    pub(super) fn check_cross_task_safe_branch(
+        &mut self,
+        block: &Block,
+        bound: HashSet<String>,
+        par_span: &Span,
+    ) {
         let outer_snapshot = self.flatten_local_scope_snapshot();
 
         let mut captures: Vec<(String, Span)> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        let mut shadow_stack: Vec<HashSet<String>> = vec![HashSet::new()];
+        let mut shadow_stack: Vec<HashSet<String>> = vec![bound];
         collect_captures_block(
             block,
             &outer_snapshot,
@@ -176,7 +187,31 @@ impl<'a> super::TypeChecker<'a> {
                 // the branch-precise ownership phase's territory (see the
                 // doc comment above). Deferring here avoids both double-
                 // reporting and a false rejection of the sole-branch case.
+                //
+                // Core semantics §11.3 has no such carve-out: a shared
+                // handle may not enter a `par` branch at all, moved or not,
+                // and a `frozen` one may (B-2026-10-19-46).
                 if path.fix_it == CrossTaskUnsafeFixIt::SharedToPar {
+                    if !self.cli_lint_overrides.strict_core
+                        || self.current_fn_frozen_params.contains(&name)
+                        || self.current_fn_frozen_lets.contains(&name)
+                    {
+                        continue;
+                    }
+                    self.type_error(
+                        format!(
+                            "error[E_NOT_CROSS_TASK]: `{name}` (a `shared` handle of type `{ty}`) cannot enter a `par` \
+                             branch (core semantics §11.3: a branch takes owned values, `frozen` \
+                             and `sync` handles, and views, and a `shared` handle is none of \
+                             them)\n\
+                             help: declare `{leaf}` as a `sync` type, or read what the \
+                             branches need out of `{name}` before the `par`",
+                            ty = type_display(ty),
+                            leaf = path.unsafe_leaf,
+                        ),
+                        anchor_span,
+                        TypeErrorKind::CrossTaskUnsafeCapture,
+                    );
                     continue;
                 }
                 self.emit_cross_task_unsafe(

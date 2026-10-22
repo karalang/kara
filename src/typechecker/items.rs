@@ -2311,6 +2311,7 @@ impl<'a> super::TypeChecker<'a> {
         // restored on the same terms as the flag above so a nested item walk
         // (an impl method, a trait default body) does not inherit them.
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
+        let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
         let saved_frozen_params = std::mem::replace(
             &mut self.current_fn_frozen_params,
             f.params
@@ -2385,6 +2386,7 @@ impl<'a> super::TypeChecker<'a> {
         self.iter_lets = saved_iter_lets;
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
+        self.current_fn_frozen_lets = saved_frozen_lets;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
         self.current_fn_mut_self = saved_mut_self;
@@ -8235,6 +8237,15 @@ impl<'a> super::TypeChecker<'a> {
                 ty,
                 value,
             } => {
+                // `let g = freeze root;` binds a `frozen` handle, which may
+                // enter a `par` branch (core §11.3; B-2026-10-19-46).
+                if self
+                    .program
+                    .freeze_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&value.span))
+                {
+                    self.current_fn_frozen_lets.extend(pattern.binding_names());
+                }
                 let mut expected_ty = if let Some(ty_expr) = ty {
                     // Lower with the enclosing fn's DIM params in scope so a
                     // shape param `let p: Tensor[f32, [D]]` resolves `D`; type

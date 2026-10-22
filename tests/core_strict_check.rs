@@ -11217,3 +11217,102 @@ fn an_arrays_in_place_methods_and_from_fn_are_checked() {
         "Array.from_fn builds 4 elements, but the array has 3",
     );
 }
+
+/// Core §11.2 (B-2026-10-22-3): a local only one `par` branch writes is no
+/// conflict, and a real one is reported once, naming both branches, with
+/// none of the legacy `Arc` / `RwLock` / `#[thread_local]` advice.
+#[test]
+fn a_par_branch_may_write_a_local_no_other_branch_uses() {
+    accepted(
+        "par-lone-writer",
+        "fn main() {\n\
+         \x20   let mut v: Vec[i64] = Vec.new();\n\
+         \x20   let mut n = 0;\n\
+         \x20   par {\n\
+         \x20       v.push(1),\n\
+         \x20       { n = 3; },\n\
+         \x20   };\n\
+         \x20   println(f\"{v.len()} {n}\");\n\
+         }\n",
+    );
+    let src = "fn main() {\n\
+               \x20   let mut v: Vec[i64] = Vec.new();\n\
+               \x20   par {\n\
+               \x20       v.push(1),\n\
+               \x20       v.push(2),\n\
+               \x20   };\n\
+               \x20   println(f\"{v.len()}\");\n\
+               }\n";
+    let (dir, path) = fixture("par-two-writers", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("branches 1 and 2 of the `par` conflict"),
+        "{err}"
+    );
+    assert!(
+        err.contains("1 error(s) found"),
+        "one error, not three: {err}"
+    );
+    for stale in ["Arc", "RwLock", "thread_local", "sync struct"] {
+        assert!(!err.contains(stale), "no `{stale}` advice: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Core §11.3 (B-2026-10-19-46, pin 6.3-shared-into-par): a `shared` handle
+/// may not enter a `par` branch or a `par for` iteration, one branch alone
+/// included; a `frozen` parameter or `freeze` binding may.
+#[test]
+fn a_shared_handle_cannot_enter_a_par_branch() {
+    let shared = "shared struct S { mut n: i64 }\n\
+                  fn get(s: S) -> i64 { s.n }\n";
+    rejected(
+        "shared-into-par",
+        &format!(
+            "{shared}fn main() {{\n\
+             \x20   let s = S {{ n: 1 }};\n\
+             \x20   let (a, b) = par {{ get(s), get(s) }};\n\
+             \x20   println(f\"{{a + b}}\");\n\
+             }}\n"
+        ),
+        "`s` (a `shared` handle of type `S`) cannot enter a `par` branch",
+    );
+    rejected(
+        "shared-into-one-branch",
+        &format!(
+            "{shared}fn main() {{\n\
+             \x20   let s = S {{ n: 1 }};\n\
+             \x20   let (a, b) = par {{ s.n + 1, 2 }};\n\
+             \x20   println(f\"{{a + b}}\");\n\
+             }}\n"
+        ),
+        "cannot enter a `par` branch",
+    );
+    rejected(
+        "shared-into-par-for",
+        &format!(
+            "{shared}fn main() {{\n\
+             \x20   let s = S {{ n: 1 }};\n\
+             \x20   let out = par for x in vec![1, 2] {{ x + s.n }};\n\
+             \x20   println(f\"{{out}}\");\n\
+             }}\n"
+        ),
+        "cannot enter a `par` branch",
+    );
+    accepted(
+        "frozen-into-par",
+        "shared struct S { n: i64 }\n\
+         fn twice(s: frozen S) -> i64 {\n\
+         \x20   let (a, b) = par { s.n, s.n };\n\
+         \x20   a + b\n\
+         }\n\
+         fn main() {\n\
+         \x20   let root = S { n: 2 };\n\
+         \x20   let g = freeze root;\n\
+         \x20   let (a, b) = par { twice(g), twice(g) };\n\
+         \x20   println(f\"{a + b}\");\n\
+         }\n",
+    );
+}

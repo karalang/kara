@@ -2762,6 +2762,10 @@ pub struct TypeChecker<'a> {
     /// enforces), and it stays enforced because this set contains only
     /// parameters the escape checker governs.
     pub(super) current_fn_frozen_params: FxHashSet<String>,
+    /// This function's `let x = freeze place;` bindings, saved and restored
+    /// with the set above. Read only by the `par` cross-task check, which
+    /// lets a `frozen` handle into a branch (B-2026-10-19-46).
+    pub(super) current_fn_frozen_lets: FxHashSet<String>,
     /// This function's BORROWED parameter names — every `ref T` / `mut ref T`
     /// parameter, plus `self` under `ref self` / `mut ref self`. B-2026-09-01-4.
     ///
@@ -3448,6 +3452,7 @@ impl<'a> TypeChecker<'a> {
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
+            current_fn_frozen_lets: FxHashSet::default(),
             current_fn_ref_params: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,

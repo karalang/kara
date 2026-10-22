@@ -9317,6 +9317,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_expr(n, &Type::Int(IntSize::I64));
                 }
                 let iter_ty = self.infer_expr(iterable);
+                // Core §11.3: each iteration of a `par for` is a branch, and
+                // what it captures crosses into a task (B-2026-10-19-46).
+                if par.is_some() && self.cli_lint_overrides.strict_core {
+                    let bound = pattern.binding_names().into_iter().collect();
+                    self.check_cross_task_safe_branch(body, bound, &expr.span);
+                }
                 self.local_scope.push();
                 // Resolve element type via IntoIterator.Item (impl_assoc_types),
                 // covering Vec, Map, SortedSet, Set, Slice, Array, Range* and
