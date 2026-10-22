@@ -7804,3 +7804,76 @@ fn main() {
         }
     }
 }
+
+/// A tree of integer literals whose value leaves its type's range traps at
+/// run time, as the same arithmetic on variables does, instead of folding to
+/// the wrapped value; a tree that stays in range still folds
+/// (B-2026-10-22-35, core semantics §10). (At a narrower annotated type the
+/// checker rejects such a tree before it runs.)
+#[test]
+fn mir_literal_overflow_traps_and_in_range_trees_fold() {
+    let traps = [
+        "let x = 9223372036854775807 + 1;",
+        "let x = 0 - 9223372036854775807 - 2;",
+        "let x = (9223372036854775807 + 1) - 1;",
+        "let x = 4611686018427387904 * 2;",
+    ];
+    let first = |b: &[u8]| {
+        String::from_utf8_lossy(b)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    for stmt in traps {
+        let src =
+            format!("fn main() {{\n    println(\"before\");\n    {stmt}\n    println(x);\n}}\n");
+        let dir = Scratch::new();
+        let file = dir.path().join("main.kara");
+        std::fs::write(&file, &src).unwrap();
+        let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["__mir-run", file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(interp.status.code(), Some(101), "__mir-run: {stmt}");
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout),
+            "before\n",
+            "{stmt}"
+        );
+        assert_eq!(
+            first(&interp.stderr),
+            "runtime error: integer overflow",
+            "__mir-run: {stmt}"
+        );
+        let Some(exe) = cli_build(&dir, &src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(run.status.code(), Some(101), "compiled: {stmt}");
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n", "{stmt}");
+        assert_eq!(
+            first(&run.stderr),
+            "runtime error: integer overflow",
+            "compiled: {stmt}"
+        );
+    }
+    let src = "fn main() {\n    let a: i32 = 2147483647 - 1 + 1;\n    let b: u8 = 200 + 55;\n    \
+               let c: i64 = -(2 * 3);\n    let d = (1 << 62) - 1 + (1 << 62);\n    \
+               let e = -9223372036854775807 - 1;\n    \
+               let f: i128 = 170141183460469231731687303715884105727 - 1;\n    \
+               let g: i32 = 3 << 31;\n    let h: u64 = 0xFFFF_FFFF_FFFF_FFFF << 1;\n    \
+               let k: u128 = (0xFFFF_FFFF_FFFF_FFFF << 64) | 1;\n    \
+               println(f\"{a} {b} {c} {d} {e} {f}\");\n    println(f\"{g} {h} {k}\");\n}\n";
+    // A left shift drops the bits past the type's width, folded or not.
+    let want = "2147483647 255 -6 9223372036854775807 -9223372036854775808 \
+                170141183460469231731687303715884105726\n\
+                -2147483648 18446744073709551614 340282366920938463444927863358058659841\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

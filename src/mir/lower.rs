@@ -39,15 +39,31 @@ use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 /// must be below `bits`, the width of the type the tree takes: 64, or 128
 /// for an `i128` or `u128` tree (B-2026-10-15-54).
 fn fold_int(e: &Expr, bits: i128) -> Option<i128> {
-    fn go(e: &Expr, bits: i128) -> Option<i128> {
-        match &e.kind {
+    fold_int_in(e, bits, i128::MIN, i128::MAX)
+}
+
+/// [`fold_int`], where every step must also lie in `lo..=hi`, the range of
+/// the type the tree takes: a step the unfolded code would trap on is not
+/// folded, so it traps at run time (core semantics §10, B-2026-10-22-35).
+/// A left shift does not trap; its bits past the type's width are dropped,
+/// as at run time.
+fn fold_int_in(e: &Expr, bits: i128, lo: i128, hi: i128) -> Option<i128> {
+    let wrap = |v: i128| match hi.checked_sub(lo).and_then(|w| w.checked_add(1)) {
+        Some(m) => v.wrapping_sub(lo).rem_euclid(m) + lo,
+        None => v,
+    };
+    fn go(e: &Expr, bits: i128, lo: i128, hi: i128, wrap: &dyn Fn(i128) -> i128) -> Option<i128> {
+        let v = match &e.kind {
             ExprKind::Integer(v, None) => Some(*v),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
-            } => go(operand, bits)?.checked_neg(),
+            } => go(operand, bits, lo, hi, wrap)?.checked_neg(),
             ExprKind::Binary { op, left, right } => {
-                let (a, b) = (go(left, bits)?, go(right, bits)?);
+                let (a, b) = (
+                    go(left, bits, lo, hi, wrap)?,
+                    go(right, bits, lo, hi, wrap)?,
+                );
                 match op {
                     AstBinOp::Add => a.checked_add(b),
                     AstBinOp::Sub => a.checked_sub(b),
@@ -55,20 +71,41 @@ fn fold_int(e: &Expr, bits: i128) -> Option<i128> {
                     AstBinOp::BitAnd => Some(a & b),
                     AstBinOp::BitOr => Some(a | b),
                     AstBinOp::BitXor => Some(a ^ b),
-                    AstBinOp::Shl if (0..bits).contains(&b) => a.checked_shl(b as u32),
+                    AstBinOp::Shl if (0..bits).contains(&b) => a.checked_shl(b as u32).map(wrap),
                     AstBinOp::Shr if (0..bits).contains(&b) => Some(a >> b),
                     _ => None,
                 }
             }
             _ => None,
-        }
+        }?;
+        (lo..=hi).contains(&v).then_some(v)
     }
     match &e.kind {
-        ExprKind::Binary { .. } => go(e, bits),
+        ExprKind::Binary { .. } => go(e, bits, lo, hi, &wrap),
         ExprKind::Unary { operand, .. } if !matches!(operand.kind, ExprKind::Integer(..)) => {
-            go(e, bits)
+            go(e, bits, lo, hi, &wrap)
         }
         _ => None,
+    }
+}
+
+/// The values an integer type holds; the whole `i128` range for anything
+/// else, and for `u128`, whose values past `i128::MAX` the fold carries as
+/// their `i128` bit pattern, so it cannot check them.
+fn int_range(k: HK) -> (i128, i128) {
+    let signed = |bits: u32| (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1);
+    match k {
+        HK::Int(IntSize::I8) => signed(8),
+        HK::Int(IntSize::I16) => signed(16),
+        HK::Int(IntSize::I32) => signed(32),
+        HK::Int(IntSize::I128) => (i128::MIN, i128::MAX),
+        HK::Int(_) => signed(64),
+        HK::UInt(UIntSize::U8) => (0, 255),
+        HK::UInt(UIntSize::U16) => (0, 65_535),
+        HK::UInt(UIntSize::U32) => (0, u32::MAX as i128),
+        HK::UInt(UIntSize::U128) => (i128::MIN, i128::MAX),
+        HK::UInt(_) => (0, u64::MAX as i128),
+        _ => (i128::MIN, i128::MAX),
     }
 }
 
@@ -5380,11 +5417,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // constant, so it takes its destination's type as a single
                 // literal does (`let n: i32 = -(2 * 3)`).
                 let t = self.expr_ty(e)?;
-                let bits = match self.tys().tcx().kind(t) {
+                let kind = self.tys().tcx().kind(t);
+                let bits = match kind {
                     HK::Int(IntSize::I128) | HK::UInt(UIntSize::U128) => 128,
                     _ => 64,
                 };
-                match fold_int(e, bits) {
+                let (lo, hi) = int_range(kind);
+                match fold_int_in(e, bits, lo, hi) {
                     Some(v) => scalar(self, v as u128),
                     None => Ok(None),
                 }
