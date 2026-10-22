@@ -1,0 +1,461 @@
+// mini_base62 — a port of pybase62 0.6.0 (BSD-3; Sumin Byeon), the Base62
+// codec used for short, URL-safe ids (the style behind shortened links and
+// compact database keys). Base62 writes a number in the 62 digits 0-9 A-Z a-z,
+// denser than hex and URL-safe unlike Base64. This port follows base62.py: the
+// integer `encode`/`decode` (with `minlen` zero-padding, the default and
+// inverted charsets, the `0z` prefix on decode, and the invalid-character
+// error) over i64, and `encodebytes`/`decodebytes` over arbitrary-length byte
+// strings. The library leans on Python big integers for the bytes path; this
+// port avoids bignum by carrying the value as a base-256 digit array and doing
+// schoolbook long division / multiply-add against base 62, so a digest far
+// wider than i64 round-trips exactly (verified against the library). The plain
+// integer ops are i64-bounded, which is the documented boundary there. See
+// README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn def_charset() -> Vec[u8] {
+    str_bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+}
+
+fn inv_charset() -> Vec[u8] {
+    str_bytes("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+}
+
+// Index of byte b in the charset, or -1 if absent.
+fn cs_index(cs: ref Vec[u8], b: u8) -> i64 {
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn hex_digit(n: i64) -> u8 {
+    if n < 10 {
+        (48 + n) as u8
+    } else {
+        (87 + n) as u8
+    }
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v = bytes[i] as i64;
+        out.push(hex_digit(v >> 4));
+        out.push(hex_digit(v & 15));
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+fn parse_hex(s: String) -> Vec[u8] {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < m {
+        out.push((hex_nibble(b[i]) * 16 + hex_nibble(b[i + 1])) as u8);
+        i = i + 2;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let mut v: i64 = 0;
+    let mut i = 0;
+    while i < b.len() {
+        v = v * 10 + ((b[i] as i64) - 48);
+        i = i + 1;
+    }
+    v
+}
+
+fn itoa(n0: i64) -> String {
+    if n0 == 0 {
+        return "0";
+    }
+    let mut n = n0;
+    let mut digits: Vec[u8] = Vec.new();
+    while n > 0 {
+        digits.push((48 + (n % 10)) as u8);
+        n = n / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut j = digits.len();
+    while j > 0 {
+        j = j - 1;
+        out.push(digits[j]);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// encode(n, minlen): a non-negative i64 to Base62, left-padded with the
+// charset's zero digit to at least `minlen` characters.
+fn enc_int(n0: i64, minlen: i64, cs: ref Vec[u8]) -> String {
+    let mut n = n0;
+    let mut chs: Vec[u8] = Vec.new();
+    while n > 0 {
+        let r = n % 62;
+        n = n / 62;
+        chs.push(cs[r]);
+    }
+    let mut body: Vec[u8] = Vec.new();
+    if chs.len() > 0 {
+        let mut p = chs.len();
+        while p > 0 {
+            p = p - 1;
+            body.push(chs[p]);
+        }
+    } else {
+        body.push(cs[0]);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut pad = minlen - (body.len() as i64);
+    while pad > 0 {
+        out.push(cs[0]);
+        pad = pad - 1;
+    }
+    let mut q = 0;
+    while q < body.len() {
+        out.push(body[q]);
+        q = q + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+#[derive(Clone)]
+struct DecI {
+    ok: bool,
+    val: i64,
+}
+
+// decode(s): Base62 string to i64 via Horner, after stripping a leading `0z`.
+// ok=false on a character outside the charset.
+fn dec_int(sb: ref Vec[u8], cs: ref Vec[u8]) -> DecI {
+    let mut start = 0;
+    if sb.len() >= 2 and sb[0] == 48 and sb[1] == 122 {
+        start = 2;
+    }
+    let mut v: i64 = 0;
+    let mut i = start;
+    while i < sb.len() {
+        let idx = cs_index(cs, sb[i]);
+        if idx < 0 {
+            return DecI { ok: false, val: 0 };
+        }
+        v = v * 62 + idx;
+        i = i + 1;
+    }
+    DecI { ok: true, val: v }
+}
+
+#[derive(Clone)]
+struct Dec {
+    ok: bool,
+    bytes: Vec[u8],
+}
+
+// encodebytes: Base62 of the big-endian integer the bytes represent, computed
+// without bignum by repeated base-256 long division by 62.
+fn enc_bytes(bs: ref Vec[u8], cs: ref Vec[u8]) -> String {
+    let mut cur: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < bs.len() {
+        cur.push(bs[i] as i64);
+        i = i + 1;
+    }
+    if cur.len() == 0 {
+        cur.push(0);
+    }
+    let mut nonzero = false;
+    let mut k = 0;
+    while k < cur.len() {
+        if cur[k] != 0 {
+            nonzero = true;
+        }
+        k = k + 1;
+    }
+    if not nonzero {
+        return "0";
+    }
+    let mut rem: Vec[i64] = Vec.new();
+    let mut done = false;
+    while not done {
+        let mut q: Vec[i64] = Vec.new();
+        let mut carry: i64 = 0;
+        let mut j = 0;
+        while j < cur.len() {
+            let v = carry * 256 + cur[j];
+            q.push(v / 62);
+            carry = v % 62;
+            j = j + 1;
+        }
+        let mut st = 0;
+        while st < q.len() - 1 and q[st] == 0 {
+            st = st + 1;
+        }
+        let mut nq: Vec[i64] = Vec.new();
+        let mut m = st;
+        while m < q.len() {
+            nq.push(q[m]);
+            m = m + 1;
+        }
+        rem.push(carry);
+        cur = nq;
+        if cur.len() == 1 and cur[0] == 0 {
+            done = true;
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut p = rem.len();
+    while p > 0 {
+        p = p - 1;
+        out.push(cs[rem[p]]);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// decodebytes: Base62 string to bytes, carrying the value as a base-256 digit
+// array (value = value*62 + digit), then stripping leading zero bytes — so the
+// zero value decodes to the empty byte string, as the library does.
+fn dec_bytes(sb: ref Vec[u8], cs: ref Vec[u8]) -> Dec {
+    let mut start = 0;
+    if sb.len() >= 2 and sb[0] == 48 and sb[1] == 122 {
+        start = 2;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    digits.push(0);
+    let mut i = start;
+    while i < sb.len() {
+        let idx = cs_index(cs, sb[i]);
+        if idx < 0 {
+            return Dec { ok: false, bytes: Vec.new() };
+        }
+        let mut acc: Vec[i64] = Vec.new();
+        let mut carry: i64 = idx;
+        let mut j = digits.len();
+        while j > 0 {
+            j = j - 1;
+            let v = digits[j] * 62 + carry;
+            acc.push(v % 256);
+            carry = v / 256;
+        }
+        while carry > 0 {
+            acc.push(carry % 256);
+            carry = carry / 256;
+        }
+        let mut nd: Vec[i64] = Vec.new();
+        if acc.len() == 0 {
+            nd.push(0);
+        }
+        let mut p = acc.len();
+        while p > 0 {
+            p = p - 1;
+            nd.push(acc[p]);
+        }
+        digits = nd;
+        i = i + 1;
+    }
+    let mut st = 0;
+    while st < digits.len() - 1 and digits[st] == 0 {
+        st = st + 1;
+    }
+    if digits.len() - st == 1 and digits[st] == 0 {
+        return Dec { ok: true, bytes: Vec.new() };
+    }
+    let mut res: Vec[u8] = Vec.new();
+    let mut m = st;
+    while m < digits.len() {
+        res.push(digits[m] as u8);
+        m = m + 1;
+    }
+    Dec { ok: true, bytes: res }
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let def = def_charset();
+    let inv = inv_charset();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "e" {
+                    out.push_str(enc_int(parse_int(f[1].clone()), 1, def));
+                } else if op == "em" {
+                    let nn = parse_int(f[1].clone());
+                    out.push_str(enc_int(nn, parse_int(f[2].clone()), def));
+                } else if op == "ei" {
+                    out.push_str(enc_int(parse_int(f[1].clone()), 1, inv));
+                } else if op == "d" {
+                    let sb = str_bytes(f[1].clone());
+                    let r = dec_int(sb, def);
+                    if r.ok {
+                        out.push_str(itoa(r.val));
+                    } else {
+                        out.push_str("ERR");
+                    }
+                } else if op == "di" {
+                    let sb = str_bytes(f[1].clone());
+                    let r = dec_int(sb, inv);
+                    if r.ok {
+                        out.push_str(itoa(r.val));
+                    } else {
+                        out.push_str("ERR");
+                    }
+                } else if op == "eb" {
+                    let bs = parse_hex(f[1].clone());
+                    out.push_str(enc_bytes(bs, def));
+                } else if op == "db" {
+                    let sb = str_bytes(f[1].clone());
+                    let r = dec_bytes(sb, def);
+                    if r.ok {
+                        out.push_str(to_hex(r.bytes));
+                    } else {
+                        out.push_str("ERR");
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("e\t0\n");
+    s.push_str("e\t1\n");
+    s.push_str("e\t61\n");
+    s.push_str("e\t62\n");
+    s.push_str("e\t63\n");
+    s.push_str("e\t100\n");
+    s.push_str("e\t255\n");
+    s.push_str("e\t256\n");
+    s.push_str("e\t1000\n");
+    s.push_str("e\t123456789\n");
+    s.push_str("e\t9223372036854775807\n");
+    s.push_str("e\t34\n");
+    s.push_str("e\t3843\n");
+    s.push_str("e\t3844\n");
+    s.push_str("e\t238327\n");
+    s.push_str("e\t238328\n");
+    s.push_str("em\t0\t5\n");
+    s.push_str("em\t1\t5\n");
+    s.push_str("em\t61\t5\n");
+    s.push_str("em\t62\t5\n");
+    s.push_str("em\t63\t5\n");
+    s.push_str("em\t100\t5\n");
+    s.push_str("em\t255\t5\n");
+    s.push_str("em\t256\t5\n");
+    s.push_str("em\t1000\t5\n");
+    s.push_str("em\t123456789\t5\n");
+    s.push_str("em\t9223372036854775807\t5\n");
+    s.push_str("em\t34\t5\n");
+    s.push_str("em\t3843\t5\n");
+    s.push_str("em\t3844\t5\n");
+    s.push_str("em\t238327\t5\n");
+    s.push_str("em\t238328\t5\n");
+    s.push_str("ei\t0\n");
+    s.push_str("ei\t1\n");
+    s.push_str("ei\t61\n");
+    s.push_str("ei\t999\n");
+    s.push_str("ei\t123456789\n");
+    s.push_str("d\t0\n");
+    s.push_str("d\t1\n");
+    s.push_str("d\tz\n");
+    s.push_str("d\t10\n");
+    s.push_str("d\t11\n");
+    s.push_str("d\t1c\n");
+    s.push_str("d\t47\n");
+    s.push_str("d\t48\n");
+    s.push_str("d\tG8\n");
+    s.push_str("d\t8M0kX\n");
+    s.push_str("d\tAzL8n0Y58m7\n");
+    s.push_str("d\tY\n");
+    s.push_str("d\tzz\n");
+    s.push_str("d\t100\n");
+    s.push_str("d\tzzz\n");
+    s.push_str("d\t1000\n");
+    s.push_str("d\t0z1A\n");
+    s.push_str("d\t!!\n");
+    s.push_str("d\t A\n");
+    s.push_str("di\t0\n");
+    s.push_str("di\t1\n");
+    s.push_str("di\tZ\n");
+    s.push_str("di\tg7\n");
+    s.push_str("eb\t01\n");
+    s.push_str("eb\tff\n");
+    s.push_str("eb\t0001\n");
+    s.push_str("eb\t68656c6c6f\n");
+    s.push_str("eb\tdeadbeef\n");
+    s.push_str("eb\t000102030405060708090a0b0c0d0e0f10111213\n");
+    s.push_str("eb\t000005\n");
+    s.push_str("eb\tffffffffffffffffffff\n");
+    s.push_str("eb\t74686520717569636b2062726f776e20666f78206a756d7073\n");
+    s.push_str("db\t1\n");
+    s.push_str("db\t47\n");
+    s.push_str("db\t1\n");
+    s.push_str("db\t7tQLFHz\n");
+    s.push_str("db\t44pZgF\n");
+    s.push_str("db\t29sS3yqsuDyR1vGFhTuuRAq1b\n");
+    s.push_str("db\t5\n");
+    s.push_str("db\t62iEp5bu9VZbsV\n");
+    s.push_str("db\t5BWCVPv4doyYUrWXhuQbnIeNixFt5ubC9T\n");
+    s
+}
