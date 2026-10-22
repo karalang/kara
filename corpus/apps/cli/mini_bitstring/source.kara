@@ -1,0 +1,643 @@
+// mini_bitstring — a port of the core of bitstring 3.1.9 (MIT, Scott
+// Griffiths), the pure-Python library for constructing and interpreting
+// bitstrings used in binary protocol, file-format and DSP work.
+//
+// A bitstring is modelled as a Vec[i64] of bits, MSB first, each 0 or 1 —
+// the same whole-value vector trick mini_macaddress uses for nibbles, so
+// nothing depends on i64 width and every interpretation is exact integer
+// arithmetic (no bitwise operators, no float).
+//
+// Scope: the BitArray auto-init grammar (0x.. / 0b.. / 0o.. / uint:N=V /
+// int:N=V and comma-joined lists), the bin/hex/oct/uint/int/len/str
+// interpretations, slicing and indexing with Python semantics, concat,
+// equality, count, find/findall (overlapping), reverse, invert, tobytes
+// and unpack, plus the library's exact error texts for the well-defined
+// failure paths. Integer interpretation is limited to bitstrings of at
+// most 63 bits (the token lengths the jobs use); the token-dispatch
+// error family ("Don't understand length ...") and non-integer tokens
+// are out of scope, as the README notes.
+
+#[derive(Clone)]
+struct Bres { ok: bool, bits: Vec[i64], err: String }
+
+fn bok(bits: own Vec[i64]) -> Bres { Bres { ok: true, bits: bits, err: String.new() } }
+fn berr(msg: own String) -> Bres {
+    let empty: Vec[i64] = Vec.new();
+    Bres { ok: false, bits: empty, err: msg }
+}
+
+#[derive(Clone)]
+struct Sres { ok: bool, val: String, err: String }
+
+fn sok(v: own String) -> Sres { Sres { ok: true, val: v, err: String.new() } }
+fn serr(m: own String) -> Sres { Sres { ok: false, val: String.new(), err: m } }
+
+#[derive(Clone)]
+struct Ires { ok: bool, val: i64, err: String }
+
+fn iok(v: i64) -> Ires { Ires { ok: true, val: v, err: String.new() } }
+fn ierr(m: own String) -> Ires { Ires { ok: false, val: 0, err: m } }
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s);
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn trim(s: String) -> String {
+    let b = bytes_of(s);
+    let mut lo = 0;
+    let mut hi = b.len();
+    while lo < hi and (b[lo] == 32 or b[lo] == 9) { lo = lo + 1; }
+    while hi > lo and (b[hi - 1] == 32 or b[hi - 1] == 9) { hi = hi - 1; }
+    s.substring(lo, hi)
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut neg = false;
+    let mut m = n;
+    if m < 0 { neg = true; m = 0 - m; }
+    let mut digs: Vec[i64] = Vec.new();
+    while m > 0 { digs.push(m % 10); m = m / 10; }
+    let ds = "0123456789";
+    let mut out = String.new();
+    if neg { out.push_str("-"); }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        out.push_str(ds.substring(digs[i], digs[i] + 1));
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == 45 { neg = true; i = 1; }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg { 0 - v } else { v }
+}
+
+fn starts(s: String, p: String) -> bool {
+    let sb = bytes_of(s);
+    let pb = bytes_of(p);
+    if sb.len() < pb.len() { return false; }
+    let mut i = 0;
+    while i < pb.len() {
+        if sb[i] != pb[i] { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn hexval(c: i64) -> i64 {
+    if c >= 48 and c <= 57 { return c - 48; }
+    if c >= 97 and c <= 102 { return c - 97 + 10; }
+    if c >= 65 and c <= 70 { return c - 65 + 10; }
+    0 - 1
+}
+
+fn pow2(k: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < k { r = r * 2; i = i + 1; }
+    r
+}
+
+fn index_of(s: String, c: i64) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == c { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn parse_int_token(tok: String) -> Bres {
+    let signed = starts(tok, "int:");
+    let b = bytes_of(tok);
+    let mut colon = 0 - 1;
+    let mut eq = 0 - 1;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == 58 and colon < 0 { colon = i; }
+        if b[i] == 61 { eq = i; }
+        i = i + 1;
+    }
+    let nstr = tok.substring(colon + 1, eq);
+    let vstr = tok.substring(eq + 1, b.len());
+    let n = parse_int(nstr);
+    let v = parse_int(vstr);
+    let mut bits: Vec[i64] = Vec.new();
+    if signed {
+        let hi = pow2(n - 1) - 1;
+        let lo = 0 - pow2(n - 1);
+        if v > hi {
+            return berr(int_to_str(v) + " is too large a signed integer for a bitstring of length " + int_to_str(n) + ". The allowed range is [" + int_to_str(lo) + ", " + int_to_str(hi) + "].");
+        }
+        if v < lo {
+            return berr(int_to_str(v) + " is too small a signed integer for a bitstring of length " + int_to_str(n) + ". The allowed range is [" + int_to_str(lo) + ", " + int_to_str(hi) + "].");
+        }
+        let uval = if v >= 0 { v } else { v + pow2(n) };
+        let mut k = 0;
+        while k < n {
+            let shift = n - 1 - k;
+            bits.push((uval / pow2(shift)) % 2);
+            k = k + 1;
+        }
+        return bok(bits);
+    }
+    if v < 0 {
+        return berr("uint cannot be initialised by a negative number.");
+    }
+    let maxu = pow2(n) - 1;
+    if v > maxu {
+        return berr(int_to_str(v) + " is too large an unsigned integer for a bitstring of length " + int_to_str(n) + ". The allowed range is [0, " + int_to_str(maxu) + "].");
+    }
+    let mut k = 0;
+    while k < n {
+        let shift = n - 1 - k;
+        bits.push((v / pow2(shift)) % 2);
+        k = k + 1;
+    }
+    bok(bits)
+}
+
+fn parse_token(tok: String) -> Bres {
+    let mut bits: Vec[i64] = Vec.new();
+    if starts(tok, "0x") {
+        let b = bytes_of(tok);
+        let mut i = 2;
+        while i < b.len() {
+            let hv = hexval(b[i]);
+            if hv < 0 { return berr("Invalid symbol in hex initialiser."); }
+            let mut v = hv;
+            bits.push(v / 8); v = v % 8;
+            bits.push(v / 4); v = v % 4;
+            bits.push(v / 2); v = v % 2;
+            bits.push(v);
+            i = i + 1;
+        }
+        return bok(bits);
+    }
+    if starts(tok, "0b") {
+        let rest = tok.substring(2, bytes_of(tok).len());
+        let b = bytes_of(rest);
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == 48 { bits.push(0); }
+            else if b[i] == 49 { bits.push(1); }
+            else { return berr("Invalid character in bin initialiser " + rest + "."); }
+            i = i + 1;
+        }
+        return bok(bits);
+    }
+    if starts(tok, "0o") {
+        let b = bytes_of(tok);
+        let mut i = 2;
+        while i < b.len() {
+            let c = b[i];
+            if c >= 48 and c <= 55 {
+                let mut w = c - 48;
+                bits.push(w / 4); w = w % 4;
+                bits.push(w / 2); w = w % 2;
+                bits.push(w);
+            } else {
+                return berr("Invalid symbol '" + tok.substring(i, i + 1) + "' in oct initialiser.");
+            }
+            i = i + 1;
+        }
+        return bok(bits);
+    }
+    if starts(tok, "uint:") or starts(tok, "int:") {
+        return parse_int_token(tok);
+    }
+    berr("Cannot parse token.")
+}
+
+fn parse_init(s: String) -> Bres {
+    let t = trim(s);
+    let mut bits: Vec[i64] = Vec.new();
+    if bytes_of(t).len() == 0 { return bok(bits); }
+    let toks = split_on(t, 44);
+    let mut i = 0;
+    while i < toks.len() {
+        let tok = trim(toks[i].clone());
+        let r = parse_token(tok);
+        if not r.ok { return berr(r.err.clone()); }
+        let mut j = 0;
+        while j < r.bits.len() { bits.push(r.bits[j]); j = j + 1; }
+        i = i + 1;
+    }
+    bok(bits)
+}
+
+fn to_bin(bits: Vec[i64]) -> String {
+    let ds = "01";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bits.len() {
+        out.push_str(ds.substring(bits[i], bits[i] + 1));
+        i = i + 1;
+    }
+    out
+}
+
+fn to_hex(bits: Vec[i64]) -> Sres {
+    if bits.len() % 4 != 0 {
+        return serr("Cannot convert to hex unambiguously - not multiple of 4 bits.");
+    }
+    let hx = "0123456789abcdef";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bits.len() {
+        let v = bits[i] * 8 + bits[i + 1] * 4 + bits[i + 2] * 2 + bits[i + 3];
+        out.push_str(hx.substring(v, v + 1));
+        i = i + 4;
+    }
+    sok(out)
+}
+
+fn to_oct(bits: Vec[i64]) -> Sres {
+    if bits.len() % 3 != 0 {
+        return serr("Cannot convert to octal unambiguously - not multiple of 3 bits.");
+    }
+    let oc = "01234567";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bits.len() {
+        let v = bits[i] * 4 + bits[i + 1] * 2 + bits[i + 2];
+        out.push_str(oc.substring(v, v + 1));
+        i = i + 3;
+    }
+    sok(out)
+}
+
+fn to_uint(bits: Vec[i64]) -> Ires {
+    if bits.len() == 0 {
+        return ierr("Cannot interpret a zero length bitstring as an integer.");
+    }
+    let mut v = 0;
+    let mut i = 0;
+    while i < bits.len() { v = v * 2 + bits[i]; i = i + 1; }
+    iok(v)
+}
+
+fn to_int(bits: Vec[i64]) -> Ires {
+    if bits.len() == 0 {
+        return ierr("Cannot interpret a zero length bitstring as an integer.");
+    }
+    let u = to_uint(bits);
+    let mut v = u.val;
+    if bits[0] == 1 { v = v - pow2(bits.len()); }
+    iok(v)
+}
+
+fn to_bytes_hex(bits: Vec[i64]) -> String {
+    let mut padded: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < bits.len() { padded.push(bits[i]); i = i + 1; }
+    while padded.len() % 8 != 0 { padded.push(0); }
+    let hx = "0123456789abcdef";
+    let mut out = String.new();
+    let mut j = 0;
+    while j < padded.len() {
+        let hi = padded[j] * 8 + padded[j + 1] * 4 + padded[j + 2] * 2 + padded[j + 3];
+        let lo = padded[j + 4] * 8 + padded[j + 5] * 4 + padded[j + 6] * 2 + padded[j + 7];
+        out.push_str(hx.substring(hi, hi + 1));
+        out.push_str(hx.substring(lo, lo + 1));
+        j = j + 8;
+    }
+    out
+}
+
+fn sub_bits(bits: Vec[i64], start: i64, stop: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < stop { out.push(bits[i]); i = i + 1; }
+    out
+}
+
+fn matches_at(hay: Vec[i64], needle: Vec[i64], at: i64) -> bool {
+    let n = needle.len();
+    let mut k = 0;
+    while k < n {
+        if hay[at + k] != needle[k] { return false; }
+        k = k + 1;
+    }
+    true
+}
+
+fn find_sub(hay: Vec[i64], needle: Vec[i64]) -> i64 {
+    let n = needle.len();
+    if n == 0 { return 0; }
+    if n > hay.len() { return 0 - 1; }
+    let mut i = 0;
+    while i + n <= hay.len() {
+        if matches_at(hay, needle, i) { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn bool_str(b: bool) -> String {
+    if b { "True" } else { "False" }
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "bin" or op == "hex" or op == "oct" or op == "uint" or op == "int" or op == "len" or op == "str" or op == "reverse" or op == "invert" or op == "tobytes" or op == "all" or op == "any" {
+        let p = parse_init(arg);
+        if not p.ok { return "error: " + p.err; }
+        if op == "bin" { return to_bin(p.bits); }
+        if op == "hex" {
+            let r = to_hex(p.bits);
+            if r.ok { return r.val; }
+            return "error: " + r.err;
+        }
+        if op == "oct" {
+            let r = to_oct(p.bits);
+            if r.ok { return r.val; }
+            return "error: " + r.err;
+        }
+        if op == "uint" {
+            let r = to_uint(p.bits);
+            if r.ok { return int_to_str(r.val); }
+            return "error: " + r.err;
+        }
+        if op == "int" {
+            let r = to_int(p.bits);
+            if r.ok { return int_to_str(r.val); }
+            return "error: " + r.err;
+        }
+        if op == "len" { return int_to_str(p.bits.len()); }
+        if op == "str" {
+            if p.bits.len() % 4 == 0 and p.bits.len() > 0 {
+                let r = to_hex(p.bits);
+                return "0x" + r.val;
+            }
+            return "0b" + to_bin(p.bits);
+        }
+        if op == "reverse" {
+            let mut rev: Vec[i64] = Vec.new();
+            let mut i = p.bits.len();
+            while i > 0 { i = i - 1; rev.push(p.bits[i]); }
+            return to_bin(rev);
+        }
+        if op == "invert" {
+            let mut inv: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < p.bits.len() { inv.push(1 - p.bits[i]); i = i + 1; }
+            return to_bin(inv);
+        }
+        if op == "tobytes" { return to_bytes_hex(p.bits); }
+        if op == "all" {
+            let mut allset = true;
+            let mut i = 0;
+            while i < p.bits.len() { if p.bits[i] != 1 { allset = false; } i = i + 1; }
+            return bool_str(allset);
+        }
+        if op == "any" {
+            let mut anyset = false;
+            let mut i = 0;
+            while i < p.bits.len() { if p.bits[i] == 1 { anyset = true; } i = i + 1; }
+            return bool_str(anyset);
+        }
+    }
+    let a = split_on(arg, 124);
+    if op == "slice" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let l = p.bits.len();
+        let mut start = parse_int(a[1].clone());
+        let mut stop = parse_int(a[2].clone());
+        if start < 0 { start = start + l; }
+        if stop < 0 { stop = stop + l; }
+        if start < 0 { start = 0; }
+        if start > l { start = l; }
+        if stop < 0 { stop = 0; }
+        if stop > l { stop = l; }
+        if stop < start { stop = start; }
+        let sub = sub_bits(p.bits, start, stop);
+        return to_bin(sub);
+    }
+    if op == "index" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let l = p.bits.len();
+        let mut idx = parse_int(a[1].clone());
+        if idx < 0 { idx = idx + l; }
+        if idx < 0 or idx >= l { return "error: Slice index out of range."; }
+        return bool_str(p.bits[idx] == 1);
+    }
+    if op == "concat" {
+        let p1 = parse_init(a[0].clone());
+        if not p1.ok { return "error: " + p1.err; }
+        let p2 = parse_init(a[1].clone());
+        if not p2.ok { return "error: " + p2.err; }
+        let mut c: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < p1.bits.len() { c.push(p1.bits[i]); i = i + 1; }
+        let mut j = 0;
+        while j < p2.bits.len() { c.push(p2.bits[j]); j = j + 1; }
+        return to_bin(c);
+    }
+    if op == "eq" {
+        let p1 = parse_init(a[0].clone());
+        if not p1.ok { return "error: " + p1.err; }
+        let p2 = parse_init(a[1].clone());
+        if not p2.ok { return "error: " + p2.err; }
+        let mut same = p1.bits.len() == p2.bits.len();
+        if same {
+            let mut i = 0;
+            while i < p1.bits.len() {
+                if p1.bits[i] != p2.bits[i] { same = false; }
+                i = i + 1;
+            }
+        }
+        return bool_str(same);
+    }
+    if op == "count" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let bit = parse_int(a[1].clone());
+        let mut c = 0;
+        let mut i = 0;
+        while i < p.bits.len() { if p.bits[i] == bit { c = c + 1; } i = i + 1; }
+        return int_to_str(c);
+    }
+    if op == "find" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let s = parse_init(a[1].clone());
+        if not s.ok { return "error: " + s.err; }
+        let pos = find_sub(p.bits, s.bits);
+        if pos < 0 { return "()"; }
+        return "(" + int_to_str(pos) + ",)";
+    }
+    if op == "findall" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let s = parse_init(a[1].clone());
+        if not s.ok { return "error: " + s.err; }
+        let n = s.bits.len();
+        let mut out = String.new();
+        out.push_str("[");
+        let mut first = true;
+        if n > 0 {
+            let mut i = 0;
+            while i + n <= p.bits.len() {
+                if matches_at(p.bits, s.bits, i) {
+                    if not first { out.push_str(", "); }
+                    out.push_str(int_to_str(i));
+                    first = false;
+                }
+                i = i + 1;
+            }
+        }
+        out.push_str("]");
+        return out;
+    }
+    if op == "unpack" {
+        let p = parse_init(a[0].clone());
+        if not p.ok { return "error: " + p.err; }
+        let fmt = a[1].clone();
+        let toks = split_on(fmt, 44);
+        let mut out = String.new();
+        out.push_str("[");
+        let mut pos = 0;
+        let mut first = true;
+        let mut i = 0;
+        while i < toks.len() {
+            let tk = trim(toks[i].clone());
+            let signed = starts(tk, "int:");
+            let colon = index_of(tk, 58);
+            let nstr = tk.substring(colon + 1, bytes_of(tk).len());
+            let n = parse_int(nstr);
+            let avail = p.bits.len() - pos;
+            if pos + n > p.bits.len() {
+                return "error: Reading off the end of the data. Tried to read " + int_to_str(n) + " bits when only " + int_to_str(avail) + " available.";
+            }
+            let sub = sub_bits(p.bits, pos, pos + n);
+            let val = if signed { to_int(sub).val } else { to_uint(sub).val };
+            if not first { out.push_str(", "); }
+            out.push_str(int_to_str(val));
+            first = false;
+            pos = pos + n;
+            i = i + 1;
+        }
+        out.push_str("]");
+        return out;
+    }
+    "error: unknown op"
+}
+
+fn main() {
+    let text = jobs_text();
+    let lines = split_on(text, 10);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].clone();
+        if bytes_of(line).len() > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let arg = if fields.len() > 1 { fields[1].clone() } else { String.new() };
+            out.push_str("== ");
+            let mut j = 0;
+            while j < fields.len() {
+                if j > 0 { out.push_str(" | "); }
+                out.push_str(fields[j].clone());
+                j = j + 1;
+            }
+            out.push_str("\n");
+            out.push_str("  ");
+            out.push_str(run(op, arg));
+            out.push_str("\n");
+        }
+        i = i + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("bin\t0x3f\n");
+    s.push_str("bin\t0o17\n");
+    s.push_str("bin\tuint:8=255\n");
+    s.push_str("bin\tint:8=-1\n");
+    s.push_str("bin\tint:5=-3\n");
+    s.push_str("bin\tuint:3=5\n");
+    s.push_str("hex\t0b1010\n");
+    s.push_str("hex\tuint:16=4096\n");
+    s.push_str("hex\t0xABCD\n");
+    s.push_str("oct\t0o17\n");
+    s.push_str("uint\t0xff\n");
+    s.push_str("int\t0xff\n");
+    s.push_str("int\tint:8=-1\n");
+    s.push_str("uint\tint:8=-1\n");
+    s.push_str("len\t0x3f\n");
+    s.push_str("len\t\n");
+    s.push_str("str\t0xdead\n");
+    s.push_str("bin\t0b1, 0x0f\n");
+    s.push_str("bin\t 0x0f , 0b1 \n");
+    s.push_str("bin\t\n");
+    s.push_str("slice\t0b11001010|2|6\n");
+    s.push_str("slice\t0b11001010|-4|8\n");
+    s.push_str("slice\t0b1100|3|1\n");
+    s.push_str("index\t0b10|0\n");
+    s.push_str("index\t0b10|1\n");
+    s.push_str("index\t0b10|-1\n");
+    s.push_str("index\t0b10|5\n");
+    s.push_str("concat\t0b10|0b11\n");
+    s.push_str("eq\t0x0f|0b00001111\n");
+    s.push_str("eq\t0x0f|0b0000111\n");
+    s.push_str("count\t0b10110|1\n");
+    s.push_str("count\t0b10110|0\n");
+    s.push_str("find\t0b00011000|0b11\n");
+    s.push_str("find\t0b0000|0b1\n");
+    s.push_str("find\t0b101|0b1\n");
+    s.push_str("findall\t0b1010101|0b1\n");
+    s.push_str("findall\t0b1111|0b11\n");
+    s.push_str("reverse\t0b1100\n");
+    s.push_str("invert\t0b1100\n");
+    s.push_str("tobytes\t0xabcd\n");
+    s.push_str("tobytes\t0b1\n");
+    s.push_str("all\t0b111\n");
+    s.push_str("any\t0b000\n");
+    s.push_str("unpack\t0xabcd|uint:8, uint:8\n");
+    s.push_str("unpack\t0xff0f|int:8, uint:8\n");
+    s.push_str("unpack\t0xff|uint:16\n");
+    s.push_str("oct\t0b1010\n");
+    s.push_str("hex\t0b10101\n");
+    s.push_str("int\t\n");
+    s.push_str("uint\tuint:4=16\n");
+    s.push_str("int\tint:4=8\n");
+    s.push_str("bin\tuint:8=-1\n");
+    s.push_str("bin\t0xzz\n");
+    s.push_str("bin\t0b1012\n");
+    s.push_str("bin\t0o18\n");
+    s
+}
