@@ -2362,6 +2362,84 @@ fn redirects_keep_credentials_only_on_the_first_origin_on_both_backends() {
     }
 }
 
+const EXTERN_LIBC: &str = r#"
+unsafe extern "C" {
+    fn abs(x: i32) -> i32;
+    fn labs(x: i64) -> i64;
+    fn strlen(s: *const u8) -> usize;
+}
+
+fn main() {
+    println(abs(-7));
+    println(labs(-9000000000));
+    match "hello".to_cstring() {
+        Ok(cs) => println(strlen(cs.as_ptr())),
+        Err(_) => println("nul"),
+    }
+}
+"#;
+
+const EXTERN_FLOAT: &str = r#"
+unsafe extern "C" {
+    fn sqrt(x: f64) -> f64;
+}
+
+fn main() {
+    println(sqrt(2.0));
+}
+"#;
+
+/// A call of an `extern "C"` function runs on the MIR interpreter
+/// (B-2026-10-22-10): the C library's own functions, and examples/interop-zlib,
+/// which links zlib through its kara.toml and passes a `CString`'s bytes and
+/// `ptr.mut` of a local for zlib to write through, printing its README's
+/// output. A float parameter is refused when the program is built.
+#[test]
+fn extern_c_calls_run_on_the_mir_interpreter() {
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let run = |file: &Path| {
+        Command::new(karac)
+            .args(["__mir-run", file.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let dir = Scratch::new("extern_c");
+    let libc = dir.path().join("libc.kara");
+    std::fs::write(&libc, EXTERN_LIBC).unwrap();
+    let out = run(&libc);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n9000000000\n5\n");
+
+    let zlib = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/interop-zlib/src/main.kara");
+    let out = run(&zlib);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "original: 1440 bytes\ncompressed: smaller than original\nround-trip length: OK\n\
+         crc32 in:  1141850752\ncrc32 out: 1141850752\nround-trip: OK\n"
+    );
+
+    let float = dir.path().join("float.kara");
+    std::fs::write(&float, EXTERN_FLOAT).unwrap();
+    let out = run(&float);
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(
+            "the `extern \"C\"` function `sqrt` other than an integer, `bool` or raw pointer"
+        ),
+        "{err}"
+    );
+}
+
 /// A call on a program-rooted resource outside any `with_provider` goes to
 /// its default provider (core-semantics §14.7): `Env.var` and `env.var` are
 /// `OsEnv.var` on a fresh `OsEnv {}`, and so on, with the ambient output.

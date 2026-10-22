@@ -16,6 +16,8 @@ pub mod counters;
 pub mod effects;
 pub mod elaborate;
 pub mod flags;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub mod foreign;
 pub mod fs;
 pub mod interp;
 pub mod layout;

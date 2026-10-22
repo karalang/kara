@@ -49,6 +49,17 @@ pub struct Program {
     /// semantics §14), by name: what effect inference needs to decide
     /// which functions take a hidden provider parameter.
     pub resources: BTreeMap<String, super::effects::ResourceDecl>,
+    /// The `extern "C"` functions the program calls, by name, with their
+    /// declared signatures: a call to one is a call into a native library
+    /// (design.md § FFI), not to a body or a library native.
+    pub externs: BTreeMap<String, ExternSig>,
+}
+
+/// An `extern "C"` function's declared parameter and return types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternSig {
+    pub params: Vec<Ty>,
+    pub ret: Ty,
 }
 
 /// How a derived `Display` departs from the default.
@@ -1043,6 +1054,32 @@ struct Interp<'a> {
     http_request: crate::http1::Request,
 }
 
+/// Where a native copy of interpreter values came from: `count` scalars of
+/// `width` bytes at `base` (from element `start` of it, when it is a
+/// sequence).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+struct NativeCopy {
+    base: Addr,
+    start: Option<u64>,
+    count: usize,
+    width: usize,
+    signed: bool,
+    bools: bool,
+}
+
+/// The value of type `it` that C returned in the integer register `r`: its
+/// low bits, sign-extended for a signed type.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn from_c_word(r: u64, it: IntTy) -> i128 {
+    let bits = it.bits().min(64);
+    let shift = 64 - bits;
+    if it.signed() {
+        i128::from(((r << shift) as i64) >> shift)
+    } else {
+        i128::from((r << shift) >> shift)
+    }
+}
+
 /// A request `RequestBuilder` assembles: method, url, headers in order,
 /// body and timeout in milliseconds (0 for none).
 #[derive(Default, Clone)]
@@ -1188,6 +1225,10 @@ impl<'a> Interp<'a> {
     /// argument and result types at the call site, which say what a
     /// generic method's element type is and how its `Option` is laid out.
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
+        let program: &'a Program = self.program;
+        if let Some(sig) = program.externs.get(name) {
+            return self.foreign_call(name, sig, args);
+        }
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         // The default providers (§14.7) are the ambient resources' natives
@@ -11848,6 +11889,147 @@ impl<'a> Interp<'a> {
             "the HTTP client is not available in the browser".into(),
             ret,
         )
+    }
+
+    /// A call of the `extern "C"` function `name` (`super::foreign`).
+    /// Integers, `bool`s and addresses go to C as they are. A pointer into
+    /// the interpreter's own values (`CString.as_ptr()`, `ptr.mut(n)`)
+    /// points at a native copy of what it addresses, from that element to
+    /// the end of its sequence, and a `*mut` one is read back afterwards.
+    /// A pointer C returns is a plain address.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn foreign_call(&mut self, name: &str, sig: &ExternSig, args: Vec<Value>) -> R<Value> {
+        let f = match super::foreign::symbol(name) {
+            Ok(f) => f,
+            Err(e) => return err(e),
+        };
+        let mut words = Vec::with_capacity(args.len());
+        // Each native copy, and where a `*mut` one is read back to.
+        let mut copies: Vec<(Vec<u8>, Option<NativeCopy>)> = Vec::new();
+        for (v, &t) in args.iter().zip(&sig.params) {
+            let word = match (self.tys.kind(t), v) {
+                (TyKind::RawPtr { mutable, pointee }, Value::Ref(at)) => {
+                    let (bytes, copy) = self.native_copy(name, at, pointee)?;
+                    copies.push((bytes, mutable.then_some(copy)));
+                    copies.last().map_or(0, |(b, _)| b.as_ptr() as u64)
+                }
+                (_, Value::Int(i)) => *i as u64,
+                (_, Value::Bool(b)) => u64::from(*b),
+                (_, other) => {
+                    return err(format!(
+                        "`{name}`: the argument {other:?} cannot cross to C"
+                    ))
+                }
+            };
+            words.push(word);
+        }
+        // SAFETY: the lowering admits only integer, `bool` and pointer
+        // parameters, each passed in an integer register; what C does
+        // through a pointer is the program's `unsafe` contract.
+        let r = match unsafe { super::foreign::call(f, &words) } {
+            Ok(r) => r,
+            Err(e) => return err(format!("`{name}`: {e}")),
+        };
+        for (bytes, back) in copies {
+            if let Some(c) = back {
+                self.read_back(&bytes, &c)?;
+            }
+        }
+        match self.tys.kind(sig.ret) {
+            TyKind::Unit => Ok(Value::Unit),
+            TyKind::Bool => Ok(Value::Bool(r as u8 != 0)),
+            TyKind::Int(it) => Ok(Value::Int(from_c_word(r, it))),
+            TyKind::RawPtr { .. } => Ok(Value::Int(i128::from(r))),
+            _ => err(format!("`{name}`: its return type cannot cross from C")),
+        }
+    }
+
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    fn foreign_call(&mut self, name: &str, _sig: &ExternSig, _args: Vec<Value>) -> R<Value> {
+        err(format!(
+            "`{name}`: an `extern \"C\"` call runs on this platform only when compiled"
+        ))
+    }
+
+    /// The native bytes of the `pointee`s at `at` and after it in its
+    /// sequence (one, when it is in none), with zeros after them, so C reading a
+    /// C string from a `CString` finds its end.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn native_copy(&self, name: &str, at: &Addr, pointee: Ty) -> R<(Vec<u8>, NativeCopy)> {
+        let (width, signed) = match self.tys.kind(pointee) {
+            TyKind::Int(it) => ((it.bits() / 8) as usize, it.signed()),
+            TyKind::Bool | TyKind::Unit => (1, false),
+            _ => {
+                return err(format!(
+                    "`{name}`: a pointer to {} cannot cross to C yet",
+                    self.tys.display(pointee)
+                ))
+            }
+        };
+        let scalar = |v: &Value| matches!(v, Value::Int(_) | Value::Bool(_));
+        let mut parent = at.clone();
+        let within = match parent.path.pop() {
+            Some(i) => match self.slot_ref(&parent)? {
+                Value::Agg(xs) if xs.get(i as usize).is_some_and(scalar) => {
+                    Some((i, xs[i as usize..].to_vec()))
+                }
+                _ => None,
+            },
+            None => None,
+        };
+        let (base, start, cells) = match within {
+            Some((i, cells)) => (parent, Some(i), cells),
+            None => (at.clone(), None, vec![self.slot_ref(at)?.clone()]),
+        };
+        let mut bytes = Vec::with_capacity(cells.len() * width + 8);
+        for c in &cells {
+            let n: i128 = match c {
+                Value::Int(n) => *n,
+                Value::Bool(b) => i128::from(*b),
+                other => {
+                    return err(format!(
+                        "`{name}`: a pointer to {other:?} cannot cross to C"
+                    ))
+                }
+            };
+            bytes.extend_from_slice(&n.to_ne_bytes()[..width]);
+        }
+        bytes.extend_from_slice(&[0; 8]);
+        let copy = NativeCopy {
+            base,
+            start,
+            count: cells.len(),
+            width,
+            signed,
+            bools: matches!(self.tys.kind(pointee), TyKind::Bool),
+        };
+        Ok((bytes, copy))
+    }
+
+    /// Writes what C left in a native copy back into the values it copied.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn read_back(&mut self, bytes: &[u8], c: &NativeCopy) -> R<()> {
+        for k in 0..c.count {
+            let raw = &bytes[k * c.width..(k + 1) * c.width];
+            let mut wide = [0u8; 16];
+            wide[..c.width].copy_from_slice(raw);
+            let mut n = i128::from_ne_bytes(wide);
+            if c.signed && c.width < 16 {
+                let shift = 128 - 8 * c.width as u32;
+                n = (n << shift) >> shift;
+            }
+            let v = if c.bools {
+                Value::Bool(n != 0)
+            } else {
+                Value::Int(n)
+            };
+            let at = match c.start {
+                Some(i) => c.base.child(i + k as u64),
+                None => c.base.clone(),
+            };
+            *self.slot_mut(&at)? = v;
+        }
+        Ok(())
     }
 
     fn http_error(&mut self, message: String, ret: Ty) -> R<Value> {

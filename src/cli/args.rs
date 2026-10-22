@@ -102,6 +102,18 @@ pub fn parse_args(args: &[String]) -> Command {
                 process::exit(1);
             });
             crate::mir::interp::set_source_name(path);
+            // The libraries an `extern "C"` call is looked up in: the
+            // `[link]` table of the manifest the file is under, if it has
+            // one that loads (a run needs no manifest).
+            let dir = std::path::Path::new(path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."));
+            if let Some(m) = crate::manifest::discover_project_root(dir)
+                .and_then(|root| crate::manifest::load_from_root(&root).ok())
+            {
+                crate::target::set_native_link_config(m.link_libs, m.link_search_paths);
+            }
             // The MIR interpreter drops a long chain (a 100 000-node list)
             // by recursion, so it runs on a thread with room for that.
             let result = std::thread::Builder::new()

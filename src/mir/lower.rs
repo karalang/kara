@@ -105,6 +105,16 @@ pub struct Lowered {
     pub effects: Option<crate::mir::effects::EffectReport>,
 }
 
+/// What an `extern "C"` signature with a type no backend passes to C yet
+/// reads as, in a "... is not lowered yet" error: only integers, `bool` and
+/// raw pointers cross so far.
+fn crossing(name: &str) -> String {
+    format!(
+        "a parameter or return type of the `extern \"C\"` function `{name}` other than an \
+         integer, `bool` or raw pointer"
+    )
+}
+
 /// Lower every instance reachable from `main`.
 #[allow(clippy::too_many_arguments)]
 pub fn lower_program<'a>(
@@ -271,6 +281,7 @@ fn lower_program_inner<'a>(
         closure_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
         own_self_trait_methods: FxHashSet::default(),
+        extern_fns: FxHashMap::default(),
     };
     lcx.index_functions(program);
     // Statics are initialized in declaration order, so they are numbered
@@ -652,6 +663,9 @@ struct Lcx<'a> {
     /// generic call through one moves its receiver even into an impl that
     /// borrows it (core semantics §4.7).
     own_self_trait_methods: FxHashSet<(String, String)>,
+    /// The functions declared in an `extern "C"` block (or as a lone
+    /// `extern "C" fn`): their calls go to the native library.
+    extern_fns: FxHashMap<DefId, &'a ast::ExternFunction>,
 }
 
 /// An element position in a sequence a slice pattern matches.
@@ -845,6 +859,23 @@ impl<'a> Lcx<'a> {
         let dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
         self.bound_resources = bound_resources(program);
         for item in &program.items {
+            let externs: Vec<&ast::ExternFunction> = match item {
+                Item::ExternFunction(e) if e.abi == "C" => vec![e],
+                Item::ExternBlock(b) if b.abi == "C" => b
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        ast::ExternItem::Function(f) => Some(&**f),
+                        ast::ExternItem::OpaqueType(_) => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for e in externs {
+                if let Some(d) = self.defs.lookup(0, &e.name) {
+                    self.extern_fns.insert(d, e);
+                }
+            }
             match item {
                 Item::Function(f) => {
                     // An appended library's `#[compiler_builtin]` function
@@ -1023,6 +1054,33 @@ impl<'a> Lcx<'a> {
             _ => return None,
         };
         Some(self.tys.tcx().intern(kind))
+    }
+
+    /// The type an `extern "C"` signature spells: an integer, `bool`, `()`,
+    /// or a raw pointer, whose pointee is `()` when it is anything else (a
+    /// foreign type). `None` for anything else, a float or an aggregate,
+    /// which no backend passes to C yet.
+    fn extern_ty(&self, t: &ast::TypeExpr) -> Option<Ty> {
+        match &t.kind {
+            ast::TypeKind::Path(p) if p.generic_args.is_none() => {
+                let [name] = p.segments.as_slice() else {
+                    return None;
+                };
+                self.primitive(name).filter(|&t| {
+                    matches!(self.tys.tcx().kind(t), HK::Int(_) | HK::UInt(_) | HK::Bool)
+                })
+            }
+            ast::TypeKind::Tuple(ts) if ts.is_empty() => Some(self.tys.tcx().intern(HK::Unit)),
+            ast::TypeKind::Pointer { is_mut, inner } => {
+                let unit = self.tys.tcx().intern(HK::Unit);
+                let pointee = self.extern_ty(inner).unwrap_or(unit);
+                Some(self.tys.tcx().intern(HK::RawPtr {
+                    mutable: *is_mut,
+                    pointee,
+                }))
+            }
+            _ => None,
+        }
     }
 
     /// Record which arguments the library's `#[compiler_builtin]` methods
@@ -10881,6 +10939,48 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// A call to an `extern "C"` function: by name, each argument at its
+    /// declared parameter type, with the declaration recorded in the
+    /// program's `externs` for the backends (design.md § FFI).
+    fn extern_call(
+        &mut self,
+        e: &'a Expr,
+        decl: &'a ast::ExternFunction,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<()> {
+        if decl.params.len() != args.len() {
+            return self.unsupported(
+                e.span,
+                "an `extern` call with the wrong number of arguments",
+            );
+        }
+        let mut params = Vec::with_capacity(args.len());
+        for p in &decl.params {
+            match self.lcx.extern_ty(&p.ty) {
+                Some(t) => params.push(t),
+                None => return self.unsupported(p.ty.span, &crossing(&decl.name)),
+            }
+        }
+        let ret = match &decl.return_type {
+            None => self.unit(),
+            Some(t) => match self.lcx.extern_ty(t) {
+                Some(t) => t,
+                None => return self.unsupported(t.span, &crossing(&decl.name)),
+            },
+        };
+        let mut ops = Vec::with_capacity(args.len());
+        for (a, &t) in args.iter().zip(&params) {
+            ops.push(self.operand_at(&a.value, t)?);
+        }
+        self.lcx
+            .program
+            .externs
+            .insert(decl.name.clone(), interp::ExternSig { params, ret });
+        self.call_native(&decl.name, ops, dest);
+        Ok(())
+    }
+
     fn call(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [CallArg], dest: Place) -> R<()> {
         if let Some(&l) = self.old_vals.get(&e.id) {
             let t = self.b.local_ty(l);
@@ -11183,6 +11283,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let f = self.lcx.fns.get(&d).map(|i| i.f);
                 let Some(f) = f else {
                     let name = self.lcx.def_name(d);
+                    if let Some(&decl) = self.lcx.extern_fns.get(&d) {
+                        return self.extern_call(e, decl, args, dest);
+                    }
                     if self.scalar_min_max(e, &name, args, dest.clone())? {
                         return Ok(());
                     }
