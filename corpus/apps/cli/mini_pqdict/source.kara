@@ -1,0 +1,462 @@
+// mini_pqdict — a port of the `pqdict` library (Nezar Abdennur, MIT): an
+// indexed priority queue (a dict-like binary heap that also supports lookup,
+// removal and priority updates by key). This is the data structure behind
+// Dijkstra's algorithm, event simulators and priority schedulers.
+//
+// The heap is two parallel arrays (key, priority); the library's key->index
+// map is an unobservable performance detail, so the port recomputes a key's
+// position by scanning. The heap algorithms — _sink / _swim / heaprepair /
+// heappush / heappop / heapupdate / heappushpop — are reproduced exactly, so
+// every observable operation (pop order, pushpop, swap, drain) is byte-identical
+// to the library, including the order ties are broken in.
+
+struct Item {
+    key: String,
+    val: i64,
+}
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+// precedence: mode 0 = min-pq (smaller is higher priority), 1 = max-pq
+fn prec(mode: i64, a: i64, b: i64) -> bool {
+    if mode == 0 { a < b } else { a > b }
+}
+
+fn find(hk: ref Vec[String], key: ref String) -> i64 {
+    let mut i = 0;
+    while i < hk.len() {
+        if hk[i] == key.clone() {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn swim(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, pos0: i64, top: i64) {
+    let mut pos = pos0;
+    let nk = hk[pos].clone();
+    let nv = hv[pos];
+    let mut go = true;
+    while go and pos > top {
+        let pp = (pos - 1) / 2;
+        if prec(mode, nv, hv[pp]) {
+            hk[pos] = hk[pp].clone();
+            hv[pos] = hv[pp];
+            pos = pp;
+        } else {
+            go = false;
+        }
+    }
+    hk[pos] = nk;
+    hv[pos] = nv;
+}
+
+fn sink(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, top: i64) {
+    let endpos = hv.len();
+    let mut pos = top;
+    let nk = hk[pos].clone();
+    let nv = hv[pos];
+    let mut child = 2 * pos + 1;
+    while child < endpos {
+        let other = child + 1;
+        if other < endpos and prec(mode, hv[child], hv[other]) == false {
+            child = other;
+        }
+        hk[pos] = hk[child].clone();
+        hv[pos] = hv[child];
+        pos = child;
+        child = 2 * pos + 1;
+    }
+    hk[pos] = nk;
+    hv[pos] = nv;
+    swim(mut hk, mut hv, mode, pos, top);
+}
+
+fn repair(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, pos: i64) {
+    let n = hv.len();
+    let pp = if pos > 0 { (pos - 1) / 2 } else { -1 };
+    let mut child = 2 * pos + 1;
+    if pp > -1 and prec(mode, hv[pos], hv[pp]) {
+        swim(mut hk, mut hv, mode, pos, 0);
+    } else if child < n {
+        let other = child + 1;
+        if other < n and prec(mode, hv[child], hv[other]) == false {
+            child = other;
+        }
+        if prec(mode, hv[child], hv[pos]) {
+            sink(mut hk, mut hv, mode, pos);
+        }
+    }
+}
+
+fn push(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, key: own String, val: i64) {
+    let n = hv.len();
+    hk.push(key);
+    hv.push(val);
+    swim(mut hk, mut hv, mode, n, 0);
+}
+
+fn pop_at(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, pos: i64) -> Item {
+    let rk = hk[pos].clone();
+    let rv = hv[pos];
+    let lastpos = hv.len() - 1;
+    let lk = hk.pop().unwrap();
+    let lv = hv.pop().unwrap();
+    if lastpos != pos {
+        hk[pos] = lk;
+        hv[pos] = lv;
+        repair(mut hk, mut hv, mode, pos);
+    }
+    Item { key: rk, val: rv }
+}
+
+fn update_at(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, pos: i64, val: i64) {
+    hv[pos] = val;
+    repair(mut hk, mut hv, mode, pos);
+}
+
+fn pushpop(hk: mut ref Vec[String], hv: mut ref Vec[i64], mode: i64, key: own String, val: i64) -> Item {
+    if hv.len() > 0 and prec(mode, hv[0], val) {
+        let rk = hk[0].clone();
+        let rv = hv[0];
+        hk[0] = key;
+        hv[0] = val;
+        sink(mut hk, mut hv, mode, 0);
+        return Item { key: rk, val: rv };
+    }
+    Item { key: key, val: val }
+}
+
+fn fmt_item(it: ref Item) -> String {
+    let mut s = String.new();
+    s.push_str(it.key.clone());
+    s.push_str(" ");
+    s.push_str(itoa(it.val));
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut hk: Vec[String] = Vec.new();
+    let mut hv: Vec[i64] = Vec.new();
+    let mut mode: i64 = 0;
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "new" {
+                    hk = Vec.new();
+                    hv = Vec.new();
+                    mode = if f[1].clone() == "max" { 1 } else { 0 };
+                } else if op == "set" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let key = a[0].clone();
+                    let val = parse_int(a[1].clone());
+                    let p = find(hk, key);
+                    if p >= 0 {
+                        update_at(mut hk, mut hv, mode, p, val);
+                    } else {
+                        push(mut hk, mut hv, mode, key, val);
+                    }
+                } else if op == "add" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let key = a[0].clone();
+                    let val = parse_int(a[1].clone());
+                    if find(hk, key) >= 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        push(mut hk, mut hv, mode, key, val);
+                    }
+                } else if op == "upd" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let key = a[0].clone();
+                    let val = parse_int(a[1].clone());
+                    let p = find(hk, key);
+                    if p < 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        update_at(mut hk, mut hv, mode, p, val);
+                    }
+                } else if op == "del" {
+                    let key = f[1].clone();
+                    let p = find(hk, key);
+                    if p < 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        pop_at(mut hk, mut hv, mode, p);
+                    }
+                } else if op == "pop" {
+                    if hv.len() == 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        let it = pop_at(mut hk, mut hv, mode, 0);
+                        out.push_str(fmt_item(it));
+                        out.push_str("\n");
+                    }
+                } else if op == "top" {
+                    if hv.len() == 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        out.push_str(hk[0].clone());
+                        out.push_str(" ");
+                        out.push_str(itoa(hv[0]));
+                        out.push_str("\n");
+                    }
+                } else if op == "get" {
+                    let key = f[1].clone();
+                    let p = find(hk, key);
+                    if p < 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        out.push_str(itoa(hv[p]));
+                        out.push_str("\n");
+                    }
+                } else if op == "has" {
+                    let key = f[1].clone();
+                    if find(hk, key) >= 0 {
+                        out.push_str("yes\n");
+                    } else {
+                        out.push_str("no\n");
+                    }
+                } else if op == "len" {
+                    out.push_str(itoa(hv.len()));
+                    out.push_str("\n");
+                } else if op == "pushpop" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let key = a[0].clone();
+                    let val = parse_int(a[1].clone());
+                    if find(hk, key) >= 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        let it = pushpop(mut hk, mut hv, mode, key, val);
+                        out.push_str(fmt_item(it));
+                        out.push_str("\n");
+                    }
+                } else if op == "swap" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let k1 = a[0].clone();
+                    let k2 = a[1].clone();
+                    let p1 = find(hk, k1);
+                    let p2 = find(hk, k2);
+                    if p1 < 0 or p2 < 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        hk[p1] = k2;
+                        hk[p2] = k1;
+                    }
+                } else if op == "rekey" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let old = a[0].clone();
+                    let nw = a[1].clone();
+                    let p = find(hk, old);
+                    let pn = find(hk, nw);
+                    if p < 0 or pn >= 0 {
+                        out.push_str("ERR\n");
+                    } else {
+                        hk[p] = nw;
+                    }
+                } else if op == "drain" {
+                    let mut parts = String.new();
+                    let mut first = true;
+                    while hv.len() > 0 {
+                        let it = pop_at(mut hk, mut hv, mode, 0);
+                        if first == false {
+                            parts.push_str(" ");
+                        }
+                        first = false;
+                        parts.push_str(it.key.clone());
+                        parts.push_str(":");
+                        parts.push_str(itoa(it.val));
+                    }
+                    out.push_str(parts);
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\tmin\n");
+    s.push_str("set\ta 10\n");
+    s.push_str("set\tb 5\n");
+    s.push_str("set\tc 8\n");
+    s.push_str("set\td 20\n");
+    s.push_str("top\n");
+    s.push_str("len\n");
+    s.push_str("upd\td 3\n");
+    s.push_str("top\n");
+    s.push_str("set\tb 1\n");
+    s.push_str("pop\n");
+    s.push_str("pop\n");
+    s.push_str("get\tc\n");
+    s.push_str("has\tb\n");
+    s.push_str("has\tz\n");
+    s.push_str("set\te 4\n");
+    s.push_str("set\tf 4\n");
+    s.push_str("set\tg 4\n");
+    s.push_str("drain\n");
+    s.push_str("new\tmax\n");
+    s.push_str("add\tlow 1\n");
+    s.push_str("add\tmid 5\n");
+    s.push_str("add\thigh 9\n");
+    s.push_str("top\n");
+    s.push_str("pushpop\turgent 10\n");
+    s.push_str("pushpop\ttrivial 0\n");
+    s.push_str("top\n");
+    s.push_str("swap\tlow mid\n");
+    s.push_str("get\tlow\n");
+    s.push_str("get\tmid\n");
+    s.push_str("len\n");
+    s.push_str("drain\n");
+    s.push_str("new\tmin\n");
+    s.push_str("pop\n");
+    s.push_str("top\n");
+    s.push_str("get\tx\n");
+    s.push_str("del\tx\n");
+    s.push_str("upd\tx 1\n");
+    s.push_str("add\tx 7\n");
+    s.push_str("add\tx 9\n");
+    s.push_str("has\tx\n");
+    s.push_str("set\tx 2\n");
+    s.push_str("get\tx\n");
+    s.push_str("pushpop\tx 0\n");
+    s.push_str("len\n");
+    s.push_str("pop\n");
+    s.push_str("pop\n");
+    s.push_str("new\tmin\n");
+    s.push_str("set\tp 3\n");
+    s.push_str("set\tq 3\n");
+    s.push_str("set\tr 3\n");
+    s.push_str("set\ts 1\n");
+    s.push_str("rekey\tp p2\n");
+    s.push_str("has\tp\n");
+    s.push_str("has\tp2\n");
+    s.push_str("get\tp2\n");
+    s.push_str("rekey\tq r\n");
+    s.push_str("rekey\tzz yy\n");
+    s.push_str("swap\ts p2\n");
+    s.push_str("get\ts\n");
+    s.push_str("get\tp2\n");
+    s.push_str("drain\n");
+    s.push_str("new\tmin\n");
+    s.push_str("set\tn0 50\n");
+    s.push_str("set\tn1 40\n");
+    s.push_str("set\tn2 30\n");
+    s.push_str("set\tn3 20\n");
+    s.push_str("set\tn4 10\n");
+    s.push_str("upd\tn0 5\n");
+    s.push_str("upd\tn1 45\n");
+    s.push_str("pop\n");
+    s.push_str("upd\tn2 2\n");
+    s.push_str("pop\n");
+    s.push_str("set\tn5 1\n");
+    s.push_str("pop\n");
+    s.push_str("pop\n");
+    s.push_str("len\n");
+    s.push_str("pop\n");
+    s.push_str("pop\n");
+    s.push_str("pop\n");
+    s.push_str("new\tmax\n");
+    s.push_str("set\tonly 42\n");
+    s.push_str("top\n");
+    s.push_str("len\n");
+    s.push_str("drain\n");
+    s.push_str("drain\n");
+    s.push_str("set\ta 1\n");
+    s.push_str("set\tb 2\n");
+    s.push_str("del\ta\n");
+    s.push_str("drain\n");
+    s
+}
