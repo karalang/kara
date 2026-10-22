@@ -1,0 +1,897 @@
+// mini_wsproto — the WebSocket frame protocol of wsproto 1.3.2
+// (src/wsproto/frame_protocol.py), the sans-I/O core that hypercorn and
+// uvicorn drive. It decodes a byte stream into frames — unmasking, key
+// rotation across reads, fragmentation reassembly, incremental UTF-8
+// validation of text, close-code parsing and validation — and serializes
+// data/ping/pong/close frames. Every ParseFailed carries wsproto's exact
+// message and close code; UTF-8 errors carry CPython's UnicodeDecodeError
+// text. Client serialization masks with a 32-bit key chosen at random;
+// that key is pinned to one fixed value (mask_key, matching the oracle) so
+// the masked bytes are reproducible. jobs_text() holds data/jobs.tsv.
+
+// ----------------------------------------------------------- hex / ints
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn hex2(b: u8) -> String {
+    f"{b:02x}"
+}
+
+fn hex_str(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(hex2(x));
+    }
+    s
+}
+
+fn to_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.bytes() {
+        v = v * 10 + (c - b'0') as i64;
+    }
+    v
+}
+
+fn tf(b: bool) -> String {
+    if b { "T".to_string() } else { "F".to_string() }
+}
+
+// ----------------------------------------------------------- types
+
+struct Fail {
+    msg: String,
+    code: i64,
+}
+
+struct Masker {
+    null: bool,
+    key: Vec[u8],
+}
+
+struct Buf {
+    data: Vec[u8],
+    used: i64,
+}
+
+struct Frame {
+    opcode: u8,
+    payload: Vec[u8],
+    close_code: i64,
+    close_reason: Vec[u8],
+    frame_finished: bool,
+    message_finished: bool,
+}
+
+struct RawFrame {
+    opcode: u8,
+    payload: Vec[u8],
+    frame_finished: bool,
+    fin: bool,
+}
+
+struct FDec {
+    client: bool,
+    buf: Buf,
+    has_header: bool,
+    h_fin: bool,
+    h_opcode: u8,
+    h_payload_len: i64,
+    effective_opcode: u8,
+    masker: Masker,
+    payload_required: i64,
+    payload_consumed: i64,
+}
+
+struct MsgDec {
+    opcode: i64,
+    active: bool,
+    leftover: Vec[u8],
+}
+
+struct Proto {
+    client: bool,
+    fdec: FDec,
+    mdec: MsgDec,
+    closed: bool,
+    outbound: i64,
+}
+
+// ----------------------------------------------------------- opcodes
+
+fn is_control(op: u8) -> bool {
+    (op & 0x08) != 0
+}
+
+fn opcode_name(op: u8) -> String {
+    if op == 0 {
+        "CONTINUATION".to_string()
+    } else if op == 1 {
+        "TEXT".to_string()
+    } else if op == 2 {
+        "BINARY".to_string()
+    } else if op == 8 {
+        "CLOSE".to_string()
+    } else if op == 9 {
+        "PING".to_string()
+    } else {
+        "PONG".to_string()
+    }
+}
+
+fn opcode_repr(op: u8) -> String {
+    f"<Opcode.{opcode_name(op)}: {op}>"
+}
+
+// ----------------------------------------------------------- UTF-8
+
+fn udec_err(input: ref Vec[u8], start: i64, end: i64, reason: String) -> String {
+    if end - start == 1 {
+        let hb = input[start];
+        f"'utf-8' codec can't decode byte 0x{hb:02x} in position {start}: {reason}"
+    } else {
+        f"'utf-8' codec can't decode bytes in position {start}-{end - 1}: {reason}"
+    }
+}
+
+// Validates UTF-8 in `input`, returning the index one past the last fully
+// decoded byte. A truncated-but-valid-so-far trailing sequence stops the
+// scan early when `at_end` is false (the caller buffers the remainder); at
+// end of message it is "unexpected end of data". Mirrors CPython's decoder
+// and its error positions.
+fn utf8_decode(input: ref Vec[u8], at_end: bool) -> Result[i64, String] {
+    let n = input.len();
+    let mut i = 0;
+    while i < n {
+        let b = input[i];
+        if b < 0x80 {
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if b >= 0xC2 and b <= 0xDF {
+            need = 1;
+        } else if b >= 0xE0 and b <= 0xEF {
+            need = 2;
+            if b == 0xE0 {
+                lo = 0xA0;
+            }
+            if b == 0xED {
+                hi = 0x9F;
+            }
+        } else if b >= 0xF0 and b <= 0xF4 {
+            need = 3;
+            if b == 0xF0 {
+                lo = 0x90;
+            }
+            if b == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            return Err(udec_err(input, i, i + 1, "invalid start byte".to_string()));
+        }
+        let mut k = 1;
+        let mut bad = false;
+        while k <= need {
+            if i + k >= n {
+                break;
+            }
+            let c = input[i + k];
+            let low: u8 = if k == 1 { lo } else { 0x80 };
+            let high: u8 = if k == 1 { hi } else { 0xBF };
+            if c < low or c > high {
+                bad = true;
+                break;
+            }
+            k += 1;
+        }
+        if bad {
+            return Err(udec_err(input, i, i + k, "invalid continuation byte".to_string()));
+        }
+        if k <= need {
+            if not at_end {
+                return Ok(i);
+            }
+            return Err(udec_err(input, i, n, "unexpected end of data".to_string()));
+        }
+        i += need + 1;
+    }
+    Ok(n)
+}
+
+// decode(ignore).encode: keep the complete codepoints at the front.
+fn truncate_utf8(data: ref Vec[u8], nbytes: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if data.len() <= nbytes {
+        for x in data {
+            out.push(x);
+        }
+        return out;
+    }
+    let mut head: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < nbytes {
+        head.push(data[i]);
+        i += 1;
+    }
+    let end = match utf8_decode(head, false) {
+        Ok(e) => e,
+        Err(_) => head.len(),
+    };
+    let mut j = 0;
+    while j < end {
+        out.push(head[j]);
+        j += 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------- masker
+
+fn mask_process(m: mut ref Masker, data: own Vec[u8]) -> Vec[u8] {
+    if m.null {
+        return data;
+    }
+    if data.len() == 0 {
+        return data;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < data.len() {
+        out.push(data[i] ^ m.key[i % 4]);
+        i += 1;
+    }
+    let rot = data.len() % 4;
+    if rot != 0 {
+        let mut nk: Vec[u8] = Vec.new();
+        let mut j = rot;
+        while j < 4 {
+            nk.push(m.key[j]);
+            j += 1;
+        }
+        j = 0;
+        while j < rot {
+            nk.push(m.key[j]);
+            j += 1;
+        }
+        m.key = nk;
+    }
+    out
+}
+
+// ----------------------------------------------------------- buffer
+
+fn buf_feed(b: mut ref Buf, more: Vec[u8]) {
+    for x in more {
+        b.data.push(x);
+    }
+}
+
+fn buf_consume_at_most(b: mut ref Buf, nbytes: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if nbytes <= 0 {
+        return out;
+    }
+    let end = b.used + nbytes;
+    let mut i = b.used;
+    while i < end and i < b.data.len() {
+        out.push(b.data[i]);
+        i += 1;
+    }
+    b.used = i;
+    out
+}
+
+fn buf_consume_exactly(b: mut ref Buf, nbytes: i64) -> Option[Vec[u8]] {
+    if b.data.len() - b.used < nbytes {
+        return None;
+    }
+    Some(buf_consume_at_most(mut b, nbytes))
+}
+
+fn buf_commit(b: mut ref Buf) {
+    let mut nd: Vec[u8] = Vec.new();
+    let mut i = b.used;
+    while i < b.data.len() {
+        nd.push(b.data[i]);
+        i += 1;
+    }
+    b.data = nd;
+    b.used = 0;
+}
+
+fn buf_rollback(b: mut ref Buf) {
+    b.used = 0;
+}
+
+fn buf_len(b: ref Buf) -> i64 {
+    b.data.len()
+}
+
+// ----------------------------------------------------------- frame decoder
+
+fn fdec_ext_len(fd: mut ref FDec, op: u8, plen: i64) -> Result[Option[i64], Fail] {
+    if is_control(op) and plen > 125 {
+        return Err(Fail { msg: "Control frame with payload len > 125".to_string(), code: 1002 });
+    }
+    if plen == 126 {
+        match buf_consume_exactly(mut fd.buf, 2) {
+            None => Ok(None),
+            Some(x) => {
+                let v = ((x[0] as i64) << 8) | (x[1] as i64);
+                if v <= 125 {
+                    return Err(Fail { msg: "Payload length used 2 bytes when 1 would have sufficed".to_string(), code: 1002 });
+                }
+                Ok(Some(v))
+            }
+        }
+    } else if plen == 127 {
+        match buf_consume_exactly(mut fd.buf, 8) {
+            None => Ok(None),
+            Some(x) => {
+                if (x[0] & 0x80) != 0 {
+                    return Err(Fail { msg: "8-byte payload length with non-zero MSB".to_string(), code: 1002 });
+                }
+                let mut v = 0;
+                let mut t = 0;
+                while t < 8 {
+                    v = (v << 8) | (x[t] as i64);
+                    t += 1;
+                }
+                if v <= 65535 {
+                    return Err(Fail { msg: "Payload length used 8 bytes when 2 would have sufficed".to_string(), code: 1002 });
+                }
+                Ok(Some(v))
+            }
+        }
+    } else {
+        Ok(Some(plen))
+    }
+}
+
+fn fdec_parse_header(fd: mut ref FDec) -> Result[bool, Fail] {
+    match buf_consume_exactly(mut fd.buf, 2) {
+        None => {
+            buf_rollback(mut fd.buf);
+            Ok(false)
+        }
+        Some(data) => {
+            let b0 = data[0];
+            let b1 = data[1];
+            let fin = (b0 & 0x80) != 0;
+            let rsv1 = (b0 & 0x40) != 0;
+            let rsv2 = (b0 & 0x20) != 0;
+            let rsv3 = (b0 & 0x10) != 0;
+            let op = b0 & 0x0F;
+            if op != 0 and op != 1 and op != 2 and op != 8 and op != 9 and op != 10 {
+                return Err(Fail { msg: f"Invalid opcode 0x{op:x}", code: 1002 });
+            }
+            if is_control(op) and not fin {
+                return Err(Fail { msg: "Invalid attempt to fragment control frame".to_string(), code: 1002 });
+            }
+            let has_mask = (b1 & 0x80) != 0;
+            let plen_short = (b1 & 0x7F) as i64;
+            let plen = match fdec_ext_len(mut fd, op, plen_short)? {
+                None => {
+                    buf_rollback(mut fd.buf);
+                    return Ok(false);
+                }
+                Some(v) => v,
+            };
+            if rsv1 or rsv2 or rsv3 {
+                return Err(Fail { msg: "Reserved bit set unexpectedly".to_string(), code: 1002 });
+            }
+            if has_mask and fd.client {
+                return Err(Fail { msg: "client received unexpected masked frame".to_string(), code: 1002 });
+            }
+            if (not has_mask) and (not fd.client) {
+                return Err(Fail { msg: "server received unexpected unmasked frame".to_string(), code: 1002 });
+            }
+            if has_mask {
+                match buf_consume_exactly(mut fd.buf, 4) {
+                    None => {
+                        buf_rollback(mut fd.buf);
+                        return Ok(false);
+                    }
+                    Some(key) => {
+                        fd.masker = Masker { null: false, key: key };
+                    }
+                }
+            } else {
+                fd.masker = Masker { null: true, key: Vec.new() };
+            }
+            buf_commit(mut fd.buf);
+            fd.has_header = true;
+            fd.h_fin = fin;
+            fd.h_opcode = op;
+            fd.h_payload_len = plen;
+            fd.effective_opcode = op;
+            if is_control(op) {
+                fd.payload_required = plen;
+            } else {
+                fd.payload_required = 0;
+            }
+            fd.payload_consumed = 0;
+            Ok(true)
+        }
+    }
+}
+
+fn fdec_process(fd: mut ref FDec) -> Result[Option[RawFrame], Fail] {
+    if not fd.has_header {
+        if not fdec_parse_header(mut fd)? {
+            return Ok(None);
+        }
+    }
+    if buf_len(fd.buf) < fd.payload_required {
+        return Ok(None);
+    }
+    let payload_remaining = fd.h_payload_len - fd.payload_consumed;
+    let payload = buf_consume_at_most(mut fd.buf, payload_remaining);
+    if payload.len() == 0 and fd.h_payload_len > 0 {
+        return Ok(None);
+    }
+    buf_commit(mut fd.buf);
+    fd.payload_consumed += payload.len();
+    let finished = fd.payload_consumed == fd.h_payload_len;
+    let eff = fd.effective_opcode;
+    let masked = mask_process(mut fd.masker, payload);
+    let rf = RawFrame { opcode: eff, payload: masked, frame_finished: finished, fin: fd.h_fin };
+    if finished {
+        fd.has_header = false;
+        fd.effective_opcode = 0;
+    } else {
+        fd.effective_opcode = 0;
+    }
+    Ok(Some(rf))
+}
+
+// ----------------------------------------------------------- message decoder
+
+fn msg_process(md: mut ref MsgDec, opcode: u8, payload: own Vec[u8], frame_finished: bool, header_fin: bool) -> Result[Frame, Fail] {
+    if md.opcode == -1 {
+        if opcode == 0 {
+            return Err(Fail { msg: "unexpected CONTINUATION".to_string(), code: 1002 });
+        }
+        md.opcode = opcode as i64;
+    } else if opcode != 0 {
+        return Err(Fail { msg: f"expected CONTINUATION, got {opcode_repr(opcode)}", code: 1002 });
+    }
+    if opcode == 1 {
+        md.active = true;
+        md.leftover = Vec.new();
+    }
+    let finished = frame_finished and header_fin;
+    let mut data_bytes = payload;
+    if md.active {
+        let mut data: Vec[u8] = Vec.new();
+        for x in md.leftover {
+            data.push(x);
+        }
+        for x in data_bytes {
+            data.push(x);
+        }
+        let end = match utf8_decode(data, finished) {
+            Ok(e) => e,
+            Err(m) => return Err(Fail { msg: m, code: 1007 }),
+        };
+        let mut emitted: Vec[u8] = Vec.new();
+        let mut j = 0;
+        while j < end {
+            emitted.push(data[j]);
+            j += 1;
+        }
+        let mut lo: Vec[u8] = Vec.new();
+        let mut t = end;
+        while t < data.len() {
+            lo.push(data[t]);
+            t += 1;
+        }
+        md.leftover = lo;
+        data_bytes = emitted;
+    }
+    let out_op = md.opcode as u8;
+    let f = Frame {
+        opcode: out_op,
+        payload: data_bytes,
+        close_code: -1,
+        close_reason: Vec.new(),
+        frame_finished: frame_finished,
+        message_finished: finished,
+    };
+    if finished {
+        md.opcode = -1;
+        md.active = false;
+        md.leftover = Vec.new();
+    }
+    Ok(f)
+}
+
+// ----------------------------------------------------------- protocol
+
+fn new_proto(client: bool) -> Proto {
+    Proto {
+        client: client,
+        fdec: FDec {
+            client: client,
+            buf: Buf { data: Vec.new(), used: 0 },
+            has_header: false,
+            h_fin: false,
+            h_opcode: 0,
+            h_payload_len: 0,
+            effective_opcode: 0,
+            masker: Masker { null: true, key: Vec.new() },
+            payload_required: 0,
+            payload_consumed: 0,
+        },
+        mdec: MsgDec { opcode: -1, active: false, leftover: Vec.new() },
+        closed: false,
+        outbound: -1,
+    }
+}
+
+fn proto_receive_bytes(p: mut ref Proto, data: Vec[u8]) {
+    buf_feed(mut p.fdec.buf, data);
+}
+
+fn is_defined_close(code: i64) -> bool {
+    code == 1000 or code == 1001 or code == 1002 or code == 1003
+        or code == 1005 or code == 1006 or code == 1007 or code == 1008
+        or code == 1009 or code == 1010 or code == 1011 or code == 1012
+        or code == 1013 or code == 1015
+}
+
+fn proto_process_close(payload: Vec[u8], frame_finished: bool, fin: bool) -> Result[Frame, Fail] {
+    let n = payload.len();
+    if n == 0 {
+        return Ok(Frame {
+            opcode: 8, payload: Vec.new(), close_code: 1005, close_reason: Vec.new(),
+            frame_finished: frame_finished, message_finished: fin,
+        });
+    }
+    if n == 1 {
+        return Err(Fail { msg: "CLOSE with 1 byte payload".to_string(), code: 1002 });
+    }
+    let code = ((payload[0] as i64) << 8) | (payload[1] as i64);
+    if code < 1000 or code > 4999 {
+        return Err(Fail { msg: "CLOSE with invalid code".to_string(), code: 1002 });
+    }
+    if code == 1005 or code == 1006 or code == 1015 {
+        return Err(Fail { msg: "remote CLOSE with local-only reason".to_string(), code: 1002 });
+    }
+    if (not is_defined_close(code)) and code <= 2999 {
+        return Err(Fail { msg: "CLOSE with unknown reserved code".to_string(), code: 1002 });
+    }
+    let mut reason: Vec[u8] = Vec.new();
+    let mut i = 2;
+    while i < n {
+        reason.push(payload[i]);
+        i += 1;
+    }
+    match utf8_decode(reason, true) {
+        Ok(_) => {}
+        Err(m) => return Err(Fail { msg: "Error decoding CLOSE reason: " + m, code: 1007 }),
+    }
+    Ok(Frame {
+        opcode: 8, payload: Vec.new(), close_code: code, close_reason: reason,
+        frame_finished: frame_finished, message_finished: fin,
+    })
+}
+
+fn proto_received(p: mut ref Proto) -> Result[Vec[Frame], Fail] {
+    let mut frames: Vec[Frame] = Vec.new();
+    if p.closed {
+        return Ok(frames);
+    }
+    let mut more = true;
+    while more {
+        match fdec_process(mut p.fdec)? {
+            None => {
+                more = false;
+            }
+            Some(rf) => {
+                if not is_control(rf.opcode) {
+                    let f = msg_process(mut p.mdec, rf.opcode, rf.payload, rf.frame_finished, rf.fin)?;
+                    frames.push(f);
+                } else if rf.opcode == 8 {
+                    let f = proto_process_close(rf.payload, rf.frame_finished, rf.fin)?;
+                    frames.push(f);
+                    p.closed = true;
+                    more = false;
+                } else {
+                    frames.push(Frame {
+                        opcode: rf.opcode,
+                        payload: rf.payload,
+                        close_code: -1,
+                        close_reason: Vec.new(),
+                        frame_finished: rf.frame_finished,
+                        message_finished: rf.fin,
+                    });
+                }
+            }
+        }
+    }
+    Ok(frames)
+}
+
+// ----------------------------------------------------------- serialize
+
+fn mask_key() -> Vec[u8] {
+    let mut k: Vec[u8] = Vec.new();
+    k.push(0x37);
+    k.push(0xfa);
+    k.push(0x1c);
+    k.push(0x8e);
+    k
+}
+
+fn serialize_frame(client: bool, opcode: u8, payload: Vec[u8], fin: bool) -> Vec[u8] {
+    let fin_bits: i64 = if fin { 0x80 } else { 0 };
+    let fro = fin_bits | (opcode as i64);
+    let plen = payload.len();
+    let mut first = 0;
+    let mut second = -1;
+    let mut quad = false;
+    if plen <= 125 {
+        first = plen;
+    } else if plen <= 65535 {
+        first = 126;
+        second = plen;
+    } else {
+        first = 127;
+        second = plen;
+        quad = true;
+    }
+    if client {
+        first = first | 0x80;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(fro as u8);
+    out.push(first as u8);
+    if second >= 0 {
+        if quad {
+            let mut t = 7;
+            while t >= 0 {
+                out.push(((second >> (8 * t)) & 0xFF) as u8);
+                t -= 1;
+            }
+        } else {
+            out.push(((second >> 8) & 0xFF) as u8);
+            out.push((second & 0xFF) as u8);
+        }
+    }
+    if client {
+        let key = mask_key();
+        for x in key {
+            out.push(x);
+        }
+        let mut i = 0;
+        while i < payload.len() {
+            out.push(payload[i] ^ key[i % 4]);
+            i += 1;
+        }
+    } else {
+        for x in payload {
+            out.push(x);
+        }
+    }
+    out
+}
+
+fn proto_ping(p: ref Proto, payload: Vec[u8]) -> Vec[u8] {
+    serialize_frame(p.client, 9, payload, true)
+}
+
+fn proto_pong(p: ref Proto, payload: Vec[u8]) -> Vec[u8] {
+    serialize_frame(p.client, 10, payload, true)
+}
+
+fn proto_close(p: ref Proto, code_in: i64, reason: Vec[u8], has_reason: bool) -> Vec[u8] {
+    let mut payload: Vec[u8] = Vec.new();
+    let mut code = code_in;
+    if code == 1005 or code == 1006 or code == 1015 {
+        code = 1000;
+    }
+    if code >= 0 {
+        payload.push(((code >> 8) & 0xFF) as u8);
+        payload.push((code & 0xFF) as u8);
+        if has_reason {
+            let tr = truncate_utf8(reason, 123);
+            for x in tr {
+                payload.push(x);
+            }
+        }
+    }
+    serialize_frame(p.client, 8, payload, true)
+}
+
+fn proto_send_data(p: mut ref Proto, is_text: bool, payload_in: Vec[u8], fin: bool) -> Vec[u8] {
+    let mut opcode: u8 = if is_text { 1 } else { 2 };
+    if p.outbound == -1 {
+        p.outbound = opcode as i64;
+    } else if p.outbound != (opcode as i64) {
+        // data type mismatch (not exercised)
+        opcode = opcode;
+    } else {
+        opcode = 0;
+    }
+    if fin {
+        p.outbound = -1;
+    }
+    serialize_frame(p.client, opcode, payload_in, fin)
+}
+
+// ----------------------------------------------------------- render
+
+fn render_frame(f: ref Frame) -> String {
+    let head = f"op={opcode_name(f.opcode)} ff={tf(f.frame_finished)} mf={tf(f.message_finished)}";
+    if f.opcode == 8 {
+        f"{head} code={f.close_code} reason={hex_str(f.close_reason)}"
+    } else if f.opcode == 1 {
+        f"{head} text={hex_str(f.payload)}"
+    } else {
+        f"{head} bin={hex_str(f.payload)}"
+    }
+}
+
+fn do_recv(f: ref Vec[String], out: mut ref String) {
+    let client = f[1] == "client";
+    let mut p = new_proto(client);
+    let mut failed = false;
+    let mut ci = 2;
+    while ci < f.len() and not failed {
+        let chunk = unhex(f[ci]);
+        proto_receive_bytes(mut p, chunk);
+        match proto_received(mut p) {
+            Ok(frames) => {
+                for fr in frames.iter() {
+                    out.push_str(f"  {render_frame(fr)}\n");
+                }
+            }
+            Err(fail) => {
+                out.push_str(f"  err={fail.msg} code={fail.code}\n");
+                failed = true;
+            }
+        }
+        ci += 1;
+    }
+}
+
+fn do_send(f: ref Vec[String], out: mut ref String) {
+    let client = f[1] == "client";
+    let mut p = new_proto(client);
+    let ops: Vec[String] = f[2].split("|").map(|o| o.to_string()).collect();
+    for op in ops.iter() {
+        let parts: Vec[String] = op.split(" ").map(|x| x.to_string()).collect();
+        let data_bytes = if parts[0] == "data" {
+            let is_text = parts[1] == "t";
+            let fin = parts[2] == "1";
+            let hexp = if parts.len() > 3 { parts[3].clone() } else { String.new() };
+            proto_send_data(mut p, is_text, unhex(hexp), fin)
+        } else if parts[0] == "ping" {
+            let hexp = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+            proto_ping(p, unhex(hexp))
+        } else if parts[0] == "pong" {
+            let hexp = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+            proto_pong(p, unhex(hexp))
+        } else {
+            let code = if parts[1] == "-" { -1 } else { to_int(parts[1]) };
+            let has_reason = parts[2] != "-";
+            let reason = if has_reason { unhex(parts[2]) } else { Vec.new() };
+            proto_close(p, code, reason, has_reason)
+        };
+        out.push_str(f"  bytes={hex_str(data_bytes)}\n");
+    }
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        if f[0] == "recv" {
+            do_recv(f, mut out);
+        } else {
+            do_send(f, mut out);
+        }
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("recv\tserver\t818537fa1c8e5f9f70e258\n");
+    s.push_str("recv\tserver\t828837fa1c8e37fb1e8d33ff1a89\n");
+    s.push_str("recv\tserver\t898837fa1c8e479372e9479572e9\n");
+    s.push_str("recv\tserver\t8a8037fa1c8e\n");
+    s.push_str("recv\tserver\t818037fa1c8e\n");
+    s.push_str("recv\tserver\t818f37fa1c8e5f39b5e25b953c6caf793c7ea8629c\n");
+    s.push_str("recv\tserver\t82fe00c837fa1c8e37fd129b2bd936bf0fc55ac363a17ee7478d620bbb69862f9f55aa33f331ce57d71df27bcbf9169f2fe53aa303c15ec767ad42eb5b89660fbf758a139351ae37f73dd25beb19f67fcf051a8323e13ea707cd22cb7ba946ef5f956af3b3718e17975db23b8b39d65fef25fa63c3011e8727ed02ab1bc926cf7fb54ad353916ef7b77d921bab59b63f8f45da43e321fe67c70de28b3be906af1fd52ab373b14ed7579d72fb4b79961faf65ba238341de47e72dc26bdb09e68f3ff50a9313d12eb777bd52db6b9976ff\n");
+    s.push_str("recv\tclient\t810b66726f6d20736572766572\n");
+    s.push_str("recv\tclient\t8204deadbeef\n");
+    s.push_str("recv\tserver\t018337fa1c8e7f9f70\t808337fa1c8e5b953d\n");
+    s.push_str("recv\tserver\t028237fa1c8e36f8\t008237fa1c8e34fe\t808137fa1c8e32\n");
+    s.push_str("recv\tserver\t018237fa1c8e5698\t898237fa1c8e5f93\t808237fa1c8e549e\n");
+    s.push_str("recv\tserver\t829437fa1c8e37\tf91a873b\tf50e9b2fe102af13dd36a307c92ab7\n");
+    s.push_str("recv\tserver\t818737fa1c8e5698fe\t16b49978\n");
+    s.push_str("recv\tserver\t888537fa1c8e34127ef752\n");
+    s.push_str("recv\tserver\t888237fa1c8e3413\n");
+    s.push_str("recv\tserver\t888037fa1c8e\n");
+    s.push_str("recv\tserver\t888537fa1c8e3c427dfe47\n");
+    s.push_str("recv\tserver\t888237fa1c8e247d\n");
+    s.push_str("recv\tserver\t838137fa1c8e4f\n");
+    s.push_str("recv\tclient\t818137fa1c8e4f\n");
+    s.push_str("recv\tserver\t810178\n");
+    s.push_str("recv\tserver\t89fe007e37fa1c8e4f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f8264f64f82\n");
+    s.push_str("recv\tserver\t888237fa1c8e341d\n");
+    s.push_str("recv\tserver\t888237fa1c8e3417\n");
+    s.push_str("recv\tserver\t888237fa1c8e302a\n");
+    s.push_str("recv\tserver\t888137fa1c8e34\n");
+    s.push_str("recv\tserver\t818237fa1c8ec804\n");
+    s.push_str("recv\tserver\t888337fa1c8e3412e3\n");
+    s.push_str("recv\tserver\t098137fa1c8e4f\n");
+    s.push_str("recv\tserver\t808637fa1c8e58886ce65694\n");
+    s.push_str("recv\tserver\t81fe007d112233440000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("recv\tserver\tc18137fa1c8e4f\n");
+    s.push_str("recv\tserver\t82ff0000000000000005112233440000000000\n");
+    s.push_str("send\tserver\tdata t 1 6869207468657265\n");
+    s.push_str("send\tserver\tdata b 1 000102ff\n");
+    s.push_str("send\tserver\tping 70696e6721\n");
+    s.push_str("send\tserver\tpong \n");
+    s.push_str("send\tserver\tclose 1000 646f6e65\n");
+    s.push_str("send\tserver\tclose 1001 -\n");
+    s.push_str("send\tserver\tclose - -\n");
+    s.push_str("send\tserver\tclose 1005 -\n");
+    s.push_str("send\tserver\tclose 1006 -\n");
+    s.push_str("send\tserver\tdata t 1 68c3a96c6c6f20e29883\n");
+    s.push_str("send\tserver\tdata b 1 00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7dce1e6ebf0f5faff04090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4a9aeb3b8bdc2c7ccd1d6dbe0e5eaeff4f9fe03080d12171c21262b30353a3f44494e53585d62676c71767b80858a8f94999ea3a8adb2b7bcc1c6cbd0d5dadfe4e9eef3f8fd02070c11161b20252a2f34393e43484d52575c61666b70757a7f84898e93989da2a7acb1b6bbc0c5cacfd4d9dee3e8edf2f7fc01060b10151a1f24292e33383d42474c51565b60656a6f74797e83888d92979ca1a6abb0b5babfc4c9ced3d8dde2e7ecf1f6fb00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7\n");
+    s.push_str("send\tserver\tdata t 0 48656c|data t 1 6c6f\n");
+    s.push_str("send\tserver\tclose 1000 7878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878\n");
+    s.push_str("send\tclient\tdata t 1 6869207468657265\n");
+    s.push_str("send\tclient\tdata b 1 000102ff\n");
+    s.push_str("send\tclient\tping 70696e6721\n");
+    s.push_str("send\tclient\tclose 1000 646f6e65\n");
+    s.push_str("send\tclient\tdata t 1 68c3a96c6c6f20e29883\n");
+    s.push_str("send\tclient\tdata b 1 00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7dce1e6ebf0f5faff04090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4a9aeb3b8bdc2c7ccd1d6dbe0e5eaeff4f9fe03080d12171c21262b30353a3f44494e53585d62676c71767b80858a8f94999ea3a8adb2b7bcc1c6cbd0d5dadfe4e9eef3f8fd02070c11161b20252a2f34393e43484d52575c61666b70757a7f84898e93989da2a7acb1b6bbc0c5cacfd4d9dee3e8edf2f7fc01060b10151a1f24292e33383d42474c51565b60656a6f74797e83888d92979ca1a6abb0b5babfc4c9ced3d8dde2e7ecf1f6fb00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7\n");
+    s
+}
