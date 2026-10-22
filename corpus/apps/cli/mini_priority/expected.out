@@ -1,0 +1,147 @@
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | - | 16 | 0
+  ok
+== insert | 5 | - | 16 | 0
+  ok
+== sched | 9
+  [1, 3, 5, 1, 3, 5, 1, 3, 5]
+== tree | 1000
+  ok
+== insert | 1 | - | 32 | 0
+  ok
+== insert | 2 | - | 16 | 0
+  ok
+== insert | 3 | - | 8 | 0
+  ok
+== sched | 14
+  [1, 2, 3, 1, 1, 2, 1, 1, 2, 3, 1, 1, 2, 1]
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | 1 | 16 | 0
+  ok
+== insert | 5 | 1 | 16 | 0
+  ok
+== block | 1
+  ok
+== sched | 8
+  [3, 5, 3, 5, 3, 5, 3, 5]
+== unblock | 1
+  ok
+== sched | 4
+  [1, 1, 1, 1]
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | - | 16 | 0
+  ok
+== insert | 5 | 1 | 16 | 1
+  ok
+== sched | 6
+  [1, 3, 1, 3, 1, 3]
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | - | 16 | 0
+  ok
+== insert | 5 | - | 16 | 0
+  ok
+== reprio | 5 | 1 | 16 | 1
+  ok
+== sched | 6
+  [1, 3, 1, 3, 1, 3]
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | 1 | 16 | 0
+  ok
+== insert | 5 | 3 | 16 | 0
+  ok
+== remove | 3
+  ok
+== sched | 6
+  [1, 1, 1, 1, 1, 1]
+== tree | 1000
+  ok
+== insert | 1 | - | 200 | 0
+  ok
+== insert | 3 | - | 100 | 0
+  ok
+== reprio | 1 | 3 | 64 | 0
+  ok
+== sched | 10
+  [3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 1 | - | 16 | 0
+  err=Stream 1 already in tree
+== tree | 1000
+  ok
+== reprio | 9 | - | 16 | 0
+  err='Stream 9 not in tree'
+== tree | 1000
+  ok
+== remove | 9
+  err='Stream 9 not in tree'
+== tree | 1000
+  ok
+== block | 9
+  err='Stream 9 not in tree'
+== tree | 1000
+  ok
+== reprio | 0 | - | 16 | 0
+  err=Cannot reprioritize stream 0
+== tree | 1000
+  ok
+== remove | 0
+  err=Cannot remove stream 0
+== tree | 1000
+  ok
+== block | 0
+  err=Cannot block stream 0
+== tree | 1000
+  ok
+== insert | 1 | 1 | 16 | 0
+  err=Stream 1 must not depend on itself.
+== tree | 1000
+  ok
+== insert | 1 | - | 0 | 0
+  err=Stream weight must be between 1 and 256 (inclusive)
+== tree | 1000
+  ok
+== insert | 1 | - | 257 | 0
+  err=Stream weight must be between 1 and 256 (inclusive)
+== tree | 2
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | - | 16 | 0
+  err=Refusing to insert 3 streams into priority tree at once
+== tree | 1000
+  ok
+== insert | 1 | - | 16 | 0
+  ok
+== insert | 3 | - | 16 | 0
+  ok
+== block | 1
+  ok
+== block | 3
+  ok
+== sched | 3
+  []
+  err=No unblocked streams to schedule.
+== tree | 1000
+  ok
+== insert | 7 | 4 | 16 | 0
+  ok
+== sched | 4
+  [7, 7, 7, 7]

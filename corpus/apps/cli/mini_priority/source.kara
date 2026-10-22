@@ -1,0 +1,571 @@
+// mini_priority — the HTTP/2 priority tree of the `priority` library (MIT),
+// the third piece of the h2 stack alongside mini_hpack (header compression)
+// and mini_hyperframe (framing). It stores streams in a dependency tree with
+// RFC 7540 §5.3 weights and schedules them with the library's deficit-weighted
+// round-robin, reproducing its exact pull order, tree surgery and errors.
+//
+// Driven by data/jobs.tsv (see mk.py): each line is one operation on a tree
+// whose state persists until the next `tree` line. A mutation prints `ok` or
+// `err=<message>`; a `sched` prints the list of stream ids pulled.
+
+// ---------- a min-heap of (level, stream_id) ----------
+// Python's `priority` keeps each node's children in a heapq keyed on
+// (level, Stream), ties broken by Stream.__lt__ (stream_id). Keys are a strict
+// total order, so any correct binary min-heap reproduces heapq's pull order.
+
+fn heap_less(a: (i64, i64), b: (i64, i64)) -> bool {
+    if a.0 != b.0 {
+        a.0 < b.0
+    } else {
+        a.1 < b.1
+    }
+}
+
+fn heappush(h: mut ref Vec[(i64, i64)], v: (i64, i64)) {
+    h.push(v);
+    let mut i = h.len() - 1;
+    while i > 0 {
+        let parent = (i - 1) / 2;
+        if heap_less(h[i], h[parent]) {
+            let tmp = h[i];
+            h[i] = h[parent];
+            h[parent] = tmp;
+            i = parent;
+        } else {
+            i = 0;
+            break;
+        }
+    }
+}
+
+fn heappop(h: mut ref Vec[(i64, i64)]) -> (i64, i64) {
+    let top = h[0];
+    let last = match h.pop() {
+        Some(x) => x,
+        None => (0, 0),
+    };
+    if h.len() > 0 {
+        h[0] = last;
+        let mut i = 0;
+        let n = h.len();
+        loop {
+            let l = 2 * i + 1;
+            let r = 2 * i + 2;
+            let mut smallest = i;
+            if l < n and heap_less(h[l], h[smallest]) {
+                smallest = l;
+            }
+            if r < n and heap_less(h[r], h[smallest]) {
+                smallest = r;
+            }
+            if smallest == i {
+                break;
+            }
+            let tmp = h[i];
+            h[i] = h[smallest];
+            h[smallest] = tmp;
+            i = smallest;
+        }
+    }
+    top
+}
+
+// ---------- the tree ----------
+
+#[derive(Clone)]
+struct Node {
+    stream_id: i64,
+    weight: i64,
+    active: bool,
+    deficit: i64,
+    last_weight: i64,
+    parent: i64,              // parent slot, -1 for none
+    children: Vec[i64],       // child stream ids, in insertion order
+    child_queue: Vec[(i64, i64)],  // (level, stream_id) min-heap
+}
+
+struct Tree {
+    nodes: Vec[Node],         // slot -> Node (slots are never reused)
+    id2slot: Map[i64, i64],
+    max_streams: i64,
+    count: i64,               // live stream count, stream 0 included
+}
+
+fn new_node(id: i64, weight: i64) -> Node {
+    Node {
+        stream_id: id,
+        weight: weight,
+        active: true,
+        deficit: 0,
+        last_weight: 0,
+        parent: -1,
+        children: Vec.new(),
+        child_queue: Vec.new(),
+    }
+}
+
+fn new_tree(max_streams: i64) -> Tree {
+    let mut t = Tree {
+        nodes: Vec.new(),
+        id2slot: Map.new(),
+        max_streams: max_streams,
+        count: 0,
+    };
+    // the root stream (id 0, weight 1, blocked)
+    let mut root = new_node(0, 1);
+    root.active = false;
+    t.nodes.push(root);
+    t.id2slot.insert(0, 0);
+    t.count = 1;
+    t
+}
+
+fn slot_of(tree: ref Tree, id: i64) -> i64 {
+    match tree.id2slot.get(id) {
+        Some(s) => s,
+        None => -1,
+    }
+}
+
+fn has_stream(tree: ref Tree, id: i64) -> bool {
+    tree.id2slot.contains_key(id)
+}
+
+// ---------- tree surgery ----------
+
+fn add_child(tree: mut ref Tree, parent_slot: i64, child_slot: i64, child_id: i64) {
+    tree.nodes[child_slot].parent = parent_slot;
+    tree.nodes[parent_slot].children.push(child_id);
+    let lw = tree.nodes[parent_slot].last_weight;
+    heappush(mut tree.nodes[parent_slot].child_queue, (lw, child_id));
+}
+
+fn add_child_exclusive(tree: mut ref Tree, parent_slot: i64, child_slot: i64, child_id: i64) {
+    let old = tree.nodes[parent_slot].children.clone();
+    tree.nodes[parent_slot].children = Vec.new();
+    tree.nodes[parent_slot].child_queue = Vec.new();
+    tree.nodes[parent_slot].last_weight = 0;
+    add_child(mut tree, parent_slot, child_slot, child_id);
+    for ocid in old.iter() {
+        let os = slot_of(tree, *ocid);
+        add_child(mut tree, child_slot, os, *ocid);
+    }
+}
+
+fn remove_child(tree: mut ref Tree, parent_slot: i64, child_id: i64, strip: bool) {
+    let mut newch: Vec[i64] = Vec.new();
+    for c in tree.nodes[parent_slot].children.iter() {
+        if *c != child_id {
+            newch.push(*c);
+        }
+    }
+    tree.nodes[parent_slot].children = newch;
+
+    let old_q = tree.nodes[parent_slot].child_queue.clone();
+    let mut nq: Vec[(i64, i64)] = Vec.new();
+    for e in old_q.iter() {
+        if (*e).1 != child_id {
+            heappush(mut nq, *e);
+        }
+    }
+    tree.nodes[parent_slot].child_queue = nq;
+
+    if strip {
+        let cs = slot_of(tree, child_id);
+        let gch = tree.nodes[cs].children.clone();
+        for g in gch.iter() {
+            let gs = slot_of(tree, *g);
+            add_child(mut tree, parent_slot, gs, *g);
+        }
+    }
+}
+
+// ---------- the scheduler ----------
+// Returns Ok(stream_id) or Err(()) when no unblocked stream is reachable
+// (the library's IndexError, surfaced as DeadlockError at the root).
+
+fn schedule(tree: mut ref Tree, slot: i64) -> Result[i64, ()] {
+    let mut next: i64 = -1;
+    let mut found = false;
+    let mut errored = false;
+    let mut popped: Vec[(i64, i64)] = Vec.new();
+
+    while not found and not errored {
+        if tree.nodes[slot].child_queue.len() == 0 {
+            errored = true;
+        } else {
+            let val = heappop(mut tree.nodes[slot].child_queue);
+            popped.push(val);
+            let child_id = val.1;
+            let cslot = slot_of(tree, child_id);
+            if tree.nodes[cslot].active {
+                next = child_id;
+                found = true;
+            } else {
+                match schedule(mut tree, cslot) {
+                    Ok(ns) => {
+                        next = ns;
+                        found = true;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+
+    // The library reinserts every popped child, even on failure, updating its
+    // deficit-weighted level: level += (256 + deficit) // weight.
+    for val in popped.iter() {
+        let level = (*val).0;
+        let child_id = (*val).1;
+        tree.nodes[slot].last_weight = level;
+        let cslot = slot_of(tree, child_id);
+        let w = tree.nodes[cslot].weight;
+        let d = tree.nodes[cslot].deficit;
+        let level2 = level + (256 + d) / w;
+        tree.nodes[cslot].deficit = (256 + d) % w;
+        heappush(mut tree.nodes[slot].child_queue, (level2, child_id));
+    }
+
+    if found {
+        Ok(next)
+    } else {
+        Err(())
+    }
+}
+
+// ---------- operations ----------
+
+fn check_weight(w: i64) -> Result[(), String] {
+    if w < 1 or w > 256 {
+        Err("Stream weight must be between 1 and 256 (inclusive)".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+// Returns the parent's slot, inserting a blocked default parent if absent.
+fn get_or_insert_parent(tree: mut ref Tree, pid: i64) -> Result[i64, String] {
+    if has_stream(tree, pid) {
+        return Ok(slot_of(tree, pid));
+    }
+    op_insert(mut tree, pid, -1, 16, false)?;
+    op_block(mut tree, pid)?;
+    Ok(slot_of(tree, pid))
+}
+
+fn op_insert(tree: mut ref Tree, id: i64, dep: i64, weight: i64, excl: bool) -> Result[(), String] {
+    if has_stream(tree, id) {
+        return Err(f"Stream {id} already in tree");
+    }
+    if (tree.count + 1) > tree.max_streams {
+        let n = tree.max_streams + 1;
+        return Err(f"Refusing to insert {n} streams into priority tree at once");
+    }
+    check_weight(weight)?;
+
+    let depn = if dep <= 0 { 0 } else { dep };
+    if dep > 0 and dep == id {
+        return Err(f"Stream {id} must not depend on itself.");
+    }
+
+    let pslot = get_or_insert_parent(mut tree, depn)?;
+    let slot = tree.nodes.len();
+    tree.nodes.push(new_node(id, weight));
+    if excl {
+        add_child_exclusive(mut tree, pslot, slot, id);
+    } else {
+        add_child(mut tree, pslot, slot, id);
+    }
+    tree.id2slot.insert(id, slot);
+    tree.count += 1;
+    Ok(())
+}
+
+// Does new_parent (by slot) depend, transitively, on current_id?
+fn stream_cycle(tree: ref Tree, new_parent_slot: i64, current_id: i64) -> bool {
+    let mut parent = new_parent_slot;
+    let mut i = 0;
+    while i < 100 {
+        parent = tree.nodes[parent].parent;
+        if tree.nodes[parent].stream_id == current_id {
+            return true;
+        } else if tree.nodes[parent].stream_id == 0 {
+            return false;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn op_reprio(tree: mut ref Tree, id: i64, dep: i64, weight: i64, excl: bool) -> Result[(), String] {
+    if id == 0 {
+        return Err("Cannot reprioritize stream 0".to_string());
+    }
+    if not has_stream(tree, id) {
+        return Err(f"'Stream {id} not in tree'");
+    }
+    let cur = slot_of(tree, id);
+
+    let mut new_parent: i64 = 0;
+    let mut cycle = false;
+    if dep > 0 {
+        if dep == id {
+            return Err(f"Stream {id} must not depend on itself");
+        }
+        new_parent = get_or_insert_parent(mut tree, dep)?;
+        cycle = stream_cycle(tree, new_parent, id);
+    } else {
+        new_parent = slot_of(tree, 0);
+        cycle = false;
+    }
+
+    check_weight(weight)?;
+    tree.nodes[cur].weight = weight;
+
+    if cycle {
+        let np_parent = tree.nodes[new_parent].parent;
+        let np_id = tree.nodes[new_parent].stream_id;
+        remove_child(mut tree, np_parent, np_id, true);
+        let cur_parent = tree.nodes[cur].parent;
+        add_child(mut tree, cur_parent, new_parent, np_id);
+    }
+
+    let cur_parent2 = tree.nodes[cur].parent;
+    remove_child(mut tree, cur_parent2, id, false);
+
+    if excl {
+        add_child_exclusive(mut tree, new_parent, cur, id);
+    } else {
+        add_child(mut tree, new_parent, cur, id);
+    }
+    Ok(())
+}
+
+fn op_remove(tree: mut ref Tree, id: i64) -> Result[(), String] {
+    if id == 0 {
+        return Err("Cannot remove stream 0".to_string());
+    }
+    if not has_stream(tree, id) {
+        return Err(f"'Stream {id} not in tree'");
+    }
+    let cs = slot_of(tree, id);
+    let parent = tree.nodes[cs].parent;
+    remove_child(mut tree, parent, id, true);
+    let _rm = tree.id2slot.remove(id);
+    tree.count -= 1;
+    Ok(())
+}
+
+fn op_block(tree: mut ref Tree, id: i64) -> Result[(), String] {
+    if id == 0 {
+        return Err("Cannot block stream 0".to_string());
+    }
+    if not has_stream(tree, id) {
+        return Err(f"'Stream {id} not in tree'");
+    }
+    let s = slot_of(tree, id);
+    tree.nodes[s].active = false;
+    Ok(())
+}
+
+fn op_unblock(tree: mut ref Tree, id: i64) -> Result[(), String] {
+    if id == 0 {
+        return Err("Cannot unblock stream 0".to_string());
+    }
+    if not has_stream(tree, id) {
+        return Err(f"'Stream {id} not in tree'");
+    }
+    let s = slot_of(tree, id);
+    tree.nodes[s].active = true;
+    Ok(())
+}
+
+// ---------- job runner ----------
+
+fn int_of(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if cs.len() > 0 and cs[0] == '-' {
+        neg = true;
+        i = 1;
+    }
+    let mut n: i64 = 0;
+    while i < cs.len() {
+        n = n * 10 + (cs[i] as i64 - 48);
+        i += 1;
+    }
+    if neg { -n } else { n }
+}
+
+fn dep_of(s: ref String) -> i64 {
+    if s == "-" { -1 } else { int_of(s) }
+}
+
+fn ok_or_err(r: Result[(), String]) -> String {
+    match r {
+        Ok(_) => "ok".to_string(),
+        Err(e) => f"err={e}",
+    }
+}
+
+fn run(tree: mut ref Tree, f: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let k = f[0].to_string();
+    if k == "insert" {
+        out.push(ok_or_err(op_insert(mut tree, int_of(f[1]), dep_of(f[2]), int_of(f[3]), f[4] == "1")));
+    } else if k == "reprio" {
+        out.push(ok_or_err(op_reprio(mut tree, int_of(f[1]), dep_of(f[2]), int_of(f[3]), f[4] == "1")));
+    } else if k == "remove" {
+        out.push(ok_or_err(op_remove(mut tree, int_of(f[1]))));
+    } else if k == "block" {
+        out.push(ok_or_err(op_block(mut tree, int_of(f[1]))));
+    } else if k == "unblock" {
+        out.push(ok_or_err(op_unblock(mut tree, int_of(f[1]))));
+    } else if k == "sched" {
+        let count = int_of(f[1]);
+        let mut ids: Vec[i64] = Vec.new();
+        let mut deadlocked = false;
+        let mut i = 0;
+        while i < count and not deadlocked {
+            match schedule(mut tree, 0) {
+                Ok(sid) => ids.push(sid),
+                Err(_) => deadlocked = true,
+            }
+            i += 1;
+        }
+        let mut s = String.new();
+        s.push('[');
+        let mut j = 0;
+        while j < ids.len() {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(f"{ids[j]}");
+            j += 1;
+        }
+        s.push(']');
+        out.push(s);
+        if deadlocked {
+            out.push("err=No unblocked streams to schedule.".to_string());
+        }
+    } else {
+        out.push(f"unknown job {k}");
+    }
+    out
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut tree = new_tree(1000);
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        if f[0] == "tree" {
+            tree = new_tree(int_of(f[1]));
+            out.push_str("  ok\n");
+        } else {
+            for r in run(mut tree, f).iter() {
+                out.push_str(f"  {r}\n");
+            }
+        }
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t16\t0\n");
+    s.push_str("insert\t5\t-\t16\t0\n");
+    s.push_str("sched\t9\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t32\t0\n");
+    s.push_str("insert\t2\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t8\t0\n");
+    s.push_str("sched\t14\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t1\t16\t0\n");
+    s.push_str("insert\t5\t1\t16\t0\n");
+    s.push_str("block\t1\n");
+    s.push_str("sched\t8\n");
+    s.push_str("unblock\t1\n");
+    s.push_str("sched\t4\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t16\t0\n");
+    s.push_str("insert\t5\t1\t16\t1\n");
+    s.push_str("sched\t6\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t16\t0\n");
+    s.push_str("insert\t5\t-\t16\t0\n");
+    s.push_str("reprio\t5\t1\t16\t1\n");
+    s.push_str("sched\t6\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t1\t16\t0\n");
+    s.push_str("insert\t5\t3\t16\t0\n");
+    s.push_str("remove\t3\n");
+    s.push_str("sched\t6\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t200\t0\n");
+    s.push_str("insert\t3\t-\t100\t0\n");
+    s.push_str("reprio\t1\t3\t64\t0\n");
+    s.push_str("sched\t10\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("reprio\t9\t-\t16\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("remove\t9\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("block\t9\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("reprio\t0\t-\t16\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("remove\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("block\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t1\t16\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t0\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t257\t0\n");
+    s.push_str("tree\t2\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t16\t0\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t1\t-\t16\t0\n");
+    s.push_str("insert\t3\t-\t16\t0\n");
+    s.push_str("block\t1\n");
+    s.push_str("block\t3\n");
+    s.push_str("sched\t3\n");
+    s.push_str("tree\t1000\n");
+    s.push_str("insert\t7\t4\t16\t0\n");
+    s.push_str("sched\t4\n");
+    s
+}
