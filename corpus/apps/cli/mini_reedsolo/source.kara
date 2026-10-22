@@ -1,0 +1,618 @@
+// mini_reedsolo — a port of the Reed-Solomon codec of reedsolo 1.7.0 (Unlicense
+// / MIT-0, public domain, Tomer Filiba & Stephen Larroque). Reed-Solomon is the
+// forward error correction behind QR codes, DVDs/CDs, DVB, RAID-6 and deep-space
+// links: it appends ECC symbols so that a fixed number of corrupted bytes can be
+// detected and repaired.
+//
+// This ports the GF(256) codec for the library's defaults (primitive polynomial
+// 0x11d, generator 2, fcr 0). Each job is `<op>\t<nsym>\t<payload>`:
+//   enc <nsym> <ascii message>   → the full codeword (message + nsym ECC bytes)
+//                                  as hex;
+//   dec <nsym> <hex codeword>    → `ok msg=<hex> ecc=<hex> errs=<n> pos=<...>`,
+//                                  the repaired message and ECC, the number of
+//                                  corrected byte errors and their positions.
+//
+// The pipeline follows reedsolo statement for statement: build the generator
+// polynomial, encode by extended synthetic division; decode by computing the
+// syndromes, the error locator polynomial (Berlekamp-Massey), the error
+// positions (a Chien-style root search), and the error magnitudes (Forney),
+// then XOR the magnitudes back in. All of it is GF(256) arithmetic over log /
+// anti-log tables.
+//
+// Scope: byte errors (not erasures), the default field and parameters, and
+// codewords within the correction bound nsym//2 — every dec job here is
+// correctable, so reporting of over-the-bound decode failures is out of scope
+// (see README). jobs_text() carries data/jobs.tsv verbatim.
+
+struct Gf {
+    exp: Vec[i64], // anti-log table, doubled to length 510
+    log: Vec[i64], // log table, length 256
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 and c <= 102 {
+        return c - 97 + 10;
+    }
+    c - 65 + 10 // uppercase A-F (unused here but complete)
+}
+
+fn hex_to_bytes(s: Str) -> Vec[i64] {
+    let b = str_bytes(s);
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        v.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i = i + 2;
+    }
+    v
+}
+
+fn bytes_to_hex(v: Vec[i64]) -> String {
+    let tbl = "0123456789abcdef".to_string();
+    let mut o = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let hi = (v[i] >> 4) & 15;
+        let lo = v[i] & 15;
+        o.push_str(tbl.substring(hi, hi + 1));
+        o.push_str(tbl.substring(lo, lo + 1));
+        i = i + 1;
+    }
+    o
+}
+
+fn init_tables() -> Gf {
+    let fc = 255;
+    let mut exp: Vec[i64] = Vec.new();
+    let mut log: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 512 {
+        exp.push(0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < 256 {
+        log.push(0);
+        i = i + 1;
+    }
+    let mut x = 1;
+    i = 0;
+    while i < fc {
+        exp[i] = x;
+        log[x] = i;
+        x = x << 1;
+        if (x & 256) != 0 {
+            x = x ^ 285; // 0x11d
+        }
+        i = i + 1;
+    }
+    i = fc;
+    while i < fc * 2 {
+        exp[i] = exp[i - fc];
+        i = i + 1;
+    }
+    Gf { exp: exp, log: log }
+}
+
+fn pymod(a: i64, m: i64) -> i64 {
+    let r = a % m;
+    if r < 0 {
+        return r + m;
+    }
+    r
+}
+
+fn gmul(g: Gf, x: i64, y: i64) -> i64 {
+    if x == 0 or y == 0 {
+        return 0;
+    }
+    g.exp[(g.log[x] + g.log[y]) % 255]
+}
+
+fn ginv(g: Gf, x: i64) -> i64 {
+    g.exp[255 - g.log[x]]
+}
+
+fn gdiv(g: Gf, x: i64, y: i64) -> i64 {
+    if x == 0 {
+        return 0;
+    }
+    g.exp[(g.log[x] + 255 - g.log[y]) % 255]
+}
+
+fn gpow(g: Gf, x: i64, power: i64) -> i64 {
+    g.exp[pymod(g.log[x] * power, 255)]
+}
+
+fn p_scale(g: Gf, p: Vec[i64], x: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < p.len() {
+        r.push(gmul(g, p[i], x));
+        i = i + 1;
+    }
+    r
+}
+
+fn p_add(p: Vec[i64], q: Vec[i64]) -> Vec[i64] {
+    let mut rlen = p.len();
+    if q.len() > rlen {
+        rlen = q.len();
+    }
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < rlen {
+        r.push(0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < p.len() {
+        r[i + rlen - p.len()] = p[i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < q.len() {
+        r[i + rlen - q.len()] = r[i + rlen - q.len()] ^ q[i];
+        i = i + 1;
+    }
+    r
+}
+
+fn p_mul(g: Gf, p: Vec[i64], q: Vec[i64]) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < p.len() + q.len() - 1 {
+        r.push(0);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < q.len() {
+        if q[j] != 0 {
+            let mut k = 0;
+            while k < p.len() {
+                if p[k] != 0 {
+                    r[k + j] = r[k + j] ^ gmul(g, p[k], q[j]);
+                }
+                k = k + 1;
+            }
+        }
+        j = j + 1;
+    }
+    r
+}
+
+fn p_eval(g: Gf, p: Vec[i64], x: i64) -> i64 {
+    let mut y = p[0];
+    let mut i = 1;
+    while i < p.len() {
+        y = gmul(g, y, x) ^ p[i];
+        i = i + 1;
+    }
+    y
+}
+
+// remainder of (p*q) truncated to degree nsym (reedsolo's rs_find_error_evaluator)
+fn p_mod_div(g: Gf, dividend: Vec[i64], divisor: Vec[i64]) -> Vec[i64] {
+    let mut msg: Vec[i64] = dividend.clone();
+    let mut i = 0;
+    while i < dividend.len() - (divisor.len() - 1) {
+        let coef = msg[i];
+        if coef != 0 {
+            let mut j = 1;
+            while j < divisor.len() {
+                if divisor[j] != 0 {
+                    msg[i + j] = msg[i + j] ^ gmul(g, divisor[j], coef);
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    let sep = divisor.len() - 1;
+    let mut rem: Vec[i64] = Vec.new();
+    let mut k = msg.len() - sep;
+    while k < msg.len() {
+        rem.push(msg[k]);
+        k = k + 1;
+    }
+    rem
+}
+
+fn rev(v: Vec[i64]) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = v.len();
+    while i > 0 {
+        i = i - 1;
+        r.push(v[i]);
+    }
+    r
+}
+
+fn gen_poly(g: Gf, nsym: i64) -> Vec[i64] {
+    let mut gp: Vec[i64] = Vec.new();
+    gp.push(1);
+    let mut i = 0;
+    while i < nsym {
+        let mut factor: Vec[i64] = Vec.new();
+        factor.push(1);
+        factor.push(gpow(g, 2, i));
+        gp = p_mul(g, gp, factor);
+        i = i + 1;
+    }
+    gp
+}
+
+fn encode(g: Gf, msg: Vec[i64], nsym: i64) -> Vec[i64] {
+    let gp = gen_poly(g, nsym);
+    let mut out: Vec[i64] = msg.clone();
+    let mut p = 0;
+    while p < gp.len() - 1 {
+        out.push(0);
+        p = p + 1;
+    }
+    let mut lgen: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < gp.len() {
+        lgen.push(g.log[gp[j]]);
+        j = j + 1;
+    }
+    let mut i = 0;
+    while i < msg.len() {
+        let coef = out[i];
+        if coef != 0 {
+            let lc = g.log[coef];
+            let mut k = 1;
+            while k < gp.len() {
+                out[i + k] = out[i + k] ^ g.exp[lc + lgen[k]];
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    // restore the original message bytes over the quotient region
+    i = 0;
+    while i < msg.len() {
+        out[i] = msg[i];
+        i = i + 1;
+    }
+    out
+}
+
+fn syndromes(g: Gf, msg: Vec[i64], nsym: i64) -> Vec[i64] {
+    let mut s: Vec[i64] = Vec.new();
+    s.push(0);
+    let mut i = 0;
+    while i < nsym {
+        s.push(p_eval(g, msg, gpow(g, 2, i)));
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_max(v: Vec[i64]) -> i64 {
+    let mut m = v[0];
+    let mut i = 1;
+    while i < v.len() {
+        if v[i] > m {
+            m = v[i];
+        }
+        i = i + 1;
+    }
+    m
+}
+
+// Berlekamp-Massey error locator
+fn find_error_locator(g: Gf, synd: Vec[i64], nsym: i64) -> Vec[i64] {
+    let mut err_loc: Vec[i64] = Vec.new();
+    err_loc.push(1);
+    let mut old_loc: Vec[i64] = Vec.new();
+    old_loc.push(1);
+    let mut synd_shift = 0;
+    if synd.len() > nsym {
+        synd_shift = synd.len() - nsym;
+    }
+    let mut i = 0;
+    while i < nsym {
+        let kk = i + synd_shift;
+        let mut delta = synd[kk];
+        let mut j = 1;
+        while j < err_loc.len() {
+            delta = delta ^ gmul(g, err_loc[err_loc.len() - 1 - j], synd[kk - j]);
+            j = j + 1;
+        }
+        old_loc.push(0);
+        if delta != 0 {
+            if old_loc.len() > err_loc.len() {
+                let new_loc = p_scale(g, old_loc.clone(), delta);
+                old_loc = p_scale(g, err_loc.clone(), ginv(g, delta));
+                err_loc = new_loc;
+            }
+            err_loc = p_add(err_loc.clone(), p_scale(g, old_loc.clone(), delta));
+        }
+        i = i + 1;
+    }
+    // drop leading zeros
+    let mut start = 0;
+    while start < err_loc.len() and err_loc[start] == 0 {
+        start = start + 1;
+    }
+    let mut trimmed: Vec[i64] = Vec.new();
+    let mut k = start;
+    while k < err_loc.len() {
+        trimmed.push(err_loc[k]);
+        k = k + 1;
+    }
+    trimmed
+}
+
+// Chien-style root search for the error positions
+fn find_errors(g: Gf, err_loc: Vec[i64], nmess: i64) -> Vec[i64] {
+    let mut pos: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < nmess {
+        if p_eval(g, err_loc, gpow(g, 2, i)) == 0 {
+            pos.push(nmess - 1 - i);
+        }
+        i = i + 1;
+    }
+    pos
+}
+
+fn find_errata_locator(g: Gf, e_pos: Vec[i64]) -> Vec[i64] {
+    let mut e_loc: Vec[i64] = Vec.new();
+    e_loc.push(1);
+    let mut i = 0;
+    while i < e_pos.len() {
+        let mut term: Vec[i64] = Vec.new();
+        term.push(gpow(g, 2, e_pos[i]));
+        term.push(0);
+        let mut one: Vec[i64] = Vec.new();
+        one.push(1);
+        e_loc = p_mul(g, e_loc, p_add(one, term));
+        i = i + 1;
+    }
+    e_loc
+}
+
+fn find_error_evaluator(g: Gf, synd: Vec[i64], err_loc: Vec[i64], nsym: i64) -> Vec[i64] {
+    let prod = p_mul(g, synd, err_loc);
+    let mut divisor: Vec[i64] = Vec.new();
+    divisor.push(1);
+    let mut z = 0;
+    while z < nsym + 1 {
+        divisor.push(0);
+        z = z + 1;
+    }
+    p_mod_div(g, prod, divisor)
+}
+
+// Forney algorithm: repair the message
+fn correct_errata(g: Gf, msg_in: Vec[i64], synd: Vec[i64], err_pos: Vec[i64]) -> Vec[i64] {
+    let n = msg_in.len();
+    let mut coef_pos: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < err_pos.len() {
+        coef_pos.push(n - 1 - err_pos[i]);
+        i = i + 1;
+    }
+    let err_loc = find_errata_locator(g, coef_pos.clone());
+    let err_eval = rev(find_error_evaluator(g, rev(synd), err_loc.clone(), err_loc.len() - 1));
+
+    let mut xs: Vec[i64] = Vec.new();
+    i = 0;
+    while i < coef_pos.len() {
+        let l = 255 - coef_pos[i];
+        xs.push(gpow(g, 2, pymod(0 - l, 255)));
+        i = i + 1;
+    }
+
+    let mut e: Vec[i64] = Vec.new();
+    let mut z = 0;
+    while z < n {
+        e.push(0);
+        z = z + 1;
+    }
+    i = 0;
+    while i < xs.len() {
+        let xi = xs[i];
+        let xi_inv = ginv(g, xi);
+        let mut elp = 1;
+        let mut j = 0;
+        while j < xs.len() {
+            if j != i {
+                elp = gmul(g, elp, 1 ^ gmul(g, xi_inv, xs[j]));
+            }
+            j = j + 1;
+        }
+        let mut y = p_eval(g, rev(err_eval.clone()), xi_inv);
+        y = gmul(g, xi, y); // gpow(xi, 1-fcr) with fcr=0 is xi
+        let mag = gdiv(g, y, elp);
+        e[err_pos[i]] = mag;
+        i = i + 1;
+    }
+    p_add(msg_in, e)
+}
+
+// insertion sort ascending
+fn sort_asc(v: Vec[i64]) -> Vec[i64] {
+    let mut a: Vec[i64] = v.clone();
+    let mut i = 1;
+    while i < a.len() {
+        let key = a[i];
+        let mut j = i;
+        while j > 0 and a[j - 1] > key {
+            a[j] = a[j - 1];
+            j = j - 1;
+        }
+        a[j] = key;
+        i = i + 1;
+    }
+    a
+}
+
+fn slice(v: Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut r: Vec[i64] = Vec.new();
+    let mut i = lo;
+    while i < hi {
+        r.push(v[i]);
+        i = i + 1;
+    }
+    r
+}
+
+fn run_decode(g: Gf, cw: Vec[i64], nsym: i64) -> String {
+    let n = cw.len();
+    let synd = syndromes(g, cw.clone(), nsym);
+    let mut msg = cw.clone();
+    let mut positions: Vec[i64] = Vec.new();
+    if vec_max(synd.clone()) != 0 {
+        let fsynd = slice(synd.clone(), 1, synd.len());
+        let err_loc = find_error_locator(g, fsynd, nsym);
+        let err_pos = find_errors(g, rev(err_loc), n);
+        msg = correct_errata(g, cw.clone(), synd.clone(), err_pos.clone());
+        positions = sort_asc(err_pos);
+    }
+    let msg_part = slice(msg.clone(), 0, n - nsym);
+    let ecc_part = slice(msg.clone(), n - nsym, n);
+    let mut o = String.new();
+    o.push_str("ok msg=");
+    o.push_str(bytes_to_hex(msg_part));
+    o.push_str(" ecc=");
+    o.push_str(bytes_to_hex(ecc_part));
+    o.push_str(" errs=");
+    o.push_str(itoa(positions.len()));
+    o.push_str(" pos=");
+    let mut k = 0;
+    while k < positions.len() {
+        if k > 0 {
+            o.push_str(",");
+        }
+        o.push_str(itoa(positions[k]));
+        k = k + 1;
+    }
+    o
+}
+
+fn main_run() -> String {
+    let g = init_tables();
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                let nsym_s = f[1].clone();
+                let payload = f[2].clone();
+                let nsym = parse_uint(nsym_s.clone());
+                out.push_str("== ");
+                out.push_str(op.clone());
+                out.push_str(" ");
+                out.push_str(nsym_s.clone());
+                out.push_str(" ");
+                out.push_str(payload.clone());
+                out.push_str("\n");
+                if op == "enc" {
+                    let cw = encode(g, str_bytes(payload.clone()), nsym);
+                    out.push_str(bytes_to_hex(cw));
+                } else {
+                    out.push_str(run_decode(g, hex_to_bytes(payload.clone()), nsym));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\t10\tHello, Reed-Solomon!\n");
+    s.push_str("enc\t10\tQR codes use this.\n");
+    s.push_str("enc\t6\tshort\n");
+    s.push_str("enc\t8\t0123456789abcdef\n");
+    s.push_str("enc\t10\t\n");
+    s.push_str("enc\t4\ta\n");
+    s.push_str("dec\t10\t48656c6c6f2c20526565642d536f6c6f6d6f6e2159cc86de65f9f46db25d\n");
+    s.push_str("dec\t10\t12656c6c6f2c20526565642d536f6c6f6d6f6e2159cc86de65f9f46db25d\n");
+    s.push_str("dec\t10\t48656c6d6f2c20526565642d536f6c6f6d6f6ede59cc86de65f9f46db25d\n");
+    s.push_str("dec\t10\t37656c6c6f2c20526565752d536f6c6f6d6f6e2159cc86de6579f46db25d\n");
+    s.push_str("dec\t10\t48476c6c6f2c20522165642d536f6c6fe56f6e2159cc86de65f9f46db24d\n");
+    s.push_str("dec\t10\t48657f6c6f2c04526565642d666f6c6f6d6f6e211fcc86de65f9f46de55d\n");
+    s.push_str("dec\t10\t515220636fcf657320b8736520746869732e8cd921dbcfa49861604b\n");
+    s.push_str("dec\t6\t73686f72747f18469563a5\n");
+    s.push_str("dec\t6\t73546f72747f18469563a5\n");
+    s.push_str("dec\t6\t7c686f72747f18b695633c\n");
+    s.push_str("dec\t8\t303132336135363738396162636465cc67795a17208c31c8\n");
+    s
+}
