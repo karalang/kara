@@ -1287,3 +1287,27 @@ fn the_mir_pipeline_does_not_call_the_legacy_interpreter() {
     }
     assert!(found.is_empty(), "legacy interpreter calls: {found:#?}");
 }
+
+/// `forget(value)` takes the value and runs no drop for it, nor for what
+/// it owns, which stays allocated without counting as a leak at exit
+/// (runtime/stdlib/intrinsics.kara, B-2026-10-22-38).
+#[test]
+fn forget_takes_the_value_and_drops_nothing() {
+    assert_runs(
+        r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    forget(a);
+    println("after forget");
+    let v = vec![R { id: 3 }, R { id: 4 }];
+    forget(v);
+    forget(String.from("text"));
+    println("end");
+}
+"#,
+        "after forget\nend\ndrop 2\n",
+    );
+}

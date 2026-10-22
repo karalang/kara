@@ -11333,8 +11333,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // stored value (`Log.set_exporter(e)`) go by value, the
                     // rest by reference. `File.append(path)` opens a file and
                     // stores nothing: its path is a `Str`.
-                    let stores =
-                        stores_argument(&name) && self.lcx.def_owner(d).as_deref() != Some("File");
+                    // `forget(value)` takes the value and drops nothing
+                    // (B-2026-10-22-38).
+                    let stores = (stores_argument(&name)
+                        && self.lcx.def_owner(d).as_deref() != Some("File"))
+                        || (name == "forget" && self.lcx.def_owner(d).is_none());
                     // A library handle declared `own` moves in, as into a
                     // library method (`BufReader.new(file)` keeps the file).
                     let owns = self

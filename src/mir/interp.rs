@@ -641,6 +641,7 @@ fn run_with(
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
         snapshots: Default::default(),
+        forgotten: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
         calls: 0,
@@ -971,6 +972,9 @@ struct Interp<'a> {
     /// of a `String`): not leaks, and kept until nothing refers to them
     /// ([`Interp::sweep_snapshots`]).
     snapshots: rustc_hash::FxHashSet<AllocId>,
+    /// The values `forget` took: what they own stays allocated by design,
+    /// so the exit check counts it as held.
+    forgotten: Vec<Value>,
     /// The bytes `String.bytes` has copied since the last sweep, and the
     /// count that starts the next one.
     snapshot_bytes: usize,
@@ -1814,6 +1818,13 @@ impl<'a> Interp<'a> {
             }
             ("panic_message", "") => {
                 self.panic_message = Some(self.show(&args, arg_tys)?);
+                Ok(Value::Unit)
+            }
+            // `forget(value)` takes the value and runs no drop for it, so
+            // what it owns stays allocated (runtime/stdlib/intrinsics.kara,
+            // B-2026-10-22-38).
+            ("forget", "") => {
+                self.forgotten.extend(args);
                 Ok(Value::Unit)
             }
             // design.md §17's introspection: the interpreter has no
@@ -12942,6 +12953,7 @@ impl<'a> Interp<'a> {
         let mut todo: Vec<&Value> = self
             .statics
             .iter()
+            .chain(self.forgotten.iter())
             .chain(self.tracing_sink.iter().map(|(v, _)| v))
             .chain(self.pools.iter().flat_map(|p| {
                 std::iter::once(&p.create)
