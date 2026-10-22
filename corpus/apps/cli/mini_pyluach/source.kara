@@ -1,0 +1,620 @@
+// mini_pyluach — a port of pyluach 2.3.0 (MIT; MS List), the Hebrew-calendar
+// library behind Jewish-date apps and the `holidays` ecosystem. It converts
+// between the proleptic Gregorian calendar and the Hebrew lunisolar calendar
+// (the 19-year Metonic cycle with the molad-based year-length rules), reports
+// the day of the week, and renders a Hebrew date as a gematria (Hebrew-numeral)
+// string. This port follows dates.py / utils.py / gematria.py exactly: the same
+// molad arithmetic in `_elapsed_days`, the same month-length rules, the same
+// Julian-day bridge (its two float truncations done in f64, as the library does
+// them, everything else in i64), and the same gematria letter math. The
+// GregorianDate class does no input validation, so this app defines its own
+// proleptic-Gregorian domain (year >= 1); oracle.py applies the same rule. The
+// gematria strings carry Hebrew characters, emitted as UTF-8. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    let mut digs: Vec[u8] = Vec.new();
+    let mut v = n;
+    if v == 0 {
+        digs.push(48);
+    }
+    while v > 0 {
+        digs.push((48 + (v % 10)) as u8);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = digs.len();
+    while i > 0 {
+        out.push(digs[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn itoa2(n: i64) -> String {
+    // zero-padded to 2 digits, like "%02d"
+    let mut out: Vec[u8] = Vec.new();
+    if n < 10 {
+        out.push(48);
+        out.push((48 + n) as u8);
+    } else {
+        out.push((48 + (n / 10)) as u8);
+        out.push((48 + (n % 10)) as u8);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn parse_ints(s: String) -> Vec[i64] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while i < n and b[i] == 32 {
+            i = i + 1;
+        }
+        if i < n {
+            let mut neg = false;
+            if b[i] == 45 {
+                neg = true;
+                i = i + 1;
+            }
+            let mut v = 0;
+            while i < n and b[i] >= 48 and b[i] <= 57 {
+                v = v * 10 + ((b[i] - 48) as i64);
+                i = i + 1;
+            }
+            if neg {
+                v = -v;
+            }
+            out.push(v);
+        }
+    }
+    out
+}
+
+// Append the UTF-8 bytes of a code point (every glyph here is in the BMP).
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 128 {
+        out.push(cp as u8);
+    } else if cp < 2048 {
+        out.push((192 + (cp >> 6)) as u8);
+        out.push((128 + (cp & 63)) as u8);
+    } else {
+        out.push((224 + (cp >> 12)) as u8);
+        out.push((128 + ((cp >> 6) & 63)) as u8);
+        out.push((128 + (cp & 63)) as u8);
+    }
+}
+
+// ---------------- Hebrew calendar math (utils.py) ----------------
+
+fn is_leap(year: i64) -> bool {
+    ((7 * year) + 1) % 19 < 7
+}
+
+fn elapsed_months(year: i64) -> i64 {
+    (235 * year - 234) / 19
+}
+
+// The molad-based first day of the Hebrew year (Rosh Hashana), in days since
+// the epoch. All operands are non-negative, so `/` (trunc) == floor here.
+fn elapsed_days(year: i64) -> i64 {
+    let me = elapsed_months(year);
+    let parts = 204 + 793 * (me % 1080);
+    let hours = 5 + 12 * me + 793 * (me / 1080) + parts / 1080;
+    let conj_day = 1 + 29 * me + hours / 24;
+    let conj_parts = 1080 * (hours % 24) + parts % 1080;
+    let mut alt = conj_day;
+    if conj_parts >= 19440
+        or (conj_day % 7 == 2 and conj_parts >= 9924 and not is_leap(year))
+        or (conj_day % 7 == 1 and conj_parts >= 16789 and is_leap(year - 1)) {
+        alt = conj_day + 1;
+    }
+    if alt % 7 == 0 or alt % 7 == 3 or alt % 7 == 5 {
+        alt = alt + 1;
+    }
+    alt
+}
+
+fn days_in_year(year: i64) -> i64 {
+    elapsed_days(year + 1) - elapsed_days(year)
+}
+
+fn long_cheshvan(year: i64) -> bool {
+    days_in_year(year) % 10 == 5
+}
+
+fn short_kislev(year: i64) -> bool {
+    days_in_year(year) % 10 == 3
+}
+
+// Nissan is month 1, Tishrei is 7, Adar 1/Adar 2 are 12/13.
+fn month_length(year: i64, month: i64) -> i64 {
+    if month == 1 or month == 3 or month == 5 or month == 7 or month == 11 {
+        30
+    } else if month == 2 or month == 4 or month == 6 or month == 10 or month == 13 {
+        29
+    } else if month == 12 {
+        if is_leap(year) { 30 } else { 29 }
+    } else if month == 8 {
+        if long_cheshvan(year) { 30 } else { 29 }
+    } else if month == 9 {
+        if short_kislev(year) { 29 } else { 30 }
+    } else {
+        -1
+    }
+}
+
+// The year's months in calendar order, Tishrei first; Adar 2 (13) only in a
+// leap year.
+fn monthslist(year: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7); v.push(8); v.push(9); v.push(10); v.push(11); v.push(12);
+    if is_leap(year) {
+        v.push(13);
+    }
+    v.push(1); v.push(2); v.push(3); v.push(4); v.push(5); v.push(6);
+    v
+}
+
+// ---------------- Gregorian helpers ----------------
+
+fn greg_is_leap(year: i64) -> bool {
+    (year % 4 == 0) and not (year % 100 == 0 and year % 400 != 0)
+}
+
+fn greg_month_length(year: i64, month: i64) -> i64 {
+    if month == 1 or month == 3 or month == 5 or month == 7
+        or month == 8 or month == 10 or month == 12 {
+        31
+    } else if month == 2 {
+        if greg_is_leap(year) { 29 } else { 28 }
+    } else {
+        30
+    }
+}
+
+fn greg_valid(year: i64, month: i64, day: i64) -> bool {
+    year >= 1 and year <= 9999 and month >= 1 and month <= 12
+        and day >= 1 and day <= greg_month_length(year, month)
+}
+
+// ---------------- the Julian-day bridge (dates.py) ----------------
+
+// GregorianDate.jd for year >= 1: the half-integer Julian day at midnight.
+// `int(365.25*year)` and `int(30.6001*month)` are the library's only floats; we
+// do exactly those two truncations in f64 (IEEE double, as Python) and the rest
+// in i64.
+fn greg_jd(year: i64, month: i64, day: i64) -> f64 {
+    let mut y = year;
+    let mut m = month;
+    if m < 3 {
+        y = y - 1;
+        m = m + 12;
+    }
+    m = m + 1;
+    let a = y / 100;
+    let b = 2 - a + a / 4;
+    let t1 = (365.25 * (y as f64)) as i64;
+    let t2 = (30.6001 * (m as f64)) as i64;
+    (t1 as f64) + (t2 as f64) + (b as f64) + (day as f64) + 1720994.5
+}
+
+struct Ymd {
+    y: i64,
+    m: i64,
+    d: i64,
+}
+
+// JulianDay.to_greg (Fliegel-Van Flandern). jdf is a half-integer; year >= 1 in
+// this app's domain, so every `/` is on non-negative operands.
+fn jd_to_greg(jdf: f64) -> Ymd {
+    let jd = (jdf + 0.5) as i64;
+    let mut l = jd + 68569;
+    let n = 4 * l / 146097;
+    l = l - (146097 * n + 3) / 4;
+    let i = (4000 * (l + 1)) / 1461001;
+    l = l - ((1461 * i) / 4) + 31;
+    let j = (80 * l) / 2447;
+    let day = l - 2447 * j / 80;
+    let l2 = j / 11;
+    let month = j + 2 - 12 * l2;
+    let year = 100 * (n - 49) + i + l2;
+    Ymd { y: year, m: month, d: day }
+}
+
+// JulianDay.to_heb.
+fn jd_to_heb(jdf: f64) -> Ymd {
+    let mut jd = (jdf + 0.5) as i64;
+    jd = jd - 347997;
+    let mut year = jd / 365 + 2;
+    let mut first = elapsed_days(year);
+    while first > jd {
+        year = year - 1;
+        first = elapsed_days(year);
+    }
+    let months = monthslist(year);
+    let mut rem = jd - first;
+    let mut i = 0;
+    let mut ry = year;
+    let mut rm = 0;
+    let mut rd = 0;
+    while i < months.len() {
+        let m = months[i];
+        let ml = month_length(year, m);
+        if rem >= ml {
+            rem = rem - ml;
+            i = i + 1;
+        } else {
+            rm = m;
+            rd = rem + 1;
+            i = months.len();
+        }
+    }
+    Ymd { y: ry, m: rm, d: rd }
+}
+
+// HebrewDate.jd: accumulate month lengths only for the months BEFORE the target
+// in calendar order, then capture (the library sets _jd when it reaches the
+// month and the later months do not affect it).
+fn heb_jd(year: i64, month: i64, day: i64) -> f64 {
+    let months = monthslist(year);
+    let mut jd = elapsed_days(year);
+    let mut i = 0;
+    let mut result = 0.0;
+    let mut found = false;
+    while i < months.len() and not found {
+        let m = months[i];
+        if m == month {
+            result = (jd + (day - 1)) as f64 + 347996.5;
+            found = true;
+        } else {
+            jd = jd + month_length(year, m);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn weekday_of_jd(jdf: f64) -> i64 {
+    ((jdf + 1.5) as i64) % 7 + 1
+}
+
+fn heb_valid(year: i64, month: i64, day: i64) -> bool {
+    if year < 1 or month < 1 or month > 13 {
+        false
+    } else if month == 13 and not is_leap(year) {
+        false
+    } else {
+        let ml = month_length(year, month);
+        ml > 0 and day >= 1 and day <= ml
+    }
+}
+
+// ---------------- gematria (gematria.py) ----------------
+
+// value -> Hebrew letter code point, 0 when the value is not a gematria unit.
+fn gem_cp(val: i64) -> i64 {
+    if val == 1 { 1488 } else if val == 2 { 1489 } else if val == 3 { 1490 }
+    else if val == 4 { 1491 } else if val == 5 { 1492 } else if val == 6 { 1493 }
+    else if val == 7 { 1494 } else if val == 8 { 1495 } else if val == 9 { 1496 }
+    else if val == 10 { 1497 } else if val == 20 { 1499 } else if val == 30 { 1500 }
+    else if val == 40 { 1502 } else if val == 50 { 1504 } else if val == 60 { 1505 }
+    else if val == 70 { 1506 } else if val == 80 { 1508 } else if val == 90 { 1510 }
+    else if val == 100 { 1511 } else if val == 200 { 1512 } else if val == 300 { 1513 }
+    else if val == 400 { 1514 } else { 0 }
+}
+
+// Replace every adjacent (a1,a2) pair with (b1,b2); matches gematria's
+// str.replace on the trailing letters (15 -> טו, 16 -> טז).
+fn replace_pair(v: Vec[i64], a1: i64, a2: i64, b1: i64, b2: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i + 1 < v.len() and v[i] == a1 and v[i + 1] == a2 {
+            out.push(b1);
+            out.push(b2);
+            i = i + 2;
+        } else {
+            out.push(v[i]);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// _get_letters: a number under 1000 as raw Hebrew letters (code points).
+fn get_letters(num: i64) -> Vec[i64] {
+    let ones = num % 10;
+    let tens = num % 100 - ones;
+    let hundreds = num % 1000 - tens - ones;
+    let mut v: Vec[i64] = Vec.new();
+    let mut k = 0;
+    let fours = hundreds / 400;
+    while k < fours {
+        v.push(1514);  // ת
+        k = k + 1;
+    }
+    let h = gem_cp(hundreds % 400);
+    if h != 0 { v.push(h); }
+    let t = gem_cp(tens);
+    if t != 0 { v.push(t); }
+    let o = gem_cp(ones);
+    if o != 0 { v.push(o); }
+    // יה -> טו, then יו -> טז (sequential, as the library does)
+    let v2 = replace_pair(v, 1497, 1492, 1496, 1493);
+    replace_pair(v2, 1497, 1493, 1496, 1494)
+}
+
+// _stringify_gematria: insert gershayim before the last letter, or a geresh
+// after a single letter.
+fn stringify(letters: Vec[i64]) -> Vec[i64] {
+    let n = letters.len();
+    let mut out: Vec[i64] = Vec.new();
+    if n > 1 {
+        let mut i = 0;
+        while i < n {
+            if i == n - 1 {
+                out.push(1524);  // gershayim
+            }
+            out.push(letters[i]);
+            i = i + 1;
+        }
+    } else if n == 1 {
+        out.push(letters[0]);
+        out.push(1523);  // geresh
+    }
+    out
+}
+
+// _num_to_str with gershayim; `thousands` prepends the thousands letter + geresh.
+fn num_to_str(num: i64, thousands: bool) -> Vec[i64] {
+    let letters = stringify(get_letters(num));
+    let mut out: Vec[i64] = Vec.new();
+    if thousands {
+        let thou = get_letters(num / 1000);
+        let mut i = 0;
+        while i < thou.len() {
+            out.push(thou[i]);
+            i = i + 1;
+        }
+        out.push(1523);  // geresh
+    }
+    let mut j = 0;
+    while j < letters.len() {
+        out.push(letters[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// MONTH_NAMES_HEBREW, indexed as _month_name does.
+fn heb_month_name(year: i64, month: i64) -> Vec[i64] {
+    let mut idx = month;
+    if month < 12 or not is_leap(year) {
+        idx = idx - 1;
+    }
+    let mut v: Vec[i64] = Vec.new();
+    if idx == 0 { v.push(1504); v.push(1497); v.push(1505); v.push(1503); }       // ניסן
+    else if idx == 1 { v.push(1488); v.push(1497); v.push(1497); v.push(1512); }  // אייר
+    else if idx == 2 { v.push(1505); v.push(1497); v.push(1493); v.push(1503); }  // סיון
+    else if idx == 3 { v.push(1514); v.push(1502); v.push(1493); v.push(1494); }  // תמוז
+    else if idx == 4 { v.push(1488); v.push(1489); }                              // אב
+    else if idx == 5 { v.push(1488); v.push(1500); v.push(1493); v.push(1500); }  // אלול
+    else if idx == 6 { v.push(1514); v.push(1513); v.push(1512); v.push(1497); }  // תשרי
+    else if idx == 7 { v.push(1495); v.push(1513); v.push(1493); v.push(1503); }  // חשון
+    else if idx == 8 { v.push(1499); v.push(1505); v.push(1500); v.push(1493); }  // כסלו
+    else if idx == 9 { v.push(1496); v.push(1489); v.push(1514); }                // טבת
+    else if idx == 10 { v.push(1513); v.push(1489); v.push(1496); }               // שבט
+    else if idx == 11 { v.push(1488); v.push(1491); v.push(1512); }               // אדר
+    else if idx == 12 { v.push(1488); v.push(1491); v.push(1512); v.push(32); v.push(1488); v.push(1523); }  // אדר א׳
+    else { v.push(1488); v.push(1491); v.push(1512); v.push(32); v.push(1489); v.push(1523); }               // אדר ב׳
+    v
+}
+
+fn append_cps(out: mut ref Vec[i64], v: Vec[i64]) {
+    let mut i = 0;
+    while i < v.len() {
+        out.push(v[i]);
+        i = i + 1;
+    }
+}
+
+// format(hd, '%*d %*B %*Y'): day gematria, Hebrew month name, Hebrew year with
+// the thousands place.
+fn heb_string(year: i64, month: i64, day: i64) -> String {
+    let mut cps: Vec[i64] = Vec.new();
+    append_cps(mut cps, num_to_str(day, false));
+    cps.push(32);
+    append_cps(mut cps, heb_month_name(year, month));
+    cps.push(32);
+    append_cps(mut cps, num_to_str(year, true));
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < cps.len() {
+        push_utf8(mut out, cps[i]);
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn iso(y: i64, m: i64, d: i64) -> String {
+    let mut s = itoa(y);
+    s.push_str("-");
+    s.push_str(itoa2(m));
+    s.push_str("-");
+    s.push_str(itoa2(d));
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    let p = parse_ints(arg.clone());
+                    if op == "g2h" {
+                        if greg_valid(p[0], p[1], p[2]) {
+                            let h = jd_to_heb(greg_jd(p[0], p[1], p[2]));
+                            out.push_str(iso(h.y, h.m, h.d));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    } else if op == "h2g" {
+                        if heb_valid(p[0], p[1], p[2]) {
+                            let g = jd_to_greg(heb_jd(p[0], p[1], p[2]));
+                            out.push_str(iso(g.y, g.m, g.d));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    } else if op == "wd" {
+                        if greg_valid(p[0], p[1], p[2]) {
+                            out.push_str(itoa(weekday_of_jd(greg_jd(p[0], p[1], p[2]))));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    } else if op == "heb" {
+                        if greg_valid(p[0], p[1], p[2]) {
+                            let h = jd_to_heb(greg_jd(p[0], p[1], p[2]));
+                            out.push_str(heb_string(h.y, h.m, h.d));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("g2h\t2024 10 22\n");
+    s.push_str("g2h\t2000 1 1\n");
+    s.push_str("g2h\t1948 5 14\n");
+    s.push_str("g2h\t2023 9 16\n");
+    s.push_str("g2h\t1700 1 1\n");
+    s.push_str("g2h\t1800 12 31\n");
+    s.push_str("g2h\t1900 2 28\n");
+    s.push_str("g2h\t2050 6 15\n");
+    s.push_str("g2h\t2017 3 12\n");
+    s.push_str("g2h\t1999 12 31\n");
+    s.push_str("g2h\t2024 2 29\n");
+    s.push_str("g2h\t1583 1 1\n");
+    s.push_str("g2h\t2239 12 31\n");
+    s.push_str("g2h\t5 7 4\n");
+    s.push_str("g2h\t1 1 1\n");
+    s.push_str("g2h\t2026 3 14\n");
+    s.push_str("g2h\t2026 9 12\n");
+    s.push_str("g2h\t1776 7 4\n");
+    s.push_str("g2h\t2033 4 1\n");
+    s.push_str("g2h\t1990 11 6\n");
+    s.push_str("g2h\t2000 13 1\n");
+    s.push_str("g2h\t2000 2 30\n");
+    s.push_str("g2h\t0 1 1\n");
+    s.push_str("g2h\t2023 0 5\n");
+    s.push_str("g2h\t2023 4 31\n");
+    s.push_str("wd\t2024 10 22\n");
+    s.push_str("wd\t2000 1 1\n");
+    s.push_str("wd\t1948 5 14\n");
+    s.push_str("wd\t2023 9 16\n");
+    s.push_str("wd\t1700 1 1\n");
+    s.push_str("wd\t1800 12 31\n");
+    s.push_str("wd\t1900 2 28\n");
+    s.push_str("wd\t2050 6 15\n");
+    s.push_str("wd\t2017 3 12\n");
+    s.push_str("wd\t1999 12 31\n");
+    s.push_str("wd\t2024 2 29\n");
+    s.push_str("wd\t1583 1 1\n");
+    s.push_str("wd\t2239 12 31\n");
+    s.push_str("wd\t5 7 4\n");
+    s.push_str("wd\t1 1 1\n");
+    s.push_str("wd\t2026 3 14\n");
+    s.push_str("wd\t2026 9 12\n");
+    s.push_str("wd\t1776 7 4\n");
+    s.push_str("wd\t2033 4 1\n");
+    s.push_str("wd\t1990 11 6\n");
+    s.push_str("wd\t2000 13 1\n");
+    s.push_str("wd\t2000 2 30\n");
+    s.push_str("wd\t0 1 1\n");
+    s.push_str("wd\t2023 0 5\n");
+    s.push_str("wd\t2023 4 31\n");
+    s.push_str("heb\t2024 10 22\n");
+    s.push_str("heb\t2000 1 1\n");
+    s.push_str("heb\t1948 5 14\n");
+    s.push_str("heb\t2023 9 16\n");
+    s.push_str("heb\t1700 1 1\n");
+    s.push_str("heb\t1800 12 31\n");
+    s.push_str("heb\t1900 2 28\n");
+    s.push_str("heb\t2050 6 15\n");
+    s.push_str("heb\t2017 3 12\n");
+    s.push_str("heb\t1999 12 31\n");
+    s.push_str("heb\t2024 2 29\n");
+    s.push_str("heb\t1583 1 1\n");
+    s.push_str("heb\t2239 12 31\n");
+    s.push_str("heb\t5 7 4\n");
+    s.push_str("heb\t1 1 1\n");
+    s.push_str("heb\t2026 3 14\n");
+    s.push_str("heb\t2026 9 12\n");
+    s.push_str("heb\t1776 7 4\n");
+    s.push_str("heb\t2033 4 1\n");
+    s.push_str("heb\t1990 11 6\n");
+    s.push_str("heb\t2000 13 1\n");
+    s.push_str("heb\t2000 2 30\n");
+    s.push_str("heb\t0 1 1\n");
+    s.push_str("heb\t2023 0 5\n");
+    s.push_str("heb\t2023 4 31\n");
+    s.push_str("h2g\t5785 7 1\n");
+    s.push_str("h2g\t5784 1 15\n");
+    s.push_str("h2g\t5784 13 14\n");
+    s.push_str("h2g\t5783 9 25\n");
+    s.push_str("h2g\t5700 6 29\n");
+    s.push_str("h2g\t5343 7 1\n");
+    s.push_str("h2g\t5999 6 29\n");
+    s.push_str("h2g\t5784 8 30\n");
+    s.push_str("h2g\t5786 7 10\n");
+    s.push_str("h2g\t5786 1 15\n");
+    s.push_str("h2g\t5784 1 30\n");
+    s.push_str("h2g\t5784 14 1\n");
+    s.push_str("h2g\t5783 13 1\n");
+    s.push_str("h2g\t0 1 1\n");
+    s.push_str("h2g\t5784 9 30\n");
+    s
+}
