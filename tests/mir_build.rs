@@ -7256,6 +7256,43 @@ fn main() {
 }
 
 #[test]
+fn mir_library_json_beside_a_variant_named_json() {
+    // B-2026-10-22-7: a program variant named `Json` renames the appended
+    // library's `Json` out of its way (`Json__lib`), and `Json.Null`,
+    // `Json.parse(..)` and `.stringify()` then reached the variant or the
+    // baked legacy definition instead of the library's.
+    let src = r#"
+import std.json.{Json};
+enum Fmt { Json, Csv }
+fn show(f: Fmt) -> String {
+    match f { Fmt.Json => "json".to_string(), Fmt.Csv => "csv".to_string() }
+}
+fn main() {
+    println(Json.Null.stringify());
+    let v = Json.Number(2.5);
+    println(v.stringify());
+    match Json.parse("[1, true, null]") {
+        Ok(j) => {
+            match j { Json.Array(xs) => println(f"{xs.len()} items"), _ => println("other") }
+        }
+        Err(_) => println("bad"),
+    }
+    if let Ok(j) = Json.parse("{\"k\": 1}") { println(j.stringify()); }
+    let b = Json.Bool(true);
+    println(f"{b.stringify()} {show(Fmt.Json)} {show(Fmt.Csv)}");
+}
+"#;
+    let want = "null\n2.5\n3 items\n{\"k\":1}\ntrue json csv\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[test]
 fn mir_shared_pattern_parts_read_through_deref() {
     // B-2026-10-18-30: a `shared` scrutinee counts as a `ref` scrutinee, so a
     // handle part reads through `*rest` (core semantics §4.6), as `karac

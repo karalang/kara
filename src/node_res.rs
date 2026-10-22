@@ -76,6 +76,19 @@ fn res_of(
             };
         }
         SymbolKind::TypeParam | SymbolKind::ConstParam => return Res::Generic(r.symbol),
+        // A variant has no members, so a path through one spelled like a
+        // library type (`Json.Null.stringify()` beside `enum Fmt { Json,
+        // Csv }`) is that type's, which the v2 pipeline appends renamed out
+        // of the variant's way (`Json__lib`, `rename_clashing_library_items`)
+        // (B-2026-10-22-7).
+        SymbolKind::EnumVariant { .. }
+            if r.rest.first().is_some_and(|seg| {
+                renamed_library_type(defs, module, &sym.name)
+                    .is_some_and(|d| member(defs, d, seg).is_some())
+            }) =>
+        {
+            Cursor::Def(renamed_library_type(defs, module, &sym.name).expect("checked"))
+        }
         SymbolKind::EnumVariant { parent_enum, .. } => {
             let parent = result.symbol_table.get_symbol(*parent_enum);
             match defs
@@ -155,6 +168,20 @@ fn res_of(
         Cursor::Def(d) => Res::Def(d),
         Cursor::Module(_) => Res::Err,
     }
+}
+
+/// The v2 library's type `name`, renamed out of the way of a program
+/// variant of that name (`Json__lib`), when no program item claims `name`.
+pub(crate) fn renamed_library_type(
+    defs: &ProgramDefs,
+    module: ModuleId,
+    name: &str,
+) -> Option<DefId> {
+    let items = defs.module_items.get(module)?;
+    if items.contains_key(name) {
+        return None;
+    }
+    items.get(&format!("{name}__lib")).copied()
 }
 
 /// `seg` as a member of definition `d`: a variant of an enum, else an

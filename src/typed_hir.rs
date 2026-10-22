@@ -134,9 +134,12 @@ impl HirDefs for ProgramHirDefs<'_> {
         // A primitive or compiler-provided type: `i64.abs`, `String.len`.
         // A variant spelled like one (`Kind.Map`) is not the owner of
         // `Map.new()`.
-        let Some(owner_def) = self
-            .defs
-            .lookup(self.module, owner)
+        // The v2 library's type renamed out of the way of a program's
+        // variant of the same name (`Json__lib` beside `enum Fmt { Json }`,
+        // `rename_clashing_library_items`) is the one a program item does
+        // not claim (B-2026-10-22-7).
+        let Some(owner_def) = crate::node_res::renamed_library_type(self.defs, self.module, owner)
+            .or_else(|| self.defs.lookup(self.module, owner))
             .filter(|&d| self.defs.table.get(d).kind != DefKind::Variant)
         else {
             // A method an impl in source gives a type with no definition
