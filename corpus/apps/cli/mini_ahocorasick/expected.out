@@ -1,0 +1,36 @@
+she@1 he@2 hers@2
+his@0 she@2 he@3 hers@3
+she@0 he@1 he@9 he@15
+
+
+she@1
+None
+
+
+aa@0 aaa@0 aa@1 aaa@1 aa@2 aaa@2 aa@3
+aba@0 aba@2
+aba@0 aa@2 aaa@2 aa@3
+aa@0
+
+aa@0 aba@1 aa@3
+python@7 java@18 go@27 rust@34
+go@0 go@2 go@4
+python@0
+c@0 c@2 c@10
+
+c@1
+error@0 warn@12 warning@12 fail@26 failure@26 ok@39
+warn@0 warn@4 warning@4
+fail@0 fail@4 failure@4
+ok@12
+
+
+is@1 issi@1 ssi@2 is@4 issi@4 ssi@5 sip@6 mississippi@0 pi@9
+is@5 issi@5 ssi@6 is@8 issi@8 ssi@9 sip@10 mississippi@4 pi@13 is@22
+is@1
+sip@0 pi@2 is@3 issi@3 ssi@4
+pi@0
+a@0 a@3 an@3 band@2 and@3 a@7 an@7 and@7 a@11 a@14 an@14 and@14 candy@13
+a@0 an@0 and@0 a@3 an@3 and@3 a@6 an@6 and@6
+a@1
+

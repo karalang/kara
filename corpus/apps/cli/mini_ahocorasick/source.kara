@@ -1,0 +1,454 @@
+// mini_ahocorasick — a port of ahocorapy 1.8.0 (MIT; Abusix / Frederik
+// Petersen), the pure-Python Aho-Corasick keyword tree used for fast
+// multi-pattern string search (keyword filtering, log/IDS scanning, search
+// indexing). It finds every occurrence of any of a set of keywords in a text
+// in one linear pass.
+//
+// It follows ahocorapy's KeywordTree: a trie of the keywords (add), failure
+// links computed in finalize (search_lss, with the DFA transition-copy that
+// turns the trie into a goto function), per-state precomputed output lists
+// (the longest match first, then its shorter suffixes), and the generic
+// search loop (search_all / search_one). The automaton is held in flat i64
+// arrays indexed by state id; because a child's id always exceeds its
+// parent's, finalize computes failure links in plain id order (verified
+// equivalent to the library's stack traversal). Keywords and texts are ASCII;
+// case-insensitive mode lowercases ASCII letters. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    let mut digs: Vec[u8] = Vec.new();
+    let mut neg = false;
+    let mut v = n;
+    if v < 0 {
+        neg = true;
+        v = -v;
+    }
+    if v == 0 {
+        digs.push(48);
+    }
+    while v > 0 {
+        digs.push((48 + (v % 10)) as u8);
+        v = v / 10;
+    }
+    if neg {
+        digs.push(45);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = digs.len();
+    while i > 0 {
+        out.push(digs[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// Lowercase an ASCII byte when case-insensitive mode is on.
+fn lower_byte(b: i64, ci: i64) -> i64 {
+    if ci == 1 and b >= 65 and b <= 90 {
+        b + 32
+    } else {
+        b
+    }
+}
+
+// The automaton, as flat parallel arrays indexed by state id (state 0 is the
+// zero/root state). Transitions are three parallel arrays (from, symbol, to);
+// outputs are a flat list sliced per state by out_start/out_count.
+struct Tree {
+    ci: i64,
+    symbol: Vec[i64],
+    parent: Vec[i64],
+    success: Vec[i64],
+    kw: Vec[i64],
+    lss: Vec[i64],
+    out_start: Vec[i64],
+    out_count: Vec[i64],
+    tr_from: Vec[i64],
+    tr_sym: Vec[i64],
+    tr_tgt: Vec[i64],
+    out_kw: Vec[i64],
+    kws: Vec[String],
+    klens: Vec[i64],
+    done: i64,
+}
+
+fn tree_new(ci: i64) -> Tree {
+    let mut symbol: Vec[i64] = Vec.new();
+    symbol.push(-1);
+    let mut parent: Vec[i64] = Vec.new();
+    parent.push(-1);
+    let mut success: Vec[i64] = Vec.new();
+    success.push(0);
+    let mut kw: Vec[i64] = Vec.new();
+    kw.push(-1);
+    let mut lss: Vec[i64] = Vec.new();
+    lss.push(-1);
+    let mut out_start: Vec[i64] = Vec.new();
+    out_start.push(0);
+    let mut out_count: Vec[i64] = Vec.new();
+    out_count.push(0);
+    let tr_from: Vec[i64] = Vec.new();
+    let tr_sym: Vec[i64] = Vec.new();
+    let tr_tgt: Vec[i64] = Vec.new();
+    let out_kw: Vec[i64] = Vec.new();
+    let kws: Vec[String] = Vec.new();
+    let klens: Vec[i64] = Vec.new();
+    Tree {
+        ci: ci, symbol: symbol, parent: parent, success: success, kw: kw,
+        lss: lss, out_start: out_start, out_count: out_count, tr_from: tr_from,
+        tr_sym: tr_sym, tr_tgt: tr_tgt, out_kw: out_kw, kws: kws, klens: klens,
+        done: 0,
+    }
+}
+
+// The transition target for (state, sym), or -1 if there is none.
+fn tr_get(t: ref Tree, state: i64, sym: i64) -> i64 {
+    let mut i = 0;
+    let n = t.tr_from.len();
+    let mut res = -1;
+    while i < n {
+        if t.tr_from[i] == state and t.tr_sym[i] == sym {
+            res = t.tr_tgt[i];
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    res
+}
+
+fn new_state(t: mut ref Tree, sym: i64, par: i64) -> i64 {
+    let id = t.symbol.len();
+    t.symbol.push(sym);
+    t.parent.push(par);
+    t.success.push(0);
+    t.kw.push(-1);
+    t.lss.push(-1);
+    t.out_start.push(0);
+    t.out_count.push(0);
+    id
+}
+
+fn st_add(t: mut ref Tree, keyword: String) {
+    let b = str_bytes(keyword.clone());
+    if b.len() > 0 {
+        let kidx = t.kws.len();
+        t.kws.push(keyword.clone());
+        t.klens.push(b.len());
+        let mut cur = 0;
+        let mut i = 0;
+        while i < b.len() {
+            let ch = lower_byte(b[i] as i64, t.ci);
+            let nxt = tr_get(t, cur, ch);
+            if nxt == -1 {
+                let ns = new_state(mut t, ch, cur);
+                t.tr_from.push(cur);
+                t.tr_sym.push(ch);
+                t.tr_tgt.push(ns);
+                cur = ns;
+            } else {
+                cur = nxt;
+            }
+            i = i + 1;
+        }
+        t.success[cur] = 1;
+        t.kw[cur] = kidx;
+    }
+}
+
+// Compute the failure link (longest strict suffix) for `state`, then copy the
+// suffix's transitions into `state` so transitions become a goto function.
+fn search_lss(t: mut ref Tree, state: i64) {
+    let par = t.parent[state];
+    let mut traversed = t.lss[par];
+    let sym = t.symbol[state];
+    let mut go = true;
+    while go {
+        let tr = tr_get(t, traversed, sym);
+        if tr != -1 and tr != state {
+            t.lss[state] = tr;
+            go = false;
+        } else if traversed == 0 {
+            t.lss[state] = 0;
+            go = false;
+        } else {
+            traversed = t.lss[traversed];
+        }
+    }
+    let suffix = t.lss[state];
+    if suffix != 0 {
+        if t.lss[suffix] == -1 {
+            search_lss(mut t, suffix);
+        }
+        let mut i = 0;
+        let n = t.tr_from.len();
+        while i < n {
+            if t.tr_from[i] == suffix {
+                let s = t.tr_sym[i];
+                if tr_get(t, state, s) == -1 {
+                    let tg = t.tr_tgt[i];
+                    t.tr_from.push(state);
+                    t.tr_sym.push(s);
+                    t.tr_tgt.push(tg);
+                }
+            }
+            i = i + 1;
+        }
+    }
+}
+
+fn finalize(t: mut ref Tree) {
+    t.lss[0] = 0;
+    let n = t.symbol.len();
+    let mut s = 1;
+    while s < n {
+        if t.lss[s] == -1 {
+            search_lss(mut t, s);
+        }
+        s = s + 1;
+    }
+    t.out_start[0] = 0;
+    t.out_count[0] = 0;
+    let mut s2 = 1;
+    while s2 < n {
+        let start = t.out_kw.len();
+        t.out_start[s2] = start;
+        let mut cnt = 0;
+        let mut suffix = s2;
+        while suffix != 0 {
+            if t.success[suffix] == 1 {
+                let kk = t.kw[suffix];
+                t.out_kw.push(kk);
+                cnt = cnt + 1;
+            }
+            suffix = t.lss[suffix];
+        }
+        t.out_count[s2] = cnt;
+        s2 = s2 + 1;
+    }
+    t.done = 1;
+}
+
+// One step of the generic search DFA: from `cur` on `sym`, return the next
+// state (0 and no match both land on 0; the caller tells them apart by the
+// returned -1 convention folded in here: this returns the next state, always).
+fn step(t: ref Tree, cur: i64, sym: i64) -> i64 {
+    if cur == 0 {
+        let nxt = tr_get(t, 0, sym);
+        if nxt == -1 { 0 } else { nxt }
+    } else {
+        let nxt = tr_get(t, cur, sym);
+        if nxt == -1 {
+            let z = tr_get(t, 0, sym);
+            if z == -1 { 0 } else { z }
+        } else {
+            nxt
+        }
+    }
+}
+
+fn search_all(t: ref Tree, text: String) -> String {
+    let b = str_bytes(text);
+    let mut out = String.new();
+    let mut cur = 0;
+    let mut idx = 0;
+    let mut first = true;
+    while idx < b.len() {
+        let sym = lower_byte(b[idx] as i64, t.ci);
+        cur = step(t, cur, sym);
+        if cur != 0 {
+            let st = t.out_start[cur];
+            let cnt = t.out_count[cur];
+            let mut k = 0;
+            while k < cnt {
+                let kidx = t.out_kw[st + k];
+                let start = idx + 1 - t.klens[kidx];
+                if first {
+                    first = false;
+                } else {
+                    out.push_str(" ");
+                }
+                out.push_str(t.kws[kidx].clone());
+                out.push_str("@");
+                out.push_str(itoa(start));
+                k = k + 1;
+            }
+        }
+        idx = idx + 1;
+    }
+    out
+}
+
+fn search_one(t: ref Tree, text: String) -> String {
+    let b = str_bytes(text);
+    let mut cur = 0;
+    let mut idx = 0;
+    let mut found = false;
+    let mut res = String.new();
+    while idx < b.len() {
+        let sym = lower_byte(b[idx] as i64, t.ci);
+        cur = step(t, cur, sym);
+        if cur != 0 {
+            if found {
+            } else {
+                if t.out_count[cur] > 0 {
+                    let kidx = t.out_kw[t.out_start[cur]];
+                    let start = idx + 1 - t.klens[kidx];
+                    res.push_str(t.kws[kidx].clone());
+                    res.push_str("@");
+                    res.push_str(itoa(start));
+                    found = true;
+                }
+            }
+        }
+        idx = idx + 1;
+    }
+    if found {
+        res
+    } else {
+        let mut none = String.new();
+        none.push_str("None");
+        none
+    }
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut t = tree_new(0);
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut p = 0;
+                while p < lb.len() {
+                    if lb[p] == 9 {
+                        tab = p;
+                        p = lb.len();
+                    } else {
+                        p = p + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    if op == "tree" {
+                        let ci = if arg == "1" { 1 } else { 0 };
+                        t = tree_new(ci);
+                    } else if op == "kw" {
+                        st_add(mut t, arg.clone());
+                    } else if op == "all" {
+                        if t.done == 0 {
+                            finalize(mut t);
+                        }
+                        out.push_str(search_all(t, arg.clone()));
+                        out.push_str("\n");
+                    } else if op == "one" {
+                        if t.done == 0 {
+                            finalize(mut t);
+                        }
+                        out.push_str(search_one(t, arg.clone()));
+                        out.push_str("\n");
+                    }
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("tree\t0\n");
+    s.push_str("kw\the\n");
+    s.push_str("kw\tshe\n");
+    s.push_str("kw\this\n");
+    s.push_str("kw\thers\n");
+    s.push_str("all\tushers\n");
+    s.push_str("all\thishers\n");
+    s.push_str("all\tshe said he is here\n");
+    s.push_str("all\txyz\n");
+    s.push_str("all\t\n");
+    s.push_str("one\tushers\n");
+    s.push_str("one\tzzz\n");
+    s.push_str("all\th\n");
+    s.push_str("all\thhhh\n");
+    s.push_str("tree\t0\n");
+    s.push_str("kw\taa\n");
+    s.push_str("kw\taaa\n");
+    s.push_str("kw\taba\n");
+    s.push_str("all\taaaaa\n");
+    s.push_str("all\tababa\n");
+    s.push_str("all\tabaaab\n");
+    s.push_str("one\taaaaa\n");
+    s.push_str("all\tb\n");
+    s.push_str("all\taabaa\n");
+    s.push_str("tree\t1\n");
+    s.push_str("kw\tpython\n");
+    s.push_str("kw\tjava\n");
+    s.push_str("kw\tgo\n");
+    s.push_str("kw\trust\n");
+    s.push_str("kw\tc\n");
+    s.push_str("all\tI love Python and JAVA and Go and rUsT\n");
+    s.push_str("all\tgogogo\n");
+    s.push_str("one\tPYTHONISTA\n");
+    s.push_str("all\tC C++ and C#\n");
+    s.push_str("all\tno languages here\n");
+    s.push_str("one\tscala\n");
+    s.push_str("tree\t0\n");
+    s.push_str("kw\terror\n");
+    s.push_str("kw\twarn\n");
+    s.push_str("kw\twarning\n");
+    s.push_str("kw\tfail\n");
+    s.push_str("kw\tfailure\n");
+    s.push_str("kw\tok\n");
+    s.push_str("all\terror: disk warning, task failure then ok\n");
+    s.push_str("all\twarnwarning\n");
+    s.push_str("all\tfailfailure\n");
+    s.push_str("one\tall systems ok\n");
+    s.push_str("all\tno issues\n");
+    s.push_str("all\tERROR\n");
+    s.push_str("tree\t0\n");
+    s.push_str("kw\tissi\n");
+    s.push_str("kw\tssi\n");
+    s.push_str("kw\tsip\n");
+    s.push_str("kw\tmississippi\n");
+    s.push_str("kw\tis\n");
+    s.push_str("kw\tpi\n");
+    s.push_str("all\tmississippi\n");
+    s.push_str("all\tthe mississippi river is wide\n");
+    s.push_str("one\tmississippi\n");
+    s.push_str("all\tsipissi\n");
+    s.push_str("all\tpip\n");
+    s.push_str("tree\t0\n");
+    s.push_str("kw\ta\n");
+    s.push_str("kw\tan\n");
+    s.push_str("kw\tand\n");
+    s.push_str("kw\tband\n");
+    s.push_str("kw\tcandy\n");
+    s.push_str("all\ta band and a candy\n");
+    s.push_str("all\tandandand\n");
+    s.push_str("one\tcandy\n");
+    s.push_str("all\tzzz\n");
+    s
+}
