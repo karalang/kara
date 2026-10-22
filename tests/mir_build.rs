@@ -7912,3 +7912,23 @@ fn mir_literal_overflow_traps_and_in_range_trees_fold() {
         }
     }
 }
+
+/// `let _ = W;` with a bare unit variant builds the variant and drops it at
+/// the `;`, as `let _ = F.W;` does; `let _ = place;` still moves nothing
+/// (core semantics §4.6, B-2026-10-22-42).
+#[test]
+fn mir_let_underscore_of_a_unit_variant_drops_it() {
+    let src = "enum F { Y(i64), W }\nimpl Drop for F {\n    fn drop(mut ref self) { println(\"dF\"); }\n}\n\
+               const NN: i64 = 7;\nstruct S { a: i64 }\n\
+               fn main() {\n    let _ = W;\n    println(\"a\");\n    let _ = F.W;\n    println(\"b\");\n    \
+               let _ = NN;\n    let f = Y(1);\n    let _ = f;\n    println(\"c\");\n    \
+               let s = S { a: 3 };\n    let _ = s.a;\n    println(f\"{s.a}\");\n}\n";
+    let want = "dF\na\ndF\nb\nc\n3\ndF\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

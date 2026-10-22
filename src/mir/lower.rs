@@ -3760,8 +3760,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.declare(l, t);
                     return Ok(());
                 }
-                // `let _ = place;` binds nothing, so it moves nothing.
-                if matches!(pattern.kind, PatternKind::Wildcard) && is_place_expr(value) {
+                // `let _ = place;` binds nothing, so it moves nothing. A
+                // bare unit variant or a const is a value, not a place: it is
+                // built and dropped at the `;` (B-2026-10-22-42).
+                if matches!(pattern.kind, PatternKind::Wildcard)
+                    && is_place_expr(value)
+                    && self.names_storage(value)
+                {
                     return Ok(());
                 }
                 self.push_scope();
@@ -4459,6 +4464,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                 op: UnaryOp::Deref, ..
             } => true,
             _ => false,
+        }
+    }
+
+    /// A place expression whose root identifier names storage, a local or
+    /// a static, rather than a unit variant or a const.
+    fn names_storage(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(_) => match self.lcx.res.get(&e.id) {
+                Some(Res::Local(_)) => true,
+                Some(Res::Def(d)) => self.lcx.statics.contains_key(d),
+                _ => false,
+            },
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.names_storage(object)
+            }
+            _ => true,
         }
     }
 
