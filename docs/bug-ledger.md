@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 340 |
+| missing-feature | 341 |
 | codegen-gap | 291 |
 | false-positive | 285 |
 | other | 198 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3039 |
-| interp | 1047 |
+| codegen | 3040 |
+| interp | 1048 |
 | typecheck | 574 |
 | ownership | 132 |
 | other | 127 |
@@ -4418,6 +4418,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-35 | interp+codegen | high | An integer overflow between two literals wraps silently instead of trapping: `let x = 9223372036854775807 + 1; println(x)` prints -922337203685477580… | bfec097d64 |
 | B-2026-10-22-37 | interp | high | On `karac __mir-run`, a u64 literal pattern in the upper half never matches: `let b: u64 = 18446744073709551615u64; match b { 18446744073709551615u64… | 5352974a52 |
 | B-2026-10-22-41 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m)… | 3700e5f187 |
+| B-2026-10-22-47 | interp+codegen | medium | std.encoding has no `percent_encode`/`percent_decode`, so the legacy `Url.encode`/`Url.decode` have no v2 target | 9e6815d7fb |
 
 </details>
 
