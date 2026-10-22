@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 758 |
+| miscompile | 759 |
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3037 |
-| interp | 1046 |
+| codegen | 3038 |
+| interp | 1047 |
 | typecheck | 572 |
 | ownership | 132 |
 | other | 127 |
@@ -185,7 +185,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-22 | 2026-10-22 | typecheck | low | v2's check has no `Iterator.chunks` / `Iterator.windows` (legacy had both; `Vec`/`Slice` chunks and windows exist): `v.iter().chunks(2)` refuses with E0236 "no method 'chunks' on type 'VecIter'" | — |
 | B-2026-10-22-23 | 2026-10-22 | codegen | medium | M3 item 4, mir-llvm half: `karac build --mir` compiles one file only. A project-mode build (many files under src/), the kara.toml link flags ([link] libs/search_paths) and a plain wasm32 target do not go through MIR to LLVM, so legacy codegen cannot be deleted while those builds need it | — |
 | B-2026-10-22-24 | 2026-10-22 | codegen | medium | M3 item 5, codegen half: the MIR backend still reaches into legacy codegen. `src/codegen/mir`, `mir_aot` and `mir_asan` hang off codegen.rs (lines 73-75) and use its driver (create_target_machine, create_unoptimized_target_machine, link_executable, link_executable_with_sanitizer), debug_info::read_debug_info_env, lljit.rs and test_jit_dispatch's runner lookup (locate_karac_jit_runner, SPAWNER_PID_ENV), so deleting codegen.rs and the non-mir codegen/** breaks `build --mir`, `__mir-llvm-run` and `__mir-llvm-asan` | — |
-| B-2026-10-22-25 | 2026-10-22 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend prints INIT then 42 three times on `__mir-run` and fails to build on `__mir-llvm-run`. It is the only corpus program that passes on mir-interp and fails on mir-llvm | — |
 | B-2026-10-22-27 | 2026-10-22 | codegen | medium | `env.args()` on mir-llvm is the constant `["main"]` (src/codegen/mir/call.rs, the `("Env", "args")` arm), so a `karac build --mir` binary never sees its argv and `karac run`'s JIT ignores what follows `--`; the MIR interpreter and both legacy backends return the real argv | — |
 | B-2026-10-22-28 | 2026-10-22 | ownership | medium | `karac check` accepts a `-> ref T` function that returns a non-`Copy` place without `ref`: `fn choose(s: ref Side, p: ref Pair) -> ref String { match s { Side.Left => p.first, Side.Right => p.second } }` and `fn first(ref self) -> ref String { self.items[0] }` pass, though design.md § returning a reference says the `ref` is written and a tail `user.name` moves out of a borrowed place (§3.7); 6025b74a66 (B-2026-10-19-37) made these lend rather than move | — |
 | B-2026-10-22-29 | 2026-10-22 | typecheck | high | `karac check` accepts a `-> ref T` function that returns a reference to a temporary: `fn bad() -> ref String { make() }` and `fn bad(s: ref String) -> ref String { String.from("temp") }` both pass, and `karac __mir-run` then faults with "deref of non-reference Box(AllocId(N))" | — |
@@ -201,6 +200,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-39 | 2026-10-22 | typecheck | low | Legacy spellings v2's check refuses, for Thread A to confirm as rule or gap: `.len()` on an iterator (`SortedMapIter`, `StrChars`, `StrLines`, `StrWords`, `StrSplit`), `.iter()` on `MapValues`/`MapKeys`, `flatten` over `ref Vec`, `partition` yielding `Vec[ref T]`, a `Str` where `String` is expected, `String + StringSlice`, `split(',')` with a char, `f64.parse` as an `Option`, `Vec.try_append` | — |
 | B-2026-10-22-40 | 2026-10-22 | typecheck | medium | Likely v2 check gaps among the legacy test programs: arithmetic on a generic `T: Add`/`Sub`/`Div` parameter ("type 'ref T' does not implement trait Add"), `StringSlice + x`, `Iterator.cycle` / `windows` / `rev` on a mapped iterator, `collect` into a non-Vec target in return or tail position (E0238), and `collect::<String>()` from an iterator of `String` ("String implements FromIterator[char], not FromIterator[String]") | — |
 | B-2026-10-22-41 | 2026-10-22 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m) => { m.insert("z", 99); } } }` as a write through a ref; core-semantics §4.6 (6252bd4551) binds them as `mut ref` | — |
+| B-2026-10-22-42 | 2026-10-22 | interp+codegen | low | `let _ = W;` with a bare unit-variant name lowers to nothing on both MIR backends, so a variant whose enum has a `Drop` body is never built and never dropped. core-semantics §4.6 drops the temporary at the `;`. `let _ = F.W;` is correct | — |
 
 ### Relocated
 
@@ -4412,6 +4412,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-17 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gat… | a28246bb93 |
 | B-2026-10-22-18 | cli | low | examples/shortener still keeps its state in module-level `let mut` bindings, which `karac check` refuses since B-2026-10-22-8, and is pinned in tests… | cf8cd3b9e4 |
 | B-2026-10-22-19 | typecheck | medium | `karac check` accepts a `const` whose initializer is a function call (`const LIMIT: i64 = compute();`), which design.md § Constants forbids ("Functio… | 124c2b8af6 |
+| B-2026-10-22-25 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initia… | 4d1c5f025b |
 | B-2026-10-22-26 | runtime+interp | medium | The compiled HTTP client re-sent the caller's Authorization and Cookie headers to wherever a redirect pointed (any host or port), while the MIR inter… | 6c66c83dda |
 
 </details>
