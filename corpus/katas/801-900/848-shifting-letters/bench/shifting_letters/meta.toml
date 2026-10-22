@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/848-shifting-letters/bench/shifting_letters.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "e850ef4dc"
+extracted_src = "5f6bb750"
+model_rev = "583cfb0d"
+model_src = "5f6bb750"

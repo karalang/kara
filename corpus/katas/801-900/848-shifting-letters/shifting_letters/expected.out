@@ -1,0 +1,16 @@
+"abc", [3, 5, 9] -> "rpl"
+"aaa", [1, 2, 3] -> "gfd"
+"z", [1] -> "a"
+"a", [0] -> "a"
+"a", [25] -> "z"
+"a", [26] -> "a"
+"az", [1, 1] -> "ca"
+"zz", [0, 1] -> "aa"
+"abcdefghijklmnopqrstuvwxyz", [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] -> "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+"abc", [1000000000, 1000000000, 1000000000] -> "kzo"
+"hello", [0, 0, 0, 0, 0] -> "hello"
+"kara", [52, 26, 78, 1] -> "lbsb"
+10^5 letters, every shift 10^9: starts "vzdybuocqtte", digest 716552295
+10^5 letters, every shift 1: starts "dshnbfkjiwhd", digest 650122644
+10^5 letters, random shifts: starts "twjyeidlqijv", digest 768362280
+500 random strings: checksum 512045668

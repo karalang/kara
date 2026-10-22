@@ -1,0 +1,89 @@
+// LeetCode #848: Shifting Letters -- whole sums, reduced only at the end.
+//
+// The shifts reach 10^9 and the string 10^5 letters, so a letter's whole
+// shift is at most 10^14, well inside an `i64`: sum from the back with
+// no reduction at all and take each letter's shift mod 26 only when it
+// is applied. O(n) time.
+
+fn shifting_letters(s: String, shifts: Vec[i64]) -> String {
+    let letters: Vec[char] = s.chars().collect();
+    let mut total = 0;
+    let mut out: Vec[char] = Vec.new();
+    for i in (0..letters.len()).rev() {
+        total += shifts[i];
+        let code = (letters[i] as i64 - 'a' as i64 + total % 26) % 26;
+        out.push((b'a' + code as u8) as char);
+    }
+    out.reverse();
+    let mut text = String.new();
+    for c in out.iter() {
+        text.push(*c);
+    }
+    text
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: String, shifts: Vec[i64]) {
+    println(f"\"{s}\", {shifts} -> \"{shifting_letters(s, shifts)}\"");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digest(text: String) -> i64 {
+    let mut h = 0;
+    for b in text.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    show("abc", [3, 5, 9]);
+    show("aaa", [1, 2, 3]);
+    show("z", [1]);
+    show("a", [0]);
+    show("a", [25]);
+    show("a", [26]);
+    show("az", [1, 1]);
+    show("zz", [0, 1]);
+    show("abcdefghijklmnopqrstuvwxyz", [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    show("abc", [1000000000, 1000000000, 1000000000]);
+    show("hello", [0, 0, 0, 0, 0]);
+    show("kara", [52, 26, 78, 1]);
+    // LeetCode's longest strings, 10^5 letters
+    let mut seed = 848;
+    let mut long = String.new();
+    let mut big: Vec[i64] = Vec.new();
+    let mut ones: Vec[i64] = Vec.new();
+    for _ in 0..100000 {
+        long.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+        big.push(1000000000);
+        ones.push(1);
+    }
+    let a = shifting_letters(long, big);
+    println(f"10^5 letters, every shift 10^9: starts \"{a.substring(0, 12)}\", digest {digest(a)}");
+    let b = shifting_letters(long, ones);
+    println(f"10^5 letters, every shift 1: starts \"{b.substring(0, 12)}\", digest {digest(b)}");
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..100000 {
+        random.push(next_random(mut seed) * 31 % 1000000001);
+    }
+    let c = shifting_letters(long, random);
+    println(f"10^5 letters, random shifts: starts \"{c.substring(0, 12)}\", digest {digest(c)}");
+    let mut check = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 30;
+        let mut s = String.new();
+        let mut shifts: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+            shifts.push(if next_random(mut seed) % 4 == 0 { next_random(mut seed) * 4657 % 1000000001 } else { next_random(mut seed) % 30 });
+        }
+        check = (check * 7 + digest(shifting_letters(s, shifts))) % 1000000007;
+    }
+    println(f"500 random strings: checksum {check}");
+}
