@@ -1,0 +1,74 @@
+== get | AF
+  Country(name='Afghanistan', alpha2='AF', alpha3='AFG', numeric='004', apolitical_name='Afghanistan')
+== get | US
+  Country(name='United States of America', alpha2='US', alpha3='USA', numeric='840', apolitical_name='United States of America')
+== get | JP
+  Country(name='Japan', alpha2='JP', alpha3='JPN', numeric='392', apolitical_name='Japan')
+== get | br
+  Country(name='Brazil', alpha2='BR', alpha3='BRA', numeric='076', apolitical_name='Brazil')
+== get | DE
+  Country(name='Germany', alpha2='DE', alpha3='DEU', numeric='276', apolitical_name='Germany')
+== get | AFG
+  Country(name='Afghanistan', alpha2='AF', alpha3='AFG', numeric='004', apolitical_name='Afghanistan')
+== get | USA
+  Country(name='United States of America', alpha2='US', alpha3='USA', numeric='840', apolitical_name='United States of America')
+== get | jpn
+  Country(name='Japan', alpha2='JP', alpha3='JPN', numeric='392', apolitical_name='Japan')
+== get | IND
+  Country(name='India', alpha2='IN', alpha3='IND', numeric='356', apolitical_name='India')
+== get | 004
+  Country(name='Afghanistan', alpha2='AF', alpha3='AFG', numeric='004', apolitical_name='Afghanistan')
+== get | 840
+  Country(name='United States of America', alpha2='US', alpha3='USA', numeric='840', apolitical_name='United States of America')
+== get | 356
+  Country(name='India', alpha2='IN', alpha3='IND', numeric='356', apolitical_name='India')
+== get | 000
+  error: KeyError '000'
+== get | Japan
+  Country(name='Japan', alpha2='JP', alpha3='JPN', numeric='392', apolitical_name='Japan')
+== get | United States of America
+  Country(name='United States of America', alpha2='US', alpha3='USA', numeric='840', apolitical_name='United States of America')
+== get | ZIMBABWE
+  Country(name='Zimbabwe', alpha2='ZW', alpha3='ZWE', numeric='716', apolitical_name='Zimbabwe')
+== get | Palestine
+  Country(name='Palestine, State of', alpha2='PS', alpha3='PSE', numeric='275', apolitical_name='Palestine')
+== get | Taiwan
+  Country(name='Taiwan, Province of China', alpha2='TW', alpha3='TWN', numeric='158', apolitical_name='Taiwan')
+== get | Atlantis
+  error: KeyError 'Atlantis'
+== get | ZZ
+  error: KeyError 'ZZ'
+== get | XYZ
+  error: KeyError 'XYZ'
+== getint | 4
+  Country(name='Afghanistan', alpha2='AF', alpha3='AFG', numeric='004', apolitical_name='Afghanistan')
+== getint | 840
+  Country(name='United States of America', alpha2='US', alpha3='USA', numeric='840', apolitical_name='United States of America')
+== getint | 51
+  Country(name='Armenia', alpha2='AM', alpha3='ARM', numeric='051', apolitical_name='Armenia')
+== getint | 392
+  Country(name='Japan', alpha2='JP', alpha3='JPN', numeric='392', apolitical_name='Japan')
+== getint | 0
+  error: KeyError 0
+== getint | 999
+  error: KeyError 999
+== contains | US
+  True
+== contains | ZZ
+  False
+== contains | USA
+  True
+== contains | 999
+  False
+== contains | CI
+  True
+== contains | KP
+  True
+== contains | TR
+  True
+== contains | 004
+  True
+== contains | 000
+  False
+== len | 
+  250

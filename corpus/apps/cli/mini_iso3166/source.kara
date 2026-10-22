@@ -1,0 +1,481 @@
+// mini_iso3166 — a port of iso3166 3.0.0 (MIT, Mike Spindel): standalone
+// ISO 3166-1 country definitions with lookup by alpha-2, alpha-3, numeric
+// code, name and apolitical_name.
+//
+// The 250 records and the jobs come from rows() and jobs_text(), appended by
+// gen_kara.py. Each row is "name|alpha2|alpha3|numeric|apolitical|NAME_UP|
+// APOLITICAL_UP"; the two *_UP fields are Python's str.upper() of the name and
+// apolitical_name (the keys the library's name indexes use), computed in the
+// generator so the port never uppercases non-ASCII stored data at run time.
+
+struct Db {
+    name: Vec[String],
+    a2: Vec[String],
+    a3: Vec[String],
+    num: Vec[String],
+    apol: Vec[String],
+    nameup: Vec[String],
+    apolup: Vec[String],
+}
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn byte_to_char(b: i64) -> String {
+    let print = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    print.substring(b - 32, b - 32 + 1)
+}
+
+fn is_digit_str(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] < 48 or b[i] > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn str_to_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut v = 0;
+    let mut i = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    v
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut out = String.new();
+    while m > 0 {
+        let d = m % 10;
+        out = byte_to_char(48 + d) + out;
+        m = m / 10;
+    }
+    out
+}
+
+// Python f"{n:03d}" for non-negative n.
+fn pad3(n: i64) -> String {
+    let mut s = int_to_str(n);
+    while blen(s.clone()) < 3 { s = "0" + s; }
+    s
+}
+
+// ASCII-only upper-casing, matching Python str.upper() for ASCII input (the
+// only input that reaches this: lookup keys are always ASCII).
+fn ascii_upper(s: String) -> String {
+    let b = bytes_of(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let mut c = b[i];
+        if c >= 97 and c <= 122 { c = c - 32; }
+        out.push_str(byte_to_char(c));
+        i = i + 1;
+    }
+    out
+}
+
+fn find(v: ref Vec[String], key: String) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].clone() == key { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// countries.get(str) dispatch: 2 chars -> alpha-2; 3 all-digit chars other
+// than "000" -> numeric (before alpha-3); 3 chars -> alpha-3; else name, then
+// apolitical_name. Returns the record index or -1.
+fn lookup(db: ref Db, key: String) -> i64 {
+    let ku = ascii_upper(key);
+    let n = blen(ku.clone());
+    if n == 2 { return find(db.a2, ku); }
+    if n == 3 and is_digit_str(ku.clone()) and ku != "000" { return find(db.num, ku); }
+    if n == 3 { return find(db.a3, ku); }
+    let bi = find(db.nameup, ku.clone());
+    if bi >= 0 { return bi; }
+    return find(db.apolup, ku);
+}
+
+// countries.get(int): zero-pad to three digits, look up as numeric.
+fn lookup_int(db: ref Db, n: i64) -> i64 {
+    let k = pad3(n);
+    return find(db.num, k);
+}
+
+fn country_repr(db: ref Db, i: i64) -> String {
+    let mut s = String.new();
+    s.push_str("Country(name='");
+    s.push_str(db.name[i].clone());
+    s.push_str("', alpha2='");
+    s.push_str(db.a2[i].clone());
+    s.push_str("', alpha3='");
+    s.push_str(db.a3[i].clone());
+    s.push_str("', numeric='");
+    s.push_str(db.num[i].clone());
+    s.push_str("', apolitical_name='");
+    s.push_str(db.apol[i].clone());
+    s.push_str("')");
+    s
+}
+
+fn build_db() -> Db {
+    let rs = rows();
+    let mut name: Vec[String] = Vec.new();
+    let mut a2: Vec[String] = Vec.new();
+    let mut a3: Vec[String] = Vec.new();
+    let mut num: Vec[String] = Vec.new();
+    let mut apol: Vec[String] = Vec.new();
+    let mut nameup: Vec[String] = Vec.new();
+    let mut apolup: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < rs.len() {
+        let parts = split_on(rs[i].clone(), 124);
+        name.push(parts[0].clone());
+        a2.push(parts[1].clone());
+        a3.push(parts[2].clone());
+        num.push(parts[3].clone());
+        apol.push(parts[4].clone());
+        nameup.push(parts[5].clone());
+        apolup.push(parts[6].clone());
+        i = i + 1;
+    }
+    Db {
+        name: name,
+        a2: a2,
+        a3: a3,
+        num: num,
+        apol: apol,
+        nameup: nameup,
+        apolup: apolup,
+    }
+}
+
+fn run(db: ref Db, op: String, arg: String) -> String {
+    if op == "len" { return int_to_str(db.name.len()); }
+    if op == "contains" {
+        let idx = lookup(db, arg);
+        if idx >= 0 { return "True"; }
+        return "False";
+    }
+    if op == "getint" {
+        let n = str_to_int(arg);
+        let idx = lookup_int(db, n);
+        if idx >= 0 { return country_repr(db, idx); }
+        return "error: KeyError " + int_to_str(n);
+    }
+    let idx = lookup(db, arg.clone());
+    if idx >= 0 { return country_repr(db, idx); }
+    return "error: KeyError '" + arg + "'";
+}
+
+fn main() {
+    let db = build_db();
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        if blen(line.clone()) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let mut arg = String.new();
+            if fields.len() > 1 { arg = fields[1].clone(); }
+            out.push_str("== ");
+            out.push_str(op.clone());
+            out.push_str(" | ");
+            out.push_str(arg.clone());
+            out.push_str("\n  ");
+            out.push_str(run(db, op, arg));
+            out.push_str("\n");
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+
+fn rows() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("Afghanistan|AF|AFG|004|Afghanistan|AFGHANISTAN|AFGHANISTAN");
+    v.push("Åland Islands|AX|ALA|248|Åland Islands|ÅLAND ISLANDS|ÅLAND ISLANDS");
+    v.push("Albania|AL|ALB|008|Albania|ALBANIA|ALBANIA");
+    v.push("Algeria|DZ|DZA|012|Algeria|ALGERIA|ALGERIA");
+    v.push("American Samoa|AS|ASM|016|American Samoa|AMERICAN SAMOA|AMERICAN SAMOA");
+    v.push("Andorra|AD|AND|020|Andorra|ANDORRA|ANDORRA");
+    v.push("Angola|AO|AGO|024|Angola|ANGOLA|ANGOLA");
+    v.push("Anguilla|AI|AIA|660|Anguilla|ANGUILLA|ANGUILLA");
+    v.push("Antarctica|AQ|ATA|010|Antarctica|ANTARCTICA|ANTARCTICA");
+    v.push("Antigua and Barbuda|AG|ATG|028|Antigua and Barbuda|ANTIGUA AND BARBUDA|ANTIGUA AND BARBUDA");
+    v.push("Argentina|AR|ARG|032|Argentina|ARGENTINA|ARGENTINA");
+    v.push("Armenia|AM|ARM|051|Armenia|ARMENIA|ARMENIA");
+    v.push("Aruba|AW|ABW|533|Aruba|ARUBA|ARUBA");
+    v.push("Australia|AU|AUS|036|Australia|AUSTRALIA|AUSTRALIA");
+    v.push("Austria|AT|AUT|040|Austria|AUSTRIA|AUSTRIA");
+    v.push("Azerbaijan|AZ|AZE|031|Azerbaijan|AZERBAIJAN|AZERBAIJAN");
+    v.push("Bahamas|BS|BHS|044|Bahamas|BAHAMAS|BAHAMAS");
+    v.push("Bahrain|BH|BHR|048|Bahrain|BAHRAIN|BAHRAIN");
+    v.push("Bangladesh|BD|BGD|050|Bangladesh|BANGLADESH|BANGLADESH");
+    v.push("Barbados|BB|BRB|052|Barbados|BARBADOS|BARBADOS");
+    v.push("Belarus|BY|BLR|112|Belarus|BELARUS|BELARUS");
+    v.push("Belgium|BE|BEL|056|Belgium|BELGIUM|BELGIUM");
+    v.push("Belize|BZ|BLZ|084|Belize|BELIZE|BELIZE");
+    v.push("Benin|BJ|BEN|204|Benin|BENIN|BENIN");
+    v.push("Bermuda|BM|BMU|060|Bermuda|BERMUDA|BERMUDA");
+    v.push("Bhutan|BT|BTN|064|Bhutan|BHUTAN|BHUTAN");
+    v.push("Bolivia, Plurinational State of|BO|BOL|068|Bolivia, Plurinational State of|BOLIVIA, PLURINATIONAL STATE OF|BOLIVIA, PLURINATIONAL STATE OF");
+    v.push("Bonaire, Sint Eustatius and Saba|BQ|BES|535|Bonaire, Sint Eustatius and Saba|BONAIRE, SINT EUSTATIUS AND SABA|BONAIRE, SINT EUSTATIUS AND SABA");
+    v.push("Bosnia and Herzegovina|BA|BIH|070|Bosnia and Herzegovina|BOSNIA AND HERZEGOVINA|BOSNIA AND HERZEGOVINA");
+    v.push("Botswana|BW|BWA|072|Botswana|BOTSWANA|BOTSWANA");
+    v.push("Bouvet Island|BV|BVT|074|Bouvet Island|BOUVET ISLAND|BOUVET ISLAND");
+    v.push("Brazil|BR|BRA|076|Brazil|BRAZIL|BRAZIL");
+    v.push("British Indian Ocean Territory|IO|IOT|086|British Indian Ocean Territory|BRITISH INDIAN OCEAN TERRITORY|BRITISH INDIAN OCEAN TERRITORY");
+    v.push("Brunei Darussalam|BN|BRN|096|Brunei Darussalam|BRUNEI DARUSSALAM|BRUNEI DARUSSALAM");
+    v.push("Bulgaria|BG|BGR|100|Bulgaria|BULGARIA|BULGARIA");
+    v.push("Burkina Faso|BF|BFA|854|Burkina Faso|BURKINA FASO|BURKINA FASO");
+    v.push("Burundi|BI|BDI|108|Burundi|BURUNDI|BURUNDI");
+    v.push("Cambodia|KH|KHM|116|Cambodia|CAMBODIA|CAMBODIA");
+    v.push("Cameroon|CM|CMR|120|Cameroon|CAMEROON|CAMEROON");
+    v.push("Canada|CA|CAN|124|Canada|CANADA|CANADA");
+    v.push("Cabo Verde|CV|CPV|132|Cabo Verde|CABO VERDE|CABO VERDE");
+    v.push("Cayman Islands|KY|CYM|136|Cayman Islands|CAYMAN ISLANDS|CAYMAN ISLANDS");
+    v.push("Central African Republic|CF|CAF|140|Central African Republic|CENTRAL AFRICAN REPUBLIC|CENTRAL AFRICAN REPUBLIC");
+    v.push("Chad|TD|TCD|148|Chad|CHAD|CHAD");
+    v.push("Chile|CL|CHL|152|Chile|CHILE|CHILE");
+    v.push("China|CN|CHN|156|China|CHINA|CHINA");
+    v.push("Christmas Island|CX|CXR|162|Christmas Island|CHRISTMAS ISLAND|CHRISTMAS ISLAND");
+    v.push("Cocos (Keeling) Islands|CC|CCK|166|Cocos (Keeling) Islands|COCOS (KEELING) ISLANDS|COCOS (KEELING) ISLANDS");
+    v.push("Colombia|CO|COL|170|Colombia|COLOMBIA|COLOMBIA");
+    v.push("Comoros|KM|COM|174|Comoros|COMOROS|COMOROS");
+    v.push("Congo|CG|COG|178|Congo|CONGO|CONGO");
+    v.push("Congo, Democratic Republic of the|CD|COD|180|Congo, Democratic Republic of the|CONGO, DEMOCRATIC REPUBLIC OF THE|CONGO, DEMOCRATIC REPUBLIC OF THE");
+    v.push("Cook Islands|CK|COK|184|Cook Islands|COOK ISLANDS|COOK ISLANDS");
+    v.push("Costa Rica|CR|CRI|188|Costa Rica|COSTA RICA|COSTA RICA");
+    v.push("Côte d'Ivoire|CI|CIV|384|Côte d'Ivoire|CÔTE D'IVOIRE|CÔTE D'IVOIRE");
+    v.push("Croatia|HR|HRV|191|Croatia|CROATIA|CROATIA");
+    v.push("Cuba|CU|CUB|192|Cuba|CUBA|CUBA");
+    v.push("Curaçao|CW|CUW|531|Curaçao|CURAÇAO|CURAÇAO");
+    v.push("Cyprus|CY|CYP|196|Cyprus|CYPRUS|CYPRUS");
+    v.push("Czechia|CZ|CZE|203|Czechia|CZECHIA|CZECHIA");
+    v.push("Denmark|DK|DNK|208|Denmark|DENMARK|DENMARK");
+    v.push("Djibouti|DJ|DJI|262|Djibouti|DJIBOUTI|DJIBOUTI");
+    v.push("Dominica|DM|DMA|212|Dominica|DOMINICA|DOMINICA");
+    v.push("Dominican Republic|DO|DOM|214|Dominican Republic|DOMINICAN REPUBLIC|DOMINICAN REPUBLIC");
+    v.push("Ecuador|EC|ECU|218|Ecuador|ECUADOR|ECUADOR");
+    v.push("Egypt|EG|EGY|818|Egypt|EGYPT|EGYPT");
+    v.push("El Salvador|SV|SLV|222|El Salvador|EL SALVADOR|EL SALVADOR");
+    v.push("Equatorial Guinea|GQ|GNQ|226|Equatorial Guinea|EQUATORIAL GUINEA|EQUATORIAL GUINEA");
+    v.push("Eritrea|ER|ERI|232|Eritrea|ERITREA|ERITREA");
+    v.push("Estonia|EE|EST|233|Estonia|ESTONIA|ESTONIA");
+    v.push("Ethiopia|ET|ETH|231|Ethiopia|ETHIOPIA|ETHIOPIA");
+    v.push("Falkland Islands (Malvinas)|FK|FLK|238|Falkland Islands (Malvinas)|FALKLAND ISLANDS (MALVINAS)|FALKLAND ISLANDS (MALVINAS)");
+    v.push("Faroe Islands|FO|FRO|234|Faroe Islands|FAROE ISLANDS|FAROE ISLANDS");
+    v.push("Fiji|FJ|FJI|242|Fiji|FIJI|FIJI");
+    v.push("Finland|FI|FIN|246|Finland|FINLAND|FINLAND");
+    v.push("France|FR|FRA|250|France|FRANCE|FRANCE");
+    v.push("French Guiana|GF|GUF|254|French Guiana|FRENCH GUIANA|FRENCH GUIANA");
+    v.push("French Polynesia|PF|PYF|258|French Polynesia|FRENCH POLYNESIA|FRENCH POLYNESIA");
+    v.push("French Southern Territories|TF|ATF|260|French Southern Territories|FRENCH SOUTHERN TERRITORIES|FRENCH SOUTHERN TERRITORIES");
+    v.push("Gabon|GA|GAB|266|Gabon|GABON|GABON");
+    v.push("Gambia|GM|GMB|270|Gambia|GAMBIA|GAMBIA");
+    v.push("Georgia|GE|GEO|268|Georgia|GEORGIA|GEORGIA");
+    v.push("Germany|DE|DEU|276|Germany|GERMANY|GERMANY");
+    v.push("Ghana|GH|GHA|288|Ghana|GHANA|GHANA");
+    v.push("Gibraltar|GI|GIB|292|Gibraltar|GIBRALTAR|GIBRALTAR");
+    v.push("Greece|GR|GRC|300|Greece|GREECE|GREECE");
+    v.push("Greenland|GL|GRL|304|Greenland|GREENLAND|GREENLAND");
+    v.push("Grenada|GD|GRD|308|Grenada|GRENADA|GRENADA");
+    v.push("Guadeloupe|GP|GLP|312|Guadeloupe|GUADELOUPE|GUADELOUPE");
+    v.push("Guam|GU|GUM|316|Guam|GUAM|GUAM");
+    v.push("Guatemala|GT|GTM|320|Guatemala|GUATEMALA|GUATEMALA");
+    v.push("Guernsey|GG|GGY|831|Guernsey|GUERNSEY|GUERNSEY");
+    v.push("Guinea|GN|GIN|324|Guinea|GUINEA|GUINEA");
+    v.push("Guinea-Bissau|GW|GNB|624|Guinea-Bissau|GUINEA-BISSAU|GUINEA-BISSAU");
+    v.push("Guyana|GY|GUY|328|Guyana|GUYANA|GUYANA");
+    v.push("Haiti|HT|HTI|332|Haiti|HAITI|HAITI");
+    v.push("Heard Island and McDonald Islands|HM|HMD|334|Heard Island and McDonald Islands|HEARD ISLAND AND MCDONALD ISLANDS|HEARD ISLAND AND MCDONALD ISLANDS");
+    v.push("Holy See|VA|VAT|336|Holy See|HOLY SEE|HOLY SEE");
+    v.push("Honduras|HN|HND|340|Honduras|HONDURAS|HONDURAS");
+    v.push("Hong Kong|HK|HKG|344|Hong Kong|HONG KONG|HONG KONG");
+    v.push("Hungary|HU|HUN|348|Hungary|HUNGARY|HUNGARY");
+    v.push("Iceland|IS|ISL|352|Iceland|ICELAND|ICELAND");
+    v.push("India|IN|IND|356|India|INDIA|INDIA");
+    v.push("Indonesia|ID|IDN|360|Indonesia|INDONESIA|INDONESIA");
+    v.push("Iran, Islamic Republic of|IR|IRN|364|Iran, Islamic Republic of|IRAN, ISLAMIC REPUBLIC OF|IRAN, ISLAMIC REPUBLIC OF");
+    v.push("Iraq|IQ|IRQ|368|Iraq|IRAQ|IRAQ");
+    v.push("Ireland|IE|IRL|372|Ireland|IRELAND|IRELAND");
+    v.push("Isle of Man|IM|IMN|833|Isle of Man|ISLE OF MAN|ISLE OF MAN");
+    v.push("Israel|IL|ISR|376|Israel|ISRAEL|ISRAEL");
+    v.push("Italy|IT|ITA|380|Italy|ITALY|ITALY");
+    v.push("Jamaica|JM|JAM|388|Jamaica|JAMAICA|JAMAICA");
+    v.push("Japan|JP|JPN|392|Japan|JAPAN|JAPAN");
+    v.push("Jersey|JE|JEY|832|Jersey|JERSEY|JERSEY");
+    v.push("Jordan|JO|JOR|400|Jordan|JORDAN|JORDAN");
+    v.push("Kazakhstan|KZ|KAZ|398|Kazakhstan|KAZAKHSTAN|KAZAKHSTAN");
+    v.push("Kenya|KE|KEN|404|Kenya|KENYA|KENYA");
+    v.push("Kiribati|KI|KIR|296|Kiribati|KIRIBATI|KIRIBATI");
+    v.push("Korea, Democratic People's Republic of|KP|PRK|408|Korea, Democratic People's Republic of|KOREA, DEMOCRATIC PEOPLE'S REPUBLIC OF|KOREA, DEMOCRATIC PEOPLE'S REPUBLIC OF");
+    v.push("Korea, Republic of|KR|KOR|410|Korea, Republic of|KOREA, REPUBLIC OF|KOREA, REPUBLIC OF");
+    v.push("Kosovo|XK|XKX|983|Kosovo|KOSOVO|KOSOVO");
+    v.push("Kuwait|KW|KWT|414|Kuwait|KUWAIT|KUWAIT");
+    v.push("Kyrgyzstan|KG|KGZ|417|Kyrgyzstan|KYRGYZSTAN|KYRGYZSTAN");
+    v.push("Lao People's Democratic Republic|LA|LAO|418|Lao People's Democratic Republic|LAO PEOPLE'S DEMOCRATIC REPUBLIC|LAO PEOPLE'S DEMOCRATIC REPUBLIC");
+    v.push("Latvia|LV|LVA|428|Latvia|LATVIA|LATVIA");
+    v.push("Lebanon|LB|LBN|422|Lebanon|LEBANON|LEBANON");
+    v.push("Lesotho|LS|LSO|426|Lesotho|LESOTHO|LESOTHO");
+    v.push("Liberia|LR|LBR|430|Liberia|LIBERIA|LIBERIA");
+    v.push("Libya|LY|LBY|434|Libya|LIBYA|LIBYA");
+    v.push("Liechtenstein|LI|LIE|438|Liechtenstein|LIECHTENSTEIN|LIECHTENSTEIN");
+    v.push("Lithuania|LT|LTU|440|Lithuania|LITHUANIA|LITHUANIA");
+    v.push("Luxembourg|LU|LUX|442|Luxembourg|LUXEMBOURG|LUXEMBOURG");
+    v.push("Macao|MO|MAC|446|Macao|MACAO|MACAO");
+    v.push("North Macedonia|MK|MKD|807|North Macedonia|NORTH MACEDONIA|NORTH MACEDONIA");
+    v.push("Madagascar|MG|MDG|450|Madagascar|MADAGASCAR|MADAGASCAR");
+    v.push("Malawi|MW|MWI|454|Malawi|MALAWI|MALAWI");
+    v.push("Malaysia|MY|MYS|458|Malaysia|MALAYSIA|MALAYSIA");
+    v.push("Maldives|MV|MDV|462|Maldives|MALDIVES|MALDIVES");
+    v.push("Mali|ML|MLI|466|Mali|MALI|MALI");
+    v.push("Malta|MT|MLT|470|Malta|MALTA|MALTA");
+    v.push("Marshall Islands|MH|MHL|584|Marshall Islands|MARSHALL ISLANDS|MARSHALL ISLANDS");
+    v.push("Martinique|MQ|MTQ|474|Martinique|MARTINIQUE|MARTINIQUE");
+    v.push("Mauritania|MR|MRT|478|Mauritania|MAURITANIA|MAURITANIA");
+    v.push("Mauritius|MU|MUS|480|Mauritius|MAURITIUS|MAURITIUS");
+    v.push("Mayotte|YT|MYT|175|Mayotte|MAYOTTE|MAYOTTE");
+    v.push("Mexico|MX|MEX|484|Mexico|MEXICO|MEXICO");
+    v.push("Micronesia, Federated States of|FM|FSM|583|Micronesia, Federated States of|MICRONESIA, FEDERATED STATES OF|MICRONESIA, FEDERATED STATES OF");
+    v.push("Moldova, Republic of|MD|MDA|498|Moldova, Republic of|MOLDOVA, REPUBLIC OF|MOLDOVA, REPUBLIC OF");
+    v.push("Monaco|MC|MCO|492|Monaco|MONACO|MONACO");
+    v.push("Mongolia|MN|MNG|496|Mongolia|MONGOLIA|MONGOLIA");
+    v.push("Montenegro|ME|MNE|499|Montenegro|MONTENEGRO|MONTENEGRO");
+    v.push("Montserrat|MS|MSR|500|Montserrat|MONTSERRAT|MONTSERRAT");
+    v.push("Morocco|MA|MAR|504|Morocco|MOROCCO|MOROCCO");
+    v.push("Mozambique|MZ|MOZ|508|Mozambique|MOZAMBIQUE|MOZAMBIQUE");
+    v.push("Myanmar|MM|MMR|104|Myanmar|MYANMAR|MYANMAR");
+    v.push("Namibia|NA|NAM|516|Namibia|NAMIBIA|NAMIBIA");
+    v.push("Naoero|NR|NRU|520|Naoero|NAOERO|NAOERO");
+    v.push("Nepal|NP|NPL|524|Nepal|NEPAL|NEPAL");
+    v.push("Netherlands|NL|NLD|528|Netherlands|NETHERLANDS|NETHERLANDS");
+    v.push("New Caledonia|NC|NCL|540|New Caledonia|NEW CALEDONIA|NEW CALEDONIA");
+    v.push("New Zealand|NZ|NZL|554|New Zealand|NEW ZEALAND|NEW ZEALAND");
+    v.push("Nicaragua|NI|NIC|558|Nicaragua|NICARAGUA|NICARAGUA");
+    v.push("Niger|NE|NER|562|Niger|NIGER|NIGER");
+    v.push("Nigeria|NG|NGA|566|Nigeria|NIGERIA|NIGERIA");
+    v.push("Niue|NU|NIU|570|Niue|NIUE|NIUE");
+    v.push("Norfolk Island|NF|NFK|574|Norfolk Island|NORFOLK ISLAND|NORFOLK ISLAND");
+    v.push("Northern Mariana Islands|MP|MNP|580|Northern Mariana Islands|NORTHERN MARIANA ISLANDS|NORTHERN MARIANA ISLANDS");
+    v.push("Norway|NO|NOR|578|Norway|NORWAY|NORWAY");
+    v.push("Oman|OM|OMN|512|Oman|OMAN|OMAN");
+    v.push("Pakistan|PK|PAK|586|Pakistan|PAKISTAN|PAKISTAN");
+    v.push("Palau|PW|PLW|585|Palau|PALAU|PALAU");
+    v.push("Palestine, State of|PS|PSE|275|Palestine|PALESTINE, STATE OF|PALESTINE");
+    v.push("Panama|PA|PAN|591|Panama|PANAMA|PANAMA");
+    v.push("Papua New Guinea|PG|PNG|598|Papua New Guinea|PAPUA NEW GUINEA|PAPUA NEW GUINEA");
+    v.push("Paraguay|PY|PRY|600|Paraguay|PARAGUAY|PARAGUAY");
+    v.push("Peru|PE|PER|604|Peru|PERU|PERU");
+    v.push("Philippines|PH|PHL|608|Philippines|PHILIPPINES|PHILIPPINES");
+    v.push("Pitcairn|PN|PCN|612|Pitcairn|PITCAIRN|PITCAIRN");
+    v.push("Poland|PL|POL|616|Poland|POLAND|POLAND");
+    v.push("Portugal|PT|PRT|620|Portugal|PORTUGAL|PORTUGAL");
+    v.push("Puerto Rico|PR|PRI|630|Puerto Rico|PUERTO RICO|PUERTO RICO");
+    v.push("Qatar|QA|QAT|634|Qatar|QATAR|QATAR");
+    v.push("Réunion|RE|REU|638|Réunion|RÉUNION|RÉUNION");
+    v.push("Romania|RO|ROU|642|Romania|ROMANIA|ROMANIA");
+    v.push("Russian Federation|RU|RUS|643|Russian Federation|RUSSIAN FEDERATION|RUSSIAN FEDERATION");
+    v.push("Rwanda|RW|RWA|646|Rwanda|RWANDA|RWANDA");
+    v.push("Saint Barthélemy|BL|BLM|652|Saint Barthélemy|SAINT BARTHÉLEMY|SAINT BARTHÉLEMY");
+    v.push("Saint Helena, Ascension and Tristan da Cunha|SH|SHN|654|Saint Helena, Ascension and Tristan da Cunha|SAINT HELENA, ASCENSION AND TRISTAN DA CUNHA|SAINT HELENA, ASCENSION AND TRISTAN DA CUNHA");
+    v.push("Saint Kitts and Nevis|KN|KNA|659|Saint Kitts and Nevis|SAINT KITTS AND NEVIS|SAINT KITTS AND NEVIS");
+    v.push("Saint Lucia|LC|LCA|662|Saint Lucia|SAINT LUCIA|SAINT LUCIA");
+    v.push("Saint Martin (French part)|MF|MAF|663|Saint Martin (French part)|SAINT MARTIN (FRENCH PART)|SAINT MARTIN (FRENCH PART)");
+    v.push("Saint Pierre and Miquelon|PM|SPM|666|Saint Pierre and Miquelon|SAINT PIERRE AND MIQUELON|SAINT PIERRE AND MIQUELON");
+    v.push("Saint Vincent and the Grenadines|VC|VCT|670|Saint Vincent and the Grenadines|SAINT VINCENT AND THE GRENADINES|SAINT VINCENT AND THE GRENADINES");
+    v.push("Samoa|WS|WSM|882|Samoa|SAMOA|SAMOA");
+    v.push("San Marino|SM|SMR|674|San Marino|SAN MARINO|SAN MARINO");
+    v.push("Sao Tome and Principe|ST|STP|678|Sao Tome and Principe|SAO TOME AND PRINCIPE|SAO TOME AND PRINCIPE");
+    v.push("Saudi Arabia|SA|SAU|682|Saudi Arabia|SAUDI ARABIA|SAUDI ARABIA");
+    v.push("Senegal|SN|SEN|686|Senegal|SENEGAL|SENEGAL");
+    v.push("Serbia|RS|SRB|688|Serbia|SERBIA|SERBIA");
+    v.push("Seychelles|SC|SYC|690|Seychelles|SEYCHELLES|SEYCHELLES");
+    v.push("Sierra Leone|SL|SLE|694|Sierra Leone|SIERRA LEONE|SIERRA LEONE");
+    v.push("Singapore|SG|SGP|702|Singapore|SINGAPORE|SINGAPORE");
+    v.push("Sint Maarten (Dutch part)|SX|SXM|534|Sint Maarten (Dutch part)|SINT MAARTEN (DUTCH PART)|SINT MAARTEN (DUTCH PART)");
+    v.push("Slovakia|SK|SVK|703|Slovakia|SLOVAKIA|SLOVAKIA");
+    v.push("Slovenia|SI|SVN|705|Slovenia|SLOVENIA|SLOVENIA");
+    v.push("Solomon Islands|SB|SLB|090|Solomon Islands|SOLOMON ISLANDS|SOLOMON ISLANDS");
+    v.push("Somalia|SO|SOM|706|Somalia|SOMALIA|SOMALIA");
+    v.push("South Africa|ZA|ZAF|710|South Africa|SOUTH AFRICA|SOUTH AFRICA");
+    v.push("South Georgia and the South Sandwich Islands|GS|SGS|239|South Georgia and the South Sandwich Islands|SOUTH GEORGIA AND THE SOUTH SANDWICH ISLANDS|SOUTH GEORGIA AND THE SOUTH SANDWICH ISLANDS");
+    v.push("South Sudan|SS|SSD|728|South Sudan|SOUTH SUDAN|SOUTH SUDAN");
+    v.push("Spain|ES|ESP|724|Spain|SPAIN|SPAIN");
+    v.push("Sri Lanka|LK|LKA|144|Sri Lanka|SRI LANKA|SRI LANKA");
+    v.push("Sudan|SD|SDN|729|Sudan|SUDAN|SUDAN");
+    v.push("Suriname|SR|SUR|740|Suriname|SURINAME|SURINAME");
+    v.push("Svalbard and Jan Mayen|SJ|SJM|744|Svalbard and Jan Mayen|SVALBARD AND JAN MAYEN|SVALBARD AND JAN MAYEN");
+    v.push("Eswatini|SZ|SWZ|748|Eswatini|ESWATINI|ESWATINI");
+    v.push("Sweden|SE|SWE|752|Sweden|SWEDEN|SWEDEN");
+    v.push("Switzerland|CH|CHE|756|Switzerland|SWITZERLAND|SWITZERLAND");
+    v.push("Syrian Arab Republic|SY|SYR|760|Syrian Arab Republic|SYRIAN ARAB REPUBLIC|SYRIAN ARAB REPUBLIC");
+    v.push("Taiwan, Province of China|TW|TWN|158|Taiwan|TAIWAN, PROVINCE OF CHINA|TAIWAN");
+    v.push("Tajikistan|TJ|TJK|762|Tajikistan|TAJIKISTAN|TAJIKISTAN");
+    v.push("Tanzania, United Republic of|TZ|TZA|834|Tanzania, United Republic of|TANZANIA, UNITED REPUBLIC OF|TANZANIA, UNITED REPUBLIC OF");
+    v.push("Thailand|TH|THA|764|Thailand|THAILAND|THAILAND");
+    v.push("Timor-Leste|TL|TLS|626|Timor-Leste|TIMOR-LESTE|TIMOR-LESTE");
+    v.push("Togo|TG|TGO|768|Togo|TOGO|TOGO");
+    v.push("Tokelau|TK|TKL|772|Tokelau|TOKELAU|TOKELAU");
+    v.push("Tonga|TO|TON|776|Tonga|TONGA|TONGA");
+    v.push("Trinidad and Tobago|TT|TTO|780|Trinidad and Tobago|TRINIDAD AND TOBAGO|TRINIDAD AND TOBAGO");
+    v.push("Tunisia|TN|TUN|788|Tunisia|TUNISIA|TUNISIA");
+    v.push("Türkiye|TR|TUR|792|Türkiye|TÜRKIYE|TÜRKIYE");
+    v.push("Turkmenistan|TM|TKM|795|Turkmenistan|TURKMENISTAN|TURKMENISTAN");
+    v.push("Turks and Caicos Islands|TC|TCA|796|Turks and Caicos Islands|TURKS AND CAICOS ISLANDS|TURKS AND CAICOS ISLANDS");
+    v.push("Tuvalu|TV|TUV|798|Tuvalu|TUVALU|TUVALU");
+    v.push("Uganda|UG|UGA|800|Uganda|UGANDA|UGANDA");
+    v.push("Ukraine|UA|UKR|804|Ukraine|UKRAINE|UKRAINE");
+    v.push("United Arab Emirates|AE|ARE|784|United Arab Emirates|UNITED ARAB EMIRATES|UNITED ARAB EMIRATES");
+    v.push("United Kingdom of Great Britain and Northern Ireland|GB|GBR|826|United Kingdom of Great Britain and Northern Ireland|UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND|UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND");
+    v.push("United States of America|US|USA|840|United States of America|UNITED STATES OF AMERICA|UNITED STATES OF AMERICA");
+    v.push("United States Minor Outlying Islands|UM|UMI|581|United States Minor Outlying Islands|UNITED STATES MINOR OUTLYING ISLANDS|UNITED STATES MINOR OUTLYING ISLANDS");
+    v.push("Uruguay|UY|URY|858|Uruguay|URUGUAY|URUGUAY");
+    v.push("Uzbekistan|UZ|UZB|860|Uzbekistan|UZBEKISTAN|UZBEKISTAN");
+    v.push("Vanuatu|VU|VUT|548|Vanuatu|VANUATU|VANUATU");
+    v.push("Venezuela, Bolivarian Republic of|VE|VEN|862|Venezuela, Bolivarian Republic of|VENEZUELA, BOLIVARIAN REPUBLIC OF|VENEZUELA, BOLIVARIAN REPUBLIC OF");
+    v.push("Viet Nam|VN|VNM|704|Viet Nam|VIET NAM|VIET NAM");
+    v.push("Virgin Islands, British|VG|VGB|092|Virgin Islands, British|VIRGIN ISLANDS, BRITISH|VIRGIN ISLANDS, BRITISH");
+    v.push("Virgin Islands, U.S.|VI|VIR|850|Virgin Islands, U.S.|VIRGIN ISLANDS, U.S.|VIRGIN ISLANDS, U.S.");
+    v.push("Wallis and Futuna|WF|WLF|876|Wallis and Futuna|WALLIS AND FUTUNA|WALLIS AND FUTUNA");
+    v.push("Western Sahara|EH|ESH|732|Western Sahara|WESTERN SAHARA|WESTERN SAHARA");
+    v.push("Yemen|YE|YEM|887|Yemen|YEMEN|YEMEN");
+    v.push("Zambia|ZM|ZMB|894|Zambia|ZAMBIA|ZAMBIA");
+    v.push("Zimbabwe|ZW|ZWE|716|Zimbabwe|ZIMBABWE|ZIMBABWE");
+    return v;
+}
+
+fn jobs_text() -> String {
+    return "get\tAF\nget\tUS\nget\tJP\nget\tbr\nget\tDE\nget\tAFG\nget\tUSA\nget\tjpn\nget\tIND\nget\t004\nget\t840\nget\t356\nget\t000\nget\tJapan\nget\tUnited States of America\nget\tZIMBABWE\nget\tPalestine\nget\tTaiwan\nget\tAtlantis\nget\tZZ\nget\tXYZ\ngetint\t4\ngetint\t840\ngetint\t51\ngetint\t392\ngetint\t0\ngetint\t999\ncontains\tUS\ncontains\tZZ\ncontains\tUSA\ncontains\t999\ncontains\tCI\ncontains\tKP\ncontains\tTR\ncontains\t004\ncontains\t000\nlen\t\n";
+}
