@@ -11057,6 +11057,31 @@ impl<'a> Interp<'a> {
             }
             "OnceLock" | "OnceCell" | "TaskHandle" | "Mutex" => Some(0),
             "Arena" => Some(1),
+            // The initializer, and the value once a `get` ran it.
+            "LazyLock" => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or_else(|| Stop::Error("LazyLock has no type argument".into()))?;
+                let init = self.tys.intern(TyKind::Fn {
+                    params: Vec::new(),
+                    ret: held,
+                    kind: crate::mir::ty::FnKind::Fn,
+                });
+                let n = match self.slot(addr)? {
+                    Value::Agg(fs) => fs.len(),
+                    other => return err(format!("LazyLock holds {other:?}")),
+                };
+                if n > 1 {
+                    self.drop_at(&addr.child(1), held)?;
+                }
+                if n > 0 {
+                    self.drop_at(&addr.child(0), init)?;
+                }
+                return Ok(());
+            }
             _ => None,
         };
         if let Some(first) = first {

@@ -237,6 +237,8 @@ pub const HANDLES: &[&str] = &[
     "CString",
     "OnceLock",
     "OnceCell",
+    // Its initializer until the first `get`, and the value after.
+    "LazyLock",
     "Arena",
     "TaskHandle",
     // A group's drop frees its runtime state (B-2026-10-15-30).

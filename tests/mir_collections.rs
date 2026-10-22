@@ -882,3 +882,41 @@ fn main() {
         0,
     );
 }
+
+/// A `LazyLock` runs its initializer at the first `get` only, for a value
+/// that owns heap memory too; one never read never runs it, and each drops
+/// what it holds (B-2026-10-22-25).
+const LAZY: &str = r#"
+struct Pair { a: i64, b: String }
+fn words() -> Vec[String] { println("words"); return vec!["x".to_string(), "yz".to_string()]; }
+fn pair() -> Pair { println("pair"); return Pair { a: 7, b: "seven".to_string() }; }
+fn show(w: ref LazyLock[Vec[String]], p: ref LazyLock[Pair]) {
+    let v = w.get();
+    println(f"{v.len()} {v[1]}");
+    let q = p.get();
+    println(f"{q.a} {q.b}");
+}
+fn main() {
+    let w: LazyLock[Vec[String]] = LazyLock.new(|| words());
+    let p: LazyLock[Pair] = LazyLock.new(|| pair());
+    let unused: LazyLock[String] = LazyLock.new(|| "never".to_string());
+    println("start");
+    show(w, p);
+    show(w, p);
+    println(f"{w.get()[0]} {p.get().b.len()}");
+}
+"#;
+
+const WANT_LAZY: &str = "start\nwords\n2 yz\npair\n7 seven\n2 yz\n7 seven\nx 5\n";
+
+#[test]
+fn lazy_lock_initializes_once_on_both_backends() {
+    agrees(LAZY, WANT_LAZY, 0);
+}
+
+#[test]
+fn lazy_lock_is_clean_under_asan() {
+    if let Some(out) = under_asan(LAZY) {
+        assert_eq!(out, WANT_LAZY);
+    }
+}

@@ -557,6 +557,9 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if base == "LazyLock" && self.lazy_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
         if matches!(
             base,
             "tracing_active_span"

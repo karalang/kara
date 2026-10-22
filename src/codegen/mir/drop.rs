@@ -59,6 +59,11 @@ enum CellDrop {
     /// An `Arena`: its items drop through their glue, last pushed first,
     /// then `karac_mir_arena_free` frees it.
     Arena,
+    /// A `LazyLock`: a malloc'd block holding a `OnceLock` handle and the
+    /// erased initializer after it (`codegen/mir/cells.rs`). The held value
+    /// and the cell drop as a `OnceLock`'s, then the initializer, then the
+    /// block is freed.
+    Lazy,
 }
 
 /// The library cells whose contents live in the runtime, behind a one-word
@@ -89,6 +94,7 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     // Its tasks have returned: the transform waits for that first.
     ("TaskGroup", CellDrop::Free("karac_mir_group_drop")),
     ("Arena", CellDrop::Arena),
+    ("LazyLock", CellDrop::Lazy),
 ];
 
 /// Library types whose builtin `Drop` does nothing here, as in the
@@ -398,6 +404,26 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(|e| e.to_string())?;
                     cx.builder.position_at_end(end);
                     Ok(())
+                })
+            }
+            CellDrop::Lazy => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or("a LazyLock has no type argument")?;
+                let init = self.tys.intern(TyKind::Fn {
+                    params: Vec::new(),
+                    ret: held,
+                    kind: crate::mir::ty::FnKind::Fn,
+                });
+                // The `OnceLock` drop reads only the held type, which is
+                // this type's argument as it is a `OnceLock`'s.
+                self.if_then(some, |cx| {
+                    cx.drop_cell(h, ty, CellDrop::Once)?;
+                    cx.call_glue(cx.offset(h, 8)?, init)?;
+                    cx.free(h)
                 })
             }
             CellDrop::Arena => {

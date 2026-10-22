@@ -8,9 +8,10 @@
 use inkwell::values::{IntValue, PointerValue};
 use inkwell::IntPredicate;
 
+use super::callable::Callee;
 use super::{Cx, R};
 use crate::mir::layout::{library_cell, Cell};
-use crate::mir::ty::IntTy;
+use crate::mir::ty::{FnKind, IntTy};
 use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
@@ -367,6 +368,86 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => return Ok(None),
         };
         Ok(Some(v.map_err(e)?))
+    }
+
+    /// `LazyLock[T]`: its one word points at a block holding a `OnceLock`
+    /// handle and the erased initializer after it. `get` runs the
+    /// initializer the first time and hands out the held value after, as
+    /// the interpreter's `LazyLock` does. A `LazyLock` is a module-level
+    /// binding that lives as long as the program, so the block is never
+    /// freed. `None` for a method not lowered here.
+    pub(super) fn lazy_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        match (method, args) {
+            ("new", [f]) => {
+                let ft = self.operand_type(f)?;
+                if !matches!(self.tys.kind(ft), TyKind::Fn { .. }) {
+                    return Ok(None);
+                }
+                let size = 8 + self.layout(ft)?.size;
+                let malloc = self.libc_fn("malloc");
+                let block = self
+                    .builder
+                    .build_call(malloc, &[self.i64(size).into()], "lazy")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let h = self.mrt_ptr_named("karac_runtime_once_new", &[])?;
+                self.store(block, h.into())?;
+                let fp = self.operand_ptr(f)?;
+                self.copy(self.offset(block, 8)?, fp, ft)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, block.into())?;
+                Ok(Some(()))
+            }
+            ("get", [recv]) => {
+                let (cell, ct) = self.cell_arg(recv)?;
+                let Some(t) = self
+                    .tys
+                    .tcx()
+                    .adt_of(ct)
+                    .and_then(|(_, a)| a.first().copied())
+                else {
+                    return Ok(None);
+                };
+                let ft = self.tys.intern(TyKind::Fn {
+                    params: Vec::new(),
+                    ret: t,
+                    kind: FnKind::Fn,
+                });
+                let size = self.layout(t)?.size;
+                let block = self.load_ptr(cell)?;
+                let h = self.load_ptr(block)?;
+                let p = self.mrt_ptr_named("karac_runtime_once_get", &[h.into()])?;
+                let unset = self.builder.build_is_null(p, "").map_err(e)?;
+                let at = self.offset(block, 8)?;
+                self.if_then(unset, |cx| {
+                    let tmp = cx.temp(t, "lazy")?;
+                    let c = Callee::Erased {
+                        at,
+                        ty: ft,
+                        consume: false,
+                    };
+                    cx.call_callee(&c, tmp, &[])?;
+                    cx.rt_int_named(
+                        "karac_runtime_once_set",
+                        &[h.into(), tmp.into(), cx.i64(size).into()],
+                        8,
+                    )?;
+                    Ok(())
+                })?;
+                let p = self.mrt_ptr_named("karac_runtime_once_get", &[h.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, p.into())?;
+                Ok(Some(()))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// The methods of `OnceLock[T]` / `OnceCell[T]`, or `None` for one not
