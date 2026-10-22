@@ -21,10 +21,10 @@
 // would be vectorizable in C and Rust and not in Kara, and the lane would
 // measure that difference instead of this one.
 
-let N_PAIRS = 400000;
-let PASSES = 12;
-let WIDTH = 4;
-let ALPHABET = 4;
+const N_PAIRS: i64 = 400000;
+const PASSES: i64 = 12;
+const WIDTH: i64 = 4;
+const ALPHABET: i64 = 4;
 
 fn lcg(state: i64) -> i64 {
     return (state * 1103515245 + 12345) & 0x7fffffff;

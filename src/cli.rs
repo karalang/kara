@@ -1822,10 +1822,12 @@ impl Pipeline {
                 // the MIR effect pass reports with both branches named. The
                 // legacy rule refused every such write, one branch alone
                 // included, and pointed at `Arc`, `RwLock` and
-                // `#[thread_local]`.
+                // `#[thread_local]`. The module-level half of the rule goes
+                // too (B-2026-10-22-8): a module `let mut` is itself refused
+                // under strict check, so a write to one in a branch has
+                // nothing left to add.
                 e.errors.retain(|e| {
                     e.kind != crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar
-                        || !e.message.starts_with("local let mut '")
                 });
             }
         }

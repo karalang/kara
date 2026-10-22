@@ -12,8 +12,9 @@
 //   any other route      → 404, "not found"
 //   non-supported method → 405, "method not allowed"
 //
-// State lives in module-level `let mut TODOS: Vec[Todo]` per
-// design.md §1278-1330 (module-level bindings). The kata
+// State lives in a `Store` built in `main` and passed down to the
+// handler (design.md § Constants: Kāra has no mutable globals; it
+// replaced the module-level `let mut TODOS`, kara B-2026-10-22-8). The kata
 // originally bridged four karac codegen gaps with inline
 // workarounds at Slice 4 ship time; all four fixes landed
 // 2026-05-22 and the kata is now back to its natural shape:
@@ -26,7 +27,7 @@
 //   - Field-receiver method GEP through `ref T`       → karac `32f52d2`
 //
 // JSON construction uses `Vec[...]` literals at variant payload
-// position; DELETE uses `TODOS.remove(idx)` and preserves element
+// position; DELETE uses `store.todos.remove(idx)` and preserves element
 // order; bool extraction from `Json.Bool(b)` reads naturally.
 // Construction lives inline in each handler — factoring into a
 // `todo_to_json(t: ref Todo) -> Json` helper compiles clean but
@@ -49,22 +50,24 @@ struct Todo {
     completed: bool,
 }
 
-let mut TODOS: Vec[Todo] = Vec.new();
-let mut NEXT_ID: i64 = 1;
+struct Store {
+    todos: Vec[Todo],
+    next_id: i64,
+}
 
-fn seed_initial_todos() {
-    TODOS.push(Todo { id: 1, title: "Learn Kāra", completed: false });
-    TODOS.push(Todo { id: 2, title: "Write a kata", completed: true });
-    TODOS.push(Todo { id: 3, title: "Ship Slice 4", completed: false });
-    NEXT_ID = 4;
+fn seed_initial_todos(store: mut ref Store) {
+    store.todos.push(Todo { id: 1, title: "Learn Kāra", completed: false });
+    store.todos.push(Todo { id: 2, title: "Write a kata", completed: true });
+    store.todos.push(Todo { id: 3, title: "Ship Slice 4", completed: false });
+    store.next_id = 4;
 }
 
 // Linear-scan find-by-id. Returns the matching index or `None`.
-fn find_index_by_id(target: i64) -> Option[i64] {
+fn find_index_by_id(store: Store, target: i64) -> Option[i64] {
     let mut i: i64 = 0;
-    let n: i64 = TODOS.len();
+    let n: i64 = store.todos.len();
     while i < n {
-        let t: ref Todo = ref TODOS[i];
+        let t: ref Todo = ref store.todos[i];
         if t.id == target {
             return Some(i);
         }
@@ -136,7 +139,7 @@ fn bad_request(msg: own String) -> Response {
     Response { status: 400, body: msg }
 }
 
-fn handle(req: Request) -> Response {
+fn handle(store: mut ref Store, req: Request) -> Response {
     let m: String = req.method();
     let p: String = req.path();
 
@@ -147,9 +150,9 @@ fn handle(req: Request) -> Response {
         if p == "/todos" {
             let mut items: Vec[Json] = Vec.new();
             let mut i: i64 = 0;
-            let n: i64 = TODOS.len();
+            let n: i64 = store.todos.len();
             while i < n {
-                let t: ref Todo = ref TODOS[i];
+                let t: ref Todo = ref store.todos[i];
                 items.push(Json.Object(Vec[
                     ("id", Json.Number(t.id as f64)),
                     ("title", Json.String(t.title.clone())),
@@ -166,9 +169,9 @@ fn handle(req: Request) -> Response {
             let rest = p.substring(7);
             match i64.parse(rest).ok() {
                 Some(id) => {
-                    match find_index_by_id(id) {
+                    match find_index_by_id(store, id) {
                         Some(idx) => {
-                            let t: ref Todo = ref TODOS[idx];
+                            let t: ref Todo = ref store.todos[idx];
                             let obj: Json = Json.Object(Vec[
                                 ("id", Json.Number(t.id as f64)),
                                 ("title", Json.String(t.title.clone())),
@@ -205,14 +208,14 @@ fn handle(req: Request) -> Response {
                         Ok(j2) => extract_completed(j2),
                         Err(_) => false,
                     };
-                    let id: i64 = NEXT_ID;
-                    NEXT_ID = NEXT_ID + 1;
+                    let id: i64 = store.next_id;
+                    store.next_id = store.next_id + 1;
                     let title_for_response: String = title.clone();
                     let new_todo: Todo = Todo { id: id, title: title, completed: completed };
-                    TODOS.push(new_todo);
+                    store.todos.push(new_todo);
                     // Build response body inline against the captured
                     // values (the Todo we just pushed is now owned by
-                    // TODOS — easier to render from the scalars than
+                    // store.todos — easier to render from the scalars than
                     // re-index).
                     let obj: Json = Json.Object(Vec[
                         ("id", Json.Number(id as f64)),
@@ -234,7 +237,7 @@ fn handle(req: Request) -> Response {
             let rest = p.substring(7);
             match i64.parse(rest).ok() {
                 Some(id) => {
-                    match find_index_by_id(id) {
+                    match find_index_by_id(store, id) {
                         Some(idx) => {
                             match Json.parse(req.body()) {
                                 Err(_) => return bad_request("invalid JSON body"),
@@ -248,7 +251,7 @@ fn handle(req: Request) -> Response {
                                         Err(_) => false,
                                     };
                                     let title_for_response: String = title.clone();
-                                    TODOS[idx] = Todo { id: id, title: title, completed: completed };
+                                    store.todos[idx] = Todo { id: id, title: title, completed: completed };
                                     let obj: Json = Json.Object(Vec[
                                         ("id", Json.Number(id as f64)),
                                         ("title", Json.String(title_for_response)),
@@ -276,9 +279,9 @@ fn handle(req: Request) -> Response {
             let rest = p.substring(7);
             match i64.parse(rest).ok() {
                 Some(id) => {
-                    match find_index_by_id(id) {
+                    match find_index_by_id(store, id) {
                         Some(idx) => {
-                            let _ = TODOS.remove(idx);
+                            let _ = store.todos.remove(idx);
                             return Response { status: 204, body: "" };
                         }
                         None => return not_found(),
@@ -294,6 +297,7 @@ fn handle(req: Request) -> Response {
 }
 
 fn main() {
-    seed_initial_todos();
-    let _ = Server.serve("127.0.0.1:8080", handle);
+    let mut store = Store { todos: Vec.new(), next_id: 1 };
+    seed_initial_todos(mut store);
+    let _ = Server.serve("127.0.0.1:8080", |req| handle(mut store, req));
 }

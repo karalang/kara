@@ -8,8 +8,8 @@
 // numbers whenever a hash is found, so a collision never counts.
 // O((m + n) log min(m, n)) expected.
 
-let BASE: i64 = 113;
-let MODULUS: i64 = 1000000007;
+const BASE: i64 = 113;
+const MODULUS: i64 = 1000000007;
 
 // The hash of every window of `nums` of length `size`, in order.
 fn window_hashes(nums: Vec[i64], size: i64) -> Vec[i64] {

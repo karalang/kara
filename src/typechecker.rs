@@ -1270,6 +1270,12 @@ pub enum TypeErrorKind {
     /// segment. The fix-it directs the programmer to `StringSlice`.
     /// Code `E_MODULE_BINDING_HEAP_TYPE`.
     ModuleBindingHeapType,
+    /// A module-level `let` or `let mut` under strict check
+    /// (B-2026-10-22-8). design.md § Constants: `const NAME: T = e;` is the
+    /// only value declared at module scope, and there are no mutable
+    /// globals. A `let` whose initializer is already constant carries a
+    /// fix-it to `const`. Code `E_MODULE_LET`.
+    ModuleLet,
     /// Slice 5 of design.md § Module-Level Bindings — an assignment
     /// target identifier resolves to a module-level `let` binding
     /// (not `let mut`). Mirrors the ownership checker's local-binding
@@ -1499,6 +1505,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MissingNonExhaustive
         | TypeErrorKind::ModuleBindingEffectfulInit
         | TypeErrorKind::ModuleBindingHeapType
+        | TypeErrorKind::ModuleLet
         | TypeErrorKind::ReassignToImmutableModuleBinding
         | TypeErrorKind::ScopeLocalEscape
         | TypeErrorKind::ParFieldNotConcurrent

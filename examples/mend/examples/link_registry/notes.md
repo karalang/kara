@@ -5,24 +5,25 @@ already knew the answers, so it measures nothing about the wedge. These are the
 shapes the task deliberately routes through, and what each is expected to cost
 a fresh author.
 
-## 1. Module-level mutable state, written from a function
+## 1. Mutable state passed down from `main`
 
-`shorten` mutates four module-level bindings. A `let` (not `let mut`) on any of
-them is an error at the write site, and the naming rule
-(`E_MODULE_BINDING_NAMING`) wants SCREAMING_SNAKE_CASE — both carry
-machine-applicable `replacement` fields, so `karac fix` should close them
-without the LLM re-reasoning. B-2026-07-31-31/-32/-33 were all found sharpening
-exactly that path, so this task doubles as their regression surface.
+`shorten` and `follow` write four fields of a `Registry` that `main` owns, so
+they take it as `reg: mut ref Registry` and each call site marks the argument
+`mut reg`. A fresh author is likely to reach for module-level `let mut` state
+instead; that is refused (`E_MODULE_LET`, B-2026-10-22-8) with no
+machine-applicable fix, since moving the state into `main` is a restructuring
+the diagnostic can only describe. A plain module `let` for the alphabet is
+refused too, and that one does carry a `replacement` to `const`.
 
 ## 2. Use-after-move on a `String` used as both key and value
 
-`shorten` needs `code` as a `LINKS` key, a `HITS` key, an `ORDER` element, and
+`shorten` needs `code` as a `links` key, a `hits` key, an `order` element, and
 the return value. Three of the four need `.clone()`. This is the E0500 shape,
 and its fix is machine-applicable — `karac fix` inserted exactly these clones
 when the parent example (`examples/shortener/`) was written.
 
 `follow` has the same shape at lower density: `code` is consumed by the second
-`HITS.insert`, so the two lookups before it need clones.
+`hits.insert`, so the two lookups before it need clones.
 
 ## 3. `char_at` returns `Option[char]`, not `char`
 
@@ -32,7 +33,7 @@ read the diagnostic and restructure. Good diagnostic-quality signal.
 
 ## 4. Map iteration order is backend-dependent
 
-The prompt says to fold `HITS` into totals rather than print per entry. An
+The prompt says to fold `hits` into totals rather than print per entry. An
 author who ignores that gets a program whose stdout matches the oracle on one
 backend and not the other — the `fixed-by-karac` + oracle-FAIL category, and a
 true positive: it IS wrong to depend on that order. Worth watching whether

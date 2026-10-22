@@ -2,8 +2,8 @@
 // logical timestamps. Deterministic tokens, idle + absolute expiry, a per-user
 // session cap (oldest evicted) and a periodic sweep of expired sessions.
 
-let HASH_MOD: i64 = 1000000007;
-let HASH_BASE: i64 = 131;
+const HASH_MOD: i64 = 1000000007;
+const HASH_BASE: i64 = 131;
 
 struct Config {
     idle_timeout: i64,

@@ -30,16 +30,16 @@
 // Sigma-clip parameters. Fixed here rather than exposed, because the oracle
 // (oracle.py) hard-codes the same values — the differential is only meaningful
 // if both sides agree on the algorithm, not merely on the answer.
-let SIGMA: f64 = 3.0;
-let MAXITERS: i64 = 5;
+const SIGMA: f64 = 3.0;
+const MAXITERS: i64 = 5;
 
 // Registration search radius, in pixels. Offsets larger than this are not
 // found — see estimate_offset.
-let MAX_SHIFT: f64 = 128.0;
+const MAX_SHIFT: f64 = 128.0;
 
 // Output tile edge, in pixels. Sets the working-set size: frames x TILE^2 x 8
 // bytes, so 16 frames at 256 is 8 MB regardless of how large the frames are.
-let TILE: i64 = 256;
+const TILE: i64 = 256;
 
 fn read_all(path: ref String) -> Vec[u8] with reads(FileSystem) {
     let mut data: Vec[u8] = Vec.new();
@@ -107,12 +107,12 @@ fn read_all(path: ref String) -> Vec[u8] with reads(FileSystem) {
 
 /// Output strip height, in rows. Sets the streaming working set:
 /// `frames x width x (STRIP + 2*MAX_HALO) x 2` bytes.
-let STRIP: i64 = 64;
+const STRIP: i64 = 64;
 
 /// Rows of slack kept above and below each strip. Dithers are a few pixels in
 /// practice; a frame needing more than this is dropped by registration long
 /// before it gets here.
-let MAX_HALO: i64 = 64;
+const MAX_HALO: i64 = 64;
 
 /// Header fields plus enough to decode the data section. `read_fits_header`
 /// reports `data_off`, the byte offset of the first pixel, so any later read
@@ -1416,7 +1416,7 @@ fn detect_stars(px: ref Vec[u16], base: i64, w: i64, h: i64, thresh_k: f64) -> V
 /// The PSF spans several pixels by construction — a colour sensor requires it,
 /// and any real optical system delivers it — so two maxima a pixel apart cannot
 /// both be stars. They are one star plus an artefact.
-let MIN_SEP: f64 = 2.0;
+const MIN_SEP: f64 = 2.0;
 
 /// Drop any detection sitting within MIN_SEP of a BRIGHTER one.
 ///

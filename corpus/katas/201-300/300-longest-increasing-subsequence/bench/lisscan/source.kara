@@ -24,10 +24,10 @@
 // of 4096, which keeps ties rare enough that the strict comparison is exercised
 // without collapsing the answer toward 1.
 
-let N_ARRAYS = 3000;
-let LEN = 512;
-let PASSES = 24;
-let SPREAD = 4096;
+const N_ARRAYS: i64 = 3000;
+const LEN: i64 = 512;
+const PASSES: i64 = 24;
+const SPREAD: i64 = 4096;
 
 fn lcg(state: i64) -> i64 {
     return (state * 1103515245 + 12345) & 0x7fffffff;

@@ -4,8 +4,8 @@
 // words per file and across the whole corpus (dropping stop words), and prints
 // the top ten words for each file and overall. Ties are broken alphabetically.
 
-let TOP_N: i64 = 10;
-let MIN_WORD_LEN: i64 = 2;
+const TOP_N: i64 = 10;
+const MIN_WORD_LEN: i64 = 2;
 
 // ---------------------------------------------------------------------------
 // Domain types

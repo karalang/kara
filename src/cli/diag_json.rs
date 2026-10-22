@@ -1735,6 +1735,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // §1297 heap-String rejection both surface here.
                 crate::typechecker::TypeErrorKind::ModuleBindingEffectfulInit => "E0250",
                 crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
+                crate::typechecker::TypeErrorKind::ModuleLet => "E_MODULE_LET",
                 // Slice 5 — assignment to a module-level immutable `let`.
                 crate::typechecker::TypeErrorKind::ReassignToImmutableModuleBinding => "E0252",
                 // Phase 6 line 218 slice 2 — ScopeLocal escape

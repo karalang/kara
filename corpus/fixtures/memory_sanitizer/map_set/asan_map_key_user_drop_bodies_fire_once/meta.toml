@@ -17,3 +17,4 @@ model_exit = 0
 model_rev = "583cfb0d"
 model_src = "1b87a424"
 model_verdict = "SAME"
+v2_reject = "design.md § Constants: Kāra has no module-level `let mut` (Thread A, 2026-10-22, B-2026-10-22-8)"

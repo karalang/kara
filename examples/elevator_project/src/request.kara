@@ -1,7 +1,7 @@
 // request.kara — Domain types shared across the elevator project.
 
-pub let MIN_FLOOR: i64 = 1;
-pub let MAX_FLOOR: i64 = 10;
+pub const MIN_FLOOR: i64 = 1;
+pub const MAX_FLOOR: i64 = 10;
 
 #[derive(Eq, Clone)]
 pub shared enum Direction {

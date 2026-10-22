@@ -12,10 +12,10 @@ struct RangeModule {
     state: Vec[i64],
 }
 
-let EMPTY: i64 = 0;
-let FULL: i64 = 1;
-let MIXED: i64 = 2;
-let TOP: i64 = 1073741824;
+const EMPTY: i64 = 0;
+const FULL: i64 = 1;
+const MIXED: i64 = 2;
+const TOP: i64 = 1073741824;
 
 impl RangeModule {
     fn new() -> RangeModule {

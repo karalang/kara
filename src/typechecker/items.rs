@@ -23,6 +23,22 @@ use super::types::{
 };
 use super::{ConstEvalError, CoreLent, FixIt, LocalTypeScope, TypeErrorKind};
 
+/// The library types whose value is a place to write (B-2026-10-22-8). A
+/// module `let` of one is mutable global state, which `const` cannot keep:
+/// a constant builds a fresh value at every use.
+const MODULE_CELL_TYPES: [&str; 10] = [
+    "Atomic",
+    "Mutex",
+    "RwLock",
+    "LazyLock",
+    "OnceLock",
+    "OnceCell",
+    "VolatileCell",
+    "Channel",
+    "Sender",
+    "Receiver",
+];
+
 impl<'a> super::TypeChecker<'a> {
     /// `prelude_shadow` (B-2026-08-27-15) — warn when a user declaration takes
     /// a prelude type's name.
@@ -4481,7 +4497,103 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn check_module_binding(&mut self, b: &ModuleBinding) {
+        if self.cli_lint_overrides.strict_core {
+            self.refuse_module_binding(b);
+            return;
+        }
         self.warn_module_mut_binding(b);
+        self.check_module_binding_decl(b);
+    }
+
+    /// B-2026-10-22-8: under strict check a module-level `let` or `let mut`
+    /// is an error. design.md § Constants: "`const NAME: T = e;` declares a
+    /// constant. It is the only value declared at module scope", and "There
+    /// is no module-level `let mut`". That subsumes the `module_mut_binding`
+    /// warning, whose menu names the module cells the spec defers, so it
+    /// does not fire here.
+    ///
+    /// The binding is still checked first, so its initializer's own
+    /// diagnostics come out as before. A `let` whose check added nothing is
+    /// already a constant, and its fix-it rewrites `let NAME` to
+    /// `const NAME: T`, taking `T` from the inferred type when the
+    /// annotation was elided. A `let mut` has no mechanical repair: the
+    /// value moves into `main`, and the spec's `main`-and-context pattern
+    /// is what the help names.
+    fn refuse_module_binding(&mut self, b: &ModuleBinding) {
+        let before = self.errors.len();
+        self.check_module_binding_decl(b);
+        // A cell is mutable state however it is bound, and `const` would
+        // build a fresh one at every use, so it gets the `let mut` answer.
+        let ty_text = match &b.ty {
+            Some(t) => Some(crate::formatter::render_type_expr(t)),
+            None => self
+                .env
+                .constants
+                .get(&b.name)
+                .map(super::types::type_display),
+        };
+        let cell = ty_text.as_deref().and_then(|t| {
+            t.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .find(|w| MODULE_CELL_TYPES.contains(w))
+                .map(str::to_string)
+        });
+        if b.is_mut || cell.is_some() {
+            let what = match &cell {
+                Some(_) if !b.is_mut => format!(
+                    "`let {}` (a `{}`) is",
+                    b.name,
+                    ty_text.as_deref().unwrap_or_default()
+                ),
+                _ => format!("`let mut {}` is", b.name),
+            };
+            self.type_error(
+                format!(
+                    "error[E_MODULE_LET]: module-level {what} mutable global state, and Kāra \
+                     has no mutable globals (design.md § Constants, \"No mutable \
+                     globals\")\nhelp: create the value in `main` and pass it down to the \
+                     functions that use it, gathering several into a context struct"
+                ),
+                b.name_span,
+                TypeErrorKind::ModuleLet,
+            );
+            return;
+        }
+        let annotation = match &b.ty {
+            Some(_) => Some(String::new()),
+            None => self
+                .env
+                .constants
+                .get(&b.name)
+                .filter(|t| !matches!(t, Type::Error))
+                .map(|t| format!(": {}", super::types::type_display(t))),
+        };
+        let message = format!(
+            "error[E_MODULE_LET]: module-level `let {}`: a value at module scope is a \
+             constant (design.md § Constants: `const NAME: T = e;` is the only value \
+             declared at module scope)\nhelp: declare it with `const`",
+            b.name
+        );
+        match annotation {
+            Some(annotation) if self.errors.len() == before => {
+                let end = b.name_span.offset + b.name_span.length;
+                self.type_error_with_fix_it(
+                    message,
+                    b.name_span,
+                    TypeErrorKind::ModuleLet,
+                    crate::typechecker::FixIt {
+                        span: Span {
+                            length: end - b.span.offset,
+                            ..b.span
+                        },
+                        replacement: format!("const {}{annotation}", b.name),
+                    },
+                );
+            }
+            _ => self.type_error(message, b.name_span, TypeErrorKind::ModuleLet),
+        }
+    }
+
+    fn check_module_binding_decl(&mut self, b: &ModuleBinding) {
         self.check_module_binding_init(&b.value, &b.name);
 
         if let Some(ref ty_expr) = b.ty {

@@ -3,8 +3,8 @@
 // (sleep_ms) plus an in-memory lookup, and merges them into a profile page. A
 // missing or unavailable backend record degrades to a fallback value.
 
-let BACKEND_LATENCY_MS: i64 = 3;
-let MAX_RECOMMENDATIONS: i64 = 3;
+const BACKEND_LATENCY_MS: i64 = 3;
+const MAX_RECOMMENDATIONS: i64 = 3;
 
 #[derive(Clone)]
 enum Tier { Free, Silver, Gold }

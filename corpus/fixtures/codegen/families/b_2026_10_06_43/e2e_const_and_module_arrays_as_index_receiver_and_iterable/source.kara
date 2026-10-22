@@ -2,8 +2,8 @@ const NUMS: Vec[i64] = [10, 20, 30];
 const ARR: Array[i64, 3] = [1, 2, 3];
 const LINES: Array[(i64, i64, i64), 2] = [(0, 1, 2), (3, 4, 5)];
 const NAMES: Vec[String] = ["ab".to_string(), "cd".to_string()];
-let MODA: Array[i64, 3] = [7, 8, 9];
-let WORDS: Array[String, 2] = ["a", "bb"];
+const MODA: Array[i64, 3] = [7, 8, 9];
+const WORDS: Array[String, 2] = ["a", "bb"];
 fn total() -> i64 { let mut s = 0; for x in NUMS { s += x; } for x in MODA { s += x; } s }
 fn main() {
     let mut s = 0;

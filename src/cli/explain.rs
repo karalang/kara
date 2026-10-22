@@ -475,6 +475,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ),
     ("E0250", ty("ModuleBindingEffectfulInit", None)),
     ("E0251", ty("ModuleBindingHeapType", None)),
+    ("E_MODULE_LET", ty("ModuleLet", None)),
     ("E0252", ty("ReassignToImmutableModuleBinding", None)),
     ("E0253", ty("ScopeLocalEscape", None)),
     ("E0254", ty("CrossTaskUnsafeCapture", None)),
@@ -1796,6 +1797,15 @@ the concept-level summary; the design.md section is authoritative when
 the two disagree.
 
 This is the page the `module_mut_binding` warning points at.
+
+`karac check` applies the v2 core rules (design.md § Constants), and
+there a module-level `let` or `let mut` is refused with E_MODULE_LET:
+`const NAME: T = e;` is the only value declared at module scope, which
+`karac fix` writes for a `let` that is already constant, and mutable
+state is built in `main` and passed down. Module cells (`LazyLock`,
+`OnceLock`, `OnceCell`) and `#[thread_local]` are deferred to the
+systems track. The rest of this page describes the legacy pipeline
+that `karac run` still uses.
 
 ────────────────────────────────────────────────────────────────────
 The compile-time initializer rule

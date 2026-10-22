@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 331 |
+| missing-feature | 332 |
 | codegen-gap | 289 |
 | false-positive | 283 |
-| other | 195 |
-| diagnostics | 186 |
+| other | 196 |
+| diagnostics | 187 |
 | perf | 183 |
-| soundness | 133 |
+| soundness | 134 |
 | crash | 129 |
 | use-after-free | 92 |
 
@@ -112,10 +112,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3029 |
 | interp | 1039 |
-| typecheck | 562 |
+| typecheck | 563 |
 | ownership | 131 |
 | other | 126 |
-| cli | 87 |
+| cli | 90 |
 | runtime | 86 |
 | parser | 77 |
 | autopar | 59 |
@@ -184,6 +184,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-15 | 2026-10-22 | other | medium | The drop model refuses 61 programs that check accepts, all one shape: a cursor local initialised from a borrowed handle aggregate and reassigned (`let mut cur = head; ... cur = n.next`), which §6.1 makes a counted copy; the model's §5.9 "write through a ref: an assignment" is wrong | — |
 | B-2026-10-22-16 | 2026-10-22 | other | low | The drop model refuses 10 more programs that check accepts: 4 count a Copy value (`Str`, a `T: Copy` parameter) as moved, 1 is an unparsed construct reported as a rejection, 5 not yet traced | — |
 | B-2026-10-22-17 | 2026-10-22 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gate pass and run.py fails them | — |
+| B-2026-10-22-18 | 2026-10-22 | cli | low | examples/shortener still keeps its state in module-level `let mut` bindings, which `karac check` refuses since B-2026-10-22-8, and is pinned in tests/example_corpus.rs KNOWN_BROKEN_FILES; it can move to a state struct built in `main` only once its E2E oracle stops building it on the legacy backend | — |
+| B-2026-10-22-19 | 2026-10-22 | typecheck | medium | `karac check` accepts a `const` whose initializer is a function call (`const LIMIT: i64 = compute();`), which design.md § Constants forbids ("Function calls. Calls to `const fn` come with the comptime track"); a module `let` with the same initializer is refused with E_MODULE_BINDING_EFFECTFUL_INIT, so the `const` form is the looser of the two | — |
+| B-2026-10-22-20 | 2026-10-22 | cli | high | Compile-time evaluation (`#[derive]` expansion and `comptime {}`) runs on the LEGACY tree-walk interpreter (src/comptime.rs), reached from the v2 MIR builder's derive expansion and from Pipeline::lower, so `check`, `fix`, `query` and `build --mir` all depend on src/interpreter* for any program with a derive or a comptime block; M3 deletes that interpreter | — |
+| B-2026-10-22-21 | 2026-10-22 | cli | medium | Features that go to the archive with the legacy backend (wasm component and browser bindings, the exported C ABI `--crate-type staticlib/cdylib`, GPU `gpu.dispatch`, auto-par) have no v2 refusal by name: after legacy is deleted a user would meet an unknown-flag or unknown-name error instead of a diagnostic that says the feature is deferred, as the M4a refusals for TLS server and WebSocket already do | — |
 
 ### Relocated
 

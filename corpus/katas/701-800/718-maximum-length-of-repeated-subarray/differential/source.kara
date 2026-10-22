@@ -87,8 +87,8 @@ fn find_length_diagonal(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
 
 // ---- hash arm -------------------------------------------------------
 
-let BASE: i64 = 113;
-let MODULUS: i64 = 1000000007;
+const BASE: i64 = 113;
+const MODULUS: i64 = 1000000007;
 
 // The hash of every window of `nums` of length `size`, in order.
 fn window_hashes_hash(nums: Vec[i64], size: i64) -> Vec[i64] {

@@ -1,23 +1,26 @@
 // Link registry — the state layer of a URL shortener, with the HTTP
 // surface removed so the unit has a deterministic stdout oracle.
 //
-// Exercises the shape that produced B-2026-07-31-30: MUTABLE MODULE-LEVEL
-// containers (`Map`, `Vec`) read, written, and ITERATED from functions.
-// That bug compiled `for x in <module-level container>` to a zero-iteration
-// loop, so a service reported empty stats while `len()` on the same map was
-// correct — silent, and invisible to a compile-only check.
+// The state is a `Registry` built in `main` and passed down: Kāra has no
+// mutable globals (design.md § Constants). Its containers (`Map`, `Vec`) are
+// read, written, and ITERATED from functions, the shape that produced
+// B-2026-07-31-30 when the state was module-level: that bug compiled
+// `for x in <module-level container>` to a zero-iteration loop, so a service
+// reported empty stats while `len()` on the same map was correct.
 //
 // The iteration below folds into a SUM rather than printing per entry:
 // interpreter and codegen walk a `Map` in different orders (insertion vs
 // bucket), so an order-dependent oracle would fail the interp == compiled
 // gate for a reason that is not a bug.
 
-let mut LINKS: Map[String, String] = Map.new();
-let mut HITS: Map[String, i64] = Map.new();
-let mut ORDER: Vec[String] = Vec.new();
-let mut SEQ: i64 = 0;
+struct Registry {
+    links: Map[String, String],
+    hits: Map[String, i64],
+    order: Vec[String],
+    seq: i64,
+}
 
-let CODE_ALPHABET: StringSlice = "abcdefghijklmnopqrstuvwxyz0123456789";
+const CODE_ALPHABET: StringSlice = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 // Base-36 encode `n` over CODE_ALPHABET. Always at least one character.
 fn encode_code(n: i64) -> String {
@@ -38,56 +41,57 @@ fn encode_code(n: i64) -> String {
 }
 
 // Register `url`, returning its freshly minted code.
-fn shorten(url: own String) -> String {
-    let code = encode_code(SEQ);
-    SEQ = SEQ + 1;
-    LINKS.insert(code.clone(), url);
-    HITS.insert(code.clone(), 0);
-    ORDER.push(code.clone());
+fn shorten(reg: mut ref Registry, url: own String) -> String {
+    let code = encode_code(reg.seq);
+    reg.seq = reg.seq + 1;
+    reg.links.insert(code.clone(), url);
+    reg.hits.insert(code.clone(), 0);
+    reg.order.push(code.clone());
     code
 }
 
 // Resolve `code`, bumping its hit count. Empty string when unknown.
-fn follow(code: own String) -> String {
-    match LINKS.get(code.clone()) {
+fn follow(reg: mut ref Registry, code: own String) -> String {
+    match reg.links.get(code.clone()) {
         Some(target) => {
-            let seen = match HITS.get(code.clone()) {
+            let seen = match reg.hits.get(code.clone()) {
                 Some(n) => n,
                 None => 0,
             };
-            HITS.insert(code, seen + 1);
-            target
+            reg.hits.insert(code, seen + 1);
+            target.clone()
         }
         None => "",
     }
 }
 
 fn main() {
-    let a = shorten("https://example.com/one");
-    let b = shorten("https://example.com/two");
-    let c = shorten("https://example.com/three");
+    let mut reg = Registry { links: Map.new(), hits: Map.new(), order: Vec.new(), seq: 0 };
+    let a = shorten(mut reg, "https://example.com/one");
+    let b = shorten(mut reg, "https://example.com/two");
+    let c = shorten(mut reg, "https://example.com/three");
     println(f"codes: {a} {b} {c}");
     println(f"seq 37: {encode_code(37)}");
 
-    println(follow(a.clone()));
-    println(follow(a.clone()));
-    println(follow(b.clone()));
-    let missing = follow("zz");
+    println(follow(mut reg, a.clone()));
+    println(follow(mut reg, a.clone()));
+    println(follow(mut reg, b.clone()));
+    let missing = follow(mut reg, "zz");
     println(f"missing is empty: {missing.len() == 0}");
 
-    // Module-level Map iteration — the B-2026-07-31-30 shape. Folded into
+    // Map iteration — the B-2026-07-31-30 shape. Folded into
     // order-independent totals so both backends agree.
     let mut entries = 0;
     let mut total = 0;
-    for (code, n) in HITS {
+    for (code, n) in reg.hits.iter() {
         entries = entries + 1;
         total = total + n;
     }
-    println(f"links: {LINKS.len()} entries: {entries} hits: {total}");
+    println(f"links: {reg.links.len()} entries: {entries} hits: {total}");
 
-    // Module-level Vec iteration — the same bug's sibling arm.
+    // Vec iteration — the same bug's sibling arm.
     let mut codes = "";
-    for code in ORDER {
+    for code in reg.order.iter() {
         codes = codes + code;
     }
     println(f"order: {codes}");

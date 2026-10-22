@@ -11749,6 +11749,16 @@ fn test_fix_applies_module_binding_const_rename() {
     assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert_eq!(rewritten, "pub let MY_CONFIG: i64 = 5;\n");
+    // The rename lets the file reach the typechecker, which then turns the
+    // module `let` into the `const` it must be (B-2026-10-22-8).
+    karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "pub const MY_CONFIG: i64 = 5;\n"
+    );
     // And the fixed file actually checks — the assertion whose absence let
     // B-2026-07-31-33 hide here.
     let check = karac_bin()
@@ -11777,8 +11787,8 @@ fn test_fix_module_binding_rename_updates_use_sites() {
     // no-op of B-2026-07-31-32 — that one merely failed to make progress.
     let path = fix_scratch_file(
         "binding-use-sites",
-        "let mut MyMap: Map[String, i64] = Map.new();\n\
-         fn main() {\n    MyMap.insert(\"a\", 1);\n    println(MyMap.len());\n}\n",
+        "let MyLimit: i64 = 3;\n\
+         fn main() {\n    println(MyLimit);\n    println(MyLimit + 1);\n}\n",
     );
     let out = karac_bin()
         .args(["fix", path.to_str().unwrap()])
@@ -11796,8 +11806,24 @@ fn test_fix_module_binding_rename_updates_use_sites() {
     );
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "let mut MY_MAP: Map[String, i64] = Map.new();\n\
-         fn main() {\n    MY_MAP.insert(\"a\", 1);\n    println(MY_MAP.len());\n}\n",
+        "let MY_LIMIT: i64 = 3;\n\
+         fn main() {\n    println(MY_LIMIT);\n    println(MY_LIMIT + 1);\n}\n",
+    );
+    // A second pass turns the module `let` into a `const` (B-2026-10-22-8).
+    let second = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&second.stdout).contains("applied 1 fix"),
+        "the `const` rewrite: {}",
+        String::from_utf8_lossy(&second.stdout)
+    );
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("const MY_LIMIT: i64 = 3;\n"),
+        "module `let` → `const`"
     );
     // The oracle: a fix loop must converge on a program that BUILDS, and a
     // second pass must find nothing left to do.
@@ -12697,6 +12723,18 @@ fn test_subcommand_help_explain() {
 /// which assert that the diagnostics a page QUOTES are still the
 /// diagnostics the compiler EMITS.
 fn check_source_output(tag: &str, src: &str) -> String {
+    source_output(tag, src, &["check"])
+}
+
+/// [`check_source_output`] through `karac run --interp`, the legacy pipeline.
+/// `karac check` applies the v2 core rules, which refuse module-level `let`
+/// outright (B-2026-10-22-8); the legacy module-binding diagnostics these
+/// pages quote are still produced by `run`.
+fn legacy_source_output(tag: &str, src: &str) -> String {
+    source_output(tag, src, &["run", "--interp"])
+}
+
+fn source_output(tag: &str, src: &str, args: &[&str]) -> String {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-explain-{}-{}-{}",
         tag,
@@ -12709,10 +12747,7 @@ fn check_source_output(tag: &str, src: &str) -> String {
     std::fs::create_dir_all(&tmp).unwrap();
     let path = tmp.join("probe.kara");
     std::fs::write(&path, src).unwrap();
-    let out = karac_bin()
-        .args(["check", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let out = karac_bin().args(args).arg(&path).output().unwrap();
     let joined = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -13148,7 +13183,7 @@ fn test_module_state_page_quotes_live_diagnostics() {
     ];
 
     for (tag, src, fragment) in cases {
-        let emitted = check_source_output(tag, src);
+        let emitted = legacy_source_output(tag, src);
         assert!(
             emitted.contains(fragment),
             "compiler no longer emits `{fragment}` for case `{tag}` — the \
@@ -13159,13 +13194,20 @@ fn test_module_state_page_quotes_live_diagnostics() {
             "module-state page must quote the live diagnostic `{fragment}`"
         );
     }
+    // And the page must name what `karac check` says instead.
+    let emitted = check_source_output("v2", "let mut COUNTER: i64 = 0;\nfn main() { }");
+    assert!(emitted.contains("E_MODULE_LET"), "{emitted}");
+    assert!(
+        page.contains("E_MODULE_LET"),
+        "module-state page must name E_MODULE_LET"
+    );
 }
 
 /// The warning that sends a reader here must keep naming the concept,
 /// otherwise the page is unreachable from the diagnostic that needs it.
 #[test]
 fn test_module_mut_binding_warning_menu_matches_the_page() {
-    let emitted = check_source_output(
+    let emitted = legacy_source_output(
         "menu",
         "let mut COUNTER: i64 = 0;\n\
          fn bump() { COUNTER = COUNTER + 1; }\n\
@@ -13208,7 +13250,7 @@ fn test_module_mut_binding_warning_menu_matches_the_page() {
 /// "context struct" because it is a design pattern.
 #[test]
 fn every_type_the_module_mut_binding_warning_names_actually_runs() {
-    let emitted = check_source_output(
+    let emitted = legacy_source_output(
         "menu-types",
         "let mut COUNTER: i64 = 0;\n\
          fn main() { COUNTER = COUNTER + 1; println(COUNTER); }",
@@ -13253,7 +13295,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
             "this test's probe list has drifted from the warning: it no longer \
              names `{name}`. Update both together. Got:\n{emitted}"
         );
-        let out = check_source_output(&format!("menu-{name}"), src);
+        let out = legacy_source_output(&format!("menu-{name}"), src);
         assert!(
             !out.contains("error"),
             "the warning recommends `{name}`, but a module-scope program using \
@@ -13550,7 +13592,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
 
     // 1. The defect itself: undeclared `pub fn`, effects reached through
     //    `get()`. Must be rejected, exactly as the direct-call control is.
-    let undeclared = check_source_output(
+    let undeclared = legacy_source_output(
         "lazy-eff-undeclared",
         &format!(
             "{effectful}\
@@ -13567,7 +13609,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
 
     // 2. ...and declaring it must satisfy the checker. A fix that rejected
     //    unconditionally would pass assertion 1 while making the type unusable.
-    let declared = check_source_output(
+    let declared = legacy_source_output(
         "lazy-eff-declared",
         &format!(
             "{effectful}\
@@ -13583,7 +13625,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
 
     // 3. Effects must also be INFERRED through a private caller, not merely
     //    verified at the public boundary.
-    let via_private = check_source_output(
+    let via_private = legacy_source_output(
         "lazy-eff-private",
         &format!(
             "{effectful}\
@@ -13602,7 +13644,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
     //    binding's name, and attributing by NAME pinned the LazyLock's effects
     //    onto a `Map.get` that has nothing to do with it. The fix keys off the
     //    resolved callee type instead, so this must stay clean.
-    let shadowed = check_source_output(
+    let shadowed = legacy_source_output(
         "lazy-eff-shadow",
         &format!(
             "{effectful}\
@@ -13623,7 +13665,7 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
     // 5. Cycles through the BINDING TABLE must terminate. Two LazyLocks whose
     //    closures call each other's `get()` form a loop the AST does not
     //    contain, so structural descent alone would not stop.
-    let cyclic = check_source_output(
+    let cyclic = legacy_source_output(
         "lazy-eff-cycle",
         &format!(
             "{effectful}\
@@ -31432,17 +31474,19 @@ fn fix_applies_bang_to_not_and_string_slice_edits() {
          }\n",
     );
 
-    for _ in 0..2 {
+    // A third pass turns the now-constant module `let`s into `const`s
+    // (B-2026-10-22-8); that fix waits until the binding checks clean.
+    for _ in 0..3 {
         karac_bin().arg("fix").arg(&path).output().unwrap();
     }
 
     let fixed = std::fs::read_to_string(&path).unwrap();
     assert!(
-        fixed.contains("let ALPHA: StringSlice = \"abc\";"),
+        fixed.contains("const ALPHA: StringSlice = \"abc\";"),
         "annotated String should be rewritten: {fixed}"
     );
     assert!(
-        fixed.contains("let BETA: StringSlice = \"xyz\";"),
+        fixed.contains("const BETA: StringSlice = \"xyz\";"),
         "inferred String should gain an annotation: {fixed}"
     );
     // `not` is a word operator: a space is added where none existed, and the

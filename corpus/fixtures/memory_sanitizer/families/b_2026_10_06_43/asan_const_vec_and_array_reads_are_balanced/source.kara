@@ -1,7 +1,7 @@
 const NUMS: Vec[i64] = [10, 20, 30];
 const NAMES: Vec[String] = ["ab".to_string(), "cd".to_string()];
 const CW: Array[String, 2] = ["x", "yy"];
-let WORDS: Array[String, 2] = ["a", "bb"];
+const WORDS: Array[String, 2] = ["a", "bb"];
 fn main() {
     let v = NUMS.clone();
     let w = NUMS[0];

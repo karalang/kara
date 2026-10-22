@@ -11455,3 +11455,61 @@ fn a_held_borrow_of_a_shared_or_copy_value_is_fixed_by_a_copy() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-22-8: design.md § Constants makes `const` the only value
+/// declared at module scope. A module `let` whose initializer is already
+/// constant is fixed to `const`, the annotation inferred when it was elided.
+#[test]
+fn a_module_let_is_refused_with_a_fix_to_const() {
+    rejected_then_fixed_by(
+        "module-let-annotated",
+        "pub let MAX_RETRIES: i64 = 5;\n\
+         let APP_NAME: StringSlice = \"karac\";\n\
+         fn main() { println(f\"{APP_NAME} {MAX_RETRIES}\") }\n",
+        "E_MODULE_LET",
+        "pub const MAX_RETRIES: i64 = 5;\nconst APP_NAME: StringSlice = \"karac\";",
+    );
+    rejected_then_fixed_by(
+        "module-let-inferred",
+        "let SPREAD = 4096;\n\
+         fn main() { println(f\"{SPREAD}\") }\n",
+        "E_MODULE_LET",
+        "const SPREAD: i64 = 4096;",
+    );
+}
+
+/// B-2026-10-22-8: there are no mutable globals. A module `let mut`, or a
+/// module `let` of a cell (a `const` would build a fresh one at every use),
+/// is refused with no fix, and the help names the `main`-and-context
+/// pattern. The legacy `module_mut_binding` warning does not fire as well.
+#[test]
+fn a_module_let_mut_or_cell_is_refused_without_a_fix() {
+    for (tag, src) in [
+        (
+            "module-let-mut",
+            "let mut COUNT: i64 = 0;\n\
+             fn bump() { COUNT = COUNT + 1; }\n\
+             fn main() { bump(); println(f\"{COUNT}\") }\n",
+        ),
+        (
+            "module-let-cell",
+            "let COUNTER: Atomic[i64] = Atomic.new(0);\n\
+             fn main() { COUNTER.store(7); println(COUNTER.load()) }\n",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains("E_MODULE_LET"), "{tag}: {err}");
+        assert!(err.contains("create the value in `main`"), "{tag}: {err}");
+        assert!(!err.contains("module_mut_binding"), "{tag}: {err}");
+        karac().arg("fix").arg(&path).output().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            src,
+            "{tag}: no fix for mutable global state"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
