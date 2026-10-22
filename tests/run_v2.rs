@@ -232,3 +232,97 @@ fn run_v2_shorthand_runs_on_v2() {
     assert!(text(&out.stderr).contains("runtime error: index out of bounds"));
     assert_eq!(out.status.code(), Some(101));
 }
+
+/// A package written to a fresh directory: `files` are `(path under src/,
+/// text)`.
+fn package(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("karac-run-v2-pkg-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nauthors = []\nedition = \"2026\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    for (path, text) in files {
+        std::fs::write(dir.join("src").join(path), text).unwrap();
+    }
+    dir
+}
+
+fn karac_in(dir: &PathBuf, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_karac"))
+        .env_remove("KARAC_LEGACY")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+const PKG_MAIN: &str = "//! The entry.\nimport util.{double, Pt, pick};\nimport std.secret.{Secret};\n\nfn main() {\n    let p = Pt { x: 2, y: 3 };\n    println(f\"{double(p.x)} {p.y}\");\n    let s = Secret.new(5);\n    println(f\"{s.expose()}\");\n    dbg(p.x + 1);\n    let mut v: Vec[i64] = Vec.new();\n    v.push(1);\n    println(f\"{pick(v, 7)}\");\n}\n";
+
+const PKG_UTIL: &str = "//! Helpers.\nimport std.secret.{Secret};\n\npub struct Pt { pub x: i64, pub y: i64 }\n\npub fn double(x: i64) -> i64 {\n    let s = Secret.new(x);\n    let _ = s.expose();\n    x * 2\n}\n\npub fn pick(v: ref Vec[i64], i: i64) -> i64 {\n    v[i as usize]\n}\n";
+
+/// A package runs as one program (project mode, B-2026-10-22-14): its
+/// modules' items in one scope, a `std` import two files share taken once,
+/// and every place it reports named by the file and line it came from.
+#[test]
+fn run_v2_runs_a_package_and_names_its_files() {
+    let dir = package("runs", &[("main.kara", PKG_MAIN), ("util.kara", PKG_UTIL)]);
+    for lane in LANES {
+        let mut args = lane.to_vec();
+        args.push("src/main.kara");
+        let out = karac_in(&dir, &args);
+        let err = text(&out.stderr);
+        assert_eq!(text(&out.stdout), "4 3\n5\n", "{lane:?}");
+        assert!(
+            err.contains("[src/main.kara:10] p.x + 1 = 3"),
+            "{lane:?}: {err}"
+        );
+        assert!(
+            err.contains("runtime error: index out of bounds\n  at src/util.kara:13:5"),
+            "{lane:?}: {err}"
+        );
+        assert_eq!(out.status.code(), Some(101), "{lane:?}");
+    }
+}
+
+/// An error only the v2 rules see (the package-wide check before them is
+/// legacy's) names its module's file and line, in the text header, the
+/// snippet's gutter, and the JSON diagnostic.
+#[test]
+fn run_v2_package_diagnostics_name_their_file() {
+    let util = format!("{PKG_UTIL}\npub fn keep(v: Vec[i64]) -> Vec[i64] {{\n    v\n}}\n");
+    let dir = package("diag", &[("main.kara", PKG_MAIN), ("util.kara", &util)]);
+    let out = karac_in(&dir, &["run", "src/main.kara"]);
+    let err = text(&out.stderr);
+    assert!(err.contains("src/util.kara:17:"), "{err}");
+    assert!(err.contains("17 |     v"), "{err}");
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(out.status.code(), Some(1));
+    let out = karac_in(&dir, &["run", "--output=json", "src/main.kara"]);
+    let json = text(&out.stdout);
+    assert!(
+        json.contains("\"file\":\"src/util.kara\",\"line\":17"),
+        "{json}"
+    );
+    assert_eq!(out.status.code(), Some(1));
+}
+
+/// What one flat scope cannot say is refused by name.
+#[test]
+fn run_v2_package_refuses_a_renaming_import() {
+    let main = PKG_MAIN
+        .replace(
+            "import util.{double, Pt, pick};",
+            "import util.{double as twice, Pt, pick};",
+        )
+        .replace("double(p.x)", "twice(p.x)");
+    let dir = package("alias", &[("main.kara", &main), ("util.kara", PKG_UTIL)]);
+    let out = karac_in(&dir, &["run", "src/main.kara"]);
+    let err = text(&out.stderr);
+    assert!(err.contains("error[project]"), "{err}");
+    assert!(err.contains("`double as ..` renames an import"), "{err}");
+    assert!(err.contains("--legacy"), "{err}");
+    assert_eq!(out.status.code(), Some(1));
+}

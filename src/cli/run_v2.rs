@@ -81,20 +81,23 @@ fn cmd_run_v2(
         std::env::set_var("KARAC_DBG_OUTPUT", "json");
     }
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
-    // v2 builds one file. A program with sibling modules needs project mode,
-    // which `karac build` gains in B-2026-10-22-14.
-    if try_build_run_super_program(filename, no_manifest).is_some() {
-        emit_build_error(
-            &format!(
-                "{filename} belongs to a package with other modules, which v2 does not \
-                 run yet (project mode, B-2026-10-22-14); `karac run --legacy` runs it"
-            ),
-            output,
-        );
-        process::exit(1);
-    }
-
-    let source = read_source(filename);
+    // A file of a package with other modules runs the whole package, as
+    // one source (project mode, B-2026-10-22-14).
+    let project =
+        super::project_v2::package_tree(filename, no_manifest, false).map(|(root, tree)| {
+            // The package-wide check sees what one combined scope cannot: an
+            // import of a private item, a cycle.
+            gate_run_on_package_check(&root, output);
+            super::project_v2::source_files(&tree, false)
+                .and_then(|files| {
+                    super::project_v2::amalgamate(&tree, &files, |_, _| Vec::new(), "")
+                })
+                .unwrap_or_else(|e| refused_project(&e, output))
+        });
+    let source = match &project {
+        Some(a) => a.text.clone(),
+        None => read_source(filename),
+    };
     let mut lint_overrides = lint_overrides;
     if let Some(m) = &manifest {
         lint_overrides.apply_manifest_lints(&m.lints);
@@ -116,23 +119,40 @@ fn cmd_run_v2(
     pipeline.run_all_checks();
     let total = pipeline.total_errors();
     if total > 0 {
-        match output {
-            OutputMode::Text => {
-                print_text_diagnostics(&pipeline);
+        match (output, &project) {
+            (OutputMode::Text, _) => {
+                print_diagnostics(&pipeline, project.as_ref());
                 eprintln!("\n{total} error(s) found.");
             }
-            OutputMode::Json => emit_json_output(&pipeline),
-            OutputMode::Jsonl => run_pipeline_jsonl(&mut checked()),
+            (OutputMode::Json, None) => emit_json_output(&pipeline),
+            (OutputMode::Jsonl, None) => run_pipeline_jsonl(&mut checked()),
+            // A package's diagnostics read as the package-wide check's do.
+            (OutputMode::Json, Some(a)) => {
+                let diags: Vec<String> = collect_diagnostics(&pipeline)
+                    .entries
+                    .iter()
+                    .map(|d| a.remap_json_text(filename, d))
+                    .collect();
+                println!("{{\"diagnostics\":[{}]}}", diags.join(","));
+            }
+            (OutputMode::Jsonl, Some(a)) => {
+                for d in &collect_diagnostics(&pipeline).entries {
+                    println!("{}", a.remap_json_text(filename, d));
+                }
+            }
         }
         process::exit(1);
     }
     if output == OutputMode::Text {
         // Warnings only: the check passed.
-        print_text_diagnostics(&pipeline);
+        print_diagnostics(&pipeline, project.as_ref());
     }
     drop(pipeline);
 
     crate::mir::interp::set_source_name(filename);
+    if let Some(a) = &project {
+        a.install();
+    }
     let mut argv = Vec::with_capacity(program_args.len() + 1);
     argv.push(filename.to_string());
     argv.extend_from_slice(program_args);
@@ -145,8 +165,31 @@ fn cmd_run_v2(
     run_on_interpreter(source, output, timeout, argv);
 }
 
+/// The text diagnostics, their places mapped back to the package's files
+/// when the program is a package's combined source.
+fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Amalgam>) {
+    for block in render_text_diagnostics(pipeline) {
+        match project {
+            Some(a) => eprintln!("{}", a.remap_text(&pipeline.filename, &block)),
+            None => eprintln!("{block}"),
+        }
+    }
+}
+
+/// The package cannot be combined into one source: a compile error naming
+/// why, exit 1.
+fn refused_project(e: &str, output: OutputMode) -> ! {
+    let e = format!("error[project]: {e}; `karac run --legacy` runs it");
+    match output {
+        OutputMode::Text => eprintln!("{e}"),
+        _ => emit_build_error(&e, output),
+    }
+    process::exit(1);
+}
+
 /// The MIR builder refused the program: a compile error, exit 1.
 fn refused(e: &str, output: OutputMode) -> ! {
+    let e = super::project_v2::remap_build_error(e);
     match output {
         OutputMode::Text => eprintln!("error[mir]: {e}"),
         _ => emit_build_error(&format!("error[mir]: {e}"), output),
@@ -172,7 +215,8 @@ fn run_on_jit(
     if let Some(keep) = std::env::var_os("KARAC_MIR_LL") {
         let _ = std::fs::write(keep, &ir);
     }
-    let run = run_ir_via_jit_subprocess_with(&ir, argv, timeout, output != OutputMode::Text);
+    let run =
+        run_ir_via_jit_subprocess_with(&ir, argv, timeout, output != OutputMode::Text, false, &[]);
     if run.timed_out {
         timed_out(timeout);
     }
@@ -291,22 +335,22 @@ fn finish(code: i32, stderr: Option<&str>, output: OutputMode) -> ! {
 
 /// A runtime error the program reported: `runtime error: MSG` then
 /// `  at FILE:LINE:COL`.
-struct Fault {
-    message: String,
-    at: Option<(String, usize, usize)>,
+pub(super) struct Fault {
+    pub(super) message: String,
+    pub(super) at: Option<(String, usize, usize)>,
 }
 
 /// The reports a v2 program writes to stderr, read back out of it.
 #[derive(Default)]
-struct RuntimeReports {
+pub(super) struct RuntimeReports {
     /// `Error: MSG`, `main`'s `Err` (exit code 1, and nothing but the trace
     /// after it).
-    error: Option<String>,
-    faults: Vec<Fault>,
+    pub(super) error: Option<String>,
+    pub(super) faults: Vec<Fault>,
     trace: Vec<(String, usize, usize)>,
     truncated: bool,
     /// Everything else the program wrote.
-    passthrough: String,
+    pub(super) passthrough: String,
 }
 
 /// `FILE:LINE:COL`, where FILE may hold colons of its own.
@@ -319,7 +363,7 @@ fn location(s: &str) -> Option<(String, usize, usize)> {
 }
 
 impl RuntimeReports {
-    fn parse(text: &str, code: i32) -> Self {
+    pub(super) fn parse(text: &str, code: i32) -> Self {
         let mut r = RuntimeReports::default();
         let lines: Vec<&str> = text.lines().collect();
         let mut i = 0;

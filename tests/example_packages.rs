@@ -34,17 +34,11 @@
 //!
 //! # Known-broken legs are pinned, not skipped
 //!
-//! `elevator_project` passes all 14 cases under the interpreter and fails all
-//! 14 under codegen — `e.pending().is_empty()` in `elevator_test.kara` puts a
-//! `Vec` method on a call-result receiver, which `compile_method_call` has no
-//! arm for. That is B-2026-07-29-12: the underlying restriction is the
-//! returned-borrow deferral named by B-2026-06-07-5, but this spelling reaches
-//! a generic fall-through that misreports it as a missing dispatcher arm.
-//! Rather than drop the package, rewrite the example to dodge the gap, or gate
-//! the whole file on the interpreter, that leg is
-//! `Expect::KnownBroken`: fixing the codegen gap turns this test RED and forces
-//! the pin to be promoted, instead of the fix landing with the gate still
-//! ignoring it.
+//! A leg that fails is `Expect::KnownBroken`: fixing it turns this test RED
+//! and forces the pin to be promoted, instead of the fix landing with the
+//! gate still ignoring it. `elevator_project`'s codegen leg was pinned so on
+//! the legacy runner (B-2026-07-29-12); `karac test` runs on v2 now
+//! (B-2026-10-22-13), where all 14 cases pass on both executors.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,7 +49,9 @@ enum Expect {
     /// Every case must pass.
     AllPass,
     /// Known-broken. Asserted to have at least one FAILING case, so a fix
-    /// trips this test and forces promotion to `AllPass`.
+    /// trips this test and forces promotion to `AllPass`. No leg is pinned
+    /// today; kept for the next one.
+    #[allow(dead_code)]
     KnownBroken,
 }
 
@@ -81,10 +77,8 @@ const PACKAGES: &[Package] = &[
         dir: "elevator_project",
         expected_tests: 14,
         interp: Expect::AllPass,
-        codegen: Expect::KnownBroken,
-        note: "B-2026-07-29-12: `e.pending().is_empty()` — direct use of a \
-               `-> ref T` result, the B-2026-06-07-5 deferral, misreported by the \
-               generic dispatcher fall-through",
+        codegen: Expect::AllPass,
+        note: "",
     },
     Package {
         dir: "game_of_life",
@@ -122,7 +116,7 @@ fn field(line: &str, key: &str) -> Option<usize> {
 
 fn run_package_tests(dir: &str, interp: bool) -> (Summary, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
-    cmd.arg("test");
+    cmd.env_remove("KARAC_LEGACY").arg("test");
     if interp {
         cmd.arg("--interp");
     }
@@ -211,7 +205,8 @@ fn example_packages_pass_their_own_test_suites_under_codegen() {
 
 /// The packages must also stay *runnable*, not merely test-clean: `karac test`
 /// only executes test functions, so a broken `main.kara` would slip past the
-/// suites above. Both entry points are pure compute with deterministic output.
+/// suites above. Both entry points are pure compute with deterministic output,
+/// and run on v2 as packages (project mode, B-2026-10-22-14).
 #[test]
 fn example_packages_entry_points_run() {
     // (package, entry file, a substring its output must contain)
@@ -221,8 +216,8 @@ fn example_packages_entry_points_run() {
     ];
     for (dir, entry, expected) in cases {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-            .args(["run", "--legacy"])
-            .arg("--interp")
+            .env_remove("KARAC_LEGACY")
+            .args(["run", "--interp"])
             .arg(entry)
             .current_dir(package_dir(dir))
             .output()

@@ -34,10 +34,12 @@ mod fix_cmds;
 mod help;
 mod maintenance_cmds;
 mod pkg_cmds;
+mod project_v2;
 mod query_cmd;
 mod run_check_cmds;
 mod run_v2;
 mod test_cmd;
+mod test_v2;
 
 use build_cmds::*;
 pub use diag_json::*;
@@ -485,6 +487,9 @@ pub enum Command {
         /// equivalent of `KARAC_TEST_JIT=0`. No-op on a non-`llvm` build
         /// (the interpreter is the only executor there).
         interp: bool,
+        /// `--legacy` (or `KARAC_LEGACY=1`): the legacy runner rather than
+        /// v2's (B-2026-10-22-13), until M3 deletes it.
+        legacy: bool,
     },
     /// Launch the interactive REPL over the tree-walk interpreter. P0
     /// delivery item per `roadmap.md § Interactive Development`. See
@@ -941,7 +946,14 @@ pub fn execute(cmd: Command) {
             filter,
             all,
             interp,
-        } => cmd_test(filter, all, interp),
+            legacy,
+        } => {
+            if run_v2::legacy_requested(legacy) {
+                cmd_test(filter, all, interp)
+            } else {
+                test_v2::cmd_test_v2(filter, all, interp)
+            }
+        }
         Command::Repl { auto_clone, interp } => {
             crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone, interp })
         }

@@ -207,8 +207,8 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// `file:line:col` of `span`.
     fn site_text(span: Span) -> String {
-        let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
-        format!("{file}:{}:{}", span.line, span.column)
+        let (file, line) = crate::mir::interp::source_at(span.line);
+        format!("{file}:{line}:{}", span.column)
     }
 
     /// The globals holding the program's latest call into the library:

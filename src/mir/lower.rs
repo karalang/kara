@@ -13149,18 +13149,65 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let int = |s: &Self, t: Ty| {
                             matches!(s.tys().tcx().kind(t), HK::Int(_) | HK::UInt(_))
                         };
-                        // Integers of two widths meet at the wider one; any
-                        // other pair of types has no `==`.
-                        if lt != rt && !(int(self, lt) && int(self, rt)) {
-                            return self.unsupported(e.span, &format!("`{name}` of two types"));
-                        }
+                        // `assert_eq(e.step(), None)`: a variant written
+                        // without its arguments is the same type, with what
+                        // it does not name left open, and `==` meets them as
+                        // it does outside an assertion.
+                        let adt = |s: &Self, t: Ty| match s.tys().tcx().kind(t) {
+                            HK::Adt { def, .. } => Some(def),
+                            _ => None,
+                        };
+                        // The open side is the one the checker left a `()`
+                        // argument in; it is built at the other side's type.
+                        let holes = |s: &Self, t: Ty| match s.tys().tcx().kind(t) {
+                            HK::Adt { args, .. } => s
+                                .tys()
+                                .tcx()
+                                .list(args)
+                                .iter()
+                                .any(|&a| matches!(s.tys().tcx().kind(a), HK::Unit)),
+                            _ => false,
+                        };
+                        let open = match (holes(self, lt), holes(self, rt)) {
+                            (false, true) => Some((&a.value, &b.value, lt, false)),
+                            (true, false) => Some((&b.value, &a.value, rt, true)),
+                            _ => None,
+                        };
+                        let same_adt = adt(self, lt).is_some() && adt(self, lt) == adt(self, rt);
                         let ne = name == "assert_ne";
-                        self.binary(
-                            if ne { AstBinOp::NotEq } else { AstBinOp::Eq },
-                            &a.value,
-                            &b.value,
-                            Place::local(ok),
-                        )?;
+                        if lt != rt && same_adt {
+                            let Some((shut, open, t, open_left)) = open else {
+                                return self.unsupported(e.span, &format!("`{name}` of two types"));
+                            };
+                            let sp = self.expr_place(shut, false)?;
+                            let (sp, _) = self.strip_refs(sp);
+                            let o = self.operand_at(open, t)?;
+                            let op = self.temp(t);
+                            self.assign(Place::local(op), Rvalue::Use(o));
+                            let (lp, rp) = match open_left {
+                                true => (Place::local(op), sp),
+                                false => (sp, Place::local(op)),
+                            };
+                            let eq = self.temp(bool_t);
+                            self.eq_places(e.span, lp, rp, t, Place::local(eq))?;
+                            let v = Operand::Move(Place::local(eq));
+                            let v = match ne {
+                                true => Rvalue::UnaryOp(UnOp::Not, v),
+                                false => Rvalue::Use(v),
+                            };
+                            self.assign(Place::local(ok), v);
+                        } else if lt != rt && !(int(self, lt) && int(self, rt)) {
+                            // Integers of two widths meet at the wider one;
+                            // any other pair of types has no `==`.
+                            return self.unsupported(e.span, &format!("`{name}` of two types"));
+                        } else {
+                            self.binary(
+                                if ne { AstBinOp::NotEq } else { AstBinOp::Eq },
+                                &a.value,
+                                &b.value,
+                                Place::local(ok),
+                            )?;
+                        }
                     }
                     _ => {
                         return self.unsupported(e.span, &format!("`{name}` without its operands"))

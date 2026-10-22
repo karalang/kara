@@ -1553,9 +1553,12 @@ fn parse_test_command(args: &[String]) -> Command {
     let mut filter: Option<String> = None;
     let mut all = false;
     let mut interp = false;
+    let mut legacy = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--all" => all = true,
+            // The legacy runner, until M3 deletes it (B-2026-10-22-13).
+            "--legacy" => legacy = true,
             // `--interp`: force the interpreter over the default JIT executor
             // (LLJIT Slice 5). Parsed on every build for CLI uniformity; only
             // consulted under `--features llvm` (see `cmd_test`).
@@ -1577,6 +1580,7 @@ fn parse_test_command(args: &[String]) -> Command {
         filter,
         all,
         interp,
+        legacy,
     }
 }
 

@@ -236,7 +236,7 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
 ///
 /// Diagnostics are rendered exactly as the build renders them, so the two
 /// commands are quotable against each other.
-fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
+pub(super) fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
     let mut lints = crate::lints::CliLintOverrides::default();
     if let Ok(mf) = manifest::load_from_root(root) {
         lints.apply_manifest_lints(&mf.lints);
@@ -479,7 +479,7 @@ mod jit_child_signals {
 /// 2084/2084 codegen-E2E-via-JIT parity), but one-shot rather than batched.
 #[cfg(feature = "llvm")]
 pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i32 {
-    run_ir_via_jit_subprocess_with(ir, program_argv, None, false).code
+    run_ir_via_jit_subprocess_with(ir, program_argv, None, false, false, &[]).code
 }
 
 /// How a [`run_ir_via_jit_subprocess_with`] run ended.
@@ -496,13 +496,18 @@ pub(super) struct JitRun {
 /// [`run_ir_via_jit_subprocess`], with a wall-clock deadline after which the
 /// runner is killed, and the program's stderr captured instead of inherited
 /// when `capture_stderr` (v2 `karac run --output=json` turns its runtime
-/// reports into JSON, B-2026-10-22-12).
+/// reports into JSON, B-2026-10-22-12). `quiet_stdout` discards stdout and
+/// `env` adds to the runner's environment (v2 `karac test` keeps its JSONL
+/// stream clean of a case's output and names the case to run there,
+/// B-2026-10-22-13).
 #[cfg(feature = "llvm")]
 pub(super) fn run_ir_via_jit_subprocess_with(
     ir: &str,
     program_argv: &[String],
     timeout: Option<std::time::Duration>,
     capture_stderr: bool,
+    quiet_stdout: bool,
+    env: &[(&str, &str)],
 ) -> JitRun {
     let failed = |code| JitRun {
         code,
@@ -556,6 +561,10 @@ pub(super) fn run_ir_via_jit_subprocess_with(
     if capture_stderr {
         command.stderr(std::process::Stdio::piped());
     }
+    if quiet_stdout {
+        command.stdout(std::process::Stdio::null());
+    }
+    command.envs(env.iter().copied());
     let child = command
         .arg(&ir_path)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))

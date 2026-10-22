@@ -437,6 +437,33 @@ pub fn source_name() -> Option<&'static str> {
     SOURCE_NAME.get().map(String::as_str)
 }
 
+/// Where each line of a package's combined source came from, when the
+/// program is one (`(first combined line, file, that file's line)`,
+/// ascending): project mode, B-2026-10-22-14.
+static SOURCE_MAP: std::sync::OnceLock<Vec<(usize, String, usize)>> = std::sync::OnceLock::new();
+
+/// Installs the line map [`source_at`] reads. The first map set wins.
+pub fn set_source_map(map: Vec<(usize, String, usize)>) {
+    let _ = SOURCE_MAP.set(map);
+}
+
+/// Whether [`set_source_map`] installed a line map.
+pub fn has_source_map() -> bool {
+    SOURCE_MAP.get().is_some()
+}
+
+/// The file and line a source line names: through the line map when one
+/// was set, otherwise the program's file name (`<unknown>` when unnamed).
+pub fn source_at(line: usize) -> (&'static str, usize) {
+    if let Some(map) = SOURCE_MAP.get() {
+        let i = map.partition_point(|(first, _, _)| *first <= line);
+        if let Some((first, file, file_line)) = i.checked_sub(1).and_then(|i| map.get(i)) {
+            return (file, file_line + (line - first));
+        }
+    }
+    (source_name().unwrap_or("<unknown>"), line)
+}
+
 /// The program's argv as `karac run` was given it (the script, then what
 /// followed `--`), for `env.args()`; unset, the argv is `["main"]`.
 static PROGRAM_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
@@ -1650,7 +1677,7 @@ impl<'a> Interp<'a> {
                 };
                 self.debug_render = false;
                 let shown = shown?;
-                let file = SOURCE_NAME.get().map_or("<unknown>", String::as_str);
+                let (file, line) = source_at(usize::try_from(line).unwrap_or(0));
                 self.write_out(true, &format!("[{file}:{line}] {text} = {shown}\n"));
                 Ok(Value::Unit)
             }
@@ -9518,8 +9545,8 @@ impl<'a> Interp<'a> {
                     (None, AbortReason::BoundsCheck) => "index out of bounds".to_string(),
                     (None, AbortReason::UnreachableArm) => "entered unreachable code".to_string(),
                 };
-                let file = SOURCE_NAME.get().map_or("<unknown>", String::as_str);
-                let at = format!("{file}:{}:{}", span.line, span.column);
+                let (file, line) = source_at(span.line);
+                let at = format!("{file}:{line}:{}", span.column);
                 self.write_out(
                     true,
                     &format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n"),

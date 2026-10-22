@@ -751,7 +751,12 @@ FLAGS:
 karac test - Run the project's tests
 
 USAGE:
-    karac test [<filter>] [--all] [--interp]
+    karac test [<filter>] [--all] [--interp] [--legacy]
+
+Each case runs on v2: the package is checked as `karac check` checks it,
+built to MIR, and every case is a run of its own on the JIT (or the MIR
+interpreter under `--interp`), with a fresh provider for each
+`#[with_provider]` fixture.
 
 ARGS:
     <filter>   Optional substring matched against each test case's
@@ -767,11 +772,11 @@ OPTIONS:
                runner emits `test_fail` for them instead and the
                process exits non-zero. Use in CI when every required
                service must be live.
-    --interp   Execute tests on the tree-walk interpreter instead of the
-               default LLJIT batch runner. The interpreter is a dev/debug
-               executor (design.md § Tree-walk interpreter). Equivalent to
-               `KARAC_TEST_JIT=0`; the flag wins over the env var. No
-               effect on a build without the `llvm` feature.
+    --interp   Execute tests on the MIR interpreter instead of the JIT.
+               Equivalent to `KARAC_TEST_JIT=0`; the flag wins over the
+               env var. No effect on a build without the `llvm` feature.
+    --legacy   Run the legacy test runner instead of v2's, until M3
+               deletes it. `KARAC_LEGACY=1` does the same.
 
 OUTPUT:
     JSONL on stdout, one event per line. Event types: `run_start`,

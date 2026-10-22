@@ -33,36 +33,36 @@ pub(super) fn module_label(path: &[String]) -> String {
 
 #[derive(Debug, Clone)]
 pub(super) struct DiscoveredTest {
-    module_id: usize,
-    fn_name: String,
-    qualified: String,
+    pub(super) module_id: usize,
+    pub(super) fn_name: String,
+    pub(super) qualified: String,
     /// Fully-qualified resource paths (e.g. `"db.UserDB"`) the test
     /// declares via `#[test(requires = [...])]`. Empty when the test has
     /// no `requires` clause; the runner gates execution on the probe
     /// result for each entry.
-    requires: Vec<String>,
+    pub(super) requires: Vec<String>,
     /// `#[with_provider(resource_path, constructor_expr)]` fixtures on
     /// the test, preserved in source order (outer-to-inner). The runner
     /// evaluates each constructor before the test body and pushes a
     /// matching provider frame so resource-method calls inside the test
     /// resolve against the fixture. See design.md § Testing.
-    with_providers: Vec<WithProviderFixture>,
+    pub(super) with_providers: Vec<WithProviderFixture>,
     /// Per-test timeout in seconds from `#[test(timeout_seconds = N)]`.
     /// `None` when the attribute is absent; the runner then falls back to
     /// the kara.toml `[test].timeout_seconds`, the `KARAC_TEST_TIMEOUT_SECS`
     /// env var, and finally the 30 s default (phase-7 line 847 sub-step 3).
-    timeout_seconds: Option<u64>,
+    pub(super) timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct WithProviderFixture {
     /// Fully-qualified resource path (e.g. `"Clock"` or `"db.UserDB"`).
-    resource_path: String,
+    pub(super) resource_path: String,
     /// Constructor expression — evaluated at test setup to produce the
     /// provider value bound into the frame. Arbitrary expression; a
     /// `panic` / runtime error / control-flow exit during evaluation
     /// produces `provider_construction_failed`.
-    constructor: crate::ast::Expr,
+    pub(super) constructor: crate::ast::Expr,
 }
 
 /// Stable opaque interpreter-side identifier for an `Item::TestCase`.
@@ -397,12 +397,17 @@ pub(super) fn run_health_check(cmd: &str) -> bool {
     }
 }
 
-pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
-    // `interp` is only consulted inside the `cfg(feature = "llvm")` JIT
-    // dispatch below; on a non-`llvm` build the interpreter is the only
-    // executor, so the flag is accepted (for CLI uniformity) but unused.
-    #[cfg(not(feature = "llvm"))]
-    let _ = interp;
+/// What both test runners start from: the package's manifest, its module
+/// tree with every `test` case lowered to a function, and the cases to run
+/// (filtered, in a stable order). Every failure on the way is reported as a
+/// JSONL event and exits 1 before any `run_start`.
+pub(super) struct TestFront {
+    pub mf: manifest::Manifest,
+    pub tree: ProgramTree,
+    pub tests: Vec<DiscoveredTest>,
+}
+
+pub(super) fn test_front(filter: Option<&str>) -> TestFront {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -583,14 +588,24 @@ pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
     // sorting by mangled name matches source order), modules in walk
     // order. LLM consumers diffing two test runs depend on this.
     let mut tests = discovered_tests;
-    if let Some(needle) = &filter {
-        tests.retain(|t| t.qualified.contains(needle.as_str()));
+    if let Some(needle) = filter {
+        tests.retain(|t| t.qualified.contains(needle));
     }
     tests.sort_by(|a, b| {
         a.module_id
             .cmp(&b.module_id)
             .then_with(|| a.fn_name.cmp(&b.fn_name))
     });
+    TestFront { mf, tree, tests }
+}
+
+pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
+    // `interp` is only consulted inside the `cfg(feature = "llvm")` JIT
+    // dispatch below; on a non-`llvm` build the interpreter is the only
+    // executor, so the flag is accepted (for CLI uniformity) but unused.
+    #[cfg(not(feature = "llvm"))]
+    let _ = interp;
+    let TestFront { mf, tree, tests } = test_front(filter.as_deref());
 
     let run_started = std::time::Instant::now();
     emit_test_event("run_start", &format!("\"total_tests\":{}", tests.len()));

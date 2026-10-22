@@ -408,12 +408,23 @@ impl<'ctx> Cx<'ctx, '_> {
         let [line, text, value] = args else {
             return Err("dbg takes a line, a text and a value".into());
         };
-        let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
         self.rt("fmt_begin", &[])?;
-        self.lit(&format!("[{file}:"))?;
-        let l = self.int_arg(line)?;
-        self.rt("fmt_i64", &[l.into()])?;
-        self.lit("] ")?;
+        // The builder passes the line as a constant, so a package's combined
+        // source maps it to its file here (project mode, B-2026-10-22-14).
+        if let Operand::Const(crate::mir::syntax::Const {
+            kind: crate::mir::syntax::ConstKind::Scalar(n),
+            ..
+        }) = line
+        {
+            let (file, l) = crate::mir::interp::source_at(*n as usize);
+            self.lit(&format!("[{file}:{l}] "))?;
+        } else {
+            let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
+            self.lit(&format!("[{file}:"))?;
+            let l = self.int_arg(line)?;
+            self.rt("fmt_i64", &[l.into()])?;
+            self.lit("] ")?;
+        }
         let (s, n) = self.str_parts(text)?;
         self.rt("fmt_str", &[s.into(), n.into()])?;
         self.lit(" = ")?;
