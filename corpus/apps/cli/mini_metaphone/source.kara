@@ -1,0 +1,704 @@
+// mini_metaphone — a port of Metaphone 0.6 (BSD; Andrew Collins, Chris Leong,
+// Matthew Somerville, Duncan McGreggor et al.), the Double Metaphone phonetic
+// encoding algorithm. Double Metaphone maps a word to one or two short
+// consonant codes that approximate how it sounds, so that differently-spelled
+// homophones collide — the engine behind fuzzy name matching, spell-check
+// suggestions and "did you mean" search. It follows metaphone.py rule for rule
+// over an ASCII-uppercased, pad-bracketed buffer with a position cursor and a
+// persistent `next` action (the library's own quirk: two G branches leave the
+// previous letter's action in place). Inputs are ASCII; the library's NFD
+// normalisation of accented letters is the documented boundary. See README.md.
+
+#[derive(Clone)]
+struct Nxt {
+    np: String,   // code added to the primary ("" = add nothing)
+    ns: String,   // code added to the secondary (arity 3 only)
+    adv: i64,     // how far to advance the cursor
+    arity: i64,   // 2 = (code, adv) adds to both; 3 = (primary, secondary, adv)
+}
+
+fn n2(p: own String, adv: i64) -> Nxt {
+    Nxt { np: p, ns: "", adv: adv, arity: 2 }
+}
+
+fn n3(p: own String, s: own String, adv: i64) -> Nxt {
+    Nxt { np: p, ns: s, adv: adv, arity: 3 }
+}
+
+// --- buffer access (Python slice semantics over an ASCII String) -----------
+
+fn sl(buf: ref String, blen: i64, lo: i64, hi: i64) -> String {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = a + blen;
+    }
+    if b < 0 {
+        b = b + blen;
+    }
+    if a < 0 {
+        a = 0;
+    }
+    if b > blen {
+        b = blen;
+    }
+    if a > blen {
+        a = blen;
+    }
+    if a >= b {
+        return "";
+    }
+    buf.substring(a, b)
+}
+
+fn ch(buf: ref String, blen: i64, i: i64) -> String {
+    if i < 0 or i >= blen {
+        return "";
+    }
+    buf.substring(i, i + 1)
+}
+
+fn is_vowel(s: ref String) -> bool {
+    s == "A" or s == "E" or s == "I" or s == "O" or s == "U" or s == "Y"
+}
+
+fn eq2(s: ref String, a: String, b: String) -> bool {
+    s == a or s == b
+}
+
+fn eq3(s: ref String, a: String, b: String, c: String) -> bool {
+    s == a or s == b or s == c
+}
+
+// --- word preparation ------------------------------------------------------
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn to_upper(s: String) -> String {
+    let b = str_bytes(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let mut c = b[i];
+        if c >= 97 and c <= 122 {
+            c = c - 32;
+        }
+        let mut one: Vec[u8] = Vec.new();
+        one.push(c);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+        i = i + 1;
+    }
+    out
+}
+
+fn str_contains(hay: ref String, hlen: i64, needle: String) -> bool {
+    let nb = str_bytes(needle.clone());
+    let nlen = nb.len();
+    if nlen == 0 {
+        return true;
+    }
+    let mut i = 0;
+    while i + nlen <= hlen {
+        if hay.substring(i, i + nlen) == needle {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// --- per-letter rules ------------------------------------------------------
+
+fn proc_c(buf: ref String, bl: i64, p: i64, s: i64) -> Nxt {
+    if p > s + 1 and not is_vowel(ch(buf, bl, p - 2))
+        and sl(buf, bl, p - 1, p + 2) == "ACH"
+        and ch(buf, bl, p + 2) != "I"
+        and (ch(buf, bl, p + 2) != "E" or eq2(sl(buf, bl, p - 2, p + 4), "BACHER", "MACHER")) {
+        return n2("K", 2);
+    }
+    if p == s and sl(buf, bl, s, s + 6) == "CAESAR" {
+        return n2("S", 2);
+    }
+    if sl(buf, bl, p, p + 4) == "CHIA" {
+        return n2("K", 2);
+    }
+    if sl(buf, bl, p, p + 2) == "CH" {
+        if p > s and sl(buf, bl, p, p + 4) == "CHAE" {
+            return n3("K", "X", 2);
+        }
+        if p == s
+            and (eq2(sl(buf, bl, p + 1, p + 6), "HARAC", "HARIS")
+                 or eq2(sl(buf, bl, p + 1, p + 4), "HOR", "HYM")
+                 or eq2(sl(buf, bl, p + 1, p + 4), "HIA", "HEM"))
+            and sl(buf, bl, s, s + 5) != "CHORE" {
+            return n2("K", 2);
+        }
+        let cc1 = ch(buf, bl, p + 2);
+        let cm1 = ch(buf, bl, p - 1);
+        if eq2(sl(buf, bl, s, s + 4), "VAN ", "VON ")
+            or sl(buf, bl, s, s + 3) == "SCH"
+            or eq3(sl(buf, bl, p - 2, p + 4), "ORCHES", "ARCHIT", "ORCHID")
+            or eq2(cc1, "T", "S")
+            or ((cm1 == "A" or cm1 == "O" or cm1 == "U" or cm1 == "E" or p == s)
+                and (cc1 == "L" or cc1 == "R" or cc1 == "N" or cc1 == "M" or cc1 == "B"
+                     or cc1 == "H" or cc1 == "F" or cc1 == "V" or cc1 == "W")) {
+            return n2("K", 2);
+        }
+        if p > s {
+            if sl(buf, bl, s, s + 2) == "MC" {
+                return n2("K", 2);
+            }
+            return n3("X", "K", 2);
+        }
+        return n2("X", 2);
+    }
+    if sl(buf, bl, p, p + 2) == "CZ" and sl(buf, bl, p - 2, p + 2) != "WICZ" {
+        return n3("S", "X", 2);
+    }
+    if sl(buf, bl, p + 1, p + 4) == "CIA" {
+        return n2("X", 3);
+    }
+    if sl(buf, bl, p, p + 2) == "CC" and not (p == s + 1 and ch(buf, bl, s) == "M") {
+        let cc2 = ch(buf, bl, p + 2);
+        if (cc2 == "I" or cc2 == "E" or cc2 == "H") and sl(buf, bl, p + 2, p + 4) != "HU" {
+            if (p == s + 1 and ch(buf, bl, s) == "A")
+                or eq2(sl(buf, bl, p - 1, p + 4), "UCCEE", "UCCES") {
+                return n2("KS", 3);
+            }
+            return n2("X", 3);
+        }
+        return n2("K", 2);
+    }
+    if eq3(sl(buf, bl, p, p + 2), "CK", "CG", "CQ") {
+        return n2("K", 2);
+    }
+    if eq3(sl(buf, bl, p, p + 2), "CI", "CE", "CY") {
+        if eq3(sl(buf, bl, p, p + 3), "CIO", "CIE", "CIA") {
+            return n3("S", "X", 2);
+        }
+        return n2("S", 2);
+    }
+    if eq3(sl(buf, bl, p + 1, p + 3), " C", " Q", " G") {
+        return n2("K", 3);
+    }
+    let cp1 = ch(buf, bl, p + 1);
+    if (cp1 == "C" or cp1 == "K" or cp1 == "Q") and not eq2(sl(buf, bl, p + 1, p + 3), "CE", "CI") {
+        return n2("K", 2);
+    }
+    n2("K", 1)
+}
+
+fn proc_d(buf: ref String, bl: i64, p: i64) -> Nxt {
+    if sl(buf, bl, p, p + 2) == "DG" {
+        let c2 = ch(buf, bl, p + 2);
+        if c2 == "I" or c2 == "E" or c2 == "Y" {
+            return n2("J", 3);
+        }
+        return n2("TK", 2);
+    }
+    if eq2(sl(buf, bl, p, p + 2), "DT", "DD") {
+        return n2("T", 2);
+    }
+    n2("T", 1)
+}
+
+fn proc_g(buf: ref String, bl: i64, p: i64, s: i64, slavo: bool, prev: own Nxt) -> Nxt {
+    if ch(buf, bl, p + 1) == "H" {
+        if p > s and not is_vowel(ch(buf, bl, p - 1)) {
+            return n2("K", 2);
+        }
+        if p < s + 3 {
+            if p == s {
+                if ch(buf, bl, p + 2) == "I" {
+                    return n2("J", 2);
+                }
+                return n2("K", 2);
+            }
+            return prev;   // library quirk: next left unchanged
+        }
+        if (p > s + 1 and eq3(ch(buf, bl, p - 2), "B", "H", "D"))
+            or (p > s + 2 and eq3(ch(buf, bl, p - 3), "B", "H", "D"))
+            or (p > s + 3 and eq2(ch(buf, bl, p - 4), "B", "H")) {
+            return n2("", 2);
+        }
+        if p > s + 2 and ch(buf, bl, p - 1) == "U"
+            and (eq3(ch(buf, bl, p - 3), "C", "G", "L") or eq2(ch(buf, bl, p - 3), "R", "T")) {
+            return n2("F", 2);
+        }
+        if p > s and ch(buf, bl, p - 1) != "I" {
+            return n2("K", 2);
+        }
+        return prev;       // library quirk: next left unchanged
+    }
+    if ch(buf, bl, p + 1) == "N" {
+        if p == s + 1 and is_vowel(ch(buf, bl, s)) and not slavo {
+            return n3("KN", "N", 2);
+        }
+        if sl(buf, bl, p + 2, p + 4) != "EY" and ch(buf, bl, p + 1) != "Y" and not slavo {
+            return n3("N", "KN", 2);
+        }
+        return n2("KN", 2);
+    }
+    if sl(buf, bl, p + 1, p + 3) == "LI" and not slavo {
+        return n3("KL", "L", 2);
+    }
+    if p == s and (ch(buf, bl, p + 1) == "Y"
+        or eq3(sl(buf, bl, p + 1, p + 3), "ES", "EP", "EB")
+        or eq3(sl(buf, bl, p + 1, p + 3), "EL", "EY", "IB")
+        or eq3(sl(buf, bl, p + 1, p + 3), "IL", "IN", "IE")
+        or eq2(sl(buf, bl, p + 1, p + 3), "EI", "ER")) {
+        return n3("K", "J", 2);
+    }
+    if (sl(buf, bl, p + 1, p + 3) == "ER" or ch(buf, bl, p + 1) == "Y")
+        and not eq3(sl(buf, bl, s, s + 6), "DANGER", "RANGER", "MANGER")
+        and not eq2(ch(buf, bl, p - 1), "E", "I")
+        and not eq2(sl(buf, bl, p - 1, p + 2), "RGY", "OGY") {
+        return n3("K", "J", 2);
+    }
+    if eq3(ch(buf, bl, p + 1), "E", "I", "Y") or eq2(sl(buf, bl, p - 1, p + 3), "AGGI", "OGGI") {
+        if eq2(sl(buf, bl, s, s + 4), "VON ", "VAN ")
+            or sl(buf, bl, s, s + 3) == "SCH"
+            or sl(buf, bl, p + 1, p + 3) == "ET" {
+            return n2("K", 2);
+        }
+        if sl(buf, bl, p + 1, p + 5) == "IER " {
+            return n2("J", 2);
+        }
+        return n3("J", "K", 2);
+    }
+    if ch(buf, bl, p + 1) == "G" {
+        return n2("K", 2);
+    }
+    n2("K", 1)
+}
+
+fn proc_h(buf: ref String, bl: i64, p: i64, s: i64) -> Nxt {
+    if (p == s or is_vowel(ch(buf, bl, p - 1))) and is_vowel(ch(buf, bl, p + 1)) {
+        return n2("H", 2);
+    }
+    n2("", 1)
+}
+
+fn proc_j(buf: ref String, bl: i64, p: i64, s: i64, e: i64, slavo: bool) -> Nxt {
+    let adv = if ch(buf, bl, p + 1) == "J" { 2 } else { 1 };
+    if sl(buf, bl, p, p + 4) == "JOSE" or sl(buf, bl, s, s + 4) == "SAN " {
+        if (p == s and ch(buf, bl, p + 4) == " ") or sl(buf, bl, s, s + 4) == "SAN " {
+            return n2("H", adv);
+        }
+        return n3("J", "H", adv);
+    }
+    if p == s and sl(buf, bl, p, p + 4) != "JOSE" {
+        return n3("J", "A", adv);
+    }
+    let cm1 = ch(buf, bl, p - 1);
+    let cp1 = ch(buf, bl, p + 1);
+    if is_vowel(cm1) and not slavo and (cp1 == "A" or cp1 == "O") {
+        return n3("J", "H", adv);
+    }
+    if p == e {
+        return n3("J", " ", adv);
+    }
+    let bad_fwd = cp1 == "L" or cp1 == "T" or cp1 == "K" or cp1 == "S"
+        or cp1 == "N" or cp1 == "M" or cp1 == "B" or cp1 == "Z";
+    let bad_bwd = cm1 == "S" or cm1 == "K" or cm1 == "L";
+    if not bad_fwd and not bad_bwd {
+        return n2("J", adv);
+    }
+    n2("", adv)
+}
+
+fn proc_l(buf: ref String, bl: i64, p: i64, e: i64) -> Nxt {
+    if ch(buf, bl, p + 1) == "L" {
+        if (p == e - 2 and eq3(sl(buf, bl, p - 1, p + 3), "ILLO", "ILLA", "ALLE"))
+            or ((eq2(sl(buf, bl, e - 1, e + 1), "AS", "OS") or eq2(ch(buf, bl, e), "A", "O"))
+                and sl(buf, bl, p - 1, p + 3) == "ALLE") {
+            return n3("L", "", 2);
+        }
+        return n2("L", 2);
+    }
+    n2("L", 1)
+}
+
+fn proc_m(buf: ref String, bl: i64, p: i64, e: i64) -> Nxt {
+    if (sl(buf, bl, p + 1, p + 4) == "UMB" and (p + 1 == e or sl(buf, bl, p + 2, p + 4) == "ER"))
+        or ch(buf, bl, p + 1) == "M" {
+        return n2("M", 2);
+    }
+    n2("M", 1)
+}
+
+fn proc_p(buf: ref String, bl: i64, p: i64) -> Nxt {
+    if ch(buf, bl, p + 1) == "H" {
+        return n2("F", 2);
+    }
+    if eq2(ch(buf, bl, p + 1), "P", "B") {
+        return n2("P", 2);
+    }
+    n2("P", 1)
+}
+
+fn proc_r(buf: ref String, bl: i64, p: i64, e: i64, slavo: bool) -> Nxt {
+    let adv = if ch(buf, bl, p + 1) == "R" { 2 } else { 1 };
+    if p == e and not slavo and sl(buf, bl, p - 2, p) == "IE"
+        and not eq2(sl(buf, bl, p - 4, p - 2), "ME", "MA") {
+        return n3("", "R", adv);
+    }
+    n2("R", adv)
+}
+
+fn proc_s(buf: ref String, bl: i64, p: i64, s: i64, e: i64, slavo: bool) -> Nxt {
+    if eq2(sl(buf, bl, p - 1, p + 2), "ISL", "YSL") {
+        return n2("", 1);
+    }
+    if p == s and sl(buf, bl, s, s + 5) == "SUGAR" {
+        return n3("X", "S", 1);
+    }
+    if sl(buf, bl, p, p + 2) == "SH" {
+        if eq2(sl(buf, bl, p + 1, p + 5), "HEIM", "HOEK")
+            or eq2(sl(buf, bl, p + 1, p + 5), "HOLM", "HOLZ") {
+            return n2("S", 2);
+        }
+        return n2("X", 2);
+    }
+    if eq2(sl(buf, bl, p, p + 3), "SIO", "SIA") or sl(buf, bl, p, p + 4) == "SIAN" {
+        if slavo {
+            return n2("S", 3);
+        }
+        return n3("S", "X", 3);
+    }
+    let cp1 = ch(buf, bl, p + 1);
+    if (p == s and (cp1 == "M" or cp1 == "N" or cp1 == "L" or cp1 == "W")) or cp1 == "Z" {
+        let adv = if cp1 == "Z" { 2 } else { 1 };
+        return n3("S", "X", adv);
+    }
+    if sl(buf, bl, p, p + 2) == "SC" {
+        if ch(buf, bl, p + 2) == "H" {
+            if eq3(sl(buf, bl, p + 3, p + 5), "OO", "ER", "EN")
+                or eq3(sl(buf, bl, p + 3, p + 5), "UY", "ED", "EM") {
+                if eq2(sl(buf, bl, p + 3, p + 5), "ER", "EN") {
+                    return n3("X", "SK", 3);
+                }
+                return n2("SK", 3);
+            }
+            if p == s and not is_vowel(ch(buf, bl, s + 3)) and ch(buf, bl, s + 3) != "W" {
+                return n3("X", "S", 3);
+            }
+            return n2("X", 3);
+        }
+        if eq3(ch(buf, bl, p + 2), "I", "E", "Y") {
+            return n2("S", 3);
+        }
+        return n2("SK", 3);
+    }
+    if p == e and eq2(sl(buf, bl, p - 2, p), "AI", "OI") {
+        return n3("", "S", 1);
+    }
+    let adv = if eq2(ch(buf, bl, p + 1), "S", "Z") { 2 } else { 1 };
+    n2("S", adv)
+}
+
+fn proc_t(buf: ref String, bl: i64, p: i64, s: i64) -> Nxt {
+    if sl(buf, bl, p, p + 4) == "TION" {
+        return n2("X", 3);
+    }
+    if eq2(sl(buf, bl, p, p + 3), "TIA", "TCH") {
+        return n2("X", 3);
+    }
+    if sl(buf, bl, p, p + 2) == "TH" or sl(buf, bl, p, p + 3) == "TTH" {
+        if eq2(sl(buf, bl, p + 2, p + 4), "OM", "AM")
+            or eq2(sl(buf, bl, s, s + 4), "VON ", "VAN ")
+            or sl(buf, bl, s, s + 3) == "SCH" {
+            return n2("T", 2);
+        }
+        return n3("0", "T", 2);
+    }
+    if eq2(ch(buf, bl, p + 1), "T", "D") {
+        return n2("T", 2);
+    }
+    n2("T", 1)
+}
+
+fn proc_w(buf: ref String, bl: i64, p: i64, s: i64, e: i64) -> Nxt {
+    if sl(buf, bl, p, p + 2) == "WR" {
+        return n2("R", 2);
+    }
+    if p == s and (is_vowel(ch(buf, bl, p + 1)) or sl(buf, bl, p, p + 2) == "WH") {
+        if is_vowel(ch(buf, bl, p + 1)) {
+            return n3("A", "F", 1);
+        }
+        return n2("A", 1);
+    }
+    if (p == e and is_vowel(ch(buf, bl, p - 1)))
+        or eq2(sl(buf, bl, p - 1, p + 4), "EWSKI", "EWSKY")
+        or eq2(sl(buf, bl, p - 1, p + 4), "OWSKI", "OWSKY")
+        or sl(buf, bl, s, s + 3) == "SCH" {
+        return n3("", "F", 1);
+    }
+    if eq2(sl(buf, bl, p, p + 4), "WICZ", "WITZ") {
+        return n3("TS", "FX", 4);
+    }
+    n2("", 1)
+}
+
+fn proc_x(buf: ref String, bl: i64, p: i64, e: i64) -> Nxt {
+    let adv = if eq2(ch(buf, bl, p + 1), "C", "X") { 2 } else { 1 };
+    if p == e and (eq2(sl(buf, bl, p - 3, p), "IAU", "EAU") or eq2(sl(buf, bl, p - 2, p), "AU", "OU")) {
+        return n2("", adv);
+    }
+    n2("KS", adv)
+}
+
+fn proc_z(buf: ref String, bl: i64, p: i64, s: i64, slavo: bool) -> Nxt {
+    let c1 = ch(buf, bl, p + 1);
+    let adv = if c1 == "Z" or c1 == "H" { 2 } else { 1 };
+    if c1 == "H" {
+        return n2("J", adv);
+    }
+    if eq3(sl(buf, bl, p + 1, p + 3), "ZO", "ZI", "ZA")
+        or (slavo and p > s and ch(buf, bl, p - 1) != "T") {
+        return n3("S", "TS", adv);
+    }
+    n2("S", adv)
+}
+
+fn double_metaphone(word: String) -> String {
+    let upper = to_upper(word);
+    let ub = str_bytes(upper.clone());
+    let length = ub.len();
+    let start = 2;
+    let end = start + length - 1;
+    let mut buf = String.new();
+    buf.push_str("--");
+    buf.push_str(upper.clone());
+    buf.push_str("------");
+    let bl = length + 8;
+    let slavo = str_contains(upper, length, "W") or str_contains(upper, length, "K")
+        or str_contains(upper, length, "CZ") or str_contains(upper, length, "WITZ");
+
+    let mut primary = String.new();
+    let mut secondary = String.new();
+    let mut nx = n2("", 1);
+    let mut pos = start;
+
+    // check_word_start
+    let s2 = sl(buf, bl, start, start + 2);
+    if s2 == "GN" or s2 == "KN" or s2 == "PN" or s2 == "WR" or s2 == "PS" {
+        pos = pos + 1;
+    }
+    if ch(buf, bl, start) == "X" {
+        primary.push_str("S");
+        secondary.push_str("S");
+        pos = pos + 1;
+    }
+
+    while pos <= end {
+        let c = ch(buf, bl, pos);
+        let mut skip = false;
+        if is_vowel(c) {
+            nx = if pos == start { n2("A", 1) } else { n2("", 1) };
+        } else if c == " " {
+            pos = pos + 1;
+            skip = true;
+        } else if c == "B" {
+            nx = if ch(buf, bl, pos + 1) == "B" { n2("P", 2) } else { n2("P", 1) };
+        } else if c == "C" {
+            nx = proc_c(buf, bl, pos, start);
+        } else if c == "D" {
+            nx = proc_d(buf, bl, pos);
+        } else if c == "F" {
+            nx = if ch(buf, bl, pos + 1) == "F" { n2("F", 2) } else { n2("F", 1) };
+        } else if c == "G" {
+            nx = proc_g(buf, bl, pos, start, slavo, nx);
+        } else if c == "H" {
+            nx = proc_h(buf, bl, pos, start);
+        } else if c == "J" {
+            nx = proc_j(buf, bl, pos, start, end, slavo);
+        } else if c == "K" {
+            nx = if ch(buf, bl, pos + 1) == "K" { n2("K", 2) } else { n2("K", 1) };
+        } else if c == "L" {
+            nx = proc_l(buf, bl, pos, end);
+        } else if c == "M" {
+            nx = proc_m(buf, bl, pos, end);
+        } else if c == "N" {
+            nx = if ch(buf, bl, pos + 1) == "N" { n2("N", 2) } else { n2("N", 1) };
+        } else if c == "P" {
+            nx = proc_p(buf, bl, pos);
+        } else if c == "Q" {
+            nx = if ch(buf, bl, pos + 1) == "Q" { n2("K", 2) } else { n2("K", 1) };
+        } else if c == "R" {
+            nx = proc_r(buf, bl, pos, end, slavo);
+        } else if c == "S" {
+            nx = proc_s(buf, bl, pos, start, end, slavo);
+        } else if c == "T" {
+            nx = proc_t(buf, bl, pos, start);
+        } else if c == "V" {
+            nx = if ch(buf, bl, pos + 1) == "V" { n2("F", 2) } else { n2("F", 1) };
+        } else if c == "W" {
+            nx = proc_w(buf, bl, pos, start, end);
+        } else if c == "X" {
+            nx = proc_x(buf, bl, pos, end);
+        } else if c == "Z" {
+            nx = proc_z(buf, bl, pos, start, slavo);
+        }
+        if not skip {
+            if nx.arity == 2 {
+                if nx.np != "" {
+                    primary.push_str(nx.np.clone());
+                    secondary.push_str(nx.np.clone());
+                }
+                pos = pos + nx.adv;
+            } else {
+                if nx.np != "" {
+                    primary.push_str(nx.np.clone());
+                }
+                if nx.ns != "" {
+                    secondary.push_str(nx.ns.clone());
+                }
+                pos = pos + nx.adv;
+            }
+        }
+    }
+
+    if primary == secondary {
+        secondary = String.new();
+    }
+    let mut out = String.new();
+    out.push_str(primary);
+    out.push_str("|");
+    out.push_str(secondary);
+    out
+}
+
+// --- line scan -------------------------------------------------------------
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                if f[0] == "dm" {
+                    out.push_str(double_metaphone(f[1].clone()));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("dm\taubrey\n");
+    s.push_str("dm\trichard\n");
+    s.push_str("dm\tJose\n");
+    s.push_str("dm\tcambrillo\n");
+    s.push_str("dm\totto\n");
+    s.push_str("dm\tmaurice\n");
+    s.push_str("dm\tauto\n");
+    s.push_str("dm\tmaisey\n");
+    s.push_str("dm\tcatherine\n");
+    s.push_str("dm\tgeoff\n");
+    s.push_str("dm\tChile\n");
+    s.push_str("dm\tkatherine\n");
+    s.push_str("dm\tsteven\n");
+    s.push_str("dm\tzhang\n");
+    s.push_str("dm\tbob\n");
+    s.push_str("dm\tray\n");
+    s.push_str("dm\tTux\n");
+    s.push_str("dm\tbryan\n");
+    s.push_str("dm\tbryce\n");
+    s.push_str("dm\tRapelje\n");
+    s.push_str("dm\tsolilijs\n");
+    s.push_str("dm\tDallas\n");
+    s.push_str("dm\tSchwein\n");
+    s.push_str("dm\tdave\n");
+    s.push_str("dm\teric\n");
+    s.push_str("dm\tParachute\n");
+    s.push_str("dm\tbrian\n");
+    s.push_str("dm\trandy\n");
+    s.push_str("dm\tThrough\n");
+    s.push_str("dm\tNowhere\n");
+    s.push_str("dm\theidi\n");
+    s.push_str("dm\tArnow\n");
+    s.push_str("dm\tThumbail\n");
+    s.push_str("dm\ttolled\n");
+    s.push_str("dm\ttold\n");
+    s.push_str("dm\tSmith\n");
+    s.push_str("dm\tSchmidt\n");
+    s.push_str("dm\tJablonski\n");
+    s.push_str("dm\tYablonsky\n");
+    s.push_str("dm\tBartosz\n");
+    s.push_str("dm\tBartosch\n");
+    s.push_str("dm\tBartos\n");
+    s.push_str("dm\tgnome\n");
+    s.push_str("dm\tknight\n");
+    s.push_str("dm\tpneumatic\n");
+    s.push_str("dm\twright\n");
+    s.push_str("dm\tpsalm\n");
+    s.push_str("dm\txavier\n");
+    s.push_str("dm\tcaesar\n");
+    s.push_str("dm\tchianti\n");
+    s.push_str("dm\tmichael\n");
+    s.push_str("dm\tczerny\n");
+    s.push_str("dm\tfocaccia\n");
+    s.push_str("dm\taccident\n");
+    s.push_str("dm\tbacci\n");
+    s.push_str("dm\tschool\n");
+    s.push_str("dm\tsugar\n");
+    s.push_str("dm\tisland\n");
+    s.push_str("dm\tmclaughlin\n");
+    s.push_str("dm\tthomas\n");
+    s.push_str("dm\tnation\n");
+    s.push_str("dm\tcampbell\n");
+    s.push_str("dm\tedge\n");
+    s.push_str("dm\tvan gogh\n");
+    s.push_str("dm\tsan jacinto\n");
+    s.push_str("dm\tbiaggi\n");
+    s.push_str("dm\ttagliaro\n");
+    s.push_str("dm\tcabrillo\n");
+    s.push_str("dm\tfilipowicz\n");
+    s.push_str("dm\tbreaux\n");
+    s.push_str("dm\tresnais\n");
+    s.push_str("dm\tlaugh\n");
+    s.push_str("dm\tcough\n");
+    s.push_str("dm\thugh\n");
+    s.push_str("dm\tdumb\n");
+    s.push_str("dm\tthames\n");
+    s
+}
