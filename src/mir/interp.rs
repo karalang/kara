@@ -418,6 +418,10 @@ impl RunResult {
 }
 
 const MAX_DEPTH: usize = 200_000;
+/// What the runtime's stack guard prints when the stack runs out.
+const STACK_OVERFLOW: &str = "fatal runtime error: stack overflow\n\
+note: a recursive call chain or an oversized stack frame exhausted the stack.\n\
+note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
 /// The default step budget, which only stops a runaway loop: real
 /// programs in the corpus run up to billions of steps, and the corpus
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
@@ -1181,7 +1185,10 @@ impl<'a> Interp<'a> {
             ));
         }
         if self.frames.len() >= MAX_DEPTH {
-            return err("stack overflow");
+            // A compiled program's stack guard reports it so and aborts
+            // (runtime/src/stack_guard.rs, B-2026-10-22-38).
+            self.write_out(true, STACK_OVERFLOW);
+            return Err(Stop::Exit(134));
         }
         // A coroutine's borrow flags outlive the `resume` that suspended
         // holding them: they are parked with its frame until the next
@@ -1809,6 +1816,13 @@ impl<'a> Interp<'a> {
                 self.panic_message = Some(self.show(&args, arg_tys)?);
                 Ok(Value::Unit)
             }
+            // design.md §17's introspection: the interpreter has no
+            // scheduler to list and no debug metadata, as in legacy
+            // (B-2026-10-22-38).
+            ("Runtime", "list_tasks" | "list_par_blocks") => {
+                Ok(self.alloc_box("Vec", Value::Agg(vec![])))
+            }
+            ("Runtime", "has_debug_metadata") => Ok(Value::Bool(false)),
             ("println" | "print" | "eprintln" | "eprint", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
@@ -2643,8 +2657,8 @@ impl<'a> Interp<'a> {
         let name = MethodName(ty_name, method);
         let is_vec = ty_name.starts_with("Vec");
         match (is_vec, method, args.as_slice()) {
-            (true, "with_capacity" | "filled", [Value::Int(n), ..]) if *n < 0 => {
-                // A negative length panics, as in legacy.
+            (true, "with_capacity", [Value::Int(n), ..]) if *n < 0 => {
+                // A negative capacity panics, as in legacy.
                 if self.trace {
                     self.events.push(Event::Abort(AbortReason::Panic));
                 }
@@ -2688,8 +2702,9 @@ impl<'a> Interp<'a> {
                     TyKind::Intrinsic(IntrinsicTy::Vec(e)) => e,
                     _ => return err(format!("{name} into {}", self.tys.display(ret))),
                 };
-                // `val` moves into the first slot and is cloned into the rest.
-                let n = *n as usize;
+                // `val` moves into the first slot and is cloned into the rest;
+                // `n < 0` counts as 0 (docs/library/collections.md).
+                let n = (*n).max(0) as usize;
                 let mut elems = Vec::with_capacity(n);
                 for i in 0..n {
                     if i + 1 == n {
@@ -3047,6 +3062,15 @@ impl<'a> Interp<'a> {
                     parts.push(self.string_at(x)?);
                 }
                 Ok(self.alloc_box("String", Value::Str(parts.join(&sep))))
+            }
+            // An `Array` passed by value is its elements (B-2026-10-22-38).
+            ("extend_from_slice", [Value::Agg(fs)]) => {
+                let mut copies = Vec::with_capacity(fs.len());
+                for x in fs {
+                    copies.push(self.clone_value(x, e)?);
+                }
+                self.vec_elems(id)?.extend(copies);
+                Ok(Value::Unit)
             }
             ("extend_from_slice", [other]) => {
                 let (base, lo, len) = self.view_of(other)?;
@@ -8105,14 +8129,16 @@ impl<'a> Interp<'a> {
             "is_ascii_hexdigit" => b(c.is_ascii_hexdigit()),
             "is_digit" => match args.get(1) {
                 Some(Value::Int(r)) if (2..=36).contains(r) => b(c.is_digit(*r as u32)),
-                _ => err(format!("{name} takes a radix from 2 to 36")),
+                Some(Value::Int(r)) => self.radix_panic(name, *r),
+                _ => err(format!("{name} takes a radix")),
             },
             "to_ascii_lowercase" => Ok(Value::Char(c.to_ascii_lowercase())),
             "to_ascii_uppercase" => Ok(Value::Char(c.to_ascii_uppercase())),
             "to_digit" => {
                 let radix = match args.get(1) {
                     Some(Value::Int(r)) if (2..=36).contains(r) => *r as u32,
-                    _ => return err(format!("{name} takes a radix from 2 to 36")),
+                    Some(Value::Int(r)) => return self.radix_panic(name, *r),
+                    _ => return err(format!("{name} takes a radix")),
                 };
                 let d = c.to_digit(radix).map(|d| Value::Int(d as i128));
                 self.option(ret, d)
@@ -8607,17 +8633,24 @@ impl<'a> Interp<'a> {
                 } else {
                     len
                 };
-                if lo < 0 || lo >= hi {
+                // An end inside a code point panics even when the range is
+                // empty there (docs/library/strings.md, B-2026-10-22-38).
+                let cut = |x: i128| (0..=len).contains(&x) && !s.is_char_boundary(x as usize);
+                if !cut(lo) && !cut(hi) && (lo < 0 || lo >= hi) {
                     return new_string(self, String::new());
                 }
-                let (lo, hi) = (lo as usize, hi as usize);
-                if !s.is_char_boundary(lo) || !s.is_char_boundary(hi) {
+                if cut(lo) || cut(hi) {
+                    // Worded as the compiled backend's runtime words it.
+                    self.panic_message = Some(format!(
+                        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not \
+                         fall on UTF-8 char boundaries of {s:?}"
+                    ));
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::Panic));
                     }
                     return Err(Stop::Abort(AbortReason::Panic));
                 }
-                let t = s[lo..hi].to_string();
+                let t = s[lo as usize..hi as usize].to_string();
                 new_string(self, t)
             }
             "char_at_byte" => {
@@ -12315,6 +12348,13 @@ impl<'a> Interp<'a> {
             self.events.push(Event::Abort(AbortReason::Panic));
         }
         Err(Stop::Abort(AbortReason::Panic))
+    }
+
+    /// `char.is_digit` / `to_digit` with a radix outside 2..=36 panics, as
+    /// legacy and Rust's own do (B-2026-10-22-38).
+    fn radix_panic<T>(&mut self, name: &str, radix: i128) -> R<T> {
+        self.panic_message = Some(format!("{name}: radix {radix} is not in 2..=36"));
+        self.native_panic()
     }
 
     /// A lane vector's lanes, from the vector or a reference to it.

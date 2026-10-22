@@ -696,9 +696,12 @@ pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const 
 /// end clamps, and a cut inside a char is lossy, so its text may be new.
 /// The message of a string cut [`str_range`] refuses, as the interpreter
 /// words it, for the abort that follows.
-fn str_range_panic(s: &str, lo: i64, hi: i64) {
+fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
     let len = s.len() as i64;
-    let msg = if !(0 <= lo && lo <= hi && hi <= len) {
+    // `substring` refuses only a cut inside a code point, and its end past
+    // the text is the text's end.
+    let hi = if mode == 0 { hi.min(len) } else { hi };
+    let msg = if mode != 0 && !(0 <= lo && lo <= hi && hi <= len) {
         format!("string slice bounds {lo}..{hi} out of range (len {len})")
     } else {
         format!(
@@ -722,6 +725,12 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_
     }
     let (lo, hi) = if mode == 0 {
         let hi = hi.min(len);
+        // An end inside a code point panics even when the range is empty
+        // there (docs/library/strings.md, B-2026-10-22-38).
+        let cut = |x: i64| (0..=len).contains(&x) && !s.is_char_boundary(x as usize);
+        if cut(lo) || cut(hi) {
+            return None;
+        }
         if lo < 0 || lo >= hi {
             return Some("".into());
         }
@@ -755,7 +764,7 @@ pub unsafe extern "C" fn karac_mir_str_slice(
         // SAFETY: as above.
         Some(t) => unsafe { string_of(out, t.as_bytes()) },
         None => {
-            str_range_panic(s, lo, hi);
+            str_range_panic(s, lo, hi, mode);
             return 1;
         }
     }
@@ -787,7 +796,7 @@ pub unsafe extern "C" fn karac_mir_str_view(
             (t.as_ptr(), t.len())
         }
         None => {
-            str_range_panic(s, lo, hi);
+            str_range_panic(s, lo, hi, mode);
             return 1;
         }
     };

@@ -1144,3 +1144,120 @@ fn main() {
     assert!(cli("fn main() { let p = Parser.new(\"t\"); }\n"));
     assert!(cli(r#"fn main() { println(f"{Parser.new("t").name}"); }"#));
 }
+
+/// The runtime's introspection (design.md §17) on the interpreter: no
+/// scheduler to list and no debug metadata (B-2026-10-22-38).
+#[test]
+fn runtime_introspection_is_empty_on_the_interpreter() {
+    assert_runs(
+        r#"
+fn main() {
+    println(Runtime.list_tasks().len());
+    println(Runtime.list_par_blocks().len());
+    println(Runtime.has_debug_metadata());
+}
+"#,
+        "0\n0\nfalse\n",
+    );
+}
+
+/// A radix outside 2..=36 panics (exit 101) rather than stopping the
+/// interpreter with an error (B-2026-10-22-38).
+#[test]
+fn a_char_radix_out_of_range_panics() {
+    for call in [
+        "'z'.is_digit(37)",
+        "'5'.to_digit(40).is_some()",
+        "'1'.is_digit(1)",
+    ] {
+        let src = format!("fn main() {{ println(\"before\"); println(f\"{{{call}}}\"); }}");
+        assert_eq!(run(&src), Ok(("before\n".to_string(), 101)), "{call}");
+    }
+    assert_runs(
+        "fn main() { println(f\"{'z'.is_digit(36)} {'5'.to_digit(2).is_some()}\"); }",
+        "true false\n",
+    );
+}
+
+/// `substring` panics on an end inside a code point, an empty range there
+/// included, and otherwise saturates (docs/library/strings.md,
+/// B-2026-10-22-38).
+#[test]
+fn substring_panics_on_an_end_inside_a_code_point() {
+    for (lo, hi) in [(1, 1), (0, 1), (1, 3), (4, 2), (2, 100)] {
+        let src = format!(
+            "fn main() {{ let s = \"日本語\"; println(\"before\"); println(s.substring({lo}, {hi})); }}"
+        );
+        assert_eq!(run(&src), Ok(("before\n".to_string(), 101)), "({lo}, {hi})");
+    }
+    assert_runs(
+        r#"
+fn main() {
+    let s = "日本語";
+    println(f"[{s.substring(3, 3)}] [{s.substring(3, 6)}] [{s.substring(6, 3)}] [{s.substring(-2, 3)}] [{s.substring(3, 100)}] [{s.substring(20, 30)}]");
+}
+"#,
+        "[] [本] [] [] [本語] []\n",
+    );
+}
+
+/// `Vec.filled(n, v)` with `n < 0` is empty, as `from_fn` and `resize`
+/// treat it (docs/library/collections.md, B-2026-10-22-38).
+#[test]
+fn vec_filled_with_a_negative_length_is_empty() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = Vec.filled(-1, 7);
+    let w = Vec.filled(-3, "s");
+    println(f"{v.len()} {w.len()} {Vec.filled(2, 7).len()}");
+}
+"#,
+        "0 0 2\n",
+    );
+}
+
+/// `extend_from_slice` takes an `Array` passed by value (B-2026-10-22-38).
+#[test]
+fn extend_from_slice_takes_an_array() {
+    assert_runs(
+        r#"
+fn main() {
+    let data = Array[1u8, 2u8, 3u8, 250u8];
+    let mut payload: Vec[u8] = Vec.new();
+    payload.extend_from_slice(data);
+    payload.extend_from_slice(Array[9u8]);
+    println(f"{payload.len()} {payload[0]} {payload[3]} {payload[4]}");
+}
+"#,
+        "5 1 250 9\n",
+    );
+}
+
+/// Recursion past the interpreter's depth aborts as a compiled program's
+/// stack overflow does: the runtime's message on stderr, exit 134
+/// (B-2026-10-22-38).
+#[test]
+fn deep_recursion_aborts_as_a_stack_overflow() {
+    let src = r#"
+fn down(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let sub = down(n - 1);
+    return sub + n;
+}
+fn main() {
+    println("before");
+    println(f"{down(50000000i64)}");
+}
+"#;
+    let r = karac::mir::lower::run_source(src).expect("builds");
+    assert_eq!((r.output.as_str(), r.exit_code()), ("before\n", Some(134)));
+    assert!(
+        r.stderr
+            .starts_with("fatal runtime error: stack overflow\n"),
+        "stderr: {}",
+        r.stderr
+    );
+}
