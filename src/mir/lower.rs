@@ -10169,7 +10169,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             PatternKind::Literal(lit) => {
                 let v = match lit {
-                    LiteralPattern::Integer(v, _) => *v as u128,
+                    // An arm's value is the scrutinee's bits, at its width
+                    // (`u64::MAX`, not the 128-bit `-1` the literal widens
+                    // to, B-2026-10-22-37).
+                    LiteralPattern::Integer(v, _) => match self.tys().int_ty(t) {
+                        Some(it) => {
+                            let s = 128 - it.bits();
+                            (*v as u128) << s >> s
+                        }
+                        None => *v as u128,
+                    },
                     LiteralPattern::Char(c) => *c as u128,
                     LiteralPattern::Bool(b) => *b as u128,
                     _ => return self.unsupported(pat.span, "this literal pattern"),

@@ -466,3 +466,47 @@ fn main() {
         "231\nk 4 f\ng\n",
     );
 }
+
+/// A literal arm compares at the scrutinee's width: an upper-half unsigned
+/// constant (`u64::MAX`, which the literal holds as a 128-bit `-1`) and a
+/// negative signed one match their own arm (B-2026-10-22-37).
+#[test]
+fn literal_arms_match_at_the_scrutinees_width() {
+    assert_runs(
+        r#"
+fn main() {
+    let b: u64 = 18446744073709551615u64;
+    let s = match b {
+        18446744073709551615u64 => "u64 max",
+        _ => "u64 other",
+    };
+    println(s);
+    let c: u32 = 4294967295u32;
+    let t = match c {
+        4294967295u32 => "u32 max",
+        _ => "u32 other",
+    };
+    println(t);
+    let n: i64 = -1;
+    let u = match n {
+        -1 => "minus one",
+        _ => "i64 other",
+    };
+    println(u);
+    let m: i8 = -128;
+    let v = match m {
+        -128 => "i8 min",
+        _ => "i8 other",
+    };
+    println(v);
+    let h: u128 = 340282366920938463463374607431768211455u128;
+    let w = match h {
+        340282366920938463463374607431768211455u128 => "u128 max",
+        _ => "u128 other",
+    };
+    println(w);
+}
+"#,
+        "u64 max\nu32 max\nminus one\ni8 min\nu128 max\n",
+    );
+}
