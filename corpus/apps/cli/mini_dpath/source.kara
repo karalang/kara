@@ -1,0 +1,696 @@
+// mini_dpath — a port of dpath 2.2.0 (MIT, Andrew Kesterson & contributors):
+// the library that addresses nested dict/list data with filesystem-like glob
+// paths, used for config access, API-response digging and bulk edits. A glob
+// segment is an exact key, `*` (any one segment), or `**` (any run of
+// segments); a numeric segment matches a list index.
+//
+// Each job runs one of three read operations over a JSON document:
+//   search → every (path, value) pair whose path matches the glob, in dpath's
+//            walk order — all of a node's direct children first, then each
+//            child's subtree — joined with ` | ` (or `(none)`);
+//   values → just the matching values, same order;
+//   get    → the single value the glob addresses, or `KeyError` (no match) /
+//            `ValueError` (more than one match).
+//
+// Values live in a flat arena (tag 0 null, 1 bool, 2 int, 3 str, 4 list, 5
+// dict). `walk` reproduces dpath's exact traversal and records every node's
+// path as a Vec of segment strings (list indices rendered decimal). `gmatch`
+// is dpath's `match`: it normalizes a single `**` by padding or dropping it to
+// the path's length, then matches each segment with a case-sensitive fnmatch
+// (`*` and `?`). Paths are joined with `/`, values serialized as canonical
+// JSON — the same output dpath prints.
+//
+// Scope: the read side (search/values/get) with `*` / `**` / exact / numeric
+// globs; fnmatch character classes (`[...]`), custom separators, afilters and
+// the mutating set/new/delete/merge are out of scope. Job strings avoid JSON
+// escapes.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct M {
+    b: Vec[i64],
+    pos: i64,
+    src: String,
+    tag: Vec[i64],
+    ival: Vec[i64],
+    sval: Vec[String],
+    kstart: Vec[i64],
+    klen: Vec[i64],
+    kids: Vec[i64],
+    keys: Vec[String],
+    root: i64,
+    wnode: Vec[i64],
+    wpath: Vec[Vec[String]],
+}
+
+fn new_m() -> M {
+    M {
+        b: Vec.new(),
+        pos: 0,
+        src: String.new(),
+        tag: Vec.new(),
+        ival: Vec.new(),
+        sval: Vec.new(),
+        kstart: Vec.new(),
+        klen: Vec.new(),
+        kids: Vec.new(),
+        keys: Vec.new(),
+        root: 0,
+        wnode: Vec.new(),
+        wpath: Vec.new(),
+    }
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn int_to_str(v: i64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut n = v;
+    let mut neg = false;
+    if n < 0 {
+        neg = true;
+        n = -n;
+    }
+    let mut digs: Vec[i64] = Vec.new();
+    while n > 0 {
+        digs.push(n % 10);
+        n = n / 10;
+    }
+    let tbl = "0123456789".to_string();
+    let mut o = String.new();
+    if neg {
+        o.push_str("-");
+    }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        o.push_str(tbl.substring(digs[i], digs[i] + 1));
+    }
+    o
+}
+
+fn parse_int_str(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut acc = 0;
+    while i < n {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg {
+        -acc
+    } else {
+        acc
+    }
+}
+
+// case-sensitive fnmatch with `*` (any run) and `?` (one char)
+fn fnmatch_seg(s: Str, pat: Str) -> bool {
+    let sb = str_bytes(s);
+    let pb = str_bytes(pat);
+    let ns = sb.len();
+    let np = pb.len();
+    let mut si = 0;
+    let mut pi = 0;
+    let mut star = -1;
+    let mut smark = 0;
+    while si < ns {
+        if pi < np and (pb[pi] == sb[si] or pb[pi] == 63) {
+            si = si + 1;
+            pi = pi + 1;
+        } else if pi < np and pb[pi] == 42 {
+            star = pi;
+            smark = si;
+            pi = pi + 1;
+        } else if star >= 0 {
+            pi = star + 1;
+            smark = smark + 1;
+            si = smark;
+        } else {
+            return false;
+        }
+    }
+    while pi < np and pb[pi] == 42 {
+        pi = pi + 1;
+    }
+    pi == np
+}
+
+// dpath's match(): normalize one `**` to the path length, then fnmatch each
+fn gmatch(pathv: ref Vec[String], glob: ref Vec[String]) -> bool {
+    let pl = pathv.len();
+    let gl = glob.len();
+    let mut ss = -1;
+    let mut gi = 0;
+    while gi < gl {
+        if glob[gi] == "**" {
+            ss = gi;
+            break;
+        }
+        gi = gi + 1;
+    }
+    let mut sg: Vec[String] = Vec.new();
+    if ss < 0 {
+        let mut i = 0;
+        while i < gl {
+            sg.push(glob[i].clone());
+            i = i + 1;
+        }
+    } else if pl >= gl {
+        let mut i = 0;
+        while i < ss {
+            sg.push(glob[i].clone());
+            i = i + 1;
+        }
+        let stars = pl - gl + 1;
+        let mut k = 0;
+        while k < stars {
+            sg.push("*".to_string());
+            k = k + 1;
+        }
+        let mut j = ss + 1;
+        while j < gl {
+            sg.push(glob[j].clone());
+            j = j + 1;
+        }
+    } else if pl == gl - 1 {
+        let mut i = 0;
+        while i < gl {
+            if i != ss {
+                sg.push(glob[i].clone());
+            }
+            i = i + 1;
+        }
+    } else {
+        let mut i = 0;
+        while i < gl {
+            sg.push(glob[i].clone());
+            i = i + 1;
+        }
+    }
+    if pathv.len() != sg.len() {
+        return false;
+    }
+    let mut i = 0;
+    let m = sg.len();
+    while i < m {
+        if not fnmatch_seg(pathv[i].clone(), sg[i].clone()) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn join_slash(path: ref Vec[String]) -> String {
+    let n = path.len();
+    let mut o = String.new();
+    let mut i = 0;
+    while i < n {
+        if i > 0 {
+            o.push_str("/");
+        }
+        o.push_str(path[i].clone());
+        i = i + 1;
+    }
+    o
+}
+
+// dpath's _split_path: strip a leading separator, then split on it
+fn split_glob(g: Str) -> Vec[String] {
+    let b = str_bytes(g);
+    let n = b.len();
+    let mut i = 0;
+    while i < n and b[i] == 47 {
+        i = i + 1;
+    }
+    let rest = g.substring(i, n);
+    let rb = str_bytes(rest);
+    let rn = rb.len();
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut k = 0;
+    while k <= rn {
+        if k == rn or rb[k] == 47 {
+            parts.push(rest.substring(start, k));
+            start = k + 1;
+        }
+        k = k + 1;
+    }
+    parts
+}
+
+impl M {
+    fn add_node(mut ref self, tg: i64, iv: i64, sv: own String, ks: i64, kl: i64) -> i64 {
+        let idx = self.tag.len();
+        self.tag.push(tg);
+        self.ival.push(iv);
+        self.sval.push(sv);
+        self.kstart.push(ks);
+        self.klen.push(kl);
+        idx
+    }
+
+    fn mk_null(mut ref self) -> i64 {
+        self.add_node(0, 0, "".to_string(), 0, 0)
+    }
+    fn mk_bool(mut ref self, v: i64) -> i64 {
+        self.add_node(1, v, "".to_string(), 0, 0)
+    }
+    fn mk_int(mut ref self, v: i64) -> i64 {
+        self.add_node(2, v, "".to_string(), 0, 0)
+    }
+    fn mk_str(mut ref self, s: own String) -> i64 {
+        self.add_node(3, 0, s, 0, 0)
+    }
+
+    fn mk_list(mut ref self, vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push("".to_string());
+            i = i + 1;
+        }
+        self.add_node(4, 0, "".to_string(), ks, n)
+    }
+
+    fn mk_dict(mut ref self, keys: ref Vec[String], vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push(keys[i].clone());
+            i = i + 1;
+        }
+        self.add_node(5, 0, "".to_string(), ks, n)
+    }
+
+    // ---- JSON parser ----
+    fn peek(mut ref self) -> i64 {
+        if self.pos < self.b.len() {
+            self.b[self.pos]
+        } else {
+            -1
+        }
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 {
+                self.pos = self.pos + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn parse_into(mut ref self, src: Str) -> i64 {
+        self.src = src.to_string();
+        self.b = str_bytes(src);
+        self.pos = 0;
+        self.p_value()
+    }
+
+    fn p_value(mut ref self) -> i64 {
+        self.skip_ws();
+        let c = self.peek();
+        if c == 91 {
+            return self.p_list();
+        }
+        if c == 123 {
+            return self.p_dict();
+        }
+        if c == 34 {
+            let s = self.p_string();
+            return self.mk_str(s);
+        }
+        self.p_atom()
+    }
+
+    fn p_list(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut items: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 93 {
+            self.pos = self.pos + 1;
+            return self.mk_list(items);
+        }
+        let mut more = true;
+        while more {
+            let v = self.p_value();
+            items.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_list(items)
+    }
+
+    fn p_dict(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut dkeys: Vec[String] = Vec.new();
+        let mut dvals: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 125 {
+            self.pos = self.pos + 1;
+            return self.mk_dict(dkeys, dvals);
+        }
+        let mut more = true;
+        while more {
+            self.skip_ws();
+            let k = self.p_string();
+            self.skip_ws();
+            self.pos = self.pos + 1; // ':'
+            let v = self.p_value();
+            dkeys.push(k);
+            dvals.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_dict(dkeys, dvals)
+    }
+
+    fn p_string(mut ref self) -> String {
+        self.pos = self.pos + 1;
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n and self.b[self.pos] != 34 {
+            self.pos = self.pos + 1;
+        }
+        let end = self.pos;
+        self.pos = self.pos + 1;
+        self.src.substring(start, end)
+    }
+
+    fn p_atom(mut ref self) -> i64 {
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 or c == 44 or c == 93 or c == 125 {
+                break;
+            }
+            self.pos = self.pos + 1;
+        }
+        let tok = self.src.substring(start, self.pos);
+        if tok == "null" {
+            return self.mk_null();
+        }
+        if tok == "true" {
+            return self.mk_bool(1);
+        }
+        if tok == "false" {
+            return self.mk_bool(0);
+        }
+        self.mk_int(parse_int_str(tok))
+    }
+
+    // ---- dpath walk: all direct children first, then each child's subtree ----
+    fn walk(mut ref self, node: i64, path: ref Vec[String]) {
+        let t = self.tag[node];
+        if t != 4 and t != 5 {
+            return;
+        }
+        let n = self.klen[node];
+        let ks = self.kstart[node];
+        let mut i = 0;
+        while i < n {
+            let seg = if t == 5 {
+                self.keys[ks + i].clone()
+            } else {
+                int_to_str(i)
+            };
+            let mut cp = path.clone();
+            cp.push(seg);
+            self.wnode.push(self.kids[ks + i]);
+            self.wpath.push(cp);
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < n {
+            let seg = if t == 5 {
+                self.keys[ks + j].clone()
+            } else {
+                int_to_str(j)
+            };
+            let mut cp = path.clone();
+            cp.push(seg);
+            self.walk(self.kids[ks + j], cp);
+            j = j + 1;
+        }
+    }
+
+    fn do_search(mut ref self, glob: ref Vec[String]) -> String {
+        let n = self.wnode.len();
+        let mut out = String.new();
+        let mut cnt = 0;
+        let mut k = 0;
+        while k < n {
+            if gmatch(self.wpath[k], glob) {
+                if cnt > 0 {
+                    out.push_str(" | ");
+                }
+                out.push_str(join_slash(self.wpath[k]));
+                out.push_str("=");
+                let node = self.wnode[k];
+                out.push_str(self.ser(node));
+                cnt = cnt + 1;
+            }
+            k = k + 1;
+        }
+        if cnt == 0 {
+            return "(none)".to_string();
+        }
+        out
+    }
+
+    fn do_values(mut ref self, glob: ref Vec[String]) -> String {
+        let n = self.wnode.len();
+        let mut out = String.new();
+        let mut cnt = 0;
+        let mut k = 0;
+        while k < n {
+            if gmatch(self.wpath[k], glob) {
+                if cnt > 0 {
+                    out.push_str(" | ");
+                }
+                let node = self.wnode[k];
+                out.push_str(self.ser(node));
+                cnt = cnt + 1;
+            }
+            k = k + 1;
+        }
+        if cnt == 0 {
+            return "(none)".to_string();
+        }
+        out
+    }
+
+    fn do_get(mut ref self, glob: ref Vec[String]) -> String {
+        let n = self.wnode.len();
+        let mut found = -1;
+        let mut cnt = 0;
+        let mut k = 0;
+        while k < n {
+            if gmatch(self.wpath[k], glob) {
+                cnt = cnt + 1;
+                if cnt == 1 {
+                    found = self.wnode[k];
+                }
+            }
+            k = k + 1;
+        }
+        if cnt == 0 {
+            return "KeyError".to_string();
+        }
+        if cnt > 1 {
+            return "ValueError".to_string();
+        }
+        self.ser(found)
+    }
+
+    // ---- serialization (canonical JSON, json.dumps default separators) ----
+    fn ser(mut ref self, idx: i64) -> String {
+        let t = self.tag[idx];
+        if t == 0 {
+            return "null".to_string();
+        }
+        if t == 1 {
+            if self.ival[idx] == 1 {
+                return "true".to_string();
+            }
+            return "false".to_string();
+        }
+        if t == 2 {
+            return int_to_str(self.ival[idx]);
+        }
+        if t == 3 {
+            let mut o = String.new();
+            o.push_str("\"");
+            o.push_str(self.sval[idx].clone());
+            o.push_str("\"");
+            return o;
+        }
+        if t == 4 {
+            let n = self.klen[idx];
+            let ks = self.kstart[idx];
+            let mut o = String.new();
+            o.push_str("[");
+            let mut i = 0;
+            while i < n {
+                if i > 0 {
+                    o.push_str(", ");
+                }
+                let child = self.kids[ks + i];
+                o.push_str(self.ser(child));
+                i = i + 1;
+            }
+            o.push_str("]");
+            return o;
+        }
+        let n = self.klen[idx];
+        let ks = self.kstart[idx];
+        let mut o = String.new();
+        o.push_str("{");
+        let mut i = 0;
+        while i < n {
+            if i > 0 {
+                o.push_str(", ");
+            }
+            o.push_str("\"");
+            o.push_str(self.keys[ks + i].clone());
+            o.push_str("\": ");
+            let child = self.kids[ks + i];
+            o.push_str(self.ser(child));
+            i = i + 1;
+        }
+        o.push_str("}");
+        o
+    }
+}
+
+fn run_job(fields: ref Vec[String]) -> String {
+    let op = fields[0].clone();
+    let glob_s = fields[1].clone();
+    let doc = fields[2].clone();
+    let mut m = new_m();
+    let root = m.parse_into(doc);
+    m.root = root;
+    let empty: Vec[String] = Vec.new();
+    m.walk(root, empty);
+    let glob = split_glob(glob_s);
+    if op == "search" {
+        return m.do_search(glob);
+    }
+    if op == "values" {
+        return m.do_values(glob);
+    }
+    if op == "get" {
+        return m.do_get(glob);
+    }
+    "unknown op".to_string()
+}
+
+fn split_fields(line: Str) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                out.push_str("== ");
+                out.push_str(fields[0].clone());
+                out.push_str(" ");
+                out.push_str(fields[1].clone());
+                out.push_str(" | ");
+                out.push_str(fields[2].clone());
+                out.push_str("\n  ");
+                out.push_str(run_job(fields));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("search\ta/*\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\t*/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\t**/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\td/*\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\ta/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\t**\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("values\td/*\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("values\t*/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("get\ta/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("get\td/1\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("get\t*/b\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("get\tx/y\t{\"a\": {\"b\": 1, \"c\": 2}, \"d\": [10, 20, 30], \"e\": {\"b\": 9}}\n");
+    s.push_str("search\tusers/*/name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("search\tusers/**/age\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("search\tusers/*/*\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("values\tusers/*/name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("values\tmeta/*\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("get\tmeta/count\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("get\tusers/0/name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("get\tusers/5/name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("search\t**\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s
+}

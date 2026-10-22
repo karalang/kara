@@ -1,0 +1,42 @@
+== search a/* | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  a/b=1 | a/c=2
+== search */b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  a/b=1 | e/b=9
+== search **/b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  a/b=1 | e/b=9
+== search d/* | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  d/0=10 | d/1=20 | d/2=30
+== search a/b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  a/b=1
+== search ** | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  a={"b": 1, "c": 2} | d=[10, 20, 30] | e={"b": 9} | a/b=1 | a/c=2 | d/0=10 | d/1=20 | d/2=30 | e/b=9
+== values d/* | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  10 | 20 | 30
+== values */b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  1 | 9
+== get a/b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  1
+== get d/1 | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  20
+== get */b | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  ValueError
+== get x/y | {"a": {"b": 1, "c": 2}, "d": [10, 20, 30], "e": {"b": 9}}
+  KeyError
+== search users/*/name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  users/0/name="x" | users/1/name="y"
+== search users/**/age | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  users/0/age=1 | users/1/age=2
+== search users/*/* | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  users/0/name="x" | users/0/age=1 | users/1/name="y" | users/1/age=2
+== values users/*/name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  "x" | "y"
+== values meta/* | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  2
+== get meta/count | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  2
+== get users/0/name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  "x"
+== get users/5/name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  KeyError
+== search ** | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  users=[{"name": "x", "age": 1}, {"name": "y", "age": 2}] | meta={"count": 2} | users/0={"name": "x", "age": 1} | users/1={"name": "y", "age": 2} | users/0/name="x" | users/0/age=1 | users/1/name="y" | users/1/age=2 | meta/count=2
