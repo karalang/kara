@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 328 |
+| missing-feature | 331 |
 | codegen-gap | 289 |
 | false-positive | 281 |
 | other | 194 |
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 562 |
 | ownership | 131 |
 | other | 123 |
+| cli | 87 |
 | runtime | 86 |
-| cli | 84 |
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
@@ -178,6 +178,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-8 | 2026-10-22 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No mutable globals"): a `let` should be refused with a machine-applicable `karac fix` to `const NAME: T = e;`, a `let mut` refused with a message to create the value in `main` and pass it down | — |
 | B-2026-10-22-10 | 2026-10-22 | interp+codegen | medium | A call to an `unsafe extern "C"` function does not run on either MIR backend, so no FFI program runs on v2, and M3 needs one (recheck §2.2): examples/interop-zlib's `crc32` fails `karac build --mir` with "native `crc32` is not lowered yet" and `__mir-run` with "call of unknown function crc32" | — |
 | B-2026-10-22-11 | 2026-10-22 | interp+codegen | medium | An `errdefer` in a `par` branch that holds a `return` is refused by name on both MIR lanes (`an `errdefer` in a `par` branch that returns is not lowered yet`); the spec says it runs when the branch's value is an `Err` (core-semantics.md §11.7, §7.6-§7.7), and legacy `run --interp` runs it | — |
+| B-2026-10-22-12 | 2026-10-22 | cli | medium | `karac run` still runs the legacy JIT (with the legacy tree-walk interpreter as fallback and as `--interp`); v2 runs only through the hidden `__mir-run` / `__mir-llvm-run`. M3 item 1: the default becomes the mir-llvm JIT, `--interp` the MIR interpreter, keeping `--output=json/jsonl`, `--timeout`, `--sequential`, `--example`, the manifest flags and `--` program args, with the old path behind `--legacy` | — |
+| B-2026-10-22-13 | 2026-10-22 | cli | medium | `karac test` runs each case on the legacy JIT (src/test_jit_dispatch.rs) with the legacy interpreter as fallback; nothing in test_cmd.rs reaches MIR. M3 item 2: discovery and the JSONL output stay, each case runs on MIR (mir-llvm by default, `--interp` the MIR interpreter), `#[with_provider]` on a test works (B-2026-10-21-5), and the old path stays behind `--legacy` | — |
+| B-2026-10-22-14 | 2026-10-22 | cli | medium | `karac build` defaults to legacy; `--mir` builds one named file only (src/cli/args.rs refuses it in project mode: "--mir builds a single file; name one") and keeps only the file, output, `--release` and `-o`, dropping the other build flags. M3 item 4, CLI half: v2 by default, project mode and `install` on v2, every other build flag carried or refused by name, the old path behind `--legacy` (plain wasm32 targets are the drop schedule's half) | — |
 
 ### Relocated
 
