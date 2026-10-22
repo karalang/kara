@@ -848,3 +848,37 @@ fn main() {
         0,
     );
 }
+
+/// A range `for` that pushes once per trip reserves its count up front on
+/// both backends (B-2026-10-18-51): 26, 26 and 10 where growth by doubling
+/// would leave 32 and 16.
+#[test]
+fn range_for_fills_reserve_their_count_on_both_backends() {
+    agrees(
+        r#"
+fn fill(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n { v.push(0); }
+    v
+}
+fn lit() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..26 { v.push(1); }
+    v
+}
+fn incl(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..=n { v.push(i); }
+    v
+}
+fn main() {
+    let a = fill(26);
+    let b = lit();
+    let c = incl(9);
+    let (al, ac, bl, bc, cl, cc) = (a.len(), a.capacity(), b.len(), b.capacity(), c.len(), c.capacity());
+    println(f"{al} {ac} {bl} {bc} {cl} {cc}");
+}"#,
+        "26 26 26 26 10 10\n",
+        0,
+    );
+}

@@ -163,6 +163,103 @@ fn mentions_only_reads(body: &Body, b: usize, v: Local, push_ok: bool) -> bool {
     !terminator_mentions(&data.terminator.kind, v)
 }
 
+/// Whether block `b` leaves the loop exactly when `i == bound`: it ends in
+/// `switchInt(c) -> [0: stay, otherwise: out]` with `c = Eq(copy i, bound)`.
+fn leaves_at_bound(
+    body: &Body,
+    b: usize,
+    i: Local,
+    bound: &Operand,
+    in_loop: &impl Fn(usize) -> bool,
+) -> bool {
+    let data = &body.blocks[b];
+    let TerminatorKind::SwitchInt {
+        discr: Operand::Copy(c),
+        targets,
+    } = &data.terminator.kind
+    else {
+        return false;
+    };
+    let [(0, stay)] = targets.values.as_slice() else {
+        return false;
+    };
+    if !c.projection.is_empty() || !in_loop(stay.index()) || in_loop(targets.otherwise.index()) {
+        return false;
+    }
+    let cmp = data.statements.iter().rev().find_map(|s| match &s.kind {
+        StatementKind::Assign(d, rv) if d == c => Some(rv),
+        _ => None,
+    });
+    let iv = Operand::Copy(Place::local(i));
+    matches!(cmp, Some(Rvalue::BinaryOp(BinOp::Eq, x, y))
+        if (*x == iv && y == bound) || (x == bound && *y == iv))
+}
+
+/// `l` when it holds at `Vec.new()` (block `nb`'s call) the value it holds
+/// anywhere after: a parameter never written, or a local written once where
+/// that write dominates the call.
+fn settled(body: &Body, idom: &[usize], nb: usize, l: Local) -> Option<Local> {
+    let ds = defs(body, l)?;
+    let ok = match ds.as_slice() {
+        [] => (1..=body.arg_count).contains(&l.index()),
+        [(bi, Some(_))] => *bi == nb || dominates(idom, *bi, nb),
+        [(bi, None)] => *bi != nb && dominates(idom, *bi, nb),
+        _ => false,
+    };
+    ok.then_some(l)
+}
+
+/// The one write of `l`, when it is a statement `l = rv`.
+fn sole_assign(body: &Body, l: Local) -> Option<&Rvalue> {
+    let [(bi, Some(si))] = defs(body, l)?[..] else {
+        return None;
+    };
+    match &body.blocks[bi].statements[si].kind {
+        StatementKind::Assign(_, rv) => Some(rv),
+        _ => None,
+    }
+}
+
+/// For `l` written once, by `l = copy x` with `x` a whole local, `f(x)`:
+/// `l` then holds `x`'s value wherever `x` holds one value.
+fn copied_from(body: &Body, l: Local, f: impl Fn(Local) -> Option<Local>) -> Option<Local> {
+    match sole_assign(body, l)? {
+        Rvalue::Use(Operand::Copy(x)) if x.projection.is_empty() => f(x.local),
+        _ => None,
+    }
+}
+
+/// The constant `l` is written once with, by `l = const k`.
+fn copied_const(body: &Body, l: Local) -> Option<u128> {
+    match sole_assign(body, l)? {
+        Rvalue::Use(o) => int_const(o),
+        _ => None,
+    }
+}
+
+/// `l = l + c`, unchecked, as `l`'s one write other than its init: the
+/// block holding it and `c`.
+fn plain_increment(body: &Body, writes: &Writes, l: Local) -> Option<(usize, u128)> {
+    writes.assigns[l.index()].iter().find_map(|&(bi, si)| {
+        let StatementKind::Assign(_, Rvalue::BinaryOp(BinOp::Add, a, b)) =
+            &body.blocks[bi].statements[si].kind
+        else {
+            return None;
+        };
+        match (a, b) {
+            (Operand::Copy(p), Operand::Const(k)) | (Operand::Const(k), Operand::Copy(p))
+                if *p == Place::local(l) =>
+            {
+                match k.kind {
+                    ConstKind::Scalar(v) => Some((bi, v)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    })
+}
+
 /// The writes of `l`: `Some(sites)` when each is a whole-local assignment
 /// or call result, `None` when something else may write it.
 fn defs(body: &Body, l: Local) -> Option<Vec<(usize, Option<usize>)>> {
@@ -276,6 +373,9 @@ fn plan(
     let Some((g, exit, op, i, bound)) = guard else {
         return out;
     };
+    // An inclusive range `for` also leaves after the trip `i == bound`,
+    // the one that trip would have been the last of anyway.
+    let mut last_exits = Vec::new();
     for b in (0..n).filter(|&b| in_loop(b)) {
         if matches!(body.blocks[b].terminator.kind, TerminatorKind::Return) {
             return out;
@@ -283,7 +383,10 @@ fn plan(
         for s in body.blocks[b].terminator.kind.successors() {
             let s = s.index();
             if !in_loop(s) && !(b == g && s == exit.index()) && !is_abort(s) {
-                return out;
+                if op != BinOp::Le || !leaves_at_bound(body, b, i, &bound, &in_loop) {
+                    return out;
+                }
+                last_exits.push(b);
             }
         }
     }
@@ -295,8 +398,13 @@ fn plan(
     if bits > 64 || writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
         return out;
     }
-    let step = increment(body, writes, i)
-        .is_some_and(|(cb, _, c)| mask(c, bits) == 1 && dominates_latches(cb));
+    let step = match increment(body, writes, i) {
+        Some((cb, _, c)) => mask(c, bits) == 1 && dominates_latches(cb),
+        // A range `for` steps with an unchecked add: its guard keeps `i`
+        // below the bound.
+        None => plain_increment(body, writes, i)
+            .is_some_and(|(cb, c)| mask(c, bits) == 1 && dominates_latches(cb)),
+    };
     if !step {
         return out;
     }
@@ -399,7 +507,7 @@ fn plan(
             }
             let p = u32::from(pushes(body, b, v));
             let (lo, hi) = (lo + p, hi + p);
-            if lp.latches.contains(&b) && (lo, hi) != (1, 1) {
+            if (lp.latches.contains(&b) || last_exits.contains(&b)) && (lo, hi) != (1, 1) {
                 continue 'v;
             }
             for s in body.blocks[b].terminator.kind.successors() {
@@ -454,11 +562,14 @@ fn plan(
         let adj = i128::from(op == BinOp::Le);
         let delta = seeds + adj - k;
         // The bound, holding at `Vec.new()` what it holds at the guard.
+        // A range `for` copies a literal bound into a local.
+        let lit = match &bound {
+            Operand::Const(_) => int_const(&bound),
+            Operand::Copy(p) if p.projection.is_empty() => copied_const(body, p.local),
+            _ => None,
+        };
         let bound = match &bound {
-            Operand::Const(_) => {
-                let Some(raw) = int_const(&bound) else {
-                    continue;
-                };
+            _ if let Some(raw) = lit => {
                 let room = signed_value(raw, bits, signed) + delta;
                 if room <= 0 || room > MAX_LITERAL_ROOM {
                     continue;
@@ -469,23 +580,15 @@ fn plan(
                 })
             }
             Operand::Copy(p) if p.projection.is_empty() => {
-                let b = p.local;
+                let Some(b) = settled(body, idom, nb, p.local)
+                    .or_else(|| copied_from(body, p.local, |x| settled(body, idom, nb, x)))
+                else {
+                    continue;
+                };
                 if !matches!(tys.kind(body.local(b).ty), TyKind::Int(t) if t.bits() <= 64) {
                     continue;
                 }
-                let Some(ds) = defs(body, b) else {
-                    continue;
-                };
-                let ok = match ds.as_slice() {
-                    [] => (1..=body.arg_count).contains(&b.index()),
-                    [(bi, Some(_))] => *bi == nb || dominates(idom, *bi, nb),
-                    [(bi, None)] => *bi != nb && dominates(idom, *bi, nb),
-                    _ => false,
-                };
-                if !ok {
-                    continue;
-                }
-                bound.clone()
+                Operand::Copy(Place::local(b))
             }
             _ => continue,
         };
@@ -598,6 +701,35 @@ mod tests {
         );
         assert_eq!(reserved(&src, "fill"), 1);
         assert_eq!(run_source(&src).unwrap(), ("11 11 10\n1\n".into(), Some(0)));
+    }
+
+    /// A range `for` steps with an unchecked add and copies its bound into
+    /// a local; an inclusive one also leaves at `i == bound`.
+    #[test]
+    fn mir_presize_reserves_a_range_for() {
+        for (body, out) in [
+            (
+                "    for i in 0..n {\n        v.push(i + 1);\n    }\n",
+                "10 10 10\n0\n",
+            ),
+            (
+                "    for i in 0..=n {\n        v.push(i);\n    }\n",
+                "11 11 10\n0\n",
+            ),
+            (
+                "    for _ in 0..26 {\n        v.push(n);\n    }\n",
+                "26 26 10\n26\n",
+            ),
+        ] {
+            let src = fill(body);
+            assert_eq!(reserved(&src, "fill"), 1, "{body}");
+            assert_eq!(run_source(&src).unwrap(), (out.into(), Some(0)), "{body}");
+        }
+        // Leaving early is off the shape.
+        let src = fill(
+            "    for i in 0..n {\n        if i == 3 {\n            break;\n        }\n        v.push(i);\n    }\n",
+        );
+        assert_eq!(reserved(&src, "fill"), 0);
     }
 
     /// Off the shape: a push on some trips only, two pushes on a trip, a
