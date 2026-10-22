@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 325 |
 | codegen-gap | 287 |
-| false-positive | 278 |
+| false-positive | 279 |
 | other | 194 |
 | diagnostics | 185 |
 | perf | 182 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3024 |
 | interp | 1035 |
-| typecheck | 557 |
+| typecheck | 558 |
 | ownership | 130 |
 | other | 123 |
 | runtime | 86 |
@@ -181,6 +181,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
 | B-2026-10-21-82 | 2026-10-21 | typecheck+interp+codegen | medium | An empty list literal `[]` in an `if`/`match` branch whose element type comes only from a sibling branch passes `karac check` but stops both MIR lanes with `a type that failed to check is not lowered yet` | — |
 | B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
+| B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
 
 ### Relocated
 
