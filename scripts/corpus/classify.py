@@ -31,6 +31,13 @@ For each entry, outside class d (deferred):
    - tagged drop/shared and MIR == legacy as multisets of lines: `c`
      (unreviewed);
    - anything else: open e (`e-differs`).
+   A program the drop model refuses (`model_verdict = "V2-REJECT"`) that
+   passes here is `e-model-rejects`, unless a row overrules the model
+   (`model_overruled`). The verdict counts only for the text it was given:
+   when `karac fix` has rewritten `source.kara` since (`model_src` differs),
+   the entry is `e-model-stale` until `record.py --model` judges the new text.
+   So a run that fixes programs is followed by `record.py --model` and a
+   second classify over those entries.
 4. Tags: `post-m1:<feature>` for what M1 does not promise (par, net, process,
    dyn, escaping closures), `lib:<type>` and `io:<kind>` for the library and
    I/O beyond the literal M1 list, `bench` for kata bench variants.
@@ -241,6 +248,11 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
                 and (not expect.startswith("error") or expect == "error:codegen") \
                 and not meta.get("model_overruled") \
                 and (res["class"] in ("a", "b", "c") or res["bucket"].endswith("e-spec")):
+            # A verdict on the text before `karac fix` rewrote it is about a
+            # program check also refused: no disagreement until it is re-run.
+            cur = src_hash(entry / "source.kara")
+            if meta.get("model_src", None if meta.get("fixed_by_classify") else cur) != cur:
+                return {**res, "class": "e", "bucket": "e-model-stale"}
             return {**res, "class": "e", "bucket": "e-model-rejects"}
         return res
     finally:

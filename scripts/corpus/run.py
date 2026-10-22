@@ -47,6 +47,7 @@ matches nothing must not read as a pass.
 
 import argparse
 import concurrent.futures as cf
+import hashlib
 import os
 import re
 import subprocess
@@ -85,6 +86,10 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         # `model_overruled` names the ledger row that ruled the model wrong.
         if check_refuses(entry, args):
             return {**base, "verdict": "PASS", "why": "", "ran": True}
+        cur = hashlib.md5((entry / "source.kara").read_bytes()).hexdigest()[:8]
+        if meta.get("model_src", None if meta.get("fixed_by_classify") else cur) != cur:
+            # classify's e-model-stale: the verdict is for the text before `karac fix`.
+            return {**base, "verdict": "MREJ", "why": "model verdict is stale: re-run record.py --model", "ran": True}
         return {**base, "verdict": "MREJ", "why": f"model: {meta.get('model_note', '')}", "ran": True}
     if BACKENDS.get(backend) is None:
         return {**base, "verdict": "SKIP", "why": f"backend {backend} not available yet", "ran": False}
