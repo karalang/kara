@@ -700,11 +700,21 @@ impl<'a> super::TypeChecker<'a> {
         // `E_TYPE_VALUE_AT_RUNTIME` boundary is enforced precisely on runtime
         // functions declaring a `Type` parameter (see `check_function`).
         // Spec: deferred.md § Comptime — Types as first-class values.
+        // A prelude name the program declares a type of its own by (a
+        // `struct Stats` deriving `Serialize`) is that type.
+        let prelude = is_prelude_type_or_module_name(name);
         if self.comptime_depth > 0
-            && !is_prelude_type_or_module_name(name)
-            && (self.env.structs.contains_key(name)
-                || self.env.enums.contains_key(name)
-                || self.env.unions.contains_key(name))
+            && (self
+                .env
+                .structs
+                .get(name)
+                .is_some_and(|s| !prelude || !s.defining_stdlib_origin)
+                || self
+                    .env
+                    .enums
+                    .get(name)
+                    .is_some_and(|e| !prelude || !e.defining_stdlib_origin)
+                || (!prelude && self.env.unions.contains_key(name)))
         {
             return Type::Named {
                 name: "Type".to_string(),

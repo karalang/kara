@@ -1465,6 +1465,9 @@ impl<'a> super::TypeChecker<'a> {
             // `key_type()` / `value_type()` peel the 1st / 2nd argument of a
             // two-parameter type like `Map[K, V]`.
             "element_type" | "key_type" | "value_type" => named("Type"),
+            // A `Type` is a name, so its copy is itself (a derive copies one
+            // out of a borrowed `Field` / `Variant`, v2 core §3.7).
+            "clone" => named("Type"),
             // Unreachable: caller gates on `is_reflection_method`.
             _ => Type::Error,
         }
@@ -1856,7 +1859,12 @@ impl<'a> super::TypeChecker<'a> {
         // form is handled by the associated-call intercept above; this arm
         // covers the case where the receiver is a value of the `Type`
         // pseudotype. Substrate 2.
-        if matches!(&obj_ty, Type::Named { name, .. } if name == "Type") {
+        // A `comptime T: Type` parameter is a borrow under D5.
+        let peeled = match &obj_ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        if matches!(peeled, Type::Named { name, .. } if name == "Type") {
             let ty = self.infer_type_reflection_method(method, args, span);
             self.record_expr_type(span, &ty);
             return ty;

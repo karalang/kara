@@ -156,6 +156,7 @@ pub fn lower_program_with_library<'a>(
         hir,
         capture_modes,
         None,
+        None,
     )
 }
 
@@ -176,6 +177,7 @@ fn lower_program_inner<'a>(
     hir: TypedHir,
     capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     signatures_only_from: Option<usize>,
+    roots: Option<&[String]>,
 ) -> Lowered {
     let user_types: FxHashSet<String> = match user_len {
         Some(n) => program
@@ -258,6 +260,7 @@ fn lower_program_inner<'a>(
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
         signatures_only_from,
+        comptime_eval: roots.is_some(),
         literal_statics: FxHashMap::default(),
         literal_queue: Vec::new(),
         eq_queue: Vec::new(),
@@ -305,11 +308,25 @@ fn lower_program_inner<'a>(
             }
         }
     }
-    match defs.lookup(0, "main") {
-        Some(main) => {
-            lcx.instance(main, Vec::new());
+    match roots {
+        // A comptime evaluation's roots (B-2026-10-22-20): its wrapper
+        // functions, and no `main`.
+        Some(roots) => {
+            for r in roots {
+                match defs.lookup(0, r) {
+                    Some(d) => {
+                        lcx.instance(d, Vec::new());
+                    }
+                    None => lcx.errors.push(format!("no `{r}` function")),
+                }
+            }
         }
-        None => lcx.errors.push("no `main` function".into()),
+        None => match defs.lookup(0, "main") {
+            Some(main) => {
+                lcx.instance(main, Vec::new());
+            }
+            None => lcx.errors.push("no `main` function".into()),
+        },
     }
     // The `#[panic_handler]` thunk is a root too: nothing calls it but the
     // backends, when a panic ends the process.
@@ -545,6 +562,9 @@ struct Lcx<'a> {
     /// Where the functions start whose bodies are not lowered, only their
     /// parameters ([`lower_program_inner`]).
     signatures_only_from: Option<usize>,
+    /// A comptime evaluation (B-2026-10-22-20): a `comptime { .. }` block
+    /// reached here runs as the block it is.
+    comptime_eval: bool,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
     /// The structs and enums the user's program declares, as opposed to
@@ -5831,6 +5851,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::Unsafe(b) => self.block_into(b, dest),
+            ExprKind::Comptime(b) if self.lcx.comptime_eval => self.block_into(b, dest),
             // The branches of a `par` block run one after another, in source
             // order: one of the schedules the block allows (the sequential
             // scheduler's).
@@ -6080,6 +6101,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             let w = self.downgrade(Operand::Move(Place::local(l)), t);
             self.assign(dest, Rvalue::Use(w));
             return Ok(());
+        }
+        // A type named in value position is a comptime `Type`, carried as
+        // its name (B-2026-10-22-20).
+        if let Some(Res::Def(d)) = self.lcx.res.get(&e.id) {
+            let kind = self.lcx.defs.table.get(*d).kind;
+            if matches!(
+                kind,
+                DefKind::Struct | DefKind::Enum | DefKind::Union | DefKind::TypeAlias
+            ) && matches!(self.tys().tcx().kind(t), HK::Str)
+            {
+                let name = self.lcx.def_name(*d);
+                let op = self.static_str(&name);
+                self.call_native("String.from", vec![op], dest);
+                return Ok(());
+            }
         }
         match self.lcx.res.get(&e.id) {
             Some(Res::Def(d)) => {
@@ -10990,10 +11026,98 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// A comptime native (B-2026-10-22-20): a reflection method of a
+    /// `Type` value (`t.name()`, `f.ty.is_struct()`), of a type named in
+    /// call position (`Point.fields()`), `ast.item(s)` / `ast.expr(s)` or
+    /// `compiler.error(msg)`. Each runs on the MIR interpreter's comptime
+    /// natives (`interp::comptime`); `true` when `e` was one.
+    fn comptime_native(&mut self, e: &'a Expr, dest: &Place) -> R<bool> {
+        let not_local = |b: &Self, x: &Expr| !matches!(b.lcx.res.get(&x.id), Some(Res::Local(_)));
+        let (name, receiver, type_name, args): (
+            String,
+            Option<&'a Expr>,
+            Option<&'a str>,
+            &'a [CallArg],
+        ) = match &e.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // A `comptime T: Type` parameter is a borrow under D5.
+                let is_type = match self.lcx.tc.node_types.get(&object.id) {
+                        Some((Type::Ref(t) | Type::MutRef(t), _)) => Some(t.as_ref()),
+                        Some((t, _)) => Some(t),
+                        None => None,
+                    }
+                    .is_some_and(|t| matches!(t, Type::Named { name, args } if name == "Type" && args.is_empty()));
+                match &object.kind {
+                    _ if is_type => (format!("Type.{method}"), Some(&**object), None, args),
+                    ExprKind::Identifier(m)
+                        if matches!(
+                            (m.as_str(), method.as_str()),
+                            ("ast", "item" | "expr") | ("compiler", "error")
+                        ) && not_local(self, object) =>
+                    {
+                        (format!("{m}.{method}"), None, None, args)
+                    }
+                    _ => return Ok(false),
+                }
+            }
+            ExprKind::Call { callee, args } => match &callee.kind {
+                ExprKind::Path { segments, .. } => match segments.as_slice() {
+                    [m, f]
+                        if matches!(
+                            (m.as_str(), f.as_str()),
+                            ("ast", "item" | "expr") | ("compiler", "error")
+                        ) =>
+                    {
+                        (format!("{m}.{f}"), None, None, args)
+                    }
+                    [t, f]
+                        if interp::comptime::REFLECTION_METHODS.contains(&f.as_str())
+                            && (self.lcx.tc.struct_info.contains_key(t)
+                                || self.lcx.tc.enum_info.contains_key(t)
+                                || self.lcx.tc.union_info.contains_key(t)) =>
+                    {
+                        (format!("Type.{f}"), None, Some(t.as_str()), args)
+                    }
+                    _ => return Ok(false),
+                },
+                _ => return Ok(false),
+            },
+            _ => return Ok(false),
+        };
+        let mut ops = Vec::new();
+        if let Some(t) = type_name {
+            ops.push(self.static_str(t));
+        }
+        for x in receiver.into_iter().chain(args.iter().map(|a| &a.value)) {
+            let p = self.expr_place_of(x, false)?;
+            let t = self.place_type(&p);
+            ops.push(self.ref_to(p, t));
+        }
+        if name == "compiler.error" {
+            let i64t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+            for n in [e.span.line, e.span.column, e.span.offset, e.span.length] {
+                ops.push(Operand::Const(Const {
+                    ty: i64t,
+                    kind: ConstKind::Scalar(n as u128),
+                }));
+            }
+        }
+        self.call_native(&name, ops, dest.clone());
+        Ok(true)
+    }
+
     fn call(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [CallArg], dest: Place) -> R<()> {
         if let Some(&l) = self.old_vals.get(&e.id) {
             let t = self.b.local_ty(l);
             self.clone_into(Place::local(l), t, dest);
+            return Ok(());
+        }
+        if self.comptime_native(e, &dest)? {
             return Ok(());
         }
         // `with_provider[R](p, f)` and `R.m(args)` (core semantics §14).
@@ -13432,6 +13556,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
+        if self.comptime_native(e, &dest)? {
+            return Ok(());
+        }
         // `critical_section.acquire()`: the guard whose drop ends the
         // section. Interrupts are not masked here, so it holds no token.
         if let (ExprKind::Identifier(m), "acquire", []) = (&object.kind, method, args) {
@@ -18146,7 +18273,8 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
     // `karac check` reports only the program's own errors, so the library is
     // checked against its signatures, as check's own pipeline checks it, and
     // its bodies are not lowered (B-2026-10-19-21).
-    if check_only {
+    // A comptime evaluation runs library bodies (a derive's), so they stay.
+    if check_only && !crate::comptime::has_comptime_work(&program) {
         library_bodies_unchecked(&mut program, user_len..library_sources_end(user_len));
     }
     // An error in the library's text is the library's, which check leaves out.
@@ -18189,8 +18317,10 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
     // A `#[derive(X)]` backed by a `comptime fn derive_x` (`Message`'s
     // `encode` / `decode`) splices its items into the program; they are
     // resolved and checked like the rest, as the CLI's pipeline does.
-    if crate::comptime::has_derives_to_expand(&program) {
-        let errs = crate::comptime::evaluate(&mut program, &tc);
+    if crate::comptime::has_comptime_work(&program) {
+        let errs = crate::comptime::evaluate_on_mir(&mut program, &tc, &src, false, &|p, r| {
+            crate::typecheck_with_pruned_library_source(p, r, pruned.clone())
+        });
         if let Some(e) = errs.first() {
             return Err(format!("comptime: {e:?}"));
         }
@@ -18220,6 +18350,39 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
         &own.closure_captures,
         check_only,
     )
+}
+
+/// A program lowered from `roots` rather than from `main`: the functions a
+/// comptime evaluation runs (B-2026-10-22-20). `program` is resolved and
+/// type-checked as `r` and `tc`; a `comptime { .. }` block reached from a
+/// root runs as the block it is.
+pub fn lower_program_with_roots(
+    program: &ast::Program,
+    src: &str,
+    user_len: Option<usize>,
+    tc: &TypeCheckResult,
+    r: &ResolveResult,
+    roots: &[String],
+) -> Lowered {
+    let defs = ProgramDefs::build_for_program(program);
+    let res = crate::node_res::node_res(r, &defs, 0, None);
+    let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+    let captures = crate::ownershipcheck(program, tc).closure_captures;
+    let mut lowered = lower_program_inner(
+        program,
+        src,
+        user_len,
+        tc,
+        &defs,
+        &res,
+        r,
+        hir,
+        &captures,
+        None,
+        Some(roots),
+    );
+    lowered.program.user_source_len = user_len;
+    lowered
 }
 
 /// The back half of [`lower_source_for_checks`]: a program with the library,
@@ -18253,6 +18416,7 @@ fn lower_typed(
         hir,
         captures,
         check_only.then_some(user_len),
+        None,
     );
     lowered.program.user_source_len = Some(user_len);
     phase_time("mir_builder", &mut t);

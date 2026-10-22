@@ -1202,7 +1202,10 @@ impl Pipeline {
         }
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
-        if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() != Ok("1") {
+        // A comptime evaluation runs library bodies (a derive's), so they stay.
+        if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() != Ok("1")
+            && !crate::comptime::has_comptime_work(&self.parsed.program)
+        {
             // The always-appended sources, not the baked modules after them:
             // a derive or `proto_schema` runs its `comptime` body at check.
             let end = crate::mir::lower::library_sources_end(user_len);
@@ -1651,10 +1654,14 @@ impl Pipeline {
             && self.library_len.is_some()
             && std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() != Ok("0")
             && std::env::var("KARAC_CHECK_MIR").as_deref() != Ok("0")
-            && !crate::comptime::has_derives_to_expand(&self.parsed.program)
+            && !crate::comptime::has_comptime_work(&self.parsed.program)
         {
             self.mir_program = Some(self.parsed.program.clone());
         }
+        // On the library (the v2 pipeline), comptime work runs on the MIR
+        // interpreter before the operators are lowered, and the program it
+        // leaves is checked again (B-2026-10-22-20).
+        let on_mir = self.library_len.is_some();
         // `#[derive(X)]` expansion (B-2026-07-08-15 Layer 1): a derive SPLICES
         // new items (methods/impls) into the program. Those generated bodies
         // must be name-resolved and typechecked so codegen's span-keyed side-
@@ -1666,9 +1673,33 @@ impl Pipeline {
         // `comptime { … }`-block folding adds no items and keeps the original
         // lower→fold order (no re-typecheck cost). This runs in `lower()` so
         // every path that lowers (check / build / run) gets it uniformly.
-        if crate::comptime::has_derives_to_expand(&self.parsed.program) {
+        if crate::comptime::has_derives_to_expand(&self.parsed.program)
+            || (on_mir && crate::comptime::has_comptime_work(&self.parsed.program))
+        {
             let typed = self.typed.take().unwrap();
-            let fold_errors = crate::comptime::evaluate(&mut self.parsed.program, &typed);
+            let fold_errors = if on_mir {
+                let mut profile_config = self.profile_config.clone();
+                profile_config.profile = self.profile;
+                let (overrides, pruned) =
+                    (self.lint_overrides.clone(), self.library_pruned.clone());
+                crate::comptime::evaluate_on_mir(
+                    &mut self.parsed.program,
+                    &typed,
+                    "",
+                    false,
+                    &|p, r| {
+                        crate::typecheck_with_lint_overrides_profile_and_library(
+                            p,
+                            r,
+                            overrides.clone(),
+                            profile_config.clone(),
+                            pruned.clone(),
+                        )
+                    },
+                )
+            } else {
+                crate::comptime::evaluate(&mut self.parsed.program, &typed)
+            };
             self.comptime_errors
                 .get_or_insert_with(Vec::new)
                 .extend(fold_errors);

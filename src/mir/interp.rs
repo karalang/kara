@@ -25,6 +25,8 @@ use super::syntax::*;
 use super::ty::{AdtId, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 use super::validate::validate;
 
+#[path = "comptime_natives.rs"]
+pub mod comptime;
 #[path = "interp_fast.rs"]
 mod fast;
 
@@ -694,6 +696,9 @@ fn run_with(
         cur_task: 0,
         wait: None,
     };
+    if comptime::active_now() {
+        it.max_steps = it.max_steps.min(crate::comptime::STEP_LIMIT);
+    }
     let task = coroutines && program.bodies.contains_key(&coroutine::resume_name(entry));
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
@@ -705,7 +710,13 @@ fn run_with(
                 it.call(entry, args)
             }
         });
+        if let Ok(v) = &ret {
+            it.comptime_capture(entry, v);
+        }
+        let comptime = comptime::active_now();
         match ret.and_then(|v| it.main_result(entry, v)) {
+            // A comptime root's result is read out, not dropped.
+            Ok(done) if comptime => done,
             Ok(done) => match it.leaks() {
                 Some(leaks) => Outcome::Error(leaks),
                 None => done,
@@ -1872,6 +1883,9 @@ impl<'a> Interp<'a> {
                     }
                 }
                 Ok(Value::Unit)
+            }
+            ("Type", _) | ("ast", "item" | "expr") | ("compiler", "error") => {
+                self.comptime_native(base, method, args, ret)
             }
             ("String", "from") => {
                 let [Value::Str(s)] = args.as_slice() else {

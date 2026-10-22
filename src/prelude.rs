@@ -880,6 +880,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/panic.kara",
         include_str!("../runtime/stdlib/source/panic.kara"),
     ),
+    (
+        "source/comptime.kara",
+        include_str!("../runtime/stdlib/source/comptime.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

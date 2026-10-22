@@ -56,6 +56,49 @@ use crate::interpreter::narrow_to_i64;
 use crate::interpreter::{Interpreter, Value};
 use crate::resolver::SpanKey;
 use crate::token::{FloatSuffix, IntSuffix, Span};
+
+#[path = "comptime_mir.rs"]
+mod on_mir;
+pub use on_mir::{evaluate_on_mir, STEP_LIMIT};
+
+/// Parses `s` as one Kāra expression: an `ast.expr(s)` quote.
+pub(crate) fn parse_quoted_expr(s: &str) -> Result<Expr, String> {
+    let tokens = crate::tokenize(s);
+    let mut parser = crate::parser::Parser::new(tokens);
+    match parser.parse_expression() {
+        Some(expr) if parser.errors.is_empty() => Ok(expr),
+        _ => {
+            let msgs: Vec<String> = parser.errors.iter().map(|e| e.message.clone()).collect();
+            Err(if msgs.is_empty() {
+                "not a valid expression".to_string()
+            } else {
+                msgs.join("; ")
+            })
+        }
+    }
+}
+
+/// Parses `s` as one top-level Kāra item: an `ast.item(s)` quote.
+pub(crate) fn parse_quoted_item(s: &str) -> Result<Item, String> {
+    let tokens = crate::tokenize(s);
+    let result = crate::parser::Parser::new(tokens).items_only().parse();
+    if !result.errors.is_empty() {
+        let msgs: Vec<String> = result.errors.iter().map(|e| e.message.clone()).collect();
+        return Err(msgs.join("; "));
+    }
+    let mut items = result.program.items;
+    match items.len() {
+        1 => Ok(items.pop().unwrap()),
+        0 => Err("not a valid item".to_string()),
+        _ => Err("quote contains more than one item".to_string()),
+    }
+}
+
+/// True iff `program` has comptime work: a `comptime { .. }` block or a
+/// derive backed by a `comptime fn`.
+pub fn has_comptime_work(program: &Program) -> bool {
+    program_has_comptime(program) || has_derives_to_expand(program)
+}
 use crate::typechecker::{FloatSize, IntSize, Type, TypeCheckResult, UIntSize};
 
 /// Wall-clock ceiling for a single `comptime { ... }` evaluation. The
@@ -114,6 +157,16 @@ pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
         .collect();
     if planned_consts.is_empty() {
         return Vec::new();
+    }
+    // The v2 pipeline's program carries the library: its schemas run on the
+    // MIR interpreter (B-2026-10-22-20).
+    if program.library_start.is_some() {
+        let resolved = crate::resolve_v2(program);
+        let typed =
+            crate::typecheck_with_pruned_library_source(program, &resolved, Default::default());
+        return evaluate_on_mir(program, &typed, "", true, &|p, r| {
+            crate::typecheck_with_pruned_library_source(p, r, Default::default())
+        });
     }
 
     // Build an evaluation context. `resolve`/`typecheck` here see the forward
@@ -180,6 +233,13 @@ pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeE
     if !needs_fold && !needs_derive {
         return Vec::new();
     }
+    // The v2 pipeline's programs carry the library and evaluate on MIR
+    // ([`evaluate_on_mir`]); this tree-walk evaluator is the legacy
+    // pipeline's alone (B-2026-10-22-20).
+    debug_assert!(
+        program.library_start.is_none(),
+        "a v2 program reached the legacy comptime evaluator"
+    );
 
     // The interpreter borrows its program immutably for its whole lifetime,
     // but this pass mutates `program` to splice in folded constants. Resolve

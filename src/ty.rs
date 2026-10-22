@@ -1032,6 +1032,11 @@ impl TyCtxt {
                 },
                 // `Unit` spelled by name is `()` (design.md § Entry Point).
                 None if name == "Unit" && args.is_empty() => TyKind::Unit,
+                // A comptime `Type` is carried as its name, an `Item` or an
+                // `Expr` as its source text (B-2026-10-22-20).
+                None if matches!(name.as_str(), "Type" | "Item" | "Expr") && args.is_empty() => {
+                    TyKind::Str
+                }
                 None => return Err(LowerError::UnknownName(name.clone())),
             },
             Type::Shared(name) => match lookup(name) {

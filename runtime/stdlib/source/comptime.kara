@@ -1,0 +1,21 @@
+// The records a comptime `Type`'s reflection methods return (deferred.md
+// § Comptime — Reflection API): `T.fields()` is a `Vec[Field]` and
+// `T.variants()` a `Vec[Variant]`. A `Type` is carried as its name and an
+// `Item` or `Expr` as its source text (B-2026-10-22-20).
+
+pub struct Field {
+    pub name: String,
+    pub ty: Type,
+    pub is_pub: bool,
+    pub attrs: Vec[String],
+}
+
+pub struct Variant {
+    pub name: String,
+    pub field_count: i64,
+    pub payload: String,
+    pub payload_ty: Type,
+    pub field_names: Vec[String],
+    pub field_types: Vec[String],
+    pub attrs: Vec[String],
+}

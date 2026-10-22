@@ -2982,6 +2982,29 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &ty);
             return ty;
         }
+        // A `comptime { .. }` at check position is checked as its block is,
+        // so its literals take `expected` (`let n: i32 = comptime { 4 }`):
+        // the constant it folds to does. A block that quotes code
+        // (`ast.expr(..)`) is typed by what it splices, below.
+        if let ExprKind::Comptime(block) = &expr.kind {
+            let quotes = block.final_expr.as_deref().is_some_and(|e| match &e.kind {
+                ExprKind::Call { callee, .. } => matches!(
+                    &callee.kind,
+                    ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "ast"
+                ),
+                ExprKind::MethodCall { object, .. } => {
+                    matches!(&object.kind, ExprKind::Identifier(m) if m == "ast")
+                }
+                _ => false,
+            });
+            if !quotes {
+                self.comptime_depth += 1;
+                let ty = self.check_block_against(block, expected);
+                self.comptime_depth -= 1;
+                self.record_expr_type(&expr.span, &ty);
+                return ty;
+            }
+        }
         // A `par {}` with a value at check position: the same, so `Ok(7)` as
         // the join expression of `let r: Result[i64, i64] = par { .. }` gets
         // its `Err` type from `expected`. The branches' bindings hoist into
