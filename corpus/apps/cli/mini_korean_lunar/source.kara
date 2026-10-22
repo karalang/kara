@@ -1,0 +1,628 @@
+// mini_korean_lunar — a port of korean_lunar_calendar 0.4.0 (MIT; Jinil Lee),
+// the library (used by the `holidays` project and Korean/Chinese calendar apps)
+// that converts between the Gregorian solar calendar and the Korean/Chinese
+// lunisolar calendar over years 1000–2050, following the KARI tables, and renders
+// a date's sexagenary-cycle (gapja) name. This port follows
+// korean_lunar_calendar.py exactly: the same bit-packed per-year data table
+// (big/small months, the intercalary-month index, the solar leap bit, the
+// cumulative-day counts), the same absolute-day arithmetic for both directions,
+// the same validity rules (including the 1582 Gregorian-reform skip), and the
+// same gapja index math. All arithmetic is integer; the gapja strings carry CJK
+// characters, emitted as UTF-8. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa4(n: i64) -> String {
+    // zero-padded to at least 4 digits (years), like "%04d"
+    let mut digs: Vec[u8] = Vec.new();
+    let mut v = n;
+    if v == 0 {
+        digs.push(48);
+    }
+    while v > 0 {
+        digs.push((48 + (v % 10)) as u8);
+        v = v / 10;
+    }
+    while digs.len() < 4 {
+        digs.push(48);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = digs.len();
+    while i > 0 {
+        out.push(digs[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn itoa2(n: i64) -> String {
+    // zero-padded to 2 digits (month/day), like "%02d"
+    let mut out: Vec[u8] = Vec.new();
+    if n < 10 {
+        out.push(48);
+        out.push((48 + n) as u8);
+    } else {
+        out.push((48 + (n / 10)) as u8);
+        out.push((48 + (n % 10)) as u8);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn hex_val(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+// Parse a space-separated list of hex tokens into Vec[i64].
+fn parse_hex_list(s: String) -> Vec[i64] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while i < n and b[i] == 32 {
+            i = i + 1;
+        }
+        if i < n {
+            let mut v = 0;
+            while i < n and b[i] != 32 {
+                v = v * 16 + hex_val(b[i]);
+                i = i + 1;
+            }
+            out.push(v);
+        }
+    }
+    out
+}
+
+// Append the UTF-8 bytes of a Unicode code point (all gapja code points are in
+// the BMP, so this covers the 1/2/3-byte forms).
+fn push_utf8(out: mut ref Vec[u8], cp: i64) {
+    if cp < 128 {
+        out.push(cp as u8);
+    } else if cp < 2048 {
+        out.push((192 + (cp >> 6)) as u8);
+        out.push((128 + (cp & 63)) as u8);
+    } else {
+        out.push((224 + (cp >> 12)) as u8);
+        out.push((128 + ((cp >> 6) & 63)) as u8);
+        out.push((128 + (cp & 63)) as u8);
+    }
+}
+
+struct Cal {
+    data: Vec[i64],
+    cum_l: Vec[i64],   // cumulative lunar days 1000..1000+i
+    cum_s: Vec[i64],   // cumulative solar days 1000..1000+i
+}
+
+fn solar_month_days_raw(ld: i64, month: i64) -> i64 {
+    // SOLAR_DAYS = [31,28,31,30,31,30,31,31,30,31,30,31, 29(feb-leap)]
+    let interc = ((ld >> 30) & 1) > 0;
+    if month == 2 {
+        if interc {
+            29
+        } else {
+            28
+        }
+    } else if month == 1 or month == 3 or month == 5 or month == 7 or month == 8 or month == 10 or month == 12 {
+        31
+    } else {
+        30
+    }
+}
+
+fn solar_year_days_raw(ld: i64) -> i64 {
+    if ((ld >> 30) & 1) > 0 {
+        366
+    } else {
+        365
+    }
+}
+
+fn lunar_year_days_raw(ld: i64) -> i64 {
+    (ld >> 17) & 511
+}
+
+fn build_cal() -> Cal {
+    let data = parse_hex_list(lunar_data_str());
+    let n = data.len();
+    let mut cum_l: Vec[i64] = Vec.new();
+    let mut cum_s: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut accl = 0;
+    let mut accs = 0;
+    while i < n {
+        accl = accl + lunar_year_days_raw(data[i]);
+        accs = accs + solar_year_days_raw(data[i]);
+        cum_l.push(accl);
+        cum_s.push(accs);
+        i = i + 1;
+    }
+    Cal { data: data, cum_l: cum_l, cum_s: cum_s }
+}
+
+fn interc_month(ld: i64) -> i64 {
+    (ld >> 12) & 15
+}
+
+fn lunar_month_days(cal: ref Cal, year: i64, month: i64, is_inter: bool) -> i64 {
+    let ld = cal.data[year - 1000];
+    if is_inter and interc_month(ld) == month {
+        if ((ld >> 16) & 1) > 0 {
+            30
+        } else {
+            29
+        }
+    } else {
+        if ((ld >> (12 - month)) & 1) > 0 {
+            30
+        } else {
+            29
+        }
+    }
+}
+
+// cumulative lunar days for years 1000..year (0 when year < 1000)
+fn lunar_days_before_year(cal: ref Cal, year: i64) -> i64 {
+    if year < 1000 {
+        0
+    } else {
+        cal.cum_l[year - 1000]
+    }
+}
+
+fn lunar_days_before_month(cal: ref Cal, year: i64, month: i64, is_inter: bool) -> i64 {
+    let mut days = 0;
+    if year >= 1000 and month > 0 {
+        let mut bm = 1;
+        while bm < month + 1 {
+            days = days + lunar_month_days(cal, year, bm, false);
+            bm = bm + 1;
+        }
+        if is_inter {
+            let im = interc_month(cal.data[year - 1000]);
+            if im > 0 and im < month + 1 {
+                days = days + lunar_month_days(cal, year, im, true);
+            }
+        }
+    }
+    days
+}
+
+fn lunar_abs_days(cal: ref Cal, year: i64, month: i64, day: i64, is_inter: bool) -> i64 {
+    let mut days = lunar_days_before_year(cal, year - 1)
+        + lunar_days_before_month(cal, year, month - 1, true) + day;
+    if is_inter and interc_month(cal.data[year - 1000]) == month {
+        days = days + lunar_month_days(cal, year, month, false);
+    }
+    days
+}
+
+fn solar_days_before_year(cal: ref Cal, year: i64) -> i64 {
+    if year < 1000 {
+        0
+    } else {
+        cal.cum_s[year - 1000]
+    }
+}
+
+fn solar_days_before_month(cal: ref Cal, year: i64, month: i64) -> i64 {
+    // ld is read lazily so an empty month range (month == 0, reached via
+    // solar_abs_days(ly + 1, 1, 1)) never indexes data out of range at year 2051.
+    let mut days = 0;
+    let mut bm = 1;
+    while bm < month + 1 {
+        days = days + solar_month_days_raw(cal.data[year - 1000], bm);
+        bm = bm + 1;
+    }
+    days
+}
+
+fn solar_abs_days(cal: ref Cal, year: i64, month: i64, day: i64) -> i64 {
+    solar_days_before_year(cal, year - 1) + solar_days_before_month(cal, year, month - 1) + day - 43
+}
+
+struct Ymd {
+    y: i64,
+    m: i64,
+    d: i64,
+    inter: bool,
+}
+
+fn solar_from_lunar(cal: ref Cal, ly: i64, lm: i64, ld: i64, is_inter: bool) -> Ymd {
+    let abs_days = lunar_abs_days(cal, ly, lm, ld, is_inter);
+    let mut sy = ly + 1;
+    if abs_days < solar_abs_days(cal, ly + 1, 1, 1) {
+        sy = ly;
+    }
+    let mut sm = 0;
+    let mut sd = 0;
+    let mut month = 12;
+    while month > 0 {
+        let abm = solar_abs_days(cal, sy, month, 1);
+        if abs_days >= abm {
+            sm = month;
+            sd = abs_days - abm + 1;
+            month = 0;
+        } else {
+            month = month - 1;
+        }
+    }
+    Ymd { y: sy, m: sm, d: sd, inter: false }
+}
+
+fn lunar_from_solar(cal: ref Cal, sy: i64, sm: i64, sd: i64) -> Ymd {
+    let abs_days = solar_abs_days(cal, sy, sm, sd);
+    let mut ly = sy - 1;
+    if abs_days >= lunar_abs_days(cal, sy, 1, 1, false) {
+        ly = sy;
+    }
+    let mut lm = 0;
+    let mut ld = 0;
+    let mut is_inter = false;
+    let mut month = 12;
+    while month > 0 {
+        let abm = lunar_abs_days(cal, ly, month, 1, false);
+        if abs_days >= abm {
+            lm = month;
+            if interc_month(cal.data[ly - 1000]) == month {
+                is_inter = abs_days >= lunar_abs_days(cal, ly, month, 1, true);
+            }
+            ld = abs_days - lunar_abs_days(cal, ly, lm, 1, is_inter) + 1;
+            month = 0;
+        } else {
+            month = month - 1;
+        }
+    }
+    Ymd { y: ly, m: lm, d: ld, inter: is_inter }
+}
+
+fn valid_date(cal: ref Cal, is_lunar: bool, is_inter: bool, year: i64, month: i64, day: i64) -> bool {
+    let dv = year * 10000 + month * 100 + day;
+    let mut lo = 10000213;
+    let mut hi = 20501231;
+    if is_lunar {
+        lo = 10000101;
+        hi = 20501118;
+    }
+    if lo <= dv and dv <= hi and month > 0 and month < 13 and day > 0 {
+        if is_lunar and is_inter and interc_month(cal.data[year - 1000]) != month {
+            return false;
+        }
+        if (not is_lunar) and year == 1582 and month == 10 and day > 4 and day < 15 {
+            return false;
+        }
+        let mut limit = 0;
+        if is_lunar {
+            limit = lunar_month_days(cal, year, month, is_inter);
+        } else {
+            limit = solar_month_days_raw(cal.data[year - 1000], month);
+        }
+        if day <= limit {
+            return true;
+        }
+    }
+    false
+}
+
+// gapja index triple ((yC,yG),(mC,mG),(dC,dG)); -1 marker in yC means "unset".
+struct Gapja {
+    yc: i64,
+    yg: i64,
+    mc: i64,
+    mg: i64,
+    dc: i64,
+    dg: i64,
+    unset: bool,
+}
+
+fn gapja_indices(cal: ref Cal, d: ref Ymd) -> Gapja {
+    let abs_days = lunar_abs_days(cal, d.y, d.m, d.d, d.inter);
+    if abs_days <= 0 {
+        return Gapja { yc: 0, yg: 0, mc: 0, mg: 0, dc: 0, dg: 0, unset: true };
+    }
+    let mc_count = d.m + 12 * (d.y - 1000);
+    Gapja {
+        yc: ((d.y + 6) - 1000) % 10,
+        yg: (d.y - 1000) % 12,
+        mc: (mc_count + 3) % 10,
+        mg: (mc_count + 1) % 12,
+        dc: (abs_days + 4) % 10,
+        dg: (abs_days + 2) % 12,
+        unset: false,
+    }
+}
+
+// cheongan (10), ganji (12), unit (3) code points for each script.
+fn gapja_string(cal: ref Cal, d: ref Ymd, korean: bool) -> String {
+    let g = gapja_indices(cal, d);
+    let che = if korean { korean_cheongan() } else { chinese_cheongan() };
+    let gan = if korean { korean_ganji() } else { chinese_ganji() };
+    let unit = if korean { korean_unit() } else { chinese_unit() };
+    let mut out: Vec[u8] = Vec.new();
+    push_utf8(mut out, che[g.yc]);
+    push_utf8(mut out, gan[g.yg]);
+    push_utf8(mut out, unit[0]);
+    out.push(32);
+    push_utf8(mut out, che[g.mc]);
+    push_utf8(mut out, gan[g.mg]);
+    push_utf8(mut out, unit[1]);
+    out.push(32);
+    push_utf8(mut out, che[g.dc]);
+    push_utf8(mut out, gan[g.dg]);
+    push_utf8(mut out, unit[2]);
+    if d.inter {
+        out.push(32);
+        out.push(40);
+        if korean {
+            push_utf8(mut out, 50980);   // 0xc724 윤
+        } else {
+            push_utf8(mut out, 38287);   // 0x958f 閏
+        }
+        push_utf8(mut out, unit[1]);
+        out.push(41);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn iso(y: i64, m: i64, d: i64) -> String {
+    let mut s = String.new();
+    s.push_str(itoa4(y));
+    s.push_str("-");
+    s.push_str(itoa2(m));
+    s.push_str("-");
+    s.push_str(itoa2(d));
+    s
+}
+
+fn parse_ints(s: String) -> Vec[i64] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        while i < n and b[i] == 32 {
+            i = i + 1;
+        }
+        if i < n {
+            let mut neg = false;
+            if b[i] == 45 {
+                neg = true;
+                i = i + 1;
+            }
+            let mut v = 0;
+            while i < n and b[i] >= 48 and b[i] <= 57 {
+                v = v * 10 + ((b[i] - 48) as i64);
+                i = i + 1;
+            }
+            if neg {
+                v = -v;
+            }
+            out.push(v);
+        }
+    }
+    out
+}
+
+fn main_run() -> String {
+    let cal = build_cal();
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    let p = parse_ints(arg.clone());
+                    if op == "s2l" {
+                        if valid_date(cal, false, false, p[0], p[1], p[2]) {
+                            let d = lunar_from_solar(cal, p[0], p[1], p[2]);
+                            out.push_str(iso(d.y, d.m, d.d));
+                            if d.inter {
+                                out.push_str(" Intercalation");
+                            }
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    } else if op == "l2s" {
+                        let is_i = p[3] != 0;
+                        if valid_date(cal, true, is_i, p[0], p[1], p[2]) {
+                            let d = solar_from_lunar(cal, p[0], p[1], p[2], is_i);
+                            out.push_str(iso(d.y, d.m, d.d));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    } else if op == "gap" or op == "cgap" {
+                        if valid_date(cal, false, false, p[0], p[1], p[2]) {
+                            let d = lunar_from_solar(cal, p[0], p[1], p[2]);
+                            out.push_str(gapja_string(cal, d, op == "gap"));
+                        } else {
+                            out.push_str("INVALID");
+                        }
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+fn korean_cheongan() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(44049); v.push(51012); v.push(48337); v.push(51221); v.push(47924);
+    v.push(44592); v.push(44221); v.push(49888); v.push(51076); v.push(44228);
+    v
+}
+
+fn korean_ganji() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(51088); v.push(52629); v.push(51064); v.push(47896); v.push(51652);
+    v.push(49324); v.push(50724); v.push(48120); v.push(49888); v.push(50976);
+    v.push(49696); v.push(54644);
+    v
+}
+
+fn korean_unit() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(45380); v.push(50900); v.push(51068);
+    v
+}
+
+fn chinese_cheongan() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(30002); v.push(20057); v.push(19993); v.push(19969); v.push(25098);
+    v.push(24049); v.push(24218); v.push(36763); v.push(22764); v.push(30328);
+    v
+}
+
+fn chinese_ganji() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(23376); v.push(19985); v.push(23493); v.push(21359); v.push(36784);
+    v.push(24051); v.push(21320); v.push(26410); v.push(30003); v.push(37193);
+    v.push(25100); v.push(20133);
+    v
+}
+
+fn chinese_unit() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(24180); v.push(26376); v.push(26085);
+    v
+}
+
+fn lunar_data_str() -> String {
+    "82c60a57 82fec52b 82c40d2a 82c60d55 c30095ad 82c4056a 82c6096d 830054dd c2c404ad 82c40a4d 83002e4d 82c40b26 c300ab56 82c60ad5 82c4035a 8300697a c2c6095b 82c4049b 83004a9b 82c40a4b c301caa5 82c406aa 82c60ad5 830092dd c2c402b5 82c60957 82fe54ae 82c60c97 c2c4064b 82ff254a 82c60da9 8300a6b6 c2c6066d 82c4026e 8301692e 82c4092e c2c40c96 83004d95 82c40d4a 8300cd69 c2c40b58 82c80d6b 8301926b 82c4025d c2c4092b 83005aab 82c40a95 82c40b4a c3021eab 82c402d5 8301b55a 82c604bb c2c4025b 83007537 82c4052b 82c40695 c3003755 82c406aa 8303cab5 82c40275 c2c404b6 83008a5e 82c40a56 82c40d26 c3005ea6 82c60d55 82c405aa 83001d6a c2c6096d 8300b4af 82c4049d 82c40a4d c3007d2d 82c40aa6 82c60b55 830045d5 c2c4035a 82c6095d 83011173 82c4045b c3009a4f 82c4064b 82c40aa5 83006b69 c2c606b5 82c402da 83002ab6 82c60937 c2fec497 82c60c97 82c4064b 82fe86aa c2c60da5 82c405b4 83034a6d 82c402ae c2c40e61 83002d2e 82c40c96 83009d4d 82c40d4a 82c60d65 83016595 82c6055d c2c4026d 83002a5d 82c4092b 8300aa97 c2c40a95 82c40b4a 83008b5a 82c60ad5 c2c6055b 830042b7 82c40457 82c4052b c3001d2b 82c40695 8300972d 82c405aa c2c60ab5 830054ed 82c404b6 82c60a57 c2ff344e 82c40d26 8301be92 82c60d55 c2c405aa 830089ba 82c6096d 82c404ae c3004a9d 82c40a4d 82c40d25 83002f25 c2c40b54 8303ad69 82c402da 82c6095d c301649b 82c4049b 82c40a4b 83004b4b c2c406a5 8300bb53 82c406b4 82c60ab6 c3018956 82c60997 82c40497 83004697 c2c4054b 82fec6a5 82c60da5 82c405ac c303aab5 82c4026e 82c4092e 83006cae c2c40c96 82c40d4a 83002f4a 82c60d55 c300b56b 82c6055b 82c4025d 8300793d c2c40927 82c40a95 83015d15 82c40b4a c2c60b55 830112d5 82c604db 82fe925e c2c60a57 82c4052b 83006aab 82c40695 c2c406aa 83003baa 82c60ab5 8300b4b7 c2c404ae 82c60a57 82fe752e 82c40d26 c2c60e93 830056d5 82c405aa 82c609b5 c300256d 82c404ae 8301aa4d 82c40a4d c2c40d26 83006d65 82c40b52 82c60d6a c30026da 82c6095d 8301c49d 82c4049b c2c40a4b 83008aab 82c406a5 82c40b54 c3004bb4 82c60ab6 82c6095b 83002537 c2c40497 8300964f 82c4054b 82c406a5 c30176c5 82c405ac 82c60ab6 8301386e c2c4092e 8300cc97 82c40c96 82c40d4a c3008daa 82c60b55 82c4056a 83025adb c2c4025d 82c4092e 83002d2b 82c40a95 c3009d4d 82c40b2a 82c60b55 83007575 c2c404da 82c60a5b 83004557 82c4052b c301ca93 82c40693 82c406aa 83008ada c2c60ae5 82c404b6 83004aae 82c60a57 c2c40527 82ff2526 82c60e53 8300a6cb c2c405aa 82c605ad 830164ad 82c404ae c2c40a4e 83004d4d 82c40d26 8300bd53 c2c40b52 82c60b6a 8301956a 82c60557 c2c4049d 83015a1b 82c40a4b 82c40aa5 c3001ea5 82c40b52 8300bb5a 82c60ab6 c2c6095b 830064b7 82c40497 82c4064b c300374b 82c406a5 8300b6b3 82c405ac c2c60ab6 830182ad 82c4049e 82c40a4d c3005d4b 82c40b25 82c40b52 83012e52 c2c60b5a 8300a95e 82c6095b 82c4049b c3006a57 82c40a4b 82c40aa5 83004ba5 c2c406d4 8300cad6 82c60ab6 82c60937 8300849f 82c40497 82c4064b 82fe56ca c2c60da5 82c405aa 83001d6c 82c60a6e c300b92f 82c4092e 82c40c96 83007d55 c2c40d4a 82c60d55 83013555 82c4056a c2c60a6d 83001a5d 82c4092b 83008a5b c2c40a95 82c40b2a 83015b2a 82c60ad5 c2c404da 83001cba 82c60a57 8300952f c2c40527 82c40693 830076b3 82c406aa c2c60ab5 83003575 82c404b6 8300ca67 c2c40a2e 82c40d16 83008e96 82c40d4a c2c60daa 830055ea 82c6056d 82c404ae c301285d 82c40a2d 8300ad17 82c40aa5 c2c40b52 83007d74 82c60ada 82c6055d c300353b 82c4045b 82c40a2b 83011a2b c2c40aa5 83009b55 82c406b2 82c60ad6 c3015536 82c60937 82c40457 83003a57 c2c4052b 82feaaa6 82c60d95 82c405aa c3017aac 82c60a6e 82c4052e 83003cae c2c40a56 8300bd2b 82c40d2a 82c60d55 c30095ad 82c4056a 82c60a6d 8300555d c2c4052b 82c40a8d 83002e55 82c40b2a c300ab56 82c60ad5 82c404da 83006a7a c2c60a57 82c4051b 83014a17 82c40653 c301c6a9 82c405aa 82c60ab5 830092bd c2c402b6 82c60a37 82fe552e 82c40d16 82c60e4b 82fe3752 82c60daa 8301b5b4 c2c6056d 82c402ae 83007a3d 82c40a2d c2c40d15 83004d95 82c40b52 8300cb69 c2c60ada 82c6055d 8301925b 82c4045b c2c40a2b 83005aab 82c40a95 82c40b52 c3001eaa 82c60ab6 8300c55b 82c604b7 c2c40457 83007537 82c4052b 82c40695 c3014695 82c405aa 8300cab5 82c60a6e c2c404ae 83008a5e 82c40a56 82c40d2a c3006eaa 82c60d55 82c4056a 8301295a c2c6095d 8300b4af 82c4049b 82c40a4d c3007d2d 82c40b2a 82c60b55 830045d5 c2c402da 82c6095b 83011157 82c4049b c3009a4f 82c4064b 82c406a9 83006aea c2c606b5 82c402b6 83002aae 82c60937 c2ffb496 82c40c96 82c60e4b 82fe76b2 c2c60daa 82c605ad 8300336d 82c4026e c2c4092e 83002d2d 82c40c95 83009d4d c2c40b4a 82c60b69 8301655a 82c6055b c2c4025d 83002a5b 82c4092b 8300aa97 c2c40695 82c4074a 83008b5a 82c60ab6 c2c6053b 830042b7 82c40257 82c4052b c3001d2b 82c40695 830096ad 82c405aa c2c60ab5 830054ed 82c404ae 82c60a57 c2ff344e 82c40d2a 8301bd94 82c60b55 82c4056a 8300797a 82c6095d 82c404ae c3004a9b 82c40a4d 82c40d25 83011aaa c2c60b55 8300956d 82c402da 82c6095b c30054b7 82c40497 82c40a4b 83004b4b c2c406a9 8300cad5 82c605b5 82c402b6 c300895e 82c6092f 82c40497 82fe4696 c2c40d4a 8300cea5 82c60d69 82c6056d c301a2b5 82c4026e 82c4092e 83006cad c2c40c95 82c40d4a 83002f4a 82c60b59 c300c56d 82c6055b 82c4025d 8300793b c2c4092b 82c40a95 83015b15 82c406ca c2c60ad5 830112b6 82c604bb 8300925f c2c40257 82c4052b 82fe6aaa 82c60e95 c2c406aa 83003baa 82c60ab5 8300b4b7 c2c404ae 82c60a57 82fe752d 82c40d26 c2c60d95 830055d5 82c4056a 82c6096d c300255d 82c404ae 8300aa4f 82c40a4d c2c40d25 83006d69 82c60b55 82c4035a c3002aba 82c6095b 8301c49b 82c40497 c2c40a4b 83008b2b 82c406a5 82c406d4 c3034ab5 82c402b6 82c60937 8300252f c2c40497 82fe964e 82c40d4a 82c60ea5 c30166a9 82c6056d 82c402b6 8301385e c2c4092e 8300bc97 82c40a95 82c40d4a c3008daa 82c60b4d 82c6056b 830042db c2c4025d 82c4092d 83002d2b 82c40a95 c3009b4d 82c406aa 82c60ad5 83006575 c2c604bb 82c4025b 83013457 82c4052b c2ffba94 82c60e95 82c406aa 83008ada c2c609b5 82c404b6 83004aae 82c60a4f c2c20526 83012d26 82c60d55 8301a5a9 c2c4056a 82c6096d 8301649d 82c4049e c2c40a4d 83004d4d 82c40d25 8300bd53 c2c40b54 82c60b5a 8301895a 82c6095b c2c4049b 83004a97 82c40a4b 82c40aa5 c3001ea5 82c406d4 8302badb 82c402b6 c2c60937 830064af 82c40497 82c4064b c2fe374a 82c60da5 8300b6b5 82c6056d c2c402ae 8300793e 82c4092e 82c40c96 c3015d15 82c40d4a 82c60da5 83013555 c2c4056a 83007a7a 82c60a5d 82c4092d c3006aab 82c40a95 82c40b4a 83004baa c2c60ad5 82c4055a 830128ba 82c60a5b c3007537 82c4052b 82c40693 83015715 c2c406aa 82c60ad5 830035b5 82c404b6 c3008a5e 82c40a4e 82c40d26 83006ea6 c2c40d52 82c60daa 8301466a 82c6056d c2c404ae 83003a9d 82c40a4d 83007d2b c2c40b25 82c40d52 83015d54 82c60b5a c2c6055d 8300355b 82c4049b 83007657 82c40a4b 82c40aa5 83006b65 82c406d2 c2c60ada 830045b6 82c60937 82c40497 c3003697 82c4064d 82fe76aa 82c60da5 c2c405aa 83005aec 82c60aae 82c4092e c3003d2e 82c40c96 83018d45 82c40d4a c2c60d55 83016595 82c4056a 82c60a6d c300455d 82c4052d 82c40a95 83013c95 c2c40b4a 83017b4a 82c60ad5 82c4055a c3015a3a 82c60a5b 82c4052b 83014a17 c2c40693 830096ab 82c406aa 82c60ab5 c30064f5 82c404b6 82c60a57 82fe452e c2c40d16 82c60e93 82fe3752 82c60daa c30175aa 82c6056d 82c404ae 83015a1d c2c40a2d 82c40d15 83004da5 82c40b52 c3009d6a 82c60ada 82c6055d 8301629b c2c4045b 82c40a2b 83005b2b 82c40a95 c2c40b52 83012ab2 82c60ad6 83017556 c2c60537 82c40457 83005657 82c4052b c2c40695 83003795 82c405aa 8300aab6 c2c60a6d 82c404ae 83006a6e 82c40a56 c2c40d2a 83005eaa 82c60d55 82c405aa c3003b6a 82c60a6d 830074bd 82c404ab c2c40a8d 83005d55 82c40b2a 82c60b55 c30045d5 82c404da 82c6095d 83002557 c2c4049b 83006a97 82c4064b 82c406a9 83004baa 82c606b5 82c402ba 83002ab6 c2c60937 82fe652e 82c40d16 82c60e4b c2fe56d2 82c60da9 82c605b5 8300336d c2c402ae 82c40a2e 83002e2d 82c40c95 c3006d55 82c40b52 82c60b69 830045da c2c6055d 82c4025d 83003a5b 82c40a2b c3017a8b 82c40a95 82c40b4a 83015b2a c2c60ad5 82c6055b 830042b7 82c40257 c300952f 82c4052b 82c40695 830066d5 c2c405aa 82c60ab5 8300456d 82c404ae c2c60a57 82ff3456 82c40d2a 83017e8a c2c60d55 82c405aa 83005ada 82c6095d c2c404ae 83004aab 82c40a4d 83008d2b c2c40b29 82c60b55 83007575 82c402da c2c6095d 830054d7 82c4049b 82c40a4b c3013a4b 82c406a9 83008ad9 82c606b5 c2c402b6 83015936 82c60937 82c40497 c2fe4696 82c40e4a 8300aea6 82c60da9 c2c605ad 830162ad 82c402ae 82c4092e c3005cad 82c40c95 82c40d4a 83013d4a c2c60b69 8300757a 82c6055b 82c4025d c300595b 82c4092b 82c40a95 83004d95 c2c40b4a 82c60b55 830026d5 82c6055b c3006277 82c40257 82c4052b 82fe5aaa c2c60e95 82c406aa 83003baa 82c60ab5 830084bd 82c404ae 82c60a57 82fe554d c2c40d26 82c60d95 83014655 82c4056a c2c609ad 8300255d 82c404ae 83006a5b c2c40a4d 82c40d25 83005da9 82c60b55 c2c4056a 83002ada 82c6095d 830074bb c2c4049b 82c40a4b 83005b4b 82c406a9 c2c40ad4 83024bb5 82c402b6 82c6095b c3002537 82c40497 82fe6656 82c40e4a c2c60ea5 830156a9 82c605b5 82c402b6 c30138ae 82c4092e 83017c8d 82c40c95 c2c40d4a 83016d8a 82c60b69 82c6056d c301425b 82c4025d 82c4092d 83002d2b c2c40a95 83007d55 82c40b4a 82c60b55 c3015555 82c604db 82c4025b 83013857 c2c4052b 83008a9b 82c40695 82c406aa c3006aea 82c60ab5 82c404b6 83004aae c2c60a57 82c40527 82fe3726 82c60d95 c30076b5 82c4056a 82c609ad 830054dd c2c404ae 82c40a4e 83004d4d 82c40d25 c3008d59 82c40b54 82c60d6a 8301695a c2c6095b 82c4049b 83004a9b 82c40a4b c300ab27 82c406a5 82c406d4 83026b75 c2c402b6 82c6095b 830054b7 82c40497 c2c4064b 82fe374a 82c60ea5 830086d9 c2c605ad 82c402b6 8300596e 82c4092e c2c40c96 83004e95 82c40d4a 82c60da5 c3002755 82c4056c 83027abb 82c4025d c2c4092d 83005cab 82c40a95 82c40b4a c3013b4a 82c60b55 8300955d 82c404ba c2c60a5b 83005557 82c4052b 82c40a95 c3004b95 82c406aa 82c60ad5 830026b5 c2c404b6 83006a6e 82c60a57 82c40527 c2fe56a6 82c60d93 82c405aa 83003b6a c2c6096d 8300b4af 82c404ae 82c40a4d c3016d0d 82c40d25 82c40d52 83005dd4 c2c60b6a 82c6096d 8300255b 82c4049b c3007a57 82c40a4b 82c40b25 83015b25 c2c406d4 82c60ada 830138b6"
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("s2l\t1000 2 13\n");
+    s.push_str("s2l\t1500 6 15\n");
+    s.push_str("s2l\t1582 10 4\n");
+    s.push_str("s2l\t1582 10 15\n");
+    s.push_str("s2l\t1700 1 1\n");
+    s.push_str("s2l\t1800 12 31\n");
+    s.push_str("s2l\t1900 2 28\n");
+    s.push_str("s2l\t1950 8 15\n");
+    s.push_str("s2l\t1988 9 17\n");
+    s.push_str("s2l\t2000 1 1\n");
+    s.push_str("s2l\t2017 6 24\n");
+    s.push_str("s2l\t2020 2 29\n");
+    s.push_str("s2l\t2033 12 25\n");
+    s.push_str("s2l\t2050 1 1\n");
+    s.push_str("s2l\t2050 12 31\n");
+    s.push_str("s2l\t1999 5 11\n");
+    s.push_str("s2l\t1444 7 7\n");
+    s.push_str("s2l\t2024 10 22\n");
+    s.push_str("s2l\t2023 3 22\n");
+    s.push_str("s2l\t1960 7 1\n");
+    s.push_str("s2l\t999 1 1\n");
+    s.push_str("s2l\t2051 1 1\n");
+    s.push_str("s2l\t2000 13 1\n");
+    s.push_str("s2l\t2000 2 30\n");
+    s.push_str("s2l\t1582 10 10\n");
+    s.push_str("l2s\t1000 1 1 0\n");
+    s.push_str("l2s\t1500 6 15 0\n");
+    s.push_str("l2s\t1700 1 1 0\n");
+    s.push_str("l2s\t1900 1 1 0\n");
+    s.push_str("l2s\t2000 1 1 0\n");
+    s.push_str("l2s\t2017 5 1 1\n");
+    s.push_str("l2s\t2020 4 1 1\n");
+    s.push_str("l2s\t2033 11 1 1\n");
+    s.push_str("l2s\t2050 11 18 0\n");
+    s.push_str("l2s\t1988 8 1 0\n");
+    s.push_str("l2s\t2024 1 1 0\n");
+    s.push_str("l2s\t2023 2 1 1\n");
+    s.push_str("l2s\t999 1 1 0\n");
+    s.push_str("l2s\t2050 11 19 0\n");
+    s.push_str("l2s\t2000 3 1 1\n");
+    s.push_str("gap\t1000 2 13\n");
+    s.push_str("gap\t1500 6 15\n");
+    s.push_str("gap\t1582 10 4\n");
+    s.push_str("gap\t1582 10 15\n");
+    s.push_str("gap\t1700 1 1\n");
+    s.push_str("gap\t1800 12 31\n");
+    s.push_str("gap\t1900 2 28\n");
+    s.push_str("gap\t1950 8 15\n");
+    s.push_str("gap\t1988 9 17\n");
+    s.push_str("gap\t2000 1 1\n");
+    s.push_str("gap\t2017 6 24\n");
+    s.push_str("gap\t2020 2 29\n");
+    s.push_str("gap\t2033 12 25\n");
+    s.push_str("gap\t2050 1 1\n");
+    s.push_str("gap\t2050 12 31\n");
+    s.push_str("gap\t1999 5 11\n");
+    s.push_str("gap\t1444 7 7\n");
+    s.push_str("gap\t2024 10 22\n");
+    s.push_str("gap\t2023 3 22\n");
+    s.push_str("gap\t1960 7 1\n");
+    s.push_str("gap\t999 1 1\n");
+    s.push_str("gap\t2051 1 1\n");
+    s.push_str("gap\t2000 13 1\n");
+    s.push_str("gap\t2000 2 30\n");
+    s.push_str("gap\t1582 10 10\n");
+    s.push_str("cgap\t1000 2 13\n");
+    s.push_str("cgap\t1500 6 15\n");
+    s.push_str("cgap\t1582 10 4\n");
+    s.push_str("cgap\t1582 10 15\n");
+    s.push_str("cgap\t1700 1 1\n");
+    s.push_str("cgap\t1800 12 31\n");
+    s.push_str("cgap\t1900 2 28\n");
+    s.push_str("cgap\t1950 8 15\n");
+    s.push_str("cgap\t1988 9 17\n");
+    s.push_str("cgap\t2000 1 1\n");
+    s.push_str("cgap\t2017 6 24\n");
+    s.push_str("cgap\t2020 2 29\n");
+    s.push_str("cgap\t2033 12 25\n");
+    s.push_str("cgap\t2050 1 1\n");
+    s.push_str("cgap\t2050 12 31\n");
+    s.push_str("cgap\t1999 5 11\n");
+    s.push_str("cgap\t1444 7 7\n");
+    s.push_str("cgap\t2024 10 22\n");
+    s.push_str("cgap\t2023 3 22\n");
+    s.push_str("cgap\t1960 7 1\n");
+    s.push_str("cgap\t999 1 1\n");
+    s.push_str("cgap\t2051 1 1\n");
+    s.push_str("cgap\t2000 13 1\n");
+    s.push_str("cgap\t2000 2 30\n");
+    s.push_str("cgap\t1582 10 10\n");
+    s
+}
