@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 325 |
+| missing-feature | 326 |
 | codegen-gap | 288 |
 | false-positive | 281 |
 | other | 194 |
@@ -112,11 +112,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3026 |
 | interp | 1036 |
-| typecheck | 560 |
+| typecheck | 561 |
 | ownership | 131 |
 | other | 123 |
 | runtime | 86 |
-| cli | 83 |
+| cli | 84 |
 | parser | 77 |
 | autopar | 59 |
 | resolver | 51 |
@@ -175,9 +175,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-80 | 2026-10-21 | typecheck+codegen | low | `.into()` called straight on a unit-variant literal is refused: `let b: B = A.Y.into();` with `impl From[A] for B` gives "no method 'into' on type 'A'", while `(A.Y).into()` and `let a = A.Y; a.into()` convert | — |
 | B-2026-10-22-1 | 2026-10-22 | interp+codegen | medium | A closure passed to `Vec.from_fn` (or `Array.from_fn`) moves the locals it captures in MIR, though `karac check` borrows them: `let pre = "n".to_string(); let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}"); println(pre);` passes check and stops `__mir-run` / `__mir-llvm-run` with "move check main: use of _1, which may have been moved or never initialized" | — |
 | B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
-| B-2026-10-22-5 | 2026-10-22 | typecheck+cli | medium | E0516 on a `shared` value borrowed out of a Map and held across an insert into that Map has no `karac fix` fix-it, though the fix is mechanical: kata 133's clone_bfs and clone_bfs_par benches (M2 frozen set) fail `karac check` with it, and `.clone()` on the borrowed `shared` value (an RC retain) makes both pass | — |
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-7 | 2026-10-22 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Null.stringify());` passes `karac check` and stops `__mir-run` and `__mir-llvm-run` with "the builtin `Json.Null.stringify` is not lowered yet"; without the variant it prints `null` | — |
+| B-2026-10-22-8 | 2026-10-22 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No mutable globals"): a `let` should be refused with a machine-applicable `karac fix` to `const NAME: T = e;`, a `let mut` refused with a message to create the value in `main` and pass it down | — |
 
 ### Relocated
 
@@ -4379,6 +4379,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-82 | typecheck+interp+codegen | medium | An empty list literal `[]` in an `if`/`match` branch whose element type comes only from a sibling branch passes `karac check` but stops both MIR lane… | 14180cd414 |
 | B-2026-10-22-3 | effect+ownership | medium | `karac check` refuses ANY write to a local `let mut` from a `par {}` branch, one branch alone included, with a legacy effect error that recommends `A… | 9c60de56c4 |
 | B-2026-10-22-4 | codegen | medium | mir-llvm: kata 6 zigzag row_buffers runs 3x legacy since the early argpromotion round (c9f3bee58), at the SAME instruction count: promoting convert_o… | bcbc9d43fd |
+| B-2026-10-22-5 | typecheck+cli | medium | E0516 on a `shared` value borrowed out of a Map and held across an insert into that Map has no `karac fix` fix-it, though the fix is mechanical: kata… | dd13906b92 |
 
 </details>
 
