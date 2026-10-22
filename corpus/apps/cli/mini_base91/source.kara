@@ -1,0 +1,235 @@
+// mini_base91 — a port of base91 1.0.1 (New BSD; Adrien Beraud, Guillaume
+// Jacquenot), the basE91 binary-to-text encoding. basE91 packs binary into a
+// 91-character printable alphabet, denser than Base64 (it averages ~1.23x the
+// input versus Base64's 1.33x) at the cost of a variable 13-or-14-bit group
+// size, which is why it turns up where payload size matters over a text-only
+// channel. This port follows base91/__init__.py exactly: the encoder's bit
+// accumulator emits a 13-bit group when the low 13 bits exceed 88 and a 14-bit
+// group otherwise, two alphabet characters per group (low then high digit of a
+// base-91 pair), with the tail rules for leftover bits; the decoder reverses it,
+// skipping any character outside the alphabet. The accumulator never exceeds
+// ~21 bits, so plain i64 arithmetic suffices (no bignum). See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn hex_digit(n: i64) -> u8 {
+    if n < 10 {
+        (48 + n) as u8
+    } else {
+        (87 + n) as u8
+    }
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v = bytes[i] as i64;
+        out.push(hex_digit(v >> 4));
+        out.push(hex_digit(v & 15));
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else if b >= 65 and b <= 70 {
+        (b - 55) as i64
+    } else {
+        0
+    }
+}
+
+fn parse_hex(s: String) -> Vec[u8] {
+    let b = str_bytes(s);
+    let m = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < m {
+        out.push((hex_nibble(b[i]) * 16 + hex_nibble(b[i + 1])) as u8);
+        i = i + 2;
+    }
+    out
+}
+
+// The 91-character basE91 alphabet (A-Z a-z 0-9 then 29 punctuation marks).
+fn alphabet() -> Vec[u8] {
+    str_bytes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\"")
+}
+
+// Index of byte b in the alphabet, or -1 if b is not a basE91 character.
+fn alpha_index(alpha: ref Vec[u8], b: u8) -> i64 {
+    let mut i = 0;
+    while i < alpha.len() {
+        if alpha[i] == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn encode(data: ref Vec[u8], alpha: ref Vec[u8]) -> String {
+    let mut b: i64 = 0;
+    let mut n: i64 = 0;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < data.len() {
+        b = b | ((data[i] as i64) << n);
+        n = n + 8;
+        if n > 13 {
+            let mut v = b & 8191;
+            if v > 88 {
+                b = b >> 13;
+                n = n - 13;
+            } else {
+                v = b & 16383;
+                b = b >> 14;
+                n = n - 14;
+            }
+            out.push(alpha[v % 91]);
+            out.push(alpha[v / 91]);
+        }
+        i = i + 1;
+    }
+    if n != 0 {
+        out.push(alpha[b % 91]);
+        if n > 7 or b > 90 {
+            out.push(alpha[b / 91]);
+        }
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn decode(sb: ref Vec[u8], alpha: ref Vec[u8]) -> Vec[u8] {
+    let mut v: i64 = -1;
+    let mut b: i64 = 0;
+    let mut n: i64 = 0;
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < sb.len() {
+        let c = alpha_index(alpha, sb[i]);
+        if c >= 0 {
+            if v < 0 {
+                v = c;
+            } else {
+                v = v + c * 91;
+                b = b | (v << n);
+                if (v & 8191) > 88 {
+                    n = n + 13;
+                } else {
+                    n = n + 14;
+                }
+                let mut done = false;
+                while not done {
+                    out.push((b & 255) as u8);
+                    b = b >> 8;
+                    n = n - 8;
+                    if not (n > 7) {
+                        done = true;
+                    }
+                }
+                v = -1;
+            }
+        }
+        i = i + 1;
+    }
+    if v != -1 {
+        out.push(((b | (v << n)) & 255) as u8);
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let alpha = alphabet();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    if op == "e" {
+                        let bs = parse_hex(arg.clone());
+                        out.push_str(encode(bs, alpha));
+                    } else if op == "d" {
+                        let sb = str_bytes(arg.clone());
+                        let r = decode(sb, alpha);
+                        out.push_str(to_hex(r));
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("e\t\n");
+    s.push_str("e\t00\n");
+    s.push_str("e\t01\n");
+    s.push_str("e\tff\n");
+    s.push_str("e\t0001\n");
+    s.push_str("e\t48656c6c6f\n");
+    s.push_str("e\tdeadbeef\n");
+    s.push_str("e\t000102030405060708090a0b0c0d0e0f\n");
+    s.push_str("e\t54686520717569636b2062726f776e20666f78206a756d7073\n");
+    s.push_str("e\tffffffffffffffff\n");
+    s.push_str("e\t7f8081\n");
+    s.push_str("e\tabcdef0123456789\n");
+    s.push_str("e\t0a0d0900\n");
+    s.push_str("e\t6d616e2069732064697374696e677569736865642c206e6f74206f6e6c79\n");
+    s.push_str("d\t\n");
+    s.push_str("d\tAA\n");
+    s.push_str("d\tBA\n");
+    s.push_str("d\t/C\n");
+    s.push_str("d\t:CA\n");
+    s.push_str("d\t>OwJh>A\n");
+    s.push_str("d\tBnZ_7\n");
+    s.push_str("d\t:C#(:C?hVB$MSiVEwndB\n");
+    s.push_str("d\tnX^Iz?T1s!2t:aRn#o>vf>6C9#`##mO\n");
+    s.push_str("d\tB\"B\"B\"B\"At\n");
+    s.push_str("d\tkBjL\n");
+    s.push_str("d\tpm1r4Y]oOY\n");
+    s.push_str("d\t!k.AA\n");
+    s.push_str("d\tBE$J`/wC4!c.hQ;mT8,<p/&Y/H@$]xlL3oDge\n");
+    s.push_str("d\t KaD \n");
+    s.push_str("d\tPgD    \n");
+    s
+}
