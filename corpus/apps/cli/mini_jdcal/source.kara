@@ -1,0 +1,309 @@
+// mini_jdcal — a port of jdcal 1.4.1 (BSD; Prasanth Nair), the small library for
+// converting between calendar dates and Julian dates (astronomy, ephemerides,
+// historical date math). This port follows jdcal.py's four conversion functions
+// and is_leap: gcal2jd / jcal2jd turn a proleptic Gregorian or Julian date into a
+// Modified Julian Date, and jd2gcal / jd2jcal reverse them. The library does the
+// arithmetic in double precision with math.modf truncation (`ipart`), but for
+// date-only (midnight) conversions every intermediate is an exact integer well
+// inside f64's range, so this port does it in i64 with truncate-toward-zero
+// division, matching the library bit for bit. The library returns a fractional
+// day for sub-day times; these conversions are date-only, so that fraction is
+// always 0 and is not printed. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut v = n;
+    if v < 0 {
+        neg = true;
+        v = -v;
+    }
+    let mut digs: Vec[u8] = Vec.new();
+    while v > 0 {
+        digs.push((48 + (v % 10)) as u8);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45);
+    }
+    let mut i = digs.len();
+    while i > 0 {
+        out.push(digs[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// Truncate-toward-zero division (matches math.modf(a/b)[1]). Kara's `/` already
+// truncates toward zero, but this makes the intent explicit at every site.
+fn tdiv(a: i64, b: i64) -> i64 {
+    let mut aa = a;
+    let mut bb = b;
+    let mut neg = false;
+    if aa < 0 {
+        aa = -aa;
+        neg = not neg;
+    }
+    if bb < 0 {
+        bb = -bb;
+        neg = not neg;
+    }
+    let q = aa / bb;
+    if neg {
+        -q
+    } else {
+        q
+    }
+}
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0) and (year % 100 != 0 or year % 400 == 0)
+}
+
+fn gcal2mjd(year: i64, month: i64, day: i64) -> i64 {
+    let a = tdiv(month - 14, 12);
+    let mut jd = tdiv(1461 * (year + 4800 + a), 4);
+    jd = jd + tdiv(367 * (month - 2 - 12 * a), 12);
+    let x = tdiv(year + 4900 + a, 100);
+    jd = jd - tdiv(3 * x, 4);
+    jd = jd + day - 2432076;
+    jd
+}
+
+fn jcal2mjd(year: i64, month: i64, day: i64) -> i64 {
+    let mut jd = 367 * year;
+    let x = tdiv(month - 9, 7);
+    jd = jd - tdiv(7 * (year + 5001 + x), 4);
+    jd = jd + tdiv(275 * month, 9);
+    jd = jd + day;
+    jd = jd + 1729777 - 2400001;
+    jd
+}
+
+// MJD -> proleptic Gregorian (year, month, day) as "y|m|d".
+fn mjd2gcal(mjd: i64) -> String {
+    let jd_i = 2400001 + mjd;
+    let mut l = jd_i + 68569;
+    let n = tdiv(4 * l, 146097);
+    l = l - tdiv(146097 * n + 3, 4);
+    let i = tdiv(4000 * (l + 1), 1461001);
+    l = l - tdiv(1461 * i, 4) + 31;
+    let mut j = tdiv(80 * l, 2447);
+    let day = l - tdiv(2447 * j, 80);
+    l = tdiv(j, 11);
+    let month = j + 2 - 12 * l;
+    let year = 100 * (n - 49) + i + l;
+    let mut out = String.new();
+    out.push_str(itoa(year));
+    out.push_str("|");
+    out.push_str(itoa(month));
+    out.push_str("|");
+    out.push_str(itoa(day));
+    out
+}
+
+// MJD -> proleptic Julian (year, month, day) as "y|m|d".
+fn mjd2jcal(mjd: i64) -> String {
+    let jd_i = 2400001 + mjd;
+    let mut j = jd_i + 1402;
+    let k = tdiv(j - 1, 1461);
+    let l = j - 1461 * k;
+    let n = tdiv(l - 1, 365) - tdiv(l, 1461);
+    let i0 = l - 365 * n + 30;
+    j = tdiv(80 * i0, 2447);
+    let day = i0 - tdiv(2447 * j, 80);
+    let i = tdiv(j, 11);
+    let month = j + 2 - 12 * i;
+    let year = 4 * k + n + i - 4716;
+    let mut out = String.new();
+    out.push_str(itoa(year));
+    out.push_str("|");
+    out.push_str(itoa(month));
+    out.push_str("|");
+    out.push_str(itoa(day));
+    out
+}
+
+// Parse a space-separated list of signed decimal integers.
+fn parse_ints(s: String) -> Vec[i64] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i <= n {
+        // skip spaces
+        while i < n and b[i] == 32 {
+            i = i + 1;
+        }
+        if i < n {
+            let mut neg = false;
+            if b[i] == 45 {
+                neg = true;
+                i = i + 1;
+            } else if b[i] == 43 {
+                i = i + 1;
+            }
+            let mut v = 0;
+            while i < n and b[i] >= 48 and b[i] <= 57 {
+                v = v * 10 + ((b[i] - 48) as i64);
+                i = i + 1;
+            }
+            if neg {
+                v = -v;
+            }
+            out.push(v);
+        } else {
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    let p = parse_ints(arg.clone());
+                    if op == "g" {
+                        out.push_str(itoa(gcal2mjd(p[0], p[1], p[2])));
+                    } else if op == "j" {
+                        out.push_str(itoa(jcal2mjd(p[0], p[1], p[2])));
+                    } else if op == "rg" {
+                        out.push_str(mjd2gcal(p[0]));
+                    } else if op == "rj" {
+                        out.push_str(mjd2jcal(p[0]));
+                    } else if op == "leap" {
+                        if is_leap(p[0]) {
+                            out.push_str("1");
+                        } else {
+                            out.push_str("0");
+                        }
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("g\t2000 1 1\n");
+    s.push_str("g\t1950 1 1\n");
+    s.push_str("g\t1999 10 12\n");
+    s.push_str("g\t2000 2 29\n");
+    s.push_str("g\t2001 2 28\n");
+    s.push_str("g\t1582 10 15\n");
+    s.push_str("g\t1582 10 4\n");
+    s.push_str("g\t-1999 10 12\n");
+    s.push_str("g\t0 1 1\n");
+    s.push_str("g\t1 1 1\n");
+    s.push_str("g\t-1 12 31\n");
+    s.push_str("g\t-4699 1 1\n");
+    s.push_str("g\t2245 12 31\n");
+    s.push_str("g\t1678 9 9\n");
+    s.push_str("g\t2012 11 11\n");
+    s.push_str("g\t1970 1 1\n");
+    s.push_str("g\t2024 2 29\n");
+    s.push_str("g\t1900 3 1\n");
+    s.push_str("g\t2100 1 1\n");
+    s.push_str("g\t-4712 1 1\n");
+    s.push_str("g\t2000 -2 -4\n");
+    s.push_str("g\t2000 0 1\n");
+    s.push_str("g\t2000 3 0\n");
+    s.push_str("g\t2000 2 30\n");
+    s.push_str("j\t2000 1 1\n");
+    s.push_str("j\t1950 1 1\n");
+    s.push_str("j\t1999 10 12\n");
+    s.push_str("j\t1 1 1\n");
+    s.push_str("j\t0 1 1\n");
+    s.push_str("j\t-4699 1 1\n");
+    s.push_str("j\t2245 12 31\n");
+    s.push_str("j\t1678 10 9\n");
+    s.push_str("j\t2012 11 11\n");
+    s.push_str("j\t1582 10 5\n");
+    s.push_str("rg\t0\n");
+    s.push_str("rg\t51544\n");
+    s.push_str("rg\t-2395215\n");
+    s.push_str("rg\t40587\n");
+    s.push_str("rg\t51827\n");
+    s.push_str("rg\t-678774\n");
+    s.push_str("rg\t141393\n");
+    s.push_str("rg\t-679162\n");
+    s.push_str("rg\t15020\n");
+    s.push_str("rg\t59000\n");
+    s.push_str("rg\t-100000\n");
+    s.push_str("rg\t100000\n");
+    s.push_str("rg\t1\n");
+    s.push_str("rg\t-1\n");
+    s.push_str("rg\t58849\n");
+    s.push_str("rj\t0\n");
+    s.push_str("rj\t51544\n");
+    s.push_str("rj\t-2395215\n");
+    s.push_str("rj\t40587\n");
+    s.push_str("rj\t51827\n");
+    s.push_str("rj\t-678774\n");
+    s.push_str("rj\t141393\n");
+    s.push_str("rj\t-679162\n");
+    s.push_str("rj\t15020\n");
+    s.push_str("rj\t59000\n");
+    s.push_str("rj\t-100000\n");
+    s.push_str("rj\t100000\n");
+    s.push_str("rj\t1\n");
+    s.push_str("rj\t-1\n");
+    s.push_str("rj\t58849\n");
+    s.push_str("leap\t2000\n");
+    s.push_str("leap\t1900\n");
+    s.push_str("leap\t2004\n");
+    s.push_str("leap\t2001\n");
+    s.push_str("leap\t1600\n");
+    s.push_str("leap\t2100\n");
+    s.push_str("leap\t0\n");
+    s.push_str("leap\t-1\n");
+    s.push_str("leap\t-4\n");
+    s.push_str("leap\t4\n");
+    s.push_str("leap\t1996\n");
+    s.push_str("leap\t2024\n");
+    s.push_str("leap\t2023\n");
+    s
+}
