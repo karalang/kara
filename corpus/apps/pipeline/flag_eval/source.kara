@@ -7,6 +7,8 @@
 // Rollout buckets are a stable FNV-1a hash of "flag:user", so a user stays
 // in or out of a percentage rollout across runs and machines.
 
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag: "op")]
 enum Rule {

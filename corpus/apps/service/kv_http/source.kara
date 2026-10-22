@@ -5,6 +5,8 @@
 // accepts, reads to end of input, answers every request it parsed, and
 // closes. Bodies are JSON, through the derived Serialize/Deserialize.
 
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct PutBody { value: String, tags: Vec[String] }
 

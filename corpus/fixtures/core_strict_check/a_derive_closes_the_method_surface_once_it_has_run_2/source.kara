@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 #[derive(Serialize)]
 struct R { code: i64 }
 fn main() {

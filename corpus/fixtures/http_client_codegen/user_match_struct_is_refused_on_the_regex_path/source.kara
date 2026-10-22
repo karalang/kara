@@ -1,4 +1,6 @@
 
+import std.regex.{Regex};
+
 struct Match { text: String }
 fn main() {
     match Regex.compile("a+") {

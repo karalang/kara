@@ -20,6 +20,8 @@
 // The run writes the configs and the document roots into data/ first.
 // expected.out is the output of oracle.py, the same routing in Python.
 
+import std.regex.{Captures, Regex};
+
 const MAX_URI_CHANGES: i64 = 10;
 
 // ------------------------------------------------------------ bytes

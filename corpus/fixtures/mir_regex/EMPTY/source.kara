@@ -1,3 +1,5 @@
+import std.regex.{Regex};
+
 fn main() {
     match Regex.compile("a*") {
         Ok(re) => { for m in re.find_all("baaab") { println(f"e {m.start}..{m.end}"); } }

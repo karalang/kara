@@ -139,7 +139,9 @@ fn a_program_with_its_own_regex_keeps_it() {
     );
 }
 
-const SURFACE: &str = r###"fn main() {
+const SURFACE: &str = r###"import std.regex.{Regex};
+
+fn main() {
     match Regex.compile("err(or)?:\\s+(\\w+)") {
         Ok(re) => {
             println(f"{re.is_match("x error:  disk")}");
@@ -232,7 +234,9 @@ u 1..3 é
 u 3..4 x
 "###;
 
-const EMPTY: &str = r###"fn main() {
+const EMPTY: &str = r###"import std.regex.{Regex};
+
+fn main() {
     match Regex.compile("a*") {
         Ok(re) => { for m in re.find_all("baaab") { println(f"e {m.start}..{m.end}"); } }
         Err(_) => println("bad"),
@@ -264,7 +268,7 @@ fn regex_v2_surface_checks_without_captures() {
     let src = dir.path().join("check.kara");
     std::fs::write(
         &src,
-        "fn main() {\n    let s: Str = \"a1b22\";\n    match Regex.compile(\"[0-9]+\") {\n        \
+        "import std.regex.{Regex};\n\nfn main() {\n    let s: Str = \"a1b22\";\n    match Regex.compile(\"[0-9]+\") {\n        \
          Ok(re) => {\n            println(re.replace(s, \"#\"));\n            \
          println(f\"{re.split(s).len()} {re.is_match(s)}\");\n        }\n        \
          Err(e) => println(e.message),\n    }\n}\n",

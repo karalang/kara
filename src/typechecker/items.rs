@@ -61,7 +61,12 @@ impl<'a> super::TypeChecker<'a> {
         span: crate::token::Span,
         lint_overrides: &[crate::lints::LintLevelOverride],
     ) {
-        if stdlib_origin || self.compiling_stdlib || !crate::prelude::PRELUDE_TYPES.contains(&name)
+        // An item of an imported library module (`std.regex`, `std.json`)
+        // is not in a program's scope until it imports it (B-2026-10-21-56).
+        if stdlib_origin
+            || self.compiling_stdlib
+            || !crate::prelude::PRELUDE_TYPES.contains(&name)
+            || crate::library_imports::is_import_required(name)
         {
             return;
         }

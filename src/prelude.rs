@@ -2230,6 +2230,14 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
         &[],
     ),
     (&["std", "iter"], &["DoubleEndedIterator"], &["Extend"]),
+    // B-2026-10-21-56: a program imports these before it uses them
+    // (`crate::library_imports`).
+    (
+        &["std", "regex"],
+        &["Regex", "Match", "Captures", "RegexError"],
+        &[],
+    ),
+    (&["std", "json"], &["Json", "JsonError"], &[]),
     (
         &["std", "process"],
         &[

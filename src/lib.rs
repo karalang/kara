@@ -101,6 +101,7 @@ pub mod struct_spread;
 // modules for the wasm32 surface.
 pub mod cross_task_safe;
 pub mod deque_head;
+pub mod library_imports;
 pub mod map_entry_lint;
 pub mod module;
 pub mod module_binding;

@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 fn main() {
     let mut n = 0i64;
     let mut i = 0i64;

@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct User { name: String, age: i64, active: bool }
 

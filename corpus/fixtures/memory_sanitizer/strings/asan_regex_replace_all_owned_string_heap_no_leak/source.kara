@@ -1,4 +1,6 @@
 
+import std.regex.{Regex};
+
 fn main() {
     let mut i = 0i64;
     let mut total = 0i64;

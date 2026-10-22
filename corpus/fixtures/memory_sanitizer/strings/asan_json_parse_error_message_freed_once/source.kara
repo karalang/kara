@@ -1,4 +1,6 @@
 
+import std.json.{Json, JsonError};
+
 fn describe(e: JsonError) -> i64 { return e.message.len() + (e.line as i64); }
 
 fn propagate(text: own String) -> Result[i64, JsonError] {

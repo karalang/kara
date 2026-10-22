@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct Bag {
     q: VecDeque[i64],

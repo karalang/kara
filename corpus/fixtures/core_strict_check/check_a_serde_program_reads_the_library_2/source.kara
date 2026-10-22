@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 #[derive(Serialize)]
 #[serde(tag: "type")]
 enum Bad { A(i64) }

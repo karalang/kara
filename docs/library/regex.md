@@ -1,6 +1,6 @@
 # Regular expressions: `std.regex`
 
-`std.regex` holds `Regex`, a compiled pattern; `RegexError`, why a pattern did not compile; `Match`, one match; and `Captures`, the groups of one match. They are not in the prelude: import the ones a program names. **Not yet implemented**: the compiler does not know `std.regex` yet, and these types are reached without an import today (B-2026-10-21-56).
+`std.regex` holds `Regex`, a compiled pattern; `RegexError`, why a pattern did not compile; `Match`, one match; and `Captures`, the groups of one match. They are not in the prelude: import the ones a program names. A use without the import is a `karac check` error, and `karac fix` adds the import.
 
 ```kara
 import std.regex.{Regex};

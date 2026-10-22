@@ -8,6 +8,8 @@
 //   B-2026-10-12-7   split() / lines() are eager Vec[String]: `.iter()`
 //                    before map / next
 
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct TaskResult {
     name: String,

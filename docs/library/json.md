@@ -1,6 +1,6 @@
 # JSON values (`Json`)
 
-`Json` is a JSON value as a tree, for programs that read or build JSON whose shape is not a Kāra type: a request body checked field by field, a document passed through, a response built by hand. It is in `std.json`: import it with `import std.json.{Json};`, which `Json.serialize` and `Json.deserialize` need as well. **Not yet implemented**: the compiler does not know `std.json` yet, and `Json` is reached without an import today (B-2026-10-21-56). To turn a Kāra type into JSON text and back, derive `Serialize` and `Deserialize` and use `Json.serialize` / `Json.deserialize` ([design.md § Serialize and Deserialize](../design.md#serialize-and-deserialize)).
+`Json` is a JSON value as a tree, for programs that read or build JSON whose shape is not a Kāra type: a request body checked field by field, a document passed through, a response built by hand. It is in `std.json`: import it with `import std.json.{Json};`, which `Json.serialize` and `Json.deserialize` need as well. A use without the import is a `karac check` error, and `karac fix` adds the import. To turn a Kāra type into JSON text and back, derive `Serialize` and `Deserialize` and use `Json.serialize` / `Json.deserialize` ([design.md § Serialize and Deserialize](../design.md#serialize-and-deserialize)).
 
 ```kara
 import std.json.{Json};

@@ -36,6 +36,8 @@
 // inline form is short enough that the missing helper isn't
 // load-bearing.
 
+import std.json.{Json};
+
 struct Response {
     status: i64,
     body: String,

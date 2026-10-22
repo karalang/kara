@@ -6030,6 +6030,8 @@ fn check_a_serde_program_reads_the_library() {
     accepted(
         "serde-accepted",
         r#"
+import std.json.{Json};
+
 #[derive(Serialize, Deserialize)]
 struct Config {
     #[serde(rename: "server_name")]
@@ -8329,6 +8331,8 @@ fn main() {
     accepted(
         "derive-serialize-json",
         r#"
+import std.json.{Json};
+
 #[derive(Serialize)]
 struct R { code: i64 }
 fn main() {
@@ -10863,7 +10867,8 @@ fn a_call_borrows_one_field_and_moves_another() {
 fn a_pub_fn_may_name_a_library_type() {
     accepted(
         "pub-fn-library-types",
-        "pub fn f(x: Option[TcpStream]) -> bool { x.is_some() }\n\
+        "import std.regex.{Match, Regex};\n\
+         pub fn f(x: Option[TcpStream]) -> bool { x.is_some() }\n\
          pub fn g(c: ref Command) -> i64 { 1 }\n\
          pub fn h(r: ref Regex) -> bool { r.is_match(\"a\") }\n\
          pub fn k(m: Option[Match]) -> bool { m.is_none() }\n\
@@ -11315,4 +11320,75 @@ fn a_shared_handle_cannot_enter_a_par_branch() {
          \x20   println(f\"{a + b}\");\n\
          }\n",
     );
+}
+
+/// `std.regex` and `std.json` are imported before their items are used
+/// (docs/library/README.md): a bare use is an error whose fix adds the
+/// import, after the program's last one or above its first item
+/// (B-2026-10-21-56).
+#[test]
+fn regex_and_json_items_need_their_import() {
+    rejected_then_fixed_by(
+        "bare-regex",
+        "// A comment stays first.\n\
+         fn main() {\n\
+         \x20   let re = Regex.compile(\"a+\").unwrap();\n\
+         \x20   let m: Option[Match] = re.find(\"baa\");\n\
+         \x20   println(f\"{m.is_some()}\");\n\
+         }\n",
+        "`Regex` is in the library module `std.regex`, which a program imports before it uses it",
+        "// A comment stays first.\nimport std.regex.{Match, Regex};\n\nfn main() {",
+    );
+    rejected_then_fixed_by(
+        "bare-json-and-regex",
+        "import std.io.{File};\n\
+         fn main() {\n\
+         \x20   let j: Result[Json, JsonError] = Json.parse(\"[1]\");\n\
+         \x20   let r: Result[Regex, RegexError] = Regex.compile(\"(\");\n\
+         \x20   println(f\"{j.is_ok()} {r.is_err()}\");\n\
+         }\n",
+        "`Json` is in the library module `std.json`",
+        "import std.io.{File};\nimport std.json.{Json, JsonError};\nimport std.regex.{Regex, RegexError};\n",
+    );
+    rejected(
+        "misspelled-regex-item",
+        "import std.regex.{Regx};\nfn main() { println(\"x\"); }\n",
+        "`std.regex` has no item `Regx`, did you mean `Regex`?",
+    );
+}
+
+/// The imports resolve, by name or as a wildcard; a program's own type or
+/// variant named like one of their items needs no import and shadows nothing
+/// (B-2026-10-21-56).
+#[test]
+fn imported_regex_and_json_items_and_own_names_are_accepted() {
+    accepted(
+        "imported-regex-json",
+        "import std.regex.{Regex, Match, Captures, RegexError};\n\
+         import std.json.*;\n\
+         fn main() {\n\
+         \x20   let re = Regex.compile(\"(a)\").unwrap();\n\
+         \x20   let c: Option[Captures] = re.captures(\"a\");\n\
+         \x20   let j: Result[Json, JsonError] = Json.parse(\"1\");\n\
+         \x20   println(f\"{c.is_some()} {j.is_ok()}\");\n\
+         }\n",
+    );
+    let (dir, path) = fixture(
+        "own-match-json",
+        "struct Match { a: i64 }\n\
+         enum Format { Json, Csv }\n\
+         fn main() {\n\
+         \x20   let m = Match { a: 3 };\n\
+         \x20   let f = Format.Json;\n\
+         \x20   match f { Format.Json => println(f\"{m.a}\"), Format.Csv => println(\"c\") }\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "own-match-json: {err}");
+    assert!(
+        !err.contains("shadows the prelude"),
+        "own-match-json: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

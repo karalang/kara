@@ -1544,7 +1544,28 @@ impl Pipeline {
             );
             typed.warnings.extend(extra);
         }
+        // B-2026-10-21-56 — `std.regex` and `std.json` items are used through
+        // an import; a bare use is an error whose fix-it adds it. Read from
+        // the program's own text, ahead of the appended library.
+        self.report_missing_library_imports();
         self.widen_redundant_suffix_fixes();
+    }
+
+    /// B-2026-10-21-56 — `std.regex` and `std.json` items are used through an
+    /// import; a bare use is an error whose fix-it adds it. Read from the
+    /// program's own text, ahead of the appended library.
+    fn report_missing_library_imports(&mut self) {
+        if !self.strict_core {
+            return;
+        }
+        if let (Some(source), Some(typed)) = (
+            self.user_source.clone().or_else(|| self.source.clone()),
+            self.typed.as_mut(),
+        ) {
+            typed
+                .errors
+                .extend(crate::library_imports::missing_library_imports(&source));
+        }
     }
 
     /// B-2026-08-22-25 — extend each `redundant_suffix` deletion back over the
@@ -1661,6 +1682,7 @@ impl Pipeline {
             self.resolved = Some(resolved);
             crate::lower(&mut self.parsed.program, &retyped);
             self.typed = Some(retyped);
+            self.report_missing_library_imports();
         } else {
             let typed = self.typed.as_ref().unwrap();
             crate::lower(&mut self.parsed.program, typed);

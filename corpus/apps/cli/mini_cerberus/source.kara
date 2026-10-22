@@ -10,6 +10,8 @@
 // set and datetime.date. Python's == , < , repr() and str() are written
 // out for them, since Cerberus's messages and results print them.
 
+import std.regex.{Regex};
+
 #[derive(Clone)]
 enum Value {
     Null,

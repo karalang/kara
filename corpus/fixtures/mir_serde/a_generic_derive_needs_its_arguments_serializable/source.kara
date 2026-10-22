@@ -1,4 +1,6 @@
 
+import std.json.{Json};
+
 #[derive(Serialize)]
 struct Wrap[T] { v: T }
 struct Plain { n: i64 }
