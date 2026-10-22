@@ -1,0 +1,633 @@
+// mini_immutables — a port of the pure-Python HAMT of immutables 0.21
+// (Apache-2.0, EdgeDB/Yury Selivanov). immutables.Map is a persistent
+// (immutable, structurally-shared) hash map — a Hash Array Mapped Trie, the
+// same structure behind CPython's contextvars and Clojure/Scala persistent
+// maps: every set/delete returns a new map, sharing most of the old one.
+//
+// This ports the map.py fallback statement for statement: the BitmapNode and
+// CollisionNode, assoc / find / without, and structural key iteration. The port
+// is functional (every assoc/without rebuilds the nodes on the path), which is
+// observationally identical to the library's clone-on-write — the keys, values,
+// length and iteration order all match.
+//
+// Each job drives one evolving map and prints a line:
+//   s <k> <v>  -> len <n>         set (new length)
+//   d <k>      -> len <n> | miss  delete (miss if absent)
+//   g <k>      -> <v> | miss      get
+//   h <k>      -> yes | no        membership
+//   l          -> len <n>
+//   k          -> [k1, k2, ...]   keys in the HAMT's iteration order
+//
+// Keys are non-negative ints; map_hash folds a 64-bit hash to 32 bits, so a key
+// above 2^32 collides with the key equal to its fold, exercising CollisionNode.
+// Scope: the integer-keyed Map core. MapMutation (the m.mutate() builder),
+// update-from-dict, __eq__/hash and repr are out of scope (see README).
+// jobs_text() carries data/jobs.tsv verbatim.
+
+#[derive(Clone)]
+enum Slot {
+    Leaf(i64, i64),
+    Child(Node),
+}
+
+#[derive(Clone)]
+struct Node {
+    tag: i64, // 0 = BitmapNode, 1 = CollisionNode
+    bm: i64,  // bitmap (BitmapNode) or hash (CollisionNode)
+    slots: Vec[Slot],
+}
+
+struct AssocRes {
+    node: Node,
+    added: bool,
+}
+
+struct WRes {
+    res: i64, // 0 = EMPTY, 1 = NEWNODE, 2 = NOT_FOUND
+    node: Node,
+}
+
+fn empty_node() -> Node {
+    let s: Vec[Slot] = Vec.new();
+    Node { tag: 0, bm: 0, slots: s }
+}
+
+fn map_hash(k: i64) -> i64 {
+    (k & 0xffffffff) ^ ((k >> 32) & 0xffffffff)
+}
+
+fn map_mask(h: i64, shift: i64) -> i64 {
+    (h >> shift) & 0x1f
+}
+
+fn map_bitpos(h: i64, shift: i64) -> i64 {
+    1 << map_mask(h, shift)
+}
+
+fn map_bitcount(v0: i64) -> i64 {
+    let mut v = v0 - ((v0 >> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+    v = (v & 0x0f0f0f0f) + ((v >> 4) & 0x0f0f0f0f);
+    v = v + (v >> 8);
+    v = (v + (v >> 16)) & 0x3f;
+    v
+}
+
+fn map_bitindex(bitmap: i64, bit: i64) -> i64 {
+    map_bitcount(bitmap & (bit - 1))
+}
+
+fn slots_replace(slots: Vec[Slot], idx: i64, ns: Slot) -> Vec[Slot] {
+    let mut out: Vec[Slot] = Vec.new();
+    let mut i = 0;
+    while i < slots.len() {
+        if i == idx {
+            out.push(ns.clone());
+        } else {
+            out.push(slots[i].clone());
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn slots_insert(slots: Vec[Slot], idx: i64, ns: Slot) -> Vec[Slot] {
+    let mut out: Vec[Slot] = Vec.new();
+    let mut i = 0;
+    while i < slots.len() {
+        if i == idx {
+            out.push(ns.clone());
+        }
+        out.push(slots[i].clone());
+        i = i + 1;
+    }
+    if idx == slots.len() {
+        out.push(ns.clone());
+    }
+    out
+}
+
+fn slots_remove(slots: Vec[Slot], idx: i64) -> Vec[Slot] {
+    let mut out: Vec[Slot] = Vec.new();
+    let mut i = 0;
+    while i < slots.len() {
+        if i != idx {
+            out.push(slots[i].clone());
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn assoc(node: Node, shift: i64, h: i64, key: i64, val: i64) -> AssocRes {
+    if node.tag == 0 {
+        let bit = map_bitpos(h, shift);
+        let idx = map_bitindex(node.bm, bit);
+        if (node.bm & bit) != 0 {
+            match node.slots[idx] {
+                Slot.Child(sub) => {
+                    let r = assoc(sub.clone(), shift + 5, h, key, val);
+                    let ns = slots_replace(node.slots.clone(), idx, Slot.Child(r.node));
+                    return AssocRes { node: Node { tag: 0, bm: node.bm, slots: ns }, added: r.added };
+                }
+                Slot.Leaf(ek, ev) => {
+                    if key == ek {
+                        let ns = slots_replace(node.slots.clone(), idx, Slot.Leaf(key, val));
+                        return AssocRes { node: Node { tag: 0, bm: node.bm, slots: ns }, added: false };
+                    }
+                    let eh = map_hash(ek);
+                    let mut sub = empty_node();
+                    if eh == h {
+                        let mut cs: Vec[Slot] = Vec.new();
+                        cs.push(Slot.Leaf(ek, ev));
+                        cs.push(Slot.Leaf(key, val));
+                        sub = Node { tag: 1, bm: h, slots: cs };
+                    } else {
+                        let r1 = assoc(empty_node(), shift + 5, eh, ek, ev);
+                        let r2 = assoc(r1.node, shift + 5, h, key, val);
+                        sub = r2.node;
+                    }
+                    let ns = slots_replace(node.slots.clone(), idx, Slot.Child(sub));
+                    return AssocRes { node: Node { tag: 0, bm: node.bm, slots: ns }, added: true };
+                }
+            }
+        } else {
+            let ns = slots_insert(node.slots.clone(), idx, Slot.Leaf(key, val));
+            return AssocRes { node: Node { tag: 0, bm: node.bm | bit, slots: ns }, added: true };
+        }
+    } else {
+        if h == node.bm {
+            let mut fi = -1;
+            let mut i = 0;
+            while i < node.slots.len() {
+                match node.slots[i] {
+                    Slot.Leaf(k, v) => {
+                        if k == key {
+                            fi = i;
+                        }
+                    }
+                    Slot.Child(c) => {}
+                }
+                i = i + 1;
+            }
+            if fi >= 0 {
+                let ns = slots_replace(node.slots.clone(), fi, Slot.Leaf(key, val));
+                return AssocRes { node: Node { tag: 1, bm: node.bm, slots: ns }, added: false };
+            }
+            let ns = slots_insert(node.slots.clone(), node.slots.len(), Slot.Leaf(key, val));
+            return AssocRes { node: Node { tag: 1, bm: node.bm, slots: ns }, added: true };
+        } else {
+            let mut cs: Vec[Slot] = Vec.new();
+            cs.push(Slot.Child(node.clone()));
+            let nn = Node { tag: 0, bm: map_bitpos(node.bm, shift), slots: cs };
+            return assoc(nn, shift, h, key, val);
+        }
+    }
+}
+
+fn find(node: Node, shift: i64, h: i64, key: i64) -> Option[i64] {
+    if node.tag == 0 {
+        let bit = map_bitpos(h, shift);
+        if (node.bm & bit) == 0 {
+            return None;
+        }
+        let idx = map_bitindex(node.bm, bit);
+        match node.slots[idx] {
+            Slot.Child(sub) => {
+                return find(sub.clone(), shift + 5, h, key);
+            }
+            Slot.Leaf(ek, ev) => {
+                if ek == key {
+                    return Some(ev);
+                }
+                return None;
+            }
+        }
+    } else {
+        let mut i = 0;
+        while i < node.slots.len() {
+            match node.slots[i] {
+                Slot.Leaf(k, v) => {
+                    if k == key {
+                        return Some(v);
+                    }
+                }
+                Slot.Child(c) => {}
+            }
+            i = i + 1;
+        }
+        return None;
+    }
+}
+
+fn inline_ok(node: Node) -> bool {
+    if node.tag != 0 {
+        return false;
+    }
+    if node.slots.len() != 1 {
+        return false;
+    }
+    match node.slots[0] {
+        Slot.Leaf(k, v) => {
+            return true;
+        }
+        Slot.Child(c) => {
+            return false;
+        }
+    }
+}
+
+fn nth_slot(slots: Vec[Slot], idx: i64) -> Slot {
+    slots[idx].clone()
+}
+
+fn without(node: Node, shift: i64, h: i64, key: i64) -> WRes {
+    if node.tag == 0 {
+        let bit = map_bitpos(h, shift);
+        if (node.bm & bit) == 0 {
+            return WRes { res: 2, node: empty_node() };
+        }
+        let idx = map_bitindex(node.bm, bit);
+        match node.slots[idx] {
+            Slot.Child(sub) => {
+                let r = without(sub.clone(), shift + 5, h, key);
+                if r.res == 1 {
+                    if inline_ok(r.node.clone()) {
+                        let leaf = nth_slot(r.node.slots.clone(), 0);
+                        let ns = slots_replace(node.slots.clone(), idx, leaf);
+                        return WRes { res: 1, node: Node { tag: 0, bm: node.bm, slots: ns } };
+                    }
+                    let ns = slots_replace(node.slots.clone(), idx, Slot.Child(r.node));
+                    return WRes { res: 1, node: Node { tag: 0, bm: node.bm, slots: ns } };
+                }
+                return WRes { res: r.res, node: empty_node() };
+            }
+            Slot.Leaf(ek, ev) => {
+                if ek == key {
+                    if node.slots.len() == 1 {
+                        return WRes { res: 0, node: empty_node() };
+                    }
+                    let ns = slots_remove(node.slots.clone(), idx);
+                    return WRes { res: 1, node: Node { tag: 0, bm: node.bm ^ bit, slots: ns } };
+                }
+                return WRes { res: 2, node: empty_node() };
+            }
+        }
+    } else {
+        if h != node.bm {
+            return WRes { res: 2, node: empty_node() };
+        }
+        let mut ki = -1;
+        let mut i = 0;
+        while i < node.slots.len() {
+            match node.slots[i] {
+                Slot.Leaf(k, v) => {
+                    if k == key {
+                        ki = i;
+                    }
+                }
+                Slot.Child(c) => {}
+            }
+            i = i + 1;
+        }
+        if ki < 0 {
+            return WRes { res: 2, node: empty_node() };
+        }
+        if node.slots.len() == 2 {
+            let other_idx = if ki == 0 { 1 } else { 0 };
+            let other = nth_slot(node.slots.clone(), other_idx);
+            let mut cs: Vec[Slot] = Vec.new();
+            cs.push(other);
+            return WRes { res: 1, node: Node { tag: 0, bm: map_bitpos(h, shift), slots: cs } };
+        }
+        let ns = slots_remove(node.slots.clone(), ki);
+        return WRes { res: 1, node: Node { tag: 1, bm: node.bm, slots: ns } };
+    }
+}
+
+fn keys_of(node: Node) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < node.slots.len() {
+        match node.slots[i] {
+            Slot.Leaf(k, v) => {
+                out.push(k);
+            }
+            Slot.Child(c) => {
+                let sub = keys_of(c.clone());
+                let mut j = 0;
+                while j < sub.len() {
+                    out.push(sub[j]);
+                    j = j + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn split_fields(line: Str, sepb: i64) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sepb {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn parse_uint(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < b.len() {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    acc
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let tbl = "0123456789".to_string();
+    let mut x = n;
+    let mut digits: Vec[i64] = Vec.new();
+    while x > 0 {
+        digits.push(x % 10);
+        x = x / 10;
+    }
+    let mut o = String.new();
+    let mut i = digits.len();
+    while i > 0 {
+        i = i - 1;
+        let d = digits[i];
+        o.push_str(tbl.substring(d, d + 1));
+    }
+    o
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut root = empty_node();
+    let mut count = 0;
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "s" {
+                    let k = parse_uint(f[1].clone());
+                    let v = parse_uint(f[2].clone());
+                    let r = assoc(root.clone(), 0, map_hash(k), k, v);
+                    root = r.node;
+                    if r.added {
+                        count = count + 1;
+                    }
+                    out.push_str("s ");
+                    out.push_str(itoa(k));
+                    out.push_str(" ");
+                    out.push_str(itoa(v));
+                    out.push_str(" -> len ");
+                    out.push_str(itoa(count));
+                } else {
+                    if op == "d" {
+                        let k = parse_uint(f[1].clone());
+                        let w = without(root.clone(), 0, map_hash(k), k);
+                        if w.res == 2 {
+                            out.push_str("d ");
+                            out.push_str(itoa(k));
+                            out.push_str(" -> miss");
+                        } else {
+                            if w.res == 0 {
+                                root = empty_node();
+                            } else {
+                                root = w.node;
+                            }
+                            count = count - 1;
+                            out.push_str("d ");
+                            out.push_str(itoa(k));
+                            out.push_str(" -> len ");
+                            out.push_str(itoa(count));
+                        }
+                    } else {
+                        if op == "g" {
+                            let k = parse_uint(f[1].clone());
+                            out.push_str("g ");
+                            out.push_str(itoa(k));
+                            out.push_str(" -> ");
+                            match find(root.clone(), 0, map_hash(k), k) {
+                                Some(v) => {
+                                    out.push_str(itoa(v));
+                                }
+                                None => {
+                                    out.push_str("miss");
+                                }
+                            }
+                        } else {
+                            if op == "h" {
+                                let k = parse_uint(f[1].clone());
+                                out.push_str("h ");
+                                out.push_str(itoa(k));
+                                out.push_str(" -> ");
+                                match find(root.clone(), 0, map_hash(k), k) {
+                                    Some(v) => {
+                                        out.push_str("yes");
+                                    }
+                                    None => {
+                                        out.push_str("no");
+                                    }
+                                }
+                            } else {
+                                if op == "l" {
+                                    out.push_str("len ");
+                                    out.push_str(itoa(count));
+                                } else {
+                                    // "k": structural key order
+                                    let ks = keys_of(root.clone());
+                                    out.push_str("[");
+                                    let mut j = 0;
+                                    while j < ks.len() {
+                                        if j > 0 {
+                                            out.push_str(", ");
+                                        }
+                                        out.push_str(itoa(ks[j]));
+                                        j = j + 1;
+                                    }
+                                    out.push_str("]");
+                                }
+                            }
+                        }
+                    }
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("s\t0\t0\n");
+    s.push_str("s\t1\t10\n");
+    s.push_str("s\t2\t20\n");
+    s.push_str("s\t3\t30\n");
+    s.push_str("s\t4\t40\n");
+    s.push_str("s\t5\t50\n");
+    s.push_str("s\t6\t60\n");
+    s.push_str("s\t7\t70\n");
+    s.push_str("s\t8\t80\n");
+    s.push_str("s\t9\t90\n");
+    s.push_str("s\t10\t100\n");
+    s.push_str("s\t11\t110\n");
+    s.push_str("s\t12\t120\n");
+    s.push_str("s\t13\t130\n");
+    s.push_str("s\t14\t140\n");
+    s.push_str("s\t15\t150\n");
+    s.push_str("s\t16\t160\n");
+    s.push_str("s\t17\t170\n");
+    s.push_str("s\t18\t180\n");
+    s.push_str("s\t19\t190\n");
+    s.push_str("s\t20\t200\n");
+    s.push_str("s\t21\t210\n");
+    s.push_str("s\t22\t220\n");
+    s.push_str("s\t23\t230\n");
+    s.push_str("s\t24\t240\n");
+    s.push_str("s\t25\t250\n");
+    s.push_str("s\t26\t260\n");
+    s.push_str("s\t27\t270\n");
+    s.push_str("s\t28\t280\n");
+    s.push_str("s\t29\t290\n");
+    s.push_str("s\t30\t300\n");
+    s.push_str("s\t31\t310\n");
+    s.push_str("s\t32\t320\n");
+    s.push_str("s\t33\t330\n");
+    s.push_str("l\n");
+    s.push_str("k\n");
+    s.push_str("g\t0\n");
+    s.push_str("h\t0\n");
+    s.push_str("g\t17\n");
+    s.push_str("h\t17\n");
+    s.push_str("g\t33\n");
+    s.push_str("h\t33\n");
+    s.push_str("g\t34\n");
+    s.push_str("h\t34\n");
+    s.push_str("g\t100\n");
+    s.push_str("h\t100\n");
+    s.push_str("g\t5\n");
+    s.push_str("h\t5\n");
+    s.push_str("s\t0\t1\n");
+    s.push_str("s\t5\t6\n");
+    s.push_str("s\t17\t18\n");
+    s.push_str("s\t33\t34\n");
+    s.push_str("l\n");
+    s.push_str("g\t5\n");
+    s.push_str("s\t4294967301\t301\n");
+    s.push_str("s\t8589934597\t597\n");
+    s.push_str("s\t12884901893\t893\n");
+    s.push_str("s\t4294967313\t313\n");
+    s.push_str("s\t8589934609\t609\n");
+    s.push_str("s\t12884901905\t905\n");
+    s.push_str("s\t4294967496\t496\n");
+    s.push_str("s\t8589934792\t792\n");
+    s.push_str("s\t12884902088\t88\n");
+    s.push_str("s\t4294967297\t297\n");
+    s.push_str("s\t8589934593\t593\n");
+    s.push_str("s\t12884901889\t889\n");
+    s.push_str("s\t4294967329\t329\n");
+    s.push_str("s\t8589934625\t625\n");
+    s.push_str("s\t12884901921\t921\n");
+    s.push_str("s\t5\t5\n");
+    s.push_str("s\t17\t17\n");
+    s.push_str("s\t200\t200\n");
+    s.push_str("s\t1\t1\n");
+    s.push_str("s\t33\t33\n");
+    s.push_str("l\n");
+    s.push_str("k\n");
+    s.push_str("g\t4294967301\n");
+    s.push_str("g\t8589934597\n");
+    s.push_str("g\t12884901893\n");
+    s.push_str("g\t4294967313\n");
+    s.push_str("g\t8589934609\n");
+    s.push_str("g\t12884901905\n");
+    s.push_str("d\t3\n");
+    s.push_str("l\n");
+    s.push_str("d\t7\n");
+    s.push_str("l\n");
+    s.push_str("d\t11\n");
+    s.push_str("l\n");
+    s.push_str("d\t999\n");
+    s.push_str("l\n");
+    s.push_str("d\t34\n");
+    s.push_str("l\n");
+    s.push_str("d\t4294967301\n");
+    s.push_str("l\n");
+    s.push_str("d\t8589934597\n");
+    s.push_str("l\n");
+    s.push_str("d\t20\n");
+    s.push_str("l\n");
+    s.push_str("d\t20\n");
+    s.push_str("l\n");
+    s.push_str("k\n");
+    s.push_str("d\t4294967301\n");
+    s.push_str("d\t8589934597\n");
+    s.push_str("d\t12884901893\n");
+    s.push_str("d\t4294967313\n");
+    s.push_str("d\t8589934609\n");
+    s.push_str("d\t12884901905\n");
+    s.push_str("d\t4294967496\n");
+    s.push_str("d\t8589934792\n");
+    s.push_str("d\t12884902088\n");
+    s.push_str("d\t4294967297\n");
+    s.push_str("d\t8589934593\n");
+    s.push_str("d\t12884901889\n");
+    s.push_str("d\t4294967329\n");
+    s.push_str("d\t8589934625\n");
+    s.push_str("d\t12884901921\n");
+    s.push_str("d\t5\n");
+    s.push_str("d\t17\n");
+    s.push_str("d\t200\n");
+    s.push_str("d\t1\n");
+    s.push_str("d\t33\n");
+    s.push_str("k\n");
+    s.push_str("l\n");
+    s.push_str("g\t0\n");
+    s.push_str("g\t1\n");
+    s.push_str("g\t2\n");
+    s.push_str("g\t15\n");
+    s.push_str("g\t33\n");
+    s.push_str("g\t500\n");
+    s
+}
