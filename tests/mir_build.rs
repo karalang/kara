@@ -4282,6 +4282,32 @@ fn main() {
     }
 }
 
+/// A program's own associated function on a primitive, from a trait impl
+/// or an inherent one, is called through the type's name.
+#[test]
+fn mir_assoc_fn_on_a_primitive_is_the_programs_own() {
+    const SRC: &str = r#"trait Zero { fn zero() -> Self; }
+impl Zero for i64 { fn zero() -> i64 { 41 } }
+impl Zero for u8 { fn zero() -> u8 { 7u8 } }
+impl i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
+impl bool { fn yes() -> bool { true } }
+fn main() {
+    println(i64.zero());
+    println(u8.zero());
+    println(f"{i64.two() + 1} {i64.add_to(5)} {bool.yes()}");
+    println(i64.two().to_string().len());
+}
+"#;
+    let want = "41\n7\n43 105 true\n2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// A wildcard import of a gated module names its public items, and the
 /// program's own `join` beats the wildcard's (design.md § Wildcards).
 #[test]

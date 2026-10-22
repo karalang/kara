@@ -13698,6 +13698,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.operator_call(owner, method, args, dest.clone())? {
                 return Ok(());
             }
+            // `i64.zero()` of the program's `impl Zero for i64` or
+            // `impl i64 { fn zero() }`: its own function.
+            if let Some(rc) = self.lcx.calls.get(&e.id) {
+                if let Callee::Def(d) = rc.callee {
+                    if let Some(f) = self.lcx.fns.get(&d).map(|i| i.f) {
+                        let substs = self.lcx.tys.tcx().list(rc.substs);
+                        let inst_args = self.instance_args(e.span, &substs)?;
+                        return self.def_call(e, d, f, inst_args, None, args, dest);
+                    }
+                }
+            }
             // `i64.default()`: the type's zero (B-2026-10-13-27).
             if let ("default", []) = (method, args) {
                 let t = self.expr_ty(e)?;
