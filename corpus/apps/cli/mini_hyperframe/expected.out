@@ -1,0 +1,212 @@
+== build | data | 1 | - | - | 0
+  hex=000000000000000001
+  repr=DataFrame(stream_id=1, flags=[]): None
+  rt=DataFrame(stream_id=1, flags=[]): None
+== build | data | 1 | END_STREAM | 48656c6c6f | 0
+  hex=00000500010000000148656c6c6f
+  repr=DataFrame(stream_id=1, flags=['END_STREAM']): <hex:48656c6c6f>
+  rt=DataFrame(stream_id=1, flags=['END_STREAM']): <hex:48656c6c6f>
+== build | data | 1 | PADDED | 48656c6c6f | 4
+  hex=00000a0008000000010448656c6c6f00000000
+  repr=DataFrame(stream_id=1, flags=['PADDED']): <hex:0448656c6c6f00000000>
+  rt=DataFrame(stream_id=1, flags=['PADDED']): <hex:0448656c6c6f00000000>
+== build | data | 1 | END_STREAM,PADDED | deadbeef | 2
+  hex=00000700090000000102deadbeef0000
+  repr=DataFrame(stream_id=1, flags=['END_STREAM', 'PADDED']): <hex:02deadbeef0000>
+  rt=DataFrame(stream_id=1, flags=['END_STREAM', 'PADDED']): <hex:02deadbeef0000>
+== build | data | 3 | - | 00010203040506070809 | 0
+  hex=00000a00000000000300010203040506070809
+  repr=DataFrame(stream_id=3, flags=[]): <hex:00010203040506070809>
+  rt=DataFrame(stream_id=3, flags=[]): <hex:00010203040506070809>
+== build | headers | 1 | - | 0 | 0 | 0 | - | 0
+  hex=000000010000000001
+  repr=HeadersFrame(stream_id=1, flags=[]): exclusive=False, depends_on=0, stream_weight=0, data=None
+  rt=HeadersFrame(stream_id=1, flags=[]): exclusive=False, depends_on=0, stream_weight=0, data=None
+== build | headers | 1 | END_STREAM,END_HEADERS | 0 | 0 | 0 | 828487 | 0
+  hex=000003010500000001828487
+  repr=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+  rt=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'END_STREAM']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+== build | headers | 1 | END_HEADERS,PRIORITY | 20 | 16 | 0 | 828487 | 0
+  hex=0000080124000000010000001410828487
+  repr=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'PRIORITY']): exclusive=False, depends_on=20, stream_weight=16, data=<hex:828487>
+  rt=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'PRIORITY']): exclusive=False, depends_on=20, stream_weight=16, data=<hex:828487>
+== build | headers | 1 | PRIORITY | 5 | 200 | 1 | 4188 | 0
+  hex=00000701200000000180000005c84188
+  repr=HeadersFrame(stream_id=1, flags=['PRIORITY']): exclusive=True, depends_on=5, stream_weight=200, data=<hex:4188>
+  rt=HeadersFrame(stream_id=1, flags=['PRIORITY']): exclusive=True, depends_on=5, stream_weight=200, data=<hex:4188>
+== build | headers | 1 | END_HEADERS,PADDED | 0 | 0 | 0 | 828487 | 5
+  hex=000009010c00000001058284870000000000
+  repr=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'PADDED']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+  rt=HeadersFrame(stream_id=1, flags=['END_HEADERS', 'PADDED']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+== build | priority | 1 | - | 0 | 0 | 0
+  hex=0000050200000000010000000000
+  repr=PriorityFrame(stream_id=1, flags=[]): exclusive=False, depends_on=0, stream_weight=0
+  rt=PriorityFrame(stream_id=1, flags=[]): exclusive=False, depends_on=0, stream_weight=0
+== build | priority | 3 | - | 1 | 200 | 1
+  hex=00000502000000000380000001c8
+  repr=PriorityFrame(stream_id=3, flags=[]): exclusive=True, depends_on=1, stream_weight=200
+  rt=PriorityFrame(stream_id=3, flags=[]): exclusive=True, depends_on=1, stream_weight=200
+== build | priority | 5 | - | 2147483647 | 255 | 0
+  hex=0000050200000000057fffffffff
+  repr=PriorityFrame(stream_id=5, flags=[]): exclusive=False, depends_on=2147483647, stream_weight=255
+  rt=PriorityFrame(stream_id=5, flags=[]): exclusive=False, depends_on=2147483647, stream_weight=255
+== build | rststream | 1 | - | 0
+  hex=00000403000000000100000000
+  repr=RstStreamFrame(stream_id=1, flags=[]): error_code=0
+  rt=RstStreamFrame(stream_id=1, flags=[]): error_code=0
+== build | rststream | 1 | - | 8
+  hex=00000403000000000100000008
+  repr=RstStreamFrame(stream_id=1, flags=[]): error_code=8
+  rt=RstStreamFrame(stream_id=1, flags=[]): error_code=8
+== build | rststream | 3 | - | 4294967295
+  hex=000004030000000003ffffffff
+  repr=RstStreamFrame(stream_id=3, flags=[]): error_code=4294967295
+  rt=RstStreamFrame(stream_id=3, flags=[]): error_code=4294967295
+== build | settings | 0 | - | -
+  hex=000000040000000000
+  repr=SettingsFrame(stream_id=0, flags=[]): settings={}
+  rt=SettingsFrame(stream_id=0, flags=[]): settings={}
+== build | settings | 0 | - | 1:4096
+  hex=000006040000000000000100001000
+  repr=SettingsFrame(stream_id=0, flags=[]): settings={1: 4096}
+  rt=SettingsFrame(stream_id=0, flags=[]): settings={1: 4096}
+== build | settings | 0 | - | 1:4096;3:100;4:65535
+  hex=00001204000000000000010000100000030000006400040000ffff
+  repr=SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 3: 100, 4: 65535}
+  rt=SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 3: 100, 4: 65535}
+== build | settings | 0 | - | 2:1;5:16384;6:1000000
+  hex=0000120400000000000002000000010005000040000006000f4240
+  repr=SettingsFrame(stream_id=0, flags=[]): settings={2: 1, 5: 16384, 6: 1000000}
+  rt=SettingsFrame(stream_id=0, flags=[]): settings={2: 1, 5: 16384, 6: 1000000}
+== build | settings | 0 | ACK | -
+  hex=000000040100000000
+  repr=SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+  rt=SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+== build | pushpromise | 1 | END_HEADERS | 2 | 828487 | 0
+  hex=00000705040000000100000002828487
+  repr=PushPromiseFrame(stream_id=1, flags=['END_HEADERS']): promised_stream_id=2, data=<hex:828487>
+  rt=PushPromiseFrame(stream_id=1, flags=['END_HEADERS']): promised_stream_id=2, data=<hex:828487>
+== build | pushpromise | 1 | END_HEADERS,PADDED | 4 | 828487 | 3
+  hex=00000b050c000000010300000004828487000000
+  repr=PushPromiseFrame(stream_id=1, flags=['END_HEADERS', 'PADDED']): promised_stream_id=4, data=<hex:828487>
+  rt=PushPromiseFrame(stream_id=1, flags=['END_HEADERS', 'PADDED']): promised_stream_id=4, data=<hex:828487>
+== build | pushpromise | 3 | - | 6 | - | 0
+  hex=00000405000000000300000006
+  repr=PushPromiseFrame(stream_id=3, flags=[]): promised_stream_id=6, data=None
+  rt=PushPromiseFrame(stream_id=3, flags=[]): promised_stream_id=6, data=None
+== build | ping | 0 | - | -
+  hex=0000080600000000000000000000000000
+  repr=PingFrame(stream_id=0, flags=[]): opaque_data=b''
+  rt=PingFrame(stream_id=0, flags=[]): opaque_data=b'\x00\x00\x00\x00\x00\x00\x00\x00'
+== build | ping | 0 | - | 0001020304050607
+  hex=0000080600000000000001020304050607
+  repr=PingFrame(stream_id=0, flags=[]): opaque_data=b'\x00\x01\x02\x03\x04\x05\x06\x07'
+  rt=PingFrame(stream_id=0, flags=[]): opaque_data=b'\x00\x01\x02\x03\x04\x05\x06\x07'
+== build | ping | 0 | ACK | cafe
+  hex=000008060100000000cafe000000000000
+  repr=PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'\xca\xfe'
+  rt=PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'\xca\xfe\x00\x00\x00\x00\x00\x00'
+== build | goaway | 0 | - | 0 | 0 | -
+  hex=0000080700000000000000000000000000
+  repr=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=0, additional_data=b''
+  rt=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=0, error_code=0, additional_data=b''
+== build | goaway | 0 | - | 5 | 8 | 6465627567
+  hex=00000d07000000000000000005000000086465627567
+  repr=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=5, error_code=8, additional_data=b'debug'
+  rt=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=5, error_code=8, additional_data=b'debug'
+== build | goaway | 0 | - | 2147483647 | 4294967295 | -
+  hex=0000080700000000007fffffffffffffff
+  repr=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=2147483647, error_code=4294967295, additional_data=b''
+  rt=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=2147483647, error_code=4294967295, additional_data=b''
+== build | windowupdate | 0 | - | 1
+  hex=00000408000000000000000001
+  repr=WindowUpdateFrame(stream_id=0, flags=[]): window_increment=1
+  rt=WindowUpdateFrame(stream_id=0, flags=[]): window_increment=1
+== build | windowupdate | 1 | - | 65535
+  hex=0000040800000000010000ffff
+  repr=WindowUpdateFrame(stream_id=1, flags=[]): window_increment=65535
+  rt=WindowUpdateFrame(stream_id=1, flags=[]): window_increment=65535
+== build | windowupdate | 0 | - | 2147483647
+  hex=0000040800000000007fffffff
+  repr=WindowUpdateFrame(stream_id=0, flags=[]): window_increment=2147483647
+  rt=WindowUpdateFrame(stream_id=0, flags=[]): window_increment=2147483647
+== build | continuation | 1 | - | -
+  hex=000000090000000001
+  repr=ContinuationFrame(stream_id=1, flags=[]): data=None
+  rt=ContinuationFrame(stream_id=1, flags=[]): data=None
+== build | continuation | 1 | END_HEADERS | 828487
+  hex=000003090400000001828487
+  repr=ContinuationFrame(stream_id=1, flags=['END_HEADERS']): data=<hex:828487>
+  rt=ContinuationFrame(stream_id=1, flags=['END_HEADERS']): data=<hex:828487>
+== build | altsvc | 1 | - | - | 68323d223a3434332229
+  hex=00000c0a0000000001000068323d223a3434332229
+  repr=AltSvcFrame(stream_id=1, flags=[]): origin=b'', field=b'h2=":443")'
+  rt=AltSvcFrame(stream_id=1, flags=[]): origin=b'', field=b'h2=":443")'
+== build | altsvc | 0 | - | 6578616d706c652e636f6d | 68323d223a34343322
+  hex=0000160a0000000000000b6578616d706c652e636f6d68323d223a34343322
+  repr=AltSvcFrame(stream_id=0, flags=[]): origin=b'example.com', field=b'h2=":443"'
+  rt=AltSvcFrame(stream_id=0, flags=[]): origin=b'example.com', field=b'h2=":443"'
+== build | ping | 0 | - | 00ff6162630a0927
+  hex=00000806000000000000ff6162630a0927
+  repr=PingFrame(stream_id=0, flags=[]): opaque_data=b"\x00\xffabc\n\t'"
+  rt=PingFrame(stream_id=0, flags=[]): opaque_data=b"\x00\xffabc\n\t'"
+== build | goaway | 0 | - | 1 | 1 | 0d0a09
+  hex=00000b07000000000000000001000000010d0a09
+  repr=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b'\r\n\t'
+  rt=GoAwayFrame(stream_id=0, flags=[]): last_stream_id=1, error_code=1, additional_data=b'\r\n\t'
+== build | altsvc | 0 | - | 27717569636b27 | 6162
+  hex=00000b0a0000000000000727717569636b276162
+  repr=AltSvcFrame(stream_id=0, flags=[]): origin=b"'quick'", field=b'ab'
+  rt=AltSvcFrame(stream_id=0, flags=[]): origin=b"'quick'", field=b'ab'
+== parse | 00000500010000000148656c6c6f | 0
+  DataFrame(stream_id=1, flags=['END_STREAM']): <hex:48656c6c6f>
+== parse | 000003010400000001828487 | 0
+  HeadersFrame(stream_id=1, flags=['END_HEADERS']): exclusive=False, depends_on=0, stream_weight=0, data=<hex:828487>
+== parse | 0000080124000000038000000110828487 | 0
+  HeadersFrame(stream_id=3, flags=['END_HEADERS', 'PRIORITY']): exclusive=True, depends_on=1, stream_weight=16, data=<hex:828487>
+== parse | 00000502000000000100000002c8 | 0
+  PriorityFrame(stream_id=1, flags=[]): exclusive=False, depends_on=2, stream_weight=200
+== parse | 00000403000000000100000008 | 0
+  RstStreamFrame(stream_id=1, flags=[]): error_code=8
+== parse | 00001204000000000000010000100000030000006400040000ffff | 0
+  SettingsFrame(stream_id=0, flags=[]): settings={1: 4096, 3: 100, 4: 65535}
+== parse | 000000040100000000 | 0
+  SettingsFrame(stream_id=0, flags=['ACK']): settings={}
+== parse | 00000705040000000100000002828487 | 0
+  PushPromiseFrame(stream_id=1, flags=['END_HEADERS']): promised_stream_id=2, data=<hex:828487>
+== parse | 0000080600000000000001020304050607 | 0
+  PingFrame(stream_id=0, flags=[]): opaque_data=b'\x00\x01\x02\x03\x04\x05\x06\x07'
+== parse | 000008060100000000cafe000000000000 | 0
+  PingFrame(stream_id=0, flags=['ACK']): opaque_data=b'\xca\xfe\x00\x00\x00\x00\x00\x00'
+== parse | 00000d07000000000000000005000000086465627567 | 0
+  GoAwayFrame(stream_id=0, flags=[]): last_stream_id=5, error_code=8, additional_data=b'debug'
+== parse | 0000040800000000000000ffff | 0
+  WindowUpdateFrame(stream_id=0, flags=[]): window_increment=65535
+== parse | 000003090400000001828487 | 0
+  ContinuationFrame(stream_id=1, flags=['END_HEADERS']): data=<hex:828487>
+== parse | 0000160a0000000000000b6578616d706c652e636f6d68323d223a34343322 | 0
+  AltSvcFrame(stream_id=0, flags=[]): origin=b'example.com', field=b'h2=":443"'
+== parse | 000006000800000001034869000000 | 0
+  DataFrame(stream_id=1, flags=['PADDED']): <hex:034869000000>
+== parse | 000008050c000000010200000004820000 | 0
+  PushPromiseFrame(stream_id=1, flags=['END_HEADERS', 'PADDED']): promised_stream_id=4, data=<hex:82>
+== parse | 000000000000000000 | 0
+  err=Stream ID must be non-zero for DataFrame
+== parse | 000000040000000001 | 0
+  err=Stream ID must be zero for SettingsFrame with stream_id=1
+== parse | 000006020000000001000000000000 | 0
+  err=PRIORITY must have 5 byte body: actual length 6.
+== parse | 000003030000000001000000 | 0
+  err=RST_STREAM must have 4 byte body: actual length 3.
+== parse | 00000408000000000100000000 | 0
+  err=WINDOW_UPDATE increment must be between 1 to 2^31-1
+== parse | 00000405040000000100000003 | 0
+  err=Invalid PUSH_PROMISE promised stream id: 3
+== parse | 0000031f0500000001deadbe | 0
+  ExtensionFrame(stream_id=1, flags=[]): type=31, flag_byte=5, body=<hex:deadbe>
+== parse | 0000031f0500000001deadbe | 1
+  err=UnknownFrameError: Unknown frame type 0x1F received, length 3 bytes
+== parse | 000000 | 0
+  err=Invalid frame header
+== parse | 00000406000000000000000000 | 0
+  err=PING frame must have 8 byte length: got 4

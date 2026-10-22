@@ -1,0 +1,1072 @@
+// mini_hyperframe — the HTTP/2 frame layer of the `hyperframe` library
+// (the framing half of the `h2` stack, MIT). It builds each frame type,
+// serializes it to the nine-byte header plus body the wire carries, and
+// parses raw bytes back into a typed frame — the exact serialize / parse /
+// repr that hyperframe 6.1.0 produces, Python bytes reprs and all.
+//
+// Driven by data/jobs.tsv (see mk.py). A `build` job constructs a frame,
+// prints its serialized hex, its repr, and the repr of the bytes re-parsed;
+// a `parse` job prints the parsed frame's repr, or the error string the
+// library raises. The port follows hyperframe's own frame.py.
+
+// ---------- byte helpers ----------
+
+fn bytes_of(s: ref String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        c as i64 - 55
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    if s == "-" {
+        return Vec.new();
+    }
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push((hex_val(cs[i]) * 16 + hex_val(cs[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn hex_of(data: ref Vec[u8]) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    for b in data.iter() {
+        let v = *b as i64;
+        s.push(ds[v / 16]);
+        s.push(ds[v % 16]);
+    }
+    s
+}
+
+fn push_all(out: mut ref Vec[u8], more: ref Vec[u8]) {
+    for b in more.iter() {
+        out.push(*b);
+    }
+}
+
+fn sub(data: ref Vec[u8], lo: i64, hi: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = lo;
+    let end = if hi < data.len() { hi } else { data.len() };
+    while i < end {
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+fn pack_u16(out: mut ref Vec[u8], v: i64) {
+    out.push(((v / 256) % 256) as u8);
+    out.push((v % 256) as u8);
+}
+
+fn pack_u32(out: mut ref Vec[u8], v: i64) {
+    out.push(((v / 16777216) % 256) as u8);
+    out.push(((v / 65536) % 256) as u8);
+    out.push(((v / 256) % 256) as u8);
+    out.push((v % 256) as u8);
+}
+
+fn read_u16(data: ref Vec[u8], off: i64) -> i64 {
+    (data[off] as i64) * 256 + (data[off + 1] as i64)
+}
+
+fn read_u32(data: ref Vec[u8], off: i64) -> i64 {
+    (data[off] as i64) * 16777216
+        + (data[off + 1] as i64) * 65536
+        + (data[off + 2] as i64) * 256
+        + (data[off + 3] as i64)
+}
+
+fn bstr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn hex_upper(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let ds: Vec[char] = "0123456789ABCDEF".chars().collect();
+    let mut digits: Vec[char] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        digits.push(ds[v % 16]);
+        v /= 16;
+    }
+    let mut s = String.new();
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        s.push(digits[i]);
+        i -= 1;
+    }
+    s
+}
+
+// ---------- frame model ----------
+
+enum FKind {
+    Data,
+    Headers,
+    Priority,
+    RstStream,
+    Settings,
+    PushPromise,
+    Ping,
+    GoAway,
+    WindowUpdate,
+    Continuation,
+    AltSvc,
+    Extension,
+}
+
+#[derive(Clone)]
+struct Frame {
+    kind: i64,          // index matching FKind order
+    type_byte: i64,
+    stream_id: i64,
+    flags: Vec[String],
+    body_len: i64,
+    data: Vec[u8],
+    pad_length: i64,
+    depends_on: i64,
+    stream_weight: i64,
+    exclusive: bool,
+    error_code: i64,
+    settings: Vec[(i64, i64)],
+    promised_stream_id: i64,
+    opaque_data: Vec[u8],
+    last_stream_id: i64,
+    additional_data: Vec[u8],
+    window_increment: i64,
+    origin: Vec[u8],
+    field: Vec[u8],
+    flag_byte: i64,
+}
+
+// kind indices
+fn k_data() -> i64 { 0 }
+fn k_headers() -> i64 { 1 }
+fn k_priority() -> i64 { 2 }
+fn k_rststream() -> i64 { 3 }
+fn k_settings() -> i64 { 4 }
+fn k_pushpromise() -> i64 { 5 }
+fn k_ping() -> i64 { 6 }
+fn k_goaway() -> i64 { 7 }
+fn k_windowupdate() -> i64 { 8 }
+fn k_continuation() -> i64 { 9 }
+fn k_altsvc() -> i64 { 10 }
+fn k_extension() -> i64 { 11 }
+
+fn blank_frame(kind: i64, stream_id: i64) -> Frame {
+    Frame {
+        kind: kind,
+        type_byte: type_byte(kind),
+        stream_id: stream_id,
+        flags: Vec.new(),
+        body_len: 0,
+        data: Vec.new(),
+        pad_length: 0,
+        depends_on: 0,
+        stream_weight: 0,
+        exclusive: false,
+        error_code: 0,
+        settings: Vec.new(),
+        promised_stream_id: 0,
+        opaque_data: Vec.new(),
+        last_stream_id: 0,
+        additional_data: Vec.new(),
+        window_increment: 0,
+        origin: Vec.new(),
+        field: Vec.new(),
+        flag_byte: 0,
+    }
+}
+
+fn type_byte(kind: i64) -> i64 {
+    if kind == 0 { 0x0 }
+    else if kind == 1 { 0x1 }
+    else if kind == 2 { 0x2 }
+    else if kind == 3 { 0x3 }
+    else if kind == 4 { 0x4 }
+    else if kind == 5 { 0x5 }
+    else if kind == 6 { 0x6 }
+    else if kind == 7 { 0x7 }
+    else if kind == 8 { 0x8 }
+    else if kind == 9 { 0x9 }
+    else if kind == 10 { 0xA }
+    else { -1 }
+}
+
+fn type_name(kind: i64) -> String {
+    if kind == 0 { "DataFrame".to_string() }
+    else if kind == 1 { "HeadersFrame".to_string() }
+    else if kind == 2 { "PriorityFrame".to_string() }
+    else if kind == 3 { "RstStreamFrame".to_string() }
+    else if kind == 4 { "SettingsFrame".to_string() }
+    else if kind == 5 { "PushPromiseFrame".to_string() }
+    else if kind == 6 { "PingFrame".to_string() }
+    else if kind == 7 { "GoAwayFrame".to_string() }
+    else if kind == 8 { "WindowUpdateFrame".to_string() }
+    else if kind == 9 { "ContinuationFrame".to_string() }
+    else if kind == 10 { "AltSvcFrame".to_string() }
+    else { "ExtensionFrame".to_string() }
+}
+
+// stream association: 0 = either, 1 = has-stream, 2 = no-stream
+fn stream_assoc(kind: i64) -> i64 {
+    if kind == 0 { 1 }        // data
+    else if kind == 1 { 1 }   // headers
+    else if kind == 2 { 1 }   // priority
+    else if kind == 3 { 1 }   // rststream
+    else if kind == 4 { 2 }   // settings
+    else if kind == 5 { 1 }   // pushpromise
+    else if kind == 6 { 2 }   // ping
+    else if kind == 7 { 2 }   // goaway
+    else if kind == 8 { 0 }   // windowupdate
+    else if kind == 9 { 1 }   // continuation
+    else { 0 }                // altsvc, extension
+}
+
+fn defined_flags(kind: i64) -> Vec[(String, i64)] {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    if kind == 0 {
+        v.push(("END_STREAM".to_string(), 0x01));
+        v.push(("PADDED".to_string(), 0x08));
+    } else if kind == 1 {
+        v.push(("END_STREAM".to_string(), 0x01));
+        v.push(("END_HEADERS".to_string(), 0x04));
+        v.push(("PADDED".to_string(), 0x08));
+        v.push(("PRIORITY".to_string(), 0x20));
+    } else if kind == 3 {
+        // no flags
+    } else if kind == 4 {
+        v.push(("ACK".to_string(), 0x01));
+    } else if kind == 5 {
+        v.push(("END_HEADERS".to_string(), 0x04));
+        v.push(("PADDED".to_string(), 0x08));
+    } else if kind == 6 {
+        v.push(("ACK".to_string(), 0x01));
+    } else if kind == 9 {
+        v.push(("END_HEADERS".to_string(), 0x04));
+    }
+    v
+}
+
+fn has_flag(frame: ref Frame, name: ref String) -> bool {
+    for f in frame.flags.iter() {
+        if f == name {
+            return true;
+        }
+    }
+    false
+}
+
+fn add_flag(frame: mut ref Frame, name: ref String) {
+    let present = has_flag(frame, name);
+    if not present {
+        frame.flags.push(name.to_string());
+    }
+}
+
+// ---------- repr helpers ----------
+
+fn str_lt(a: ref String, b: ref String) -> bool {
+    let ca: Vec[char] = a.chars().collect();
+    let cb: Vec[char] = b.chars().collect();
+    let mut i = 0;
+    while i < ca.len() and i < cb.len() {
+        if ca[i] != cb[i] {
+            return (ca[i] as i64) < (cb[i] as i64);
+        }
+        i += 1;
+    }
+    ca.len() < cb.len()
+}
+
+fn flags_repr(frame: ref Frame) -> String {
+    let mut names: Vec[String] = Vec.new();
+    for f in frame.flags.iter() {
+        names.push(f.to_string());
+    }
+    // insertion sort ascending
+    let mut a = 1;
+    while a < names.len() {
+        let mut b = a;
+        while b > 0 and str_lt(names[b], names[b - 1]) {
+            let tmp = names[b - 1].clone();
+            names[b - 1] = names[b].clone();
+            names[b] = tmp;
+            b -= 1;
+        }
+        a += 1;
+    }
+    let mut s = String.new();
+    s.push('[');
+    let mut i = 0;
+    while i < names.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push('\'');
+        s.push_str(names[i]);
+        s.push('\'');
+        i += 1;
+    }
+    s.push(']');
+    s
+}
+
+fn raw_data_repr(data: ref Vec[u8]) -> String {
+    if data.len() == 0 {
+        return "None".to_string();
+    }
+    let full = hex_of(data);
+    let cs: Vec[char] = full.chars().collect();
+    let mut r = String.new();
+    if cs.len() > 20 {
+        let mut i = 0;
+        while i < 20 {
+            r.push(cs[i]);
+            i += 1;
+        }
+        r.push_str("...");
+    } else {
+        r = full;
+    }
+    f"<hex:{r}>"
+}
+
+// Python's bytes repr: b'...' with backslash escapes, choosing a double
+// quote when the data holds a single quote but no double quote.
+fn bytes_repr(data: ref Vec[u8]) -> String {
+    let mut has_sq = false;
+    let mut has_dq = false;
+    for b in data.iter() {
+        if *b as i64 == 39 { has_sq = true; }
+        if *b as i64 == 34 { has_dq = true; }
+    }
+    let quote: i64 = if has_sq and not has_dq { 34 } else { 39 };
+    let qc: char = if quote == 34 { '"' } else { '\'' };
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push('b');
+    s.push(qc);
+    for bb in data.iter() {
+        let c = *bb as i64;
+        if c == quote or c == 92 {
+            s.push('\\');
+            s.push(c as u8 as char);
+        } else if c == 9 {
+            s.push_str("\\t");
+        } else if c == 10 {
+            s.push_str("\\n");
+        } else if c == 13 {
+            s.push_str("\\r");
+        } else if c < 0x20 or c >= 0x7f {
+            s.push_str("\\x");
+            s.push(ds[c / 16]);
+            s.push(ds[c % 16]);
+        } else {
+            s.push(c as u8 as char);
+        }
+    }
+    s.push(qc);
+    s
+}
+
+fn settings_repr(frame: ref Frame) -> String {
+    let mut s = String.new();
+    s.push('{');
+    let mut i = 0;
+    while i < frame.settings.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        let k = frame.settings[i].0;
+        let v = frame.settings[i].1;
+        s.push_str(f"{k}: {v}");
+        i += 1;
+    }
+    s.push('}');
+    s
+}
+
+fn body_repr(frame: ref Frame) -> String {
+    if frame.kind == 2 {
+        f"exclusive={bstr(frame.exclusive)}, depends_on={frame.depends_on}, stream_weight={frame.stream_weight}"
+    } else if frame.kind == 1 {
+        let dr = raw_data_repr(frame.data);
+        f"exclusive={bstr(frame.exclusive)}, depends_on={frame.depends_on}, stream_weight={frame.stream_weight}, data={dr}"
+    } else if frame.kind == 3 {
+        f"error_code={frame.error_code}"
+    } else if frame.kind == 4 {
+        let sr = settings_repr(frame);
+        f"settings={sr}"
+    } else if frame.kind == 5 {
+        let dr = raw_data_repr(frame.data);
+        f"promised_stream_id={frame.promised_stream_id}, data={dr}"
+    } else if frame.kind == 6 {
+        let br = bytes_repr(frame.opaque_data);
+        f"opaque_data={br}"
+    } else if frame.kind == 7 {
+        let br = bytes_repr(frame.additional_data);
+        f"last_stream_id={frame.last_stream_id}, error_code={frame.error_code}, additional_data={br}"
+    } else if frame.kind == 8 {
+        f"window_increment={frame.window_increment}"
+    } else if frame.kind == 9 {
+        let dr = raw_data_repr(frame.data);
+        f"data={dr}"
+    } else if frame.kind == 10 {
+        let orig = bytes_repr(frame.origin);
+        let fr = bytes_repr(frame.field);
+        f"origin={orig}, field={fr}"
+    } else if frame.kind == 11 {
+        let br = raw_data_repr(frame.data);
+        f"type={frame.type_byte}, flag_byte={frame.flag_byte}, body={br}"
+    } else {
+        // data / continuation fallback: serialized body
+        let body = serialize_body(frame);
+        raw_data_repr(body)
+    }
+}
+
+fn frame_repr(frame: ref Frame) -> String {
+    let name = type_name(frame.kind);
+    let fr = flags_repr(frame);
+    let br = body_repr(frame);
+    f"{name}(stream_id={frame.stream_id}, flags={fr}): {br}"
+}
+
+// ---------- serialize ----------
+
+fn serialize_padding_data(frame: ref Frame) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let padded = "PADDED".to_string();
+    if has_flag(frame, padded) {
+        out.push((frame.pad_length % 256) as u8);
+    }
+    out
+}
+
+fn serialize_priority_data(frame: ref Frame) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let val = frame.depends_on + (if frame.exclusive { 0x80000000 } else { 0 });
+    pack_u32(mut out, val);
+    out.push((frame.stream_weight % 256) as u8);
+    out
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        v.push(0);
+        i += 1;
+    }
+    v
+}
+
+fn serialize_body(frame: ref Frame) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    if frame.kind == 0 {
+        push_all(mut out, serialize_padding_data(frame));
+        push_all(mut out, frame.data);
+        push_all(mut out, zeros(frame.pad_length));
+    } else if frame.kind == 1 {
+        push_all(mut out, serialize_padding_data(frame));
+        let priority = "PRIORITY".to_string();
+        if has_flag(frame, priority) {
+            push_all(mut out, serialize_priority_data(frame));
+        }
+        push_all(mut out, frame.data);
+        push_all(mut out, zeros(frame.pad_length));
+    } else if frame.kind == 2 {
+        push_all(mut out, serialize_priority_data(frame));
+    } else if frame.kind == 3 {
+        pack_u32(mut out, frame.error_code);
+    } else if frame.kind == 4 {
+        let mut i = 0;
+        while i < frame.settings.len() {
+            pack_u16(mut out, frame.settings[i].0 % 256);
+            pack_u32(mut out, frame.settings[i].1);
+            i += 1;
+        }
+    } else if frame.kind == 5 {
+        push_all(mut out, serialize_padding_data(frame));
+        pack_u32(mut out, frame.promised_stream_id);
+        push_all(mut out, frame.data);
+        push_all(mut out, zeros(frame.pad_length));
+    } else if frame.kind == 6 {
+        push_all(mut out, frame.opaque_data);
+        let mut i = frame.opaque_data.len();
+        while i < 8 {
+            out.push(0);
+            i += 1;
+        }
+    } else if frame.kind == 7 {
+        pack_u32(mut out, frame.last_stream_id % 2147483648);
+        pack_u32(mut out, frame.error_code);
+        push_all(mut out, frame.additional_data);
+    } else if frame.kind == 8 {
+        pack_u32(mut out, frame.window_increment % 2147483648);
+    } else if frame.kind == 9 {
+        push_all(mut out, frame.data);
+    } else if frame.kind == 10 {
+        pack_u16(mut out, frame.origin.len());
+        push_all(mut out, frame.origin);
+        push_all(mut out, frame.field);
+    }
+    out
+}
+
+fn serialize(frame: ref Frame) -> Result[Vec[u8], String] {
+    if frame.kind == 6 and frame.opaque_data.len() > 8 {
+        let n = frame.opaque_data.len();
+        return Err(f"PING frame may not have more than 8 bytes of data, got {n}");
+    }
+    let body = serialize_body(frame);
+    let body_len = body.len();
+    let mut out: Vec[u8] = Vec.new();
+    pack_u16(mut out, (body_len / 256) % 65536);
+    out.push((body_len % 256) as u8);
+    out.push((frame.type_byte % 256) as u8);
+    // flags byte
+    let mut flags: i64 = 0;
+    for pair in defined_flags(frame.kind).iter() {
+        if has_flag(frame, pair.0) {
+            flags += pair.1;
+        }
+    }
+    out.push((flags % 256) as u8);
+    pack_u32(mut out, frame.stream_id % 2147483648);
+    push_all(mut out, body);
+    Ok(out)
+}
+
+// ---------- parse ----------
+
+// returns bytes consumed, or Err
+fn parse_padding_data(frame: mut ref Frame, data: ref Vec[u8]) -> Result[i64, String] {
+    let padded = "PADDED".to_string();
+    if has_flag(frame, padded) {
+        if data.len() < 1 {
+            return Err("Invalid Padding data".to_string());
+        }
+        frame.pad_length = data[0] as i64;
+        return Ok(1);
+    }
+    Ok(0)
+}
+
+fn parse_priority_data(frame: mut ref Frame, data: ref Vec[u8]) -> Result[i64, String] {
+    if data.len() < 5 {
+        return Err("Invalid Priority data".to_string());
+    }
+    let raw = read_u32(data, 0);
+    frame.stream_weight = data[4] as i64;
+    frame.exclusive = (raw / 2147483648) % 2 == 1;
+    frame.depends_on = raw % 2147483648;
+    Ok(5)
+}
+
+fn parse_frame_header(data: ref Vec[u8], strict: bool) -> Result[(Frame, i64), String] {
+    if data.len() < 9 {
+        return Err("Invalid frame header".to_string());
+    }
+    let length = read_u16(data, 0) * 256 + (data[2] as i64);
+    let typ = data[3] as i64;
+    let flag_byte = data[4] as i64;
+    let stream_id = read_u32(data, 5) % 2147483648;
+
+    let kind = kind_for_type(typ);
+    if kind < 0 {
+        if strict {
+            let hx = hex_upper(typ);
+            return Err(f"UnknownFrameError: Unknown frame type 0x{hx} received, length {length} bytes");
+        }
+        let mut ef = blank_frame(k_extension(), stream_id);
+        ef.type_byte = typ;
+        ef.flag_byte = flag_byte;
+        return Ok((ef, length));
+    }
+
+    // construct and run the stream-association check
+    let mut frame = blank_frame(kind, stream_id);
+    let assoc = stream_assoc(kind);
+    if stream_id == 0 and assoc == 1 {
+        let nm = type_name(kind);
+        return Err(f"Stream ID must be non-zero for {nm}");
+    }
+    if stream_id != 0 and assoc == 2 {
+        let nm = type_name(kind);
+        return Err(f"Stream ID must be zero for {nm} with stream_id={stream_id}");
+    }
+    parse_flags(mut frame, flag_byte);
+    Ok((frame, length))
+}
+
+fn kind_for_type(typ: i64) -> i64 {
+    if typ == 0 { 0 }
+    else if typ == 1 { 1 }
+    else if typ == 2 { 2 }
+    else if typ == 3 { 3 }
+    else if typ == 4 { 4 }
+    else if typ == 5 { 5 }
+    else if typ == 6 { 6 }
+    else if typ == 7 { 7 }
+    else if typ == 8 { 8 }
+    else if typ == 9 { 9 }
+    else if typ == 10 { 10 }
+    else { -1 }
+}
+
+fn parse_flags(frame: mut ref Frame, flag_byte: i64) {
+    let flags = defined_flags(frame.kind);
+    let mut i = 0;
+    while i < flags.len() {
+        let bit = flags[i].1;
+        if band(flag_byte, bit) != 0 {
+            add_flag(mut frame, flags[i].0.clone());
+        }
+        i += 1;
+    }
+}
+
+fn band(a: i64, b: i64) -> i64 {
+    let mut result = 0;
+    let mut bit = 1;
+    let mut x = a;
+    let mut y = b;
+    while x > 0 or y > 0 {
+        if (x % 2) == 1 and (y % 2) == 1 {
+            result += bit;
+        }
+        x /= 2;
+        y /= 2;
+        bit *= 2;
+    }
+    result
+}
+
+fn parse_body(frame: mut ref Frame, data: ref Vec[u8]) -> Result[(), String] {
+    if frame.kind == 0 {
+        let pdl = parse_padding_data(mut frame, data)?;
+        let endd = data.len() - frame.pad_length;
+        frame.data = sub(data, pdl, endd);
+        frame.body_len = data.len();
+        if frame.pad_length != 0 and frame.pad_length >= frame.body_len {
+            return Err("Padding is too long.".to_string());
+        }
+        Ok(())
+    } else if frame.kind == 1 {
+        let pdl = parse_padding_data(mut frame, data)?;
+        let rest = sub(data, pdl, data.len());
+        let priority = "PRIORITY".to_string();
+        let mut prio_len = 0;
+        if has_flag(frame, priority) {
+            prio_len = parse_priority_data(mut frame, rest)?;
+        }
+        frame.body_len = rest.len();
+        let endd = rest.len() - frame.pad_length;
+        frame.data = sub(rest, prio_len, endd);
+        if frame.pad_length != 0 and frame.pad_length >= frame.body_len {
+            return Err("Padding is too long.".to_string());
+        }
+        Ok(())
+    } else if frame.kind == 2 {
+        if data.len() > 5 {
+            let n = data.len();
+            return Err(f"PRIORITY must have 5 byte body: actual length {n}.");
+        }
+        parse_priority_data(mut frame, data)?;
+        frame.body_len = 5;
+        Ok(())
+    } else if frame.kind == 3 {
+        if data.len() != 4 {
+            let n = data.len();
+            return Err(f"RST_STREAM must have 4 byte body: actual length {n}.");
+        }
+        frame.error_code = read_u32(data, 0);
+        frame.body_len = 4;
+        Ok(())
+    } else if frame.kind == 4 {
+        let ack = "ACK".to_string();
+        if has_flag(frame, ack) and data.len() > 0 {
+            let n = data.len();
+            return Err(f"SETTINGS ack frame must not have payload: got {n} bytes");
+        }
+        let mut body_len = 0;
+        let mut i = 0;
+        while i < data.len() {
+            if i + 6 > data.len() {
+                return Err("Invalid SETTINGS body".to_string());
+            }
+            let name = read_u16(data, i);
+            let value = read_u32(data, i + 2);
+            set_setting(mut frame, name, value);
+            body_len += 6;
+            i += 6;
+        }
+        frame.body_len = body_len;
+        Ok(())
+    } else if frame.kind == 5 {
+        let pdl = parse_padding_data(mut frame, data)?;
+        if pdl + 4 > data.len() {
+            return Err("Invalid PUSH_PROMISE body".to_string());
+        }
+        frame.promised_stream_id = read_u32(data, pdl);
+        let endd = data.len() - frame.pad_length;
+        frame.data = sub(data, pdl + 4, endd);
+        frame.body_len = data.len();
+        if frame.promised_stream_id == 0 or frame.promised_stream_id % 2 != 0 {
+            let p = frame.promised_stream_id;
+            return Err(f"Invalid PUSH_PROMISE promised stream id: {p}");
+        }
+        if frame.pad_length != 0 and frame.pad_length >= frame.body_len {
+            return Err("Padding is too long.".to_string());
+        }
+        Ok(())
+    } else if frame.kind == 6 {
+        if data.len() != 8 {
+            let n = data.len();
+            return Err(f"PING frame must have 8 byte length: got {n}");
+        }
+        frame.opaque_data = sub(data, 0, 8);
+        frame.body_len = 8;
+        Ok(())
+    } else if frame.kind == 7 {
+        if data.len() < 8 {
+            return Err("Invalid GOAWAY body.".to_string());
+        }
+        frame.last_stream_id = read_u32(data, 0);
+        frame.error_code = read_u32(data, 4);
+        frame.body_len = data.len();
+        if data.len() > 8 {
+            frame.additional_data = sub(data, 8, data.len());
+        }
+        Ok(())
+    } else if frame.kind == 8 {
+        if data.len() > 4 {
+            let n = data.len();
+            return Err(f"WINDOW_UPDATE frame must have 4 byte length: got {n}");
+        }
+        if data.len() < 4 {
+            return Err("Invalid WINDOW_UPDATE body".to_string());
+        }
+        frame.window_increment = read_u32(data, 0);
+        if frame.window_increment < 1 or frame.window_increment > 2147483647 {
+            return Err("WINDOW_UPDATE increment must be between 1 to 2^31-1".to_string());
+        }
+        frame.body_len = 4;
+        Ok(())
+    } else if frame.kind == 9 {
+        frame.data = sub(data, 0, data.len());
+        frame.body_len = data.len();
+        Ok(())
+    } else if frame.kind == 10 {
+        if data.len() < 2 {
+            return Err("Invalid ALTSVC frame body.".to_string());
+        }
+        let origin_len = read_u16(data, 0);
+        frame.origin = sub(data, 2, 2 + origin_len);
+        if frame.origin.len() != origin_len {
+            return Err("Invalid ALTSVC frame body.".to_string());
+        }
+        frame.field = sub(data, 2 + origin_len, data.len());
+        frame.body_len = data.len();
+        Ok(())
+    } else {
+        // extension
+        frame.data = sub(data, 0, data.len());
+        frame.body_len = data.len();
+        Ok(())
+    }
+}
+
+fn set_setting(frame: mut ref Frame, name: i64, value: i64) {
+    let mut i = 0;
+    while i < frame.settings.len() {
+        if frame.settings[i].0 == name {
+            frame.settings[i] = (name, value);
+            return;
+        }
+        i += 1;
+    }
+    frame.settings.push((name, value));
+}
+
+// ---------- build from a job spec ----------
+
+fn parse_flaglist(frame: mut ref Frame, s: ref String) {
+    if s == "-" {
+        return;
+    }
+    for part in s.split(",") {
+        add_flag(mut frame, part.to_string());
+    }
+}
+
+fn build_frame(f: ref Vec[String]) -> Result[Frame, String] {
+    let typ = f[1].to_string();
+    let sid = int_of(f[2]);
+    let kind = if typ == "data" { k_data() }
+        else if typ == "headers" { k_headers() }
+        else if typ == "priority" { k_priority() }
+        else if typ == "rststream" { k_rststream() }
+        else if typ == "settings" { k_settings() }
+        else if typ == "pushpromise" { k_pushpromise() }
+        else if typ == "ping" { k_ping() }
+        else if typ == "goaway" { k_goaway() }
+        else if typ == "windowupdate" { k_windowupdate() }
+        else if typ == "continuation" { k_continuation() }
+        else { k_altsvc() };
+
+    // stream-association check, as the constructor runs it
+    let assoc = stream_assoc(kind);
+    if sid == 0 and assoc == 1 {
+        let nm = type_name(kind);
+        return Err(f"Stream ID must be non-zero for {nm}");
+    }
+    if sid != 0 and assoc == 2 {
+        let nm = type_name(kind);
+        return Err(f"Stream ID must be zero for {nm} with stream_id={sid}");
+    }
+
+    let mut frame = blank_frame(kind, sid);
+    parse_flaglist(mut frame, f[3]);
+
+    if kind == k_data() {
+        frame.data = unhex(f[4]);
+        frame.pad_length = int_of(f[5]);
+    } else if kind == k_headers() {
+        frame.depends_on = int_of(f[4]);
+        frame.stream_weight = int_of(f[5]);
+        frame.exclusive = f[6] == "1";
+        frame.data = unhex(f[7]);
+        frame.pad_length = int_of(f[8]);
+    } else if kind == k_priority() {
+        frame.depends_on = int_of(f[4]);
+        frame.stream_weight = int_of(f[5]);
+        frame.exclusive = f[6] == "1";
+    } else if kind == k_rststream() {
+        frame.error_code = int_of(f[4]);
+    } else if kind == k_settings() {
+        let ack = "ACK".to_string();
+        let has_settings = f[4] != "-";
+        if has_settings and has_flag(frame, ack) {
+            return Err("Settings must be empty if ACK flag is set.".to_string());
+        }
+        if has_settings {
+            for pair in f[4].split(";") {
+                let kv: Vec[String] = pair.split(":").map(|p| p.to_string()).collect();
+                set_setting(mut frame, int_of(kv[0]), int_of(kv[1]));
+            }
+        }
+    } else if kind == k_pushpromise() {
+        frame.promised_stream_id = int_of(f[4]);
+        frame.data = unhex(f[5]);
+        frame.pad_length = int_of(f[6]);
+    } else if kind == k_ping() {
+        frame.opaque_data = unhex(f[4]);
+    } else if kind == k_goaway() {
+        frame.last_stream_id = int_of(f[4]);
+        frame.error_code = int_of(f[5]);
+        frame.additional_data = unhex(f[6]);
+    } else if kind == k_windowupdate() {
+        frame.window_increment = int_of(f[4]);
+    } else if kind == k_continuation() {
+        frame.data = unhex(f[4]);
+    } else if kind == k_altsvc() {
+        frame.origin = unhex(f[4]);
+        frame.field = unhex(f[5]);
+    }
+    Ok(frame)
+}
+
+fn int_of(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if cs.len() > 0 and cs[0] == '-' {
+        neg = true;
+        i = 1;
+    }
+    let mut n: i64 = 0;
+    while i < cs.len() {
+        n = n * 10 + (cs[i] as i64 - 48);
+        i += 1;
+    }
+    if neg { -n } else { n }
+}
+
+// ---------- run a job ----------
+
+fn run(f: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let k = f[0].to_string();
+    if k == "build" {
+        match build_frame(f) {
+            Ok(frame) => {
+                match serialize(frame) {
+                    Ok(bytes) => {
+                        let hx = hex_of(bytes);
+                        out.push(f"hex={hx}");
+                        out.push(f"repr={frame_repr(frame)}");
+                        // round-trip
+                        let header = sub(bytes, 0, 9);
+                        match parse_frame_header(header, false) {
+                            Ok(pair) => {
+                                let mut frame2 = pair.0;
+                                let length = pair.1;
+                                let body = sub(bytes, 9, 9 + length);
+                                match parse_body(mut frame2, body) {
+                                    Ok(_) => out.push(f"rt={frame_repr(frame2)}"),
+                                    Err(e) => out.push(f"err={e}"),
+                                }
+                            }
+                            Err(e) => out.push(f"err={e}"),
+                        }
+                    }
+                    Err(e) => out.push(f"err={e}"),
+                }
+            }
+            Err(e) => out.push(f"err={e}"),
+        }
+    } else if k == "parse" {
+        let data = unhex(f[1]);
+        let strict = f[2] == "1";
+        let header = sub(data, 0, 9);
+        match parse_frame_header(header, strict) {
+            Ok(pair) => {
+                let mut frame = pair.0;
+                let length = pair.1;
+                let body = sub(data, 9, 9 + length);
+                match parse_body(mut frame, body) {
+                    Ok(_) => out.push(frame_repr(frame)),
+                    Err(e) => out.push(f"err={e}"),
+                }
+            }
+            Err(e) => out.push(f"err={e}"),
+        }
+    } else {
+        out.push(f"unknown job {k}");
+    }
+    out
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        for r in run(f).iter() {
+            out.push_str(f"  {r}\n");
+        }
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("build\tdata\t1\t-\t-\t0\n");
+    s.push_str("build\tdata\t1\tEND_STREAM\t48656c6c6f\t0\n");
+    s.push_str("build\tdata\t1\tPADDED\t48656c6c6f\t4\n");
+    s.push_str("build\tdata\t1\tEND_STREAM,PADDED\tdeadbeef\t2\n");
+    s.push_str("build\tdata\t3\t-\t00010203040506070809\t0\n");
+    s.push_str("build\theaders\t1\t-\t0\t0\t0\t-\t0\n");
+    s.push_str("build\theaders\t1\tEND_STREAM,END_HEADERS\t0\t0\t0\t828487\t0\n");
+    s.push_str("build\theaders\t1\tEND_HEADERS,PRIORITY\t20\t16\t0\t828487\t0\n");
+    s.push_str("build\theaders\t1\tPRIORITY\t5\t200\t1\t4188\t0\n");
+    s.push_str("build\theaders\t1\tEND_HEADERS,PADDED\t0\t0\t0\t828487\t5\n");
+    s.push_str("build\tpriority\t1\t-\t0\t0\t0\n");
+    s.push_str("build\tpriority\t3\t-\t1\t200\t1\n");
+    s.push_str("build\tpriority\t5\t-\t2147483647\t255\t0\n");
+    s.push_str("build\trststream\t1\t-\t0\n");
+    s.push_str("build\trststream\t1\t-\t8\n");
+    s.push_str("build\trststream\t3\t-\t4294967295\n");
+    s.push_str("build\tsettings\t0\t-\t-\n");
+    s.push_str("build\tsettings\t0\t-\t1:4096\n");
+    s.push_str("build\tsettings\t0\t-\t1:4096;3:100;4:65535\n");
+    s.push_str("build\tsettings\t0\t-\t2:1;5:16384;6:1000000\n");
+    s.push_str("build\tsettings\t0\tACK\t-\n");
+    s.push_str("build\tpushpromise\t1\tEND_HEADERS\t2\t828487\t0\n");
+    s.push_str("build\tpushpromise\t1\tEND_HEADERS,PADDED\t4\t828487\t3\n");
+    s.push_str("build\tpushpromise\t3\t-\t6\t-\t0\n");
+    s.push_str("build\tping\t0\t-\t-\n");
+    s.push_str("build\tping\t0\t-\t0001020304050607\n");
+    s.push_str("build\tping\t0\tACK\tcafe\n");
+    s.push_str("build\tgoaway\t0\t-\t0\t0\t-\n");
+    s.push_str("build\tgoaway\t0\t-\t5\t8\t6465627567\n");
+    s.push_str("build\tgoaway\t0\t-\t2147483647\t4294967295\t-\n");
+    s.push_str("build\twindowupdate\t0\t-\t1\n");
+    s.push_str("build\twindowupdate\t1\t-\t65535\n");
+    s.push_str("build\twindowupdate\t0\t-\t2147483647\n");
+    s.push_str("build\tcontinuation\t1\t-\t-\n");
+    s.push_str("build\tcontinuation\t1\tEND_HEADERS\t828487\n");
+    s.push_str("build\taltsvc\t1\t-\t-\t68323d223a3434332229\n");
+    s.push_str("build\taltsvc\t0\t-\t6578616d706c652e636f6d\t68323d223a34343322\n");
+    s.push_str("build\tping\t0\t-\t00ff6162630a0927\n");
+    s.push_str("build\tgoaway\t0\t-\t1\t1\t0d0a09\n");
+    s.push_str("build\taltsvc\t0\t-\t27717569636b27\t6162\n");
+    s.push_str("parse\t00000500010000000148656c6c6f\t0\n");
+    s.push_str("parse\t000003010400000001828487\t0\n");
+    s.push_str("parse\t0000080124000000038000000110828487\t0\n");
+    s.push_str("parse\t00000502000000000100000002c8\t0\n");
+    s.push_str("parse\t00000403000000000100000008\t0\n");
+    s.push_str("parse\t00001204000000000000010000100000030000006400040000ffff\t0\n");
+    s.push_str("parse\t000000040100000000\t0\n");
+    s.push_str("parse\t00000705040000000100000002828487\t0\n");
+    s.push_str("parse\t0000080600000000000001020304050607\t0\n");
+    s.push_str("parse\t000008060100000000cafe000000000000\t0\n");
+    s.push_str("parse\t00000d07000000000000000005000000086465627567\t0\n");
+    s.push_str("parse\t0000040800000000000000ffff\t0\n");
+    s.push_str("parse\t000003090400000001828487\t0\n");
+    s.push_str("parse\t0000160a0000000000000b6578616d706c652e636f6d68323d223a34343322\t0\n");
+    s.push_str("parse\t000006000800000001034869000000\t0\n");
+    s.push_str("parse\t000008050c000000010200000004820000\t0\n");
+    s.push_str("parse\t000000000000000000\t0\n");
+    s.push_str("parse\t000000040000000001\t0\n");
+    s.push_str("parse\t000006020000000001000000000000\t0\n");
+    s.push_str("parse\t000003030000000001000000\t0\n");
+    s.push_str("parse\t00000408000000000100000000\t0\n");
+    s.push_str("parse\t00000405040000000100000003\t0\n");
+    s.push_str("parse\t0000031f0500000001deadbe\t0\n");
+    s.push_str("parse\t0000031f0500000001deadbe\t1\n");
+    s.push_str("parse\t000000\t0\n");
+    s.push_str("parse\t00000406000000000000000000\t0\n");
+    s
+}
