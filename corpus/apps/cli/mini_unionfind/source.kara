@@ -1,0 +1,316 @@
+// mini_unionfind — a port of the `unionfind` library (Saito Tsutomu, Apache-2.0):
+// a disjoint-set / union-find structure with path compression, plus its grid
+// `isconnected` helper. Union-find is the structure behind Kruskal's MST,
+// connected-component labelling, image region analysis and equivalence merging.
+//
+// The parent array, `find` with recursive path compression, `unite` (attach
+// root(i) under root(j), no union-by-rank), `issame`, `groups` (members per
+// root in index order) and `isconnected` (every '1' cell forms one 4-connected
+// region, uniting equal-valued up/left neighbours over the flat index i + j*nw)
+// all follow the library line for line, so the output is byte-identical.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn uf_find(parent: mut ref Vec[i64], i: i64) -> i64 {
+    if parent[i] != i {
+        let p = parent[i];
+        let r = uf_find(mut parent, p);
+        parent[i] = r;
+    }
+    parent[i]
+}
+
+fn uf_unite(parent: mut ref Vec[i64], i: i64, j: i64) {
+    let ri = uf_find(mut parent, i);
+    let rj = uf_find(mut parent, j);
+    if ri != rj {
+        parent[ri] = rj;
+    }
+}
+
+fn new_parent(n: i64) -> Vec[i64] {
+    let mut p: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        p.push(k);
+        k = k + 1;
+    }
+    p
+}
+
+fn fmt_groups(parent: mut ref Vec[i64]) -> String {
+    let mut gline = String.new();
+    let mut firstg = true;
+    let mut i = 0;
+    while i < parent.len() {
+        if parent[i] == i {
+            if firstg == false {
+                gline.push_str("|");
+            }
+            firstg = false;
+            let mut firstm = true;
+            let mut j = 0;
+            while j < parent.len() {
+                let a = uf_find(mut parent, j);
+                let b = uf_find(mut parent, i);
+                if a == b {
+                    if firstm == false {
+                        gline.push_str(",");
+                    }
+                    firstm = false;
+                    gline.push_str(itoa(j));
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    gline
+}
+
+fn cells_from(s: String) -> Vec[i64] {
+    let mut g: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        if b == 49 {
+            g.push(1);
+        } else {
+            g.push(0);
+        }
+    }
+    g
+}
+
+fn conn(cells: ref Vec[i64], nw: i64, nh: i64) -> bool {
+    let total = nw * nh;
+    let mut cp = new_parent(total);
+    let mut f = -1;
+    let mut i = 0;
+    while i < nw {
+        let mut j = 0;
+        while j < nh {
+            let v = cells[i * nh + j];
+            if v == 1 {
+                if f < 0 {
+                    f = i + j * nw;
+                }
+                if j > 0 and cells[i * nh + (j - 1)] == v {
+                    uf_unite(mut cp, i + j * nw, i + j * nw - nw);
+                }
+                if i > 0 and cells[(i - 1) * nh + j] == v {
+                    uf_unite(mut cp, i + j * nw, i + j * nw - 1);
+                }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    if f < 0 {
+        return false;
+    }
+    let mut ok = true;
+    let mut i2 = 0;
+    while i2 < nw and ok {
+        let mut j2 = 0;
+        while j2 < nh and ok {
+            if cells[i2 * nh + j2] == 1 {
+                let a = uf_find(mut cp, f);
+                let b = uf_find(mut cp, i2 + j2 * nw);
+                if a != b {
+                    ok = false;
+                }
+            }
+            j2 = j2 + 1;
+        }
+        i2 = i2 + 1;
+    }
+    ok
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+
+    let mut parent: Vec[i64] = Vec.new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "new" {
+                    parent = new_parent(parse_int(f[1].clone()));
+                } else if op == "unite" {
+                    let a = split_fields(f[1].clone(), 32);
+                    uf_unite(mut parent, parse_int(a[0].clone()), parse_int(a[1].clone()));
+                } else if op == "find" {
+                    let r = uf_find(mut parent, parse_int(f[1].clone()));
+                    out.push_str(itoa(r));
+                    out.push_str("\n");
+                } else if op == "same" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let ra = uf_find(mut parent, parse_int(a[0].clone()));
+                    let rb = uf_find(mut parent, parse_int(a[1].clone()));
+                    if ra == rb {
+                        out.push_str("yes\n");
+                    } else {
+                        out.push_str("no\n");
+                    }
+                } else if op == "groups" {
+                    out.push_str(fmt_groups(mut parent));
+                    out.push_str("\n");
+                } else if op == "conn" {
+                    let a = split_fields(f[1].clone(), 32);
+                    let nw = parse_int(a[0].clone());
+                    let nh = parse_int(a[1].clone());
+                    let cells = cells_from(a[2].clone());
+                    if conn(cells, nw, nh) {
+                        out.push_str("yes\n");
+                    } else {
+                        out.push_str("no\n");
+                    }
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\t8\n");
+    s.push_str("same\t0 7\n");
+    s.push_str("unite\t0 1\n");
+    s.push_str("unite\t2 3\n");
+    s.push_str("unite\t1 3\n");
+    s.push_str("find\t0\n");
+    s.push_str("find\t2\n");
+    s.push_str("same\t0 3\n");
+    s.push_str("same\t0 4\n");
+    s.push_str("groups\n");
+    s.push_str("unite\t4 5\n");
+    s.push_str("unite\t6 7\n");
+    s.push_str("unite\t5 7\n");
+    s.push_str("groups\n");
+    s.push_str("unite\t0 4\n");
+    s.push_str("same\t1 6\n");
+    s.push_str("find\t6\n");
+    s.push_str("groups\n");
+    s.push_str("new\t6\n");
+    s.push_str("unite\t0 1\n");
+    s.push_str("unite\t1 2\n");
+    s.push_str("unite\t2 3\n");
+    s.push_str("unite\t3 4\n");
+    s.push_str("find\t0\n");
+    s.push_str("same\t0 4\n");
+    s.push_str("unite\t5 0\n");
+    s.push_str("groups\n");
+    s.push_str("find\t5\n");
+    s.push_str("find\t4\n");
+    s.push_str("new\t4\n");
+    s.push_str("unite\t0 0\n");
+    s.push_str("unite\t1 1\n");
+    s.push_str("unite\t0 1\n");
+    s.push_str("unite\t1 0\n");
+    s.push_str("same\t0 1\n");
+    s.push_str("groups\n");
+    s.push_str("find\t0\n");
+    s.push_str("find\t1\n");
+    s.push_str("new\t5\n");
+    s.push_str("groups\n");
+    s.push_str("find\t3\n");
+    s.push_str("same\t2 2\n");
+    s.push_str("same\t1 4\n");
+    s.push_str("conn\t3 3 111101111\n");
+    s.push_str("conn\t3 3 100010001\n");
+    s.push_str("conn\t3 3 110000011\n");
+    s.push_str("conn\t1 1 1\n");
+    s.push_str("conn\t2 2 0000\n");
+    s.push_str("conn\t4 3 111100100100\n");
+    s.push_str("conn\t3 4 101111101111\n");
+    s.push_str("conn\t2 3 111111\n");
+    s
+}
