@@ -1,0 +1,60 @@
+== camelize | user_id
+  userId
+== camelize | first_name
+  firstName
+== camelize | api_response_code
+  apiResponseCode
+== camelize | is_active
+  isActive
+== camelize | already_camel
+  alreadyCamel
+== camelize | HTTP_status
+  HTTPStatus
+== decamelize | firstName
+  first_name
+== decamelize | apiResponseCode
+  api_response_code
+== decamelize | getHTTPResponseCode
+  get_http_response_code
+== decamelize | userID
+  user_id
+== decamelize | alreadySnake
+  already_snake
+== decamelize | parseURLToPath
+  parse_url_to_path
+== pascalize | user_id
+  UserId
+== pascalize | first_name
+  FirstName
+== pascalize | api_response_code
+  ApiResponseCode
+== pascalize | http_status_code
+  HttpStatusCode
+== kebabize | first_name
+  first-name
+== kebabize | api_response_code
+  api-response-code
+== kebabize | firstName
+  first-name
+== kebabize | getHTTPResponseCode
+  get-http-response-code
+== dekebabize | first-name
+  first_name
+== dekebabize | api-response-code
+  api_response_code
+== is_camelcase | firstName
+  true
+== is_camelcase | first_name
+  false
+== is_snakecase | first_name
+  true
+== is_snakecase | firstName
+  false
+== is_pascalcase | FirstName
+  true
+== is_pascalcase | firstName
+  false
+== is_kebabcase | first-name
+  true
+== is_kebabcase | first_name
+  false

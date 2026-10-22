@@ -1,0 +1,459 @@
+// mini_pyhumps — a port of pyhumps 3.8.0 (Unlicense / public domain,
+// Nick Ficano): the string case converter a JSON (de)serializer uses to turn
+// API field names between snake_case, camelCase, PascalCase and kebab-case.
+//
+// pyhumps drives each conversion with four regexes (acronym folding, word
+// splitting, the camel/pascal first-letter rule, and underscore collapsing).
+// This port reimplements each as a byte scan over the identifier, so the
+// control-flow is explicit but the results are byte-for-byte the library's —
+// including its quirks (e.g. an all-caps "HTTP_status" camelizes to
+// "HTTPStatus", a lone leading "_" survives, "foo_Bar" decamelizes with a
+// doubled underscore).
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn copyv(src: ref Vec[i64]) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() { o.push(src[i]); i = i + 1; }
+    o
+}
+
+fn slice_vec(src: ref Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = a;
+    while i < b { o.push(src[i]); i = i + 1; }
+    o
+}
+
+fn bytes_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() { if a[i] != b[i] { return false; } i = i + 1; }
+    true
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn bytes_to_str(v: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+// --- byte class predicates ---------------------------------------------
+
+fn is_upper(b: i64) -> bool { b >= 65 and b <= 90 }
+fn is_lower(b: i64) -> bool { b >= 97 and b <= 122 }
+fn is_digit(b: i64) -> bool { b >= 48 and b <= 57 }
+fn is_letter(b: i64) -> bool { is_upper(b) or is_lower(b) }
+fn is_sep(b: i64) -> bool { b == 45 or b == 95 } // '-' or '_'
+fn is_ws(b: i64) -> bool { b == 32 or b == 9 or b == 10 or b == 13 or b == 11 or b == 12 }
+
+fn to_upper(b: i64) -> i64 { if is_lower(b) { b - 32 } else { b } }
+fn to_lower(b: i64) -> i64 { if is_upper(b) { b + 32 } else { b } }
+
+// _is_none: strip all whitespace.
+fn strip_ws(s: ref Vec[i64]) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() { if not is_ws(s[i]) { o.push(s[i]); } i = i + 1; }
+    o
+}
+
+// str.isupper(): at least one cased char, and every cased char is upper.
+fn all_upper(s: ref Vec[i64]) -> bool {
+    let mut has = false;
+    let mut i = 0;
+    while i < s.len() {
+        let b = s[i];
+        if is_lower(b) { return false; }
+        if is_upper(b) { has = true; }
+        i = i + 1;
+    }
+    has
+}
+
+// str.isnumeric(): non-empty and every char a digit.
+fn all_numeric(s: ref Vec[i64]) -> bool {
+    if s.len() == 0 { return false; }
+    let mut i = 0;
+    while i < s.len() { if not is_digit(s[i]) { return false; } i = i + 1; }
+    true
+}
+
+fn lower_all(s: ref Vec[i64]) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() { o.push(to_lower(s[i])); i = i + 1; }
+    o
+}
+
+// --- the four regex-equivalent passes ----------------------------------
+
+// UNDERSCORE_RE = (?<=[^\-_])[\-_]+[^\-_] with the match's trailing char
+// uppercased and the separators dropped. A separator run keeps its original
+// bytes when it is leading (no preceding non-separator) or trailing (no
+// following non-separator).
+fn collapse_us_upper(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let b = s[i];
+        if is_sep(b) and i > 0 and not is_sep(s[i - 1]) {
+            let mut j = i;
+            while j < n and is_sep(s[j]) { j = j + 1; }
+            if j < n {
+                out.push(to_upper(s[j]));
+                i = j + 1;
+            } else {
+                while i < n { out.push(s[i]); i = i + 1; }
+            }
+        } else {
+            out.push(b);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// Same shape, but the kebabize fallback replaces a separator run with a
+// single '-' followed by the next char unchanged (no upper-casing).
+fn collapse_us_hyphen(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let b = s[i];
+        if is_sep(b) and i > 0 and not is_sep(s[i - 1]) {
+            let mut j = i;
+            while j < n and is_sep(s[j]) { j = j + 1; }
+            if j < n {
+                out.push(45);
+                out.push(s[j]);
+                i = j + 1;
+            } else {
+                while i < n { out.push(s[i]); i = i + 1; }
+            }
+        } else {
+            out.push(b);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// PASCAL_RE = ([^\-_]+) with the first char of each non-separator run
+// upper-cased.
+fn pascal_sub(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        if is_sep(s[i]) {
+            out.push(s[i]);
+            i = i + 1;
+        } else {
+            out.push(to_upper(s[i]));
+            i = i + 1;
+            while i < n and not is_sep(s[i]) { out.push(s[i]); i = i + 1; }
+        }
+    }
+    out
+}
+
+// str.title() over a run of upper-case letters and digits: the first letter
+// of each letter-word stays upper, the rest lower; a digit ends the word.
+fn title_slice(s: ref Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = a;
+    let mut prev_letter = false;
+    while i < b {
+        let c = s[i];
+        if is_letter(c) {
+            if prev_letter { out.push(to_lower(c)); } else { out.push(to_upper(c)); }
+            prev_letter = true;
+        } else {
+            out.push(c);
+            prev_letter = false;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ACRONYM_RE = ([A-Z\d]+)(?=[A-Z\d]|$) title-cased. For a maximal run of
+// upper/digit bytes: title the whole run if it ends the string; otherwise, if
+// the run is >= 2 long, title all but its last char (that char starts the
+// next word and is left as-is); a lone upper/digit before a lower char is
+// untouched.
+fn fix_abbr(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = s.len();
+    let mut i = 0;
+    while i < n {
+        let b = s[i];
+        if is_upper(b) or is_digit(b) {
+            let mut j = i;
+            while j < n and (is_upper(s[j]) or is_digit(s[j])) { j = j + 1; }
+            let runlen = j - i;
+            if j == n {
+                let t = title_slice(s, i, j);
+                let mut k = 0;
+                while k < t.len() { out.push(t[k]); k = k + 1; }
+            } else {
+                if runlen >= 2 {
+                    let t = title_slice(s, i, j - 1);
+                    let mut k = 0;
+                    while k < t.len() { out.push(t[k]); k = k + 1; }
+                    out.push(s[j - 1]);
+                } else {
+                    out.push(s[i]);
+                }
+            }
+            i = j;
+        } else {
+            out.push(b);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// SPLIT_RE = ([\-_]*[A-Z][^A-Z]*[\-_]*) via re.split, non-empty pieces joined
+// by `sep`. [^A-Z]* already swallows any trailing separators, so the pattern's
+// trailing [\-_]* is always empty here.
+fn separate_words(s: ref Vec[i64], sep: i64) -> Vec[i64] {
+    let mut pieces: Vec[Vec[i64]] = Vec.new();
+    let n = s.len();
+    let mut pos = 0;
+    let mut last = 0;
+    while pos < n {
+        let mut k = pos;
+        while k < n and is_sep(s[k]) { k = k + 1; }
+        if k < n and is_upper(s[k]) {
+            let mstart = pos;
+            k = k + 1;
+            while k < n and not is_upper(s[k]) { k = k + 1; }
+            let mend = k;
+            if mstart > last { pieces.push(slice_vec(s, last, mstart)); }
+            pieces.push(slice_vec(s, mstart, mend));
+            last = mend;
+            pos = mend;
+        } else {
+            pos = pos + 1;
+        }
+    }
+    if last < n { pieces.push(slice_vec(s, last, n)); }
+    let mut out: Vec[i64] = Vec.new();
+    let mut first = true;
+    for p in pieces {
+        if p.len() > 0 {
+            if not first { out.push(sep); }
+            let mut m = 0;
+            while m < p.len() { out.push(p[m]); m = m + 1; }
+            first = false;
+        }
+    }
+    out
+}
+
+fn first_two_upper(t: ref Vec[i64]) -> bool {
+    let n = t.len();
+    let lim = if n < 2 { n } else { 2 };
+    let mut has = false;
+    let mut i = 0;
+    while i < lim {
+        let b = t[i];
+        if is_lower(b) { return false; }
+        if is_upper(b) { has = true; }
+        i = i + 1;
+    }
+    has
+}
+
+// --- the public conversions --------------------------------------------
+
+fn camelize_v(orig: ref Vec[i64]) -> Vec[i64] {
+    let s = strip_ws(orig);
+    if all_upper(s) or all_numeric(s) { return copyv(orig); }
+    let mut t = copyv(s);
+    if t.len() != 0 and not first_two_upper(t) {
+        let mut r: Vec[i64] = Vec.new();
+        r.push(to_lower(t[0]));
+        let mut i = 1;
+        while i < t.len() { r.push(t[i]); i = i + 1; }
+        t = r;
+    }
+    collapse_us_upper(t)
+}
+
+fn pascalize_v(orig: ref Vec[i64]) -> Vec[i64] {
+    let s = strip_ws(orig);
+    if all_upper(s) or all_numeric(s) { return copyv(orig); }
+    let p = pascal_sub(s);
+    let c = camelize_v(p);
+    if c.len() == 0 { return c; }
+    let mut r: Vec[i64] = Vec.new();
+    r.push(to_upper(c[0]));
+    let mut i = 1;
+    while i < c.len() { r.push(c[i]); i = i + 1; }
+    r
+}
+
+fn decamelize_v(orig: ref Vec[i64]) -> Vec[i64] {
+    let s = strip_ws(orig);
+    if all_upper(s) or all_numeric(s) { return copyv(orig); }
+    let f = fix_abbr(s);
+    let w = separate_words(f, 95);
+    lower_all(w)
+}
+
+fn is_camel(v: ref Vec[i64]) -> bool {
+    let c = camelize_v(v);
+    bytes_eq(v, c)
+}
+
+fn is_pascal(v: ref Vec[i64]) -> bool {
+    let c = pascalize_v(v);
+    bytes_eq(v, c)
+}
+
+fn is_kebab(v: ref Vec[i64]) -> bool {
+    let c = kebabize_v(v);
+    bytes_eq(v, c)
+}
+
+fn kebabize_v(orig: ref Vec[i64]) -> Vec[i64] {
+    let s = strip_ws(orig);
+    if all_numeric(s) { return copyv(orig); }
+    let is_up = all_upper(s);
+    let camel = is_camel(s);
+    let pascal = is_pascal(s);
+    if (not is_up) and (camel or pascal) {
+        let f = fix_abbr(s);
+        let w = separate_words(f, 45);
+        return lower_all(w);
+    }
+    collapse_us_hyphen(s)
+}
+
+fn dekebabize_v(orig: ref Vec[i64]) -> Vec[i64] {
+    let s = strip_ws(orig);
+    if all_numeric(s) { return copyv(orig); }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        let b = s[i];
+        if b == 45 { out.push(95); } else { out.push(b); }
+        i = i + 1;
+    }
+    out
+}
+
+fn is_snakecase(v: ref Vec[i64]) -> bool {
+    if is_kebab(v) and not is_camel(v) { return false; }
+    let d = decamelize_v(v);
+    bytes_eq(v, d)
+}
+
+// --- driver ------------------------------------------------------------
+
+fn run_op(op: ref String, arg: ref String) -> String {
+    let a = bytes_of(arg);
+    if op == "camelize" { let r = camelize_v(a); return bytes_to_str(r); }
+    if op == "decamelize" { let r = decamelize_v(a); return bytes_to_str(r); }
+    if op == "pascalize" { let r = pascalize_v(a); return bytes_to_str(r); }
+    if op == "kebabize" { let r = kebabize_v(a); return bytes_to_str(r); }
+    if op == "dekebabize" { let r = dekebabize_v(a); return bytes_to_str(r); }
+    if op == "is_camelcase" { if is_camel(a) { return "true"; } return "false"; }
+    if op == "is_snakecase" { if is_snakecase(a) { return "true"; } return "false"; }
+    if op == "is_pascalcase" { if is_pascal(a) { return "true"; } return "false"; }
+    if op == "is_kebabcase" { if is_kebab(a) { return "true"; } return "false"; }
+    "?"
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let mut out = String.new();
+    let n = db.len();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let mut t = line_start;
+                while t < i and db[t] != 9 { t = t + 1; }
+                let opv = slice_vec(db, line_start, t);
+                let op = bytes_to_str(opv);
+                let mut arg = String.new();
+                if t < i {
+                    let argv = slice_vec(db, t + 1, i);
+                    arg = bytes_to_str(argv);
+                }
+                out.push_str("== ");
+                out.push_str(op);
+                out.push_str(" | ");
+                out.push_str(arg);
+                out.push_str("\n");
+                out.push_str("  ");
+                out.push_str(run_op(op, arg));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("camelize\tuser_id\n");
+    s.push_str("camelize\tfirst_name\n");
+    s.push_str("camelize\tapi_response_code\n");
+    s.push_str("camelize\tis_active\n");
+    s.push_str("camelize\talready_camel\n");
+    s.push_str("camelize\tHTTP_status\n");
+    s.push_str("decamelize\tfirstName\n");
+    s.push_str("decamelize\tapiResponseCode\n");
+    s.push_str("decamelize\tgetHTTPResponseCode\n");
+    s.push_str("decamelize\tuserID\n");
+    s.push_str("decamelize\talreadySnake\n");
+    s.push_str("decamelize\tparseURLToPath\n");
+    s.push_str("pascalize\tuser_id\n");
+    s.push_str("pascalize\tfirst_name\n");
+    s.push_str("pascalize\tapi_response_code\n");
+    s.push_str("pascalize\thttp_status_code\n");
+    s.push_str("kebabize\tfirst_name\n");
+    s.push_str("kebabize\tapi_response_code\n");
+    s.push_str("kebabize\tfirstName\n");
+    s.push_str("kebabize\tgetHTTPResponseCode\n");
+    s.push_str("dekebabize\tfirst-name\n");
+    s.push_str("dekebabize\tapi-response-code\n");
+    s.push_str("is_camelcase\tfirstName\n");
+    s.push_str("is_camelcase\tfirst_name\n");
+    s.push_str("is_snakecase\tfirst_name\n");
+    s.push_str("is_snakecase\tfirstName\n");
+    s.push_str("is_pascalcase\tFirstName\n");
+    s.push_str("is_pascalcase\tfirstName\n");
+    s.push_str("is_kebabcase\tfirst-name\n");
+    s.push_str("is_kebabcase\tfirst_name\n");
+    s
+}
