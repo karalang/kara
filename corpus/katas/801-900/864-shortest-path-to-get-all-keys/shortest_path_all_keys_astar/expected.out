@@ -1,0 +1,17 @@
+@.a.. / ###.# / b.A.B -> 8
+@..aA / ..B#. / ....b -> 6
+@Aa -> -1
+@aA -> 1
+Aa@ -> 1
+@#a / A.. -> -1
+a.@.b / ##### / A...B -> 6
+@..... / #####. / a.A..b / ###### / B..... -> -1
+b.@.a / .###. / ..A.. / .#B#. -> 6
+@abcdef / ABCDEF. -> 6
+fedcba@ / FEDCBA# -> 6
+@.#ab / .#.## / ...BA -> -1
+30 by 30, walls 0 in 100, six keys: 86
+30 by 30, walls 20 in 100, six keys: 91
+30 by 30, walls 30 in 100, six keys: 108
+30 by 30, walls 40 in 100, six keys: -1
+1000 random grids: 711 with every key reached, moves sum to 4806, checksum 559109712

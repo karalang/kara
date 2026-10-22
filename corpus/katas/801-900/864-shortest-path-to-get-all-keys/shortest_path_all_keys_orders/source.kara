@@ -1,0 +1,183 @@
+// LeetCode #864: Shortest Path to Get All Keys -- a table over the order
+// the keys are picked up in.
+//
+// A shortest walk picks the keys up in some order, and between two of
+// them it can only pass the locks of keys already held. So it is at least
+// as long as the sum, over that order, of the breadth-first distances
+// with exactly those locks open; and that sum is a real walk, since
+// stepping on a key early only opens more. `best[held][last]`, the
+// shortest such walk that holds the keys `held` and stands on key `last`,
+// extends to each key not held, the sets taken in increasing order, as
+// the travelling-salesman table does. O(2^k * k * rows * cols).
+
+// steps from `from` to every cell with the locks of `held` open, -1 where
+// no walk reaches
+fn distances(cells: Vec[u8], rows: i64, cols: i64, from: i64, held: i64) -> Vec[i64] {
+    let mut dist: Vec[i64] = Vec.filled(cells.len(), -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    dist[from] = 0;
+    queue.push_back(from);
+    while let Some(cell) = queue.pop_front() {
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                continue;
+            }
+            let next = nr * cols + nc;
+            let b = cells[next];
+            if dist[next] >= 0 or b == b'#' {
+                continue;
+            }
+            if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                continue;
+            }
+            dist[next] = dist[cell] + 1;
+            queue.push_back(next);
+        }
+    }
+    dist
+}
+
+fn shortest_path_all_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let mut start = 0;
+    let mut at: Vec[i64] = Vec.filled(6, -1);
+    let mut keys = 0;
+    for i in 0..cells.len() {
+        if cells[i] == b'@' {
+            start = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            at[(cells[i] - b'a') as i64] = i;
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..all + 1 {
+        best.push(Vec.filled(keys, -1));
+    }
+    let first = distances(cells, rows, cols, start, 0);
+    for key in 0..keys {
+        best[1 << key][key] = first[at[key]];
+    }
+    for held in 1..all + 1 {
+        for last in 0..keys {
+            if best[held][last] < 0 {
+                continue;
+            }
+            let dist = distances(cells, rows, cols, at[last], held);
+            for key in 0..keys {
+                if (held & (1 << key)) != 0 or dist[at[key]] < 0 {
+                    continue;
+                }
+                let now = held | (1 << key);
+                let total = best[held][last] + dist[at[key]];
+                if best[now][key] < 0 or total < best[now][key] {
+                    best[now][key] = total;
+                }
+            }
+        }
+    }
+    let mut answer = -1;
+    for last in 0..keys {
+        if best[all][last] >= 0 and (answer < 0 or best[all][last] < answer) {
+            answer = best[all][last];
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(grid: Vec[String]) {
+    println(f"{grid.join(" / ")} -> {shortest_path_all_keys(grid)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random grid: each cell a wall with chance `walls` in 100, then the
+// start, the `keys` keys and their locks on distinct random cells.
+fn random_grid(seed: mut ref i64, rows: i64, cols: i64, keys: i64, walls: i64) -> Vec[String] {
+    let size = rows * cols;
+    let mut cells: Vec[u8] = Vec.new();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..size {
+        if next_random(mut seed) % 100 < walls {
+            cells.push(b'#');
+        } else {
+            cells.push(b'.');
+        }
+        order.push(i);
+    }
+    for i in 1..size {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    cells[order[0]] = b'@';
+    for i in 0..keys {
+        cells[order[1 + i]] = b'a' + i as u8;
+        cells[order[1 + keys + i]] = b'A' + i as u8;
+    }
+    let mut grid: Vec[String] = Vec.new();
+    for r in 0..rows {
+        let mut row = String.new();
+        for c in 0..cols {
+            row.push(cells[r * cols + c] as char);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show(["@.a..", "###.#", "b.A.B"]);
+    show(["@..aA", "..B#.", "....b"]);
+    show(["@Aa"]);
+    show(["@aA"]);
+    show(["Aa@"]);
+    show(["@#a", "A.."]);
+    show(["a.@.b", "#####", "A...B"]);
+    show(["@.....", "#####.", "a.A..b", "######", "B....."]);
+    show(["b.@.a", ".###.", "..A..", ".#B#."]);
+    show(["@abcdef", "ABCDEF."]);
+    show(["fedcba@", "FEDCBA#"]);
+    show(["@.#ab", ".#.##", "...BA"]);
+    // LeetCode's largest grids, 30 by 30, with six keys
+    let mut seed = 864;
+    for walls in [0, 20, 30, 40] {
+        let grid = random_grid(mut seed, 30, 30, 6, walls);
+        println(f"30 by 30, walls {walls} in 100, six keys: {shortest_path_all_keys(grid)}");
+    }
+    // random grids of up to 8 by 8 with one to six keys
+    let mut reached = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let rows = 1 + next_random(mut seed) % 8;
+        let cols = 1 + next_random(mut seed) % 8;
+        let most = (rows * cols - 1) / 2;
+        if most == 0 {
+            continue;
+        }
+        let keys = 1 + next_random(mut seed) % most.min(6);
+        let walls = next_random(mut seed) % 40;
+        let moves = shortest_path_all_keys(random_grid(mut seed, rows, cols, keys, walls));
+        if moves >= 0 {
+            reached += 1;
+            total += moves;
+        }
+        check = (check * 31 + moves + 2) % 1000000007;
+    }
+    println(f"1000 random grids: {reached} with every key reached, moves sum to {total}, checksum {check}");
+}

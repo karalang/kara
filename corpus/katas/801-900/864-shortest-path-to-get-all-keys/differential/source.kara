@@ -1,0 +1,657 @@
+// LeetCode #864: Shortest Path to Get All Keys -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: the fewest moves after which a walk from the start,
+// never onto a wall or onto a lock without its key, holds every key; -1
+// if no number of moves does.
+
+// ---- the ★ arm: breadth-first search over (cell, keys held) ---------------
+fn star_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    let mut start = 0;
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            start = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut seen: Vec[bool] = Vec.filled(size << keys, false);
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    seen[start] = true;
+    queue.push_back((start, 0, 0));
+    while let Some((cell, held, steps)) = queue.pop_front() {
+        if held == all {
+            return steps;
+        }
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                continue;
+            }
+            let next = nr * cols + nc;
+            let b = cells[next];
+            if b == b'#' {
+                continue;
+            }
+            if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                continue;
+            }
+            let mut now = held;
+            if b >= b'a' and b <= b'f' {
+                now = held | (1 << (b - b'a') as i64);
+            }
+            if not seen[now * size + next] {
+                seen[now * size + next] = true;
+                queue.push_back((next, now, steps + 1));
+            }
+        }
+    }
+    -1
+}
+
+// ---- Dijkstra over (point, keys held) -------------------------------------
+fn dijkstra_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    // point 0 is the start, point 1 + i key i
+    let mut at: Vec[i64] = Vec.filled(7, -1);
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            at[0] = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            at[1 + (cells[i] - b'a') as i64] = i;
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut best: Vec[i64] = Vec.filled((keys + 1) << keys, -1);
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    best[0] = 0;
+    queue.push((0, 0, 0));
+    while let Some((d, point, held)) = queue.pop() {
+        if held == all {
+            return d;
+        }
+        if d > best[held * (keys + 1) + point] {
+            continue;
+        }
+        // breadth-first search from the point, stopping at new keys
+        let mut dist: Vec[i64] = Vec.filled(size, -1);
+        let mut cells_queue: VecDeque[i64] = VecDeque.new();
+        dist[at[point]] = 0;
+        cells_queue.push_back(at[point]);
+        while let Some(cell) = cells_queue.pop_front() {
+            let r = cell / cols;
+            let c = cell % cols;
+            for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let nr = r + dr;
+                let nc = c + dc;
+                if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                    continue;
+                }
+                let next = nr * cols + nc;
+                let b = cells[next];
+                if dist[next] >= 0 or b == b'#' {
+                    continue;
+                }
+                if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                    continue;
+                }
+                dist[next] = dist[cell] + 1;
+                if b >= b'a' and b <= b'f' and (held & (1 << (b - b'a') as i64)) == 0 {
+                    let key = (b - b'a') as i64;
+                    let now = held | (1 << key);
+                    let state = now * (keys + 1) + 1 + key;
+                    let total = d + dist[next];
+                    if best[state] < 0 or total < best[state] {
+                        best[state] = total;
+                        queue.push((total, 1 + key, now));
+                    }
+                } else {
+                    cells_queue.push_back(next);
+                }
+            }
+        }
+    }
+    -1
+}
+
+// ---- a table over the order of the keys -----------------------------------
+// steps from `from` to every cell with the locks of `held` open, -1 where
+// no walk reaches
+fn orders_distances(cells: Vec[u8], rows: i64, cols: i64, from: i64, held: i64) -> Vec[i64] {
+    let mut dist: Vec[i64] = Vec.filled(cells.len(), -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    dist[from] = 0;
+    queue.push_back(from);
+    while let Some(cell) = queue.pop_front() {
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                continue;
+            }
+            let next = nr * cols + nc;
+            let b = cells[next];
+            if dist[next] >= 0 or b == b'#' {
+                continue;
+            }
+            if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                continue;
+            }
+            dist[next] = dist[cell] + 1;
+            queue.push_back(next);
+        }
+    }
+    dist
+}
+
+fn orders_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let mut start = 0;
+    let mut at: Vec[i64] = Vec.filled(6, -1);
+    let mut keys = 0;
+    for i in 0..cells.len() {
+        if cells[i] == b'@' {
+            start = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            at[(cells[i] - b'a') as i64] = i;
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..all + 1 {
+        best.push(Vec.filled(keys, -1));
+    }
+    let first = orders_distances(cells, rows, cols, start, 0);
+    for key in 0..keys {
+        best[1 << key][key] = first[at[key]];
+    }
+    for held in 1..all + 1 {
+        for last in 0..keys {
+            if best[held][last] < 0 {
+                continue;
+            }
+            let dist = orders_distances(cells, rows, cols, at[last], held);
+            for key in 0..keys {
+                if (held & (1 << key)) != 0 or dist[at[key]] < 0 {
+                    continue;
+                }
+                let now = held | (1 << key);
+                let total = best[held][last] + dist[at[key]];
+                if best[now][key] < 0 or total < best[now][key] {
+                    best[now][key] = total;
+                }
+            }
+        }
+    }
+    let mut answer = -1;
+    for last in 0..keys {
+        if best[all][last] >= 0 and (answer < 0 or best[all][last] < answer) {
+            answer = best[all][last];
+        }
+    }
+    answer
+}
+
+// ---- packed states, a level at a time -------------------------------------
+fn levels_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    let mut level: Vec[i64] = Vec.new();
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            level.push(i);
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut seen: Set[i64] = Set.new();
+    seen.insert(level[0]);
+    let mut steps = 0;
+    while level.len() > 0 {
+        let mut next_level: Vec[i64] = Vec.new();
+        for state in level.iter() {
+            let held = *state / size;
+            if held == all {
+                return steps;
+            }
+            let cell = *state % size;
+            let r = cell / cols;
+            let c = cell % cols;
+            let mut near: Vec[i64] = Vec.new();
+            if r > 0 {
+                near.push(cell - cols);
+            }
+            if r + 1 < rows {
+                near.push(cell + cols);
+            }
+            if c > 0 {
+                near.push(cell - 1);
+            }
+            if c + 1 < cols {
+                near.push(cell + 1);
+            }
+            for next in near {
+                let b = cells[next];
+                let open = match b {
+                    b'#' => false,
+                    b'A'..=b'F' => (held & (1 << (b - b'A') as i64)) != 0,
+                    _ => true,
+                };
+                if not open {
+                    continue;
+                }
+                let now = match b {
+                    b'a'..=b'f' => held | (1 << (b - b'a') as i64),
+                    _ => held,
+                };
+                let packed = now * size + next;
+                if not seen.contains(packed) {
+                    seen.insert(packed);
+                    next_level.push(packed);
+                }
+            }
+        }
+        level = next_level;
+        steps += 1;
+    }
+    -1
+}
+
+// ---- A* over (cell, keys held) --------------------------------------------
+fn astar_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    let mut start = 0;
+    let mut at: Vec[i64] = Vec.filled(6, -1);
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            start = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            at[(cells[i] - b'a') as i64] = i;
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut done: Vec[bool] = Vec.filled(size << keys, false);
+    let mut queue: PriorityQueue[(i64, i64, i64, i64)] = PriorityQueue.new();
+    queue.push((astar_guess(at, keys, cols, start, 0), 0, start, 0));
+    while let Some((_, steps, cell, held)) = queue.pop() {
+        if held == all {
+            return steps;
+        }
+        if done[held * size + cell] {
+            continue;
+        }
+        done[held * size + cell] = true;
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                continue;
+            }
+            let next = nr * cols + nc;
+            let b = cells[next];
+            if b == b'#' {
+                continue;
+            }
+            if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                continue;
+            }
+            let mut now = held;
+            if b >= b'a' and b <= b'f' {
+                now = held | (1 << (b - b'a') as i64);
+            }
+            if not done[now * size + next] {
+                queue.push((steps + 1 + astar_guess(at, keys, cols, next, now), steps + 1, next, now));
+            }
+        }
+    }
+    -1
+}
+
+// the largest Manhattan distance from `cell` to a key not in `held`
+fn astar_guess(at: Vec[i64], keys: i64, cols: i64, cell: i64, held: i64) -> i64 {
+    let mut far = 0;
+    for key in 0..keys {
+        if (held & (1 << key)) == 0 {
+            let d = (cell / cols - at[key] / cols).abs() + (cell % cols - at[key] % cols).abs();
+            far = far.max(d);
+        }
+    }
+    far
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// The set of (cell, keys held) states some walk can be in after exactly t
+// moves, for t = 0, 1, 2, ..., with no state ruled out for having been
+// seen before; the first t whose set holds a state with every key is the
+// answer. Each set follows from the one before by a fixed rule, so once a
+// set repeats an earlier one the sets cycle, and if none so far held
+// every key none ever will.
+fn literal_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let cells = cells_of(grid);
+    let size = cells.len();
+    let mut keys = 0;
+    let mut now: Vec[bool] = Vec.new();
+    for i in 0..size {
+        if cells[i] >= b'a' and cells[i] <= b'f' {
+            keys += 1;
+        }
+    }
+    for i in 0..size << keys {
+        now.push(cells[i % size] == b'@' and i < size);
+    }
+    let all = (1 << keys) - 1;
+    let mut history: Set[String] = Set.new();
+    let mut t = 0;
+    loop {
+        let mut key = String.new();
+        for s in 0..now.len() {
+            if now[s] {
+                if s / size == all {
+                    return t;
+                }
+                key.push('1');
+            } else {
+                key.push('0');
+            }
+        }
+        if history.contains(key) {
+            return -1;
+        }
+        history.insert(key);
+        let mut next: Vec[bool] = Vec.filled(size << keys, false);
+        for s in 0..now.len() {
+            if not now[s] {
+                continue;
+            }
+            let held = s / size;
+            let cell = s % size;
+            for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let r = cell / cols + dr;
+                let c = cell % cols + dc;
+                if r < 0 or r >= rows or c < 0 or c >= cols {
+                    continue;
+                }
+                let b = cells[r * cols + c];
+                if b == b'#' or (b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0) {
+                    continue;
+                }
+                let mut got = held;
+                if b >= b'a' and b <= b'f' {
+                    got = held | (1 << (b - b'a') as i64);
+                }
+                next[got * size + r * cols + c] = true;
+            }
+        }
+        now = next;
+        t += 1;
+    }
+}
+
+// ---- grids -------------------------------------------------------------------
+
+fn cells_of(grid: Vec[String]) -> Vec[u8] {
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    cells
+}
+
+fn grid_of(cells: Vec[u8], rows: i64, cols: i64) -> Vec[String] {
+    let mut grid: Vec[String] = Vec.new();
+    for r in 0..rows {
+        let mut row = String.new();
+        for c in 0..cols {
+            row.push(cells[r * cols + c] as char);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// the grid with rows and columns swapped
+fn transposed(grid: Vec[String]) -> Vec[String] {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let cells = cells_of(grid);
+    let mut out: Vec[u8] = Vec.new();
+    for c in 0..cols {
+        for r in 0..rows {
+            out.push(cells[r * cols + c]);
+        }
+    }
+    grid_of(out, cols, rows)
+}
+
+// the grid turned half a turn: each row reversed, and the rows in the
+// reverse order
+fn turned(grid: Vec[String]) -> Vec[String] {
+    let mut cells = cells_of(grid);
+    cells.reverse();
+    grid_of(cells, grid.len(), grid[0].len())
+}
+
+// the grid with key and lock `i` renamed to `to[i]`
+fn relabelled(grid: Vec[String], to: Vec[i64]) -> Vec[String] {
+    let mut cells = cells_of(grid);
+    for i in 0..cells.len() {
+        if cells[i] >= b'a' and cells[i] <= b'f' {
+            cells[i] = b'a' + to[(cells[i] - b'a') as i64] as u8;
+        } else if cells[i] >= b'A' and cells[i] <= b'F' {
+            cells[i] = b'A' + to[(cells[i] - b'A') as i64] as u8;
+        }
+    }
+    grid_of(cells, grid.len(), grid[0].len())
+}
+
+// the grid with cell `at` replaced by `b`
+fn with_cell(grid: Vec[String], at: i64, b: u8) -> Vec[String] {
+    let mut cells = cells_of(grid);
+    cells[at] = b;
+    grid_of(cells, grid.len(), grid[0].len())
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random grid: each cell a wall with chance `walls` in 100, then the
+// start, the `keys` keys and their locks on distinct random cells.
+fn random_grid(seed: mut ref i64, rows: i64, cols: i64, keys: i64, walls: i64) -> Vec[String] {
+    let size = rows * cols;
+    let mut cells: Vec[u8] = Vec.new();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..size {
+        if next_random(mut seed) % 100 < walls {
+            cells.push(b'#');
+        } else {
+            cells.push(b'.');
+        }
+        order.push(i);
+    }
+    for i in 1..size {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    cells[order[0]] = b'@';
+    for i in 0..keys {
+        cells[order[1 + i]] = b'a' + i as u8;
+        cells[order[1 + keys + i]] = b'A' + i as u8;
+    }
+    grid_of(cells, rows, cols)
+}
+
+// ---- the properties --------------------------------------------------------
+
+fn arms(grid: Vec[String]) -> Vec[i64] {
+    [star_keys(grid), dijkstra_keys(grid), orders_keys(grid), levels_keys(grid), astar_keys(grid)]
+}
+
+// checks made, and failures by property (index 0 holds P1)
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+// `a` is a longer walk than `b`, -1 being no walk at all
+fn longer(a: i64, b: i64) -> bool {
+    if a < 0 {
+        b >= 0
+    } else {
+        b >= 0 and a > b
+    }
+}
+
+fn expect(t: mut ref Tally, p: i64, grid: Vec[String], want: i64) {
+    for got in arms(grid) {
+        t.checks += 1;
+        if got != want {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, grid: Vec[String]) -> i64 {
+    let want = literal_keys(grid);
+    // P1: the statement's answer
+    expect(mut t, 1, grid, want);
+    // P2: the grid transposed gives the same answer
+    expect(mut t, 2, transposed(grid), want);
+    // P3: the grid turned half a turn gives the same answer
+    expect(mut t, 3, turned(grid), want);
+    // P4: the keys renamed, each lock with its key, give the same answer
+    let cells = cells_of(grid);
+    let mut keys = 0;
+    for b in cells.iter() {
+        if *b >= b'a' and *b <= b'f' {
+            keys += 1;
+        }
+    }
+    let mut to: Vec[i64] = Vec.new();
+    for i in 0..keys {
+        to.push(i);
+    }
+    for i in 1..keys {
+        let j = next_random(mut seed) % (i + 1);
+        to.swap(i, j);
+    }
+    expect(mut t, 4, relabelled(grid, to), want);
+    // P5: a lock opened never makes the answer longer (each lock in turn)
+    // P6: a wall on an empty cell never makes it shorter (each such cell)
+    for i in 0..cells.len() {
+        let mut p = 0;
+        let mut b = b'.';
+        if cells[i] >= b'A' and cells[i] <= b'F' {
+            p = 5;
+        } else if cells[i] == b'.' {
+            p = 6;
+            b = b'#';
+        }
+        if p == 0 {
+            continue;
+        }
+        for got in arms(with_cell(grid, i, b)) {
+            t.checks += 1;
+            if (p == 5 and longer(got, want)) or (p == 6 and longer(want, got)) {
+                t.failures[p - 1] += 1;
+            }
+        }
+    }
+    want
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 864;
+    let mut grids = 0;
+    let mut reached = 0;
+    let mut total = 0;
+    // LeetCode's examples
+    for grid in [["@.a..", "###.#", "b.A.B"], ["@..aA", "..B#.", "....b"], ["@Aa"]] {
+        let moves = properties(mut t, mut seed, grid);
+        grids += 1;
+        if moves >= 0 {
+            reached += 1;
+            total += moves;
+        }
+    }
+    // random grids of up to 4 by 5 with one to three keys
+    while grids < 4000 {
+        let rows = 1 + next_random(mut seed) % 4;
+        let cols = 1 + next_random(mut seed) % 5;
+        let most = (rows * cols - 1) / 2;
+        if most == 0 {
+            continue;
+        }
+        let keys = 1 + next_random(mut seed) % most.min(3);
+        let walls = next_random(mut seed) % 40;
+        let moves = properties(mut t, mut seed, random_grid(mut seed, rows, cols, keys, walls));
+        grids += 1;
+        if moves >= 0 {
+            reached += 1;
+            total += moves;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{grids} grids, {reached} with every key reached, moves sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

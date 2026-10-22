@@ -1,0 +1,165 @@
+// LeetCode #864: Shortest Path to Get All Keys -- the ★ arm's states
+// packed into one integer each and searched a level at a time.
+//
+// A state is `held * size + cell`. The next level is every state one step
+// from this one that has not been seen, kept in a `Set`; the first level
+// holding a state with every key gives the answer, and an empty level
+// means no walk gets them all. O(rows * cols * 2^k) states.
+
+fn shortest_path_all_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    let mut level: Vec[i64] = Vec.new();
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            level.push(i);
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut seen: Set[i64] = Set.new();
+    seen.insert(level[0]);
+    let mut steps = 0;
+    while level.len() > 0 {
+        let mut next_level: Vec[i64] = Vec.new();
+        for state in level.iter() {
+            let held = *state / size;
+            if held == all {
+                return steps;
+            }
+            let cell = *state % size;
+            let r = cell / cols;
+            let c = cell % cols;
+            let mut near: Vec[i64] = Vec.new();
+            if r > 0 {
+                near.push(cell - cols);
+            }
+            if r + 1 < rows {
+                near.push(cell + cols);
+            }
+            if c > 0 {
+                near.push(cell - 1);
+            }
+            if c + 1 < cols {
+                near.push(cell + 1);
+            }
+            for next in near {
+                let b = cells[next];
+                let open = match b {
+                    b'#' => false,
+                    b'A'..=b'F' => (held & (1 << (b - b'A') as i64)) != 0,
+                    _ => true,
+                };
+                if not open {
+                    continue;
+                }
+                let now = match b {
+                    b'a'..=b'f' => held | (1 << (b - b'a') as i64),
+                    _ => held,
+                };
+                let packed = now * size + next;
+                if not seen.contains(packed) {
+                    seen.insert(packed);
+                    next_level.push(packed);
+                }
+            }
+        }
+        level = next_level;
+        steps += 1;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(grid: Vec[String]) {
+    println(f"{grid.join(" / ")} -> {shortest_path_all_keys(grid)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random grid: each cell a wall with chance `walls` in 100, then the
+// start, the `keys` keys and their locks on distinct random cells.
+fn random_grid(seed: mut ref i64, rows: i64, cols: i64, keys: i64, walls: i64) -> Vec[String] {
+    let size = rows * cols;
+    let mut cells: Vec[u8] = Vec.new();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..size {
+        if next_random(mut seed) % 100 < walls {
+            cells.push(b'#');
+        } else {
+            cells.push(b'.');
+        }
+        order.push(i);
+    }
+    for i in 1..size {
+        let j = next_random(mut seed) % (i + 1);
+        order.swap(i, j);
+    }
+    cells[order[0]] = b'@';
+    for i in 0..keys {
+        cells[order[1 + i]] = b'a' + i as u8;
+        cells[order[1 + keys + i]] = b'A' + i as u8;
+    }
+    let mut grid: Vec[String] = Vec.new();
+    for r in 0..rows {
+        let mut row = String.new();
+        for c in 0..cols {
+            row.push(cells[r * cols + c] as char);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show(["@.a..", "###.#", "b.A.B"]);
+    show(["@..aA", "..B#.", "....b"]);
+    show(["@Aa"]);
+    show(["@aA"]);
+    show(["Aa@"]);
+    show(["@#a", "A.."]);
+    show(["a.@.b", "#####", "A...B"]);
+    show(["@.....", "#####.", "a.A..b", "######", "B....."]);
+    show(["b.@.a", ".###.", "..A..", ".#B#."]);
+    show(["@abcdef", "ABCDEF."]);
+    show(["fedcba@", "FEDCBA#"]);
+    show(["@.#ab", ".#.##", "...BA"]);
+    // LeetCode's largest grids, 30 by 30, with six keys
+    let mut seed = 864;
+    for walls in [0, 20, 30, 40] {
+        let grid = random_grid(mut seed, 30, 30, 6, walls);
+        println(f"30 by 30, walls {walls} in 100, six keys: {shortest_path_all_keys(grid)}");
+    }
+    // random grids of up to 8 by 8 with one to six keys
+    let mut reached = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let rows = 1 + next_random(mut seed) % 8;
+        let cols = 1 + next_random(mut seed) % 8;
+        let most = (rows * cols - 1) / 2;
+        if most == 0 {
+            continue;
+        }
+        let keys = 1 + next_random(mut seed) % most.min(6);
+        let walls = next_random(mut seed) % 40;
+        let moves = shortest_path_all_keys(random_grid(mut seed, rows, cols, keys, walls));
+        if moves >= 0 {
+            reached += 1;
+            total += moves;
+        }
+        check = (check * 31 + moves + 2) % 1000000007;
+    }
+    println(f"1000 random grids: {reached} with every key reached, moves sum to {total}, checksum {check}");
+}

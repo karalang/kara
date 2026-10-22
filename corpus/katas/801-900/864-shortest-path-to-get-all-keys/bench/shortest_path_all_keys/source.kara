@@ -1,0 +1,126 @@
+// LeetCode #864: Shortest Path to Get All Keys -- bench program: the ★
+// arm, breadth-first search over (cell, keys held) states.
+//
+// Where a walk can go next depends only on the cell it stands on and the
+// keys it holds, so those pairs are the states, rows * cols * 2^k of them
+// for k keys. A step moves to a neighbouring cell that is not a wall and
+// not a lock without its key, and picks up any key lying there.
+// Breadth-first search from the start reaches the states in order of
+// distance, and the first state holding every key ends the shortest walk.
+// O(rows * cols * 2^k) time and space.
+
+fn shortest_path_all_keys(grid: Vec[String]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut cells: Vec[u8] = Vec.new();
+    for row in grid.iter() {
+        cells.extend(row.bytes().to_vec());
+    }
+    let size = cells.len();
+    let mut start = 0;
+    let mut keys = 0;
+    for i in 0..size {
+        if cells[i] == b'@' {
+            start = i;
+        } else if cells[i] >= b'a' and cells[i] <= b'f' {
+            keys += 1;
+        }
+    }
+    let all = (1 << keys) - 1;
+    let mut seen: Vec[bool] = Vec.filled(size << keys, false);
+    let mut queue: VecDeque[(i64, i64, i64)] = VecDeque.new();
+    seen[start] = true;
+    queue.push_back((start, 0, 0));
+    while let Some((cell, held, steps)) = queue.pop_front() {
+        if held == all {
+            return steps;
+        }
+        let r = cell / cols;
+        let c = cell % cols;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr < 0 or nr >= rows or nc < 0 or nc >= cols {
+                continue;
+            }
+            let next = nr * cols + nc;
+            let b = cells[next];
+            if b == b'#' {
+                continue;
+            }
+            if b >= b'A' and b <= b'F' and (held & (1 << (b - b'A') as i64)) == 0 {
+                continue;
+            }
+            let mut now = held;
+            if b >= b'a' and b <= b'f' {
+                now = held | (1 << (b - b'a') as i64);
+            }
+            if not seen[now * size + next] {
+                seen[now * size + next] = true;
+                queue.push_back((next, now, steps + 1));
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A 30 by 30 grid, LeetCode's largest, with a wall on a cell with chance
+// 20 in 100 and the six keys and their locks on random cells; then each
+// round moves the start to a random open cell and finds the shortest
+// path from there.
+fn main() {
+    let rows = 30;
+    let cols = 30;
+    let rounds = 1000;
+    let mut seed = 864;
+    let mut cells: Vec[u8] = Vec.new();
+    for _ in 0..rows * cols {
+        if next_random(mut seed) % 100 < 20 {
+            cells.push(b'#');
+        } else {
+            cells.push(b'.');
+        }
+    }
+    for i in 0..12 {
+        let mut at = next_random(mut seed) % (rows * cols);
+        while cells[at] != b'.' {
+            at = next_random(mut seed) % (rows * cols);
+        }
+        if i < 6 {
+            cells[at] = b'a' + i as u8;
+        } else {
+            cells[at] = b'A' + (i - 6) as u8;
+        }
+    }
+    let mut reached = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let mut start = next_random(mut seed) % (rows * cols);
+        while cells[start] != b'.' {
+            start = next_random(mut seed) % (rows * cols);
+        }
+        cells[start] = b'@';
+        let mut grid: Vec[String] = Vec.new();
+        for r in 0..rows {
+            let mut row = String.new();
+            for c in 0..cols {
+                row.push(cells[r * cols + c] as char);
+            }
+            grid.push(row);
+        }
+        cells[start] = b'.';
+        let moves = shortest_path_all_keys(grid);
+        if moves >= 0 {
+            reached += 1;
+            total += moves;
+        }
+        check = (check * 31 + moves + 2) % 1000000007;
+    }
+    println(f"{rounds} starts on a 30 by 30 grid: {reached} reach every key, moves sum to {total}, checksum {check}");
+}
