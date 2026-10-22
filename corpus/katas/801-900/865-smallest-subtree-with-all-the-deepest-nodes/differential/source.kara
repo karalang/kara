@@ -1,0 +1,518 @@
+// LeetCode #865: Smallest Subtree with all the Deepest Nodes --
+// differential test of the five arms against the statement read
+// literally, with six properties.
+//
+// The statement: the deepest nodes are those at the largest distance from
+// the root; return the root of the smallest subtree that contains all of
+// them, a subtree being a node and all its descendants.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: one recursive pass ----------------------------------------
+fn star_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let (_, node) = star_deepest(root);
+    node
+}
+
+fn star_deepest(node: Option[TreeNode]) -> (i64, Option[TreeNode]) {
+    match node {
+        None => (0, None),
+        Some(n) => {
+            let (dl, l) = star_deepest(n.left);
+            let (dr, r) = star_deepest(n.right);
+            if dl == dr {
+                (dl + 1, Some(n))
+            } else if dl > dr {
+                (dl + 1, l)
+            } else {
+                (dr + 1, r)
+            }
+        }
+    }
+}
+
+// ---- depths first, then the answer ----------------------------------------
+fn depths_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut depth: Map[i64, i64] = Map.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    let mut most = 0;
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some((node, d)) = stack.pop() {
+        depth.insert(node.val, d);
+        most = most.max(d);
+        if let Some(child) = node.left {
+            stack.push((child, d + 1));
+        }
+        if let Some(child) = node.right {
+            stack.push((child, d + 1));
+        }
+    }
+    depths_answer(root, depth, most)
+}
+
+fn depths_answer(node: Option[TreeNode], depth: Map[i64, i64], most: i64) -> Option[TreeNode] {
+    let Some(n) = node else {
+        return None;
+    };
+    if (depth.get(n.val) ?? 0) == most {
+        return node;
+    }
+    let left = depths_answer(n.left, depth, most);
+    let right = depths_answer(n.right, depth, most);
+    if left.is_some() and right.is_some() {
+        node
+    } else if left.is_some() {
+        left
+    } else {
+        right
+    }
+}
+
+// ---- the deepest level, climbed until it meets ----------------------------
+fn climb_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut parent: Map[i64, TreeNode] = Map.new();
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        level.push(r);
+    }
+    loop {
+        let mut next: Vec[TreeNode] = Vec.new();
+        for node in level.iter() {
+            if let Some(child) = node.left {
+                parent.insert(child.val, *node);
+                next.push(child);
+            }
+            if let Some(child) = node.right {
+                parent.insert(child.val, *node);
+                next.push(child);
+            }
+        }
+        if next.len() == 0 {
+            break;
+        }
+        level = next;
+    }
+    while level.len() > 1 {
+        let mut seen: Set[i64] = Set.new();
+        let mut up: Vec[TreeNode] = Vec.new();
+        for node in level.iter() {
+            let p = *parent.get(node.val).unwrap();
+            if not seen.contains(p.val) {
+                seen.insert(p.val);
+                up.push(p);
+            }
+        }
+        level = up;
+    }
+    if level.len() == 0 { None } else { Some(level[0]) }
+}
+
+// ---- the common start of the paths ----------------------------------------
+fn paths_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut paths: Vec[Vec[TreeNode]] = Vec.new();
+    let mut path: Vec[TreeNode] = Vec.new();
+    paths_walk(root, mut path, mut paths);
+    if paths.len() == 0 {
+        return None;
+    }
+    let mut common = 0;
+    while common < paths[0].len() {
+        let val = paths[0][common].val;
+        let mut shared = true;
+        for p in paths.iter() {
+            if p[common].val != val {
+                shared = false;
+            }
+        }
+        if not shared {
+            break;
+        }
+        common += 1;
+    }
+    Some(paths[0][common - 1])
+}
+
+fn paths_walk(node: Option[TreeNode], path: mut ref Vec[TreeNode], paths: mut ref Vec[Vec[TreeNode]]) {
+    let Some(n) = node else {
+        return;
+    };
+    path.push(n);
+    if n.left.is_none() and n.right.is_none() {
+        if paths.len() == 0 or path.len() > paths[0].len() {
+            paths.clear();
+        }
+        if paths.len() == 0 or path.len() == paths[0].len() {
+            paths.push(path.clone());
+        }
+    }
+    paths_walk(n.left, mut path, mut paths);
+    paths_walk(n.right, mut path, mut paths);
+    path.pop();
+}
+
+// ---- the ★ arm's pass without recursion -----------------------------------
+fn iter_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(r) = root else {
+        return None;
+    };
+    let mut done: Map[i64, (i64, TreeNode)] = Map.new();
+    let mut stack: Vec[(TreeNode, bool)] = [(r, false)];
+    while let Some((node, expanded)) = stack.pop() {
+        if not expanded {
+            stack.push((node, true));
+            if let Some(child) = node.left {
+                stack.push((child, false));
+            }
+            if let Some(child) = node.right {
+                stack.push((child, false));
+            }
+            continue;
+        }
+        let (dl, l) = iter_height_of(node.left, done);
+        let (dr, r) = iter_height_of(node.right, done);
+        if dl == dr {
+            done.insert(node.val, (dl + 1, node));
+        } else if dl > dr {
+            done.insert(node.val, (dl + 1, l.unwrap()));
+        } else {
+            done.insert(node.val, (dr + 1, r.unwrap()));
+        }
+    }
+    let (_, found) = *done.get(r.val).unwrap();
+    Some(found)
+}
+
+// a finished child's height and answer, or (0, None) for no child
+fn iter_height_of(child: Option[TreeNode], done: Map[i64, (i64, TreeNode)]) -> (i64, Option[TreeNode]) {
+    match child {
+        None => (0, None),
+        Some(c) => {
+            let (h, found) = *done.get(c.val).unwrap();
+            (h, Some(found))
+        }
+    }
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// Every node with its depth, the deepest depth, and then, of the nodes
+// whose subtree holds every deepest node, the one whose subtree has the
+// fewest nodes.
+fn literal_subtree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[(TreeNode, i64)] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    let mut most = 0;
+    while let Some((node, d)) = stack.pop() {
+        nodes.push((node, d));
+        most = most.max(d);
+        if let Some(child) = node.left {
+            stack.push((child, d + 1));
+        }
+        if let Some(child) = node.right {
+            stack.push((child, d + 1));
+        }
+    }
+    let mut deep: Vec[i64] = Vec.new();
+    for (node, d) in nodes.iter() {
+        if *d == most {
+            deep.push(node.val);
+        }
+    }
+    let mut best: Option[TreeNode] = None;
+    let mut best_size = nodes.len() + 1;
+    for (node, _) in nodes.iter() {
+        let inside = values(Some(*node));
+        let mut holds = true;
+        for v in deep.iter() {
+            if not inside.contains(*v) {
+                holds = false;
+            }
+        }
+        if holds and inside.len() < best_size {
+            best_size = inside.len();
+            best = Some(*node);
+        }
+    }
+    best
+}
+
+// the values in a subtree
+fn values(node: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(n) = node {
+        stack.push(n);
+    }
+    while let Some(n) = stack.pop() {
+        out.push(n.val);
+        if let Some(child) = n.left {
+            stack.push(child);
+        }
+        if let Some(child) = n.right {
+            stack.push(child);
+        }
+    }
+    out
+}
+
+// ---- trees -------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// every binary tree shape with n nodes, in preorder: 1 for a node, 0 for a
+// missing child
+fn shapes(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n == 0 {
+        out.push([0]);
+        return out;
+    }
+    for left in 0..n {
+        for l in shapes(left).iter() {
+            for r in shapes(n - 1 - left).iter() {
+                let mut code: Vec[i64] = [1];
+                for b in l.iter() {
+                    code.push(*b);
+                }
+                for b in r.iter() {
+                    code.push(*b);
+                }
+                out.push(code);
+            }
+        }
+    }
+    out
+}
+
+// the tree a shape code describes, the k-th node in preorder holding
+// vals[k]; `at` walks the code
+fn build(code: Vec[i64], at: mut ref i64, vals: Vec[i64], next: mut ref i64) -> Option[TreeNode] {
+    let bit = code[*at];
+    *at += 1;
+    if bit == 0 {
+        return None;
+    }
+    let node = TreeNode { val: vals[*next], left: None, right: None };
+    *next += 1;
+    node.left = build(code, mut at, vals, mut next);
+    node.right = build(code, mut at, vals, mut next);
+    Some(node)
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..n {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    vals
+}
+
+// A random tree of n nodes holding the values 0 to n - 1 in a random
+// order: each new node hangs from a random node with a free side.
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 0..n {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let node = TreeNode { val: vals[k], left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+// the tree with every left and right child swapped, as a new tree
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirror(n.right), right: mirror(n.left) }),
+    }
+}
+
+// the tree with every value raised by `by`, as a new tree
+fn shifted(node: Option[TreeNode], by: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val + by, left: shifted(n.left, by), right: shifted(n.right, by) }),
+    }
+}
+
+// every node of the tree with its depth, in preorder
+fn with_depths(root: Option[TreeNode]) -> Vec[(TreeNode, i64)] {
+    let mut out: Vec[(TreeNode, i64)] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    while let Some((node, d)) = stack.pop() {
+        out.push((node, d));
+        if let Some(child) = node.right {
+            stack.push((child, d + 1));
+        }
+        if let Some(child) = node.left {
+            stack.push((child, d + 1));
+        }
+    }
+    out
+}
+
+// ---- the properties --------------------------------------------------------
+
+fn value(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => -1,
+        Some(n) => n.val,
+    }
+}
+
+fn arms(root: Option[TreeNode]) -> Vec[i64] {
+    [value(star_subtree(root)), value(depths_subtree(root)), value(climb_subtree(root)), value(paths_subtree(root)),
+     value(iter_subtree(root))]
+}
+
+// checks made, and failures by property (index 0 holds P1)
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, p: i64, root: Option[TreeNode], want: i64) {
+    for got in arms(root) {
+        t.checks += 1;
+        if got != want {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+// A copy of the tree with a new leaf of value `n` hung on the `pick`-th
+// node, in preorder, of those at a depth `deep` or `shallow` of the
+// deepest (deepest - 1 and less when not `deep`) with a free side;
+// None when there is no such node.
+fn grown(root: Option[TreeNode], n: i64, deep: bool, pick: i64) -> Option[TreeNode] {
+    let copy = shifted(root, 0);
+    let nodes = with_depths(copy);
+    let mut most = 0;
+    for (_, d) in nodes.iter() {
+        most = most.max(*d);
+    }
+    let mut free: Vec[TreeNode] = Vec.new();
+    for (node, d) in nodes.iter() {
+        let fits = if deep { *d == most } else { *d < most - 1 };
+        if fits and (node.left.is_none() or node.right.is_none()) {
+            free.push(*node);
+        }
+    }
+    if free.len() == 0 {
+        return None;
+    }
+    let at = free[pick % free.len()];
+    let leaf = TreeNode { val: n, left: None, right: None };
+    if at.left.is_none() {
+        at.left = Some(leaf);
+    } else {
+        at.right = Some(leaf);
+    }
+    copy
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, root: Option[TreeNode], n: i64) -> i64 {
+    let want = literal_subtree(root);
+    let v = value(want);
+    // P1: the statement's answer
+    expect(mut t, 1, root, v);
+    // P2: the mirrored tree gives the same answer
+    expect(mut t, 2, mirror(root), v);
+    // P3: every value raised by n raises the answer by n
+    expect(mut t, 3, shifted(root, n), v + n);
+    // P4: a new leaf under a deepest node is the only deepest node, so
+    // it is the answer
+    let pick = next_random(mut seed);
+    expect(mut t, 4, grown(root, n, true, pick), n);
+    // P5: a new leaf two or more levels above the deepest changes nothing
+    let higher = grown(root, n, false, pick);
+    if higher.is_some() {
+        expect(mut t, 5, higher, v);
+    }
+    // P6: on the answer's own subtree, the answer is its root
+    expect(mut t, 6, want, v);
+    size(want)
+}
+
+// the number of nodes in a subtree
+fn size(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + size(n.left) + size(n.right),
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut trees = 0;
+    let mut total = 0;
+    let mut seed = 865;
+    // every shape of one to eight nodes
+    for n in 1..9 {
+        for code in shapes(n).iter() {
+            let mut at = 0;
+            let mut next = 0;
+            let root = build(code, mut at, shuffled(mut seed, n), mut next);
+            trees += 1;
+            total += properties(mut t, mut seed, root, n);
+        }
+    }
+    // random trees of up to 40 nodes
+    for _ in 0..1000 {
+        let n = 1 + next_random(mut seed) % 40;
+        trees += 1;
+        total += properties(mut t, mut seed, random_tree(mut seed, n), n);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{trees} trees, answers of {total} nodes in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
