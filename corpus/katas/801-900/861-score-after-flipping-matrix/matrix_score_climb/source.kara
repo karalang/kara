@@ -1,0 +1,148 @@
+// LeetCode #861: Score After Flipping Matrix -- climb, one best move at a
+// time.
+//
+// Start from the grid as given. At each step work out what every move
+// would gain: flipping row i turns its value v into 2^n - 1 - v, and
+// flipping column j changes each of its cells, worth 2^(n-1-j) apiece, so
+// it gains (zeros - ones) times that. Make the move that gains most, the
+// first such in rows-then-columns order, and stop when no move gains. The
+// climb cannot stop short of the best grid: while a row starts with a 0,
+// flipping it gains, since its first bit outweighs the rest; once none
+// does, each column is on its better side, and the columns no longer
+// interact. O(s * mn) for s steps.
+
+fn matrix_score(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let m = g.len();
+    let n = g[0].len();
+    let full = (1 << n) - 1;
+    loop {
+        let mut best_gain = 0;
+        let mut best_move = -1;
+        for i in 0..m {
+            let v = row_value(g[i]);
+            let gain = full - v - v;
+            if gain > best_gain {
+                best_gain = gain;
+                best_move = i;
+            }
+        }
+        for j in 0..n {
+            let mut ones = 0;
+            for i in 0..m {
+                ones += g[i][j];
+            }
+            let gain = (m - 2 * ones) * (1 << (n - 1 - j));
+            if gain > best_gain {
+                best_gain = gain;
+                best_move = m + j;
+            }
+        }
+        if best_move < 0 {
+            break;
+        }
+        if best_move < m {
+            for j in 0..n {
+                g[best_move][j] = 1 - g[best_move][j];
+            }
+        } else {
+            let j = best_move - m;
+            for i in 0..m {
+                g[i][j] = 1 - g[i][j];
+            }
+        }
+    }
+    let mut score = 0;
+    for row in g.iter() {
+        score += row_value(row);
+    }
+    score
+}
+
+fn row_value(row: Vec[i64]) -> i64 {
+    let mut v = 0;
+    for bit in row.iter() {
+        v = v * 2 + *bit;
+    }
+    v
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"{grid} -> {matrix_score(grid)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// an m by n grid of zeros
+fn zeros(m: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(0);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[0, 0, 1, 1], [1, 0, 1, 0], [1, 1, 0, 0]]);
+    show([[0]]);
+    show([[1]]);
+    show([[0, 0]]);
+    show([[0], [0], [1]]);
+    show([[1, 0], [1, 1]]);
+    show([[0, 1], [1, 0]]);
+    show([[1, 1, 1], [0, 0, 0]]);
+    show([[0, 1, 1, 0, 1]]);
+    show([[1, 0], [1, 0], [1, 1]]);
+    show([[1, 0, 0, 1], [1, 0, 1, 0], [1, 1, 0, 0], [1, 0, 0, 0]]);
+    show([[0, 1, 0, 1], [0, 1, 1, 1], [1, 0, 1, 0]]);
+    let mut grid = zeros(20, 20);
+    println(f"20 by 20, all zeros -> {matrix_score(grid)}");
+    for i in 0..20 {
+        for j in 0..20 {
+            grid[i][j] = (i + j) % 2;
+        }
+    }
+    println(f"20 by 20, a chessboard -> {matrix_score(grid)}");
+    // every grid of one to three rows and one to three columns
+    let mut grids = 0;
+    let mut sum = 0;
+    for m in 1..4 {
+        for n in 1..4 {
+            for code in 0..(1 << (m * n)) {
+                let mut g = zeros(m, n);
+                for k in 0..m * n {
+                    g[k / n][k % n] = (code >> k) & 1;
+                }
+                grids += 1;
+                sum += matrix_score(g);
+            }
+        }
+    }
+    println(f"all {grids} grids up to 3 by 3: scores sum to {sum}");
+    let mut seed = 861;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let m = 1 + next_random(mut seed) % 20;
+        let n = 1 + next_random(mut seed) % 20;
+        let mut g = zeros(m, n);
+        for i in 0..m {
+            for j in 0..n {
+                g[i][j] = next_random(mut seed) % 2;
+            }
+        }
+        let s = matrix_score(g);
+        total += s;
+        check = (check * 31 + s) % 1000000007;
+    }
+    println(f"2000 random grids up to 20 by 20: scores sum to {total}, checksum {check}");
+}

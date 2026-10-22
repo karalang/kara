@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/861-score-after-flipping-matrix/matrix_score.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "34b62406e"
+extracted_src = "a3fc655c"
+model_rev = "aafbe785"
+model_src = "a3fc655c"

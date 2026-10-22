@@ -1,0 +1,350 @@
+// LeetCode #861: Score After Flipping Matrix -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: any number of moves, each flipping a whole row or a whole
+// column, then the rows read as binary numbers and added. The literal
+// reading packs the grid into one integer, a bit per cell, and searches
+// every grid the moves can reach from it, keeping the best score.
+
+// ---- the ★ arm: count each column against the first --------------------------
+fn star_score(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut score = 0;
+    for j in 0..n {
+        let mut ones = 0;
+        for row in grid.iter() {
+            if row[j] == row[0] {
+                ones += 1;
+            }
+        }
+        score = score * 2 + ones.max(m - ones);
+    }
+    score
+}
+
+// ---- the flips made on a copy ------------------------------------------------
+fn flip_score(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let m = g.len();
+    let n = g[0].len();
+    for i in 0..m {
+        if g[i][0] == 0 {
+            for cell in g[i].iter_mut() {
+                *cell = 1 - *cell;
+            }
+        }
+    }
+    for j in 1..n {
+        let mut ones = 0;
+        for i in 0..m {
+            ones += g[i][j];
+        }
+        if 2 * ones < m {
+            for i in 0..m {
+                g[i][j] = 1 - g[i][j];
+            }
+        }
+    }
+    let mut score = 0;
+    for row in g.iter() {
+        let mut value = 0;
+        for bit in row.iter() {
+            value = value * 2 + *bit;
+        }
+        score += value;
+    }
+    score
+}
+
+// ---- each row as one integer -------------------------------------------------
+fn bits_score(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let full = (1 << n) - 1;
+    let mut rows: Vec[i64] = Vec.new();
+    for row in grid.iter() {
+        let mut r = 0;
+        for bit in row.iter() {
+            r = (r << 1) | *bit;
+        }
+        if r >> (n - 1) == 0 {
+            r = r ^ full;
+        }
+        rows.push(r);
+    }
+    let mut score = 0;
+    for k in 0..n {
+        let mut ones = 0;
+        for r in rows.iter() {
+            ones += (*r >> k) & 1;
+        }
+        score += ones.max(m - ones) << k;
+    }
+    score
+}
+
+// ---- climb, one best move at a time ------------------------------------------
+fn climb_score(grid: Vec[Vec[i64]]) -> i64 {
+    let mut g = grid.clone();
+    let m = g.len();
+    let n = g[0].len();
+    let full = (1 << n) - 1;
+    loop {
+        let mut best_gain = 0;
+        let mut best_move = -1;
+        for i in 0..m {
+            let v = climb_row_value(g[i]);
+            let gain = full - v - v;
+            if gain > best_gain {
+                best_gain = gain;
+                best_move = i;
+            }
+        }
+        for j in 0..n {
+            let mut ones = 0;
+            for i in 0..m {
+                ones += g[i][j];
+            }
+            let gain = (m - 2 * ones) * (1 << (n - 1 - j));
+            if gain > best_gain {
+                best_gain = gain;
+                best_move = m + j;
+            }
+        }
+        if best_move < 0 {
+            break;
+        }
+        if best_move < m {
+            for j in 0..n {
+                g[best_move][j] = 1 - g[best_move][j];
+            }
+        } else {
+            let j = best_move - m;
+            for i in 0..m {
+                g[i][j] = 1 - g[i][j];
+            }
+        }
+    }
+    let mut score = 0;
+    for row in g.iter() {
+        score += climb_row_value(row);
+    }
+    score
+}
+
+fn climb_row_value(row: Vec[i64]) -> i64 {
+    let mut v = 0;
+    for bit in row.iter() {
+        v = v * 2 + *bit;
+    }
+    v
+}
+
+// ---- the ★ count as one fold -------------------------------------------------
+fn iter_score(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    (0..grid[0].len()).fold(0, |score, j| {
+        let ones = grid.iter().filter(|row| row[j] == row[0]).count();
+        score * 2 + ones.max(m - ones)
+    })
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// the score of a grid packed one bit per cell, cell (i, j) at bit i * n + j
+fn packed_score(g: i64, m: i64, n: i64) -> i64 {
+    let mut score = 0;
+    for i in 0..m {
+        let mut value = 0;
+        for j in 0..n {
+            value = value * 2 + ((g >> (i * n + j)) & 1);
+        }
+        score += value;
+    }
+    score
+}
+
+// every grid the moves reach from this one, searched breadth first
+fn literal_score(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut start = 0;
+    for i in 0..m {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                start = start | (1 << (i * n + j));
+            }
+        }
+    }
+    let mut moves: Vec[i64] = Vec.new();
+    for i in 0..m {
+        moves.push(((1 << n) - 1) << (i * n));
+    }
+    for j in 0..n {
+        let mut column = 0;
+        for i in 0..m {
+            column = column | (1 << (i * n + j));
+        }
+        moves.push(column);
+    }
+    let mut seen: Vec[bool] = Vec.filled(1 << (m * n), false);
+    seen[start] = true;
+    let mut queue: Vec[i64] = [start];
+    let mut head = 0;
+    let mut best = 0;
+    while head < queue.len() {
+        let g = queue[head];
+        head += 1;
+        best = best.max(packed_score(g, m, n));
+        for mv in moves.iter() {
+            let next = g ^ *mv;
+            if not seen[next] {
+                seen[next] = true;
+                queue.push(next);
+            }
+        }
+    }
+    best
+}
+
+// ---- the properties --------------------------------------------------------
+
+fn arms(grid: Vec[Vec[i64]]) -> Vec[i64] {
+    [star_score(grid), flip_score(grid), bits_score(grid), climb_score(grid), iter_score(grid)]
+}
+
+// checks made, and failures by property (index 0 holds P1)
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+// every arm's answer for `grid` lies in lo..=hi
+fn expect(t: mut ref Tally, p: i64, grid: Vec[Vec[i64]], lo: i64, hi: i64) {
+    let got = arms(grid);
+    for k in 0..got.len() {
+        t.checks += 1;
+        if got[k] < lo or got[k] > hi {
+            t.failures[p - 1] += 1;
+        }
+    }
+}
+
+fn own_score(grid: Vec[Vec[i64]]) -> i64 {
+    let mut score = 0;
+    for row in grid.iter() {
+        let mut value = 0;
+        for bit in row.iter() {
+            value = value * 2 + *bit;
+        }
+        score += value;
+    }
+    score
+}
+
+fn properties(t: mut ref Tally, grid: Vec[Vec[i64]]) -> i64 {
+    let want = literal_score(grid);
+    let m = grid.len();
+    let n = grid[0].len();
+    // P1: the statement's answer
+    expect(mut t, 1, grid, want, want);
+    // P2: never less than the grid's own score
+    expect(mut t, 2, grid, own_score(grid), m * ((1 << n) - 1));
+    // P3: one move made first changes nothing
+    for i in 0..m {
+        let mut moved = grid.clone();
+        for j in 0..n {
+            moved[i][j] = 1 - moved[i][j];
+        }
+        expect(mut t, 3, moved, want, want);
+    }
+    for j in 0..n {
+        let mut moved = grid.clone();
+        for i in 0..m {
+            moved[i][j] = 1 - moved[i][j];
+        }
+        expect(mut t, 3, moved, want, want);
+    }
+    // P4: the rows in the other order change nothing
+    let mut reversed: Vec[Vec[i64]] = Vec.new();
+    for i in 0..m {
+        reversed.push(grid[m - 1 - i].clone());
+    }
+    expect(mut t, 4, reversed, want, want);
+    // P5: every row can start with a 1, and no row is worth more than n ones
+    expect(mut t, 5, grid, m * (1 << (n - 1)), m * ((1 << n) - 1));
+    // P6: a copy of the first column added at the right doubles the score,
+    // plus one for each row: once every row starts with a 1, so does it end
+    let mut wider = grid.clone();
+    for i in 0..m {
+        wider[i].push(grid[i][0]);
+    }
+    expect(mut t, 6, wider, 2 * want + m, 2 * want + m);
+    want
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn zeros(m: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(0);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut grids = 0;
+    let mut sum = 0;
+    // every grid of one to three rows and one to three columns
+    for m in 1..4 {
+        for n in 1..4 {
+            for code in 0..(1 << (m * n)) {
+                let mut g = zeros(m, n);
+                for k in 0..m * n {
+                    g[k / n][k % n] = (code >> k) & 1;
+                }
+                grids += 1;
+                sum += properties(mut t, g);
+            }
+        }
+    }
+    // random grids of up to four rows and up to twelve cells
+    let mut seed = 861;
+    for _ in 0..1318 {
+        let m = 1 + next_random(mut seed) % 4;
+        let mut n = 1 + next_random(mut seed) % 4;
+        if m * n > 12 {
+            n = 12 / m;
+        }
+        let mut g = zeros(m, n);
+        for i in 0..m {
+            for j in 0..n {
+                g[i][j] = next_random(mut seed) % 2;
+            }
+        }
+        grids += 1;
+        sum += properties(mut t, g);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{grids} grids, scores sum to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'Vec.from_fn length must be non-negat
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "78aea56f"
-model_rev = "205d5cda"
+model_rev = "aafbe785"
 model_src = "78aea56f"

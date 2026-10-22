@@ -14,5 +14,5 @@ note = "core-semantics §4.1: a bare parameter borrows (D5), so the program lega
 bucket = "e-spec"
 classified_with = "e4ff86f12"
 extracted_src = "18447b57"
-model_rev = "205d5cda"
+model_rev = "aafbe785"
 model_src = "18447b57"

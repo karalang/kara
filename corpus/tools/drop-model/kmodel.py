@@ -845,6 +845,13 @@ class Model:
                         t = self.deref_refs(v)
                         if isinstance(t, Handle) or self.handle_like(t):
                             v = self.read_through_ref(t)
+                    if isinstance(v, Ref) and pat[3] and ty is None:
+                        # `let mut t = r;` with `r` a reference to a Copy value copies
+                        # the value, so `t` is a counter of its own; a plain `let`
+                        # stays a reference (§1.1)
+                        t = self.deref_refs(v)
+                        if not isinstance(t, Ref) and self.is_copy(t):
+                            v = self.copy_value(t)
                     if isinstance(v, Ref) and ty is not None and ty[0] not in ("ref", "mutref"):
                         # an owned annotation on a reference: Copy is read, anything else is C3
                         r = self.read_through_ref(self.deref_refs(v))
