@@ -1,0 +1,3 @@
+1600 cases and 400 long pairs, swaps sum to 1554, 38400 checks over 4 arms: 0 failures
+by arm: star 0, bound 0, cycles 0, deepen 0
+by property: answer 0, swapped 0, letters renamed 0, positions moved 0, bounds 0, arms agree 0

@@ -1,0 +1,13 @@
+"ab", "ba" -> 1
+"abc", "bca" -> 2
+"a", "a" -> 0
+"abcdef", "abcdef" -> 0
+"abcdef", "fabcde" -> 5
+"aaabbb", "bbbaaa" -> 3
+"abab", "baba" -> 2
+"abcabc", "cbacba" -> 2
+"abccaacceecdeea", "bcaacceeccdeaae" -> 9
+"abcdefabcdefabcdefab", "badcfebadcfebadcfeba" -> 10
+"abcdefabcdefabcdefab", "bcdefabcdefabcdefaba" -> 16
+12 random pairs of 20 letters: swaps sum to 119
+300 random pairs: swaps sum to 569, checksum 1370533

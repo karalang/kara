@@ -1,0 +1,127 @@
+// LeetCode #854: K-Similar Strings -- the most cycles in the misplacement
+// graph.
+//
+// Draw an edge from letter `x` to letter `y` for every position that
+// holds `x` and wants `y`. Every letter has as many edges out as in, so
+// the edges split into cycles, and a cycle of `k` edges takes `k - 1`
+// swaps to fix. So the answer is the number of misplaced positions less
+// the most cycles the edges can be split into. With six letters the
+// graph is tiny: take the first edge, try every simple cycle through it,
+// and remember the best split of each remaining set of edge counts.
+
+fn most_cycles(count: mut ref Vec[i64], memo: mut ref Map[String, i64]) -> i64 {
+    let mut first = 0;
+    while first < 36 and count[first] == 0 {
+        first += 1;
+    }
+    if first == 36 {
+        return 0;
+    }
+    let key = f"{count}";
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    // the first edge lies on one cycle of any split: try every one
+    let mut path: Vec[i64] = [first / 6, first % 6];
+    let best = close_cycles(mut count, mut memo, mut path);
+    memo.insert(key, best);
+    best
+}
+
+// Extends `path`, which begins at the cycle's start, to every simple cycle,
+// and returns the most cycles any of them leaves room for.
+fn close_cycles(count: mut ref Vec[i64], memo: mut ref Map[String, i64], path: mut ref Vec[i64]) -> i64 {
+    let start = path[0];
+    let at = path[path.len() - 1];
+    let mut best = 0;
+    if at == start {
+        for k in 0..path.len() - 1 {
+            count[path[k] * 6 + path[k + 1]] -= 1;
+        }
+        best = 1 + most_cycles(mut count, mut memo);
+        for k in 0..path.len() - 1 {
+            count[path[k] * 6 + path[k + 1]] += 1;
+        }
+        return best;
+    }
+    for next in 0..6 {
+        let on_path = path[1..].contains(next);
+        if count[at * 6 + next] > 0 and not on_path {
+            path.push(next);
+            best = best.max(close_cycles(mut count, mut memo, mut path));
+            let _ = path.pop();
+        }
+    }
+    best
+}
+
+fn k_similarity(s1: String, s2: String) -> i64 {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let mut count: Vec[i64] = Vec.filled(36, 0);
+    let mut wrong = 0;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            count[(a[i] - b'a') as i64 * 6 + (b[i] - b'a') as i64] += 1;
+            wrong += 1;
+        }
+    }
+    let mut memo: Map[String, i64] = Map.new();
+    wrong - most_cycles(mut count, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s1: String, s2: String) {
+    println(f"\"{s1}\", \"{s2}\" -> {k_similarity(s1, s2)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random string of `n` letters from the first `letters` of `a..f`, and
+// a random rearrangement of it.
+fn random_pair(seed: mut ref i64, n: i64, letters: i64) -> (String, String) {
+    let mut a: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        a.push(b'a' + (next_random(mut seed) % letters) as u8);
+    }
+    let mut b = a.clone();
+    for i in (1..n).rev() {
+        b.swap(i, next_random(mut seed) % (i + 1));
+    }
+    (String.from_utf8(a).unwrap(), String.from_utf8(b).unwrap())
+}
+
+fn main() {
+    show("ab", "ba");
+    show("abc", "bca");
+    show("a", "a");
+    show("abcdef", "abcdef");
+    show("abcdef", "fabcde");
+    show("aaabbb", "bbbaaa");
+    show("abab", "baba");
+    show("abcabc", "cbacba");
+    show("abccaacceecdeea", "bcaacceeccdeaae");
+    show("abcdefabcdefabcdefab", "badcfebadcfebadcfeba");
+    show("abcdefabcdefabcdefab", "bcdefabcdefabcdefaba");
+    let mut seed = 854;
+    let mut long_total = 0;
+    for _ in 0..12 {
+        let (a, b) = random_pair(mut seed, 20, 6);
+        long_total += k_similarity(a, b);
+    }
+    println(f"12 random pairs of 20 letters: swaps sum to {long_total}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let (a, b) = random_pair(mut seed, n, 1 + next_random(mut seed) % 6);
+        let k = k_similarity(a, b);
+        total += k;
+        check = (check * 31 + k) % 1000000007;
+    }
+    println(f"300 random pairs: swaps sum to {total}, checksum {check}");
+}

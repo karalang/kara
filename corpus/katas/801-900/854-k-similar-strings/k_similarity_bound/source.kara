@@ -1,0 +1,100 @@
+// LeetCode #854: K-Similar Strings -- depth-first search with a bound.
+//
+// The same swaps as the ★ arm, explored depth first: fix the first
+// misplaced position with each useful swap in turn, undo it, and give
+// up on any branch that has already used as many swaps as the best
+// answer found so far. A swap fixes at most two positions, so a branch
+// with `m` positions still wrong needs at least `(m + 1) / 2` more, and
+// that bound prunes too.
+
+fn search(cur: mut ref Vec[u8], goal: Vec[u8], i: i64, used: i64, best: mut ref i64) {
+    let n = goal.len();
+    let mut i = i;
+    while i < n and cur[i] == goal[i] {
+        i += 1;
+    }
+    let mut wrong = 0;
+    for k in i..n {
+        if cur[k] != goal[k] {
+            wrong += 1;
+        }
+    }
+    if used + (wrong + 1) / 2 >= *best {
+        return;
+    }
+    if i == n {
+        *best = used;
+        return;
+    }
+    for j in i + 1..n {
+        if cur[j] == goal[i] and cur[j] != goal[j] {
+            cur.swap(i, j);
+            search(mut cur, goal, i + 1, used + 1, mut best);
+            cur.swap(i, j);
+        }
+    }
+}
+
+fn k_similarity(s1: String, s2: String) -> i64 {
+    let mut cur: Vec[u8] = s1.bytes().to_vec();
+    let goal: Vec[u8] = s2.bytes().to_vec();
+    let mut best = goal.len() + 1;
+    search(mut cur, goal, 0, 0, mut best);
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s1: String, s2: String) {
+    println(f"\"{s1}\", \"{s2}\" -> {k_similarity(s1, s2)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random string of `n` letters from the first `letters` of `a..f`, and
+// a random rearrangement of it.
+fn random_pair(seed: mut ref i64, n: i64, letters: i64) -> (String, String) {
+    let mut a: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        a.push(b'a' + (next_random(mut seed) % letters) as u8);
+    }
+    let mut b = a.clone();
+    for i in (1..n).rev() {
+        b.swap(i, next_random(mut seed) % (i + 1));
+    }
+    (String.from_utf8(a).unwrap(), String.from_utf8(b).unwrap())
+}
+
+fn main() {
+    show("ab", "ba");
+    show("abc", "bca");
+    show("a", "a");
+    show("abcdef", "abcdef");
+    show("abcdef", "fabcde");
+    show("aaabbb", "bbbaaa");
+    show("abab", "baba");
+    show("abcabc", "cbacba");
+    show("abccaacceecdeea", "bcaacceeccdeaae");
+    show("abcdefabcdefabcdefab", "badcfebadcfebadcfeba");
+    show("abcdefabcdefabcdefab", "bcdefabcdefabcdefaba");
+    let mut seed = 854;
+    let mut long_total = 0;
+    for _ in 0..12 {
+        let (a, b) = random_pair(mut seed, 20, 6);
+        long_total += k_similarity(a, b);
+    }
+    println(f"12 random pairs of 20 letters: swaps sum to {long_total}");
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 12;
+        let (a, b) = random_pair(mut seed, n, 1 + next_random(mut seed) % 6);
+        let k = k_similarity(a, b);
+        total += k;
+        check = (check * 31 + k) % 1000000007;
+    }
+    println(f"300 random pairs: swaps sum to {total}, checksum {check}");
+}

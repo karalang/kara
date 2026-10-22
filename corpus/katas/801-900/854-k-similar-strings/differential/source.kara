@@ -1,0 +1,332 @@
+// LeetCode #854: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on random
+// anagram pairs, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn k_similarity_star(s1: String, s2: String) -> i64 {
+    let goal = s2.bytes();
+    let n = goal.len();
+    let mut seen: Set[String] = Set.new();
+    let mut level: Vec[Vec[u8]] = [s1.bytes().to_vec()];
+    seen.insert(s1.clone());
+    let mut swaps = 0;
+    loop {
+        let mut next: Vec[Vec[u8]] = Vec.new();
+        for cur in level.iter() {
+            let mut i = 0;
+            while i < n and cur[i] == goal[i] {
+                i += 1;
+            }
+            if i == n {
+                return swaps;
+            }
+            for j in i + 1..n {
+                if cur[j] == goal[i] and cur[j] != goal[j] {
+                    let mut moved = cur.clone();
+                    moved.swap(i, j);
+                    let key = String.from_utf8(moved.clone()).unwrap();
+                    if not seen.contains(key) {
+                        seen.insert(key);
+                        next.push(moved);
+                    }
+                }
+            }
+        }
+        level = next;
+        swaps += 1;
+    }
+}
+
+// ---- bounded-search arm ---------------------------------------------
+
+fn search(cur: mut ref Vec[u8], goal: Vec[u8], i: i64, used: i64, best: mut ref i64) {
+    let n = goal.len();
+    let mut i = i;
+    while i < n and cur[i] == goal[i] {
+        i += 1;
+    }
+    let mut wrong = 0;
+    for k in i..n {
+        if cur[k] != goal[k] {
+            wrong += 1;
+        }
+    }
+    if used + (wrong + 1) / 2 >= *best {
+        return;
+    }
+    if i == n {
+        *best = used;
+        return;
+    }
+    for j in i + 1..n {
+        if cur[j] == goal[i] and cur[j] != goal[j] {
+            cur.swap(i, j);
+            search(mut cur, goal, i + 1, used + 1, mut best);
+            cur.swap(i, j);
+        }
+    }
+}
+
+fn k_similarity_bound(s1: String, s2: String) -> i64 {
+    let mut cur: Vec[u8] = s1.bytes().to_vec();
+    let goal: Vec[u8] = s2.bytes().to_vec();
+    let mut best = goal.len() + 1;
+    search(mut cur, goal, 0, 0, mut best);
+    best
+}
+
+// ---- cycles arm -----------------------------------------------------
+
+fn most_cycles(count: mut ref Vec[i64], memo: mut ref Map[String, i64]) -> i64 {
+    let mut first = 0;
+    while first < 36 and count[first] == 0 {
+        first += 1;
+    }
+    if first == 36 {
+        return 0;
+    }
+    let key = f"{count}";
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    // the first edge lies on one cycle of any split: try every one
+    let mut path: Vec[i64] = [first / 6, first % 6];
+    let best = close_cycles(mut count, mut memo, mut path);
+    memo.insert(key, best);
+    best
+}
+
+// Extends `path`, which begins at the cycle's start, to every simple cycle,
+// and returns the most cycles any of them leaves room for.
+fn close_cycles(count: mut ref Vec[i64], memo: mut ref Map[String, i64], path: mut ref Vec[i64]) -> i64 {
+    let start = path[0];
+    let at = path[path.len() - 1];
+    let mut best = 0;
+    if at == start {
+        for k in 0..path.len() - 1 {
+            count[path[k] * 6 + path[k + 1]] -= 1;
+        }
+        best = 1 + most_cycles(mut count, mut memo);
+        for k in 0..path.len() - 1 {
+            count[path[k] * 6 + path[k + 1]] += 1;
+        }
+        return best;
+    }
+    for next in 0..6 {
+        let on_path = path[1..].contains(next);
+        if count[at * 6 + next] > 0 and not on_path {
+            path.push(next);
+            best = best.max(close_cycles(mut count, mut memo, mut path));
+            let _ = path.pop();
+        }
+    }
+    best
+}
+
+fn k_similarity_cycles(s1: String, s2: String) -> i64 {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let mut count: Vec[i64] = Vec.filled(36, 0);
+    let mut wrong = 0;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            count[(a[i] - b'a') as i64 * 6 + (b[i] - b'a') as i64] += 1;
+            wrong += 1;
+        }
+    }
+    let mut memo: Map[String, i64] = Map.new();
+    wrong - most_cycles(mut count, mut memo)
+}
+
+// ---- iterative-deepening arm ----------------------------------------
+
+fn within(cur: mut ref Vec[u8], goal: Vec[u8], i: i64, left: i64) -> bool {
+    let n = goal.len();
+    let mut i = i;
+    while i < n and cur[i] == goal[i] {
+        i += 1;
+    }
+    if i == n {
+        return true;
+    }
+    let wrong = (i..n).filter(|k| cur[k] != goal[k]).count();
+    if (wrong + 1) / 2 > left {
+        return false;
+    }
+    for j in i + 1..n {
+        if cur[j] == goal[i] and cur[j] != goal[j] {
+            cur.swap(i, j);
+            let found = within(mut cur, goal, i + 1, left - 1);
+            cur.swap(i, j);
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn k_similarity_deepen(s1: String, s2: String) -> i64 {
+    let mut cur: Vec[u8] = s1.bytes().to_vec();
+    let goal: Vec[u8] = s2.bytes().to_vec();
+    let mut limit = 0;
+    while not within(mut cur, goal, 0, limit) {
+        limit += 1;
+    }
+    limit
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally: the fewest swaps of any two letters that
+// turn `s1` into `s2`, found by a breadth-first search over every swap
+// from every string reached.
+fn statement(s1: String, s2: String) -> i64 {
+    let n = s1.len();
+    let mut seen: Set[String] = Set.new();
+    seen.insert(s1.clone());
+    let mut level: Vec[String] = [s1.clone()];
+    let mut swaps = 0;
+    loop {
+        let mut next: Vec[String] = Vec.new();
+        for cur in level.iter() {
+            if cur == s2 {
+                return swaps;
+            }
+            for i in 0..n {
+                for j in i + 1..n {
+                    let mut b: Vec[u8] = cur.bytes().to_vec();
+                    b.swap(i, j);
+                    let t = String.from_utf8(b).unwrap();
+                    if not seen.contains(t) {
+                        seen.insert(t.clone());
+                        next.push(t);
+                    }
+                }
+            }
+        }
+        level = next;
+        swaps += 1;
+    }
+}
+
+fn swaps_of(arm: i64, s1: String, s2: String) -> i64 {
+    if arm == 0 {
+        k_similarity_star(s1, s2)
+    } else if arm == 1 {
+        k_similarity_bound(s1, s2)
+    } else if arm == 2 {
+        k_similarity_cycles(s1, s2)
+    } else {
+        k_similarity_deepen(s1, s2)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        order.swap(i, next_random(mut seed) % (i + 1));
+    }
+    order
+}
+
+fn main() {
+    let names = ["star", "bound", "cycles", "deepen"];
+    let properties = ["answer", "swapped", "letters renamed", "positions moved", "bounds", "arms agree"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(6, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 854;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let n = 1 + next_random(mut seed) % 7;
+        // two letters, three, six, or a few changes to a string
+        let letters = if kind == 0 { 2 } else if kind == 1 { 3 } else { 6 };
+        let mut a: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            a.push(b'a' + (next_random(mut seed) % letters) as u8);
+        }
+        let mut b = a.clone();
+        if kind == 3 {
+            for _ in 0..next_random(mut seed) % 4 {
+                b.swap(next_random(mut seed) % n, next_random(mut seed) % n);
+            }
+        } else {
+            for i in (1..n).rev() {
+                b.swap(i, next_random(mut seed) % (i + 1));
+            }
+        }
+        let s1 = String.from_utf8(a.clone()).unwrap();
+        let s2 = String.from_utf8(b.clone()).unwrap();
+        let want = statement(s1, s2);
+        total += want;
+        let rename = shuffled(mut seed, 6);
+        // every letter renamed by one permutation of `a..f`
+        let renamed1: String = a.iter().map(|c| (b'a' + rename[(c - b'a') as i64] as u8) as char).collect();
+        let renamed2: String = b.iter().map(|c| (b'a' + rename[(c - b'a') as i64] as u8) as char).collect();
+        // both strings' positions moved by one permutation
+        let place = shuffled(mut seed, n);
+        let moved1: String = place.iter().map(|p| a[p] as char).collect();
+        let moved2: String = place.iter().map(|p| b[p] as char).collect();
+        // every fourth case also a pair of 8 to 14 letters from all six,
+        // too long for the statement's search: there the arms are held
+        // to each other
+        let long_n = if case % 4 == 0 { 8 + next_random(mut seed) % 7 } else { 2 };
+        let mut long_a: Vec[u8] = Vec.new();
+        for _ in 0..long_n {
+            long_a.push(b'a' + (next_random(mut seed) % 6) as u8);
+        }
+        let mut long_b = long_a.clone();
+        for i in (1..long_n).rev() {
+            long_b.swap(i, next_random(mut seed) % (i + 1));
+        }
+        let long1 = String.from_utf8(long_a).unwrap();
+        let long2 = String.from_utf8(long_b).unwrap();
+        let mut long_answers: Vec[i64] = Vec.new();
+        for arm in 0..4 {
+            long_answers.push(swaps_of(arm, long1, long2));
+        }
+        let mut wrong = 0;
+        for i in 0..n {
+            if a[i] != b[i] {
+                wrong += 1;
+            }
+        }
+        for arm in 0..4 {
+            let got = swaps_of(arm, s1, s2);
+            let oks = [
+                got == want,
+                swaps_of(arm, s2, s1) == got,
+                swaps_of(arm, renamed1, renamed2) == got,
+                swaps_of(arm, moved1, moved2) == got,
+                (wrong + 1) / 2 <= got and got <= (wrong - 1).max(0),
+                (0..4).filter(|o| o != arm and long_answers[o] == long_answers[arm]).count() >= 2,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: \"{s1}\", \"{s2}\" -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases and 400 long pairs, swaps sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, bound {by_arm[1]}, cycles {by_arm[2]}, deepen {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, swapped {by_property[1]}, letters renamed {by_property[2]}, positions moved {by_property[3]}, bounds {by_property[4]}, arms agree {by_property[5]}");
+}
