@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/859-buddy-strings/bench/buddy_strings.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "f4bc9968a"
+extracted_src = "4f2b00be"
+model_rev = "583cfb0d"
+model_src = "4f2b00be"

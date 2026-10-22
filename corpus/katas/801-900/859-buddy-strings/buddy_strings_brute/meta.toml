@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/859-buddy-strings/buddy_strings_brute.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f4bc9968a"
+extracted_src = "63c7c0b9"
+model_rev = "583cfb0d"
+model_src = "63c7c0b9"

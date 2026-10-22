@@ -1,0 +1,148 @@
+// LeetCode #859: Buddy Strings -- the ★ arm (one pass over the positions
+// where the strings differ).
+//
+// One swap of two letters in `s` changes exactly the two positions it
+// touches, or nothing when the two letters are equal. So `s` reaches
+// `goal` in one swap when the strings have the same length and either
+// differ at exactly two positions i and j with s[i] == goal[j] and
+// s[j] == goal[i], or are equal and `s` has some letter twice, which can
+// be swapped with itself. One pass records the first two differing
+// positions and stops at a third; when there are none, a count of each
+// letter finds the repeat. O(n) time, O(1) space.
+
+fn buddy_strings(s: String, goal: String) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            if first < 0 {
+                first = i;
+            } else if second < 0 {
+                second = i;
+            } else {
+                return false;
+            }
+        }
+    }
+    if first < 0 {
+        let mut seen = [false; 26];
+        for c in a {
+            let k = (*c - 97) as i64;
+            if seen[k] {
+                return true;
+            }
+            seen[k] = true;
+        }
+        return false;
+    }
+    second >= 0 and a[first] == b[second] and a[second] == b[first]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: String, goal: String) {
+    println(f"s = \"{s}\", goal = \"{goal}\" -> {buddy_strings(s, goal)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> char {
+    (97 + i) as u8 as char
+}
+
+// `n` letters, each one of the first `k`
+fn random_text(seed: mut ref i64, n: i64, k: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(letter(next_random(mut seed) % k));
+    }
+    s
+}
+
+// `s` changed by one of five edits, chosen at random: left as it is, two
+// positions swapped, three positions rotated, one letter changed, or one
+// letter dropped from the end
+fn edited(seed: mut ref i64, s: String, k: i64) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let edit = next_random(mut seed) % 5;
+    if edit == 1 {
+        let i = next_random(mut seed) % n;
+        let j = next_random(mut seed) % n;
+        cs.swap(i, j);
+    } else if edit == 2 and n >= 3 {
+        let i = next_random(mut seed) % (n - 2);
+        let t = cs[i];
+        cs[i] = cs[i + 1];
+        cs[i + 1] = cs[i + 2];
+        cs[i + 2] = t;
+    } else if edit == 3 {
+        let i = next_random(mut seed) % n;
+        cs[i] = letter(next_random(mut seed) % k);
+    } else if edit == 4 {
+        cs.pop();
+    }
+    let mut out = String.new();
+    for c in cs {
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    show("ab", "ba");
+    show("ab", "ab");
+    show("aa", "aa");
+    show("aaaaaaabc", "aaaaaaacb");
+    show("a", "a");
+    show("a", "b");
+    show("abc", "ab");
+    show("abcd", "badc");
+    show("abcd", "abdc");
+    show("abab", "abab");
+    show("abc", "abc");
+    show("abc", "acd");
+    show("abac", "abad");
+    show("ab", "ca");
+    // every pair of strings of length 3 over three letters
+    let mut words: Vec[String] = Vec.new();
+    for x in 0..27 {
+        let mut w = String.new();
+        w.push(letter(x / 9));
+        w.push(letter(x / 3 % 3));
+        w.push(letter(x % 3));
+        words.push(w);
+    }
+    let mut buddies = 0;
+    for s in words.iter() {
+        for g in words.iter() {
+            if buddy_strings(s, g) {
+                buddies += 1;
+            }
+        }
+    }
+    println(f"all 729 pairs of length 3 over three letters: {buddies} are buddies");
+    let mut seed = 859;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..2000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 26;
+        let s = random_text(mut seed, n, k);
+        let goal = edited(mut seed, s, k);
+        let yes = buddy_strings(s, goal);
+        if yes {
+            total += 1;
+        }
+        check = (check * 31 + if yes { r + 2 } else { 1 }) % 1000000007;
+    }
+    println(f"2000 random pairs: {total} are buddies, checksum {check}");
+}

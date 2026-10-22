@@ -1,0 +1,338 @@
+// LeetCode #859: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on every pair of
+// strings of one to three letters over three letters and on random pairs
+// of up to twelve letters, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn buddy_star(s: String, goal: String) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            if first < 0 {
+                first = i;
+            } else if second < 0 {
+                second = i;
+            } else {
+                return false;
+            }
+        }
+    }
+    if first < 0 {
+        let mut seen = [false; 26];
+        for c in a {
+            let k = (*c - 97) as i64;
+            if seen[k] {
+                return true;
+            }
+            seen[k] = true;
+        }
+        return false;
+    }
+    second >= 0 and a[first] == b[second] and a[second] == b[first]
+}
+
+// ---- counting arm ---------------------------------------------------
+
+fn buddy_counts(s: String, goal: String) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut ca = [0; 26];
+    let mut cb = [0; 26];
+    let mut diff = 0;
+    for i in 0..a.len() {
+        ca[(a[i] - 97) as i64] += 1;
+        cb[(b[i] - 97) as i64] += 1;
+        if a[i] != b[i] {
+            diff += 1;
+        }
+    }
+    let mut repeat = false;
+    for k in 0..26 {
+        if ca[k] != cb[k] {
+            return false;
+        }
+        if ca[k] >= 2 {
+            repeat = true;
+        }
+    }
+    diff == 2 or (diff == 0 and repeat)
+}
+
+// ---- swap-and-compare arm -------------------------------------------
+
+fn buddy_swap(s: String, goal: String) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    let n = a.len();
+    if n != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < n and a[i] == b[i] {
+        i += 1;
+    }
+    if i == n {
+        let mut seen: Set[u8] = Set.new();
+        for c in a {
+            if not seen.insert(*c) {
+                return true;
+            }
+        }
+        return false;
+    }
+    let mut j = n - 1;
+    while a[j] == b[j] {
+        j -= 1;
+    }
+    if i == j {
+        return false;
+    }
+    let mut t: Vec[u8] = a.to_vec();
+    t.swap(i, j);
+    for k in 0..n {
+        if t[k] != b[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- brute-force arm ------------------------------------------------
+
+fn buddy_brute(s: String, goal: String) -> bool {
+    let a = s.bytes();
+    let b = goal.bytes();
+    let n = a.len();
+    if n != b.len() {
+        return false;
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            let mut t: Vec[u8] = a.to_vec();
+            t.swap(i, j);
+            let mut same = true;
+            for k in 0..n {
+                if t[k] != b[k] {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- the statement, read literally ---------------------------------------
+
+// "Swap two letters in s so that the result is equal to goal": every pair
+// of different indices, in either order, swapped in a list of the
+// characters of s, and the list read back as a string and compared.
+fn statement(s: String, goal: String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    for i in 0..cs.len() {
+        for j in 0..cs.len() {
+            if i != j {
+                let mut t = cs.clone();
+                let c = t[i];
+                t[i] = t[j];
+                t[j] = c;
+                let mut r = String.new();
+                for c in t {
+                    r.push(c);
+                }
+                if r == goal {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> char {
+    (97 + i) as u8 as char
+}
+
+fn random_text(seed: mut ref i64, n: i64, k: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(letter(next_random(mut seed) % k));
+    }
+    s
+}
+
+// `s` left as it is, with two positions swapped, three rotated, one
+// letter changed or the last one dropped
+fn edited(seed: mut ref i64, s: String, k: i64) -> String {
+    let mut cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let edit = next_random(mut seed) % 5;
+    if edit == 1 {
+        cs.swap(next_random(mut seed) % n, next_random(mut seed) % n);
+    } else if edit == 2 and n >= 3 {
+        let i = next_random(mut seed) % (n - 2);
+        let t = cs[i];
+        cs[i] = cs[i + 1];
+        cs[i + 1] = cs[i + 2];
+        cs[i + 2] = t;
+    } else if edit == 3 {
+        let i = next_random(mut seed) % n;
+        cs[i] = letter(next_random(mut seed) % k);
+    } else if edit == 4 {
+        cs.pop();
+    }
+    let mut out = String.new();
+    for c in cs {
+        out.push(c);
+    }
+    out
+}
+
+// every letter moved `by` places on round the alphabet
+fn renamed(s: String, by: i64) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(letter(((c as i64) - 97 + by) % 26));
+    }
+    out
+}
+
+fn has_repeat(s: String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    for i in 0..cs.len() {
+        for j in i + 1..cs.len() {
+            if cs[i] == cs[j] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn arm(which: i64, s: String, goal: String) -> bool {
+    if which == 0 {
+        buddy_star(s, goal)
+    } else if which == 1 {
+        buddy_counts(s, goal)
+    } else if which == 2 {
+        buddy_swap(s, goal)
+    } else {
+        buddy_brute(s, goal)
+    }
+}
+
+fn main() {
+    let names = ["star", "counts", "swap", "brute"];
+    let props = ["answer", "symmetric", "against itself", "one swap away", "renamed", "longer"];
+    let mut by_arm = [0, 0, 0, 0];
+    let mut by_prop = [0, 0, 0, 0, 0, 0];
+    let mut checks = 0;
+    let mut buddies = 0;
+    let mut seed = 859;
+    let mut words: Vec[String] = Vec.new();
+    for n in 1..4 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        for x in 0..count {
+            let mut w = String.new();
+            let mut y = x;
+            for _ in 0..n {
+                w.push(letter(y % 3));
+                y /= 3;
+            }
+            words.push(w);
+        }
+    }
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    for s in words.iter() {
+        for g in words.iter() {
+            pairs.push((s.clone(), g.clone()));
+        }
+    }
+    while pairs.len() < 2500 {
+        let n = 1 + next_random(mut seed) % 12;
+        let k = 1 + next_random(mut seed) % 5;
+        let s = random_text(mut seed, n, k);
+        let g = edited(mut seed, s, k);
+        pairs.push((s, g));
+    }
+    for pair in pairs.iter() {
+        let s = pair.0.clone();
+        let goal = pair.1.clone();
+        let want = statement(s, goal);
+        if want {
+            buddies += 1;
+        }
+        let by = 1 + next_random(mut seed) % 25;
+        // two positions holding different letters, if there are any
+        let cs: Vec[char] = s.chars().collect();
+        let mut swapped = String.new();
+        let i = next_random(mut seed) % cs.len();
+        let mut j = -1;
+        for d in 1..cs.len() {
+            if j < 0 and cs[(i + d) % cs.len()] != cs[i] {
+                j = (i + d) % cs.len();
+            }
+        }
+        if j >= 0 {
+            let mut t = cs.clone();
+            t.swap(i, j);
+            for c in t {
+                swapped.push(c);
+            }
+        }
+        let mut longer = s.clone();
+        longer.push('a');
+        for a in 0..4 {
+            let got = arm(a, s, goal);
+            let mut bad = [false, false, false, false, false, false];
+            bad[0] = got != want;
+            bad[1] = arm(a, goal, s) != got;
+            bad[2] = arm(a, s, s) != has_repeat(s);
+            if j >= 0 {
+                bad[3] = not arm(a, s, swapped);
+            }
+            bad[4] = arm(a, renamed(s, by), renamed(goal, by)) != got;
+            bad[5] = arm(a, s, longer);
+            for p in 0..6 {
+                if p != 3 or j >= 0 {
+                    checks += 1;
+                }
+                if bad[p] {
+                    by_arm[a] += 1;
+                    by_prop[p] += 1;
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for f in by_arm.iter() {
+        failures += *f;
+    }
+    println(f"{pairs.len()} pairs, {buddies} buddies, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: {names[0]} {by_arm[0]}, {names[1]} {by_arm[1]}, {names[2]} {by_arm[2]}, {names[3]} {by_arm[3]}");
+    println(f"by property: {props[0]} {by_prop[0]}, {props[1]} {by_prop[1]}, {props[2]} {by_prop[2]}, {props[3]} {by_prop[3]}, {props[4]} {by_prop[4]}, {props[5]} {by_prop[5]}");
+}

@@ -1,0 +1,85 @@
+// LeetCode #859: Buddy Strings -- bench program, the ★ arm (one pass over
+// the positions where the strings differ), on the bytes of the strings.
+//
+// Two strings of 20,000 letters, LeetCode's longest, built once; each of
+// 40,000 rounds edits `goal` in place, asks whether it is a buddy of `s`,
+// and undoes the edit. A round swaps two positions, changes one letter,
+// or makes two swaps, so most rounds read both strings to the end.
+
+fn buddy_strings(a: Slice[u8], b: Slice[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut first = -1;
+    let mut second = -1;
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            if first < 0 {
+                first = i;
+            } else if second < 0 {
+                second = i;
+            } else {
+                return false;
+            }
+        }
+    }
+    if first < 0 {
+        let mut seen = [false; 26];
+        for c in a {
+            let k = (*c - 97) as i64;
+            if seen[k] {
+                return true;
+            }
+            seen[k] = true;
+        }
+        return false;
+    }
+    second >= 0 and a[first] == b[second] and a[second] == b[first]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 20000;
+    let mut seed = 859;
+    let mut s: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        s.push((97 + next_random(mut seed) % 26) as u8);
+    }
+    let mut goal = s.clone();
+    let mut buddies = 0;
+    let mut check = 0;
+    for r in 0..40000 {
+        let i = next_random(mut seed) % n;
+        let j = next_random(mut seed) % n;
+        let kind = r % 3;
+        let old = goal[i];
+        if kind == 1 {
+            goal[i] = (97 + (old as i64 - 97 + 1 + next_random(mut seed) % 25) % 26) as u8;
+        } else {
+            goal.swap(i, j);
+        }
+        let k = next_random(mut seed) % n;
+        let l = next_random(mut seed) % n;
+        if kind == 2 {
+            goal.swap(k, l);
+        }
+        let yes = buddy_strings(s, goal);
+        if kind == 2 {
+            goal.swap(k, l);
+        }
+        if kind == 1 {
+            goal[i] = old;
+        } else {
+            goal.swap(i, j);
+        }
+        if yes {
+            buddies += 1;
+        }
+        check = (check * 31 + if yes { r + 2 } else { 1 }) % 1000000007;
+    }
+    println(f"40000 rounds on 20000 letters: {buddies} buddies, checksum {check}");
+}

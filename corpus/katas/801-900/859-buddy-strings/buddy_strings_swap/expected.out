@@ -1,0 +1,16 @@
+s = "ab", goal = "ba" -> true
+s = "ab", goal = "ab" -> false
+s = "aa", goal = "aa" -> true
+s = "aaaaaaabc", goal = "aaaaaaacb" -> true
+s = "a", goal = "a" -> false
+s = "a", goal = "b" -> false
+s = "abc", goal = "ab" -> false
+s = "abcd", goal = "badc" -> false
+s = "abcd", goal = "abdc" -> true
+s = "abab", goal = "abab" -> true
+s = "abc", goal = "abc" -> false
+s = "abc", goal = "acd" -> false
+s = "abac", goal = "abad" -> false
+s = "ab", goal = "ca" -> false
+all 729 pairs of length 3 over three letters: 75 are buddies
+2000 random pairs: 898 are buddies, checksum 371619811
