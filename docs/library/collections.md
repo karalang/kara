@@ -80,8 +80,8 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 |---|---|---|
 | `new` | `fn new() -> Vec[T]` | Empty, no allocation |
 | `with_capacity` | `fn with_capacity(cap: i64) -> Vec[T]` | Preallocates `cap` slots |
-| `filled` | `fn filled(n: i64, val: T) -> Vec[T] where T: Clone` | `n` copies of `val` |
-| `from_fn` | `fn from_fn(n: i64, f: own MutFn(i64) -> T) -> Vec[T]` | `n` elements computed from their index |
+| `filled` | `fn filled(n: i64, val: T) -> Vec[T] where T: Clone` | `n` copies of `val`. `n < 0` counts as 0 |
+| `from_fn` | `fn from_fn(n: i64, f: own MutFn(i64) -> T) -> Vec[T]` | `n` elements computed from their index. `n < 0` counts as 0, as in `resize` |
 | `as_slice` | `fn as_slice(self) -> Slice[T]` | The whole vector as a `Slice[T]` value |
 | `push` | `fn push(mut ref self, val: own T)` | Appends |
 | `pop` | `fn pop(mut ref self) -> Option[T]` | Removes the last element |
@@ -91,6 +91,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest, in one pass |
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on. Does nothing if `len >= self.len()` |
+| `split_off` | `fn split_off(mut ref self, at: i64) -> Vec[T]` | Moves the elements from `at` on into a new `Vec` and returns it, leaving `[0, at)`. Panics if `at > self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
 | `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is moved into the first new slot and cloned into the rest, and dropped when there is no new slot |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Appends every item, in order. `a.extend(b)` moves every element of the `Vec` `b` onto the end of `a`. There is no `append`: a borrowed `b` is emptied onto `a` with `a.extend(mem.take(mut b))` |

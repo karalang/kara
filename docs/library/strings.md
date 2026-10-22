@@ -67,6 +67,7 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `to_string` | `fn to_string(self) -> String` | An owned copy of a `Str`. For a `String`, use `clone()` |
 | `clone` | `fn clone(self) -> String` | The same owned copy as `to_string()`. A `Str` is a view, so `clone()` copies the text it views, not the view |
 | `[]` | `s[a..b]` | A `Str` over the byte range `[a, b)`, through `Index` ([design.md §5](../design.md#5-types)). Panics if either end falls inside a multi-byte code point |
+| `substring` | `fn substring(self, start: i64) -> String` / `fn substring(self, start: i64, end: i64) -> String` | An owned copy of the bytes from `start` to the end, or of the byte range `[start, end)`. Out-of-range, negative or inverted bounds saturate, so the result may be empty. An end that falls inside a multi-byte code point panics, as `s[a..b]` does, including both ends of an empty range there |
 
 Byte offsets (`len`, `find`, `s[a..b]`, `bytes()`) count bytes, not characters. Locate a valid cut with `find`, or work in characters with `chars()` and `char_at`.
 
