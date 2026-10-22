@@ -1,0 +1,702 @@
+// mini_pyrsistent — a port of pyrsistent 0.20.0's PVector (MIT, Tobias
+// Gustafsson): the persistent vector behind pyrsistent, a 32-way trie with a
+// tail buffer and structural sharing, modelled here as a recursive tagged node
+// (Leaf holds values, Branch holds child nodes) with a functional rebuild on
+// every mutating op. The trie math (append / set / get / push_tail /
+// create_new_root / new_path) follows pyrsistent/_pvector.py branch for branch;
+// index/count/delete/mul/extend/compare go through the flat list the way the
+// library does. See README.md and mk.py for the op table.
+
+enum Node {
+    Leaf(Vec[i64]),
+    Branch(Vec[Node]),
+}
+
+#[derive(Clone)]
+struct PVec {
+    count: i64,
+    shift: i64,
+    root: Node,
+    tail: Vec[i64],
+}
+
+struct RootShift {
+    root: Node,
+    shift: i64,
+}
+
+fn clone_node(n: ref Node) -> Node {
+    match n {
+        Node.Leaf(vals) => {
+            Node.Leaf(vals.clone())
+        }
+        Node.Branch(kids) => {
+            let mut out: Vec[Node] = Vec.new();
+            let mut i = 0;
+            while i < kids.len() {
+                out.push(clone_node(kids[i]));
+                i = i + 1;
+            }
+            Node.Branch(out)
+        }
+    }
+}
+
+fn pv_empty() -> PVec {
+    let kids: Vec[Node] = Vec.new();
+    let tail: Vec[i64] = Vec.new();
+    PVec { count: 0, shift: 5, root: Node.Branch(kids), tail: tail }
+}
+
+fn tail_offset(v: ref PVec) -> i64 {
+    v.count - v.tail.len()
+}
+
+// --- get -------------------------------------------------------------------
+
+fn tree_get_lvl(n: ref Node, shift: i64, i: i64) -> i64 {
+    match n {
+        Node.Leaf(vals) => {
+            vals[i & 31]
+        }
+        Node.Branch(kids) => {
+            let sub = (i >> shift) & 31;
+            tree_get_lvl(kids[sub], shift - 5, i)
+        }
+    }
+}
+
+fn pv_get(v: ref PVec, idx: i64) -> i64 {
+    let mut i = idx;
+    if i < 0 {
+        i = i + v.count;
+    }
+    if i >= tail_offset(v) {
+        return v.tail[i & 31];
+    }
+    tree_get_lvl(v.root, v.shift, i)
+}
+
+// --- tolist ----------------------------------------------------------------
+
+fn fill_list(n: ref Node, out: mut ref Vec[i64]) {
+    match n {
+        Node.Leaf(vals) => {
+            let mut j = 0;
+            while j < vals.len() {
+                out.push(vals[j]);
+                j = j + 1;
+            }
+        }
+        Node.Branch(kids) => {
+            let mut j = 0;
+            while j < kids.len() {
+                fill_list(kids[j], mut out);
+                j = j + 1;
+            }
+        }
+    }
+}
+
+fn pv_tolist(v: ref PVec) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    fill_list(v.root, mut out);
+    let mut j = 0;
+    while j < v.tail.len() {
+        out.push(v.tail[j]);
+        j = j + 1;
+    }
+    out
+}
+
+// --- append ----------------------------------------------------------------
+
+fn new_path(level: i64, node: own Node) -> Node {
+    if level == 0 {
+        return node;
+    }
+    let mut kids: Vec[Node] = Vec.new();
+    kids.push(new_path(level - 5, node));
+    Node.Branch(kids)
+}
+
+fn push_tail(v: ref PVec, level: i64, parent: ref Node, tail_vals: own Vec[i64]) -> Node {
+    match parent {
+        Node.Branch(pk) => {
+            let mut ret: Vec[Node] = Vec.new();
+            let mut i = 0;
+            while i < pk.len() {
+                ret.push(clone_node(pk[i]));
+                i = i + 1;
+            }
+            if level == 5 {
+                ret.push(Node.Leaf(tail_vals));
+                return Node.Branch(ret);
+            }
+            let sub = ((v.count - 1) >> level) & 31;
+            if pk.len() > sub {
+                let child = push_tail(v, level - 5, pk[sub], tail_vals);
+                ret[sub] = child;
+                return Node.Branch(ret);
+            }
+            ret.push(new_path(level - 5, Node.Leaf(tail_vals)));
+            Node.Branch(ret)
+        }
+        Node.Leaf(lv) => {
+            // unreachable: push_tail only ever descends branches
+            Node.Leaf(lv.clone())
+        }
+    }
+}
+
+fn create_new_root(v: ref PVec) -> RootShift {
+    if (v.count >> 5) > (1 << v.shift) {
+        let mut kids: Vec[Node] = Vec.new();
+        kids.push(clone_node(v.root));
+        kids.push(new_path(v.shift, Node.Leaf(v.tail.clone())));
+        RootShift { root: Node.Branch(kids), shift: v.shift + 5 }
+    } else {
+        RootShift { root: push_tail(v, v.shift, v.root, v.tail.clone()), shift: v.shift }
+    }
+}
+
+fn pv_append(v: ref PVec, val: i64) -> PVec {
+    if v.tail.len() < 32 {
+        let mut nt = v.tail.clone();
+        nt.push(val);
+        return PVec { count: v.count + 1, shift: v.shift, root: clone_node(v.root), tail: nt };
+    }
+    let rs = create_new_root(v);
+    let mut nt2: Vec[i64] = Vec.new();
+    nt2.push(val);
+    PVec { count: v.count + 1, shift: rs.shift, root: rs.root, tail: nt2 }
+}
+
+// --- set -------------------------------------------------------------------
+
+fn do_set(level: i64, node: ref Node, i: i64, val: i64) -> Node {
+    match node {
+        Node.Leaf(vals) => {
+            let mut ret = vals.clone();
+            ret[i & 31] = val;
+            Node.Leaf(ret)
+        }
+        Node.Branch(kids) => {
+            let mut ret: Vec[Node] = Vec.new();
+            let mut j = 0;
+            while j < kids.len() {
+                ret.push(clone_node(kids[j]));
+                j = j + 1;
+            }
+            let sub = (i >> level) & 31;
+            let child = do_set(level - 5, kids[sub], i, val);
+            ret[sub] = child;
+            Node.Branch(ret)
+        }
+    }
+}
+
+fn pv_set(v: ref PVec, idx: i64, val: i64) -> PVec {
+    let mut i = idx;
+    if i < 0 {
+        i = i + v.count;
+    }
+    if i == v.count {
+        return pv_append(v, val);
+    }
+    if i >= tail_offset(v) {
+        let mut nt = v.tail.clone();
+        nt[i & 31] = val;
+        return PVec { count: v.count, shift: v.shift, root: clone_node(v.root), tail: nt };
+    }
+    PVec { count: v.count, shift: v.shift, root: do_set(v.shift, v.root, i, val), tail: v.tail.clone() }
+}
+
+// --- derived ops (through the flat list, as the library does) --------------
+
+fn pv_from_list(xs: ref Vec[i64]) -> PVec {
+    let mut v = pv_empty();
+    let mut i = 0;
+    while i < xs.len() {
+        v = pv_append(v, xs[i]);
+        i = i + 1;
+    }
+    v
+}
+
+fn pv_extend(v: ref PVec, xs: ref Vec[i64]) -> PVec {
+    let mut out = clone_pvec(v);
+    let mut i = 0;
+    while i < xs.len() {
+        out = pv_append(out, xs[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn clone_pvec(v: ref PVec) -> PVec {
+    PVec { count: v.count, shift: v.shift, root: clone_node(v.root), tail: v.tail.clone() }
+}
+
+fn pv_delete1(v: ref PVec, at: i64) -> PVec {
+    let l = pv_tolist(v);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < l.len() {
+        if i != at {
+            out.push(l[i]);
+        }
+        i = i + 1;
+    }
+    pv_from_list(out)
+}
+
+fn pv_delete_slice(v: ref PVec, a: i64, b: i64) -> PVec {
+    let l = pv_tolist(v);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < l.len() {
+        if i < a or i >= b {
+            out.push(l[i]);
+        }
+        i = i + 1;
+    }
+    pv_from_list(out)
+}
+
+fn pv_mul(v: ref PVec, times: i64) -> PVec {
+    let mut out: Vec[i64] = Vec.new();
+    if times <= 0 {
+        return pv_from_list(out);
+    }
+    let l = pv_tolist(v);
+    let mut t = 0;
+    while t < times {
+        let mut i = 0;
+        while i < l.len() {
+            out.push(l[i]);
+            i = i + 1;
+        }
+        t = t + 1;
+    }
+    pv_from_list(out)
+}
+
+fn list_index(l: ref Vec[i64], val: i64) -> i64 {
+    let mut i = 0;
+    while i < l.len() {
+        if l[i] == val {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn list_count(l: ref Vec[i64], val: i64) -> i64 {
+    let mut c = 0;
+    let mut i = 0;
+    while i < l.len() {
+        if l[i] == val {
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+    c
+}
+
+fn list_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn list_lt(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] < b[i] {
+            return true;
+        }
+        if a[i] > b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    a.len() < b.len()
+}
+
+// --- formatting ------------------------------------------------------------
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn fmt_window(l: ref Vec[i64], a: i64, b: i64) -> String {
+    let mut lo = a;
+    let mut hi = b;
+    if lo < 0 {
+        lo = 0;
+    }
+    if hi > l.len() {
+        hi = l.len();
+    }
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = lo;
+    let mut first = true;
+    while i < hi {
+        if not first {
+            out.push_str(", ");
+        }
+        out.push_str(itoa(l[i]));
+        first = false;
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn fmt_list(l: ref Vec[i64]) -> String {
+    fmt_window(l, 0, l.len())
+}
+
+// --- parsing / line scan ---------------------------------------------------
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < n {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg {
+        -v
+    } else {
+        v
+    }
+}
+
+// --- register machine ------------------------------------------------------
+
+fn reg_line(k: i64, n: i64) -> String {
+    let mut s = String.new();
+    s.push_str("reg ");
+    s.push_str(itoa(k));
+    s.push_str(" len ");
+    s.push_str(itoa(n));
+    s
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut regs: Vec[PVec] = Vec.new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "iota" {
+                    let cnt = parse_int(f[1].clone());
+                    let mut v = pv_empty();
+                    let mut j = 0;
+                    while j < cnt {
+                        v = pv_append(v, j);
+                        j = j + 1;
+                    }
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "new" {
+                    let mut xs: Vec[i64] = Vec.new();
+                    let mut j = 1;
+                    while j < f.len() {
+                        xs.push(parse_int(f[j].clone()));
+                        j = j + 1;
+                    }
+                    let v = pv_from_list(xs);
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "app" {
+                    let r = parse_int(f[1].clone());
+                    let v = pv_append(regs[r], parse_int(f[2].clone()));
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "set" {
+                    let r = parse_int(f[1].clone());
+                    let v = pv_set(regs[r], parse_int(f[2].clone()), parse_int(f[3].clone()));
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "ext" {
+                    let r = parse_int(f[1].clone());
+                    let mut xs: Vec[i64] = Vec.new();
+                    let mut j = 2;
+                    while j < f.len() {
+                        xs.push(parse_int(f[j].clone()));
+                        j = j + 1;
+                    }
+                    let v = pv_extend(regs[r], xs);
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "extr" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let xs = pv_tolist(regs[r2]);
+                    let v = pv_extend(regs[r], xs);
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "mset" {
+                    let r = parse_int(f[1].clone());
+                    let mut v = clone_pvec(regs[r]);
+                    let mut j = 2;
+                    while j + 1 < f.len() {
+                        v = pv_set(v, parse_int(f[j].clone()), parse_int(f[j + 1].clone()));
+                        j = j + 2;
+                    }
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "del" {
+                    let r = parse_int(f[1].clone());
+                    let v = pv_delete1(regs[r], parse_int(f[2].clone()));
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "dels" {
+                    let r = parse_int(f[1].clone());
+                    let v = pv_delete_slice(regs[r], parse_int(f[2].clone()), parse_int(f[3].clone()));
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "mul" {
+                    let r = parse_int(f[1].clone());
+                    let v = pv_mul(regs[r], parse_int(f[2].clone()));
+                    let k = regs.len();
+                    let ln = v.count;
+                    regs.push(v);
+                    out.push_str(reg_line(k, ln));
+                } else if op == "get" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(itoa(pv_get(regs[r], parse_int(f[2].clone()))));
+                } else if op == "len" {
+                    let r = parse_int(f[1].clone());
+                    out.push_str(itoa(regs[r].count));
+                } else if op == "idx" {
+                    let r = parse_int(f[1].clone());
+                    let l = pv_tolist(regs[r]);
+                    let at = list_index(l, parse_int(f[2].clone()));
+                    if at < 0 {
+                        out.push_str("miss");
+                    } else {
+                        out.push_str(itoa(at));
+                    }
+                } else if op == "cnt" {
+                    let r = parse_int(f[1].clone());
+                    let l = pv_tolist(regs[r]);
+                    out.push_str(itoa(list_count(l, parse_int(f[2].clone()))));
+                } else if op == "eq" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let la = pv_tolist(regs[r]);
+                    let lb = pv_tolist(regs[r2]);
+                    if list_eq(la, lb) {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "lt" {
+                    let r = parse_int(f[1].clone());
+                    let r2 = parse_int(f[2].clone());
+                    let la = pv_tolist(regs[r]);
+                    let lb = pv_tolist(regs[r2]);
+                    if list_lt(la, lb) {
+                        out.push_str("yes");
+                    } else {
+                        out.push_str("no");
+                    }
+                } else if op == "rng" {
+                    let r = parse_int(f[1].clone());
+                    let l = pv_tolist(regs[r]);
+                    out.push_str(fmt_window(l, parse_int(f[2].clone()), parse_int(f[3].clone())));
+                } else if op == "list" {
+                    let r = parse_int(f[1].clone());
+                    let l = pv_tolist(regs[r]);
+                    out.push_str(fmt_list(l));
+                } else if op == "repr" {
+                    let r = parse_int(f[1].clone());
+                    let l = pv_tolist(regs[r]);
+                    out.push_str("pvector(");
+                    out.push_str(fmt_list(l));
+                    out.push_str(")");
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("iota\t1100\n");
+    s.push_str("get\t0\t0\n");
+    s.push_str("get\t0\t1\n");
+    s.push_str("get\t0\t31\n");
+    s.push_str("get\t0\t32\n");
+    s.push_str("get\t0\t33\n");
+    s.push_str("get\t0\t1023\n");
+    s.push_str("get\t0\t1024\n");
+    s.push_str("get\t0\t1025\n");
+    s.push_str("get\t0\t1099\n");
+    s.push_str("get\t0\t-1\n");
+    s.push_str("get\t0\t-1100\n");
+    s.push_str("rng\t0\t30\t35\n");
+    s.push_str("rng\t0\t1022\t1027\n");
+    s.push_str("rng\t0\t1095\t1100\n");
+    s.push_str("rng\t0\t0\t4\n");
+    s.push_str("len\t0\n");
+    s.push_str("set\t0\t1099\t-8\n");
+    s.push_str("get\t1\t1099\n");
+    s.push_str("get\t0\t1099\n");
+    s.push_str("set\t0\t33\t-7\n");
+    s.push_str("get\t2\t33\n");
+    s.push_str("get\t0\t33\n");
+    s.push_str("set\t0\t1024\t-9\n");
+    s.push_str("get\t3\t1024\n");
+    s.push_str("get\t0\t1024\n");
+    s.push_str("app\t0\t7\n");
+    s.push_str("len\t4\n");
+    s.push_str("get\t4\t1100\n");
+    s.push_str("iota\t40\n");
+    s.push_str("rng\t5\t30\t34\n");
+    s.push_str("get\t5\t-1\n");
+    s.push_str("len\t5\n");
+    s.push_str("new\t10\t20\t30\t40\t50\n");
+    s.push_str("list\t6\n");
+    s.push_str("repr\t6\n");
+    s.push_str("ext\t6\t60\t70\n");
+    s.push_str("list\t7\n");
+    s.push_str("idx\t7\t40\n");
+    s.push_str("idx\t7\t999\n");
+    s.push_str("cnt\t7\t30\n");
+    s.push_str("extr\t6\t5\n");
+    s.push_str("len\t8\n");
+    s.push_str("rng\t8\t3\t9\n");
+    s.push_str("del\t7\t2\n");
+    s.push_str("list\t9\n");
+    s.push_str("dels\t7\t1\t4\n");
+    s.push_str("list\t10\n");
+    s.push_str("mset\t7\t0\t9\t6\t8\n");
+    s.push_str("list\t11\n");
+    s.push_str("mul\t6\t3\n");
+    s.push_str("list\t12\n");
+    s.push_str("len\t12\n");
+    s.push_str("mul\t6\t0\n");
+    s.push_str("len\t13\n");
+    s.push_str("new\t1\t2\t3\n");
+    s.push_str("new\t1\t2\t3\n");
+    s.push_str("new\t1\t2\t4\n");
+    s.push_str("new\t1\t2\n");
+    s.push_str("eq\t14\t15\n");
+    s.push_str("eq\t14\t16\n");
+    s.push_str("lt\t14\t16\n");
+    s.push_str("lt\t16\t14\n");
+    s.push_str("lt\t17\t14\n");
+    s.push_str("lt\t14\t17\n");
+    s
+}
