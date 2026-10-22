@@ -229,6 +229,15 @@ impl<'ctx> Cx<'ctx, '_> {
             .i32_type()
             .const_int(k as u64 | if byte { 0x100 } else { 0 }, false);
         let v = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
+        if radix {
+            // The runtime set the panic's message for a radix outside 2..=36.
+            let min = self.i64(i64::MIN as u64);
+            let ok = self
+                .builder
+                .build_int_compare(IntPredicate::NE, v, min, "")
+                .map_err(e)?;
+            self.abort_unless(ok, "explicit panic")?;
+        }
         let dty = self.place_type(dest)?;
         match method {
             "to_digit" => self.store_opt_int(dest, v)?,

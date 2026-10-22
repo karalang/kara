@@ -920,3 +920,42 @@ fn lazy_lock_is_clean_under_asan() {
         assert_eq!(out, WANT_LAZY);
     }
 }
+
+/// The runtime's introspection is empty and `Vec.filled` with a negative
+/// count is empty, on both backends (B-2026-10-22-38).
+#[test]
+fn runtime_introspection_and_negative_fills_agree_on_both_backends() {
+    agrees(
+        r#"
+fn main() {
+    println(Runtime.list_tasks().len());
+    println(Runtime.list_par_blocks().len());
+    println(Runtime.has_debug_metadata());
+    let v = Vec.filled(-1, 7);
+    let w = Vec.filled(-3, "s");
+    println(f"{v.len()} {w.len()} {Vec.filled(2, 7).len()}");
+}
+"#,
+        "0\n0\nfalse\n0 0 2\n",
+        0,
+    );
+}
+
+/// A char radix outside 2..=36 panics with exit 101 on both backends,
+/// rather than aborting inside the runtime (B-2026-10-22-38).
+#[test]
+fn a_char_radix_out_of_range_panics_on_both_backends() {
+    for call in [
+        "'z'.is_digit(37)",
+        "'5'.to_digit(40).is_some()",
+        "'1'.is_digit(1)",
+    ] {
+        let src = format!("fn main() {{ println(\"before\"); println(f\"{{{call}}}\"); }}");
+        agrees(&src, "before\n", 101);
+    }
+    agrees(
+        "fn main() { println(f\"{'z'.is_digit(36)} {'5'.to_digit(2).is_some()}\"); }",
+        "true false\n",
+        0,
+    );
+}

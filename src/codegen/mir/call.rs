@@ -848,7 +848,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt("string_from", &[d.into(), s.into(), n.into()])?;
                 self.drop_moved(args)
             }
-            ("String" | "Vec", "new") => {
+            // No scheduler is listed and no debug metadata is kept, as on
+            // the MIR interpreter (design.md §17; B-2026-10-22-38).
+            ("String" | "Vec", "new") | ("Runtime", "list_tasks" | "list_par_blocks") => {
                 let d = self.place_ptr(dest)?;
                 self.builder
                     .build_memset(d, 1, self.llcx.i8_type().const_zero(), self.i64(24))
@@ -1124,9 +1126,15 @@ impl<'ctx> Cx<'ctx, '_> {
                     return Err(format!("{name} into a `{}`", self.tys.display(dty)));
                 };
                 let size = self.layout(el)?.size;
+                // A negative count is no elements, as `from_fn` and `resize`
+                // take it (B-2026-10-22-38).
                 let n = self.int_arg(&args[0])?;
                 let ok = self.non_negative(n)?;
-                self.abort_unless(ok, "explicit panic")?;
+                let n = self
+                    .builder
+                    .build_select(ok, n, self.i64(0), "")
+                    .map_err(e)?
+                    .into_int_value();
                 let val = self.operand_ptr(&args[1])?;
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
@@ -1219,6 +1227,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, p.into())?;
                 self.store(self.offset(d, 8)?, n.into())
+            }
+            ("Runtime", "has_debug_metadata") => {
+                let d = self.place_ptr(dest)?;
+                self.store_i1(d, self.llcx.bool_type().const_zero())
             }
             ("Env", "args") => {
                 let d = self.place_ptr(dest)?;

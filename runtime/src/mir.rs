@@ -2405,6 +2405,14 @@ pub extern "C" fn karac_mir_fmt_char_debug(c: u32) {
 /// integer receiver), which is in no class when it is above 255.
 #[no_mangle]
 pub extern "C" fn karac_mir_char(op: u32, c: i64, radix: i64) -> i64 {
+    let name = CHAR_OPS.get((op & 0xff) as usize).copied().unwrap_or("");
+    // A radix outside 2..=36 panics, worded as the MIR interpreter words it;
+    // `i64::MIN` tells the caller to abort (B-2026-10-22-38).
+    if matches!(name, "is_digit" | "to_digit") && !(2..=36).contains(&radix) {
+        let msg = format!("char.{name}: radix {radix} is not in 2..=36");
+        PANIC.with(|p| *p.borrow_mut() = Some(msg));
+        return i64::MIN;
+    }
     let ch = if op & 0x100 != 0 {
         u8::try_from(c).ok().map(char::from)
     } else {
@@ -2422,7 +2430,7 @@ pub extern "C" fn karac_mir_char(op: u32, c: i64, radix: i64) -> i64 {
         }
     };
     let r = u32::try_from(radix).unwrap_or(0);
-    match CHAR_OPS.get((op & 0xff) as usize).copied().unwrap_or("") {
+    match name {
         "is_alphabetic" => b(ch.is_alphabetic()),
         "is_numeric" => b(ch.is_numeric()),
         "is_alphanumeric" => b(ch.is_alphanumeric()),
