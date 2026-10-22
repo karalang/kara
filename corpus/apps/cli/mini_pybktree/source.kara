@@ -1,0 +1,373 @@
+// mini_pybktree — a port of pybktree 1.1 (MIT, Jetsetter): a Bk-tree, the
+// metric-tree structure for fast "close match" queries (spell-check, perceptual
+// image hashes, fuzzy dedup). Each node keeps its children in a map keyed by
+// their distance to the node; a query prunes whole subtrees with the triangle
+// inequality. The distance metric here is Hamming distance on integers, the
+// library's documented default. Modelled as an integer-id arena so no node owns
+// another; add / find / iter follow pybktree.py branch for branch. See
+// README.md and mk.py for the op table.
+
+struct Bk {
+    items: Vec[i64],            // node id -> item value
+    child_dist: Vec[Vec[i64]],  // node id -> child distances, in add order
+    child_node: Vec[Vec[i64]],  // node id -> child node ids (parallel)
+    root: i64,                  // -1 when empty
+}
+
+fn bk_new() -> Bk {
+    let items: Vec[i64] = Vec.new();
+    let cd: Vec[Vec[i64]] = Vec.new();
+    let cn: Vec[Vec[i64]] = Vec.new();
+    Bk { items: items, child_dist: cd, child_node: cn, root: -1 }
+}
+
+fn popcount(nbits: i64) -> i64 {
+    let mut x = nbits;
+    let mut c = 0;
+    while x > 0 {
+        c = c + (x & 1);
+        x = x >> 1;
+    }
+    c
+}
+
+fn hamming(x: i64, y: i64) -> i64 {
+    popcount(x ^ y)
+}
+
+fn bk_add(t: mut ref Bk, item: i64) {
+    if t.root == -1 {
+        let id = t.items.len();
+        t.items.push(item);
+        let kd: Vec[i64] = Vec.new();
+        let kn: Vec[i64] = Vec.new();
+        t.child_dist.push(kd);
+        t.child_node.push(kn);
+        t.root = id;
+        return;
+    }
+    let mut node = t.root;
+    let mut placed = false;
+    while not placed {
+        let parent = t.items[node];
+        let d = hamming(item, parent);
+        // look for an existing child at distance d (insertion order)
+        let mut found = -1;
+        let mut j = 0;
+        while j < t.child_dist[node].len() {
+            if t.child_dist[node][j] == d {
+                found = t.child_node[node][j];
+            }
+            j = j + 1;
+        }
+        if found == -1 {
+            let id = t.items.len();
+            t.items.push(item);
+            let kd: Vec[i64] = Vec.new();
+            let kn: Vec[i64] = Vec.new();
+            t.child_dist.push(kd);
+            t.child_node.push(kn);
+            t.child_dist[node].push(d);
+            t.child_node[node].push(id);
+            placed = true;
+        } else {
+            node = found;
+        }
+    }
+}
+
+// find: FIFO walk with triangle-inequality pruning, then a stable sort by
+// distance. Returns parallel (distance, item) vectors packed into one Vec as
+// [d0, item0, d1, item1, ...] so a single return value carries both.
+fn bk_find(t: ref Bk, item: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if t.root == -1 {
+        return out;
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(t.root);
+    let mut head = 0;
+    let mut fd: Vec[i64] = Vec.new();    // found distances, visitation order
+    let mut fi: Vec[i64] = Vec.new();    // found items, visitation order
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        let cand = t.items[node];
+        let d = hamming(cand, item);
+        if d <= n {
+            fd.push(d);
+            fi.push(cand);
+        }
+        let lower = d - n;
+        let upper = d + n;
+        let mut j = 0;
+        while j < t.child_dist[node].len() {
+            let cdist = t.child_dist[node][j];
+            if lower <= cdist and cdist <= upper {
+                queue.push(t.child_node[node][j]);
+            }
+            j = j + 1;
+        }
+    }
+    // stable sort by distance: emit in ascending distance, ties in order
+    let mut maxd = 0;
+    let mut k = 0;
+    while k < fd.len() {
+        if fd[k] > maxd {
+            maxd = fd[k];
+        }
+        k = k + 1;
+    }
+    let mut dd = 0;
+    while dd <= maxd {
+        let mut m = 0;
+        while m < fd.len() {
+            if fd[m] == dd {
+                out.push(fd[m]);
+                out.push(fi[m]);
+            }
+            m = m + 1;
+        }
+        dd = dd + 1;
+    }
+    out
+}
+
+fn bk_iter(t: ref Bk) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if t.root == -1 {
+        return out;
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(t.root);
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        out.push(t.items[node]);
+        let mut j = 0;
+        while j < t.child_node[node].len() {
+            queue.push(t.child_node[node][j]);
+            j = j + 1;
+        }
+    }
+    out
+}
+
+// --- formatting ------------------------------------------------------------
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 {
+        neg = true;
+        x = -x;
+    }
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        let d = (x % 10) as u8;
+        buf.push(48 + d);
+        x = x / 10;
+    }
+    if neg {
+        buf.push(45);
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn fmt_items(xs: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < xs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(itoa(xs[i]));
+        i = i + 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn fmt_find(packed: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    let mut first = true;
+    while i + 1 < packed.len() {
+        if not first {
+            out.push_str(", ");
+        }
+        out.push_str("(");
+        out.push_str(itoa(packed[i]));
+        out.push_str(", ");
+        out.push_str(itoa(packed[i + 1]));
+        out.push_str(")");
+        first = false;
+        i = i + 2;
+    }
+    out.push_str("]");
+    out
+}
+
+fn bk_repr(t: ref Bk) -> String {
+    let mut out = String.new();
+    out.push_str("<BKTree using hamming_distance with ");
+    if t.root == -1 {
+        out.push_str("no");
+    } else {
+        out.push_str(itoa(t.child_dist[t.root].len()));
+    }
+    out.push_str(" top-level nodes>");
+    out
+}
+
+// --- parsing / line scan ---------------------------------------------------
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = str_bytes(s);
+    let m = b.len();
+    if m == 0 {
+        return 0;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i64 = 0;
+    while i < m {
+        v = v * 10 + (b[i] - 48) as i64;
+        i = i + 1;
+    }
+    if neg {
+        -v
+    } else {
+        v
+    }
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut t = bk_new();
+
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let f = split_fields(line, 9);
+                let op = f[0].clone();
+                if op == "add" {
+                    bk_add(mut t, parse_int(f[1].clone()));
+                    out.push_str(bk_repr(t));
+                } else if op == "find" {
+                    let packed = bk_find(t, parse_int(f[1].clone()), parse_int(f[2].clone()));
+                    out.push_str(fmt_find(packed));
+                } else if op == "iter" {
+                    let xs = bk_iter(t);
+                    out.push_str(fmt_items(xs));
+                } else if op == "len" {
+                    out.push_str(itoa(t.items.len()));
+                } else if op == "dist" {
+                    out.push_str(itoa(hamming(parse_int(f[1].clone()), parse_int(f[2].clone()))));
+                }
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("add\t0\n");
+    s.push_str("add\t4\n");
+    s.push_str("add\t5\n");
+    s.push_str("add\t14\n");
+    s.push_str("add\t15\n");
+    s.push_str("add\t8\n");
+    s.push_str("add\t10\n");
+    s.push_str("add\t12\n");
+    s.push_str("add\t31\n");
+    s.push_str("add\t7\n");
+    s.push_str("add\t1\n");
+    s.push_str("add\t2\n");
+    s.push_str("add\t3\n");
+    s.push_str("add\t63\n");
+    s.push_str("add\t100\n");
+    s.push_str("add\t127\n");
+    s.push_str("add\t200\n");
+    s.push_str("add\t255\n");
+    s.push_str("iter\n");
+    s.push_str("len\n");
+    s.push_str("find\t13\t0\n");
+    s.push_str("find\t13\t1\n");
+    s.push_str("find\t13\t2\n");
+    s.push_str("find\t13\t3\n");
+    s.push_str("find\t0\t1000\n");
+    s.push_str("find\t255\t1\n");
+    s.push_str("find\t200\t2\n");
+    s.push_str("find\t7\t2\n");
+    s.push_str("find\t1\t1\n");
+    s.push_str("find\t64\t0\n");
+    s.push_str("find\t100\t0\n");
+    s.push_str("find\t999\t2\n");
+    s.push_str("find\t15\t4\n");
+    s.push_str("find\t0\t0\n");
+    s.push_str("dist\t0\t15\n");
+    s.push_str("dist\t8\t15\n");
+    s.push_str("dist\t13\t5\n");
+    s.push_str("dist\t255\t0\n");
+    s.push_str("dist\t127\t128\n");
+    s.push_str("dist\t1023\t0\n");
+    s
+}
