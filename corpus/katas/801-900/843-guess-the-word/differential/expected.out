@@ -1,0 +1,5 @@
+400 cases, 11248 words, 8000 checks over 4 arms: 0 failures
+by arm: star 0, squares 0, zeros 0, letters 0
+by property: found 0, no stray 0, consistent 0, stops 0, renamed 0
+most guesses: star 9, squares 9, zeros 10, letters 9
+all guesses: star 1327, squares 1306, zeros 1390, letters 1362

@@ -1,0 +1,423 @@
+// LeetCode #843: differential -- the four arms against the judge.
+//
+// Copies of the four arms, each playing the judge on random word lists and
+// held to five properties.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn shared_star(a: Vec[u8], b: Vec[u8]) -> i64 {
+    let mut count = 0;
+    for k in 0..a.len() {
+        if a[k] == b[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn find_secret_word_star(words: Vec[String], master: mut ref Master) {
+    let n = words.len();
+    let mut letters: Vec[Vec[u8]] = Vec.new();
+    for word in words.iter() {
+        letters.push(word.bytes().iter().collect());
+    }
+    let mut same: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(shared_star(letters[i], letters[j]));
+        }
+        same.push(row);
+    }
+    let mut possible: Vec[i64] = (0..n).collect();
+    while possible.len() > 0 {
+        let mut best = possible[0];
+        let mut best_worst = n + 1;
+        for c in possible.iter() {
+            let mut groups = [0; 7];
+            for o in possible.iter() {
+                groups[same[*c][*o]] += 1;
+            }
+            let mut worst = 0;
+            for k in 0..6 {
+                worst = worst.max(groups[k]);
+            }
+            if worst < best_worst {
+                best_worst = worst;
+                best = *c;
+            }
+        }
+        let answer = master.guess(words[best]);
+        if answer == 6 {
+            return;
+        }
+        let mut left: Vec[i64] = Vec.new();
+        for o in possible.iter() {
+            if same[best][*o] == answer {
+                left.push(*o);
+            }
+        }
+        possible = left;
+    }
+}
+
+// ---- sum-of-squares arm ---------------------------------------------
+
+fn places_squares(a: String, b: String) -> i64 {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut count = 0;
+    for k in 0..x.len() {
+        if x[k] == y[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn find_secret_word_squares(words: Vec[String], master: mut ref Master) {
+    let mut possible: Vec[String] = words.clone();
+    while possible.len() > 0 {
+        let mut best = 0;
+        let mut least = -1;
+        for c in 0..possible.len() {
+            let mut groups = [0; 7];
+            for o in 0..possible.len() {
+                groups[places_squares(possible[c], possible[o])] += 1;
+            }
+            let mut squares = 0;
+            for g in groups {
+                squares += g * g;
+            }
+            if least < 0 or squares < least {
+                least = squares;
+                best = c;
+            }
+        }
+        let guess = possible[best].clone();
+        let answer = master.guess(guess);
+        if answer == 6 {
+            return;
+        }
+        possible = possible.into_iter().filter(|w| places_squares(w, guess) == answer).collect();
+    }
+}
+
+// ---- fewest-strangers arm -------------------------------------------
+
+fn shared_places_zeros(a: Vec[u8], b: Vec[u8]) -> i64 {
+    let mut count = 0;
+    for k in 0..6 {
+        if a[k] == b[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn find_secret_word_zeros(words: Vec[String], master: mut ref Master) {
+    let mut letters: Vec[Vec[u8]] = Vec.new();
+    for word in words.iter() {
+        letters.push(word.bytes().iter().collect());
+    }
+    let mut possible: Vec[i64] = (0..words.len()).collect();
+    loop {
+        let mut best = possible[0];
+        let mut fewest = words.len() + 1;
+        for c in possible.iter() {
+            let mut strangers = 0;
+            for o in possible.iter() {
+                if shared_places_zeros(letters[*c], letters[*o]) == 0 {
+                    strangers += 1;
+                }
+            }
+            if strangers < fewest {
+                fewest = strangers;
+                best = *c;
+            }
+        }
+        let answer = master.guess(words[best]);
+        if answer == 6 or possible.len() == 1 {
+            return;
+        }
+        possible.retain(|o| shared_places_zeros(letters[best], letters[o]) == answer);
+    }
+}
+
+// ---- commonest-letters arm ------------------------------------------
+
+fn agreement_letters(a: Vec[u8], b: Vec[u8]) -> i64 {
+    let mut count = 0;
+    for k in 0..6 {
+        if a[k] == b[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn find_secret_word_letters(words: Vec[String], master: mut ref Master) {
+    let mut possible: Vec[Vec[u8]] = Vec.new();
+    for word in words.iter() {
+        possible.push(word.bytes().iter().collect());
+    }
+    while possible.len() > 0 {
+        let mut counts: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..6 {
+            counts.push(Vec.filled(26, 0));
+        }
+        for word in possible.iter() {
+            for k in 0..6 {
+                counts[k][(word[k] - 97) as i64] += 1;
+            }
+        }
+        let mut best = 0;
+        let mut top = -1;
+        for c in 0..possible.len() {
+            let mut score = 0;
+            for k in 0..6 {
+                score += counts[k][(possible[c][k] - 97) as i64];
+            }
+            if score > top {
+                top = score;
+                best = c;
+            }
+        }
+        let guess = possible[best].clone();
+        let mut text = String.new();
+        for b in guess.iter() {
+            text.push(*b as char);
+        }
+        let answer = master.guess(text);
+        if answer == 6 {
+            return;
+        }
+        let mut left: Vec[Vec[u8]] = Vec.new();
+        for word in possible.iter() {
+            if agreement_letters(word, guess) == answer {
+                left.push(word.clone());
+            }
+        }
+        possible = left;
+    }
+}
+
+// ---- the judge --------------------------------------------------------------
+
+// The judge of the statement, which also keeps every guess and answer.
+struct Master {
+    words: Vec[String],
+    secret: String,
+    allowed: i64,
+    guesses: i64,
+    strays: i64,
+    found: bool,
+    said: Vec[String],
+    heard: Vec[i64],
+}
+
+impl Master {
+    fn new(words: Vec[String], secret: String, allowed: i64) -> Master {
+        Master {
+            words: words.clone(),
+            secret: secret.clone(),
+            allowed: allowed,
+            guesses: 0,
+            strays: 0,
+            found: false,
+            said: Vec.new(),
+            heard: Vec.new(),
+        }
+    }
+
+    fn guess(mut ref self, word: String) -> i64 {
+        self.guesses += 1;
+        self.said.push(word.clone());
+        if not self.words.contains(word) {
+            self.strays += 1;
+            self.heard.push(-1);
+            return -1;
+        }
+        if word == self.secret and self.guesses <= self.allowed {
+            self.found = true;
+        }
+        let answer = matching(word, self.secret);
+        self.heard.push(answer);
+        answer
+    }
+}
+
+fn matching(a: String, b: String) -> i64 {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut count = 0;
+    for k in 0..6 {
+        if x[k] == y[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn play(arm: i64, words: Vec[String], secret: String, allowed: i64) -> Master {
+    let mut master = Master.new(words, secret, allowed);
+    if arm == 0 {
+        find_secret_word_star(words, mut master);
+    } else if arm == 1 {
+        find_secret_word_squares(words, mut master);
+    } else if arm == 2 {
+        find_secret_word_zeros(words, mut master);
+    } else {
+        find_secret_word_letters(words, mut master);
+    }
+    master
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, k: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..6 {
+        w.push((97 + next_random(mut seed) % k) as u8 as char);
+    }
+    w
+}
+
+// up to `n` distinct words: random ones from the first `k` letters when
+// `near` is 0; otherwise copies of `near` random seed words, each with
+// `changes` places given a random letter
+fn random_list(seed: mut ref i64, n: i64, k: i64, near: i64, changes: i64) -> Vec[String] {
+    let mut seeds: Vec[String] = Vec.new();
+    for _ in 0..near {
+        seeds.push(random_word(mut seed, k));
+    }
+    let mut words: Vec[String] = Vec.new();
+    let mut tries = 0;
+    while words.len() < n and tries < 20 * n {
+        tries += 1;
+        let w = if near == 0 {
+            random_word(mut seed, k)
+        } else {
+            let mut cs: Vec[char] = seeds[next_random(mut seed) % near].chars().collect();
+            for _ in 0..changes {
+                cs[next_random(mut seed) % 6] = (97 + next_random(mut seed) % k) as u8 as char;
+            }
+            let mut s = String.new();
+            for c in cs {
+                s.push(c);
+            }
+            s
+        };
+        if not words.contains(w) {
+            words.push(w);
+        }
+    }
+    words
+}
+
+// every word with its letters renamed by `letters` and its places put in
+// the order `order`
+fn renamed(words: Vec[String], letters: Vec[i64], order: Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        let cs: Vec[char] = word.chars().collect();
+        let mut s = String.new();
+        for k in 0..6 {
+            s.push((97 + letters[cs[order[k]] as i64 - 97]) as u8 as char);
+        }
+        out.push(s);
+    }
+    out
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut p: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        p.swap(i, j);
+    }
+    p
+}
+
+fn main() {
+    let names = ["star", "squares", "zeros", "letters"];
+    let properties = ["found", "no stray", "consistent", "stops", "renamed"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(5, 0);
+    let mut worst: Vec[i64] = Vec.filled(4, 0);
+    let mut total: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut words_seen = 0;
+    let mut seed = 843;
+    let cases = 400;
+    for case in 0..cases {
+        let kind = case * 4 / cases;
+        let words = if kind == 0 {
+            // random words of all 26 letters, up to LeetCode's 100
+            random_list(mut seed, 1 + next_random(mut seed) % 100, 26, 0, 0)
+        } else if kind == 1 {
+            // random words of 2 to 6 letters
+            random_list(mut seed, 1 + next_random(mut seed) % 40, 2 + next_random(mut seed) % 5, 0, 0)
+        } else if kind == 2 {
+            // words near a few others, two places changed
+            random_list(mut seed, 1 + next_random(mut seed) % 60, 26, 1 + next_random(mut seed) % 4, 2)
+        } else {
+            // words near one or two others, one place changed: one guess
+            // can rule out little
+            random_list(mut seed, 1 + next_random(mut seed) % 30, 26, 1 + next_random(mut seed) % 2, 1)
+        };
+        words_seen += words.len();
+        // LeetCode's fewest guesses for the lists a reasonable strategy
+        // can win, its most for the near ones
+        let allowed = if kind < 3 { 10 } else { 30 };
+        let secret = words[next_random(mut seed) % words.len()].clone();
+        let letters = shuffled(mut seed, 26);
+        let order = shuffled(mut seed, 6);
+        let other = renamed(words, letters, order);
+        let other_secret = renamed([secret.clone()], letters, order)[0].clone();
+        for arm in 0..4 {
+            let m = play(arm, words, secret, allowed);
+            let mut consistent = true;
+            let mut stops = true;
+            for i in 0..m.said.len() {
+                for j in 0..i {
+                    if matching(m.said[i], m.said[j]) != m.heard[j] {
+                        consistent = false;
+                    }
+                    if m.said[i] == m.said[j] {
+                        stops = false;
+                    }
+                }
+                if m.said[i] == secret and i + 1 < m.said.len() {
+                    stops = false;
+                }
+            }
+            let r = play(arm, other, other_secret, allowed);
+            worst[arm] = worst[arm].max(m.guesses);
+            total[arm] += m.guesses;
+            let oks = [m.found, m.strays == 0, consistent, stops, r.guesses == m.guesses and r.found];
+            for q in 0..5 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: {words.len()} words, secret {secret}, {m.guesses} guesses");
+                    }
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, {words_seen} words, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, squares {by_arm[1]}, zeros {by_arm[2]}, letters {by_arm[3]}");
+    println(f"by property: found {by_property[0]}, no stray {by_property[1]}, consistent {by_property[2]}, stops {by_property[3]}, renamed {by_property[4]}");
+    println(f"most guesses: star {worst[0]}, squares {worst[1]}, zeros {worst[2]}, letters {worst[3]}");
+    println(f"all guesses: star {total[0]}, squares {total[1]}, zeros {total[2]}, letters {total[3]}");
+}

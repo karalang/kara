@@ -1,0 +1,139 @@
+// Benchmark for #843: Guess the Word -- the ★ arm (minimax over the words
+// still possible).
+//
+// The places every pair of words share are worked out once. Each turn
+// guesses the possible word whose answer leaves the fewest possible
+// words in the worst case, and the answer keeps the words that share
+// exactly that many places with the guess.
+
+fn shared(a: Vec[u8], b: Vec[u8]) -> i64 {
+    let mut count = 0;
+    for k in 0..a.len() {
+        if a[k] == b[k] {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn find_secret_word(words: Vec[String], master: mut ref Master) {
+    let n = words.len();
+    let mut letters: Vec[Vec[u8]] = Vec.new();
+    for word in words.iter() {
+        letters.push(word.bytes().iter().collect());
+    }
+    let mut same: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(shared(letters[i], letters[j]));
+        }
+        same.push(row);
+    }
+    let mut possible: Vec[i64] = (0..n).collect();
+    while possible.len() > 0 {
+        let mut best = possible[0];
+        let mut best_worst = n + 1;
+        for c in possible.iter() {
+            let mut groups = [0; 7];
+            for o in possible.iter() {
+                groups[same[*c][*o]] += 1;
+            }
+            let mut worst = 0;
+            for k in 0..6 {
+                worst = worst.max(groups[k]);
+            }
+            if worst < best_worst {
+                best_worst = worst;
+                best = *c;
+            }
+        }
+        let answer = master.guess(words[best]);
+        if answer == 6 {
+            return;
+        }
+        let mut left: Vec[i64] = Vec.new();
+        for o in possible.iter() {
+            if same[best][*o] == answer {
+                left.push(*o);
+            }
+        }
+        possible = left;
+    }
+}
+
+// The judge: it knows the list and the secret and counts the guesses.
+struct Master {
+    words: Vec[String],
+    secret: String,
+    guesses: i64,
+    found: bool,
+}
+
+impl Master {
+    fn guess(mut ref self, word: String) -> i64 {
+        self.guesses += 1;
+        if not self.words.contains(word) {
+            return -1;
+        }
+        if word == self.secret and self.guesses <= 10 {
+            self.found = true;
+        }
+        let a: Vec[u8] = word.bytes().iter().collect();
+        let b: Vec[u8] = self.secret.bytes().iter().collect();
+        let mut count = 0;
+        for k in 0..6 {
+            if a[k] == b[k] {
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 lists drawn once, each of LeetCode's most words, 100, distinct
+    // random words of six letters from the first 4, 8, 16 or 26 letters
+    // in turn, with a random secret. Each round plays the next list
+    // against its judge, set up once and reset to no guesses, allowing
+    // 10.
+    let count = 64;
+    let rounds = 6000;
+    let mut seed: i64 = 843;
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    let mut masters: Vec[Master] = Vec.new();
+    for g in 0..count {
+        let k = [4, 8, 16, 26][g % 4];
+        let mut words: Vec[String] = Vec.new();
+        while words.len() < 100 {
+            let mut w = String.new();
+            for _ in 0..6 {
+                w.push((97 + next_random(mut seed) % k) as u8 as char);
+            }
+            if not words.contains(w) {
+                words.push(w);
+            }
+        }
+        let secret = words[next_random(mut seed) % 100].clone();
+        masters.push(Master { words: words.clone(), secret: secret, guesses: 0, found: false });
+        lists.push(words);
+    }
+    let mut found = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        masters[g].guesses = 0;
+        masters[g].found = false;
+        find_secret_word(lists[g], mut masters[g]);
+        if masters[g].found {
+            found += 1;
+        }
+        checksum = (checksum * 31 + masters[g].guesses) % 1000000007;
+    }
+    println(f"{rounds} rounds of {count} lists: {found} found, checksum {checksum}");
+}
