@@ -167,7 +167,24 @@ pub(super) fn build_super_program_for_run(tree: &ProgramTree) -> Program {
 /// empty list on any failure (no diagnostics — the strict build path owns
 /// error reporting, and `run`'s resolver pass surfaces unknown-module
 /// diagnostics naturally when dep modules are absent).
+/// The dependencies a strict build already resolved (fetched git and
+/// registry ones included), which the package-wide check then walks instead
+/// of its own path-only walk (B-2026-10-22-14).
+static RESOLVED_DEP_WALKS: std::sync::Mutex<Option<Vec<module::DepPackageWalk>>> =
+    std::sync::Mutex::new(None);
+
+pub(super) fn install_resolved_dep_walks(walks: Vec<module::DepPackageWalk>) {
+    *RESOLVED_DEP_WALKS.lock().unwrap_or_else(|e| e.into_inner()) = Some(walks);
+}
+
 pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk> {
+    if let Some(walks) = RESOLVED_DEP_WALKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        return walks.clone();
+    }
     let Ok(mf) = manifest::load_from_root(root) else {
         return Vec::new();
     };

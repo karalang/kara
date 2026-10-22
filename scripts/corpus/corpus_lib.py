@@ -30,7 +30,7 @@ META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
 # `karac_jit_runner`).
 BACKENDS = {
     "legacy-interp": {"run": ["run", "--legacy", "--interp"]},
-    "legacy-build": {"build": ["build"], "env": {"KARAC_AUTO_PAR": "0"}},
+    "legacy-build": {"build": ["build", "--legacy"], "env": {"KARAC_AUTO_PAR": "0"}},
     "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},
     "mir-llvm-asan": {"check": True, "run": ["__mir-llvm-asan"]},

@@ -197,7 +197,7 @@ def surfaces(path, workdir):
         binp = workdir / f"{stem}"
         if binp.exists():
             binp.unlink()
-        rc, so, se = run(["karac", "build", str(path)], cwd=workdir, env=env)
+        rc, so, se = run(["karac", "build", "--legacy", str(path)], cwd=workdir, env=env)
         if rc != 0 or not binp.exists():
             bad[label] = (se or so).strip().splitlines()[:2]
             continue

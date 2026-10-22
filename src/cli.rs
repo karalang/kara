@@ -28,6 +28,7 @@ use std::process;
 
 mod args;
 mod build_cmds;
+mod build_v2;
 mod diag_json;
 pub mod explain;
 mod fix_cmds;
@@ -345,9 +346,9 @@ pub enum Command {
         out_path: Option<String>,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
-        /// `--mir`: build through the redesign's pipeline (MIR compiled to
-        /// LLVM, M2) instead of the legacy codegen.
-        mir: bool,
+        /// `--legacy` (without `--mir`): build through the legacy pipeline
+        /// rather than v2, until M3 deletes it (B-2026-10-22-14).
+        legacy: bool,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -430,6 +431,8 @@ pub enum Command {
         /// This variant did not carry them (B-2026-08-18-19), so a project
         /// build silently ignored every lint flag the invocation named.
         lint_overrides: crate::lints::CliLintOverrides,
+        /// `--legacy`: see `Build.legacy`.
+        legacy: bool,
     },
     Query {
         kind: QueryKind,
@@ -840,14 +843,6 @@ pub fn execute(cmd: Command) {
         Command::Build {
             file,
             output,
-            release,
-            out_path,
-            mir: true,
-            ..
-        } => build_cmds::cmd_build_mir(&file, output, release, out_path.as_deref()),
-        Command::Build {
-            file,
-            output,
             concurrency_report,
             simd_report,
             offline,
@@ -863,26 +858,51 @@ pub fn execute(cmd: Command) {
             crate_type,
             out_path,
             lint_overrides,
-            mir: false,
-        } => cmd_build(
-            &file,
-            output,
-            concurrency_report,
-            simd_report,
-            offline,
-            enable_hot_swap,
-            no_proxy,
-            target.as_deref(),
-            bindings,
-            target_cpu.as_deref(),
-            target_features.as_deref(),
-            wasm_threads,
-            monomorphization_budget,
-            release,
-            crate_type,
-            out_path.as_deref(),
-            lint_overrides,
-        ),
+            legacy,
+        } => {
+            if !run_v2::legacy_requested(legacy) {
+                return build_v2::cmd_build_v2_file(
+                    &file,
+                    build_v2::BuildArgs {
+                        output,
+                        offline,
+                        no_proxy,
+                        concurrency_report,
+                        simd_report,
+                        enable_hot_swap,
+                        target: target.as_deref(),
+                        bindings,
+                        target_cpu: target_cpu.as_deref(),
+                        target_features: target_features.as_deref(),
+                        wasm_threads,
+                        monomorphization_budget: monomorphization_budget.is_enabled(),
+                        release,
+                        crate_type,
+                        out_path: out_path.as_deref(),
+                        lint_overrides,
+                    },
+                );
+            }
+            cmd_build(
+                &file,
+                output,
+                concurrency_report,
+                simd_report,
+                offline,
+                enable_hot_swap,
+                no_proxy,
+                target.as_deref(),
+                bindings,
+                target_cpu.as_deref(),
+                target_features.as_deref(),
+                wasm_threads,
+                monomorphization_budget,
+                release,
+                crate_type,
+                out_path.as_deref(),
+                lint_overrides,
+            )
+        }
         Command::CheckProject {
             output,
             concurrency_report,
@@ -914,21 +934,44 @@ pub fn execute(cmd: Command) {
             crate_type,
             out_path,
             lint_overrides,
-        } => cmd_build_project(
-            output,
-            offline,
-            enable_hot_swap,
-            no_proxy,
-            target.as_deref(),
-            bindings,
-            target_cpu.as_deref(),
-            target_features.as_deref(),
-            wasm_threads,
-            release,
-            crate_type,
-            out_path.as_deref(),
-            lint_overrides,
-        ),
+            legacy,
+        } => {
+            if !run_v2::legacy_requested(legacy) {
+                return build_v2::cmd_build_v2_project(build_v2::BuildArgs {
+                    output,
+                    offline,
+                    no_proxy,
+                    concurrency_report: false,
+                    simd_report: false,
+                    enable_hot_swap,
+                    target: target.as_deref(),
+                    bindings,
+                    target_cpu: target_cpu.as_deref(),
+                    target_features: target_features.as_deref(),
+                    wasm_threads,
+                    monomorphization_budget: false,
+                    release,
+                    crate_type,
+                    out_path: out_path.as_deref(),
+                    lint_overrides,
+                });
+            }
+            cmd_build_project(
+                output,
+                offline,
+                enable_hot_swap,
+                no_proxy,
+                target.as_deref(),
+                bindings,
+                target_cpu.as_deref(),
+                target_features.as_deref(),
+                wasm_threads,
+                release,
+                crate_type,
+                out_path.as_deref(),
+                lint_overrides,
+            )
+        }
         Command::Query {
             kind,
             file,

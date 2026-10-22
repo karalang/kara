@@ -139,7 +139,7 @@ fn build_and_run_on_gpu(
     backend: &Backend,
 ) -> Result<String, String> {
     let built = karac()
-        .arg("build")
+        .args(["build", "--legacy"])
         .arg(src_path)
         .current_dir(dir)
         .output()

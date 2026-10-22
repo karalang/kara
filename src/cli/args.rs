@@ -728,6 +728,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut out_path: Option<String> = None;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut mir = false;
+    let mut legacy = false;
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -751,8 +752,12 @@ fn parse_build_command(args: &[String]) -> Command {
             // `Command::Build.release` / `Command::BuildProject.release`.
             release = true;
         } else if arg == "--mir" {
-            // The redesign's pipeline (M2): MIR compiled to LLVM.
+            // The redesign's pipeline, which is now the default: kept so a
+            // script that asks for it explicitly still works.
             mir = true;
+        } else if arg == "--legacy" {
+            // The legacy pipeline, until M3 deletes it (B-2026-10-22-14).
+            legacy = true;
         } else if let Some(rest) = arg.strip_prefix("--target=") {
             // `--target=<triple>` selects the active target for
             // `[target.<triple>.*]` overlay merge (tracker line 882).
@@ -930,13 +935,9 @@ fn parse_build_command(args: &[String]) -> Command {
             crate_type,
             out_path,
             lint_overrides,
-            mir,
+            legacy: legacy && !mir,
         },
         None => {
-            if mir {
-                eprintln!("error: --mir builds a single file; name one");
-                process::exit(1);
-            }
             // Project-mode monomorphization budget would need the merged
             // multi-module instantiation table; the v1.x mechanism is
             // single-file only. Reject loudly rather than silently drop a
@@ -967,6 +968,7 @@ fn parse_build_command(args: &[String]) -> Command {
                 crate_type,
                 out_path,
                 lint_overrides,
+                legacy: legacy && !mir,
             }
         }
     }

@@ -1031,7 +1031,7 @@ fn build_and_emit_all() -> Option<String> {
 
     let build = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["build"])
+        .args(["build", "--legacy"])
         .env_remove("KARAC_RUNTIME")
         .output()
         .expect("spawn karac build");

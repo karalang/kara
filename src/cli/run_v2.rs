@@ -83,33 +83,60 @@ fn cmd_run_v2(
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
     // A file of a package with other modules runs the whole package, as
     // one source (project mode, B-2026-10-22-14).
-    let project =
-        super::project_v2::package_tree(filename, no_manifest, false).map(|(root, tree)| {
-            // The package-wide check sees what one combined scope cannot: an
-            // import of a private item, a cycle.
-            gate_run_on_package_check(&root, output);
-            super::project_v2::source_files(&tree, false)
-                .and_then(|files| {
-                    super::project_v2::amalgamate(&tree, &files, |_, _| Vec::new(), "")
-                })
-                .unwrap_or_else(|e| refused_project(&e, output))
-        });
+    let project = package_source(filename, no_manifest, output, "run");
     let source = match &project {
         Some(a) => a.text.clone(),
         None => read_source(filename),
     };
+    check_v2(
+        filename,
+        &source,
+        project.as_ref(),
+        manifest.as_ref(),
+        lint_overrides,
+        output,
+    );
+
+    crate::mir::interp::set_source_name(filename);
+    if let Some(a) = &project {
+        a.install();
+    }
+    let mut argv = Vec::with_capacity(program_args.len() + 1);
+    argv.push(filename.to_string());
+    argv.extend_from_slice(program_args);
+    #[cfg(feature = "llvm")]
+    if !interp {
+        run_on_jit(&source, output, timeout, &argv);
+    }
+    // Without the llvm feature the MIR interpreter is the only executor.
+    let _ = interp;
+    run_on_interpreter(source, output, timeout, argv);
+}
+
+/// The checks `karac check` runs, on the program's source (a package's
+/// combined source in project mode): an error there fails the command with
+/// exit 1, its diagnostics naming the package's files; warnings print in text
+/// mode.
+pub(super) fn check_v2(
+    filename: &str,
+    source: &str,
+    project: Option<&super::project_v2::Amalgam>,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+    output: OutputMode,
+) {
     let mut lint_overrides = lint_overrides;
-    if let Some(m) = &manifest {
+    if let Some(m) = manifest {
         lint_overrides.apply_manifest_lints(&m.lints);
     }
-    // The checks `karac check` runs: an error there fails the run too, as it
-    // fails `karac build --mir` (core semantics §0).
+    // An error `karac check` reports fails the command too (core semantics
+    // §0): the MIR builder does not repeat every rule.
     let checked = || {
-        let mut p = Pipeline::new(filename, &source)
+        let mut p = Pipeline::new(filename, source)
             .with_lint_overrides(lint_overrides.clone())
             .strict_core()
             .with_library();
-        if let Some(m) = &manifest {
+        if let Some(m) = manifest {
             p.profile = m.profile;
             p.profile_config = m.profile_config.clone();
         }
@@ -119,9 +146,9 @@ fn cmd_run_v2(
     pipeline.run_all_checks();
     let total = pipeline.total_errors();
     if total > 0 {
-        match (output, &project) {
+        match (output, project) {
             (OutputMode::Text, _) => {
-                print_diagnostics(&pipeline, project.as_ref());
+                print_diagnostics(&pipeline, project);
                 eprintln!("\n{total} error(s) found.");
             }
             (OutputMode::Json, None) => emit_json_output(&pipeline),
@@ -145,24 +172,8 @@ fn cmd_run_v2(
     }
     if output == OutputMode::Text {
         // Warnings only: the check passed.
-        print_diagnostics(&pipeline, project.as_ref());
+        print_diagnostics(&pipeline, project);
     }
-    drop(pipeline);
-
-    crate::mir::interp::set_source_name(filename);
-    if let Some(a) = &project {
-        a.install();
-    }
-    let mut argv = Vec::with_capacity(program_args.len() + 1);
-    argv.push(filename.to_string());
-    argv.extend_from_slice(program_args);
-    #[cfg(feature = "llvm")]
-    if !interp {
-        run_on_jit(&source, output, timeout, &argv);
-    }
-    // Without the llvm feature the MIR interpreter is the only executor.
-    let _ = interp;
-    run_on_interpreter(source, output, timeout, argv);
 }
 
 /// The text diagnostics, their places mapped back to the package's files
@@ -176,10 +187,38 @@ fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Am
     }
 }
 
+/// The package `filename` belongs to, as one source, when it has other
+/// modules (project mode, B-2026-10-22-14); `None` for a lone file. `cmd`
+/// names the command a refusal sends to `--legacy`.
+pub(super) fn package_source(
+    filename: &str,
+    no_manifest: bool,
+    output: OutputMode,
+    cmd: &str,
+) -> Option<super::project_v2::Amalgam> {
+    super::project_v2::package_tree(filename, no_manifest, false)
+        .map(|(root, tree)| combine(&root, &tree, output, cmd))
+}
+
+/// The package at `root` as one source, after the package-wide check, which
+/// sees what one combined scope cannot: an import of a private item, a
+/// cycle.
+pub(super) fn combine(
+    root: &std::path::Path,
+    tree: &ProgramTree,
+    output: OutputMode,
+    cmd: &str,
+) -> super::project_v2::Amalgam {
+    gate_run_on_package_check(root, output);
+    super::project_v2::source_files(tree, false)
+        .and_then(|files| super::project_v2::amalgamate(tree, &files, |_, _| Vec::new(), ""))
+        .unwrap_or_else(|e| refused_project(&e, output, cmd))
+}
+
 /// The package cannot be combined into one source: a compile error naming
 /// why, exit 1.
-fn refused_project(e: &str, output: OutputMode) -> ! {
-    let e = format!("error[project]: {e}; `karac run --legacy` runs it");
+fn refused_project(e: &str, output: OutputMode, cmd: &str) -> ! {
+    let e = format!("error[project]: {e}; `karac {cmd} --legacy` takes it");
     match output {
         OutputMode::Text => eprintln!("{e}"),
         _ => emit_build_error(&e, output),
@@ -188,7 +227,7 @@ fn refused_project(e: &str, output: OutputMode) -> ! {
 }
 
 /// The MIR builder refused the program: a compile error, exit 1.
-fn refused(e: &str, output: OutputMode) -> ! {
+pub(super) fn refused(e: &str, output: OutputMode) -> ! {
     let e = super::project_v2::remap_build_error(e);
     match output {
         OutputMode::Text => eprintln!("error[mir]: {e}"),

@@ -69,7 +69,7 @@ print(f'    print(emit_program(parse_program("{esc}")));')
 print("}")
 PY
 
-( cd "$TMP" && "$KARAC" build ) > "$TMP/build.log" 2>&1 || true
+( cd "$TMP" && "$KARAC" build --legacy ) > "$TMP/build.log" 2>&1 || true
 if [ ! -x "$TMP/cg" ]; then
   echo "!! emitter driver failed to build"; tail -25 "$TMP/build.log"; exit 1
 fi

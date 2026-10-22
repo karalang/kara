@@ -33456,7 +33456,7 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
     // archive / no linker means no binary, and the assertions below would be
     // vacuous, so skip loudly rather than pass.
     let build = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .arg("build")
+        .args(["build", "--legacy"])
         .arg(&src)
         .current_dir(&dir)
         .output()
@@ -33592,7 +33592,7 @@ fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
     // Same soft-skip contract as the sibling test above: no runtime archive
     // means no binary, and the compiled assertions would be vacuous.
     let build = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .arg("build")
+        .args(["build", "--legacy"])
         .arg(&src)
         .current_dir(&dir)
         .output()

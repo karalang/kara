@@ -101,7 +101,7 @@ for spec in "${KATAS_LIST[@]}"; do
   d="$WORK/$name"; rm -rf "$d"; mkdir -p "$d"; cp "$src" "$d/k.kara"
   ok=1
   for sso in 0 1; do
-    ( cd "$d" && KARAC_SSO=$sso KARAC_AUTO_PAR=0 "$KARAC" build k.kara >build.$sso.log 2>&1 && mv k "bin$sso" ) || ok=0
+    ( cd "$d" && KARAC_SSO=$sso KARAC_AUTO_PAR=0 "$KARAC" build --legacy k.kara >build.$sso.log 2>&1 && mv k "bin$sso" ) || ok=0
     [ -x "$d/bin$sso" ] || ok=0
   done
   if [ "$ok" != 1 ]; then printf "%-22s  BUILD FAILED (see %s)\n" "$name" "$d"; fail=1; continue; fi

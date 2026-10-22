@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_lib import ROOT, entries, read_toml  # noqa: E402
 
 BUILDS = {
-    "legacy": (["build"], {"KARAC_AUTO_PAR": "0"}),
+    "legacy": (["build", "--legacy"], {"KARAC_AUTO_PAR": "0"}),
     "mir": (["build", "--mir"], {}),
 }
 

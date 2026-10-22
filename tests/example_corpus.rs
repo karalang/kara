@@ -97,8 +97,8 @@ const EXCLUDED_DIRS: &[&str] = &[
 const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
     "elevator_project",
     "typecheck: the legacy `karac build` refuses `ref self.stops` (only `ref v[i]` in v1), \
-     and v2 requires the `ref` on a returned place (B-2026-10-22-28); the package builds \
-     once `karac build` on a package runs on v2 (B-2026-10-22-14).",
+     and v2 requires the `ref` on a returned place (B-2026-10-22-28). This leg measures \
+     `karac build --legacy`; the v2 `karac build` builds the package (B-2026-10-22-14).",
 )];
 
 /// Single files that do not currently check, with the first reported error.
@@ -253,7 +253,7 @@ fn check_file(rel: &Path) -> (bool, String) {
 #[cfg_attr(feature = "llvm", allow(dead_code))]
 fn build_package(name: &str) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .arg("build")
+        .args(["build", "--legacy"])
         .current_dir(examples_root().join(name))
         .output()
         .expect("spawn karac build");

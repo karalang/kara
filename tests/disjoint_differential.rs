@@ -902,7 +902,7 @@ fn heavy(v: i64, work: i64) -> i64 {
             // a pass — and left a stray `lever` binary in the repo root, which
             // is how it was noticed.
             cmd.current_dir(&leg)
-                .args(["build", "lever.kara"])
+                .args(["build", "--legacy", "lever.kara"])
                 .env("KARAC_RUNTIME", &rt);
             if let Some(v) = auto_par {
                 cmd.env("KARAC_AUTO_PAR", v);

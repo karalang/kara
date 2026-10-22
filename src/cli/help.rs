@@ -243,16 +243,22 @@ karac build - Compile a .kara file or the current Kara project
 USAGE:
     karac build [<file.kara>] [options]
 
-With a file, compiles that single file. Without a file, builds the current
-project: walks up from CWD to find `kara.toml` and compiles every `.kara`
-under `src/`. (The multi-file pipeline lands in CR-24 slice 3; slice 2 only
-verifies the manifest.)
+With a file, compiles that file into `<stem>` (`-o` names another path); a
+file of a package with other modules builds the whole package. Without a
+file, builds the package in the current directory from `src/main.kara` into
+`<root>/<package name>`. The program is checked as `karac check` checks it,
+built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
+optimisation level, -O2 by default). `--legacy` (or KARAC_LEGACY=1) builds
+through the legacy pipeline instead, until M3 deletes it; the flags marked
+Legacy only below are refused without it.
 
 OPTIONS:
     --output=json           Structured JSON output on stdout
     --output=jsonl          Streaming JSONL output on stdout
-    --concurrency-report    Print a human-readable summary of the auto-par
-                            analyzer's per-function parallel groups (with the
+    --legacy                Build through the legacy pipeline.
+    --concurrency-report    Legacy only. Print a human-readable summary of
+                            the auto-par analyzer's per-function parallel
+                            groups (with the
                             calls in source order, their reads/writes effects,
                             and the analyzer's reason for parallelizing) to
                             stdout alongside the binary build.
@@ -266,11 +272,9 @@ OPTIONS:
                             optimizer on. Works in both single-file and project
                             mode. Composes (OR) with the KARAC_STRIP_CONTRACTS
                             and KARAC_STRIP_ERROR_TRACE env vars.
-    --mir                   Build through the redesign's pipeline: the
-                            file's MIR compiled to LLVM (single file only).
-                            KARAC_MIR_OPT=0..3 sets the IR optimisation
-                            level, -O2 by default.
-    --enable-hot-swap       Emit PLT-style indirection for extern-public
+    --mir                   The v2 build, now the default (accepted so
+                            scripts that ask for it keep working).
+    --enable-hot-swap       Legacy only. Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
                             forward-compatible with the post-v1 continuous-
                             PGO + shared-object reload story. Off by default.
@@ -289,7 +293,9 @@ OPTIONS:
                             `./vendor/` from the current resolution.
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
-    --target=<name|triple>  Compilation target. A v1 target NAME
+    --target=<name|triple>  Compilation target; v2 builds `native` (or
+                            the host triple) only, the rest is legacy
+                            only. A v1 target NAME
                             (native, wasm_wasi, wasm_browser; gpu is
                             recognized but not standalone-buildable)
                             selects the cross-compile target:
@@ -310,7 +316,7 @@ OPTIONS:
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
                             See the TARGETS section.
-    --bindings=<mode>       WASM output shape: browser (emit `.js`
+    --bindings=<mode>       Legacy only. WASM output shape: browser (emit `.js`
                             ES-module glue + `.d.ts` TypeScript
                             declarations next to the `.wasm`),
                             component (a single embedded-WIT Component
@@ -358,7 +364,7 @@ OPTIONS:
                             targets `+simd128` is the default (Vector
                             ops lower to v128); `-simd128` opts back
                             down to an MVP-clean scalarized module.
-    --features=<list>       Build-feature opt-ins (`--features=help` lists
+    --features=<list>       Legacy only. Build-feature opt-ins (`--features=help` lists
                             them). The set is closed at one:
                             `wasm-threads` — shared-memory multithreading
                             for `--target=wasm_browser`. Emits a SECOND
@@ -384,7 +390,7 @@ OPTIONS:
                             (wasi-threads and the component model do not
                             compose). Accepts `--features <list>` too.
     --monomorphization-budget=warn:N,error:M
-                            Cap per-generic instantiations. After typecheck
+                            Legacy only. Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N
                             times emits warning[monomorphization-budget];
                             >= M fails the build. Either threshold may be
