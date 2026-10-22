@@ -609,6 +609,9 @@ impl<'ctx> Cx<'ctx, '_> {
         if (base, method) == ("Vec", "from_fn") && args.len() == 2 {
             return self.vec_from_fn(args, dest);
         }
+        if (base, method) == ("Array", "from_fn") && args.len() == 2 {
+            return self.array_from_fn(args, dest);
+        }
         if (base, method) == ("Vec", "from_slice") {
             // The source may come moved (a `Vec` handed over whole): its
             // elements are cloned, then it drops.

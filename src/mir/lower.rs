@@ -4317,7 +4317,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             ExprKind::SelfValue => true,
             // A field of a temporary is a place too: the temporary's.
-            ExprKind::FieldAccess { .. } => self.int_limit_of(e).is_none(),
+            ExprKind::FieldAccess { .. } => {
+                self.int_limit_of(e).is_none() && self.builtin_fn_def(e).is_none()
+            }
             // `v[a..b]` makes a slice value; `v[i]` names an element.
             ExprKind::Index { index, .. } => !matches!(index.kind, ExprKind::Range { .. }),
             ExprKind::TupleIndex { .. } => true,
@@ -5445,6 +5447,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::FieldAccess { .. } if self.int_limit_of(e).is_some() => {
                 let (t, kind) = self.int_limit_of(e).expect("checked above");
                 self.assign(dest, Rvalue::Use(Operand::Const(Const { ty: t, kind })));
+                Ok(())
+            }
+            ExprKind::FieldAccess { .. } if self.builtin_fn_def(e).is_some() => {
+                let d = self.builtin_fn_def(e).expect("checked");
+                let want = self.place_type(&dest);
+                let (op, _) = self.fn_item_value(e, d, Some(want))?;
+                self.assign(dest, Rvalue::Use(op));
                 Ok(())
             }
             _ if self.is_place(e) => {
@@ -6686,9 +6695,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             // B-2026-10-06-92: a `Vec` orders lexicographically, as its
-            // `Slice` does and as `==` already compares it.
+            // `Slice` does and as `==` already compares it. A `VecDeque`
+            // too, front to back (B-2026-10-21-30).
             HK::Intrinsic {
-                kind: IntrinsicKind::Vec,
+                kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
                 args,
             } => {
                 let elem = self.tys().tcx().list(args)[0];
@@ -7151,7 +7161,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.all_eq(span, parts, dest)
             }
             HK::Intrinsic {
-                kind: IntrinsicKind::Vec,
+                kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
                 args,
             } => {
                 let elem = self.tys().tcx().list(args)[0];
@@ -14734,6 +14744,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Vec.new`, `String.new` and the other empty constructors are the
     /// type's `default`, as is `String.default` (B-2026-10-06-118).
     fn builtin_fn_def(&self, e: &Expr) -> Option<DefId> {
+        // `f64.total_cmp` named as a value is the library's
+        // `f64_total_cmp` (B-2026-10-21-30).
+        if let ExprKind::FieldAccess { object, field } = &e.kind {
+            let ExprKind::Identifier(name) = &object.kind else {
+                return None;
+            };
+            if field != "total_cmp"
+                || !matches!(name.as_str(), "f64" | "f32")
+                || matches!(self.lcx.res.get(&object.id), Some(Res::Local(_)))
+            {
+                return None;
+            }
+            return self.lcx.defs.lookup(0, &format!("{name}_total_cmp"));
+        }
         let Some(Res::Builtin(path)) = self.lcx.res.get(&e.id) else {
             return None;
         };
@@ -14763,6 +14787,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let p = self.expr_place(e, false)?;
                 let t = self.place_type(&p);
                 Ok((self.use_place(p, t), t))
+            }
+            ExprKind::FieldAccess { .. } if self.builtin_fn_def(e).is_some() => {
+                let d = self.builtin_fn_def(e).expect("checked");
+                self.fn_item_value(e, d, None)
             }
             // Any other expression (a call's result, an element, a field)
             // already has an erased `Fn` type: its value is the function.

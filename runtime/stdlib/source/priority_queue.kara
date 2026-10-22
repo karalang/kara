@@ -232,3 +232,16 @@ impl[T: Ord] PriorityQueue[T] {
         out
     }
 }
+
+// "Every collection implements FromIterator" (docs/library/collections.md,
+// Common traits): `collect` builds a smallest-first queue, as `from` does.
+impl[T: Ord] FromIterator[T] for PriorityQueue[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> PriorityQueue[T] {
+        let mut it = iter;
+        let mut v: Vec[T] = Vec.new();
+        while let Some(x) = it.next() {
+            v.push(x);
+        }
+        PriorityQueue.from(v)
+    }
+}

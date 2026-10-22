@@ -382,7 +382,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Slice { element, .. } => self.type_supports_display(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_display(inner),
             Type::Named { name, args } => match name.as_str() {
-                "Vec" | "Option" | "SortedSet" | "Set" if args.len() == 1 => {
+                "Vec" | "VecDeque" | "Option" | "SortedSet" | "Set" if args.len() == 1 => {
                     self.type_supports_display(&args[0])
                 }
                 "Map" | "SortedMap" | "Result" if args.len() == 2 => {
@@ -1859,7 +1859,7 @@ impl super::env::TypeEnv {
             // struct routes through `emit_eq_fn_for_struct` (B-2026-08-12-5),
             // the type-directed comparator, whichever of the two traits was
             // written.
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+            Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_partial_eq(&args[0])
             }
             Type::Named { name, args } => {
@@ -1938,7 +1938,7 @@ impl super::env::TypeEnv {
             // (wrongly) reports `Vec` as un-`Eq`, blocking `Set[Vec[T]]` /
             // `Map[Vec[T], _]`. Codegen's per-element `karac_eq_Vec_<elem>`
             // walks the contents to match the interpreter (B-2026-06-20-15).
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+            Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_eq(&args[0])
             }
             Type::Named { name, .. } => {
@@ -2180,7 +2180,7 @@ impl super::env::TypeEnv {
             Type::Vector { element, .. } => self.type_supports_ord(element),
             Type::Slice { element, .. } => self.type_supports_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
-            Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
+            Type::Named { name, args } if self.vec_is_ord && (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_ord(&args[0])
             }
             // B-2026-10-18-15: the v2 pipeline orders a generic aggregate's
@@ -2247,7 +2247,7 @@ impl super::env::TypeEnv {
             Type::Vector { element, .. } => self.type_supports_partial_ord(element),
             Type::Slice { element, .. } => self.type_supports_partial_ord(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
-            Type::Named { name, args } if self.vec_is_ord && name == "Vec" && args.len() == 1 => {
+            Type::Named { name, args } if self.vec_is_ord && (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_partial_ord(&args[0])
             }
             Type::Named { name, args }

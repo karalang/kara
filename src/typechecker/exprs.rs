@@ -2432,6 +2432,19 @@ impl<'a> super::TypeChecker<'a> {
             // `types_compatible` rejects with "expected Vec<Vec<i64>>,
             // found Vec<Vec<?T0>>" — surfaced 2026-05-25 by kata 3629's
             // `bench/bfs_sieve.kara::build_factors`.
+            // `Array.from_fn(n, f)` against an `Array[T, N]` (B-2026-10-21-30).
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 && segments[0] == "Array" && segments[1] == "from_fn" {
+                    let resolved = resolve_type_var_top(expected, &self.env.substitutions);
+                    if let Type::Array {
+                        element,
+                        size: ConstArg::Literal(n),
+                    } = &resolved
+                    {
+                        return self.check_array_from_fn(args, Some((element, *n)), &expr.span);
+                    }
+                }
+            }
             // `Vec.from_fn(n, f)` in check position — push the destination's
             // element type through as the function's RETURN type, the same
             // pushdown the `Vec.filled` arm below does for its value argument

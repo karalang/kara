@@ -11168,3 +11168,52 @@ fn iterator_max_and_min_need_ord_items() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The collections.md surface `karac check` used to refuse: the `from`
+/// constructors, `VecDeque`'s traits, `remove_first`, `f64.total_cmp` as a
+/// comparator, `clone_from_slice` and an `Array`'s `Slice` methods
+/// (B-2026-10-21-30).
+#[test]
+fn the_collections_page_surface_is_accepted() {
+    accepted(
+        "collections-page",
+        "fn main() {\n\
+             let primes = Set.from([2, 3, 5, 7]);\n\
+             let ages = Map.from([(\"ann\", 31), (\"bo\", 27)]);\n\
+             println(f\"{primes.len()} {ages[\"ann\"]}\");\n\
+             let pq: PriorityQueue[i64] = [3, 1, 2].into_iter().collect();\n\
+             println(f\"{pq.len()}\");\n\
+             let d: VecDeque[i64] = VecDeque.new();\n\
+             let e: VecDeque[i64] = VecDeque.new();\n\
+             println(f\"{d} {d == e} {d < e}\");\n\
+             let mut v: Vec[i64] = [1, 4, 6];\n\
+             let x = v.remove_first(|x| x % 2 == 0);\n\
+             let mut w: Vec[f64] = [2.5, -1.5];\n\
+             w.sort_by(f64.total_cmp);\n\
+             let src: Vec[i64] = [9, 8];\n\
+             v[0..2].clone_from_slice(src);\n\
+             let mut a: Array[i64, 4] = Array.from_fn(4, |i| i * i);\n\
+             a.sort();\n\
+             a.reverse();\n\
+             a.swap(0, 3);\n\
+             a.fill(1);\n\
+             println(f\"{a} {v} {w} {src}\");\n\
+         }\n",
+    );
+}
+
+/// An `Array`'s in-place `Slice` methods write it, so they need `let mut`;
+/// `Array.from_fn`'s count must be the array's length (B-2026-10-21-30).
+#[test]
+fn an_arrays_in_place_methods_and_from_fn_are_checked() {
+    rejected(
+        "array-sort-immutable",
+        "fn main() {\n    let a: Array[i64, 3] = [3, 1, 2];\n    a.sort();\n    println(f\"{a}\");\n}\n",
+        "cannot call `sort` on `a`",
+    );
+    rejected(
+        "array-from-fn-count",
+        "fn main() {\n    let a: Array[i64, 3] = Array.from_fn(4, |i| i);\n    println(f\"{a}\");\n}\n",
+        "Array.from_fn builds 4 elements, but the array has 3",
+    );
+}

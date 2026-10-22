@@ -1909,12 +1909,24 @@ impl<'a> Interp<'a> {
             }
             ("String", "reserve" | "reserve_exact") => Ok(Value::Unit),
             ("String", "with_capacity") => Ok(self.alloc_box("String", Value::Str(String::new()))),
-            ("Vec", "from_fn") => {
+            // `Array.from_fn(n, f)` builds its elements the same way, in
+            // place; `n` must be the array's length (B-2026-10-21-30).
+            ("Vec" | "Array", "from_fn") => {
                 let (Some(Value::Int(n)), Some(f), Some(&fty)) =
                     (args.first(), args.get(1), arg_tys.get(1))
                 else {
                     return err(format!("{name} takes a length and a closure"));
                 };
+                if let TyKind::Array(_, len) = self.tys.kind(ret) {
+                    if *n != len as i128 {
+                        self.panic_message =
+                            Some("Array.from_fn: n is not the array's length".to_string());
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Panic));
+                        }
+                        return Err(Stop::Abort(AbortReason::Panic));
+                    }
+                }
                 let mut out = Vec::with_capacity((*n).max(0) as usize);
                 if let Value::Erased { .. } = f {
                     // A `Fn(i64) -> T` value: called through a reference to
@@ -1940,6 +1952,9 @@ impl<'a> Interp<'a> {
                         out.push(self.call_callee(&mut callee, vec![Value::Int(i)])?);
                     }
                     self.release_callee(callee, fty)?;
+                }
+                if base == "Array" {
+                    return Ok(Value::Agg(out));
                 }
                 let vname = self.tys.display(ret);
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
@@ -1977,9 +1992,11 @@ impl<'a> Interp<'a> {
             ("Map" | "SortedMap" | "Set" | "SortedSet", "reserve" | "shrink_to_fit") => {
                 Ok(Value::Unit)
             }
-            ("Slice", m) if m.starts_with("sort") && VEC_MORE_METHODS.contains(&m) => {
+            ("Slice" | "Array", m) if m.starts_with("sort") && VEC_MORE_METHODS.contains(&m) => {
                 // Sorted through a scratch `Vec` of the view's elements,
-                // written back in their new order.
+                // written back in their new order. An array sorts as its
+                // `Slice[T]` view does (B-2026-10-21-30).
+                let vec_name = format!("Vec{}", &name[base.len()..]);
                 let Some(view) = args.first() else {
                     return err(format!("{name} needs a receiver"));
                 };
@@ -1992,7 +2009,6 @@ impl<'a> Interp<'a> {
                 let mut rest = vec![scratch.clone()];
                 rest.extend(args[1..].iter().cloned());
                 let unit = self.tys.unit();
-                let vec_name = name.replacen("Slice", "Vec", 1);
                 self.native(&vec_name, rest, arg_tys, unit)?;
                 let Value::Box(sid) = scratch else {
                     unreachable!()

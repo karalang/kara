@@ -520,7 +520,8 @@ impl<'a> super::OwnershipChecker<'a> {
     /// suggestion are array-specific: per design.md §1097 the v1 DA analyser
     /// tracks whole-value assignment only — per-slot fills like `arr[0] = ...`
     /// do not satisfy DA — so the suggestion points users at the canonical
-    /// fully-initialized constructors (`Array[v; N]` literal, `Array.from_fn`).
+    /// fully-initialized constructors (the `[v; N]` literal, `Array.from_fn`;
+    /// docs/library/collections.md, B-2026-10-21-30).
     pub(crate) fn handle_uninit_read(
         &mut self,
         name: &str,
@@ -538,7 +539,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     name, let_span.line, let_span.column
                 ),
                 format!(
-                    "assign the whole value first — try `{} = Array[v; N]` or `{} = Array.from_fn(N, |i| ...)`",
+                    "assign the whole value first — try `{} = [v; N]` or `{} = Array.from_fn(N, |i| ...)`",
                     name, name
                 ),
             )

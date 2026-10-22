@@ -27,10 +27,25 @@ use crate::typechecker::type_to_concrete_or_param_name;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
-/// `Slice[T]` methods an `Array[T, N]` receiver reaches through a read-only
+/// `Slice[T]` methods an `Array[T, N]` receiver reaches through a slice
 /// view (B-2026-10-15-60). Its own read arm already covers `len`, `get`,
-/// `first`, `last`, `contains` and the iterator sources.
-const ARRAY_SLICE_READ_METHODS: &[&str] = &["to_vec", "binary_search", "windows", "chunks"];
+/// `first`, `last`, `contains` and the iterator sources. The ones in
+/// `SLICE_MUTATING_METHODS` take a mutable view: an array "has every
+/// `Slice[T]` method" (docs/library/collections.md; B-2026-10-21-30).
+const ARRAY_SLICE_METHODS: &[&str] = &[
+    "to_vec",
+    "binary_search",
+    "windows",
+    "chunks",
+    "split_at",
+    "sort",
+    "sort_by",
+    "sort_by_key",
+    "reverse",
+    "swap",
+    "fill",
+    "split_at_mut",
+];
 
 impl<'a> super::TypeChecker<'a> {
     /// Dispatch a method call to a user `impl` block.
@@ -599,7 +614,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else if matches!(receiver_for_lookup, Type::Array { .. })
                     && !self.array_user_impl_declares(method)
-                    && ARRAY_SLICE_READ_METHODS.contains(&method)
+                    && ARRAY_SLICE_METHODS.contains(&method)
                 {
                     // design.md § Method resolution: an `Array[T, N]`
                     // receiver also finds `Slice[T]`'s methods, after its
@@ -609,7 +624,8 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Array { element, .. } => (**element).clone(),
                         _ => unreachable!(),
                     };
-                    return self.infer_slice_method(&element, false, object, method, args, span);
+                    let mutable = super::expr_method_call::SLICE_MUTATING_METHODS.contains(&method);
+                    return self.infer_slice_method(&element, mutable, object, method, args, span);
                 } else if matches!(receiver_for_lookup, Type::Array { .. })
                     && !self.array_user_impl_declares(method)
                 {

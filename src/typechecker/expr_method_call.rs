@@ -259,6 +259,7 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
 /// place where a mutable view is needed, so `v[a..b].reverse()` types the view
 /// as `mut Slice[T]` exactly as `flip(mut v[a..b])` does (B-2026-10-12-24).
 pub(crate) const SLICE_MUTATING_METHODS: &[&str] = &[
+    "clone_from_slice",
     "fill",
     "reverse",
     "sort",

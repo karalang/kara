@@ -4271,6 +4271,15 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         // these in v1; the receiver-side push fires regardless because
         // mut Slice has its own slice-form borrow tracking.
         "Slice.swap" => MutRef,
+        // An array's in-place `Slice[T]` methods write it, so they need
+        // `let mut` as `Vec.sort` does (B-2026-10-21-30).
+        "Array.sort"
+        | "Array.sort_by"
+        | "Array.sort_by_key"
+        | "Array.reverse"
+        | "Array.fill"
+        | "Array.swap"
+        | "Array.split_at_mut" => MutRef,
         _ => return None,
     };
     Some(kind)

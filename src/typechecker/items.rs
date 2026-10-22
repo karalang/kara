@@ -4886,7 +4886,13 @@ impl<'a> super::TypeChecker<'a> {
                             .cloned();
                         match ty {
                             Some(Type::Slice { mutable: false, .. }) => {
-                                if !matches!(&object.kind, ExprKind::Index { index, .. }
+                                // A `mut ref self` method of `Slice[T]` holds
+                                // a mutable view, as `sort` does
+                                // (`clone_from_slice`; B-2026-10-21-30).
+                                let mut_self = self.current_fn_mut_self
+                                    && matches!(object.kind, ExprKind::SelfValue);
+                                if !mut_self
+                                    && !matches!(&object.kind, ExprKind::Index { index, .. }
                                     if matches!(index.kind, ExprKind::Range { .. }))
                                 {
                                     let what = match &object.kind {

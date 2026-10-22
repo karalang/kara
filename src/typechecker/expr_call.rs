@@ -19,6 +19,108 @@ use super::types::{type_display, ConstArg, DimArg, IntSize, Type, UIntSize};
 use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
+    /// `Array.from_fn(n, f)` against `expected`, an `Array[T, N]` when the
+    /// call has one: `f` is `Fn(i64) -> T` and `n` must be `N`. Without one
+    /// `n` is an integer literal, which is the length (B-2026-10-21-30).
+    pub(super) fn check_array_from_fn(
+        &mut self,
+        args: &[CallArg],
+        expected: Option<(&Type, i64)>,
+        span: &Span,
+    ) -> Type {
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "Array.from_fn expects 2 arguments (n, f), found {}",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let n_ty = self.infer_expr(&args[0].value);
+        self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
+        let literal = super::TypeChecker::unsuffixed_int_literal_value(&args[0].value);
+        let len = match (expected, literal) {
+            (Some((_, n)), Some(k)) if k != n as i128 => {
+                self.type_error(
+                    format!("Array.from_fn builds {k} elements, but the array has {n}"),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            (Some((_, n)), _) => n,
+            (None, Some(k)) if (0..=i64::MAX as i128).contains(&k) => k as i64,
+            (None, _) => {
+                self.type_error(
+                    "Array.from_fn needs the array's length: write `n` as an integer \
+                     literal, or give the result an `Array[T, N]` type"
+                        .to_string(),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                self.infer_expr(&args[1].value);
+                return Type::Error;
+            }
+        };
+        let idx_ty = Type::Int(IntSize::I64);
+        let elem = match expected {
+            Some((elem, _)) => {
+                let f_ty = Type::Function {
+                    params: vec![idx_ty],
+                    return_type: Box::new(elem.clone()),
+                };
+                self.check_expr(&args[1].value, &f_ty);
+                elem.clone()
+            }
+            None => {
+                if matches!(&args[1].value.kind, ExprKind::Closure { .. }) {
+                    self.closure_param_seeds.insert(
+                        SpanKey::from_span(&args[1].value.span),
+                        vec![idx_ty.clone()],
+                    );
+                }
+                let f_ty = self.infer_expr(&args[1].value);
+                match resolve_type_var_top(&f_ty, &self.env.substitutions) {
+                    Type::Function {
+                        params,
+                        return_type,
+                    }
+                    | Type::OnceFunction {
+                        params,
+                        return_type,
+                    } if params.len() == 1 => {
+                        self.check_assignable(&idx_ty, &params[0], args[1].value.span);
+                        resolve_type_var_top(&return_type, &self.env.substitutions)
+                    }
+                    Type::Error => return Type::Error,
+                    other => {
+                        self.type_error(
+                            format!(
+                                "Array.from_fn expects a function of the index, got '{}'",
+                                type_display(&other)
+                            ),
+                            args[1].value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                }
+            }
+        };
+        let ty = Type::Array {
+            element: Box::new(elem),
+            size: ConstArg::Literal(len),
+        };
+        self.record_expr_type(span, &ty);
+        ty
+    }
+
     /// Render the wrong-number-of-arguments message. For a free fn with
     /// defaulted trailing parameters (`fn_name` resolvable in
     /// `fn_default_arg_counts`), the expectation reads as a range —
@@ -1820,6 +1922,14 @@ impl<'a> super::TypeChecker<'a> {
         // `Vec.from_fn(5, |i| i * 2)` fails inside the body with
         // "cannot compare '?T0' and 'i64'" — the same shape B-2026-07-15-16
         // fixed for `Vec.retain`.
+        // `Array.from_fn(n, f)`: an `Array[T, n]` of `f(0)` .. `f(n - 1)`
+        // (docs/library/collections.md, `Array`; B-2026-10-21-30). With no
+        // expected type the length is `n`, written as an integer literal.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[0] == "Array" && segments[1] == "from_fn" {
+                return self.check_array_from_fn(args, None, span);
+            }
+        }
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "from_fn" {
                 if args.len() != 2 {

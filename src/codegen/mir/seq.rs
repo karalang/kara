@@ -1914,6 +1914,49 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
+    /// `Array.from_fn(n, f)`: `f(i)` written into slot `i` of the array at
+    /// `dest`, whose length `n` must be (B-2026-10-21-30).
+    pub(super) fn array_from_fn(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let dty = self.place_type(dest)?;
+        let TyKind::Array(el, len) = self.tys.kind(dty) else {
+            return Err("Array.from_fn builds a non-Array".into());
+        };
+        let size = self.layout(el)?.size;
+        let k = self.int_arg(&args[0])?;
+        let n = self.i64(len);
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, k, n, "")
+            .map_err(e)?;
+        self.abort_unless(ok, "Array.from_fn: n is not the array's length")?;
+        let c = self.callee_by_ref(&args[1])?;
+        let d = self.place_ptr(dest)?;
+        let i64t = self.tys.intern(TyKind::Int(crate::mir::IntTy::I64));
+        let arg = self.entry_slot(8, "from_fn.i")?;
+        let rt = self.callee_ret(&c)?;
+        let cast = rt != el && self.widens(rt, el);
+        let tmp = if cast {
+            Some(self.temp(rt, "from_fn.x")?)
+        } else {
+            None
+        };
+        self.count_loop(n, |cx, i| {
+            cx.store(arg, i.into())?;
+            let x = cx.elem_ptr(d, i, size)?;
+            match tmp {
+                Some(t) => {
+                    cx.call_callee(&c, t, &[(arg, i64t)])?;
+                    cx.widen_into(x, t, rt, el)
+                }
+                None => cx.call_callee(&c, x, &[(arg, i64t)]),
+            }
+        })?;
+        if !Self::consumes(&c) {
+            self.drop_moved(&args[1..])?;
+        }
+        Ok(())
+    }
+
     /// A new `Vec` at `dest` of clones of `n` elements of `el` from `p`.
     pub(super) fn vec_of_clones(
         &mut self,

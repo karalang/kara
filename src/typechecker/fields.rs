@@ -94,6 +94,28 @@ impl<'a> super::TypeChecker<'a> {
                 };
             }
         }
+        // `f64.total_cmp` named as a value is the comparator
+        // `fn(f64, f64) -> Ordering` (`w.sort_by(f64.total_cmp)`,
+        // docs/library/collections.md; B-2026-10-21-30).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if field == "total_cmp"
+                && matches!(name.as_str(), "f64" | "f32")
+                && self.local_scope.lookup(name).is_none()
+            {
+                let f = if name == "f64" {
+                    Type::Float(super::types::FloatSize::F64)
+                } else {
+                    Type::Float(super::types::FloatSize::F32)
+                };
+                return Type::Function {
+                    params: vec![f.clone(), f],
+                    return_type: Box::new(Type::Named {
+                        name: "Ordering".to_string(),
+                        args: Vec::new(),
+                    }),
+                };
+            }
+        }
         // B-2026-10-20-23 — an unknown constant on a primitive type
         // (`f64.FOO`, `u8.MAXX`) is reported here; it used to be a silent
         // `Type::Error` that only the MIR builder noticed.

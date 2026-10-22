@@ -690,3 +690,126 @@ fn main() {
         0,
     );
 }
+
+/// The collections.md surface B-2026-10-21-30 found missing: the `from`
+/// constructors, `PriorityQueue` from `collect`, `VecDeque`'s `Display`,
+/// `==` and `<`, `Vec.remove_first`, `f64.total_cmp` as a comparator,
+/// `clone_from_slice`, `Array.from_fn` and an `Array`'s in-place `Slice`
+/// methods, on `String` elements where an element can be.
+const COLLECTIONS_PAGE: &str = r#"fn main() {
+    let primes = Set.from([2, 3, 5, 7, 7]);
+    let ages = Map.from([("ann", 31), ("bo", 27)]);
+    println(f"{primes.len()} {primes.contains(5)} {ages["ann"]} {ages.len()}");
+    let pq: PriorityQueue[i64] = [3, 1, 2].into_iter().collect();
+    println(f"{pq.into_sorted_vec()}");
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back("b".to_string());
+    d.push_front("a".to_string());
+    let e: VecDeque[String] = ["a".to_string(), "b".to_string()].into_iter().collect();
+    let empty: VecDeque[i64] = VecDeque.new();
+    println(f"{d} {empty} {d == e} {d < e}");
+    e.push_back("c".to_string());
+    println(f"{d < e} {d != e}");
+    let mut v: Vec[String] = ["ab".to_string(), "cde".to_string(), "fg".to_string()];
+    match v.remove_first(|s| s.len() == 3) {
+        Some(x) => println(f"{x} {v}"),
+        None => println("none"),
+    }
+    match v.remove_first(|s| s.len() > 9) {
+        Some(x) => println(x),
+        None => println(f"none {v}"),
+    }
+    let mut w: Vec[f64] = [2.5, -1.5, f64.NAN, 0.5];
+    w.sort_by(f64.total_cmp);
+    println(f"{w}");
+    let other: Vec[String] = ["x".to_string(), "y".to_string()];
+    v[0..2].clone_from_slice(other);
+    println(f"{v} {other}");
+    let mut a: Array[String, 3] = Array.from_fn(3, |i| f"s{3 - i}");
+    a.sort();
+    println(f"{a}");
+    a.sort_by_key(|s| s.len());
+    a.reverse();
+    a.swap(0, 2);
+    println(f"{a}");
+    let mut n = Array.from_fn(4, |i| i * i);
+    n.fill(7);
+    println(f"{n} {n.len()}");
+}
+"#;
+
+const WANT_COLLECTIONS_PAGE: &str = "4 true 31 2\n[1, 2, 3]\n[a, b] [] true false\n\
+true true\ncde [ab, fg]\nnone [ab, fg]\n[-1.5, 0.5, 2.5, NaN]\n[x, y] [x, y]\n\
+[s1, s2, s3]\n[s1, s2, s3]\n[7, 7, 7, 7] 4\n";
+
+#[test]
+fn collections_page_surface_agrees_on_both_backends() {
+    agrees(COLLECTIONS_PAGE, WANT_COLLECTIONS_PAGE, 0);
+}
+
+#[test]
+fn collections_page_surface_is_clean_under_asan() {
+    if let Some(out) = under_asan(COLLECTIONS_PAGE) {
+        assert_eq!(out, WANT_COLLECTIONS_PAGE);
+    }
+}
+
+/// `clone_from_slice` panics when the lengths differ, before writing.
+#[test]
+fn clone_from_slice_of_another_length_panics() {
+    agrees(
+        r#"fn main() {
+    let mut v: Vec[String] = ["a".to_string(), "b".to_string(), "c".to_string()];
+    let other: Vec[String] = ["x".to_string()];
+    println("before");
+    v[0..2].clone_from_slice(other);
+    println(f"{v}");
+}
+"#,
+        "before\n",
+        101,
+    );
+}
+
+/// `Array.from_fn` over an element with a `Drop`: each is built once and
+/// dropped once, and a capture is borrowed, not moved (B-2026-10-21-30).
+const ARRAY_FROM_FN_DROP: &str = r#"struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn main() {
+    let tag = "t".to_string();
+    let a: Array[Noisy, 3] = Array.from_fn(3, |i| Noisy { n: i + tag.len() });
+    println(f"{a[0].n} {a[2].n}");
+}
+"#;
+
+#[test]
+fn array_from_fn_drops_each_element_once() {
+    agrees(ARRAY_FROM_FN_DROP, "1 3\ndrop 1\ndrop 2\ndrop 3\n", 0);
+    if let Some(out) = under_asan(ARRAY_FROM_FN_DROP) {
+        assert_eq!(out, "1 3\ndrop 1\ndrop 2\ndrop 3\n");
+    }
+}
+
+/// A count that is not the array's length panics before any element is
+/// built.
+#[test]
+fn array_from_fn_of_the_wrong_count_panics() {
+    agrees(
+        r#"struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn count() -> i64 { 4 }
+fn main() {
+    let s: Array[String, 2] = Array.from_fn(2, |i| f"x{i}");
+    println(f"{s}");
+    let a: Array[Noisy, 3] = Array.from_fn(count(), |i| Noisy { n: i });
+    println(f"{a[0].n}");
+}
+"#,
+        "[x0, x1]\n",
+        101,
+    );
+}

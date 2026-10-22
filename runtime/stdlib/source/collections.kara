@@ -57,6 +57,21 @@ impl[T] DoubleEndedIterator for VecIterMut[T] {
     }
 }
 
+impl[T: Clone] Slice[T] {
+    /// Overwrites every element with a clone of the matching element of
+    /// `src`; the lengths must agree (docs/library/collections.md).
+    fn clone_from_slice(mut ref self, src: Slice[T]) {
+        if self.len() != src.len() {
+            panic("clone_from_slice: destination and source slices have different lengths");
+        }
+        let mut i = 0;
+        while i < self.len() {
+            self[i] = src[i].clone();
+            i = i + 1;
+        }
+    }
+}
+
 /// The elements of a slice, front to back, each borrowed.
 struct SliceIter[T] {
     s: Slice[T],
@@ -200,6 +215,20 @@ impl[T] Vec[T] {
         self.swap(idx, last);
         self.pop().unwrap()
     }
+
+    /// Removes and returns the first element `pred` accepts, shifting the
+    /// rest down, or `None` when it accepts none.
+    fn remove_first(mut ref self, pred: own MutFn(T) -> bool) -> Option[T] {
+        let mut f = pred;
+        let mut i = 0;
+        while i < self.len() {
+            if f(self[i]) {
+                return Some(self.remove(i));
+            }
+            i = i + 1;
+        }
+        None
+    }
 }
 
 impl[T: PartialEq] Vec[T] {
@@ -248,6 +277,16 @@ impl[T] Set[T] {
     /// The elements, in the set's iteration order, each borrowed.
     fn iter(ref self) -> SetIter[T] {
         SetIter { s: self, front: 0, back: self.len() }
+    }
+
+    /// A set of the list's elements; a repeated element is kept once
+    /// (docs/library/collections.md, Collection literals).
+    fn from(v: own Vec[T]) -> Set[T] {
+        let mut out: Set[T] = Set.new();
+        for x in v.into_iter() {
+            out.insert(x);
+        }
+        out
     }
 }
 
@@ -377,6 +416,16 @@ impl[K, V] Iterator for MapIter[K, V] {
 }
 
 impl[K, V] Map[K, V] {
+    /// A map of the list's `(key, value)` pairs; a repeated key keeps its
+    /// last value (docs/library/collections.md, Collection literals).
+    fn from(v: own Vec[(K, V)]) -> Map[K, V] {
+        let mut out: Map[K, V] = Map.new();
+        for (k, x) in v.into_iter() {
+            out.insert(k, x);
+        }
+        out
+    }
+
     /// The entries, in the map's iteration order, each key and value
     /// borrowed.
     fn iter(ref self) -> MapIter[K, V] {
@@ -1205,4 +1254,15 @@ impl[K, V] SortedMap[K, V] {
         let mut c = self;
         c.drain_entries().into_iter()
     }
+}
+
+// `f64.total_cmp` and `f32.total_cmp` named as a value: the comparator
+// `w.sort_by(f64.total_cmp)` passes (docs/library/collections.md). The MIR
+// builder names these for the path (B-2026-10-21-30).
+fn f64_total_cmp(a: f64, b: f64) -> Ordering {
+    a.total_cmp(b)
+}
+
+fn f32_total_cmp(a: f32, b: f32) -> Ordering {
+    a.total_cmp(b)
 }
