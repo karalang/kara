@@ -1,0 +1,320 @@
+== parse | pkg:maven/org.apache.commons/io@1.3.4
+  type=maven
+  namespace=org.apache.commons
+  name=io
+  version=1.3.4
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/org.apache.commons/io@1.3.4
+== parse | pkg:maven/org.apache.commons/io
+  type=maven
+  namespace=org.apache.commons
+  name=io
+  version=-
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/org.apache.commons/io
+== parse | pkg:GOLANG/google.golang.org/genproto#/googleapis/api/annotations/
+  type=golang
+  namespace=google.golang.org
+  name=genproto
+  version=-
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:golang/google.golang.org/genproto#googleapis/api/annotations
+== parse | pkg:GOLANG/google.golang.org/genproto@abcdedf#/googleapis/api/annotations/
+  type=golang
+  namespace=google.golang.org
+  name=genproto
+  version=abcdedf
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:golang/google.golang.org/genproto@abcdedf#googleapis/api/annotations
+== parse | pkg:golang/github.com/nats-io/nats-server/v2/server@v1.2.9
+  type=golang
+  namespace=github.com/nats-io/nats-server/v2
+  name=server
+  version=v1.2.9
+  qualifiers=-
+  subpath=-
+  canonical=pkg:golang/github.com/nats-io/nats-server/v2/server@v1.2.9
+== parse | pkg:bitbucket/birKenfeld/pyGments-main@244fd47e07d1014f0aed9c
+  type=bitbucket
+  namespace=birkenfeld
+  name=pygments-main
+  version=244fd47e07d1014f0aed9c
+  qualifiers=-
+  subpath=-
+  canonical=pkg:bitbucket/birkenfeld/pygments-main@244fd47e07d1014f0aed9c
+== parse | pkg:github/Package-url/purl-Spec@244fd47e07d1004f0aed9c
+  type=github
+  namespace=package-url
+  name=purl-spec
+  version=244fd47e07d1004f0aed9c
+  qualifiers=-
+  subpath=-
+  canonical=pkg:github/package-url/purl-spec@244fd47e07d1004f0aed9c
+== parse | pkg:deb/debian/curl@7.50.3-1?arch=i386&distro=jessie
+  type=deb
+  namespace=debian
+  name=curl
+  version=7.50.3-1
+  qualifiers=arch=i386&distro=jessie
+  subpath=-
+  canonical=pkg:deb/debian/curl@7.50.3-1?arch=i386&distro=jessie
+== parse | pkg:docker/customer/dockerimage@sha256:244fd47e07d1004f0aed9c?repository_url=gcr.io
+  type=docker
+  namespace=customer
+  name=dockerimage
+  version=sha256:244fd47e07d1004f0aed9c
+  qualifiers=repository_url=gcr.io
+  subpath=-
+  canonical=pkg:docker/customer/dockerimage@sha256:244fd47e07d1004f0aed9c?repository_url=gcr.io
+== parse | pkg:gem/jruby-launcher@1.1.2?Platform=java
+  type=gem
+  namespace=-
+  name=jruby-launcher
+  version=1.1.2
+  qualifiers=platform=java
+  subpath=-
+  canonical=pkg:gem/jruby-launcher@1.1.2?platform=java
+== parse | pkg:Maven/org.apache.xmlgraphics/batik-anim@1.9.1?repositorY_url=repo.spring.io/release&classifier=sources
+  type=maven
+  namespace=org.apache.xmlgraphics
+  name=batik-anim
+  version=1.9.1
+  qualifiers=classifier=sources&repository_url=repo.spring.io/release
+  subpath=-
+  canonical=pkg:maven/org.apache.xmlgraphics/batik-anim@1.9.1?classifier=sources&repository_url=repo.spring.io/release
+== parse | pkg:Maven/org.apache.xmlgraphics/batik-anim@1.9.1?repositorY_url=repo.spring.io/release&extension=pom
+  type=maven
+  namespace=org.apache.xmlgraphics
+  name=batik-anim
+  version=1.9.1
+  qualifiers=extension=pom&repository_url=repo.spring.io/release
+  subpath=-
+  canonical=pkg:maven/org.apache.xmlgraphics/batik-anim@1.9.1?extension=pom&repository_url=repo.spring.io/release
+== parse | pkg:Maven/net.sf.jacob-project/jacob@1.14.3?type=dll&classifier=x86
+  type=maven
+  namespace=net.sf.jacob-project
+  name=jacob
+  version=1.14.3
+  qualifiers=classifier=x86&type=dll
+  subpath=-
+  canonical=pkg:maven/net.sf.jacob-project/jacob@1.14.3?classifier=x86&type=dll
+== parse | pkg:npm/%40angular/animation@12.3.1
+  type=npm
+  namespace=@angular
+  name=animation
+  version=12.3.1
+  qualifiers=-
+  subpath=-
+  canonical=pkg:npm/%40angular/animation@12.3.1
+== parse | pkg:Nuget/EnterpriseLibrary.Common@6.0.1304
+  type=nuget
+  namespace=-
+  name=EnterpriseLibrary.Common
+  version=6.0.1304
+  qualifiers=-
+  subpath=-
+  canonical=pkg:nuget/EnterpriseLibrary.Common@6.0.1304
+== parse | pkg:PYPI/Django_package@1.11.1.dev1
+  type=pypi
+  namespace=-
+  name=django-package
+  version=1.11.1.dev1
+  qualifiers=-
+  subpath=-
+  canonical=pkg:pypi/django-package@1.11.1.dev1
+== parse | pkg:composer/guzzlehttp/promises@2.0.2
+  type=composer
+  namespace=guzzlehttp
+  name=promises
+  version=2.0.2
+  qualifiers=-
+  subpath=-
+  canonical=pkg:composer/guzzlehttp/promises@2.0.2
+== parse | pkg:Rpm/fedora/curl@7.50.3-1.fc25?Arch=i386&Distro=fedora-25
+  type=rpm
+  namespace=fedora
+  name=curl
+  version=7.50.3-1.fc25
+  qualifiers=arch=i386&distro=fedora-25
+  subpath=-
+  canonical=pkg:rpm/fedora/curl@7.50.3-1.fc25?arch=i386&distro=fedora-25
+== parse | pkg:/maven/org.apache.commons/io
+  type=maven
+  namespace=org.apache.commons
+  name=io
+  version=-
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/org.apache.commons/io
+== parse | pkg://maven/org.apache.commons/io
+  type=maven
+  namespace=org.apache.commons
+  name=io
+  version=-
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/org.apache.commons/io
+== parse | pkg:///maven/org.apache.commons/io
+  type=maven
+  namespace=org.apache.commons
+  name=io
+  version=-
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/org.apache.commons/io
+== parse | pkg:maven/HTTPClient/HTTPClient@0.3-3
+  type=maven
+  namespace=HTTPClient
+  name=HTTPClient
+  version=0.3-3
+  qualifiers=-
+  subpath=-
+  canonical=pkg:maven/HTTPClient/HTTPClient@0.3-3
+== parse | pkg:maven/mygroup/myartifact@1.0.0%20Final?mykey=my%20value
+  type=maven
+  namespace=mygroup
+  name=myartifact
+  version=1.0.0 Final
+  qualifiers=mykey=my value
+  subpath=-
+  canonical=pkg:maven/mygroup/myartifact@1.0.0%20Final?mykey=my%20value
+== parse | pkg:npm/@babel/core#/googleapis/api/annotations/
+  type=npm
+  namespace=@babel
+  name=core
+  version=-
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:npm/%40babel/core#googleapis/api/annotations
+== parse | pkg:npm/@babel/core@1.0.2#/googleapis/api/annotations/
+  type=npm
+  namespace=@babel
+  name=core
+  version=1.0.2
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:npm/%40babel/core@1.0.2#googleapis/api/annotations
+== parse | pkg:npm/core@1.0.2#/googleapis/api/annotations/
+  type=npm
+  namespace=-
+  name=core
+  version=1.0.2
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:npm/core@1.0.2#googleapis/api/annotations
+== parse | pkg:npm/core#/googleapis/api/annotations/
+  type=npm
+  namespace=-
+  name=core
+  version=-
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:npm/core#googleapis/api/annotations
+== parse | pkg:NPM/core#/googleapis/api/annotations/
+  type=npm
+  namespace=-
+  name=core
+  version=-
+  qualifiers=-
+  subpath=googleapis/api/annotations
+  canonical=pkg:npm/core#googleapis/api/annotations
+== parse | EnterpriseLibrary.Common@6.0.1304
+  err=purl is missing the required "pkg" scheme component: 'EnterpriseLibrary.Common@6.0.1304'.
+== parse | pkg:EnterpriseLibrary.Common@6.0.1304
+  err=purl is missing the required type component: 'pkg:EnterpriseLibrary.Common@6.0.1304'.
+== parse | pkg:maven/@1.3.4
+  err=purl is missing the required name component: 'pkg:maven/@1.3.4'
+== parse | pkg:npm/myartifact@1.0.0?in%20production=true
+  err=A qualifier key cannot be percent encoded: 'in%20production'
+== parse |    
+  err=A purl string argument is required.
+== parse | pkg:pypi/requests@2.31.0
+  type=pypi
+  namespace=-
+  name=requests
+  version=2.31.0
+  qualifiers=-
+  subpath=-
+  canonical=pkg:pypi/requests@2.31.0
+== parse | pkg:cargo/serde@1.0.197
+  type=cargo
+  namespace=-
+  name=serde
+  version=1.0.197
+  qualifiers=-
+  subpath=-
+  canonical=pkg:cargo/serde@1.0.197
+== parse | pkg:golang/golang.org/x/text@v0.3.7
+  type=golang
+  namespace=golang.org/x
+  name=text
+  version=v0.3.7
+  qualifiers=-
+  subpath=-
+  canonical=pkg:golang/golang.org/x/text@v0.3.7
+== parse | pkg:generic/openssl@1.1.10g?download_url=https://openssl.org/source/openssl-1.1.10g.tar.gz&checksum=sha256:de4d501267da
+  type=generic
+  namespace=-
+  name=openssl
+  version=1.1.10g
+  qualifiers=checksum=sha256:de4d501267da&download_url=https://openssl.org/source/openssl-1.1.10g.tar.gz
+  subpath=-
+  canonical=pkg:generic/openssl@1.1.10g?checksum=sha256:de4d501267da&download_url=https://openssl.org/source/openssl-1.1.10g.tar.gz
+== parse | pkg:deb/ubuntu/libncurses5@6.1?arch=amd64
+  type=deb
+  namespace=ubuntu
+  name=libncurses5
+  version=6.1
+  qualifiers=arch=amd64
+  subpath=-
+  canonical=pkg:deb/ubuntu/libncurses5@6.1?arch=amd64
+== parse | pkg:huggingface/distilbert-base-uncased@043235d6088ecd3dd5fb5ca3592b6913fd516027
+  type=huggingface
+  namespace=-
+  name=distilbert-base-uncased
+  version=043235d6088ecd3dd5fb5ca3592b6913fd516027
+  qualifiers=-
+  subpath=-
+  canonical=pkg:huggingface/distilbert-base-uncased@043235d6088ecd3dd5fb5ca3592b6913fd516027
+== parse | pkg:oci/debian@sha256%3A244fd47e07d10?repository_url=docker.io/library/debian&tag=bullseye
+  type=oci
+  namespace=-
+  name=debian
+  version=sha256:244fd47e07d10
+  qualifiers=repository_url=docker.io/library/debian&tag=bullseye
+  subpath=-
+  canonical=pkg:oci/debian@sha256:244fd47e07d10?repository_url=docker.io/library/debian&tag=bullseye
+== build | maven | org.apache.commons | io | 1.3.4 | - | -
+  str=pkg:maven/org.apache.commons/io@1.3.4
+== build | npm | @angular | animation | 12.3.1 | - | -
+  str=pkg:npm/%40angular/animation@12.3.1
+== build | pypi | - | Django_Package | 1.11.1.dev1 | - | -
+  str=pkg:pypi/django-package@1.11.1.dev1
+== build | hackage | - | AC_Vector_Space | 1.0 | - | -
+  str=pkg:hackage/AC-Vector-Space@1.0
+== build | cpan | DROLSKY | DateTime | 1.55 | - | -
+  str=pkg:cpan/DROLSKY/DateTime@1.55
+== build | pub | - | Flutter Package! | 2.0 | - | -
+  str=pkg:pub/flutter_package_@2.0
+== build | maven | mygroup | myartifact | 1.0.0 Final | mykey=my value | -
+  str=pkg:maven/mygroup/myartifact@1.0.0%20Final?mykey=my%20value
+== build | golang | google.golang.org | genproto | - | - | googleapis/api/annotations
+  str=pkg:golang/google.golang.org/genproto#googleapis/api/annotations
+== build | deb | debian | curl | 7.50.3-1 | distro=jessie&arch=i386 | -
+  str=pkg:deb/debian/curl@7.50.3-1?arch=i386&distro=jessie
+== build | docker | customer | dockerimage | sha256:244fd47e07d1004f0aed9c | repository_url=gcr.io | -
+  str=pkg:docker/customer/dockerimage@sha256:244fd47e07d1004f0aed9c?repository_url=gcr.io
+== build | mlflow | - | TraceClassifier | 1 | repository_url=https://adb-1234.azuredatabricks.net | -
+  str=pkg:mlflow/traceclassifier@1?repository_url=https://adb-1234.azuredatabricks.net
+== build | mlflow | - | TraceClassifier | 1 | repository_url=https://westus.api.azureml.ms | -
+  str=pkg:mlflow/TraceClassifier@1?repository_url=https://westus.api.azureml.ms
+== build | - | ns | name | 1.0 | - | -
+  err=Invalid purl: type is a required argument.
+== build | generic | - | - | 1.0 | - | -
+  err=Invalid purl: name is a required argument.
+== build | nuget | - | EnterpriseLibrary.Common | 6.0.1304 | - | -
+  str=pkg:nuget/EnterpriseLibrary.Common@6.0.1304

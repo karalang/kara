@@ -1,0 +1,792 @@
+// mini_packageurl — the parse / canonicalize / build core of packageurl-python
+// 0.17.6 (MIT), the Package-URL (purl) library under SBOM, SCA and security
+// tooling (SPDX, OSV, CycloneDX, dependency scanners).
+//
+// It follows the library's packageurl/__init__.py: PackageURL.from_string
+// parses a purl into its six components, applying the per-type normalization
+// rules (lowercasing, pypi `_`->`-`, hackage, pub, cpan, mlflow, npm's `@`
+// namespace, golang subpaths), percent-decoding on the way in; to_string
+// rebuilds the canonical string, percent-encoding on the way out and sorting
+// and case-folding qualifier keys; the component constructor applies the same
+// rules without a backing string. Every ValueError carries the library's
+// exact message (missing scheme/type/name, a percent-encoded qualifier key, a
+// required constructor argument).
+//
+// from_string uses urllib.parse.urlsplit to separate path / ?qualifiers /
+// #subpath. For a well-formed purl (no `//` authority — the spec strips
+// leading slashes before the type) urlsplit's colon/scheme handling is a
+// no-op and the split reduces to: fragment after the first `#`, query after
+// the first `?`, path the rest. This port reproduces that reduction directly.
+//
+// Output: each job prints a `== ` header then a two-space result block. A
+// `parse` job prints the six components (`-` for an absent one, qualifiers as
+// sorted key=value joined by &) and the canonical string, or `err=<message>`.
+// A `build` job prints `str=<purl>` or `err=<message>`. computation the
+// library's. jobs_text() holds data/jobs.tsv.
+
+#[derive(Clone)]
+struct Qual {
+    key: String,
+    val: String,
+}
+
+#[derive(Clone)]
+struct Purl {
+    ptype: String,
+    namespace: String,
+    name: String,
+    version: String,
+    quals: Vec[Qual],
+    subpath: String,
+}
+
+// ---------------------------------------------------------- byte helpers
+
+fn hex_val(b: u8) -> i64 {
+    let c = b as i64;
+    if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 65 and c <= 70 {
+        c - 55
+    } else if c >= 97 and c <= 102 {
+        c - 87
+    } else {
+        -1
+    }
+}
+
+fn quote_safe(b: u8) -> bool {
+    let c = b as i64;
+    (c >= 65 and c <= 90)
+        or (c >= 97 and c <= 122)
+        or (c >= 48 and c <= 57)
+        or c == 95
+        or c == 46
+        or c == 45
+        or c == 126
+        or c == 47
+        or c == 58
+}
+
+fn pct_quote(s: String) -> String {
+    let bytes = s.bytes().to_vec();
+    let hexd = "0123456789ABCDEF".bytes().to_vec();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if quote_safe(b) {
+            out.push(char.try_from(b as i64).unwrap_or('?'));
+        } else {
+            let hi = hexd[(b as i64) / 16];
+            let lo = hexd[(b as i64) % 16];
+            out.push('%');
+            out.push(char.try_from(hi as i64).unwrap_or('?'));
+            out.push(char.try_from(lo as i64).unwrap_or('?'));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn pct_unquote(s: String) -> String {
+    let bytes = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let mut step = 1;
+        if b == 37 and i + 2 < bytes.len() {
+            let h1 = hex_val(bytes[i + 1]);
+            let h2 = hex_val(bytes[i + 2]);
+            if h1 >= 0 and h2 >= 0 {
+                out.push((h1 * 16 + h2) as u8);
+                step = 3;
+            } else {
+                out.push(b);
+            }
+        } else {
+            out.push(b);
+        }
+        i = i + step;
+    }
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+fn apply_quoter(mode: i64, s: String) -> String {
+    if mode == 1 {
+        pct_quote(s)
+    } else if mode == 2 {
+        pct_unquote(s)
+    } else {
+        s.to_string()
+    }
+}
+
+// --------------------------------------------------------- string helpers
+
+fn lstrip_slashes(s: String) -> String {
+    let mut r = s.to_string();
+    while r.starts_with("/") {
+        r = r.substring(1).to_string();
+    }
+    r
+}
+
+fn strip_slashes(s: String) -> String {
+    let mut r = lstrip_slashes(s);
+    while r.ends_with("/") and r.len() > 0 {
+        r = r.substring(0, r.len() - 1).to_string();
+    }
+    r
+}
+
+fn py_repr(s: String) -> String {
+    let has_sq = s.contains("'");
+    let has_dq = s.contains("\"");
+    let q = if has_sq and not has_dq { "\"" } else { "'" };
+    let bytes = s.bytes().to_vec();
+    let qb = q.bytes().to_vec()[0];
+    let mut out = String.new();
+    out.push_str(q);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 92 {
+            out.push_str("\\\\");
+        } else if b == qb {
+            out.push('\\');
+            out.push(char.try_from(b as i64).unwrap_or('?'));
+        } else if b == 10 {
+            out.push_str("\\n");
+        } else if b == 9 {
+            out.push_str("\\t");
+        } else if b == 13 {
+            out.push_str("\\r");
+        } else {
+            out.push(char.try_from(b as i64).unwrap_or('?'));
+        }
+        i = i + 1;
+    }
+    out.push_str(q);
+    out
+}
+
+fn str_lt(a: String, b: String) -> bool {
+    let ab = a.bytes().to_vec();
+    let bb = b.bytes().to_vec();
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] != bb[i] {
+            return ab[i] < bb[i];
+        }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+fn dash_none(s: String) -> String {
+    if s == "-" {
+        "".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+// ----------------------------------------------------- per-type tables
+
+fn ns_lower(t: String) -> bool {
+    t == "bitbucket"
+        or t == "github"
+        or t == "pypi"
+        or t == "gitlab"
+        or t == "composer"
+        or t == "luarocks"
+        or t == "qpkg"
+        or t == "alpm"
+        or t == "apk"
+        or t == "hex"
+}
+
+fn name_lower(t: String) -> bool {
+    t == "bitbucket"
+        or t == "github"
+        or t == "pypi"
+        or t == "gitlab"
+        or t == "composer"
+        or t == "luarocks"
+        or t == "oci"
+        or t == "npm"
+        or t == "alpm"
+        or t == "apk"
+        or t == "bitnami"
+        or t == "hex"
+        or t == "pub"
+}
+
+fn pub_name(s: own String) -> String {
+    let low = s.to_lowercase();
+    let bytes = low.bytes().to_vec();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as i64;
+        if (c >= 97 and c <= 122) or (c >= 48 and c <= 57) {
+            out.push(char.try_from(c).unwrap_or('?'));
+        } else {
+            out.push('_');
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------- normalization
+
+fn norm_type(t: String, mode: i64) -> String {
+    if t.is_empty() {
+        return "".to_string();
+    }
+    let s = apply_quoter(mode, t.to_string());
+    s.trim().to_lowercase()
+}
+
+fn norm_namespace(ns: String, ptype: String, mode: i64) -> String {
+    if ns.is_empty() {
+        return "".to_string();
+    }
+    let mut s = strip_slashes(ns.trim().to_string());
+    if ns_lower(ptype) {
+        s = s.to_lowercase();
+    } else if ptype == "cpan" {
+        s = s.to_uppercase();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for seg in s.split("/") {
+        if not seg.trim().is_empty() {
+            parts.push(apply_quoter(mode, seg.to_string()));
+        }
+    }
+    parts.join("/")
+}
+
+fn norm_name(name: String, repo_ctx: String, ptype: String, mode: i64) -> String {
+    if name.is_empty() {
+        return "".to_string();
+    }
+    let quoted = apply_quoter(mode, name.to_string());
+    let mut s = strip_slashes(quoted.trim().to_string());
+    if ptype == "mlflow" {
+        if repo_ctx.contains("azureml") {
+            return s;
+        } else if repo_ctx.contains("databricks") {
+            return s.to_lowercase();
+        } else {
+            return s;
+        }
+    }
+    if name_lower(ptype) {
+        s = s.to_lowercase();
+    }
+    if ptype == "pypi" {
+        s = s.replace("_", "-").to_lowercase();
+    }
+    if ptype == "hackage" {
+        s = s.replace("_", "-");
+    }
+    if ptype == "pub" {
+        s = pub_name(s);
+    }
+    s
+}
+
+fn norm_version(version: String, ptype: String, mode: i64) -> String {
+    if version.is_empty() {
+        return "".to_string();
+    }
+    let mut s = apply_quoter(mode, version.trim().to_string());
+    if ptype == "huggingface" or ptype == "oci" {
+        s = s.to_lowercase();
+    }
+    s
+}
+
+fn norm_subpath(subpath: String, mode: i64) -> String {
+    if subpath.is_empty() {
+        return "".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for seg in subpath.split("/") {
+        if not seg.trim().is_empty() and seg != "." and seg != ".." {
+            parts.push(apply_quoter(mode, seg.to_string()));
+        }
+    }
+    parts.join("/")
+}
+
+fn sort_quals(quals: own Vec[Qual]) -> Vec[Qual] {
+    let mut v = quals;
+    let n = v.len();
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 and str_lt(v[j].key, v[j - 1].key) {
+            let tmp = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = tmp;
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+    v
+}
+
+// Parse a `key=value&...` string into validated, sorted qualifiers.
+// `mode` quotes the VALUES (2 decode on parse, 0 identity on build).
+fn parse_qualifiers(qstr: String, mode: i64) -> Result[Vec[Qual], String] {
+    let mut pairs: Vec[Qual] = Vec.new();
+    if qstr.is_empty() {
+        return Ok(pairs);
+    }
+    for kv in qstr.split("&") {
+        match kv.find("=") {
+            None => {
+                return Err("Invalid qualifier. Must be a string of key=value pairs:".to_string());
+            },
+            Some(p) => {
+                let k = kv.substring(0, p).to_string();
+                let v = kv.substring(p + 1).to_string();
+                if not k.trim().is_empty() and not v.trim().is_empty() {
+                    let key = k.trim().to_lowercase();
+                    let val = apply_quoter(mode, v.to_string());
+                    // last write wins on a duplicate key
+                    let mut replaced = false;
+                    let mut qi = 0;
+                    while qi < pairs.len() {
+                        if pairs[qi].key == key {
+                            pairs[qi] = Qual { key: key.clone(), val: val.clone() };
+                            replaced = true;
+                        }
+                        qi = qi + 1;
+                    }
+                    if not replaced {
+                        pairs.push(Qual { key: key, val: val });
+                    }
+                }
+            },
+        }
+    }
+    let mut vi = 0;
+    while vi < pairs.len() {
+        let key = pairs[vi].key.clone();
+        if key.contains("%") {
+            return Err(f"A qualifier key cannot be percent encoded: {py_repr(key)}");
+        }
+        if key.contains(" ") {
+            return Err(f"A qualifier key cannot contain spaces: {py_repr(key)}");
+        }
+        if not key_chars_ok(key.clone()) {
+            return Err(f"A qualifier key must be composed only of ASCII letters and numbersperiod, dash and underscore: {py_repr(key)}");
+        }
+        if key_starts_digit(key.clone()) {
+            return Err(f"A qualifier key cannot start with a number: {py_repr(key)}");
+        }
+        vi = vi + 1;
+    }
+    Ok(sort_quals(pairs))
+}
+
+fn key_chars_ok(key: String) -> bool {
+    let bytes = key.bytes().to_vec();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as i64;
+        let ok = (c >= 65 and c <= 90)
+            or (c >= 97 and c <= 122)
+            or (c >= 48 and c <= 57)
+            or c == 46
+            or c == 45
+            or c == 95;
+        if not ok {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn key_starts_digit(key: String) -> bool {
+    let bytes = key.bytes().to_vec();
+    if bytes.len() == 0 {
+        return false;
+    }
+    let c = bytes[0] as i64;
+    c >= 48 and c <= 57
+}
+
+fn repo_url_from_qstr(qstr: String) -> String {
+    for kv in qstr.split("&") {
+        match kv.find("=") {
+            Some(p) => {
+                if kv.substring(0, p).trim().to_lowercase() == "repository_url" {
+                    return kv.substring(p + 1).to_lowercase();
+                }
+            },
+            None => {},
+        }
+    }
+    "".to_string()
+}
+
+fn repo_url_from_vec(quals: ref Vec[Qual]) -> String {
+    for q in quals {
+        if q.key == "repository_url" {
+            return q.val.to_lowercase();
+        }
+    }
+    "".to_string()
+}
+
+// ----------------------------------------------------- build / to_string
+
+fn build_purl(
+    rtype: String,
+    rns: String,
+    rname: String,
+    rver: String,
+    rqstr: String,
+    rsub: String,
+) -> Result[Purl, String] {
+    if rtype.is_empty() {
+        return Err("Invalid purl: type is a required argument.".to_string());
+    }
+    if rname.is_empty() {
+        return Err("Invalid purl: name is a required argument.".to_string());
+    }
+    let ptype = norm_type(rtype, 0);
+    let ns = norm_namespace(rns, ptype.clone(), 0);
+    let repo_ctx = repo_url_from_qstr(rqstr);
+    let name = norm_name(rname, repo_ctx, ptype.clone(), 0);
+    let version = norm_version(rver, ptype.clone(), 0);
+    let quals = parse_qualifiers(rqstr, 0)?;
+    let subpath = norm_subpath(rsub, 0);
+    Ok(Purl {
+        ptype: ptype,
+        namespace: ns,
+        name: name,
+        version: version,
+        quals: quals,
+        subpath: subpath,
+    })
+}
+
+fn quals_to_string(quals: ref Vec[Qual], mode: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for q in quals {
+        parts.push(f"{q.key}={apply_quoter(mode, q.val.to_string())}");
+    }
+    parts.join("&")
+}
+
+fn purl_to_string(p: ref Purl) -> String {
+    let t = norm_type(p.ptype, 1);
+    let ns = norm_namespace(p.namespace, t.clone(), 1);
+    let repo_ctx = repo_url_from_vec(p.quals);
+    let name = norm_name(p.name, repo_ctx, t.clone(), 1);
+    let version = norm_version(p.version, t.clone(), 1);
+    let subpath = norm_subpath(p.subpath, 1);
+    let quals = quals_to_string(p.quals, 1);
+
+    let mut out = String.new();
+    out.push_str("pkg:");
+    out.push_str(t);
+    out.push_str("/");
+    if not ns.is_empty() {
+        out.push_str(ns);
+        out.push_str("/");
+    }
+    out.push_str(name);
+    if not version.is_empty() {
+        out.push_str("@");
+        out.push_str(version);
+    }
+    if not quals.is_empty() {
+        out.push_str("?");
+        out.push_str(quals);
+    }
+    if not subpath.is_empty() {
+        out.push_str("#");
+        out.push_str(subpath);
+    }
+    out
+}
+
+// ----------------------------------------------------- from_string
+
+fn split_slash_filter(s: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for seg in s.split("/") {
+        if not seg.trim().is_empty() {
+            out.push(seg.to_string());
+        }
+    }
+    out
+}
+
+fn parse_purl(purl: String) -> Result[Purl, String] {
+    if purl.trim().is_empty() {
+        return Err("A purl string argument is required.".to_string());
+    }
+    // scheme
+    let scheme_sep = purl.find(":");
+    match scheme_sep {
+        None => {
+            return Err(f"purl is missing the required \"pkg\" scheme component: {py_repr(purl.to_string())}.");
+        },
+        Some(p) => {
+            let scheme = purl.substring(0, p).to_string();
+            if scheme != "pkg" {
+                return Err(f"purl is missing the required \"pkg\" scheme component: {py_repr(purl.to_string())}.");
+            }
+            let mut remainder = lstrip_slashes(purl.substring(p + 1).trim().to_string());
+            // type
+            let type_sep = remainder.find("/");
+            let type_raw = match type_sep {
+                None => "".to_string(),
+                Some(tp) => remainder.substring(0, tp).to_string(),
+            };
+            match type_sep {
+                None => {
+                    return Err(f"purl is missing the required type component: {py_repr(purl.to_string())}.");
+                },
+                Some(tp) => {
+                    if type_raw.is_empty() {
+                        return Err(f"purl is missing the required type component: {py_repr(purl.to_string())}.");
+                    }
+                    let ptype = type_raw.to_lowercase();
+                    let rest = remainder.substring(tp + 1).to_string();
+
+                    // urlsplit reduction: fragment after first '#', query after
+                    // first '?' in the pre-fragment part, path the rest.
+                    let before_frag = match rest.find("#") {
+                        Some(fp) => rest.substring(0, fp).to_string(),
+                        None => rest.to_string(),
+                    };
+                    let sub_raw = match rest.find("#") {
+                        Some(fp) => rest.substring(fp + 1).to_string(),
+                        None => "".to_string(),
+                    };
+                    let path_raw = match before_frag.find("?") {
+                        Some(qp) => before_frag.substring(0, qp).to_string(),
+                        None => before_frag.to_string(),
+                    };
+                    let qstr = match before_frag.find("?") {
+                        Some(qp) => before_frag.substring(qp + 1).to_string(),
+                        None => "".to_string(),
+                    };
+                    let mut path = lstrip_slashes(path_raw);
+
+                    // npm keeps an `@scope` namespace in the path
+                    let mut namespace_raw = "".to_string();
+                    let mut ns_set = false;
+                    if ptype == "npm" and path.starts_with("@") {
+                        match path.find("/") {
+                            Some(sp) => {
+                                namespace_raw = path.substring(0, sp).to_string();
+                                path = path.substring(sp + 1).to_string();
+                                ns_set = true;
+                            },
+                            None => {
+                                namespace_raw = path.to_string();
+                                path = "".to_string();
+                                ns_set = not namespace_raw.is_empty();
+                            },
+                        }
+                    }
+
+                    // version: after the LAST '@'
+                    let remainder2 = match path.rfind("@") {
+                        Some(ap) => path.substring(0, ap).to_string(),
+                        None => path.to_string(),
+                    };
+                    let version_raw = match path.rfind("@") {
+                        Some(ap) => path.substring(ap + 1).to_string(),
+                        None => "".to_string(),
+                    };
+
+                    let parts = split_slash_filter(remainder2.trim().to_string());
+                    let mut name_raw = "".to_string();
+                    if not ns_set and parts.len() > 1 {
+                        name_raw = parts[parts.len() - 1].clone();
+                        let mut nsparts: Vec[String] = Vec.new();
+                        let mut k = 0;
+                        while k < parts.len() - 1 {
+                            nsparts.push(parts[k].clone());
+                            k = k + 1;
+                        }
+                        namespace_raw = nsparts.join("/");
+                    } else if parts.len() == 1 {
+                        name_raw = parts[0].clone();
+                    }
+
+                    if name_raw.is_empty() {
+                        return Err(f"purl is missing the required name component: {py_repr(purl.to_string())}");
+                    }
+
+                    let repo_ctx = repo_url_from_qstr(qstr.clone());
+                    let ns = norm_namespace(namespace_raw, ptype.clone(), 2);
+                    let name = norm_name(name_raw, repo_ctx, ptype.clone(), 2);
+                    let version = norm_version(version_raw, ptype.clone(), 2);
+                    let quals = parse_qualifiers(qstr, 2)?;
+                    let subpath = norm_subpath(sub_raw, 2);
+
+                    Ok(Purl {
+                        ptype: ptype,
+                        namespace: ns,
+                        name: name,
+                        version: version,
+                        quals: quals,
+                        subpath: subpath,
+                    })
+                },
+            }
+        },
+    }
+}
+
+// ----------------------------------------------------- dispatch
+
+fn dash(s: String) -> String {
+    if s.is_empty() {
+        "-".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+fn render_parse(p: ref Purl) -> String {
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"  type={dash(p.ptype)}");
+    lines.push(f"  namespace={dash(p.namespace)}");
+    lines.push(f"  name={dash(p.name)}");
+    lines.push(f"  version={dash(p.version)}");
+    let qd = quals_to_string(p.quals, 0);
+    lines.push(f"  qualifiers={dash(qd)}");
+    lines.push(f"  subpath={dash(p.subpath)}");
+    lines.push(f"  canonical={purl_to_string(p)}");
+    lines.join("\n")
+}
+
+fn run_job(f: ref Vec[String]) -> String {
+    let kind = f[0].clone();
+    if kind == "parse" {
+        match parse_purl(f[1].clone()) {
+            Ok(p) => render_parse(p),
+            Err(m) => f"  err={m}",
+        }
+    } else if kind == "build" {
+        match build_purl(
+            dash_none(f[1].clone()),
+            dash_none(f[2].clone()),
+            dash_none(f[3].clone()),
+            dash_none(f[4].clone()),
+            dash_none(f[5].clone()),
+            dash_none(f[6].clone()),
+        ) {
+            Ok(p) => f"  str={purl_to_string(p)}",
+            Err(m) => f"  err={m}",
+        }
+    } else {
+        f"  unknown job: {kind}"
+    }
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        out.push_str(run_job(f));
+        out.push_str("\n");
+    }
+    print(out);
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("parse\tpkg:maven/org.apache.commons/io@1.3.4\n");
+    s.push_str("parse\tpkg:maven/org.apache.commons/io\n");
+    s.push_str("parse\tpkg:GOLANG/google.golang.org/genproto#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:GOLANG/google.golang.org/genproto@abcdedf#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:golang/github.com/nats-io/nats-server/v2/server@v1.2.9\n");
+    s.push_str("parse\tpkg:bitbucket/birKenfeld/pyGments-main@244fd47e07d1014f0aed9c\n");
+    s.push_str("parse\tpkg:github/Package-url/purl-Spec@244fd47e07d1004f0aed9c\n");
+    s.push_str("parse\tpkg:deb/debian/curl@7.50.3-1?arch=i386&distro=jessie\n");
+    s.push_str("parse\tpkg:docker/customer/dockerimage@sha256:244fd47e07d1004f0aed9c?repository_url=gcr.io\n");
+    s.push_str("parse\tpkg:gem/jruby-launcher@1.1.2?Platform=java\n");
+    s.push_str("parse\tpkg:Maven/org.apache.xmlgraphics/batik-anim@1.9.1?repositorY_url=repo.spring.io/release&classifier=sources\n");
+    s.push_str("parse\tpkg:Maven/org.apache.xmlgraphics/batik-anim@1.9.1?repositorY_url=repo.spring.io/release&extension=pom\n");
+    s.push_str("parse\tpkg:Maven/net.sf.jacob-project/jacob@1.14.3?type=dll&classifier=x86\n");
+    s.push_str("parse\tpkg:npm/%40angular/animation@12.3.1\n");
+    s.push_str("parse\tpkg:Nuget/EnterpriseLibrary.Common@6.0.1304\n");
+    s.push_str("parse\tpkg:PYPI/Django_package@1.11.1.dev1\n");
+    s.push_str("parse\tpkg:composer/guzzlehttp/promises@2.0.2\n");
+    s.push_str("parse\tpkg:Rpm/fedora/curl@7.50.3-1.fc25?Arch=i386&Distro=fedora-25\n");
+    s.push_str("parse\tpkg:/maven/org.apache.commons/io\n");
+    s.push_str("parse\tpkg://maven/org.apache.commons/io\n");
+    s.push_str("parse\tpkg:///maven/org.apache.commons/io\n");
+    s.push_str("parse\tpkg:maven/HTTPClient/HTTPClient@0.3-3\n");
+    s.push_str("parse\tpkg:maven/mygroup/myartifact@1.0.0%20Final?mykey=my%20value\n");
+    s.push_str("parse\tpkg:npm/@babel/core#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:npm/@babel/core@1.0.2#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:npm/core@1.0.2#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:npm/core#/googleapis/api/annotations/\n");
+    s.push_str("parse\tpkg:NPM/core#/googleapis/api/annotations/\n");
+    s.push_str("parse\tEnterpriseLibrary.Common@6.0.1304\n");
+    s.push_str("parse\tpkg:EnterpriseLibrary.Common@6.0.1304\n");
+    s.push_str("parse\tpkg:maven/@1.3.4\n");
+    s.push_str("parse\tpkg:npm/myartifact@1.0.0?in%20production=true\n");
+    s.push_str("parse\t   \n");
+    s.push_str("parse\tpkg:pypi/requests@2.31.0\n");
+    s.push_str("parse\tpkg:cargo/serde@1.0.197\n");
+    s.push_str("parse\tpkg:golang/golang.org/x/text@v0.3.7\n");
+    s.push_str("parse\tpkg:generic/openssl@1.1.10g?download_url=https://openssl.org/source/openssl-1.1.10g.tar.gz&checksum=sha256:de4d501267da\n");
+    s.push_str("parse\tpkg:deb/ubuntu/libncurses5@6.1?arch=amd64\n");
+    s.push_str("parse\tpkg:huggingface/distilbert-base-uncased@043235d6088ecd3dd5fb5ca3592b6913fd516027\n");
+    s.push_str("parse\tpkg:oci/debian@sha256%3A244fd47e07d10?repository_url=docker.io/library/debian&tag=bullseye\n");
+    s.push_str("build\tmaven\torg.apache.commons\tio\t1.3.4\t-\t-\n");
+    s.push_str("build\tnpm\t@angular\tanimation\t12.3.1\t-\t-\n");
+    s.push_str("build\tpypi\t-\tDjango_Package\t1.11.1.dev1\t-\t-\n");
+    s.push_str("build\thackage\t-\tAC_Vector_Space\t1.0\t-\t-\n");
+    s.push_str("build\tcpan\tDROLSKY\tDateTime\t1.55\t-\t-\n");
+    s.push_str("build\tpub\t-\tFlutter Package!\t2.0\t-\t-\n");
+    s.push_str("build\tmaven\tmygroup\tmyartifact\t1.0.0 Final\tmykey=my value\t-\n");
+    s.push_str("build\tgolang\tgoogle.golang.org\tgenproto\t-\t-\tgoogleapis/api/annotations\n");
+    s.push_str("build\tdeb\tdebian\tcurl\t7.50.3-1\tdistro=jessie&arch=i386\t-\n");
+    s.push_str("build\tdocker\tcustomer\tdockerimage\tsha256:244fd47e07d1004f0aed9c\trepository_url=gcr.io\t-\n");
+    s.push_str("build\tmlflow\t-\tTraceClassifier\t1\trepository_url=https://adb-1234.azuredatabricks.net\t-\n");
+    s.push_str("build\tmlflow\t-\tTraceClassifier\t1\trepository_url=https://westus.api.azureml.ms\t-\n");
+    s.push_str("build\t-\tns\tname\t1.0\t-\t-\n");
+    s.push_str("build\tgeneric\t-\t-\t1.0\t-\t-\n");
+    s.push_str("build\tnuget\t-\tEnterpriseLibrary.Common\t6.0.1304\t-\t-\n");
+    s
+}
