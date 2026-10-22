@@ -1,0 +1,114 @@
+== norm 1.0
+  1.0
+== norm 1.0.0
+  1.0.0
+== norm v2.3.4
+  2.3.4
+== norm 0.1
+  0.1
+== norm 1!2.0
+  1!2.0
+== norm 2!1.0
+  2!1.0
+== norm 1.0a1
+  1.0a1
+== norm 1.0alpha1
+  1.0a1
+== norm 1.0a
+  1.0a0
+== norm 1.0b2
+  1.0b2
+== norm 1.0beta2
+  1.0b2
+== norm 1.0c3
+  1.0rc3
+== norm 1.0pre3
+  1.0rc3
+== norm 1.0preview3
+  1.0rc3
+== norm 1.0rc3
+  1.0rc3
+== norm 1.0.post1
+  1.0.post1
+== norm 1.0-1
+  1.0.post1
+== norm 1.0rev2
+  1.0.post2
+== norm 1.0r2
+  1.0.post2
+== norm 1.0.dev4
+  1.0.dev4
+== norm 1.0a2.dev3
+  1.0a2.dev3
+== norm 1.0.post1.dev2
+  1.0.post1.dev2
+== norm 1.0+ubuntu.1
+  1.0+ubuntu.1
+== norm 1.0+abc.5
+  1.0+abc.5
+== norm 1.0+5
+  1.0+5
+== norm 1.0.0.0
+  1.0.0.0
+== norm 1.2.3.4.5
+  1.2.3.4.5
+== norm 10.20.30
+  10.20.30
+== norm 2.0.dev0
+  2.0.dev0
+== norm 1!1.0rc2.post3.dev4+local.7
+  1!1.0rc2.post3.dev4+local.7
+== norm 
+  INVALID
+== norm foo
+  INVALID
+== norm 1.0.0.0a.b
+  INVALID
+== norm 1..0
+  INVALID
+== norm 1.0+
+  INVALID
+== norm 1.0-
+  INVALID
+== norm 1.0.0rc
+  1.0.0rc0
+== norm 01!1.0junk
+  INVALID
+== cmp 1.0 | 1.0.0
+  =
+== cmp 1.0 | 1.1
+  <
+== cmp 1.0a1 | 1.0a2
+  <
+== cmp 1.0a2 | 1.0b1
+  <
+== cmp 1.0b1 | 1.0rc1
+  <
+== cmp 1.0rc1 | 1.0
+  <
+== cmp 1.0.dev1 | 1.0a1
+  <
+== cmp 1.0 | 1.0.post1
+  <
+== cmp 1.0.post1 | 1.0.post1.dev1
+  >
+== cmp 1.0.post1.dev1 | 1.0.post1
+  <
+== cmp 1!1.0 | 2.0
+  >
+== cmp 1.0+1 | 1.0+2
+  <
+== cmp 1.0+abc | 1.0+1
+  <
+== cmp 1.0+abc | 1.0+abd
+  <
+== cmp 1.0+1.0 | 1.0+1
+  >
+== cmp 1.0 | 1.0+1
+  <
+== cmp 1.0alpha1 | 1.0a1
+  =
+== cmp 1.0preview | 1.0rc0
+  =
+== cmp 1.0r1 | 1.0.post1
+  =
