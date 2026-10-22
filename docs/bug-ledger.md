@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 327 |
+| missing-feature | 328 |
 | codegen-gap | 288 |
 | false-positive | 281 |
 | other | 194 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3027 |
-| interp | 1037 |
+| codegen | 3028 |
+| interp | 1038 |
 | typecheck | 562 |
 | ownership | 131 |
 | other | 123 |
@@ -177,6 +177,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-7 | 2026-10-22 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Null.stringify());` passes `karac check` and stops `__mir-run` and `__mir-llvm-run` with "the builtin `Json.Null.stringify` is not lowered yet"; without the variant it prints `null` | — |
 | B-2026-10-22-8 | 2026-10-22 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No mutable globals"): a `let` should be refused with a machine-applicable `karac fix` to `const NAME: T = e;`, a `let mut` refused with a message to create the value in `main` and pass it down | — |
+| B-2026-10-22-10 | 2026-10-22 | interp+codegen | medium | A call to an `unsafe extern "C"` function does not run on either MIR backend, so no FFI program runs on v2, and M3 needs one (recheck §2.2): examples/interop-zlib's `crc32` fails `karac build --mir` with "native `crc32` is not lowered yet" and `__mir-run` with "call of unknown function crc32" | — |
 
 ### Relocated
 
