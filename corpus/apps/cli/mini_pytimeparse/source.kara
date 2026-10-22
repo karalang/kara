@@ -1,0 +1,863 @@
+// mini_pytimeparse — the parse core of pytimeparse 1.1.10 (MIT).
+//
+// Ports pytimeparse.timeparse.timeparse: strip a leading sign, then try the
+// five time formats in order (unit words; MM:SS; [W D] HH:MM:SS; D:HH:MM:SS;
+// :SS), taking the first that fully matches with a non-empty body. The result
+// is an int when every component is a whole number, an int (with the fractional
+// seconds truncated per the library) when only non-seconds components are
+// fractional, and a float when the seconds component is fractional. The
+// granularity="minutes" reinterpretation of an ambiguous "M:S" as "H:M" is
+// reproduced, as is the skip-to-next-format behaviour on a malformed number.
+//
+// All component arithmetic is done in exact scaled integers (value * 10^p),
+// so the int-truncation and the decimal rendering of the float branch match
+// CPython's Decimal/float output byte for byte.
+
+fn is_ws(x: i64) -> bool {
+    x == 32 or x == 9 or x == 10 or x == 13 or x == 12 or x == 11
+}
+
+fn is_dig(x: i64) -> bool {
+    x >= 48 and x <= 57
+}
+
+fn lc(x: i64) -> i64 {
+    if x >= 65 and x <= 90 { x + 32 } else { x }
+}
+
+fn is_alpha(x: i64) -> bool {
+    let y = lc(x);
+    y >= 97 and y <= 122
+}
+
+fn pow10(p: i64) -> i64 {
+    let mut r = 1;
+    let mut k = 0;
+    while k < p {
+        r = r * 10;
+        k = k + 1;
+    }
+    r
+}
+
+fn to_bytes(s: String) -> Vec[i64] {
+    let mut v = Vec.new();
+    for c in s.bytes() {
+        v.push(c as i64);
+    }
+    v
+}
+
+fn slice_str(b: Vec[i64], i: i64, j: i64) -> String {
+    let mut s = String.new();
+    let mut k = i;
+    while k < j {
+        s.push(char.try_from(b[k]).unwrap_or('?'));
+        k = k + 1;
+    }
+    s
+}
+
+fn count_byte(b: Vec[i64], x: i64) -> i64 {
+    let mut c = 0;
+    let mut k = 0;
+    let n = b.len();
+    while k < n {
+        if b[k] == x {
+            c = c + 1;
+        }
+        k = k + 1;
+    }
+    c
+}
+
+fn skip_ws(b: Vec[i64], i: i64, n: i64) -> i64 {
+    let mut k = i;
+    while k < n and is_ws(b[k]) {
+        k = k + 1;
+    }
+    k
+}
+
+fn scan_value(b: Vec[i64], i: i64, n: i64) -> i64 {
+    let mut k = i;
+    while k < n and (is_dig(b[k]) or b[k] == 46) {
+        k = k + 1;
+    }
+    k
+}
+
+fn digit_run(b: Vec[i64], i: i64, n: i64) -> i64 {
+    let mut k = i;
+    while k < n and is_dig(b[k]) {
+        k = k + 1;
+    }
+    k
+}
+
+fn two_digits(b: Vec[i64], i: i64, n: i64) -> i64 {
+    if i + 2 <= n and is_dig(b[i]) and is_dig(b[i + 1]) { i + 2 } else { -1 }
+}
+
+// \d{2}(\.\d+)? — returns the end index, or -1 if no two leading digits.
+fn secs_clock(b: Vec[i64], i: i64, n: i64) -> i64 {
+    let e = two_digits(b, i, n);
+    if e < 0 {
+        return -1;
+    }
+    if e < n and b[e] == 46 and e + 1 < n and is_dig(b[e + 1]) {
+        let mut k = e + 1;
+        while k < n and is_dig(b[k]) {
+            k = k + 1;
+        }
+        return k;
+    }
+    e
+}
+
+// Longest valid unit word for `which` at `i` (0=w 1=d 2=h 3=min 4=sec),
+// requiring a non-letter to follow; returns the length, or 0 on no match.
+fn word_len(b: Vec[i64], i: i64, n: i64, w: String) -> i64 {
+    let wb = to_bytes(w);
+    let m = wb.len();
+    if i + m > n {
+        return 0;
+    }
+    let mut k = 0;
+    while k < m {
+        if lc(b[i + k]) != lc(wb[k]) {
+            return 0;
+        }
+        k = k + 1;
+    }
+    if i + m < n and is_alpha(b[i + m]) {
+        return 0;
+    }
+    m
+}
+
+fn unit_words(which: i64) -> Vec[String] {
+    let mut c = Vec.new();
+    if which == 0 {
+        c.push("weeks".to_string());
+        c.push("week".to_string());
+        c.push("wks".to_string());
+        c.push("wk".to_string());
+        c.push("w".to_string());
+    } else if which == 1 {
+        c.push("days".to_string());
+        c.push("day".to_string());
+        c.push("dys".to_string());
+        c.push("dy".to_string());
+        c.push("d".to_string());
+    } else if which == 2 {
+        c.push("hours".to_string());
+        c.push("hour".to_string());
+        c.push("hrs".to_string());
+        c.push("hr".to_string());
+        c.push("h".to_string());
+    } else if which == 3 {
+        c.push("minutes".to_string());
+        c.push("minute".to_string());
+        c.push("mins".to_string());
+        c.push("min".to_string());
+        c.push("m".to_string());
+    } else {
+        c.push("seconds".to_string());
+        c.push("second".to_string());
+        c.push("secs".to_string());
+        c.push("sec".to_string());
+        c.push("s".to_string());
+    }
+    c
+}
+
+fn scan_unit(b: Vec[i64], i: i64, n: i64, which: i64) -> i64 {
+    let cands = unit_words(which);
+    let mut idx = 0;
+    while idx < cands.len() {
+        let l = word_len(b, i, n, cands[idx].clone());
+        if l > 0 {
+            return i + l;
+        }
+        idx = idx + 1;
+    }
+    i
+}
+
+#[derive(Clone)]
+struct Fields {
+    w: String,
+    hw: bool,
+    d: String,
+    hd: bool,
+    h: String,
+    hh: bool,
+    mi: String,
+    hmi: bool,
+    se: String,
+    hse: bool,
+}
+
+fn new_fields() -> Fields {
+    Fields {
+        w: String.new(),
+        hw: false,
+        d: String.new(),
+        hd: false,
+        h: String.new(),
+        hh: false,
+        mi: String.new(),
+        hmi: false,
+        se: String.new(),
+        hse: false,
+    }
+}
+
+struct MatchRes {
+    ok: bool,
+    f: Fields,
+}
+
+fn no_match() -> MatchRes {
+    MatchRes { ok: false, f: new_fields() }
+}
+
+#[derive(Clone)]
+struct ClauseRes {
+    ni: i64,
+    ok: bool,
+    val: String,
+}
+
+// An optional "value unit" clause with an optional trailing [,/] separator.
+fn clause(b: Vec[i64], i: i64, n: i64, which: i64) -> ClauseRes {
+    let j = skip_ws(b, i, n);
+    let ve = scan_value(b, j, n);
+    if ve <= j {
+        return ClauseRes { ni: j, ok: false, val: String.new() };
+    }
+    let k = skip_ws(b, ve, n);
+    let ue = scan_unit(b, k, n, which);
+    if ue <= k {
+        return ClauseRes { ni: j, ok: false, val: String.new() };
+    }
+    let v = slice_str(b, j, ve);
+    let mut m = skip_ws(b, ue, n);
+    if m < n and (b[m] == 44 or b[m] == 47) {
+        m = skip_ws(b, m + 1, n);
+    }
+    ClauseRes { ni: m, ok: true, val: v }
+}
+
+// Format 1: WEEKS? DAYS? HOURS? MINS? SECS? (unit words, in order).
+fn match_fmt1(b: Vec[i64], n: i64) -> MatchRes {
+    let mut f = new_fields();
+    let mut i = skip_ws(b, 0, n);
+    let cw = clause(b, i, n, 0);
+    if cw.ok {
+        f.w = cw.val.clone();
+        f.hw = true;
+    }
+    i = skip_ws(b, cw.ni, n);
+    let cd = clause(b, i, n, 1);
+    if cd.ok {
+        f.d = cd.val.clone();
+        f.hd = true;
+    }
+    i = skip_ws(b, cd.ni, n);
+    let ch = clause(b, i, n, 2);
+    if ch.ok {
+        f.h = ch.val.clone();
+        f.hh = true;
+    }
+    i = skip_ws(b, ch.ni, n);
+    let cm = clause(b, i, n, 3);
+    if cm.ok {
+        f.mi = cm.val.clone();
+        f.hmi = true;
+    }
+    i = skip_ws(b, cm.ni, n);
+    // SECS is optional with no trailing separator.
+    let ve = scan_value(b, i, n);
+    if ve > i {
+        let k = skip_ws(b, ve, n);
+        let ue = scan_unit(b, k, n, 4);
+        if ue > k {
+            f.se = slice_str(b, i, ve);
+            f.hse = true;
+            i = ue;
+        }
+    }
+    i = skip_ws(b, i, n);
+    let good = i == n and (f.hw or f.hd or f.hh or f.hmi or f.hse);
+    MatchRes { ok: good, f: f }
+}
+
+// Format 2: (\d{1,2}):(\d{2}(\.\d+)?)
+fn match_fmt2(b: Vec[i64], n: i64) -> MatchRes {
+    let mut f = new_fields();
+    let i0 = skip_ws(b, 0, n);
+    let de = digit_run(b, i0, n);
+    let l = de - i0;
+    if not (l == 1 or l == 2) {
+        return no_match();
+    }
+    if not (de < n and b[de] == 58) {
+        return no_match();
+    }
+    let se = secs_clock(b, de + 1, n);
+    if se < 0 {
+        return no_match();
+    }
+    let end = skip_ws(b, se, n);
+    if end != n {
+        return no_match();
+    }
+    f.mi = slice_str(b, i0, de);
+    f.hmi = true;
+    f.se = slice_str(b, de + 1, se);
+    f.hse = true;
+    MatchRes { ok: true, f: f }
+}
+
+// Format 3: WEEKS? DAYS? (\d+):(\d{2}):(\d{2}(\.\d+)?)
+fn match_fmt3(b: Vec[i64], n: i64) -> MatchRes {
+    let mut f = new_fields();
+    let mut i = skip_ws(b, 0, n);
+    let cw = clause(b, i, n, 0);
+    if cw.ok {
+        f.w = cw.val.clone();
+        f.hw = true;
+    }
+    i = skip_ws(b, cw.ni, n);
+    let cd = clause(b, i, n, 1);
+    if cd.ok {
+        f.d = cd.val.clone();
+        f.hd = true;
+    }
+    i = skip_ws(b, cd.ni, n);
+    let he = digit_run(b, i, n);
+    if he <= i {
+        return no_match();
+    }
+    if not (he < n and b[he] == 58) {
+        return no_match();
+    }
+    let me = two_digits(b, he + 1, n);
+    if me < 0 {
+        return no_match();
+    }
+    if not (me < n and b[me] == 58) {
+        return no_match();
+    }
+    let se = secs_clock(b, me + 1, n);
+    if se < 0 {
+        return no_match();
+    }
+    let end = skip_ws(b, se, n);
+    if end != n {
+        return no_match();
+    }
+    f.h = slice_str(b, i, he);
+    f.hh = true;
+    f.mi = slice_str(b, he + 1, me);
+    f.hmi = true;
+    f.se = slice_str(b, me + 1, se);
+    f.hse = true;
+    MatchRes { ok: true, f: f }
+}
+
+// Format 4: (\d+)[:-](\d{2}):(\d{2}):(\d{2}(\.\d+)?)
+fn match_fmt4(b: Vec[i64], n: i64) -> MatchRes {
+    let mut f = new_fields();
+    let i0 = skip_ws(b, 0, n);
+    let de = digit_run(b, i0, n);
+    if de <= i0 {
+        return no_match();
+    }
+    if not (de < n and (b[de] == 58 or b[de] == 45)) {
+        return no_match();
+    }
+    let he = two_digits(b, de + 1, n);
+    if he < 0 {
+        return no_match();
+    }
+    if not (he < n and b[he] == 58) {
+        return no_match();
+    }
+    let me = two_digits(b, he + 1, n);
+    if me < 0 {
+        return no_match();
+    }
+    if not (me < n and b[me] == 58) {
+        return no_match();
+    }
+    let se = secs_clock(b, me + 1, n);
+    if se < 0 {
+        return no_match();
+    }
+    let end = skip_ws(b, se, n);
+    if end != n {
+        return no_match();
+    }
+    f.d = slice_str(b, i0, de);
+    f.hd = true;
+    f.h = slice_str(b, de + 1, he);
+    f.hh = true;
+    f.mi = slice_str(b, he + 1, me);
+    f.hmi = true;
+    f.se = slice_str(b, me + 1, se);
+    f.hse = true;
+    MatchRes { ok: true, f: f }
+}
+
+// Format 5: :(\d{2}(\.\d+)?)
+fn match_fmt5(b: Vec[i64], n: i64) -> MatchRes {
+    let mut f = new_fields();
+    let i0 = skip_ws(b, 0, n);
+    if not (i0 < n and b[i0] == 58) {
+        return no_match();
+    }
+    let se = secs_clock(b, i0 + 1, n);
+    if se < 0 {
+        return no_match();
+    }
+    let end = skip_ws(b, se, n);
+    if end != n {
+        return no_match();
+    }
+    f.se = slice_str(b, i0 + 1, se);
+    f.hse = true;
+    MatchRes { ok: true, f: f }
+}
+
+fn is_digits(s: String) -> bool {
+    let v = to_bytes(s);
+    if v.len() == 0 {
+        return false;
+    }
+    let mut k = 0;
+    while k < v.len() {
+        if not (v[k] >= 48 and v[k] <= 57) {
+            return false;
+        }
+        k = k + 1;
+    }
+    true
+}
+
+fn dec_valid(s: String) -> bool {
+    let v = to_bytes(s);
+    let mut dots = 0;
+    let mut digs = 0;
+    let mut k = 0;
+    while k < v.len() {
+        if v[k] == 46 {
+            dots = dots + 1;
+        } else if v[k] >= 48 and v[k] <= 57 {
+            digs = digs + 1;
+        } else {
+            return false;
+        }
+        k = k + 1;
+    }
+    dots <= 1 and digs >= 1
+}
+
+fn frac_len(s: String) -> i64 {
+    let v = to_bytes(s);
+    let mut k = 0;
+    while k < v.len() and v[k] != 46 {
+        k = k + 1;
+    }
+    if k >= v.len() {
+        return 0;
+    }
+    v.len() - (k + 1)
+}
+
+fn parse_u(s: String) -> i64 {
+    let v = to_bytes(s);
+    let mut t = 0;
+    let mut k = 0;
+    while k < v.len() {
+        if v[k] >= 48 and v[k] <= 57 {
+            t = t * 10 + (v[k] - 48);
+        }
+        k = k + 1;
+    }
+    t
+}
+
+// value * 10^p, exact (value has at most p fractional digits).
+fn to_scaled(s: String, p: i64) -> i64 {
+    let v = to_bytes(s);
+    let n = v.len();
+    let mut ip = 0;
+    let mut j = 0;
+    while j < n and v[j] != 46 {
+        ip = ip * 10 + (v[j] - 48);
+        j = j + 1;
+    }
+    let mut fr = 0;
+    let mut fl = 0;
+    if j < n and v[j] == 46 {
+        j = j + 1;
+        while j < n {
+            fr = fr * 10 + (v[j] - 48);
+            fl = fl + 1;
+            j = j + 1;
+        }
+    }
+    ip * pow10(p) + fr * pow10(p - fl)
+}
+
+fn fmt_int(t: i64, neg: bool) -> String {
+    if neg and t != 0 { f"-{t}" } else { f"{t}" }
+}
+
+fn fmt_float(ip: i64, fr: i64, p: i64, neg: bool) -> String {
+    let mut digits = String.new();
+    let mut divisor = pow10(p - 1);
+    let mut idx = 0;
+    while idx < p {
+        let dd = (fr / divisor) % 10;
+        digits.push(char.try_from(48 + dd).unwrap_or('0'));
+        divisor = divisor / 10;
+        idx = idx + 1;
+    }
+    let db = to_bytes(digits.clone());
+    let mut end = db.len();
+    while end > 0 and db[end - 1] == 48 {
+        end = end - 1;
+    }
+    let fracs = if end == 0 { "0".to_string() } else { digits.substring(0, end) };
+    let body = f"{ip}.{fracs}";
+    if neg { f"-{body}" } else { body }
+}
+
+fn compute(f: Fields, neg: bool) -> Option[String] {
+    let mut all_dig = true;
+    if f.hw and not is_digits(f.w.clone()) {
+        all_dig = false;
+    }
+    if f.hd and not is_digits(f.d.clone()) {
+        all_dig = false;
+    }
+    if f.hh and not is_digits(f.h.clone()) {
+        all_dig = false;
+    }
+    if f.hmi and not is_digits(f.mi.clone()) {
+        all_dig = false;
+    }
+    if f.hse and not is_digits(f.se.clone()) {
+        all_dig = false;
+    }
+    if all_dig {
+        let mut t = 0;
+        if f.hw {
+            t = t + 604800 * parse_u(f.w.clone());
+        }
+        if f.hd {
+            t = t + 86400 * parse_u(f.d.clone());
+        }
+        if f.hh {
+            t = t + 3600 * parse_u(f.h.clone());
+        }
+        if f.hmi {
+            t = t + 60 * parse_u(f.mi.clone());
+        }
+        if f.hse {
+            t = t + parse_u(f.se.clone());
+        }
+        return Some(fmt_int(t, neg));
+    }
+    let secs_int = not f.hse or is_digits(f.se.clone());
+    if secs_int {
+        if f.hw and not dec_valid(f.w.clone()) {
+            return None;
+        }
+        if f.hd and not dec_valid(f.d.clone()) {
+            return None;
+        }
+        if f.hh and not dec_valid(f.h.clone()) {
+            return None;
+        }
+        if f.hmi and not dec_valid(f.mi.clone()) {
+            return None;
+        }
+        let mut p = 0;
+        if f.hw {
+            let x = frac_len(f.w.clone());
+            if x > p {
+                p = x;
+            }
+        }
+        if f.hd {
+            let x = frac_len(f.d.clone());
+            if x > p {
+                p = x;
+            }
+        }
+        if f.hh {
+            let x = frac_len(f.h.clone());
+            if x > p {
+                p = x;
+            }
+        }
+        if f.hmi {
+            let x = frac_len(f.mi.clone());
+            if x > p {
+                p = x;
+            }
+        }
+        let mut ss = 0;
+        if f.hw {
+            ss = ss + 604800 * to_scaled(f.w.clone(), p);
+        }
+        if f.hd {
+            ss = ss + 86400 * to_scaled(f.d.clone(), p);
+        }
+        if f.hh {
+            ss = ss + 3600 * to_scaled(f.h.clone(), p);
+        }
+        if f.hmi {
+            ss = ss + 60 * to_scaled(f.mi.clone(), p);
+        }
+        let base = ss / pow10(p);
+        let mut t = base;
+        if f.hse {
+            t = t + parse_u(f.se.clone());
+        }
+        return Some(fmt_int(t, neg));
+    }
+    // Float branch: the seconds component is fractional.
+    if f.hw and not dec_valid(f.w.clone()) {
+        return None;
+    }
+    if f.hd and not dec_valid(f.d.clone()) {
+        return None;
+    }
+    if f.hh and not dec_valid(f.h.clone()) {
+        return None;
+    }
+    if f.hmi and not dec_valid(f.mi.clone()) {
+        return None;
+    }
+    if f.hse and not dec_valid(f.se.clone()) {
+        return None;
+    }
+    let mut p = 0;
+    if f.hw {
+        let x = frac_len(f.w.clone());
+        if x > p {
+            p = x;
+        }
+    }
+    if f.hd {
+        let x = frac_len(f.d.clone());
+        if x > p {
+            p = x;
+        }
+    }
+    if f.hh {
+        let x = frac_len(f.h.clone());
+        if x > p {
+            p = x;
+        }
+    }
+    if f.hmi {
+        let x = frac_len(f.mi.clone());
+        if x > p {
+            p = x;
+        }
+    }
+    if f.hse {
+        let x = frac_len(f.se.clone());
+        if x > p {
+            p = x;
+        }
+    }
+    let mut ss = 0;
+    if f.hw {
+        ss = ss + 604800 * to_scaled(f.w.clone(), p);
+    }
+    if f.hd {
+        ss = ss + 86400 * to_scaled(f.d.clone(), p);
+    }
+    if f.hh {
+        ss = ss + 3600 * to_scaled(f.h.clone(), p);
+    }
+    if f.hmi {
+        ss = ss + 60 * to_scaled(f.mi.clone(), p);
+    }
+    if f.hse {
+        ss = ss + to_scaled(f.se.clone(), p);
+    }
+    let ip = ss / pow10(p);
+    let fr = ss % pow10(p);
+    Some(fmt_float(ip, fr, p, neg))
+}
+
+// granularity="minutes": reinterpret an ambiguous single-colon "M:S" as "H:M".
+fn interpret_minutes(f: own Fields, colons: i64, has_dot: bool) -> Fields {
+    let mut g = f;
+    if colons == 1 and not has_dot and not g.hh and not g.hd and not g.hw and g.hmi {
+        g.hh = true;
+        g.h = g.mi.clone();
+        if g.hse {
+            g.mi = g.se.clone();
+            g.hmi = true;
+        } else {
+            g.mi = String.new();
+            g.hmi = false;
+        }
+        g.se = String.new();
+        g.hse = false;
+    }
+    g
+}
+
+fn try_result(r: MatchRes, is_min: bool, colons: i64, has_dot: bool, neg: bool) -> Option[String] {
+    if not r.ok {
+        return None;
+    }
+    let mut f = r.f.clone();
+    if is_min {
+        f = interpret_minutes(f, colons, has_dot);
+    }
+    compute(f, neg)
+}
+
+fn is_minutes(g: String) -> bool {
+    let v = to_bytes(g);
+    v.len() >= 1 and v[0] == 109
+}
+
+fn parse_time(sval: String, gran: String) -> Option[String] {
+    let b0 = to_bytes(sval);
+    let n0 = b0.len();
+    let mut i = 0;
+    while i < n0 and is_ws(b0[i]) {
+        i = i + 1;
+    }
+    let mut neg = false;
+    if i < n0 and (b0[i] == 43 or b0[i] == 45) {
+        if b0[i] == 45 {
+            neg = true;
+        }
+        i = i + 1;
+    }
+    while i < n0 and is_ws(b0[i]) {
+        i = i + 1;
+    }
+    let uns = slice_str(b0, i, n0);
+    let b = to_bytes(uns);
+    let n = b.len();
+    let colons = count_byte(b, 58);
+    let has_dot = count_byte(b, 46) > 0;
+    let is_min = is_minutes(gran);
+
+    let c1 = try_result(match_fmt1(b, n), is_min, colons, has_dot, neg);
+    match c1 {
+        Some(v) => {
+            return Some(v);
+        }
+        None => {}
+    }
+    let c2 = try_result(match_fmt2(b, n), is_min, colons, has_dot, neg);
+    match c2 {
+        Some(v) => {
+            return Some(v);
+        }
+        None => {}
+    }
+    let c3 = try_result(match_fmt3(b, n), is_min, colons, has_dot, neg);
+    match c3 {
+        Some(v) => {
+            return Some(v);
+        }
+        None => {}
+    }
+    let c4 = try_result(match_fmt4(b, n), is_min, colons, has_dot, neg);
+    match c4 {
+        Some(v) => {
+            return Some(v);
+        }
+        None => {}
+    }
+    let c5 = try_result(match_fmt5(b, n), is_min, colons, has_dot, neg);
+    match c5 {
+        Some(v) => {
+            return Some(v);
+        }
+        None => {}
+    }
+    None
+}
+
+fn run_job(fields: Vec[String]) -> String {
+    let sval = fields[0].clone();
+    let gran = fields[1].clone();
+    let r = parse_time(sval, gran);
+    match r {
+        Some(v) => f"  result={v}",
+        None => "  result=None".to_string(),
+    }
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let fields: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str("== ");
+        out.push_str(fields.join(" | "));
+        out.push_str("\n");
+        out.push_str(run_job(fields));
+        out.push_str("\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("32 min\tseconds\n");
+    s.push_str("1w3d2h32m\tseconds\n");
+    s.push_str("1 minute, 24 secs\tseconds\n");
+    s.push_str("1m24s\tseconds\n");
+    s.push_str("4:13\tseconds\n");
+    s.push_str(":13\tseconds\n");
+    s.push_str("4:13:02\tseconds\n");
+    s.push_str("4:13:02.266\tseconds\n");
+    s.push_str("2:04:13:02.266\tseconds\n");
+    s.push_str("4:32\tminutes\n");
+    s.push_str("7:02.223\tminutes\n");
+    s.push_str("0:02\tseconds\n");
+    s.push_str("2 days,  4:13:02\tseconds\n");
+    s.push_str("5hr34m56s\tseconds\n");
+    s.push_str("- 1 minute\tseconds\n");
+    s.push_str("+ 1 minute\tseconds\n");
+    s.push_str("1.2 seconds\tseconds\n");
+    s.push_str("1.2 minutes\tseconds\n");
+    s.push_str("1.5h\tseconds\n");
+    s.push_str("4.5m 3s\tseconds\n");
+    s.push_str("1:30\tseconds\n");
+    s.push_str("1:30\tminutes\n");
+    s.push_str("1:24\tseconds\n");
+    s.push_str("1:24\tminutes\n");
+    s.push_str("10 weeks\tseconds\n");
+    s.push_str("1.0 seconds\tseconds\n");
+    s.push_str("2 hours/13 mins\tseconds\n");
+    s.push_str("1.2.3s\tseconds\n");
+    s.push_str("32 m - 1 s\tseconds\n");
+    s.push_str("|5m\tseconds\n");
+    s.push_str("90\tseconds\n");
+    s
+}

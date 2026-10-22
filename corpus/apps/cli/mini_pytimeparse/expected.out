@@ -1,0 +1,62 @@
+== 32 min | seconds
+  result=1920
+== 1w3d2h32m | seconds
+  result=873120
+== 1 minute, 24 secs | seconds
+  result=84
+== 1m24s | seconds
+  result=84
+== 4:13 | seconds
+  result=253
+== :13 | seconds
+  result=13
+== 4:13:02 | seconds
+  result=15182
+== 4:13:02.266 | seconds
+  result=15182.266
+== 2:04:13:02.266 | seconds
+  result=187982.266
+== 4:32 | minutes
+  result=16320
+== 7:02.223 | minutes
+  result=422.223
+== 0:02 | seconds
+  result=2
+== 2 days,  4:13:02 | seconds
+  result=187982
+== 5hr34m56s | seconds
+  result=20096
+== - 1 minute | seconds
+  result=-60
+== + 1 minute | seconds
+  result=60
+== 1.2 seconds | seconds
+  result=1.2
+== 1.2 minutes | seconds
+  result=72
+== 1.5h | seconds
+  result=5400
+== 4.5m 3s | seconds
+  result=273
+== 1:30 | seconds
+  result=90
+== 1:30 | minutes
+  result=5400
+== 1:24 | seconds
+  result=84
+== 1:24 | minutes
+  result=5040
+== 10 weeks | seconds
+  result=6048000
+== 1.0 seconds | seconds
+  result=1.0
+== 2 hours/13 mins | seconds
+  result=7980
+== 1.2.3s | seconds
+  result=None
+== 32 m - 1 s | seconds
+  result=None
+== |5m | seconds
+  result=None
+== 90 | seconds
+  result=None
