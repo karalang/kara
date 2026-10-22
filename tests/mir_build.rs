@@ -4250,6 +4250,38 @@ fn main() {
     }
 }
 
+/// `a.lt(b)` and the other comparison methods on a scalar or string
+/// receiver are the operators, and the free `clamp` takes integers, chars
+/// and bools as `min` and `max` do; a program's own `lt` on a primitive
+/// still wins.
+#[test]
+fn mir_comparison_methods_and_clamp_on_scalars() {
+    const SRC: &str = r#"impl i32 { fn lt(self, other: i32) -> String { "user" } }
+fn main() {
+    let a: u8 = 200u8;
+    let b: u8 = 100u8;
+    println(f"{a.lt(b)} {a.le(b)} {a.gt(b)} {a.ge(b)} {a.eq(b)} {a.ne(b)}");
+    let n: i64 = -5;
+    println(f"{n.lt(3)} {n.gt(3)} {true.lt(false)} {false.lt(true)} {'a'.le('a')}");
+    let s: String = "abc";
+    let t: String = "abd";
+    println(f"{s.lt(t)} {s.ge(t)} {s.eq(t)} {"x".ne("y")}");
+    let m: i32 = 1;
+    println(m.lt(2));
+    println(f"{clamp(-2, 0, 10)} {clamp(7, 0, 10)} {clamp(15u8, 0u8, 10u8)}");
+    println(f"{clamp('z', 'a', 'm')} {clamp(5, 9, 1)} {min(true, false)} {max(true, false)}");
+}
+"#;
+    let want = "false false true true false true\ntrue false false true true\ntrue false false true\nuser\n0 7 10\nm 9 false true\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// A wildcard import of a gated module names its public items, and the
 /// program's own `join` beats the wildcard's (design.md § Wildcards).
 #[test]

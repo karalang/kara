@@ -12813,10 +12813,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(s)
     }
 
-    /// The prelude's `min(a, b)` and `max(a, b)` on integers and chars,
-    /// in place until the library's Kāra bodies are lowered: `min` is `b`
-    /// when `a > b`, else `a`; `max` is `b` when `a < b`, else `a` (the
-    /// bodies in `ordering.kara`). `false` for anything else.
     /// `swap(mut a, mut b)`, `replace(mut a, v)`, `take(mut a)` (`std.mem`):
     /// the library's moves through borrowed places, which MIR does not
     /// spell (a move out of `*r` is refused, core semantics §3.7). `take`
@@ -12869,6 +12865,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// The prelude's `min(a, b)`, `max(a, b)` and `clamp(v, low, high)` on
+    /// integers, chars and bools, in place until the library's Kāra bodies
+    /// are lowered: `min` is `b` when `a > b`, else `a`; `max` is `b` when
+    /// `a < b`, else `a`; `clamp` is `low` below it, `high` above it, else
+    /// `v` (the bodies in `ordering.kara`). `false` for anything else.
     fn scalar_min_max(
         &mut self,
         e: &'a Expr,
@@ -12876,50 +12877,57 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<bool> {
-        let [a, b] = args else {
-            return Ok(false);
-        };
-        let cmp = match name {
-            "min" => BinOp::Gt,
-            "max" => BinOp::Lt,
+        // Each step returns its bound when `value <op> bound` holds; the
+        // value is the result when no step does. `clamp` takes `low` below
+        // it, then `high` above it, so `low` wins when `low > high`.
+        let (value, steps): (&CallArg, Vec<(BinOp, &CallArg)>) = match (name, args) {
+            ("min", [a, b]) => (a, vec![(BinOp::Gt, b)]),
+            ("max", [a, b]) => (a, vec![(BinOp::Lt, b)]),
+            ("clamp", [v, lo, hi]) => (v, vec![(BinOp::Lt, lo), (BinOp::Gt, hi)]),
             _ => return Ok(false),
         };
         let t = self.expr_ty(e)?;
         if !matches!(
             self.tys().tcx().kind(t),
-            HK::Int(_) | HK::UInt(_) | HK::Char
+            HK::Int(_) | HK::UInt(_) | HK::Char | HK::Bool
         ) {
             return Ok(false);
         }
         let bool_t = self.tys().bool();
         let x = self.temp(t);
-        let (o, _) = self.scalar_operand(&a.value)?;
+        let (o, _) = self.scalar_operand(&value.value)?;
         self.assign(x, Rvalue::Use(retype_const(o, t)));
-        let y = self.temp(t);
-        let (o, _) = self.scalar_operand(&b.value)?;
-        self.assign(y, Rvalue::Use(retype_const(o, t)));
-        let c = self.temp(bool_t);
-        self.assign(
-            c,
-            Rvalue::BinaryOp(
-                cmp,
-                Operand::Copy(Place::local(x)),
-                Operand::Copy(Place::local(y)),
-            ),
-        );
-        let take_b = self.b.new_block();
-        let take_a = self.b.new_block();
+        let mut bounds = Vec::new();
+        for (op, b) in steps {
+            let y = self.temp(t);
+            let (o, _) = self.scalar_operand(&b.value)?;
+            self.assign(y, Rvalue::Use(retype_const(o, t)));
+            bounds.push((op, y));
+        }
         let join = self.b.new_block();
-        self.goto_with(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::local(c)),
-                targets: SwitchTargets::if_else(take_b, take_a),
-            },
-            take_b,
-        );
-        self.assign(dest.clone(), Rvalue::Use(Operand::Copy(Place::local(y))));
-        self.goto(join);
-        self.cur = take_a;
+        for (op, y) in bounds {
+            let c = self.temp(bool_t);
+            self.assign(
+                c,
+                Rvalue::BinaryOp(
+                    op,
+                    Operand::Copy(Place::local(x)),
+                    Operand::Copy(Place::local(y)),
+                ),
+            );
+            let take_bound = self.b.new_block();
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(c)),
+                    targets: SwitchTargets::if_else(take_bound, next),
+                },
+                take_bound,
+            );
+            self.assign(dest.clone(), Rvalue::Use(Operand::Copy(Place::local(y))));
+            self.goto(join);
+            self.cur = next;
+        }
         self.assign(dest, Rvalue::Use(Operand::Copy(Place::local(x))));
         self.goto(join);
         self.cur = join;
@@ -16642,6 +16650,26 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let (lp, lt) = self.strip_refs(lp);
                 let (rp, _) = self.strip_refs(rp);
                 return self.cmp_places(e.span, lp, rp, lt, dest);
+            }
+        }
+        // `a.lt(b)` on a scalar or a string: the operator, as `i64.lt(a, b)`
+        // is.
+        if let [other] = args {
+            let op = match method {
+                "eq" => Some(AstBinOp::Eq),
+                "ne" => Some(AstBinOp::NotEq),
+                "lt" => Some(AstBinOp::Lt),
+                "le" => Some(AstBinOp::LtEq),
+                "gt" => Some(AstBinOp::Gt),
+                "ge" => Some(AstBinOp::GtEq),
+                _ => None,
+            };
+            let scalar = matches!(
+                self.tys().tcx().kind(base),
+                HK::Int(_) | HK::UInt(_) | HK::Char | HK::Bool | HK::Str | HK::StaticStr
+            ) || self.tys().display(base) == "String";
+            if let (Some(op), true) = (op, scalar) {
+                return self.binary(op, object, &other.value, dest);
             }
         }
         match (key, method) {
