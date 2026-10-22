@@ -1,0 +1,799 @@
+// mini_glom — a port of glom 25.12.0 (BSD-3-Clause, Mahmoud Hashemi):
+// the library that pulls values out of nested data and restructures them with
+// a declarative spec, used across config loading, API-response shaping and
+// data pipelines. `glom(target, spec)` navigates `target` according to `spec`
+// and returns the result (or raises a GlomError).
+//
+// The spec forms this port supports are carried in a small textual DSL (shared
+// with oracle.py) — one job per line, `<spec-dsl>\t<json-target>`:
+//   P <path>               path access, dotted (`a.b.c`, `users.0.name`)
+//   V <json>               a literal value (glom's Val), ignoring the target
+//   D k=<path>;k2=<path>    a dict restructure {k: path, ...}
+//   I <path>               map a path over each element of a list target
+//   T <outer> | <inner>    navigate outer, then map inner over the list there
+//   C p1 || p2 [=> <json>]  Coalesce: first subpath that resolves, else default
+//
+// Values live in a flat arena (tag 0 null, 1 bool, 2 int, 3 str, 4 list, 5
+// dict). Path access mirrors glom's three target cases exactly: a dict is keyed
+// (KeyError on a miss), a list is indexed by the integer segment (IndexError
+// out of range), and any scalar falls to attribute access (AttributeError).
+// On failure the port reproduces glom's final, most specific error line —
+// `glom.core.PathAccessError: could not access …` / `glom.core.CoalesceError:
+// …` — including the Python repr of the failing segment, the Path, and the
+// underlying exception. Successes serialize as canonical JSON (json.dumps'
+// default separators).
+//
+// Scope: the read/restructure spec forms above. glom's T-expressions, Spec,
+// Match/Check, Assign/Delete mutation, Fold/Flatten streaming, Call/Invoke and
+// the multi-line "Target-spec trace" header printed above the summary line are
+// out of scope (see README). Job strings avoid JSON escapes.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct M {
+    b: Vec[i64],
+    pos: i64,
+    src: String,
+    tag: Vec[i64],
+    ival: Vec[i64],
+    sval: Vec[String],
+    kstart: Vec[i64],
+    klen: Vec[i64],
+    kids: Vec[i64],
+    keys: Vec[String],
+    root: i64,
+    err: String,
+}
+
+fn new_m() -> M {
+    M {
+        b: Vec.new(),
+        pos: 0,
+        src: String.new(),
+        tag: Vec.new(),
+        ival: Vec.new(),
+        sval: Vec.new(),
+        kstart: Vec.new(),
+        klen: Vec.new(),
+        kids: Vec.new(),
+        keys: Vec.new(),
+        root: 0,
+        err: String.new(),
+    }
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn int_to_str(v: i64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut n = v;
+    let mut neg = false;
+    if n < 0 {
+        neg = true;
+        n = -n;
+    }
+    let mut digs: Vec[i64] = Vec.new();
+    while n > 0 {
+        digs.push(n % 10);
+        n = n / 10;
+    }
+    let tbl = "0123456789".to_string();
+    let mut o = String.new();
+    if neg {
+        o.push_str("-");
+    }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        o.push_str(tbl.substring(digs[i], digs[i] + 1));
+    }
+    o
+}
+
+fn parse_int_str(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut acc = 0;
+    while i < n {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg {
+        -acc
+    } else {
+        acc
+    }
+}
+
+// Python str repr: single quotes, switching to double only when the string
+// contains a `'` and no `"`; backslash, the chosen quote and \n\t\r escaped.
+fn pyrepr(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut has_sq = false;
+    let mut has_dq = false;
+    let mut i = 0;
+    while i < n {
+        if b[i] == 39 {
+            has_sq = true;
+        }
+        if b[i] == 34 {
+            has_dq = true;
+        }
+        i = i + 1;
+    }
+    let use_dq = has_sq and not has_dq;
+    let q = if use_dq { 34 } else { 39 };
+    let mut o = String.new();
+    if use_dq {
+        o.push_str("\"");
+    } else {
+        o.push_str("'");
+    }
+    i = 0;
+    while i < n {
+        let c = b[i];
+        if c == 92 {
+            o.push_str("\\\\");
+        } else if c == q {
+            if use_dq {
+                o.push_str("\\\"");
+            } else {
+                o.push_str("\\'");
+            }
+        } else if c == 10 {
+            o.push_str("\\n");
+        } else if c == 9 {
+            o.push_str("\\t");
+        } else if c == 13 {
+            o.push_str("\\r");
+        } else {
+            o.push_str(s.substring(i, i + 1));
+        }
+        i = i + 1;
+    }
+    if use_dq {
+        o.push_str("\"");
+    } else {
+        o.push_str("'");
+    }
+    o
+}
+
+fn pytype_name(t: i64) -> String {
+    if t == 0 {
+        return "NoneType".to_string();
+    }
+    if t == 1 {
+        return "bool".to_string();
+    }
+    if t == 2 {
+        return "int".to_string();
+    }
+    "str".to_string()
+}
+
+// glom's PathAccessError.get_message, rendered onto its final summary line.
+fn pae(segs: ref Vec[String], part: i64, exc: Str) -> String {
+    let mut o = String.new();
+    o.push_str("glom.core.PathAccessError: could not access ");
+    o.push_str(pyrepr(segs[part].clone()));
+    o.push_str(", part ");
+    o.push_str(int_to_str(part));
+    o.push_str(" of Path(");
+    let m = segs.len();
+    let mut i = 0;
+    while i < m {
+        if i > 0 {
+            o.push_str(", ");
+        }
+        o.push_str(pyrepr(segs[i].clone()));
+        i = i + 1;
+    }
+    o.push_str("), got error: ");
+    o.push_str(exc);
+    o
+}
+
+fn find_sep(hay: ref Vec[i64], ndl: ref Vec[i64], from: i64) -> i64 {
+    let hn = hay.len();
+    let nn = ndl.len();
+    if nn == 0 {
+        return from;
+    }
+    let mut i = from;
+    while i + nn <= hn {
+        let mut j = 0;
+        let mut ok = true;
+        while j < nn {
+            if hay[i + j] != ndl[j] {
+                ok = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if ok {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+// Python str.split on a literal separator: n separators give n+1 parts, empty
+// parts kept. "" -> [""], "a.b" -> ["a", "b"].
+fn split_on(s: Str, sep: Str) -> Vec[String] {
+    let hay = str_bytes(s);
+    let ndl = str_bytes(sep);
+    let nn = ndl.len();
+    let hn = hay.len();
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut done = false;
+    while not done {
+        let p = find_sep(hay, ndl, start);
+        if p < 0 {
+            parts.push(s.substring(start, hn));
+            done = true;
+        } else {
+            parts.push(s.substring(start, p));
+            start = p + nn;
+        }
+    }
+    parts
+}
+
+fn split_dot(s: Str) -> Vec[String] {
+    split_on(s, ".")
+}
+
+impl M {
+    fn add_node(mut ref self, tg: i64, iv: i64, sv: own String, ks: i64, kl: i64) -> i64 {
+        let idx = self.tag.len();
+        self.tag.push(tg);
+        self.ival.push(iv);
+        self.sval.push(sv);
+        self.kstart.push(ks);
+        self.klen.push(kl);
+        idx
+    }
+
+    fn mk_null(mut ref self) -> i64 {
+        self.add_node(0, 0, "".to_string(), 0, 0)
+    }
+    fn mk_bool(mut ref self, v: i64) -> i64 {
+        self.add_node(1, v, "".to_string(), 0, 0)
+    }
+    fn mk_int(mut ref self, v: i64) -> i64 {
+        self.add_node(2, v, "".to_string(), 0, 0)
+    }
+    fn mk_str(mut ref self, s: own String) -> i64 {
+        self.add_node(3, 0, s, 0, 0)
+    }
+
+    fn mk_list(mut ref self, vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push("".to_string());
+            i = i + 1;
+        }
+        self.add_node(4, 0, "".to_string(), ks, n)
+    }
+
+    fn mk_dict(mut ref self, keys: ref Vec[String], vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push(keys[i].clone());
+            i = i + 1;
+        }
+        self.add_node(5, 0, "".to_string(), ks, n)
+    }
+
+    // ---- JSON parser ----
+    fn peek(mut ref self) -> i64 {
+        if self.pos < self.b.len() {
+            self.b[self.pos]
+        } else {
+            -1
+        }
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 {
+                self.pos = self.pos + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn parse_into(mut ref self, src: Str) -> i64 {
+        self.src = src.to_string();
+        self.b = str_bytes(src);
+        self.pos = 0;
+        self.p_value()
+    }
+
+    fn p_value(mut ref self) -> i64 {
+        self.skip_ws();
+        let c = self.peek();
+        if c == 91 {
+            return self.p_list();
+        }
+        if c == 123 {
+            return self.p_dict();
+        }
+        if c == 34 {
+            let s = self.p_string();
+            return self.mk_str(s);
+        }
+        self.p_atom()
+    }
+
+    fn p_list(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut items: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 93 {
+            self.pos = self.pos + 1;
+            return self.mk_list(items);
+        }
+        let mut more = true;
+        while more {
+            let v = self.p_value();
+            items.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_list(items)
+    }
+
+    fn p_dict(mut ref self) -> i64 {
+        self.pos = self.pos + 1;
+        let mut dkeys: Vec[String] = Vec.new();
+        let mut dvals: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 125 {
+            self.pos = self.pos + 1;
+            return self.mk_dict(dkeys, dvals);
+        }
+        let mut more = true;
+        while more {
+            self.skip_ws();
+            let k = self.p_string();
+            self.skip_ws();
+            self.pos = self.pos + 1; // ':'
+            let v = self.p_value();
+            dkeys.push(k);
+            dvals.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1;
+        self.mk_dict(dkeys, dvals)
+    }
+
+    fn p_string(mut ref self) -> String {
+        self.pos = self.pos + 1;
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n and self.b[self.pos] != 34 {
+            self.pos = self.pos + 1;
+        }
+        let end = self.pos;
+        self.pos = self.pos + 1;
+        self.src.substring(start, end)
+    }
+
+    fn p_atom(mut ref self) -> i64 {
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 or c == 44 or c == 93 or c == 125 {
+                break;
+            }
+            self.pos = self.pos + 1;
+        }
+        let tok = self.src.substring(start, self.pos);
+        if tok == "null" {
+            return self.mk_null();
+        }
+        if tok == "true" {
+            return self.mk_bool(1);
+        }
+        if tok == "false" {
+            return self.mk_bool(0);
+        }
+        self.mk_int(parse_int_str(tok))
+    }
+
+    // ---- path access (glom's three target cases) ----
+    fn path_get(mut ref self, node0: i64, segs: ref Vec[String]) -> i64 {
+        let mut cur = node0;
+        let m = segs.len();
+        let mut i = 0;
+        while i < m {
+            let seg = segs[i].clone();
+            let t = self.tag[cur];
+            if t == 5 {
+                let n = self.klen[cur];
+                let ks = self.kstart[cur];
+                let mut found = -1;
+                let mut j = 0;
+                while j < n {
+                    if self.keys[ks + j] == seg {
+                        found = self.kids[ks + j];
+                        break;
+                    }
+                    j = j + 1;
+                }
+                if found < 0 {
+                    let mut exc = String.new();
+                    exc.push_str("KeyError(");
+                    exc.push_str(pyrepr(seg));
+                    exc.push_str(")");
+                    self.err = pae(segs, i, exc);
+                    return -1;
+                }
+                cur = found;
+            } else if t == 4 {
+                let idx = parse_int_str(seg);
+                let n = self.klen[cur];
+                let ks = self.kstart[cur];
+                if idx < 0 or idx >= n {
+                    self.err = pae(segs, i, "IndexError('list index out of range')".to_string());
+                    return -1;
+                }
+                cur = self.kids[ks + idx];
+            } else {
+                let pyt = pytype_name(t);
+                let mut msg = String.new();
+                msg.push_str("'");
+                msg.push_str(pyt);
+                msg.push_str("' object has no attribute '");
+                msg.push_str(seg);
+                msg.push_str("'");
+                let mut exc = String.new();
+                exc.push_str("AttributeError(");
+                exc.push_str(pyrepr(msg));
+                exc.push_str(")");
+                self.err = pae(segs, i, exc);
+                return -1;
+            }
+            i = i + 1;
+        }
+        cur
+    }
+
+    // glom's [subspec]: map a path over each element of a list target.
+    fn map_list(mut ref self, listnode: i64, path: ref Vec[String]) -> i64 {
+        let n = self.klen[listnode];
+        let ks = self.kstart[listnode];
+        let mut vals: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < n {
+            let elem = self.kids[ks + i];
+            let node = self.path_get(elem, path);
+            if self.err != "" {
+                return -1;
+            }
+            vals.push(node);
+            i = i + 1;
+        }
+        self.mk_list(vals)
+    }
+
+    fn eval_dsl(mut ref self, dsl: Str) -> String {
+        let db = str_bytes(dsl);
+        let dn = db.len();
+        let kind = db[0];
+        let body = if dn >= 2 {
+            dsl.substring(2, dn)
+        } else {
+            "".to_string()
+        };
+        if kind == 80 {
+            // P
+            let segs = split_dot(body);
+            self.err = "".to_string();
+            let node = self.path_get(self.root, segs);
+            if self.err != "" {
+                return self.err.clone();
+            }
+            return self.ser(node);
+        }
+        if kind == 86 {
+            // V
+            let node = self.parse_into(body);
+            return self.ser(node);
+        }
+        if kind == 68 {
+            // D
+            let pairs = split_on(body, ";");
+            let np = pairs.len();
+            let mut keys: Vec[String] = Vec.new();
+            let mut vals: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < np {
+                let pair = pairs[i].clone();
+                let kv = split_on(pair, "=");
+                let key = kv[0].clone();
+                let path = kv[1].clone();
+                let segs = split_dot(path);
+                self.err = "".to_string();
+                let node = self.path_get(self.root, segs);
+                if self.err != "" {
+                    return self.err.clone();
+                }
+                keys.push(key);
+                vals.push(node);
+                i = i + 1;
+            }
+            let d = self.mk_dict(keys, vals);
+            return self.ser(d);
+        }
+        if kind == 73 {
+            // I
+            let segs = split_dot(body);
+            self.err = "".to_string();
+            let lst = self.map_list(self.root, segs);
+            if self.err != "" {
+                return self.err.clone();
+            }
+            return self.ser(lst);
+        }
+        if kind == 84 {
+            // T
+            let ot = split_on(body, " | ");
+            let outer = ot[0].clone();
+            let inner = ot[1].clone();
+            let osegs = split_dot(outer);
+            self.err = "".to_string();
+            let onode = self.path_get(self.root, osegs);
+            if self.err != "" {
+                return self.err.clone();
+            }
+            let isegs = split_dot(inner);
+            let lst = self.map_list(onode, isegs);
+            if self.err != "" {
+                return self.err.clone();
+            }
+            return self.ser(lst);
+        }
+        if kind == 67 {
+            // C — Coalesce
+            let parts = split_on(body, " => ");
+            let has_def = parts.len() >= 2;
+            let subsbody = parts[0].clone();
+            let subs = split_on(subsbody, " || ");
+            let ns = subs.len();
+            let mut i = 0;
+            while i < ns {
+                let sub = subs[i].clone();
+                let segs = split_dot(sub);
+                self.err = "".to_string();
+                let node = self.path_get(self.root, segs);
+                if self.err == "" {
+                    return self.ser(node);
+                }
+                i = i + 1;
+            }
+            if has_def {
+                let dflt = parts[1].clone();
+                let dnode = self.parse_into(dflt);
+                return self.ser(dnode);
+            }
+            let mut o = String.new();
+            o.push_str("glom.core.CoalesceError: no valid values found. Tried (");
+            let mut j = 0;
+            while j < ns {
+                if j > 0 {
+                    o.push_str(", ");
+                }
+                o.push_str(pyrepr(subs[j].clone()));
+                j = j + 1;
+            }
+            if ns == 1 {
+                o.push_str(",");
+            }
+            o.push_str(") and got (");
+            let mut k = 0;
+            while k < ns {
+                if k > 0 {
+                    o.push_str(", ");
+                }
+                o.push_str("PathAccessError");
+                k = k + 1;
+            }
+            o.push_str(") (at path [])");
+            return o;
+        }
+        "unknown spec".to_string()
+    }
+
+    // ---- serialization (canonical JSON, json.dumps default separators) ----
+    fn ser(mut ref self, idx: i64) -> String {
+        let t = self.tag[idx];
+        if t == 0 {
+            return "null".to_string();
+        }
+        if t == 1 {
+            if self.ival[idx] == 1 {
+                return "true".to_string();
+            }
+            return "false".to_string();
+        }
+        if t == 2 {
+            return int_to_str(self.ival[idx]);
+        }
+        if t == 3 {
+            let mut o = String.new();
+            o.push_str("\"");
+            o.push_str(self.sval[idx].clone());
+            o.push_str("\"");
+            return o;
+        }
+        if t == 4 {
+            let n = self.klen[idx];
+            let ks = self.kstart[idx];
+            let mut o = String.new();
+            o.push_str("[");
+            let mut i = 0;
+            while i < n {
+                if i > 0 {
+                    o.push_str(", ");
+                }
+                let child = self.kids[ks + i];
+                o.push_str(self.ser(child));
+                i = i + 1;
+            }
+            o.push_str("]");
+            return o;
+        }
+        let n = self.klen[idx];
+        let ks = self.kstart[idx];
+        let mut o = String.new();
+        o.push_str("{");
+        let mut i = 0;
+        while i < n {
+            if i > 0 {
+                o.push_str(", ");
+            }
+            o.push_str("\"");
+            o.push_str(self.keys[ks + i].clone());
+            o.push_str("\": ");
+            let child = self.kids[ks + i];
+            o.push_str(self.ser(child));
+            i = i + 1;
+        }
+        o.push_str("}");
+        o
+    }
+}
+
+fn run_job(dsl: Str, target: Str) -> String {
+    let mut m = new_m();
+    let root = m.parse_into(target);
+    m.root = root;
+    m.eval_dsl(dsl)
+}
+
+fn split_fields(line: Str) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                let dsl = fields[0].clone();
+                let target = fields[1].clone();
+                out.push_str("== ");
+                out.push_str(dsl.clone());
+                out.push_str(" | ");
+                out.push_str(target.clone());
+                out.push_str("\n  ");
+                out.push_str(run_job(dsl, target));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("P a\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P a.b\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P a.b.c\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P d\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P d.0\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P d.2\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P e.name\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P users.0.name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("P users.1.age\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("P meta.count\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("P a.z\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P a.b.z\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P d.5\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P a.b.c.x\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("P users.9.name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("D first=a.b.c;who=e.name\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("D n=meta.count;top=users.0.name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("D miss=a.z\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("I v\t[{\"v\": 1}, {\"v\": 2}, {\"v\": 3}]\n");
+    s.push_str("T users | name\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("T users | age\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("T d | \t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("V 42\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("V \"hello\"\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("V [1, 2, 3]\t{\"users\": [{\"name\": \"x\", \"age\": 1}, {\"name\": \"y\", \"age\": 2}], \"meta\": {\"count\": 2}}\n");
+    s.push_str("V {\"k\": true}\t[{\"v\": 1}, {\"v\": 2}, {\"v\": 3}]\n");
+    s.push_str("C a.b.c || e.name\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("C x.y || a.b.c\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("C x || y => -1\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("C a.z || meta.nope => \"fb\"\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("C x\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s.push_str("C x || y || z\t{\"a\": {\"b\": {\"c\": 10}}, \"d\": [1, 2, 3], \"e\": {\"name\": \"x\"}}\n");
+    s
+}

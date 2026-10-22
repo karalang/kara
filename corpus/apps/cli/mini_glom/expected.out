@@ -1,0 +1,64 @@
+== P a | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  {"b": {"c": 10}}
+== P a.b | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  {"c": 10}
+== P a.b.c | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  10
+== P d | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  [1, 2, 3]
+== P d.0 | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  1
+== P d.2 | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  3
+== P e.name | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  "x"
+== P users.0.name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  "x"
+== P users.1.age | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  2
+== P meta.count | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  2
+== P a.z | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access 'z', part 1 of Path('a', 'z'), got error: KeyError('z')
+== P a.b.z | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access 'z', part 2 of Path('a', 'b', 'z'), got error: KeyError('z')
+== P d.5 | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access '5', part 1 of Path('d', '5'), got error: IndexError('list index out of range')
+== P a.b.c.x | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access 'x', part 3 of Path('a', 'b', 'c', 'x'), got error: AttributeError("'int' object has no attribute 'x'")
+== P users.9.name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  glom.core.PathAccessError: could not access '9', part 1 of Path('users', '9', 'name'), got error: IndexError('list index out of range')
+== D first=a.b.c;who=e.name | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  {"first": 10, "who": "x"}
+== D n=meta.count;top=users.0.name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  {"n": 2, "top": "x"}
+== D miss=a.z | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access 'z', part 1 of Path('a', 'z'), got error: KeyError('z')
+== I v | [{"v": 1}, {"v": 2}, {"v": 3}]
+  [1, 2, 3]
+== T users | name | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  ["x", "y"]
+== T users | age | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  [1, 2]
+== T d |  | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.PathAccessError: could not access '', part 0 of Path(''), got error: AttributeError("'int' object has no attribute ''")
+== V 42 | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  42
+== V "hello" | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  "hello"
+== V [1, 2, 3] | {"users": [{"name": "x", "age": 1}, {"name": "y", "age": 2}], "meta": {"count": 2}}
+  [1, 2, 3]
+== V {"k": true} | [{"v": 1}, {"v": 2}, {"v": 3}]
+  {"k": true}
+== C a.b.c || e.name | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  10
+== C x.y || a.b.c | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  10
+== C x || y => -1 | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  -1
+== C a.z || meta.nope => "fb" | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  "fb"
+== C x | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.CoalesceError: no valid values found. Tried ('x',) and got (PathAccessError) (at path [])
+== C x || y || z | {"a": {"b": {"c": 10}}, "d": [1, 2, 3], "e": {"name": "x"}}
+  glom.core.CoalesceError: no valid values found. Tried ('x', 'y', 'z') and got (PathAccessError, PathAccessError, PathAccessError) (at path [])
