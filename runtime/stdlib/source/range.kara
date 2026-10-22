@@ -14,6 +14,10 @@ trait RangeStep {
 
     /// The next value down.
     fn step_backward(ref self) -> Self;
+
+    /// The value `n` steps up, or `None` when that passes `end`; `self`
+    /// is at most `end`. Lets `step_by` over a range jump rather than walk.
+    fn step_forward_within(ref self, n: i64, end: ref Self) -> Option[Self];
 }
 
 impl RangeStep for i8 {
@@ -23,6 +27,14 @@ impl RangeStep for i8 {
 
     fn step_backward(ref self) -> i8 {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref i8) -> Option[i8] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as i8)
     }
 }
 
@@ -34,6 +46,14 @@ impl RangeStep for i16 {
     fn step_backward(ref self) -> i16 {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref i16) -> Option[i16] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as i16)
+    }
 }
 
 impl RangeStep for i32 {
@@ -43,6 +63,14 @@ impl RangeStep for i32 {
 
     fn step_backward(ref self) -> i32 {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref i32) -> Option[i32] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as i32)
     }
 }
 
@@ -54,6 +82,14 @@ impl RangeStep for i64 {
     fn step_backward(ref self) -> i64 {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref i64) -> Option[i64] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as i64)
+    }
 }
 
 impl RangeStep for i128 {
@@ -63,6 +99,13 @@ impl RangeStep for i128 {
 
     fn step_backward(ref self) -> i128 {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref i128) -> Option[i128] {
+        if (end.wrapping_sub(self) as u128) < n as u128 {
+            return None;
+        }
+        Some(self + n as i128)
     }
 }
 
@@ -74,6 +117,14 @@ impl RangeStep for isize {
     fn step_backward(ref self) -> isize {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref isize) -> Option[isize] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as isize)
+    }
 }
 
 impl RangeStep for u8 {
@@ -83,6 +134,14 @@ impl RangeStep for u8 {
 
     fn step_backward(ref self) -> u8 {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref u8) -> Option[u8] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as u8)
     }
 }
 
@@ -94,6 +153,14 @@ impl RangeStep for u16 {
     fn step_backward(ref self) -> u16 {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref u16) -> Option[u16] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as u16)
+    }
 }
 
 impl RangeStep for u32 {
@@ -103,6 +170,14 @@ impl RangeStep for u32 {
 
     fn step_backward(ref self) -> u32 {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref u32) -> Option[u32] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as u32)
     }
 }
 
@@ -114,6 +189,14 @@ impl RangeStep for u64 {
     fn step_backward(ref self) -> u64 {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref u64) -> Option[u64] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as u64)
+    }
 }
 
 impl RangeStep for u128 {
@@ -124,6 +207,13 @@ impl RangeStep for u128 {
     fn step_backward(ref self) -> u128 {
         self - 1
     }
+
+    fn step_forward_within(ref self, n: i64, end: ref u128) -> Option[u128] {
+        if end - self < n as u128 {
+            return None;
+        }
+        Some(self + n as u128)
+    }
 }
 
 impl RangeStep for usize {
@@ -133,6 +223,14 @@ impl RangeStep for usize {
 
     fn step_backward(ref self) -> usize {
         self - 1
+    }
+
+    fn step_forward_within(ref self, n: i64, end: ref usize) -> Option[usize] {
+        let to = (self as i128) + (n as i128);
+        if to > (end as i128) {
+            return None;
+        }
+        Some(to as usize)
     }
 }
 
@@ -155,6 +253,25 @@ impl[T: RangeStep + PartialOrd + Copy] Iterator for Range[T] {
         let v = self.start;
         self.start = v.step_forward();
         Some(v)
+    }
+
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if self.start >= self.end {
+            return false;
+        }
+        match self.start.step_forward_within(n, self.end) {
+            Some(v) => {
+                self.start = v;
+                true
+            }
+            None => {
+                self.start = self.end;
+                false
+            }
+        }
     }
 }
 
@@ -209,6 +326,30 @@ impl[T: RangeStep + PartialOrd + Copy] Iterator for RangeInclusive[T] {
             self.start = v.step_forward();
         }
         Some(v)
+    }
+
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if self.exhausted or self.start > self.end {
+            return false;
+        }
+        match self.start.step_forward_within(n, self.end) {
+            Some(v) => {
+                self.start = v;
+                true
+            }
+            None => {
+                // Exactly the values left is still a full advance.
+                let exact = match self.start.step_forward_within(n - 1, self.end) {
+                    Some(v) => v == self.end,
+                    None => false,
+                };
+                self.exhausted = true;
+                exact
+            }
+        }
     }
 }
 

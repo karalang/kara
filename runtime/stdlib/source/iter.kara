@@ -38,6 +38,20 @@ trait Iterator {
         last
     }
 
+    /// Steps past `n` items; `false` if they ran out first. A range
+    /// jumps rather than walking, which is what keeps `step_by` over one
+    /// linear.
+    fn advance_by(mut ref self, n: i64) -> bool {
+        let mut k = 0;
+        while k < n {
+            if self.next().is_none() {
+                return false;
+            }
+            k = k + 1;
+        }
+        true
+    }
+
     /// The item at index `n`, counting from 0.
     fn nth(own self, n: i64) -> Option[Self.Item] {
         let mut it = self;
@@ -439,12 +453,8 @@ impl[I: Iterator] Iterator for IterStepBy[I] {
             self.first = false;
             return self.it.next();
         }
-        let mut k = 1;
-        while k < self.step {
-            if self.it.next().is_none() {
-                return None;
-            }
-            k = k + 1;
+        if not self.it.advance_by(self.step - 1) {
+            return None;
         }
         self.it.next()
     }
