@@ -1,0 +1,119 @@
+len 1
+len 2
+len 3
+len 4
+len 5
+len 6
+len 7
+len 8
+len 9
+len 10
+len 11
+len 12
+len 13
+len 14
+len 15
+len 16
+len 17
+len 17
+[, a, an, and, ant, any, be, bee, car, card, care, cart, cat, do, dodge, dog, doll]
+6
+8
+miss
+miss
+miss
+0
+14
+miss
+yes
+yes
+3
+no
+yes
+2
+yes
+no
+1
+yes
+yes
+3
+yes
+no
+1
+no
+yes
+2
+no
+no
+0
+yes
+yes
+3
+ 0
+card 7
+[( 0), (car 6), (card 7)]
+ 0
+care 8
+[( 0), (car 6), (care 8)]
+ 0
+cart 9
+[( 0), (car 6), (cart 9)]
+ 0
+cat 10
+[( 0), (cat 10)]
+ 0
+a 1
+[( 0), (a 1)]
+ 0
+and 3
+[( 0), (a 1), (an 2), (and 3)]
+ 0
+ant 4
+[( 0), (a 1), (an 2), (ant 4)]
+ 0
+dodge 13
+[( 0), (do 11), (dodge 13)]
+ 0
+ 0
+[( 0)]
+len 17
+60
+len 17
+[car, card, care, cart]
+[car, card, care, cart, cat]
+[do, dodge, dog, doll]
+[a, an, and, ant, any]
+[be, bee]
+nokey
+len 16
+len 16
+0
+len 15
+len 15
+2
+short
+len 15
+2
+miss
+len 15
+0
+len 14
+len 14
+0
+len 13
+len 13
+2
+[, a, an, and, ant, any, be, bee, card, care, cat, dog, doll]
+yes
+yes
+yes
+yes
+yes
+[card, care, cat]
+[dog, doll]
+card 7
+ 0
+len 12
+2
+[a, an, and, ant, any, be, bee, card, care, cat, dog, doll]
+len 12
