@@ -1,0 +1,42 @@
+== enc | 0 | 1 2 3
+  laHquq
+== dec | 0 | laHquq
+  1 2 3
+== enc | 0 | 12345
+  NkK9
+== dec | 0 | NkK9
+  12345
+== enc | 0 | 683
+  XVM
+== dec | 0 | XVM
+  683
+== enc | 0 | 1 2 3 4 5 6
+  orHQuLh7tWcO
+== dec | 0 | orHQuLh7tWcO
+  1 2 3 4 5 6
+== enc | 0 | 2147483647
+  ykJWW1g
+== dec | 0 | ykJWW1g
+  2147483647
+== enc | 0 | 0
+  5x
+== dec | 0 | 5x
+  0
+== enc | 8 | 1
+  gB0NV05e
+== dec | 8 | gB0NV05e
+  1
+== enc | 16 | 1 23 456
+  56jYdEmHPsPkdoy1
+== dec | 16 | 56jYdEmHPsPkdoy1
+  1 23 456
+== enc | 12 | 1234567
+  4xpAYXg8n0mQ
+== dec | 12 | 4xpAYXg8n0mQ
+  1234567
+== enc | 10 | 7 7 7
+  yAoaTvTgG7
+== dec | 10 | yAoaTvTgG7
+  7 7 7
+== dec | 0 | !bad!
+  []

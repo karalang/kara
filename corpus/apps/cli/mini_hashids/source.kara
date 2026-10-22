@@ -1,0 +1,457 @@
+// mini_hashids — a port of hashids 1.3.1 (MIT, Ivan Akimov & David Aurelio):
+// reversible obfuscation of non-negative integers into short, URL-safe ids.
+//
+// The algorithm is a consistent-shuffle (`reorder`) of the alphabet driven by a
+// salt, a per-call "lottery" character, per-value base conversion (`hash`), and
+// separator/guard characters that pad to a minimum length. All arithmetic is
+// i64-safe for the ids a URL carries, so the port needs no bignum.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn blen(s: String) -> i64 { bytes_of(s).len() }
+
+fn copyv(src: ref Vec[i64]) -> Vec[i64] {
+    let mut o: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() { o.push(src[i]); i = i + 1; }
+    o
+}
+
+fn index_of(v: ref Vec[i64], ch: i64) -> i64 {
+    let mut i = 0;
+    while i < v.len() { if v[i] == ch { return i; } i = i + 1; }
+    0 - 1
+}
+
+fn bytes_eq(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() { if a[i] != b[i] { return false; } i = i + 1; }
+    true
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn bytes_to_str(v: ref Vec[i64]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() { out.push_str(byte_to_char(v[i])); i = i + 1; }
+    out
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut m = n;
+    let mut out = String.new();
+    let digits = "0123456789";
+    while m > 0 {
+        let d = m % 10;
+        out = digits.substring(d, d + 1) + out;
+        m = m / 10;
+    }
+    out
+}
+
+fn str_to_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut v = 0;
+    let mut i = 0;
+    while i < b.len() { v = v * 10 + (b[i] - 48); i = i + 1; }
+    v
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s.clone());
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+// --- core hashids primitives (operate on byte vectors) ---
+
+// Consistent shuffle of `src` driven by `salt`. Returns a fresh vector.
+fn reorder(src: ref Vec[i64], salt: ref Vec[i64]) -> Vec[i64] {
+    let mut s = copyv(src);
+    let len_salt = salt.len();
+    if len_salt == 0 { return s; }
+    let mut index = 0;
+    let mut integer_sum = 0;
+    let mut i = s.len() - 1;
+    while i > 0 {
+        let integer = salt[index];
+        integer_sum = integer_sum + integer;
+        let j = (integer + index + integer_sum) % i;
+        let tmp = s[i];
+        s[i] = s[j];
+        s[j] = tmp;
+        index = (index + 1) % len_salt;
+        i = i - 1;
+    }
+    s
+}
+
+// Base-`len(alphabet)` encode of a single number, most-significant digit first.
+fn hash_num(number: i64, alphabet: ref Vec[i64]) -> Vec[i64] {
+    let la = alphabet.len();
+    let mut digits: Vec[i64] = Vec.new();
+    let mut num = number;
+    let mut go = true;
+    while go {
+        digits.push(alphabet[num % la]);
+        num = num / la;
+        if num == 0 { go = false; }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = digits.len();
+    while k > 0 { out.push(digits[k - 1]); k = k - 1; }
+    out
+}
+
+// Inverse of hash_num. Returns -1 if a character is not in the alphabet.
+fn unhash(hashed: ref Vec[i64], alphabet: ref Vec[i64]) -> i64 {
+    let la = alphabet.len();
+    let mut number = 0;
+    let mut i = 0;
+    while i < hashed.len() {
+        let pos = index_of(alphabet, hashed[i]);
+        if pos < 0 { return 0 - 1; }
+        number = number * la + pos;
+        i = i + 1;
+    }
+    number
+}
+
+fn in_set(setb: ref Vec[i64], ch: i64) -> bool { index_of(setb, ch) >= 0 }
+
+fn split_set(src: ref Vec[i64], setb: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut parts: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        let ch = src[i];
+        if in_set(setb, ch) {
+            parts.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(ch);
+        }
+        i = i + 1;
+    }
+    parts.push(cur);
+    parts
+}
+
+fn ensure_length(encoded_in: ref Vec[i64], min_length: i64, alphabet0: ref Vec[i64],
+                 guards: ref Vec[i64], values_hash: i64) -> Vec[i64] {
+    let len_guards = guards.len();
+    let gi0 = (values_hash + encoded_in[0]) % len_guards;
+    let mut encoded: Vec[i64] = Vec.new();
+    encoded.push(guards[gi0]);
+    let mut k = 0;
+    while k < encoded_in.len() { encoded.push(encoded_in[k]); k = k + 1; }
+    if encoded.len() < min_length {
+        let gi1 = (values_hash + encoded[2]) % len_guards;
+        encoded.push(guards[gi1]);
+    }
+    let mut alphabet = copyv(alphabet0);
+    let split_at = alphabet.len() / 2;
+    while encoded.len() < min_length {
+        alphabet = reorder(alphabet, alphabet);
+        let mut ne: Vec[i64] = Vec.new();
+        let mut p = split_at;
+        while p < alphabet.len() { ne.push(alphabet[p]); p = p + 1; }
+        p = 0;
+        while p < encoded.len() { ne.push(encoded[p]); p = p + 1; }
+        p = 0;
+        while p < split_at { ne.push(alphabet[p]); p = p + 1; }
+        encoded = ne;
+        let excess = encoded.len() - min_length;
+        if excess > 0 {
+            let from_index = excess / 2;
+            let end = from_index + min_length;
+            let mut trimmed: Vec[i64] = Vec.new();
+            let mut q = from_index;
+            while q < end { trimmed.push(encoded[q]); q = q + 1; }
+            encoded = trimmed;
+        }
+    }
+    encoded
+}
+
+fn encode_vals(values: ref Vec[i64], min_length: i64, salt: ref Vec[i64],
+               alphabet0: ref Vec[i64], separators: ref Vec[i64],
+               guards: ref Vec[i64]) -> Vec[i64] {
+    let len_alphabet = alphabet0.len();
+    let len_separators = separators.len();
+    let mut values_hash = 0;
+    let mut i = 0;
+    while i < values.len() {
+        values_hash = values_hash + (values[i] % (i + 100));
+        i = i + 1;
+    }
+    let lottery = alphabet0[values_hash % len_alphabet];
+    let mut encoded: Vec[i64] = Vec.new();
+    encoded.push(lottery);
+    let mut alphabet = copyv(alphabet0);
+    i = 0;
+    while i < values.len() {
+        let value0 = values[i];
+        // alphabet_salt = (lottery + salt + alphabet)[:len_alphabet]
+        let mut asalt: Vec[i64] = Vec.new();
+        asalt.push(lottery);
+        let mut k = 0;
+        while k < salt.len() { asalt.push(salt[k]); k = k + 1; }
+        k = 0;
+        while k < alphabet.len() { asalt.push(alphabet[k]); k = k + 1; }
+        let mut asalt2: Vec[i64] = Vec.new();
+        k = 0;
+        while k < len_alphabet { asalt2.push(asalt[k]); k = k + 1; }
+        alphabet = reorder(alphabet, asalt2);
+        let last = hash_num(value0, alphabet);
+        k = 0;
+        while k < last.len() { encoded.push(last[k]); k = k + 1; }
+        let modbase = last[0] + i;
+        let v2 = value0 % modbase;
+        encoded.push(separators[v2 % len_separators]);
+        i = i + 1;
+    }
+    // cut off last separator
+    let mut enc2: Vec[i64] = Vec.new();
+    let cut = encoded.len() - 1;
+    let mut m = 0;
+    while m < cut { enc2.push(encoded[m]); m = m + 1; }
+    if enc2.len() >= min_length { return enc2; }
+    ensure_length(enc2, min_length, alphabet, guards, values_hash)
+}
+
+fn decode_raw(hashid: ref Vec[i64], salt: ref Vec[i64], alphabet0: ref Vec[i64],
+              separators: ref Vec[i64], guards: ref Vec[i64]) -> Vec[i64] {
+    let parts = split_set(hashid, guards);
+    let np = parts.len();
+    let mut h: Vec[i64] = Vec.new();
+    if np >= 2 and np <= 3 { h = copyv(parts[1]); } else { h = copyv(parts[0]); }
+    let mut res: Vec[i64] = Vec.new();
+    if h.len() == 0 { return res; }
+    let lottery_char = h[0];
+    let mut hbody: Vec[i64] = Vec.new();
+    let mut i = 1;
+    while i < h.len() { hbody.push(h[i]); i = i + 1; }
+    let hash_parts = split_set(hbody, separators);
+    let mut alphabet = copyv(alphabet0);
+    let len_alphabet = alphabet0.len();
+    let mut pi = 0;
+    while pi < hash_parts.len() {
+        let part = copyv(hash_parts[pi]);
+        let mut asalt: Vec[i64] = Vec.new();
+        asalt.push(lottery_char);
+        let mut k = 0;
+        while k < salt.len() { asalt.push(salt[k]); k = k + 1; }
+        k = 0;
+        while k < alphabet.len() { asalt.push(alphabet[k]); k = k + 1; }
+        let mut asalt2: Vec[i64] = Vec.new();
+        k = 0;
+        while k < len_alphabet { asalt2.push(asalt[k]); k = k + 1; }
+        alphabet = reorder(alphabet, asalt2);
+        let num = unhash(part, alphabet);
+        if num < 0 {
+            let mut empty: Vec[i64] = Vec.new();
+            return empty;
+        }
+        res.push(num);
+        pi = pi + 1;
+    }
+    res
+}
+
+// Public decode: re-encode the recovered values and accept only if the id
+// reproduces exactly (hashids' own validity check).
+fn decode_verified(hashid: ref Vec[i64], min_length: i64, salt: ref Vec[i64],
+                   alphabet0: ref Vec[i64], separators: ref Vec[i64],
+                   guards: ref Vec[i64]) -> Vec[i64] {
+    let res = decode_raw(hashid, salt, alphabet0, separators, guards);
+    if res.len() == 0 { return res; }
+    let re = encode_vals(res, min_length, salt, alphabet0, separators, guards);
+    if bytes_eq(re, hashid) { return res; }
+    let mut empty: Vec[i64] = Vec.new();
+    empty
+}
+
+struct Config {
+    salt: Vec[i64],
+    alphabet: Vec[i64],
+    separators: Vec[i64],
+    guards: Vec[i64],
+}
+
+// Replicate the Hashids constructor for the default 62-char alphabet + salt.
+fn build_config(salt_str: String) -> Config {
+    let salt = bytes_of(salt_str);
+    let full = bytes_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
+    let sep_src = bytes_of("cfhistuCFHISTU");
+
+    // separators = chars of sep_src that appear in the alphabet
+    let mut separators: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < sep_src.len() {
+        if in_set(full, sep_src[i]) { separators.push(sep_src[i]); }
+        i = i + 1;
+    }
+    // alphabet = full minus the separators (default alphabet has no duplicates)
+    let mut alphabet: Vec[i64] = Vec.new();
+    i = 0;
+    while i < full.len() {
+        if not in_set(separators, full[i]) { alphabet.push(full[i]); }
+        i = i + 1;
+    }
+
+    separators = reorder(separators, salt);
+
+    // min_separators = ceil(len_alphabet / 3.5) = ceil(2*len/7)
+    let len_alphabet0 = alphabet.len();
+    let min_separators = (2 * len_alphabet0 + 6) / 7;
+    let missing = min_separators - separators.len();
+    if missing > 0 {
+        // separators += alphabet[:missing]; alphabet = alphabet[missing:]
+        let mut j = 0;
+        while j < missing { separators.push(alphabet[j]); j = j + 1; }
+        let mut na: Vec[i64] = Vec.new();
+        j = missing;
+        while j < alphabet.len() { na.push(alphabet[j]); j = j + 1; }
+        alphabet = na;
+    }
+
+    alphabet = reorder(alphabet, salt);
+
+    // num_guards = ceil(len_alphabet / 12)
+    let len_alphabet = alphabet.len();
+    let num_guards = (len_alphabet + 11) / 12;
+    let mut guards: Vec[i64] = Vec.new();
+    if len_alphabet < 3 {
+        // guards from the front of separators
+        let mut g = 0;
+        while g < num_guards { guards.push(separators[g]); g = g + 1; }
+        let mut ns: Vec[i64] = Vec.new();
+        g = num_guards;
+        while g < separators.len() { ns.push(separators[g]); g = g + 1; }
+        separators = ns;
+    } else {
+        let mut g = 0;
+        while g < num_guards { guards.push(alphabet[g]); g = g + 1; }
+        let mut na: Vec[i64] = Vec.new();
+        g = num_guards;
+        while g < alphabet.len() { na.push(alphabet[g]); g = g + 1; }
+        alphabet = na;
+    }
+
+    Config { salt: salt, alphabet: alphabet, separators: separators, guards: guards }
+}
+
+fn parse_values(payload: String) -> Vec[i64] {
+    let toks = split_on(payload, 32);
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i].clone();
+        if blen(t.clone()) > 0 { v.push(str_to_int(t)); }
+        i = i + 1;
+    }
+    v
+}
+
+fn join_values(v: ref Vec[i64]) -> String {
+    if v.len() == 0 { return "[]"; }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { out.push_str(" "); }
+        out.push_str(int_to_str(v[i]));
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    let cfg = build_config("this is my salt");
+
+    let jt = jobs_text();
+    let lines = split_on(jt, 10);
+    let mut out = String.new();
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        if blen(line.clone()) > 0 {
+            let fields = split_on(line, 9);
+            let op = fields[0].clone();
+            let ml = str_to_int(fields[1].clone());
+            let mut payload = String.new();
+            if fields.len() > 2 { payload = fields[2].clone(); }
+
+            out.push_str("== ");
+            out.push_str(op.clone());
+            out.push_str(" | ");
+            out.push_str(int_to_str(ml));
+            out.push_str(" | ");
+            out.push_str(payload.clone());
+            out.push_str("\n  ");
+
+            if op == "enc" {
+                let vals = parse_values(payload.clone());
+                let enc = encode_vals(vals, ml, cfg.salt, cfg.alphabet, cfg.separators, cfg.guards);
+                out.push_str(bytes_to_str(enc));
+            } else if op == "dec" {
+                let hb = bytes_of(payload.clone());
+                let res = decode_verified(hb, ml, cfg.salt, cfg.alphabet, cfg.separators, cfg.guards);
+                out.push_str(join_values(res));
+            } else {
+                out.push_str("?");
+            }
+            out.push_str("\n");
+        }
+        li = li + 1;
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\t0\t1 2 3\n");
+    s.push_str("dec\t0\tlaHquq\n");
+    s.push_str("enc\t0\t12345\n");
+    s.push_str("dec\t0\tNkK9\n");
+    s.push_str("enc\t0\t683\n");
+    s.push_str("dec\t0\tXVM\n");
+    s.push_str("enc\t0\t1 2 3 4 5 6\n");
+    s.push_str("dec\t0\torHQuLh7tWcO\n");
+    s.push_str("enc\t0\t2147483647\n");
+    s.push_str("dec\t0\tykJWW1g\n");
+    s.push_str("enc\t0\t0\n");
+    s.push_str("dec\t0\t5x\n");
+    s.push_str("enc\t8\t1\n");
+    s.push_str("dec\t8\tgB0NV05e\n");
+    s.push_str("enc\t16\t1 23 456\n");
+    s.push_str("dec\t16\t56jYdEmHPsPkdoy1\n");
+    s.push_str("enc\t12\t1234567\n");
+    s.push_str("dec\t12\t4xpAYXg8n0mQ\n");
+    s.push_str("enc\t10\t7 7 7\n");
+    s.push_str("dec\t10\tyAoaTvTgG7\n");
+    s.push_str("dec\t0\t!bad!\n");
+    s
+}
