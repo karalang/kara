@@ -1,0 +1,66 @@
+== parse | 01-23-45-67-89-AB
+  addr=EUI48('01-23-45-67-89-AB')
+== parse | 01:23:45:67:89:ab
+  addr=EUI48('01-23-45-67-89-AB')
+== parse | 0123.4567.89AB
+  addr=EUI48('01-23-45-67-89-AB')
+== parse | 0123456789abcdef
+  addr=EUI64('01-23-45-67-89-AB-CD-EF')
+== parse | 01-23-45
+  addr=OUI('01-23-45')
+== parse | 01:23:45
+  addr=OUI('01-23-45')
+== parse | abcdef
+  addr=OUI('AB-CD-EF')
+== parse | 01-23-45-67
+  addr=CDI32('01-23-45-67')
+== parse | 01-23-45-67-89
+  addr=CDI40('01-23-45-67-89')
+== parse | 0123456789
+  addr=CDI40('01-23-45-67-89')
+== parse | 01-23-45-67-89-ab-cd-ef
+  addr=EUI64('01-23-45-67-89-AB-CD-EF')
+== parse | 
+  error=hardware address cannot be an empty string
+== parse | zz
+  error='zz' cannot be parsed as OUI, CDI32, CDI40, EUI48, EUI60, or EUI64
+== parse | 0123
+  error='0123' cannot be parsed as OUI, CDI32, CDI40, EUI48, EUI60, or EUI64
+== parse | 01-23-4Z
+  error='01-23-4Z' cannot be parsed as OUI, CDI32, CDI40, EUI48, EUI60, or EUI64
+== int | OUI,0
+  addr=OUI('00-00-00')
+== int | OUI,16777215
+  addr=OUI('FF-FF-FF')
+== int | OUI,16777216
+  error=16777216 is too big for OUI
+== int | EUI48,1
+  addr=EUI48('00-00-00-00-00-01')
+== int | EUI64,255
+  addr=EUI64('00-00-00-00-00-00-00-FF')
+== int | EUI60,1
+  addr=EUI60('0.0.0.0.0.0.0.0.0.0.0.0.0.0.1')
+== int | CDI40,4294967296
+  addr=CDI40('01-00-00-00-00')
+== int | CDI32,-1
+  error=hardware address cannot be negative
+== oui | EUI48,01-23-45-67-89-AB
+  oui=OUI('01-23-45')
+== oui | EUI64,0123456789abcdef
+  oui=OUI('01-23-45')
+== oui | CDI32,AA-BB-CC-DD
+  oui=OUI('AA-BB-CC')
+== cmp | OUI=00-00-00|CDI32=00-00-00-00
+  lt=true eq=false
+== cmp | OUI=00-00-01|CDI32=00-00-00-00
+  lt=false eq=false
+== cmp | EUI48=01-23-45-67-89-AB|EUI48=01-23-45-67-89-AB
+  lt=false eq=true
+== cmp | EUI48=01-23-45-67-89-AB|EUI48=01-23-45-67-89-AC
+  lt=true eq=false
+== cmp | OUI=FF-FF-FF|EUI64=00-00-00-00-00-00-00-01
+  lt=false eq=false
+== sort | CDI32=00-00-00-00,OUI=00-00-01,OUI=00-00-00,EUI48=00-00-01-00-00-00
+  sorted=OUI('00-00-00'),CDI32('00-00-00-00'),OUI('00-00-01'),EUI48('00-00-01-00-00-00')
+== sort | EUI64=00-00-00-00-00-00-00-02,OUI=00-00-00,EUI48=00-00-00-00-00-01
+  sorted=OUI('00-00-00'),EUI64('00-00-00-00-00-00-00-02'),EUI48('00-00-00-00-00-01')

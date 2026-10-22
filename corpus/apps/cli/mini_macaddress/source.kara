@@ -1,0 +1,489 @@
+// mini_macaddress — a port of the `macaddress` library (2.0.2, MIT / SPDX 0BSD,
+// Alexander Kozhevnikov). Hardware-address parsing, canonical formatting, the
+// OUI prefix, ordering and the int/str construction errors, reproduced exactly.
+//
+// Addresses are carried as a vector of 4-bit nibbles, most-significant first,
+// of length size/4. Every class size (24, 32, 40, 48, 60, 64) is a multiple of
+// 4, so the library's sub-nibble offset is always zero and a nibble vector is a
+// faithful model that never overflows i64 (EUI-64 is 16 nibbles, not 2^64).
+
+#[derive(Clone)]
+struct Addr {
+    cls: i64,
+    nibbles: Vec[i64],
+}
+
+#[derive(Clone)]
+struct Parsed {
+    ok: bool,
+    cls: i64,
+    nibbles: Vec[i64],
+    err: String,
+}
+
+#[derive(Clone)]
+struct Cand {
+    fmt: String,
+    cls: i64,
+}
+
+// Class table. Index 0..5 = OUI, CDI32, CDI40, EUI48, EUI60, EUI64.
+
+fn class_size(cls: i64) -> i64 {
+    if cls == 0 { return 24; }
+    if cls == 1 { return 32; }
+    if cls == 2 { return 40; }
+    if cls == 3 { return 48; }
+    if cls == 4 { return 60; }
+    64
+}
+
+fn class_name(cls: i64) -> String {
+    if cls == 0 { return "OUI"; }
+    if cls == 1 { return "CDI32"; }
+    if cls == 2 { return "CDI40"; }
+    if cls == 3 { return "EUI48"; }
+    if cls == 4 { return "EUI60"; }
+    "EUI64"
+}
+
+// The first format string is the canonical one used by str / repr.
+fn format0(cls: i64) -> String {
+    if cls == 0 { return "xx-xx-xx"; }
+    if cls == 1 { return "xx-xx-xx-xx"; }
+    if cls == 2 { return "xx-xx-xx-xx-xx"; }
+    if cls == 3 { return "xx-xx-xx-xx-xx-xx"; }
+    if cls == 4 { return "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x"; }
+    "xx-xx-xx-xx-xx-xx-xx-xx"
+}
+
+// All parseable format strings for a class, in library order.
+fn class_formats(cls: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    if cls == 0 {
+        v.push("xx-xx-xx"); v.push("xx:xx:xx"); v.push("xxxxxx");
+    } else if cls == 1 {
+        v.push("xx-xx-xx-xx"); v.push("xx:xx:xx:xx"); v.push("xxxxxxxx");
+    } else if cls == 2 {
+        v.push("xx-xx-xx-xx-xx"); v.push("xx:xx:xx:xx:xx"); v.push("xxxxxxxxxx");
+    } else if cls == 3 {
+        v.push("xx-xx-xx-xx-xx-xx"); v.push("xx:xx:xx:xx:xx:xx");
+        v.push("xxxx.xxxx.xxxx"); v.push("xxxxxxxxxxxx");
+    } else if cls == 4 {
+        v.push("x.x.x.x.x.x.x.x.x.x.x.x.x.x.x");
+        v.push("xx-xx-xx.x.x.x.x.x.x.x.x.x");
+        v.push("xxxxxxxxxxxxxxx");
+    } else {
+        v.push("xx-xx-xx-xx-xx-xx-xx-xx"); v.push("xx:xx:xx:xx:xx:xx:xx:xx");
+        v.push("xxxx.xxxx.xxxx.xxxx"); v.push("xxxxxxxxxxxxxxxx");
+    }
+    v
+}
+
+fn name_to_cls(name: String) -> i64 {
+    if name == "OUI" { return 0; }
+    if name == "CDI32" { return 1; }
+    if name == "CDI40" { return 2; }
+    if name == "EUI48" { return 3; }
+    if name == "EUI60" { return 4; }
+    5
+}
+
+// Byte / hex helpers.
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+// Split on a single separator byte, keeping trailing empties (like Python's
+// str.split(sep)). Self-contained so the port does not depend on the stdlib
+// split/lines iterator surface, which is in flux.
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s);
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn is_hexb(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn hexval(c: i64) -> i64 {
+    if c <= 57 { return c - 48; }
+    if c <= 70 { return c - 55; }
+    c - 87
+}
+
+fn hex_digit(n: i64) -> String {
+    let digits = "0123456789ABCDEF";
+    digits.substring(n, n + 1)
+}
+
+fn byte_to_str(c: i64) -> String {
+    if c == 45 { return "-"; }
+    if c == 58 { return ":"; }
+    if c == 46 { return "."; }
+    " "
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut neg = false;
+    let mut v = n;
+    if v < 0 { neg = true; v = 0 - v; }
+    let mut rev: Vec[i64] = Vec.new();
+    while v > 0 { rev.push(v % 10); v = v / 10; }
+    let mut out = String.new();
+    if neg { out = out + "-"; }
+    let mut i = 0;
+    while i < rev.len() {
+        out = out + hex_digit(rev[rev.len() - 1 - i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == 45 { neg = true; i = 1; }
+    let mut val = 0;
+    while i < b.len() {
+        val = val * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg { 0 - val } else { val }
+}
+
+// Canonical human-readable string: walk the first format, filling each 'x' with
+// the next nibble (MSB first) and copying every other character verbatim.
+fn str_of(cls: i64, nibbles: Vec[i64]) -> String {
+    let fb = bytes_of(format0(cls));
+    let mut out = String.new();
+    let mut j = 0;
+    let mut i = 0;
+    while i < fb.len() {
+        let c = fb[i];
+        if c == 120 {
+            out = out + hex_digit(nibbles[j]);
+            j = j + 1;
+        } else {
+            out = out + byte_to_str(c);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn repr_cls(cls: i64, nibbles: Vec[i64]) -> String {
+    class_name(cls) + "('" + str_of(cls, nibbles) + "')"
+}
+
+fn contains_fmt(cands: Vec[Cand], fmt: String) -> bool {
+    let mut i = 0;
+    while i < cands.len() {
+        if cands[i].fmt == fmt { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Lexicographic byte comparison, matching Python's string ordering.
+fn str_lt(a: String, b: String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] < bb[i] { return true; }
+        if ab[i] > bb[i] { return false; }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+// Proper-English class-name list for the error messages.
+fn classlist(classes: Vec[i64]) -> String {
+    let n = classes.len();
+    if n < 2 { return class_name(classes[0]); }
+    if n == 2 { return class_name(classes[0]) + " or " + class_name(classes[1]); }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        if i > 0 { out = out + ", "; }
+        if i == n - 1 { out = out + "or " + class_name(classes[i]); }
+        else { out = out + class_name(classes[i]); }
+        i = i + 1;
+    }
+    out
+}
+
+// The library's char-by-char candidate-narrowing parser, restricted to the
+// given class set.
+fn do_parse(s: String, classes: Vec[i64]) -> Parsed {
+    let sb = bytes_of(s);
+    let length = sb.len();
+    if length < 1 {
+        return Parsed { ok: false, cls: 0, nibbles: Vec.new(),
+            err: "hardware address cannot be an empty string" };
+    }
+    // candidate formats of the matching length, first class wins per format
+    let mut cands: Vec[Cand] = Vec.new();
+    let mut ci = 0;
+    while ci < classes.len() {
+        let cls = classes[ci];
+        let fmts = class_formats(cls);
+        let mut fi = 0;
+        while fi < fmts.len() {
+            let fmt = fmts[fi].clone();
+            if fmt.len() == length and not contains_fmt(cands, fmt.clone()) {
+                cands.push(Cand { fmt: fmt.clone(), cls: cls });
+            }
+            fi = fi + 1;
+        }
+        ci = ci + 1;
+    }
+    // sort candidates by format string (selection sort)
+    let mut a = 0;
+    while a < cands.len() {
+        let mut lo = a;
+        let mut b = a + 1;
+        while b < cands.len() {
+            if str_lt(cands[b].fmt.clone(), cands[lo].fmt.clone()) { lo = b; }
+            b = b + 1;
+        }
+        if lo != a {
+            let tmp = cands[a].clone();
+            cands[a] = cands[lo].clone();
+            cands[lo] = tmp;
+        }
+        a = a + 1;
+    }
+    // narrow
+    let mut start = 0;
+    let mut end = cands.len();
+    let mut nibbles: Vec[i64] = Vec.new();
+    let mut idx = 0;
+    while idx < length {
+        let c = sb[idx];
+        let mut charcode = c;
+        if is_hexb(c) {
+            nibbles.push(hexval(c));
+            charcode = 120;
+        } else if c == 120 {
+            charcode = 0 - 1;
+        }
+        while start < end {
+            let fb = bytes_of(cands[start].fmt.clone());
+            if fb[idx] < charcode { start = start + 1; } else { break; }
+        }
+        while start < end {
+            let fb = bytes_of(cands[end - 1].fmt.clone());
+            if fb[idx] > charcode { end = end - 1; } else { break; }
+        }
+        if start >= end {
+            return Parsed { ok: false, cls: 0, nibbles: Vec.new(),
+                err: "'" + s + "' cannot be parsed as " + classlist(classes) };
+        }
+        idx = idx + 1;
+    }
+    Parsed { ok: true, cls: cands[start].cls, nibbles: nibbles, err: "" }
+}
+
+fn all_classes() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(0); v.push(1); v.push(2); v.push(3); v.push(4); v.push(5);
+    v
+}
+
+fn build_int(cls: i64, value: i64) -> Parsed {
+    if value < 0 {
+        return Parsed { ok: false, cls: 0, nibbles: Vec.new(),
+            err: "hardware address cannot be negative" };
+    }
+    let size = class_size(cls);
+    if size < 63 {
+        let overflow = 1 << size;
+        if value >= overflow {
+            return Parsed { ok: false, cls: 0, nibbles: Vec.new(),
+                err: int_to_str(value) + " is too big for " + class_name(cls) };
+        }
+    }
+    let n = size / 4;
+    let mut tmp: Vec[i64] = Vec.new();
+    let mut v = value;
+    let mut k = 0;
+    while k < n { tmp.push(v & 15); v = v >> 4; k = k + 1; }
+    let mut nibbles: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { nibbles.push(tmp[n - 1 - i]); i = i + 1; }
+    Parsed { ok: true, cls: cls, nibbles: nibbles, err: "" }
+}
+
+// Construct one specific class from a format string (parse restricted to it).
+fn build_spec(spec: String) -> Addr {
+    let parts: Vec[String] = split_on(spec, 61);
+    let cls = name_to_cls(parts[0].clone());
+    let one = one_class(cls);
+    let p = do_parse(parts[1].clone(), one);
+    Addr { cls: p.cls, nibbles: p.nibbles }
+}
+
+fn one_class(cls: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(cls);
+    v
+}
+
+// Compare two addresses: align bits to the wider size by zero-padding the
+// narrower one on the right, compare nibble by nibble, then by size.
+fn cmp_addr(a: Addr, b: Addr) -> i64 {
+    let sa = class_size(a.cls);
+    let sb = class_size(b.cls);
+    let m = if sa > sb { sa / 4 } else { sb / 4 };
+    let mut i = 0;
+    while i < m {
+        let va = if i < a.nibbles.len() { a.nibbles[i] } else { 0 };
+        let vb = if i < b.nibbles.len() { b.nibbles[i] } else { 0 };
+        if va < vb { return 0 - 1; }
+        if va > vb { return 1; }
+        i = i + 1;
+    }
+    if sa < sb { 0 - 1 } else if sa > sb { 1 } else { 0 }
+}
+
+fn boolstr(b: bool) -> String {
+    if b { "true" } else { "false" }
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "parse" {
+        let p = do_parse(arg, all_classes());
+        if p.ok { return "addr=" + repr_cls(p.cls, p.nibbles); }
+        return "error=" + p.err;
+    }
+    if op == "int" {
+        let parts: Vec[String] = split_on(arg, 44);
+        let cls = name_to_cls(parts[0].clone());
+        let p = build_int(cls, parse_int(parts[1].clone()));
+        if p.ok { return "addr=" + repr_cls(p.cls, p.nibbles); }
+        return "error=" + p.err;
+    }
+    if op == "oui" {
+        let parts: Vec[String] = split_on(arg, 44);
+        let cls = name_to_cls(parts[0].clone());
+        let p = do_parse(parts[1].clone(), one_class(cls));
+        let mut on: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < 6 { on.push(p.nibbles[i]); i = i + 1; }
+        return "oui=" + repr_cls(0, on);
+    }
+    if op == "cmp" {
+        let sides: Vec[String] = split_on(arg, 124);
+        let a = build_spec(sides[0].clone());
+        let b = build_spec(sides[1].clone());
+        let c = cmp_addr(a.clone(), b.clone());
+        return "lt=" + boolstr(c < 0) + " eq=" + boolstr(c == 0);
+    }
+    if op == "sort" {
+        let specs: Vec[String] = split_on(arg, 44);
+        let mut addrs: Vec[Addr] = Vec.new();
+        let mut i = 0;
+        while i < specs.len() { addrs.push(build_spec(specs[i].clone())); i = i + 1; }
+        // selection sort by cmp_addr
+        let mut a = 0;
+        while a < addrs.len() {
+            let mut lo = a;
+            let mut b = a + 1;
+            while b < addrs.len() {
+                if cmp_addr(addrs[b].clone(), addrs[lo].clone()) < 0 { lo = b; }
+                b = b + 1;
+            }
+            if lo != a {
+                let tmp = addrs[a].clone();
+                addrs[a] = addrs[lo].clone();
+                addrs[lo] = tmp;
+            }
+            a = a + 1;
+        }
+        let mut out = String.new();
+        let mut j = 0;
+        while j < addrs.len() {
+            if j > 0 { out = out + ","; }
+            out = out + repr_cls(addrs[j].cls, addrs[j].nibbles.clone());
+            j = j + 1;
+        }
+        return "sorted=" + out;
+    }
+    "unknown op: " + op
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    let lines = split_on(jobs, 10);
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        li = li + 1;
+        if line.len() == 0 { continue; }
+        let fields: Vec[String] = split_on(line, 9);
+        let op = fields[0].clone();
+        let arg = if fields.len() > 1 { fields[1].clone() } else { String.new() };
+        out.push_str("== " + op.clone() + " | " + arg.clone() + "\n");
+        out.push_str("  " + run(op.clone(), arg.clone()) + "\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("parse\t01-23-45-67-89-AB\n");
+    s.push_str("parse\t01:23:45:67:89:ab\n");
+    s.push_str("parse\t0123.4567.89AB\n");
+    s.push_str("parse\t0123456789abcdef\n");
+    s.push_str("parse\t01-23-45\n");
+    s.push_str("parse\t01:23:45\n");
+    s.push_str("parse\tabcdef\n");
+    s.push_str("parse\t01-23-45-67\n");
+    s.push_str("parse\t01-23-45-67-89\n");
+    s.push_str("parse\t0123456789\n");
+    s.push_str("parse\t01-23-45-67-89-ab-cd-ef\n");
+    s.push_str("parse\t\n");
+    s.push_str("parse\tzz\n");
+    s.push_str("parse\t0123\n");
+    s.push_str("parse\t01-23-4Z\n");
+    s.push_str("int\tOUI,0\n");
+    s.push_str("int\tOUI,16777215\n");
+    s.push_str("int\tOUI,16777216\n");
+    s.push_str("int\tEUI48,1\n");
+    s.push_str("int\tEUI64,255\n");
+    s.push_str("int\tEUI60,1\n");
+    s.push_str("int\tCDI40,4294967296\n");
+    s.push_str("int\tCDI32,-1\n");
+    s.push_str("oui\tEUI48,01-23-45-67-89-AB\n");
+    s.push_str("oui\tEUI64,0123456789abcdef\n");
+    s.push_str("oui\tCDI32,AA-BB-CC-DD\n");
+    s.push_str("cmp\tOUI=00-00-00|CDI32=00-00-00-00\n");
+    s.push_str("cmp\tOUI=00-00-01|CDI32=00-00-00-00\n");
+    s.push_str("cmp\tEUI48=01-23-45-67-89-AB|EUI48=01-23-45-67-89-AB\n");
+    s.push_str("cmp\tEUI48=01-23-45-67-89-AB|EUI48=01-23-45-67-89-AC\n");
+    s.push_str("cmp\tOUI=FF-FF-FF|EUI64=00-00-00-00-00-00-00-01\n");
+    s.push_str("sort\tCDI32=00-00-00-00,OUI=00-00-01,OUI=00-00-00,EUI48=00-00-01-00-00-00\n");
+    s.push_str("sort\tEUI64=00-00-00-00-00-00-00-02,OUI=00-00-00,EUI48=00-00-00-00-00-01\n");
+    s
+}
