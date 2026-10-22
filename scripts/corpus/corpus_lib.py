@@ -28,7 +28,7 @@ META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
 # `karac __mir-llvm-run` (the same MIR compiled to LLVM IR and run under
 # `karac_jit_runner`).
 BACKENDS = {
-    "legacy-interp": {"run": ["run", "--interp"]},
+    "legacy-interp": {"run": ["run", "--legacy", "--interp"]},
     "legacy-build": {"build": ["build"], "env": {"KARAC_AUTO_PAR": "0"}},
     "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},

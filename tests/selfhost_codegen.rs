@@ -1128,7 +1128,7 @@ fn seed_run(src: &str) -> (String, i32) {
     let tmp = std::env::temp_dir().join(format!("karac-cg-seed-{}.kara", std::process::id()));
     std::fs::write(&tmp, src).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .args(["run", tmp.to_str().unwrap()])
+        .args(["run", "--legacy", tmp.to_str().unwrap()])
         .output()
         .expect("spawn karac run");
     let _ = std::fs::remove_file(&tmp);

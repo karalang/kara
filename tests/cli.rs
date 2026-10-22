@@ -65,8 +65,13 @@ impl KaracBin {
     }
 }
 
+/// Every test here exercises the legacy pipeline, which `karac run` reaches
+/// through `--legacy` / `KARAC_LEGACY=1` since its default moved to v2
+/// (B-2026-10-22-12); v2's run is covered in `tests/run_v2.rs`.
 fn karac_bin() -> KaracBin {
-    KaracBin(Command::new(env!("CARGO_BIN_EXE_karac")))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
+    cmd.env("KARAC_LEGACY", "1");
+    KaracBin(cmd)
 }
 
 // ── Help & Version ──────────────────────────────────────────────
@@ -289,7 +294,7 @@ fn a_parse_error_beside_a_multi_assign_is_reported_not_a_crash() {
     for args in [
         &["check", "m.kara"][..],
         &["check", "--output=json", "m.kara"][..],
-        &["run", "--interp", "m.kara"][..],
+        &["run", "--legacy", "--interp", "m.kara"][..],
     ] {
         let out = karac_bin().current_dir(&tmp).args(args).output().unwrap();
         let text = format!(
@@ -335,7 +340,7 @@ fn fix_drops_the_parentheses_from_a_tuple_assignment() {
     assert!(got.contains("    a, b = b, a + 1;\n"), "{got}");
     let run = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "t.kara"])
+        .args(["run", "--legacy", "--interp", "t.kara"])
         .output()
         .unwrap();
     assert_eq!(
@@ -464,7 +469,10 @@ fn test_subcommand_help_init() {
 
 #[test]
 fn test_subcommand_help_run() {
-    let out = karac_bin().args(["run", "--help"]).output().unwrap();
+    let out = karac_bin()
+        .args(["run", "--legacy", "--help"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("karac run"));
@@ -866,7 +874,7 @@ fn test_subcommand_help_does_not_scaffold() {
 #[test]
 fn test_run_clean_program() {
     let out = karac_bin()
-        .args(["run", "tests/snapshots/clean.kara"])
+        .args(["run", "--legacy", "tests/snapshots/clean.kara"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -888,7 +896,7 @@ fn test_run_bare_file_shorthand() {
 #[test]
 fn test_run_resolve_error_exits_nonzero() {
     let out = karac_bin()
-        .args(["run", "tests/snapshots/resolve_error.kara"])
+        .args(["run", "--legacy", "tests/snapshots/resolve_error.kara"])
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1082,7 +1090,11 @@ fn test_run_rejects_provider_escape() {
     // diagnostic stays covered by `test_check_provider_escape_error*` (which
     // exercise `karac check`, where all diagnostics are collected together).
     let out = karac_bin()
-        .args(["run", "tests/snapshots/provider_escape_error.kara"])
+        .args([
+            "run",
+            "--legacy",
+            "tests/snapshots/provider_escape_error.kara",
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success(), "expected non-zero exit");
@@ -1202,7 +1214,7 @@ fn main() {
     // 4. `--interp` still RUNS it. The interpreter accepts this shape, and the
     //    gate must not take that away.
     let out = karac_bin()
-        .args(["run", "--interp", file])
+        .args(["run", "--legacy", "--interp", file])
         .output()
         .unwrap();
     assert!(
@@ -1373,7 +1385,7 @@ fn test_stdlib_hygiene_lints_are_silent_on_a_user_compile() {
     for args in [
         vec!["check", file],
         vec!["check", file, "--output=json"],
-        vec!["run", "--interp", file],
+        vec!["run", "--legacy", "--interp", file],
     ] {
         let out = karac_bin().args(&args).output().unwrap();
         let combined = format!(
@@ -1580,7 +1592,7 @@ fn test_must_use_reaches_check_and_json() {
     // 4. `run` still emits it EXACTLY ONCE — the run path has its own call
     //    site, so wiring check up must not double-report.
     let out = karac_bin()
-        .args(["run", "--interp", file])
+        .args(["run", "--legacy", "--interp", file])
         .output()
         .unwrap();
     let hits = String::from_utf8_lossy(&out.stderr)
@@ -1793,7 +1805,7 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
 
     // (c) the legacy lane still runs it, with the hidden copy.
     let out = karac_bin()
-        .args(["run", "--interp", uam.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", uam.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -2030,7 +2042,7 @@ fn main() {
     //    taking away a working execution path would be a worse trade than the
     //    silence this lint replaced.
     let out = karac_bin()
-        .args(["run", "--interp", file])
+        .args(["run", "--legacy", "--interp", file])
         .output()
         .unwrap();
     assert!(
@@ -2119,7 +2131,7 @@ fn test_run_interp_gates_on_fatal_ownership() {
     let path = tmp.join("uninit.kara");
     std::fs::write(&path, "fn main() { let x: i64; println(f\"{x}\"); }\n").unwrap();
     let out = karac_bin()
-        .args(["run", "--interp", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -3717,7 +3729,7 @@ fn test_unknown_command() {
 #[test]
 fn test_missing_file() {
     let out = karac_bin()
-        .args(["run", "nonexistent.kara"])
+        .args(["run", "--legacy", "nonexistent.kara"])
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -3858,7 +3870,7 @@ fn test_run_package_member_refuses_a_private_cross_directory_import() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -3891,7 +3903,7 @@ fn test_run_package_member_still_runs_a_sound_package() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -3967,7 +3979,7 @@ fn test_run_package_member_honours_an_aliased_import() {
     );
     let aliased_type = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -3980,7 +3992,7 @@ fn test_run_package_member_honours_an_aliased_import() {
     );
     let aliased_fn = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4069,7 +4081,7 @@ fn test_module_binding_import_reaches_the_module_s_items() {
         .unwrap();
     let run = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4102,7 +4114,7 @@ fn test_module_binding_import_reaches_a_type_in_a_signature() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4129,7 +4141,7 @@ fn test_module_binding_import_reaches_a_nested_module() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4184,7 +4196,7 @@ fn test_module_binding_import_enforces_visibility() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4215,7 +4227,7 @@ fn test_module_binding_import_defers_to_a_local_of_the_same_name() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4244,7 +4256,7 @@ fn test_module_binding_alongside_an_explicit_item_import_of_the_same_name() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4268,7 +4280,7 @@ fn test_unused_module_binding_import_is_accepted() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .output()
         .unwrap();
@@ -4373,7 +4385,7 @@ fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
 
     let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "--interp", "chatty.kara"])
+        .args(["run", "--legacy", "--interp", "chatty.kara"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -4453,7 +4465,7 @@ fn jit_broken_pipe_stops_the_program_like_a_native_binary() {
 
     let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "forever.kara"])
+        .args(["run", "--legacy", "forever.kara"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -4652,7 +4664,7 @@ fn signalling_karac_run_does_not_orphan_the_jit_runner() {
     for sig in ["INT", "TERM", "KILL"] {
         let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
-            .args(["run", "spin.kara"])
+            .args(["run", "--legacy", "spin.kara"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -4855,7 +4867,10 @@ fn test_stdin_lines_run_and_build_parity() {
 
     // `karac run` (interpreter / JIT).
     let mut run_cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
-    run_cmd.current_dir(&tmp).arg("run").arg("lines.kara");
+    run_cmd
+        .current_dir(&tmp)
+        .args(["run", "--legacy"])
+        .arg("lines.kara");
     let run_out = pipe(run_cmd);
     if let Some(ref out) = run_out {
         assert_eq!(out, expected, "karac run stdin.lines() output");
@@ -5134,7 +5149,7 @@ fn test_param_view_assign_to_a_carrier_struct_frees_once() {
     let want = {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
-            .args(["run", "--interp", "carrier.kara"])
+            .args(["run", "--legacy", "--interp", "carrier.kara"])
             .output()
             .expect("spawn karac run --interp");
         assert!(
@@ -5151,7 +5166,7 @@ fn test_param_view_assign_to_a_carrier_struct_frees_once() {
 
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "carrier.kara"])
+        .args(["run", "--legacy", "carrier.kara"])
         .output()
         .expect("spawn karac run");
     assert!(
@@ -5223,7 +5238,7 @@ fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
     for attempt in 0..3 {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
-            .args(["run", "--interp", "po.kara"])
+            .args(["run", "--legacy", "--interp", "po.kara"])
             .output()
             .expect("spawn karac run --interp");
         assert_eq!(
@@ -5311,7 +5326,7 @@ fn test_par_console_capture_preserves_stdout_stderr_interleaving() {
         let f2 = f.try_clone().expect("dup merged output file");
         let status = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
-            .args(["run", "--interp", "il.kara"])
+            .args(["run", "--legacy", "--interp", "il.kara"])
             .stdout(Stdio::from(f))
             .stderr(Stdio::from(f2))
             .status()
@@ -5360,7 +5375,7 @@ fn test_providers_block_run_build_parity() {
 
     let run_out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "prov.kara"])
+        .args(["run", "--legacy", "--interp", "prov.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -5513,8 +5528,8 @@ fn test_eprintln_reaches_stderr_on_every_backend() {
             })
     };
 
-    let interp = capture(&["run", "--interp", "estream.kara"]);
-    let jit = capture(&["run", "estream.kara"]);
+    let interp = capture(&["run", "--legacy", "--interp", "estream.kara"]);
+    let jit = capture(&["run", "--legacy", "estream.kara"]);
 
     let built = karac_bin()
         .current_dir(&tmp)
@@ -5626,7 +5641,7 @@ fn test_zero_argument_console_forms_match_across_backends() {
     };
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "zeroarg.kara"])
+        .args(["run", "--legacy", "--interp", "zeroarg.kara"])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -5752,7 +5767,7 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
     // argument's side effect happens, and the dbg lines reach stderr.
     let run = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "dbgprog.kara"])
+        .args(["run", "--legacy", "--interp", "dbgprog.kara"])
         .output()
         .expect("karac run spawn");
     let out = String::from_utf8_lossy(&run.stdout);
@@ -5845,7 +5860,7 @@ fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
         + &String::from_utf8_lossy(&built.stdout);
     let run = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "u.kara"])
+        .args(["run", "--legacy", "--interp", "u.kara"])
         .output()
         .expect("karac run spawn");
     let rout = String::from_utf8_lossy(&run.stdout).into_owned();
@@ -5927,8 +5942,8 @@ fn test_errdefer_tail_error_exit_parity_across_backends() {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = stdout_of(&["run", "--interp", "ed.kara"]);
-    let jit = stdout_of(&["run", "ed.kara"]);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "ed.kara"]);
+    let jit = stdout_of(&["run", "--legacy", "ed.kara"]);
 
     let built = karac_bin()
         .current_dir(&tmp)
@@ -6000,7 +6015,7 @@ fn test_provider_early_return_run_build_parity() {
 
     let run_out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "provret.kara"])
+        .args(["run", "--legacy", "--interp", "provret.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -6081,7 +6096,7 @@ fn test_provider_closure_scoped_return_run_build_parity() {
 
     let run_out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "provclo.kara"])
+        .args(["run", "--legacy", "--interp", "provclo.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -6154,7 +6169,7 @@ fn test_user_drop_on_aggregate_field_run_build_parity() {
 
     let run_out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "agg.kara"])
+        .args(["run", "--legacy", "--interp", "agg.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -6811,7 +6826,7 @@ fn test_interp_panic_goes_to_stderr_and_exits_101() {
     let dir = panic_program_dir("interp", PANIC_SRC);
     let out = karac_bin()
         .current_dir(&dir)
-        .args(["run", "--interp", "pk.kara"])
+        .args(["run", "--legacy", "--interp", "pk.kara"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -6841,7 +6856,7 @@ fn test_jit_panic_goes_to_stderr_and_exits_101() {
     let dir = panic_program_dir("jit", PANIC_SRC);
     let out = karac_bin()
         .current_dir(&dir)
-        .args(["run", "pk.kara"])
+        .args(["run", "--legacy", "pk.kara"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -6929,7 +6944,7 @@ fn test_main_returning_err_still_exits_1_not_101() {
     );
     let out = karac_bin()
         .current_dir(&dir)
-        .args(["run", "--interp", "pk.kara"])
+        .args(["run", "--legacy", "--interp", "pk.kara"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -7367,7 +7382,7 @@ fn test_run_project_multi_module_loads_siblings() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "src/main.kara"])
+        .args(["run", "--legacy", "src/main.kara"])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -8784,7 +8799,7 @@ fn test_run_timeout_kills_infinite_loop() {
 
     let started = std::time::Instant::now();
     let out = karac_bin()
-        .args(["run", "--timeout=1s", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--timeout=1s", path.to_str().unwrap()])
         .output()
         .unwrap();
     let wall = started.elapsed();
@@ -8830,7 +8845,7 @@ fn test_run_no_timeout_default_runs_to_completion() {
     std::fs::write(&path, "fn main() { println(42); }").unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -8902,8 +8917,8 @@ fn test_run_derive_generated_body_typechecked_under_codegen() {
     for (tag, src, expected) in cases {
         let path = write_run_temp(tag, src);
         for args in [
-            vec!["run", path.to_str().unwrap()],
-            vec!["run", "--interp", path.to_str().unwrap()],
+            vec!["run", "--legacy", path.to_str().unwrap()],
+            vec!["run", "--legacy", "--interp", path.to_str().unwrap()],
         ] {
             let out = karac_bin().args(&args).output().unwrap();
             let combined = format!(
@@ -8962,11 +8977,19 @@ fn test_run_gpu_dispatch_routes_to_interpreter() {
 
     // JIT-default (the previously-broken form), explicit `--interp`, and the
     // `KARAC_RUN_JIT=0` escape hatch must all agree.
-    assert_ok("`run` (JIT-default)", karac_bin().args(["run", p]));
-    assert_ok("`run --interp`", karac_bin().args(["run", "--interp", p]));
+    assert_ok(
+        "`run` (JIT-default)",
+        karac_bin().args(["run", "--legacy", p]),
+    );
+    assert_ok(
+        "`run --interp`",
+        karac_bin().args(["run", "--legacy", "--interp", p]),
+    );
     assert_ok(
         "`run` KARAC_RUN_JIT=0",
-        karac_bin().args(["run", p]).env("KARAC_RUN_JIT", "0"),
+        karac_bin()
+            .args(["run", "--legacy", p])
+            .env("KARAC_RUN_JIT", "0"),
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -9007,11 +9030,19 @@ fn test_run_lazyframe_all_run_forms_agree() {
         );
     };
 
-    assert_ok("`run` (JIT-default)", karac_bin().args(["run", p]));
-    assert_ok("`run --interp`", karac_bin().args(["run", "--interp", p]));
+    assert_ok(
+        "`run` (JIT-default)",
+        karac_bin().args(["run", "--legacy", p]),
+    );
+    assert_ok(
+        "`run --interp`",
+        karac_bin().args(["run", "--legacy", "--interp", p]),
+    );
     assert_ok(
         "`run` KARAC_RUN_JIT=0",
-        karac_bin().args(["run", p]).env("KARAC_RUN_JIT", "0"),
+        karac_bin()
+            .args(["run", "--legacy", p])
+            .env("KARAC_RUN_JIT", "0"),
     );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -9038,8 +9069,8 @@ fn test_run_comptime_derive_fn_skipped_by_codegen() {
          fn main() { let w = W { val: 5 }; println(w.doubled()); }\n",
     );
     for args in [
-        vec!["run", path.to_str().unwrap()],
-        vec!["run", "--interp", path.to_str().unwrap()],
+        vec!["run", "--legacy", path.to_str().unwrap()],
+        vec!["run", "--legacy", "--interp", path.to_str().unwrap()],
     ] {
         let out = karac_bin().args(&args).output().unwrap();
         let combined = format!(
@@ -9090,8 +9121,8 @@ fn test_run_derive_message_roundtrips_under_codegen() {
     // Same field decode order under both backends — this is the parity claim.
     let expected = "Ada\n36\n3\n100\nLondon\n12345\n";
     for args in [
-        vec!["run", path.to_str().unwrap()],
-        vec!["run", "--interp", path.to_str().unwrap()],
+        vec!["run", "--legacy", path.to_str().unwrap()],
+        vec!["run", "--legacy", "--interp", path.to_str().unwrap()],
     ] {
         let out = karac_bin().args(&args).output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -9138,8 +9169,8 @@ fn test_run_derive_message_repeated_string_and_map_roundtrip() {
     );
     let expected = "3\nbb\n2\n9\n";
     for args in [
-        vec!["run", path.to_str().unwrap()],
-        vec!["run", "--interp", path.to_str().unwrap()],
+        vec!["run", "--legacy", path.to_str().unwrap()],
+        vec!["run", "--legacy", "--interp", path.to_str().unwrap()],
     ] {
         let out = karac_bin().args(&args).output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -9160,7 +9191,7 @@ fn test_run_contract_violation_prints_message_and_exits_nonzero() {
         "fn checked(x: i64) -> i64 requires x > 100 { x }\nfn main() { println(checked(5)); }\n",
     );
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -9191,7 +9222,7 @@ fn test_run_index_oob_prints_message_and_exits_nonzero() {
         "fn main() { let v: Vec[i64] = Vec.new(); println(v[5]); }\n",
     );
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -9220,7 +9251,7 @@ fn test_run_runtime_error_json_envelope() {
         "fn checked(x: i64) -> i64 requires x > 100 { x }\nfn main() { println(checked(5)); }\n",
     );
     let out = karac_bin()
-        .args(["run", "--output=json", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--output=json", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -9241,7 +9272,7 @@ fn test_run_timeout_rejects_zero_value() {
     // at parse time with a clear diagnostic rather than running a
     // pre-aborted process.
     let out = karac_bin()
-        .args(["run", "--timeout=0", "dummy.kara"])
+        .args(["run", "--legacy", "--timeout=0", "dummy.kara"])
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -9255,7 +9286,7 @@ fn test_run_timeout_rejects_zero_value() {
 #[test]
 fn test_run_timeout_rejects_unparseable_value() {
     let out = karac_bin()
-        .args(["run", "--timeout=fast", "dummy.kara"])
+        .args(["run", "--legacy", "--timeout=fast", "dummy.kara"])
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -9284,7 +9315,7 @@ fn test_run_timeout_accepts_bare_integer_as_seconds() {
     std::fs::write(&path, "fn main() { println(7); }").unwrap();
 
     let out = karac_bin()
-        .args(["run", "--timeout=60", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--timeout=60", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -12731,7 +12762,7 @@ fn check_source_output(tag: &str, src: &str) -> String {
 /// outright (B-2026-10-22-8); the legacy module-binding diagnostics these
 /// pages quote are still produced by `run`.
 fn legacy_source_output(tag: &str, src: &str) -> String {
-    source_output(tag, src, &["run", "--interp"])
+    source_output(tag, src, &["run", "--legacy", "--interp"])
 }
 
 fn source_output(tag: &str, src: &str, args: &[&str]) -> String {
@@ -12981,7 +13012,7 @@ fn test_operators_page_quotes_live_diagnostics() {
     )
     .unwrap();
     let out = karac_bin()
-        .args(["run", "--interp", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", path.to_str().unwrap()])
         .output()
         .unwrap();
     let emitted = format!(
@@ -13310,7 +13341,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
         let path = tmp.join("probe.kara");
         std::fs::write(&path, src).unwrap();
         let run = karac_bin()
-            .args(["run", path.to_str().unwrap()])
+            .args(["run", "--legacy", path.to_str().unwrap()])
             .output()
             .unwrap();
         let run_err = String::from_utf8_lossy(&run.stderr).into_owned();
@@ -13357,8 +13388,8 @@ fn main() {
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = run(&["run", "--interp", "m.kara"]);
-    let jit = run(&["run", "m.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+    let jit = run(&["run", "--legacy", "m.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "m.kara"])
@@ -13464,8 +13495,8 @@ fn test_char_renders_as_glyph_through_a_closure_on_every_backend() {
                 .success()
                 .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
         };
-        let interp = run(&["run", "--interp", "m.kara"]);
-        let jit = run(&["run", "m.kara"]);
+        let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+        let jit = run(&["run", "--legacy", "m.kara"]);
         let _ = std::fs::remove_dir_all(&tmp);
         assert_eq!(
             interp.as_deref(),
@@ -13530,8 +13561,8 @@ fn test_ref_scalar_closure_tail_coerces_and_runs() {
                 .success()
                 .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
         };
-        let interp = run(&["run", "--interp", "m.kara"]);
-        let jit = run(&["run", "m.kara"]);
+        let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+        let jit = run(&["run", "--legacy", "m.kara"]);
         let _ = std::fs::remove_dir_all(&tmp);
         let want = format!("{expect}\n");
         assert_eq!(
@@ -13704,8 +13735,8 @@ fn main() {
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = run(&["run", "--interp", "m.kara"]);
-    let jit = run(&["run", "m.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+    let jit = run(&["run", "--legacy", "m.kara"]);
     let _ = std::fs::remove_dir_all(&tmp);
 
     assert_eq!(
@@ -15371,7 +15402,7 @@ fn test_run_surfaces_dep_cycle() {
     std::fs::write(tmp.join("sub/src/main.kara"), "fn main() {}\n").unwrap();
 
     let out = karac_bin()
-        .args(["run", "src/main.kara"])
+        .args(["run", "--legacy", "src/main.kara"])
         .current_dir(&tmp)
         .output()
         .unwrap();
@@ -15402,7 +15433,7 @@ fn test_run_surfaces_msrv_violation() {
     std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
 
     let out = karac_bin()
-        .args(["run", "src/main.kara"])
+        .args(["run", "--legacy", "src/main.kara"])
         .current_dir(&tmp)
         .output()
         .unwrap();
@@ -15437,7 +15468,7 @@ fn test_run_clean_path_dep_still_runs() {
     std::fs::write(tmp.join("child/src/lib.kara"), "fn dummy() {}\n").unwrap();
 
     let out = karac_bin()
-        .args(["run", "src/main.kara"])
+        .args(["run", "--legacy", "src/main.kara"])
         .current_dir(&tmp)
         .output()
         .unwrap();
@@ -16175,7 +16206,7 @@ fn test_run_script_walks_from_script_dir_not_cwd() {
 
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "proj/foo.kara"])
+        .args(["run", "--legacy", "proj/foo.kara"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -16203,7 +16234,7 @@ fn test_run_no_manifest_skips_discovery() {
 
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--no-manifest", "proj/foo.kara"])
+        .args(["run", "--legacy", "--no-manifest", "proj/foo.kara"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -16258,7 +16289,13 @@ fn test_run_manifest_override_loads_explicit_file() {
 #[test]
 fn test_run_manifest_and_no_manifest_are_mutually_exclusive() {
     let out = karac_bin()
-        .args(["run", "--manifest=x.toml", "--no-manifest", "foo.kara"])
+        .args([
+            "run",
+            "--legacy",
+            "--manifest=x.toml",
+            "--no-manifest",
+            "foo.kara",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -16278,7 +16315,7 @@ fn test_run_script_outside_project_runs_stdlib_only() {
 
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "foo.kara"])
+        .args(["run", "--legacy", "foo.kara"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -16291,7 +16328,10 @@ fn test_run_script_outside_project_runs_stdlib_only() {
 
 #[test]
 fn test_run_subcommand_help_documents_manifest_flags() {
-    let out = karac_bin().args(["run", "--help"]).output().unwrap();
+    let out = karac_bin()
+        .args(["run", "--legacy", "--help"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--manifest=<path>"));
@@ -19412,7 +19452,7 @@ fn main() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -19579,7 +19619,7 @@ fn main() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -19645,7 +19685,7 @@ fn run_value_corrupting_cast_aborts() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -19706,7 +19746,7 @@ fn run_soft_type_error_aborts() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -19758,7 +19798,7 @@ fn run_via_jit_opt_in_executes_and_matches_output() {
     // Point the runner locator at cargo's per-build runner binary.
     let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .env("KARAC_RUN_JIT", "1")
         .env("KARAC_JIT_RUNNER", runner)
         .output()
@@ -19841,7 +19881,7 @@ fn run_via_jit_executes_network_boundary_fn_body() {
         let path = tmp.join(format!("{name}.kara"));
         std::fs::write(&path, src).unwrap();
         let out = karac_bin()
-            .args(["run", path.to_str().unwrap()])
+            .args(["run", "--legacy", path.to_str().unwrap()])
             .env("KARAC_RUN_JIT", "1")
             .env("KARAC_JIT_RUNNER", runner)
             .output()
@@ -19912,7 +19952,7 @@ fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
-            .args(["run", &file])
+            .args(["run", "--legacy", &file])
             .output()
             .expect("spawn karac run");
         assert!(
@@ -19999,7 +20039,7 @@ fn main() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -20040,7 +20080,7 @@ fn std_web_single_file_unimported_resource_is_undefined() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -20086,7 +20126,7 @@ fn main() {
     std::fs::write(&path, src).unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -20139,7 +20179,7 @@ fn main() {
     .unwrap();
 
     let out = karac_bin()
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--legacy", path.to_str().unwrap()])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -22532,7 +22572,7 @@ fn main() {}
     }
     if let Some(wt) = wasmtime_on_path() {
         let run = std::process::Command::new(wt)
-            .args(["run", "--invoke", "make-point(2, 3)"])
+            .args(["run", "--legacy", "--invoke", "make-point(2, 3)"])
             .arg(&component)
             .output()
             .unwrap();
@@ -22617,7 +22657,7 @@ fn main() {}
     }
     if let Some(wt) = wasmtime_on_path() {
         let run = std::process::Command::new(wt)
-            .args(["run", "--invoke", "area({x: 2, y: 3})"])
+            .args(["run", "--legacy", "--invoke", "area({x: 2, y: 3})"])
             .arg(&component)
             .output()
             .unwrap();
@@ -22628,7 +22668,12 @@ fn main() {}
             String::from_utf8_lossy(&run.stderr),
         );
         let run2 = std::process::Command::new(wt)
-            .args(["run", "--invoke", "translate({x: 2, y: 3}, 10, 20)"])
+            .args([
+                "run",
+                "--legacy",
+                "--invoke",
+                "translate({x: 2, y: 3}, 10, 20)",
+            ])
             .arg(&component)
             .output()
             .unwrap();
@@ -22711,7 +22756,7 @@ fn main() {}
     if let Some(wt) = wasmtime_on_path() {
         let invoke = |args: &str| -> String {
             let o = std::process::Command::new(wt)
-                .args(["run", "--invoke", args])
+                .args(["run", "--legacy", "--invoke", args])
                 .arg(&component)
                 .output()
                 .unwrap();
@@ -22804,7 +22849,7 @@ fn main() {}
     if let Some(wt) = wasmtime_on_path() {
         let invoke = |args: &str| -> String {
             let o = std::process::Command::new(wt)
-                .args(["run", "--invoke", args])
+                .args(["run", "--legacy", "--invoke", args])
                 .arg(&component)
                 .output()
                 .unwrap();
@@ -29584,7 +29629,7 @@ fn test_xpkg_import_typechecks_and_builds() {
 fn test_xpkg_run_interpreter_sees_dep_modules() {
     let tmp = xpkg_fixture("xpkg-run");
     let out = karac_bin()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .current_dir(tmp.join("app"))
         .output()
@@ -29719,7 +29764,7 @@ fn test_xpkg_transitive_path_dep_resolves() {
     )
     .unwrap();
     let run = karac_bin()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("src/main.kara")
         .current_dir(tmp.join("app"))
         .output()
@@ -31097,7 +31142,12 @@ fn test_run_interp_env_args_is_the_programs_argv() {
 #[test]
 fn test_run_interp_env_args_without_forwarding_is_script_only() {
     let out = karac_bin()
-        .args(["run", "--interp", "tests/snapshots/env_args_echo.kara"])
+        .args([
+            "run",
+            "--legacy",
+            "--interp",
+            "tests/snapshots/env_args_echo.kara",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -32052,7 +32102,10 @@ fn every_lane_renders_the_deprecated_warning_identically() {
         "the control lane must warn, else this test proves nothing"
     );
 
-    for lane in [vec!["run", "--interp", &path], vec!["run", &path]] {
+    for lane in [
+        vec!["run", "--legacy", "--interp", &path],
+        vec!["run", "--legacy", &path],
+    ] {
         let label = lane.join(" ");
         let out = karac_bin().args(&lane).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -32070,7 +32123,7 @@ fn every_lane_renders_the_deprecated_warning_identically() {
 
     // `-A <lint>` suppresses it in the run lane exactly as in check.
     let out = karac_bin()
-        .args(["run", "--interp", "-A", "deprecated", &path])
+        .args(["run", "--legacy", "--interp", "-A", "deprecated", &path])
         .output()
         .unwrap();
     assert!(
@@ -32104,7 +32157,7 @@ fn run_prints_must_use_exactly_once() {
     )
     .unwrap();
     let out = karac_bin()
-        .args(["run", "--interp", src.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", src.to_str().unwrap()])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -32436,8 +32489,8 @@ fn test_wildcard_and_nested_group_imports_run_build_parity() {
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
 
-    let interp = stdout_of(&["run", "--interp", "src/main.kara"], true);
-    let jit = stdout_of(&["run", "src/main.kara"], true);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "src/main.kara"], true);
+    let jit = stdout_of(&["run", "--legacy", "src/main.kara"], true);
     assert_eq!(
         interp.as_deref(),
         Some(expected),
@@ -32584,13 +32637,13 @@ fn test_same_named_items_in_two_modules_run_on_every_surface() {
                 .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
         };
         assert_eq!(
-            stdout_of(&["run", "--interp", "src/main.kara"]).as_deref(),
+            stdout_of(&["run", "--legacy", "--interp", "src/main.kara"]).as_deref(),
             Some(case.expected),
             "{}: interpreter",
             case.tag,
         );
         assert_eq!(
-            stdout_of(&["run", "src/main.kara"]).as_deref(),
+            stdout_of(&["run", "--legacy", "src/main.kara"]).as_deref(),
             Some(case.expected),
             "{}: LLJIT `karac run`",
             case.tag,
@@ -32644,12 +32697,12 @@ fn test_a_renamed_item_is_still_reachable_through_every_import_form() {
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
     assert_eq!(
-        stdout_of(&["run", "--interp", "src/main.kara"]).as_deref(),
+        stdout_of(&["run", "--legacy", "--interp", "src/main.kara"]).as_deref(),
         Some(expected),
         "interpreter",
     );
     assert_eq!(
-        stdout_of(&["run", "src/main.kara"]).as_deref(),
+        stdout_of(&["run", "--legacy", "src/main.kara"]).as_deref(),
         Some(expected),
         "LLJIT `karac run`",
     );
@@ -32742,10 +32795,10 @@ fn module_binding_surfaces(tag: &str, main: &str) -> (bool, Vec<(String, String)
     };
     let checked = run(&["check", "src/main.kara"]).is_some();
     let mut outs = Vec::new();
-    if let Some(o) = run(&["run", "--interp", "src/main.kara"]) {
+    if let Some(o) = run(&["run", "--legacy", "--interp", "src/main.kara"]) {
         outs.push(("interp".to_string(), o));
     }
-    if let Some(o) = run(&["run", "src/main.kara"]) {
+    if let Some(o) = run(&["run", "--legacy", "src/main.kara"]) {
         outs.push(("jit".to_string(), o));
     }
     let exe = tmp.join("mb");
@@ -32898,10 +32951,13 @@ fn test_a_contested_member_reached_through_a_binding_chain() {
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
     assert_eq!(
-        run(&["run", "--interp", "src/main.kara"]).as_deref(),
+        run(&["run", "--legacy", "--interp", "src/main.kara"]).as_deref(),
         Some("1\n2\n")
     );
-    assert_eq!(run(&["run", "src/main.kara"]).as_deref(), Some("1\n2\n"));
+    assert_eq!(
+        run(&["run", "--legacy", "src/main.kara"]).as_deref(),
+        Some("1\n2\n")
+    );
     let exe = tmp.join("mb");
     if run(&["build"]).is_some() && exe.exists() {
         let out = Command::new(&exe).output().unwrap();
@@ -33041,7 +33097,10 @@ fn test_platform_is_refused_by_build_and_run() {
     let tmp = platform_split_project("refused", None);
     for (args, verb) in [
         (vec!["build", "--platform=macos"], "emitted"),
-        (vec!["run", "--platform=macos", "src/main.kara"], "executed"),
+        (
+            vec!["run", "--legacy", "--platform=macos", "src/main.kara"],
+            "executed",
+        ),
     ] {
         let out = karac_bin()
             .current_dir(&tmp)
@@ -33204,7 +33263,7 @@ fn map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces() {
 
     let run = |seed: Option<&str>| -> String {
         let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
-        c.arg("run").arg("--interp").arg(&src);
+        c.args(["run", "--legacy"]).arg("--interp").arg(&src);
         match seed {
             Some(s) => {
                 c.env("KARAC_HASH_SEED", s);
@@ -33285,7 +33344,7 @@ fn stable_hash_digest_does_not_move_with_the_process_hash_seed() {
 
     let run = |interp: bool, seed: &str| -> String {
         let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
-        c.arg("run");
+        c.args(["run", "--legacy"]);
         if interp {
             c.arg("--interp");
         }
@@ -33380,7 +33439,7 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
     let interp: Vec<(String, String)> = (0..6)
         .map(|_| {
             let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-                .arg("run")
+                .args(["run", "--legacy"])
                 .arg("--interp")
                 .arg(&src)
                 // An inherited pin would freeze the CONTROL too and make the
@@ -33517,7 +33576,7 @@ fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
     let interp: Vec<(String, String)> = (0..6)
         .map(|_| {
             let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-                .arg("run")
+                .args(["run", "--legacy"])
                 .arg("--interp")
                 .arg(&src)
                 // An inherited pin would freeze the CONTROL too and make the
@@ -33617,7 +33676,7 @@ fn test_fix_deletes_the_underscore_that_attaches_a_redundant_suffix() {
     // A rewrite that produced a broken file would still "apply", so pin that
     // the result is check-clean and evaluates to the same numbers.
     let run = karac_bin()
-        .args(["run", "--interp", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", path.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(
@@ -33791,8 +33850,8 @@ fn main() {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = stdout_of(&["run", "--interp", "ed.kara"]);
-    let jit = stdout_of(&["run", "ed.kara"]);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "ed.kara"]);
+    let jit = stdout_of(&["run", "--legacy", "ed.kara"]);
 
     let built = karac_bin()
         .current_dir(&tmp)
@@ -34017,8 +34076,8 @@ fn main() {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = stdout_of(&["run", "--interp", "w.kara"]);
-    let jit = stdout_of(&["run", "w.kara"]);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "w.kara"]);
+    let jit = stdout_of(&["run", "--legacy", "w.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "w.kara"])
@@ -34076,7 +34135,7 @@ fn main() -> Result[(), Wide] {
 
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "m.kara"])
+        .args(["run", "--legacy", "m.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
@@ -34147,7 +34206,7 @@ fn main() -> Result[(), AllocError] {
     for i in 0..5 {
         let out = karac_bin()
             .current_dir(&tmp)
-            .args(["run", "m.kara"])
+            .args(["run", "--legacy", "m.kara"])
             .output()
             .expect("JIT must run — it needs no runtime archive");
         let so = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -34194,7 +34253,7 @@ fn main() -> Result[(), Wide] {
 
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "m.kara"])
+        .args(["run", "--legacy", "m.kara"])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
@@ -34314,8 +34373,8 @@ fn test_main_result_err_uses_display_impl_on_every_backend() {
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
         };
-        let interp = stderr_of(&["run", "--interp", "m.kara"]);
-        let jit = stderr_of(&["run", "m.kara"]);
+        let interp = stderr_of(&["run", "--legacy", "--interp", "m.kara"]);
+        let jit = stderr_of(&["run", "--legacy", "m.kara"]);
         let built = karac_bin()
             .current_dir(&tmp)
             .args(["build", "m.kara"])
@@ -34377,7 +34436,7 @@ fn test_main_result_err_render_is_deterministic_across_runs() {
     let run_once = || -> Option<String> {
         karac_bin()
             .current_dir(&tmp)
-            .args(["run", "--interp", "m.kara"])
+            .args(["run", "--legacy", "--interp", "m.kara"])
             .output()
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
@@ -34450,8 +34509,8 @@ fn test_dbg_renders_identically_on_all_three_backends() {
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
     };
-    let interp = stderr_of(&["run", "--interp", "d.kara"]);
-    let jit = stderr_of(&["run", "d.kara"]);
+    let interp = stderr_of(&["run", "--legacy", "--interp", "d.kara"]);
+    let jit = stderr_of(&["run", "--legacy", "d.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "d.kara"])
@@ -34536,7 +34595,7 @@ fn test_dbg_is_identity_and_evaluates_its_argument_once() {
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = stdout_of(&["run", "--interp", "i.kara"]);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "i.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "i.kara"])
@@ -34594,7 +34653,7 @@ fn test_dbg_json_form_is_identical_across_backends() {
     };
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "--output=json", "j.kara"])
+        .args(["run", "--legacy", "--interp", "--output=json", "j.kara"])
         .output()
         .ok()
         .map(|o| dbg_lines(&String::from_utf8_lossy(&o.stderr)));
@@ -34668,7 +34727,7 @@ fn test_dbg_tags_par_branches_with_task_ids_on_every_backend() {
     };
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "p.kara"])
+        .args(["run", "--legacy", "--interp", "p.kara"])
         .output()
         .ok()
         .map(|o| sorted_dbg(&String::from_utf8_lossy(&o.stderr)));
@@ -34802,7 +34861,7 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
     let once = || -> Option<String> {
         karac_bin()
             .current_dir(&tmp)
-            .args(["run", "--interp", "o.kara"])
+            .args(["run", "--legacy", "--interp", "o.kara"])
             .output()
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
@@ -34874,7 +34933,7 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
     for attempt in 0..12 {
         let out = karac_bin()
             .current_dir(&tmp)
-            .args(["run", "--interp", "s.kara"])
+            .args(["run", "--legacy", "--interp", "s.kara"])
             .output()
             .expect("karac run --interp");
         assert_eq!(
@@ -34888,7 +34947,7 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
     // JIT and AOT — the halves that refused to compile at all before.
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "s.kara"])
+        .args(["run", "--legacy", "s.kara"])
         .output()
         .expect("karac run");
     assert_eq!(
@@ -34961,7 +35020,7 @@ fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
 
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "n.kara"])
+        .args(["run", "--legacy", "--interp", "n.kara"])
         .output()
         .expect("karac run --interp");
     assert_eq!(
@@ -35027,7 +35086,7 @@ fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
 
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "e.kara"])
+        .args(["run", "--legacy", "--interp", "e.kara"])
         .output()
         .expect("karac run --interp");
     assert_eq!(
@@ -35038,7 +35097,7 @@ fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
 
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "e.kara"])
+        .args(["run", "--legacy", "e.kara"])
         .output()
         .expect("karac run");
     assert_eq!(
@@ -35119,7 +35178,7 @@ fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
 
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "cyc.kara"])
+        .args(["run", "--legacy", "--interp", "cyc.kara"])
         .output()
         .expect("karac run --interp");
     assert_eq!(
@@ -35130,7 +35189,7 @@ fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
 
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "cyc.kara"])
+        .args(["run", "--legacy", "cyc.kara"])
         .output()
         .expect("karac run");
     assert_eq!(
@@ -35224,7 +35283,7 @@ fn test_dbg_of_a_would_be_headerless_chain_renders_on_all_three_backends() {
 
     let interp = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "s.kara"])
+        .args(["run", "--legacy", "--interp", "s.kara"])
         .output()
         .expect("karac run --interp");
     assert_eq!(
@@ -35235,7 +35294,7 @@ fn test_dbg_of_a_would_be_headerless_chain_renders_on_all_three_backends() {
 
     let jit = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "s.kara"])
+        .args(["run", "--legacy", "s.kara"])
         .output()
         .expect("karac run");
     assert_eq!(
@@ -35300,7 +35359,7 @@ fn test_shared_struct_still_has_no_display_impl() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["run", "--interp", "d.kara"])
+        .args(["run", "--legacy", "--interp", "d.kara"])
         .output()
         .expect("karac run --interp");
     let combined = format!(
@@ -35367,8 +35426,8 @@ fn main() {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = stdout_of(&["run", "--interp", "ts.kara"]);
-    let jit = stdout_of(&["run", "ts.kara"]);
+    let interp = stdout_of(&["run", "--legacy", "--interp", "ts.kara"]);
+    let jit = stdout_of(&["run", "--legacy", "ts.kara"]);
 
     let built = karac_bin()
         .current_dir(&tmp)
@@ -35445,7 +35504,7 @@ fn test_par_branch_runtime_error_fails_the_run() {
     let run = |name: &str| {
         let o = karac_bin()
             .current_dir(&tmp)
-            .args(["run", "--interp", name])
+            .args(["run", "--legacy", "--interp", name])
             .output()
             .expect("run karac");
         (
@@ -35504,8 +35563,8 @@ fn test_fault_in_return_operand_stops_every_backend() {
                 )
             })
     };
-    let interp = run(&["run", "--interp", "b.kara"]);
-    let jit = run(&["run", "b.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "b.kara"]);
+    let jit = run(&["run", "--legacy", "b.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "b.kara"])
@@ -35595,8 +35654,8 @@ fn test_tail_position_loop_value_matches_across_backends() {
                 )
             })
     };
-    let interp = run(&["run", "--interp", "b.kara"]);
-    let jit = run(&["run", "b.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "b.kara"]);
+    let jit = run(&["run", "--legacy", "b.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "b.kara"])
@@ -35688,8 +35747,8 @@ fn test_alloc_error_displays_its_specified_prose_on_every_backend() {
             .success()
             .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
     };
-    let interp = run(&["run", "--interp", "m.kara"]);
-    let jit = run(&["run", "m.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+    let jit = run(&["run", "--legacy", "m.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "m.kara"])
@@ -35906,8 +35965,8 @@ fn main() {
             )
         })
     };
-    let interp = run(&["run", "--interp", "m.kara"]);
-    let jit = run(&["run", "m.kara"]);
+    let interp = run(&["run", "--legacy", "--interp", "m.kara"]);
+    let jit = run(&["run", "--legacy", "m.kara"]);
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "m.kara"])
@@ -36012,7 +36071,7 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
             Some(String::from_utf8_lossy(&o.stderr).into_owned())
         };
         // The interpreter is the oracle — it renders every one of these.
-        let interp = stderr_of(&["run", "--interp", "m.kara"]).unwrap_or_default();
+        let interp = stderr_of(&["run", "--legacy", "--interp", "m.kara"]).unwrap_or_default();
         let first = |s: &str| s.lines().next().unwrap_or("").to_string();
         let want = first(&interp);
         assert!(
@@ -36021,7 +36080,7 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
              prefix ({want:?}) — fix the oracle before trusting the comparison"
         );
 
-        let jit = first(&stderr_of(&["run", "m.kara"]).unwrap_or_default());
+        let jit = first(&stderr_of(&["run", "--legacy", "m.kara"]).unwrap_or_default());
         assert_eq!(jit, want, "{name}: `karac run` (JIT) must match --interp");
 
         let built = karac_bin()
@@ -36153,7 +36212,7 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
         write(&tmp.join(&file), &src);
         let interp = karac_bin()
             .current_dir(&tmp)
-            .args(["run", "--interp", &file])
+            .args(["run", "--legacy", "--interp", &file])
             .output()
             .expect("karac run --interp");
         let want = String::from_utf8_lossy(&interp.stderr)
@@ -36274,10 +36333,10 @@ fn test_main_result_error_nested_result_keeps_tag_and_payload() {
 
         // The interpreter is the oracle, and it was already correct — pin it
         // so a regression there cannot quietly redefine "agreement".
-        let interp = first(&stderr_of(&["run", "--interp", "m.kara"]));
+        let interp = first(&stderr_of(&["run", "--legacy", "--interp", "m.kara"]));
         assert_eq!(interp, *want, "{name}: interpreter oracle");
 
-        let jit = first(&stderr_of(&["run", "m.kara"]));
+        let jit = first(&stderr_of(&["run", "--legacy", "m.kara"]));
         assert_eq!(jit, *want, "{name}: `karac run` (JIT) must match --interp");
 
         let built = karac_bin()
@@ -36443,12 +36502,12 @@ fn test_main_result_error_nested_result_survives_question_propagation() {
     };
     let want = "Error: Ok(3)";
     assert_eq!(
-        first(&stderr_of(&["run", "--interp", "m.kara"])),
+        first(&stderr_of(&["run", "--legacy", "--interp", "m.kara"])),
         want,
         "interpreter oracle"
     );
     assert_eq!(
-        first(&stderr_of(&["run", "m.kara"])),
+        first(&stderr_of(&["run", "--legacy", "m.kara"])),
         want,
         "`karac run` (JIT) must match --interp"
     );
@@ -36840,7 +36899,7 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
         // "this is a compiler bug" diagnostic.
         let interp = karac_bin()
             .current_dir(&tmp)
-            .arg("run")
+            .args(["run", "--legacy"])
             .arg("--interp")
             .arg("src/main.kara")
             .output()
@@ -37175,7 +37234,7 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
     // The interpreter is the oracle: it has no descriptor layout to get wrong.
     let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "--interp", "envffi.kara"])
+        .args(["run", "--legacy", "--interp", "envffi.kara"])
         .output()
         .expect("spawn karac run --interp");
     assert!(
@@ -37196,7 +37255,7 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_SSO", sso)
-            .args(["run", "envffi.kara"])
+            .args(["run", "--legacy", "envffi.kara"])
             .output()
             .expect("spawn karac run");
         assert!(
@@ -37316,7 +37375,7 @@ fn test_sso_string_slice_routes_match_the_interpreter() {
     // path to get wrong.
     let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "--interp", "slice.kara"])
+        .args(["run", "--legacy", "--interp", "slice.kara"])
         .output()
         .expect("spawn karac run --interp");
     assert!(
@@ -37334,7 +37393,7 @@ fn test_sso_string_slice_routes_match_the_interpreter() {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_SSO", sso)
-            .args(["run", "slice.kara"])
+            .args(["run", "--legacy", "slice.kara"])
             .output()
             .expect("spawn karac run");
         assert!(
@@ -37557,7 +37616,7 @@ fn main() {
     // The interpreter is the oracle: it has no inline descriptor to get wrong.
     let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "--interp", "deinline.kara"])
+        .args(["run", "--legacy", "--interp", "deinline.kara"])
         .output()
         .expect("spawn karac run --interp");
     assert!(
@@ -37577,7 +37636,7 @@ fn main() {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_SSO", sso)
-            .args(["run", "deinline.kara"])
+            .args(["run", "--legacy", "deinline.kara"])
             .output()
             .expect("spawn karac run");
         assert!(

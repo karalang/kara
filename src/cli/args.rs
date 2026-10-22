@@ -290,6 +290,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut timeout: Option<std::time::Duration> = None;
     let mut interp = false;
+    let mut legacy = false;
     let mut i = file_idx;
     let mut program_args: Vec<String> = Vec::new();
     while i < args.len() {
@@ -310,6 +311,10 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
             // `--interp`: force the tree-walk interpreter over the default LLJIT
             // executor (Slice 6c JIT-default flip). Ergonomic `KARAC_RUN_JIT=0`.
             interp = true;
+        } else if arg == "--legacy" {
+            // The legacy pipeline (JIT, or its tree-walk interpreter under
+            // `--interp`) until M3 deletes it (B-2026-10-22-12).
+            legacy = true;
         } else if let Some(rest) = arg.strip_prefix("--timeout=") {
             timeout = Some(parse_timeout_arg(rest));
         } else if arg == "--timeout" {
@@ -377,6 +382,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         lint_overrides,
         timeout,
         interp,
+        legacy,
         program_args,
     }
 }
@@ -1485,6 +1491,7 @@ fn parse_run_example_command(args: &[String]) -> Command {
     let mut name: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut sequential = false;
+    let mut legacy = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -1501,6 +1508,8 @@ fn parse_run_example_command(args: &[String]) -> Command {
             output = OutputMode::Jsonl;
         } else if arg == "--sequential" {
             sequential = true;
+        } else if arg == "--legacy" {
+            legacy = true;
         } else if let Some(rest) = arg.strip_prefix("--output=") {
             eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
             process::exit(1);
@@ -1524,6 +1533,7 @@ fn parse_run_example_command(args: &[String]) -> Command {
         output,
         sequential,
         lint_overrides,
+        legacy,
     }
 }
 

@@ -426,6 +426,15 @@ pub fn source_name() -> Option<&'static str> {
     SOURCE_NAME.get().map(String::as_str)
 }
 
+/// The program's argv as `karac run` was given it (the script, then what
+/// followed `--`), for `env.args()`; unset, the argv is `["main"]`.
+static PROGRAM_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Gives `env.args()` the program's argv. The first argv set wins.
+pub fn set_program_args(args: Vec<String>) {
+    let _ = PROGRAM_ARGS.set(args);
+}
+
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
@@ -1525,10 +1534,17 @@ impl<'a> Interp<'a> {
                 Ok(Value::Int(i128::from(x)))
             }
             ("Env", "args") => {
-                // argv[0] only: the MIR interpreter passes no arguments,
-                // and legacy counts the program name.
-                let prog = self.alloc_box("String", Value::Str("main".into()));
-                Ok(self.alloc_box(ty_name, Value::Agg(vec![prog])))
+                // The argv `karac run` set, or argv[0] alone, as legacy
+                // counts the program name.
+                let argv = PROGRAM_ARGS
+                    .get()
+                    .cloned()
+                    .unwrap_or_else(|| vec!["main".to_string()]);
+                let items = argv
+                    .into_iter()
+                    .map(|a| self.alloc_box("String", Value::Str(a)))
+                    .collect();
+                Ok(self.alloc_box(ty_name, Value::Agg(items)))
             }
             ("Option", "take" | "replace") if matches!(args.first(), Some(Value::Ref(_))) => {
                 // Moves the value out of the borrowed `Option` and leaves

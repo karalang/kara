@@ -221,7 +221,7 @@ fn example_packages_entry_points_run() {
     ];
     for (dir, entry, expected) in cases {
         let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-            .arg("run")
+            .args(["run", "--legacy"])
             .arg("--interp")
             .arg(entry)
             .current_dir(package_dir(dir))

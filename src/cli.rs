@@ -36,6 +36,7 @@ mod maintenance_cmds;
 mod pkg_cmds;
 mod query_cmd;
 mod run_check_cmds;
+mod run_v2;
 mod test_cmd;
 
 use build_cmds::*;
@@ -163,6 +164,9 @@ pub enum Command {
         /// the internal `karac_jit_runner` plus a temp `.ll` path under the JIT
         /// (B-2026-07-29-18).
         program_args: Vec<String>,
+        /// `--legacy` (or `KARAC_LEGACY=1`): run on the legacy pipeline
+        /// rather than v2, until M3 deletes it (B-2026-10-22-12).
+        legacy: bool,
     },
     RunExample {
         name: String,
@@ -170,6 +174,8 @@ pub enum Command {
         sequential: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
+        /// See [`Command::Run::legacy`].
+        legacy: bool,
     },
     Check {
         file: String,
@@ -787,7 +793,9 @@ pub fn execute(cmd: Command) {
             timeout,
             interp,
             program_args,
-        } => cmd_run(
+            legacy,
+        } => run_v2::cmd_run_either(
+            legacy,
             &file,
             output,
             sequential,
@@ -803,7 +811,8 @@ pub fn execute(cmd: Command) {
             output,
             sequential,
             lint_overrides,
-        } => cmd_run_example(&name, output, sequential, lint_overrides),
+            legacy,
+        } => cmd_run_example(&name, output, sequential, lint_overrides, legacy),
         Command::Check {
             file,
             output,

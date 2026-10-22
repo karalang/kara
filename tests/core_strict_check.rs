@@ -238,7 +238,7 @@ fn legacy_run_still_accepts_use_after_move() {
          }\n",
     );
     let out = karac()
-        .args(["run", "--interp"])
+        .args(["run", "--legacy", "--interp"])
         .arg(&path)
         .output()
         .unwrap();
@@ -507,7 +507,7 @@ fn a_ref_binding_runs_and_formats_under_legacy() {
          }\n",
     );
     let out = karac()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("--interp")
         .arg(&path)
         .output()
@@ -1595,7 +1595,7 @@ fn a_mut_ref_pattern_writes_through_its_scrutinee() {
     // The legacy backends would bind a copy, so they refuse it.
     let (dir, path) = fixture("mut-ref-pattern-run", src);
     let out = karac()
-        .args(["run", "--interp"])
+        .args(["run", "--legacy", "--interp"])
         .arg(&path)
         .output()
         .unwrap();
@@ -2567,7 +2567,7 @@ fn main() {
     );
     let (dir, path) = fixture("int_to_f64_run", src);
     let out = karac()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("--interp")
         .arg(&path)
         .output()
@@ -3558,7 +3558,7 @@ fn collect_of_strings_into_set_deque_and_map() {
     accepted("collect-strings-into-set", src);
     let (dir, path) = fixture("collect-strings-into-set-run", src);
     let out = karac()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("--interp")
         .arg(&path)
         .output()
@@ -3587,7 +3587,7 @@ fn collect_into_sorted_set_and_map() {
     accepted("collect-into-sorted", src);
     let (dir, path) = fixture("collect-into-sorted-run", src);
     let out = karac()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg("--interp")
         .arg(&path)
         .output()

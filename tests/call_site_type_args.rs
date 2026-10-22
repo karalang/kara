@@ -44,7 +44,7 @@ fn main() {
         String::from_utf8_lossy(&out.stderr)
     );
     let out = karac()
-        .args(["run", "--interp"])
+        .args(["run", "--legacy", "--interp"])
         .arg(&path)
         .output()
         .unwrap();

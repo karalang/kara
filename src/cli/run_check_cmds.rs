@@ -31,6 +31,7 @@ pub(super) fn cmd_run_example(
     output: OutputMode,
     sequential: bool,
     lint_overrides: crate::lints::CliLintOverrides,
+    legacy: bool,
 ) {
     // Try single-file form first, then project-style directory form.
     let single_file = format!("examples/{name}.kara");
@@ -53,7 +54,8 @@ pub(super) fn cmd_run_example(
     // with the same `--interp`/`KARAC_RUN_JIT=0` escape hatches honored inside.
     // `run --example` takes no trailing program arguments — the examples it
     // runs are self-contained demos, so the program argv is just the script.
-    cmd_run(
+    super::run_v2::cmd_run_either(
+        legacy,
         &path,
         output,
         sequential,
@@ -477,13 +479,43 @@ mod jit_child_signals {
 /// 2084/2084 codegen-E2E-via-JIT parity), but one-shot rather than batched.
 #[cfg(feature = "llvm")]
 pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i32 {
+    run_ir_via_jit_subprocess_with(ir, program_argv, None, false).code
+}
+
+/// How a [`run_ir_via_jit_subprocess_with`] run ended.
+#[cfg(feature = "llvm")]
+pub(super) struct JitRun {
+    /// The runner's exit code, a signal death as `128 + signal`.
+    pub code: i32,
+    /// What the program wrote to stderr, when the caller asked to capture it.
+    pub stderr: Option<String>,
+    /// The run passed its deadline and the runner was killed.
+    pub timed_out: bool,
+}
+
+/// [`run_ir_via_jit_subprocess`], with a wall-clock deadline after which the
+/// runner is killed, and the program's stderr captured instead of inherited
+/// when `capture_stderr` (v2 `karac run --output=json` turns its runtime
+/// reports into JSON, B-2026-10-22-12).
+#[cfg(feature = "llvm")]
+pub(super) fn run_ir_via_jit_subprocess_with(
+    ir: &str,
+    program_argv: &[String],
+    timeout: Option<std::time::Duration>,
+    capture_stderr: bool,
+) -> JitRun {
+    let failed = |code| JitRun {
+        code,
+        stderr: None,
+        timed_out: false,
+    };
     let ir_path = std::env::temp_dir().join(format!("karac_run_{}_jit.ll", std::process::id()));
     if let Err(e) = std::fs::write(&ir_path, ir) {
         eprintln!(
             "error: could not write JIT IR to {}: {e}",
             ir_path.display()
         );
-        return 1;
+        return failed(1);
     }
     let runner = match crate::test_jit_dispatch::locate_karac_jit_runner() {
         Some(p) => p,
@@ -493,7 +525,7 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
                  karac with --features llvm (the runner ships beside the karac binary)"
             );
             let _ = std::fs::remove_file(&ir_path);
-            return 1;
+            return failed(1);
         }
     };
     // `.status()` inherits stdin/stdout/stderr, so the JIT'd program writes
@@ -520,7 +552,11 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
     // is the only party still alive on the paths where this process is killed
     // outright.
     let forwarder = jit_child_signals::Forwarder::arm();
-    let child = std::process::Command::new(&runner)
+    let mut command = std::process::Command::new(&runner);
+    if capture_stderr {
+        command.stderr(std::process::Stdio::piped());
+    }
+    let child = command
         .arg(&ir_path)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
         .env("KARAC_JIT_IR_UNLINK", "1")
@@ -537,19 +573,52 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
         Err(e) => {
             eprintln!("error: could not spawn karac_jit_runner: {e}");
             let _ = std::fs::remove_file(&ir_path);
-            return 1;
+            return failed(1);
         }
     };
     forwarder.attach(child.id());
-    let status = child.wait();
+    // Read the captured stderr on a thread of its own, so a program that
+    // writes more than a pipe holds cannot block on a reader that waits.
+    let reader = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut pipe, &mut text);
+            text
+        })
+    });
+    let mut timed_out = false;
+    let status = match timeout {
+        None => child.wait(),
+        Some(d) => {
+            let deadline = std::time::Instant::now() + d;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(s)) => break Ok(s),
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        timed_out = true;
+                        let _ = child.kill();
+                        break child.wait();
+                    }
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    Err(e) => break Err(e),
+                }
+            }
+        }
+    };
     drop(forwarder);
     let _ = std::fs::remove_file(&ir_path);
-    match status {
+    let stderr = reader.map(|r| r.join().unwrap_or_default());
+    let code = match status {
         Ok(s) => exit_code_of(&s),
         Err(e) => {
             eprintln!("error: could not wait for karac_jit_runner: {e}");
             1
         }
+    };
+    JitRun {
+        code,
+        stderr,
+        timed_out,
     }
 }
 
@@ -654,27 +723,16 @@ pub(super) fn program_declares_gpu_kernel(program: &crate::ast::Program) -> bool
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn cmd_run(
+/// What every `karac run` does before it reads the program, on either
+/// pipeline: the `--manifest`/`--no-manifest` exclusion, the discovered
+/// manifest (its profile and lints apply to the run), the toolchain pin and
+/// the dependency graph's diagnostics. Exits on a failure.
+pub(super) fn run_manifest_preamble(
     filename: &str,
     output: OutputMode,
-    sequential: bool,
     manifest_override: Option<&str>,
     no_manifest: bool,
-    lint_overrides: crate::lints::CliLintOverrides,
-    timeout: Option<std::time::Duration>,
-    interp: bool,
-    program_args: &[String],
-) {
-    // `dbg()` output format for a COMPILED run (design.md § `dbg()` —
-    // "Structured mode (`--output=json` or `--output=jsonl`)"). The interpreter
-    // takes the mode as a value (`DbgOutputMode`, below); a compiled program has
-    // no CLI flag of its own, so its runtime reads `KARAC_DBG_OUTPUT`. Set here,
-    // once, so the JIT subprocess inherits it — `run_ir_via_jit_subprocess`
-    // never sees `output` (B-2026-08-23-18).
-    if matches!(output, OutputMode::Json | OutputMode::Jsonl) {
-        std::env::set_var("KARAC_DBG_OUTPUT", "json");
-    }
+) -> Option<manifest::Manifest> {
     // Mutual exclusion at the entry point — both flags together would
     // be ambiguous (which wins?). Reject early so the operator gets a
     // clear diagnostic rather than a silent precedence rule.
@@ -770,6 +828,33 @@ pub(super) fn cmd_run(
             }
         }
     }
+
+    discovered_manifest
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn cmd_run(
+    filename: &str,
+    output: OutputMode,
+    sequential: bool,
+    manifest_override: Option<&str>,
+    no_manifest: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
+    timeout: Option<std::time::Duration>,
+    interp: bool,
+    program_args: &[String],
+) {
+    // `dbg()` output format for a COMPILED run (design.md § `dbg()` —
+    // "Structured mode (`--output=json` or `--output=jsonl`)"). The interpreter
+    // takes the mode as a value (`DbgOutputMode`, below); a compiled program has
+    // no CLI flag of its own, so its runtime reads `KARAC_DBG_OUTPUT`. Set here,
+    // once, so the JIT subprocess inherits it — `run_ir_via_jit_subprocess`
+    // never sees `output` (B-2026-08-23-18).
+    if matches!(output, OutputMode::Json | OutputMode::Jsonl) {
+        std::env::set_var("KARAC_DBG_OUTPUT", "json");
+    }
+    let discovered_manifest =
+        run_manifest_preamble(filename, output, manifest_override, no_manifest);
 
     let source = read_source(filename);
     let mut lint_overrides = lint_overrides;

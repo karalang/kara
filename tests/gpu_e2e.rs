@@ -91,7 +91,7 @@ fn scratch(tag: &str) -> PathBuf {
 
 fn run_interp(src_path: &Path) -> String {
     let out = karac()
-        .args(["run", "--interp"])
+        .args(["run", "--legacy", "--interp"])
         .arg(src_path)
         .output()
         .expect("spawn karac run --interp");
@@ -116,7 +116,7 @@ fn run_interp(src_path: &Path) -> String {
 /// `--interp` is precisely the lane the routing is supposed to select.
 fn run_default(src_path: &Path) -> String {
     let out = karac()
-        .arg("run")
+        .args(["run", "--legacy"])
         .arg(src_path)
         .output()
         .expect("spawn karac run");
@@ -2057,7 +2057,7 @@ fn gpu_u32_overflow_traps_at_its_own_boundary() {
         "compiled leg must trap with `integer overflow`, got: {err}"
     );
 
-    for args in [vec!["run"], vec!["run", "--interp"]] {
+    for args in [vec!["run", "--legacy"], vec!["run", "--legacy", "--interp"]] {
         let out = karac()
             .args(&args)
             .arg(&src)
@@ -2171,7 +2171,7 @@ fn gpu_integer_overflow_traps_on_every_surface() {
     );
 
     // Both interpreter lanes: `karac run` (routed) and explicit `--interp`.
-    for args in [vec!["run"], vec!["run", "--interp"]] {
+    for args in [vec!["run", "--legacy"], vec!["run", "--legacy", "--interp"]] {
         let out = karac()
             .args(&args)
             .arg(&src)

@@ -106,7 +106,7 @@ C
 
 # ---- 3. seed output, for parity alongside the memory verdicts ----
 echo "== seed (karac run) =="
-"$KARAC" run "$PROG" 2>&1 | sed 's/^/   /'
+"$KARAC" run --legacy "$PROG" 2>&1 | sed 's/^/   /'
 
 # ---- 4. ASAN leg ----
 echo "== emitted, under AddressSanitizer =="

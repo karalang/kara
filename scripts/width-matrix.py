@@ -180,12 +180,12 @@ def surfaces(path, workdir):
     """Return {surface: output} for every surface that produced one, plus a
     dict of surfaces that failed with the reason."""
     out, bad = {}, {}
-    rc, so, se = run(["karac", "run", "--interp", str(path)])
+    rc, so, se = run(["karac", "run", "--legacy", "--interp", str(path)])
     if rc != 0:
         return None, {"interp": (se or so).strip().splitlines()[:2]}
     out["interp"] = so
 
-    rc, so, se = run(["karac", "run", str(path)])
+    rc, so, se = run(["karac", "run", "--legacy", str(path)])
     if rc == 0:
         out["jit"] = so
     else:

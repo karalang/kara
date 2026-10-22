@@ -143,7 +143,7 @@ fn tangle_src(file: &str) -> PathBuf {
 /// legitimate "does not match".
 fn run_backend(file: &str, interp: bool) -> Option<String> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
-    cmd.arg("run");
+    cmd.args(["run", "--legacy"]);
     if interp {
         cmd.arg("--interp");
     }

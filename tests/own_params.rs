@@ -90,7 +90,7 @@ fn own_runs_like_a_bare_parameter() {
     )
     .unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
-        .args(["run", "--interp", path.to_str().unwrap()])
+        .args(["run", "--legacy", "--interp", path.to_str().unwrap()])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);

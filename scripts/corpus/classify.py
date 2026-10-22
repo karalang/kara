@@ -281,7 +281,7 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
             # the program, which is no language rule. `karac check` accepts
             # it, so it is judged on its output, with legacy's interpreter as
             # the legacy baseline.
-            li = sh([args.karac, "run", "--interp", "source.kara"], d, env, args.timeout)
+            li = sh([args.karac, "run", "--legacy", "--interp", "source.kara"], d, env, args.timeout)
             legacy_interp = (li.stdout, li.returncode) if li is not None else (None, None)
             expect = "stdout"
         if errs:

@@ -30,7 +30,7 @@ fn write(tag: &str, src: &str) -> PathBuf {
 /// asserts both print `expected`.
 fn runs_on_both(tag: &str, src: &str, expected: &str) {
     let path = write(tag, src);
-    for args in [&["run", "--interp"][..], &["__mir-run"][..]] {
+    for args in [&["run", "--legacy", "--interp"][..], &["__mir-run"][..]] {
         let out = karac().args(args).arg(&path).output().unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),

@@ -136,7 +136,11 @@ pub(super) fn print_subcommand_help(subcmd: &str) {
     let text = match subcmd {
         "run" => {
             "\
-karac run - Run a .kara program through the interpreter
+karac run - Check a .kara program and run it
+
+The program is checked as `karac check` checks it, built to MIR and run
+on the JIT (`--interp`: on the MIR interpreter). `--legacy` runs it on
+the legacy pipeline instead, until M3 deletes it.
 
 USAGE:
     karac run <file.kara> [options]
@@ -154,7 +158,12 @@ OPTIONS:
     --example NAME      Run examples/<NAME>.kara (or examples/<NAME>/src/main.kara)
     --output=json       Structured JSON output on stdout
     --output=jsonl      Streaming JSONL output on stdout
-    --sequential        Disable parallel execution in `par` blocks
+    --interp            Run on the MIR interpreter instead of the JIT
+    --legacy            Run on the legacy pipeline (its JIT, or its
+                        tree-walk interpreter with --interp).
+                        KARAC_LEGACY=1 does the same.
+    --sequential        Legacy only (with --legacy): run `par` branches
+                        one after another
     --manifest=<path>   Override manifest discovery — load the supplied
                         kara.toml instead of walking upward from the
                         script's directory. Mutually exclusive with
@@ -164,7 +173,7 @@ OPTIONS:
                         only, ignore any enclosing project's
                         [package].profile and karac-toolchain.toml pin).
                         Mutually exclusive with --manifest.
-    --timeout DURATION  Opt-in wall-clock cap on the interpreter. No
+    --timeout DURATION  Opt-in wall-clock cap on the run. No
                         default — long-running services / daemons /
                         REPLs are legitimate workloads, so a default
                         would silently break real operations. Useful
