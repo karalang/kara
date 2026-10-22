@@ -1,0 +1,60 @@
+== always | {"a": [1, 2], "b": {"x": 1}} | {"a": [2, 3], "b": {"y": 2}, "c": 5}
+  {"a": [1, 2, 2, 3], "b": {"x": 1, "y": 2}, "c": 5}
+== always | {"a": 1} | {"a": 2}
+  {"a": 2}
+== conservative | {"a": 1} | {"a": 2}
+  {"a": 1}
+== always | {"a": 1} | {"a": "s"}
+  {"a": "s"}
+== conservative | {"a": 1} | {"a": "s"}
+  {"a": 1}
+== always | [1, 2] | [3, 4]
+  [1, 2, 3, 4]
+== prepend | [1, 2] | [3, 4]
+  [3, 4, 1, 2]
+== unique | [1, 2, 3] | [2, 3, 4]
+  [1, 2, 3, 4]
+== unique | [{"a": 1}] | [{"a": 1}, {"b": 2}]
+  [{"a": 1}, {"b": 2}]
+== always | <1, 2> | <2, 3>
+  <1, 2, 3>
+== intersect | <1, 2, 3> | <2, 3, 4>
+  <2, 3>
+== setoverride | <1, 2> | <3, 4>
+  <3, 4>
+== always | <"b", "a"> | <"c", "a">
+  <"a", "b", "c">
+== raise | {"a": [1]} | {"a": [2], "b": 3}
+  {"a": [1, 2], "b": 3}
+== raise | {"a": 1} | {"b": 2}
+  {"a": 1, "b": 2}
+== raise | {"a": 1} | {"a": 2}
+  RAISE
+== raise | 1 | "s"
+  RAISE
+== ifnotempty | 5 | 0
+  0
+== ifnotempty | 5 | null
+  5
+== ifnotempty | 5 | "s"
+  "s"
+== ifnotempty | [1] | {}
+  [1]
+== ifnotempty | 5 | []
+  5
+== ifnotempty | false | true
+  true
+== always | {"pkgs": [{"n": "a"}], "env": {"p": "3"}} | {"pkgs": [{"n": "b"}], "env": {"q": "4"}, "ci": true}
+  {"pkgs": [{"n": "a"}, {"n": "b"}], "env": {"p": "3", "q": "4"}, "ci": true}
+== always | {"tags": <"x">} | {"tags": <"y", "x">}
+  {"tags": <"x", "y">}
+== prepend | {"a": {"x": 1}} | {"a": {"y": 2}}
+  {"a": {"y": 2}}
+== always | {"a": null} | {"a": 7}
+  {"a": 7}
+== conservative | {"a": null} | {"a": 7}
+  {"a": null}
+== always | {} | {"a": 1, "b": [2]}
+  {"a": 1, "b": [2]}
+== always | {"name": "old"} | {"name": "new"}
+  {"name": "new"}
