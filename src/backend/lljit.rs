@@ -538,7 +538,7 @@ impl LLJITEngine {
                     .to_string());
             }
 
-            let passes = CString::new(super::coro::coro_lowering_pipeline(module)).unwrap();
+            let passes = CString::new(super::coro_passes::coro_lowering_pipeline(module)).unwrap();
             let opts = LLVMCreatePassBuilderOptions();
             let run_err = LLVMRunPasses(module, passes.as_ptr(), tm, opts);
             LLVMDisposePassBuilderOptions(opts);

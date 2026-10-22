@@ -70,9 +70,8 @@ mod closures;
 mod collections;
 mod column;
 mod conc_state;
-pub mod mir;
-pub mod mir_aot;
-pub mod mir_asan;
+// The MIR backend lives in `crate::backend` (B-2026-10-22-24).
+pub use crate::backend::{mir, mir_aot, mir_asan};
 // B-2026-09-02-26 — `consume_class` now lives at CRATE level (`src/consume_class.rs`)
 // and is re-exported here so every `super::consume_class::` path keeps resolving.
 //
@@ -113,10 +112,8 @@ mod http;
 mod json;
 mod kernel;
 mod lazyframe;
-#[cfg(feature = "llvm")]
-mod lljit;
+use crate::backend::lljit;
 mod popcount_idiom;
-#[cfg(feature = "llvm")]
 pub use lljit::{LLJITEngine, ResourceTracker, PUBLISHED_LIBM_SYMBOLS};
 mod arena;
 mod contracts;
@@ -171,15 +168,16 @@ mod types_lowering;
 mod var_types;
 mod vec_method;
 
+pub use crate::backend::driver::{
+    link_executable, link_executable_exports, link_executable_with_sanitizer, link_native_library,
+    link_wasm_executable_threaded, print_target_cpu_listing, validate_target_cpu,
+    validate_target_features, NativeLibKind,
+};
 use driver::{
     apply_optimization_passes, create_target_machine, read_auto_par_env,
     read_runtime_debug_metadata_env, read_strip_contracts_env, read_strip_error_trace_env,
 };
-pub use driver::{
-    link_executable, link_executable_exports, link_executable_with_sanitizer, link_native_library,
-    link_wasm_executable_threaded, pin_runtime_debug_metadata, print_target_cpu_listing,
-    validate_target_cpu, validate_target_features, NativeLibKind, RuntimeDebugMetadataPin,
-};
+pub use driver::{pin_runtime_debug_metadata, RuntimeDebugMetadataPin};
 use helpers::{
     impl_target_name, make_generic_impl_method_function, make_impl_method_function,
     method_is_compiler_builtin, method_self_is_value,

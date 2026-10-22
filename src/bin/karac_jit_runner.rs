@@ -38,7 +38,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use karac::codegen::LLJITEngine;
+use karac::backend::lljit::LLJITEngine;
 
 // ── Panic-salvage for REPL mode (B-2026-07-09-4) ─────────────────────
 //
@@ -263,13 +263,13 @@ fn watch_for_parent_death() {
     // So prefer the pid the spawner DECLARED for itself. If we are no longer
     // its child by the time we look, it is gone and we exit now rather than
     // arming a watch that would never fire.
-    let declared = std::env::var(karac::test_jit_dispatch::SPAWNER_PID_ENV)
+    let declared = std::env::var(karac::backend::runner::SPAWNER_PID_ENV)
         .ok()
         .and_then(|s| s.trim().parse::<libc::pid_t>().ok())
         .filter(|p| *p > 1);
     // Remove it before the JIT'd program runs: anything IT spawns would
     // otherwise inherit a pid that is not its parent's and exit immediately.
-    std::env::remove_var(karac::test_jit_dispatch::SPAWNER_PID_ENV);
+    std::env::remove_var(karac::backend::runner::SPAWNER_PID_ENV);
 
     // SAFETY: `getppid` is a pure read of process state and cannot fail.
     let spawner = match declared {
@@ -503,7 +503,7 @@ fn repl_main() -> ExitCode {
     // item is shadowed (cell N+1 redefines cell N's `fn foo`) is a
     // follow-on; today the parser rejects same-scope redeclaration
     // at typecheck before reaching the runner.
-    let mut cell_trackers: Vec<karac::codegen::ResourceTracker<'_>> = Vec::new();
+    let mut cell_trackers: Vec<karac::backend::lljit::ResourceTracker<'_>> = Vec::new();
 
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();
@@ -598,7 +598,10 @@ fn run_one_cell<'a>(
     engine: &'a LLJITEngine,
     id: u64,
     ir: &str,
-) -> (CellOutcome, Option<karac::codegen::ResourceTracker<'a>>) {
+) -> (
+    CellOutcome,
+    Option<karac::backend::lljit::ResourceTracker<'a>>,
+) {
     let tracker = match engine.add_ir_module_with_tracker(ir) {
         Ok(t) => t,
         Err(e) => {
@@ -706,7 +709,7 @@ fn test_batch_main(prefix: &str) -> ExitCode {
     // binding — a write-only `Option` reassignment trips `unused_assignments`
     // since the tracker is kept only for its `Drop`/remove side effect, never
     // read. At most one element; `clear()` drops the prior module.
-    let mut module_trackers: Vec<karac::codegen::ResourceTracker<'_>> = Vec::new();
+    let mut module_trackers: Vec<karac::backend::lljit::ResourceTracker<'_>> = Vec::new();
 
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();

@@ -479,7 +479,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = vec![root.join("typed_hir.rs")];
         rust_files(&root.join("mir"), &mut files);
-        rust_files(&root.join("codegen/mir"), &mut files);
+        rust_files(&root.join("backend/mir"), &mut files);
         let kept: FxHashSet<&str> = ALWAYS_KEPT.iter().copied().collect();
         let mut missing: Vec<String> = Vec::new();
         for f in files {

@@ -131,7 +131,7 @@ pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> 
     let llcx = Context::create();
     let module = compile_mir(&llcx, "main", program, tys)?;
     if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
-        let tm = super::create_target_machine()?;
+        let tm = super::driver::create_target_machine()?;
         module
             .run_passes(
                 "function(sroa)",

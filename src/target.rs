@@ -273,7 +273,7 @@ pub fn is_v1_target_name(name: &str) -> bool {
 
 /// User-selected CPU baseline override (phase-10 `--target-cpu`;
 /// design.md § CPU Baseline Targeting). `None` (the default) keeps the
-/// per-target-triple table in `codegen/driver.rs::default_cpu_and_features`.
+/// per-target-triple table in `backend/driver.rs::default_cpu_and_features`.
 /// Set once at CLI startup by `cmd_build` / `cmd_build_project` after
 /// resolving the precedence chain `--target-cpu` flag > `KARAC_TARGET_CPU`
 /// env > `[release] target-cpu` in `kara.toml` — the codegen driver's

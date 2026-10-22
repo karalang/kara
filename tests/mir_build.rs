@@ -1538,7 +1538,7 @@ fn main() {
 
 // B-2026-10-14-31: `if let` / `while let` on a bare `None` take the
 // payload's type from the body. The compiled backend panicked in
-// src/codegen/mir/body.rs on the `()` payload typed HIR used to give it.
+// src/backend/mir/body.rs on the `()` payload typed HIR used to give it.
 #[test]
 fn mir_if_let_on_a_bare_none() {
     const SRC: &str = r#"fn main() {

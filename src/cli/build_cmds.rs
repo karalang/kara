@@ -4306,7 +4306,7 @@ pub(super) fn cmd_build_mir(
                 Ok(l)
             })
             .unwrap_or_else(|e| fail(format!("error[mir]: {e}")));
-        let built = crate::codegen::mir_aot::compile_program_object(
+        let built = crate::backend::mir_aot::compile_program_object(
             &lowered.program,
             &lowered.tys,
             &obj,
@@ -4316,7 +4316,7 @@ pub(super) fn cmd_build_mir(
         .map_err(|e| format!("llvm: {e}"))
         .and_then(|()| {
             let mut t = std::time::Instant::now();
-            let r = crate::codegen::link_executable(&obj.to_string_lossy(), &exe_path);
+            let r = crate::backend::driver::link_executable(&obj.to_string_lossy(), &exe_path);
             crate::mir::lower::phase_time("link", &mut t);
             r
         });

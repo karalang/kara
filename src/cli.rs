@@ -279,7 +279,7 @@ pub enum Command {
         /// means "flag omitted" — `cmd_build` then consults the
         /// `KARAC_TARGET_CPU` env var, then the discovered manifest's
         /// `[release] target-cpu`, then the per-target default table in
-        /// `codegen/driver.rs::default_cpu_and_features`. The literal
+        /// `backend/driver.rs::default_cpu_and_features`. The literal
         /// value `help` prints LLVM's supported-CPU listing for the
         /// active target and exits (mirrors `rustc -C target-cpu=help`);
         /// any other name is validated against that same listing before

@@ -2,7 +2,7 @@
 //!
 //! [`compile_program_object`] compiles a MIR program to a native object
 //! ([`compile_object`] does the same from the textual IR that
-//! [`super::mir::compile_mir_ir`] produces); the caller links it with [`super::link_executable`], which picks the runtime
+//! [`super::mir::compile_mir_ir`] produces); the caller links it with [`super::driver::link_executable`], which picks the runtime
 //! archive the object needs. This is what `karac build --mir` runs.
 //!
 //! The IR defines the C `main` itself, so the object links as a program
@@ -64,7 +64,7 @@ fn compile_module<'ctx>(
     opt: u8,
 ) -> Result<(), String> {
     let mut t = std::time::Instant::now();
-    let tm = super::create_target_machine()?;
+    let tm = super::driver::create_target_machine()?;
     module.set_triple(&tm.get_triple());
     module.set_data_layout(&tm.get_target_data().get_data_layout());
 
@@ -93,7 +93,7 @@ fn compile_module<'ctx>(
         crate::mir::lower::phase_time("plan codegen units", &mut t);
         let units = plan.units();
         let r = split::compile_units(module.as_mut_ptr(), &plan, obj, &|m, part| {
-            optimize_and_emit(m, part, opt, &super::create_target_machine()?)
+            optimize_and_emit(m, part, opt, &super::driver::create_target_machine()?)
         });
         crate::mir::lower::phase_time(&format!("opt + emission, {units} units"), &mut t);
         return r;

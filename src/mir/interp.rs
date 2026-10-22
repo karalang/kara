@@ -3167,7 +3167,7 @@ impl<'a> Interp<'a> {
     /// spaced ones tie with the middle element, a stable partition
     /// ([`Interp::partition`]); otherwise [`Interp::merge_order`]. The
     /// compiled sort makes the same calls in the same order
-    /// (src/codegen/mir/callable.rs `build_part_sort`), so the two agree
+    /// (src/backend/mir/callable.rs `build_part_sort`), so the two agree
     /// for any comparator, one that prints or panics included.
     fn sort_order(
         &mut self,
@@ -3250,7 +3250,7 @@ impl<'a> Interp<'a> {
     /// the same as a full pass would make, taken block by block so a
     /// compiled sort stays in cache. The compiled backend runs this
     /// schedule too (runtime/src/mir.rs `merge_passes`, and the emitted
-    /// sort in src/codegen/mir/callable.rs), so the comparator sees the
+    /// sort in src/backend/mir/callable.rs), so the comparator sees the
     /// same calls in the same order on each (B-2026-10-13-18).
     fn merge_order(
         &mut self,
@@ -8932,7 +8932,7 @@ impl<'a> Interp<'a> {
             ("powi", [Value::Float(a), Value::Int(n)]) => {
                 // Repeated squaring at the receiver's width, the same
                 // multiplications in the same order as the compiled loop
-                // (`src/codegen/mir/num.rs`), so the two agree to the bit.
+                // (`src/backend/mir/num.rs`), so the two agree to the bit.
                 let wide = matches!(self.tys.kind(ret), TyKind::Float(super::ty::FloatTy::F64));
                 let n = *n as i32;
                 Ok(Value::Float(if wide {

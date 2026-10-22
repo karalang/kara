@@ -150,14 +150,14 @@ pub fn parse_args(args: &[String]) -> Command {
             install_manifest_link(path);
             let ir = crate::mir::lower::build_source(&src).and_then(|l| {
                 crate::mir::lower::compiled_check(&l)?;
-                crate::codegen::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
+                crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
                     .map_err(|e| format!("llvm: {e}"))
             });
             let ir = ir.unwrap_or_else(|e| {
                 eprintln!("error[mir]: {e}");
                 process::exit(3);
             });
-            let Some(runner) = crate::test_jit_dispatch::locate_karac_jit_runner() else {
+            let Some(runner) = crate::backend::runner::locate_karac_jit_runner() else {
                 eprintln!("error[mir]: llvm: no karac_jit_runner beside karac");
                 process::exit(3);
             };
@@ -207,7 +207,7 @@ pub fn parse_args(args: &[String]) -> Command {
             let ir = crate::mir::lower::build_source(&src)
                 .and_then(|l| {
                     crate::mir::lower::compiled_check(&l)?;
-                    crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
+                    crate::backend::mir::compile_mir_ir(&l.program, &l.tys)
                         .map_err(|e| format!("llvm: {e}"))
                 })
                 .unwrap_or_else(|e| fail(e));
@@ -217,8 +217,8 @@ pub fn parse_args(args: &[String]) -> Command {
             }
             let obj = dir.join("main.o");
             let exe = dir.join("main");
-            let built = crate::codegen::mir_asan::compile_asan_object(&ir, &obj).and_then(|()| {
-                crate::codegen::link_executable_with_sanitizer(
+            let built = crate::backend::mir_asan::compile_asan_object(&ir, &obj).and_then(|()| {
+                crate::backend::driver::link_executable_with_sanitizer(
                     &obj.to_string_lossy(),
                     &exe.to_string_lossy(),
                     &["-fsanitize=address"],

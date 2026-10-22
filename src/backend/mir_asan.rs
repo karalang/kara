@@ -4,7 +4,7 @@
 //! [`compile_asan_object`] takes the textual IR that
 //! [`super::mir::compile_mir_ir`] produces, instruments every function it
 //! defines, and writes a native object. The caller links it with
-//! [`super::link_executable_with_sanitizer`] and `-fsanitize=address`, so the
+//! [`super::driver::link_executable_with_sanitizer`] and `-fsanitize=address`, so the
 //! runtime's `malloc`/`free` are intercepted too.
 //!
 //! Unlike the legacy harness (see `link_executable_with_sanitizer`), the

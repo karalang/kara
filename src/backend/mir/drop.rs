@@ -52,7 +52,7 @@ enum CellDrop {
     /// glue, then `karac_runtime_once_free` frees the cell.
     Once,
     /// A `TaskHandle`: a malloc'd block holding its task's state and result
-    /// (null once joined, `codegen/mir/task.rs`). A finished task's result
+    /// (null once joined, `backend/mir/task.rs`). A finished task's result
     /// drops through its glue before the block is freed; a running one's
     /// block is marked detached, for the task to free.
     Boxed,
@@ -60,7 +60,7 @@ enum CellDrop {
     /// then `karac_mir_arena_free` frees it.
     Arena,
     /// A `LazyLock`: a malloc'd block holding a `OnceLock` handle and the
-    /// erased initializer after it (`codegen/mir/cells.rs`). The held value
+    /// erased initializer after it (`backend/mir/cells.rs`). The held value
     /// and the cell drop as a `OnceLock`'s, then the initializer, then the
     /// block is freed.
     Lazy,

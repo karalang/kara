@@ -1269,7 +1269,7 @@ fn main() {
 fn the_mir_pipeline_does_not_call_the_legacy_interpreter() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
-    let mut dirs = vec![root.join("src/mir"), root.join("src/codegen/mir")];
+    let mut dirs = vec![root.join("src/mir"), root.join("src/backend")];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("a source directory") {
             let path = entry.expect("an entry").path();
@@ -1286,6 +1286,43 @@ fn the_mir_pipeline_does_not_call_the_legacy_interpreter() {
         }
     }
     assert!(found.is_empty(), "legacy interpreter calls: {found:#?}");
+}
+
+/// The MIR backend (`src/backend/`) reaches nothing in legacy codegen, which
+/// M3 deletes: legacy re-exports what the two share from the backend, never
+/// the other way round (M3 item 5, B-2026-10-22-24).
+#[test]
+fn the_mir_backend_does_not_reach_into_legacy_codegen() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    let mut seen = 0;
+    let mut dirs = vec![root.join("src/backend")];
+    let mut files = vec![root.join("src/backend.rs")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a source directory") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        seen += 1;
+        let text = std::fs::read_to_string(&path).expect("a source file");
+        for (i, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("crate::codegen") || code.contains("super::super") {
+                found.push(format!("{}:{}", path.display(), i + 1));
+            }
+        }
+    }
+    assert!(seen > 20, "only {seen} backend files scanned");
+    assert!(
+        found.is_empty(),
+        "legacy codegen reached from the backend: {found:#?}"
+    );
 }
 
 /// `forget(value)` takes the value and runs no drop for it, nor for what

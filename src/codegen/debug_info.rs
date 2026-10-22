@@ -231,9 +231,4 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
-/// Read the `KARAC_DEBUG_INFO` gate. Unset / `"0"` → off (the default); any
-/// other value → on. Mirrors the other codegen env gates (`read_auto_par_env`
-/// etc.). The `-g` / `--debug-info` CLI flag sets this var for its build.
-pub(super) fn read_debug_info_env() -> bool {
-    matches!(std::env::var("KARAC_DEBUG_INFO"), Ok(v) if v != "0")
-}
+pub(super) use crate::backend::read_debug_info_env;

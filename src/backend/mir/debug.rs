@@ -62,7 +62,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Starts the module's debug info for the source file `name`, when
     /// `KARAC_DEBUG_INFO` asks for it.
     pub(super) fn debug_init(&mut self, name: &str) {
-        if !crate::codegen::debug_info::read_debug_info_env() {
+        if !crate::backend::read_debug_info_env() {
             return;
         }
         let (file, dir) = file_and_dir(name);

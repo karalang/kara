@@ -15,6 +15,7 @@ pub mod cheader;
 // only the in-process check pipeline + `Interpreter`, so excluding these
 // modules from the wasm32 build is a strict subset of what the playground
 // needs — see `pub fn run_playground` at the bottom of this file.
+pub mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod closure_escape;
