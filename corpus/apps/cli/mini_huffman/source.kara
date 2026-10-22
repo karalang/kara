@@ -1,0 +1,343 @@
+// mini_huffman — a port of the Huffman core of the dahuffman library (Stefaan
+// Lippens, MIT): build a canonical Huffman code from the byte frequencies of
+// the input, then encode the input to bytes. Huffman coding is the entropy
+// stage inside DEFLATE, gzip, JPEG and PNG. For each input line the program
+// prints the encoded bytes as hex and the code table (symbol -> bit length and
+// value), with an end-of-stream symbol (E) exactly as dahuffman uses.
+//
+// dahuffman builds the tree with a heap of (frequency, node) entries. Because
+// the entries hold disjoint symbol sets, a frequency tie is broken by each
+// node's first symbol alone — a strict total order on (freq, key_symbol) — so
+// "pop the two smallest" needs no heap internals: a linear min-scan is exact.
+// Bit packing is a 0/1 bit vector converted to bytes at the end (no bitwise
+// operators), so the encoded bytes are byte-identical to the library's.
+//
+// Input bytes are the symbols (0..255); E is the end-of-file symbol, sorted
+// before every byte. Only the from_data / encode / get_code_table path is
+// ported (not the pickle save/load).
+
+#[derive(Clone)]
+struct Node {
+    freq: i64,
+    key: i64,
+    syms: Vec[i64],
+    bits: Vec[i64],
+    vals: Vec[i64],
+}
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let mut x = n;
+    let mut buf: Vec[u8] = Vec.new();
+    while x > 0 {
+        buf.push(48 + (x % 10) as u8);
+        x = x / 10;
+    }
+    let mut out = String.new();
+    let mut i = buf.len();
+    while i > 0 {
+        i = i - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[i]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn hex2(b: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut v: Vec[u8] = Vec.new();
+    v.push(digs[b / 16]);
+    v.push(digs[b % 16]);
+    String.from_utf8(v).unwrap_or("")
+}
+
+// bits of `val` as a `bits`-wide MSB-first 0/1 sequence, appended to `out`.
+fn push_code(out: mut ref Vec[i64], bits: i64, val: i64) {
+    let mut i = 0;
+    while i < bits {
+        let place = pow2(bits - 1 - i);
+        out.push((val / place) % 2);
+        i = i + 1;
+    }
+}
+
+fn pop_min(h: mut ref Vec[Node]) -> Node {
+    let n = h.len();
+    let mut bi = 0;
+    let mut i = 1;
+    while i < n {
+        let lower = h[i].freq < h[bi].freq
+            or (h[i].freq == h[bi].freq and h[i].key < h[bi].key);
+        if lower {
+            bi = i;
+        }
+        i = i + 1;
+    }
+    let m = h[bi].clone();
+    let last = h.pop().unwrap();
+    if bi < h.len() {
+        h[bi] = last;
+    }
+    m
+}
+
+fn run_job(line: String) -> String {
+    let data = str_bytes(line);
+    let n = data.len();
+
+    // byte frequencies
+    let mut freq: Vec[i64] = Vec.new();
+    let mut f = 0;
+    while f < 256 {
+        freq.push(0);
+        f = f + 1;
+    }
+    let mut di = 0;
+    while di < n {
+        let b = data[di] as i64;
+        freq[b] = freq[b] + 1;
+        di = di + 1;
+    }
+
+    // initial heap: one leaf per present byte, plus the EOF symbol (key -1)
+    let mut heap: Vec[Node] = Vec.new();
+    let mut s = 0;
+    while s < 256 {
+        if freq[s] > 0 {
+            let mut syms: Vec[i64] = Vec.new();
+            let mut bits: Vec[i64] = Vec.new();
+            let mut vals: Vec[i64] = Vec.new();
+            syms.push(s);
+            bits.push(0);
+            vals.push(0);
+            heap.push(Node { freq: freq[s], key: s, syms: syms, bits: bits, vals: vals });
+        }
+        s = s + 1;
+    }
+    let mut esyms: Vec[i64] = Vec.new();
+    let mut ebits: Vec[i64] = Vec.new();
+    let mut evals: Vec[i64] = Vec.new();
+    esyms.push(-1);
+    ebits.push(0);
+    evals.push(0);
+    heap.push(Node { freq: 1, key: -1, syms: esyms, bits: ebits, vals: evals });
+
+    // merge until one node remains
+    while heap.len() > 1 {
+        let a = pop_min(mut heap);
+        let b = pop_min(mut heap);
+        let mut syms: Vec[i64] = Vec.new();
+        let mut bits: Vec[i64] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        let na = a.syms.len();
+        let mut i = 0;
+        while i < na {
+            syms.push(a.syms[i]);
+            bits.push(a.bits[i] + 1);
+            vals.push(a.vals[i]);
+            i = i + 1;
+        }
+        let nb = b.syms.len();
+        let mut j = 0;
+        while j < nb {
+            syms.push(b.syms[j]);
+            bits.push(b.bits[j] + 1);
+            vals.push(b.vals[j] + pow2(b.bits[j]));
+            j = j + 1;
+        }
+        heap.push(Node { freq: a.freq + b.freq, key: a.key, syms: syms, bits: bits, vals: vals });
+    }
+    let table = heap.pop().unwrap();
+
+    // lookup arrays indexed by symbol+1 (EOF -1 -> slot 0, byte b -> slot b+1)
+    let mut tbits: Vec[i64] = Vec.new();
+    let mut tvals: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 257 {
+        tbits.push(0);
+        tvals.push(0);
+        k = k + 1;
+    }
+    let tn = table.syms.len();
+    let mut t = 0;
+    while t < tn {
+        let idx = table.syms[t] + 1;
+        tbits[idx] = table.bits[t];
+        tvals[idx] = table.vals[t];
+        t = t + 1;
+    }
+
+    // encode: build the bit vector, then pack to bytes with the EOF flush
+    let mut bitv: Vec[i64] = Vec.new();
+    let mut p = 0;
+    while p < n {
+        let idx = data[p] as i64 + 1;
+        push_code(mut bitv, tbits[idx], tvals[idx]);
+        p = p + 1;
+    }
+    let total = bitv.len();
+    let full = (total / 8) * 8;
+    let mut bytes: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < full {
+        let mut byte = 0;
+        let mut m = 0;
+        while m < 8 {
+            byte = byte * 2 + bitv[i + m];
+            m = m + 1;
+        }
+        bytes.push(byte);
+        i = i + 1 + 7;
+    }
+    let leftover = total - full;
+    if leftover > 0 {
+        // append the EOF code, then take the first 8 bits (zero-padded on the right)
+        let mut fin: Vec[i64] = Vec.new();
+        let mut q = full;
+        while q < total {
+            fin.push(bitv[q]);
+            q = q + 1;
+        }
+        push_code(mut fin, tbits[0], tvals[0]);
+        let fl = fin.len();
+        let mut byte = 0;
+        let mut m = 0;
+        while m < 8 {
+            let bit = if m < fl { fin[m] } else { 0 };
+            byte = byte * 2 + bit;
+            m = m + 1;
+        }
+        bytes.push(byte);
+    }
+
+    let mut hexs = String.new();
+    let mut hi = 0;
+    let nb2 = bytes.len();
+    while hi < nb2 {
+        hexs.push_str(hex2(bytes[hi]));
+        hi = hi + 1;
+    }
+
+    // sort the table triples by symbol ascending (selection sort; EOF = -1 first)
+    let mut ss: Vec[i64] = Vec.new();
+    let mut bb: Vec[i64] = Vec.new();
+    let mut vv: Vec[i64] = Vec.new();
+    let mut c = 0;
+    while c < tn {
+        ss.push(table.syms[c]);
+        bb.push(table.bits[c]);
+        vv.push(table.vals[c]);
+        c = c + 1;
+    }
+    let mut a = 0;
+    while a < tn {
+        let mut mn = a;
+        let mut b2 = a + 1;
+        while b2 < tn {
+            if ss[b2] < ss[mn] {
+                mn = b2;
+            }
+            b2 = b2 + 1;
+        }
+        if mn != a {
+            let ts = ss[a]; ss[a] = ss[mn]; ss[mn] = ts;
+            let tb = bb[a]; bb[a] = bb[mn]; bb[mn] = tb;
+            let tv = vv[a]; vv[a] = vv[mn]; vv[mn] = tv;
+        }
+        a = a + 1;
+    }
+
+    let mut out = String.new();
+    out.push_str("enc ");
+    out.push_str(hexs);
+    out.push_str("\ntab ");
+    let mut w = 0;
+    while w < tn {
+        if w > 0 {
+            out.push_str(" ");
+        }
+        if ss[w] < 0 {
+            out.push_str("E");
+        } else {
+            out.push_str(itoa(ss[w]));
+        }
+        out.push_str(":");
+        out.push_str(itoa(bb[w]));
+        out.push_str(":");
+        out.push_str(itoa(vv[w]));
+        w = w + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("aaaa\n");
+    s.push_str("ab\n");
+    s.push_str("abracadabra\n");
+    s.push_str("mississippi\n");
+    s.push_str("hello world\n");
+    s.push_str("the quick brown fox jumps over the lazy dog\n");
+    s.push_str("aaaabbbccd\n");
+    s.push_str("banana\n");
+    s.push_str("1223334444\n");
+    s.push_str("to be or not to be\n");
+    s.push_str("AAAAAAAAB\n");
+    s.push_str("abcabcabcabc\n");
+    s.push_str("committee\n");
+    s.push_str("bookkeeper\n");
+    s.push_str("0123456789\n");
+    s.push_str("racecar\n");
+    s.push_str("tennessee\n");
+    s.push_str("!!!???...\n");
+    s.push_str("the rain in spain\n");
+    s.push_str("compression\n");
+    s
+}
