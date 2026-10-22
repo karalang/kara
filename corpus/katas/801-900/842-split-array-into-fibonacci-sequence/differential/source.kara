@@ -1,0 +1,491 @@
+// LeetCode #842: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random strings of digits,
+// against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn read_star(d: Vec[u8], start: i64, len: i64) -> i64 {
+    if len > 1 and d[start] == 48 {
+        return -1;
+    }
+    let mut value = 0;
+    for k in start..start + len {
+        value = value * 10 + (d[k] - 48) as i64;
+    }
+    if value > 2147483647 { -1 } else { value }
+}
+
+fn split_into_fibonacci_star(num: String) -> Vec[i64] {
+    let d: Vec[u8] = num.bytes().iter().collect();
+    let n = d.len();
+    for i in 1..11 {
+        for j in 1..11 {
+            if i + j >= n {
+                break;
+            }
+            let a = read_star(d, 0, i);
+            let b = read_star(d, i, j);
+            if a < 0 or b < 0 {
+                continue;
+            }
+            let mut seq: Vec[i64] = [a, b];
+            let mut pos = i + j;
+            while pos < n {
+                let c = seq[seq.len() - 1] + seq[seq.len() - 2];
+                if c > 2147483647 {
+                    break;
+                }
+                let digits: Vec[u8] = c.to_string().bytes().iter().collect();
+                if pos + digits.len() > n {
+                    break;
+                }
+                let mut same = true;
+                for k in 0..digits.len() {
+                    if d[pos + k] != digits[k] {
+                        same = false;
+                    }
+                }
+                if not same {
+                    break;
+                }
+                seq.push(c);
+                pos += digits.len();
+            }
+            if pos == n {
+                return seq;
+            }
+        }
+    }
+    Vec.new()
+}
+
+// ---- backtracking arm -----------------------------------------------
+
+fn extend_backtrack(d: Vec[u8], start: i64, seq: mut ref Vec[i64]) -> bool {
+    if start == d.len() {
+        return seq.len() >= 3;
+    }
+    let mut value = 0;
+    for end in start..d.len() {
+        if end > start and d[start] == 48 {
+            break;
+        }
+        value = value * 10 + (d[end] - 48) as i64;
+        if value > 2147483647 {
+            break;
+        }
+        let k = seq.len();
+        if k >= 2 and value > seq[k - 1] + seq[k - 2] {
+            break;
+        }
+        if k < 2 or value == seq[k - 1] + seq[k - 2] {
+            seq.push(value);
+            if extend_backtrack(d, end + 1, mut seq) {
+                return true;
+            }
+            seq.pop();
+        }
+    }
+    false
+}
+
+fn split_into_fibonacci_backtrack(num: String) -> Vec[i64] {
+    let d: Vec[u8] = num.bytes().iter().collect();
+    let mut seq: Vec[i64] = Vec.new();
+    if extend_backtrack(d, 0, mut seq) {
+        seq
+    } else {
+        Vec.new()
+    }
+}
+
+// ---- whole-string arm -----------------------------------------------
+
+fn split_into_fibonacci_concat(num: String) -> Vec[i64] {
+    let n = num.len();
+    let chars: Vec[char] = num.chars().collect();
+    for i in 1..11 {
+        for j in 1..11 {
+            if i + j >= n {
+                break;
+            }
+            if (i > 1 and chars[0] == '0') or (j > 1 and chars[i] == '0') {
+                continue;
+            }
+            let mut a = 0;
+            for k in 0..i {
+                a = a * 10 + chars[k].to_digit(10).unwrap() as i64;
+            }
+            let mut b = 0;
+            for k in i..i + j {
+                b = b * 10 + chars[k].to_digit(10).unwrap() as i64;
+            }
+            if a > 2147483647 or b > 2147483647 {
+                continue;
+            }
+            let mut seq: Vec[i64] = [a, b];
+            let mut written = f"{a}{b}";
+            while written.len() < n {
+                let c = seq[seq.len() - 1] + seq[seq.len() - 2];
+                if c > 2147483647 {
+                    break;
+                }
+                written.push_str(c.to_string());
+                seq.push(c);
+            }
+            if seq.len() >= 3 and written == num {
+                return seq;
+            }
+        }
+    }
+    Vec.new()
+}
+
+// ---- digit-sum arm --------------------------------------------------
+
+fn too_big_digits(x: Vec[u8]) -> bool {
+    let limit = [2, 1, 4, 7, 4, 8, 3, 6, 4, 7];
+    if x.len() != 10 {
+        return x.len() > 10;
+    }
+    for k in 0..10 {
+        if x[k] as i64 != limit[k] {
+            return x[k] as i64 > limit[k];
+        }
+    }
+    false
+}
+
+fn add_digits(x: Vec[u8], y: Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut carry = 0;
+    let mut i = x.len() - 1;
+    let mut j = y.len() - 1;
+    while i >= 0 or j >= 0 or carry > 0 {
+        let mut s = carry;
+        if i >= 0 {
+            s += x[i] as i64;
+        }
+        if j >= 0 {
+            s += y[j] as i64;
+        }
+        out.push((s % 10) as u8);
+        carry = s / 10;
+        i -= 1;
+        j -= 1;
+    }
+    out.reverse();
+    out
+}
+
+fn value_digits(x: Vec[u8]) -> i64 {
+    let mut v = 0;
+    for digit in x.iter() {
+        v = v * 10 + *digit as i64;
+    }
+    v
+}
+
+fn split_into_fibonacci_digits(num: String) -> Vec[i64] {
+    let mut d: Vec[u8] = Vec.new();
+    for b in num.bytes().iter() {
+        d.push(*b - 48);
+    }
+    let n = d.len();
+    for i in 1..11 {
+        for j in 1..11 {
+            if i + j >= n {
+                break;
+            }
+            let a: Vec[u8] = d[0..i].to_vec();
+            let b: Vec[u8] = d[i..i + j].to_vec();
+            if (i > 1 and a[0] == 0) or (j > 1 and b[0] == 0) or too_big_digits(a) or too_big_digits(b) {
+                continue;
+            }
+            let mut seq: Vec[Vec[u8]] = [a, b];
+            let mut pos = i + j;
+            while pos < n {
+                let c = add_digits(seq[seq.len() - 2], seq[seq.len() - 1]);
+                if too_big_digits(c) or pos + c.len() > n or d[pos..pos + c.len()].to_vec() != c {
+                    break;
+                }
+                pos += c.len();
+                seq.push(c);
+            }
+            if pos == n {
+                let mut out: Vec[i64] = Vec.new();
+                for x in seq.iter() {
+                    out.push(value_digits(x));
+                }
+                return out;
+            }
+        }
+    }
+    Vec.new()
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// A number as the statement allows it: digits with no leading 0 unless
+// it is 0 itself, no greater than 2^31 - 1; -1 otherwise.
+fn number(s: String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    if cs.len() == 0 or (cs.len() > 1 and cs[0] == '0') {
+        return -1;
+    }
+    let mut v = 0;
+    for c in cs {
+        v = v * 10 + c.to_digit(10).unwrap() as i64;
+        if v > 2147483647 {
+            return -1;
+        }
+    }
+    v
+}
+
+// The statement read literally: the first two numbers may have any
+// lengths; each later number is the sum of the two before it, and must
+// be the next part of the string, written as it is; the split must use
+// the whole string and have at least three numbers. Of the splits, the
+// one whose first number is shortest, and then its second, is taken.
+fn statement(num: String) -> Vec[i64] {
+    let n = num.len();
+    for i in 1..n {
+        // a part that is not a number stays one when it grows: it keeps
+        // its leading 0, or stays past 2^31 - 1
+        let a = number(num.substring(0, i));
+        if a < 0 {
+            break;
+        }
+        for j in 1..n - i {
+            let b = number(num.substring(i, i + j));
+            if b < 0 {
+                break;
+            }
+            let mut seq: Vec[i64] = [a, b];
+            let mut pos = i + j;
+            let mut fits = true;
+            while pos < n and fits {
+                let c = seq[seq.len() - 1] + seq[seq.len() - 2];
+                let w = c.to_string();
+                if c > 2147483647 or pos + w.len() > n or num.substring(pos, pos + w.len()) != w {
+                    fits = false;
+                } else {
+                    seq.push(c);
+                    pos += w.len();
+                }
+            }
+            if fits {
+                return seq;
+            }
+        }
+    }
+    Vec.new()
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(arm: i64, num: String) -> Vec[i64] {
+    if arm == 0 {
+        split_into_fibonacci_star(num)
+    } else if arm == 1 {
+        split_into_fibonacci_backtrack(num)
+    } else if arm == 2 {
+        split_into_fibonacci_concat(num)
+    } else {
+        split_into_fibonacci_digits(num)
+    }
+}
+
+// a Fibonacci-like sequence from a and b written out while it stays
+// within `limit` digits and 2^31 - 1, then, once in `spoil` strings, one
+// digit changed
+fn random_string(seed: mut ref i64, a: i64, b: i64, limit: i64, spoil: i64) -> String {
+    let mut s = f"{a}{b}";
+    let mut x = a;
+    let mut y = b;
+    loop {
+        let z = x + y;
+        let w = z.to_string();
+        if z > 2147483647 or s.len() + w.len() > limit {
+            break;
+        }
+        s.push_str(w);
+        x = y;
+        y = z;
+    }
+    if next_random(mut seed) % spoil == 0 {
+        let mut cs: Vec[char] = s.chars().collect();
+        let at = next_random(mut seed) % cs.len();
+        cs[at] = (48 + next_random(mut seed) % 10) as u8 as char;
+        s = String.new();
+        for c in cs {
+            s.push(c);
+        }
+    }
+    s
+}
+
+// an answer that is a split of num: at least three numbers, none past
+// 2^31 - 1, each after the second the sum of the two before, written out
+// together as num; or no answer at all
+fn is_split(num: String, seq: Vec[i64]) -> bool {
+    if seq.len() == 0 {
+        return true;
+    }
+    if seq.len() < 3 {
+        return false;
+    }
+    let mut written = String.new();
+    for k in 0..seq.len() {
+        if seq[k] < 0 or seq[k] > 2147483647 {
+            return false;
+        }
+        if k >= 2 and seq[k] != seq[k - 1] + seq[k - 2] {
+            return false;
+        }
+        written.push_str(seq[k].to_string());
+    }
+    written == num
+}
+
+// digits from 0 to `top`, n of them
+fn random_digits(seed: mut ref i64, n: i64, top: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((48 + next_random(mut seed) % (top + 1)) as u8 as char);
+    }
+    s
+}
+
+// `num` with one more number written after it: the sum of the last two
+// numbers of `seq`, or 1 when `seq` has fewer than two.
+fn extended(num: String, seq: Vec[i64]) -> String {
+    let mut longer = num.clone();
+    if seq.len() >= 2 {
+        longer.push_str((seq[seq.len() - 1] + seq[seq.len() - 2]).to_string());
+    } else {
+        longer.push_str("1");
+    }
+    longer
+}
+
+// The statement's answer for each prefix of `seq` written out that ends
+// at a number boundary after the third number and before the last.
+fn prefix_answers(seq: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut written = String.new();
+    for k in 0..seq.len() {
+        written.push_str(seq[k].to_string());
+        if k >= 2 and k + 1 < seq.len() {
+            rows.push(statement(written));
+        }
+    }
+    rows
+}
+
+fn main() {
+    let names = ["star", "backtrack", "concat", "digits"];
+    let properties = ["answer", "a split", "prefixes", "extended"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(4, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut split = 0;
+    let mut seed = 842;
+    for case in 0..1600 {
+        let kind = case / 400;
+        let num = if kind == 0 {
+            // short strings of few kinds of digit
+            let n = 1 + next_random(mut seed) % 10;
+            random_digits(mut seed, n, next_random(mut seed) % 3)
+        } else if kind == 1 {
+            // sequences from small numbers, some spoiled
+            let a = next_random(mut seed) % 20;
+            let b = next_random(mut seed) % 20;
+            random_string(mut seed, a, b, 3 + next_random(mut seed) % 40, 3)
+        } else if kind == 2 {
+            // sequences from numbers of up to 6 digits, some spoiled
+            let a = next_random(mut seed) % [10, 1000, 1000000][next_random(mut seed) % 3];
+            let b = next_random(mut seed) % [10, 1000, 1000000][next_random(mut seed) % 3];
+            random_string(mut seed, a, b, 3 + next_random(mut seed) % 60, 3)
+        } else if case % 4 == 3 {
+            // three numbers whose sum is 2^31 - 1 or one past it
+            let a = 1073741823 + next_random(mut seed) % 2;
+            let b = 2147483647 - a + next_random(mut seed) % 2;
+            f"{a}{b}{a + b}"
+        } else {
+            // sequences that run up to 2^31 - 1, written past it; the
+            // first or the second number has 10 digits in half of them
+            let big = 1000000000 + next_random(mut seed) % 1000000000;
+            let small = next_random(mut seed) % 1000;
+            let near = 400000000 + next_random(mut seed) % 400000000;
+            let (a, b) = if case % 4 == 1 {
+                (big, small)
+            } else if case % 4 == 2 {
+                (small, big)
+            } else {
+                (near, 400000000 + next_random(mut seed) % 400000000)
+            };
+            let mut s = random_string(mut seed, a, b, 60, 4);
+            if next_random(mut seed) % 2 == 0 {
+                s.push_str(f"{a + b + b}");
+            }
+            s
+        };
+        let want = statement(num);
+        if want.len() > 0 {
+            split += 1;
+        }
+        // The statement's answers for the prefixes of `want` and for `num`
+        // extended, worked out once per case; an arm whose answer differs
+        // from `want` has them worked out again for its own answer.
+        let want_prefixes = prefix_answers(want);
+        let want_longer = statement(extended(num, want));
+        for arm in 0..4 {
+            let got = answer(arm, num);
+            let same = got == want;
+            let mut prefixes_ok = true;
+            let mut written = String.new();
+            let mut row = 0;
+            for k in 0..got.len() {
+                written.push_str(got[k].to_string());
+                if k >= 2 and k + 1 < got.len() {
+                    let expect = if same { want_prefixes[row].clone() } else { statement(written) };
+                    if answer(arm, written) != expect {
+                        prefixes_ok = false;
+                    }
+                    row += 1;
+                }
+            }
+            let longer = extended(num, got);
+            let expect_longer = if same { want_longer.clone() } else { statement(longer) };
+            let oks = [
+                same,
+                is_split(num, got),
+                prefixes_ok,
+                answer(arm, longer) == expect_longer,
+            ];
+            for q in 0..4 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: \"{num}\" -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, {split} split, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, backtrack {by_arm[1]}, concat {by_arm[2]}, digits {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, a split {by_property[1]}, prefixes {by_property[2]}, extended {by_property[3]}");
+}

@@ -1,0 +1,118 @@
+// Benchmark for #842: Split Array into Fibonacci Sequence -- the ★ arm
+// (the first two numbers decide the rest).
+//
+// Every pair of lengths for the first two numbers is tried, the first
+// number's shortest first and then the second's, and each sum's digits
+// are matched against the string until it runs out, a sum passes
+// 2^31 - 1 or the digits differ. The answer is the first split found,
+// or none.
+
+fn read(d: Vec[u8], start: i64, len: i64) -> i64 {
+    if len > 1 and d[start] == 48 {
+        return -1;
+    }
+    let mut value = 0;
+    for k in start..start + len {
+        value = value * 10 + (d[k] - 48) as i64;
+    }
+    if value > 2147483647 { -1 } else { value }
+}
+
+fn split_into_fibonacci(num: String) -> Vec[i64] {
+    let d: Vec[u8] = num.bytes().iter().collect();
+    let n = d.len();
+    for i in 1..11 {
+        for j in 1..11 {
+            if i + j >= n {
+                break;
+            }
+            let a = read(d, 0, i);
+            let b = read(d, i, j);
+            if a < 0 or b < 0 {
+                continue;
+            }
+            let mut seq: Vec[i64] = [a, b];
+            let mut pos = i + j;
+            while pos < n {
+                let c = seq[seq.len() - 1] + seq[seq.len() - 2];
+                if c > 2147483647 {
+                    break;
+                }
+                let digits: Vec[u8] = c.to_string().bytes().iter().collect();
+                if pos + digits.len() > n {
+                    break;
+                }
+                let mut same = true;
+                for k in 0..digits.len() {
+                    if d[pos + k] != digits[k] {
+                        same = false;
+                    }
+                }
+                if not same {
+                    break;
+                }
+                seq.push(c);
+                pos += digits.len();
+            }
+            if pos == n {
+                return seq;
+            }
+        }
+    }
+    Vec.new()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 strings drawn once, each at most LeetCode's 200 digits: string
+    // g writes out the sequence two random numbers start, of up to 1, 3
+    // or 5 digits, sum after sum, while it stays within 200 digits and
+    // 2^31 - 1; one string in four then has one digit changed. Each
+    // round splits the next string.
+    let count = 64;
+    let rounds = 240000;
+    let mut seed: i64 = 842;
+    let mut cases: Vec[String] = Vec.new();
+    for g in 0..count {
+        let top = [10, 1000, 100000][g % 3];
+        let mut x = next_random(mut seed) % top;
+        let mut y = next_random(mut seed) % top;
+        let mut s = f"{x}{y}";
+        loop {
+            let z = x + y;
+            let w = z.to_string();
+            if z > 2147483647 or s.len() + w.len() > 200 {
+                break;
+            }
+            s.push_str(w);
+            x = y;
+            y = z;
+        }
+        if g % 4 == 3 {
+            let mut d: Vec[u8] = s.bytes().iter().collect();
+            let at = next_random(mut seed) % d.len();
+            d[at] = (48 + (d[at] as i64 - 48 + 1) % 10) as u8;
+            s = String.new();
+            for b in d.iter() {
+                s.push(*b as char);
+            }
+        }
+        cases.push(s);
+    }
+    let mut split = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let seq = split_into_fibonacci(cases[round % count]);
+        if seq.len() > 0 {
+            split += 1;
+            checksum = (checksum * 31 + seq.len() * 1000 + seq[seq.len() - 1] % 1000) % 1000000007;
+        } else {
+            checksum = (checksum * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of {count} strings: {split} split, checksum {checksum}");
+}

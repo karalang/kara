@@ -1,0 +1,129 @@
+// LeetCode #842: Split Array into Fibonacci Sequence -- backtracking.
+//
+// From each position, every number the next digits can make is tried,
+// shortest first: one that starts with 0 and has more digits, or passes
+// 2^31 - 1, ends the tries there, and after the first two a number must
+// be the sum of the two before it, so one larger than that sum ends them
+// too. A number that fits is pushed, the rest of the string is split the
+// same way, and on failure it is popped again. The first split found is
+// the answer.
+
+fn extend(d: Vec[u8], start: i64, seq: mut ref Vec[i64]) -> bool {
+    if start == d.len() {
+        return seq.len() >= 3;
+    }
+    let mut value = 0;
+    for end in start..d.len() {
+        if end > start and d[start] == 48 {
+            break;
+        }
+        value = value * 10 + (d[end] - 48) as i64;
+        if value > 2147483647 {
+            break;
+        }
+        let k = seq.len();
+        if k >= 2 and value > seq[k - 1] + seq[k - 2] {
+            break;
+        }
+        if k < 2 or value == seq[k - 1] + seq[k - 2] {
+            seq.push(value);
+            if extend(d, end + 1, mut seq) {
+                return true;
+            }
+            seq.pop();
+        }
+    }
+    false
+}
+
+fn split_into_fibonacci(num: String) -> Vec[i64] {
+    let d: Vec[u8] = num.bytes().iter().collect();
+    let mut seq: Vec[i64] = Vec.new();
+    if extend(d, 0, mut seq) {
+        seq
+    } else {
+        Vec.new()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a Fibonacci-like sequence from a and b written out while it stays
+// within `limit` digits and 2^31 - 1, then, once in `spoil` strings, one
+// digit changed
+fn random_string(seed: mut ref i64, a: i64, b: i64, limit: i64, spoil: i64) -> String {
+    let mut s = f"{a}{b}";
+    let mut x = a;
+    let mut y = b;
+    loop {
+        let z = x + y;
+        let w = z.to_string();
+        if z > 2147483647 or s.len() + w.len() > limit {
+            break;
+        }
+        s.push_str(w);
+        x = y;
+        y = z;
+    }
+    if next_random(mut seed) % spoil == 0 {
+        let mut cs: Vec[char] = s.chars().collect();
+        let at = next_random(mut seed) % cs.len();
+        cs[at] = (48 + next_random(mut seed) % 10) as u8 as char;
+        s = String.new();
+        for c in cs {
+            s.push(c);
+        }
+    }
+    s
+}
+
+fn show(num: String) {
+    println(f"\"{num}\" -> {split_into_fibonacci(num)}");
+}
+
+fn main() {
+    show("1101111");
+    show("112358130");
+    show("0123");
+    show("123456579");
+    show("11235813");
+    show("000");
+    show("0000");
+    show("101");
+    show("1");
+    show("10");
+    show("1011");
+    show("214748364721474836422147483641");
+    show("2147483647021474836472147483647");
+    show("1023");
+    // long strings, up to LeetCode's longest, 200 digits
+    let mut seed = 842;
+    let long = random_string(mut seed, 1, 1, 200, 1000000);
+    println(f"{long.len()} digits from 1, 1: {split_into_fibonacci(long).len()} numbers");
+    let long = random_string(mut seed, 0, 0, 200, 1000000);
+    println(f"{long.len()} digits from 0, 0: {split_into_fibonacci(long).len()} numbers");
+    let long = random_string(mut seed, 98765, 43210, 200, 1000000);
+    println(f"{long.len()} digits from 98765, 43210: {split_into_fibonacci(long)}");
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let a = next_random(mut seed) % [10, 1000, 100000][next_random(mut seed) % 3];
+        let b = next_random(mut seed) % [10, 1000, 100000][next_random(mut seed) % 3];
+        let limit = 3 + next_random(mut seed) % 60;
+        let s = random_string(mut seed, a, b, limit, 3);
+        let seq = split_into_fibonacci(s);
+        if seq.len() > 0 {
+            found += 1;
+        }
+        for x in seq.iter() {
+            check = (check * 31 + *x) % 1000000007;
+        }
+        check = (check * 31 + seq.len()) % 1000000007;
+    }
+    println(f"300 random strings: {found} split, checksum {check}");
+}

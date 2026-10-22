@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/842-split-array-into-fibonacci-sequence/bench/split_into_fibonacci.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "cfec6aee8"
+extracted_src = "30e9773d"
+model_rev = "583cfb0d"
+model_src = "30e9773d"
