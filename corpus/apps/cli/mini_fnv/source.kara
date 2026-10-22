@@ -1,0 +1,242 @@
+// mini_fnv — a port of the pure-Python core of the `fnvhash` library
+// (Lorenz Schori, MIT): the Fowler/Noll/Vo non-cryptographic hash. Each job
+// names a 32-bit variant — fnv0_32, fnv1_32 or fnv1a_32 — and the ASCII text
+// whose UTF-8 bytes are hashed; the result is printed as 8 lowercase hex
+// digits.
+//
+// FNV is defined with a byte-wise XOR and a multiply-modulo step. Kara has no
+// bitwise operators, so the XOR is done with integer arithmetic: a byte XOR is
+// a bit-by-bit decomposition (xor8), and folding a byte into the accumulator
+// touches only its low byte (xor_byte). The 32-bit accumulator stays below
+// 2^32, so `hval * prime` (prime ~2^24) fits in i64 before the `% 2^32`. The
+// 64-bit variants need a 64-bit accumulator that overflows i64 and are out of
+// scope (see README); everything the library computes for the 32-bit variants
+// is reproduced byte-for-byte.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn split_fields(line: String, sepb: u8) -> Vec[String] {
+    let b = str_bytes(line.clone());
+    let m = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= m {
+        if i == m or b[i] == sepb {
+            out.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// XOR of two values in [0, 255], by bit decomposition.
+fn xor8(a: i64, b: i64) -> i64 {
+    let mut r = 0;
+    let mut bit = 1;
+    let mut i = 0;
+    while i < 8 {
+        let abit = (a / bit) % 2;
+        let bbit = (b / bit) % 2;
+        if abit != bbit {
+            r = r + bit;
+        }
+        bit = bit * 2;
+        i = i + 1;
+    }
+    r
+}
+
+// hval ^ byte where byte is in [0, 255]: only the low byte of hval changes.
+fn xor_byte(hval: i64, byte: i64) -> i64 {
+    let low = hval % 256;
+    hval - low + xor8(low, byte)
+}
+
+// Core FNV loop over the data bytes. `alt` selects FNV-1a (XOR before multiply)
+// over FNV-0/FNV-1 (multiply before XOR).
+fn fnv_core(data: Vec[u8], init: i64, alt: bool) -> i64 {
+    let prime = 16777619;
+    let modulus = 4294967296;
+    let mut hval = init;
+    let n = data.len();
+    let mut i = 0;
+    while i < n {
+        let byte = data[i] as i64;
+        if alt {
+            hval = xor_byte(hval, byte);
+            hval = (hval * prime) % modulus;
+        } else {
+            hval = (hval * prime) % modulus;
+            hval = xor_byte(hval, byte);
+        }
+        i = i + 1;
+    }
+    hval
+}
+
+fn to_hex8(n: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut buf: Vec[u8] = Vec.new();
+    let mut x = n;
+    let mut i = 0;
+    while i < 8 {
+        let d = x % 16;
+        buf.push(digs[d]);
+        x = x / 16;
+        i = i + 1;
+    }
+    let mut out = String.new();
+    let mut j = buf.len();
+    while j > 0 {
+        j = j - 1;
+        let mut one: Vec[u8] = Vec.new();
+        one.push(buf[j]);
+        out.push_str(String.from_utf8(one).unwrap_or(""));
+    }
+    out
+}
+
+fn run_job(line: String) -> String {
+    let parts = split_fields(line, 9);
+    let variant = parts[0].clone();
+    let input = if parts.len() > 1 { parts[1].clone() } else { String.new() };
+    let data = str_bytes(input);
+
+    let fnv1_init = 2166136261;
+    let hval = if variant == "fnv0_32" {
+        fnv_core(data, 0, false)
+    } else if variant == "fnv1_32" {
+        fnv_core(data, fnv1_init, false)
+    } else {
+        fnv_core(data, fnv1_init, true)
+    };
+
+    let mut out = String.new();
+    out.push_str(variant);
+    out.push_str(" ");
+    out.push_str(to_hex8(hval));
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("fnv0_32\t\n");
+    s.push_str("fnv1_32\t\n");
+    s.push_str("fnv1a_32\t\n");
+    s.push_str("fnv0_32\ta\n");
+    s.push_str("fnv1_32\ta\n");
+    s.push_str("fnv1a_32\ta\n");
+    s.push_str("fnv0_32\tb\n");
+    s.push_str("fnv1_32\tb\n");
+    s.push_str("fnv1a_32\tb\n");
+    s.push_str("fnv0_32\tab\n");
+    s.push_str("fnv1_32\tab\n");
+    s.push_str("fnv1a_32\tab\n");
+    s.push_str("fnv0_32\tabc\n");
+    s.push_str("fnv1_32\tabc\n");
+    s.push_str("fnv1a_32\tabc\n");
+    s.push_str("fnv0_32\tabcd\n");
+    s.push_str("fnv1_32\tabcd\n");
+    s.push_str("fnv1a_32\tabcd\n");
+    s.push_str("fnv0_32\thello\n");
+    s.push_str("fnv1_32\thello\n");
+    s.push_str("fnv1a_32\thello\n");
+    s.push_str("fnv0_32\tHello\n");
+    s.push_str("fnv1_32\tHello\n");
+    s.push_str("fnv1a_32\tHello\n");
+    s.push_str("fnv0_32\thello world\n");
+    s.push_str("fnv1_32\thello world\n");
+    s.push_str("fnv1a_32\thello world\n");
+    s.push_str("fnv0_32\tThe quick brown fox jumps over the lazy dog\n");
+    s.push_str("fnv1_32\tThe quick brown fox jumps over the lazy dog\n");
+    s.push_str("fnv1a_32\tThe quick brown fox jumps over the lazy dog\n");
+    s.push_str("fnv0_32\tfoobar\n");
+    s.push_str("fnv1_32\tfoobar\n");
+    s.push_str("fnv1a_32\tfoobar\n");
+    s.push_str("fnv0_32\tchongo was here!\n");
+    s.push_str("fnv1_32\tchongo was here!\n");
+    s.push_str("fnv1a_32\tchongo was here!\n");
+    s.push_str("fnv0_32\tchongo was here!\n");
+    s.push_str("fnv1_32\tchongo was here!\n");
+    s.push_str("fnv1a_32\tchongo was here!\n");
+    s.push_str("fnv0_32\t1234567890\n");
+    s.push_str("fnv1_32\t1234567890\n");
+    s.push_str("fnv1a_32\t1234567890\n");
+    s.push_str("fnv0_32\t0\n");
+    s.push_str("fnv1_32\t0\n");
+    s.push_str("fnv1a_32\t0\n");
+    s.push_str("fnv0_32\t00\n");
+    s.push_str("fnv1_32\t00\n");
+    s.push_str("fnv1a_32\t00\n");
+    s.push_str("fnv0_32\t000\n");
+    s.push_str("fnv1_32\t000\n");
+    s.push_str("fnv1a_32\t000\n");
+    s.push_str("fnv0_32\tFNV\n");
+    s.push_str("fnv1_32\tFNV\n");
+    s.push_str("fnv1a_32\tFNV\n");
+    s.push_str("fnv0_32\tfnv\n");
+    s.push_str("fnv1_32\tfnv\n");
+    s.push_str("fnv1a_32\tfnv\n");
+    s.push_str("fnv0_32\tgeohash\n");
+    s.push_str("fnv1_32\tgeohash\n");
+    s.push_str("fnv1a_32\tgeohash\n");
+    s.push_str("fnv0_32\ta quick test of the fnv hash\n");
+    s.push_str("fnv1_32\ta quick test of the fnv hash\n");
+    s.push_str("fnv1a_32\ta quick test of the fnv hash\n");
+    s.push_str("fnv0_32\t!@#$%^&*()\n");
+    s.push_str("fnv1_32\t!@#$%^&*()\n");
+    s.push_str("fnv1a_32\t!@#$%^&*()\n");
+    s.push_str("fnv0_32\taaaaaaaa\n");
+    s.push_str("fnv1_32\taaaaaaaa\n");
+    s.push_str("fnv1a_32\taaaaaaaa\n");
+    s.push_str("fnv0_32\tzzzzzzzzzzzz\n");
+    s.push_str("fnv1_32\tzzzzzzzzzzzz\n");
+    s.push_str("fnv1a_32\tzzzzzzzzzzzz\n");
+    s.push_str("fnv0_32\tThe five boxing wizards jump quickly\n");
+    s.push_str("fnv1_32\tThe five boxing wizards jump quickly\n");
+    s.push_str("fnv1a_32\tThe five boxing wizards jump quickly\n");
+    s.push_str("fnv0_32\txyzzy\n");
+    s.push_str("fnv1_32\txyzzy\n");
+    s.push_str("fnv1a_32\txyzzy\n");
+    s.push_str("fnv0_32\tline with spaces and  double  spaces\n");
+    s.push_str("fnv1_32\tline with spaces and  double  spaces\n");
+    s.push_str("fnv1a_32\tline with spaces and  double  spaces\n");
+    s.push_str("fnv0_32\tMixedCASE Letters 123\n");
+    s.push_str("fnv1_32\tMixedCASE Letters 123\n");
+    s.push_str("fnv1a_32\tMixedCASE Letters 123\n");
+    s
+}
