@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 325 |
-| codegen-gap | 287 |
+| codegen-gap | 288 |
 | false-positive | 281 |
 | other | 194 |
 | diagnostics | 186 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3025 |
-| interp | 1035 |
+| codegen | 3026 |
+| interp | 1036 |
 | typecheck | 560 |
 | ownership | 131 |
 | other | 123 |
@@ -166,7 +166,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-21-42 | 2026-10-21 | typecheck+interp+codegen | medium | Connection pool `acquire` takes `timeout: i64` milliseconds where docs/library/pool.md specifies `timeout: Duration` (`pool.acquire(Duration.ms(500))`) | — |
 | B-2026-10-21-43 | 2026-10-21 | typecheck+interp+codegen | low | Connection pool `with_health_check` takes `ref self` and returns a second `Pool` value where docs/library/pool.md specifies a builder taking `own self` | — |
 | B-2026-10-21-44 | 2026-10-21 | runtime+codegen+interp | medium | Connection pool `acquire` never waits and has no `Busy`: at capacity it returns `Timeout` at once whatever the timeout, and `max_waiters` limits nothing, where docs/library/pool.md specifies waiting up to the timeout for a value to come back and `PoolError.Busy` at once when `max_waiters` callers are already waiting | — |
-| B-2026-10-21-56 | 2026-10-21 | resolver+typecheck | low | `std.regex` and `std.json` do not exist as modules: `import std.regex.{Regex}` is "unknown module `std.regex`", and `Regex`, `Match`, `Captures`, `RegexError` and `Json` are reached without any import, where docs/library/README.md (and design.md:626, "everything else is under `std.*`") requires `import std.regex.{...}` and `import std.json.{Json}` | — |
 | B-2026-10-21-59 | 2026-10-21 | ownership+codegen | medium | `for w in words.by_ref() { flags.push(w) }` then `words.collect()` (iterators.md's by_ref example) is refused E0516 by check and the MIR borrow checker: the `Str` items are tied to the `by_ref` borrow of `words` rather than to the text `words` splits | — |
 | B-2026-10-21-60 | 2026-10-21 | typecheck+codegen | medium | Iterator methods on a value of generic type `I: Iterator[Item = i64]` fail: check refuses `it.fold(0, |a, x| a + x)` ("expected 'Fn(AccV, I.Item) -> AccV'") and `it.filter(|x| x > 5)`, and `it.map(..).count()` checks but MIR refuses it ("UnknownParam(\"FnV\") is not lowered") | — |
 | B-2026-10-21-71 | 2026-10-21 | typecheck | medium | `TaskGroup.spawn` does not check that the task's RESULT is `CrossTask`: `g.spawn(|| Node { v: 1 })` with `shared struct Node` checks and runs, where concurrency.md declares `spawn[T: CrossTask]` (the capture direction is correctly refused) | — |
@@ -179,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-4 | 2026-10-22 | codegen | medium | mir-llvm: kata 6 zigzag row_buffers runs 3x legacy since the early argpromotion round (c9f3bee58), at the SAME instruction count: promoting convert_off's scalar params lets O2 fold the row step `if going_down { cur + 1 } else { cur - 1 }` into `cur + select(c, 1, -1)`, which x86 lowers as setne+lea, so the next push's rows[cur] address waits on a serial compare chain; turning the round off (KARAC_MIR_EARLY_PROMOTE=0) fixes 6 but puts 276 paint_enum back at ~2.6x, so neither setting meets the no-bench-over-2x bar | — |
 | B-2026-10-22-5 | 2026-10-22 | typecheck+cli | medium | E0516 on a `shared` value borrowed out of a Map and held across an insert into that Map has no `karac fix` fix-it, though the fix is mechanical: kata 133's clone_bfs and clone_bfs_par benches (M2 frozen set) fail `karac check` with it, and `.clone()` on the borrowed `shared` value (an RC retain) makes both pass | — |
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
+| B-2026-10-22-7 | 2026-10-22 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Null.stringify());` passes `karac check` and stops `__mir-run` and `__mir-llvm-run` with "the builtin `Json.Null.stringify` is not lowered yet"; without the variant it prints `null` | — |
 
 ### Relocated
 
@@ -4358,6 +4358,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-21-53 | typecheck | medium | A `pub fn` cannot mention any type from the appended v2 library sources: `pub fn f(x: Option[TcpStream]) -> bool`, and the same with `Command`, `Rege… | eb38cc9910 |
 | B-2026-10-21-54 | effect | medium | `karac check` demands `with panics` on a `pub fn` that can panic, contradicting design.md § Default-permitted effects ("`allocates(Heap)` and `panics… | d3632749b0 |
 | B-2026-10-21-55 | typecheck+codegen | medium | A generic fixed only by its return type does not lower on MIR when the call is unwrapped into an annotated binding: `fn make[T: Default]() -> Option[… | 9523515b6c |
+| B-2026-10-21-56 | resolver+typecheck | low | `std.regex` and `std.json` do not exist as modules: `import std.regex.{Regex}` is "unknown module `std.regex`", and `Regex`, `Match`, `Captures`, `Re… | 0d7c57b296 |
 | B-2026-10-21-57 | interp+codegen | low | MIR path appends std.cli whenever the source text contains `Parser` or `Arg` as a substring (`MidiParser`, `Args`, a string literal "Parser()"), not… | bd339f6d4b |
 | B-2026-10-21-58 | codegen | high | Compiled MIR stores a folded float constant as an 8-byte `double` into an `f32` slot: `let d: f32 = 1.0 / 3.0; println(d)` prints `14660155000000.0`… | 3e97a3dd14 |
 | B-2026-10-21-61 | typecheck | medium | `Iterator.max` / `min` accept items that are not `Ord`: `v.iter().max()` over `Vec[f64]` checks and prints `2.0`, where iterators.md requires `Self.I… | 76f9d4f056 |
