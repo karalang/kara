@@ -1,0 +1,28 @@
+-|706c61696e|<ParsedDataURI media_type=None data=b'plain'>
+text/plain|68656c6c6f20776f726c64|<ParsedDataURI media_type='text/plain' data=b'hello world'>
+text/plain;charset=utf-8|48656c6c6f2c20576f726c6421|<ParsedDataURI media_type='text/plain;charset=utf-8' data=b'Hello, World!'>
+text/html|3c68313e4869213c2f68313e|<ParsedDataURI media_type='text/html' data=b'<h1>Hi!</h1>'>
+image/gif|474946383961010001000000002c000000000100010000|<ParsedDataURI media_type='image/gif' data=b'GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00...'>
+application/octet-stream|deadbeef|<ParsedDataURI media_type='application/octet-stream' data=b'\xde\xad\xbe\xef'>
+-|48656c6c6f21|<ParsedDataURI media_type=None data=b'Hello!'>
+text/plain||<ParsedDataURI media_type='text/plain' data=b''>
+text/plain|612b62|<ParsedDataURI media_type='text/plain' data=b'a+b'>
+text/plain|31303025646f6e65|<ParsedDataURI media_type='text/plain' data=b'100%done'>
+text/plain|e29c93|<ParsedDataURI media_type='text/plain' data=b'\xe2\x9c\x93'>
+text/plain|257a7a6e6f7065|<ParsedDataURI media_type='text/plain' data=b'%zznope'>
+application/json|7b226b223a317d|<ParsedDataURI media_type='application/json' data=b'{"k":1}'>
+text/plain|41|<ParsedDataURI media_type='text/plain' data=b'A'>
+text/plain|414243|<ParsedDataURI media_type='text/plain' data=b'ABC'>
+text/css|626f64797b636f6c6f723a7265647d|<ParsedDataURI media_type='text/css' data=b'body{color:red}'>
+ERR invalid data uri
+ERR invalid data uri
+ERR invalid data uri
+ERR invalid base64 in data uri
+text/plain|746869732069732061206c6f6e676572207061796c6f616420657863656564696e67207477656e747920627974657320666f722072657072|<ParsedDataURI media_type='text/plain' data=b'this is a longer ...'>
+text/plain|54686973206973206120666169726c79206c6f6e6720626173653634207061796c6f6164|<ParsedDataURI media_type='text/plain' data=b'This is a fairly ...'>
+2 text/plain|6869 text/html|3c68313e
+0
+2 -|78 text/plain|414243
+1 application/json|7b226b223a317d
+2 -|61 -|62
+1 -|6f6b

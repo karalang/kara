@@ -1,0 +1,525 @@
+// mini_datauri — a port of datauri 1.1.0 (BSD-3; EclecticIQ), the library for
+// "data:" URIs as defined in RFC 2397 (the inline-resource scheme behind
+// embedded images in CSS/HTML and small payloads in config and email). This
+// port follows datauri/datauri.py: parse() splits the URI at its first comma,
+// strips an optional ";base64" suffix, base64-decodes (with the library's
+// length-based "=" padding) or percent-decodes the payload, and reports a None
+// media type for an empty one; discover() finds every data: URI in a string by
+// the same greedy character-class scan the library's regex performs. The
+// ParsedDataURI repr — CPython's str and bytes repr, with the 20-byte data
+// truncation — is reproduced exactly. base64 payloads use the standard alphabet
+// with the library's trailing padding; CPython binascii's discarding of interior
+// non-alphabet bytes is the documented boundary. See README.md.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn hex_digit(n: i64) -> u8 {
+    if n < 10 {
+        (48 + n) as u8
+    } else {
+        (87 + n) as u8
+    }
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let v = bytes[i] as i64;
+        out.push(hex_digit(v >> 4));
+        out.push(hex_digit(v & 15));
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn is_hex(b: u8) -> bool {
+    (b >= 48 and b <= 57) or (b >= 97 and b <= 102) or (b >= 65 and b <= 70)
+}
+
+fn hex_nibble(b: u8) -> i64 {
+    if b >= 48 and b <= 57 {
+        (b - 48) as i64
+    } else if b >= 97 and b <= 102 {
+        (b - 87) as i64
+    } else {
+        (b - 55) as i64
+    }
+}
+
+// Standard base64 alphabet index of byte c, or -1 if c is not an alphabet byte.
+fn b64_index(c: u8) -> i64 {
+    if c >= 65 and c <= 90 {
+        (c - 65) as i64
+    } else if c >= 97 and c <= 122 {
+        (c - 97 + 26) as i64
+    } else if c >= 48 and c <= 57 {
+        (c - 48 + 52) as i64
+    } else if c == 43 {
+        62
+    } else if c == 47 {
+        63
+    } else {
+        -1
+    }
+}
+
+#[derive(Clone)]
+struct Dec {
+    ok: bool,
+    bytes: Vec[u8],
+}
+
+// Decode a base64 payload whose length-based "=" padding is already appended.
+// Mirrors the port's rule: keep alphabet bytes, count pads, a data byte after a
+// pad is invalid, and a kept count of (n mod 4 == 1) is invalid.
+fn b64_decode(payload: ref Vec[u8]) -> Dec {
+    let mut kept: Vec[i64] = Vec.new();
+    let mut pads = 0;
+    let mut i = 0;
+    while i < payload.len() {
+        let c = payload[i];
+        if c == 61 {
+            pads = pads + 1;
+        } else {
+            let idx = b64_index(c);
+            if idx >= 0 {
+                if pads > 0 {
+                    return Dec { ok: false, bytes: Vec.new() };
+                }
+                kept.push(idx);
+            }
+        }
+        i = i + 1;
+    }
+    let n = kept.len();
+    if n % 4 == 1 {
+        return Dec { ok: false, bytes: Vec.new() };
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut j = 0;
+    while j + 4 <= n {
+        let v = (kept[j] << 18) | (kept[j + 1] << 12) | (kept[j + 2] << 6) | kept[j + 3];
+        out.push(((v >> 16) & 255) as u8);
+        out.push(((v >> 8) & 255) as u8);
+        out.push((v & 255) as u8);
+        j = j + 4;
+    }
+    let rem = n - j;
+    if rem == 2 {
+        let v = (kept[j] << 18) | (kept[j + 1] << 12);
+        out.push(((v >> 16) & 255) as u8);
+    } else if rem == 3 {
+        let v = (kept[j] << 18) | (kept[j + 1] << 12) | (kept[j + 2] << 6);
+        out.push(((v >> 16) & 255) as u8);
+        out.push(((v >> 8) & 255) as u8);
+    }
+    Dec { ok: true, bytes: out }
+}
+
+// urllib.parse.unquote_to_bytes over an ASCII payload: "%XX" (XX both hex) is
+// one byte; a lone or malformed "%" stays literal; every other byte passes.
+fn pct_decode(raw: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let n = raw.len();
+    let mut i = 0;
+    while i < n {
+        if raw[i] == 37 and i + 2 < n and is_hex(raw[i + 1]) and is_hex(raw[i + 2]) {
+            out.push((hex_nibble(raw[i + 1]) * 16 + hex_nibble(raw[i + 2])) as u8);
+            i = i + 3;
+        } else {
+            out.push(raw[i]);
+            i = i + 1;
+        }
+    }
+    out
+}
+
+// CPython bytes repr: default single quotes; if the data holds ' but not ", use
+// double quotes. \\ \t \n \r and the active quote are escaped; 0x20..0x7e print
+// as themselves; every other byte is \xNN.
+fn bytes_repr(bs: ref Vec[u8]) -> String {
+    let mut has_s = false;
+    let mut has_d = false;
+    let mut k = 0;
+    while k < bs.len() {
+        if bs[k] == 39 {
+            has_s = true;
+        }
+        if bs[k] == 34 {
+            has_d = true;
+        }
+        k = k + 1;
+    }
+    let mut q: u8 = 39;
+    if has_s and not has_d {
+        q = 34;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(98);
+    out.push(q);
+    let mut i = 0;
+    while i < bs.len() {
+        let b = bs[i];
+        if b == 92 {
+            out.push(92);
+            out.push(92);
+        } else if b == q {
+            out.push(92);
+            out.push(q);
+        } else if b == 9 {
+            out.push(92);
+            out.push(116);
+        } else if b == 10 {
+            out.push(92);
+            out.push(110);
+        } else if b == 13 {
+            out.push(92);
+            out.push(114);
+        } else if b >= 32 and b < 127 {
+            out.push(b);
+        } else {
+            out.push(92);
+            out.push(120);
+            out.push(hex_digit((b as i64) >> 4));
+            out.push(hex_digit((b as i64) & 15));
+        }
+        i = i + 1;
+    }
+    out.push(q);
+    String.from_utf8(out).unwrap_or("")
+}
+
+// CPython str repr for an ASCII media type (or "None").
+fn str_repr(has: bool, text: String) -> String {
+    if not has {
+        return "None";
+    }
+    let bs = str_bytes(text);
+    let mut has_s = false;
+    let mut has_d = false;
+    let mut k = 0;
+    while k < bs.len() {
+        if bs[k] == 39 {
+            has_s = true;
+        }
+        if bs[k] == 34 {
+            has_d = true;
+        }
+        k = k + 1;
+    }
+    let mut q: u8 = 39;
+    if has_s and not has_d {
+        q = 34;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut i = 0;
+    while i < bs.len() {
+        let b = bs[i];
+        if b == 92 {
+            out.push(92);
+            out.push(92);
+        } else if b == q {
+            out.push(92);
+            out.push(q);
+        } else if b == 9 {
+            out.push(92);
+            out.push(116);
+        } else if b == 10 {
+            out.push(92);
+            out.push(110);
+        } else if b == 13 {
+            out.push(92);
+            out.push(114);
+        } else if b >= 32 and b < 127 {
+            out.push(b);
+        } else {
+            out.push(92);
+            out.push(120);
+            out.push(hex_digit((b as i64) >> 4));
+            out.push(hex_digit((b as i64) & 15));
+        }
+        i = i + 1;
+    }
+    out.push(q);
+    String.from_utf8(out).unwrap_or("")
+}
+
+#[derive(Clone)]
+struct ParseRes {
+    ok: bool,
+    err: String,
+    has_mt: bool,
+    mt: String,
+    data: Vec[u8],
+}
+
+fn err_res(msg: String) -> ParseRes {
+    ParseRes { ok: false, err: msg.clone(), has_mt: false, mt: "", data: Vec.new() }
+}
+
+// Whether byte b is in the data-URI character class of the discover regex.
+fn allowed(b: u8) -> bool {
+    (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or (b >= 48 and b <= 57)
+        or b == 45 or b == 95 or b == 46 or b == 126
+        or b == 58 or b == 47 or b == 63 or b == 35 or b == 91 or b == 93
+        or b == 64 or b == 33 or b == 36 or b == 38 or b == 39 or b == 40
+        or b == 41 or b == 42 or b == 43 or b == 44 or b == 59 or b == 61
+        or b == 37
+}
+
+fn parse_uri(uri: String) -> ParseRes {
+    let b = str_bytes(uri.clone());
+    let n = b.len();
+    if n < 5 or b[0] != 100 or b[1] != 97 or b[2] != 116 or b[3] != 97 or b[4] != 58 {
+        return err_res("invalid data uri");
+    }
+    // s = uri[5:]; find first comma in s.
+    let mut comma = -1;
+    let mut i = 5;
+    while i < n {
+        if b[i] == 44 {
+            comma = i;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    if n == 5 or comma < 0 {
+        return err_res("invalid data uri");
+    }
+    // media type is uri[5..comma], raw payload is uri[comma+1..].
+    let mut mt = uri.substring(5, comma);
+    let raw = str_bytes(uri.substring(comma + 1, n));
+    let mtb = str_bytes(mt.clone());
+    let ml = mtb.len();
+    let mut is_b64 = false;
+    if ml >= 7 {
+        let suffix = uri.substring(5 + ml - 7, 5 + ml);
+        if suffix == ";base64" {
+            is_b64 = true;
+        }
+    }
+    let mut data: Vec[u8] = Vec.new();
+    if is_b64 {
+        mt = uri.substring(5, comma - 7);
+        let rl = raw.len() as i64;
+        let pad = (4 - (rl % 4)) % 4;
+        let mut payload: Vec[u8] = Vec.new();
+        let mut p = 0;
+        while p < raw.len() {
+            payload.push(raw[p]);
+            p = p + 1;
+        }
+        let mut q = 0;
+        while q < pad {
+            payload.push(61);
+            q = q + 1;
+        }
+        let dec = b64_decode(payload);
+        if not dec.ok {
+            return err_res("invalid base64 in data uri");
+        }
+        data = dec.bytes;
+    } else {
+        data = pct_decode(raw);
+    }
+    let has_mt = str_bytes(mt.clone()).len() > 0;
+    ParseRes { ok: true, err: "", has_mt: has_mt, mt: mt, data: data }
+}
+
+fn repr_parsed(pr: ref ParseRes) -> String {
+    let mut raw: Vec[u8] = Vec.new();
+    let dl = pr.data.len();
+    if dl > 20 {
+        let mut i = 0;
+        while i < 17 {
+            raw.push(pr.data[i]);
+            i = i + 1;
+        }
+        raw.push(46);
+        raw.push(46);
+        raw.push(46);
+    } else {
+        let mut i = 0;
+        while i < dl {
+            raw.push(pr.data[i]);
+            i = i + 1;
+        }
+    }
+    let mut out = String.new();
+    out.push_str("<ParsedDataURI media_type=");
+    out.push_str(str_repr(pr.has_mt, pr.mt.clone()));
+    out.push_str(" data=");
+    out.push_str(bytes_repr(raw));
+    out.push_str(">");
+    out
+}
+
+fn item_str(pr: ref ParseRes) -> String {
+    let mut out = String.new();
+    if pr.has_mt {
+        out.push_str(pr.mt.clone());
+    } else {
+        out.push_str("-");
+    }
+    out.push_str("|");
+    out.push_str(to_hex(pr.data));
+    out
+}
+
+fn do_parse(arg: String) -> String {
+    let pr = parse_uri(arg.clone());
+    if not pr.ok {
+        let mut out = String.new();
+        out.push_str("ERR ");
+        out.push_str(pr.err.clone());
+        return out;
+    }
+    let mut out = item_str(pr);
+    out.push_str("|");
+    out.push_str(repr_parsed(pr));
+    out
+}
+
+fn do_discover(text: String) -> String {
+    let b = str_bytes(text.clone());
+    let n = b.len();
+    let mut results: Vec[ParseRes] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut matched = false;
+        if i + 5 <= n and b[i] == 100 and b[i + 1] == 97 and b[i + 2] == 116
+            and b[i + 3] == 97 and b[i + 4] == 58 {
+            let mut j = i + 5;
+            while j < n and allowed(b[j]) {
+                j = j + 1;
+            }
+            if j > i + 5 {
+                let sub = text.substring(i, j);
+                let pr = parse_uri(sub);
+                if pr.ok {
+                    results.push(pr);
+                }
+                i = j;
+                matched = true;
+            }
+        }
+        if not matched {
+            i = i + 1;
+        }
+    }
+    let mut out = String.new();
+    out.push_str(itoa(results.len() as i64));
+    let mut k = 0;
+    while k < results.len() {
+        out.push_str(" ");
+        out.push_str(item_str(results[k]));
+        k = k + 1;
+    }
+    out
+}
+
+fn itoa(n0: i64) -> String {
+    if n0 == 0 {
+        return "0";
+    }
+    let mut n = n0;
+    let mut digits: Vec[u8] = Vec.new();
+    while n > 0 {
+        digits.push((48 + (n % 10)) as u8);
+        n = n / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut j = digits.len();
+    while j > 0 {
+        j = j - 1;
+        out.push(digits[j]);
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut tab = -1;
+                let mut t = 0;
+                while t < lb.len() {
+                    if lb[t] == 9 {
+                        tab = t;
+                        t = lb.len();
+                    } else {
+                        t = t + 1;
+                    }
+                }
+                if tab >= 0 {
+                    let op = line.substring(0, tab);
+                    let arg = line.substring(tab + 1, lb.len());
+                    if op == "p" {
+                        out.push_str(do_parse(arg));
+                    } else if op == "d" {
+                        out.push_str(do_discover(arg));
+                    }
+                    out.push_str("\n");
+                }
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("p\tdata:,plain\n");
+    s.push_str("p\tdata:text/plain,hello%20world\n");
+    s.push_str("p\tdata:text/plain;charset=utf-8,Hello%2C%20World%21\n");
+    s.push_str("p\tdata:text/html;base64,PGgxPkhpITwvaDE+\n");
+    s.push_str("p\tdata:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=\n");
+    s.push_str("p\tdata:application/octet-stream;base64,3q2+7w==\n");
+    s.push_str("p\tdata:;base64,SGVsbG8h\n");
+    s.push_str("p\tdata:text/plain,\n");
+    s.push_str("p\tdata:text/plain,a+b\n");
+    s.push_str("p\tdata:text/plain,100%25done\n");
+    s.push_str("p\tdata:text/plain,%E2%9C%93\n");
+    s.push_str("p\tdata:text/plain,%zznope\n");
+    s.push_str("p\tdata:application/json,%7B%22k%22%3A1%7D\n");
+    s.push_str("p\tdata:text/plain;base64,QQ==\n");
+    s.push_str("p\tdata:text/plain;base64,QUJD\n");
+    s.push_str("p\tdata:text/css,body%7Bcolor%3Ared%7D\n");
+    s.push_str("p\tnope\n");
+    s.push_str("p\tdata:\n");
+    s.push_str("p\tdata:text/plain\n");
+    s.push_str("p\tdata:text/plain;base64,A\n");
+    s.push_str("p\tdata:text/plain,this is a longer payload exceeding twenty bytes for repr\n");
+    s.push_str("p\tdata:text/plain;base64,VGhpcyBpcyBhIGZhaXJseSBsb25nIGJhc2U2NCBwYXlsb2Fk\n");
+    s.push_str("d\tsee data:text/plain,hi and data:text/html;base64,PGgxPg== end\n");
+    s.push_str("d\tno uris here at all\n");
+    s.push_str("d\tdata:,x data:text/plain;base64,QUJD junk data: notacompletething\n");
+    s.push_str("d\tprefix data:application/json,%7B%22k%22%3A1%7D suffix\n");
+    s.push_str("d\ttwo in a row data:,a data:,b done\n");
+    s.push_str("d\ta bad base64 data:x;base64,A then a good one data:,ok\n");
+    s
+}
