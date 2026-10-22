@@ -1,0 +1,1029 @@
+// mini_requirements — a port of packaging.requirements 26.3 (Apache-2.0 OR
+// BSD-2-Clause, Donald Stufft & contributors): the PEP 508 Requirement that
+// every `requirements.txt` line and every package's `Requires-Dist` metadata
+// is written in. A requirement is `name [extras] specifier ; marker`, or
+// `name [extras] @ url ; marker`.
+//
+// `req` parses a requirement into its parts and prints name, the sorted
+// extras, the canonical specifier set (specifiers deduplicated and sorted, as
+// packaging renders them), and the url. `eval` parses it and evaluates the
+// environment marker against a fixed Linux / CPython 3.11.5 environment, with
+// a chosen `extra`. Both report `INVALID` for a requirement the grammar
+// rejects (empty name, a name not starting alphanumeric, trailing junk, an
+// empty or malformed specifier).
+//
+// The version/specifier core below is shared with mini_specifiers; marker
+// comparisons on the version keys (python_version, python_full_version,
+// implementation_version, platform_release) reuse it exactly as packaging
+// does — `python_version >= "3.8"` is `Specifier(">=3.8").contains("3.11")`.
+// The other keys use PEP 508's string table: `in`/`not in` are substring
+// membership, `==`/`<=`/`>=` are equality, `!=` inequality, and `<`/`>` on a
+// string marker are always false. Marker literals and the `extra` environment
+// value are canonicalized per PEP 503 before an `extra == "..."` comparison.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct V {
+    valid: bool,
+    epoch: i64,
+    rel: Vec[i64],
+    pre_kind: i64, // 0=a 1=b 2=rc 3=none
+    pre_n: i64,
+    has_post: bool,
+    post_n: i64,
+    has_dev: bool,
+    dev_n: i64,
+}
+
+struct Spec { op: String, wild: bool, v: V, raw: String }
+
+struct PreM { idx: i64, kind: i64, n: i64 }
+struct SegM { idx: i64, n: i64, has: bool }
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn is_digit(c: i64) -> bool { c >= 48 and c <= 57 }
+fn is_sep(c: i64) -> bool { c == 45 or c == 95 or c == 46 }
+fn lower_byte(c: i64) -> i64 { if c >= 65 and c <= 90 { c + 32 } else { c } }
+
+fn atoi(b: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let mut acc = 0;
+    let mut i = lo;
+    while i < hi { acc = acc * 10 + (b[i] - 48); i = i + 1; }
+    acc
+}
+
+// Case-insensitive match of literal `w` at position i; returns index past the
+// match, or -1.
+fn match_word(b: ref Vec[i64], i: i64, w: ref String) -> i64 {
+    let wb = bytes_of(w);
+    let wl = wb.len();
+    let n = b.len();
+    if i + wl > n { return -1; }
+    let mut k = 0;
+    while k < wl {
+        if lower_byte(b[i + k]) != wb[k] { return -1; }
+        k = k + 1;
+    }
+    i + wl
+}
+
+// ---- Version parsing ----------------------------------------------------
+
+fn try_pre(b: ref Vec[i64], i0: i64) -> PreM {
+    let n = b.len();
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let mut idx = -1;
+    let mut kind = 3;
+    let ra = match_word(b, si, "alpha"); if ra >= 0 { idx = ra; kind = 0; }
+    if idx < 0 { let r = match_word(b, si, "a"); if r >= 0 { idx = r; kind = 0; } }
+    if idx < 0 { let r = match_word(b, si, "beta"); if r >= 0 { idx = r; kind = 1; } }
+    if idx < 0 { let r = match_word(b, si, "b"); if r >= 0 { idx = r; kind = 1; } }
+    if idx < 0 { let r = match_word(b, si, "preview"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "pre"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "c"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { let r = match_word(b, si, "rc"); if r >= 0 { idx = r; kind = 2; } }
+    if idx < 0 { return PreM { idx: -1, kind: 3, n: 0 }; }
+    let mut k = idx;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    PreM { idx: k, kind: kind, n: num }
+}
+
+fn try_post(b: ref Vec[i64], i0: i64) -> SegM {
+    let n = b.len();
+    // bare "-N" implicit post
+    if i0 < n and b[i0] == 45 {
+        let ds = i0 + 1;
+        let mut j = ds;
+        while j < n and is_digit(b[j]) { j = j + 1; }
+        if j > ds { return SegM { idx: j, n: atoi(b, ds, j), has: true }; }
+    }
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let mut after = -1;
+    let rp = match_word(b, si, "post"); if rp >= 0 { after = rp; }
+    if after < 0 { let r = match_word(b, si, "rev"); if r >= 0 { after = r; } }
+    if after < 0 { let r = match_word(b, si, "r"); if r >= 0 { after = r; } }
+    if after < 0 { return SegM { idx: i0, n: 0, has: false }; }
+    let mut k = after;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    SegM { idx: k, n: num, has: true }
+}
+
+fn try_dev(b: ref Vec[i64], i0: i64) -> SegM {
+    let n = b.len();
+    let mut si = i0;
+    if si < n and is_sep(b[si]) { si = si + 1; }
+    let rd = match_word(b, si, "dev");
+    if rd < 0 { return SegM { idx: i0, n: 0, has: false }; }
+    let mut k = rd;
+    if k < n and is_sep(b[k]) { k = k + 1; }
+    let ds = k;
+    while k < n and is_digit(b[k]) { k = k + 1; }
+    let num = if k > ds { atoi(b, ds, k) } else { 0 };
+    SegM { idx: k, n: num, has: true }
+}
+
+fn invalid_ver() -> V {
+    V { valid: false, epoch: 0, rel: Vec.new(), pre_kind: 3, pre_n: 0,
+        has_post: false, post_n: 0, has_dev: false, dev_n: 0 }
+}
+
+fn parse_ver(s: ref String) -> V {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut i = 0;
+    if n == 0 { return invalid_ver(); }
+    if b[0] == 118 or b[0] == 86 { i = 1; } // leading v / V
+    // epoch: a digit run immediately followed by '!'
+    let mut epoch = 0;
+    let mut j = i;
+    while j < n and is_digit(b[j]) { j = j + 1; }
+    if j < n and j > i and b[j] == 33 { epoch = atoi(b, i, j); i = j + 1; }
+    // release: >=1 numeric component, '.'-separated
+    if not (i < n and is_digit(b[i])) { return invalid_ver(); }
+    let mut rel: Vec[i64] = Vec.new();
+    let mut more = true;
+    while more {
+        let ds = i;
+        while i < n and is_digit(b[i]) { i = i + 1; }
+        rel.push(atoi(b, ds, i));
+        if i < n and b[i] == 46 and i + 1 < n and is_digit(b[i + 1]) { i = i + 1; }
+        else { more = false; }
+    }
+    // pre, post, dev (in order), each with an optional separator
+    let mut pre_kind = 3;
+    let mut pre_n = 0;
+    let pm = try_pre(b, i);
+    if pm.idx >= 0 { pre_kind = pm.kind; pre_n = pm.n; i = pm.idx; }
+    let mut has_post = false;
+    let mut post_n = 0;
+    let po = try_post(b, i);
+    if po.has { has_post = true; post_n = po.n; i = po.idx; }
+    let mut has_dev = false;
+    let mut dev_n = 0;
+    let dv = try_dev(b, i);
+    if dv.has { has_dev = true; dev_n = dv.n; i = dv.idx; }
+    if i != n { return invalid_ver(); } // trailing junk (incl. +local)
+    V { valid: true, epoch: epoch, rel: rel, pre_kind: pre_kind, pre_n: pre_n,
+        has_post: has_post, post_n: post_n, has_dev: has_dev, dev_n: dev_n }
+}
+
+// ---- Version comparison -------------------------------------------------
+
+fn rel_cmp(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let la = a.len();
+    let lb = b.len();
+    let m = if la > lb { la } else { lb };
+    let mut i = 0;
+    while i < m {
+        let av = if i < la { a[i] } else { 0 };
+        let bv = if i < lb { b[i] } else { 0 };
+        if av < bv { return -1; }
+        if av > bv { return 1; }
+        i = i + 1;
+    }
+    0
+}
+
+fn pre_rank(v: ref V) -> i64 {
+    if v.pre_kind < 3 { return v.pre_kind; }
+    if (not v.has_post) and v.has_dev { return -1; } // dev-only sorts first
+    3
+}
+
+fn vcmp(a: ref V, b: ref V) -> i64 {
+    if a.epoch != b.epoch { if a.epoch < b.epoch { return -1; } return 1; }
+    let c = rel_cmp(a.rel, b.rel);
+    if c != 0 { return c; }
+    let ar = pre_rank(a);
+    let br = pre_rank(b);
+    if ar != br { if ar < br { return -1; } return 1; }
+    let an = if a.pre_kind < 3 { a.pre_n } else { 0 };
+    let bn = if b.pre_kind < 3 { b.pre_n } else { 0 };
+    if an != bn { if an < bn { return -1; } return 1; }
+    let apr = if a.has_post { 1 } else { 0 };
+    let bpr = if b.has_post { 1 } else { 0 };
+    if apr != bpr { if apr < bpr { return -1; } return 1; }
+    let apn = if a.has_post { a.post_n } else { 0 };
+    let bpn = if b.has_post { b.post_n } else { 0 };
+    if apn != bpn { if apn < bpn { return -1; } return 1; }
+    let adr = if a.has_dev { 0 } else { 1 };
+    let bdr = if b.has_dev { 0 } else { 1 };
+    if adr != bdr { if adr < bdr { return -1; } return 1; }
+    let adn = if a.has_dev { a.dev_n } else { 0 };
+    let bdn = if b.has_dev { b.dev_n } else { 0 };
+    if adn != bdn { if adn < bdn { return -1; } return 1; }
+    0
+}
+
+fn is_pre(v: ref V) -> bool { v.pre_kind < 3 or v.has_dev }
+
+// same public release and pre segment (epoch, trimmed release, pre).
+fn same_base(p: ref V, v: ref V) -> bool {
+    if p.epoch != v.epoch { return false; }
+    if rel_cmp(p.rel, v.rel) != 0 { return false; }
+    if p.pre_kind != v.pre_kind { return false; }
+    let pn = if p.pre_kind < 3 { p.pre_n } else { 0 };
+    let vn = if v.pre_kind < 3 { v.pre_n } else { 0 };
+    pn == vn
+}
+
+// ---- Derived versions used as range boundaries --------------------------
+
+fn clone_rel(r: ref Vec[i64]) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let n = r.len();
+    let mut i = 0;
+    while i < n { v.push(r[i]); i = i + 1; }
+    v
+}
+
+fn clone_ver(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n,
+        has_dev: v.has_dev, dev_n: v.dev_n }
+}
+
+fn with_dev0(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n, has_dev: true, dev_n: 0 }
+}
+
+fn with_dev_inc(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: v.has_post, post_n: v.post_n, has_dev: true,
+        dev_n: v.dev_n + 1 }
+}
+
+fn with_post_inc(v: ref V) -> V {
+    V { valid: true, epoch: v.epoch, rel: clone_rel(v.rel), pre_kind: v.pre_kind,
+        pre_n: v.pre_n, has_post: true, post_n: v.post_n + 1, has_dev: true, dev_n: 0 }
+}
+
+// epoch!rel.dev0 with no pre/post.
+fn ver_rel_dev0(epoch: i64, rel: own Vec[i64]) -> V {
+    V { valid: true, epoch: epoch, rel: rel, pre_kind: 3, pre_n: 0,
+        has_post: false, post_n: 0, has_dev: true, dev_n: 0 }
+}
+
+// the .dev0 of the next prefix: rel (a1,...,ak) -> (a1,...,a(k-1)+1).dev0.
+fn ver_next_prefix(epoch: i64, rel: ref Vec[i64]) -> V {
+    let n = rel.len();
+    let mut nr: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n - 1 { nr.push(rel[i]); i = i + 1; }
+    nr.push(rel[n - 1] + 1);
+    ver_rel_dev0(epoch, nr)
+}
+
+fn le_min(v: ref V) -> bool {
+    let mut z: Vec[i64] = Vec.new();
+    z.push(0);
+    let m = ver_rel_dev0(0, z);
+    vcmp(v, m) <= 0
+}
+
+// ---- Operator range membership (standard ops; no pre-release policy) -----
+
+fn in_bounds(sp: ref Spec, p: ref V) -> bool {
+    if sp.wild {
+        let lo = ver_rel_dev0(sp.v.epoch, clone_rel(sp.v.rel));
+        let hi = ver_next_prefix(sp.v.epoch, sp.v.rel);
+        let inlo = vcmp(p, lo) >= 0;
+        let inhi = vcmp(p, hi) < 0;
+        if sp.op == "==" { return inlo and inhi; }
+        return (not inlo) or (not inhi); // !=V.* : outside [lo, hi)
+    }
+    if sp.op == ">=" { return vcmp(p, sp.v) >= 0; }
+    if sp.op == "<=" { return vcmp(p, sp.v) <= 0; }
+    if sp.op == "==" { return vcmp(p, sp.v) == 0; }
+    if sp.op == "!=" { return vcmp(p, sp.v) != 0; }
+    if sp.op == "~=" {
+        let n = sp.v.rel.len();
+        let mut prefix: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < n - 1 { prefix.push(sp.v.rel[i]); i = i + 1; }
+        let hi = ver_next_prefix(sp.v.epoch, prefix);
+        return (vcmp(p, sp.v) >= 0) and (vcmp(p, hi) < 0);
+    }
+    if sp.op == "<" {
+        let bound = if is_pre(sp.v) { clone_ver(sp.v) } else { with_dev0(sp.v) };
+        if le_min(bound) { return false; }
+        return vcmp(p, bound) < 0;
+    }
+    if sp.op == ">" {
+        if sp.v.has_dev {
+            let bound = with_dev_inc(sp.v);
+            return vcmp(p, bound) >= 0;
+        }
+        if sp.v.has_post {
+            let bound = with_post_inc(sp.v);
+            return vcmp(p, bound) >= 0;
+        }
+        if vcmp(sp.v, p) >= 0 { return false; }
+        if same_base(p, sp.v) { return false; }
+        return true;
+    }
+    false
+}
+
+// ---- Specifier-set parsing ----------------------------------------------
+
+fn eq_ci(a: ref String, b: ref String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    if ab.len() != bb.len() { return false; }
+    let n = ab.len();
+    let mut i = 0;
+    while i < n {
+        if lower_byte(ab[i]) != lower_byte(bb[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn trim(s: ref String) -> String {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut lo = 0;
+    while lo < n and (b[lo] == 32 or b[lo] == 9) { lo = lo + 1; }
+    let mut hi = n;
+    while hi > lo and (b[hi - 1] == 32 or b[hi - 1] == 9) { hi = hi - 1; }
+    s.substring(lo, hi)
+}
+
+fn parse_spec(raw_in: ref String) -> Spec {
+    let s = trim(raw_in);
+    let n = s.bytes().len() as i64;
+    let mut op = String.new();
+    let mut rest_lo = 0;
+    if n >= 3 and s.substring(0, 3) == "===" { op.push_str("==="); rest_lo = 3; }
+    else if n >= 2 and s.substring(0, 2) == "~=" { op.push_str("~="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "==" { op.push_str("=="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "!=" { op.push_str("!="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == "<=" { op.push_str("<="); rest_lo = 2; }
+    else if n >= 2 and s.substring(0, 2) == ">=" { op.push_str(">="); rest_lo = 2; }
+    else if n >= 1 and s.substring(0, 1) == "<" { op.push_str("<"); rest_lo = 1; }
+    else if n >= 1 and s.substring(0, 1) == ">" { op.push_str(">"); rest_lo = 1; }
+    else { op.push_str("=="); rest_lo = 0; }
+    let verpart = trim(s.substring(rest_lo, n));
+    if op == "===" {
+        return Spec { op: op, wild: false, v: invalid_ver(), raw: verpart };
+    }
+    let vn = verpart.bytes().len() as i64;
+    let mut wild = false;
+    let base = if vn >= 2 and verpart.substring(vn - 2, vn) == ".*" {
+        wild = true;
+        verpart.substring(0, vn - 2)
+    } else {
+        verpart.clone()
+    };
+    let pv = parse_ver(base);
+    Spec { op: op, wild: wild, v: pv, raw: verpart }
+}
+
+fn parse_set(s: ref String) -> Vec[Spec] {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut specs: Vec[Spec] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 44 { // ','
+            let piece = trim(s.substring(start, i));
+            if piece.bytes().len() > 0 { specs.push(parse_spec(piece)); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    specs
+}
+
+// ---- contains / filter --------------------------------------------------
+
+fn set_contains(specs: ref Vec[Spec], item: ref String, pre_mode: i64) -> bool {
+    let p = parse_ver(item);
+    if pre_mode == 2 and p.valid and is_pre(p) { return false; }
+    for sp in specs {
+        if sp.op == "===" {
+            if not eq_ci(item, sp.raw) { return false; }
+        } else {
+            if not p.valid { return false; }
+            if not in_bounds(sp, p) { return false; }
+        }
+    }
+    true
+}
+
+// ====================== PEP 508 requirement + marker layer =================
+
+struct Req {
+    valid: bool,
+    name: String,
+    extras: Vec[String],
+    spec_str: String,
+    url: String,
+    has_marker: bool,
+    marker: String,
+}
+
+struct EvR { val: bool, pos: i64, ok: bool }
+struct Toks { kinds: Vec[i64], texts: Vec[String] }
+
+fn chr(c: i64) -> String {
+    let tab = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    if c < 32 or c > 126 { return "?"; }
+    tab.substring(c - 32, c - 31)
+}
+
+fn is_alnum(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+fn is_name_char(c: i64) -> bool { is_alnum(c) or c == 46 or c == 45 or c == 95 }
+
+fn str_eq(a: ref String, b: ref String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    if ab.len() != bb.len() { return false; }
+    let n = ab.len();
+    let mut i = 0;
+    while i < n { if ab[i] != bb[i] { return false; } i = i + 1; }
+    true
+}
+
+fn contains_sub(hay: ref String, needle: ref String) -> bool {
+    let h = bytes_of(hay);
+    let nd = bytes_of(needle);
+    let hn = h.len();
+    let nn = nd.len();
+    if nn == 0 { return true; }
+    if nn > hn { return false; }
+    let mut i = 0;
+    while i + nn <= hn {
+        let mut k = 0;
+        let mut ok = true;
+        while k < nn { if h[i + k] != nd[k] { ok = false; k = nn; } else { k = k + 1; } }
+        if ok { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// PEP 503 name canonicalization: lowercase, collapse runs of -_. to a single -.
+fn canon(s: ref String) -> String {
+    let b = bytes_of(s);
+    let n = b.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c == 45 or c == 95 or c == 46 {
+            out.push_str("-");
+            while i < n and (b[i] == 45 or b[i] == 95 or b[i] == 46) { i = i + 1; }
+        } else {
+            out.push_str(chr(lower_byte(c)));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+fn is_version_key(key: ref String) -> bool {
+    key == "python_version" or key == "python_full_version"
+        or key == "implementation_version" or key == "platform_release"
+}
+
+fn is_spec_op(op: ref String) -> bool {
+    op == "<" or op == "<=" or op == ">" or op == ">=" or op == "=="
+        or op == "!=" or op == "~=" or op == "==="
+}
+
+fn env_val(key: ref String, extra: ref String) -> String {
+    if key == "os_name" { return "posix"; }
+    if key == "sys_platform" { return "linux"; }
+    if key == "platform_machine" { return "x86_64"; }
+    if key == "platform_system" { return "Linux"; }
+    if key == "platform_release" { return "6.1.0"; }
+    if key == "platform_version" { return "#1 SMP"; }
+    if key == "platform_python_implementation" { return "CPython"; }
+    if key == "python_version" { return "3.11"; }
+    if key == "python_full_version" { return "3.11.5"; }
+    if key == "implementation_name" { return "cpython"; }
+    if key == "implementation_version" { return "3.11.5"; }
+    if key == "extra" { return extra.clone(); }
+    String.new()
+}
+
+// op length at the start of a specifier piece (0 = none recognized).
+fn spec_op_len(p: ref String) -> i64 {
+    let n = p.bytes().len() as i64;
+    if n >= 3 and p.substring(0, 3) == "===" { return 3; }
+    if n >= 2 {
+        let two = p.substring(0, 2);
+        if two == "~=" or two == "==" or two == "!=" or two == "<=" or two == ">=" { return 2; }
+    }
+    if n >= 1 {
+        let one = p.substring(0, 1);
+        if one == "<" or one == ">" { return 1; }
+    }
+    0
+}
+
+// Canonical SpecifierSet string for a specifier substring. Returns ok=false in
+// `valid`; the canonical string in `name` of the Req-less pair below.
+struct SpecRes { ok: bool, s: String }
+
+fn spec_canon(sub: ref String) -> SpecRes {
+    let b = bytes_of(sub);
+    let n = b.len();
+    let mut pieces: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 44 {
+            let piece = trim(sub.substring(start, i));
+            if piece.bytes().len() > 0 { pieces.push(piece); }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    let mut canons: Vec[String] = Vec.new();
+    let mut k = 0;
+    let pc = pieces.len();
+    while k < pc {
+        let piece = pieces[k].clone();
+        let oplen = spec_op_len(piece);
+        if oplen == 0 { return SpecRes { ok: false, s: String.new() }; }
+        let pn = piece.bytes().len() as i64;
+        let op = piece.substring(0, oplen);
+        let verpart = trim(piece.substring(oplen, pn));
+        if verpart.bytes().len() == 0 { return SpecRes { ok: false, s: String.new() }; }
+        if op != "===" {
+            let vn = verpart.bytes().len() as i64;
+            let base = if vn >= 2 and verpart.substring(vn - 2, vn) == ".*" {
+                verpart.substring(0, vn - 2)
+            } else {
+                verpart.clone()
+            };
+            let pv = parse_ver(base);
+            if not pv.valid { return SpecRes { ok: false, s: String.new() }; }
+        }
+        let mut cs = String.new();
+        cs.push_str(op);
+        cs.push_str(verpart);
+        canons.push(cs);
+        k = k + 1;
+    }
+    // dedup + sort (selection sort over the canonical strings)
+    let m = canons.len();
+    let mut used: Vec[i64] = Vec.new();
+    let mut u = 0;
+    while u < m { used.push(0); u = u + 1; }
+    let mut out = String.new();
+    let mut emitted = 0;
+    let mut prev = String.new();
+    let mut have_prev = false;
+    let mut count = 0;
+    while count < m {
+        // find smallest unused
+        let mut best = -1;
+        let mut bi = 0;
+        while bi < m {
+            if used[bi] == 0 {
+                if best < 0 { best = bi; }
+                else if lt_str(canons[bi], canons[best]) { best = bi; }
+            }
+            bi = bi + 1;
+        }
+        used[best] = 1;
+        let cur = canons[best].clone();
+        if have_prev and str_eq(cur, prev) {
+            // duplicate, skip
+        } else {
+            if emitted > 0 { out.push_str(","); }
+            out.push_str(cur.clone());
+            emitted = emitted + 1;
+        }
+        prev = cur;
+        have_prev = true;
+        count = count + 1;
+    }
+    SpecRes { ok: true, s: out }
+}
+
+fn lt_str(a: ref String, b: ref String) -> bool {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    let la = ab.len();
+    let lb = bb.len();
+    let m = if la < lb { la } else { lb };
+    let mut i = 0;
+    while i < m {
+        if ab[i] < bb[i] { return true; }
+        if ab[i] > bb[i] { return false; }
+        i = i + 1;
+    }
+    la < lb
+}
+
+fn invalid_req() -> Req {
+    Req { valid: false, name: String.new(), extras: Vec.new(), spec_str: String.new(),
+          url: String.new(), has_marker: false, marker: String.new() }
+}
+
+fn parse_req(s: ref String) -> Req {
+    let st = trim(s);
+    let b = bytes_of(st);
+    let n = b.len();
+    if n == 0 { return invalid_req(); }
+    // name
+    let mut i = 0;
+    while i < n and is_name_char(b[i]) { i = i + 1; }
+    let name = st.substring(0, i);
+    let nn = name.bytes().len() as i64;
+    if nn == 0 { return invalid_req(); }
+    if not is_alnum(b[0]) { return invalid_req(); }
+    if not is_alnum(b[i - 1]) { return invalid_req(); }
+    // skip spaces
+    while i < n and (b[i] == 32 or b[i] == 9) { i = i + 1; }
+    let mut extras: Vec[String] = Vec.new();
+    if i < n and b[i] == 91 { // '['
+        let mut j = i + 1;
+        while j < n and b[j] != 93 { j = j + 1; } // ']'
+        if j >= n { return invalid_req(); }
+        let inner = st.substring(i + 1, j);
+        let ib = bytes_of(inner);
+        let inn = ib.len();
+        let mut es = 0;
+        let mut ei = 0;
+        while ei <= inn {
+            if ei == inn or ib[ei] == 44 {
+                let e = trim(inner.substring(es, ei));
+                if e.bytes().len() > 0 { extras.push(e); }
+                es = ei + 1;
+            }
+            ei = ei + 1;
+        }
+        i = j + 1;
+        while i < n and (b[i] == 32 or b[i] == 9) { i = i + 1; }
+    }
+    // marker split point: first ';'
+    let mut semi = -1;
+    let mut t = i;
+    while t < n { if b[t] == 59 { semi = t; t = n; } else { t = t + 1; } }
+    let region_hi = if semi >= 0 { semi } else { n };
+    let mut has_marker = false;
+    let mut marker = String.new();
+    if semi >= 0 {
+        has_marker = true;
+        marker = trim(st.substring(semi + 1, n));
+    }
+    let mut url = String.new();
+    let mut spec_str = String.new();
+    if i < n and b[i] == 64 { // '@' url form
+        let u = trim(st.substring(i + 1, region_hi));
+        if u.bytes().len() == 0 { return invalid_req(); }
+        url = u;
+    } else {
+        let sub = trim(st.substring(i, region_hi));
+        if sub.bytes().len() > 0 {
+            let sr = spec_canon(sub);
+            if not sr.ok { return invalid_req(); }
+            spec_str = sr.s;
+        }
+    }
+    Req { valid: true, name: name, extras: extras, spec_str: spec_str, url: url,
+          has_marker: has_marker, marker: marker }
+}
+
+// ---- marker tokenizer + evaluator ----
+
+fn tokenize(m: ref String) -> Toks {
+    let b = bytes_of(m);
+    let n = b.len();
+    let mut kinds: Vec[i64] = Vec.new();
+    let mut texts: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = b[i];
+        if c == 32 or c == 9 { i = i + 1; }
+        else if c == 39 or c == 34 { // quote
+            let q = c;
+            let s0 = i + 1;
+            let mut j = s0;
+            while j < n and b[j] != q { j = j + 1; }
+            texts.push(m.substring(s0, j));
+            kinds.push(1);
+            i = j + 1;
+        } else if c == 40 { kinds.push(3); texts.push("("); i = i + 1; }
+        else if c == 41 { kinds.push(4); texts.push(")"); i = i + 1; }
+        else if c == 61 or c == 33 or c == 60 or c == 62 or c == 126 {
+            // operator; match longest
+            let mut oplen = 1;
+            if c == 61 and i + 2 < n and b[i + 1] == 61 and b[i + 2] == 61 { oplen = 3; }
+            else if (c == 61 and i + 1 < n and b[i + 1] == 61)
+                 or (c == 33 and i + 1 < n and b[i + 1] == 61)
+                 or (c == 60 and i + 1 < n and b[i + 1] == 61)
+                 or (c == 62 and i + 1 < n and b[i + 1] == 61)
+                 or (c == 126 and i + 1 < n and b[i + 1] == 61) { oplen = 2; }
+            texts.push(m.substring(i, i + oplen));
+            kinds.push(2);
+            i = i + oplen;
+        } else {
+            let s0 = i;
+            while i < n and is_name_char(b[i]) { i = i + 1; }
+            if i == s0 { i = i + 1; } // skip an unexpected char
+            else { texts.push(m.substring(s0, i)); kinds.push(0); }
+        }
+    }
+    Toks { kinds: kinds, texts: texts }
+}
+
+fn peek_word(t: ref Toks, pos: i64, w: ref String) -> bool {
+    let n = t.kinds.len();
+    pos < n and t.kinds[pos] == 0 and str_eq(t.texts[pos], w)
+}
+
+fn eval_cmp(ak: i64, at: ref String, op: ref String, bk: i64, bt: ref String, extra: ref String) -> bool {
+    // orient: the variable side is a bare word (kind 0)
+    let mut key = String.new();
+    let mut lhs = String.new();
+    let mut rhs = String.new();
+    if ak == 0 {
+        key = at.clone();
+        lhs = env_val(key, extra);
+        rhs = bt.clone();
+    } else {
+        lhs = at.clone();
+        key = bt.clone();
+        rhs = env_val(key, extra);
+    }
+    if key == "extra" {
+        lhs = canon(lhs);
+        rhs = canon(rhs);
+    }
+    eval_op(lhs, op, rhs, key)
+}
+
+fn eval_op(lhs: ref String, op: ref String, rhs: ref String, key: ref String) -> bool {
+    if is_version_key(key) and is_spec_op(op) {
+        // validate rhs forms a specifier; otherwise fall to string ops
+        let mut ok = true;
+        if op != "===" {
+            let vn = rhs.bytes().len() as i64;
+            let base = if vn >= 2 and rhs.substring(vn - 2, vn) == ".*" {
+                rhs.substring(0, vn - 2)
+            } else {
+                rhs.clone()
+            };
+            let pv = parse_ver(base);
+            if not pv.valid { ok = false; }
+        } else {
+            if rhs.bytes().len() == 0 { ok = false; }
+        }
+        if ok {
+            let mut spec_s = String.new();
+            spec_s.push_str(op.clone());
+            spec_s.push_str(rhs.clone());
+            let specs = parse_set(spec_s);
+            return set_contains(specs, lhs, 1);
+        }
+    }
+    if op == "in" { return contains_sub(rhs, lhs); }
+    if op == "not in" { return not contains_sub(rhs, lhs); }
+    if op == "==" or op == "<=" or op == ">=" { return str_eq(lhs, rhs); }
+    if op == "!=" { return not str_eq(lhs, rhs); }
+    // "<", ">" on a string marker are always false; "~=","===" undefined (unused)
+    false
+}
+
+fn eval_atom(t: ref Toks, pos: i64, extra: ref String) -> EvR {
+    let n = t.kinds.len();
+    if pos >= n { return EvR { val: false, pos: pos, ok: false }; }
+    if t.kinds[pos] == 3 { // '('
+        let r = eval_or(t, pos + 1, extra);
+        let mut p = r.pos;
+        let mut ok = r.ok;
+        if p < n and t.kinds[p] == 4 { p = p + 1; } else { ok = false; }
+        return EvR { val: r.val, pos: p, ok: ok };
+    }
+    // comparison: operand op operand
+    let ak = t.kinds[pos];
+    let at = t.texts[pos].clone();
+    let mut p = pos + 1;
+    let mut op = String.new();
+    let mut ok = true;
+    if p < n and t.kinds[p] == 0 and str_eq(t.texts[p], "not") {
+        p = p + 1;
+        if p < n and t.kinds[p] == 0 and str_eq(t.texts[p], "in") { op.push_str("not in"); p = p + 1; }
+        else { ok = false; }
+    } else if p < n and t.kinds[p] == 0 and str_eq(t.texts[p], "in") {
+        op.push_str("in"); p = p + 1;
+    } else if p < n and t.kinds[p] == 2 {
+        op.push_str(t.texts[p].clone()); p = p + 1;
+    } else { ok = false; }
+    if p >= n { return EvR { val: false, pos: p, ok: false }; }
+    let bk = t.kinds[p];
+    let bt = t.texts[p].clone();
+    p = p + 1;
+    let v = eval_cmp(ak, at, op, bk, bt, extra);
+    EvR { val: v, pos: p, ok: ok }
+}
+
+fn eval_and(t: ref Toks, pos: i64, extra: ref String) -> EvR {
+    let mut r = eval_atom(t, pos, extra);
+    while peek_word(t, r.pos, "and") {
+        let rr = eval_atom(t, r.pos + 1, extra);
+        r = EvR { val: r.val and rr.val, pos: rr.pos, ok: r.ok and rr.ok };
+    }
+    r
+}
+
+fn eval_or(t: ref Toks, pos: i64, extra: ref String) -> EvR {
+    let mut r = eval_and(t, pos, extra);
+    while peek_word(t, r.pos, "or") {
+        let rr = eval_and(t, r.pos + 1, extra);
+        r = EvR { val: r.val or rr.val, pos: rr.pos, ok: r.ok and rr.ok };
+    }
+    r
+}
+
+fn eval_marker(m: ref String, extra: ref String) -> bool {
+    let t = tokenize(m);
+    let r = eval_or(t, 0, extra);
+    r.val
+}
+
+// ---- driver ----
+
+fn join_extras_sorted(extras: ref Vec[String]) -> String {
+    let m = extras.len();
+    if m == 0 { return "-"; }
+    let mut used: Vec[i64] = Vec.new();
+    let mut u = 0;
+    while u < m { used.push(0); u = u + 1; }
+    let mut out = String.new();
+    let mut count = 0;
+    while count < m {
+        let mut best = -1;
+        let mut bi = 0;
+        while bi < m {
+            if used[bi] == 0 {
+                if best < 0 { best = bi; }
+                else if lt_str(extras[bi], extras[best]) { best = bi; }
+            }
+            bi = bi + 1;
+        }
+        used[best] = 1;
+        if count > 0 { out.push_str(","); }
+        out.push_str(extras[best].clone());
+        count = count + 1;
+    }
+    out
+}
+
+fn run_job(fields: ref Vec[String]) -> String {
+    let op = fields[0].clone();
+    if op == "req" {
+        let s = fields[1].clone();
+        let r = parse_req(s);
+        if not r.valid { return "INVALID"; }
+        let mut out = String.new();
+        out.push_str("name=");
+        out.push_str(r.name.clone());
+        out.push_str(" | extras=");
+        out.push_str(join_extras_sorted(r.extras));
+        out.push_str(" | spec=");
+        if r.spec_str.bytes().len() == 0 { out.push_str("-"); } else { out.push_str(r.spec_str.clone()); }
+        out.push_str(" | url=");
+        if r.url.bytes().len() == 0 { out.push_str("-"); } else { out.push_str(r.url.clone()); }
+        return out;
+    }
+    if op == "eval" {
+        let s = fields[1].clone();
+        let ex_raw = fields[2].clone();
+        let r = parse_req(s);
+        if not r.valid { return "INVALID"; }
+        if not r.has_marker { return "(no marker)"; }
+        let extra = if ex_raw == "-" { String.new() } else { ex_raw.clone() };
+        if eval_marker(r.marker, extra) { return "True"; }
+        return "False";
+    }
+    "unknown op"
+}
+
+fn split_fields(line: ref String) -> Vec[String] {
+    let v = bytes_of(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                let fop = fields[0].clone();
+                let mut args = String.new();
+                let mut k = 1;
+                let fc = fields.len();
+                while k < fc {
+                    if k > 1 { args.push_str(" "); }
+                    args.push_str(fields[k].clone());
+                    k = k + 1;
+                }
+                out.push_str("== ");
+                out.push_str(fop);
+                out.push_str(" | ");
+                out.push_str(args);
+                out.push_str("\n  ");
+                out.push_str(run_job(fields));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("req\trequests\n");
+    s.push_str("req\trequests>=2.0\n");
+    s.push_str("req\trequests>=2.0,<3.0\n");
+    s.push_str("req\trequests[security]\n");
+    s.push_str("req\trequests[security,socks]\n");
+    s.push_str("req\trequests[socks,security]\n");
+    s.push_str("req\tDjango>=3.2,<4.0\n");
+    s.push_str("req\tfoo==1.0.0\n");
+    s.push_str("req\tfoo===1.0+local\n");
+    s.push_str("req\tfoo ~= 2.2\n");
+    s.push_str("req\tfoo != 1.5\n");
+    s.push_str("req\tpip @ https://example.com/pip.tar.gz\n");
+    s.push_str("req\tname @ https://example.com/pkg.whl ; python_version < '3.9'\n");
+    s.push_str("req\tfoo ; os_name == 'posix'\n");
+    s.push_str("req\tfoo[a,b]>=1,<2 ; extra == 'a'\n");
+    s.push_str("req\t\n");
+    s.push_str("req\t_leading\n");
+    s.push_str("req\tfoo bar\n");
+    s.push_str("req\tfoo>=\n");
+    s.push_str("req\tfoo[]\n");
+    s.push_str("eval\tfoo; python_version >= '3.8'\t-\n");
+    s.push_str("eval\tfoo; python_version < '3.8'\t-\n");
+    s.push_str("eval\tfoo; python_version == '3.11'\t-\n");
+    s.push_str("eval\tfoo; python_version != '3.10'\t-\n");
+    s.push_str("eval\tfoo; python_version ~= '3.11'\t-\n");
+    s.push_str("eval\tfoo; python_full_version >= '3.11.0'\t-\n");
+    s.push_str("eval\tfoo; '3.8' <= python_version\t-\n");
+    s.push_str("eval\tfoo; python_version >= '3.8' and sys_platform == 'linux'\t-\n");
+    s.push_str("eval\tfoo; python_version < '3.8' or sys_platform == 'linux'\t-\n");
+    s.push_str("eval\tfoo; sys_platform == 'win32'\t-\n");
+    s.push_str("eval\tfoo; os_name == 'posix'\t-\n");
+    s.push_str("eval\tfoo; implementation_name == 'cpython'\t-\n");
+    s.push_str("eval\tfoo; platform_machine == 'x86_64'\t-\n");
+    s.push_str("eval\tfoo; 'linux' in sys_platform\t-\n");
+    s.push_str("eval\tfoo; 'win' not in sys_platform\t-\n");
+    s.push_str("eval\tfoo; sys_platform > 'a'\t-\n");
+    s.push_str("eval\tfoo; (python_version >= '3.8' and sys_platform == 'linux') or os_name == 'nt'\t-\n");
+    s.push_str("eval\tfoo\t-\n");
+    s.push_str("eval\tfoo; extra == 'dev'\tdev\n");
+    s.push_str("eval\tfoo; extra == 'dev'\t-\n");
+    s.push_str("eval\tfoo; extra == 'dev'\ttest\n");
+    s.push_str("eval\tfoo; extra == 'Dev'\tdev\n");
+    s.push_str("eval\tfoo; extra == 'dev' and python_version >= '3.8'\tdev\n");
+    s
+}

@@ -1,0 +1,86 @@
+== req | requests
+  name=requests | extras=- | spec=- | url=-
+== req | requests>=2.0
+  name=requests | extras=- | spec=>=2.0 | url=-
+== req | requests>=2.0,<3.0
+  name=requests | extras=- | spec=<3.0,>=2.0 | url=-
+== req | requests[security]
+  name=requests | extras=security | spec=- | url=-
+== req | requests[security,socks]
+  name=requests | extras=security,socks | spec=- | url=-
+== req | requests[socks,security]
+  name=requests | extras=security,socks | spec=- | url=-
+== req | Django>=3.2,<4.0
+  name=Django | extras=- | spec=<4.0,>=3.2 | url=-
+== req | foo==1.0.0
+  name=foo | extras=- | spec===1.0.0 | url=-
+== req | foo===1.0+local
+  name=foo | extras=- | spec====1.0+local | url=-
+== req | foo ~= 2.2
+  name=foo | extras=- | spec=~=2.2 | url=-
+== req | foo != 1.5
+  name=foo | extras=- | spec=!=1.5 | url=-
+== req | pip @ https://example.com/pip.tar.gz
+  name=pip | extras=- | spec=- | url=https://example.com/pip.tar.gz
+== req | name @ https://example.com/pkg.whl ; python_version < '3.9'
+  name=name | extras=- | spec=- | url=https://example.com/pkg.whl
+== req | foo ; os_name == 'posix'
+  name=foo | extras=- | spec=- | url=-
+== req | foo[a,b]>=1,<2 ; extra == 'a'
+  name=foo | extras=a,b | spec=<2,>=1 | url=-
+== req | 
+  INVALID
+== req | _leading
+  INVALID
+== req | foo bar
+  INVALID
+== req | foo>=
+  INVALID
+== req | foo[]
+  name=foo | extras=- | spec=- | url=-
+== eval | foo; python_version >= '3.8' -
+  True
+== eval | foo; python_version < '3.8' -
+  False
+== eval | foo; python_version == '3.11' -
+  True
+== eval | foo; python_version != '3.10' -
+  True
+== eval | foo; python_version ~= '3.11' -
+  True
+== eval | foo; python_full_version >= '3.11.0' -
+  True
+== eval | foo; '3.8' <= python_version -
+  True
+== eval | foo; python_version >= '3.8' and sys_platform == 'linux' -
+  True
+== eval | foo; python_version < '3.8' or sys_platform == 'linux' -
+  True
+== eval | foo; sys_platform == 'win32' -
+  False
+== eval | foo; os_name == 'posix' -
+  True
+== eval | foo; implementation_name == 'cpython' -
+  True
+== eval | foo; platform_machine == 'x86_64' -
+  True
+== eval | foo; 'linux' in sys_platform -
+  True
+== eval | foo; 'win' not in sys_platform -
+  True
+== eval | foo; sys_platform > 'a' -
+  False
+== eval | foo; (python_version >= '3.8' and sys_platform == 'linux') or os_name == 'nt' -
+  True
+== eval | foo -
+  (no marker)
+== eval | foo; extra == 'dev' dev
+  True
+== eval | foo; extra == 'dev' -
+  False
+== eval | foo; extra == 'dev' test
+  False
+== eval | foo; extra == 'Dev' dev
+  True
+== eval | foo; extra == 'dev' and python_version >= '3.8' dev
+  True
