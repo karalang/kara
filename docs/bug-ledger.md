@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 334 |
-| codegen-gap | 290 |
+| codegen-gap | 291 |
 | false-positive | 283 |
 | other | 197 |
 | diagnostics | 187 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3032 |
+| codegen | 3033 |
 | interp | 1040 |
 | typecheck | 564 |
 | ownership | 131 |
@@ -176,7 +176,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 | B-2026-10-22-10 | 2026-10-22 | interp+codegen | medium | A call to an `unsafe extern "C"` function does not run on either MIR backend, so no FFI program runs on v2, and M3 needs one (recheck §2.2): examples/interop-zlib's `crc32` fails `karac build --mir` with "native `crc32` is not lowered yet" and `__mir-run` with "call of unknown function crc32" | — |
 | B-2026-10-22-11 | 2026-10-22 | interp+codegen | medium | An `errdefer` in a `par` branch that holds a `return` is refused by name on both MIR lanes (`an `errdefer` in a `par` branch that returns is not lowered yet`); the spec says it runs when the branch's value is an `Err` (core-semantics.md §11.7, §7.6-§7.7), and legacy `run --interp` runs it | — |
-| B-2026-10-22-12 | 2026-10-22 | cli | medium | `karac run` still runs the legacy JIT (with the legacy tree-walk interpreter as fallback and as `--interp`); v2 runs only through the hidden `__mir-run` / `__mir-llvm-run`. M3 item 1: the default becomes the mir-llvm JIT, `--interp` the MIR interpreter, keeping `--output=json/jsonl`, `--timeout`, `--sequential`, `--example`, the manifest flags and `--` program args, with the old path behind `--legacy` | — |
 | B-2026-10-22-13 | 2026-10-22 | cli | medium | `karac test` runs each case on the legacy JIT (src/test_jit_dispatch.rs) with the legacy interpreter as fallback; nothing in test_cmd.rs reaches MIR. M3 item 2: discovery and the JSONL output stay, each case runs on MIR (mir-llvm by default, `--interp` the MIR interpreter), `#[with_provider]` on a test works (B-2026-10-21-5), and the old path stays behind `--legacy` | — |
 | B-2026-10-22-14 | 2026-10-22 | cli | medium | `karac build` defaults to legacy; `--mir` builds one named file only (src/cli/args.rs refuses it in project mode: "--mir builds a single file; name one") and keeps only the file, output, `--release` and `-o`, dropping the other build flags. M3 item 4, CLI half: v2 by default, project mode and `install` on v2, every other build flag carried or refused by name, the old path behind `--legacy` (plain wasm32 targets are the drop schedule's half) | — |
 | B-2026-10-22-15 | 2026-10-22 | other | medium | The drop model refuses 61 programs that check accepts, all one shape: a cursor local initialised from a borrowed handle aggregate and reassigned (`let mut cur = head; ... cur = n.next`), which §6.1 makes a counted copy; the model's §5.9 "write through a ref: an assignment" is wrong | — |
@@ -189,6 +188,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-23 | 2026-10-22 | codegen | medium | M3 item 4, mir-llvm half: `karac build --mir` compiles one file only. A project-mode build (many files under src/), the kara.toml link flags ([link] libs/search_paths) and a plain wasm32 target do not go through MIR to LLVM, so legacy codegen cannot be deleted while those builds need it | — |
 | B-2026-10-22-24 | 2026-10-22 | codegen | medium | M3 item 5, codegen half: the MIR backend still reaches into legacy codegen. `src/codegen/mir`, `mir_aot` and `mir_asan` hang off codegen.rs (lines 73-75) and use its driver (create_target_machine, create_unoptimized_target_machine, link_executable, link_executable_with_sanitizer), debug_info::read_debug_info_env, lljit.rs and test_jit_dispatch's runner lookup (locate_karac_jit_runner, SPAWNER_PID_ENV), so deleting codegen.rs and the non-mir codegen/** breaks `build --mir`, `__mir-llvm-run` and `__mir-llvm-asan` | — |
 | B-2026-10-22-25 | 2026-10-22 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initializer_once_on_every_backend prints INIT then 42 three times on `__mir-run` and fails to build on `__mir-llvm-run`. It is the only corpus program that passes on mir-interp and fails on mir-llvm | — |
+| B-2026-10-22-27 | 2026-10-22 | codegen | medium | `env.args()` on mir-llvm is the constant `["main"]` (src/codegen/mir/call.rs, the `("Env", "args")` arm), so a `karac build --mir` binary never sees its argv and `karac run`'s JIT ignores what follows `--`; the MIR interpreter and both legacy backends return the real argv | — |
 
 ### Relocated
 
@@ -4396,6 +4396,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-7 | interp+codegen | low | A program with its own enum variant named `Json` cannot use the library's `Json` on the MIR backends: `enum Fmt { Json, Csv }` plus `println(Json.Nul… | 574b46d00f |
 | B-2026-10-22-8 | typecheck+cli | medium | `karac check` accepts a module-level `let` and `let mut`, which design.md § Constants rules out ("Kāra has no module-level `let` or `let mut`"; "No m… | b3368cf65c |
 | B-2026-10-22-9 | typecheck+interp+codegen | medium | A `par` branch holding a `return` still runs in place, in source order, on both MIR lanes, so it cannot wait on a later branch (`par { { let v = rx.r… | 63fa8a3df7 |
+| B-2026-10-22-12 | cli | medium | `karac run` still runs the legacy JIT (with the legacy tree-walk interpreter as fallback and as `--interp`); v2 runs only through the hidden `__mir-r… | 7fff3fa9b2 |
 | B-2026-10-22-17 | other | low | 23 corpus entries expect a refusal with a code recorded from legacy and v2's check refuses with another code; classify.py counts any refusal as a gat… | a28246bb93 |
 | B-2026-10-22-26 | runtime+interp | medium | The compiled HTTP client re-sent the caller's Authorization and Cookie headers to wherever a redirect pointed (any host or port), while the MIR inter… | 6c66c83dda |
 
