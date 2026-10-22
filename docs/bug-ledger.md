@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 325 |
 | codegen-gap | 287 |
-| false-positive | 280 |
+| false-positive | 281 |
 | other | 194 |
 | diagnostics | 186 |
 | perf | 183 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3025 |
 | interp | 1035 |
-| typecheck | 559 |
+| typecheck | 560 |
 | ownership | 131 |
 | other | 123 |
 | runtime | 86 |
@@ -178,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-2 | 2026-10-22 | typecheck | low | `s.pop();` on a `String` warns `discarded Option value` although `v.pop();` on a `Vec` is exempt: design.md's displaced-value exemption to the implicit `Option` must-use lists `Vec.pop` but not `String.pop` | — |
 | B-2026-10-22-4 | 2026-10-22 | codegen | medium | mir-llvm: kata 6 zigzag row_buffers runs 3x legacy since the early argpromotion round (c9f3bee58), at the SAME instruction count: promoting convert_off's scalar params lets O2 fold the row step `if going_down { cur + 1 } else { cur - 1 }` into `cur + select(c, 1, -1)`, which x86 lowers as setne+lea, so the next push's rows[cur] address waits on a serial compare chain; turning the round off (KARAC_MIR_EARLY_PROMOTE=0) fixes 6 but puts 276 paint_enum back at ~2.6x, so neither setting meets the no-bench-over-2x bar | — |
 | B-2026-10-22-5 | 2026-10-22 | typecheck+cli | medium | E0516 on a `shared` value borrowed out of a Map and held across an insert into that Map has no `karac fix` fix-it, though the fix is mechanical: kata 133's clone_bfs and clone_bfs_par benches (M2 frozen set) fail `karac check` with it, and `.clone()` on the borrowed `shared` value (an RC retain) makes both pass | — |
+| B-2026-10-22-6 | 2026-10-22 | typecheck | low | A list literal whose FIRST element is a `ref T` of a `Copy` `T` is typed `Vec[ref T]` even where a `Vec[T]` is expected: `for p in v.iter() { let u: Vec[i64] = [p]; }` is refused with "expected 'Vec[i64]', found 'Vec[ref i64]'" by `karac check` and `karac __mir-run`, while `[1, p]`, `let a: Array[i64, 1] = [p]`, `w.push(p)`, `let x: i64 = p` and `S { x: p }` are all accepted | — |
 
 ### Relocated
 
