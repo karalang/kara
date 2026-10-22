@@ -618,9 +618,10 @@ It applies only where the compiler proves all of that. In particular, it does no
 
 **11.7 Failure in `par {}`** (2026-10-07, D4).
 - **`?` in a branch** keeps `design.md`'s block-piercing meaning. It ends that branch, running the branch's drops, `defer`s and `errdefer`s as an error exit (§7.6–§7.7). The error is returned from the enclosing function once the block is done.
+- **`return` in a branch** is the same early exit as `?`, with any value: `?` is a `return` of the error. It ends that branch, running the branch's drops and `defer`s, and its `errdefer`s if the value is an `Err` (§7.6–§7.7), and the enclosing function returns the value once the block is done. `break` and `continue` cannot leave a branch; aiming one at a loop outside the block is an error (review-thread ruling 2026-10-22, B-2026-10-21-68 follow-up).
 - **No branch is cancelled.** Every other branch runs to completion.
 - **When the block is done:**
-  - If any branch ended with an error, the enclosing function returns the **source-earliest** one (for `par for`, the earliest in iteration order). That holds whichever failed first, so the result is deterministic. The block's other values, errors included, drop in reverse source order as the block is left (§7.6).
+  - If any branch exited early (`?` or `return`), the enclosing function returns the **source-earliest** one's value (for `par for`, the earliest in iteration order). That holds whichever exited first, so the result is deterministic. The block's other values, errors included, drop in reverse source order as the block is left (§7.6).
   - Otherwise the block has its value, as `design.md` defines it.
 - **A panic** in any branch ends the process (§11.4).
 - **Removed.** `Cancellable`, `#[derive(Cancellable)]`, `collect_all` and `collect_all_vec` are removed. A block whose branches produce `Result` values without `?` already returns every result, in source order.
