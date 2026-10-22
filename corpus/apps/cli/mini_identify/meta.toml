@@ -1,0 +1,10 @@
+source = "kara-katas/apps/cli/mini_identify/mini_identify.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:cli", "apps:real-io"]
+expected_from = "oracle"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = {}
+extracted_src = "ed3f058f"

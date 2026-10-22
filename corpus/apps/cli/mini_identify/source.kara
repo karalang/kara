@@ -1,0 +1,920 @@
+// mini_identify — a port of identify 2.6.20 (MIT, Chris Kuehl & Anthony
+// Sottile): the library pre-commit uses to tag a file by what it is (python,
+// shell, json, binary, ...) from its name and shebang, so hooks can decide
+// which files to run on.
+//
+// This port covers the name/shebang path (no filesystem stat): tags_from_filename,
+// tags_from_interpreter and parse_shebang. The library's four lookup tables —
+// EXTENSIONS (343), EXTENSIONS_NEED_BINARY_CHECK (5), NAMES (96) and
+// INTERPRETERS (25) — are embedded verbatim by gen_kara.py as a text block
+// (tables_text), parsed once at startup into parallel arrays, rather than a
+// giant compile-time constructor. The algorithms match the library: splitext's
+// leading-dot rule, the "Dockerfile.xenial matches Dockerfile" dot-split
+// fallback in NAMES, the python3.5.2 -> python3.5 -> python3 interpreter
+// narrowing, and parse_shebang's `/usr/bin/env` and `/usr/bin/env -S` rewrites.
+// tags_from_filename returns a set, so its union of the NAMES and EXTENSIONS
+// matches is de-duplicated and sorted for a stable line.
+//
+// Scope: shebang tokenization is whitespace splitting (the library best-guesses
+// with shlex first for the rare quoted shebang; unquoted ASCII, which every
+// real shebang is, tokenizes identically). The nix-shell multi-line `-i` form
+// and the filesystem/stat and license-detection paths are out of scope.
+//
+// tables_text() and jobs_text() (both appended by gen_kara.py) carry the
+// library tables and data/jobs.tsv verbatim.
+
+struct Tables {
+    ext_keys: Vec[String], ext_tags: Vec[String],
+    bin_keys: Vec[String], bin_tags: Vec[String],
+    name_keys: Vec[String], name_tags: Vec[String],
+    interp_keys: Vec[String], interp_tags: Vec[String],
+}
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn byte_to_char(b: i64) -> String {
+    let printable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    printable.substring(b - 32, b - 31)
+}
+
+fn str_eq(a: ref String, b: ref String) -> bool {
+    let x = bytes_of(a);
+    let y = bytes_of(b);
+    let nx = x.len();
+    let ny = y.len();
+    if nx != ny { return false; }
+    let mut i = 0;
+    while i < nx { if x[i] != y[i] { return false; } i = i + 1; }
+    true
+}
+
+fn str_lt(a: ref String, b: ref String) -> bool {
+    let x = bytes_of(a);
+    let y = bytes_of(b);
+    let nx = x.len();
+    let ny = y.len();
+    let mut i = 0;
+    while i < nx and i < ny {
+        if x[i] < y[i] { return true; }
+        if x[i] > y[i] { return false; }
+        i = i + 1;
+    }
+    nx < ny
+}
+
+fn lower(s: ref String) -> String {
+    let v = bytes_of(s);
+    let mut out = String.new();
+    for b in v {
+        let c = if b >= 65 and b <= 90 { b + 32 } else { b };
+        out.push_str(byte_to_char(c));
+    }
+    out
+}
+
+// Split on `sep`, keeping empty pieces (like Python str.split(sep)).
+fn split_on(s: ref String, sep: i64) -> Vec[String] {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == sep {
+            out.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Split on space, dropping empty pieces (tags are space-joined).
+fn split_sp(s: ref String) -> Vec[String] {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0 - 1;
+    let mut i = 0;
+    while i <= n {
+        let sp = if i < n { v[i] == 32 } else { true };
+        if sp {
+            if start >= 0 { out.push(s.substring(start, i)); start = 0 - 1; }
+        } else {
+            if start < 0 { start = i; }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Whitespace split (space or tab), dropping empties (shebang tokenization).
+fn ws_split(s: ref String) -> Vec[String] {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0 - 1;
+    let mut i = 0;
+    while i <= n {
+        let ws = if i < n { v[i] == 32 or v[i] == 9 } else { true };
+        if ws {
+            if start >= 0 { out.push(s.substring(start, i)); start = 0 - 1; }
+        } else {
+            if start < 0 { start = i; }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn join_sp(v: ref Vec[String]) -> String {
+    let mut s = String.new();
+    let n = v.len();
+    let mut i = 0;
+    while i < n {
+        if i > 0 { s.push_str(" "); }
+        s.push_str(v[i].clone());
+        i = i + 1;
+    }
+    s
+}
+
+fn drop_front(v: ref Vec[String], k: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = v.len();
+    let mut i = k;
+    while i < n { out.push(v[i].clone()); i = i + 1; }
+    out
+}
+
+fn after_last(s: ref String, sep: i64) -> String {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut idx = 0 - 1;
+    let mut i = 0;
+    while i < n { if v[i] == sep { idx = i; } i = i + 1; }
+    if idx < 0 { return s.clone(); }
+    s.substring(idx + 1, n)
+}
+
+fn before_last(s: ref String, sep: i64) -> String {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut idx = 0 - 1;
+    let mut i = 0;
+    while i < n { if v[i] == sep { idx = i; } i = i + 1; }
+    if idx < 0 { return String.new(); }
+    s.substring(0, idx)
+}
+
+fn basename(name: ref String) -> String {
+    after_last(name, 47) // '/'
+}
+
+// os.path.splitext on a basename: the extension (no dot, lower-cased) or "".
+// A name whose only dots are leading has no extension (".bashrc" -> "").
+fn ext_of(base: ref String) -> String {
+    let v = bytes_of(base);
+    let n = v.len();
+    let mut dot = 0 - 1;
+    let mut i = 0;
+    while i < n { if v[i] == 46 { dot = i; } i = i + 1; }
+    if dot < 0 { return String.new(); }
+    let mut has_nondot = false;
+    let mut j = 0;
+    while j < dot {
+        if v[j] != 46 { has_nondot = true; }
+        j = j + 1;
+    }
+    if not has_nondot { return String.new(); }
+    let raw = base.substring(dot + 1, n);
+    lower(raw)
+}
+
+fn find(keys: ref Vec[String], tags: ref Vec[String], key: ref String) -> String {
+    let n = keys.len();
+    let mut i = 0;
+    while i < n {
+        let k = keys[i].clone();
+        if str_eq(k, key) { return tags[i].clone(); }
+        i = i + 1;
+    }
+    String.new()
+}
+
+fn dedup_sort(toks: ref Vec[String]) -> Vec[String] {
+    let n = toks.len();
+    let mut used: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { used.push(0); i = i + 1; }
+    let mut out: Vec[String] = Vec.new();
+    let mut count = 0;
+    while count < n {
+        let mut best = 0 - 1;
+        let mut j = 0;
+        while j < n {
+            if used[j] == 0 {
+                if best < 0 { best = j; }
+                else {
+                    let bj = toks[j].clone();
+                    let bb = toks[best].clone();
+                    if str_lt(bj, bb) { best = j; }
+                }
+            }
+            j = j + 1;
+        }
+        used[best] = 1;
+        count = count + 1;
+        let cur = toks[best].clone();
+        if out.len() == 0 {
+            out.push(cur);
+        } else {
+            let last = out[out.len() - 1].clone();
+            if not str_eq(last, cur) { out.push(cur); }
+        }
+    }
+    out
+}
+
+fn union_sort(a: ref String, b: ref String) -> String {
+    let ta = split_sp(a);
+    let tb = split_sp(b);
+    let mut toks: Vec[String] = Vec.new();
+    let mut i = 0;
+    let na = ta.len();
+    while i < na { toks.push(ta[i].clone()); i = i + 1; }
+    i = 0;
+    let nb = tb.len();
+    while i < nb { toks.push(tb[i].clone()); i = i + 1; }
+    let uniq = dedup_sort(toks);
+    join_sp(uniq)
+}
+
+fn filename_tags(tables: ref Tables, name: ref String) -> String {
+    let base = basename(name);
+    // NAMES: the full name first, then each dot-split piece; first match wins.
+    let mut names_t = find(tables.name_keys, tables.name_tags, base);
+    if names_t.len() == 0 {
+        let pieces = split_on(base, 46); // '.'
+        let np = pieces.len();
+        let mut i = 0;
+        while i < np {
+            let p = pieces[i].clone();
+            let r = find(tables.name_keys, tables.name_tags, p);
+            if r.len() > 0 { names_t = r; i = np; }
+            else { i = i + 1; }
+        }
+    }
+    // Extension: EXTENSIONS, then EXTENSIONS_NEED_BINARY_CHECK.
+    let ext = ext_of(base);
+    let mut ext_t = String.new();
+    if ext.len() > 0 {
+        ext_t = find(tables.ext_keys, tables.ext_tags, ext);
+        if ext_t.len() == 0 {
+            ext_t = find(tables.bin_keys, tables.bin_tags, ext);
+        }
+    }
+    union_sort(names_t, ext_t)
+}
+
+fn interp_tags(tables: ref Tables, interp0: ref String) -> String {
+    let mut cur = after_last(interp0, 47); // '/'
+    let mut result = String.new();
+    let mut go = true;
+    while go and cur.len() > 0 {
+        let t = find(tables.interp_keys, tables.interp_tags, cur);
+        if t.len() > 0 { result = t; go = false; }
+        else { cur = before_last(cur, 46); } // rpartition('.')[0]
+    }
+    result
+}
+
+fn parse_shebang(line: ref String) -> Vec[String] {
+    let v = bytes_of(line);
+    let n = v.len();
+    let mut empty: Vec[String] = Vec.new();
+    if n < 2 or v[0] != 35 or v[1] != 33 { return empty; } // '#','!'
+    let rest = line.substring(2, n);
+    let rv = bytes_of(rest);
+    let m = rv.len();
+    let mut i = 0;
+    while i < m {
+        let b = rv[i];
+        let pr = (b >= 32 and b <= 126) or (b >= 9 and b <= 13);
+        if not pr { return empty; }
+        i = i + 1;
+    }
+    let toks = ws_split(rest);
+    let nt = toks.len();
+    if nt == 0 { return toks; }
+    let t0 = toks[0].clone();
+    if str_eq(t0, "/usr/bin/env") {
+        if nt >= 2 {
+            let t1 = toks[1].clone();
+            if str_eq(t1, "-S") { return drop_front(toks, 2); }
+        }
+        return drop_front(toks, 1);
+    }
+    toks
+}
+
+fn run_job(tables: ref Tables, op: ref String, arg: ref String) -> String {
+    if op == "filename" {
+        let t = filename_tags(tables, arg);
+        if t.len() == 0 { return "(none)"; }
+        return t;
+    }
+    if op == "interpreter" {
+        let t = interp_tags(tables, arg);
+        if t.len() == 0 { return "(none)"; }
+        return t;
+    }
+    if op == "shebang" {
+        let cmd = parse_shebang(arg);
+        if cmd.len() == 0 { return "(none)"; }
+        return join_sp(cmd);
+    }
+    if op == "shebang_tags" {
+        let cmd = parse_shebang(arg);
+        if cmd.len() == 0 { return "(none)"; }
+        let first = cmd[0].clone();
+        let t = interp_tags(tables, first);
+        if t.len() == 0 { return "(none)"; }
+        return t;
+    }
+    "unknown op"
+}
+
+fn build_tables() -> Tables {
+    let tt = tables_text();
+    let lines = split_on(tt, 10);
+    let mut tables = Tables {
+        ext_keys: Vec.new(), ext_tags: Vec.new(),
+        bin_keys: Vec.new(), bin_tags: Vec.new(),
+        name_keys: Vec.new(), name_tags: Vec.new(),
+        interp_keys: Vec.new(), interp_tags: Vec.new(),
+    };
+    let nl = lines.len();
+    let mut i = 0;
+    while i < nl {
+        let line = lines[i].clone();
+        i = i + 1;
+        if line.len() == 0 { continue; }
+        let f = split_on(line, 9); // tab
+        if f.len() < 3 { continue; }
+        let kind = f[0].clone();
+        let key = f[1].clone();
+        let tags = f[2].clone();
+        if str_eq(kind, "E") { tables.ext_keys.push(key); tables.ext_tags.push(tags); }
+        else if str_eq(kind, "B") { tables.bin_keys.push(key); tables.bin_tags.push(tags); }
+        else if str_eq(kind, "N") { tables.name_keys.push(key); tables.name_tags.push(tags); }
+        else if str_eq(kind, "I") { tables.interp_keys.push(key); tables.interp_tags.push(tags); }
+    }
+    tables
+}
+
+fn main_run() -> String {
+    let tables = build_tables();
+    let data = jobs_text();
+    let jlines = split_on(data, 10);
+    let mut out = String.new();
+    let nj = jlines.len();
+    let mut i = 0;
+    while i < nj {
+        let line = jlines[i].clone();
+        i = i + 1;
+        if line.len() == 0 { continue; }
+        let f = split_on(line, 9);
+        if f.len() < 2 { continue; }
+        let op = f[0].clone();
+        let arg = f[1].clone();
+        out.push_str("== ");
+        out.push_str(op.clone());
+        out.push_str(" | ");
+        out.push_str(arg.clone());
+        out.push_str("\n  ");
+        out.push_str(run_job(tables, op, arg));
+        out.push_str("\n");
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// identify lookup tables (EXTENSIONS, EXTENSIONS_NEED_BINARY_CHECK,
+// NAMES, INTERPRETERS), one `kind<TAB>key<TAB>sorted tags` row each.
+fn tables_text() -> String {
+    let mut s = String.new();
+    s.push_str("E\tadoc\tasciidoc text\n");
+    s.push_str("E\tai\tadobe-illustrator binary\n");
+    s.push_str("E\taj\taspectj text\n");
+    s.push_str("E\tapinotes\tapinotes text\n");
+    s.push_str("E\tasar\tasar binary\n");
+    s.push_str("E\tasciidoc\tasciidoc text\n");
+    s.push_str("E\tasm\tasm text\n");
+    s.push_str("E\tastro\tastro text\n");
+    s.push_str("E\tavif\tavif binary image\n");
+    s.push_str("E\tavsc\tavro-schema text\n");
+    s.push_str("E\tbash\tbash shell text\n");
+    s.push_str("E\tbat\tbatch text\n");
+    s.push_str("E\tbats\tbash bats shell text\n");
+    s.push_str("E\tbazel\tbazel text\n");
+    s.push_str("E\tbb\tbitbake text\n");
+    s.push_str("E\tbbappend\tbitbake text\n");
+    s.push_str("E\tbbclass\tbitbake text\n");
+    s.push_str("E\tbeancount\tbeancount text\n");
+    s.push_str("E\tbib\tbib text\n");
+    s.push_str("E\tbmp\tbinary bitmap image\n");
+    s.push_str("E\tbz2\tbinary bzip2\n");
+    s.push_str("E\tbz3\tbinary bzip3\n");
+    s.push_str("E\tbzl\tbazel text\n");
+    s.push_str("E\tc\tc text\n");
+    s.push_str("E\tc++\tc++ text\n");
+    s.push_str("E\tc++m\tc++ text\n");
+    s.push_str("E\tcc\tc++ text\n");
+    s.push_str("E\tccm\tc++ text\n");
+    s.push_str("E\tcfg\ttext\n");
+    s.push_str("E\tchs\tc2hs text\n");
+    s.push_str("E\tcjs\tjavascript text\n");
+    s.push_str("E\tclj\tclojure text\n");
+    s.push_str("E\tcljc\tclojure text\n");
+    s.push_str("E\tcljs\tclojure clojurescript text\n");
+    s.push_str("E\tcmake\tcmake text\n");
+    s.push_str("E\tcmd\tbatch text\n");
+    s.push_str("E\tcnf\ttext\n");
+    s.push_str("E\tcoffee\tcoffee text\n");
+    s.push_str("E\tconf\ttext\n");
+    s.push_str("E\tcpp\tc++ text\n");
+    s.push_str("E\tcppm\tc++ text\n");
+    s.push_str("E\tcr\tcrystal text\n");
+    s.push_str("E\tcrt\tpem text\n");
+    s.push_str("E\tcs\tc# text\n");
+    s.push_str("E\tcsh\tcsh shell text\n");
+    s.push_str("E\tcson\tcson text\n");
+    s.push_str("E\tcsproj\tcsproj msbuild text xml\n");
+    s.push_str("E\tcss\tcss text\n");
+    s.push_str("E\tcsv\tcsv text\n");
+    s.push_str("E\tcsx\tc# c#script text\n");
+    s.push_str("E\tcu\tcuda text\n");
+    s.push_str("E\tcue\tcue text\n");
+    s.push_str("E\tcuh\tcuda text\n");
+    s.push_str("E\tcxx\tc++ text\n");
+    s.push_str("E\tcxxm\tc++ text\n");
+    s.push_str("E\tcylc\tcylc text\n");
+    s.push_str("E\tdart\tdart text\n");
+    s.push_str("E\tdbc\tdbc text\n");
+    s.push_str("E\tdef\tdef text\n");
+    s.push_str("E\tdiff\tdiff text\n");
+    s.push_str("E\tdll\tbinary\n");
+    s.push_str("E\tdtd\tdtd text\n");
+    s.push_str("E\tear\tbinary jar zip\n");
+    s.push_str("E\tedn\tclojure edn text\n");
+    s.push_str("E\tejs\tejs text\n");
+    s.push_str("E\tejson\tejson json text\n");
+    s.push_str("E\telm\telm text\n");
+    s.push_str("E\tenv\tdotenv text\n");
+    s.push_str("E\teot\tbinary eot\n");
+    s.push_str("E\teps\tbinary eps\n");
+    s.push_str("E\terb\terb text\n");
+    s.push_str("E\terl\terlang text\n");
+    s.push_str("E\tescript\terlang text\n");
+    s.push_str("E\tex\telixir text\n");
+    s.push_str("E\texe\tbinary\n");
+    s.push_str("E\texs\telixir text\n");
+    s.push_str("E\teyaml\ttext yaml\n");
+    s.push_str("E\tf03\tfortran text\n");
+    s.push_str("E\tf08\tfortran text\n");
+    s.push_str("E\tf90\tfortran text\n");
+    s.push_str("E\tf95\tfortran text\n");
+    s.push_str("E\tfeature\tgherkin text\n");
+    s.push_str("E\tfish\tfish text\n");
+    s.push_str("E\tfits\tbinary fits\n");
+    s.push_str("E\tfs\tf# text\n");
+    s.push_str("E\tfsproj\tfsproj msbuild text xml\n");
+    s.push_str("E\tfsx\tf# f#script text\n");
+    s.push_str("E\tgd\tgdscript text\n");
+    s.push_str("E\tgemspec\truby text\n");
+    s.push_str("E\tgeojson\tgeojson json text\n");
+    s.push_str("E\tggb\tbinary ggb zip\n");
+    s.push_str("E\tgif\tbinary gif image\n");
+    s.push_str("E\tgleam\tgleam text\n");
+    s.push_str("E\tgo\tgo text\n");
+    s.push_str("E\tgotmpl\tgotmpl text\n");
+    s.push_str("E\tgpx\tgpx text xml\n");
+    s.push_str("E\tgradle\tgroovy text\n");
+    s.push_str("E\tgraphql\tgraphql text\n");
+    s.push_str("E\tgroovy\tgroovy text\n");
+    s.push_str("E\tgyb\tgyb text\n");
+    s.push_str("E\tgyp\tgyp python text\n");
+    s.push_str("E\tgypi\tgyp python text\n");
+    s.push_str("E\tgz\tbinary gzip\n");
+    s.push_str("E\th\tc c++ header text\n");
+    s.push_str("E\thbs\thandlebars text\n");
+    s.push_str("E\thcl\thcl text\n");
+    s.push_str("E\thh\tc++ header text\n");
+    s.push_str("E\thlsl\thlsl text\n");
+    s.push_str("E\thlsli\thlsl text\n");
+    s.push_str("E\thpp\tc++ header text\n");
+    s.push_str("E\thrl\terlang text\n");
+    s.push_str("E\ths\thaskell text\n");
+    s.push_str("E\thtm\thtml text\n");
+    s.push_str("E\thtml\thtml text\n");
+    s.push_str("E\thxx\tc++ header text\n");
+    s.push_str("E\ticns\tbinary icns\n");
+    s.push_str("E\tico\tbinary icon\n");
+    s.push_str("E\tics\ticalendar text\n");
+    s.push_str("E\tidl\tidl text\n");
+    s.push_str("E\tidr\tidris text\n");
+    s.push_str("E\tinc\tinc text\n");
+    s.push_str("E\tini\tini text\n");
+    s.push_str("E\tinl\tc++ inl text\n");
+    s.push_str("E\tino\tc++ ino text\n");
+    s.push_str("E\tinx\tinx text xml\n");
+    s.push_str("E\tipp\tc++ text\n");
+    s.push_str("E\tipxe\tipxe text\n");
+    s.push_str("E\tipynb\tjson jupyter text\n");
+    s.push_str("E\tixx\tc++ text\n");
+    s.push_str("E\tj2\tjinja text\n");
+    s.push_str("E\tjade\tjade text\n");
+    s.push_str("E\tjar\tbinary jar zip\n");
+    s.push_str("E\tjava\tjava text\n");
+    s.push_str("E\tjbuilder\tjbuilder ruby text\n");
+    s.push_str("E\tjenkins\tgroovy jenkins text\n");
+    s.push_str("E\tjenkinsfile\tgroovy jenkins text\n");
+    s.push_str("E\tjinja\tjinja text\n");
+    s.push_str("E\tjinja2\tjinja text\n");
+    s.push_str("E\tjl\tjulia text\n");
+    s.push_str("E\tjpeg\tbinary image jpeg\n");
+    s.push_str("E\tjpg\tbinary image jpeg\n");
+    s.push_str("E\tjs\tjavascript text\n");
+    s.push_str("E\tjson\tjson text\n");
+    s.push_str("E\tjson5\tjson5 text\n");
+    s.push_str("E\tjsonld\tjson jsonld text\n");
+    s.push_str("E\tjsonnet\tjsonnet text\n");
+    s.push_str("E\tjsx\tjsx text\n");
+    s.push_str("E\tkey\tpem text\n");
+    s.push_str("E\tkml\tkml text xml\n");
+    s.push_str("E\tkt\tkotlin text\n");
+    s.push_str("E\tkts\tkotlin text\n");
+    s.push_str("E\tlean\tlean text\n");
+    s.push_str("E\tlektorproject\tini lektorproject text\n");
+    s.push_str("E\tless\tless text\n");
+    s.push_str("E\tlfm\tlazarus lazarus-form text\n");
+    s.push_str("E\tlhs\tliterate-haskell text\n");
+    s.push_str("E\tlibsonnet\tjsonnet text\n");
+    s.push_str("E\tlidr\tidris text\n");
+    s.push_str("E\tliquid\tliquid text\n");
+    s.push_str("E\tlpi\tlazarus text xml\n");
+    s.push_str("E\tlpr\tlazarus pascal text\n");
+    s.push_str("E\tlr\tlektor text\n");
+    s.push_str("E\tlua\tlua text\n");
+    s.push_str("E\tluau\tluau text\n");
+    s.push_str("E\tm\tobjective-c text\n");
+    s.push_str("E\tm4\tm4 text\n");
+    s.push_str("E\tmagik\tmagik text\n");
+    s.push_str("E\tmake\tmakefile text\n");
+    s.push_str("E\tmanifest\tmanifest text\n");
+    s.push_str("E\tmap\tmap text\n");
+    s.push_str("E\tmarkdown\tmarkdown text\n");
+    s.push_str("E\tmd\tmarkdown text\n");
+    s.push_str("E\tmdx\tmdx text\n");
+    s.push_str("E\tmeson\tmeson text\n");
+    s.push_str("E\tmetal\tmetal text\n");
+    s.push_str("E\tmib\tmib text\n");
+    s.push_str("E\tmjs\tjavascript text\n");
+    s.push_str("E\tmk\tmakefile text\n");
+    s.push_str("E\tml\tocaml text\n");
+    s.push_str("E\tmli\tocaml text\n");
+    s.push_str("E\tmm\tc++ objective-c++ text\n");
+    s.push_str("E\tmodulemap\tmodulemap text\n");
+    s.push_str("E\tmscx\tmusescore text xml\n");
+    s.push_str("E\tmscz\tbinary musescore zip\n");
+    s.push_str("E\tmustache\tmustache text\n");
+    s.push_str("E\tmyst\tmyst text\n");
+    s.push_str("E\tngdoc\tngdoc text\n");
+    s.push_str("E\tnim\tnim text\n");
+    s.push_str("E\tnimble\tnimble text\n");
+    s.push_str("E\tnims\tnim text\n");
+    s.push_str("E\tnix\tnix text\n");
+    s.push_str("E\tnjk\tnunjucks text\n");
+    s.push_str("E\tnu\tnushell text\n");
+    s.push_str("E\totf\tbinary otf\n");
+    s.push_str("E\tp12\tbinary p12\n");
+    s.push_str("E\tpas\tpascal text\n");
+    s.push_str("E\tpatch\tdiff text\n");
+    s.push_str("E\tpdf\tbinary pdf\n");
+    s.push_str("E\tpem\tpem text\n");
+    s.push_str("E\tphp\tphp text\n");
+    s.push_str("E\tphp4\tphp text\n");
+    s.push_str("E\tphp5\tphp text\n");
+    s.push_str("E\tphtml\tphp text\n");
+    s.push_str("E\tpiskel\tjson piskel text\n");
+    s.push_str("E\tpl\tperl text\n");
+    s.push_str("E\tplantuml\tplantuml text\n");
+    s.push_str("E\tpm\tperl text\n");
+    s.push_str("E\tpng\tbinary image png\n");
+    s.push_str("E\tpo\tpofile text\n");
+    s.push_str("E\tpom\tpom text xml\n");
+    s.push_str("E\tpp\tpuppet text\n");
+    s.push_str("E\tprisma\tprisma text\n");
+    s.push_str("E\tproperties\tjava-properties text\n");
+    s.push_str("E\tprops\tmsbuild text xml\n");
+    s.push_str("E\tproto\tproto text\n");
+    s.push_str("E\tps1\tpowershell text\n");
+    s.push_str("E\tpsd1\tpowershell text\n");
+    s.push_str("E\tpsm1\tpowershell text\n");
+    s.push_str("E\tpug\tpug text\n");
+    s.push_str("E\tpuml\tplantuml text\n");
+    s.push_str("E\tpurs\tpurescript text\n");
+    s.push_str("E\tpxd\tcython text\n");
+    s.push_str("E\tpxi\tcython text\n");
+    s.push_str("E\tpy\tpython text\n");
+    s.push_str("E\tpyi\tpyi text\n");
+    s.push_str("E\tpyproj\tmsbuild pyproj text xml\n");
+    s.push_str("E\tpyt\tpython text\n");
+    s.push_str("E\tpyw\tpython text\n");
+    s.push_str("E\tpyx\tcython text\n");
+    s.push_str("E\tpyz\tbinary pyz\n");
+    s.push_str("E\tpyzw\tbinary pyz\n");
+    s.push_str("E\tqmd\tquarto text\n");
+    s.push_str("E\tqml\tqml text\n");
+    s.push_str("E\tr\tr text\n");
+    s.push_str("E\trake\truby text\n");
+    s.push_str("E\trb\truby text\n");
+    s.push_str("E\tresx\tresx text xml\n");
+    s.push_str("E\trng\trelax-ng text xml\n");
+    s.push_str("E\trobot\trobot text\n");
+    s.push_str("E\trs\trust text\n");
+    s.push_str("E\trst\trst text\n");
+    s.push_str("E\ts\tasm text\n");
+    s.push_str("E\tsas\tsas text\n");
+    s.push_str("E\tsass\tsass text\n");
+    s.push_str("E\tsbt\tsbt scala text\n");
+    s.push_str("E\tsc\tscala text\n");
+    s.push_str("E\tscala\tscala text\n");
+    s.push_str("E\tscm\tscheme text\n");
+    s.push_str("E\tscss\tscss text\n");
+    s.push_str("E\tsh\tshell text\n");
+    s.push_str("E\tsln\tsln text\n");
+    s.push_str("E\tslnx\tmsbuild slnx text xml\n");
+    s.push_str("E\tsls\tsalt text\n");
+    s.push_str("E\tso\tbinary\n");
+    s.push_str("E\tsol\tsolidity text\n");
+    s.push_str("E\tspec\tspec text\n");
+    s.push_str("E\tsql\tsql text\n");
+    s.push_str("E\tss\tscheme text\n");
+    s.push_str("E\tsty\ttex text\n");
+    s.push_str("E\tstyl\tstylus text\n");
+    s.push_str("E\tsv\tsystem-verilog text\n");
+    s.push_str("E\tsvelte\tsvelte text\n");
+    s.push_str("E\tsvg\timage svg text xml\n");
+    s.push_str("E\tsvh\tsystem-verilog text\n");
+    s.push_str("E\tswf\tbinary swf\n");
+    s.push_str("E\tswift\tswift text\n");
+    s.push_str("E\tswiftdeps\tswiftdeps text\n");
+    s.push_str("E\ttac\tpython text twisted\n");
+    s.push_str("E\ttar\tbinary tar\n");
+    s.push_str("E\ttargets\tmsbuild text xml\n");
+    s.push_str("E\ttempl\ttempl text\n");
+    s.push_str("E\ttex\ttex text\n");
+    s.push_str("E\ttextproto\ttext textproto\n");
+    s.push_str("E\ttf\tterraform text\n");
+    s.push_str("E\ttfvars\tterraform text\n");
+    s.push_str("E\ttgz\tbinary gzip\n");
+    s.push_str("E\tthrift\ttext thrift\n");
+    s.push_str("E\ttif\tbinary image tiff\n");
+    s.push_str("E\ttiff\tbinary image tiff\n");
+    s.push_str("E\ttoml\ttext toml\n");
+    s.push_str("E\ttpp\tc++ text\n");
+    s.push_str("E\tts\ttext ts\n");
+    s.push_str("E\ttsv\ttext tsv\n");
+    s.push_str("E\ttsx\ttext tsx\n");
+    s.push_str("E\tttf\tbinary ttf\n");
+    s.push_str("E\ttwig\ttext twig\n");
+    s.push_str("E\ttxsprofile\tini text txsprofile\n");
+    s.push_str("E\ttxt\tplain-text text\n");
+    s.push_str("E\ttxtpb\ttext textproto\n");
+    s.push_str("E\turdf\ttext urdf xml\n");
+    s.push_str("E\tv\ttext verilog\n");
+    s.push_str("E\tvala\ttext vala\n");
+    s.push_str("E\tvb\ttext vb\n");
+    s.push_str("E\tvbproj\tmsbuild text vbproj xml\n");
+    s.push_str("E\tvcxproj\tmsbuild text vcxproj xml\n");
+    s.push_str("E\tvdx\ttext vdx\n");
+    s.push_str("E\tvh\ttext verilog\n");
+    s.push_str("E\tvhd\ttext vhdl\n");
+    s.push_str("E\tvim\ttext vim\n");
+    s.push_str("E\tvtl\ttext vtl\n");
+    s.push_str("E\tvue\ttext vue\n");
+    s.push_str("E\twar\tbinary jar zip\n");
+    s.push_str("E\twav\taudio binary wav\n");
+    s.push_str("E\twebp\tbinary image webp\n");
+    s.push_str("E\twhl\tbinary wheel zip\n");
+    s.push_str("E\twixproj\ttext wixproj xml\n");
+    s.push_str("E\twkt\ttext wkt\n");
+    s.push_str("E\twoff\tbinary woff\n");
+    s.push_str("E\twoff2\tbinary woff2\n");
+    s.push_str("E\twsdl\ttext wsdl xml\n");
+    s.push_str("E\twsgi\tpython text wsgi\n");
+    s.push_str("E\twxi\ttext wxi xml\n");
+    s.push_str("E\twxl\ttext wxl xml\n");
+    s.push_str("E\twxs\ttext wxs xml\n");
+    s.push_str("E\txacro\ttext urdf xacro xml\n");
+    s.push_str("E\txaml\ttext xaml xml\n");
+    s.push_str("E\txcconfig\ttext xcconfig xcodebuild\n");
+    s.push_str("E\txcscheme\ttext xcodebuild xcscheme xml\n");
+    s.push_str("E\txctestplan\tjson text xcodebuild xctestplan\n");
+    s.push_str("E\txcworkspacedata\ttext xcodebuild xcworkspacedata xml\n");
+    s.push_str("E\txhtml\thtml text xhtml xml\n");
+    s.push_str("E\txlf\ttext xliff xml\n");
+    s.push_str("E\txliff\ttext xliff xml\n");
+    s.push_str("E\txml\ttext xml\n");
+    s.push_str("E\txq\ttext xquery\n");
+    s.push_str("E\txql\ttext xquery\n");
+    s.push_str("E\txqm\ttext xquery\n");
+    s.push_str("E\txqu\ttext xquery\n");
+    s.push_str("E\txquery\ttext xquery\n");
+    s.push_str("E\txqy\ttext xquery\n");
+    s.push_str("E\txsd\ttext xml xsd\n");
+    s.push_str("E\txsl\ttext xml xsl\n");
+    s.push_str("E\txslt\ttext xml xsl\n");
+    s.push_str("E\tyaml\ttext yaml\n");
+    s.push_str("E\tyamlld\ttext yaml yamlld\n");
+    s.push_str("E\tyang\ttext yang\n");
+    s.push_str("E\tyin\ttext xml yin\n");
+    s.push_str("E\tyml\ttext yaml\n");
+    s.push_str("E\tzcml\ttext xml zcml\n");
+    s.push_str("E\tzig\ttext zig\n");
+    s.push_str("E\tzip\tbinary zip\n");
+    s.push_str("E\tzpt\ttext zpt\n");
+    s.push_str("E\tzsh\tshell text zsh\n");
+    s.push_str("B\tentitlements\tentitlements plist\n");
+    s.push_str("B\tplist\tplist\n");
+    s.push_str("B\tppm\timage ppm\n");
+    s.push_str("B\txcprivacy\tplist xcodebuild xcprivacy\n");
+    s.push_str("B\txcsettings\tplist xcodebuild xcsettings\n");
+    s.push_str("N\t.ansible-lint\ttext yaml\n");
+    s.push_str("N\t.babelrc\tbabelrc json text\n");
+    s.push_str("N\t.bash_aliases\tbash shell text\n");
+    s.push_str("N\t.bash_profile\tbash shell text\n");
+    s.push_str("N\t.bashrc\tbash shell text\n");
+    s.push_str("N\t.bazelrc\tbazelrc text\n");
+    s.push_str("N\t.bowerrc\tbowerrc json text\n");
+    s.push_str("N\t.browserslistrc\tbrowserslistrc text\n");
+    s.push_str("N\t.clang-format\ttext yaml\n");
+    s.push_str("N\t.clang-tidy\ttext yaml\n");
+    s.push_str("N\t.codespellrc\tcodespellrc ini text\n");
+    s.push_str("N\t.coveragerc\tcoveragerc ini text\n");
+    s.push_str("N\t.cshrc\tcsh shell text\n");
+    s.push_str("N\t.csslintrc\tcsslintrc json text\n");
+    s.push_str("N\t.dockerignore\tdockerignore text\n");
+    s.push_str("N\t.editorconfig\teditorconfig text\n");
+    s.push_str("N\t.envrc\tbash shell text\n");
+    s.push_str("N\t.flake8\tflake8 ini text\n");
+    s.push_str("N\t.gitattributes\tgitattributes text\n");
+    s.push_str("N\t.gitconfig\tgitconfig ini text\n");
+    s.push_str("N\t.gitignore\tgitignore text\n");
+    s.push_str("N\t.gitlint\tgitlint ini text\n");
+    s.push_str("N\t.gitmodules\tgitmodules text\n");
+    s.push_str("N\t.hgrc\thgrc ini text\n");
+    s.push_str("N\t.isort.cfg\tini isort text\n");
+    s.push_str("N\t.jshintrc\tjshintrc json text\n");
+    s.push_str("N\t.mailmap\tmailmap text\n");
+    s.push_str("N\t.mention-bot\tjson mention-bot text\n");
+    s.push_str("N\t.npmignore\tnpmignore text\n");
+    s.push_str("N\t.pdbrc\tpdbrc python text\n");
+    s.push_str("N\t.prettierignore\tgitignore prettierignore text\n");
+    s.push_str("N\t.profile\tshell text\n");
+    s.push_str("N\t.pypirc\tini pypirc text\n");
+    s.push_str("N\t.rstcheck.cfg\tini text\n");
+    s.push_str("N\t.salt-lint\tsalt-lint text yaml\n");
+    s.push_str("N\t.sqlfluff\tini text\n");
+    s.push_str("N\t.yamllint\ttext yaml yamllint\n");
+    s.push_str("N\t.zlogin\tshell text zsh\n");
+    s.push_str("N\t.zlogout\tshell text zsh\n");
+    s.push_str("N\t.zprofile\tshell text zsh\n");
+    s.push_str("N\t.zshenv\tshell text zsh\n");
+    s.push_str("N\t.zshrc\tshell text zsh\n");
+    s.push_str("N\tAUTHORS\tplain-text text\n");
+    s.push_str("N\tBUILD\tbazel text\n");
+    s.push_str("N\tBrewfile\truby text\n");
+    s.push_str("N\tCHANGELOG\tplain-text text\n");
+    s.push_str("N\tCMakeLists.txt\tcmake text\n");
+    s.push_str("N\tCONTRIBUTING\tplain-text text\n");
+    s.push_str("N\tCOPYING\tplain-text text\n");
+    s.push_str("N\tCargo.lock\tcargo-lock text toml\n");
+    s.push_str("N\tCargo.toml\tcargo text toml\n");
+    s.push_str("N\tContainerfile\tdockerfile text\n");
+    s.push_str("N\tDockerfile\tdockerfile text\n");
+    s.push_str("N\tFastfile\truby text\n");
+    s.push_str("N\tGNUmakefile\tmakefile text\n");
+    s.push_str("N\tGemfile\truby text\n");
+    s.push_str("N\tGemfile.lock\tgemfile-lock text\n");
+    s.push_str("N\tJenkinsfile\tgroovy jenkins text\n");
+    s.push_str("N\tLICENSE\tplain-text text\n");
+    s.push_str("N\tMAINTAINERS\tplain-text text\n");
+    s.push_str("N\tMakefile\tmakefile text\n");
+    s.push_str("N\tNEWS\tplain-text text\n");
+    s.push_str("N\tNOTICE\tplain-text text\n");
+    s.push_str("N\tPATENTS\tplain-text text\n");
+    s.push_str("N\tPKGBUILD\talpm bash pkgbuild shell text\n");
+    s.push_str("N\tPipfile\ttext toml\n");
+    s.push_str("N\tPipfile.lock\tjson pipfile-lock text\n");
+    s.push_str("N\tREADME\tplain-text text\n");
+    s.push_str("N\tRakefile\truby text\n");
+    s.push_str("N\tSConscript\tscons text\n");
+    s.push_str("N\tSConstruct\tscons text\n");
+    s.push_str("N\tSCsub\tscons text\n");
+    s.push_str("N\tTiltfile\ttext tiltfile\n");
+    s.push_str("N\tVagrantfile\truby text\n");
+    s.push_str("N\tWORKSPACE\tbazel text\n");
+    s.push_str("N\tbblayers.conf\tbitbake text\n");
+    s.push_str("N\tbitbake.conf\tbitbake text\n");
+    s.push_str("N\tconfig.ru\truby text\n");
+    s.push_str("N\tcopy.bara.sky\tbazel text\n");
+    s.push_str("N\tdirenvrc\tbash shell text\n");
+    s.push_str("N\tgo.mod\tgo-mod text\n");
+    s.push_str("N\tgo.sum\tgo-sum text\n");
+    s.push_str("N\tmakefile\tmakefile text\n");
+    s.push_str("N\tmeson.build\tmeson text\n");
+    s.push_str("N\tmeson.options\tmeson meson-options text\n");
+    s.push_str("N\tmeson_options.txt\tmeson meson-options text\n");
+    s.push_str("N\tpoetry.lock\tpoetry-lock text toml\n");
+    s.push_str("N\tpom.xml\tpom text xml\n");
+    s.push_str("N\tpylintrc\tini pylintrc text\n");
+    s.push_str("N\tpyproject.toml\tpyproject text toml\n");
+    s.push_str("N\trebar.config\terlang text\n");
+    s.push_str("N\tsetup.cfg\tini text\n");
+    s.push_str("N\tsys.config\terlang text\n");
+    s.push_str("N\tsys.config.src\terlang text\n");
+    s.push_str("N\tuv.lock\ttext toml uv-lock\n");
+    s.push_str("N\twscript\tpython text\n");
+    s.push_str("I\tash\tash shell\n");
+    s.push_str("I\tawk\tawk\n");
+    s.push_str("I\tbash\tbash shell\n");
+    s.push_str("I\tbats\tbash bats shell\n");
+    s.push_str("I\tcbsd\tcbsd shell\n");
+    s.push_str("I\tcsh\tcsh shell\n");
+    s.push_str("I\tdash\tdash shell\n");
+    s.push_str("I\tescript\terlang\n");
+    s.push_str("I\texpect\texpect\n");
+    s.push_str("I\tksh\tksh shell\n");
+    s.push_str("I\tnode\tjavascript\n");
+    s.push_str("I\tnodejs\tjavascript\n");
+    s.push_str("I\tnu\tnushell\n");
+    s.push_str("I\tnushell\tnushell\n");
+    s.push_str("I\tperl\tperl\n");
+    s.push_str("I\tphp\tphp\n");
+    s.push_str("I\tphp7\tphp php7\n");
+    s.push_str("I\tphp8\tphp php8\n");
+    s.push_str("I\tpython\tpython\n");
+    s.push_str("I\tpython2\tpython python2\n");
+    s.push_str("I\tpython3\tpython python3\n");
+    s.push_str("I\truby\truby\n");
+    s.push_str("I\tsh\tsh shell\n");
+    s.push_str("I\ttcsh\tshell tcsh\n");
+    s.push_str("I\tzsh\tshell zsh\n");
+    s
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("filename\tfoo.py\n");
+    s.push_str("filename\tREADME.md\n");
+    s.push_str("filename\tscript.PY\n");
+    s.push_str("filename\tarchive.tar.gz\n");
+    s.push_str("filename\tbundle.min.js\n");
+    s.push_str("filename\t.bashrc\n");
+    s.push_str("filename\t.babelrc\n");
+    s.push_str("filename\tDockerfile\n");
+    s.push_str("filename\tDockerfile.xenial\n");
+    s.push_str("filename\tMakefile\n");
+    s.push_str("filename\tsetup.cfg\n");
+    s.push_str("filename\timage.ppm\n");
+    s.push_str("filename\tconfig.plist\n");
+    s.push_str("filename\tsrc/main/app.rs\n");
+    s.push_str("filename\tmystery.zzz\n");
+    s.push_str("filename\tnoextension\n");
+    s.push_str("interpreter\tpython\n");
+    s.push_str("interpreter\tpython3.5.2\n");
+    s.push_str("interpreter\t/usr/bin/python3.6\n");
+    s.push_str("interpreter\tbash\n");
+    s.push_str("interpreter\truby\n");
+    s.push_str("interpreter\tnode\n");
+    s.push_str("interpreter\tweirdlang9\n");
+    s.push_str("shebang\t#!/usr/bin/env python3\n");
+    s.push_str("shebang\t#!/usr/bin/python\n");
+    s.push_str("shebang\t#!/usr/bin/env -S python -u\n");
+    s.push_str("shebang\t#!/bin/sh\n");
+    s.push_str("shebang\t#!/usr/bin/env\n");
+    s.push_str("shebang\tnot a shebang\n");
+    s.push_str("shebang_tags\t#!/usr/bin/env python3.11\n");
+    s.push_str("shebang_tags\t#!/bin/bash\n");
+    s.push_str("shebang_tags\t#!/usr/bin/perl\n");
+    s
+}
