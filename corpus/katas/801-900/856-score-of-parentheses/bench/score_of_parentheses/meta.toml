@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/856-score-of-parentheses/bench/score_of_parentheses.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "a4073c6bb"
+extracted_src = "7481c5f0"
+model_rev = "583cfb0d"
+model_src = "7481c5f0"

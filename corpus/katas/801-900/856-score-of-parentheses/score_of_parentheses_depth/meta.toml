@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/856-score-of-parentheses/score_of_parentheses_depth.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "a4073c6bb"
+extracted_src = "f0a1dd16"
+model_rev = "583cfb0d"
+model_src = "f0a1dd16"

@@ -1,0 +1,239 @@
+// LeetCode #856: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to six properties on random
+// strings, against the statement read literally.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn score_of_parentheses_star(s: String) -> i64 {
+    let mut stack: Vec[i64] = [0];
+    for c in s.chars() {
+        if c == '(' {
+            stack.push(0);
+        } else {
+            let inner = stack.pop().unwrap();
+            let worth = if inner == 0 { 1 } else { 2 * inner };
+            let top = stack.len() - 1;
+            stack[top] += worth;
+        }
+    }
+    stack[0]
+}
+
+// ---- depth arm ------------------------------------------------------
+
+fn score_of_parentheses_depth(s: String) -> i64 {
+    let b = s.bytes();
+    let mut depth = 0;
+    let mut total = 0;
+    for i in 0..b.len() {
+        if b[i] == b'(' {
+            depth += 1;
+        } else {
+            depth -= 1;
+            if b[i - 1] == b'(' {
+                total += 1 << depth;
+            }
+        }
+    }
+    total
+}
+
+// ---- split arm ------------------------------------------------------
+
+fn score_of_split(b: Slice[u8], from: i64, to: i64) -> i64 {
+    let mut total = 0;
+    let mut balance = 0;
+    let mut start = from;
+    for i in from..to {
+        balance += if b[i] == b'(' { 1 } else { -1 };
+        if balance == 0 {
+            if i == start + 1 {
+                total += 1;
+            } else {
+                total += 2 * score_of_split(b, start + 1, i);
+            }
+            start = i + 1;
+        }
+    }
+    total
+}
+
+fn score_of_parentheses_split(s: String) -> i64 {
+    let b = s.bytes();
+    score_of_split(b, 0, b.len())
+}
+
+// ---- tree arm -------------------------------------------------------
+
+struct Group {
+    inside: Vec[Group],
+}
+
+// Reads the groups that start at `at` up to the `)` that closes the
+// group around them, or the end, and leaves `at` there.
+fn parse_tree(b: Slice[u8], at: mut ref i64) -> Vec[Group] {
+    let mut groups: Vec[Group] = Vec.new();
+    while *at < b.len() and b[*at] == b'(' {
+        *at += 1;
+        let inside = parse_tree(b, mut at);
+        *at += 1;
+        groups.push(Group { inside: inside });
+    }
+    groups
+}
+
+fn worth_tree(g: Group) -> i64 {
+    if g.inside.is_empty() {
+        1
+    } else {
+        2 * g.inside.iter().map(|h| worth_tree(h)).sum()
+    }
+}
+
+fn score_of_parentheses_tree(s: String) -> i64 {
+    let mut at = 0;
+    let groups = parse_tree(s.bytes(), mut at);
+    groups.iter().map(|g| worth_tree(g)).sum()
+}
+
+// ---- the statement ----------------------------------------------------------
+
+// The statement read literally, as rewriting: `()` becomes a score of 1,
+// `(A)` with a score `A` becomes `2A`, and two scores side by side become
+// their sum, the first rule that applies at the leftmost place each time,
+// until one score is left. A token is a score, or -1 for `(` and -2 for
+// `)`.
+fn statement(s: String) -> i64 {
+    let mut t: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        t.push(if c == '(' { -1 } else { -2 });
+    }
+    while t.len() > 1 {
+        let mut i = 0;
+        loop {
+            if t[i] == -1 and t[i + 1] == -2 {
+                t[i] = 1;
+                t.remove(i + 1);
+                break;
+            }
+            if i + 2 < t.len() and t[i] == -1 and t[i + 1] >= 0 and t[i + 2] == -2 {
+                t[i] = 2 * t[i + 1];
+                t.remove(i + 1);
+                t.remove(i + 1);
+                break;
+            }
+            if t[i] >= 0 and t[i + 1] >= 0 {
+                t[i] = t[i] + t[i + 1];
+                t.remove(i + 1);
+                break;
+            }
+            i += 1;
+        }
+    }
+    t[0]
+}
+
+fn score_of(arm: i64, s: String) -> i64 {
+    if arm == 0 {
+        score_of_parentheses_star(s)
+    } else if arm == 1 {
+        score_of_parentheses_depth(s)
+    } else if arm == 2 {
+        score_of_parentheses_split(s)
+    } else {
+        score_of_parentheses_tree(s)
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random balanced string of `pairs` pairs that opens a group, while
+// any are left, `open` times in 4, and always when nothing is open.
+fn random_string(seed: mut ref i64, pairs: i64, open: i64) -> String {
+    let mut s = String.new();
+    let mut opens = 0;
+    let mut balance = 0;
+    while s.len() < 2 * pairs {
+        if opens < pairs and (balance == 0 or next_random(mut seed) % 4 < open) {
+            s.push('(');
+            opens += 1;
+            balance += 1;
+        } else {
+            s.push(')');
+            balance -= 1;
+        }
+    }
+    s
+}
+
+// The string read backwards with each parenthesis turned around.
+fn mirrored(s: String) -> String {
+    s.chars().rev().map(|c| if c == '(' { ')' } else { '(' }).collect()
+}
+
+fn main() {
+    let names = ["star", "depth", "split", "tree"];
+    let properties = ["answer", "joined", "wrapped", "mirrored", "bounds", "a pair added"];
+    let mut by_arm: Vec[i64] = Vec.filled(4, 0);
+    let mut by_property: Vec[i64] = Vec.filled(6, 0);
+    let mut failures = 0;
+    let mut checks = 0;
+    let mut total = 0;
+    let mut seed = 856;
+    for case in 0..1600 {
+        let kind = case / 400;
+        // even odds, deep strings, shallow strings, and short strings
+        let open = if kind == 1 { 3 } else if kind == 2 { 1 } else { 2 };
+        let pairs = if kind == 3 { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 12 };
+        let s = random_string(mut seed, pairs, open);
+        let other = random_string(mut seed, 1 + next_random(mut seed) % 12, 2);
+        let want = statement(s);
+        total += want;
+        let joined = f"{s}{other}";
+        let wrapped = f"({s})";
+        // a `()` put in at a random place, inside `depth` groups: as a
+        // `()` inside `d` groups is worth `2^d`, it adds that much
+        let at = next_random(mut seed) % (s.len() + 1);
+        let mut depth = 0;
+        for c in s.chars().take(at) {
+            depth += if c == '(' { 1 } else { -1 };
+        }
+        let added = f"{s.substring(0, at)}(){s.substring(at, s.len())}";
+        // put in an empty group, it turns that group's 1 into a 2 at the
+        // group's depth, which adds half of what it adds anywhere else
+        let b = s.bytes();
+        let in_empty = at > 0 and at < b.len() and b[at - 1] == b'(' and b[at] == b')';
+        let gain = if in_empty { 1 << (depth - 1) } else { 1 << depth };
+        for arm in 0..4 {
+            let got = score_of(arm, s);
+            let oks = [
+                got == want,
+                score_of(arm, joined) == got + score_of(arm, other),
+                score_of(arm, wrapped) == 2 * got,
+                score_of(arm, mirrored(s)) == got,
+                pairs <= got and got <= 1 << (pairs - 1),
+                score_of(arm, added) == got + gain,
+            ];
+            for q in 0..6 {
+                checks += 1;
+                if not oks[q] {
+                    failures += 1;
+                    by_arm[arm] += 1;
+                    by_property[q] += 1;
+                    if failures <= 5 {
+                        println(f"FAIL {names[arm]} {properties[q]}: \"{s}\" -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1600 cases, scores sum to {total}, {checks} checks over 4 arms: {failures} failures");
+    println(f"by arm: star {by_arm[0]}, depth {by_arm[1]}, split {by_arm[2]}, tree {by_arm[3]}");
+    println(f"by property: answer {by_property[0]}, joined {by_property[1]}, wrapped {by_property[2]}, mirrored {by_property[3]}, bounds {by_property[4]}, a pair added {by_property[5]}");
+}
