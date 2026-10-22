@@ -50,13 +50,6 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "parameter `f` is a non-escaping function value and cannot be bound to a variable: a function-typed parameter may only be called or passed to another non-escaping parameter. Declare it `f: escaping Fn(...)` to store or return it (core-semantics.md §9.3)"
     },
-    "6c2b995fdc35": {
-      "line": 3515,
-      "heading": "`impl Trait` > Return-position `impl Trait`",
-      "outcome": "REJECTED",
-      "reason": "B-2026-10-21-46 made `start..` an iterator (2b42975210); collecting an adapter over a return-position `impl Iterator` is still refused: B-2026-10-20-35 (Thread A, M3-needed). Drop once that lands.",
-      "first_diagnostic": "method 'collect' is not callable on this `IterTake` (via `impl Iterator for IterTake`): trait bound `I: Iterator` is not satisfied; `impl Iterator[Item = i64]` does not implement `Iterator`; trait `Iterator` is implemented by: DequeIter, ItemValues, IterCloned, IterEnumerate, IterMap, IterRev, IterSkip, IterTake, MapIter, MapKeys, MapValues, Range, RangeFrom, RangeInclusive, ReceiverIter, SetIter, SliceIter, SortedMapIter, SortedMapKeys, SortedMapValues, SortedSetIter, StrChars, StrLines, StrSplit, StrSplitN, StrViewChars, StrWords, VecIntoIter, VecIter"
-    },
     "e17f7f14296c": {
       "line": 3877,
       "heading": "9. Traits > Conversion traits",
