@@ -1140,3 +1140,33 @@ fn main() {
 "#;
     assert_runs(src, "héllo 5 abc\n");
 }
+
+/// A return-position `impl Iterator` value takes the trait's adaptors and
+/// terminals, generic ones included, and fills a generic parameter such as
+/// `flat_map`'s `OutV` (B-2026-10-20-35). The first line is design.md's
+/// `make_counter` example.
+#[test]
+fn an_impl_iterator_return_value_takes_adaptors_and_terminals() {
+    let src = r#"
+fn make_counter(start: i64) -> impl Iterator[Item = i64] {
+    start..
+}
+fn tens(i: i64) -> impl Iterator[Item = i64] { (i..4).map(|j| j * 10) }
+fn main() {
+    let v: Vec[i64] = make_counter(0).take(3).collect();
+    println(f"{v.len()} {v[0]} {v[2]}");
+    let s: i64 = tens(1).sum();
+    let m: i64 = tens(1).map(|x| x + 1).count();
+    let f: i64 = tens(1).fold(0, |a, x| a + x);
+    let top: i64 = tens(1).max() ?? 0;
+    let big: i64 = tens(1).filter(|x| *x > 10).count();
+    println(f"{s} {m} {f} {top} {big}");
+    let w: Vec[i64] = (0..3).flat_map(|i| tens(i)).collect();
+    println(f"{w}");
+}
+"#;
+    assert_runs(
+        src,
+        "3 0 2\n60 3 60 30 2\n[0, 10, 20, 30, 10, 20, 30, 20, 30]\n",
+    );
+}

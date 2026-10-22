@@ -156,6 +156,17 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
                 .iter()
                 .map(|a| substitute_type_params(a, subs))
                 .collect();
+            // An `impl Iterator[Item = i64]` receiver names its `Item`
+            // inline, so `<it>.Item` is `i64` (B-2026-10-20-35).
+            if let Some(Type::Existential { assoc_bindings, .. }) =
+                subs.get(param).and_then(SubstValue::as_type)
+            {
+                if new_args.is_empty() {
+                    if let Some((_, bound)) = assoc_bindings.iter().find(|(n, _)| n == assoc) {
+                        return bound.clone();
+                    }
+                }
+            }
             if let Some(concrete) = subs.get(param).and_then(SubstValue::as_type) {
                 // GAT slice 5: when the receiver resolves to a generic
                 // concrete type (`Type::Named`/`Shared`/`Rc`/`Arc`),

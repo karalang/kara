@@ -2685,6 +2685,11 @@ pub struct TypeChecker<'a> {
     /// origin)`. The projection stays opaque to the checker; at export the
     /// node's typed-HIR type is resolved through the origin's witness.
     pub(super) pending_existential_projections: Vec<(crate::ids::NodeId, String, SpanKey)>,
+    /// A trait method called on a return-position `impl Trait` value on the
+    /// MIR pipeline: `(call, method, origin)`. The typed HIR calls the
+    /// witness's own method, which is known once every body is walked
+    /// (B-2026-10-20-35).
+    pub(super) pending_existential_method_callees: Vec<(crate::ids::NodeId, String, SpanKey)>,
     /// Origins that saw two or more DISTINCT witnesses across the program and
     /// so must never be rewritten. Tracked separately from the map above
     /// because a later single-witness function must not resurrect an origin an
@@ -3437,6 +3442,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_return_witnesses: FxHashMap::default(),
             pending_existential_call_subs: Vec::new(),
             pending_existential_projections: Vec::new(),
+            pending_existential_method_callees: Vec::new(),
             pending_existential_pattern_bindings: Vec::new(),
             impl_trait_contested_origins: FxHashSet::default(),
             return_impl_trait_witnesses: Vec::new(),
@@ -3807,6 +3813,24 @@ impl<'a> TypeChecker<'a> {
                 let ty = self.project_through_witness(&ty, &trait_name, &witness);
                 self.node_types.insert(node, (ty, frame));
             }
+        }
+        for (node, method, origin) in std::mem::take(&mut self.pending_existential_method_callees) {
+            let Some(witness) = self.impl_trait_return_witnesses.get(&origin).cloned() else {
+                continue;
+            };
+            // An inherent library method names its owner; a trait method
+            // (`sum`, `map`, a provided body) is keyed on the witness type,
+            // as the same call on a concretely typed receiver is.
+            let Some(owner) = self
+                .library_source_method_owner(&witness, &method)
+                .or_else(|| crate::typechecker::types::method_callee_type_name(&witness))
+            else {
+                continue;
+            };
+            self.node_method_callees
+                .entry(node)
+                .or_insert_with(|| format!("{owner}.{method}"));
+            self.record_receiver_impl_subs_at(node, &witness, &owner, &method);
         }
         for (binding, origin) in std::mem::take(&mut self.pending_existential_pattern_bindings) {
             let Some(witness) = self.impl_trait_return_witnesses.get(&origin) else {
@@ -7094,6 +7118,23 @@ impl<'a> TypeChecker<'a> {
         type_name: &str,
         method: &str,
     ) {
+        let Some((node, key)) = self.current_call_node else {
+            return;
+        };
+        if key != SpanKey::from_span(span) || node.is_dummy() {
+            return;
+        }
+        self.record_receiver_impl_subs_at(node, receiver, type_name, method);
+    }
+
+    /// [`Self::record_node_receiver_impl_subs`] for the call `node`.
+    pub(super) fn record_receiver_impl_subs_at(
+        &mut self,
+        node: crate::ids::NodeId,
+        receiver: &Type,
+        type_name: &str,
+        method: &str,
+    ) {
         fn bind(
             pat: &Type,
             actual: &Type,
@@ -7117,12 +7158,6 @@ impl<'a> TypeChecker<'a> {
                 }
                 _ => pat == actual,
             }
-        }
-        let Some((node, key)) = self.current_call_node else {
-            return;
-        };
-        if key != SpanKey::from_span(span) || node.is_dummy() {
-            return;
         }
         let mut recv = receiver;
         while let Type::Ref(t) | Type::MutRef(t) = recv {

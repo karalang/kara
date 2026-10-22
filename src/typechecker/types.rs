@@ -1566,6 +1566,11 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 origin: b_origin, ..
             },
         ) => a_origin == b_origin,
+        // A type parameter is as permissive toward an existential as toward
+        // any other type (the wildcard below): a closure returning an
+        // `impl Iterator` fills `flat_map`'s `OutV` (B-2026-10-20-35).
+        (Type::TypeParam(_), Type::Existential { .. })
+        | (Type::Existential { .. }, Type::TypeParam(_)) => true,
         (Type::Existential { .. }, _) | (_, Type::Existential { .. }) => false,
         // A borrow of a type param (`ref T` / `mut ref T`) is NOT the owned
         // type param it stands for — the permissive TypeParam wildcard below

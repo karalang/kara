@@ -1215,6 +1215,16 @@ impl TypeEnv {
             "Display" if display_builtin(ty) => return true,
             _ => {}
         }
+        // An `impl Trait` value is a `Trait`, and so whatever `Trait`'s
+        // supertraits are: `make_counter(0).take(3)` holds an
+        // `IterTake[impl Iterator]`, whose impl wants `I: Iterator`
+        // (B-2026-10-20-35).
+        if let Type::Existential {
+            trait_name: has, ..
+        } = ty
+        {
+            return self.trait_reaches(has, trait_name);
+        }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             // Type variables, function types, etc. don't appear in
             // `env.impls`. Conservative: drop. Generic call-site resolution
@@ -1223,6 +1233,25 @@ impl TypeEnv {
             return false;
         };
         self.type_satisfies_trait(&ty_name, &ty_args, trait_name)
+    }
+
+    /// `true` when trait `from` is `to` or has it in its supertrait closure.
+    fn trait_reaches(&self, from: &str, to: &str) -> bool {
+        let last = |p: &str| p.rsplit('.').next().unwrap_or(p).to_string();
+        let mut stack = vec![last(from)];
+        let mut seen: HashSet<String> = HashSet::new();
+        while let Some(t) = stack.pop() {
+            if t == last(to) {
+                return true;
+            }
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            if let Some(info) = self.traits.get(&t) {
+                stack.extend(info.supertraits.iter().map(|s| last(s)));
+            }
+        }
+        false
     }
 
     /// `true` when `ty_name` impls `trait_name` directly OR impls some

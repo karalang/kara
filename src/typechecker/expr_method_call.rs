@@ -812,7 +812,24 @@ impl<'a> super::TypeChecker<'a> {
             Some(m.clone())
         });
         if let Some(m) = trait_method {
-            let ret = self.dispatch_trait_assoc_fn(trait_name, &m, &[], args, span);
+            if self.library_methods_from_source {
+                let key = SpanKey::from_span(span);
+                if let Some((node, _)) = self.current_call_node.filter(|(_, k)| *k == key) {
+                    self.pending_existential_method_callees.push((
+                        node,
+                        method.to_string(),
+                        origin,
+                    ));
+                }
+            }
+            let ret = self.dispatch_trait_method_on(
+                Type::TypeParam(trait_name.to_string()),
+                &m,
+                &[],
+                Some(receiver),
+                args,
+                span,
+            );
             // `dispatch_trait_assoc_fn` substitutes `Self -> TypeParam(target)`,
             // so a method declared `-> Self.Item` comes back as the projection
             // `<trait_name>.Item`. On a concrete receiver that param names a
@@ -1124,6 +1141,24 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        self.dispatch_trait_method_on(self_ty, method, trait_subs, None, args, span)
+    }
+
+    /// [`Self::dispatch_trait_method_as`], where the receiver may be an
+    /// `impl Trait` value (`existential`). Its inline bindings name the
+    /// trait's associated types in the signature, and a method with type
+    /// parameters or a where clause has them solved and checked as on a
+    /// named receiver: `adder(1).collect()`, `adder(1).map(|x| x + 1)`
+    /// (B-2026-10-20-35).
+    pub(super) fn dispatch_trait_method_on(
+        &mut self,
+        self_ty: Type,
+        method: &crate::ast::TraitMethod,
+        trait_subs: &[(String, Type)],
+        existential: Option<&Type>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
         let mut subs: HashMap<String, SubstValue> = HashMap::new();
         subs.insert("Self".to_string(), SubstValue::Type(self_ty));
         for (name, ty) in trait_subs {
@@ -1139,14 +1174,92 @@ impl<'a> super::TypeChecker<'a> {
             scope.extend(gp.params.iter().map(|p| p.name.clone()));
         }
 
-        let param_types: Vec<Type> = method
+        let (ex_trait, ex_bindings) = match existential {
+            Some(Type::Existential {
+                trait_name,
+                assoc_bindings,
+                ..
+            }) => (trait_name.clone(), assoc_bindings.clone()),
+            _ => (String::new(), Vec::new()),
+        };
+        let bind = |t: Type| substitute_existential_assoc_bindings(&t, &ex_trait, &ex_bindings);
+        let mut param_types: Vec<Type> = method
             .params
             .iter()
             .map(|p| {
                 let lowered = self.lower_type_expr(&p.ty, &scope);
-                substitute_type_params(&lowered, &subs)
+                bind(substitute_type_params(&lowered, &subs))
             })
             .collect();
+
+        let generic_names: Vec<String> = method
+            .generic_params
+            .iter()
+            .flat_map(|gp| gp.params.iter().map(|p| p.name.clone()))
+            .collect();
+        if let Some(ex) =
+            existential.filter(|_| !generic_names.is_empty() || method.where_clause.is_some())
+        {
+            let mut ret = method
+                .return_type
+                .as_ref()
+                .map(|rt| self.lower_type_expr(rt, &scope))
+                .unwrap_or(Type::Unit);
+            ret = bind(substitute_type_params(&ret, &subs));
+            let mut receiver: HashMap<String, SubstValue> =
+                std::iter::once(("Self".to_string(), SubstValue::Type(ex.clone()))).collect();
+            let mut generic_names = generic_names;
+            // `sum`, `product`, `reduce`, `collect` and `cloned` read their
+            // items as values, as on a named receiver (iterators.md).
+            if ex_trait == "Iterator"
+                && generic_names.iter().any(|g| g == "ItemV")
+                && matches!(
+                    method.name.as_str(),
+                    "sum" | "product" | "reduce" | "collect" | "cloned"
+                )
+            {
+                if let Some((_, item)) = ex_bindings.iter().find(|(n, _)| n == "Item") {
+                    let value = match item {
+                        Type::Ref(t) | Type::MutRef(t)
+                            if method.name == "cloned" || self.is_copy_type_during_check(t) =>
+                        {
+                            (**t).clone()
+                        }
+                        other => other.clone(),
+                    };
+                    let v: HashMap<String, SubstValue> =
+                        std::iter::once(("ItemV".to_string(), SubstValue::Type(value))).collect();
+                    self.record_node_impl_subs(span, &v);
+                    param_types = param_types
+                        .iter()
+                        .map(|p| substitute_type_params(p, &v))
+                        .collect();
+                    ret = substitute_type_params(&ret, &v);
+                    // The where clause names `ItemV` too (`C: FromIterator[ItemV]`):
+                    // it is bound, as on a named receiver, not inferred.
+                    generic_names.retain(|g| g != "ItemV");
+                    receiver.extend(v);
+                }
+            }
+            let where_clause = super::normalize_bounds_into_where_clause(
+                &method.generic_params,
+                &method.where_clause,
+            );
+            let saved = self.call_bound_receiver_subs.replace(receiver);
+            let ret = self.check_call_args_with_substitution_full(
+                args,
+                &param_types,
+                &ret,
+                span,
+                /* apply_call_site_marker = */ false,
+                None,
+                Some(&generic_names),
+                where_clause.as_ref(),
+                span,
+            );
+            self.call_bound_receiver_subs = saved;
+            return ret;
+        }
 
         if args.len() != param_types.len() {
             self.type_error(
