@@ -1,0 +1,752 @@
+// mini_jsonref — a port of jsonref 1.1.0 (MIT, Chase Sterling): the library
+// that resolves JSON Reference objects (`{"$ref": "#/a/b"}`) inside a JSON
+// document, as JSON Schema tooling and API-spec loaders do. `replace_refs`
+// returns a deep copy of the document with every reference replaced by the
+// data it points at, resolved against the same document.
+//
+// Each job `resolve <merge> <doc>` parses a JSON document, resolves every
+// local fragment reference eagerly (the library's `proxies=False` mode), and
+// serializes the result with json.dumps' default separators. `<merge>` is the
+// `merge_props` flag: with 1, a reference object's extra keys are merged into
+// the resolved mapping (last-writer-wins, reference keys after the target's).
+// A reference whose JSON pointer does not resolve, or that points directly at
+// itself, prints `ERROR: <message>` exactly as JsonRefError renders it.
+//
+// Values live in a flat arena of nodes indexed by i64 (so resolution needs no
+// recursive value type): tag 0 null, 1 bool, 2 int, 3 str, 4 list, 5 dict. A
+// pointer is resolved by walking the original arena (keys by name, array
+// elements by integer index), after %-decoding the fragment and expanding the
+// ~1 / ~0 escapes. A reference whose target is itself a reference is followed
+// through; an `active` stack of in-flight reference nodes catches a cycle.
+//
+// Scope: local fragment refs only (no remote/`http` loader, no JSON Schema
+// `$id` base changes); a bare `#` pointer and a top-level reference are out of
+// scope (the library's proxies=False path does not materialize either). The
+// job strings avoid JSON escapes, so serialization needs none.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct M {
+    b: Vec[i64],
+    pos: i64,
+    src: String,
+    tag: Vec[i64],
+    ival: Vec[i64],
+    sval: Vec[String],
+    kstart: Vec[i64],
+    klen: Vec[i64],
+    kids: Vec[i64],
+    keys: Vec[String],
+    root: i64,
+    err: String,
+    merge_on: bool,
+    active: Vec[i64],
+}
+
+fn new_m() -> M {
+    M {
+        b: Vec.new(),
+        pos: 0,
+        src: String.new(),
+        tag: Vec.new(),
+        ival: Vec.new(),
+        sval: Vec.new(),
+        kstart: Vec.new(),
+        klen: Vec.new(),
+        kids: Vec.new(),
+        keys: Vec.new(),
+        root: 0,
+        err: String.new(),
+        merge_on: false,
+        active: Vec.new(),
+    }
+}
+
+fn str_bytes(s: Str) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        v.push(b as i64);
+    }
+    v
+}
+
+fn int_to_str(v: i64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut n = v;
+    let mut neg = false;
+    if n < 0 {
+        neg = true;
+        n = -n;
+    }
+    let mut digs: Vec[i64] = Vec.new();
+    while n > 0 {
+        digs.push(n % 10);
+        n = n / 10;
+    }
+    let tbl = "0123456789".to_string();
+    let mut o = String.new();
+    if neg {
+        o.push_str("-");
+    }
+    let mut i = digs.len();
+    while i > 0 {
+        i = i - 1;
+        o.push_str(tbl.substring(digs[i], digs[i] + 1));
+    }
+    o
+}
+
+fn parse_int_str(s: Str) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut acc = 0;
+    while i < n {
+        acc = acc * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    if neg {
+        -acc
+    } else {
+        acc
+    }
+}
+
+fn all_digits(s: Str) -> bool {
+    let b = str_bytes(s);
+    let n = b.len();
+    if n == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < n {
+        if b[i] < 48 or b[i] > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn hexval(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 and c <= 102 {
+        return c - 97 + 10;
+    }
+    if c >= 65 and c <= 70 {
+        return c - 65 + 10;
+    }
+    -1
+}
+
+fn pct_decode(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if b[i] == 37 and i + 2 < n {
+            let hi = hexval(b[i + 1]);
+            let lo = hexval(b[i + 2]);
+            if hi >= 0 and lo >= 0 {
+                out.push((hi * 16 + lo) as u8);
+                i = i + 3;
+            } else {
+                out.push(b[i] as u8);
+                i = i + 1;
+            }
+        } else {
+            out.push(b[i] as u8);
+            i = i + 1;
+        }
+    }
+    String.from_utf8(out).unwrap_or("".to_string())
+}
+
+// one-pass ~1 -> '/', ~0 -> '~'; a '~' not followed by 0/1 is kept literal
+fn tilde_unescape(s: Str) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if b[i] == 126 and i + 1 < n and b[i + 1] == 49 {
+            out.push(47); // '/'
+            i = i + 2;
+        } else if b[i] == 126 and i + 1 < n and b[i + 1] == 48 {
+            out.push(126); // '~'
+            i = i + 2;
+        } else {
+            out.push(b[i] as u8);
+            i = i + 1;
+        }
+    }
+    String.from_utf8(out).unwrap_or("".to_string())
+}
+
+fn split_slash(s: Str) -> Vec[String] {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == 47 {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts
+}
+
+impl M {
+    fn add_node(mut ref self, tg: i64, iv: i64, sv: own String, ks: i64, kl: i64) -> i64 {
+        let idx = self.tag.len();
+        self.tag.push(tg);
+        self.ival.push(iv);
+        self.sval.push(sv);
+        self.kstart.push(ks);
+        self.klen.push(kl);
+        idx
+    }
+
+    fn mk_null(mut ref self) -> i64 {
+        self.add_node(0, 0, "".to_string(), 0, 0)
+    }
+    fn mk_bool(mut ref self, v: i64) -> i64 {
+        self.add_node(1, v, "".to_string(), 0, 0)
+    }
+    fn mk_int(mut ref self, v: i64) -> i64 {
+        self.add_node(2, v, "".to_string(), 0, 0)
+    }
+    fn mk_str(mut ref self, s: own String) -> i64 {
+        self.add_node(3, 0, s, 0, 0)
+    }
+
+    fn mk_list(mut ref self, vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push("".to_string());
+            i = i + 1;
+        }
+        self.add_node(4, 0, "".to_string(), ks, n)
+    }
+
+    fn mk_dict(mut ref self, keys: ref Vec[String], vals: ref Vec[i64]) -> i64 {
+        let ks = self.kids.len();
+        let n = vals.len();
+        let mut i = 0;
+        while i < n {
+            self.kids.push(vals[i]);
+            self.keys.push(keys[i].clone());
+            i = i + 1;
+        }
+        self.add_node(5, 0, "".to_string(), ks, n)
+    }
+
+    // ---- parser ----
+    fn peek(mut ref self) -> i64 {
+        if self.pos < self.b.len() {
+            self.b[self.pos]
+        } else {
+            -1
+        }
+    }
+
+    fn skip_ws(mut ref self) {
+        while self.pos < self.b.len() {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 {
+                self.pos = self.pos + 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn parse_into(mut ref self, src: Str) -> i64 {
+        self.src = src.to_string();
+        self.b = str_bytes(src);
+        self.pos = 0;
+        self.p_value()
+    }
+
+    fn p_value(mut ref self) -> i64 {
+        self.skip_ws();
+        let c = self.peek();
+        if c == 91 {
+            return self.p_list(); // '['
+        }
+        if c == 123 {
+            return self.p_dict(); // '{'
+        }
+        if c == 34 {
+            let s = self.p_string(); // '"'
+            return self.mk_str(s);
+        }
+        self.p_atom()
+    }
+
+    fn p_list(mut ref self) -> i64 {
+        self.pos = self.pos + 1; // '['
+        let mut items: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 93 {
+            self.pos = self.pos + 1;
+            return self.mk_list(items);
+        }
+        let mut more = true;
+        while more {
+            let v = self.p_value();
+            items.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1; // ']'
+        self.mk_list(items)
+    }
+
+    fn p_dict(mut ref self) -> i64 {
+        self.pos = self.pos + 1; // '{'
+        let mut dkeys: Vec[String] = Vec.new();
+        let mut dvals: Vec[i64] = Vec.new();
+        self.skip_ws();
+        if self.peek() == 125 {
+            self.pos = self.pos + 1; // '}'
+            return self.mk_dict(dkeys, dvals);
+        }
+        let mut more = true;
+        while more {
+            self.skip_ws();
+            let k = self.p_string();
+            self.skip_ws();
+            self.pos = self.pos + 1; // ':'
+            let v = self.p_value();
+            dkeys.push(k);
+            dvals.push(v);
+            self.skip_ws();
+            if self.peek() == 44 {
+                self.pos = self.pos + 1;
+            } else {
+                more = false;
+            }
+        }
+        self.skip_ws();
+        self.pos = self.pos + 1; // '}'
+        self.mk_dict(dkeys, dvals)
+    }
+
+    fn p_string(mut ref self) -> String {
+        self.pos = self.pos + 1; // opening quote
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n and self.b[self.pos] != 34 {
+            self.pos = self.pos + 1;
+        }
+        let end = self.pos;
+        self.pos = self.pos + 1; // closing quote
+        self.src.substring(start, end)
+    }
+
+    fn p_atom(mut ref self) -> i64 {
+        let start = self.pos;
+        let n = self.b.len();
+        while self.pos < n {
+            let c = self.b[self.pos];
+            if c == 32 or c == 9 or c == 10 or c == 13 or c == 44 or c == 93 or c == 125 {
+                break;
+            }
+            self.pos = self.pos + 1;
+        }
+        let tok = self.src.substring(start, self.pos);
+        if tok == "null" {
+            return self.mk_null();
+        }
+        if tok == "true" {
+            return self.mk_bool(1);
+        }
+        if tok == "false" {
+            return self.mk_bool(0);
+        }
+        self.mk_int(parse_int_str(tok))
+    }
+
+    // ---- reference resolution ----
+    fn find_key(mut ref self, node: i64, k: Str) -> i64 {
+        let n = self.klen[node];
+        let ks = self.kstart[node];
+        let mut i = 0;
+        while i < n {
+            if self.keys[ks + i] == k {
+                return self.kids[ks + i];
+            }
+            i = i + 1;
+        }
+        -1
+    }
+
+    // if node is a dict whose "$ref" value is a string, return that string
+    // node's index; else -1
+    fn is_ref(mut ref self, node: i64) -> i64 {
+        if self.tag[node] != 5 {
+            return -1;
+        }
+        let c = self.find_key(node, "$ref");
+        if c >= 0 and self.tag[c] == 3 {
+            return c;
+        }
+        -1
+    }
+
+    // walk the fragment against the original document root; -1 on any failure
+    fn resolve_pointer(mut ref self, frag: Str) -> i64 {
+        let fb = str_bytes(frag);
+        let n = fb.len();
+        let mut i = 0;
+        while i < n and fb[i] == 47 {
+            i = i + 1;
+        }
+        let stripped = frag.substring(i, n);
+        let dec = pct_decode(stripped);
+        if dec.bytes().len() == 0 {
+            return self.root;
+        }
+        let parts = split_slash(dec);
+        let np = parts.len();
+        let mut doc = self.root;
+        let mut j = 0;
+        while j < np {
+            let part = tilde_unescape(parts[j].clone());
+            let t = self.tag[doc];
+            if t == 4 {
+                if not all_digits(part) {
+                    return -1;
+                }
+                let idx = parse_int_str(part);
+                if idx >= self.klen[doc] {
+                    return -1;
+                }
+                doc = self.kids[self.kstart[doc] + idx];
+            } else if t == 5 {
+                let c = self.find_key(doc, part);
+                if c < 0 {
+                    return -1;
+                }
+                doc = c;
+            } else {
+                return -1;
+            }
+            j = j + 1;
+        }
+        doc
+    }
+
+    fn set_err(mut ref self, refs: Str, detail: Str) {
+        let mut m = String.new();
+        m.push_str("Error while resolving `");
+        m.push_str(refs.to_string());
+        m.push_str("`: ");
+        m.push_str(detail.to_string());
+        self.err = m;
+    }
+
+    fn resolve(mut ref self, node: i64) -> i64 {
+        if self.err.bytes().len() > 0 {
+            return -1;
+        }
+        let t = self.tag[node];
+        if t == 5 {
+            let refv = self.is_ref(node);
+            if refv >= 0 {
+                return self.resolve_ref(node, refv);
+            }
+            let n = self.klen[node];
+            let ks = self.kstart[node];
+            let mut okeys: Vec[String] = Vec.new();
+            let mut ovals: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                let rk = self.keys[ks + i].clone();
+                let rv = self.resolve(self.kids[ks + i]);
+                if self.err.bytes().len() > 0 {
+                    return -1;
+                }
+                okeys.push(rk);
+                ovals.push(rv);
+                i = i + 1;
+            }
+            return self.mk_dict(okeys, ovals);
+        }
+        if t == 4 {
+            let n = self.klen[node];
+            let ks = self.kstart[node];
+            let mut out: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                let rv = self.resolve(self.kids[ks + i]);
+                if self.err.bytes().len() > 0 {
+                    return -1;
+                }
+                out.push(rv);
+                i = i + 1;
+            }
+            return self.mk_list(out);
+        }
+        node // scalar: reuse the immutable node
+    }
+
+    fn resolve_ref(mut ref self, node: i64, refstr_idx: i64) -> i64 {
+        let refs = self.sval[refstr_idx].clone();
+        let fb = str_bytes(refs);
+        let n = fb.len();
+        let mut h = 0;
+        while h < n and fb[h] != 35 {
+            h = h + 1;
+        }
+        let frag = if h < n {
+            refs.substring(h + 1, n)
+        } else {
+            "".to_string()
+        };
+        // cycle guard: this reference node is already being resolved
+        let an = self.active.len();
+        let mut a = 0;
+        while a < an {
+            if self.active[a] == node {
+                self.set_err(refs, "Reference refers directly to itself.");
+                return -1;
+            }
+            a = a + 1;
+        }
+        let target = self.resolve_pointer(frag);
+        if target < 0 {
+            let mut d = String.new();
+            d.push_str("Unresolvable JSON pointer: '");
+            d.push_str(frag);
+            d.push_str("'");
+            self.set_err(refs, d);
+            return -1;
+        }
+        if target == node {
+            self.set_err(refs, "Reference refers directly to itself.");
+            return -1;
+        }
+        self.active.push(node);
+        let resolved = self.resolve(target);
+        let _ = self.active.pop();
+        if self.err.bytes().len() > 0 {
+            return -1;
+        }
+        if self.merge_on and self.tag[resolved] == 5 and self.klen[node] > 1 {
+            return self.merge_extras(node, resolved);
+        }
+        resolved
+    }
+
+    fn merge_extras(mut ref self, node: i64, resolved: i64) -> i64 {
+        let rn = self.klen[resolved];
+        let rs = self.kstart[resolved];
+        let mut okeys: Vec[String] = Vec.new();
+        let mut ovals: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < rn {
+            okeys.push(self.keys[rs + i].clone());
+            ovals.push(self.kids[rs + i]);
+            i = i + 1;
+        }
+        let xn = self.klen[node];
+        let xs = self.kstart[node];
+        let mut j = 0;
+        while j < xn {
+            let k = self.keys[xs + j].clone();
+            if k != "$ref" {
+                let rv = self.resolve(self.kids[xs + j]);
+                if self.err.bytes().len() > 0 {
+                    return -1;
+                }
+                let mut found = -1;
+                let mut p = 0;
+                let on = okeys.len();
+                while p < on {
+                    if okeys[p] == k {
+                        found = p;
+                        break;
+                    }
+                    p = p + 1;
+                }
+                if found < 0 {
+                    okeys.push(k);
+                    ovals.push(rv);
+                } else {
+                    ovals[found] = rv;
+                }
+            }
+            j = j + 1;
+        }
+        self.mk_dict(okeys, ovals)
+    }
+
+    // ---- serialization (canonical JSON, json.dumps default separators) ----
+    fn ser(mut ref self, idx: i64) -> String {
+        let t = self.tag[idx];
+        if t == 0 {
+            return "null".to_string();
+        }
+        if t == 1 {
+            if self.ival[idx] == 1 {
+                return "true".to_string();
+            }
+            return "false".to_string();
+        }
+        if t == 2 {
+            return int_to_str(self.ival[idx]);
+        }
+        if t == 3 {
+            let mut o = String.new();
+            o.push_str("\"");
+            o.push_str(self.sval[idx].clone());
+            o.push_str("\"");
+            return o;
+        }
+        if t == 4 {
+            let n = self.klen[idx];
+            let ks = self.kstart[idx];
+            let mut o = String.new();
+            o.push_str("[");
+            let mut i = 0;
+            while i < n {
+                if i > 0 {
+                    o.push_str(", ");
+                }
+                let child = self.kids[ks + i];
+                o.push_str(self.ser(child));
+                i = i + 1;
+            }
+            o.push_str("]");
+            return o;
+        }
+        // dict
+        let n = self.klen[idx];
+        let ks = self.kstart[idx];
+        let mut o = String.new();
+        o.push_str("{");
+        let mut i = 0;
+        while i < n {
+            if i > 0 {
+                o.push_str(", ");
+            }
+            o.push_str("\"");
+            o.push_str(self.keys[ks + i].clone());
+            o.push_str("\": ");
+            let child = self.kids[ks + i];
+            o.push_str(self.ser(child));
+            i = i + 1;
+        }
+        o.push_str("}");
+        o
+    }
+}
+
+fn run_job(fields: ref Vec[String]) -> String {
+    let merge = fields[1].clone();
+    let doc = fields[2].clone();
+    let mut m = new_m();
+    m.merge_on = merge == "1";
+    let root = m.parse_into(doc);
+    m.root = root;
+    let r = m.resolve(root);
+    if r < 0 {
+        let mut o = String.new();
+        o.push_str("ERROR: ");
+        o.push_str(m.err.clone());
+        return o;
+    }
+    m.ser(r)
+}
+
+fn split_fields(line: Str) -> Vec[String] {
+    let v = str_bytes(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                out.push_str("== merge=");
+                out.push_str(fields[1].clone());
+                out.push_str(" | ");
+                out.push_str(fields[2].clone());
+                out.push_str("\n  ");
+                out.push_str(run_job(fields));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("resolve\t0\t{\"a\": {\"$ref\": \"#/b\"}, \"b\": 5}\n");
+    s.push_str("resolve\t0\t{\"x\": [10, 20, {\"$ref\": \"#/y\"}], \"y\": {\"z\": {\"$ref\": \"#/x/1\"}}}\n");
+    s.push_str("resolve\t0\t{\"a~b\": 1, \"c/d\": 2, \"r\": [{\"$ref\": \"#/a~0b\"}, {\"$ref\": \"#/c~1d\"}]}\n");
+    s.push_str("resolve\t0\t{\"a b\": 7, \"r\": {\"$ref\": \"#/a%20b\"}}\n");
+    s.push_str("resolve\t0\t{\"def\": {\"x\": [1, 2, 3]}, \"use\": {\"$ref\": \"#/def\"}}\n");
+    s.push_str("resolve\t0\t{\"t\": {\"n\": 1}, \"a\": {\"$ref\": \"#/t\"}, \"b\": {\"$ref\": \"#/t\"}}\n");
+    s.push_str("resolve\t0\t{\"a\": {\"b\": {\"c\": true}}, \"r\": {\"$ref\": \"#/a/b/c\"}, \"n\": null, \"k\": -3, \"m\": {\"$ref\": \"#/k\"}}\n");
+    s.push_str("resolve\t0\t{\"tpl\": {\"kind\": \"box\"}, \"items\": [{\"$ref\": \"#/tpl\"}, {\"id\": 2}, {\"$ref\": \"#/tpl\"}]}\n");
+    s.push_str("resolve\t1\t{\"base\": {\"a\": 1, \"b\": 2}, \"r\": {\"$ref\": \"#/base\", \"b\": 99, \"c\": 3}}\n");
+    s.push_str("resolve\t0\t{\"base\": {\"a\": 1}, \"r\": {\"$ref\": \"#/base\", \"x\": 9}}\n");
+    s.push_str("resolve\t1\t{\"base\": [1, 2], \"r\": {\"$ref\": \"#/base\", \"extra\": 1}}\n");
+    s.push_str("resolve\t0\t{\"a\": {\"$ref\": \"#/b\"}, \"b\": {\"$ref\": \"#/c\"}, \"c\": 42}\n");
+    s.push_str("resolve\t0\t{\"r\": {\"$ref\": \"#/nope\"}}\n");
+    s.push_str("resolve\t0\t{\"a\": [1, 2], \"r\": {\"$ref\": \"#/a/5\"}}\n");
+    s.push_str("resolve\t0\t{\"r\": {\"$ref\": \"#/r\"}}\n");
+    s.push_str("resolve\t0\t{\"a\": {\"b\": 1}, \"r\": {\"$ref\": \"#/a/b/c\"}}\n");
+    s.push_str("resolve\t0\t{\"a\": 1, \"b\": [2, 3], \"c\": {\"d\": \"e\"}}\n");
+    s
+}
