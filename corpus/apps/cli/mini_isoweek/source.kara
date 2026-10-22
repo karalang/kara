@@ -1,0 +1,484 @@
+// mini_isoweek — a port of isoweek 1.3.3 (BSD, Gisle Aas): the Week class that
+// reporting, scheduling and fiscal-week code uses to name and do arithmetic on
+// ISO 8601 weeks. A Week is a (year, week) pair where week 1 is the first week
+// with four or more days in January.
+//
+// The library is a thin layer over datetime.date, so the port reimplements the
+// proleptic-Gregorian calendar it leans on — ymd<->ordinal, the ISO-calendar
+// rule (isoweek1monday) and weekday — in i64, then every Week method on top:
+// the out-of-range-week normalization in the constructor, fromstring/withdate/
+// fromordinal, the seven days, week<->ordinal round-trips, week + n and
+// week - week, contains, replace, and the 52-vs-53-week-year queries. The one
+// place Python's floor division matters (a date before its year's ISO week 1
+// gives a negative week quotient) is reproduced with an explicit floordiv, since
+// i64 division truncates toward zero.
+//
+// jobs_text() (appended by gen_kara.py) carries data/jobs.tsv verbatim.
+
+struct Ymd { y: i64, m: i64, d: i64 }
+struct Yw { y: i64, w: i64 }
+struct Wk { ok: bool, year: i64, week: i64, err: String }
+
+fn bytes_of(s: ref String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn digit_char(d: i64) -> String {
+    let ds = "0123456789";
+    ds.substring(d, d + 1)
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut neg = false;
+    let mut x = n;
+    if x < 0 { neg = true; x = -x; }
+    let mut digs: Vec[i64] = Vec.new();
+    while x > 0 { digs.push(x % 10); x = x / 10; }
+    let mut s = String.new();
+    if neg { s.push_str("-"); }
+    let mut k = digs.len() - 1;
+    while k >= 0 { s.push_str(digit_char(digs[k])); k = k - 1; }
+    s
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 {
+        let mut s = String.new();
+        s.push_str("0");
+        s.push_str(itoa(n));
+        return s;
+    }
+    itoa(n)
+}
+
+fn pad4(n: i64) -> String {
+    let mut s = String.new();
+    if n < 10 { s.push_str("000"); }
+    else if n < 100 { s.push_str("00"); }
+    else if n < 1000 { s.push_str("0"); }
+    s.push_str(itoa(n));
+    s
+}
+
+fn parse_int(s: ref String) -> i64 {
+    let v = bytes_of(s);
+    let n = v.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and v[0] == 45 { neg = true; i = 1; }
+    let mut acc = 0;
+    while i < n { acc = acc * 10 + (v[i] - 48); i = i + 1; }
+    if neg { -acc } else { acc }
+}
+
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    let r = a % b;
+    if r != 0 and ((r < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0) and ((y % 100 != 0) or (y % 400 == 0))
+}
+
+fn dim_nonleap(m: i64) -> i64 {
+    if m == 1 { return 31; }
+    if m == 2 { return 28; }
+    if m == 3 { return 31; }
+    if m == 4 { return 30; }
+    if m == 5 { return 31; }
+    if m == 6 { return 30; }
+    if m == 7 { return 31; }
+    if m == 8 { return 31; }
+    if m == 9 { return 30; }
+    if m == 10 { return 31; }
+    if m == 11 { return 30; }
+    31
+}
+
+// Non-leap cumulative days before month m (1-indexed).
+fn cum_nonleap(m: i64) -> i64 {
+    let mut total = 0;
+    let mut mm = 1;
+    while mm < m { total = total + dim_nonleap(mm); mm = mm + 1; }
+    total
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let yy = y - 1;
+    yy * 365 + yy / 4 - yy / 100 + yy / 400
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut total = cum_nonleap(m);
+    if m > 2 and is_leap(y) { total = total + 1; }
+    total
+}
+
+fn ymd2ord(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+fn ord2ymd(ordv: i64) -> Ymd {
+    let mut n = ordv - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year = year + n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return Ymd { y: year - 1, m: 12, d: 31 };
+    }
+    let leap = (n1 == 3) and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) / 32;
+    let mut preceding = cum_nonleap(month);
+    if month > 2 and leap { preceding = preceding + 1; }
+    if preceding > n {
+        month = month - 1;
+        preceding = preceding - dim_nonleap(month);
+        if month == 2 and leap { preceding = preceding - 1; }
+    }
+    n = n - preceding;
+    Ymd { y: year, m: month, d: n + 1 }
+}
+
+fn fmt_date_ord(ordv: i64) -> String {
+    let ymd = ord2ymd(ordv);
+    let mut s = String.new();
+    s.push_str(pad4(ymd.y));
+    s.push_str("-");
+    s.push_str(pad2(ymd.m));
+    s.push_str("-");
+    s.push_str(pad2(ymd.d));
+    s
+}
+
+fn fmt_week(y: i64, w: i64) -> String {
+    let mut s = String.new();
+    s.push_str(pad4(y));
+    s.push_str("W");
+    s.push_str(pad2(w));
+    s
+}
+
+fn isoweek1monday(year: i64) -> i64 {
+    let firstday = ymd2ord(year, 1, 1);
+    let firstweekday = (firstday + 6) % 7; // Monday = 0
+    let mut w1m = firstday - firstweekday;
+    if firstweekday > 3 { w1m = w1m + 7; } // Thursday = 3
+    w1m
+}
+
+fn isocalendar(y: i64, m: i64, d: i64) -> Yw {
+    let mut year = y;
+    let mut w1m = isoweek1monday(year);
+    let today = ymd2ord(y, m, d);
+    let mut week = floordiv(today - w1m, 7);
+    if week < 0 {
+        year = year - 1;
+        w1m = isoweek1monday(year);
+        week = floordiv(today - w1m, 7);
+    } else if week >= 52 {
+        if today >= isoweek1monday(year + 1) {
+            year = year + 1;
+            week = 0;
+        }
+    }
+    Yw { y: year, w: week + 1 }
+}
+
+// The date (as a day-ordinal) of day `num` (Monday = 0) of ISO week (year,week).
+fn week_day_ord(year: i64, week: i64, num: i64) -> i64 {
+    let base = ymd2ord(year, 1, 4); // Jan 4 is always in ISO week 1
+    let wd = (base + 6) % 7;        // weekday of Jan 4, Monday = 0
+    base + (week - 1) * 7 + (num - wd)
+}
+
+fn week_toordinal(year: i64, week: i64) -> i64 {
+    week_day_ord(year, week, 0) / 7 + 1
+}
+
+fn week_fromordinal(word: i64) -> Wk {
+    let day_ord = (word - 1) * 7 + 1;
+    let ymd = ord2ymd(day_ord);
+    let yw = isocalendar(ymd.y, ymd.m, ymd.d);
+    Wk { ok: true, year: yw.y, week: yw.w, err: String.new() }
+}
+
+fn add_weeks(year: i64, week: i64, n: i64) -> Wk {
+    week_fromordinal(week_toordinal(year, week) + n)
+}
+
+// Week(year, week) with the library's normalization and year-range check.
+fn mk_week(year: i64, week: i64) -> Wk {
+    if week < 1 or week > 52 {
+        let base = mk_week(year, 1);
+        if not base.ok { return base; }
+        return add_weeks(base.year, base.week, week - 1);
+    }
+    if year < 1 or year > 9999 {
+        return Wk { ok: false, year: 0, week: 0, err: "year is out of range" };
+    }
+    Wk { ok: true, year: year, week: week, err: String.new() }
+}
+
+fn from_string(s: ref String) -> Wk {
+    let v = bytes_of(s);
+    let n = v.len();
+    if n == 7 and v[4] == 87 { // 'W'
+        let ys = s.substring(0, 4);
+        let ws = s.substring(5, 7);
+        return mk_week(parse_int(ys), parse_int(ws));
+    }
+    if n == 8 and v[4] == 45 and v[5] == 87 { // '-W'
+        let ys = s.substring(0, 4);
+        let ws = s.substring(6, 8);
+        return mk_week(parse_int(ys), parse_int(ws));
+    }
+    let mut msg = String.new();
+    msg.push_str("Week.tostring argument must be on the form <yyyy>W<ww>; got '");
+    msg.push_str(s.clone());
+    msg.push_str("'");
+    Wk { ok: false, year: 0, week: 0, err: msg }
+}
+
+fn verr(w: ref Wk) -> String {
+    let mut s = String.new();
+    s.push_str("ValueError: ");
+    s.push_str(w.err.clone());
+    s
+}
+
+fn week_str(w: ref Wk) -> String {
+    if not w.ok { return verr(w); }
+    fmt_week(w.year, w.week)
+}
+
+fn ai(fields: ref Vec[String], k: i64) -> i64 {
+    let s = fields[k].clone();
+    parse_int(s)
+}
+
+fn run_job(fields: ref Vec[String]) -> String {
+    let op = fields[0].clone();
+
+    if op == "str" {
+        let w = mk_week(ai(fields, 1), ai(fields, 2));
+        return week_str(w);
+    }
+    if op == "repr" {
+        let w = mk_week(ai(fields, 1), ai(fields, 2));
+        if not w.ok { return verr(w); }
+        let mut s = String.new();
+        s.push_str("isoweek.Week(");
+        s.push_str(itoa(w.year));
+        s.push_str(", ");
+        s.push_str(itoa(w.week));
+        s.push_str(")");
+        return s;
+    }
+    if op == "year_week" {
+        let w = mk_week(ai(fields, 1), ai(fields, 2));
+        if not w.ok { return verr(w); }
+        let mut s = String.new();
+        s.push_str(itoa(w.year));
+        s.push_str(" ");
+        s.push_str(itoa(w.week));
+        return s;
+    }
+    if op == "fromstring" {
+        let s = fields[1].clone();
+        let w = from_string(s);
+        return week_str(w);
+    }
+    if op == "withdate" {
+        let yw = isocalendar(ai(fields, 1), ai(fields, 2), ai(fields, 3));
+        return fmt_week(yw.y, yw.w);
+    }
+    if op == "day" {
+        return fmt_date_ord(week_day_ord(ai(fields, 1), ai(fields, 2), ai(fields, 3)));
+    }
+    if op == "monday" {
+        return fmt_date_ord(week_day_ord(ai(fields, 1), ai(fields, 2), 0));
+    }
+    if op == "sunday" {
+        return fmt_date_ord(week_day_ord(ai(fields, 1), ai(fields, 2), 6));
+    }
+    if op == "days" {
+        let monday = week_day_ord(ai(fields, 1), ai(fields, 2), 0);
+        let mut s = String.new();
+        let mut i = 0;
+        while i < 7 {
+            if i > 0 { s.push_str(" "); }
+            s.push_str(fmt_date_ord(monday + i));
+            i = i + 1;
+        }
+        return s;
+    }
+    if op == "toordinal" {
+        return itoa(week_toordinal(ai(fields, 1), ai(fields, 2)));
+    }
+    if op == "fromordinal" {
+        let w = week_fromordinal(ai(fields, 1));
+        return week_str(w);
+    }
+    if op == "add" {
+        let w = add_weeks(ai(fields, 1), ai(fields, 2), ai(fields, 3));
+        return week_str(w);
+    }
+    if op == "sub_int" {
+        let w = add_weeks(ai(fields, 1), ai(fields, 2), -ai(fields, 3));
+        return week_str(w);
+    }
+    if op == "sub_week" {
+        let a = week_toordinal(ai(fields, 1), ai(fields, 2));
+        let b = week_toordinal(ai(fields, 3), ai(fields, 4));
+        return itoa(a - b);
+    }
+    if op == "contains" {
+        let d0 = week_day_ord(ai(fields, 1), ai(fields, 2), 0);
+        let d7 = week_day_ord(ai(fields, 1), ai(fields, 2), 7);
+        let t = ymd2ord(ai(fields, 3), ai(fields, 4), ai(fields, 5));
+        if d0 <= t and t < d7 { return "True"; }
+        return "False";
+    }
+    if op == "replace_week" {
+        let w = mk_week(ai(fields, 1), ai(fields, 3));
+        return week_str(w);
+    }
+    if op == "replace_year" {
+        let w = mk_week(ai(fields, 3), ai(fields, 2));
+        return week_str(w);
+    }
+    if op == "last_week_of_year" {
+        let year = ai(fields, 1);
+        if year == 9999 { return fmt_week(9999, 52); }
+        let w = mk_week(year + 1, 0);
+        return week_str(w);
+    }
+    if op == "weeks_of_year" {
+        let year = ai(fields, 1);
+        let mut count = 0;
+        let mut last_y = year;
+        let mut last_w = 1;
+        let mut cur = mk_week(year, 1);
+        while cur.ok and cur.year == year {
+            count = count + 1;
+            last_y = cur.year;
+            last_w = cur.week;
+            cur = add_weeks(cur.year, cur.week, 1);
+        }
+        let mut s = String.new();
+        s.push_str(itoa(count));
+        s.push_str(" ");
+        s.push_str(fmt_week(year, 1));
+        s.push_str(" ");
+        s.push_str(fmt_week(last_y, last_w));
+        return s;
+    }
+    "unknown op"
+}
+
+fn split_fields(line: ref String) -> Vec[String] {
+    let v = bytes_of(line);
+    let n = v.len();
+    let mut fields: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or v[i] == 9 {
+            fields.push(line.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    fields
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = bytes_of(data);
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > line_start {
+                let line = data.substring(line_start, i);
+                let fields = split_fields(line);
+                let op = fields[0].clone();
+                let mut args = String.new();
+                let mut k = 1;
+                let fc = fields.len();
+                while k < fc {
+                    if k > 1 { args.push_str(" "); }
+                    args.push_str(fields[k].clone());
+                    k = k + 1;
+                }
+                out.push_str("== ");
+                out.push_str(op);
+                out.push_str(" | ");
+                out.push_str(args);
+                out.push_str("\n  ");
+                out.push_str(run_job(fields));
+                out.push_str("\n");
+            }
+            line_start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("str\t2011\t8\n");
+    s.push_str("str\t2011\t0\n");
+    s.push_str("str\t2010\t53\n");
+    s.push_str("str\t2011\t53\n");
+    s.push_str("str\t2020\t53\n");
+    s.push_str("repr\t2011\t35\n");
+    s.push_str("year_week\t2011\t8\n");
+    s.push_str("fromstring\t2011W08\n");
+    s.push_str("fromstring\t2011-W08\n");
+    s.push_str("fromstring\t1999W52\n");
+    s.push_str("fromstring\tbogus\n");
+    s.push_str("withdate\t2011\t2\t22\n");
+    s.push_str("withdate\t2021\t1\t1\n");
+    s.push_str("withdate\t2012\t12\t31\n");
+    s.push_str("withdate\t2016\t1\t4\n");
+    s.push_str("day\t2011\t8\t0\n");
+    s.push_str("day\t2011\t8\t6\n");
+    s.push_str("monday\t2020\t1\n");
+    s.push_str("sunday\t2020\t1\n");
+    s.push_str("days\t2011\t8\n");
+    s.push_str("toordinal\t2011\t8\n");
+    s.push_str("fromordinal\t104911\n");
+    s.push_str("add\t2011\t52\t1\n");
+    s.push_str("add\t2020\t53\t1\n");
+    s.push_str("sub_int\t2011\t1\t1\n");
+    s.push_str("sub_week\t2011\t8\t2011\t1\n");
+    s.push_str("sub_week\t2012\t1\t2010\t52\n");
+    s.push_str("contains\t2011\t8\t2011\t2\t21\n");
+    s.push_str("contains\t2011\t8\t2011\t2\t28\n");
+    s.push_str("replace_week\t2011\t8\t20\n");
+    s.push_str("replace_year\t2011\t8\t2015\n");
+    s.push_str("last_week_of_year\t2020\n");
+    s.push_str("last_week_of_year\t2021\n");
+    s.push_str("weeks_of_year\t2015\n");
+    s.push_str("weeks_of_year\t2011\n");
+    s
+}
