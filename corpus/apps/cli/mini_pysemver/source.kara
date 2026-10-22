@@ -1,0 +1,516 @@
+// mini_pysemver — a port of python-semver 3.1.0 (BSD, Konstantine Rybnikov), the
+// semantic-version library used across release tooling. It reproduces the
+// strict semver.org grammar, the §11 precedence ordering (numeric identifiers
+// below alphanumeric, fewer identifiers below more), the bump_*, next_version,
+// match, finalize and is_valid surface, and every ValueError text.
+//
+// Versions are (major, minor, patch) integers plus prerelease and build
+// strings (an empty string stands for Python's None). All integer and string
+// work; no float. Byte helpers keep the port independent of the stdlib
+// split/lines iterator surface.
+
+#[derive(Clone)]
+struct Ver {
+    ok: bool,
+    major: i64,
+    minor: i64,
+    patch: i64,
+    pre: String,
+    build: String,
+    err: String,
+}
+
+fn bytes_of(s: String) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for b in s.bytes() { v.push(b as i64); }
+    v
+}
+
+fn split_on(s: String, sep: i64) -> Vec[String] {
+    let b = bytes_of(s);
+    let mut parts: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == sep {
+            parts.push(s.substring(start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    parts.push(s.substring(start, b.len()));
+    parts
+}
+
+fn find_first(b: Vec[i64], target: i64) -> i64 {
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == target { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn int_to_str(n: i64) -> String {
+    if n == 0 { return "0"; }
+    let mut neg = false;
+    let mut v = n;
+    if v < 0 { neg = true; v = 0 - v; }
+    let mut rev: Vec[i64] = Vec.new();
+    while v > 0 { rev.push(v % 10); v = v / 10; }
+    let digits = "0123456789";
+    let mut out = String.new();
+    if neg { out = out + "-"; }
+    let mut i = 0;
+    while i < rev.len() {
+        let d = rev[rev.len() - 1 - i];
+        out = out + digits.substring(d, d + 1);
+        i = i + 1;
+    }
+    out
+}
+
+fn parse_int(s: String) -> i64 {
+    let b = bytes_of(s);
+    let mut i = 0;
+    let mut val = 0;
+    while i < b.len() {
+        val = val * 10 + (b[i] - 48);
+        i = i + 1;
+    }
+    val
+}
+
+fn is_digit(c: i64) -> bool { c >= 48 and c <= 57 }
+fn is_alpha(c: i64) -> bool { (c >= 65 and c <= 90) or (c >= 97 and c <= 122) }
+fn is_alnum(c: i64) -> bool { is_digit(c) or is_alpha(c) }
+
+// numeric identifier: nonempty, all digits, no leading zero unless it is "0".
+fn is_num_ident(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        if not is_digit(b[i]) { return false; }
+        i = i + 1;
+    }
+    if b.len() > 1 and b[0] == 48 { return false; }
+    true
+}
+
+// prerelease identifier: a valid numeric identifier, or an alnum/hyphen run
+// with at least one non-digit (letter or hyphen).
+fn is_pre_ident(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut all_digit = true;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if not (is_alnum(c) or c == 45) { return false; }
+        if not is_digit(c) { all_digit = false; }
+        i = i + 1;
+    }
+    if all_digit { return is_num_ident(s); }
+    true
+}
+
+// build identifier: nonempty run of alnum/hyphen (leading zeros allowed).
+fn is_build_ident(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if not (is_alnum(c) or c == 45) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn all_idents_ok(s: String, kind: i64) -> bool {
+    // kind 0 = prerelease, 1 = build
+    let parts = split_on(s, 46);
+    let mut i = 0;
+    while i < parts.len() {
+        if kind == 0 {
+            if not is_pre_ident(parts[i].clone()) { return false; }
+        } else {
+            if not is_build_ident(parts[i].clone()) { return false; }
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn bad(s: String) -> Ver {
+    Ver { ok: false, major: 0, minor: 0, patch: 0, pre: "", build: "",
+        err: s + " is not valid SemVer string" }
+}
+
+fn parse_ver(s: String) -> Ver {
+    let b = bytes_of(s);
+    // split off build on the first '+'
+    let plus = find_first(b, 43);
+    let mut rest = s.clone();
+    let mut build = String.new();
+    let mut has_build = false;
+    if plus >= 0 {
+        rest = s.substring(0, plus);
+        build = s.substring(plus + 1, b.len());
+        has_build = true;
+    }
+    // split off prerelease on the first '-' of the remainder
+    let rb = bytes_of(rest);
+    let dash = find_first(rb, 45);
+    let mut core = rest.clone();
+    let mut pre = String.new();
+    let mut has_pre = false;
+    if dash >= 0 {
+        core = rest.substring(0, dash);
+        pre = rest.substring(dash + 1, rb.len());
+        has_pre = true;
+    }
+    // core = major.minor.patch
+    let nums = split_on(core, 46);
+    if nums.len() != 3 { return bad(s); }
+    if not is_num_ident(nums[0].clone()) { return bad(s); }
+    if not is_num_ident(nums[1].clone()) { return bad(s); }
+    if not is_num_ident(nums[2].clone()) { return bad(s); }
+    if has_pre {
+        if pre.len() == 0 { return bad(s); }
+        if not all_idents_ok(pre.clone(), 0) { return bad(s); }
+    }
+    if has_build {
+        if build.len() == 0 { return bad(s); }
+        if not all_idents_ok(build.clone(), 1) { return bad(s); }
+    }
+    Ver {
+        ok: true,
+        major: parse_int(nums[0].clone()),
+        minor: parse_int(nums[1].clone()),
+        patch: parse_int(nums[2].clone()),
+        pre: if has_pre { pre } else { String.new() },
+        build: if has_build { build } else { String.new() },
+        err: "",
+    }
+}
+
+fn ver_str(v: Ver) -> String {
+    let mut out = int_to_str(v.major) + "." + int_to_str(v.minor) + "." + int_to_str(v.patch);
+    if v.pre.len() > 0 { out = out + "-" + v.pre.clone(); }
+    if v.build.len() > 0 { out = out + "+" + v.build.clone(); }
+    out
+}
+
+fn str_cmp(a: String, b: String) -> i64 {
+    let ab = bytes_of(a);
+    let bb = bytes_of(b);
+    let mut i = 0;
+    while i < ab.len() and i < bb.len() {
+        if ab[i] < bb[i] { return 0 - 1; }
+        if ab[i] > bb[i] { return 1; }
+        i = i + 1;
+    }
+    if ab.len() < bb.len() { 0 - 1 } else if ab.len() > bb.len() { 1 } else { 0 }
+}
+
+fn is_num_token(s: String) -> bool {
+    let b = bytes_of(s);
+    if b.len() == 0 { return false; }
+    let mut i = 0;
+    while i < b.len() {
+        if not is_digit(b[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn cmp_tag(a: String, b: String) -> i64 {
+    let an = is_num_token(a.clone());
+    let bn = is_num_token(b.clone());
+    if an and bn {
+        let ia = parse_int(a);
+        let ib = parse_int(b);
+        if ia < ib { 0 - 1 } else if ia > ib { 1 } else { 0 }
+    } else if an {
+        0 - 1
+    } else if bn {
+        1
+    } else {
+        str_cmp(a, b)
+    }
+}
+
+fn nat_cmp(a: String, b: String) -> i64 {
+    let ap = split_on(a, 46);
+    let bp = split_on(b, 46);
+    let n = if ap.len() < bp.len() { ap.len() } else { bp.len() };
+    let mut i = 0;
+    while i < n {
+        let r = cmp_tag(ap[i].clone(), bp[i].clone());
+        if r != 0 { return r; }
+        i = i + 1;
+    }
+    if ap.len() < bp.len() { 0 - 1 } else if ap.len() > bp.len() { 1 } else { 0 }
+}
+
+fn compare(a: Ver, b: Ver) -> i64 {
+    if a.major != b.major { return if a.major < b.major { 0 - 1 } else { 1 }; }
+    if a.minor != b.minor { return if a.minor < b.minor { 0 - 1 } else { 1 }; }
+    if a.patch != b.patch { return if a.patch < b.patch { 0 - 1 } else { 1 }; }
+    let rccmp = nat_cmp(a.pre.clone(), b.pre.clone());
+    if rccmp == 0 { return 0; }
+    if a.pre.len() == 0 { return 1; }
+    if b.pre.len() == 0 { return 0 - 1; }
+    rccmp
+}
+
+// _increment_prerelease: bump the trailing dot-numeric, else append ".0".
+fn increment_prerelease(s: String) -> String {
+    let b = bytes_of(s);
+    let len = b.len();
+    if len == 0 { return ".0"; }
+    if not is_digit(b[len - 1]) { return s + ".0"; }
+    let mut k = len;
+    while k > 0 and is_digit(b[k - 1]) { k = k - 1; }
+    if k == 0 {
+        return int_to_str(parse_int(s) + 1);
+    }
+    if b[k - 1] == 46 {
+        let prefix = s.substring(0, k);
+        let numpart = s.substring(k, len);
+        return prefix + int_to_str(parse_int(numpart) + 1);
+    }
+    s + ".0"
+}
+
+// _increment_string: increment the last digit run; unchanged if no digit.
+fn increment_string(s: String) -> String {
+    let b = bytes_of(s);
+    let len = b.len();
+    let mut j = len - 1;
+    while j >= 0 and not is_digit(b[j]) { j = j - 1; }
+    if j < 0 { return s.clone(); }
+    let e = j + 1;
+    let mut k = j;
+    while k > 0 and is_digit(b[k - 1]) { k = k - 1; }
+    let numpart = s.substring(k, e);
+    s.substring(0, k) + int_to_str(parse_int(numpart) + 1) + s.substring(e, len)
+}
+
+fn bump_pre(v: Ver, token: String, bump_when_empty: bool) -> Ver {
+    let mut patch = v.patch;
+    let pre: String;
+    if v.pre.len() > 0 {
+        pre = increment_prerelease(v.pre.clone());
+    } else {
+        if bump_when_empty { patch = patch + 1; }
+        pre = token + ".1";
+    }
+    Ver { ok: true, major: v.major, minor: v.minor, patch: patch, pre: pre, build: "", err: "" }
+}
+
+fn bump_build(v: Ver) -> Ver {
+    let mut bld: String;
+    if v.build.len() > 0 { bld = v.build.clone(); } else { bld = "build.0"; }
+    let inc = increment_string(bld);
+    let fin = if inc == v.build { inc + ".0" } else { inc };
+    Ver { ok: true, major: v.major, minor: v.minor, patch: v.patch, pre: v.pre.clone(), build: fin, err: "" }
+}
+
+fn do_bump(which: String, v: Ver) -> Ver {
+    if which == "major" {
+        return Ver { ok: true, major: v.major + 1, minor: 0, patch: 0, pre: "", build: "", err: "" };
+    }
+    if which == "minor" {
+        return Ver { ok: true, major: v.major, minor: v.minor + 1, patch: 0, pre: "", build: "", err: "" };
+    }
+    if which == "patch" {
+        return Ver { ok: true, major: v.major, minor: v.minor, patch: v.patch + 1, pre: "", build: "", err: "" };
+    }
+    if which == "prerelease" {
+        return bump_pre(v, "rc", false);
+    }
+    bump_build(v)
+}
+
+fn is_valid_part(p: String) -> bool {
+    p == "major" or p == "minor" or p == "patch" or p == "prerelease"
+}
+
+fn run(op: String, arg: String) -> String {
+    if op == "parse" {
+        let v = parse_ver(arg);
+        if not v.ok { return "error=" + v.err; }
+        let pre = if v.pre.len() > 0 { v.pre.clone() } else { "None".to_string() };
+        let build = if v.build.len() > 0 { v.build.clone() } else { "None".to_string() };
+        return "major=" + int_to_str(v.major) + " minor=" + int_to_str(v.minor)
+            + " patch=" + int_to_str(v.patch) + " prerelease=" + pre + " build=" + build;
+    }
+    if op == "valid" {
+        let v = parse_ver(arg);
+        return "valid=" + (if v.ok { "true" } else { "false" });
+    }
+    if op == "cmp" {
+        let sides: Vec[String] = split_on(arg, 124);
+        let a = parse_ver(sides[0].clone());
+        if not a.ok { return "error=" + a.err; }
+        let b = parse_ver(sides[1].clone());
+        if not b.ok { return "error=" + b.err; }
+        return "cmp=" + int_to_str(compare(a, b));
+    }
+    if op == "match" {
+        let sides: Vec[String] = split_on(arg, 124);
+        let a = parse_ver(sides[0].clone());
+        if not a.ok { return "error=" + a.err; }
+        let e = sides[1].clone();
+        let eb = bytes_of(e.clone());
+        let prefix2 = if eb.len() >= 2 { e.substring(0, 2) } else { String.new() };
+        let mut oper = String.new();
+        let mut mv = String.new();
+        if prefix2 == ">=" or prefix2 == "<=" or prefix2 == "==" or prefix2 == "!=" {
+            oper = prefix2;
+            mv = e.substring(2, eb.len());
+        } else if eb.len() >= 1 and (eb[0] == 62 or eb[0] == 60) {
+            oper = e.substring(0, 1);
+            mv = e.substring(1, eb.len());
+        } else if eb.len() >= 1 and is_digit(eb[0]) {
+            oper = "==".to_string();
+            mv = e.clone();
+        } else {
+            return "error=match_expr parameter should be in format <op><ver>, where <op> is one of ['<', '>', '==', '<=', '>=', '!=']. You provided: '" + e + "'";
+        }
+        let mvv = parse_ver(mv);
+        if not mvv.ok { return "error=" + mvv.err; }
+        let c = compare(a, mvv);
+        let mut hit = false;
+        if oper == ">" { hit = c == 1; }
+        else if oper == "<" { hit = c == (0 - 1); }
+        else if oper == "==" { hit = c == 0; }
+        else if oper == "!=" { hit = c != 0; }
+        else if oper == ">=" { hit = c >= 0; }
+        else { hit = c <= 0; }
+        return "match=" + (if hit { "true" } else { "false" });
+    }
+    if op == "bump" {
+        let sides: Vec[String] = split_on(arg, 124);
+        let which = sides[0].clone();
+        let v = parse_ver(sides[1].clone());
+        if not v.ok { return "error=" + v.err; }
+        return "bumped=" + ver_str(do_bump(which, v));
+    }
+    if op == "next" {
+        let sides: Vec[String] = split_on(arg, 124);
+        let part = sides[0].clone();
+        let v = parse_ver(sides[1].clone());
+        if not v.ok { return "error=" + v.err; }
+        if not is_valid_part(part.clone()) {
+            return "error=Invalid part. Expected one of ('major', 'minor', 'patch', 'prerelease'), but got '" + part + "'";
+        }
+        // prerelease present and part raises an equal-or-lower core -> finalize
+        if v.pre.len() > 0 and (part == "patch"
+            or (part == "minor" and v.patch == 0)
+            or (part == "major" and v.minor == 0 and v.patch == 0)) {
+            let fin = Ver { ok: true, major: v.major, minor: v.minor, patch: v.patch, pre: "", build: "", err: "" };
+            return "next=" + ver_str(fin);
+        }
+        if part == "major" or part == "minor" or part == "patch" {
+            return "next=" + ver_str(do_bump(part, v));
+        }
+        // part == "prerelease"
+        if v.pre.len() > 0 {
+            let toks = split_on(v.pre.clone(), 46);
+            if toks[0].clone() != "rc" {
+                let rep = Ver { ok: true, major: v.major, minor: v.minor, patch: v.patch, pre: "rc.1", build: "", err: "" };
+                return "next=" + ver_str(rep);
+            }
+        }
+        return "next=" + ver_str(bump_pre(v, "rc", true));
+    }
+    if op == "finalize" {
+        let v = parse_ver(arg);
+        if not v.ok { return "error=" + v.err; }
+        let fin = Ver { ok: true, major: v.major, minor: v.minor, patch: v.patch, pre: "", build: "", err: "" };
+        return "final=" + ver_str(fin);
+    }
+    "unknown op: " + op
+}
+
+fn main() {
+    let _ = fs.create_dir_all("data");
+    let _ = fs.write("data/jobs.tsv", jobs_text());
+    let jobs = fs.read_to_string("data/jobs.tsv").unwrap_or(String.new());
+    let mut out = String.new();
+    let lines = split_on(jobs, 10);
+    let mut li = 0;
+    while li < lines.len() {
+        let line = lines[li].clone();
+        li = li + 1;
+        if line.len() == 0 { continue; }
+        let fields: Vec[String] = split_on(line, 9);
+        let op = fields[0].clone();
+        let arg = if fields.len() > 1 { fields[1].clone() } else { String.new() };
+        out.push_str("== " + op.clone() + " | " + arg.clone() + "\n");
+        out.push_str("  " + run(op.clone(), arg.clone()) + "\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("parse\t1.2.3\n");
+    s.push_str("parse\t3.4.5-pre.2+build.4\n");
+    s.push_str("parse\t1.0.0-alpha\n");
+    s.push_str("parse\t1.0.0-alpha.1\n");
+    s.push_str("parse\t1.0.0-0.3.7\n");
+    s.push_str("parse\t1.0.0-x.7.z.92\n");
+    s.push_str("parse\t1.0.0+20130313144700\n");
+    s.push_str("parse\t1.0.0-beta+exp.sha.5114f85\n");
+    s.push_str("parse\t01.2.3\n");
+    s.push_str("parse\t1.2\n");
+    s.push_str("parse\t1.2.3.4\n");
+    s.push_str("parse\t1.2.3-01\n");
+    s.push_str("parse\t1.2.3-\n");
+    s.push_str("parse\tfoobar\n");
+    s.push_str("valid\t1.2.3\n");
+    s.push_str("valid\t1.2.3-rc.1+build\n");
+    s.push_str("valid\t1.2\n");
+    s.push_str("cmp\t1.0.0|2.0.0\n");
+    s.push_str("cmp\t2.0.0|2.0.0\n");
+    s.push_str("cmp\t1.0.0-alpha|1.0.0\n");
+    s.push_str("cmp\t1.0.0-alpha|1.0.0-alpha.1\n");
+    s.push_str("cmp\t1.0.0-alpha.1|1.0.0-alpha.beta\n");
+    s.push_str("cmp\t1.0.0-alpha.beta|1.0.0-beta\n");
+    s.push_str("cmp\t1.0.0-beta|1.0.0-beta.2\n");
+    s.push_str("cmp\t1.0.0-beta.2|1.0.0-beta.11\n");
+    s.push_str("cmp\t1.0.0-beta.11|1.0.0-rc.1\n");
+    s.push_str("cmp\t1.0.0-rc.1|1.0.0\n");
+    s.push_str("cmp\t1.0.0+build.1|1.0.0+build.2\n");
+    s.push_str("match\t2.0.0|>=1.0.0\n");
+    s.push_str("match\t1.0.0|>1.0.0\n");
+    s.push_str("match\t4.0.4|4.0.4\n");
+    s.push_str("match\t1.2.3|!=1.2.3\n");
+    s.push_str("match\t1.2.3|<=1.2.3\n");
+    s.push_str("match\t1.2.3|=1.2.3\n");
+    s.push_str("bump\tmajor|1.2.3\n");
+    s.push_str("bump\tminor|1.2.3\n");
+    s.push_str("bump\tpatch|1.2.3\n");
+    s.push_str("bump\tprerelease|1.2.3\n");
+    s.push_str("bump\tprerelease|1.2.3-rc.1\n");
+    s.push_str("bump\tprerelease|1.2.3-alpha\n");
+    s.push_str("bump\tbuild|1.2.3\n");
+    s.push_str("bump\tbuild|1.2.3-rc.1+build.9\n");
+    s.push_str("bump\tbuild|1.2.3+alpha\n");
+    s.push_str("next\tpatch|1.2.3\n");
+    s.push_str("next\tminor|1.2.3\n");
+    s.push_str("next\tmajor|1.2.3\n");
+    s.push_str("next\tprerelease|1.2.3\n");
+    s.push_str("next\tprerelease|1.2.3-rc.1\n");
+    s.push_str("next\tpatch|1.2.3-rc.1\n");
+    s.push_str("next\tprerelease|1.2.3-beta.1\n");
+    s.push_str("next\tbuild|1.2.3\n");
+    s.push_str("finalize\t1.2.3-rc.5+b\n");
+    s.push_str("finalize\t1.2.3\n");
+    s
+}
