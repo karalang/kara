@@ -1,0 +1,154 @@
+== parse | 1
+  1
+== parse | 1.0
+  1.0
+== parse | 1.0.0
+  1.0.0
+== parse | 1.2.3
+  1.2.3
+== parse | 1.0.0.0.0
+  1.0.0.0.0
+== parse | v1.2.3
+  1.2.3
+== parse | 1!2.0
+  1!2.0
+== parse | 1.0a1
+  1.0a1
+== parse | 1.0alpha1
+  1.0a1
+== parse | 1.0-a.1
+  1.0a1
+== parse | 1.0a
+  1.0a0
+== parse | 1.0.a.4
+  1.0a4
+== parse | 1.0b2
+  1.0b2
+== parse | 1.0beta2
+  1.0b2
+== parse | 1.0rc1
+  1.0rc1
+== parse | 1.0c1
+  1.0rc1
+== parse | 1.0pre5
+  1.0rc5
+== parse | 1.0preview5
+  1.0rc5
+== parse | 1.0.post1
+  1.0.post1
+== parse | 1.0-1
+  1.0.post1
+== parse | 1.0rev2
+  1.0.post2
+== parse | 1.0r3
+  1.0.post3
+== parse | 1.0.post
+  1.0.post0
+== parse | 1.0.dev1
+  1.0.dev1
+== parse | 1.0dev
+  1.0.dev0
+== parse | 1.0.dev
+  1.0.dev0
+== parse | 1.0+abc.1.twelve
+  1.0+abc.1.twelve
+== parse | 1.0+Ubuntu-1
+  1.0+ubuntu.1
+== parse | 1!2.0.0a1.post2.dev3+foo.bar.5
+  1!2.0.0a1.post2.dev3+foo.bar.5
+== parse | 01.002.03
+  1.2.3
+== parse | 2016.07
+  2016.7
+== parse | invalid
+  Invalid version: 'invalid'
+== parse | 1..2
+  Invalid version: '1..2'
+== parse | .1
+  Invalid version: '.1'
+== parse | 1.0.0+
+  Invalid version: '1.0.0+'
+== parse | 1.2.3.
+  Invalid version: '1.2.3.'
+== parse | 1.0++
+  Invalid version: '1.0++'
+== parse
+  Invalid version: ''
+== props | 1.2.3
+  epoch=0 release=(1, 2, 3) pre=None post=None dev=None local=None public='1.2.3' base='1.2.3' major=1 minor=2 micro=3 is_pre=False is_post=False is_dev=False
+== props | 1!2.0.0a1.post2.dev3+foo.1
+  epoch=1 release=(2, 0, 0) pre=('a', 1) post=2 dev=3 local='foo.1' public='1!2.0.0a1.post2.dev3' base='1!2.0.0' major=2 minor=0 micro=0 is_pre=True is_post=True is_dev=True
+== props | 1.0
+  epoch=0 release=(1, 0) pre=None post=None dev=None local=None public='1.0' base='1.0' major=1 minor=0 micro=0 is_pre=False is_post=False is_dev=False
+== props | 2.0.0.0
+  epoch=0 release=(2, 0, 0, 0) pre=None post=None dev=None local=None public='2.0.0.0' base='2.0.0.0' major=2 minor=0 micro=0 is_pre=False is_post=False is_dev=False
+== props | 1.0rc2
+  epoch=0 release=(1, 0) pre=('rc', 2) post=None dev=None local=None public='1.0rc2' base='1.0' major=1 minor=0 micro=0 is_pre=True is_post=False is_dev=False
+== props | 1.0.post4
+  epoch=0 release=(1, 0) pre=None post=4 dev=None local=None public='1.0.post4' base='1.0' major=1 minor=0 micro=0 is_pre=False is_post=True is_dev=False
+== props | 1.0.dev7
+  epoch=0 release=(1, 0) pre=None post=None dev=7 local=None public='1.0.dev7' base='1.0' major=1 minor=0 micro=0 is_pre=True is_post=False is_dev=True
+== props | 5
+  epoch=0 release=(5,) pre=None post=None dev=None local=None public='5' base='5' major=5 minor=0 micro=0 is_pre=False is_post=False is_dev=False
+== cmp | 1.0 | 1.0.0
+  lt=False le=True eq=True ne=False gt=False ge=True
+== cmp | 1.0 | 1.0.1
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0a1 | 1.0
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0.dev1 | 1.0a1
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0a1 | 1.0b1
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0rc1 | 1.0
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0 | 1.0.post1
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0.post1 | 1.0.post2
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1!1.0 | 2.0
+  lt=False le=False eq=False ne=True gt=True ge=True
+== cmp | 1.0+local | 1.0
+  lt=False le=False eq=False ne=True gt=True ge=True
+== cmp | 1.0+abc | 1.0+abd
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0+1 | 1.0+2
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0.0 | 1.0
+  lt=False le=True eq=True ne=False gt=False ge=True
+== cmp | 1.0a2 | 1.0a10
+  lt=True le=True eq=False ne=True gt=False ge=False
+== cmp | 1.0.dev1 | 1.0.dev1
+  lt=False le=True eq=True ne=False gt=False ge=True
+== sort | 1.0,1.0.dev1,1.0a1,1.0b2,1.0rc1,1.0.post1,1.1,1!0.1,2.0.dev0
+  ['1.0.dev1', '1.0a1', '1.0b2', '1.0rc1', '1.0', '1.0.post1', '1.1', '2.0.dev0', '1!0.1']
+== sort | 1.0+2,1.0+1,1.0+10,1.0,1.0+1.1
+  ['1.0', '1.0+1', '1.0+1.1', '1.0+2', '1.0+10']
+== sort | 2.0,1.0,1.5,1.0.1,1.0.0
+  ['1.0', '1.0.0', '1.0.1', '1.5', '2.0']
+== cname | Django
+  django
+== cname | oslo.concurrency
+  oslo-concurrency
+== cname | requests
+  requests
+== cname | A__B--C.._D
+  a-b-c-d
+== cname | Flask-SQLAlchemy
+  flask-sqlalchemy
+== cver | 1.0.1 | 1
+  1.0.1
+== cver | 1.0.0 | 1
+  1
+== cver | 1.0.0 | 0
+  1.0.0
+== cver | 1.4.0.0.0 | 1
+  1.4
+== cver | 1!2.0.0 | 1
+  1!2
+== cver | 1.0a1.post2 | 1
+  1a1.post2
+== cver | foo bar baz | 1
+  foo bar baz
+== cver | 2.0 | 0
+  2.0

@@ -1,0 +1,786 @@
+// mini_pep440: packaging's PEP 440 `Version` and the name/version
+// canonicalizers, run over a job list.
+//
+// A `Version` is parsed by hand following packaging's regex: an optional
+// leading `v`, an optional `epoch!`, the dotted release, and optional
+// pre-, post-, dev- and local-version segments. Letters are normalised the
+// way packaging does (`alpha`->`a`, `beta`->`b`, `c`/`pre`/`preview`->`rc`,
+// `rev`/`r`->`post`), and the comparison key is the flat 6-int suffix
+// packaging builds in `_cmpkey`, so sorting and the six operators order
+// versions exactly as the library does. Output matches `oracle.py` byte for
+// byte.
+
+// ------------------------------------------------------------ model
+
+#[derive(Clone)]
+struct Seg {
+    is_int: bool,
+    n: i64,
+    s: String,
+}
+
+#[derive(Clone)]
+struct Ver {
+    epoch: i64,
+    release: Vec[i64],
+    has_pre: bool,
+    pre_l: String,
+    pre_n: i64,
+    has_post: bool,
+    post_n: i64,
+    has_dev: bool,
+    dev_n: i64,
+    has_local: bool,
+    local: Vec[Seg],
+}
+
+// ------------------------------------------------------------ char helpers
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_sep(c: char) -> bool {
+    c == '.' or c == '_' or c == '-'
+}
+
+fn is_alnum(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'z')
+}
+
+fn lower_char(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        char.try_from((c as u32) + 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+fn lower_str(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(lower_char(c));
+    }
+    out
+}
+
+fn word_at(cs: ref Vec[char], i: i64, w: ref Vec[char]) -> bool {
+    if i + w.len() > cs.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < w.len() {
+        if cs[i + k] != w[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+// ------------------------------------------------------------ parser
+
+// Try to match a pre-release letter at position i. Returns (consumed, norm);
+// consumed == 0 means no match.
+fn try_pre(cs: ref Vec[char], i: i64) -> (i64, String) {
+    if word_at(cs, i, chars_of("alpha")) {
+        return (5, "a".to_string());
+    }
+    if word_at(cs, i, chars_of("preview")) {
+        return (7, "rc".to_string());
+    }
+    if word_at(cs, i, chars_of("beta")) {
+        return (4, "b".to_string());
+    }
+    if word_at(cs, i, chars_of("pre")) {
+        return (3, "rc".to_string());
+    }
+    if word_at(cs, i, chars_of("rc")) {
+        return (2, "rc".to_string());
+    }
+    if word_at(cs, i, chars_of("a")) {
+        return (1, "a".to_string());
+    }
+    if word_at(cs, i, chars_of("b")) {
+        return (1, "b".to_string());
+    }
+    if word_at(cs, i, chars_of("c")) {
+        return (1, "rc".to_string());
+    }
+    (0, "".to_string())
+}
+
+// Try to match a post word (post|rev|r) at i. Returns consumed length.
+fn try_post_word(cs: ref Vec[char], i: i64) -> i64 {
+    if word_at(cs, i, chars_of("post")) {
+        return 4;
+    }
+    if word_at(cs, i, chars_of("rev")) {
+        return 3;
+    }
+    if word_at(cs, i, chars_of("r")) {
+        return 1;
+    }
+    0
+}
+
+fn parse_version(raw: ref String) -> Option[Ver] {
+    // trim ASCII whitespace, lowercase (the pattern is case-insensitive and
+    // normalisation lowercases everything anyway).
+    let trimmed = raw.trim().to_string();
+    let lowered = lower_str(trimmed);
+    let cs: Vec[char] = lowered.chars().collect();
+    let n = cs.len();
+    let mut i = 0;
+
+    if i < n and cs[i] == 'v' {
+        i += 1;
+    }
+
+    let mut epoch = 0;
+    // epoch: a digit run followed by '!'
+    let mut j = i;
+    while j < n and is_digit(cs[j]) {
+        j += 1;
+    }
+    if j > i and j < n and cs[j] == '!' {
+        let mut e = 0;
+        let mut t = i;
+        while t < j {
+            e = e * 10 + ((cs[t] as u32) as i64) - (('0' as u32) as i64);
+            t += 1;
+        }
+        epoch = e;
+        i = j + 1;
+    }
+
+    // release: [0-9]+(\.[0-9]+)*
+    if i >= n or not is_digit(cs[i]) {
+        return None;
+    }
+    let mut release: Vec[i64] = Vec.new();
+    let mut running = true;
+    while running {
+        let mut v = 0;
+        while i < n and is_digit(cs[i]) {
+            v = v * 10 + ((cs[i] as u32) as i64) - (('0' as u32) as i64);
+            i += 1;
+        }
+        release.push(v);
+        if i + 1 < n and cs[i] == '.' and is_digit(cs[i + 1]) {
+            i += 1;
+        } else {
+            running = false;
+        }
+    }
+
+    // pre: [._-]? (letter) [._-]? [0-9]*
+    let mut has_pre = false;
+    let mut pre_l = String.new();
+    let mut pre_n = 0;
+    {
+        let mut k = i;
+        if k < n and is_sep(cs[k]) {
+            k += 1;
+        }
+        let (wl, norm) = try_pre(cs, k);
+        if wl > 0 {
+            k += wl;
+            if k < n and is_sep(cs[k]) {
+                k += 1;
+            }
+            let mut pn = 0;
+            while k < n and is_digit(cs[k]) {
+                pn = pn * 10 + ((cs[k] as u32) as i64) - (('0' as u32) as i64);
+                k += 1;
+            }
+            has_pre = true;
+            pre_l = norm;
+            pre_n = pn;
+            i = k;
+        }
+    }
+
+    // post: (-[0-9]+) | ([._-]? (post|rev|r) [._-]? [0-9]*)
+    let mut has_post = false;
+    let mut post_n = 0;
+    if i < n and cs[i] == '-' and i + 1 < n and is_digit(cs[i + 1]) {
+        i += 1;
+        let mut v = 0;
+        while i < n and is_digit(cs[i]) {
+            v = v * 10 + ((cs[i] as u32) as i64) - (('0' as u32) as i64);
+            i += 1;
+        }
+        has_post = true;
+        post_n = v;
+    } else {
+        let mut k = i;
+        if k < n and is_sep(cs[k]) {
+            k += 1;
+        }
+        let wl = try_post_word(cs, k);
+        if wl > 0 {
+            k += wl;
+            if k < n and is_sep(cs[k]) {
+                k += 1;
+            }
+            let mut v = 0;
+            while k < n and is_digit(cs[k]) {
+                v = v * 10 + ((cs[k] as u32) as i64) - (('0' as u32) as i64);
+                k += 1;
+            }
+            has_post = true;
+            post_n = v;
+            i = k;
+        }
+    }
+
+    // dev: [._-]? dev [._-]? [0-9]*
+    let mut has_dev = false;
+    let mut dev_n = 0;
+    {
+        let mut k = i;
+        if k < n and is_sep(cs[k]) {
+            k += 1;
+        }
+        if word_at(cs, k, chars_of("dev")) {
+            k += 3;
+            if k < n and is_sep(cs[k]) {
+                k += 1;
+            }
+            let mut v = 0;
+            while k < n and is_digit(cs[k]) {
+                v = v * 10 + ((cs[k] as u32) as i64) - (('0' as u32) as i64);
+                k += 1;
+            }
+            has_dev = true;
+            dev_n = v;
+            i = k;
+        }
+    }
+
+    // local: + [a-z0-9]+ ([._-][a-z0-9]+)*
+    let mut has_local = false;
+    let mut local: Vec[Seg] = Vec.new();
+    if i < n and cs[i] == '+' {
+        i += 1;
+        if i >= n or not is_alnum(cs[i]) {
+            return None;
+        }
+        let mut more = true;
+        while more {
+            let mut seg = String.new();
+            let mut all_dig = true;
+            while i < n and is_alnum(cs[i]) {
+                if not is_digit(cs[i]) {
+                    all_dig = false;
+                }
+                seg.push(cs[i]);
+                i += 1;
+            }
+            if all_dig {
+                let mut v = 0;
+                for c in seg.chars() {
+                    v = v * 10 + ((c as u32) as i64) - (('0' as u32) as i64);
+                }
+                local.push(Seg { is_int: true, n: v, s: String.new() });
+            } else {
+                local.push(Seg { is_int: false, n: 0, s: seg });
+            }
+            if i + 1 < n and is_sep(cs[i]) and is_alnum(cs[i + 1]) {
+                i += 1;
+            } else {
+                more = false;
+            }
+        }
+        has_local = true;
+    }
+
+    if i != n {
+        return None;
+    }
+
+    Some(Ver {
+        epoch: epoch,
+        release: release,
+        has_pre: has_pre,
+        pre_l: pre_l,
+        pre_n: pre_n,
+        has_post: has_post,
+        post_n: post_n,
+        has_dev: has_dev,
+        dev_n: dev_n,
+        has_local: has_local,
+        local: local,
+    })
+}
+
+// ------------------------------------------------------------ rendering
+
+// trim_mode 1 strips trailing release zeros but keeps at least one component.
+fn trim_keep1(r: ref Vec[i64]) -> Vec[i64] {
+    let mut len = r.len();
+    while len > 1 and r[len - 1] == 0 {
+        len -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        out.push(r[i]);
+        i += 1;
+    }
+    out
+}
+
+fn render(v: ref Ver, trim: bool) -> String {
+    let rel = if trim { trim_keep1(v.release) } else { v.release.clone() };
+    let parts: Vec[String] = rel.iter().map(|x| f"{x}").collect();
+    let mut s = parts.join(".");
+    if v.epoch != 0 {
+        s = f"{v.epoch}!{s}";
+    }
+    if v.has_pre {
+        s.push_str(v.pre_l.clone());
+        s.push_str(f"{v.pre_n}");
+    }
+    if v.has_post {
+        s.push_str(f".post{v.post_n}");
+    }
+    if v.has_dev {
+        s.push_str(f".dev{v.dev_n}");
+    }
+    if v.has_local {
+        let segs: Vec[String] = v.local.iter().map(|g| if g.is_int { f"{g.n}" } else { g.s.clone() }).collect();
+        s.push_str("+");
+        s.push_str(segs.join("."));
+    }
+    s
+}
+
+fn public_str(v: ref Ver) -> String {
+    let saved = v.has_local;
+    // public = str without local
+    let mut c = Ver {
+        epoch: v.epoch,
+        release: v.release.clone(),
+        has_pre: v.has_pre,
+        pre_l: v.pre_l.clone(),
+        pre_n: v.pre_n,
+        has_post: v.has_post,
+        post_n: v.post_n,
+        has_dev: v.has_dev,
+        dev_n: v.dev_n,
+        has_local: false,
+        local: Vec.new(),
+    };
+    let _ = saved;
+    render(c, false)
+}
+
+fn base_version_str(v: ref Ver) -> String {
+    let parts: Vec[String] = v.release.iter().map(|x| f"{x}").collect();
+    let rel = parts.join(".");
+    if v.epoch != 0 {
+        f"{v.epoch}!{rel}"
+    } else {
+        rel
+    }
+}
+
+fn local_str(v: ref Ver) -> String {
+    let segs: Vec[String] = v.local.iter().map(|g| if g.is_int { f"{g.n}" } else { g.s.clone() }).collect();
+    segs.join(".")
+}
+
+// ------------------------------------------------------------ comparison
+
+fn ivec_cmp(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    let mut i = 0;
+    while i < n {
+        if a[i] < b[i] {
+            return -1;
+        }
+        if a[i] > b[i] {
+            return 1;
+        }
+        i += 1;
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn trim_empty(r: ref Vec[i64]) -> Vec[i64] {
+    let mut len = r.len();
+    while len > 0 and r[len - 1] == 0 {
+        len -= 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < len {
+        out.push(r[i]);
+        i += 1;
+    }
+    out
+}
+
+fn pre_rank(l: ref String) -> i64 {
+    if l == "a" {
+        0
+    } else if l == "b" {
+        1
+    } else {
+        2
+    }
+}
+
+fn suffix(v: ref Ver) -> Vec[i64] {
+    let mut pr = 3;
+    let mut pn = 0;
+    if not v.has_pre and not v.has_post and v.has_dev {
+        pr = -1;
+    } else if not v.has_pre {
+        pr = 3;
+    } else {
+        pr = pre_rank(v.pre_l);
+        pn = v.pre_n;
+    }
+    let por = if v.has_post { 1 } else { 0 };
+    let pon = if v.has_post { v.post_n } else { 0 };
+    let dr = if v.has_dev { 0 } else { 1 };
+    let dn = if v.has_dev { v.dev_n } else { 0 };
+    let mut out: Vec[i64] = Vec.new();
+    out.push(pr);
+    out.push(pn);
+    out.push(por);
+    out.push(pon);
+    out.push(dr);
+    out.push(dn);
+    out
+}
+
+fn str_cmp(a: ref String, b: ref String) -> i64 {
+    let ca: Vec[char] = a.chars().collect();
+    let cb: Vec[char] = b.chars().collect();
+    let n = if ca.len() < cb.len() { ca.len() } else { cb.len() };
+    let mut i = 0;
+    while i < n {
+        let x = ca[i] as u32;
+        let y = cb[i] as u32;
+        if x < y {
+            return -1;
+        }
+        if x > y {
+            return 1;
+        }
+        i += 1;
+    }
+    if ca.len() < cb.len() {
+        -1
+    } else if ca.len() > cb.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn local_cmp(a: ref Vec[Seg], b: ref Vec[Seg]) -> i64 {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    let mut i = 0;
+    while i < n {
+        let ar = if a[i].is_int { a[i].n } else { -1 };
+        let br = if b[i].is_int { b[i].n } else { -1 };
+        if ar < br {
+            return -1;
+        }
+        if ar > br {
+            return 1;
+        }
+        let as_ = if a[i].is_int { "".to_string() } else { a[i].s.clone() };
+        let bs = if b[i].is_int { "".to_string() } else { b[i].s.clone() };
+        let c = str_cmp(as_, bs);
+        if c != 0 {
+            return c;
+        }
+        i += 1;
+    }
+    if a.len() < b.len() {
+        -1
+    } else if a.len() > b.len() {
+        1
+    } else {
+        0
+    }
+}
+
+fn ver_cmp(a: ref Ver, b: ref Ver) -> i64 {
+    if a.epoch < b.epoch {
+        return -1;
+    }
+    if a.epoch > b.epoch {
+        return 1;
+    }
+    let c1 = ivec_cmp(trim_empty(a.release), trim_empty(b.release));
+    if c1 != 0 {
+        return c1;
+    }
+    let c2 = ivec_cmp(suffix(a), suffix(b));
+    if c2 != 0 {
+        return c2;
+    }
+    if not a.has_local and not b.has_local {
+        return 0;
+    }
+    if not a.has_local {
+        return -1;
+    }
+    if not b.has_local {
+        return 1;
+    }
+    local_cmp(a.local, b.local)
+}
+
+// ------------------------------------------------------------ canonicalize
+
+fn canonicalize_name(name: ref String) -> String {
+    let lowered = lower_str(name);
+    let mut v = String.new();
+    for c in lowered.chars() {
+        if c == '_' or c == '.' {
+            v.push('-');
+        } else {
+            v.push(c);
+        }
+    }
+    // condense repeated '-'
+    let mut out = String.new();
+    let cs: Vec[char] = v.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '-' {
+            out.push('-');
+            while i < cs.len() and cs[i] == '-' {
+                i += 1;
+            }
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn canonicalize_version(vstr: ref String, strip: bool) -> String {
+    match parse_version(vstr) {
+        None => vstr.clone(),
+        Some(v) => render(v, strip),
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn bstr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn props_line(v: ref Ver) -> String {
+    let rel: Vec[String] = v.release.iter().map(|x| f"{x}").collect();
+    let release_repr = if v.release.len() == 1 {
+        f"({rel[0]},)"
+    } else {
+        f"({rel.join(", ")})"
+    };
+    let pre_repr = if v.has_pre {
+        f"('{v.pre_l}', {v.pre_n})"
+    } else {
+        "None".to_string()
+    };
+    let post_repr = if v.has_post { f"{v.post_n}" } else { "None".to_string() };
+    let dev_repr = if v.has_dev { f"{v.dev_n}" } else { "None".to_string() };
+    let local_repr = if v.has_local { f"'{local_str(v)}'" } else { "None".to_string() };
+    let public = public_str(v);
+    let base = base_version_str(v);
+    let major = if v.release.len() >= 1 { v.release[0] } else { 0 };
+    let minor = if v.release.len() >= 2 { v.release[1] } else { 0 };
+    let micro = if v.release.len() >= 3 { v.release[2] } else { 0 };
+    let is_pre = v.has_dev or v.has_pre;
+    let is_post = v.has_post;
+    let is_dev = v.has_dev;
+    f"epoch={v.epoch} release={release_repr} pre={pre_repr} post={post_repr} dev={dev_repr} local={local_repr} public='{public}' base='{base}' major={major} minor={minor} micro={micro} is_pre={bstr(is_pre)} is_post={bstr(is_post)} is_dev={bstr(is_dev)}"
+}
+
+fn run(f: ref Vec[String]) -> String {
+    let k = f[0].clone();
+    if k == "parse" {
+        let arg = if f.len() > 1 { f[1].clone() } else { "".to_string() };
+        match parse_version(arg) {
+            Some(v) => render(v, false),
+            None => f"Invalid version: '{arg}'",
+        }
+    } else if k == "props" {
+        match parse_version(f[1]) {
+            Some(v) => props_line(v),
+            None => f"Invalid version: '{f[1]}'",
+        }
+    } else if k == "cmp" {
+        let a = match parse_version(f[1]) {
+            Some(v) => v,
+            None => return f"Invalid version: '{f[1]}'",
+        };
+        let b = match parse_version(f[2]) {
+            Some(v) => v,
+            None => return f"Invalid version: '{f[2]}'",
+        };
+        let c = ver_cmp(a, b);
+        let lt = c < 0;
+        let eq = c == 0;
+        let gt = c > 0;
+        f"lt={bstr(lt)} le={bstr(lt or eq)} eq={bstr(eq)} ne={bstr(not eq)} gt={bstr(gt)} ge={bstr(gt or eq)}"
+    } else if k == "sort" {
+        let mut vs: Vec[Ver] = Vec.new();
+        for part in f[1].split(",") {
+            match parse_version(part.to_string()) {
+                Some(v) => vs.push(v),
+                None => {}
+            }
+        }
+        // stable insertion sort by ver_cmp
+        let mut a = 1;
+        while a < vs.len() {
+            let mut b = a;
+            while b > 0 and ver_cmp(vs[b - 1], vs[b]) > 0 {
+                let tmp = vs[b - 1].clone();
+                vs[b - 1] = vs[b].clone();
+                vs[b] = tmp;
+                b -= 1;
+            }
+            a += 1;
+        }
+        let parts: Vec[String] = vs.iter().map(|v| f"'{render(v, false)}'").collect();
+        f"[{parts.join(", ")}]"
+    } else if k == "cname" {
+        canonicalize_name(f[1])
+    } else if k == "cver" {
+        canonicalize_version(f[1], f[2] == "1")
+    } else {
+        f"unknown job {k}"
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        out.push_str(f"== {f.join(" | ")}\n");
+        out.push_str(f"  {run(f)}\n");
+    }
+    print(out);
+}
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("parse\t1\n");
+    s.push_str("parse\t1.0\n");
+    s.push_str("parse\t1.0.0\n");
+    s.push_str("parse\t1.2.3\n");
+    s.push_str("parse\t1.0.0.0.0\n");
+    s.push_str("parse\tv1.2.3\n");
+    s.push_str("parse\t1!2.0\n");
+    s.push_str("parse\t1.0a1\n");
+    s.push_str("parse\t1.0alpha1\n");
+    s.push_str("parse\t1.0-a.1\n");
+    s.push_str("parse\t1.0a\n");
+    s.push_str("parse\t1.0.a.4\n");
+    s.push_str("parse\t1.0b2\n");
+    s.push_str("parse\t1.0beta2\n");
+    s.push_str("parse\t1.0rc1\n");
+    s.push_str("parse\t1.0c1\n");
+    s.push_str("parse\t1.0pre5\n");
+    s.push_str("parse\t1.0preview5\n");
+    s.push_str("parse\t1.0.post1\n");
+    s.push_str("parse\t1.0-1\n");
+    s.push_str("parse\t1.0rev2\n");
+    s.push_str("parse\t1.0r3\n");
+    s.push_str("parse\t1.0.post\n");
+    s.push_str("parse\t1.0.dev1\n");
+    s.push_str("parse\t1.0dev\n");
+    s.push_str("parse\t1.0.dev\n");
+    s.push_str("parse\t1.0+abc.1.twelve\n");
+    s.push_str("parse\t1.0+Ubuntu-1\n");
+    s.push_str("parse\t1!2.0.0a1.post2.dev3+foo.bar.5\n");
+    s.push_str("parse\t01.002.03\n");
+    s.push_str("parse\t2016.07\n");
+    s.push_str("parse\tinvalid\n");
+    s.push_str("parse\t1..2\n");
+    s.push_str("parse\t.1\n");
+    s.push_str("parse\t1.0.0+\n");
+    s.push_str("parse\t1.2.3.\n");
+    s.push_str("parse\t1.0++\n");
+    s.push_str("parse\n");
+    s.push_str("props\t1.2.3\n");
+    s.push_str("props\t1!2.0.0a1.post2.dev3+foo.1\n");
+    s.push_str("props\t1.0\n");
+    s.push_str("props\t2.0.0.0\n");
+    s.push_str("props\t1.0rc2\n");
+    s.push_str("props\t1.0.post4\n");
+    s.push_str("props\t1.0.dev7\n");
+    s.push_str("props\t5\n");
+    s.push_str("cmp\t1.0\t1.0.0\n");
+    s.push_str("cmp\t1.0\t1.0.1\n");
+    s.push_str("cmp\t1.0a1\t1.0\n");
+    s.push_str("cmp\t1.0.dev1\t1.0a1\n");
+    s.push_str("cmp\t1.0a1\t1.0b1\n");
+    s.push_str("cmp\t1.0rc1\t1.0\n");
+    s.push_str("cmp\t1.0\t1.0.post1\n");
+    s.push_str("cmp\t1.0.post1\t1.0.post2\n");
+    s.push_str("cmp\t1!1.0\t2.0\n");
+    s.push_str("cmp\t1.0+local\t1.0\n");
+    s.push_str("cmp\t1.0+abc\t1.0+abd\n");
+    s.push_str("cmp\t1.0+1\t1.0+2\n");
+    s.push_str("cmp\t1.0.0\t1.0\n");
+    s.push_str("cmp\t1.0a2\t1.0a10\n");
+    s.push_str("cmp\t1.0.dev1\t1.0.dev1\n");
+    s.push_str("sort\t1.0,1.0.dev1,1.0a1,1.0b2,1.0rc1,1.0.post1,1.1,1!0.1,2.0.dev0\n");
+    s.push_str("sort\t1.0+2,1.0+1,1.0+10,1.0,1.0+1.1\n");
+    s.push_str("sort\t2.0,1.0,1.5,1.0.1,1.0.0\n");
+    s.push_str("cname\tDjango\n");
+    s.push_str("cname\toslo.concurrency\n");
+    s.push_str("cname\trequests\n");
+    s.push_str("cname\tA__B--C.._D\n");
+    s.push_str("cname\tFlask-SQLAlchemy\n");
+    s.push_str("cver\t1.0.1\t1\n");
+    s.push_str("cver\t1.0.0\t1\n");
+    s.push_str("cver\t1.0.0\t0\n");
+    s.push_str("cver\t1.4.0.0.0\t1\n");
+    s.push_str("cver\t1!2.0.0\t1\n");
+    s.push_str("cver\t1.0a1.post2\t1\n");
+    s.push_str("cver\tfoo bar baz\t1\n");
+    s.push_str("cver\t2.0\t0\n");
+    s
+}
