@@ -98,3 +98,13 @@ regenerate with `corpus_run.py --json`.
    for the MIR interpreter.
 3. Widen the subset: closures, `Vec.iter` chains, `effect` items, `env`, integer widths.
 4. ~~Land beside the corpus.~~ Done by the kata thread 2026-10-06: `corpus/tools/drop-model/` and `corpus/drop-matrix/`.
+
+## Known simplifications
+
+- **Int-to-float widening.** The model has no integer widths, so it widens *any* integer stored into a
+  float place (a `let` or parameter of a float type, a struct field, a `return` from a float function, an
+  assignment over a float, a map index-assign into a float value). That is right only because `karac check`
+  refuses the lossy conversions (i64/u64 → f64 and wider-than-mantissa ints → f32) without `as`
+  (design.md § 5, the implicit-conversion table), so the model never sees those programs. It is not the
+  whole rule. (Review thread, 2026-10-22; a comment at the sites in `kmodel.py` waits for the next model
+  change, since any edit to a `*.py` file changes `model_rev` and re-records the corpus.)

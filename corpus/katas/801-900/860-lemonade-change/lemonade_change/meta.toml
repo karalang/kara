@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/860-lemonade-change/lemonade_change.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3700e5f18"
+extracted_src = "9a18b455"
+model_rev = "5c9fbd42"
+model_src = "9a18b455"

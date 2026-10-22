@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 291 |
 | false-positive | 285 |
 | other | 198 |
-| diagnostics | 189 |
+| diagnostics | 190 |
 | perf | 183 |
 | soundness | 137 |
 | crash | 129 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3038 |
 | interp | 1047 |
-| typecheck | 572 |
+| typecheck | 573 |
 | ownership | 132 |
 | other | 127 |
 | cli | 90 |
@@ -198,8 +198,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-38 | 2026-10-22 | interp+runtime | medium | MIR interpreter/runtime gaps from the legacy test programs: `std.runtime` `list_tasks` / `list_par_blocks` / `has_debug_metadata`, a char radix out of range is an interpreter error rather than a panic, `extend_from_slice` with an `Array`, an `extern "C"` call, a deep recursion that should panic as a stack overflow, and `"日本語".substring(1, 1)` returning "" where an end inside a code point panics | — |
 | B-2026-10-22-39 | 2026-10-22 | typecheck | low | Legacy spellings v2's check refuses, for Thread A to confirm as rule or gap: `.len()` on an iterator (`SortedMapIter`, `StrChars`, `StrLines`, `StrWords`, `StrSplit`), `.iter()` on `MapValues`/`MapKeys`, `flatten` over `ref Vec`, `partition` yielding `Vec[ref T]`, a `Str` where `String` is expected, `String + StringSlice`, `split(',')` with a char, `f64.parse` as an `Option`, `Vec.try_append` | — |
 | B-2026-10-22-40 | 2026-10-22 | typecheck | medium | Likely v2 check gaps among the legacy test programs: arithmetic on a generic `T: Add`/`Sub`/`Div` parameter ("type 'ref T' does not implement trait Add"), `StringSlice + x`, `Iterator.cycle` / `windows` / `rev` on a mapped iterator, `collect` into a non-Vec target in return or tail position (E0238), and `collect::<String>()` from an iterator of `String` ("String implements FromIterator[char], not FromIterator[String]") | — |
-| B-2026-10-22-41 | 2026-10-22 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m) => { m.insert("z", 99); } } }` as a write through a ref; core-semantics §4.6 (6252bd4551) binds them as `mut ref` | — |
 | B-2026-10-22-42 | 2026-10-22 | interp+codegen | low | `let _ = W;` with a bare unit-variant name lowers to nothing on both MIR backends, so a variant whose enum has a `Drop` body is never built and never dropped. core-semantics §4.6 drops the temporary at the `;`. `let _ = F.W;` is correct | — |
+| B-2026-10-22-43 | 2026-10-22 | typecheck | low | E0517 prints a MIR temporary instead of the source place: `let g = v[0];` over a `Vec[Fn(i64) -> i64]` reports "move of (*_7) through a shared reference"; a user-facing message must name the source place (`v[0]`) | — |
 
 ### Relocated
 
@@ -4414,6 +4414,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-25 | codegen | medium | `LazyLock[T].new(f)` is not lowered on mir-llvm ("native `LazyLock[i64].new` is not lowered yet"); corpus/fixtures/cli/test_lazy_lock_runs_its_initia… | 4d1c5f025b |
 | B-2026-10-22-26 | runtime+interp | medium | The compiled HTTP client re-sent the caller's Authorization and Cookie headers to wherever a redirect pointed (any host or port), while the MIR inter… | 6c66c83dda |
 | B-2026-10-22-37 | interp | high | On `karac __mir-run`, a u64 literal pattern in the upper half never matches: `let b: u64 = 18446744073709551615u64; match b { 18446744073709551615u64… | 5352974a52 |
+| B-2026-10-22-41 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m)… | 3700e5f187 |
 
 </details>
 

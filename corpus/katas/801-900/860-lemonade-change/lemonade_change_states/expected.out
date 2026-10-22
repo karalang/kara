@@ -1,0 +1,16 @@
+[5, 5, 5, 10, 20] -> true
+[5, 5, 10, 10, 20] -> false
+[5] -> true
+[10] -> false
+[20] -> false
+[5, 10] -> true
+[5, 20] -> false
+[5, 5, 5, 20] -> true
+[5, 5, 10, 20] -> true
+[5, 5, 10, 20, 5, 5, 5, 20] -> true
+[5, 5, 5, 10, 20, 20] -> false
+[5, 5, 5, 5, 10, 20, 10, 20] -> true
+[5, 10, 5, 20] -> true
+[5, 5, 5, 5, 20, 20, 5, 10] -> false
+all 3279 queues of one to seven bills: 162 get their change
+2000 random queues: 253 get their change, checksum 65588803

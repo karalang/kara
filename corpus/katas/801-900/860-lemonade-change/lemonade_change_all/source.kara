@@ -1,0 +1,114 @@
+// LeetCode #860: Lemonade Change -- `all` over the queue, the till in
+// the closure.
+//
+// The ★ arm's rule written as one `all`: the closure owns no state of its
+// own, it updates the counts of fives and tens it captures, and a `match`
+// on the bill says whether that customer gets change. `all` stops at the
+// first customer who does not. O(n) time, O(1) space.
+
+fn lemonade_change(bills: Vec[i64]) -> bool {
+    let mut fives = 0;
+    let mut tens = 0;
+    bills.iter().all(|b| match b {
+        5 => {
+            fives += 1;
+            true
+        }
+        10 => {
+            if fives == 0 {
+                return false;
+            }
+            fives -= 1;
+            tens += 1;
+            true
+        }
+        _ => {
+            if tens > 0 and fives > 0 {
+                tens -= 1;
+                fives -= 1;
+                true
+            } else if fives >= 3 {
+                fives -= 3;
+                true
+            } else {
+                false
+            }
+        }
+    })
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(bills: Vec[i64]) {
+    println(f"{bills} -> {lemonade_change(bills)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a bill: 5 half the time, 10 three times in ten, 20 one time in five
+fn random_bill(seed: mut ref i64) -> i64 {
+    let r = next_random(mut seed) % 10;
+    if r < 5 {
+        5
+    } else if r < 8 {
+        10
+    } else {
+        20
+    }
+}
+
+fn main() {
+    show([5, 5, 5, 10, 20]);
+    show([5, 5, 10, 10, 20]);
+    show([5]);
+    show([10]);
+    show([20]);
+    show([5, 10]);
+    show([5, 20]);
+    show([5, 5, 5, 20]);
+    show([5, 5, 10, 20]);
+    show([5, 5, 10, 20, 5, 5, 5, 20]);
+    show([5, 5, 5, 10, 20, 20]);
+    show([5, 5, 5, 5, 10, 20, 10, 20]);
+    show([5, 10, 5, 20]);
+    show([5, 5, 5, 5, 20, 20, 5, 10]);
+    // every queue of one to seven bills
+    let mut queues = 0;
+    let mut served = 0;
+    let mut total = 3;
+    for n in 1..8 {
+        for code in 0..total {
+            let mut bills: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                bills.push(if c % 3 == 0 { 5 } else if c % 3 == 1 { 10 } else { 20 });
+                c = c / 3;
+            }
+            queues += 1;
+            if lemonade_change(bills) {
+                served += 1;
+            }
+        }
+        total = total * 3;
+    }
+    println(f"all {queues} queues of one to seven bills: {served} get their change");
+    let mut seed = 860;
+    let mut yes = 0;
+    let mut check = 0;
+    for r in 0..2000 {
+        let n = 1 + next_random(mut seed) % 40;
+        let mut bills: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            bills.push(random_bill(mut seed));
+        }
+        let ok = lemonade_change(bills);
+        if ok {
+            yes += 1;
+        }
+        check = (check * 31 + if ok { r + 2 } else { 1 }) % 1000000007;
+    }
+    println(f"2000 random queues: {yes} get their change, checksum {check}");
+}
