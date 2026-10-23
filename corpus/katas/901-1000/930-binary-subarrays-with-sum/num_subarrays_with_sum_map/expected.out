@@ -1,0 +1,12 @@
+[1,0,1,0,1], goal 2: 4
+[0,0,0,0,0], goal 0: 15
+[1], goal 1: 1
+[0], goal 1: 0
+[1,1,1], goal 0: 0
+[1,0,1], goal 3: 0
+[1,1,1,1], goal 2: 3
+[0,1,0,0,1,0], goal 0: 5
+[0,0,1,1,0], goal 2: 6
+[0,1,0,1,0,1,0], goal 3: 4
+300 random arrays: answers summing to 785735, checksum 852168785
+30000 elements: all 0s 450015000, all 1s 15001, alternating 30002

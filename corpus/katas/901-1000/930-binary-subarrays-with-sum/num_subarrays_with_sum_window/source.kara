@@ -1,0 +1,95 @@
+// LeetCode #930: Binary Subarrays With Sum -- two sliding windows.
+//
+// Count the subarrays whose sum is at most goal with a sliding window:
+// for each end, move the start right until the window's sum is at most
+// goal, and every start from there to the end works. Exactly goal is
+// at most goal less at most goal - 1. O(n), O(1) space.
+
+fn at_most(nums: Vec[i64], goal: i64) -> i64 {
+    if goal < 0 {
+        return 0;
+    }
+    let mut start = 0;
+    let mut sum = 0;
+    let mut count = 0;
+    for end in 0..nums.len() {
+        sum += nums[end];
+        while sum > goal {
+            sum -= nums[start];
+            start += 1;
+        }
+        count += end - start + 1;
+    }
+    count
+}
+
+fn num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    at_most(nums, goal) - at_most(nums, goal - 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], goal: i64) {
+    let mut text = String.from("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            text = text + ",";
+        }
+        text = text + f"{nums[i]}";
+    }
+    println(f"{text}], goal {goal}: {num_subarrays_with_sum(nums, goal)}");
+}
+
+fn main() {
+    // LeetCode's two examples
+    show(vec![1, 0, 1, 0, 1], 2);
+    show(vec![0, 0, 0, 0, 0], 0);
+    // one element either way; a goal above the 1s; all 1s; goal 0 between
+    // 1s; 0s at both ends; every 1 needed
+    show(vec![1], 1);
+    show(vec![0], 1);
+    show(vec![1, 1, 1], 0);
+    show(vec![1, 0, 1], 3);
+    show(vec![1, 1, 1, 1], 2);
+    show(vec![0, 1, 0, 0, 1, 0], 0);
+    show(vec![0, 0, 1, 1, 0], 2);
+    show(vec![0, 1, 0, 1, 0, 1, 0], 3);
+    // 300 random arrays of 1 to 2000 elements, leaning from 0 to 1, with a
+    // goal from 0 to a little past the number of 1s
+    let mut seed = 930;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        let lean = 1 + next_random(mut seed) % 99;
+        let mut nums: Vec[i64] = Vec.new();
+        let mut ones = 0;
+        for _ in 0..n {
+            let v = if next_random(mut seed) % 100 < lean { 1 } else { 0 };
+            ones += v;
+            nums.push(v);
+        }
+        let goal = next_random(mut seed) % (ones + 2);
+        let a = num_subarrays_with_sum(nums, goal);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random arrays: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 30000 elements: all 0s with goal 0, all 1s with
+    // goal 15000, and alternating with goal 7500
+    let zeros: Vec[i64] = Vec.filled(30000, 0);
+    let ones: Vec[i64] = Vec.filled(30000, 1);
+    let mut alternating: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        alternating.push(i % 2);
+    }
+    let a = num_subarrays_with_sum(zeros, 0);
+    let b = num_subarrays_with_sum(ones, 15000);
+    let c = num_subarrays_with_sum(alternating, 7500);
+    println(f"30000 elements: all 0s {a}, all 1s {b}, alternating {c}");
+}

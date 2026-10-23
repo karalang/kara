@@ -1,0 +1,304 @@
+// LeetCode #930: Binary Subarrays With Sum -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given a binary array nums and an integer goal, return
+// the number of non-empty subarrays with a sum goal. A subarray is a
+// contiguous part of the array.
+
+// ---- the ★ arm: prefix sums counted in an array ---------------------------
+fn star_num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    let n = nums.len();
+    let mut seen: Vec[i64] = Vec.filled(n + 1, 0);
+    seen[0] = 1;
+    let mut sum = 0;
+    let mut count = 0;
+    for v in nums.iter() {
+        sum += *v;
+        if sum >= goal {
+            count += seen[sum - goal];
+        }
+        seen[sum] += 1;
+    }
+    count
+}
+
+// ---- the window arm: two sliding windows ----------------------------------
+fn window_at_most(nums: Vec[i64], goal: i64) -> i64 {
+    if goal < 0 {
+        return 0;
+    }
+    let mut start = 0;
+    let mut sum = 0;
+    let mut count = 0;
+    for end in 0..nums.len() {
+        sum += nums[end];
+        while sum > goal {
+            sum -= nums[start];
+            start += 1;
+        }
+        count += end - start + 1;
+    }
+    count
+}
+
+fn window_num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    window_at_most(nums, goal) - window_at_most(nums, goal - 1)
+}
+
+// ---- the ones arm: the gaps between the 1s --------------------------------
+fn ones_num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    let n = nums.len();
+    let mut pos: Vec[i64] = vec![-1];
+    for i in 0..n {
+        if nums[i] == 1 {
+            pos.push(i);
+        }
+    }
+    pos.push(n);
+    let ones = pos.len() - 2;
+    let mut count = 0;
+    if goal == 0 {
+        for k in 1..pos.len() {
+            let z = pos[k] - pos[k - 1] - 1;
+            count += z * (z + 1) / 2;
+        }
+        return count;
+    }
+    // windows of goal 1s: the k-th through the (k + goal - 1)-th
+    let mut k = 1;
+    while k + goal - 1 <= ones {
+        let left = pos[k] - pos[k - 1];
+        let right = pos[k + goal] - pos[k + goal - 1];
+        count += left * right;
+        k += 1;
+    }
+    count
+}
+
+// ---- the three arm: one window and its leading 0s -------------------------
+fn three_num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    let mut start = 0;
+    let mut sum = 0;
+    let mut zeros = 0;
+    let mut count = 0;
+    for end in 0..nums.len() {
+        sum += nums[end];
+        while start < end and (sum > goal or nums[start] == 0) {
+            if nums[start] == 1 {
+                sum -= 1;
+                zeros = 0;
+            } else {
+                zeros += 1;
+            }
+            start += 1;
+        }
+        if sum == goal {
+            count += zeros + 1;
+        }
+    }
+    count
+}
+
+// ---- the map arm: suffix sums in a map ------------------------------------
+fn map_num_subarrays_with_sum(nums: Vec[i64], goal: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut sum = 0;
+    let mut count = 0;
+    let mut i = nums.len();
+    while i > 0 {
+        i -= 1;
+        sum += nums[i];
+        count += seen.get(sum - goal).unwrap_or(0);
+        seen.insert(sum, seen.get(sum).unwrap_or(0) + 1);
+    }
+    count
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, nums: Vec[i64], goal: i64) -> i64 {
+    if x == 0 {
+        star_num_subarrays_with_sum(nums, goal)
+    } else if x == 1 {
+        window_num_subarrays_with_sum(nums, goal)
+    } else if x == 2 {
+        ones_num_subarrays_with_sum(nums, goal)
+    } else if x == 3 {
+        three_num_subarrays_with_sum(nums, goal)
+    } else {
+        map_num_subarrays_with_sum(nums, goal)
+    }
+}
+
+// The statement read literally: every non-empty subarray, its elements
+// added up one by one, counted when the sum is goal.
+fn literal(nums: Vec[i64], goal: i64) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut sum = 0;
+            for k in i..j + 1 {
+                sum += nums[k];
+            }
+            if sum == goal {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n elements, each 1 with chance lean in 100
+fn random_array(seed: mut ref i64, n: i64, lean: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(if next_random(mut seed) % 100 < lean { 1 } else { 0 });
+    }
+    nums
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], goal: i64, small: bool) {
+    let n = nums.len();
+    let mut ones = 0;
+    for v in nums.iter() {
+        ones += *v;
+    }
+    let mut reversed: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        reversed.push(nums[i]);
+    }
+    // a 0 at the end adds one subarray for each suffix, the empty one
+    // included, that sums to goal
+    let mut longer = nums.clone();
+    longer.push(0);
+    let mut suffixes = if goal == 0 { 1 } else { 0 };
+    let mut s = 0;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        s += nums[i];
+        if s == goal {
+            suffixes += 1;
+        }
+    }
+    // a second array after this one: the subarrays crossing the join
+    // pair a non-empty suffix of the first with a non-empty prefix of the
+    // second whose sums make goal
+    let other_n = 1 + next_random(mut seed) % 50;
+    let other_lean = next_random(mut seed) % 101;
+    let other = random_array(mut seed, other_n, other_lean);
+    let mut joined = nums.clone();
+    for v in other.iter() {
+        joined.push(*v);
+    }
+    let mut suffix_sums: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut s = 0;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        s += nums[i];
+        suffix_sums[s] += 1;
+    }
+    let mut prefix_sums: Vec[i64] = Vec.filled(other_n + 1, 0);
+    let mut s = 0;
+    for v in other.iter() {
+        s += *v;
+        prefix_sums[s] += 1;
+    }
+    let mut crossing = 0;
+    for k in 0..n + 1 {
+        if goal - k >= 0 and goal - k <= other_n {
+            crossing += suffix_sums[k] * prefix_sums[goal - k];
+        }
+    }
+    let truth = if small { literal(nums, goal) } else { -1 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, nums, goal));
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small arrays
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: between 0 and n(n + 1)/2, and positive exactly when some
+        // subarray can sum to goal
+        let possible = (goal >= 1 and goal <= ones) or (goal == 0 and ones < n);
+        check(mut t, 2, a >= 0 and a <= n * (n + 1) / 2 and (a > 0) == possible);
+        // P3: the same answer for the array reversed
+        check(mut t, 3, arm(x, reversed, goal) == a);
+        // P4: a 0 at the end adds the suffixes that sum to goal
+        check(mut t, 4, arm(x, longer, goal) == a + suffixes);
+        // P5: the array followed by another counts both arrays' subarrays
+        // and those crossing the join
+        check(mut t, 5, arm(x, joined, goal) == a + arm(x, other, goal) + crossing);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 930;
+    let mut cases = 0;
+    let mut elements = 0;
+    let mut sum = 0;
+    // 1 to 12 elements against the statement, then 1 to 2000, each array
+    // leaning from 0 to 1 by a random amount, with a goal from 0 to one
+    // past the number of 1s
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 2000 };
+        let lean = next_random(mut seed) % 101;
+        let nums = random_array(mut seed, n, lean);
+        let mut ones = 0;
+        for v in nums.iter() {
+            ones += *v;
+        }
+        let goal = next_random(mut seed) % (ones + 2);
+        cases += 1;
+        elements += n;
+        sum += arm(0, nums, goal);
+        properties(mut t, mut seed, nums, goal, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} arrays, {elements} elements, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
