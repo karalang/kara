@@ -1,0 +1,147 @@
+// LeetCode #883: Projection Area of 3D Shapes -- the side view as the
+// front view of the grid turned.
+//
+// The front view is the sum of the rows' tallest towers. Turning the grid
+// over its diagonal makes its columns rows, so the side view is the front
+// view of the turned grid, and the top view counts the cells holding a
+// tower. O(n^2), with a copy of the grid.
+
+fn top_view(grid: Vec[Vec[i64]]) -> i64 {
+    let mut squares = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid[i].len() {
+            if grid[i][j] > 0 {
+                squares += 1;
+            }
+        }
+    }
+    squares
+}
+
+fn front_view(grid: Vec[Vec[i64]]) -> i64 {
+    let mut squares = 0;
+    for i in 0..grid.len() {
+        let mut tallest = 0;
+        for j in 0..grid[i].len() {
+            tallest = tallest.max(grid[i][j]);
+        }
+        squares += tallest;
+    }
+    squares
+}
+
+fn turned(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for j in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for i in 0..n {
+            row.push(grid[i][j]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    top_view(grid) + front_view(grid) + front_view(turned(grid))
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn text(grid: Vec[Vec[i64]]) -> String {
+    let n = grid.len();
+    if n > 3 {
+        let mut cubes = 0;
+        for i in 0..n {
+            for j in 0..n {
+                cubes += grid[i][j];
+            }
+        }
+        return f"{n} x {n} grid of {cubes} cubes";
+    }
+    let mut out = "[";
+    for i in 0..n {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + "[";
+        for j in 0..n {
+            if j > 0 {
+                out = out + ", ";
+            }
+            out = out + f"{grid[i][j]}";
+        }
+        out = out + "]";
+    }
+    out + "]"
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"grid = {text(grid)} -> {projection_area(grid)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// an n x n grid of towers 0 to most - 1 high, a quarter of the cells empty
+fn random_grid(seed: mut ref i64, n: i64, most: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 4 == 0 {
+                row.push(0);
+            } else {
+                row.push(next_random(mut seed) % most);
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn filled(n: i64, cell: Fn(i64, i64) -> i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(cell(i, j));
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    show([[1, 2], [3, 4]]);
+    show([[2]]);
+    show([[1, 0], [0, 2]]);
+    show([[0]]);
+    show([[1, 1, 1], [1, 0, 1], [1, 1, 1]]);
+    show([[2, 2, 2], [2, 1, 2], [2, 2, 2]]);
+    show([[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+    show(filled(50, |i, j| 50));
+    show(filled(50, |i, j| if i == 49 and j == 0 { 50 } else { 0 }));
+    show(filled(50, |i, j| (i * j) % 51));
+    // small cases
+    let mut seed = 883;
+    let mut total = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 8 + 1;
+        total += projection_area(random_grid(mut seed, n, 10));
+    }
+    println(f"3000 grids of up to 8 x 8: area {total}");
+    // LeetCode's sizes: n up to 50, towers up to 50
+    total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 50 + 1;
+        let area = projection_area(random_grid(mut seed, n, 51));
+        total += area;
+        check = (check * 131 + area) % 1000000007;
+    }
+    println(f"1000 grids of up to 50 x 50: area {total}, checksum {check}");
+}

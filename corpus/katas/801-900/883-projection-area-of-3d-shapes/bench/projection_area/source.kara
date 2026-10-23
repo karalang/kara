@@ -1,0 +1,57 @@
+// LeetCode #883 bench: the ★ arm (one pass over rows and columns
+// together) on 100 grids of LeetCode's sizes, each tower rebuilt in turn.
+
+fn projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        let mut row = 0;
+        let mut column = 0;
+        for j in 0..n {
+            if grid[i][j] > 0 {
+                area += 1;
+            }
+            row = row.max(grid[i][j]);
+            column = column.max(grid[j][i]);
+        }
+        area += row + column;
+    }
+    area
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 883;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        // a grid of 40 x 40 to 50 x 50, towers up to 50, a quarter empty
+        let n = 40 + next_random(mut seed) % 11;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                if next_random(mut seed) % 4 == 0 {
+                    row.push(0);
+                } else {
+                    row.push(next_random(mut seed) % 51);
+                }
+            }
+            grid.push(row);
+        }
+        // 1000 towers rebuilt one at a time, the area after each
+        for _ in 0..1000 {
+            let i = next_random(mut seed) % n;
+            let j = next_random(mut seed) % n;
+            grid[i][j] = next_random(mut seed) % 51;
+            let area = projection_area(grid);
+            total += area;
+            check = (check * 131 + area) % 1000000007;
+        }
+    }
+    println(f"100 grids, 1000 towers rebuilt in each: area {total}, checksum {check}");
+}

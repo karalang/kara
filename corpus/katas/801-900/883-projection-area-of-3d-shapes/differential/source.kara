@@ -1,0 +1,347 @@
+// LeetCode #883: Projection Area of 3D Shapes -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: an n x n grid of towers of unit cubes, grid[i][j] cubes
+// on cell (i, j). Return the total area of the three projections of the
+// shape, onto the xy, yz and zx planes.
+
+// ---- the ★ arm: one pass, rows and columns together -----------------------
+fn star_projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        let mut row = 0;
+        let mut column = 0;
+        for j in 0..n {
+            if grid[i][j] > 0 {
+                area += 1;
+            }
+            row = row.max(grid[i][j]);
+            column = column.max(grid[j][i]);
+        }
+        area += row + column;
+    }
+    area
+}
+
+// ---- the columns arm: row by row, keeping each column's tallest -----------
+fn columns_projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut tallest: Vec[i64] = Vec.filled(n, 0);
+    let mut area = 0;
+    for i in 0..n {
+        let mut row = 0;
+        for j in 0..n {
+            let height = grid[i][j];
+            if height > 0 {
+                area += 1;
+            }
+            row = row.max(height);
+            tallest[j] = tallest[j].max(height);
+        }
+        area += row;
+    }
+    for j in 0..n {
+        area += tallest[j];
+    }
+    area
+}
+
+// ---- the transpose arm: the side view as the front view turned ------------
+fn transpose_top_view(grid: Vec[Vec[i64]]) -> i64 {
+    let mut squares = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid[i].len() {
+            if grid[i][j] > 0 {
+                squares += 1;
+            }
+        }
+    }
+    squares
+}
+
+fn transpose_front_view(grid: Vec[Vec[i64]]) -> i64 {
+    let mut squares = 0;
+    for i in 0..grid.len() {
+        let mut tallest = 0;
+        for j in 0..grid[i].len() {
+            tallest = tallest.max(grid[i][j]);
+        }
+        squares += tallest;
+    }
+    squares
+}
+
+fn transpose_turned(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for j in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for i in 0..n {
+            row.push(grid[i][j]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn transpose_projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    transpose_top_view(grid) + transpose_front_view(grid) + transpose_front_view(transpose_turned(grid))
+}
+
+// ---- the layers arm: layer by layer ---------------------------------------
+fn layers_projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut highest = 0;
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] > 0 {
+                area += 1;
+            }
+            highest = highest.max(grid[i][j]);
+        }
+    }
+    for h in 1..highest + 1 {
+        for i in 0..n {
+            let mut row_reaches = false;
+            let mut column_reaches = false;
+            for j in 0..n {
+                if grid[i][j] >= h {
+                    row_reaches = true;
+                }
+                if grid[j][i] >= h {
+                    column_reaches = true;
+                }
+            }
+            if row_reaches {
+                area += 1;
+            }
+            if column_reaches {
+                area += 1;
+            }
+        }
+    }
+    area
+}
+
+// ---- the masks arm: views as sets of bits ---------------------------------
+fn masks_projection_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut columns: Vec[i64] = Vec.filled(n, 0);
+    let mut area = 0;
+    for i in 0..n {
+        let mut row = 0;
+        let mut seen = 0;
+        for j in 0..n {
+            let tower = (1 << grid[i][j]) - 1;
+            row = row | tower;
+            columns[j] = columns[j] | tower;
+            if grid[i][j] > 0 {
+                seen = seen | (1 << j);
+            }
+        }
+        area += row.count_ones() as i64 + seen.count_ones() as i64;
+    }
+    for j in 0..n {
+        area += columns[j].count_ones() as i64;
+    }
+    area
+}
+
+fn arm(x: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match x {
+        0 => star_projection_area(grid),
+        1 => columns_projection_area(grid),
+        2 => transpose_projection_area(grid),
+        3 => layers_projection_area(grid),
+        _ => masks_projection_area(grid),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every cube placed: a tower of v cubes on cell (i, j) is the cubes at
+// (i, j, 0) to (i, j, v - 1); each cube is projected onto the three planes,
+// xy, yz and zx, and the area is the number of distinct unit squares the
+// projections cover
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let mut xy: Set[i64] = Set.new();
+    let mut yz: Set[i64] = Set.new();
+    let mut zx: Set[i64] = Set.new();
+    for i in 0..grid.len() {
+        for j in 0..grid.len() {
+            for k in 0..grid[i][j] {
+                xy.insert(i * 1000 + j);
+                yz.insert(j * 1000 + k);
+                zx.insert(k * 1000 + i);
+            }
+        }
+    }
+    xy.len() + yz.len() + zx.len()
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(seed: mut ref i64, n: i64, most: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            if next_random(mut seed) % 4 == 0 {
+                row.push(0);
+            } else {
+                row.push(next_random(mut seed) % most);
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn shuffled(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        order.swap(i, j);
+    }
+    order
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one grid over the five arms (P1 only when `small`).
+// Returns the ★ arm's area.
+fn properties(t: mut ref Tally, seed: mut ref i64, grid: Vec[Vec[i64]], small: bool) -> i64 {
+    let n = grid.len();
+    let want = if small { literal(grid) } else { 0 };
+    let mut towers = 0;
+    let mut tallest = 0;
+    let mut cubes = 0;
+    for i in 0..n {
+        for j in 0..n {
+            if grid[i][j] > 0 {
+                towers += 1;
+            }
+            tallest = tallest.max(grid[i][j]);
+            cubes += grid[i][j];
+        }
+    }
+    // the rows and the columns each in another order, then the grid turned
+    // over its diagonal
+    let rows = shuffled(mut seed, n);
+    let columns = shuffled(mut seed, n);
+    let mut moved: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(grid[rows[j]][columns[i]]);
+        }
+        moved.push(row);
+    }
+    // one tower raised by up to 10, to at most 50
+    let r = next_random(mut seed) % n;
+    let c = next_random(mut seed) % n;
+    let mut raised = grid.clone();
+    raised[r][c] = (grid[r][c] + 1 + next_random(mut seed) % 10).min(50);
+    let rise = raised[r][c] - grid[r][c];
+    let was_empty = if grid[r][c] == 0 { 1 } else { 0 };
+    // a second grid of up to 10 x 10 placed beside the first on the
+    // diagonal, the rest of the larger grid empty
+    let other = random_grid(mut seed, next_random(mut seed) % 10 + 1, if small { 8 } else { 51 });
+    let m = other.len();
+    let mut both: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n + m {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n + m {
+            if i < n and j < n {
+                row.push(grid[i][j]);
+            } else if i >= n and j >= n {
+                row.push(other[i - n][j - n]);
+            } else {
+                row.push(0);
+            }
+        }
+        both.push(row);
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, grid));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's area
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the top view counts the towers, and the front and side views
+        // each show the tallest tower at least and every cube at most, and
+        // no more than n columns of the tallest
+        let most = cubes.min(n * tallest);
+        check(mut t, 2, got >= towers + 2 * tallest and got <= towers + 2 * most);
+        // P3: the rows and columns in another order and the grid turned
+        check(mut t, 3, arm(x, moved) == got);
+        // P4: a tower raised never shrinks the area, and adds at most its
+        // rise to each side view and one square on top if it was empty
+        let higher = arm(x, raised);
+        check(mut t, 4, higher >= got and higher <= got + 2 * rise + was_empty);
+        // P5: two grids side by side on the diagonal show their two areas
+        check(mut t, 5, arm(x, both) == got + arm(x, other));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 883;
+    // up to 6 x 6 with towers up to 7 against the statement; then
+    // LeetCode's sizes, up to 50 x 50 with towers up to 50
+    for c in 0..3400 {
+        let small = c < 3000;
+        let n = if small { next_random(mut seed) % 6 + 1 } else { next_random(mut seed) % 50 + 1 };
+        let grid = random_grid(mut seed, n, if small { 8 } else { 51 });
+        cases += 1;
+        total += properties(mut t, mut seed, grid, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, areas sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

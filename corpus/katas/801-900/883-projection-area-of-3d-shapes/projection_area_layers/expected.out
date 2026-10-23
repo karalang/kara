@@ -1,0 +1,12 @@
+grid = [[1, 2], [3, 4]] -> 17
+grid = [[2]] -> 5
+grid = [[1, 0], [0, 2]] -> 8
+grid = [[0]] -> 0
+grid = [[1, 1, 1], [1, 0, 1], [1, 1, 1]] -> 14
+grid = [[2, 2, 2], [2, 1, 2], [2, 2, 2]] -> 21
+grid = [[0, 0, 0], [0, 0, 0], [0, 0, 0]] -> 0
+grid = 50 x 50 grid of 125000 cubes -> 7500
+grid = 50 x 50 grid of 50 cubes -> 101
+grid = 50 x 50 grid of 59569 cubes -> 7107
+3000 grids of up to 8 x 8: area 250885
+1000 grids of up to 50 x 50: area 3148346, checksum 132972372
