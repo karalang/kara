@@ -1,0 +1,1639 @@
+# the kitchen sinks, parsed and printed back
+> parse cases/kitchen_sink.graphql
+  | query queryName($foo: ComplexType, $site: Site = MOBILE) @onQuery {
+  |   whoever123is: node(id: [123, 456]) {
+  |     id
+  |     ... on User @onInlineFragment {
+  |       field2 {
+  |         id
+  |         alias: field1(first: 10, after: $foo) @include(if: $foo) {
+  |           id
+  |           ...frag @onFragmentSpread
+  |         }
+  |       }
+  |     }
+  |     ... @skip(unless: $foo) {
+  |       id
+  |     }
+  |     ... {
+  |       id
+  |     }
+  |   }
+  | }
+  |
+  | mutation likeStory @onMutation {
+  |   like(story: 123) @onField {
+  |     story {
+  |       id @onField
+  |     }
+  |   }
+  | }
+  |
+  | subscription StoryLikeSubscription($input: StoryLikeSubscribeInput @onVariableDefinition) @onSubscription {
+  |   storyLikeSubscribe(input: $input) {
+  |     story {
+  |       likers {
+  |         count
+  |       }
+  |       likeSentence {
+  |         text
+  |       }
+  |     }
+  |   }
+  | }
+  |
+  | fragment frag on Friend @onFragmentDefinition {
+  |   foo(
+  |     size: $size
+  |     bar: $b
+  |     obj: {key: "value", block: """
+  |     block string uses \"""
+  |     """}
+  |   )
+  | }
+  |
+  | {
+  |   unnamed(truthy: true, falsy: false, nullish: null)
+  |   query
+  | }
+  |
+  | {
+  |   __typename
+  | }
+> parse cases/schema_kitchen_sink.graphql
+  | """This is a description of the schema as a whole."""
+  | schema {
+  |   query: QueryType
+  |   mutation: MutationType
+  | }
+  |
+  | """
+  | This is a description
+  | of the `Foo` type.
+  | """
+  | type Foo implements Bar & Baz & Two {
+  |   "Description of the `one` field."
+  |   one: Type
+  |   """This is a description of the `two` field."""
+  |   two(
+  |     """This is a description of the `argument` argument."""
+  |     argument: InputType!
+  |   ): Type
+  |   """This is a description of the `three` field."""
+  |   three(argument: InputType, other: String): Int
+  |   four(argument: String = "string"): String
+  |   five(argument: [String] = ["string", "string"]): String
+  |   six(argument: InputType = {key: "value"}): Type
+  |   seven(argument: Int = null): Type
+  | }
+  |
+  | type AnnotatedObject @onObject(arg: "value") {
+  |   annotatedField(arg: Type = "default" @onArgumentDefinition): Type @onField
+  | }
+  |
+  | type UndefinedType
+  |
+  | extend type Foo {
+  |   seven(argument: [String]): Type
+  | }
+  |
+  | extend type Foo @onType
+  |
+  | interface Bar {
+  |   one: Type
+  |   four(argument: String = "string"): String
+  | }
+  |
+  | interface AnnotatedInterface @onInterface {
+  |   annotatedField(arg: Type @onArgumentDefinition): Type @onField
+  | }
+  |
+  | interface UndefinedInterface
+  |
+  | extend interface Bar implements Two {
+  |   two(argument: InputType!): Type
+  | }
+  |
+  | extend interface Bar @onInterface
+  |
+  | interface Baz implements Bar & Two {
+  |   one: Type
+  |   two(argument: InputType!): Type
+  |   four(argument: String = "string"): String
+  | }
+  |
+  | union Feed = Story | Article | Advert
+  |
+  | union AnnotatedUnion @onUnion = A | B
+  |
+  | union AnnotatedUnionTwo @onUnion = A | B
+  |
+  | union UndefinedUnion
+  |
+  | extend union Feed = Photo | Video
+  |
+  | extend union Feed @onUnion
+  |
+  | scalar CustomScalar
+  |
+  | scalar AnnotatedScalar @onScalar
+  |
+  | extend scalar CustomScalar @onScalar
+  |
+  | enum Site {
+  |   """This is a description of the `DESKTOP` value"""
+  |   DESKTOP
+  |   """This is a description of the `MOBILE` value"""
+  |   MOBILE
+  |   "This is a description of the `WEB` value"
+  |   WEB
+  | }
+  |
+  | enum AnnotatedEnum @onEnum {
+  |   ANNOTATED_VALUE @onEnumValue
+  |   OTHER_VALUE
+  | }
+  |
+  | enum UndefinedEnum
+  |
+  | extend enum Site {
+  |   VR
+  | }
+  |
+  | extend enum Site @onEnum
+  |
+  | input InputType {
+  |   key: String!
+  |   answer: Int = 42
+  | }
+  |
+  | input AnnotatedInput @onInputObject {
+  |   annotatedField: Type @onInputFieldDefinition
+  | }
+  |
+  | input UndefinedInput
+  |
+  | extend input InputType {
+  |   other: Float = 1.23e4 @onInputFieldDefinition
+  | }
+  |
+  | extend input InputType @onInputObject
+  |
+  | """This is a description of the `@skip` directive"""
+  | directive @skip(
+  |   """This is a description of the `if` argument"""
+  |   if: Boolean! @onArgumentDefinition
+  | ) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  |
+  | directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  |
+  | directive @include2(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  |
+  | directive @myRepeatableDir(name: String!) repeatable on OBJECT | INTERFACE
+  |
+  | extend schema @onSchema
+  |
+  | extend schema @onSchema {
+  |   subscription: SubscriptionType
+  | }
+> parse cases/kitchen_sink.graphql no_location
+  | query queryName($foo: ComplexType, $site: Site = MOBILE) @onQuery {
+  |   whoever123is: node(id: [123, 456]) {
+  |     id
+  |     ... on User @onInlineFragment {
+  |       field2 {
+  |         id
+  |         alias: field1(first: 10, after: $foo) @include(if: $foo) {
+  |           id
+  |           ...frag @onFragmentSpread
+  |         }
+  |       }
+  |     }
+  |     ... @skip(unless: $foo) {
+  |       id
+  |     }
+  |     ... {
+  |       id
+  |     }
+  |   }
+  | }
+  |
+  | mutation likeStory @onMutation {
+  |   like(story: 123) @onField {
+  |     story {
+  |       id @onField
+  |     }
+  |   }
+  | }
+  |
+  | subscription StoryLikeSubscription($input: StoryLikeSubscribeInput @onVariableDefinition) @onSubscription {
+  |   storyLikeSubscribe(input: $input) {
+  |     story {
+  |       likers {
+  |         count
+  |       }
+  |       likeSentence {
+  |         text
+  |       }
+  |     }
+  |   }
+  | }
+  |
+  | fragment frag on Friend @onFragmentDefinition {
+  |   foo(
+  |     size: $size
+  |     bar: $b
+  |     obj: {key: "value", block: """
+  |     block string uses \"""
+  |     """}
+  |   )
+  | }
+  |
+  | {
+  |   unnamed(truthy: true, falsy: false, nullish: null)
+  |   query
+  | }
+  |
+  | {
+  |   __typename
+  | }
+# printing: what print_ast keeps and what it drops
+> parse cases/shorthand.graphql
+  | {
+  |   a
+  |   b
+  |   c
+  | }
+> parse cases/query_keyword.graphql
+  | {
+  |   a
+  | }
+> parse cases/query_directive.graphql
+  | query @live {
+  |   a
+  | }
+> parse cases/named_no_vars.graphql
+  | query Q {
+  |   a
+  | }
+> parse cases/comments.graphql
+  | {
+  |   a
+  |   b
+  | }
+> parse cases/aliases.graphql
+  | {
+  |   me: user(id: 4) {
+  |     first: name
+  |     last: surname
+  |   }
+  | }
+> parse cases/long_args.graphql
+  | {
+  |   searchProducts(
+  |     query: "wireless noise cancelling headphones"
+  |     first: 20
+  |     after: "Y3Vyc29yOjQw"
+  |     sort: PRICE_ASC
+  |     inStock: true
+  |   ) {
+  |     id
+  |     name
+  |   }
+  | }
+> parse cases/eighty.graphql
+  | {
+  |   f(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 1, bbbbbbbbbbbbbbbbbbbbbbbbbbbbb: 2, c: 3)
+  | }
+> parse cases/eighty_one.graphql
+  | {
+  |   f(
+  |     aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 1
+  |     bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb: 2
+  |     c: 3
+  |   )
+  | }
+> parse cases/variables.graphql
+  | query Q($id: ID!, $first: Int = 10, $tags: [String!]! = ["a", "b"], $f: Filter = {min: 1, max: null} @deprecated) {
+  |   a
+  | }
+> parse cases/values.graphql
+  | {
+  |   f(
+  |     i: -0
+  |     j: 123
+  |     x: -1.5e-3
+  |     y: 0.0
+  |     z: 6E+10
+  |     s: ""
+  |     e: RED
+  |     l: [[], [1, [2]]]
+  |     o: {}
+  |     n: {a: {b: {c: $v}}}
+  |   )
+  | }
+> parse cases/fragments.graphql
+  | {
+  |   ...A
+  |   ... on B {
+  |     b
+  |   }
+  |   ... @include(if: $x) {
+  |     c
+  |   }
+  |   ... {
+  |     d
+  |   }
+  | }
+  |
+  | fragment A on T @dir {
+  |   a
+  | }
+> parse cases/crlf.graphql
+  | query Q {
+  |   a
+  |   b
+  | }
+> parse cases/bom.graphql
+  | query Q {
+  |   a
+  | }
+> parse cases/unicode_names_in_strings.graphql
+  | {
+  |   f(s: "café — 東京 🚀")
+  | }
+# printing strings: escapes, unicode and block strings
+> parse cases/escapes.graphql
+  | {
+  |   f(s: "quote \" slash \\ / \b \f \n \r \t done")
+  | }
+> parse cases/unicode_escapes.graphql
+  | {
+  |   f(a: "Aé€", b: "😀", c: "😀", d: "\u0000\u001F\u007F\u0085\u009F ")
+  | }
+> parse cases/block_plain.graphql
+  | {
+  |   f(s: """
+  |   first
+  |     indented
+  |   last
+  |   """)
+  | }
+> parse cases/block_one_line.graphql
+  | {
+  |   f(s: """  leading spaces""", t: """tail quote" """)
+  | }
+> parse cases/block_escape.graphql
+  | {
+  |   f(s: """has \""" inside""", t: """
+  |   a slash \
+  |   """)
+  | }
+> parse cases/block_escape_trap.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unterminated string.
+  |
+  | cases/block_escape_trap.graphql:1:29
+  | 1 | { f(t: """ends with \\""") }
+  |   |                             ^
+> parse cases/block_long.graphql
+  | {
+  |   f(
+  |     s: """
+  |     xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  |     """
+  |     t: """yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"""
+  |   )
+  | }
+> parse cases/block_blank_lines.graphql
+  | {
+  |   f(s: """
+  |   a
+  |   
+  |   b
+  |   """)
+  | }
+> parse cases/block_empty.graphql
+  | {
+  |   f(s: """""", t: """""", u: """""")
+  | }
+> parse cases/block_tabs.graphql
+  | {
+  |   f(s: """
+  |   one
+  |   	two
+  |   """)
+  | }
+> parse cases/block_crlf.graphql
+  | {
+  |   f(s: """
+  |   a
+  |   b
+  |   c
+  |   """)
+  | }
+> parse cases/block_indented_first.graphql
+  | {
+  |   f(s: """
+  |     a
+  |   b
+  |   """)
+  | }
+> parse cases/block_odd_breaks.graphql
+  | {
+  |   f(s: """
+  |   onetwothree four
+  |   """)
+  | }
+> parse cases/block_control.graphql
+  | {
+  |   f(s: """bell""")
+  | }
+# descriptions on type system definitions
+> parse cases/descriptions.graphql
+  | """A user of the shop."""
+  | type User {
+  |   "The primary key."
+  |   id: ID!
+  |   """Display name, as entered."""
+  |   name(
+  |     "Shorten it."
+  |     short: Boolean = false
+  |   ): String
+  | }
+  |
+  | "Ways to sort."
+  | enum Sort {
+  |   "cheapest first"
+  |   PRICE_ASC
+  |   PRICE_DESC
+  | }
+  |
+  | """Money, in cents."""
+  | scalar Cents @specifiedBy(url: "https://example.com/cents")
+# legacy fragment variables and the token limit
+> parse cases/legacy_fragment.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected 'on', found '('.
+  |
+  | cases/legacy_fragment.graphql:1:11
+  | 1 | fragment F($size: Int = 64) on User { avatar(size: $size) }
+  |   |           ^
+> parse cases/legacy_fragment.graphql legacy
+  | fragment F($size: Int = 64) on User {
+  |   avatar(size: $size)
+  | }
+> parse cases/kitchen_sink.graphql max_tokens=50
+  error GraphQLSyntaxError
+  | Syntax Error: Document contains more than 50 tokens. Parsing aborted.
+  |
+  | cases/kitchen_sink.graphql:7:44
+  | 6 |         id ,
+  | 7 |         alias: field1(first:10, after:$foo,) @include(if: $foo) {
+  |   |                                            ^
+  | 8 |           id,
+> parse cases/kitchen_sink.graphql max_tokens=1000
+  | query queryName($foo: ComplexType, $site: Site = MOBILE) @onQuery {
+  |   whoever123is: node(id: [123, 456]) {
+  |     id
+  |     ... on User @onInlineFragment {
+  |       field2 {
+  |         id
+  |         alias: field1(first: 10, after: $foo) @include(if: $foo) {
+  |           id
+  |           ...frag @onFragmentSpread
+  |         }
+  |       }
+  |     }
+  |     ... @skip(unless: $foo) {
+  |       id
+  |     }
+  |     ... {
+  |       id
+  |     }
+  |   }
+  | }
+  |
+  | mutation likeStory @onMutation {
+  |   like(story: 123) @onField {
+  |     story {
+  |       id @onField
+  |     }
+  |   }
+  | }
+  |
+  | subscription StoryLikeSubscription($input: StoryLikeSubscribeInput @onVariableDefinition) @onSubscription {
+  |   storyLikeSubscribe(input: $input) {
+  |     story {
+  |       likers {
+  |         count
+  |       }
+  |       likeSentence {
+  |         text
+  |       }
+  |     }
+  |   }
+  | }
+  |
+  | fragment frag on Friend @onFragmentDefinition {
+  |   foo(
+  |     size: $size
+  |     bar: $b
+  |     obj: {key: "value", block: """
+  |     block string uses \"""
+  |     """}
+  |   )
+  | }
+  |
+  | {
+  |   unnamed(truthy: true, falsy: false, nullish: null)
+  |   query
+  | }
+  |
+  | {
+  |   __typename
+  | }
+> parse cases/tiny.graphql max_tokens=3
+  | {
+  |   a
+  | }
+> parse cases/tiny.graphql max_tokens=2
+  error GraphQLSyntaxError
+  | Syntax Error: Document contains more than 2 tokens. Parsing aborted.
+  |
+  | cases/tiny.graphql:1:5
+  | 1 | { a }
+  |   |     ^
+# syntax errors from the parser
+> parse cases/eof.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found <EOF>.
+  |
+  | cases/eof.graphql:1:2
+  | 1 | {
+  |   |  ^
+> parse cases/missing_on.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected 'on', found Name 'Type'.
+  |
+  | cases/missing_on.graphql:2:20
+  | 1 | { ...MissingOn }
+  | 2 | fragment MissingOn Type
+  |   |                    ^
+> parse cases/field_brace.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '{'.
+  |
+  | cases/field_brace.graphql:1:10
+  | 1 | { field: {} }
+  |   |          ^
+> parse cases/not_an_operation.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'notAnOperation'.
+  |
+  | cases/not_an_operation.graphql:1:1
+  | 1 | notAnOperation Foo { field }
+  |   | ^
+> parse cases/spread_only.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected '...'.
+  |
+  | cases/spread_only.graphql:1:1
+  | 1 | ...
+  |   | ^
+> parse cases/empty_string_name.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found String ''.
+  |
+  | cases/empty_string_name.graphql:1:3
+  | 1 | { ""
+  |   |   ^
+> parse cases/var_in_const.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected variable '$var' in constant value.
+  |
+  | cases/var_in_const.graphql:1:37
+  | 1 | query Foo($x: Complex = { a: { b: [ $var ] } }) { field }
+  |   |                                     ^
+> parse cases/dollar_in_const.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected '$'.
+  |
+  | cases/dollar_in_const.graphql:1:21
+  | 1 | query Foo($x: Int = $) { field }
+  |   |                     ^
+> parse cases/fragment_named_on.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'on'.
+  |
+  | cases/fragment_named_on.graphql:1:10
+  | 1 | fragment on on on { on }
+  |   |          ^
+> parse cases/spread_on.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/spread_on.graphql:1:9
+  | 1 | { ...on }
+  |   |         ^
+> parse cases/desc_on_query.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected description, descriptions are supported only on type definitions.
+  |
+  | cases/desc_on_query.graphql:1:1
+  | 1 | "Description" query { a }
+  |   | ^
+> parse cases/desc_on_extend.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected description, descriptions are supported only on type definitions.
+  |
+  | cases/desc_on_extend.graphql:1:1
+  | 1 | "Description" extend type T { a: A }
+  |   | ^
+> parse cases/enum_true.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Name 'true' is reserved and cannot be used for an enum value.
+  |
+  | cases/enum_true.graphql:1:20
+  | 1 | enum Test { VALID, true }
+  |   |                    ^
+> parse cases/enum_null.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Name 'null' is reserved and cannot be used for an enum value.
+  |
+  | cases/enum_null.graphql:1:13
+  | 1 | enum Test { null }
+  |   |             ^
+> parse cases/extend_schema_bare.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected <EOF>.
+  |
+  | cases/extend_schema_bare.graphql:1:14
+  | 1 | extend schema
+  |   |              ^
+> parse cases/extend_scalar_bare.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected <EOF>.
+  |
+  | cases/extend_scalar_bare.graphql:1:19
+  | 1 | extend scalar Date
+  |   |                   ^
+> parse cases/extend_type_bare.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected <EOF>.
+  |
+  | cases/extend_type_bare.graphql:1:17
+  | 1 | extend type User
+  |   |                 ^
+> parse cases/extend_unknown.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'thing'.
+  |
+  | cases/extend_unknown.graphql:1:8
+  | 1 | extend thing Foo
+  |   |        ^
+> parse cases/bad_location.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'INCORRECT_LOCATION'.
+  |
+  | cases/bad_location.graphql:1:27
+  | 1 | directive @foo on FIELD | INCORRECT_LOCATION
+  |   |                           ^
+> parse cases/lowercase_location.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'field'.
+  |
+  | cases/lowercase_location.graphql:1:19
+  | 1 | directive @foo on field
+  |   |                   ^
+> parse cases/bad_operation.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected Name 'subscriptio'.
+  |
+  | cases/bad_operation.graphql:1:1
+  | 1 | subscriptio Foo { a }
+  |   | ^
+> parse cases/empty_selection.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/empty_selection.graphql:1:3
+  | 1 | { }
+  |   |   ^
+> parse cases/empty_args.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found ')'.
+  |
+  | cases/empty_args.graphql:1:5
+  | 1 | { a() }
+  |   |     ^
+> parse cases/empty_doc.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected <EOF>.
+  |
+  | cases/empty_doc.graphql:1:1
+  | 1 |
+  |   | ^
+> parse cases/only_comment.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected <EOF>.
+  |
+  | cases/only_comment.graphql:1:15
+  | 1 | # nothing here
+  |   |               ^
+> parse cases/union_empty_member.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found <EOF>.
+  |
+  | cases/union_empty_member.graphql:1:13
+  | 1 | union U = | 
+  |   |             ^
+> parse cases/type_list_unclosed.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected ']', found ')'.
+  |
+  | cases/type_list_unclosed.graphql:1:16
+  | 1 | query ($a: [Int) { a }
+  |   |                ^
+> parse cases/double_bang.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected '$', found '!'.
+  |
+  | cases/double_bang.graphql:1:16
+  | 1 | query ($a: Int!!) { a }
+  |   |                ^
+> parse cases/default_missing.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected ')'.
+  |
+  | cases/default_missing.graphql:1:18
+  | 1 | query ($a: Int = ) { a }
+  |   |                  ^
+> parse cases/implements_amp_only.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '{'.
+  |
+  | cases/implements_amp_only.graphql:1:21
+  | 1 | type T implements & { a: A }
+  |   |                     ^
+> parse cases/schema_no_ops.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/schema_no_ops.graphql:1:9
+  | 1 | schema {}
+  |   |         ^
+> parse cases/dangling_at.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/dangling_at.graphql:1:7
+  | 1 | { a @ }
+  |   |       ^
+> parse cases/bad_value.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected ':'.
+  |
+  | cases/bad_value.graphql:1:8
+  | 1 | { a(b: : ) }
+  |   |        ^
+> parse cases/object_no_colon.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected ':', found Name 'd'.
+  |
+  | cases/object_no_colon.graphql:1:11
+  | 1 | { a(b: {c d}) }
+  |   |           ^
+# syntax errors from the lexer
+> parse cases/single_quote.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected single quote character ('), did you mean to use a double quote (")?
+  |
+  | cases/single_quote.graphql:1:3
+  | 1 | { ''
+  |   |   ^
+> parse cases/unterminated.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unterminated string.
+  |
+  | cases/unterminated.graphql:1:15
+  | 1 | { a(s: "no end
+  |   |               ^
+> parse cases/unterminated_block.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unterminated string.
+  |
+  | cases/unterminated_block.graphql:1:17
+  | 1 | { a(s: """no end
+  |   |                 ^
+> parse cases/string_newline.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unterminated string.
+  |
+  | cases/string_newline.graphql:1:14
+  | 1 | { a(s: "multi
+  |   |              ^
+  | 2 | line") }
+> parse cases/bad_escape.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid character escape sequence: '\z'.
+  |
+  | cases/bad_escape.graphql:1:13
+  | 1 | { a(s: "bad \z esc") }
+  |   |             ^
+> parse cases/bad_escape_x.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid character escape sequence: '\x'.
+  |
+  | cases/bad_escape_x.graphql:1:13
+  | 1 | { a(s: "bad \x esc") }
+  |   |             ^
+> parse cases/bad_unicode_short.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u1 es'.
+  |
+  | cases/bad_unicode_short.graphql:1:13
+  | 1 | { a(s: "bad \u1 esc") }
+  |   |             ^
+> parse cases/bad_unicode_letters.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\uXYZW'.
+  |
+  | cases/bad_unicode_letters.graphql:1:13
+  | 1 | { a(s: "bad \uXYZW esc") }
+  |   |             ^
+> parse cases/bad_unicode_big.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u{110000}'.
+  |
+  | cases/bad_unicode_big.graphql:1:9
+  | 1 | { a(s: "\u{110000}") }
+  |   |         ^
+> parse cases/bad_unicode_open.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u{12"'.
+  |
+  | cases/bad_unicode_open.graphql:1:9
+  | 1 | { a(s: "\u{12") }
+  |   |         ^
+> parse cases/bad_unicode_empty.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u{}'.
+  |
+  | cases/bad_unicode_empty.graphql:1:9
+  | 1 | { a(s: "\u{}") }
+  |   |         ^
+> parse cases/bad_unicode_long.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u{000000000'.
+  |
+  | cases/bad_unicode_long.graphql:1:9
+  | 1 | { a(s: "\u{000000000041}") }
+  |   |         ^
+> parse cases/lone_surrogate.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\uDEAD'.
+  |
+  | cases/lone_surrogate.graphql:1:9
+  | 1 | { a(s: "\uDEAD") }
+  |   |         ^
+> parse cases/lead_alone.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\uD83D'.
+  |
+  | cases/lead_alone.graphql:1:9
+  | 1 | { a(s: "\uD83D x") }
+  |   |         ^
+> parse cases/lead_then_bad.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\uD83D'.
+  |
+  | cases/lead_then_bad.graphql:1:9
+  | 1 | { a(s: "\uD83DA") }
+  |   |         ^
+> parse cases/surrogate_braces.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid Unicode escape sequence: '\u{D800}'.
+  |
+  | cases/surrogate_braces.graphql:1:9
+  | 1 | { a(s: "\u{D800}") }
+  |   |         ^
+> parse cases/zero_zero.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, unexpected digit after 0: '0'.
+  |
+  | cases/zero_zero.graphql:1:9
+  | 1 | { a(n: 00) }
+  |   |         ^
+> parse cases/dot_no_digits.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: ')'.
+  |
+  | cases/dot_no_digits.graphql:1:10
+  | 1 | { a(n: 1.) }
+  |   |          ^
+> parse cases/dot_e.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: 'e'.
+  |
+  | cases/dot_e.graphql:1:10
+  | 1 | { a(n: 1.e1) }
+  |   |          ^
+> parse cases/leading_dot.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: '.'.
+  |
+  | cases/leading_dot.graphql:1:8
+  | 1 | { a(n: .123) }
+  |   |        ^
+> parse cases/exp_no_digits.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: ')'.
+  |
+  | cases/exp_no_digits.graphql:1:12
+  | 1 | { a(n: 1.0e) }
+  |   |            ^
+> parse cases/two_dots.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: '.'.
+  |
+  | cases/two_dots.graphql:1:11
+  | 1 | { a(n: 1.2.3) }
+  |   |           ^
+> parse cases/hex.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: 'x'.
+  |
+  | cases/hex.graphql:1:9
+  | 1 | { a(n: 0xF1) }
+  |   |         ^
+> parse cases/underscore.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: '_'.
+  |
+  | cases/underscore.graphql:1:9
+  | 1 | { a(n: 1_000) }
+  |   |         ^
+> parse cases/letter_after.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: 'a'.
+  |
+  | cases/letter_after.graphql:1:10
+  | 1 | { a(n: 12abc) }
+  |   |          ^
+> parse cases/minus_alone.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid number, expected digit but got: ')'.
+  |
+  | cases/minus_alone.graphql:1:9
+  | 1 | { a(n: -) }
+  |   |         ^
+> parse cases/plus.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: '+'.
+  |
+  | cases/plus.graphql:1:8
+  | 1 | { a(n: +1) }
+  |   |        ^
+> parse cases/two_dot_spread.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: '.'.
+  |
+  | cases/two_dot_spread.graphql:1:3
+  | 1 | { ..a }
+  |   |   ^
+> parse cases/question.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: '?'.
+  |
+  | cases/question.graphql:1:15
+  | 1 | query ($a: Int?) { a }
+  |   |               ^
+> parse cases/reference_mark.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+203B.
+  |
+  | cases/reference_mark.graphql:1:3
+  | 1 | { ※ }
+  |   |   ^
+> parse cases/bell.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+0007.
+  |
+  | cases/bell.graphql:1:3
+  | 1 | {  }
+  |   |   ^
+> parse cases/zero_width.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+200B.
+  |
+  | cases/zero_width.graphql:1:4
+  | 1 | { a​ }
+  |   |    ^
+> parse cases/emoji.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+1F600.
+  |
+  | cases/emoji.graphql:1:3
+  | 1 | { 😀 }
+  |   |   ^
+> parse cases/nbsp.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+00A0.
+  |
+  | cases/nbsp.graphql:1:2
+  | 1 | { a }
+  |   |  ^
+> parse cases/escape_at_end.graphql
+  error IndexError
+  | string index out of range
+> parse cases/unicode_at_end.graphql
+  error IndexError
+  | string index out of range
+> parse cases/pair_at_end.graphql
+  error IndexError
+  | string index out of range
+# where the error is reported
+> parse cases/brace_next_line.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/brace_next_line.graphql:1:2
+  | 1 | {
+  |   |  ^
+  | 2 | }
+> parse cases/deep_line.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/deep_line.graphql:4:3
+  | 3 |     name(
+  | 4 |   }
+  |   |   ^
+  | 5 | }
+> parse cases/crlf_error.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/crlf_error.graphql:3:5
+  | 2 |   a
+  | 3 |   b(
+  |   |     ^
+  | 4 | }
+> parse cases/cr_error.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/cr_error.graphql:3:5
+  | 2 |   a
+  | 3 |   b(
+  |   |     ^
+  | 4 | }
+> parse cases/minified.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found ':'.
+  |
+  | cases/minified.graphql:1:185
+  | 1 | {f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18,f19,f20,f21,f
+  |   | 22,f23,f24,f25,f26,f27,f28,f29,g(x: 1, y: [1,2,3], z: {w: 1}),h0,h1,h2,h3,h4,h5,
+  |   | h6,h7,h8,h9,h10,h11,bad(:1),k0,k1,k2,k3,k4,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k1
+  |   |                         ^
+  |   | 5,k16,k17,k18,k19}
+> parse cases/minified_end.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/minified_end.graphql:1:199
+  | 1 | {field0,field1,field2,field3,field4,field5,field6,field7,field8,field9,field10,f
+  |   | ield11,field12,field13,field14,field15,field16,field17,field18,field19,field20,f
+  |   | ield21,field22,field23,field24,broken(}
+  |   |                                       ^
+> parse cases/vtab_comment.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found '}'.
+  |
+  | cases/vtab_comment.graphql:4:5
+  | 3 |   c(
+  | 4 | }
+  |   |     ^
+> parse cases/line_sep_comment.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found <EOF>.
+  |
+  | (str() raised IndexError: list index out of range)
+> parse cases/formfeed_last.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected character: U+000C.
+  |
+  | cases/formfeed_last.graphql:1:6
+  | 1 | { a }}
+  |   |      ^
+# parse_value, parse_const_value and parse_type
+> value cases/v_list.graphql
+  | [1, 2.5e3, "s", true, false, null, ENUM, $var, {a: {b: [x]}}]
+> const_value cases/v_list.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected variable '$var' in constant value.
+  |
+  | GraphQL request:1:42
+  | 1 | [1, 2.5e3, "s", true, false, null, ENUM, $var, {a: {b: [x]}}]
+  |   |                                          ^
+> value cases/v_block.graphql
+  | """block"""
+> const_value cases/v_block.graphql
+  | """block"""
+> value cases/v_empty_object.graphql
+  | {}
+> const_value cases/v_empty_object.graphql
+  | {}
+> value cases/v_trailing.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected <EOF>, found Int '2'.
+  |
+  | GraphQL request:1:3
+  | 1 | 1 2
+  |   |   ^
+> const_value cases/v_trailing.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected <EOF>, found Int '2'.
+  |
+  | GraphQL request:1:3
+  | 1 | 1 2
+  |   |   ^
+> value cases/v_var_name.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found <EOF>.
+  |
+  | GraphQL request:1:2
+  | 1 | $
+  |   |  ^
+> const_value cases/v_var_name.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected '$'.
+  |
+  | GraphQL request:1:1
+  | 1 | $
+  |   | ^
+> value cases/v_bad.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected ')'.
+  |
+  | GraphQL request:1:1
+  | 1 | )
+  |   | ^
+> const_value cases/v_bad.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Unexpected ')'.
+  |
+  | GraphQL request:1:1
+  | 1 | )
+  |   | ^
+> value cases/v_object_dup.graphql
+  | {a: 1, a: 2}
+> const_value cases/v_object_dup.graphql
+  | {a: 1, a: 2}
+> type cases/t_nested.graphql
+  | [[Int!]!]
+> type cases/t_named.graphql
+  | Upload
+> type cases/t_double_bang.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected <EOF>, found '!'.
+  |
+  | GraphQL request:1:5
+  | 1 | Int!!
+  |   |     ^
+> type cases/t_unclosed.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected ']', found <EOF>.
+  |
+  | GraphQL request:1:5
+  | 1 | [Int
+  |   |     ^
+> type cases/t_empty.graphql
+  error GraphQLSyntaxError
+  | Syntax Error: Expected Name, found <EOF>.
+  |
+  | GraphQL request:1:1
+  | 1 |
+  |   | ^
+> type cases/t_list_of_list.graphql
+  | [[[ID]]]!
+# the lexer's tokens, with comments, lines and columns
+> tokens cases/tok_basic.graphql
+  <Token <SOF> 0:0>
+  <Token Name 'query' 1:1>
+  <Token Name 'Q' 1:7>
+  <Token ( 1:8>
+  <Token $ 1:9>
+  <Token Name 'a' 1:10>
+  <Token : 1:11>
+  <Token Name 'Int' 1:13>
+  <Token = 1:17>
+  <Token Float '-12.5e+3' 1:19>
+  <Token ) 1:27>
+  <Token { 1:29>
+  <Token Name 'f' 1:31>
+  <Token ( 1:32>
+  <Token Name 's' 1:33>
+  <Token : 1:34>
+  <Token String 'x\ty' 1:36>
+  <Token Name 'b' 1:44>
+  <Token : 1:45>
+  <Token String 1:47>
+  <Token ) 1:49>
+  <Token @ 1:51>
+  <Token Name 'd' 1:52>
+  <Token Comment ' note' 1:54>
+  <Token } 2:1>
+  <Token <EOF> 2:2>
+> tokens cases/tok_block.graphql
+  <Token <SOF> 0:0>
+  <Token Name 'type' 1:1>
+  <Token Name 'T' 1:6>
+  <Token { 1:8>
+  <Token BlockString 'two\nlines' 2:3>
+  <Token Name 'a' 6:3>
+  <Token : 6:4>
+  <Token Name 'Int' 6:6>
+  <Token } 7:1>
+  <Token { 8:1>
+  <Token Name 'b' 8:3>
+  <Token } 8:5>
+  <Token <EOF> 8:6>
+> tokens cases/tok_block_crlf.graphql
+  <Token <SOF> 0:0>
+  <Token BlockString 'a\nb' 1:1>
+  <Token Name 'c' 4:1>
+  <Token Name 'd' 5:3>
+  <Token <EOF> 5:4>
+> tokens cases/tok_punct.graphql
+  <Token <SOF> 0:0>
+  <Token ! 1:1>
+  <Token $ 1:3>
+  <Token & 1:5>
+  <Token ( 1:7>
+  <Token ) 1:9>
+  <Token ... 1:11>
+  <Token : 1:15>
+  <Token = 1:17>
+  <Token @ 1:19>
+  <Token [ 1:21>
+  <Token ] 1:23>
+  <Token { 1:25>
+  <Token | 1:27>
+  <Token } 1:29>
+  <Token Name 'end' 1:39>
+  <Token <EOF> 1:42>
+> tokens cases/tok_comments.graphql
+  <Token <SOF> 0:0>
+  <Token Comment 1:1>
+  <Token Comment ' two' 2:1>
+  <Token Comment 'three' 3:1>
+  <Token Name 'name' 4:1>
+  <Token Comment ' 日本 é' 5:1>
+  <Token <EOF> 6:1>
+> tokens cases/tok_unicode.graphql
+  <Token <SOF> 0:0>
+  <Token { 1:1>
+  <Token Name 'f' 1:3>
+  <Token ( 1:4>
+  <Token Name 's' 1:5>
+  <Token : 1:6>
+  <Token String 'café 東京 🚀' 1:8>
+  <Token Name 'e' 1:21>
+  <Token : 1:22>
+  <Token String 'é🚀' 1:24>
+  <Token ) 1:41>
+  <Token } 1:43>
+  <Token <EOF> 1:44>
+> tokens cases/bad_escape.graphql
+  <Token <SOF> 0:0>
+  <Token { 1:1>
+  <Token Name 'a' 1:3>
+  <Token ( 1:4>
+  <Token Name 's' 1:5>
+  <Token : 1:6>
+  error GraphQLSyntaxError
+  | Syntax Error: Invalid character escape sequence: '\z'.
+  |
+  | cases/bad_escape.graphql:1:13
+  | 1 | { a(s: "bad \z esc") }
+  |   |             ^
+> tokens cases/empty_doc.graphql
+  <Token <SOF> 0:0>
+  <Token <EOF> 1:1>
+# a client app: format check, persisted-query manifest, schema check, gql`` extraction
+> !format app/queries/admin.graphql app/queries/broken.graphql app/queries/catalog.graphql app/queries/checkout.graphql app/queries/formatted.graphql app/queries/fragments.graphql app/queries/user.graphql
+  app/queries/admin.graphql: would reformat (7 lines -> 12 lines)
+    | query AdminDashboard {
+    |   stats(range: LAST_7_DAYS) {
+    |     revenue {
+    |       ...MoneyFields
+    |     }
+    |     orders
+    |     topProducts(first: 3) {
+    |       ...ProductCard
+    |       ...MissingFragment
+    |     }
+    |   }
+    | }
+  app/queries/broken.graphql: error at 4:19
+    error GraphQLSyntaxError
+    | Syntax Error: Unexpected ')'.
+    |
+    | app/queries/broken.graphql:4:19
+    | 3 |     name
+    | 4 |     orders(first: ) { id }
+    |   |                   ^
+    | 5 |   }
+  app/queries/catalog.graphql: would reformat (10 lines -> 28 lines)
+    | query Products($first: Int = 24, $after: String, $sort: ProductSort = RELEVANCE, $filter: ProductFilter = {inStock: true}) {
+    |   products(first: $first, after: $after, sort: $sort, filter: $filter) {
+    |     pageInfo {
+    |       hasNextPage
+    |       endCursor
+    |     }
+    |     edges {
+    |       cursor
+    |       node {
+    |         ...ProductCard
+    |       }
+    |     }
+    |   }
+    | }
+    |
+    | query Search($q: String!) {
+    |   search(query: $q, types: [PRODUCT, COLLECTION]) {
+    |     __typename
+    |     ... on Product {
+    |       ...ProductCard
+    |     }
+    |     ... on Collection {
+    |       id
+    |       title
+    |       productsCount
+    |     }
+    |   }
+    | }
+  app/queries/checkout.graphql: would reformat (17 lines -> 35 lines)
+    | mutation AddToCart($productId: ID!, $quantity: Int = 1) {
+    |   cartLinesAdd(lines: [{productId: $productId, quantity: $quantity}]) {
+    |     cart {
+    |       ...CartFields
+    |     }
+    |     userErrors {
+    |       field
+    |       message
+    |     }
+    |   }
+    | }
+    |
+    | mutation Checkout($input: CheckoutInput!) @retry(times: 2) {
+    |   checkoutComplete(input: $input) {
+    |     order {
+    |       id
+    |       number
+    |       total {
+    |         ...MoneyFields
+    |       }
+    |     }
+    |     userErrors {
+    |       field
+    |       message
+    |       code
+    |     }
+    |   }
+    | }
+    |
+    | subscription OrderStatus($orderId: ID!) {
+    |   orderStatusChanged(id: $orderId) {
+    |     status
+    |     updatedAt
+    |   }
+    | }
+  app/queries/formatted.graphql: ok
+  app/queries/fragments.graphql: would reformat (20 lines -> 35 lines)
+    | fragment UserFields on User {
+    |   id
+    |   name
+    |   avatar(size: 64)
+    | }
+    |
+    | fragment MoneyFields on Money {
+    |   amount
+    |   currency
+    | }
+    |
+    | fragment CartFields on Cart {
+    |   id
+    |   lines {
+    |     quantity
+    |     product {
+    |       ...ProductCard
+    |     }
+    |   }
+    |   subtotal {
+    |     ...MoneyFields
+    |   }
+    | }
+    |
+    | fragment ProductCard on Product {
+    |   id
+    |   title
+    |   price {
+    |     ...MoneyFields
+    |   }
+    |   images(first: 1) {
+    |     url
+    |     altText
+    |   }
+    | }
+  app/queries/user.graphql: would reformat (15 lines -> 24 lines)
+    | query CurrentUser {
+    |   viewer {
+    |     ...UserFields
+    |     cart {
+    |       ...CartFields
+    |     }
+    |   }
+    | }
+    |
+    | query UserById($id: ID!, $withOrders: Boolean = false) {
+    |   user(id: $id) {
+    |     ...UserFields
+    |     orders(first: 5) @include(if: $withOrders) {
+    |       edges {
+    |         node {
+    |           id
+    |           total {
+    |             ...MoneyFields
+    |           }
+    |         }
+    |       }
+    |     }
+    |   }
+    | }
+> !manifest app/queries/admin.graphql app/queries/broken.graphql app/queries/catalog.graphql app/queries/checkout.graphql app/queries/formatted.graphql app/queries/fragments.graphql app/queries/user.graphql
+  app/queries/broken.graphql: skipped, Syntax Error: Unexpected ')'. at 4:19
+  query AdminDashboard  [app/queries/admin.graphql]
+    variables: none
+    fragments: MoneyFields, ProductCard
+    missing fragments: MissingFragment
+    root fields: stats
+    depth: 4
+    document: 373 characters, id 4852bc67
+  query Products  [app/queries/catalog.graphql]
+    variables: $first: Int = 24, $after: String, $sort: ProductSort = RELEVANCE, $filter: ProductFilter = {inStock: true}
+    fragments: MoneyFields, ProductCard
+    root fields: products
+    depth: 5
+    document: 516 characters, id 9a14de59
+  query Search  [app/queries/catalog.graphql]
+    variables: $q: String!
+    fragments: MoneyFields, ProductCard
+    root fields: search
+    depth: 3
+    document: 402 characters, id 7269afa0
+  mutation AddToCart  [app/queries/checkout.graphql]
+    variables: $productId: ID!, $quantity: Int = 1
+    fragments: CartFields, MoneyFields, ProductCard
+    root fields: cartLinesAdd
+    depth: 6
+    document: 546 characters, id 71c0bec3
+  mutation Checkout  [app/queries/checkout.graphql]
+    variables: $input: CheckoutInput!
+    fragments: MoneyFields
+    root fields: checkoutComplete
+    depth: 4
+    document: 302 characters, id bfd04147
+  subscription OrderStatus  [app/queries/checkout.graphql]
+    variables: $orderId: ID!
+    fragments: none
+    root fields: orderStatusChanged
+    depth: 2
+    document: 109 characters, id adbee58b
+  query Ping  [app/queries/formatted.graphql]
+    variables: none
+    fragments: none
+    root fields: ping
+    depth: 1
+    document: 21 characters, id eab0544f
+  query CurrentUser  [app/queries/user.graphql]
+    variables: none
+    fragments: CartFields, MoneyFields, ProductCard, UserFields
+    root fields: viewer
+    depth: 6
+    document: 480 characters, id 39058b99
+  query UserById  [app/queries/user.graphql]
+    variables: $id: ID!, $withOrders: Boolean = false
+    fragments: MoneyFields, UserFields
+    root fields: user
+    depth: 6
+    document: 389 characters, id fc279897
+  9 operations, 4 fragments
+> !schema app/schema/schema.graphql app/schema/orders.graphql
+  schema: query Query, mutation Mutation, subscription Subscription
+  type Cart implements Node: id, lines, subtotal
+  type CartLine: quantity, product
+  input CartLineInput: productId, quantity
+  enum Currency: USD, EUR, GBP, INR, JPY, CAD, AUD (+1 extension)
+  scalar DateTime
+  type Money: amount, currency
+  type Mutation: cartLinesAdd, checkoutComplete
+  interface Node: id
+  type Order implements Node & Timestamped: id, number, total, status
+  enum OrderStatus: PENDING, PAID, SHIPPED, DELIVERED
+  type Product implements Node: id, title, price, images
+  input ProductFilter: inStock, minPrice, maxPrice
+  enum ProductSort: RELEVANCE, PRICE_ASC, PRICE_DESC, NEWEST
+  type Query: viewer, user, products, search, stats, order (+1 extension)
+  union SearchResult = Product | Collection | Order (+1 extension)
+  type Subscription: orderStatusChanged
+  type User implements Node: id, name, avatar, cart, orders (+1 extension)
+  directive @auth(requires) on FIELD_DEFINITION | OBJECT
+  unknown type ProductConnection, first at app/schema/schema.graphql:14:87
+  unknown type SearchType, first at app/schema/schema.graphql:15:34
+  unknown type Stats, first at app/schema/schema.graphql:16:25
+  unknown type Range, first at app/schema/schema.graphql:16:16
+  unknown type CartPayload, first at app/schema/schema.graphql:20:43
+  unknown type CheckoutPayload, first at app/schema/schema.graphql:21:44
+  unknown type CheckoutInput, first at app/schema/schema.graphql:21:27
+  unknown type Url, first at app/schema/schema.graphql:27:27
+  unknown type OrderConnection, first at app/schema/schema.graphql:29:38
+  unknown type Image, first at app/schema/schema.graphql:36:24
+  unknown type Decimal, first at app/schema/schema.graphql:39:22
+  unknown type Collection, first at app/schema/schema.graphql:47:32
+  unknown type Role, first at app/schema/schema.graphql:49:27
+  unknown type Timestamped, first at app/schema/orders.graphql:9:30
+  unknown directive @key, first at app/schema/orders.graphql:24:18
+> !schema cases/schema_kitchen_sink.graphql
+  schema: query QueryType, mutation MutationType, subscription SubscriptionType
+  enum AnnotatedEnum: ANNOTATED_VALUE, OTHER_VALUE
+  input AnnotatedInput: annotatedField
+  interface AnnotatedInterface: annotatedField
+  type AnnotatedObject: annotatedField
+  scalar AnnotatedScalar
+  union AnnotatedUnion = A | B
+  union AnnotatedUnionTwo = A | B
+  interface Bar implements Two: one, four, two (+2 extensions)
+  interface Baz implements Bar & Two: one, two, four
+  scalar CustomScalar (+1 extension)
+  union Feed = Story | Article | Advert | Photo | Video (+2 extensions)
+  type Foo implements Bar & Baz & Two: one, two, three, four, five, six, seven, seven (+2 extensions)
+  input InputType: key, answer, other (+2 extensions)
+  enum Site: DESKTOP, MOBILE, WEB, VR (+2 extensions)
+  enum UndefinedEnum
+  input UndefinedInput
+  interface UndefinedInterface
+  type UndefinedType
+  union UndefinedUnion
+  directive @skip(if) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  directive @include(if) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  directive @include2(if) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+  directive @myRepeatableDir(name) repeatable on OBJECT | INTERFACE
+  unknown type QueryType, first at cases/schema_kitchen_sink.graphql:3:10
+  unknown type MutationType, first at cases/schema_kitchen_sink.graphql:4:13
+  unknown type Two, first at cases/schema_kitchen_sink.graphql:11:33
+  unknown type Type, first at cases/schema_kitchen_sink.graphql:13:8
+  unknown type Story, first at cases/schema_kitchen_sink.graphql:67:5
+  unknown type Article, first at cases/schema_kitchen_sink.graphql:68:5
+  unknown type Advert, first at cases/schema_kitchen_sink.graphql:69:5
+  unknown type A, first at cases/schema_kitchen_sink.graphql:71:33
+  unknown type B, first at cases/schema_kitchen_sink.graphql:71:37
+  unknown type Photo, first at cases/schema_kitchen_sink.graphql:77:21
+  unknown type Video, first at cases/schema_kitchen_sink.graphql:77:29
+  unknown type SubscriptionType, first at cases/schema_kitchen_sink.graphql:155:17
+  unknown directive @onField, first at cases/schema_kitchen_sink.graphql:32:69
+  unknown directive @onArgumentDefinition, first at cases/schema_kitchen_sink.graphql:32:40
+  unknown directive @onObject, first at cases/schema_kitchen_sink.graphql:31:22
+  unknown directive @onType, first at cases/schema_kitchen_sink.graphql:41:17
+  unknown directive @onInterface, first at cases/schema_kitchen_sink.graphql:48:30
+  unknown directive @onUnion, first at cases/schema_kitchen_sink.graphql:71:22
+  unknown directive @onScalar, first at cases/schema_kitchen_sink.graphql:83:24
+  unknown directive @onEnumValue, first at cases/schema_kitchen_sink.graphql:101:19
+  unknown directive @onEnum, first at cases/schema_kitchen_sink.graphql:100:20
+  unknown directive @onInputFieldDefinition, first at cases/schema_kitchen_sink.graphql:119:24
+  unknown directive @onInputObject, first at cases/schema_kitchen_sink.graphql:118:22
+  unknown directive @onSchema, first at cases/schema_kitchen_sink.graphql:152:15
+> !extract app/src/UserCard.jsx app/src/api.ts
+  app/src/UserCard.jsx:3:23: query UserCard
+  app/src/UserCard.jsx:14:20: error
+    error GraphQLSyntaxError
+    | Syntax Error: Expected Name, found '{'.
+    |
+    | app/src/UserCard.jsx:18:25
+    | 17 |       name
+    | 18 |       friends(first: 10 {
+    |    |                         ^
+    | 19 |         name
+  app/src/api.ts:3:35: fragment ProductFields on Product
+  app/src/api.ts:5:27: query Search
+  app/src/api.ts:8:14: skipped, the template interpolates
+  app/src/api.ts:11:20: error
+    error GraphQLSyntaxError
+    | Syntax Error: Expected Name, found <EOF>.
+    |
+    | app/src/api.ts:11:75
+    | 11 |                    query Typo { product(id: 1) { title, price { amount } }
+    |    |                                                                           ^

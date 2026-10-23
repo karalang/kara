@@ -1,0 +1,2708 @@
+// mini_graphql: a port of the GraphQL language module of graphql-core
+// 3.2.6 (MIT; the GraphQL Contributors, Syrus Akbary, Christoph
+// Zwerschke), the Python reference implementation of GraphQL: the lexer,
+// the recursive-descent parser for executable documents and the type
+// system definition language, print_ast, and GraphQLError's rendering of
+// a syntax error with the lines around it. The programs check a client
+// app's queries the way its build tooling does.
+//
+// A Source body is a Vec[char], so positions are code points, as in
+// Python's str. Python can hold surrogates in a str; a body read from a
+// UTF-8 file cannot, which is why the lexer's surrogate branches only
+// matter inside \u escapes.
+
+// ------------------------------------------------------------ errors
+
+struct GqlErr {
+    cls: String,
+    message: String,
+    pos: i64,
+}
+
+fn syntax(pos: i64, description: own String) -> GqlErr {
+    GqlErr { cls: "GraphQLSyntaxError".to_string(), message: f"Syntax Error: {description}", pos }
+}
+
+// A str index past the end, which the lexer does not guard everywhere.
+fn index_error() -> GqlErr {
+    GqlErr { cls: "IndexError".to_string(), message: "string index out of range".to_string(), pos: -1 }
+}
+
+// ------------------------------------------------------------ text helpers
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn str_of(cs: ref Vec[char], a: i64, e: i64) -> String {
+    let n = cs.len() as i64;
+    let lo = if a < 0 { 0 } else if a > n { n } else { a };
+    let hi = if e > n { n } else if e < lo { lo } else { e };
+    let mut out = String.new();
+    let mut k = lo;
+    while k < hi {
+        out.push(cs[k as usize]);
+        k += 1;
+    }
+    out
+}
+
+fn at(cs: ref Vec[char], k: i64) -> Option[char] {
+    if k >= 0 and k < cs.len() as i64 { Some(cs[k as usize]) } else { None }
+}
+
+fn is_at(cs: ref Vec[char], k: i64, c: char) -> bool {
+    match at(cs, k) {
+        Some(x) => x == c,
+        None => false,
+    }
+}
+
+fn clen(s: ref String) -> i64 {
+    let mut n: i64 = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn hex_upper(v: i64, width: i64) -> String {
+    let digits = "0123456789ABCDEF";
+    let ds: Vec[char] = digits.chars().collect();
+    let mut out: Vec[char] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        out.push(ds[(x % 16) as usize]);
+        x = x / 16;
+    }
+    while (out.len() as i64) < width {
+        out.push('0');
+    }
+    let mut s = String.new();
+    let mut k = out.len() as i64 - 1;
+    while k >= 0 {
+        s.push(out[k as usize]);
+        k -= 1;
+    }
+    s
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    let mut k: i64 = 0;
+    while k < n {
+        s.push(' ');
+        k += 1;
+    }
+    s
+}
+
+fn rjust(s: ref String, width: i64) -> String {
+    let n = clen(s);
+    if n >= width { s.clone() } else { f"{spaces(width - n)}{s}" }
+}
+
+// str.splitlines(): every line boundary Python knows, no empty last line.
+fn is_py_break(c: char) -> bool {
+    let o = c as i64;
+    c == '\n' or c == '\r' or o == 0x0b or o == 0x0c or o == 0x1c or o == 0x1d or o == 0x1e or o == 0x85 or o == 0x2028 or o == 0x2029
+}
+
+fn py_splitlines(cs: ref Vec[char]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = cs.len() as i64;
+    let mut start: i64 = 0;
+    let mut k: i64 = 0;
+    while k < n {
+        let c = cs[k as usize];
+        if is_py_break(c) {
+            out.push(str_of(cs, start, k));
+            if c == '\r' and is_at(cs, k + 1, '\n') {
+                k += 1;
+            }
+            start = k + 1;
+        }
+        k += 1;
+    }
+    if start < n {
+        out.push(str_of(cs, start, n));
+    }
+    out
+}
+
+// re.split(r"\r\n|[\n\r]", body)
+fn newline_split(cs: ref Vec[char]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = cs.len() as i64;
+    let mut start: i64 = 0;
+    let mut k: i64 = 0;
+    while k < n {
+        let c = cs[k as usize];
+        if c == '\n' or c == '\r' {
+            out.push(str_of(cs, start, k));
+            if c == '\r' and is_at(cs, k + 1, '\n') {
+                k += 1;
+            }
+            start = k + 1;
+        }
+        k += 1;
+    }
+    out.push(str_of(cs, start, n));
+    out
+}
+
+// ------------------------------------------------------------ source
+
+struct Source {
+    body: Vec[char],
+    name: String,
+    off_line: i64,
+    off_col: i64,
+}
+
+fn source(body: ref String, name: ref String) -> Source {
+    Source { body: chars_of(body), name: name.clone(), off_line: 1, off_col: 1 }
+}
+
+// Source.get_location: splitlines() on the text before the position, so
+// a position just after a line break reports the end of the line before.
+fn get_location(src: ref Source, pos: i64) -> (i64, i64) {
+    let before: Vec[char] = src.body[0..(pos as usize)].to_vec();
+    let lines = py_splitlines(before);
+    if lines.len() == 0 {
+        return (1, 1);
+    }
+    (lines.len() as i64, clen(lines[lines.len() - 1]) + 1)
+}
+
+fn prefixed(rows: ref Vec[(String, Option[String])]) -> String {
+    let mut pad: i64 = 0;
+    for r in rows.iter() {
+        if let Some(_) = r.1 {
+            if clen(r.0) > pad {
+                pad = clen(r.0);
+            }
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for r in rows.iter() {
+        if let Some(line) = r.1.clone() {
+            let tail = if line.len() > 0 { f" {line}" } else { String.new() };
+            parts.push(f"{rjust(r.0, pad)}{tail}");
+        }
+    }
+    join_with(parts, "\n")
+}
+
+fn join_with(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs.iter() {
+        if not first {
+            out.push_str(sep);
+        }
+        first = false;
+        out.push_str(x);
+    }
+    out
+}
+
+// print_source_location; None where Python's lines[line_index] raises
+// IndexError, which happens when splitlines() found a break the
+// excerpt's own split does not.
+fn print_source_location(src: ref Source, line: i64, col: i64) -> Option[String] {
+    let first_off = src.off_col - 1;
+    let mut body: Vec[char] = chars_of(spaces(first_off));
+    for c in src.body.iter() {
+        body.push(*c);
+    }
+    let line_index = line - 1;
+    let line_num = line + (src.off_line - 1);
+    let column_num = col + (if line == 1 { first_off } else { 0 });
+    let location_str = f"{src.name}:{line_num}:{column_num}\n";
+    let lines = newline_split(body);
+    if line_index >= lines.len() as i64 {
+        return None;
+    }
+    let location_line = lines[line_index as usize].clone();
+    let mut rows: Vec[(String, Option[String])] = Vec.new();
+    if clen(location_line) > 120 {
+        let sub_index = column_num / 80;
+        let sub_col = column_num % 80;
+        let lc = chars_of(location_line);
+        let mut subs: Vec[String] = Vec.new();
+        let mut k: i64 = 0;
+        while k < lc.len() as i64 {
+            subs.push(str_of(lc, k, k + 80));
+            k += 80;
+        }
+        rows.push((f"{line_num} |", Some(subs[0].clone())));
+        let mut j: i64 = 1;
+        while j <= sub_index and j < subs.len() as i64 {
+            rows.push(("|".to_string(), Some(subs[j as usize].clone())));
+            j += 1;
+        }
+        rows.push(("|".to_string(), Some(rjust("^".to_string(), sub_col))));
+        let next = if sub_index < subs.len() as i64 - 1 { Some(subs[(sub_index + 1) as usize].clone()) } else { None };
+        rows.push(("|".to_string(), next));
+    } else {
+        let prev = if line_index > 0 { Some(lines[(line_index - 1) as usize].clone()) } else { None };
+        rows.push((f"{line_num - 1} |", prev));
+        rows.push((f"{line_num} |", Some(location_line)));
+        rows.push(("|".to_string(), Some(rjust("^".to_string(), column_num))));
+        let next = if line_index < lines.len() as i64 - 1 { Some(lines[(line_index + 1) as usize].clone()) } else { None };
+        rows.push((f"{line_num + 1} |", next));
+    }
+    Some(f"{location_str}{prefixed(rows)}")
+}
+
+// str(GraphQLError)
+fn error_text(src: ref Source, e: ref GqlErr) -> String {
+    if e.pos < 0 {
+        return e.message.clone();
+    }
+    let (line, col) = get_location(src, e.pos);
+    match print_source_location(src, line, col) {
+        Some(t) => f"{e.message}\n\n{t}",
+        None => f"{e.message}\n\n(str() raised IndexError: list index out of range)",
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+const K_SOF: i64 = 0;
+const K_EOF: i64 = 1;
+const K_BANG: i64 = 2;
+const K_DOLLAR: i64 = 3;
+const K_AMP: i64 = 4;
+const K_PAREN_L: i64 = 5;
+const K_PAREN_R: i64 = 6;
+const K_SPREAD: i64 = 7;
+const K_COLON: i64 = 8;
+const K_EQUALS: i64 = 9;
+const K_AT: i64 = 10;
+const K_BRACKET_L: i64 = 11;
+const K_BRACKET_R: i64 = 12;
+const K_BRACE_L: i64 = 13;
+const K_PIPE: i64 = 14;
+const K_BRACE_R: i64 = 15;
+const K_NAME: i64 = 16;
+const K_INT: i64 = 17;
+const K_FLOAT: i64 = 18;
+const K_STRING: i64 = 19;
+const K_BLOCK: i64 = 20;
+const K_COMMENT: i64 = 21;
+
+fn kind_value(k: i64) -> String {
+    let names = "<SOF> <EOF> ! $ & ( ) ... : = @ [ ] { | } Name Int Float String BlockString Comment";
+    let mut i: i64 = 0;
+    for w in names.split(" ") {
+        if i == k {
+            return w.to_string();
+        }
+        i += 1;
+    }
+    String.new()
+}
+
+fn is_punct(k: i64) -> bool {
+    k >= K_BANG and k <= K_BRACE_R
+}
+
+fn kind_desc(k: i64) -> String {
+    if is_punct(k) { f"'{kind_value(k)}'" } else { kind_value(k) }
+}
+
+#[derive(Clone)]
+struct Token {
+    kind: i64,
+    start: i64,
+    end: i64,
+    line: i64,
+    col: i64,
+    value: Option[String],
+}
+
+fn token_desc(t: ref Token) -> String {
+    match t.value.clone() {
+        Some(v) => f"{kind_desc(t.kind)} '{v}'",
+        None => kind_desc(t.kind),
+    }
+}
+
+fn is_printable(c: char) -> bool {
+    let o = c as i64;
+    (o >= 0x20 and o < 0x7f) or o > 0xa0
+}
+
+// repr() of a str whose characters outside ASCII are printable.
+fn py_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_printable(c) {
+            out.push(c);
+        } else {
+            out.push_str(f"\\x{hex_upper(o, 2).to_lowercase()}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// Token.__repr__
+fn token_repr(t: ref Token) -> String {
+    let mut desc = kind_value(t.kind);
+    if let Some(v) = t.value.clone() {
+        if v.len() > 0 {
+            desc = f"{desc} {py_repr(v)}";
+        }
+    }
+    f"<Token {desc} {t.line}:{t.col}>"
+}
+
+// ------------------------------------------------------------ lexer
+
+struct Lexer {
+    src: Source,
+    tokens: Vec[Token],
+    cur: i64,
+    last: i64,
+    line: i64,
+    line_start: i64,
+}
+
+fn new_lexer(src: own Source) -> Lexer {
+    let sof = Token { kind: K_SOF, start: 0, end: 0, line: 0, col: 0, value: None };
+    Lexer { src, tokens: vec![sof], cur: 0, last: 0, line: 1, line_start: 0 }
+}
+
+fn cur_tok(lx: ref Lexer) -> Token {
+    lx.tokens[lx.cur as usize].clone()
+}
+
+fn last_tok(lx: ref Lexer) -> Token {
+    lx.tokens[lx.last as usize].clone()
+}
+
+// lookahead(): the index of the next token that is not a comment, lexing
+// it onto the chain if it is not there yet.
+fn lookahead(lx: mut ref Lexer) -> Result[i64, GqlErr] {
+    let mut k = lx.cur;
+    if lx.tokens[k as usize].kind != K_EOF {
+        loop {
+            if k + 1 < lx.tokens.len() as i64 {
+                k += 1;
+            } else {
+                let end = lx.tokens[k as usize].end;
+                let t = read_next_token(mut lx, end)?;
+                lx.tokens.push(t);
+                k += 1;
+            }
+            if lx.tokens[k as usize].kind != K_COMMENT {
+                break;
+            }
+        }
+    }
+    Ok(k)
+}
+
+fn advance(lx: mut ref Lexer) -> Result[Token, GqlErr] {
+    lx.last = lx.cur;
+    let k = lookahead(mut lx)?;
+    lx.cur = k;
+    Ok(cur_tok(lx))
+}
+
+fn print_code_point_at(lx: ref Lexer, k: i64) -> String {
+    match at(lx.src.body, k) {
+        None => kind_value(K_EOF),
+        Some(c) => {
+            let o = c as i64;
+            if o >= 0x20 and o <= 0x7e {
+                if c == '"' { "'\"'".to_string() } else { f"'{c}'" }
+            } else {
+                f"U+{hex_upper(o, 4)}"
+            }
+        }
+    }
+}
+
+fn make_token(lx: ref Lexer, kind: i64, start: i64, end: i64, value: own Option[String]) -> Token {
+    Token { kind, start, end, line: lx.line, col: 1 + start - lx.line_start, value }
+}
+
+fn punct_kind(c: char) -> i64 {
+    if c == '!' { K_BANG }
+    else if c == '$' { K_DOLLAR }
+    else if c == '&' { K_AMP }
+    else if c == '(' { K_PAREN_L }
+    else if c == ')' { K_PAREN_R }
+    else if c == ':' { K_COLON }
+    else if c == '=' { K_EQUALS }
+    else if c == '@' { K_AT }
+    else if c == '[' { K_BRACKET_L }
+    else if c == ']' { K_BRACKET_R }
+    else if c == '{' { K_BRACE_L }
+    else if c == '}' { K_BRACE_R }
+    else if c == '|' { K_PIPE }
+    else { -1 }
+}
+
+fn is_digit_c(c: Option[char]) -> bool {
+    match c {
+        Some(x) => x >= '0' and x <= '9',
+        None => false,
+    }
+}
+
+fn is_name_start(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+fn is_name_continue(c: char) -> bool {
+    is_name_start(c) or (c >= '0' and c <= '9')
+}
+
+fn read_next_token(lx: mut ref Lexer, start: i64) -> Result[Token, GqlErr] {
+    let n = lx.src.body.len() as i64;
+    let mut pos = start;
+    while pos < n {
+        let c = lx.src.body[pos as usize];
+        if c == ' ' or c == '\t' or c == ',' or c as i64 == 0xfeff {
+            pos += 1;
+            continue;
+        }
+        if c == '\n' {
+            pos += 1;
+            lx.line += 1;
+            lx.line_start = pos;
+            continue;
+        }
+        if c == '\r' {
+            if is_at(lx.src.body, pos + 1, '\n') {
+                pos += 2;
+            } else {
+                pos += 1;
+            }
+            lx.line += 1;
+            lx.line_start = pos;
+            continue;
+        }
+        if c == '#' {
+            return Ok(read_comment(lx, pos));
+        }
+        if c == '"' {
+            if is_at(lx.src.body, pos + 1, '"') and is_at(lx.src.body, pos + 2, '"') {
+                return read_block_string(mut lx, pos);
+            }
+            return read_string(lx, pos);
+        }
+        let k = punct_kind(c);
+        if k >= 0 {
+            return Ok(make_token(lx, k, pos, pos + 1, None));
+        }
+        if (c >= '0' and c <= '9') or c == '-' {
+            return read_number(lx, pos, c);
+        }
+        if is_name_start(c) {
+            return Ok(read_name(lx, pos));
+        }
+        if c == '.' and is_at(lx.src.body, pos + 1, '.') and is_at(lx.src.body, pos + 2, '.') {
+            return Ok(make_token(lx, K_SPREAD, pos, pos + 3, None));
+        }
+        if c == '\'' {
+            return Err(syntax(pos, "Unexpected single quote character ('), did you mean to use a double quote (\")?".to_string()));
+        }
+        return Err(syntax(pos, f"Unexpected character: {print_code_point_at(lx, pos)}."));
+    }
+    Ok(make_token(lx, K_EOF, n, n, None))
+}
+
+fn read_comment(lx: ref Lexer, start: i64) -> Token {
+    let n = lx.src.body.len() as i64;
+    let mut pos = start + 1;
+    while pos < n {
+        let c = lx.src.body[pos as usize];
+        if c == '\r' or c == '\n' {
+            break;
+        }
+        pos += 1;
+    }
+    make_token(lx, K_COMMENT, start, pos, Some(str_of(lx.src.body, start + 1, pos)))
+}
+
+fn read_number(lx: ref Lexer, start: i64, first: char) -> Result[Token, GqlErr] {
+    let body = lx.src.body.clone();
+    let mut pos = start;
+    let mut c: Option[char] = Some(first);
+    let mut is_float = false;
+    if first == '-' {
+        pos += 1;
+        c = at(body, pos);
+    }
+    if c == Some('0') {
+        pos += 1;
+        c = at(body, pos);
+        if is_digit_c(c) {
+            return Err(syntax(pos, f"Invalid number, unexpected digit after 0: {print_code_point_at(lx, pos)}."));
+        }
+    } else {
+        pos = read_digits(lx, pos, c)?;
+        c = at(body, pos);
+    }
+    if c == Some('.') {
+        is_float = true;
+        pos += 1;
+        c = at(body, pos);
+        pos = read_digits(lx, pos, c)?;
+        c = at(body, pos);
+    }
+    if c == Some('E') or c == Some('e') {
+        is_float = true;
+        pos += 1;
+        c = at(body, pos);
+        if c == Some('+') or c == Some('-') {
+            pos += 1;
+            c = at(body, pos);
+        }
+        pos = read_digits(lx, pos, c)?;
+        c = at(body, pos);
+    }
+    if let Some(x) = c {
+        if x == '.' or is_name_start(x) {
+            return Err(syntax(pos, f"Invalid number, expected digit but got: {print_code_point_at(lx, pos)}."));
+        }
+    }
+    let kind = if is_float { K_FLOAT } else { K_INT };
+    Ok(make_token(lx, kind, start, pos, Some(str_of(body, start, pos))))
+}
+
+fn read_digits(lx: ref Lexer, start: i64, first: Option[char]) -> Result[i64, GqlErr] {
+    if not is_digit_c(first) {
+        return Err(syntax(start, f"Invalid number, expected digit but got: {print_code_point_at(lx, start)}."));
+    }
+    let n = lx.src.body.len() as i64;
+    let mut pos = start + 1;
+    while pos < n and is_digit_c(at(lx.src.body, pos)) {
+        pos += 1;
+    }
+    Ok(pos)
+}
+
+fn hex_digit(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        -1
+    }
+}
+
+// read_16_bit_hex_code: body[k] .. body[k + 3], an IndexError past the end.
+fn hex16(body: ref Vec[char], k: i64) -> Result[i64, GqlErr] {
+    if k + 3 >= body.len() as i64 {
+        return Err(index_error());
+    }
+    Ok((hex_digit(body[k as usize]) << 12) | (hex_digit(body[(k + 1) as usize]) << 8) | (hex_digit(body[(k + 2) as usize]) << 4) | hex_digit(body[(k + 3) as usize]))
+}
+
+fn is_scalar(p: i64) -> bool {
+    (p >= 0 and p <= 0xd7ff) or (p >= 0xe000 and p <= 0x10ffff)
+}
+
+fn chr(p: i64) -> char {
+    char.try_from(p as u32).unwrap_or('?')
+}
+
+// An escape sequence's value and length.
+fn read_escape(lx: ref Lexer, pos: i64) -> Result[(String, i64), GqlErr] {
+    let body = lx.src.body.clone();
+    if is_at(body, pos + 1, 'u') {
+        if is_at(body, pos + 2, '{') {
+            let mut point: i64 = 0;
+            let mut size: i64 = 3;
+            let rest = body.len() as i64 - pos;
+            let max_size = if rest < 12 { rest } else { 12 };
+            while size < max_size {
+                let c = body[(pos + size) as usize];
+                size += 1;
+                if c == '}' {
+                    if size < 5 or not is_scalar(point) {
+                        break;
+                    }
+                    let mut v = String.new();
+                    v.push(chr(point));
+                    return Ok((v, size));
+                }
+                point = (point << 4) | hex_digit(c);
+                if point < 0 {
+                    break;
+                }
+            }
+            return Err(syntax(pos, f"Invalid Unicode escape sequence: '{str_of(body, pos, pos + size)}'."));
+        }
+        let code = hex16(body, pos + 2)?;
+        if is_scalar(code) {
+            let mut v = String.new();
+            v.push(chr(code));
+            return Ok((v, 6));
+        }
+        if code >= 0xd800 and code <= 0xdbff {
+            if is_at(body, pos + 6, '\\') and is_at(body, pos + 7, 'u') {
+                let trailing = hex16(body, pos + 8)?;
+                if trailing >= 0xdc00 and trailing <= 0xdfff {
+                    let mut v = String.new();
+                    v.push(chr(0x10000 + ((code - 0xd800) << 10) + (trailing - 0xdc00)));
+                    return Ok((v, 12));
+                }
+            }
+        }
+        return Err(syntax(pos, f"Invalid Unicode escape sequence: '{str_of(body, pos, pos + 6)}'."));
+    }
+    let c = match at(body, pos + 1) {
+        Some(c) => c,
+        None => return Err(index_error()),
+    };
+    let v = if c == '"' { "\"" }
+        else if c == '/' { "/" }
+        else if c == '\\' { "\\" }
+        else if c == 'b' { "\u{8}" }
+        else if c == 'f' { "\u{c}" }
+        else if c == 'n' { "\n" }
+        else if c == 'r' { "\r" }
+        else if c == 't' { "\t" }
+        else { "" };
+    if v.len() > 0 {
+        return Ok((v.to_string(), 2));
+    }
+    Err(syntax(pos, f"Invalid character escape sequence: '{str_of(body, pos, pos + 2)}'."))
+}
+
+fn read_string(lx: ref Lexer, start: i64) -> Result[Token, GqlErr] {
+    let n = lx.src.body.len() as i64;
+    let mut pos = start + 1;
+    let mut chunk_start = pos;
+    let mut value = String.new();
+    while pos < n {
+        let c = lx.src.body[pos as usize];
+        if c == '"' {
+            value.push_str(str_of(lx.src.body, chunk_start, pos));
+            return Ok(make_token(lx, K_STRING, start, pos + 1, Some(value)));
+        }
+        if c == '\\' {
+            value.push_str(str_of(lx.src.body, chunk_start, pos));
+            let (v, size) = read_escape(lx, pos)?;
+            value.push_str(v);
+            pos += size;
+            chunk_start = pos;
+            continue;
+        }
+        if c == '\r' or c == '\n' {
+            break;
+        }
+        pos += 1;
+    }
+    Err(syntax(pos, "Unterminated string.".to_string()))
+}
+
+// dedent_block_string_lines
+fn dedent(lines: ref Vec[String]) -> Vec[String] {
+    let mut common: i64 = 1 << 62;
+    let mut first: i64 = -1;
+    let mut last: i64 = -1;
+    let mut i: i64 = 0;
+    for line in lines.iter() {
+        let mut indent: i64 = 0;
+        for c in line.chars() {
+            if c != ' ' and c != '\t' {
+                break;
+            }
+            indent += 1;
+        }
+        if indent == clen(line) {
+            i += 1;
+            continue;
+        }
+        if first < 0 {
+            first = i;
+        }
+        last = i;
+        if i > 0 and indent < common {
+            common = indent;
+        }
+        i += 1;
+    }
+    if first < 0 {
+        first = 0;
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut j: i64 = first;
+    while j <= last {
+        let line = lines[j as usize].clone();
+        if j == 0 {
+            out.push(line);
+        } else {
+            let lc = chars_of(line);
+            out.push(str_of(lc, common, lc.len() as i64));
+        }
+        j += 1;
+    }
+    out
+}
+
+fn read_block_string(lx: mut ref Lexer, start: i64) -> Result[Token, GqlErr] {
+    let body = lx.src.body.clone();
+    let n = body.len() as i64;
+    let mut line_start = lx.line_start;
+    let mut pos = start + 3;
+    let mut chunk_start = pos;
+    let mut current = String.new();
+    let mut lines: Vec[String] = Vec.new();
+    while pos < n {
+        let c = body[pos as usize];
+        if c == '"' and is_at(body, pos + 1, '"') and is_at(body, pos + 2, '"') {
+            current.push_str(str_of(body, chunk_start, pos));
+            lines.push(current);
+            let value = join_with(dedent(lines), "\n");
+            let token = make_token(lx, K_BLOCK, start, pos + 3, Some(value));
+            lx.line += lines.len() as i64 - 1;
+            lx.line_start = line_start;
+            return Ok(token);
+        }
+        if c == '\\' and is_at(body, pos + 1, '"') and is_at(body, pos + 2, '"') and is_at(body, pos + 3, '"') {
+            current.push_str(str_of(body, chunk_start, pos));
+            chunk_start = pos + 1;
+            pos += 4;
+            continue;
+        }
+        if c == '\r' or c == '\n' {
+            current.push_str(str_of(body, chunk_start, pos));
+            lines.push(current);
+            if c == '\r' and is_at(body, pos + 1, '\n') {
+                pos += 2;
+            } else {
+                pos += 1;
+            }
+            current = String.new();
+            chunk_start = pos;
+            line_start = pos;
+            continue;
+        }
+        pos += 1;
+    }
+    Err(syntax(pos, "Unterminated string.".to_string()))
+}
+
+fn read_name(lx: ref Lexer, start: i64) -> Token {
+    let n = lx.src.body.len() as i64;
+    let mut pos = start + 1;
+    while pos < n and is_name_continue(lx.src.body[pos as usize]) {
+        pos += 1;
+    }
+    make_token(lx, K_NAME, start, pos, Some(str_of(lx.src.body, start, pos)))
+}
+
+// ------------------------------------------------------------ ast
+
+#[derive(Clone)]
+struct Name {
+    value: String,
+    start: i64,
+}
+
+#[derive(Clone)]
+enum Value {
+    Var(String),
+    Int(String),
+    Float(String),
+    Str(String, bool),
+    Bool(bool),
+    Null,
+    Enum(String),
+    List(Vec[Value]),
+    Object(Vec[ObjField]),
+}
+
+#[derive(Clone)]
+struct ObjField {
+    name: String,
+    value: Value,
+}
+
+// A NamedTypeNode, or a list / non-null wrapper around exactly one type.
+#[derive(Clone)]
+enum TypeRef {
+    Named(Name),
+    List(Vec[TypeRef]),
+    NonNull(Vec[TypeRef]),
+}
+
+#[derive(Clone)]
+struct ArgNode {
+    name: String,
+    value: Value,
+}
+
+#[derive(Clone)]
+struct Directive {
+    name: String,
+    args: Vec[ArgNode],
+    start: i64,
+}
+
+#[derive(Clone)]
+struct VarDef {
+    name: String,
+    ty: TypeRef,
+    default: Option[Value],
+    dirs: Vec[Directive],
+}
+
+#[derive(Clone)]
+struct Field {
+    alias: Option[String],
+    name: String,
+    args: Vec[ArgNode],
+    dirs: Vec[Directive],
+    sel: Option[Vec[Selection]],
+}
+
+#[derive(Clone)]
+enum Selection {
+    Field(Field),
+    Spread(String, Vec[Directive]),
+    Inline(Option[String], Vec[Directive], Vec[Selection]),
+}
+
+#[derive(Clone)]
+struct Desc {
+    value: String,
+    block: bool,
+}
+
+#[derive(Clone)]
+struct InputDef {
+    desc: Option[Desc],
+    name: String,
+    ty: TypeRef,
+    default: Option[Value],
+    dirs: Vec[Directive],
+}
+
+#[derive(Clone)]
+struct FieldDef {
+    desc: Option[Desc],
+    name: String,
+    args: Vec[InputDef],
+    ty: TypeRef,
+    dirs: Vec[Directive],
+}
+
+#[derive(Clone)]
+struct EnumValueDef {
+    desc: Option[Desc],
+    name: String,
+    dirs: Vec[Directive],
+}
+
+#[derive(Clone)]
+struct OpTypeDef {
+    op: String,
+    ty: Name,
+}
+
+#[derive(Clone)]
+struct OpDef {
+    op: String,
+    name: Option[String],
+    vars: Vec[VarDef],
+    dirs: Vec[Directive],
+    sel: Vec[Selection],
+    start: i64,
+}
+
+#[derive(Clone)]
+struct FragDef {
+    name: String,
+    vars: Vec[VarDef],
+    cond: String,
+    dirs: Vec[Directive],
+    sel: Vec[Selection],
+    start: i64,
+}
+
+// Every type system definition and extension; `kind` is one of the T_*
+// keywords and the lists a kind does not have stay empty.
+#[derive(Clone)]
+struct TsDef {
+    kind: i64,
+    ext: bool,
+    desc: Option[Desc],
+    name: String,
+    start: i64,
+    interfaces: Vec[Name],
+    dirs: Vec[Directive],
+    fields: Vec[FieldDef],
+    inputs: Vec[InputDef],
+    members: Vec[Name],
+    values: Vec[EnumValueDef],
+    ops: Vec[OpTypeDef],
+    repeatable: bool,
+    locations: Vec[String],
+}
+
+#[derive(Clone)]
+enum Def {
+    Op(OpDef),
+    Frag(FragDef),
+    Ts(TsDef),
+}
+
+const T_SCHEMA: i64 = 0;
+const T_SCALAR: i64 = 1;
+const T_TYPE: i64 = 2;
+const T_INTERFACE: i64 = 3;
+const T_UNION: i64 = 4;
+const T_ENUM: i64 = 5;
+const T_INPUT: i64 = 6;
+const T_DIRECTIVE: i64 = 7;
+
+fn ts_keyword(k: i64) -> String {
+    let names = "schema scalar type interface union enum input directive";
+    let mut i: i64 = 0;
+    for w in names.split(" ") {
+        if i == k {
+            return w.to_string();
+        }
+        i += 1;
+    }
+    String.new()
+}
+
+fn ts_kind(word: ref String) -> i64 {
+    let mut k: i64 = 0;
+    while k <= T_DIRECTIVE {
+        if ts_keyword(k) == *word {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn is_directive_location(name: ref String) -> bool {
+    let names = "QUERY MUTATION SUBSCRIPTION FIELD FRAGMENT_DEFINITION FRAGMENT_SPREAD INLINE_FRAGMENT VARIABLE_DEFINITION SCHEMA SCALAR OBJECT FIELD_DEFINITION ARGUMENT_DEFINITION INTERFACE UNION ENUM ENUM_VALUE INPUT_OBJECT INPUT_FIELD_DEFINITION";
+    for w in names.split(" ") {
+        if w == name.as_str() {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ parser
+
+struct GqlParser {
+    lx: Lexer,
+    max_tokens: i64,
+    legacy: bool,
+    counter: i64,
+}
+
+fn new_parser(src: own Source, max_tokens: i64, legacy: bool) -> GqlParser {
+    GqlParser { lx: new_lexer(src), max_tokens, legacy, counter: 0 }
+}
+
+fn tok(p: ref GqlParser) -> Token {
+    cur_tok(p.lx)
+}
+
+fn peek(p: ref GqlParser, kind: i64) -> bool {
+    p.lx.tokens[p.lx.cur as usize].kind == kind
+}
+
+fn tok_value(p: ref GqlParser) -> String {
+    match tok(p).value {
+        Some(v) => v,
+        None => String.new(),
+    }
+}
+
+fn advance_lexer(p: mut ref GqlParser) -> Result[(), GqlErr] {
+    let t = advance(mut p.lx)?;
+    if p.max_tokens >= 0 and t.kind != K_EOF {
+        p.counter += 1;
+        if p.counter > p.max_tokens {
+            return Err(syntax(t.start, f"Document contains more than {p.max_tokens} tokens. Parsing aborted."));
+        }
+    }
+    Ok(())
+}
+
+fn unexpected(t: ref Token) -> GqlErr {
+    syntax(t.start, f"Unexpected {token_desc(t)}.")
+}
+
+fn unexpected_here(p: ref GqlParser) -> GqlErr {
+    unexpected(tok(p))
+}
+
+fn expect_token(p: mut ref GqlParser, kind: i64) -> Result[Token, GqlErr] {
+    let t = tok(p);
+    if t.kind == kind {
+        advance_lexer(mut p)?;
+        return Ok(t);
+    }
+    Err(syntax(t.start, f"Expected {kind_desc(kind)}, found {token_desc(t)}."))
+}
+
+fn expect_optional_token(p: mut ref GqlParser, kind: i64) -> Result[bool, GqlErr] {
+    if peek(p, kind) {
+        advance_lexer(mut p)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn is_keyword(t: ref Token, word: Str) -> bool {
+    if t.kind != K_NAME {
+        return false;
+    }
+    match t.value.clone() {
+        Some(v) => v == word,
+        None => false,
+    }
+}
+
+fn expect_keyword(p: mut ref GqlParser, word: Str) -> Result[(), GqlErr] {
+    let t = tok(p);
+    if is_keyword(t, word) {
+        advance_lexer(mut p)?;
+        return Ok(());
+    }
+    Err(syntax(t.start, f"Expected '{word}', found {token_desc(t)}."))
+}
+
+fn expect_optional_keyword(p: mut ref GqlParser, word: Str) -> Result[bool, GqlErr] {
+    if is_keyword(tok(p), word) {
+        advance_lexer(mut p)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn parse_name(p: mut ref GqlParser) -> Result[Name, GqlErr] {
+    let t = expect_token(mut p, K_NAME)?;
+    Ok(Name { value: t.value.unwrap_or(String.new()), start: t.start })
+}
+
+fn parse_document(p: mut ref GqlParser) -> Result[Vec[Def], GqlErr] {
+    expect_token(mut p, K_SOF)?;
+    let mut defs: Vec[Def] = Vec.new();
+    defs.push(parse_definition(mut p)?);
+    while not expect_optional_token(mut p, K_EOF)? {
+        defs.push(parse_definition(mut p)?);
+    }
+    Ok(defs)
+}
+
+fn peek_description(p: ref GqlParser) -> bool {
+    peek(p, K_STRING) or peek(p, K_BLOCK)
+}
+
+fn parse_definition(p: mut ref GqlParser) -> Result[Def, GqlErr] {
+    if peek(p, K_BRACE_L) {
+        return Ok(Def.Op(parse_operation_definition(mut p)?));
+    }
+    let has_description = peek_description(p);
+    let keyword = if has_description {
+        let k = lookahead(mut p.lx)?;
+        p.lx.tokens[k as usize].clone()
+    } else {
+        tok(p)
+    };
+    if keyword.kind == K_NAME {
+        let word = keyword.value.clone().unwrap_or(String.new());
+        let kind = ts_kind(word);
+        if kind >= 0 {
+            return Ok(Def.Ts(parse_type_system_definition(mut p, kind)?));
+        }
+        if has_description {
+            return Err(syntax(tok(p).start, "Unexpected description, descriptions are supported only on type definitions.".to_string()));
+        }
+        if word == "query" or word == "mutation" or word == "subscription" {
+            return Ok(Def.Op(parse_operation_definition(mut p)?));
+        }
+        if word == "fragment" {
+            return Ok(Def.Frag(parse_fragment_definition(mut p)?));
+        }
+        if word == "extend" {
+            return Ok(Def.Ts(parse_type_system_extension(mut p)?));
+        }
+    }
+    Err(unexpected(keyword))
+}
+
+fn parse_operation_definition(p: mut ref GqlParser) -> Result[OpDef, GqlErr] {
+    let start = tok(p).start;
+    if peek(p, K_BRACE_L) {
+        let sel = parse_selection_set(mut p)?;
+        return Ok(OpDef { op: "query".to_string(), name: None, vars: Vec.new(), dirs: Vec.new(), sel, start });
+    }
+    let op = parse_operation_type(mut p)?;
+    let name = if peek(p, K_NAME) { Some(parse_name(mut p)?.value) } else { None };
+    let vars = parse_variable_definitions(mut p)?;
+    let dirs = parse_directives(mut p, false)?;
+    let sel = parse_selection_set(mut p)?;
+    Ok(OpDef { op, name, vars, dirs, sel, start })
+}
+
+fn parse_operation_type(p: mut ref GqlParser) -> Result[String, GqlErr] {
+    let t = expect_token(mut p, K_NAME)?;
+    let v = t.value.clone().unwrap_or(String.new());
+    if v == "query" or v == "mutation" or v == "subscription" {
+        return Ok(v);
+    }
+    Err(unexpected(t))
+}
+
+fn parse_variable_definitions(p: mut ref GqlParser) -> Result[Vec[VarDef], GqlErr] {
+    let mut out: Vec[VarDef] = Vec.new();
+    if expect_optional_token(mut p, K_PAREN_L)? {
+        out.push(parse_variable_definition(mut p)?);
+        while not expect_optional_token(mut p, K_PAREN_R)? {
+            out.push(parse_variable_definition(mut p)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_variable_definition(p: mut ref GqlParser) -> Result[VarDef, GqlErr] {
+    let name = parse_variable(mut p)?;
+    expect_token(mut p, K_COLON)?;
+    let ty = parse_type_reference(mut p)?;
+    let default = if expect_optional_token(mut p, K_EQUALS)? { Some(parse_value_literal(mut p, true)?) } else { None };
+    let dirs = parse_directives(mut p, true)?;
+    Ok(VarDef { name, ty, default, dirs })
+}
+
+fn parse_variable(p: mut ref GqlParser) -> Result[String, GqlErr] {
+    expect_token(mut p, K_DOLLAR)?;
+    Ok(parse_name(mut p)?.value)
+}
+
+fn parse_selection_set(p: mut ref GqlParser) -> Result[Vec[Selection], GqlErr] {
+    expect_token(mut p, K_BRACE_L)?;
+    let mut out: Vec[Selection] = Vec.new();
+    out.push(parse_selection(mut p)?);
+    while not expect_optional_token(mut p, K_BRACE_R)? {
+        out.push(parse_selection(mut p)?);
+    }
+    Ok(out)
+}
+
+fn parse_selection(p: mut ref GqlParser) -> Result[Selection, GqlErr] {
+    if peek(p, K_SPREAD) { parse_fragment(mut p) } else { Ok(Selection.Field(parse_field(mut p)?)) }
+}
+
+fn parse_field(p: mut ref GqlParser) -> Result[Field, GqlErr] {
+    let name_or_alias = parse_name(mut p)?.value;
+    let mut alias: Option[String] = None;
+    let mut name = name_or_alias.clone();
+    if expect_optional_token(mut p, K_COLON)? {
+        alias = Some(name_or_alias);
+        name = parse_name(mut p)?.value;
+    }
+    let args = parse_arguments(mut p, false)?;
+    let dirs = parse_directives(mut p, false)?;
+    let sel = if peek(p, K_BRACE_L) { Some(parse_selection_set(mut p)?) } else { None };
+    Ok(Field { alias, name, args, dirs, sel })
+}
+
+fn parse_arguments(p: mut ref GqlParser, is_const: bool) -> Result[Vec[ArgNode], GqlErr] {
+    let mut out: Vec[ArgNode] = Vec.new();
+    if expect_optional_token(mut p, K_PAREN_L)? {
+        out.push(parse_argument(mut p, is_const)?);
+        while not expect_optional_token(mut p, K_PAREN_R)? {
+            out.push(parse_argument(mut p, is_const)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_argument(p: mut ref GqlParser, is_const: bool) -> Result[ArgNode, GqlErr] {
+    let name = parse_name(mut p)?.value;
+    expect_token(mut p, K_COLON)?;
+    let value = parse_value_literal(mut p, is_const)?;
+    Ok(ArgNode { name, value })
+}
+
+fn parse_fragment(p: mut ref GqlParser) -> Result[Selection, GqlErr] {
+    expect_token(mut p, K_SPREAD)?;
+    let has_type_condition = expect_optional_keyword(mut p, "on")?;
+    if not has_type_condition and peek(p, K_NAME) {
+        let name = parse_fragment_name(mut p)?;
+        let dirs = parse_directives(mut p, false)?;
+        return Ok(Selection.Spread(name, dirs));
+    }
+    let cond = if has_type_condition { Some(parse_name(mut p)?.value) } else { None };
+    let dirs = parse_directives(mut p, false)?;
+    let sel = parse_selection_set(mut p)?;
+    Ok(Selection.Inline(cond, dirs, sel))
+}
+
+fn parse_fragment_definition(p: mut ref GqlParser) -> Result[FragDef, GqlErr] {
+    let start = tok(p).start;
+    expect_keyword(mut p, "fragment")?;
+    let name = parse_fragment_name(mut p)?;
+    let vars = if p.legacy { parse_variable_definitions(mut p)? } else { Vec.new() };
+    expect_keyword(mut p, "on")?;
+    let cond = parse_name(mut p)?.value;
+    let dirs = parse_directives(mut p, false)?;
+    let sel = parse_selection_set(mut p)?;
+    Ok(FragDef { name, vars, cond, dirs, sel, start })
+}
+
+// Any token whose value is "on", whatever its kind.
+fn parse_fragment_name(p: mut ref GqlParser) -> Result[String, GqlErr] {
+    if let Some(v) = tok(p).value {
+        if v == "on" {
+            return Err(unexpected_here(p));
+        }
+    }
+    Ok(parse_name(mut p)?.value)
+}
+
+fn parse_value_literal(p: mut ref GqlParser, is_const: bool) -> Result[Value, GqlErr] {
+    let t = tok(p);
+    let k = t.kind;
+    if k == K_BRACKET_L {
+        expect_token(mut p, K_BRACKET_L)?;
+        let mut vals: Vec[Value] = Vec.new();
+        while not expect_optional_token(mut p, K_BRACKET_R)? {
+            vals.push(parse_value_literal(mut p, is_const)?);
+        }
+        return Ok(Value.List(vals));
+    }
+    if k == K_BRACE_L {
+        expect_token(mut p, K_BRACE_L)?;
+        let mut fields: Vec[ObjField] = Vec.new();
+        while not expect_optional_token(mut p, K_BRACE_R)? {
+            let name = parse_name(mut p)?.value;
+            expect_token(mut p, K_COLON)?;
+            let value = parse_value_literal(mut p, is_const)?;
+            fields.push(ObjField { name, value });
+        }
+        return Ok(Value.Object(fields));
+    }
+    let v = t.value.clone().unwrap_or(String.new());
+    if k == K_INT {
+        advance_lexer(mut p)?;
+        return Ok(Value.Int(v));
+    }
+    if k == K_FLOAT {
+        advance_lexer(mut p)?;
+        return Ok(Value.Float(v));
+    }
+    if k == K_STRING or k == K_BLOCK {
+        advance_lexer(mut p)?;
+        return Ok(Value.Str(v, k == K_BLOCK));
+    }
+    if k == K_NAME {
+        advance_lexer(mut p)?;
+        if v == "true" {
+            return Ok(Value.Bool(true));
+        }
+        if v == "false" {
+            return Ok(Value.Bool(false));
+        }
+        if v == "null" {
+            return Ok(Value.Null);
+        }
+        return Ok(Value.Enum(v));
+    }
+    if k == K_DOLLAR {
+        if is_const {
+            let dollar = expect_token(mut p, K_DOLLAR)?;
+            let next = tok(p);
+            if next.kind == K_NAME {
+                let name = next.value.unwrap_or(String.new());
+                return Err(syntax(dollar.start, f"Unexpected variable '${name}' in constant value."));
+            }
+            return Err(unexpected(dollar));
+        }
+        return Ok(Value.Var(parse_variable(mut p)?));
+    }
+    Err(unexpected(t))
+}
+
+fn parse_directives(p: mut ref GqlParser, is_const: bool) -> Result[Vec[Directive], GqlErr] {
+    let mut out: Vec[Directive] = Vec.new();
+    while peek(p, K_AT) {
+        let start = tok(p).start;
+        expect_token(mut p, K_AT)?;
+        let name = parse_name(mut p)?.value;
+        let args = parse_arguments(mut p, is_const)?;
+        out.push(Directive { name, args, start });
+    }
+    Ok(out)
+}
+
+fn parse_type_reference(p: mut ref GqlParser) -> Result[TypeRef, GqlErr] {
+    let mut ty = if expect_optional_token(mut p, K_BRACKET_L)? {
+        let inner = parse_type_reference(mut p)?;
+        expect_token(mut p, K_BRACKET_R)?;
+        TypeRef.List(vec![inner])
+    } else {
+        TypeRef.Named(parse_name(mut p)?)
+    };
+    if expect_optional_token(mut p, K_BANG)? {
+        ty = TypeRef.NonNull(vec![ty]);
+    }
+    Ok(ty)
+}
+
+fn parse_description(p: mut ref GqlParser) -> Result[Option[Desc], GqlErr] {
+    if peek_description(p) {
+        let t = tok(p);
+        advance_lexer(mut p)?;
+        return Ok(Some(Desc { value: t.value.unwrap_or(String.new()), block: t.kind == K_BLOCK }));
+    }
+    Ok(None)
+}
+
+fn empty_ts(kind: i64, ext: bool, start: i64) -> TsDef {
+    TsDef {
+        kind,
+        ext,
+        desc: None,
+        name: String.new(),
+        start,
+        interfaces: Vec.new(),
+        dirs: Vec.new(),
+        fields: Vec.new(),
+        inputs: Vec.new(),
+        members: Vec.new(),
+        values: Vec.new(),
+        ops: Vec.new(),
+        repeatable: false,
+        locations: Vec.new(),
+    }
+}
+
+fn parse_operation_type_definition(p: mut ref GqlParser) -> Result[OpTypeDef, GqlErr] {
+    let op = parse_operation_type(mut p)?;
+    expect_token(mut p, K_COLON)?;
+    let ty = parse_name(mut p)?;
+    Ok(OpTypeDef { op, ty })
+}
+
+fn parse_implements_interfaces(p: mut ref GqlParser) -> Result[Vec[Name], GqlErr] {
+    if expect_optional_keyword(mut p, "implements")? {
+        return delimited_names(mut p, K_AMP);
+    }
+    Ok(Vec.new())
+}
+
+fn delimited_names(p: mut ref GqlParser, delimiter: i64) -> Result[Vec[Name], GqlErr] {
+    expect_optional_token(mut p, delimiter)?;
+    let mut out: Vec[Name] = Vec.new();
+    loop {
+        out.push(parse_name(mut p)?);
+        if not expect_optional_token(mut p, delimiter)? {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn parse_fields_definition(p: mut ref GqlParser) -> Result[Vec[FieldDef], GqlErr] {
+    let mut out: Vec[FieldDef] = Vec.new();
+    if expect_optional_token(mut p, K_BRACE_L)? {
+        out.push(parse_field_definition(mut p)?);
+        while not expect_optional_token(mut p, K_BRACE_R)? {
+            out.push(parse_field_definition(mut p)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_field_definition(p: mut ref GqlParser) -> Result[FieldDef, GqlErr] {
+    let desc = parse_description(mut p)?;
+    let name = parse_name(mut p)?.value;
+    let args = parse_input_values(mut p, K_PAREN_L, K_PAREN_R)?;
+    expect_token(mut p, K_COLON)?;
+    let ty = parse_type_reference(mut p)?;
+    let dirs = parse_directives(mut p, true)?;
+    Ok(FieldDef { desc, name, args, ty, dirs })
+}
+
+// parse_argument_defs (parentheses) and parse_input_fields_definition
+// (braces) are the same optional_many over input value definitions.
+fn parse_input_values(p: mut ref GqlParser, open: i64, close: i64) -> Result[Vec[InputDef], GqlErr] {
+    let mut out: Vec[InputDef] = Vec.new();
+    if expect_optional_token(mut p, open)? {
+        out.push(parse_input_value_def(mut p)?);
+        while not expect_optional_token(mut p, close)? {
+            out.push(parse_input_value_def(mut p)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_input_value_def(p: mut ref GqlParser) -> Result[InputDef, GqlErr] {
+    let desc = parse_description(mut p)?;
+    let name = parse_name(mut p)?.value;
+    expect_token(mut p, K_COLON)?;
+    let ty = parse_type_reference(mut p)?;
+    let default = if expect_optional_token(mut p, K_EQUALS)? { Some(parse_value_literal(mut p, true)?) } else { None };
+    let dirs = parse_directives(mut p, true)?;
+    Ok(InputDef { desc, name, ty, default, dirs })
+}
+
+fn parse_union_member_types(p: mut ref GqlParser) -> Result[Vec[Name], GqlErr] {
+    if expect_optional_token(mut p, K_EQUALS)? {
+        return delimited_names(mut p, K_PIPE);
+    }
+    Ok(Vec.new())
+}
+
+fn parse_enum_values_definition(p: mut ref GqlParser) -> Result[Vec[EnumValueDef], GqlErr] {
+    let mut out: Vec[EnumValueDef] = Vec.new();
+    if expect_optional_token(mut p, K_BRACE_L)? {
+        out.push(parse_enum_value_definition(mut p)?);
+        while not expect_optional_token(mut p, K_BRACE_R)? {
+            out.push(parse_enum_value_definition(mut p)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_enum_value_definition(p: mut ref GqlParser) -> Result[EnumValueDef, GqlErr] {
+    let desc = parse_description(mut p)?;
+    let t = tok(p);
+    let v = t.value.clone().unwrap_or(String.new());
+    if t.value.is_some() and (v == "true" or v == "false" or v == "null") {
+        return Err(syntax(t.start, f"{token_desc(t)} is reserved and cannot be used for an enum value."));
+    }
+    let name = parse_name(mut p)?.value;
+    let dirs = parse_directives(mut p, true)?;
+    Ok(EnumValueDef { desc, name, dirs })
+}
+
+fn parse_operation_types(p: mut ref GqlParser, required: bool) -> Result[Vec[OpTypeDef], GqlErr] {
+    let mut out: Vec[OpTypeDef] = Vec.new();
+    let open = if required { expect_token(mut p, K_BRACE_L)?; true } else { expect_optional_token(mut p, K_BRACE_L)? };
+    if open {
+        out.push(parse_operation_type_definition(mut p)?);
+        while not expect_optional_token(mut p, K_BRACE_R)? {
+            out.push(parse_operation_type_definition(mut p)?);
+        }
+    }
+    Ok(out)
+}
+
+fn parse_type_system_definition(p: mut ref GqlParser, kind: i64) -> Result[TsDef, GqlErr] {
+    let mut d = empty_ts(kind, false, tok(p).start);
+    d.desc = parse_description(mut p)?;
+    let word = ts_keyword(kind);
+    expect_keyword(mut p, word.as_str())?;
+    if kind == T_SCHEMA {
+        d.dirs = parse_directives(mut p, true)?;
+        d.ops = parse_operation_types(mut p, true)?;
+        return Ok(d);
+    }
+    if kind == T_DIRECTIVE {
+        expect_token(mut p, K_AT)?;
+        d.name = parse_name(mut p)?.value;
+        d.inputs = parse_input_values(mut p, K_PAREN_L, K_PAREN_R)?;
+        d.repeatable = expect_optional_keyword(mut p, "repeatable")?;
+        expect_keyword(mut p, "on")?;
+        expect_optional_token(mut p, K_PIPE)?;
+        loop {
+            let t = tok(p);
+            let name = parse_name(mut p)?.value;
+            if not is_directive_location(name) {
+                return Err(unexpected(t));
+            }
+            d.locations.push(name);
+            if not expect_optional_token(mut p, K_PIPE)? {
+                break;
+            }
+        }
+        return Ok(d);
+    }
+    d.name = parse_name(mut p)?.value;
+    parse_type_body(mut p, mut d)?;
+    Ok(d)
+}
+
+// What follows the name, for definitions and extensions alike.
+fn parse_type_body(p: mut ref GqlParser, d: mut ref TsDef) -> Result[(), GqlErr] {
+    let kind = d.kind;
+    if kind == T_TYPE or kind == T_INTERFACE {
+        d.interfaces = parse_implements_interfaces(mut p)?;
+    }
+    d.dirs = parse_directives(mut p, true)?;
+    if kind == T_TYPE or kind == T_INTERFACE {
+        d.fields = parse_fields_definition(mut p)?;
+    } else if kind == T_UNION {
+        d.members = parse_union_member_types(mut p)?;
+    } else if kind == T_ENUM {
+        d.values = parse_enum_values_definition(mut p)?;
+    } else if kind == T_INPUT {
+        d.inputs = parse_input_values(mut p, K_BRACE_L, K_BRACE_R)?;
+    }
+    Ok(())
+}
+
+fn parse_type_system_extension(p: mut ref GqlParser) -> Result[TsDef, GqlErr] {
+    let k = lookahead(mut p.lx)?;
+    let keyword = p.lx.tokens[k as usize].clone();
+    let kind = if keyword.kind == K_NAME { ts_kind(keyword.value.clone().unwrap_or(String.new())) } else { -1 };
+    if kind < 0 or kind == T_DIRECTIVE {
+        return Err(unexpected(keyword));
+    }
+    let mut d = empty_ts(kind, true, tok(p).start);
+    expect_keyword(mut p, "extend")?;
+    let word = ts_keyword(kind);
+    expect_keyword(mut p, word.as_str())?;
+    if kind == T_SCHEMA {
+        d.dirs = parse_directives(mut p, true)?;
+        d.ops = parse_operation_types(mut p, false)?;
+        if d.dirs.len() == 0 and d.ops.len() == 0 {
+            return Err(unexpected_here(p));
+        }
+        return Ok(d);
+    }
+    d.name = parse_name(mut p)?.value;
+    parse_type_body(mut p, mut d)?;
+    let empty = d.interfaces.len() == 0 and d.dirs.len() == 0 and d.fields.len() == 0 and d.members.len() == 0 and d.values.len() == 0 and d.inputs.len() == 0;
+    if empty {
+        return Err(unexpected_here(p));
+    }
+    Ok(d)
+}
+
+fn parse_value_source(src: own Source, is_const: bool) -> Result[Value, GqlErr] {
+    let mut p = new_parser(src, -1, false);
+    expect_token(mut p, K_SOF)?;
+    let v = parse_value_literal(mut p, is_const)?;
+    expect_token(mut p, K_EOF)?;
+    Ok(v)
+}
+
+fn parse_type_source(src: own Source) -> Result[TypeRef, GqlErr] {
+    let mut p = new_parser(src, -1, false);
+    expect_token(mut p, K_SOF)?;
+    let t = parse_type_reference(mut p)?;
+    expect_token(mut p, K_EOF)?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ print_ast
+
+// printer.join: the separator goes only between non-empty strings.
+fn join_ne(xs: ref Vec[String], sep: Str) -> String {
+    let mut kept: Vec[String] = Vec.new();
+    for x in xs.iter() {
+        if x.len() > 0 {
+            kept.push(x.clone());
+        }
+    }
+    join_with(kept, sep)
+}
+
+fn wrap(start: Str, s: ref String, end: Str) -> String {
+    if s.len() == 0 { String.new() } else { f"{start}{s}{end}" }
+}
+
+fn indent(s: ref String) -> String {
+    wrap("  ", s.replace("\n", "\n  "), "")
+}
+
+fn block(xs: ref Vec[String]) -> String {
+    wrap("{\n", indent(join_ne(xs, "\n")), "\n}")
+}
+
+fn has_multiline_items(xs: ref Vec[String]) -> bool {
+    for x in xs.iter() {
+        if x.contains("\n") {
+            return true;
+        }
+    }
+    false
+}
+
+fn print_string(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '\u{8}' {
+            out.push_str("\\b");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\u{c}' {
+            out.push_str("\\f");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if o < 0x20 or (o >= 0x7f and o <= 0x9f) {
+            out.push_str(f"\\u{hex_upper(o, 4)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn print_block_string(value: ref String) -> String {
+    let escaped = value.replace("\"\"\"", "\\\"\"\"");
+    let mut lines = py_splitlines(chars_of(escaped));
+    if lines.len() == 0 {
+        lines.push(String.new());
+    }
+    let num_lines = lines.len() as i64;
+    let is_single_line = num_lines == 1;
+    let mut force_leading = num_lines > 1;
+    let mut k: i64 = 1;
+    while force_leading and k < num_lines {
+        let line = lines[k as usize].clone();
+        if line.len() > 0 and not (line.starts_with(" ") or line.starts_with("\t")) {
+            force_leading = false;
+        }
+        k += 1;
+    }
+    let trailing_triple = escaped.ends_with("\\\"\"\"");
+    let trailing_quote = value.ends_with("\"") and not trailing_triple;
+    let trailing_slash = value.ends_with("\\");
+    let force_trailing = trailing_quote or trailing_slash;
+    let multiple = not is_single_line or clen(value) > 70 or force_trailing or force_leading or trailing_triple;
+    let skip_leading = is_single_line and (value.starts_with(" ") or value.starts_with("\t"));
+    let before = if (multiple and not skip_leading) or force_leading { "\n" } else { "" };
+    let after = if multiple or force_trailing { "\n" } else { "" };
+    f"\"\"\"{before}{escaped}{after}\"\"\""
+}
+
+fn print_value(v: ref Value) -> String {
+    match v {
+        Value.Var(n) => f"${n}",
+        Value.Int(s) => s.clone(),
+        Value.Float(s) => s.clone(),
+        Value.Str(s, block) => if *block { print_block_string(s) } else { print_string(s) },
+        Value.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value.Null => "null".to_string(),
+        Value.Enum(s) => s.clone(),
+        Value.List(vals) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in vals.iter() {
+                parts.push(print_value(x));
+            }
+            f"[{join_ne(parts, ", ")}]"
+        }
+        Value.Object(fields) => {
+            let mut parts: Vec[String] = Vec.new();
+            for f in fields.iter() {
+                parts.push(f"{f.name}: {print_value(f.value)}");
+            }
+            f"{{{join_ne(parts, ", ")}}}"
+        }
+    }
+}
+
+fn print_type(t: ref TypeRef) -> String {
+    match t {
+        TypeRef.Named(n) => n.value.clone(),
+        TypeRef.List(inner) => f"[{print_type(inner[0])}]",
+        TypeRef.NonNull(inner) => f"{print_type(inner[0])}!",
+    }
+}
+
+fn named_type(t: ref TypeRef) -> Name {
+    match t {
+        TypeRef.Named(n) => n.clone(),
+        TypeRef.List(inner) => named_type(inner[0]),
+        TypeRef.NonNull(inner) => named_type(inner[0]),
+    }
+}
+
+fn print_args(args: ref Vec[ArgNode]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for a in args.iter() {
+        out.push(f"{a.name}: {print_value(a.value)}");
+    }
+    out
+}
+
+fn print_directive(d: ref Directive) -> String {
+    f"@{d.name}{wrap("(", join_ne(print_args(d.args), ", "), ")")}"
+}
+
+fn print_dirs(ds: ref Vec[Directive]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for d in ds.iter() {
+        parts.push(print_directive(d));
+    }
+    join_ne(parts, " ")
+}
+
+fn print_var_def(v: ref VarDef) -> String {
+    let default = match v.default.clone() {
+        Some(x) => print_value(x),
+        None => String.new(),
+    };
+    f"${v.name}: {print_type(v.ty)}{wrap(" = ", default, "")}{wrap(" ", print_dirs(v.dirs), "")}"
+}
+
+fn print_var_defs(vs: ref Vec[VarDef]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in vs.iter() {
+        parts.push(print_var_def(v));
+    }
+    join_ne(parts, ", ")
+}
+
+fn print_selection_set(sels: ref Vec[Selection]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in sels.iter() {
+        parts.push(print_selection(s));
+    }
+    block(parts)
+}
+
+fn print_selection(s: ref Selection) -> String {
+    match s {
+        Selection.Field(f) => print_field(f),
+        Selection.Spread(name, dirs) => f"...{name}{wrap(" ", print_dirs(dirs), "")}",
+        Selection.Inline(cond, dirs, sel) => {
+            let c = match cond.clone() {
+                Some(x) => f"on {x}",
+                None => String.new(),
+            };
+            join_ne(vec!["...".to_string(), c, print_dirs(dirs), print_selection_set(sel)], " ")
+        }
+    }
+}
+
+fn print_field(f: ref Field) -> String {
+    let alias = match f.alias.clone() {
+        Some(a) => f"{a}: ",
+        None => String.new(),
+    };
+    let prefix = f"{alias}{f.name}";
+    let args = print_args(f.args);
+    let mut args_line = f"{prefix}{wrap("(", join_ne(args, ", "), ")")}";
+    if clen(args_line) > 80 {
+        args_line = f"{prefix}{wrap("(\n", indent(join_ne(args, "\n")), "\n)")}";
+    }
+    let sel = match f.sel.clone() {
+        Some(s) => print_selection_set(s),
+        None => String.new(),
+    };
+    join_ne(vec![args_line, print_dirs(f.dirs), sel], " ")
+}
+
+fn print_op(d: ref OpDef) -> String {
+    let name = d.name.clone().unwrap_or(String.new());
+    let var_defs = wrap("(", print_var_defs(d.vars), ")");
+    let prefix = join_ne(vec![d.op.clone(), join_ne(vec![name, var_defs], ""), print_dirs(d.dirs)], " ");
+    let sel = print_selection_set(d.sel);
+    if prefix == "query" { sel } else { f"{prefix} {sel}" }
+}
+
+fn print_frag(d: ref FragDef) -> String {
+    let vars = wrap("(", print_var_defs(d.vars), ")");
+    f"fragment {d.name}{vars} on {d.cond} {wrap("", print_dirs(d.dirs), " ")}{print_selection_set(d.sel)}"
+}
+
+fn print_desc(d: ref Option[Desc]) -> String {
+    match d.clone() {
+        Some(x) => {
+            let s = if x.block { print_block_string(x.value) } else { print_string(x.value) };
+            f"{s}\n"
+        }
+        None => String.new(),
+    }
+}
+
+fn print_input_value(v: ref InputDef) -> String {
+    let default = match v.default.clone() {
+        Some(x) => print_value(x),
+        None => String.new(),
+    };
+    let body = join_ne(vec![f"{v.name}: {print_type(v.ty)}", wrap("= ", default, ""), print_dirs(v.dirs)], " ");
+    f"{print_desc(v.desc)}{body}"
+}
+
+fn print_arg_defs(args: ref Vec[InputDef]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for a in args.iter() {
+        parts.push(print_input_value(a));
+    }
+    if has_multiline_items(parts) {
+        wrap("(\n", indent(join_ne(parts, "\n")), "\n)")
+    } else {
+        wrap("(", join_ne(parts, ", "), ")")
+    }
+}
+
+fn print_field_def(f: ref FieldDef) -> String {
+    f"{print_desc(f.desc)}{f.name}{print_arg_defs(f.args)}: {print_type(f.ty)}{wrap(" ", print_dirs(f.dirs), "")}"
+}
+
+fn print_ts(d: ref TsDef) -> String {
+    let kw = ts_keyword(d.kind);
+    let head = if d.ext { f"extend {kw}" } else { kw.clone() };
+    let desc = if d.ext { String.new() } else { print_desc(d.desc) };
+    let dirs = print_dirs(d.dirs);
+    let k = d.kind;
+    if k == T_SCHEMA {
+        let mut ops: Vec[String] = Vec.new();
+        for o in d.ops.iter() {
+            ops.push(f"{o.op}: {o.ty.value}");
+        }
+        return f"{desc}{join_ne(vec![head, dirs, block(ops)], " ")}";
+    }
+    if k == T_DIRECTIVE {
+        let rep = if d.repeatable { " repeatable" } else { "" };
+        return f"{desc}directive @{d.name}{print_arg_defs(d.inputs)}{rep} on {join_ne(d.locations, " | ")}";
+    }
+    let mut parts: Vec[String] = vec![head, d.name.clone()];
+    if k == T_TYPE or k == T_INTERFACE {
+        let mut names: Vec[String] = Vec.new();
+        for i in d.interfaces.iter() {
+            names.push(i.value.clone());
+        }
+        parts.push(wrap("implements ", join_ne(names, " & "), ""));
+    }
+    parts.push(dirs);
+    if k == T_TYPE or k == T_INTERFACE {
+        let mut fs: Vec[String] = Vec.new();
+        for f in d.fields.iter() {
+            fs.push(print_field_def(f));
+        }
+        parts.push(block(fs));
+    } else if k == T_UNION {
+        let mut names: Vec[String] = Vec.new();
+        for m in d.members.iter() {
+            names.push(m.value.clone());
+        }
+        parts.push(wrap("= ", join_ne(names, " | "), ""));
+    } else if k == T_ENUM {
+        let mut vs: Vec[String] = Vec.new();
+        for v in d.values.iter() {
+            vs.push(f"{print_desc(v.desc)}{join_ne(vec![v.name.clone(), print_dirs(v.dirs)], " ")}");
+        }
+        parts.push(block(vs));
+    } else if k == T_INPUT {
+        let mut fs: Vec[String] = Vec.new();
+        for f in d.inputs.iter() {
+            fs.push(print_input_value(f));
+        }
+        parts.push(block(fs));
+    }
+    f"{desc}{join_ne(parts, " ")}"
+}
+
+fn print_def(d: ref Def) -> String {
+    match d {
+        Def.Op(o) => print_op(o),
+        Def.Frag(f) => print_frag(f),
+        Def.Ts(t) => print_ts(t),
+    }
+}
+
+fn print_document(defs: ref Vec[Def]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for d in defs.iter() {
+        parts.push(print_def(d));
+    }
+    join_ne(parts, "\n\n")
+}
+
+// ------------------------------------------------------------ output
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn emit(text: ref String, ind: Str) {
+    for line in split_on(text, '\n') {
+        if line.len() > 0 {
+            println(f"{ind}| {line}");
+        } else {
+            println(f"{ind}|");
+        }
+    }
+}
+
+fn show_error(src: ref Source, e: ref GqlErr, ind: Str) {
+    println(f"{ind}error {e.cls}");
+    emit(error_text(src, e), ind);
+}
+
+fn first_location(src: ref Source, e: ref GqlErr) -> String {
+    if e.pos < 0 {
+        return "?".to_string();
+    }
+    let (line, col) = get_location(src, e.pos);
+    f"{line}:{col}"
+}
+
+fn read_data(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn parse_body(body: ref String, name: ref String, max_tokens: i64, legacy: bool) -> Result[Vec[Def], GqlErr] {
+    let mut p = new_parser(source(body, name), max_tokens, legacy);
+    parse_document(mut p)
+}
+
+fn count_char(s: ref String, c: char) -> i64 {
+    let mut n: i64 = 0;
+    for x in s.chars() {
+        if x == c {
+            n += 1;
+        }
+    }
+    n
+}
+
+// ------------------------------------------------------------ jobs
+
+fn job_parse(rel: ref String, opts: ref Vec[String]) {
+    let mut max_tokens: i64 = -1;
+    let mut legacy = false;
+    for o in opts.iter() {
+        if *o == "legacy" {
+            legacy = true;
+        } else if o.starts_with("max_tokens=") {
+            max_tokens = i64.parse(split_on(o, '=')[1]).unwrap_or(-1);
+        }
+    }
+    let body = read_data(rel);
+    match parse_body(body, rel, max_tokens, legacy) {
+        Ok(defs) => emit(print_document(defs), "  "),
+        Err(e) => show_error(source(body, rel), e, "  "),
+    }
+}
+
+fn job_value(rel: ref String, what: Str) {
+    let body = read_data(rel);
+    let name = "GraphQL request".to_string();
+    let printed = if what == "type" {
+        match parse_type_source(source(body, name)) {
+            Ok(t) => Ok(print_type(t)),
+            Err(e) => Err(e),
+        }
+    } else {
+        match parse_value_source(source(body, name), what == "const_value") {
+            Ok(v) => Ok(print_value(v)),
+            Err(e) => Err(e),
+        }
+    };
+    match printed {
+        Ok(s) => emit(s, "  "),
+        Err(e) => show_error(source(body, name), e, "  "),
+    }
+}
+
+fn job_tokens(rel: ref String) {
+    let body = read_data(rel);
+    let mut lx = new_lexer(source(body, rel));
+    let mut err: Option[GqlErr] = None;
+    loop {
+        match advance(mut lx) {
+            Ok(t) => {
+                if t.kind == K_EOF {
+                    break;
+                }
+            }
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    for t in lx.tokens.iter() {
+        println(f"  {token_repr(t)}");
+    }
+    if let Some(e) = err {
+        show_error(lx.src, e, "  ");
+    }
+}
+
+// ------------------------------------------------------------ format
+
+fn fmt_files(files: ref Vec[String]) {
+    for rel in files.iter() {
+        let body = read_data(rel);
+        match parse_body(body, rel, -1, false) {
+            Err(e) => {
+                let src = source(body, rel);
+                println(f"  {rel}: error at {first_location(src, e)}");
+                show_error(src, e, "    ");
+            }
+            Ok(defs) => {
+                let printed = print_document(defs);
+                if body == f"{printed}\n" {
+                    println(f"  {rel}: ok");
+                } else {
+                    println(f"  {rel}: would reformat ({count_char(body, '\n')} lines -> {count_char(printed, '\n') + 1} lines)");
+                    emit(printed, "    ");
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ manifest
+
+fn spreads(sels: ref Vec[Selection], frags: ref Map[String, FragDef], seen: mut ref Vec[String], missing: mut ref Vec[String]) {
+    for s in sels.iter() {
+        match s {
+            Selection.Spread(name, _) => {
+                if seen.contains(name) {
+                    continue;
+                }
+                seen.push(name.clone());
+                match frags.get(name.clone()) {
+                    Some(f) => spreads(f.sel, frags, mut seen, mut missing),
+                    None => missing.push(name.clone()),
+                }
+            }
+            Selection.Field(f) => {
+                if let Some(ss) = f.sel.clone() {
+                    spreads(ss, frags, mut seen, mut missing);
+                }
+            }
+            Selection.Inline(_, _, ss) => spreads(ss, frags, mut seen, mut missing),
+        }
+    }
+}
+
+fn depth(sels: ref Vec[Selection], frags: ref Map[String, FragDef], stack: ref Vec[String]) -> i64 {
+    let mut best: i64 = 0;
+    for s in sels.iter() {
+        let d = match s {
+            Selection.Field(f) => match f.sel.clone() {
+                Some(ss) => 1 + depth(ss, frags, stack),
+                None => 1,
+            },
+            Selection.Inline(_, _, ss) => depth(ss, frags, stack),
+            Selection.Spread(name, _) => {
+                if stack.contains(name) {
+                    0
+                } else {
+                    match frags.get(name.clone()) {
+                        Some(f) => {
+                            let mut deeper = stack.clone();
+                            deeper.push(name.clone());
+                            depth(f.sel, frags, deeper)
+                        }
+                        None => 0,
+                    }
+                }
+            }
+        };
+        if d > best {
+            best = d;
+        }
+    }
+    best
+}
+
+fn root_fields(sels: ref Vec[Selection], frags: ref Map[String, FragDef], out: mut ref Vec[String], stack: ref Vec[String]) {
+    for s in sels.iter() {
+        match s {
+            Selection.Field(f) => {
+                let name = match f.alias.clone() {
+                    Some(a) => a,
+                    None => f.name.clone(),
+                };
+                if not out.contains(name) {
+                    out.push(name);
+                }
+            }
+            Selection.Inline(_, _, ss) => root_fields(ss, frags, mut out, stack),
+            Selection.Spread(name, _) => {
+                if not stack.contains(name) {
+                    if let Some(f) = frags.get(name.clone()) {
+                        let mut deeper = stack.clone();
+                        deeper.push(name.clone());
+                        root_fields(f.sel, frags, mut out, deeper);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn fnv1a(text: ref String) -> String {
+    let mut h: i64 = 0x811C9DC5;
+    for b in text.bytes() {
+        h = h ^ (b as i64);
+        h = (h * 0x01000193) % 4294967296;
+    }
+    hex_upper(h, 8).to_lowercase()
+}
+
+fn manifest(files: ref Vec[String]) {
+    let mut docs: Vec[(String, Vec[Def])] = Vec.new();
+    let mut frags: Map[String, FragDef] = Map.new();
+    for rel in files.iter() {
+        let body = read_data(rel);
+        let defs = match parse_body(body, rel, -1, false) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"  {rel}: skipped, {e.message} at {first_location(source(body, rel), e)}");
+                continue;
+            }
+        };
+        for d in defs.iter() {
+            if let Def.Frag(f) = d {
+                if frags.contains_key(f.name.clone()) {
+                    println(f"  {rel}: fragment {f.name} defined twice");
+                } else {
+                    frags.insert(f.name.clone(), f.clone());
+                }
+            }
+        }
+        docs.push((rel.clone(), defs));
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut count: i64 = 0;
+    for doc in docs.iter() {
+        let rel = doc.0.clone();
+        for d in doc.1.iter() {
+            let op = match d {
+                Def.Op(o) => o.clone(),
+                _ => continue,
+            };
+            count += 1;
+            let name = match op.name.clone() {
+                Some(n) => n,
+                None => "(anonymous)".to_string(),
+            };
+            println(f"  {op.op} {name}  [{rel}]");
+            if op.name.is_some() and names.contains(name) {
+                println("    duplicate operation name");
+            }
+            if not names.contains(name) {
+                names.push(name.clone());
+            }
+            let mut vars: Vec[String] = Vec.new();
+            for v in op.vars.iter() {
+                vars.push(print_var_def(v));
+            }
+            let shown_vars = if vars.len() > 0 { join_with(vars, ", ") } else { "none".to_string() };
+            println(f"    variables: {shown_vars}");
+            let mut seen: Vec[String] = Vec.new();
+            let mut missing: Vec[String] = Vec.new();
+            spreads(op.sel, frags, mut seen, mut missing);
+            let mut used: Vec[String] = Vec.new();
+            for s in seen.iter() {
+                if not missing.contains(s) {
+                    used.push(s.clone());
+                }
+            }
+            used.sort();
+            missing.sort();
+            let shown_used = if used.len() > 0 { join_with(used, ", ") } else { "none".to_string() };
+            println(f"    fragments: {shown_used}");
+            if missing.len() > 0 {
+                println(f"    missing fragments: {join_with(missing, ", ")}");
+            }
+            let mut fields: Vec[String] = Vec.new();
+            root_fields(op.sel, frags, mut fields, Vec.new());
+            println(f"    root fields: {join_with(fields, ", ")}");
+            println(f"    depth: {depth(op.sel, frags, Vec.new())}");
+            let mut parts: Vec[String] = vec![print_op(op)];
+            for n in used.iter() {
+                if let Some(f) = frags.get(n.clone()) {
+                    parts.push(print_frag(f));
+                }
+            }
+            let text = join_with(parts, "\n\n");
+            println(f"    document: {clen(text)} characters, id {fnv1a(text)}");
+        }
+    }
+    println(f"  {count} operations, {frags.len()} fragments");
+}
+
+// ------------------------------------------------------------ schema
+
+#[derive(Clone)]
+struct TypeInfo {
+    name: String,
+    kind: String,
+    members: Vec[String],
+    interfaces: Vec[String],
+    ext: i64,
+}
+
+struct SchemaScan {
+    rel: String,
+    src: Source,
+    types: Vec[TypeInfo],
+    directives: Vec[String],
+    directive_names: Vec[String],
+    ops: Vec[String],
+    refs: Vec[(String, String)],
+    dir_uses: Vec[(String, String)],
+}
+
+fn where_at(sc: ref SchemaScan, pos: i64) -> String {
+    let (line, col) = get_location(sc.src, pos);
+    f"{sc.rel}:{line}:{col}"
+}
+
+fn find_type(sc: ref SchemaScan, name: ref String) -> i64 {
+    let mut k: i64 = 0;
+    for t in sc.types.iter() {
+        if t.name == *name {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn uses(sc: mut ref SchemaScan, dirs: ref Vec[Directive]) {
+    for d in dirs.iter() {
+        let w = where_at(sc, d.start);
+        sc.dir_uses.push((d.name.clone(), w));
+    }
+}
+
+fn add_ref(sc: mut ref SchemaScan, n: ref Name) {
+    let w = where_at(sc, n.start);
+    sc.refs.push((n.value.clone(), w));
+}
+
+fn add_members(t: mut ref TypeInfo, d: ref TsDef) {
+    for f in d.fields.iter() {
+        t.members.push(f.name.clone());
+    }
+    if d.kind == T_INPUT {
+        for f in d.inputs.iter() {
+            t.members.push(f.name.clone());
+        }
+    }
+    for v in d.values.iter() {
+        t.members.push(v.name.clone());
+    }
+    for m in d.members.iter() {
+        t.members.push(m.value.clone());
+    }
+    for i in d.interfaces.iter() {
+        t.interfaces.push(i.value.clone());
+    }
+}
+
+fn refs_of(sc: mut ref SchemaScan, d: ref TsDef) {
+    for i in d.interfaces.iter() {
+        add_ref(mut sc, i);
+    }
+    for m in d.members.iter() {
+        add_ref(mut sc, m);
+    }
+    for f in d.fields.iter() {
+        add_ref(mut sc, named_type(f.ty));
+        uses(mut sc, f.dirs);
+        for a in f.args.iter() {
+            add_ref(mut sc, named_type(a.ty));
+            uses(mut sc, a.dirs);
+        }
+    }
+    if d.kind == T_INPUT {
+        for f in d.inputs.iter() {
+            add_ref(mut sc, named_type(f.ty));
+            uses(mut sc, f.dirs);
+        }
+    }
+    for v in d.values.iter() {
+        uses(mut sc, v.dirs);
+    }
+    uses(mut sc, d.dirs);
+}
+
+fn scan_definition(sc: mut ref SchemaScan, d: ref Def) {
+    let t = match d {
+        Def.Ts(t) => t.clone(),
+        Def.Op(o) => {
+            println(f"  {where_at(sc, o.start)}: OperationDefinitionNode is not a type system definition");
+            return;
+        }
+        Def.Frag(f) => {
+            println(f"  {where_at(sc, f.start)}: FragmentDefinitionNode is not a type system definition");
+            return;
+        }
+    };
+    if t.kind >= T_SCALAR and t.kind <= T_INPUT {
+        let kind = ts_keyword(t.kind);
+        let k = find_type(sc, t.name);
+        if not t.ext {
+            if k >= 0 {
+                println(f"  {where_at(sc, t.start)}: {kind} {t.name} defined again");
+                return;
+            }
+            let mut info = TypeInfo { name: t.name.clone(), kind, members: Vec.new(), interfaces: Vec.new(), ext: 0 };
+            add_members(mut info, t);
+            sc.types.push(info);
+            refs_of(mut sc, t);
+            return;
+        }
+        if k < 0 {
+            println(f"  {where_at(sc, t.start)}: extend {kind} {t.name}, which is not defined");
+        } else if sc.types[k as usize].kind != kind {
+            println(f"  {where_at(sc, t.start)}: extend {kind} {t.name}, which is a {sc.types[k as usize].kind}");
+        } else {
+            sc.types[k as usize].ext += 1;
+            add_members(mut sc.types[k as usize], t);
+        }
+        refs_of(mut sc, t);
+        return;
+    }
+    if t.kind == T_SCHEMA {
+        for o in t.ops.iter() {
+            sc.ops.push(f"{o.op} {o.ty.value}");
+            add_ref(mut sc, o.ty);
+        }
+        uses(mut sc, t.dirs);
+        return;
+    }
+    let mut args: Vec[String] = Vec.new();
+    for a in t.inputs.iter() {
+        args.push(a.name.clone());
+    }
+    let rep = if t.repeatable { " repeatable" } else { "" };
+    sc.directives.push(f"@{t.name}({join_with(args, ", ")}){rep} on {join_with(t.locations, " | ")}");
+    sc.directive_names.push(t.name.clone());
+    for a in t.inputs.iter() {
+        add_ref(mut sc, named_type(a.ty));
+        uses(mut sc, a.dirs);
+    }
+}
+
+fn schema(files: ref Vec[String]) {
+    let mut sc = SchemaScan {
+        rel: String.new(),
+        src: source(String.new(), String.new()),
+        types: Vec.new(),
+        directives: Vec.new(),
+        directive_names: Vec.new(),
+        ops: Vec.new(),
+        refs: Vec.new(),
+        dir_uses: Vec.new(),
+    };
+    for rel in files.iter() {
+        let body = read_data(rel);
+        let defs = match parse_body(body, rel, -1, false) {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"  {rel}: skipped, {e.message} at {first_location(source(body, rel), e)}");
+                continue;
+            }
+        };
+        sc.rel = rel.clone();
+        sc.src = source(body, rel);
+        for d in defs.iter() {
+            scan_definition(mut sc, d);
+        }
+    }
+    let shown_ops = if sc.ops.len() > 0 { join_with(sc.ops, ", ") } else { "none".to_string() };
+    println(f"  schema: {shown_ops}");
+    let mut order: Vec[String] = Vec.new();
+    for t in sc.types.iter() {
+        order.push(t.name.clone());
+    }
+    order.sort();
+    for name in order.iter() {
+        let t = sc.types[find_type(sc, name) as usize].clone();
+        let mut line = f"{t.kind} {name}";
+        if t.interfaces.len() > 0 {
+            line.push_str(f" implements {join_with(t.interfaces, " & ")}");
+        }
+        let is_union = t.kind == "union";
+        let body = join_with(t.members, if is_union { " | " } else { ", " });
+        if body.len() > 0 {
+            line.push_str(if is_union { " = " } else { ": " });
+            line.push_str(body);
+        }
+        if t.ext > 0 {
+            let plural = if t.ext == 1 { "" } else { "s" };
+            line.push_str(f" (+{t.ext} extension{plural})");
+        }
+        println(f"  {line}");
+    }
+    for d in sc.directives.iter() {
+        println(f"  directive {d}");
+    }
+    let builtin_scalars = vec!["Int".to_string(), "Float".to_string(), "String".to_string(), "Boolean".to_string(), "ID".to_string()];
+    let mut shown: Vec[String] = Vec.new();
+    for r in sc.refs.iter() {
+        let name = r.0.clone();
+        if find_type(sc, name) < 0 and not builtin_scalars.contains(name) and not shown.contains(name) {
+            println(f"  unknown type {name}, first at {r.1}");
+            shown.push(name);
+        }
+    }
+    let builtin_directives = vec!["skip".to_string(), "include".to_string(), "deprecated".to_string(), "specifiedBy".to_string()];
+    let mut shown_dirs: Vec[String] = Vec.new();
+    for u in sc.dir_uses.iter() {
+        let name = u.0.clone();
+        if not sc.directive_names.contains(name) and not builtin_directives.contains(name) and not shown_dirs.contains(name) {
+            println(f"  unknown directive @{name}, first at {u.1}");
+            shown_dirs.push(name);
+        }
+    }
+}
+
+// ------------------------------------------------------------ extract
+
+fn find_seq(cs: ref Vec[char], pat: Str, from: i64) -> i64 {
+    let ps: Vec[char] = pat.chars().collect();
+    let n = cs.len() as i64;
+    let m = ps.len() as i64;
+    let mut k = from;
+    while k + m <= n {
+        let mut j: i64 = 0;
+        while j < m and cs[(k + j) as usize] == ps[j as usize] {
+            j += 1;
+        }
+        if j == m {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn extract(files: ref Vec[String]) {
+    for rel in files.iter() {
+        let text = chars_of(read_data(rel));
+        let mut pos: i64 = 0;
+        loop {
+            let k = find_seq(text, "gql`", pos);
+            if k < 0 {
+                break;
+            }
+            let start = k + 4;
+            let end = find_seq(text, "`", start);
+            if end < 0 {
+                println(f"  {rel}: unterminated template");
+                break;
+            }
+            pos = end + 1;
+            let mut line: i64 = 1;
+            let mut last_nl: i64 = -1;
+            let mut j: i64 = 0;
+            while j < start {
+                if text[j as usize] == '\n' {
+                    line += 1;
+                    last_nl = j;
+                }
+                j += 1;
+            }
+            let col = start - (last_nl + 1) + 1;
+            let body = str_of(text, start, end);
+            let at = f"{rel}:{line}:{col}";
+            if body.contains("${") {
+                println(f"  {at}: skipped, the template interpolates");
+                continue;
+            }
+            let mut src = source(body, rel);
+            src.off_line = line;
+            src.off_col = col;
+            let mut p = new_parser(source(body, rel), -1, false);
+            p.lx.src.off_line = line;
+            p.lx.src.off_col = col;
+            match parse_document(mut p) {
+                Err(e) => {
+                    println(f"  {at}: error");
+                    show_error(src, e, "    ");
+                }
+                Ok(defs) => {
+                    let mut names: Vec[String] = Vec.new();
+                    for d in defs.iter() {
+                        match d {
+                            Def.Op(o) => {
+                                let n = match o.name.clone() {
+                                    Some(x) => x,
+                                    None => "(anonymous)".to_string(),
+                                };
+                                names.push(f"{o.op} {n}");
+                            }
+                            Def.Frag(f) => names.push(f"fragment {f.name} on {f.cond}"),
+                            Def.Ts(_) => {}
+                        }
+                    }
+                    println(f"  {at}: {join_with(names, ", ")}");
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k + 1 < cs.len() {
+        out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+        k += 2;
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k as usize] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    str_of(cs, 0, cut)
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let line = hex_string(hex);
+        if line.starts_with("#") {
+            println(line);
+            continue;
+        }
+        println(f"> {line}");
+        let parts = split_on(line, ' ');
+        let cmd = parts[0].clone();
+        let mut args: Vec[String] = Vec.new();
+        let mut k: i64 = 1;
+        while k < parts.len() {
+            args.push(parts[k].clone());
+            k += 1;
+        }
+        if cmd == "parse" {
+            let mut opts: Vec[String] = Vec.new();
+            let mut j: i64 = 1;
+            while j < args.len() {
+                opts.push(args[j].clone());
+                j += 1;
+            }
+            job_parse(args[0], opts);
+        } else if cmd == "value" or cmd == "const_value" or cmd == "type" {
+            job_value(args[0], cmd.as_str());
+        } else if cmd == "tokens" {
+            job_tokens(args[0]);
+        } else if cmd == "!format" {
+            fmt_files(args);
+        } else if cmd == "!manifest" {
+            manifest(args);
+        } else if cmd == "!schema" {
+            schema(args);
+        } else if cmd == "!extract" {
+            extract(args);
+        } else {
+            println(f"unknown job {line}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("2320746865206b69746368656e2073696e6b732c2070617273656420616e64207072696e746564206261636b\n70617273652063617365732f6b69746368656e5f73696e6b2e6772617068716c\n70617273652063617365732f736368656d615f6b69746368656e5f73696e6b2e6772617068716c\n70617273652063617365732f6b69746368656e5f73696e6b2e6772617068716c206e6f5f6c6f636174696f6e\n23207072696e74696e673a2077686174207072696e745f617374206b6565707320616e6420776861742069742064726f7073\n70617273652063617365732f73686f727468616e642e6772617068716c\n70617273652063617365732f71756572795f6b6579776f72642e6772617068716c\n70617273652063617365732f71756572795f6469726563746976652e6772617068716c\n70617273652063617365732f6e616d65645f6e6f5f766172732e6772617068716c\n70617273652063617365732f636f6d6d656e74732e6772617068716c\n70617273652063617365732f616c69617365732e6772617068716c\n70617273652063617365732f6c6f6e675f617267732e6772617068716c\n70617273652063617365732f6569676874792e6772617068716c\n70617273652063617365732f6569676874795f6f6e652e6772617068716c\n70617273652063617365732f7661726961626c65732e6772617068716c\n70617273652063617365732f76616c7565732e6772617068716c\n70617273652063617365732f667261676d656e74732e6772617068716c\n70617273652063617365732f63726c662e6772617068716c\n70617273652063617365732f626f6d2e6772617068716c\n70617273652063617365732f756e69636f64655f6e616d65735f696e5f737472696e67732e6772617068716c\n23207072696e74696e6720737472696e67733a20657363617065732c20756e69636f646520616e6420626c6f636b20737472696e6773\n70617273652063617365732f657363617065732e6772617068716c\n70617273652063617365732f756e69636f64655f657363617065732e6772617068716c\n70617273652063617365732f626c6f636b5f706c61696e2e6772617068716c\n70617273652063617365732f626c6f636b5f6f6e655f6c696e652e6772617068716c\n70617273652063617365732f626c6f636b5f6573636170652e6772617068716c\n70617273652063617365732f626c6f636b5f6573636170655f747261702e6772617068716c\n70617273652063617365732f626c6f636b5f6c6f6e672e6772617068716c\n70617273652063617365732f626c6f636b5f626c616e6b5f6c696e65732e6772617068716c\n");
+    s.push_str("70617273652063617365732f626c6f636b5f656d7074792e6772617068716c\n70617273652063617365732f626c6f636b5f746162732e6772617068716c\n70617273652063617365732f626c6f636b5f63726c662e6772617068716c\n70617273652063617365732f626c6f636b5f696e64656e7465645f66697273742e6772617068716c\n70617273652063617365732f626c6f636b5f6f64645f627265616b732e6772617068716c\n70617273652063617365732f626c6f636b5f636f6e74726f6c2e6772617068716c\n23206465736372697074696f6e73206f6e20747970652073797374656d20646566696e6974696f6e73\n70617273652063617365732f6465736372697074696f6e732e6772617068716c\n23206c656761637920667261676d656e74207661726961626c657320616e642074686520746f6b656e206c696d6974\n70617273652063617365732f6c65676163795f667261676d656e742e6772617068716c\n70617273652063617365732f6c65676163795f667261676d656e742e6772617068716c206c6567616379\n70617273652063617365732f6b69746368656e5f73696e6b2e6772617068716c206d61785f746f6b656e733d3530\n70617273652063617365732f6b69746368656e5f73696e6b2e6772617068716c206d61785f746f6b656e733d31303030\n70617273652063617365732f74696e792e6772617068716c206d61785f746f6b656e733d33\n70617273652063617365732f74696e792e6772617068716c206d61785f746f6b656e733d32\n232073796e746178206572726f72732066726f6d2074686520706172736572\n70617273652063617365732f656f662e6772617068716c\n70617273652063617365732f6d697373696e675f6f6e2e6772617068716c\n70617273652063617365732f6669656c645f62726163652e6772617068716c\n70617273652063617365732f6e6f745f616e5f6f7065726174696f6e2e6772617068716c\n70617273652063617365732f7370726561645f6f6e6c792e6772617068716c\n70617273652063617365732f656d7074795f737472696e675f6e616d652e6772617068716c\n70617273652063617365732f7661725f696e5f636f6e73742e6772617068716c\n70617273652063617365732f646f6c6c61725f696e5f636f6e73742e6772617068716c\n70617273652063617365732f667261676d656e745f6e616d65645f6f6e2e6772617068716c\n70617273652063617365732f7370726561645f6f6e2e6772617068716c\n70617273652063617365732f646573635f6f6e5f71756572792e6772617068716c\n70617273652063617365732f646573635f6f6e5f657874656e642e6772617068716c\n");
+    s.push_str("70617273652063617365732f656e756d5f747275652e6772617068716c\n70617273652063617365732f656e756d5f6e756c6c2e6772617068716c\n70617273652063617365732f657874656e645f736368656d615f626172652e6772617068716c\n70617273652063617365732f657874656e645f7363616c61725f626172652e6772617068716c\n70617273652063617365732f657874656e645f747970655f626172652e6772617068716c\n70617273652063617365732f657874656e645f756e6b6e6f776e2e6772617068716c\n70617273652063617365732f6261645f6c6f636174696f6e2e6772617068716c\n70617273652063617365732f6c6f776572636173655f6c6f636174696f6e2e6772617068716c\n70617273652063617365732f6261645f6f7065726174696f6e2e6772617068716c\n70617273652063617365732f656d7074795f73656c656374696f6e2e6772617068716c\n70617273652063617365732f656d7074795f617267732e6772617068716c\n70617273652063617365732f656d7074795f646f632e6772617068716c\n70617273652063617365732f6f6e6c795f636f6d6d656e742e6772617068716c\n70617273652063617365732f756e696f6e5f656d7074795f6d656d6265722e6772617068716c\n70617273652063617365732f747970655f6c6973745f756e636c6f7365642e6772617068716c\n70617273652063617365732f646f75626c655f62616e672e6772617068716c\n70617273652063617365732f64656661756c745f6d697373696e672e6772617068716c\n70617273652063617365732f696d706c656d656e74735f616d705f6f6e6c792e6772617068716c\n70617273652063617365732f736368656d615f6e6f5f6f70732e6772617068716c\n70617273652063617365732f64616e676c696e675f61742e6772617068716c\n70617273652063617365732f6261645f76616c75652e6772617068716c\n70617273652063617365732f6f626a6563745f6e6f5f636f6c6f6e2e6772617068716c\n232073796e746178206572726f72732066726f6d20746865206c65786572\n70617273652063617365732f73696e676c655f71756f74652e6772617068716c\n70617273652063617365732f756e7465726d696e617465642e6772617068716c\n70617273652063617365732f756e7465726d696e617465645f626c6f636b2e6772617068716c\n70617273652063617365732f737472696e675f6e65776c696e652e6772617068716c\n70617273652063617365732f6261645f6573636170652e6772617068716c\n70617273652063617365732f6261645f6573636170655f782e6772617068716c\n70617273652063617365732f6261645f756e69636f64655f73686f72742e6772617068716c\n");
+    s.push_str("70617273652063617365732f6261645f756e69636f64655f6c6574746572732e6772617068716c\n70617273652063617365732f6261645f756e69636f64655f6269672e6772617068716c\n70617273652063617365732f6261645f756e69636f64655f6f70656e2e6772617068716c\n70617273652063617365732f6261645f756e69636f64655f656d7074792e6772617068716c\n70617273652063617365732f6261645f756e69636f64655f6c6f6e672e6772617068716c\n70617273652063617365732f6c6f6e655f737572726f676174652e6772617068716c\n70617273652063617365732f6c6561645f616c6f6e652e6772617068716c\n70617273652063617365732f6c6561645f7468656e5f6261642e6772617068716c\n70617273652063617365732f737572726f676174655f6272616365732e6772617068716c\n70617273652063617365732f7a65726f5f7a65726f2e6772617068716c\n70617273652063617365732f646f745f6e6f5f6469676974732e6772617068716c\n70617273652063617365732f646f745f652e6772617068716c\n70617273652063617365732f6c656164696e675f646f742e6772617068716c\n70617273652063617365732f6578705f6e6f5f6469676974732e6772617068716c\n70617273652063617365732f74776f5f646f74732e6772617068716c\n70617273652063617365732f6865782e6772617068716c\n70617273652063617365732f756e64657273636f72652e6772617068716c\n70617273652063617365732f6c65747465725f61667465722e6772617068716c\n70617273652063617365732f6d696e75735f616c6f6e652e6772617068716c\n70617273652063617365732f706c75732e6772617068716c\n70617273652063617365732f74776f5f646f745f7370726561642e6772617068716c\n70617273652063617365732f7175657374696f6e2e6772617068716c\n70617273652063617365732f7265666572656e63655f6d61726b2e6772617068716c\n70617273652063617365732f62656c6c2e6772617068716c\n70617273652063617365732f7a65726f5f77696474682e6772617068716c\n70617273652063617365732f656d6f6a692e6772617068716c\n70617273652063617365732f6e6273702e6772617068716c\n70617273652063617365732f6573636170655f61745f656e642e6772617068716c\n70617273652063617365732f756e69636f64655f61745f656e642e6772617068716c\n70617273652063617365732f706169725f61745f656e642e6772617068716c\n2320776865726520746865206572726f72206973207265706f72746564\n70617273652063617365732f62726163655f6e6578745f6c696e652e6772617068716c\n");
+    s.push_str("70617273652063617365732f646565705f6c696e652e6772617068716c\n70617273652063617365732f63726c665f6572726f722e6772617068716c\n70617273652063617365732f63725f6572726f722e6772617068716c\n70617273652063617365732f6d696e69666965642e6772617068716c\n70617273652063617365732f6d696e69666965645f656e642e6772617068716c\n70617273652063617365732f767461625f636f6d6d656e742e6772617068716c\n70617273652063617365732f6c696e655f7365705f636f6d6d656e742e6772617068716c\n70617273652063617365732f666f726d666565645f6c6173742e6772617068716c\n232070617273655f76616c75652c2070617273655f636f6e73745f76616c756520616e642070617273655f74797065\n76616c75652063617365732f765f6c6973742e6772617068716c\n636f6e73745f76616c75652063617365732f765f6c6973742e6772617068716c\n76616c75652063617365732f765f626c6f636b2e6772617068716c\n636f6e73745f76616c75652063617365732f765f626c6f636b2e6772617068716c\n76616c75652063617365732f765f656d7074795f6f626a6563742e6772617068716c\n636f6e73745f76616c75652063617365732f765f656d7074795f6f626a6563742e6772617068716c\n76616c75652063617365732f765f747261696c696e672e6772617068716c\n636f6e73745f76616c75652063617365732f765f747261696c696e672e6772617068716c\n76616c75652063617365732f765f7661725f6e616d652e6772617068716c\n636f6e73745f76616c75652063617365732f765f7661725f6e616d652e6772617068716c\n76616c75652063617365732f765f6261642e6772617068716c\n636f6e73745f76616c75652063617365732f765f6261642e6772617068716c\n76616c75652063617365732f765f6f626a6563745f6475702e6772617068716c\n636f6e73745f76616c75652063617365732f765f6f626a6563745f6475702e6772617068716c\n747970652063617365732f745f6e65737465642e6772617068716c\n747970652063617365732f745f6e616d65642e6772617068716c\n747970652063617365732f745f646f75626c655f62616e672e6772617068716c\n747970652063617365732f745f756e636c6f7365642e6772617068716c\n747970652063617365732f745f656d7074792e6772617068716c\n747970652063617365732f745f6c6973745f6f665f6c6973742e6772617068716c\n2320746865206c65786572277320746f6b656e732c207769746820636f6d6d656e74732c206c696e657320616e6420636f6c756d6e73\n");
+    s.push_str("746f6b656e732063617365732f746f6b5f62617369632e6772617068716c\n746f6b656e732063617365732f746f6b5f626c6f636b2e6772617068716c\n746f6b656e732063617365732f746f6b5f626c6f636b5f63726c662e6772617068716c\n746f6b656e732063617365732f746f6b5f70756e63742e6772617068716c\n746f6b656e732063617365732f746f6b5f636f6d6d656e74732e6772617068716c\n746f6b656e732063617365732f746f6b5f756e69636f64652e6772617068716c\n746f6b656e732063617365732f6261645f6573636170652e6772617068716c\n746f6b656e732063617365732f656d7074795f646f632e6772617068716c\n23206120636c69656e74206170703a20666f726d617420636865636b2c207065727369737465642d7175657279206d616e69666573742c20736368656d6120636865636b2c2067716c60602065787472616374696f6e\n21666f726d6174206170702f717565726965732f61646d696e2e6772617068716c206170702f717565726965732f62726f6b656e2e6772617068716c206170702f717565726965732f636174616c6f672e6772617068716c206170702f717565726965732f636865636b6f75742e6772617068716c206170702f717565726965732f666f726d61747465642e6772617068716c206170702f717565726965732f667261676d656e74732e6772617068716c206170702f717565726965732f757365722e6772617068716c\n216d616e6966657374206170702f717565726965732f61646d696e2e6772617068716c206170702f717565726965732f62726f6b656e2e6772617068716c206170702f717565726965732f636174616c6f672e6772617068716c206170702f717565726965732f636865636b6f75742e6772617068716c206170702f717565726965732f666f726d61747465642e6772617068716c206170702f717565726965732f667261676d656e74732e6772617068716c206170702f717565726965732f757365722e6772617068716c\n21736368656d61206170702f736368656d612f736368656d612e6772617068716c206170702f736368656d612f6f72646572732e6772617068716c\n21736368656d612063617365732f736368656d615f6b69746368656e5f73696e6b2e6772617068716c\n2165787472616374206170702f7372632f55736572436172642e6a7378206170702f7372632f6170692e7473\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("cases/kitchen_sink.graphql 71756572792071756572794e616d652824666f6f3a20436f6d706c6578547970652c2024736974653a2053697465203d204d4f42494c452920406f6e5175657279207b0a202077686f6576657231323369733a206e6f64652869643a205b3132332c203435365d29207b0a202020206964202c0a202020202e2e2e206f6e205573657220406f6e496e6c696e65467261676d656e74207b0a2020202020206669656c6432207b0a20202020202020206964202c0a2020202020202020616c6961733a206669656c64312866697273743a31302c2061667465723a24666f6f2c292040696e636c7564652869663a2024666f6f29207b0a2020202020202020202069642c0a202020202020202020202e2e2e6672616720406f6e467261676d656e745370726561640a20202020202020207d0a2020202020207d0a202020207d0a202020202e2e2e2040736b697028756e6c6573733a2024666f6f29207b0a20202020202069640a202020207d0a202020202e2e2e207b0a20202020202069640a202020207d0a20207d0a7d0a0a6d75746174696f6e206c696b6553746f727920406f6e4d75746174696f6e207b0a20206c696b652873746f72793a203132332920406f6e4669656c64207b0a2020202073746f7279207b0a202020202020696420406f6e4669656c640a202020207d0a20207d0a7d0a0a737562736372697074696f6e2053746f72794c696b65537562736372697074696f6e280a202024696e7075743a2053746f72794c696b65537562736372696265496e70757420406f6e5661726961626c65446566696e6974696f6e0a2920406f6e537562736372697074696f6e207b0a202073746f72794c696b6553756273637269626528696e7075743a2024696e70757429207b0a2020202073746f7279207b0a2020202020206c696b657273207b0a2020202020202020636f756e740a2020202020207d0a2020202020206c696b6553656e74656e6365207b0a2020202020202020746578740a2020202020207d0a202020207d0a20207d0a7d0a0a667261676d656e742066726167206f6e20467269656e6420406f6e467261676d656e74446566696e6974696f6e207b0a2020666f6f2873697a653a202473697a652c206261723a2024622c206f626a3a207b6b65793a202276616c7565222c20626c6f636b3a202222220a0a202020202020626c6f636b20737472696e672075736573205c2222220a0a20202222227d290a7d0a0a7b0a2020756e6e616d6564287472757468793a20747275652c2066616c73793a2066616c73652c206e756c6c6973683a206e756c6c292c0a202071756572790a7d0a0a7175657279207b205f5f747970656e616d65207d0a\n");
+    s.push_str("cases/schema_kitchen_sink.graphql 222222546869732069732061206465736372697074696f6e206f662074686520736368656d6120617320612077686f6c652e2222220a736368656d61207b0a202071756572793a205175657279547970650a20206d75746174696f6e3a204d75746174696f6e547970650a7d0a0a2222220a546869732069732061206465736372697074696f6e0a6f66207468652060466f6f6020747970652e0a2222220a7479706520466f6f20696d706c656d656e74732042617220262042617a20262054776f207b0a2020224465736372697074696f6e206f662074686520606f6e6560206669656c642e220a20206f6e653a20547970650a20202222220a2020546869732069732061206465736372697074696f6e206f6620746865206074776f60206669656c642e0a20202222220a202074776f280a202020202222220a20202020546869732069732061206465736372697074696f6e206f66207468652060617267756d656e746020617267756d656e742e0a202020202222220a20202020617267756d656e743a20496e70757454797065210a2020293a20547970650a2020222222546869732069732061206465736372697074696f6e206f66207468652060746872656560206669656c642e2222220a2020746872656528617267756d656e743a20496e707574547970652c206f746865723a20537472696e67293a20496e740a2020666f757228617267756d656e743a20537472696e67203d2022737472696e6722293a20537472696e670a20206669766528617267756d656e743a205b537472696e675d203d205b22737472696e67222c2022737472696e67225d293a20537472696e670a202073697828617267756d656e743a20496e70757454797065203d207b6b65793a202276616c7565227d293a20547970650a2020736576656e28617267756d656e743a20496e74203d206e756c6c293a20547970650a7d0a0a7479706520416e6e6f74617465644f626a65637420406f6e4f626a656374286172673a202276616c75652229207b0a2020616e6e6f74617465644669656c64286172673a2054797065203d202264656661756c742220406f6e417267756d656e74446566696e6974696f6e293a205479706520406f6e4669656c640a7d0a0a7479706520556e646566696e6564547970650a0a657874656e64207479706520466f6f207b0a2020736576656e28617267756d656e743a205b537472696e675d293a20547970650a7d0a0a657874656e64207479706520466f6f20406f6e547970650a0a696e7465726661636520426172207b0a20206f6e653a20547970650a2020666f757228617267756d656e743a20537472696e67203d2022737472696e6722293a20537472696e670a7d0a0a696e7465726661636520416e6e6f7461746564496e7465726661636520406f6e496e74657266616365207b0a2020616e6e6f74617465644669656c64286172673a205479706520406f6e417267756d656e74446566696e6974696f6e293a205479706520406f6e4669656c640a7d0a0a696e7465726661636520556e646566696e6564496e746572666163650a0a657874656e6420696e746572666163652042617220696d706c656d656e74732054776f207b0a202074776f28617267756d656e743a20496e7075745479706521293a20547970650a7d0a0a657874656e6420696e746572666163652042617220406f6e496e746572666163650a0a696e746572666163652042617a20696d706c656d656e74732042617220262054776f207b0a20206f6e653a20547970650a202074776f28617267756d656e743a20496e7075745479706521293a20547970650a2020666f757228617267756d656e743a20537472696e67203d2022737472696e6722293a20537472696e670a7d0a0a756e696f6e2046656564203d0a20207c2053746f72790a20207c2041727469636c650a20207c204164766572740a0a756e696f6e20416e6e6f7461746564556e696f6e20406f6e556e696f6e203d2041207c20420a0a756e696f6e20416e6e6f7461746564556e696f6e54776f20406f6e556e696f6e203d207c2041207c20420a0a756e696f6e20556e646566696e6564556e696f6e0a0a657874656e6420756e696f6e2046656564203d2050686f746f207c20566964656f0a0a657874656e6420756e696f6e204665656420406f6e556e696f6e0a0a7363616c617220437573746f6d5363616c61720a0a7363616c617220416e6e6f74617465645363616c617220406f6e5363616c61720a0a657874656e64207363616c617220437573746f6d5363616c617220406f6e5363616c61720a0a656e756d2053697465207b0a20202222220a2020546869732069732061206465736372697074696f6e206f662074686520604445534b544f50602076616c75650a20202222220a20204445534b544f500a0a2020222222546869732069732061206465736372697074696f6e206f662074686520604d4f42494c45602076616c75652222220a20204d4f42494c450a0a202022546869732069732061206465736372697074696f6e206f66207468652060574542602076616c7565220a20205745420a7d0a0a656e756d20416e6e6f7461746564456e756d20406f6e456e756d207b0a2020414e4e4f54415445445f56414c554520406f6e456e756d56616c75650a20204f544845525f56414c55450a7d0a0a656e756d20556e646566696e6564456e756d0a0a657874656e6420656e756d2053697465207b0a202056520a7d0a0a657874656e6420656e756d205369746520406f6e456e756d0a0a696e70757420496e70757454797065207b0a20206b65793a20537472696e67210a2020616e737765723a20496e74203d2034320a7d0a0a696e70757420416e6e6f7461746564496e70757420406f6e496e7075744f626a656374207b0a2020616e6e6f74617465644669656c643a205479706520406f6e496e7075744669656c64446566696e6974696f6e0a7d0a0a696e70757420556e646566696e6564496e7075740a0a657874656e6420696e70757420496e70757454797065207b0a20206f746865723a20466c6f6174203d20312e3233653420406f6e496e7075744669656c64446566696e6974696f6e0a7d0a0a657874656e6420696e70757420496e7075745479706520406f6e496e7075744f626a6563740a0a2222220a546869732069732061206465736372697074696f6e206f6620746865206040736b697060206469726563746976650a2222220a6469726563746976652040736b6970280a2020222222546869732069732061206465736372697074696f6e206f6620746865206069666020617267756d656e742222220a202069663a20426f6f6c65616e2120406f6e417267756d656e74446566696e6974696f6e0a29206f6e204649454c44207c20465241474d454e545f535052454144207c20494e4c494e455f465241474d454e540a0a6469726563746976652040696e636c7564652869663a20426f6f6c65616e21290a20206f6e204649454c440a2020207c20465241474d454e545f5350524541440a2020207c20494e4c494e455f465241474d454e540a0a6469726563746976652040696e636c756465322869663a20426f6f6c65616e2129206f6e0a20207c204649454c440a20207c20465241474d454e545f5350524541440a20207c20494e4c494e455f465241474d454e540a0a64697265637469766520406d7952657065617461626c65446972286e616d653a20537472696e6721292072657065617461626c65206f6e0a20207c204f424a4543540a20207c20494e544552464143450a0a657874656e6420736368656d6120406f6e536368656d610a0a657874656e6420736368656d6120406f6e536368656d61207b0a2020737562736372697074696f6e3a20537562736372697074696f6e547970650a7d0a\n");
+    s.push_str("cases/shorthand.graphql 7b20612c20622c202c2c2063207d\ncases/query_keyword.graphql 7175657279207b2061207d\ncases/query_directive.graphql 717565727920406c697665207b2061207d\ncases/named_no_vars.graphql 71756572792051207b2061207d\ncases/comments.graphql 23206c656164696e6720636f6d6d656e740a7b0a202061202320747261696c696e670a20202320616c6f6e650a2020620a7d0a23206c617374\ncases/aliases.graphql 7b206d653a20757365722869643a203429207b2066697273743a206e616d652c206c6173743a207375726e616d65207d207d\ncases/long_args.graphql 7b2073656172636850726f64756374732871756572793a2022776972656c657373206e6f6973652063616e63656c6c696e67206865616470686f6e6573222c2066697273743a2032302c2061667465723a202259335679633239794f6a5177222c20736f72743a2050524943455f4153432c20696e53746f636b3a207472756529207b206964206e616d65207d207d\ncases/eighty.graphql 7b206628616161616161616161616161616161616161616161616161616161616161616161613a20312c2062626262626262626262626262626262626262626262626262626262623a20322c20633a203329207d\ncases/eighty_one.graphql 7b206628616161616161616161616161616161616161616161616161616161616161616161613a20312c206262626262626262626262626262626262626262626262626262626262623a20322c20633a203329207d\ncases/variables.graphql 71756572792051282469643a204944212c202466697273743a20496e74203d2031302c2024746167733a205b537472696e67215d21203d205b2261222c202262225d2c2024663a2046696c746572203d207b6d696e3a20312c206d61783a206e756c6c7d20406465707265636174656429207b2061207d\ncases/values.graphql 7b206628693a202d302c206a3a203132332c20783a202d312e35652d332c20793a20302e302c207a3a2036452b31302c20733a2022222c20653a205245442c206c3a205b5b5d2c205b312c205b325d5d5d2c206f3a207b7d2c206e3a207b613a207b623a207b633a2024767d7d7d29207d\ncases/fragments.graphql 7175657279207b202e2e2e41202e2e2e206f6e2042207b2062207d202e2e2e2040696e636c7564652869663a20247829207b2063207d202e2e2e207b2064207d207d0a667261676d656e742041206f6e20542040646972207b2061207d\ncases/crlf.graphql 71756572792051207b0d0a2020610d0a2020620d0a7d0d0a\ncases/bom.graphql efbbbf71756572792051207b2061207d\n");
+    s.push_str("cases/unicode_names_in_strings.graphql 7b206628733a2022636166c3a920e2809420e69db1e4baac20f09f9a802229207d\ncases/escapes.graphql 7b206628733a202271756f7465205c2220736c617368205c5c205c2f205c62205c66205c6e205c72205c7420646f6e652229207d\ncases/unicode_escapes.graphql 7b206628613a202241c3a9e282ac222c20623a20225c757b31463630307d222c20633a2022f09f9880222c20643a20225c757b307d5c75303031465c75303037465c75303038355c7530303946c2a02229207d\ncases/block_plain.graphql 7b206628733a202222220a2020202066697273740a202020202020696e64656e7465640a202020206c6173740a202022222229207d\ncases/block_one_line.graphql 7b206628733a2022222220206c656164696e67207370616365732222222c20743a202222227461696c2071756f7465222022222229207d\ncases/block_escape.graphql 7b206628733a20222222686173205c22222220696e736964652222222c20743a202222226120736c617368205c0a22222229207d\ncases/block_escape_trap.graphql 7b206628743a20222222656e64732077697468205c5c22222229207d\ncases/block_long.graphql 7b206628733a2022222278787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878782222222c20743a202222227979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797922222229207d\ncases/block_blank_lines.graphql 7b206628733a202222220a0a0a202020610a0a202020620a0a0a22222229207d\ncases/block_empty.graphql 7b206628733a202222222222222c20743a202222222020202222222c20753a202222220a22222229207d\ncases/block_tabs.graphql 7b206628733a202222220a09096f6e650a09090974776f0a22222229207d\ncases/block_crlf.graphql 7b206628733a20222222610d0a2020620d20206322222229207d\ncases/block_indented_first.graphql 7b206628733a202222222020610a20206222222229207d\ncases/block_odd_breaks.graphql 7b206628733a202222226f6e650b74776f1c7468726565e280a8666f757222222229207d\ncases/block_control.graphql 7b206628733a2022222262656c6c0722222229207d\ncases/descriptions.graphql 2222220a412075736572206f66207468652073686f702e0a2222220a747970652055736572207b0a202022546865207072696d617279206b65792e220a202069643a204944210a20202222220a2020446973706c6179206e616d652c20617320656e74657265642e0a20202222220a20206e616d65280a202020202253686f7274656e2069742e220a2020202073686f72743a20426f6f6c65616e203d2066616c73650a2020293a20537472696e670a7d0a0a225761797320746f20736f72742e2220656e756d20536f7274207b20226368656170657374206669727374222050524943455f4153432050524943455f44455343207d0a2222224d6f6e65792c20696e2063656e74732e2222220a7363616c61722043656e7473204073706563696669656442792875726c3a202268747470733a2f2f6578616d706c652e636f6d2f63656e74732229\n");
+    s.push_str("cases/legacy_fragment.graphql 667261676d656e742046282473697a653a20496e74203d20363429206f6e2055736572207b206176617461722873697a653a202473697a6529207d\ncases/tiny.graphql 7b2061207d\ncases/eof.graphql 7b\ncases/missing_on.graphql 7b202e2e2e4d697373696e674f6e207d0a667261676d656e74204d697373696e674f6e2054797065\ncases/field_brace.graphql 7b206669656c643a207b7d207d\ncases/not_an_operation.graphql 6e6f74416e4f7065726174696f6e20466f6f207b206669656c64207d\ncases/spread_only.graphql 2e2e2e\ncases/empty_string_name.graphql 7b202222\ncases/var_in_const.graphql 717565727920466f6f2824783a20436f6d706c6578203d207b20613a207b20623a205b2024766172205d207d207d29207b206669656c64207d\ncases/dollar_in_const.graphql 717565727920466f6f2824783a20496e74203d202429207b206669656c64207d\ncases/fragment_named_on.graphql 667261676d656e74206f6e206f6e206f6e207b206f6e207d\ncases/spread_on.graphql 7b202e2e2e6f6e207d\ncases/desc_on_query.graphql 224465736372697074696f6e22207175657279207b2061207d\ncases/desc_on_extend.graphql 224465736372697074696f6e2220657874656e6420747970652054207b20613a2041207d\ncases/enum_true.graphql 656e756d2054657374207b2056414c49442c2074727565207d\ncases/enum_null.graphql 656e756d2054657374207b206e756c6c207d\ncases/extend_schema_bare.graphql 657874656e6420736368656d61\ncases/extend_scalar_bare.graphql 657874656e64207363616c61722044617465\ncases/extend_type_bare.graphql 657874656e6420747970652055736572\ncases/extend_unknown.graphql 657874656e64207468696e6720466f6f\ncases/bad_location.graphql 6469726563746976652040666f6f206f6e204649454c44207c20494e434f52524543545f4c4f434154494f4e\ncases/lowercase_location.graphql 6469726563746976652040666f6f206f6e206669656c64\ncases/bad_operation.graphql 737562736372697074696f20466f6f207b2061207d\ncases/empty_selection.graphql 7b207d\ncases/empty_args.graphql 7b20612829207d\ncases/empty_doc.graphql \ncases/only_comment.graphql 23206e6f7468696e672068657265\ncases/union_empty_member.graphql 756e696f6e2055203d207c20\ncases/type_list_unclosed.graphql 7175657279202824613a205b496e7429207b2061207d\n");
+    s.push_str("cases/double_bang.graphql 7175657279202824613a20496e74212129207b2061207d\ncases/default_missing.graphql 7175657279202824613a20496e74203d2029207b2061207d\ncases/implements_amp_only.graphql 74797065205420696d706c656d656e74732026207b20613a2041207d\ncases/schema_no_ops.graphql 736368656d61207b7d\ncases/dangling_at.graphql 7b20612040207d\ncases/bad_value.graphql 7b206128623a203a2029207d\ncases/object_no_colon.graphql 7b206128623a207b6320647d29207d\ncases/single_quote.graphql 7b202727\ncases/unterminated.graphql 7b206128733a20226e6f20656e64\ncases/unterminated_block.graphql 7b206128733a202222226e6f20656e64\ncases/string_newline.graphql 7b206128733a20226d756c74690a6c696e652229207d\ncases/bad_escape.graphql 7b206128733a2022626164205c7a206573632229207d\ncases/bad_escape_x.graphql 7b206128733a2022626164205c78206573632229207d\ncases/bad_unicode_short.graphql 7b206128733a2022626164205c7531206573632229207d\ncases/bad_unicode_letters.graphql 7b206128733a2022626164205c7558595a57206573632229207d\ncases/bad_unicode_big.graphql 7b206128733a20225c757b3131303030307d2229207d\ncases/bad_unicode_open.graphql 7b206128733a20225c757b31322229207d\ncases/bad_unicode_empty.graphql 7b206128733a20225c757b7d2229207d\ncases/bad_unicode_long.graphql 7b206128733a20225c757b3030303030303030303034317d2229207d\ncases/lone_surrogate.graphql 7b206128733a20225c75444541442229207d\ncases/lead_alone.graphql 7b206128733a20225c754438334420782229207d\ncases/lead_then_bad.graphql 7b206128733a20225c7544383344412229207d\ncases/surrogate_braces.graphql 7b206128733a20225c757b443830307d2229207d\ncases/zero_zero.graphql 7b2061286e3a20303029207d\ncases/dot_no_digits.graphql 7b2061286e3a20312e29207d\ncases/dot_e.graphql 7b2061286e3a20312e653129207d\ncases/leading_dot.graphql 7b2061286e3a202e31323329207d\ncases/exp_no_digits.graphql 7b2061286e3a20312e306529207d\ncases/two_dots.graphql 7b2061286e3a20312e322e3329207d\ncases/hex.graphql 7b2061286e3a203078463129207d\ncases/underscore.graphql 7b2061286e3a20315f30303029207d\ncases/letter_after.graphql 7b2061286e3a20313261626329207d\n");
+    s.push_str("cases/minus_alone.graphql 7b2061286e3a202d29207d\ncases/plus.graphql 7b2061286e3a202b3129207d\ncases/two_dot_spread.graphql 7b202e2e61207d\ncases/question.graphql 7175657279202824613a20496e743f29207b2061207d\ncases/reference_mark.graphql 7b20e280bb207d\ncases/bell.graphql 7b2007207d\ncases/zero_width.graphql 7b2061e2808b207d\ncases/emoji.graphql 7b20f09f9880207d\ncases/nbsp.graphql 7bc2a061207d\ncases/escape_at_end.graphql 7b206128733a20225c\ncases/unicode_at_end.graphql 7b206128733a20225c753132\ncases/pair_at_end.graphql 7b206128733a20225c75443833445c753132\ncases/brace_next_line.graphql 7b0a7d\ncases/deep_line.graphql 7175657279207b0a202075736572207b0a202020206e616d65280a20207d0a7d\ncases/crlf_error.graphql 7175657279207b0d0a2020610d0a202062280d0a7d\ncases/cr_error.graphql 7175657279207b0d2020610d202062280d7d\ncases/minified.graphql 7b66302c66312c66322c66332c66342c66352c66362c66372c66382c66392c6631302c6631312c6631322c6631332c6631342c6631352c6631362c6631372c6631382c6631392c6632302c6632312c6632322c6632332c6632342c6632352c6632362c6632372c6632382c6632392c6728783a20312c20793a205b312c322c335d2c207a3a207b773a20317d292c68302c68312c68322c68332c68342c68352c68362c68372c68382c68392c6831302c6831312c626164283a31292c6b302c6b312c6b322c6b332c6b342c6b352c6b362c6b372c6b382c6b392c6b31302c6b31312c6b31322c6b31332c6b31342c6b31352c6b31362c6b31372c6b31382c6b31397d\ncases/minified_end.graphql 7b6669656c64302c6669656c64312c6669656c64322c6669656c64332c6669656c64342c6669656c64352c6669656c64362c6669656c64372c6669656c64382c6669656c64392c6669656c6431302c6669656c6431312c6669656c6431322c6669656c6431332c6669656c6431342c6669656c6431352c6669656c6431362c6669656c6431372c6669656c6431382c6669656c6431392c6669656c6432302c6669656c6432312c6669656c6432322c6669656c6432332c6669656c6432342c62726f6b656e287d\ncases/vtab_comment.graphql 2320610b620a7b0a202063280a7d\ncases/line_sep_comment.graphql 23206e6f7465e280a80a7b\ncases/formfeed_last.graphql 7b2061207d0c7d\ncases/v_list.graphql 5b312c20322e3565332c202273222c20747275652c2066616c73652c206e756c6c2c20454e554d2c20247661722c207b613a207b623a205b785d7d7d5d\n");
+    s.push_str("cases/v_block.graphql 2222220a2020626c6f636b0a222222\ncases/v_empty_object.graphql 7b7d\ncases/v_trailing.graphql 312032\ncases/v_var_name.graphql 24\ncases/v_bad.graphql 29\ncases/v_object_dup.graphql 7b613a20312c20613a20327d\ncases/t_nested.graphql 5b5b496e74215d215d\ncases/t_named.graphql 202055706c6f61642020\ncases/t_double_bang.graphql 496e742121\ncases/t_unclosed.graphql 5b496e74\ncases/t_empty.graphql \ncases/t_list_of_list.graphql 5b5b5b49445d5d5d21\ncases/tok_basic.graphql 717565727920512824613a20496e74203d202d31322e35652b3329207b206628733a2022785c7479222c20623a202222292040642023206e6f74650a7d\ncases/tok_block.graphql 747970652054207b0a20202222220a202074776f0a20206c696e65730a20202222220a2020613a20496e740a7d0a7b2062207d\ncases/tok_block_crlf.graphql 222222610d0a620d0a2222220d0a630d0a202064\ncases/tok_punct.graphql 212024202620282029202e2e2e203a203d2040205b205d207b207c207d202c202c2c2c20efbbbf20656e64\ncases/tok_comments.graphql 230a232074776f0d0a2374687265650d6e616d650a2320e697a5e69cac20c3a90a\ncases/tok_unicode.graphql 7b206628733a2022636166c3a920e69db1e4baac20f09f9a80222c20653a20225c75303065395c757b31463638307d2229207d\napp/queries/user.graphql 71756572792043757272656e7455736572207b0a2020766965776572207b0a202020202e2e2e557365724669656c64730a2020202063617274207b202e2e2e436172744669656c6473207d0a20207d0a7d0a0a7175657279205573657242794964282469643a204944212c2024776974684f72646572733a20426f6f6c65616e203d2066616c736529207b0a2020757365722869643a2024696429207b0a202020202e2e2e557365724669656c64730a202020206f72646572732866697273743a2035292040696e636c7564652869663a2024776974684f726465727329207b0a2020202020206564676573207b206e6f6465207b20696420746f74616c207b202e2e2e4d6f6e65794669656c6473207d207d207d0a202020207d0a20207d0a7d0a\napp/queries/fragments.graphql 667261676d656e7420557365724669656c6473206f6e2055736572207b0a202069640a20206e616d650a20206176617461722873697a653a203634290a7d0a0a667261676d656e74204d6f6e65794669656c6473206f6e204d6f6e6579207b20616d6f756e742063757272656e6379207d0a0a667261676d656e7420436172744669656c6473206f6e2043617274207b0a202069640a20206c696e6573207b207175616e746974792070726f64756374207b202e2e2e50726f6475637443617264207d207d0a2020737562746f74616c207b202e2e2e4d6f6e65794669656c6473207d0a7d0a0a667261676d656e742050726f6475637443617264206f6e2050726f64756374207b0a202069640a20207469746c650a20207072696365207b202e2e2e4d6f6e65794669656c6473207d0a2020696d616765732866697273743a203129207b2075726c20616c7454657874207d0a7d0a\n");
+    s.push_str("app/queries/catalog.graphql 23205468652070726f64756374206c697374696e67207061676520616e64206974732073656172636820626f782e0a71756572792050726f6475637473282466697273743a496e743d32342c2461667465723a537472696e672c24736f72743a50726f64756374536f72743d52454c4556414e43452c2466696c7465723a50726f6475637446696c7465723d7b696e53746f636b3a747275657d297b70726f64756374732866697273743a2466697273742c61667465723a2461667465722c736f72743a24736f72742c66696c7465723a2466696c746572297b70616765496e666f7b6861734e6578745061676520656e64437572736f727d65646765737b637572736f72206e6f64657b2e2e2e50726f64756374436172647d7d7d7d0a0a7175657279205365617263682824713a20537472696e672129207b0a20207365617263682871756572793a2024712c2074797065733a205b50524f445543542c20434f4c4c454354494f4e5d29207b0a202020205f5f747970656e616d650a202020202e2e2e206f6e2050726f64756374207b202e2e2e50726f6475637443617264207d0a202020202e2e2e206f6e20436f6c6c656374696f6e207b206964207469746c652070726f6475637473436f756e74207d0a20207d0a7d0a\napp/queries/checkout.graphql 6d75746174696f6e20416464546f43617274282470726f6475637449643a204944212c20247175616e746974793a20496e74203d203129207b0a2020636172744c696e6573416464286c696e65733a205b7b70726f6475637449643a202470726f6475637449642c207175616e746974793a20247175616e746974797d5d29207b0a2020202063617274207b202e2e2e436172744669656c6473207d0a20202020757365724572726f7273207b206669656c64206d657373616765207d0a20207d0a7d0a0a6d75746174696f6e20436865636b6f75742824696e7075743a20436865636b6f7574496e7075742129204072657472792874696d65733a203229207b0a2020636865636b6f7574436f6d706c65746528696e7075743a2024696e70757429207b0a202020206f72646572207b206964206e756d62657220746f74616c207b202e2e2e4d6f6e65794669656c6473207d207d0a20202020757365724572726f7273207b206669656c64206d65737361676520636f6465207d0a20207d0a7d0a0a737562736372697074696f6e204f7264657253746174757328246f7264657249643a2049442129207b0a20206f726465725374617475734368616e6765642869643a20246f72646572496429207b2073746174757320757064617465644174207d0a7d0a\napp/queries/admin.graphql 71756572792041646d696e44617368626f617264207b0a202073746174732872616e67653a204c4153545f375f4441595329207b0a20202020726576656e7565207b202e2e2e4d6f6e65794669656c6473207d0a202020206f72646572730a20202020746f7050726f64756374732866697273743a203329207b202e2e2e50726f6475637443617264202e2e2e4d697373696e67467261676d656e74207d0a20207d0a7d0a\n");
+    s.push_str("app/queries/broken.graphql 71756572792042726f6b656e207b0a2020757365722869643a2022312229207b0a202020206e616d650a202020206f72646572732866697273743a2029207b206964207d0a20207d0a7d0a\napp/queries/formatted.graphql 71756572792050696e67207b0a202070696e670a7d0a\napp/schema/schema.graphql 2222225468652073686f702773207075626c6963204150492e2222220a736368656d61207b0a202071756572793a2051756572790a20206d75746174696f6e3a204d75746174696f6e0a7d0a0a7363616c6172204461746554696d65204073706563696669656442792875726c3a202268747470733a2f2f7363616c6172732e6772617068716c2e6f72672f616e64696d6172656b2f646174652d74696d6522290a0a696e74657266616365204e6f6465207b2069643a20494421207d0a0a74797065205175657279207b0a20207669657765723a20557365720a2020757365722869643a20494421293a20557365720a202070726f64756374732866697273743a20496e74203d2032342c2061667465723a20537472696e672c20736f72743a2050726f64756374536f72742c2066696c7465723a2050726f6475637446696c746572293a2050726f64756374436f6e6e656374696f6e210a20207365617263682871756572793a20537472696e67212c2074797065733a205b53656172636854797065215d293a205b536561726368526573756c74215d210a202073746174732872616e67653a2052616e676521293a2053746174732040617574682872657175697265733a2041444d494e290a7d0a0a74797065204d75746174696f6e207b0a2020636172744c696e6573416464286c696e65733a205b436172744c696e65496e707574215d21293a20436172745061796c6f61640a2020636865636b6f7574436f6d706c65746528696e7075743a20436865636b6f7574496e70757421293a20436865636b6f75745061796c6f61640a7d0a0a74797065205573657220696d706c656d656e7473204e6f6465207b0a202069643a204944210a20206e616d653a20537472696e67210a20206176617461722873697a653a20496e74203d203332293a2055726c0a2020636172743a20436172740a20206f72646572732866697273743a20496e742c2061667465723a20537472696e67293a204f72646572436f6e6e656374696f6e0a7d0a0a747970652050726f6475637420696d706c656d656e7473204e6f6465207b0a202069643a204944210a20207469746c653a20537472696e67210a202070726963653a204d6f6e6579210a2020696d616765732866697273743a20496e74293a205b496d616765215d210a7d0a0a74797065204d6f6e6579207b20616d6f756e743a20446563696d616c212063757272656e63793a2043757272656e637921207d0a0a656e756d2043757272656e6379207b20555344204555522047425020494e52204a5059207d0a0a656e756d2050726f64756374536f7274207b2052454c4556414e43452050524943455f4153432050524943455f44455343204e4557455354207d0a0a696e7075742050726f6475637446696c746572207b20696e53746f636b3a20426f6f6c65616e2c206d696e50726963653a20496e742c206d617850726963653a20496e74207d0a0a756e696f6e20536561726368526573756c74203d2050726f64756374207c20436f6c6c656374696f6e0a0a6469726563746976652040617574682872657175697265733a20526f6c65203d205553455229206f6e204649454c445f444546494e4954494f4e207c204f424a4543540a\n");
+    s.push_str("app/schema/orders.graphql 74797065204361727420696d706c656d656e7473204e6f6465207b0a202069643a204944210a20206c696e65733a205b436172744c696e65215d210a2020737562746f74616c3a204d6f6e6579210a7d0a0a7479706520436172744c696e65207b207175616e746974793a20496e74212070726f647563743a2050726f6475637421207d0a0a74797065204f7264657220696d706c656d656e7473204e6f646520262054696d657374616d706564207b0a202069643a204944210a20206e756d6265723a20496e74210a2020746f74616c3a204d6f6e6579210a20207374617475733a204f72646572537461747573210a7d0a0a656e756d204f72646572537461747573207b2050454e44494e47205041494420534849505045442044454c495645524544207d0a0a696e70757420436172744c696e65496e707574207b2070726f6475637449643a204944212c207175616e746974793a20496e74203d2031207d0a0a657874656e642074797065205175657279207b0a20206f726465722869643a20494421293a204f726465720a7d0a0a657874656e642074797065205573657220406b6579286669656c64733a2022696422290a0a657874656e6420656e756d2043757272656e6379207b2043414420415544207d0a0a657874656e6420756e696f6e20536561726368526573756c74203d204f726465720a0a657874656e6420736368656d61207b20737562736372697074696f6e3a20537562736372697074696f6e207d0a0a7479706520537562736372697074696f6e207b206f726465725374617475734368616e6765642869643a20494421293a204f72646572207d0a\napp/src/UserCard.jsx 696d706f7274207b2067716c2c207573655175657279207d2066726f6d20224061706f6c6c6f2f636c69656e74223b0a0a636f6e737420555345525f43415244203d2067716c600a20207175657279205573657243617264282469643a2049442129207b0a20202020757365722869643a2024696429207b206964206e616d65206176617461722873697a653a20343829207d0a20207d0a603b0a0a6578706f72742066756e6374696f6e205573657243617264287b206964207d29207b0a2020636f6e7374207b2064617461207d203d20757365517565727928555345525f434152442c207b207661726961626c65733a207b206964207d207d293b0a202072657475726e203c64697620636c6173734e616d653d2263617264223e7b646174613f2e757365722e6e616d657d3c2f6469763e3b0a7d0a0a636f6e73742042524f4b454e203d2067716c600a202071756572792042726f6b656e282469643a2049442129207b0a20202020757365722869643a2024696429207b0a2020202020206e616d650a202020202020667269656e64732866697273743a203130207b0a20202020202020206e616d650a2020202020207d0a202020207d0a20207d0a603b0a\n");
+    s.push_str("app/src/api.ts 696d706f72742067716c2066726f6d20226772617068716c2d746167223b0a0a6578706f727420636f6e73742050524f445543545f4649454c4453203d2067716c60667261676d656e742050726f647563744669656c6473206f6e2050726f64756374207b206964207469746c65207d603b0a0a6578706f727420636f6e737420534541524348203d2067716c607175657279205365617263682824713a20537472696e672129207b207365617263682871756572793a20247129207b202e2e2e206f6e2050726f64756374207b202e2e2e50726f647563744669656c6473207d207d207d603b0a0a6578706f72742066756e6374696f6e20627949642869643a20737472696e6729207b0a202072657475726e2067716c6071756572792042794964207b206e6f64652869643a2022247b69647d2229207b206964207d207d603b0a7d0a0a2020636f6e7374205459504f203d2067716c607175657279205479706f207b2070726f647563742869643a203129207b207469746c652c207072696365207b20616d6f756e74207d207d603b0a\n");
+    s
+}
