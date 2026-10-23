@@ -1,0 +1,2005 @@
+# RSS 2.0
+> rss data/feeds/rss/scripting-news.xml
+  RSSChannel
+    title: 'Scripting News'
+    link: 'http://scripting.example.com/'
+    description: 'A weblog about scripting and stuff like that.'
+    language: 'en-us'
+    copyright: 'Copyright 1997-2024 Dave Example'
+    managing_editor: 'dave@example.com (Dave)'
+    web_master: 'ops@example.com'
+    pub_date: 2024-09-30T04:00:00+00:00
+    last_build_date: 2024-09-30T09:41:01-04:00
+    categories: ['Scripting', 'Web/RSS', None]
+    generator: 'Radio UserLand v8.2.1'
+    docs: 'https://www.rssboard.org/rss-specification'
+    ttl: 60
+    image:
+      RSSImage
+        url: 'http://scripting.example.com/gifs/tinyScriptingNews.gif'
+        title: 'Scripting News'
+        link: 'http://scripting.example.com/'
+        width: 144
+        height: 40
+        description: 'Click to visit'
+    items: [4]
+      RSSItem
+        title: 'Why RSS still matters'
+        link: 'http://scripting.example.com/2024/09/30/rss.html'
+        description: '<p>Feeds are the web&#39;s open plumbing.</p>'
+        author: 'dave@example.com (Dave)'
+        categories: ['RSS', 'Open web']
+        comments: 'http://scripting.example.com/2024/09/30/rss.html#comments'
+        enclosures: []
+        guid: 'http://scripting.example.com/2024/09/30/rss.html'
+        pub_date: 2024-09-30T08:15:00-04:00
+        source:
+          RSSSource
+            title: 'RSS Matters'
+            url: 'http://feeds.example.org/rss-matters.xml'
+        content_encoded: "<p>Feeds are the web's <em>open</em> plumbing.</p>"
+      RSSItem
+        title: 'Whitespace around a title'
+        link: 'http://scripting.example.com/2024/09/29/ws.html'
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: 'http://scripting.example.com/2024/09/29/ws.html'
+        pub_date: 2024-09-29T23:59:59-07:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: None
+        link: None
+        description: 'An item with only a description, as RSS 2.0 allows.'
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: 'tag:scripting.example.com,2024:item-3'
+        pub_date: None
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Café — “quoted” 日本語'
+        link: 'http://scripting.example.com/2024/09/28/unicode.html'
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2024-09-28T12:00:00+09:00
+        source: None
+        content_encoded: None
+    content_encoded: None
+> rss data/feeds/rss/podcast.xml
+  RSSChannel
+    title: 'The Changelog-ish'
+    link: 'https://podcast.example.com'
+    description: 'Conversations with the hackers, leaders and innovators of software.'
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: 1440
+    image:
+      RSSImage
+        url: 'https://podcast.example.com/cover.png'
+        title: None
+        link: 'https://podcast.example.com'
+        width: 88
+        height: 31
+        description: None
+    items: [4]
+      RSSItem
+        title: 'Episode 3: Compilers all the way down'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: [1]
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/ep3.mp3?source=rss#t=0'
+            length: 48213504
+            type: 'audio/mpeg'
+        guid: 'podcast-ep-3'
+        pub_date: 2024-10-02T10:00:00-06:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Episode 2: Feeds and fediverse'
+        link: 'https://podcast.example.com/2'
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: [2]
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/ep2.mp3'
+            length: None
+            type: 'audio/mpeg'
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/ep2-transcript.txt'
+            length: None
+            type: 'text/plain'
+        guid: 'https://podcast.example.com/2'
+        pub_date: 2024-09-25T10:00:00-05:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Episode 1: Hello'
+        link: 'https://podcast.example.com/1'
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: [2]
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/ep1;v=2'
+            length: None
+            type: None
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/'
+            length: 1024
+            type: 'audio/mpeg'
+        guid: None
+        pub_date: 2024-09-18T10:00:00-07:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Trailer'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: [1]
+          RSSEnclosure
+            url: 'https://cdn.example.com/media/trailer.m4a'
+            length: 2048
+            type: 'audio/x-m4a'
+        guid: None
+        pub_date: 2024-09-11T10:00:00-06:00
+        source: None
+        content_encoded: None
+    content_encoded: None
+> rss data/feeds/rss/dates.xml
+  RSSChannel
+    title: 'Dates'
+    link: None
+    description: None
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: None
+    image: None
+    items: [20]
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 GMT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 UT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 EST'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00-05:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 EDT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00-04:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 PST'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00-08:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 +0530'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+05:30
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 2003 04:00:00 CET'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 10 Jun 03 04:00:00 GMT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Thu, 10 Jun 1999 04:00 GMT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 1999-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Mon, 10 Jun 2003 04:00:00 GMT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '10 Jun 2003'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T00:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '2003-06-10T04:00:00Z'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '2003-06-10T04:00:00.25-07:00'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00.250000-07:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '2003-06-10 04:00:00 GMT+3'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T04:00:00-03:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'June 10, 2003 4:00 PM'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T16:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Posted on Tuesday, June 10th, 2003 at 4pm UTC'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: 2003-06-10T16:00:00+00:00
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'Tue, 31 Jun 2003 04:00:00 GMT'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: None
+        source: None
+        content_encoded: None
+      RSSItem
+        title: 'not a date'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: None
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '(blank)'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: None
+        source: None
+        content_encoded: None
+      RSSItem
+        title: '(blank)'
+        link: None
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: None
+        source: None
+        content_encoded: None
+    content_encoded: None
+> rss data/feeds/rss/link-only.xml
+  RSSChannel
+    title: None
+    link: 'https://link-only.example.com/'
+    description: None
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: None
+    image: None
+    items: [1]
+      RSSItem
+        title: 'First'
+        link: 'https://link-only.example.com/1'
+        description: None
+        author: None
+        categories: []
+        comments: None
+        enclosures: []
+        guid: None
+        pub_date: None
+        source: None
+        content_encoded: None
+    content_encoded: None
+> rss data/feeds/rss/no-title-no-link.xml
+  RSSChannel
+    title: None
+    link: None
+    description: 'Neither a title nor a link'
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: None
+    image: None
+    items: []
+    content_encoded: None
+> rss data/feeds/rss/v091.xml
+  error FeedParseError: Cannot process RSS feed version "0.91"
+> rss data/feeds/rss/no-channel.xml
+  error FeedParseError: RSS does not have a channel
+> rss data/feeds/rss/bad-ttl.xml
+  error ValueError: invalid literal for int() with base 10: 'sixty'
+> rss data/feeds/rss/ttl-spaces.xml
+  RSSChannel
+    title: 'T'
+    link: None
+    description: None
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: 1440
+    image: None
+    items: []
+    content_encoded: None
+> rss data/feeds/rss/image-no-url.xml
+  error FeedParseError: Could not parse feed: "image" does not have a "url"
+> rss data/feeds/rss/enclosure-no-url.xml
+  error KeyError: 'url'
+> rss data/feeds/rss/empty-source.xml
+  error AttributeError: 'NoneType' object has no attribute 'strip'
+> rss data/feeds/rss/required-empty.xml
+  error FeedParseError: Could not parse feed: "url" text is required but is empty
+# Atom 1.0
+> atom data/feeds/atom/blog.xml
+  AtomFeed
+    title:
+      AtomTextConstruct
+        text_type: AtomTextType.text
+        lang: None
+        value: 'dive into mark'
+    id_: 'tag:example.org,2003:3'
+    updated: 2005-07-31T12:29:29+00:00
+    authors: [1]
+      AtomPerson
+        name: 'Mark Pilgrim'
+        uri: 'http://example.org/'
+        email: 'f8dy@example.com'
+    contributors: [2]
+      AtomPerson
+        name: 'Sam Ruby'
+        uri: None
+        email: None
+      AtomPerson
+        name: 'Joe Gregorio'
+        uri: 'http://bitworking.example/'
+        email: None
+    links: [2]
+      AtomLink
+        href: 'http://example.org/'
+        rel: 'alternate'
+        type_: 'text/html'
+        hreflang: 'en'
+        title: None
+        length: None
+      AtomLink
+        href: 'http://example.org/feed.atom'
+        rel: 'self'
+        type_: 'application/atom+xml'
+        hreflang: None
+        title: None
+        length: None
+    categories: [2]
+      AtomCategory
+        term: 'web'
+        scheme: 'http://example.org/cats'
+        label: 'The Web'
+      AtomCategory
+        term: 'python'
+        scheme: None
+        label: None
+    generator:
+      AtomGenerator
+        name: 'Example Toolkit'
+        uri: 'http://www.example.com/'
+        version: '1.0'
+    subtitle:
+      AtomTextConstruct
+        text_type: AtomTextType.html
+        lang: None
+        value: 'A <em>lot</em> of effort went into making this effortless'
+    rights:
+      AtomTextConstruct
+        text_type: AtomTextType.text
+        lang: None
+        value: 'Copyright (c) 2003, Mark Pilgrim'
+    icon: 'http://example.org/favicon.ico'
+    logo: 'http://example.org/logo.png'
+    entries: [4]
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.html
+            lang: None
+            value: 'AT&amp;T <b>bold</b> move'
+        id_: 'tag:example.org,2003:3.2397'
+        updated: 2005-07-31T12:29:29+00:00
+        authors: [1]
+          AtomPerson
+            name: 'Mark Pilgrim'
+            uri: None
+            email: None
+        contributors: [1]
+          AtomPerson
+            name: 'Sam Ruby'
+            uri: None
+            email: None
+        links: [5]
+          AtomLink
+            href: 'http://example.org/2005/04/02/atom'
+            rel: 'alternate'
+            type_: 'text/html'
+            hreflang: None
+            title: None
+            length: None
+          AtomLink
+            href: 'http://example.org/2005/04/02/atom-again'
+            rel: None
+            type_: None
+            hreflang: None
+            title: None
+            length: None
+          AtomLink
+            href: 'http://example.org/audio/ph34r_my_podcast.mp3'
+            rel: 'enclosure'
+            type_: 'audio/mpeg'
+            hreflang: None
+            title: None
+            length: 1337
+          AtomLink
+            href: 'http://example.org/video/clip.mp4'
+            rel: 'enclosure'
+            type_: 'video/mp4'
+            hreflang: None
+            title: 'The video'
+            length: None
+          AtomLink
+            href: 'http://example.org/related'
+            rel: 'related'
+            type_: None
+            hreflang: None
+            title: None
+            length: None
+        categories: [1]
+          AtomCategory
+            term: 'atom'
+            scheme: None
+            label: 'Atom'
+        published: 2003-12-13T08:29:29-04:00
+        rights:
+          AtomTextConstruct
+            text_type: AtomTextType.html
+            lang: None
+            value: '<p>Copyright 2005</p>'
+        summary:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'A summary with   inner   spaces.'
+        content:
+          AtomTextConstruct
+            text_type: AtomTextType.xhtml
+            lang: None
+            value: ''
+        source: None
+      AtomEntry
+        title: None
+        id_: 'tag:example.org,2003:3.2398'
+        updated: 2005-07-30T10:00:00+02:00
+        authors: [1]
+          AtomPerson
+            name: 'Mark Pilgrim'
+            uri: 'http://example.org/'
+            email: 'f8dy@example.com'
+        contributors: []
+        links: []
+        categories: []
+        published: None
+        rights: None
+        summary:
+          AtomTextConstruct
+            text_type: AtomTextType.html
+            lang: None
+            value: '<p>Only a summary, &eacute;t&eacute; &amp; more</p>'
+        content: None
+        source: None
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.html
+            lang: None
+            value: '&lt;not a tag&gt; &copy; 2005 &notit; &#x263A; &#128512;'
+        id_: 'tag:example.org,2003:3.2399'
+        updated: None
+        authors: [1]
+          AtomPerson
+            name: 'Mark Pilgrim'
+            uri: 'http://example.org/'
+            email: 'f8dy@example.com'
+        contributors: []
+        links: []
+        categories: []
+        published: 2005-07-29T09:00:00+00:00
+        rights: None
+        summary: None
+        content:
+          AtomTextConstruct
+            text_type: AtomTextType.html
+            lang: None
+            value: '<p>Body</p>'
+        source: None
+      AtomEntry
+        title: None
+        id_: None
+        updated: None
+        authors: [1]
+          AtomPerson
+            name: 'Mark Pilgrim'
+            uri: 'http://example.org/'
+            email: 'f8dy@example.com'
+        contributors: []
+        links: []
+        categories: []
+        published: None
+        rights: None
+        summary: None
+        content:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'Plain text body'
+        source: None
+> atom data/feeds/atom/aggregated.xml
+  AtomFeed
+    title: None
+    id_: 'urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6'
+    updated: 2024-10-01T00:00:00+00:00
+    authors: []
+    contributors: []
+    links: [1]
+      AtomLink
+        href: 'https://planet.example.org/'
+        rel: 'alternate'
+        type_: None
+        hreflang: None
+        title: None
+        length: None
+    categories: []
+    generator: None
+    subtitle: None
+    rights: None
+    icon: None
+    logo: None
+    entries: [3]
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'From a source with authors'
+        id_: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6a'
+        updated: 2024-09-30T18:30:02+00:00
+        authors: [2]
+          AtomPerson
+            name: 'Ada'
+            uri: None
+            email: 'ada@example.net'
+          AtomPerson
+            name: 'Grace'
+            uri: None
+            email: None
+        contributors: []
+        links: []
+        categories: []
+        published: None
+        rights: None
+        summary: None
+        content: None
+        source:
+          AtomFeed
+            title:
+              AtomTextConstruct
+                text_type: AtomTextType.text
+                lang: None
+                value: "Someone's blog"
+            id_: 'tag:blog.example.net,2024:feed'
+            updated: None
+            authors: [2]
+              AtomPerson
+                name: 'Ada'
+                uri: None
+                email: 'ada@example.net'
+              AtomPerson
+                name: 'Grace'
+                uri: None
+                email: None
+            contributors: []
+            links: []
+            categories: []
+            generator: None
+            subtitle: None
+            rights: None
+            icon: None
+            logo: None
+            entries: []
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'A source without an id'
+        id_: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6b'
+        updated: 2024-09-29T18:30:02+00:00
+        authors: []
+        contributors: []
+        links: []
+        categories: []
+        published: None
+        rights: None
+        summary: None
+        content: None
+        source: None
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'Its own author wins'
+        id_: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6c'
+        updated: None
+        authors: [1]
+          AtomPerson
+            name: 'Linus'
+            uri: None
+            email: None
+        contributors: []
+        links: []
+        categories: []
+        published: 2024-09-28T18:30:02+00:00
+        rights: None
+        summary: None
+        content: None
+        source:
+          AtomFeed
+            title: None
+            id_: 's'
+            updated: None
+            authors: [1]
+              AtomPerson
+                name: 'Ignored'
+                uri: None
+                email: None
+            contributors: []
+            links: []
+            categories: []
+            generator: None
+            subtitle: None
+            rights: None
+            icon: None
+            logo: None
+            entries: []
+> atom data/feeds/atom/no-id.xml
+  error FeedParseError: Could not parse feed: "{http://www.w3.org/2005/Atom}feed" does not have a "feed:id"
+> atom data/feeds/atom/bad-type.xml
+  error ValueError: 'text/plain' is not a valid AtomTextType
+> atom data/feeds/atom/link-no-href.xml
+  error KeyError: 'href'
+> atom data/feeds/atom/category-no-term.xml
+  error KeyError: 'term'
+> atom data/feeds/atom/empty-generator.xml
+  error AttributeError: 'NoneType' object has no attribute 'strip'
+> atom data/feeds/atom/empty-id.xml
+  error FeedParseError: Could not parse feed: "feed:id" text is required but is empty
+> atom data/feeds/atom/prefixed.xml
+  AtomFeed
+    title:
+      AtomTextConstruct
+        text_type: AtomTextType.text
+        lang: None
+        value: "Atom's title"
+    id_: 'prefixed'
+    updated: None
+    authors: []
+    contributors: []
+    links: []
+    categories: []
+    generator: None
+    subtitle: None
+    rights: None
+    icon: None
+    logo: None
+    entries: [1]
+      AtomEntry
+        title:
+          AtomTextConstruct
+            text_type: AtomTextType.text
+            lang: None
+            value: 'Entry'
+        id_: 'e1'
+        updated: None
+        authors: []
+        contributors: []
+        links: [1]
+          AtomLink
+            href: 'https://example.com/e1'
+            rel: None
+            type_: None
+            hreflang: None
+            title: None
+            length: None
+        categories: []
+        published: None
+        rights: None
+        summary: None
+        content: None
+        source: None
+> atom data/feeds/atom/old-namespace.xml
+  error FeedParseError: Could not parse feed: "{http://purl.org/atom/ns#}feed" does not have a "feed:id"
+# JSON Feed, from a file and from bytes
+> json data/feeds/json/blog.json
+  JSONFeed
+    version: 'https://jsonfeed.org/version/1.1'
+    title: 'My Example Feed'
+    home_page_url: 'https://example.org/'
+    feed_url: 'https://example.org/feed.json'
+    description: 'A blog about JSON Feed — and "quotes"'
+    user_comment: 'This feed allows you to read the posts from this site in any feed reader that supports the JSON Feed format.'
+    next_url: 'https://example.org/feed.json?page=2'
+    icon: 'https://example.org/icon.png'
+    favicon: 'https://example.org/favicon.ico'
+    author:
+      JSONFeedAuthor
+        name: 'Brent'
+        url: 'https://example.org/brent'
+        avatar: 'https://example.org/b.png'
+    expired: True
+    items: [3]
+      JSONFeedItem
+        id_: '2'
+        url: 'https://example.org/second-item'
+        external_url: 'https://elsewhere.example.com/2'
+        title: 'Second'
+        content_html: None
+        content_text: 'This is a second item.'
+        summary: 'Two'
+        image: 'https://example.org/2.png'
+        banner_image: 'https://example.org/2-banner.png'
+        date_published: 2024-10-01T09:30:00-07:00
+        date_modified: 2024-10-02T10:00:00+00:00
+        author: None
+        tags: ['json', 'feeds', 'web']
+        attachments: []
+      JSONFeedItem
+        id_: '1'
+        url: 'https://example.org/initial-post'
+        external_url: None
+        title: None
+        content_html: '<p>Hello, world!</p>'
+        content_text: 'Hello, world!'
+        summary: None
+        image: None
+        banner_image: None
+        date_published: 2024-10-01T08:00:00-07:00
+        date_modified: None
+        author:
+          JSONFeedAuthor
+            name: None
+            url: None
+            avatar: 'https://example.org/a.png'
+        tags: ['a', 'b', 'c']
+        attachments: []
+      JSONFeedItem
+        id_: '0'
+        url: None
+        external_url: None
+        title: '😀 Emoji and escapes \t/'
+        content_html: None
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: None
+        date_modified: None
+        author: None
+        tags: []
+        attachments: []
+> json_bytes data/feeds/json/blog.json
+  JSONFeed
+    version: 'https://jsonfeed.org/version/1.1'
+    title: 'My Example Feed'
+    home_page_url: 'https://example.org/'
+    feed_url: 'https://example.org/feed.json'
+    description: 'A blog about JSON Feed — and "quotes"'
+    user_comment: 'This feed allows you to read the posts from this site in any feed reader that supports the JSON Feed format.'
+    next_url: 'https://example.org/feed.json?page=2'
+    icon: 'https://example.org/icon.png'
+    favicon: 'https://example.org/favicon.ico'
+    author:
+      JSONFeedAuthor
+        name: 'Brent'
+        url: 'https://example.org/brent'
+        avatar: 'https://example.org/b.png'
+    expired: True
+    items: [3]
+      JSONFeedItem
+        id_: '2'
+        url: 'https://example.org/second-item'
+        external_url: 'https://elsewhere.example.com/2'
+        title: 'Second'
+        content_html: None
+        content_text: 'This is a second item.'
+        summary: 'Two'
+        image: 'https://example.org/2.png'
+        banner_image: 'https://example.org/2-banner.png'
+        date_published: 2024-10-01T09:30:00-07:00
+        date_modified: 2024-10-02T10:00:00+00:00
+        author: None
+        tags: ['json', 'feeds', 'web']
+        attachments: []
+      JSONFeedItem
+        id_: '1'
+        url: 'https://example.org/initial-post'
+        external_url: None
+        title: None
+        content_html: '<p>Hello, world!</p>'
+        content_text: 'Hello, world!'
+        summary: None
+        image: None
+        banner_image: None
+        date_published: 2024-10-01T08:00:00-07:00
+        date_modified: None
+        author:
+          JSONFeedAuthor
+            name: None
+            url: None
+            avatar: 'https://example.org/a.png'
+        tags: ['a', 'b', 'c']
+        attachments: []
+      JSONFeedItem
+        id_: '0'
+        url: None
+        external_url: None
+        title: '😀 Emoji and escapes \t/'
+        content_html: None
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: None
+        date_modified: None
+        author: None
+        tags: []
+        attachments: []
+> json data/feeds/json/podcast.json
+  JSONFeed
+    version: 'https://jsonfeed.org/version/1'
+    title: 'Timetable'
+    home_page_url: 'http://timetable.example.com/'
+    feed_url: None
+    description: None
+    user_comment: None
+    next_url: None
+    icon: None
+    favicon: None
+    author: None
+    expired: False
+    items: [3]
+      JSONFeedItem
+        id_: 'http://timetable.example.com/episodes/42'
+        url: 'http://timetable.example.com/episodes/42'
+        external_url: None
+        title: 'Episode 42'
+        content_html: None
+        content_text: 'Chris has a test.'
+        summary: None
+        image: None
+        banner_image: None
+        date_published: 2024-09-10T14:00:00-07:00
+        date_modified: None
+        author: None
+        tags: []
+        attachments: [2]
+          JSONFeedAttachment
+            url: 'http://timetable.example.com/media/42.m4a'
+            mime_type: 'audio/x-m4a'
+            title: None
+            size_in_bytes: 89970236
+            duration: 1:50:29
+          JSONFeedAttachment
+            url: 'http://timetable.example.com/media/42-notes.pdf?dl=1'
+            mime_type: 'application/pdf'
+            title: 'Show notes'
+            size_in_bytes: None
+            duration: None
+      JSONFeedItem
+        id_: 'http://timetable.example.com/episodes/41'
+        url: None
+        external_url: None
+        title: 'Episode 41'
+        content_html: None
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: None
+        date_modified: None
+        author: None
+        tags: []
+        attachments: [2]
+          JSONFeedAttachment
+            url: 'http://timetable.example.com/media/41.m4a'
+            mime_type: 'audio/x-m4a'
+            title: None
+            size_in_bytes: True
+            duration: 1 day, 1:01:01
+          JSONFeedAttachment
+            url: 'http://timetable.example.com/media/41-bonus.m4a'
+            mime_type: 'audio/x-m4a'
+            title: None
+            size_in_bytes: 0
+            duration: -1 day, 23:59:59
+      JSONFeedItem
+        id_: 'http://timetable.example.com/episodes/40'
+        url: None
+        external_url: None
+        title: None
+        content_html: '<p>Short one</p>'
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: 2024-08-27T14:00:00-07:00
+        date_modified: None
+        author: None
+        tags: []
+        attachments: [1]
+          JSONFeedAttachment
+            url: 'http://timetable.example.com/media/40.mp3'
+            mime_type: 'audio/mpeg'
+            title: None
+            size_in_bytes: None
+            duration: 0:00:00
+> json data/feeds/json/bom.json
+  error FeedJSONError: Not a valid JSON document
+> json_bytes data/feeds/json/bom.json
+  JSONFeed
+    version: '1'
+    title: 'With a BOM'
+    home_page_url: None
+    feed_url: None
+    description: None
+    user_comment: None
+    next_url: None
+    icon: None
+    favicon: None
+    author: None
+    expired: False
+    items: [1]
+      JSONFeedItem
+        id_: 'a'
+        url: None
+        external_url: None
+        title: None
+        content_html: None
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: None
+        date_modified: None
+        author: None
+        tags: []
+        attachments: []
+> json data/feeds/json/int-id.json
+  error FeedParseError: Could not parse feed: "id" is not a string
+> json data/feeds/json/no-title.json
+  error FeedParseError: Could not parse feed: "title" text is required but is empty
+> json data/feeds/json/null-title.json
+  error FeedParseError: Could not parse feed: "title" text is required but is empty
+> json data/feeds/json/list.json
+  error AttributeError: 'list' object has no attribute 'get'
+> json_bytes data/feeds/json/list.json
+  error AttributeError: 'list' object has no attribute 'get'
+> json data/feeds/json/item-string.json
+  error AttributeError: 'str' object has no attribute 'get'
+> json data/feeds/json/items-number.json
+  error TypeError: 'int' object is not iterable
+> json data/feeds/json/items-null.json
+  error AttributeError: 'str' object has no attribute 'get'
+> json data/feeds/json/tags-null.json
+  error TypeError: 'NoneType' object is not iterable
+> json data/feeds/json/size-float.json
+  error FeedParseError: Could not parse feed: "size_in_bytes" is not an int
+> json data/feeds/json/no-mime.json
+  error FeedParseError: Could not parse feed: "mime_type" text is required but is empty
+> json data/feeds/json/trailing-comma.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/single-quotes.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/truncated.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/extra-data.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/nan.json
+  error FeedParseError: Could not parse feed: "size_in_bytes" is not an int
+> json data/feeds/json/numbers.json
+  error FeedParseError: Could not parse feed: "duration_in_seconds" is not an int
+> json data/feeds/json/leading-zero.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/control-char.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/bad-escape.json
+  error FeedJSONError: Not a valid JSON document
+> json data/feeds/json/duplicate-keys.json
+  JSONFeed
+    version: '1'
+    title: 'Second'
+    home_page_url: None
+    feed_url: None
+    description: None
+    user_comment: None
+    next_url: None
+    icon: None
+    favicon: None
+    author: None
+    expired: False
+    items: [1]
+      JSONFeedItem
+        id_: 'b'
+        url: None
+        external_url: None
+        title: None
+        content_html: None
+        content_text: None
+        summary: None
+        image: None
+        banner_image: None
+        date_published: None
+        date_modified: None
+        author: None
+        tags: []
+        attachments: []
+> json data/feeds/json/latin1.json
+  error FeedJSONError: Not a valid JSON document
+> json_bytes data/feeds/json/latin1.json
+  error FeedJSONError: Not a valid JSON document
+# OPML
+> opml data/opml/subscriptions.opml
+  OPML
+    title: 'mySubscriptions.opml'
+    owner_name: 'Dave Example'
+    owner_email: 'dave@example.com'
+    date_created: 2005-06-18T12:11:52+00:00
+    date_modified: 2005-08-02T21:42:48+00:00
+    expansion_state: '1, 6, 13'
+    vertical_scroll_state: 1
+    window_top: 61
+    window_left: 304
+    window_bottom: 562
+    window_right: 842
+    outlines: [9]
+      OPMLOutline
+        text: 'Scripting News'
+        type: 'rss'
+        xml_url: 'http://scripting.example.com/rss.xml'
+        description: "It's even worse than it appears."
+        html_url: 'http://scripting.example.com/'
+        language: 'en-us'
+        title: 'Scripting News'
+        version: 'RSS2'
+        outlines: []
+      OPMLOutline
+        text: 'Podcasts'
+        type: None
+        xml_url: None
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: [4]
+          OPMLOutline
+            text: 'The Changelog-ish'
+            type: 'rss'
+            xml_url: 'https://podcast.example.com/feed.xml'
+            description: None
+            html_url: None
+            language: None
+            title: None
+            version: None
+            outlines: []
+          OPMLOutline
+            text: 'Timetable'
+            type: 'rss'
+            xml_url: 'http://timetable.example.com/feed.json'
+            description: None
+            html_url: None
+            language: None
+            title: None
+            version: None
+            outlines: []
+          OPMLOutline
+            text: 'Dead link'
+            type: 'rss'
+            xml_url: ''
+            description: None
+            html_url: None
+            language: None
+            title: None
+            version: None
+            outlines: []
+          OPMLOutline
+            text: 'Archived'
+            type: None
+            xml_url: None
+            description: None
+            html_url: None
+            language: None
+            title: None
+            version: None
+            outlines: [1]
+              OPMLOutline
+                text: 'Old blog'
+                type: 'rss'
+                xml_url: 'http://old.example.com/rss091.xml'
+                description: None
+                html_url: None
+                language: None
+                title: None
+                version: None
+                outlines: []
+      OPMLOutline
+        text: 'dive into mark'
+        type: 'rss'
+        xml_url: 'http://example.org/feed.atom'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'A web page'
+        type: 'link'
+        xml_url: None
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'My JSON blog'
+        type: 'rss'
+        xml_url: 'https://example.org/feed.json'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'Uncached'
+        type: 'rss'
+        xml_url: 'https://uncached.example.com/feed'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'Broken'
+        type: 'rss'
+        xml_url: 'https://broken.example.com/feed'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'Hostile'
+        type: 'rss'
+        xml_url: 'https://hostile.example.com/feed'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+      OPMLOutline
+        text: 'Planet'
+        type: 'RSS'
+        xml_url: 'https://planet.example.org/atom.xml'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+  feeds: ['http://scripting.example.com/rss.xml', 'https://podcast.example.com/feed.xml', 'http://timetable.example.com/feed.json', 'http://old.example.com/rss091.xml', 'http://example.org/feed.atom', 'https://example.org/feed.json', 'https://uncached.example.com/feed', 'https://broken.example.com/feed', 'https://hostile.example.com/feed']
+> opml data/opml/minimal.opml
+  OPML
+    title: None
+    owner_name: None
+    owner_email: None
+    date_created: None
+    date_modified: None
+    expansion_state: None
+    vertical_scroll_state: None
+    window_top: None
+    window_left: None
+    window_bottom: None
+    window_right: None
+    outlines: [1]
+      OPMLOutline
+        text: 'x'
+        type: 'rss'
+        xml_url: 'http://x.example/feed'
+        description: None
+        html_url: None
+        language: None
+        title: None
+        version: None
+        outlines: []
+  feeds: ['http://x.example/feed']
+> opml data/opml/bad-int.opml
+  error ValueError: invalid literal for int() with base 10: 'top'
+> opml data/opml/no-head.opml
+  error AttributeError: 'NoneType' object has no attribute 'find'
+> opml data/opml/no-body.opml
+  error AttributeError: 'NoneType' object has no attribute 'findall'
+# broken and hostile XML
+> rss data/bad/unclosed.xml
+  error FeedXMLError: Not a valid XML document
+> rss data/bad/undefined-entity.xml
+  error FeedXMLError: Not a valid XML document
+> rss data/bad/billion-laughs.xml
+  error EntitiesForbidden: EntitiesForbidden(name='lol', system_id=None, public_id=None)
+> rss data/bad/xxe.xml
+  error EntitiesForbidden: EntitiesForbidden(name='xxe', system_id='file:///etc/passwd', public_id=None)
+> rss data/bad/public-entity.xml
+  error EntitiesForbidden: EntitiesForbidden(name='ext', system_id='http://example.com/ents.dtd', public_id='-//Example//Entities//EN')
+> rss data/bad/plain-doctype.xml
+  RSSChannel
+    title: 'A doctype is fine'
+    link: None
+    description: None
+    language: None
+    copyright: None
+    managing_editor: None
+    web_master: None
+    pub_date: None
+    last_build_date: None
+    categories: []
+    generator: None
+    docs: None
+    ttl: None
+    image: None
+    items: []
+    content_encoded: None
+> rss data/bad/empty.xml
+  error FeedXMLError: Not a valid XML document
+> rss data/bad/html.html
+  error FeedXMLError: Not a valid XML document
+> rss data/bad/foreign-root.xml
+  error FeedParseError: Cannot process RSS feed version "None"
+> rss data/bad/missing.xml
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/bad/missing.xml'
+# the simple API, from a file and from bytes
+> simple data/feeds/rss/scripting-news.xml
+  Feed
+    title: 'Scripting News'
+    subtitle: 'A weblog about scripting and stuff like that.'
+    link: 'http://scripting.example.com/'
+    updated_at: 2024-09-30T04:00:00+00:00
+    articles: [4]
+      Article
+        id: 'http://scripting.example.com/2024/09/30/rss.html'
+        title: 'Why RSS still matters'
+        link: 'http://scripting.example.com/2024/09/30/rss.html'
+        content: "<p>Feeds are the web's <em>open</em> plumbing.</p>"
+        published_at: 2024-09-30T08:15:00-04:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'http://scripting.example.com/2024/09/29/ws.html'
+        title: 'Whitespace around a title'
+        link: 'http://scripting.example.com/2024/09/29/ws.html'
+        content: ''
+        published_at: 2024-09-29T23:59:59-07:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'tag:scripting.example.com,2024:item-3'
+        title: None
+        link: None
+        content: 'An item with only a description, as RSS 2.0 allows.'
+        published_at: None
+        updated_at: None
+        attachments: []
+      Article
+        id: 'http://scripting.example.com/2024/09/28/unicode.html'
+        title: 'Café — “quoted” 日本語'
+        link: 'http://scripting.example.com/2024/09/28/unicode.html'
+        content: ''
+        published_at: 2024-09-28T12:00:00+09:00
+        updated_at: None
+        attachments: []
+> simple data/feeds/rss/podcast.xml
+  Feed
+    title: 'The Changelog-ish'
+    subtitle: 'Conversations with the hackers, leaders and innovators of software.'
+    link: 'https://podcast.example.com'
+    updated_at: None
+    articles: [4]
+      Article
+        id: 'podcast-ep-3'
+        title: 'Episode 3: Compilers all the way down'
+        link: None
+        content: ''
+        published_at: 2024-10-02T10:00:00-06:00
+        updated_at: None
+        attachments: [1]
+          Attachment
+            link: 'https://cdn.example.com/media/ep3.mp3?source=rss#t=0'
+            mime_type: 'audio/mpeg'
+            title: 'ep3.mp3'
+            size_in_bytes: 48213504
+            duration: None
+      Article
+        id: 'https://podcast.example.com/2'
+        title: 'Episode 2: Feeds and fediverse'
+        link: 'https://podcast.example.com/2'
+        content: ''
+        published_at: 2024-09-25T10:00:00-05:00
+        updated_at: None
+        attachments: [2]
+          Attachment
+            link: 'https://cdn.example.com/media/ep2.mp3'
+            mime_type: 'audio/mpeg'
+            title: 'ep2.mp3'
+            size_in_bytes: None
+            duration: None
+          Attachment
+            link: 'https://cdn.example.com/media/ep2-transcript.txt'
+            mime_type: 'text/plain'
+            title: 'ep2-transcript.txt'
+            size_in_bytes: None
+            duration: None
+      Article
+        id: 'https://podcast.example.com/1'
+        title: 'Episode 1: Hello'
+        link: 'https://podcast.example.com/1'
+        content: ''
+        published_at: 2024-09-18T10:00:00-07:00
+        updated_at: None
+        attachments: [2]
+          Attachment
+            link: 'https://cdn.example.com/media/ep1;v=2'
+            mime_type: None
+            title: 'ep1'
+            size_in_bytes: None
+            duration: None
+          Attachment
+            link: 'https://cdn.example.com/media/'
+            mime_type: 'audio/mpeg'
+            title: ''
+            size_in_bytes: 1024
+            duration: None
+      Article
+        id: None
+        title: 'Trailer'
+        link: None
+        content: ''
+        published_at: 2024-09-11T10:00:00-06:00
+        updated_at: None
+        attachments: [1]
+          Attachment
+            link: 'https://cdn.example.com/media/trailer.m4a'
+            mime_type: 'audio/x-m4a'
+            title: 'trailer.m4a'
+            size_in_bytes: 2048
+            duration: None
+> simple data/feeds/rss/link-only.xml
+  Feed
+    title: 'https://link-only.example.com/'
+    subtitle: None
+    link: 'https://link-only.example.com/'
+    updated_at: None
+    articles: [1]
+      Article
+        id: 'https://link-only.example.com/1'
+        title: 'First'
+        link: 'https://link-only.example.com/1'
+        content: ''
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple data/feeds/rss/no-title-no-link.xml
+  error FeedParseError: File is not a valid supported feed
+> simple data/feeds/rss/v091.xml
+  error FeedParseError: File is not a valid supported feed
+> simple data/feeds/rss/bad-ttl.xml
+  error ValueError: invalid literal for int() with base 10: 'sixty'
+> simple data/feeds/atom/blog.xml
+  Feed
+    title: 'dive into mark'
+    subtitle: 'A <em>lot</em> of effort went into making this effortless'
+    link: 'http://example.org/feed.atom'
+    updated_at: 2005-07-31T12:29:29+00:00
+    articles: [4]
+      Article
+        id: 'tag:example.org,2003:3.2397'
+        title: 'AT&T <b>bold</b> move'
+        link: 'http://example.org/2005/04/02/atom-again'
+        content: ''
+        published_at: 2003-12-13T08:29:29-04:00
+        updated_at: 2005-07-31T12:29:29+00:00
+        attachments: [2]
+          Attachment
+            link: 'http://example.org/audio/ph34r_my_podcast.mp3'
+            mime_type: 'audio/mpeg'
+            title: 'ph34r_my_podcast.mp3'
+            size_in_bytes: 1337
+            duration: None
+          Attachment
+            link: 'http://example.org/video/clip.mp4'
+            mime_type: 'video/mp4'
+            title: 'The video'
+            size_in_bytes: None
+            duration: None
+      Article
+        id: 'tag:example.org,2003:3.2398'
+        title: None
+        link: None
+        content: '<p>Only a summary, &eacute;t&eacute; &amp; more</p>'
+        published_at: 2005-07-30T10:00:00+02:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'tag:example.org,2003:3.2399'
+        title: '<not a tag> © 2005 ¬it; ☺ 😀'
+        link: None
+        content: '<p>Body</p>'
+        published_at: 2005-07-29T09:00:00+00:00
+        updated_at: None
+        attachments: []
+      Article
+        id: None
+        title: None
+        link: None
+        content: 'Plain text body'
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple data/feeds/atom/aggregated.xml
+  Feed
+    title: 'urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6'
+    subtitle: None
+    link: None
+    updated_at: 2024-10-01T00:00:00+00:00
+    articles: [3]
+      Article
+        id: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6a'
+        title: 'From a source with authors'
+        link: None
+        content: ''
+        published_at: 2024-09-30T18:30:02+00:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6b'
+        title: 'A source without an id'
+        link: None
+        content: ''
+        published_at: 2024-09-29T18:30:02+00:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'urn:uuid:1225c695-cfb8-4ebb-aaaa-80da344efa6c'
+        title: 'Its own author wins'
+        link: None
+        content: ''
+        published_at: 2024-09-28T18:30:02+00:00
+        updated_at: None
+        attachments: []
+> simple data/feeds/atom/no-id.xml
+  error FeedParseError: File is not a valid supported feed
+> simple data/feeds/atom/prefixed.xml
+  Feed
+    title: "Atom's title"
+    subtitle: None
+    link: None
+    updated_at: None
+    articles: [1]
+      Article
+        id: 'e1'
+        title: 'Entry'
+        link: 'https://example.com/e1'
+        content: ''
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple data/feeds/json/blog.json
+  Feed
+    title: 'My Example Feed'
+    subtitle: 'A blog about JSON Feed — and "quotes"'
+    link: 'https://example.org/feed.json'
+    updated_at: None
+    articles: [3]
+      Article
+        id: '2'
+        title: 'Second'
+        link: 'https://example.org/second-item'
+        content: 'This is a second item.'
+        published_at: 2024-10-01T09:30:00-07:00
+        updated_at: 2024-10-02T10:00:00+00:00
+        attachments: []
+      Article
+        id: '1'
+        title: None
+        link: 'https://example.org/initial-post'
+        content: '<p>Hello, world!</p>'
+        published_at: 2024-10-01T08:00:00-07:00
+        updated_at: None
+        attachments: []
+      Article
+        id: '0'
+        title: '😀 Emoji and escapes \t/'
+        link: None
+        content: ''
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple data/feeds/json/podcast.json
+  Feed
+    title: 'Timetable'
+    subtitle: None
+    link: None
+    updated_at: None
+    articles: [3]
+      Article
+        id: 'http://timetable.example.com/episodes/42'
+        title: 'Episode 42'
+        link: 'http://timetable.example.com/episodes/42'
+        content: 'Chris has a test.'
+        published_at: 2024-09-10T14:00:00-07:00
+        updated_at: None
+        attachments: [2]
+          Attachment
+            link: 'http://timetable.example.com/media/42.m4a'
+            mime_type: 'audio/x-m4a'
+            title: '42.m4a'
+            size_in_bytes: 89970236
+            duration: 1:50:29
+          Attachment
+            link: 'http://timetable.example.com/media/42-notes.pdf?dl=1'
+            mime_type: 'application/pdf'
+            title: 'Show notes'
+            size_in_bytes: None
+            duration: None
+      Article
+        id: 'http://timetable.example.com/episodes/41'
+        title: 'Episode 41'
+        link: None
+        content: ''
+        published_at: None
+        updated_at: None
+        attachments: [2]
+          Attachment
+            link: 'http://timetable.example.com/media/41.m4a'
+            mime_type: 'audio/x-m4a'
+            title: '41.m4a'
+            size_in_bytes: True
+            duration: 1 day, 1:01:01
+          Attachment
+            link: 'http://timetable.example.com/media/41-bonus.m4a'
+            mime_type: 'audio/x-m4a'
+            title: '41-bonus.m4a'
+            size_in_bytes: 0
+            duration: -1 day, 23:59:59
+      Article
+        id: 'http://timetable.example.com/episodes/40'
+        title: None
+        link: None
+        content: '<p>Short one</p>'
+        published_at: 2024-08-27T14:00:00-07:00
+        updated_at: None
+        attachments: [1]
+          Attachment
+            link: 'http://timetable.example.com/media/40.mp3'
+            mime_type: 'audio/mpeg'
+            title: '40.mp3'
+            size_in_bytes: None
+            duration: 0:00:00
+> simple data/feeds/json/bom.json
+  error FeedDocumentError: File is not a supported feed type
+> simple data/feeds/json/no-title.json
+  error FeedParseError: File is not a valid supported feed
+> simple data/feeds/json/list.json
+  error AttributeError: 'list' object has no attribute 'get'
+> simple data/feeds/json/trailing-comma.json
+  error FeedDocumentError: File is not a supported feed type
+> simple data/feeds/json/latin1.json
+  error FeedDocumentError: File is not a supported feed type
+> simple data/bad/unclosed.xml
+  error FeedDocumentError: File is not a supported feed type
+> simple data/bad/undefined-entity.xml
+  error FeedDocumentError: File is not a supported feed type
+> simple data/bad/billion-laughs.xml
+  error EntitiesForbidden: EntitiesForbidden(name='lol', system_id=None, public_id=None)
+> simple data/bad/xxe.xml
+  error EntitiesForbidden: EntitiesForbidden(name='xxe', system_id='file:///etc/passwd', public_id=None)
+> simple data/bad/public-entity.xml
+  error EntitiesForbidden: EntitiesForbidden(name='ext', system_id='http://example.com/ents.dtd', public_id='-//Example//Entities//EN')
+> simple data/bad/plain-doctype.xml
+  Feed
+    title: 'A doctype is fine'
+    subtitle: None
+    link: None
+    updated_at: None
+    articles: []
+> simple data/bad/empty.xml
+  error FeedDocumentError: File is not a supported feed type
+> simple data/bad/html.html
+  error FeedDocumentError: File is not a supported feed type
+> simple data/bad/foreign-root.xml
+  error FeedParseError: File is not a valid supported feed
+> simple data/bad/missing.xml
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/bad/missing.xml'
+> simple data/opml/subscriptions.opml
+  error FeedParseError: File is not a valid supported feed
+> simple_bytes data/feeds/json/bom.json
+  Feed
+    title: 'With a BOM'
+    subtitle: None
+    link: None
+    updated_at: None
+    articles: [1]
+      Article
+        id: 'a'
+        title: None
+        link: None
+        content: ''
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple_bytes data/feeds/atom/blog.xml
+  Feed
+    title: 'dive into mark'
+    subtitle: 'A <em>lot</em> of effort went into making this effortless'
+    link: 'http://example.org/feed.atom'
+    updated_at: 2005-07-31T12:29:29+00:00
+    articles: [4]
+      Article
+        id: 'tag:example.org,2003:3.2397'
+        title: 'AT&T <b>bold</b> move'
+        link: 'http://example.org/2005/04/02/atom-again'
+        content: ''
+        published_at: 2003-12-13T08:29:29-04:00
+        updated_at: 2005-07-31T12:29:29+00:00
+        attachments: [2]
+          Attachment
+            link: 'http://example.org/audio/ph34r_my_podcast.mp3'
+            mime_type: 'audio/mpeg'
+            title: 'ph34r_my_podcast.mp3'
+            size_in_bytes: 1337
+            duration: None
+          Attachment
+            link: 'http://example.org/video/clip.mp4'
+            mime_type: 'video/mp4'
+            title: 'The video'
+            size_in_bytes: None
+            duration: None
+      Article
+        id: 'tag:example.org,2003:3.2398'
+        title: None
+        link: None
+        content: '<p>Only a summary, &eacute;t&eacute; &amp; more</p>'
+        published_at: 2005-07-30T10:00:00+02:00
+        updated_at: None
+        attachments: []
+      Article
+        id: 'tag:example.org,2003:3.2399'
+        title: '<not a tag> © 2005 ¬it; ☺ 😀'
+        link: None
+        content: '<p>Body</p>'
+        published_at: 2005-07-29T09:00:00+00:00
+        updated_at: None
+        attachments: []
+      Article
+        id: None
+        title: None
+        link: None
+        content: 'Plain text body'
+        published_at: None
+        updated_at: None
+        attachments: []
+> simple_bytes data/feeds/json/latin1.json
+  error FeedDocumentError: File is not a supported feed type
+> simple_bytes data/bad/empty.xml
+  error FeedDocumentError: File is not a supported feed type
+# dates, as the parsers read them
+> date Tue, 10 Jun 2003 04:00:00 GMT
+  2003-06-10T04:00:00+00:00
+> date Tue, 10 Jun 2003 04:00:00 UT
+  2003-06-10T04:00:00+00:00
+> date Tue, 10 Jun 2003 04:00:00 EST
+  2003-06-10T04:00:00-05:00
+> date Tue, 10 Jun 2003 04:00:00 EDT
+  2003-06-10T04:00:00-04:00
+> date Tue, 10 Jun 2003 04:00:00 PST
+  2003-06-10T04:00:00-08:00
+> date Tue, 10 Jun 2003 04:00:00 +0530
+  2003-06-10T04:00:00+05:30
+> date Tue, 10 Jun 2003 04:00:00 CET
+  2003-06-10T04:00:00+00:00
+> date Tue, 10 Jun 03 04:00:00 GMT
+  2003-06-10T04:00:00+00:00
+> date Thu, 10 Jun 1999 04:00 GMT
+  1999-06-10T04:00:00+00:00
+> date Mon, 10 Jun 2003 04:00:00 GMT
+  2003-06-10T04:00:00+00:00
+> date 10 Jun 2003
+  2003-06-10T00:00:00+00:00
+> date 2003-06-10T04:00:00Z
+  2003-06-10T04:00:00+00:00
+> date 2003-06-10T04:00:00.25-07:00
+  2003-06-10T04:00:00.250000-07:00
+> date 2003-06-10 04:00:00 GMT+3
+  2003-06-10T04:00:00-03:00
+> date June 10, 2003 4:00 PM
+  2003-06-10T16:00:00+00:00
+> date Posted on Tuesday, June 10th, 2003 at 4pm UTC
+  2003-06-10T16:00:00+00:00
+> date Tue, 31 Jun 2003 04:00:00 GMT
+  None
+> date not a date
+  None
+> date    
+  None
+> date 
+  None
+> date Sun, 06 Nov 1994 08:49:37 MDT
+  1994-11-06T08:49:37-06:00
+> date Sunday, 06-Nov-94 08:49:37 GMT
+  1994-11-06T08:49:37+00:00
+> date Sun Nov  6 08:49:37 1994
+  1994-11-06T08:49:37+00:00
+> date 1994-11-06T08:49:37.123456+01:00
+  1994-11-06T08:49:37.123456+01:00
+> date 2024-02-30T00:00:00Z
+  None
+> date Wed, 02 Oct 2002 08:00:00 EST trailing words
+  2002-10-02T08:00:00-05:00
+> date Wed, 02 Oct 2002 13:00:00 GMT+02:00
+  2002-10-02T13:00:00-02:00
+> date 20240101T120000
+  2024-01-01T12:00:00+00:00
+# programs
+> river data/opml/subscriptions.opml
+  9 feeds in 'mySubscriptions.opml'
+  http://scripting.example.com/rss.xml: 'Scripting News', 4 articles
+  https://podcast.example.com/feed.xml: 'The Changelog-ish', 4 articles
+  http://timetable.example.com/feed.json: 'Timetable', 3 articles
+  http://old.example.com/rss091.xml: FeedParseError: File is not a valid supported feed
+  http://example.org/feed.atom: 'dive into mark', 4 articles
+  https://example.org/feed.json: 'My Example Feed', 3 articles
+  https://uncached.example.com/feed: not in the cache
+  https://broken.example.com/feed: FeedDocumentError: File is not a supported feed type
+  https://hostile.example.com/feed: EntitiesForbidden: EntitiesForbidden(name='lol', system_id=None, public_id=None)
+  2024-10-02 16:00  The Changelog-ish: 'Episode 3: Compilers all the way down' None
+  2024-10-01 16:30  My Example Feed: 'Second' 'https://example.org/second-item'
+  2024-10-01 15:00  My Example Feed: None 'https://example.org/initial-post'
+  2024-09-30 12:15  Scripting News: 'Why RSS still matters' 'http://scripting.example.com/2024/09/30/rss.html'
+  2024-09-30 06:59  Scripting News: 'Whitespace around a title' 'http://scripting.example.com/2024/09/29/ws.html'
+  2024-09-28 03:00  Scripting News: 'Café — “quoted” 日本語' 'http://scripting.example.com/2024/09/28/unicode.html'
+  2024-09-25 15:00  The Changelog-ish: 'Episode 2: Feeds and fediverse' 'https://podcast.example.com/2'
+  2024-09-18 17:00  The Changelog-ish: 'Episode 1: Hello' 'https://podcast.example.com/1'
+  2024-09-11 16:00  The Changelog-ish: 'Trailer' None
+  2024-09-10 21:00  Timetable: 'Episode 42' 'http://timetable.example.com/episodes/42'
+  2024-08-27 21:00  Timetable: None None
+  2005-07-30 08:00  dive into mark: None None
+  2005-07-29 09:00  dive into mark: '<not a tag> © 2005 ¬it; ☺ 😀' None
+  2003-12-13 12:29  dive into mark: 'AT&T <b>bold</b> move' 'http://example.org/2005/04/02/atom-again'
+  -                 Scripting News: None None
+  -                 Timetable: 'Episode 41' None
+  -                 dive into mark: None None
+  -                 My Example Feed: '😀 Emoji and escapes \t/' None
+> river data/opml/minimal.opml
+  1 feeds in None
+  http://x.example/feed: not in the cache
+> podcast data/feeds/rss/podcast.xml
+  'The Changelog-ish'
+  'Episode 3: Compilers all the way down': 'ep3.mp3' 'audio/mpeg' 48213504 None
+  'Episode 2: Feeds and fediverse': 'ep2.mp3' 'audio/mpeg' None None
+  'Episode 2: Feeds and fediverse': 'ep2-transcript.txt' 'text/plain' None None
+  'Episode 1: Hello': 'ep1' None None None
+  'Episode 1: Hello': '' 'audio/mpeg' 1024 None
+  'Trailer': 'trailer.m4a' 'audio/x-m4a' 2048 None
+  4 episodes, 6 files, 48216576 bytes, 0:00:00
+> podcast data/feeds/json/podcast.json
+  'Timetable'
+  'Episode 42': '42.m4a' 'audio/x-m4a' 89970236 1:50:29
+  'Episode 42': 'Show notes' 'application/pdf' None None
+  'Episode 41': '41.m4a' 'audio/x-m4a' True 1 day, 1:01:01
+  'Episode 41': '41-bonus.m4a' 'audio/x-m4a' 0 -1 day, 23:59:59
+  None: '40.mp3' 'audio/mpeg' None 0:00:00
+  3 episodes, 5 files, 89970237 bytes, 1 day, 2:51:29
+> podcast data/feeds/atom/blog.xml
+  'dive into mark'
+  'AT&T <b>bold</b> move': 'ph34r_my_podcast.mp3' 'audio/mpeg' 1337 None
+  'AT&T <b>bold</b> move': 'The video' 'video/mp4' None None
+  4 episodes, 2 files, 1337 bytes, 0:00:00
