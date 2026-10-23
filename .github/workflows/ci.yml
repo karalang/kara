@@ -1413,9 +1413,11 @@ jobs:
 
       - name: Build the ws_idle_holder demo (karac build)
         working-directory: examples/ws_idle_holder
+        # A WebSocket server is M4a on v2, which `karac build` refuses by
+        # name, so the demo builds on the legacy pipeline until M4a lands.
         run: |
           KARAC_RUNTIME="$PWD/../../target/release/libkarac_runtime.a" \
-            ../../target/debug/karac build
+            ../../target/debug/karac build --legacy
           test -x ws_idle_holder
 
       - name: Build the bench harness

@@ -7197,6 +7197,89 @@ fn main() {
     }
 }
 
+/// B-2026-10-23-9: a closure that uses a bound resource, other than the one
+/// given to `with_provider`, reaches the provider too: called where it is
+/// made, or made into a function value (`apply(|| tick())`), which carries a
+/// borrow of the provider in its environment.
+#[test]
+fn mir_closures_inside_with_provider_reach_the_provider() {
+    let src = r#"effect resource Clk: ClkP;
+trait ClkP { fn now(ref self) -> i64; fn bump(mut ref self) {} }
+struct F { t: i64 }
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+    fn bump(mut ref self) { self.t = self.t + 1; }
+}
+fn tick() -> i64 { Clk.now() }
+fn apply[G: Fn() -> i64](g: G) -> i64 { g() }
+fn twice(g: Fn() -> i64) -> i64 { g() + g() }
+fn each(xs: Vec[i64], g: Fn(i64) -> i64) -> i64 {
+    let mut s = 0;
+    for x in xs { s = s + g(x); }
+    s
+}
+fn main() {
+    let a = with_provider[Clk](F { t: 7 }, || { let c = || tick() + 1; c() });
+    let b = with_provider[Clk](F { t: 5 }, || apply(|| tick() * 2));
+    let k = 100;
+    let c = with_provider[Clk](F { t: 3 }, || twice(|| tick() + k));
+    let d = with_provider[Clk](F { t: 1 }, || each([1, 2, 3], |x| x * tick()));
+    let e = with_provider[Clk](F { t: 2 }, || {
+        let inner = || apply(|| tick() + 10);
+        apply(inner)
+    });
+    let f = with_provider[Clk](F { t: 0 }, || { Clk.bump(); apply(|| tick() + 1) });
+    println(f"{a} {b} {c} {d} {e} {f}");
+}
+"#;
+    let want = "8 10 206 6 12 2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+    // A `Fn` value borrows its environment shared, so it cannot write
+    // through a provider kept there: refused by name rather than lowered.
+    let writes = src.replace(
+        "apply(|| tick() + 1) });",
+        "apply(|| { Clk.bump(); tick() }) });",
+    );
+    let Err(err) = karac::mir::lower::run_source(&writes) else {
+        panic!("a closure writing the provider through a `Fn` value must be refused");
+    };
+    assert!(
+        err.contains("writes `Clk`'s provider, made into a `Fn` value"),
+        "{err}"
+    );
+}
+
+/// A closure held in a local and passed for a borrowed function parameter
+/// (`apply(inner)`) is borrowed as its erased value, so the call reaches its
+/// body, and the local can be passed again.
+#[test]
+fn mir_a_named_closure_passed_for_a_fn_parameter() {
+    let src = r#"fn apply[G: Fn() -> i64](g: G) -> i64 { g() }
+fn twice(g: Fn() -> i64) -> i64 { g() + g() }
+fn main() {
+    let k = 3;
+    let inner = || k + 1;
+    println(apply(inner));
+    println(apply(inner));
+    println(twice(inner));
+}
+"#;
+    let want = "4\n4\n8\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
 /// B-2026-10-20-31: a variant the checker typed at the `ref` parameter it is
 /// lent to (a bare `None` arm of an `if` or `match` passed straight to a
 /// call) is built as the value its destination holds, not as a borrow of a

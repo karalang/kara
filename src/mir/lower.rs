@@ -12574,6 +12574,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                         p = v.clone();
                     }
                 }
+                // A closure or function item held in a local, passed for a
+                // borrowed function parameter (`apply(inner)`): the borrow
+                // is of its erased value, made from a copy of it when it
+                // can be copied, so the local stays usable.
+                let fn_t = match self.tys().tcx().kind(pt) {
+                    HK::Ref(t) | HK::MutRef(t) => t,
+                    _ => pt,
+                };
+                let held = self.place_type(&p);
+                if self.erases(&Operand::Copy(p.clone()), fn_t) {
+                    let op = if self.is_copy(held) {
+                        Operand::Copy(p)
+                    } else {
+                        Operand::Move(p)
+                    };
+                    let v = self.scoped_temp(fn_t);
+                    self.assign(v, Rvalue::Use(op));
+                    p = Place::local(v);
+                }
                 let r = self.temp(pt);
                 self.assign(r, Rvalue::Ref(kind, p));
                 Ok(Operand::Move(Place::local(r)))

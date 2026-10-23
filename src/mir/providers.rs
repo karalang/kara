@@ -11,6 +11,14 @@
 //! its receiver. `with_provider` keeps `p` in a local, calls its closure's
 //! copy for `P` with a borrow of it, then drops the closure and `p`.
 //!
+//! A closure that reaches a bound resource and is made into a function value
+//! (`apply(|| tick())`, an `Erase` cast) is called through that value, where
+//! no hidden argument can follow it, so it carries its providers instead: the
+//! value holds a copy of the closure with a borrow of each provider after its
+//! captures, and the copy of its body reads them from there (B-2026-10-23-9).
+//! It cannot outlive the providers: `karac check` refuses a closure that
+//! uses a bound resource escaping the `with_provider` (§14.5).
+//!
 //! A resource with a default provider (§14.7) that no `with_provider`
 //! overrides on the way takes no parameter: a call on it builds the
 //! (field-less) default where it is made, as the builder does for a program
@@ -50,6 +58,20 @@ struct Sig {
     closure: Option<Ty>,
 }
 
+/// A copy of a closure's body that reads its providers from its
+/// environment: the closure type that carries them, and per resource the
+/// field holding its borrow and whether it is `mut`.
+#[derive(Clone)]
+struct Carried {
+    ty: Ty,
+    def: DefId,
+    fields: Vec<(String, u32, bool)>,
+}
+
+/// Closure types made here take their ids from this one down, far from the
+/// ids the resolver hands out.
+const CARRIED_DEFS: u32 = u32::MAX - 1;
+
 /// Rewrites `program`, built with resource placeholders, so that every
 /// provider is passed explicitly. `needs` is effect inference's
 /// [`super::effects::EffectReport::providers`] for the program as built.
@@ -86,6 +108,7 @@ pub fn specialise(
         sigs: &sigs,
         queued: BTreeMap::new(),
         queue: Vec::new(),
+        carried: BTreeMap::new(),
     };
     // A body that reaches only resources with a default runs against the
     // defaults under its own name; it is also the template of its copies.
@@ -139,6 +162,8 @@ struct Spec<'p> {
     queued: BTreeMap<String, ()>,
     /// Copies still to make: template, environment, name.
     queue: Vec<(String, Env, String)>,
+    /// The closure body copies that carry their providers, by name.
+    carried: BTreeMap<String, Carried>,
 }
 
 /// One body being rewritten under one environment.
@@ -156,6 +181,16 @@ impl Spec<'_> {
     /// The name of `template`'s copy under `env` (restricted to what it
     /// needs), queued if it is new.
     fn request(&mut self, template: &str, env: &Env) -> Result<String, String> {
+        let (env, name) = self.copy_name(template, env)?;
+        if name != template && self.queued.insert(name.clone(), ()).is_none() {
+            self.queue.push((template.to_string(), env, name.clone()));
+        }
+        Ok(name)
+    }
+
+    /// `env` restricted to what `template` needs, and the name of
+    /// `template`'s copy under it (its own name when nothing is bound).
+    fn copy_name(&self, template: &str, env: &Env) -> Result<(Env, String), String> {
         let env: Env = match self.needs.get(template) {
             Some(n) => n
                 .keys()
@@ -175,13 +210,10 @@ impl Spec<'_> {
             })
             .collect();
         if bound.is_empty() {
-            return Ok(template.to_string());
+            return Ok((env, template.to_string()));
         }
         let name = format!("{template}{{{}}}", bound.join(", "));
-        if self.queued.insert(name.clone(), ()).is_none() {
-            self.queue.push((template.to_string(), env, name.clone()));
-        }
-        Ok(name)
+        Ok((env, name))
     }
 
     /// Rewrites `body`, a copy of `template`, under `env`.
@@ -192,19 +224,43 @@ impl Spec<'_> {
             env: env.clone(),
             src: BTreeMap::new(),
         };
-        // The hidden parameters, after the body's own.
-        let mut params = Vec::new();
-        for (r, b) in env {
-            if let Binding::Bound(t) = b {
-                let mutable = needs.get(r) == Some(&Access::Writes);
-                params.push((r.clone(), self.tys.tcx().reference(*t, mutable)));
+        if let Some(c) = self.carried.get(&fx.body.instance.name).cloned() {
+            // Its providers are in its environment, after the captures.
+            fx.body.instance.def = c.def;
+            let env_l = Local(1);
+            let t = fx.body.local(env_l).ty;
+            let (ty, by_ref) = match self.tys.tcx().kind(t) {
+                SK::Ref(_) => (self.tys.tcx().reference(c.ty, false), true),
+                SK::MutRef(_) => (self.tys.tcx().reference(c.ty, true), true),
+                _ => (c.ty, false),
+            };
+            fx.body.locals[env_l.index()].ty = ty;
+            let mut at = Place::local(env_l);
+            if by_ref {
+                at = at.project(ProjElem::Deref);
+            }
+            for (r, k, mutable) in &c.fields {
+                let Some(Binding::Bound(pt)) = env.get(r) else {
+                    continue;
+                };
+                let rt = self.tys.tcx().reference(*pt, *mutable);
+                fx.src
+                    .insert(r.clone(), at.field(*k, rt).project(ProjElem::Deref));
+            }
+        } else {
+            // The hidden parameters, after the body's own.
+            let mut params = Vec::new();
+            for (r, b) in env {
+                if let Binding::Bound(t) = b {
+                    let mutable = needs.get(r) == Some(&Access::Writes);
+                    params.push((r.clone(), self.tys.tcx().reference(*t, mutable)));
+                }
+            }
+            if !params.is_empty() {
+                fx.add_params(&params);
             }
         }
-        if !params.is_empty() {
-            fx.add_params(&params);
-        }
         let src = fx.src.clone();
-        let supplied = supplied_closures(fx.body);
         let provided = std::mem::take(&mut fx.body.provided);
         for i in 0..fx.body.blocks.len() {
             let bb = BasicBlock(i as u32);
@@ -217,7 +273,8 @@ impl Spec<'_> {
                 fx.env.insert(p.resource.clone(), Binding::Bound(t));
                 fx.src.insert(p.resource.clone(), Place::local(p.local));
             }
-            self.check_values(&fx, bb, &supplied)?;
+            self.carry_erased(&mut fx, bb)?;
+            self.check_values(&fx, bb)?;
             let TerminatorKind::Call {
                 func:
                     Operand::Const(Const {
@@ -496,10 +553,151 @@ impl Spec<'_> {
         Ok(())
     }
 
-    /// A closure or function item made as a value that reaches a bound
-    /// resource would have to carry its provider; only the closure given
-    /// to `with_provider` does so far.
-    fn check_values(&self, fx: &Fx, bb: BasicBlock, supplied: &[Local]) -> Result<(), String> {
+    /// The bound resources the body of the closure type `t` reaches, each
+    /// with whether it writes, and that body's name; `None` for another
+    /// type or a closure that reaches none.
+    fn carrying(&self, fx: &Fx, t: Ty) -> Option<(String, Vec<(String, bool)>)> {
+        let (template, _) = self.sigs.iter().find(|(_, s)| s.closure == Some(t))?;
+        let bound: Vec<(String, bool)> = self
+            .needs
+            .get(template)?
+            .iter()
+            .filter(|(r, _)| matches!(fx.env.get(*r), Some(Binding::Bound(_))))
+            .map(|(r, a)| (r.clone(), *a == Access::Writes))
+            .collect();
+        (!bound.is_empty()).then(|| (template.clone(), bound))
+    }
+
+    /// The closure type, and the name of its body's copy, that carries
+    /// `bound`'s providers for `template` (a closure body whose
+    /// environment is `from`) under `env`; queued if new.
+    fn carry_request(
+        &mut self,
+        template: &str,
+        from: Ty,
+        env: &Env,
+        bound: &[(String, bool)],
+    ) -> Result<(Ty, String), String> {
+        let (env, copy) = self.copy_name(template, env)?;
+        let name = format!("{copy}.carried");
+        if let Some(c) = self.carried.get(&name) {
+            return Ok((c.ty, name));
+        }
+        let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
+            return Err(format!("providers: `{template}` is not a closure body"));
+        };
+        // A body that borrows its environment shared cannot write through
+        // a borrow kept there.
+        let shared_env = self.sigs[template]
+            .first
+            .is_some_and(|t| matches!(self.tys.tcx().kind(t), SK::Ref(_)));
+        if let Some((r, _)) = bound.iter().find(|(_, m)| *m).filter(|_| shared_env) {
+            return Err(format!(
+                "a closure that writes `{r}`'s provider, made into a `Fn` value, is not \
+                 lowered yet (`{template}`)"
+            ));
+        }
+        let mut caps = self.tys.tcx().list(captures);
+        let mut fields = Vec::new();
+        for (r, mutable) in bound {
+            let Some(Binding::Bound(pt)) = env.get(r).copied() else {
+                continue;
+            };
+            fields.push((r.clone(), caps.len() as u32, *mutable));
+            caps.push(self.tys.tcx().reference(pt, *mutable));
+        }
+        let def = DefId(CARRIED_DEFS - self.carried.len() as u32);
+        let ty = self.tys.intern(super::ty::TyKind::Closure(def, caps));
+        self.carried
+            .insert(name.clone(), Carried { ty, def, fields });
+        self.queued.insert(name.clone(), ());
+        self.queue.push((template.to_string(), env, name.clone()));
+        Ok((ty, name))
+    }
+
+    /// Each closure of `bb` made into a function value that reaches a bound
+    /// resource: made instead as its copy carrying the providers, a
+    /// borrow of each after its captures.
+    fn carry_erased(&mut self, fx: &mut Fx, bb: BasicBlock) -> Result<(), String> {
+        let stmts = std::mem::take(&mut fx.body.blocks[bb.index()].statements);
+        let mut out = Vec::with_capacity(stmts.len());
+        for st in stmts {
+            let StatementKind::Assign(dst, Rvalue::Cast(CastKind::Erase, op, to)) = &st.kind else {
+                out.push(st);
+                continue;
+            };
+            let (Operand::Move(src) | Operand::Copy(src)) = op else {
+                out.push(st);
+                continue;
+            };
+            let from = place_ty(fx.body, self.tys, src)?.ty;
+            let Some((template, bound)) = self.carrying(fx, from) else {
+                out.push(st);
+                continue;
+            };
+            let env = fx.env.clone();
+            let (ty, _) = self.carry_request(&template, from, &env, &bound)?;
+            let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
+                unreachable!()
+            };
+            let copy = matches!(op, Operand::Copy(_));
+            let mut ops: Vec<Operand> = self
+                .tys
+                .tcx()
+                .list(captures)
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let p = src.field(i as u32, t);
+                    if copy {
+                        Operand::Copy(p)
+                    } else {
+                        Operand::Move(p)
+                    }
+                })
+                .collect();
+            let info = st.source_info;
+            for (r, mutable) in &bound {
+                let p = fx.src[r].clone();
+                let pt = place_ty(fx.body, self.tys, &p)?.ty;
+                let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
+                let kind = if *mutable {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                out.push(Statement {
+                    kind: StatementKind::Assign(Place::local(l), Rvalue::Ref(kind, p)),
+                    source_info: info,
+                });
+                ops.push(Operand::Move(Place::local(l)));
+            }
+            let v = fx.temp(ty);
+            out.push(Statement {
+                kind: StatementKind::Assign(
+                    Place::local(v),
+                    Rvalue::Aggregate(AggregateKind::Closure { ty }, ops),
+                ),
+                source_info: info,
+            });
+            out.push(Statement {
+                kind: StatementKind::Assign(
+                    dst.clone(),
+                    Rvalue::Cast(CastKind::Erase, Operand::Move(Place::local(v)), *to),
+                ),
+                source_info: info,
+            });
+        }
+        fx.body.blocks[bb.index()].statements = out;
+        Ok(())
+    }
+
+    /// A function item made as a value that reaches a bound resource would
+    /// have to carry its provider, which only a closure does so far
+    /// ([`Self::carry_erased`]). A closure made as a value is called
+    /// directly, or carries its providers once erased; one that would
+    /// escape the providers is refused by `karac check` (§14.5).
+    fn check_values(&self, fx: &Fx, bb: BasicBlock) -> Result<(), String> {
         let bound = |name: &str| {
             self.needs.get(name).and_then(|n| {
                 n.keys()
@@ -509,25 +707,16 @@ impl Spec<'_> {
         };
         let err = |r: String| {
             Err(format!(
-                "in `{}`: a closure or function value that uses `{r}`'s provider, other than \
-                 the closure given to `with_provider`, is not lowered yet",
+                "in `{}`: a function used as a value that uses `{r}`'s provider is not \
+                 lowered yet; call it from a closure (`|| f()`) instead",
                 fx.body.instance.name
             ))
         };
         for st in &fx.body.blocks[bb.index()].statements {
-            let StatementKind::Assign(dst, rv) = &st.kind else {
+            let StatementKind::Assign(_, rv) = &st.kind else {
                 continue;
             };
             match rv {
-                Rvalue::Aggregate(AggregateKind::Closure { ty }, _) => {
-                    if dst.projection.is_empty() && supplied.contains(&dst.local) {
-                        continue;
-                    }
-                    let found = self.sigs.iter().find(|(_, s)| s.closure == Some(*ty));
-                    if let Some(r) = found.and_then(|(n, _)| bound(n)) {
-                        return err(r);
-                    }
-                }
                 Rvalue::Use(Operand::Const(Const {
                     kind: ConstKind::FnDef(inst),
                     ..
@@ -549,58 +738,6 @@ impl Spec<'_> {
         }
         Ok(())
     }
-}
-
-/// The locals holding the closure some `with_provider` call is given,
-/// through moves from one local into another.
-fn supplied_closures(body: &Body) -> Vec<Local> {
-    let mut out = Vec::new();
-    for bb in &body.blocks {
-        let TerminatorKind::Call {
-            func:
-                Operand::Const(Const {
-                    kind: ConstKind::FnDef(inst),
-                    ..
-                }),
-            args,
-            ..
-        } = &bb.terminator.kind
-        else {
-            continue;
-        };
-        if !inst.name.starts_with("with_provider[") {
-            continue;
-        }
-        if let Some(Operand::Move(p) | Operand::Copy(p)) = args.get(1) {
-            if p.projection.is_empty() {
-                out.push(p.local);
-            }
-        }
-    }
-    // Follow `a = move b` back to the local the closure was made in.
-    let mut grew = true;
-    while grew {
-        grew = false;
-        for bb in &body.blocks {
-            for st in &bb.statements {
-                if let StatementKind::Assign(
-                    dst,
-                    Rvalue::Use(Operand::Move(src) | Operand::Copy(src)),
-                ) = &st.kind
-                {
-                    if dst.projection.is_empty()
-                        && src.projection.is_empty()
-                        && out.contains(&dst.local)
-                        && !out.contains(&src.local)
-                    {
-                        out.push(src.local);
-                        grew = true;
-                    }
-                }
-            }
-        }
-    }
-    out
 }
 
 fn fn_def(tys: &TyInterner, def: DefId, args: Vec<Ty>, name: String) -> Operand {
