@@ -191,7 +191,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-44 | 2026-10-22 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and reports neither operand, so the `test_fail` event has only `message` and `location`, where the legacy runner gives `"left":"4","right":"5"` (design §14 runner output; deferred.md's `test_fail` row makes both fields part of the event) | — |
 | B-2026-10-22-45 | 2026-10-22 | cli | medium | `karac repl` runs on the legacy interpreter only. M3 item 3: the REPL on v2 (each entry checked as `karac check` checks a program and run on MIR), with the old path behind `--legacy` until legacy is deleted (M3 item 11) | — |
 | B-2026-10-22-46 | 2026-10-22 | typecheck | medium | `karac check` accepts a bare enum variant used to BUILD a value (`enum E { A(String), B } fn main() { let p = B; ... }`), and v2 runs it as `E.B`; design.md:1310 says a variant is built with its qualified name, and only a pattern may leave the enum name out | — |
-| B-2026-10-22-48 | 2026-10-22 | typecheck | low | `karac check` accepts `VecDeque`'s `push_front` / `push_back` / `pop_front` / `pop_back` on a `Vec`, which collections.md does not give `Vec`, so the program passes check and both MIR backends stop with "call of unknown function Vec[i64].push_front" | — |
 | B-2026-10-23-1 | 2026-10-23 | interp | medium | `SortedMap.ceiling` / `floor` / `min` / `max` / `range` on `karac __mir-run` copy and order every key on each call, so each query is O(n log n) where collections.md promises a B-tree: a loop of n queries is quadratic, and kata 870's SortedMap arm (10^5 queries) runs past 300 s while `__mir-llvm-run` takes under a second | — |
 
 ### Relocated
@@ -4421,6 +4420,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-41 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m)… | 3700e5f187 |
 | B-2026-10-22-42 | interp+codegen | low | `let _ = W;` with a bare unit-variant name lowers to nothing on both MIR backends, so a variant whose enum has a `Drop` body is never built and never… | 5f0b82c0d7 |
 | B-2026-10-22-47 | interp+codegen | medium | std.encoding has no `percent_encode`/`percent_decode`, so the legacy `Url.encode`/`Url.decode` have no v2 target | 9e6815d7fb |
+| B-2026-10-22-48 | typecheck | low | `karac check` accepts `VecDeque`'s `push_front` / `push_back` / `pop_front` / `pop_back` on a `Vec`, which collections.md does not give `Vec`, so the… | db323d955b |
 
 </details>
 
