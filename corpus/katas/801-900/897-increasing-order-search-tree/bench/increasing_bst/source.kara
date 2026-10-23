@@ -1,0 +1,71 @@
+// LeetCode #897 bench: the ★ arm (an in-order walk that relinks as it
+// goes) on 200,000 search trees of 100 nodes, LeetCode's largest, each
+// made by putting in 100 random values from 0 to 1000; each chain is
+// walked into a checksum.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let head = TreeNode { val: -1, left: None, right: None };
+    let mut tail = head;
+    relink(root, mut tail);
+    head.right
+}
+
+fn relink(node: Option[TreeNode], tail: mut ref TreeNode) {
+    if let Some(n) = node {
+        relink(n.left, mut tail);
+        n.left = None;
+        tail.right = Some(n);
+        *tail = n;
+        relink(n.right, mut tail);
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 897;
+    let mut nodes = 0;
+    let mut check = 0;
+    for _ in 0..200000 {
+        let root = TreeNode { val: next_random(mut seed) % 1001, left: None, right: None };
+        for _ in 1..100 {
+            let v = next_random(mut seed) % 1001;
+            let mut cur = root;
+            loop {
+                if v < cur.val {
+                    match cur.left {
+                        Some(l) => cur = l,
+                        None => {
+                            cur.left = Some(TreeNode { val: v, left: None, right: None });
+                            break;
+                        }
+                    }
+                } else {
+                    match cur.right {
+                        Some(r) => cur = r,
+                        None => {
+                            cur.right = Some(TreeNode { val: v, left: None, right: None });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let mut cur = increasing_bst(Some(root));
+        while let Some(n) = cur {
+            nodes += 1;
+            check = (check * 31 + n.val) % 1000000007;
+            cur = n.right;
+        }
+    }
+    println(f"200000 trees of 100 nodes: {nodes} in the chains, checksum {check}");
+}

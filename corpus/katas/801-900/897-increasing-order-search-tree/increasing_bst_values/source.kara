@@ -1,0 +1,181 @@
+// LeetCode #897: Increasing Order Search Tree -- the values in order, a
+// new chain.
+//
+// Read the values in order into a list, then build a fresh chain of
+// nodes from the last value back to the first, each new node taking the
+// chain so far as its right child. O(n) time and O(n) new nodes.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut vals: Vec[i64] = Vec.new();
+    in_order(root, mut vals);
+    let mut chain: Option[TreeNode] = None;
+    let mut i = vals.len();
+    while i > 0 {
+        i -= 1;
+        chain = Some(TreeNode { val: vals[i], left: None, right: chain });
+    }
+    chain
+}
+
+fn in_order(node: Option[TreeNode], vals: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order(n.left, mut vals);
+        vals.push(n.val);
+        in_order(n.right, mut vals);
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, "null" for a missing child, with the
+// trailing nulls dropped.
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(", ")}]"
+}
+
+fn show(vals: Vec[Option[i64]]) {
+    let before = to_level_order(from_level_order(vals));
+    println(f"root = {before} -> {to_level_order(increasing_bst(from_level_order(vals)))}");
+}
+
+// A search tree of n distinct values from 0 to 1000, put in at random,
+// in increasing order (kind 1) or in decreasing order (kind 2).
+fn random_bst(seed: mut ref i64, n: i64, kind: i64) -> Option[TreeNode] {
+    let mut pool: Vec[i64] = Vec.new();
+    for v in 0..1001 {
+        pool.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (1001 - i);
+        pool.swap(i, j);
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..n {
+        vals.push(pool[i]);
+    }
+    if kind == 1 {
+        vals.sort();
+    } else if kind == 2 {
+        vals.sort();
+        vals.reverse();
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..n {
+        let v = vals[i];
+        let mut cur = root;
+        loop {
+            if v < cur.val {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The number of nodes and a checksum of the values and shape in pre-order.
+fn summary(root: Option[TreeNode]) -> (i64, i64) {
+    match root {
+        None => (0, 7),
+        Some(node) => {
+            let (ln, lc) = summary(node.left);
+            let (rn, rc) = summary(node.right);
+            (1 + ln + rn, (lc * 31 + rc * 17 + node.val + 3) % 1000000007)
+        }
+    }
+}
+
+fn main() {
+    show([Some(5), Some(3), Some(6), Some(2), Some(4), None, Some(8), Some(1), None, None, None, Some(7), Some(9)]);
+    show([Some(5), Some(1), Some(7)]);
+    show([Some(0)]);
+    show([Some(1), None, Some(2), None, Some(3)]);
+    show([Some(3), Some(2), None, Some(1)]);
+    show([Some(2), Some(1), Some(3)]);
+    show([Some(4), Some(1), None, None, Some(3), Some(2)]);
+    // LeetCode's largest, 100 nodes: put in at random, increasing and
+    // decreasing
+    let mut seed = 897;
+    for kind in 0..3 {
+        let (n, check) = summary(increasing_bst(random_bst(mut seed, 100, kind)));
+        println(f"100 nodes of kind {kind} -> {n} in the chain, checksum {check}");
+    }
+    let mut nodes = 0;
+    let mut all = 0;
+    for c in 0..300 {
+        let size = 1 + next_random(mut seed) % 100;
+        let (n, check) = summary(increasing_bst(random_bst(mut seed, size, c % 4 % 3)));
+        nodes += n;
+        all = (all * 131 + check) % 1000000007;
+    }
+    println(f"300 random trees of 1 to 100 nodes: {nodes} in the chains, checksum {all}");
+}

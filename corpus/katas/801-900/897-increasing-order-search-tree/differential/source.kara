@@ -1,0 +1,371 @@
+// LeetCode #897: Increasing Order Search Tree -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given the root of a binary search tree, rearrange the
+// tree in in-order so that the leftmost node in the tree is now the root
+// of the tree, and every node has no left child and only one right child.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: an in-order walk that relinks as it goes ------------------
+fn star_increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let head = TreeNode { val: -1, left: None, right: None };
+    let mut tail = head;
+    star_relink(root, mut tail);
+    head.right
+}
+
+fn star_relink(node: Option[TreeNode], tail: mut ref TreeNode) {
+    if let Some(n) = node {
+        star_relink(n.left, mut tail);
+        n.left = None;
+        tail.right = Some(n);
+        *tail = n;
+        star_relink(n.right, mut tail);
+    }
+}
+
+// ---- the values arm: the values in order, a new chain ---------------------
+fn values_increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut vals: Vec[i64] = Vec.new();
+    values_in_order(root, mut vals);
+    let mut chain: Option[TreeNode] = None;
+    let mut i = vals.len();
+    while i > 0 {
+        i -= 1;
+        chain = Some(TreeNode { val: vals[i], left: None, right: chain });
+    }
+    chain
+}
+
+fn values_in_order(node: Option[TreeNode], vals: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        values_in_order(n.left, mut vals);
+        vals.push(n.val);
+        values_in_order(n.right, mut vals);
+    }
+}
+
+// ---- the stack arm: an in-order walk with a stack of its own --------------
+fn stack_increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let head = TreeNode { val: -1, left: None, right: None };
+    let mut tail = head;
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut cur = root;
+    loop {
+        while let Some(n) = cur {
+            stack.push(n);
+            cur = n.left;
+        }
+        match stack.pop() {
+            None => break,
+            Some(n) => {
+                cur = n.right;
+                n.left = None;
+                tail.right = Some(n);
+                tail = n;
+            }
+        }
+    }
+    head.right
+}
+
+// ---- the vine arm: right rotations into a vine ----------------------------
+fn vine_increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let head = TreeNode { val: -1, left: None, right: root };
+    let mut tail = head;
+    while let Some(node) = tail.right {
+        match node.left {
+            Some(l) => {
+                node.left = l.right;
+                l.right = Some(node);
+                tail.right = Some(l);
+            }
+            None => tail = node,
+        }
+    }
+    head.right
+}
+
+// ---- the pairs arm: each subtree flattened to a chain ---------------------
+fn pairs_increasing_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        None => None,
+        Some(r) => {
+            let (head, _) = pairs_flatten(r);
+            Some(head)
+        }
+    }
+}
+
+fn pairs_flatten(node: TreeNode) -> (TreeNode, TreeNode) {
+    let mut head = node;
+    let mut tail = node;
+    if let Some(l) = node.left {
+        let (lh, lt) = pairs_flatten(l);
+        lt.right = Some(node);
+        head = lh;
+    }
+    node.left = None;
+    if let Some(r) = node.right {
+        let (rh, rt) = pairs_flatten(r);
+        node.right = Some(rh);
+        tail = rt;
+    }
+    (head, tail)
+}
+
+fn arm(x: i64, root: Option[TreeNode]) -> Option[TreeNode] {
+    match x {
+        0 => star_increasing_bst(root),
+        1 => values_increasing_bst(root),
+        2 => stack_increasing_bst(root),
+        3 => vine_increasing_bst(root),
+        _ => pairs_increasing_bst(root),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the values of a tree in order: the left subtree, the node, the right
+fn in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order(n.left, mut out);
+        out.push(n.val);
+        in_order(n.right, mut out);
+    }
+}
+
+// rearranged in in-order: the leftmost node the root, and every node with
+// no left child and only one right child, the last none
+fn literal(original: Option[TreeNode], got: Option[TreeNode]) -> bool {
+    let mut want: Vec[i64] = Vec.new();
+    in_order(original, mut want);
+    let mut cur = got;
+    let mut i = 0;
+    while let Some(n) = cur {
+        if i >= want.len() or n.val != want[i] or n.left.is_some() {
+            return false;
+        }
+        if i < want.len() - 1 and n.right.is_none() {
+            return false;
+        }
+        i += 1;
+        cur = n.right;
+    }
+    i == want.len() and (want.len() == 0 or got.unwrap().val == want[0])
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct values from 0 to 1000 in a random order
+fn random_values(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut pool: Vec[i64] = Vec.new();
+    for v in 0..1001 {
+        pool.push(v);
+    }
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (1001 - i);
+        pool.swap(i, j);
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..n {
+        vals.push(pool[i]);
+    }
+    vals
+}
+
+// the search tree the values make, put in in their order
+fn bst(vals: Vec[i64]) -> Option[TreeNode] {
+    if vals.len() == 0 {
+        return None;
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    for i in 1..vals.len() {
+        let v = vals[i];
+        let mut cur = root;
+        loop {
+            if v < cur.val {
+                match cur.left {
+                    Some(l) => cur = l,
+                    None => {
+                        cur.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match cur.right {
+                    Some(r) => cur = r,
+                    None => {
+                        cur.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// a new copy of the tree, mirrored with every value negated if `flip`
+fn copy(node: Option[TreeNode], flip: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            if flip {
+                Some(TreeNode { val: -n.val, left: copy(n.right, true), right: copy(n.left, true) })
+            } else {
+                Some(TreeNode { val: n.val, left: copy(n.left, false), right: copy(n.right, false) })
+            }
+        }
+    }
+}
+
+// the values down the right children, and whether no node on the way has
+// a left child
+struct Chain {
+    vals: Vec[i64],
+    straight: bool,
+}
+
+fn chain(x: i64, tree: Option[TreeNode]) -> Chain {
+    let mut c = Chain { vals: Vec.new(), straight: true };
+    let mut cur = arm(x, copy(tree, false));
+    while let Some(n) = cur {
+        c.vals.push(n.val);
+        if n.left.is_some() {
+            c.straight = false;
+        }
+        cur = n.right;
+    }
+    c
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the number of nodes.
+fn properties(t: mut ref Tally, vals: Vec[i64], small: bool) -> i64 {
+    let n = vals.len();
+    let tree = bst(vals);
+    let mut sorted = vals.clone();
+    sorted.sort();
+    let in_sorted_order = bst(sorted);
+    let mirrored = copy(tree, true);
+    let mut chains: Vec[Chain] = Vec.new();
+    for x in 0..5 {
+        chains.push(chain(x, tree));
+    }
+    for x in 0..5 {
+        let got = chains[x].vals.clone();
+        // P1: the statement's rearrangement
+        if small {
+            check(mut t, 1, literal(copy(tree, false), arm(x, copy(tree, false))));
+        }
+        // P2: a straight chain of all n values, each larger than the one
+        // before, from the smallest to the largest
+        let mut rising = true;
+        for i in 1..got.len() {
+            if got[i] <= got[i - 1] {
+                rising = false;
+            }
+        }
+        check(mut t, 2, chains[x].straight and got.len() == n and rising and got[0] == sorted[0] and got[n - 1] == sorted[n - 1]);
+        // P3: the same values put in another order give the same chain; and
+        // the root's left subtree's chain, the root, and its right
+        // subtree's chain make the whole chain
+        let root = tree.unwrap();
+        let mut joined = chain(x, root.left).vals;
+        joined.push(root.val);
+        for v in chain(x, root.right).vals.iter() {
+            joined.push(*v);
+        }
+        check(mut t, 3, chain(x, in_sorted_order).vals == got and joined == got);
+        // P4: the chain rearranged again is itself
+        let mut again = Chain { vals: Vec.new(), straight: true };
+        let mut cur = arm(x, arm(x, copy(tree, false)));
+        while let Some(node) = cur {
+            again.vals.push(node.val);
+            if node.left.is_some() {
+                again.straight = false;
+            }
+            cur = node.right;
+        }
+        check(mut t, 4, again.straight and again.vals == got);
+        // P5: the tree mirrored with every value negated gives the chain
+        // backwards, negated
+        let back = chain(x, mirrored).vals;
+        let mut ok = back.len() == n and got.len() == n;
+        if ok {
+            for i in 0..n {
+                if back[i] != -got[n - 1 - i] {
+                    ok = false;
+                }
+            }
+        }
+        check(mut t, 5, ok);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and chains[y].vals == got and chains[y].straight == chains[x].straight {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    n
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 897;
+    let mut cases = 0;
+    let mut nodes = 0;
+    // up to 12 nodes against the statement; then up to 100, LeetCode's
+    // largest; the values put in at random, increasing or decreasing
+    for c in 0..3200 {
+        let small = c < 3000;
+        let size = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 100 };
+        let mut vals = random_values(mut seed, size);
+        let kind = next_random(mut seed) % 3;
+        if kind >= 1 {
+            vals.sort();
+        }
+        if kind == 2 {
+            vals.reverse();
+        }
+        cases += 1;
+        nodes += properties(mut t, vals, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {nodes} nodes, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
