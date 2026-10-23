@@ -1,0 +1,1666 @@
+== the paths of the SVG specification
+> parse_path('M 100 100 L 300 100 L 200 300 z')
+  -> Path(Move(to=(100+100j)), Line(start=(100+100j), end=(300+100j)), Line(start=(300+100j), end=(200+300j)), Close(start=(200+300j), end=(100+100j)))
+  d: M 100,100 L 300,100 L 200,300 z
+> boundingbox()
+  -> [100.0, 100.0, 300.0, 300.0]
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> boundingbox()
+  -> [100.0, 125.0, 400.0, 275.0]
+> parse_path('M200,300 Q400,50 600,300 T1000,300')
+  -> Path(Move(to=(200+300j)), QuadraticBezier(start=(200+300j), control=(400+50j), end=(600+300j), smooth=False), QuadraticBezier(start=(600+300j), control=(800+550j), end=(1000+300j), smooth=True))
+  d: M 200,300 Q 400,50 600,300 T 1000,300
+> boundingbox()
+  -> [200.0, 175.0, 1000.0, 425.0]
+> parse_path('M300,200 h-150 a150,150 0 1,0 150,-150 z')
+  -> Path(Move(to=(300+200j)), Line(start=(300+200j), end=(150+200j)), Arc(start=(150+200j), radius=(150+150j), rotation=0.0, arc=True, sweep=False, end=(300+50j)), Close(start=(300+50j), end=(300+200j)))
+  d: M 300,200 h -150 a 150,150 0 1,0 150,-150 z
+> boundingbox()
+  -> [150.0, 50.0, 450.0, 350.0]
+> parse_path('M275,175 v-150 a150,150 0 0,0 -150,150 z')
+  -> Path(Move(to=(275+175j)), Line(start=(275+175j), end=(275+25j)), Arc(start=(275+25j), radius=(150+150j), rotation=0.0, arc=False, sweep=False, end=(125+175j)), Close(start=(125+175j), end=(275+175j)))
+  d: M 275,175 v -150 a 150,150 0 0,0 -150,150 z
+> boundingbox()
+  -> [125.0, 25.0, 275.0, 175.00000000000003]
+> parse_path('M600,350 l 50,-25 a25,25 -30 0,1 50,-25 l 50,-25 a25,50 -30 0,1 50,-25 l 50,-25 a25,75 -30 0,1 50,-25 l 50,-25 a25,100 -30 0,1 50,-25 l 50,-25')
+  -> Path(Move(to=(600+350j)), Line(start=(600+350j), end=(650+325j)), Arc(start=(650+325j), radius=(25+25j), rotation=-30.0, arc=False, sweep=True, end=(700+300j)), Line(start=(700+300j), end=(750+275j)), Arc(start=(750+275j), radius=(25+50j), rotation=-30.0, arc=False, sweep=True, end=(800+250j)), Line(start=(800+250j), end=(850+225j)), Arc(start=(850+225j), radius=(25+75j), rotation=-30.0, arc=False, sweep=True, end=(900+200j)), Line(start=(900+200j), end=(950+175j)), Arc(start=(950+175j), radius=(25+100j), rotation=-30.0, arc=False, sweep=True, end=(1000+150j)), Line(start=(1000+150j), end=(1050+125j)))
+  d: M 600,350 l 50,-25 a 25,25 -30 0,1 50,-25 l 50,-25 a 25,50 -30 0,1 50,-25 l 50,-25 a 25,75 -30 0,1 50,-25 l 50,-25 a 25,100 -30 0,1 50,-25 l 50,-25
+> boundingbox()
+  -> [600.0, 64.83678479616788, 1050.0, 350.0]
+> parse_path('M100,200 C100,100 400,100 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(400+100j), end=(400+200j), smooth=False))
+  d: M 100,200 C 100,100 400,100 400,200
+> boundingbox()
+  -> [100.0, 125.0, 400.0, 200.0]
+> parse_path('M100,500 C25,400 475,400 400,500')
+  -> Path(Move(to=(100+500j)), CubicBezier(start=(100+500j), control1=(25+400j), control2=(475+400j), end=(400+500j), smooth=False))
+  d: M 100,500 C 25,400 475,400 400,500
+> boundingbox()
+  -> [91.53357723840314, 425.0, 408.46642276159685, 500.0]
+> parse_path('M600,800 C625,700 725,700 750,800 S875,900 900,800')
+  -> Path(Move(to=(600+800j)), CubicBezier(start=(600+800j), control1=(625+700j), control2=(725+700j), end=(750+800j), smooth=False), CubicBezier(start=(750+800j), control1=(775+900j), control2=(875+900j), end=(900+800j), smooth=True))
+  d: M 600,800 C 625,700 725,700 750,800 S 875,900 900,800
+> boundingbox()
+  -> [600.0, 725.0, 900.0, 875.0]
+== the grammar
+> parse_path('m 10 10 20 20 30 0')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(30+30j)), Line(start=(30+30j), end=(60+30j)))
+  d: m 10,10 l 20,20 l 30,0
+> parse_path('M10 10 20 20')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(20+20j)))
+  d: M 10,10 L 20,20
+> parse_path('M 0 0 L 10 0 10 10 0 10 z m 20 0 l 10 0')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Line(start=(10+10j), end=10j), Close(start=10j, end=0j), Move(to=(20+0j)), Line(start=(20+0j), end=(30+0j)))
+  d: M 0,0 L 10,0 L 10,10 L 0,10 z m 20,0 l 10,0
+> parse_path('M10-20L.5.5-1e2,3E-1')
+  -> Path(Move(to=(10-20j)), Line(start=(10-20j), end=(0.5+0.5j)), Line(start=(0.5+0.5j), end=(-100+0.3j)))
+  d: M 10,-20 L 0.5,0.5 L -100,0.3
+> parse_path('M1.5.5.5.5')
+  -> Path(Move(to=(1.5+0.5j)), Line(start=(1.5+0.5j), end=(0.5+0.5j)))
+  d: M 1.5,0.5 L 0.5,0.5
+> parse_path('M0,0l1-1-1-1z')
+  -> Path(Move(to=0j), Line(start=0j, end=(1-1j)), Line(start=(1-1j), end=-2j), Close(start=-2j, end=0j))
+  d: M 0,0 l 1,-1 l -1,-1 z
+> parse_path('M 10 10 a20 20 0 1010 10')
+  -> Path(Move(to=(10+10j)), Arc(start=(10+10j), radius=(20+20j), rotation=0.0, arc=True, sweep=False, end=(20+20j)))
+  d: M 10,10 a 20,20 0 1,0 10,10
+> parse_path('\tM\n10\r10 L 20,20')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(20+20j)))
+  d: M 10,10 L 20,20
+> parse_path('M 10 10 L 10 10')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(10+10j)))
+  d: M 10,10 L 10,10
+> parse_path('M 5 5')
+  -> Path(Move(to=(5+5j)))
+  d: M 5,5
+> parse_path('M 0 0 M 10 10 L 20 20')
+  -> Path(Move(to=0j), Move(to=(10+10j)), Line(start=(10+10j), end=(20+20j)))
+  d: M 0,0 M 10,10 L 20,20
+> parse_path('M 0 0 A 0 10 0 0 1 10 10')
+  -> Path(Move(to=0j), Arc(start=0j, radius=10j, rotation=0.0, arc=False, sweep=True, end=(10+10j)))
+  d: M 0,0 A 0,10 0 0,1 10,10
+> parse_path('M 10 10 A 5 5 0 0 1 10 10')
+  -> Path(Move(to=(10+10j)), Arc(start=(10+10j), radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+10j)))
+  d: M 10,10 A 5,5 0 0,1 10,10
+> parse_path('M 0 0 A 1 1 0 0 1 10 0')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(1+1j), rotation=0.0, arc=False, sweep=True, end=(10+0j)))
+  d: M 0,0 A 1,1 0 0,1 10,0
+> parse_path('M 0 0 A 5 5 30 1 1 3 4')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=30.0, arc=True, sweep=True, end=(3+4j)))
+  d: M 0,0 A 5,5 30 1,1 3,4
+> parse_path('M 0 0 A 5 5 0 2 1 10 10')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+10j)))
+  d: M 0,0 A 5,5 0 0,1 10,10
+> parse_path('M 0 0 A 3 9 -60 1 0 6 6')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(3+9j), rotation=-60.0, arc=True, sweep=False, end=(6+6j)))
+  d: M 0,0 A 3,9 -60 1,0 6,6
+> parse_path('L 10 10 20 0')
+  -> Path(Line(start=0, end=(10+10j)), Line(start=(10+10j), end=(20+0j)))
+  d: L 10,10 L 20,0
+> parse_path('C 0 10 10 10 10 0')
+  -> Path(CubicBezier(start=0, control1=10j, control2=(10+10j), end=(10+0j), smooth=False))
+  d: C 0,10 10,10 10,0
+> parse_path('Q 5 5 10 0')
+  -> Path(QuadraticBezier(start=0, control=(5+5j), end=(10+0j), smooth=False))
+  d: Q 5,5 10,0
+> parse_path('H 10 V 10')
+  -> Path(Line(start=0, end=(10+0j)), Line(start=(10+0j), end=(10+10j)))
+  error AttributeError: 'NoneType' object has no attribute 'end'
+> parse_path('l 10 10')
+  -> Path(Line(start=0, end=(10+10j)))
+  error AttributeError: 'NoneType' object has no attribute 'end'
+> parse_path('A 5 5 0 0 1 10 0')
+  -> Path(Arc(start=0, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+0j)))
+  d: A 5,5 0 0,1 10,0
+> parse_path('S 10 10 20 0')
+  error TypeError: 'in <string>' requires string as left operand, not NoneType
+> parse_path('M 10 10 L 20 20 Z L 30 30')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(20+20j)), Close(start=(20+20j), end=(10+10j)), Line(start=(10+10j), end=(30+30j)))
+  d: M 10,10 L 20,20 Z L 30,30
+> parse_path('M 10 10 Z Z')
+  -> Path(Move(to=(10+10j)), Close(start=(10+10j), end=(10+10j)), Close(start=(10+10j), end=(10+10j)))
+  d: M 10,10 Z Z
+> parse_path('m 10 10 z m 5 5 z')
+  -> Path(Move(to=(10+10j)), Close(start=(10+10j), end=(10+10j)), Move(to=(15+15j)), Close(start=(15+15j), end=(15+15j)))
+  d: m 10,10 z m 5,5 z
+> parse_path('M 0 0 S 10 10 20 0')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=0j, control2=(10+10j), end=(20+0j), smooth=True))
+  d: M 0,0 S 10,10 20,0
+> parse_path('M 0 0 C 0 10 10 10 10 0 S 20 -10 20 0')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=10j, control2=(10+10j), end=(10+0j), smooth=False), CubicBezier(start=(10+0j), control1=(10-10j), control2=(20-10j), end=(20+0j), smooth=True))
+  d: M 0,0 C 0,10 10,10 10,0 S 20,-10 20,0
+> parse_path('M 0 0 T 10 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=0j, end=(10+0j), smooth=True))
+  d: M 0,0 T 10,0
+> parse_path('M 0 0 Q 5 10 10 0 T 20 0 T 30 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(5+10j), end=(10+0j), smooth=False), QuadraticBezier(start=(10+0j), control=(15-10j), end=(20+0j), smooth=True), QuadraticBezier(start=(20+0j), control=(25+10j), end=(30+0j), smooth=True))
+  d: M 0,0 Q 5,10 10,0 T 20,0 T 30,0
+> parse_path('M 0 0 C 1 1 2 2 3 3 T 10 0')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=(1+1j), control2=(2+2j), end=(3+3j), smooth=False), QuadraticBezier(start=(3+3j), control=(3+3j), end=(10+0j), smooth=True))
+  d: M 0,0 C 1,1 2,2 3,3 T 10,0
+> parse_path('M 0 0 Q 5 5 10 0 S 15 5 20 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(5+5j), end=(10+0j), smooth=False), CubicBezier(start=(10+0j), control1=(10+0j), control2=(15+5j), end=(20+0j), smooth=True))
+  d: M 0,0 Q 5,5 10,0 S 15,5 20,0
+> parse_path('M 0 0 c 0 -5 5 -5 5 0 s 5 5 5 0 s 5 -5 5 0')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=-5j, control2=(5-5j), end=(5+0j), smooth=False), CubicBezier(start=(5+0j), control1=(5+5j), control2=(10+5j), end=(10+0j), smooth=True), CubicBezier(start=(10+0j), control1=(10-5j), control2=(15-5j), end=(15+0j), smooth=True))
+  d: M 0,0 c 0,-5 5,-5 5,0 s 5,5 5,0 s 5,-5 5,0
+> parse_path('M 0 0 q 5 -5 10 0 t 10 0 t 10 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(5-5j), end=(10+0j), smooth=False), QuadraticBezier(start=(10+0j), control=(15+5j), end=(20+0j), smooth=True), QuadraticBezier(start=(20+0j), control=(25-5j), end=(30+0j), smooth=True))
+  d: M 0,0 q 5,-5 10,0 t 10,0 t 10,0
+> parse_path('M 1e2 1E2 l -1e1 .5e1')
+  -> Path(Move(to=(100+100j)), Line(start=(100+100j), end=(90+105j)))
+  d: M 100,100 l -10,5
+> parse_path('M 0.000001 1000000 L 1234567 0.00001234')
+  -> Path(Move(to=(1e-06+1000000j)), Line(start=(1e-06+1000000j), end=(1234567+1.234e-05j)))
+  d: M 1E-06,1E+06 L 1.23457E+06,1.234E-05
+> parse_path('M 123456.5 0 L 0.0001 -0.0')
+  -> Path(Move(to=(123456.5+0j)), Line(start=(123456.5+0j), end=(0.0001-0j)))
+  d: M 123456,0 L 0.0001,-0
+> parse_path('M -0 -0 l -0 -0')
+  -> Path(Move(to=(-0-0j)), Line(start=(-0-0j), end=(-0-0j)))
+  d: M -0,-0 l 0,0
+> parse_path('M 0 0 L 1e400 0')
+  -> Path(Move(to=0j), Line(start=0j, end=(inf+0j)))
+  d: M 0,0 L INF,0
+> parse_path('M 0 0 L 1e-400 5')
+  -> Path(Move(to=0j), Line(start=0j, end=5j))
+  d: M 0,0 L 0,5
+> parse_path('M 3 3 h 4 v 4 h -4 v -4')
+  -> Path(Move(to=(3+3j)), Line(start=(3+3j), end=(7+3j)), Line(start=(7+3j), end=(7+7j)), Line(start=(7+7j), end=(3+7j)), Line(start=(3+7j), end=(3+3j)))
+  d: M 3,3 h 4 v 4 h -4 v -4
+> parse_path('M 0 0 V 5 H 5 v 5 h 5')
+  -> Path(Move(to=0j), Line(start=0j, end=5j), Line(start=5j, end=(5+5j)), Line(start=(5+5j), end=(5+10j)), Line(start=(5+10j), end=(10+10j)))
+  d: M 0,0 V 5 H 5 v 5 h 5
+> parse_path('M 1 2 3 4 5 6 Z 7 8')
+  error ValueError: too many values to unpack (expected 2)
+== broken paths
+> parse_path('')
+  error TypeError: cannot unpack non-iterable NoneType object
+> parse_path('   ')
+  error TypeError: cannot unpack non-iterable NoneType object
+> parse_path('10 10 L 20 20')
+  error InvalidPathError: Path does not start with a command: 10 10 L 20 20
+> parse_path('M 10')
+  error InvalidPathError: Invalid path element M 10
+> parse_path('M 10 10 L 20')
+  error InvalidPathError: Invalid path element L 20
+> parse_path('M 10 10 L 20 20 x 30 30')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(20+20j)))
+  d: M 10,10 L 20,20
+> parse_path('M 0 0 L 10 10 L')
+  error ValueError: not enough values to unpack (expected 2, got 1)
+> parse_path('M 0 0 z 10 10')
+  error ValueError: too many values to unpack (expected 2)
+> parse_path('M 0 0 L . 5')
+  error ValueError: could not convert string to float: b'.'
+> parse_path('M 0 0 L - 5')
+  error ValueError: could not convert string to float: b'-'
+> parse_path('M 0 0 L e5 5')
+  error ValueError: could not convert string to float: b'e5'
+> parse_path('M 0 0 A -5 5 0 0 1 10 10')
+  error InvalidPathError: Invalid path element A -5 5 0 0 1 10 10
+> parse_path('M 0 0 A 5 5 0 0 1')
+  error InvalidPathError: Invalid path element A 5 5 0 0 1
+> parse_path('M 0 0 A 5 5 0')
+  error IndexError: bytearray index out of range
+> parse_path('M 0 0 L 5 é')
+  error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 2: ordinal not in range(128)
+> parse_path('M 0 0 L 10 10 # comment')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+10j)))
+  d: M 0,0 L 10,10
+> parse_path('M,10,10')
+  error InvalidPathError: Invalid path element M ,10,10
+> parse_path('M 10 10 L 1.5.5')
+  -> Path(Move(to=(10+10j)), Line(start=(10+10j), end=(1.5+0.5j)))
+  d: M 10,10 L 1.5,0.5
+> parse_path('M 0 0 C 1 2 3 4')
+  error InvalidPathError: Invalid path element C 1 2 3 4
+> parse_path('M 0 0 Q 1 1')
+  error InvalidPathError: Invalid path element Q 1 1
+> parse_path('M 0 0 L 1 1 2')
+  -> Path(Move(to=0j), Line(start=0j, end=(1+1j)))
+  d: M 0,0 L 1,1
+> parse_path('Z')
+  -> Path(Close(start=0, end=None))
+  d: Z
+> parse_path('z M 1 1')
+  -> Path(Close(start=0, end=None), Move(to=(1+1j)))
+  d: z M 1,1
+> parse_path('M 0 0 L 1 1 Z L 2 2 x')
+  -> Path(Move(to=0j), Line(start=0j, end=(1+1j)), Close(start=(1+1j), end=0j), Line(start=0j, end=(2+2j)))
+  d: M 0,0 L 1,1 Z L 2,2
+> parse_path('M 0 0 H')
+  error ValueError: not enough values to unpack (expected 2, got 1)
+== the tokenizer
+> _tokenize_path('M 100 100 L 300 100 L 200 300 z')
+  - ('M', (100+100j))
+  - ('L', (300+100j))
+  - ('L', (200+300j))
+  - ('z',)
+> _tokenize_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  - ('M', (100+200j))
+  - ('C', (100+100j), (250+100j), (250+200j))
+  - ('S', (400+300j), (400+200j))
+> _tokenize_path('M200,300 Q400,50 600,300 T1000,300')
+  - ('M', (200+300j))
+  - ('Q', (400+50j), (600+300j))
+  - ('T', (1000+300j))
+> _tokenize_path('m 10 10 20 20 30 0')
+  - ('m', (10+10j))
+  - ('l', (20+20j))
+  - ('l', (30+0j))
+> _tokenize_path('M10 10 20 20')
+  - ('M', (10+10j))
+  - ('L', (20+20j))
+> _tokenize_path('M 0 0 L 10 0 10 10 0 10 z m 20 0 l 10 0')
+  - ('M', 0j)
+  - ('L', (10+0j))
+  - ('L', (10+10j))
+  - ('L', 10j)
+  - ('z',)
+  - ('m', (20+0j))
+  - ('l', (10+0j))
+> _tokenize_path('M10-20L.5.5-1e2,3E-1')
+  - ('M', (10-20j))
+  - ('L', (0.5+0.5j))
+  - ('L', (-100+0.3j))
+> _tokenize_path('M1.5.5.5.5')
+  - ('M', (1.5+0.5j))
+  - ('L', (0.5+0.5j))
+> _tokenize_path('M0,0l1-1-1-1z')
+  - ('M', 0j)
+  - ('l', (1-1j))
+  - ('l', (-1-1j))
+  - ('z',)
+> _tokenize_path('M 10 10 a20 20 0 1010 10')
+  - ('M', (10+10j))
+  - ('a', 20.0, 20.0, 0.0, True, False, (10+10j))
+> _tokenize_path('\tM\n10\r10 L 20,20')
+  - ('M', (10+10j))
+  - ('L', (20+20j))
+> _tokenize_path('M 10 10 L 10 10')
+  - ('M', (10+10j))
+  - ('L', (10+10j))
+> _tokenize_path('M 5 5')
+  - ('M', (5+5j))
+> _tokenize_path('M 0 0 M 10 10 L 20 20')
+  - ('M', 0j)
+  - ('M', (10+10j))
+  - ('L', (20+20j))
+> _tokenize_path('M 0 0 A 0 10 0 0 1 10 10')
+  - ('M', 0j)
+  - ('A', 0.0, 10.0, 0.0, False, True, (10+10j))
+> _tokenize_path('')
+  error TypeError: cannot unpack non-iterable NoneType object
+> _tokenize_path('   ')
+  error TypeError: cannot unpack non-iterable NoneType object
+> _tokenize_path('10 10 L 20 20')
+  error InvalidPathError: Path does not start with a command: 10 10 L 20 20
+> _tokenize_path('M 10')
+  error InvalidPathError: Invalid path element M 10
+> _tokenize_path('M 10 10 L 20')
+  - ('M', (10+10j))
+  error InvalidPathError: Invalid path element L 20
+> _tokenize_path('M 10 10 L 20 20 x 30 30')
+  - ('M', (10+10j))
+  - ('L', (20+20j))
+> _tokenize_path('M 0 0 L 10 10 L')
+  - ('M', 0j)
+  - ('L', (10+10j))
+  error ValueError: not enough values to unpack (expected 2, got 1)
+> _tokenize_path('M 0 0 z 10 10')
+  - ('M', 0j)
+  error ValueError: too many values to unpack (expected 2)
+> _tokenize_path('M 0 0 L . 5')
+  - ('M', 0j)
+  error ValueError: could not convert string to float: b'.'
+> _tokenize_path('M 0 0 L - 5')
+  - ('M', 0j)
+  error ValueError: could not convert string to float: b'-'
+> _tokenize_path('M 0 0 L e5 5')
+  - ('M', 0j)
+  error ValueError: could not convert string to float: b'e5'
+> _tokenize_path('M 0 0 A -5 5 0 0 1 10 10')
+  - ('M', 0j)
+  error InvalidPathError: Invalid path element A -5 5 0 0 1 10 10
+> _tokenize_path('M 0 0 A 5 5 0 0 1')
+  - ('M', 0j)
+  error InvalidPathError: Invalid path element A 5 5 0 0 1
+> _tokenize_path('M 0 0 A 5 5 0')
+  - ('M', 0j)
+  error IndexError: bytearray index out of range
+> _tokenize_path('M 0 0 L 5 é')
+  - ('M', 0j)
+  error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 2: ordinal not in range(128)
+> _tokenize_path('M 0 0 L 10 10 # comment')
+  - ('M', 0j)
+  - ('L', (10+10j))
+> _tokenize_path('M,10,10')
+  error InvalidPathError: Invalid path element M ,10,10
+> _tokenize_path('M 10 10 L 1.5.5')
+  - ('M', (10+10j))
+  - ('L', (1.5+0.5j))
+> _tokenize_path('M 0 0 C 1 2 3 4')
+  - ('M', 0j)
+  error InvalidPathError: Invalid path element C 1 2 3 4
+> _tokenize_path('M 0 0 Q 1 1')
+  - ('M', 0j)
+  error InvalidPathError: Invalid path element Q 1 1
+> _tokenize_path('M 0 0 L 1 1 2')
+  - ('M', 0j)
+  - ('L', (1+1j))
+> _tokenize_path('Z')
+  - ('Z',)
+> _tokenize_path('z M 1 1')
+  - ('z',)
+  - ('M', (1+1j))
+> _tokenize_path('M 0 0 L 1 1 Z L 2 2 x')
+  - ('M', 0j)
+  - ('L', (1+1j))
+  - ('Z',)
+  - ('L', (2+2j))
+> _tokenize_path('M 0 0 H')
+  - ('M', 0j)
+  error ValueError: not enough values to unpack (expected 2, got 1)
+== measuring the specification's paths
+> parse_path('M 100 100 L 300 100 L 200 300 z')
+  -> Path(Move(to=(100+100j)), Line(start=(100+100j), end=(300+100j)), Line(start=(300+100j), end=(200+300j)), Close(start=(200+300j), end=(100+100j)))
+  d: M 100,100 L 300,100 L 200,300 z
+> length(error=1e-6)
+  -> 647.2135954999579
+> point(0)
+  -> (100+100j)
+> point(0.0)
+  -> (100+100j)
+> point(0.25)
+  -> (261.80339887498945+100j)
+> point(0.5)
+  -> (244.72135954999578+210.5572809000084j)
+> point(0.75)
+  -> (172.3606797749979+244.72135954999578j)
+> point(1)
+  -> (100+100j)
+> point(1.0)
+  -> (100+100j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (200+0j)
+> tangent(1.0)
+  -> (-100-200j)
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=1e-6)
+  -> 475.747109765449
+> point(0)
+  -> (100+200j)
+> point(0.0)
+  -> (100+200j)
+> point(0.25)
+  -> (175+125j)
+> point(0.5)
+  -> (250+200j)
+> point(0.75)
+  -> (325+275j)
+> point(1)
+  -> (400+200j)
+> point(1.0)
+  -> (400+200j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (216+60j)
+> tangent(1.0)
+  -> -300j
+> parse_path('M200,300 Q400,50 600,300 T1000,300')
+  -> Path(Move(to=(200+300j)), QuadraticBezier(start=(200+300j), control=(400+50j), end=(600+300j), smooth=False), QuadraticBezier(start=(600+300j), control=(800+550j), end=(1000+300j), smooth=True))
+  d: M 200,300 Q 400,50 600,300 T 1000,300
+> length(error=1e-6)
+  -> 975.5421877910477
+> point(0)
+  -> (200+300j)
+> point(0.0)
+  -> (200+300j)
+> point(0.25)
+  -> (400+175j)
+> point(0.5)
+  -> (600+300j)
+> point(0.75)
+  -> (800+425j)
+> point(1)
+  -> (1000+300j)
+> point(1.0)
+  -> (1000+300j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (400+100j)
+> tangent(1.0)
+  -> (400-500j)
+> parse_path('M300,200 h-150 a150,150 0 1,0 150,-150 z')
+  -> Path(Move(to=(300+200j)), Line(start=(300+200j), end=(150+200j)), Arc(start=(150+200j), radius=(150+150j), rotation=0.0, arc=True, sweep=False, end=(300+50j)), Close(start=(300+50j), end=(300+200j)))
+  d: M 300,200 h -150 a 150,150 0 1,0 150,-150 z
+> length(error=1e-6)
+  -> 1006.8583470577034
+> point(0)
+  -> (300+200j)
+> point(0.0)
+  -> (300+200j)
+> point(0.25)
+  -> (183.18483758286305+294.0968534514195j)
+> point(0.5)
+  -> (406.06601717798213+306.06601717798213j)
+> point(0.75)
+  -> (394.0968534514195+83.1848375828631j)
+> point(1)
+  -> (300+200j)
+> point(1.0)
+  -> (300+200j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (-127.32041320465655-79.30644602676077j)
+> tangent(1.0)
+  -> 150j
+> parse_path('M275,175 v-150 a150,150 0 0,0 -150,150 z')
+  -> Path(Move(to=(275+175j)), Line(start=(275+175j), end=(275+25j)), Arc(start=(275+25j), radius=(150+150j), rotation=0.0, arc=False, sweep=False, end=(125+175j)), Close(start=(125+175j), end=(275+175j)))
+  d: M 275,175 v -150 a 150,150 0 0,0 -150,150 z
+> length(error=1e-6)
+  -> 535.6194490192345
+> point(0)
+  -> (275+175j)
+> point(0.0)
+  -> (275+175j)
+> point(0.25)
+  -> (275+41.09513774519138j)
+> point(0.5)
+  -> (168.93398282201787+68.93398282201788j)
+> point(0.75)
+  -> (141.09513774519138+175j)
+> point(1)
+  -> (275+175j)
+> point(1.0)
+  -> (275+175j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (149.6195373996666-10.676798598352123j)
+> tangent(1.0)
+  -> (150+0j)
+> parse_path('M100,200 C100,100 400,100 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(400+100j), end=(400+200j), smooth=False))
+  d: M 100,200 C 100,100 400,100 400,200
+> length(error=1e-6)
+  -> 366.3825921268624
+> point(0)
+  -> (100+200j)
+> point(0.0)
+  -> (100+200j)
+> point(0.25)
+  -> (146.875+143.75j)
+> point(0.5)
+  -> (250+125j)
+> point(0.75)
+  -> (353.125+143.75j)
+> point(1)
+  -> (400+200j)
+> point(1.0)
+  -> (400+200j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (377.9999999999999-119.99999999999997j)
+> tangent(1.0)
+  -> 300j
+> parse_path('M100,500 C25,400 475,400 400,500')
+  -> Path(Move(to=(100+500j)), CubicBezier(start=(100+500j), control1=(25+400j), control2=(475+400j), end=(400+500j), smooth=False))
+  d: M 100,500 C 25,400 475,400 400,500
+> length(error=1e-6)
+  -> 403.012872831153
+> point(0)
+  -> (100+500j)
+> point(0.0)
+  -> (100+500j)
+> point(0.25)
+  -> (125.78125+443.75j)
+> point(0.5)
+  -> (250+425j)
+> point(0.75)
+  -> (374.21875+443.75j)
+> point(1)
+  -> (400+500j)
+> point(1.0)
+  -> (400+500j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (436.4999999999999-120j)
+> tangent(1.0)
+  -> (-225+300j)
+> parse_path('M600,800 C625,700 725,700 750,800 S875,900 900,800')
+  -> Path(Move(to=(600+800j)), CubicBezier(start=(600+800j), control1=(625+700j), control2=(725+700j), end=(750+800j), smooth=False), CubicBezier(start=(750+800j), control1=(775+900j), control2=(875+900j), end=(900+800j), smooth=True))
+  d: M 600,800 C 625,700 725,700 750,800 S 875,900 900,800
+> length(error=1e-6)
+  -> 457.37302781072196
+> point(0)
+  -> (600+800j)
+> point(0.0)
+  -> (600+800j)
+> point(0.25)
+  -> (675+725j)
+> point(0.5)
+  -> (750+800j)
+> point(0.75)
+  -> (825+875j)
+> point(1)
+  -> (900+800j)
+> point(1.0)
+  -> (900+800j)
+> tangent(0)
+  -> 0
+> tangent(0.3)
+  -> (183+60j)
+> tangent(1.0)
+  -> (75-300j)
+== lengths to a given error
+> parse_path('M600,350 l 50,-25 a25,25 -30 0,1 50,-25 l 50,-25 a25,50 -30 0,1 50,-25 l 50,-25 a25,75 -30 0,1 50,-25 l 50,-25 a25,100 -30 0,1 50,-25 l 50,-25')
+  -> Path(Move(to=(600+350j)), Line(start=(600+350j), end=(650+325j)), Arc(start=(650+325j), radius=(25+25j), rotation=-30.0, arc=False, sweep=True, end=(700+300j)), Line(start=(700+300j), end=(750+275j)), Arc(start=(750+275j), radius=(25+50j), rotation=-30.0, arc=False, sweep=True, end=(800+250j)), Line(start=(800+250j), end=(850+225j)), Arc(start=(850+225j), radius=(25+75j), rotation=-30.0, arc=False, sweep=True, end=(900+200j)), Line(start=(900+200j), end=(950+175j)), Arc(start=(950+175j), radius=(25+100j), rotation=-30.0, arc=False, sweep=True, end=(1000+150j)), Line(start=(1000+150j), end=(1050+125j)))
+  d: M 600,350 l 50,-25 a 25,25 -30 0,1 50,-25 l 50,-25 a 25,50 -30 0,1 50,-25 l 50,-25 a 25,75 -30 0,1 50,-25 l 50,-25 a 25,100 -30 0,1 50,-25 l 50,-25
+> length(error=1e-3)
+  -> 928.3703442931197
+> length()
+  -> 928.3703442931197
+> parse_path('M600,350 l 50,-25 a25,25 -30 0,1 50,-25 l 50,-25 a25,50 -30 0,1 50,-25 l 50,-25 a25,75 -30 0,1 50,-25 l 50,-25 a25,100 -30 0,1 50,-25 l 50,-25')
+  -> Path(Move(to=(600+350j)), Line(start=(600+350j), end=(650+325j)), Arc(start=(650+325j), radius=(25+25j), rotation=-30.0, arc=False, sweep=True, end=(700+300j)), Line(start=(700+300j), end=(750+275j)), Arc(start=(750+275j), radius=(25+50j), rotation=-30.0, arc=False, sweep=True, end=(800+250j)), Line(start=(800+250j), end=(850+225j)), Arc(start=(850+225j), radius=(25+75j), rotation=-30.0, arc=False, sweep=True, end=(900+200j)), Line(start=(900+200j), end=(950+175j)), Arc(start=(950+175j), radius=(25+100j), rotation=-30.0, arc=False, sweep=True, end=(1000+150j)), Line(start=(1000+150j), end=(1050+125j)))
+  d: M 600,350 l 50,-25 a 25,25 -30 0,1 50,-25 l 50,-25 a 25,50 -30 0,1 50,-25 l 50,-25 a 25,75 -30 0,1 50,-25 l 50,-25 a 25,100 -30 0,1 50,-25 l 50,-25
+> length(error=1e-6, min_depth=2)
+  -> 928.3884485078919
+> parse_path('M600,350 l 50,-25 a25,25 -30 0,1 50,-25 l 50,-25 a25,50 -30 0,1 50,-25 l 50,-25 a25,75 -30 0,1 50,-25 l 50,-25 a25,100 -30 0,1 50,-25 l 50,-25')
+  -> Path(Move(to=(600+350j)), Line(start=(600+350j), end=(650+325j)), Arc(start=(650+325j), radius=(25+25j), rotation=-30.0, arc=False, sweep=True, end=(700+300j)), Line(start=(700+300j), end=(750+275j)), Arc(start=(750+275j), radius=(25+50j), rotation=-30.0, arc=False, sweep=True, end=(800+250j)), Line(start=(800+250j), end=(850+225j)), Arc(start=(850+225j), radius=(25+75j), rotation=-30.0, arc=False, sweep=True, end=(900+200j)), Line(start=(900+200j), end=(950+175j)), Arc(start=(950+175j), radius=(25+100j), rotation=-30.0, arc=False, sweep=True, end=(1000+150j)), Line(start=(1000+150j), end=(1050+125j)))
+  d: M 600,350 l 50,-25 a 25,25 -30 0,1 50,-25 l 50,-25 a 25,50 -30 0,1 50,-25 l 50,-25 a 25,75 -30 0,1 50,-25 l 50,-25 a 25,100 -30 0,1 50,-25 l 50,-25
+> length(error=1e-6)
+  -> 928.3884485078919
+> point(0.1)
+  -> (656.7184432995101+291.3568057357772j)
+> point(0.5)
+  -> (827.7307487776995+147.8241591333566j)
+> point(0.9)
+  -> (971.2843654992593+106.30236272826257j)
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=1e-2, min_depth=0)
+  -> 475.6988798190196
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=1e-2, min_depth=5)
+  -> 475.6988798190196
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=0.5, min_depth=0)
+  -> 474.9722065194328
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=1, min_depth=1)
+  -> 474.04776281400154
+> parse_path('M100,200 C100,100 250,100 250,200 S400,300 400,200')
+  -> Path(Move(to=(100+200j)), CubicBezier(start=(100+200j), control1=(100+100j), control2=(250+100j), end=(250+200j), smooth=False), CubicBezier(start=(250+200j), control1=(250+300j), control2=(400+300j), end=(400+200j), smooth=True))
+  d: M 100,200 C 100,100 250,100 250,200 S 400,300 400,200
+> length(error=1e-9, min_depth=3)
+  -> 475.74729747786694
+== segments one by one
+> parse_path('M 0 0 L 10 0 Q 15 5 10 10 C 5 15 0 15 0 10 A 5 5 0 0 1 0 0 Z')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), QuadraticBezier(start=(10+0j), control=(15+5j), end=(10+10j), smooth=False), CubicBezier(start=(10+10j), control1=(5+15j), control2=15j, end=10j, smooth=False), Arc(start=10j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=0j), Close(start=0j, end=0j))
+  d: M 0,0 L 10,0 Q 15,5 10,10 C 5,15 0,15 0,10 A 5,5 0 0,1 0,0 Z
+> [-1].repr()
+  -> Close(start=0j, end=0j)
+> [0].repr()
+  -> Move(to=0j)
+> [1].repr()
+  -> Line(start=0j, end=(10+0j))
+> [2].repr()
+  -> QuadraticBezier(start=(10+0j), control=(15+5j), end=(10+10j), smooth=False)
+> [3].repr()
+  -> CubicBezier(start=(10+10j), control1=(5+15j), control2=15j, end=10j, smooth=False)
+> [4].repr()
+  -> Arc(start=10j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=0j)
+> [5].repr()
+  -> Close(start=0j, end=0j)
+> [6].repr()
+  error IndexError: list index out of range
+> [0].point(0)
+  -> 0j
+> [0].point(0.5)
+  -> 0j
+> [0].point(1)
+  -> 0j
+> [0].tangent(0)
+  -> 0
+> [0].tangent(0.5)
+  -> 0
+> [0].tangent(1)
+  -> 0
+> [0].length()
+  -> 0
+> [0].bbox()
+  -> [0.0, 0.0, 0.0, 0.0]
+> [1].point(0)
+  -> 0j
+> [1].point(0.5)
+  -> (5+0j)
+> [1].point(1)
+  -> (10+0j)
+> [1].tangent(0)
+  -> (10+0j)
+> [1].tangent(0.5)
+  -> (10+0j)
+> [1].tangent(1)
+  -> (10+0j)
+> [1].length()
+  -> 10.0
+> [1].bbox()
+  -> [0.0, 0.0, 10.0, 0.0]
+> [2].point(0)
+  -> (10+0j)
+> [2].point(0.5)
+  -> (12.5+5j)
+> [2].point(1)
+  -> (10+10j)
+> [2].tangent(0)
+  -> (10+10j)
+> [2].tangent(0.5)
+  -> 10j
+> [2].tangent(1)
+  -> (-10+10j)
+> [2].length()
+  -> 11.47793574696319
+> [2].bbox()
+  -> [10.0, 0.0, 12.5, 10.0]
+> [3].point(0)
+  -> (10+10j)
+> [3].point(0.5)
+  -> (3.125+13.75j)
+> [3].point(1)
+  -> 10j
+> [3].tangent(0)
+  -> (-15+15j)
+> [3].tangent(0.5)
+  -> (-11.25+0j)
+> [3].tangent(1)
+  -> -15j
+> [3].length()
+  -> 13.547552653953263
+> [3].bbox()
+  -> [0.0, 10.0, 10.0, 13.75]
+> [4].point(0)
+  -> (3.061616997868383e-16+10j)
+> [4].point(0.5)
+  -> (-5+5.000000000000001j)
+> [4].point(1)
+  -> (-9.184850993605148e-16+0j)
+> [4].tangent(0)
+  -> (-5+3.061616997868383e-16j)
+> [4].tangent(0.5)
+  -> (-6.123233995736766e-16-5j)
+> [4].tangent(1)
+  -> (5-9.184850993605148e-16j)
+> [4].length()
+  -> 15.707963267948966
+> [4].bbox()
+  -> [-5.0, 0.0, 3.061616997868383e-16, 10.0]
+> [5].point(0)
+  -> 0j
+> [5].point(0.5)
+  -> 0j
+> [5].point(1)
+  -> 0j
+> [5].tangent(0)
+  -> 0j
+> [5].tangent(0.5)
+  -> 0j
+> [5].tangent(1)
+  -> 0j
+> [5].length()
+  -> 0.0
+> [5].bbox()
+  -> [0.0, 0.0, 0.0, 0.0]
+> parse_path('M 0 0 A 0 5 0 0 1 10 10 A 5 5 0 0 1 10 10')
+  -> Path(Move(to=0j), Arc(start=0j, radius=5j, rotation=0.0, arc=False, sweep=True, end=(10+10j)), Arc(start=(10+10j), radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+10j)))
+  d: M 0,0 A 0,5 0 0,1 10,10 A 5,5 0 0,1 10,10
+> [1].point(0.5)
+  -> (5+5j)
+> [1].tangent(0.5)
+  error AttributeError: 'Arc' object has no attribute 'theta'
+> [1].length(0.5)
+  -> 14.142135623730951
+> [1].bbox(0.5)
+  error AttributeError: 'Arc' object has no attribute 'radius_scale'
+> [2].point(0.5)
+  -> (10+10j)
+> [2].tangent(0.5)
+  error AttributeError: 'Arc' object has no attribute 'theta'
+> [2].length(0.5)
+  -> 0
+> [2].bbox(0.5)
+  error AttributeError: 'Arc' object has no attribute 'radius_scale'
+> parse_path('M 0 0 Q 10 0 20 0 Q 10 0 0 0 Q 10 10 20 20 Q 0 0 0 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(10+0j), end=(20+0j), smooth=False), QuadraticBezier(start=(20+0j), control=(10+0j), end=0j, smooth=False), QuadraticBezier(start=0j, control=(10+10j), end=(20+20j), smooth=False), QuadraticBezier(start=(20+20j), control=0j, end=0j, smooth=False))
+  d: M 0,0 Q 10,0 20,0 Q 10,0 0,0 Q 10,10 20,20 Q 0,0 0,0
+> [1].length()
+  -> 20.0
+> [1].bbox()
+  -> [0.0, 0.0, 20.0, 0.0]
+> [2].length()
+  -> 20.0
+> [2].bbox()
+  -> [0.0, 0.0, 20.0, 0.0]
+> [3].length()
+  -> 28.284271247461902
+> [3].bbox()
+  -> [0.0, 0.0, 20.0, 20.0]
+> [4].length()
+  -> 28.2842712474619
+> [4].bbox()
+  -> [0.0, 0.0, 20.0, 20.0]
+> parse_path('M 0 0 Q 0 0 30 40 Q 30 40 30 40 Q -10 0 10 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=0j, end=(30+40j), smooth=False), QuadraticBezier(start=(30+40j), control=(30+40j), end=(30+40j), smooth=False), QuadraticBezier(start=(30+40j), control=(-10+0j), end=(10+0j), smooth=False))
+  d: M 0,0 Q 0,0 30,40 Q 30,40 30,40 Q -10,0 10,0
+> [1].length()
+  -> 50.0
+> [2].length()
+  -> 0.0
+> [3].length()
+  -> 54.11563389681704
+> parse_path('L 10 10 Q 20 0 30 10 C 30 20 20 30 10 20')
+  -> Path(Line(start=0, end=(10+10j)), QuadraticBezier(start=(10+10j), control=(20+0j), end=(30+10j), smooth=False), CubicBezier(start=(30+10j), control1=(30+20j), control2=(20+30j), end=(10+20j), smooth=False))
+  d: L 10,10 Q 20,0 30,10 C 30,20 20,30 10,20
+> boundingbox()
+  -> [0, 0, 30.0, 24.14213562373095]
+> point(0.5)
+  -> (26.822182664592034+7.327108815453003j)
+> [0].point(0)
+  -> 0j
+> [0].tangent(1)
+  -> (10+10j)
+> [0].bbox()
+  -> [0, 0, 10.0, 10.0]
+> [1].point(0)
+  -> (10+10j)
+> [1].tangent(1)
+  -> (20+20j)
+> [1].bbox()
+  -> [10.0, 5.0, 30.0, 10.0]
+> [2].point(0)
+  -> (30+10j)
+> [2].tangent(1)
+  -> (-30-30j)
+> [2].bbox()
+  -> [10.0, 10.0, 30.0, 24.14213562373095]
+== points beyond the ends
+> parse_path('M 0 0 L 10 0 L 10 10')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)))
+  d: M 0,0 L 10,0 L 10,10
+> point(-0.1)
+  error ZeroDivisionError: float division by zero
+> point(0)
+  -> 0j
+> point(0.4)
+  -> (8+0j)
+> point(0.5)
+  -> (10+0j)
+> point(0.5000001)
+  -> (10+1.9999999989472883e-06j)
+> point(0.9999999999)
+  -> (10+9.999999998j)
+> point(1)
+  -> (10+10j)
+> point(1.5)
+  error IndexError: list index out of range
+> point(2)
+  error IndexError: list index out of range
+> parse_path('L 10 0 L 10 10')
+  -> Path(Line(start=0, end=(10+0j)), Line(start=(10+0j), end=(10+10j)))
+  d: L 10,0 L 10,10
+> point(-0.1)
+  -> (-2+0j)
+> point(0.5)
+  -> (10+0j)
+> point(1.5)
+  error IndexError: list index out of range
+> parse_path('M 0 0 L 1 0 L 1 3')
+  -> Path(Move(to=0j), Line(start=0j, end=(1+0j)), Line(start=(1+0j), end=(1+3j)))
+  d: M 0,0 L 1,0 L 1,3
+> point(0.999999999999999)
+  -> (1+2.999999999999996j)
+> point(0.25)
+  -> (1+0j)
+> parse_path('M 5 5 M 10 10')
+  -> Path(Move(to=(5+5j)), Move(to=(10+10j)))
+  d: M 5,5 M 10,10
+> length()
+  -> 0
+> point(0)
+  -> (5+5j)
+> tangent(0)
+  -> 0
+> point(0.5)
+  -> (5+5j)
+> tangent(0.5)
+  -> 0
+> point(1)
+  -> (10+10j)
+> tangent(1)
+  -> 0
+> boundingbox()
+  -> [5.0, 5.0, 10.0, 10.0]
+== comparing paths
+> parse_path('M 0 0 L 10 0 L 10 10 Z')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Close(start=(10+10j), end=0j))
+  d: M 0,0 L 10,0 L 10,10 Z
+> keep as square
+> parse_path('M0,0 L10,0 10,10 z')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Close(start=(10+10j), end=0j))
+  d: M 0,0 L 10,0 L 10,10 z
+> == square, != square
+  -> True False
+> parse_path('m 0 0 l 10 0 l 0 10 z')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Close(start=(10+10j), end=0j))
+  d: m 0,0 l 10,0 l 0,10 z
+> == square, != square
+  -> True False
+> parse_path('M 0 0 L 10 0 L 10 10')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)))
+  d: M 0,0 L 10,0 L 10,10
+> == square, != square
+  -> False True
+> parse_path('M 0 0 L 10 0 L 10 10 L 0 0')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Line(start=(10+10j), end=0j))
+  d: M 0,0 L 10,0 L 10,10 L 0,0
+> == square, != square
+  -> False True
+> parse_path('M 0 0 C 1 1 2 2 3 3')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=(1+1j), control2=(2+2j), end=(3+3j), smooth=False))
+  d: M 0,0 C 1,1 2,2 3,3
+> keep as c
+> parse_path('M 0 0 C 1 1 2 2 3 3 S 5 5 6 6')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=(1+1j), control2=(2+2j), end=(3+3j), smooth=False), CubicBezier(start=(3+3j), control1=(4+4j), control2=(5+5j), end=(6+6j), smooth=True))
+  d: M 0,0 C 1,1 2,2 3,3 S 5,5 6,6
+> keep as cs
+> parse_path('M 0 0 C 1 1 2 2 3 3 C 4 4 5 5 6 6')
+  -> Path(Move(to=0j), CubicBezier(start=0j, control1=(1+1j), control2=(2+2j), end=(3+3j), smooth=False), CubicBezier(start=(3+3j), control1=(4+4j), control2=(5+5j), end=(6+6j), smooth=False))
+  d: M 0,0 C 1,1 2,2 3,3 C 4,4 5,5 6,6
+> == cs, != cs
+  -> True False
+> parse_path('M 0 0 A 5 5 0 0 1 10 0')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+0j)))
+  d: M 0,0 A 5,5 0 0,1 10,0
+> keep as arc
+> parse_path('M 0 0 A 5 5 0 0 0 10 0')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=0.0, arc=False, sweep=False, end=(10+0j)))
+  d: M 0,0 A 5,5 0 0,0 10,0
+> == arc, != arc
+  -> False True
+> parse_path('M 0 0 a 5 5 0 0 1 10 0')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+0j)))
+  d: M 0,0 a 5,5 0 0,1 10,0
+> == arc, != arc
+  -> True False
+> parse_path('M 0 0 A 5 5 0.0 0 1 10 0')
+  -> Path(Move(to=0j), Arc(start=0j, radius=(5+5j), rotation=0.0, arc=False, sweep=True, end=(10+0j)))
+  d: M 0,0 A 5,5 0 0,1 10,0
+> == arc, != arc
+  -> True False
+> parse_path('M 0 0 Q 1 1 2 2')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(1+1j), end=(2+2j), smooth=False))
+  d: M 0,0 Q 1,1 2,2
+> keep as q
+> parse_path('M 0 0 Q 1 1 2 2 T 4 0')
+  -> Path(Move(to=0j), QuadraticBezier(start=0j, control=(1+1j), end=(2+2j), smooth=False), QuadraticBezier(start=(2+2j), control=(3+3j), end=(4+0j), smooth=True))
+  d: M 0,0 Q 1,1 2,2 T 4,0
+> keep as qt
+== editing a path
+> parse_path('M 0 0 L 10 0 L 10 10 L 0 10 Z')
+  -> Path(Move(to=0j), Line(start=0j, end=(10+0j)), Line(start=(10+0j), end=(10+10j)), Line(start=(10+10j), end=10j), Close(start=10j, end=0j))
+  d: M 0,0 L 10,0 L 10,10 L 0,10 Z
+> keep as box
+> length()
+  -> 40.0
+> point(0.5)
+  -> (10+10j)
+> append(c[1])
+> len()
+  -> 6
+> length()
+  -> 44.242640687119284
+> point(0.5)
+  error IndexError: list index out of range
+> point(0.9)
+  error IndexError: list index out of range
+> insert(1, qt[2])
+> point(0.5)
+  -> (10+0j)
+> set(0, arc[0])
+> point(0.3)
+  error IndexError: list index out of range
+> del [2]
+> point(0.3)
+  -> (10+1.9999999999999996j)
+> pop()
+  -> CubicBezier(start=0j, control1=(1+1j), control2=(2+2j), end=(3+3j), smooth=False)
+> pop(0)
+  -> Move(to=0j)
+> pop(99)
+  error IndexError: list index out of range
+> index(box[3])
+  -> 3
+> index(c[1])
+  error ValueError: 
+> count(box[2])
+  -> 1
+> has(box[4])
+  error IndexError: list index out of range
+> has(qt[2])
+  -> True
+> remove(box[3])
+> remove(box[3])
+  error IndexError: list index out of range
+> [1:3]
+  -> [Line(start=(10+0j), end=(10+10j)), Line(start=(10+10j), end=10j)]
+> [-2:99]
+  -> [Line(start=(10+0j), end=(10+10j)), Line(start=(10+10j), end=10j)]
+> reverse()
+  error NotImplementedError: 
+> len()
+  -> 3
+> boundingbox()
+  -> [0.0, 0.0, 10.0, 10.0]
+> [9].repr()
+  error IndexError: list index out of range
+> del [9]
+  error IndexError: list assignment index out of range
+> set(-1, q[1])
+> parse_path('M 0 0 L 4 0')
+  -> Path(Move(to=0j), Line(start=0j, end=(4+0j)))
+  d: M 0,0 L 4,0
+> keep as line
+> parse_path('M 0 0 L 4 0')
+  -> Path(Move(to=0j), Line(start=0j, end=(4+0j)))
+  d: M 0,0 L 4,0
+> point(0.5)
+  -> (2+0j)
+> set(1, c[1])
+> point(0.5)
+  error IndexError: list index out of range
+> length()
+  -> 4.242640687119285
+> clear()
+> len()
+  -> 0
+> boundingbox()
+  error ValueError: min() iterable argument is empty
+> point(0.5)
+  error IndexError: list index out of range
+> use box
+> len()
+  -> 3
+> == square, != square
+  -> False True
+> use line
+> length()
+  -> 4.0
+== the plotter
+> plot svg/icons.svg
+  heart: 6 segments, length 57.45235520630508, bbox [2.992223297370734, 3.8615612366938903, 21.00777670262927, 21.0]
+  home: 11 segments, length 72.0831891575846, bbox [27.0, 4.0, 45.0, 20.0]
+  check: 3 segments, length 21.213203435596427, bbox [51.0, 6.0, 66.0, 16.5]
+  ring: 4 segments, length 37.69911184307752, bbox [72.0, 6.0, 84.0, 18.0]
+  path5: 5 segments, length 16.0, bbox [88.0, 4.0, 92.0, 8.0]
+  wrote out/icons.gcode (75 lines, total length 204.44785964256363)
+  | ; icons.svg, drawn by svg.path
+  | ; heart
+  | G0 X12.000 Y21.000
+  | G1 X8.192 Y17.616
+  | G1 X5.296 Y14.568
+  | G1 X3.504 Y11.712
+  | G1 X3.008 Y8.904
+  | G1 X4.000 Y6.000
+  | G1 X6.519 Y4.037
+  | G1 X9.481 Y4.296
+  | G1 X12.000 Y7.000
+  | G1 X14.519 Y4.296
+  | G1 X17.481 Y4.037
+  | G1 X20.000 Y6.000
+  | G1 X20.992 Y8.904
+  | G1 X20.496 Y11.712
+  | G1 X18.704 Y14.568
+  | G1 X15.808 Y17.616
+  | G1 X12.000 Y21.000
+  | G1 X12.000 Y21.000
+  | ; home
+  | G0 X27.000 Y12.000
+  | G1 X29.250 Y10.000
+  | G1 X31.500 Y8.000
+  | G1 X33.750 Y6.000
+  | G1 X36.000 Y4.000
+  | G1 X38.250 Y6.000
+  | G1 X40.500 Y8.000
+  | G1 X42.750 Y10.000
+  | G1 X45.000 Y12.000
+  | G0 X29.000 Y10.000
+  | G1 X29.000 Y13.333
+  | G1 X29.000 Y16.667
+  | G1 X29.000 Y20.000
+  | G1 X32.500 Y20.000
+  | G1 X36.000 Y20.000
+  | G1 X39.500 Y20.000
+  | G1 X43.000 Y20.000
+  | G1 X43.000 Y16.667
+  | G1 X43.000 Y13.333
+  | G1 X43.000 Y10.000
+  | G0 X34.000 Y20.000
+  | G1 X34.000 Y17.500
+  | G1 X34.000 Y15.000
+  | G1 X38.000 Y15.000
+  | G1 X38.000 Y17.500
+  | G1 X38.000 Y20.000
+  | ; check
+  | G0 X51.000 Y12.000
+  | G1 X53.250 Y14.250
+  | G1 X55.500 Y16.500
+  | G1 X58.125 Y13.875
+  | G1 X60.750 Y11.250
+  | G1 X63.375 Y8.625
+  | G1 X66.000 Y6.000
+  | ; ring
+  | G0 X84.000 Y12.000
+  | G1 X82.854 Y8.473
+  | G1 X79.854 Y6.294
+  | G1 X76.146 Y6.294
+  | G1 X73.146 Y8.473
+  | G1 X72.000 Y12.000
+  | G1 X73.146 Y15.527
+  | G1 X76.146 Y17.706
+  | G1 X79.854 Y17.706
+  | G1 X82.854 Y15.527
+  | G1 X84.000 Y12.000
+  | G1 X84.000 Y12.000
+  | ; path5
+  | G0 X88.000 Y4.000
+  | G1 X92.000 Y4.000
+  | G1 X92.000 Y8.000
+  | G1 X88.000 Y8.000
+  | G1 X88.000 Y4.000
+  | ; total length 204.448
+> plot svg/logo.svg
+  wave: 5 segments, length 283.37506809483847, bbox [10.0, 35.0, 190.0, 85.0]
+  swoosh: 3 segments, length 368.0938671632366, bbox [20.0, 77.5, 196.08513994227417, 117.32050807568876]
+  leaf: 3 segments, length 116.51580875017461, bbox [100.0, 19.999999999999996, 140.0, 60.0]
+  badge: 10 segments, length 162.83185307179588, bbox [20.0, 20.0, 70.0, 60.0]
+  wrote out/logo.gcode (204 lines, total length 930.8165970800457)
+  | ; logo.svg, drawn by svg.path
+  | ; wave
+  | G0 X10.000 Y60.000
+  | G1 X12.632 Y55.014
+  | G1 X15.263 Y50.582
+  | G1 X17.895 Y46.704
+  | G1 X20.526 Y43.380
+  | G1 X23.158 Y40.609
+  | G1 X25.789 Y38.393
+  | G1 X28.421 Y36.731
+  | G1 X31.053 Y35.623
+  | G1 X33.684 Y35.069
+  | G1 X36.316 Y35.069
+  | G1 X38.947 Y35.623
+  | G1 X41.579 Y36.731
+  | G1 X44.211 Y38.393
+  | G1 X46.842 Y40.609
+  | G1 X49.474 Y43.380
+  | G1 X52.105 Y46.704
+  | G1 X54.737 Y50.582
+  | G1 X57.368 Y55.014
+  | G1 X60.000 Y60.000
+  | G1 X62.632 Y64.986
+  | G1 X65.263 Y69.418
+  | G1 X67.895 Y73.296
+  | G1 X70.526 Y76.620
+  | G1 X73.158 Y79.391
+  | G1 X75.789 Y81.607
+  | G1 X78.421 Y83.269
+  | G1 X81.053 Y84.377
+  | G1 X83.684 Y84.931
+  | G1 X86.316 Y84.931
+  | G1 X88.947 Y84.377
+  | G1 X91.579 Y83.269
+  | G1 X94.211 Y81.607
+  | G1 X96.842 Y79.391
+  | G1 X99.474 Y76.620
+  | G1 X102.105 Y73.296
+  | G1 X104.737 Y69.418
+  | G1 X107.368 Y64.986
+  | G1 X110.000 Y60.000
+  | G1 X112.632 Y55.014
+  | G1 X115.263 Y50.582
+  | G1 X117.895 Y46.704
+  | G1 X120.526 Y43.380
+  | G1 X123.158 Y40.609
+  | G1 X125.789 Y38.393
+  | G1 X128.421 Y36.731
+  | G1 X131.053 Y35.623
+  | G1 X133.684 Y35.069
+  | G1 X136.316 Y35.069
+  | G1 X138.947 Y35.623
+  | G1 X141.579 Y36.731
+  | G1 X144.211 Y38.393
+  | G1 X146.842 Y40.609
+  | G1 X149.474 Y43.380
+  | G1 X152.105 Y46.704
+  | G1 X154.737 Y50.582
+  | G1 X157.368 Y55.014
+  | G1 X160.000 Y60.000
+  | G1 X163.047 Y65.859
+  | G1 X165.938 Y70.938
+  | G1 X168.672 Y75.234
+  | G1 X171.250 Y78.750
+  | G1 X173.672 Y81.484
+  | G1 X175.938 Y83.438
+  | G1 X178.047 Y84.609
+  | G1 X180.000 Y85.000
+  | G1 X181.797 Y84.609
+  | G1 X183.438 Y83.438
+  | G1 X184.922 Y81.484
+  | G1 X186.250 Y78.750
+  | G1 X187.422 Y75.234
+  | G1 X188.438 Y70.938
+  | G1 X189.297 Y65.859
+  | G1 X190.000 Y60.000
+  | ; swoosh
+  | G0 X20.000 Y100.000
+  | G1 X25.103 Y96.406
+  | G1 X30.405 Y93.125
+  | G1 X35.898 Y90.156
+  | G1 X41.574 Y87.500
+  | G1 X47.423 Y85.156
+  | G1 X53.438 Y83.125
+  | G1 X59.608 Y81.406
+  | G1 X65.926 Y80.000
+  | G1 X72.383 Y78.906
+  | G1 X78.970 Y78.125
+  | G1 X85.679 Y77.656
+  | G1 X92.500 Y77.500
+  | G1 X99.426 Y77.656
+  | G1 X106.447 Y78.125
+  | G1 X113.555 Y78.906
+  | G1 X120.741 Y80.000
+  | G1 X127.996 Y81.406
+  | G1 X135.312 Y83.125
+  | G1 X142.681 Y85.156
+  | G1 X150.093 Y87.500
+  | G1 X157.539 Y90.156
+  | G1 X165.012 Y93.125
+  | G1 X172.501 Y96.406
+  | G1 X180.000 Y100.000
+  | G1 X186.577 Y103.519
+  | G1 X191.366 Y106.589
+  | G1 X194.453 Y109.229
+  | G1 X195.926 Y111.458
+  | G1 X195.871 Y113.298
+  | G1 X194.375 Y114.766
+  | G1 X191.525 Y115.882
+  | G1 X187.407 Y116.667
+  | G1 X182.109 Y117.139
+  | G1 X175.718 Y117.318
+  | G1 X168.319 Y117.223
+  | G1 X160.000 Y116.875
+  | G1 X150.848 Y116.292
+  | G1 X140.949 Y115.495
+  | G1 X130.391 Y114.502
+  | G1 X119.259 Y113.333
+  | G1 X107.642 Y112.008
+  | G1 X95.625 Y110.547
+  | G1 X83.296 Y108.968
+  | G1 X70.741 Y107.292
+  | G1 X58.047 Y105.537
+  | G1 X45.301 Y103.724
+  | G1 X32.590 Y101.872
+  | G1 X20.000 Y100.000
+  | ; leaf
+  | G0 X100.000 Y20.000
+  | G1 X103.191 Y21.210
+  | G1 X106.456 Y22.735
+  | G1 X109.760 Y24.558
+  | G1 X113.067 Y26.661
+  | G1 X116.340 Y29.019
+  | G1 X119.543 Y31.607
+  | G1 X122.642 Y34.397
+  | G1 X125.603 Y37.358
+  | G1 X128.393 Y40.457
+  | G1 X130.981 Y43.660
+  | G1 X133.339 Y46.933
+  | G1 X135.442 Y50.240
+  | G1 X137.265 Y53.544
+  | G1 X138.790 Y56.809
+  | G1 X140.000 Y60.000
+  | G1 X136.809 Y58.790
+  | G1 X133.544 Y57.265
+  | G1 X130.240 Y55.442
+  | G1 X126.933 Y53.339
+  | G1 X123.660 Y50.981
+  | G1 X120.457 Y48.393
+  | G1 X117.358 Y45.603
+  | G1 X114.397 Y42.642
+  | G1 X111.607 Y39.543
+  | G1 X109.019 Y36.340
+  | G1 X106.661 Y33.067
+  | G1 X104.558 Y29.760
+  | G1 X102.735 Y26.456
+  | G1 X101.210 Y23.191
+  | G1 X100.000 Y20.000
+  | ; badge
+  | G0 X30.000 Y20.000
+  | G1 X33.750 Y20.000
+  | G1 X37.500 Y20.000
+  | G1 X41.250 Y20.000
+  | G1 X45.000 Y20.000
+  | G1 X48.750 Y20.000
+  | G1 X52.500 Y20.000
+  | G1 X56.250 Y20.000
+  | G1 X60.000 Y20.000
+  | G1 X63.827 Y20.761
+  | G1 X67.071 Y22.929
+  | G1 X69.239 Y26.173
+  | G1 X70.000 Y30.000
+  | G1 X70.000 Y34.000
+  | G1 X70.000 Y38.000
+  | G1 X70.000 Y42.000
+  | G1 X70.000 Y46.000
+  | G1 X70.000 Y50.000
+  | G1 X69.239 Y53.827
+  | G1 X67.071 Y57.071
+  | G1 X63.827 Y59.239
+  | G1 X60.000 Y60.000
+  | G1 X56.250 Y60.000
+  | G1 X52.500 Y60.000
+  | G1 X48.750 Y60.000
+  | G1 X45.000 Y60.000
+  | G1 X41.250 Y60.000
+  | G1 X37.500 Y60.000
+  | G1 X33.750 Y60.000
+  | G1 X30.000 Y60.000
+  | G1 X26.173 Y59.239
+  | G1 X22.929 Y57.071
+  | G1 X20.761 Y53.827
+  | G1 X20.000 Y50.000
+  | G1 X20.000 Y46.000
+  | G1 X20.000 Y42.000
+  | G1 X20.000 Y38.000
+  | G1 X20.000 Y34.000
+  | G1 X20.000 Y30.000
+  | G1 X20.761 Y26.173
+  | G1 X22.929 Y22.929
+  | G1 X26.173 Y20.761
+  | G1 X30.000 Y20.000
+  | G1 X30.000 Y20.000
+  | ; total length 930.817
+> plot svg/floorplan.svg
+  outer: 5 segments, length 1000.0, bbox [0.0, 0.0, 300.0, 200.0]
+  kitchen: 10 segments, length 680.0, bbox [0.0, 0.0, 190.0, 80.0]
+  door: 3 segments, length 77.12388980384691, bbox [120.0, 120.0, 150.0, 150.0]
+  stairs: 9 segments, length 120.0, bbox [200.0, 120.0, 280.0, 160.0]
+  wrote out/floorplan.gcode (317 lines, total length 1877.1238898038469)
+  | ; floorplan.svg, drawn by svg.path
+  | ; outer
+  | G0 X0.000 Y0.000
+  | G1 X12.500 Y0.000
+  | G1 X25.000 Y0.000
+  | G1 X37.500 Y0.000
+  | G1 X50.000 Y0.000
+  | G1 X62.500 Y0.000
+  | G1 X75.000 Y0.000
+  | G1 X87.500 Y0.000
+  | G1 X100.000 Y0.000
+  | G1 X112.500 Y0.000
+  | G1 X125.000 Y0.000
+  | G1 X137.500 Y0.000
+  | G1 X150.000 Y0.000
+  | G1 X162.500 Y0.000
+  | G1 X175.000 Y0.000
+  | G1 X187.500 Y0.000
+  | G1 X200.000 Y0.000
+  | G1 X212.500 Y0.000
+  | G1 X225.000 Y0.000
+  | G1 X237.500 Y0.000
+  | G1 X250.000 Y0.000
+  | G1 X262.500 Y0.000
+  | G1 X275.000 Y0.000
+  | G1 X287.500 Y0.000
+  | G1 X300.000 Y0.000
+  | G1 X300.000 Y8.333
+  | G1 X300.000 Y16.667
+  | G1 X300.000 Y25.000
+  | G1 X300.000 Y33.333
+  | G1 X300.000 Y41.667
+  | G1 X300.000 Y50.000
+  | G1 X300.000 Y58.333
+  | G1 X300.000 Y66.667
+  | G1 X300.000 Y75.000
+  | G1 X300.000 Y83.333
+  | G1 X300.000 Y91.667
+  | G1 X300.000 Y100.000
+  | G1 X300.000 Y108.333
+  | G1 X300.000 Y116.667
+  | G1 X300.000 Y125.000
+  | G1 X300.000 Y133.333
+  | G1 X300.000 Y141.667
+  | G1 X300.000 Y150.000
+  | G1 X300.000 Y158.333
+  | G1 X300.000 Y166.667
+  | G1 X300.000 Y175.000
+  | G1 X300.000 Y183.333
+  | G1 X300.000 Y191.667
+  | G1 X300.000 Y200.000
+  | G1 X287.500 Y200.000
+  | G1 X275.000 Y200.000
+  | G1 X262.500 Y200.000
+  | G1 X250.000 Y200.000
+  | G1 X237.500 Y200.000
+  | G1 X225.000 Y200.000
+  | G1 X212.500 Y200.000
+  | G1 X200.000 Y200.000
+  | G1 X187.500 Y200.000
+  | G1 X175.000 Y200.000
+  | G1 X162.500 Y200.000
+  | G1 X150.000 Y200.000
+  | G1 X137.500 Y200.000
+  | G1 X125.000 Y200.000
+  | G1 X112.500 Y200.000
+  | G1 X100.000 Y200.000
+  | G1 X87.500 Y200.000
+  | G1 X75.000 Y200.000
+  | G1 X62.500 Y200.000
+  | G1 X50.000 Y200.000
+  | G1 X37.500 Y200.000
+  | G1 X25.000 Y200.000
+  | G1 X12.500 Y200.000
+  | G1 X0.000 Y200.000
+  | G1 X0.000 Y191.667
+  | G1 X0.000 Y183.333
+  | G1 X0.000 Y175.000
+  | G1 X0.000 Y166.667
+  | G1 X0.000 Y158.333
+  | G1 X0.000 Y150.000
+  | G1 X0.000 Y141.667
+  | G1 X0.000 Y133.333
+  | G1 X0.000 Y125.000
+  | G1 X0.000 Y116.667
+  | G1 X0.000 Y108.333
+  | G1 X0.000 Y100.000
+  | G1 X0.000 Y91.667
+  | G1 X0.000 Y83.333
+  | G1 X0.000 Y75.000
+  | G1 X0.000 Y66.667
+  | G1 X0.000 Y58.333
+  | G1 X0.000 Y50.000
+  | G1 X0.000 Y41.667
+  | G1 X0.000 Y33.333
+  | G1 X0.000 Y25.000
+  | G1 X0.000 Y16.667
+  | G1 X0.000 Y8.333
+  | G1 X0.000 Y0.000
+  | ; kitchen
+  | G0 X0.000 Y0.000
+  | G1 X5.000 Y0.000
+  | G1 X10.000 Y0.000
+  | G1 X15.000 Y0.000
+  | G1 X20.000 Y0.000
+  | G1 X25.000 Y0.000
+  | G1 X30.000 Y0.000
+  | G1 X35.000 Y0.000
+  | G1 X40.000 Y0.000
+  | G1 X45.000 Y0.000
+  | G1 X50.000 Y0.000
+  | G1 X55.000 Y0.000
+  | G1 X60.000 Y0.000
+  | G1 X65.000 Y0.000
+  | G1 X70.000 Y0.000
+  | G1 X75.000 Y0.000
+  | G1 X80.000 Y0.000
+  | G1 X85.000 Y0.000
+  | G1 X90.000 Y0.000
+  | G1 X95.000 Y0.000
+  | G1 X100.000 Y0.000
+  | G1 X105.000 Y0.000
+  | G1 X110.000 Y0.000
+  | G1 X115.000 Y0.000
+  | G1 X120.000 Y0.000
+  | G1 X120.000 Y4.000
+  | G1 X120.000 Y8.000
+  | G1 X120.000 Y12.000
+  | G1 X120.000 Y16.000
+  | G1 X120.000 Y20.000
+  | G1 X120.000 Y24.000
+  | G1 X120.000 Y28.000
+  | G1 X120.000 Y32.000
+  | G1 X120.000 Y36.000
+  | G1 X120.000 Y40.000
+  | G1 X120.000 Y44.000
+  | G1 X120.000 Y48.000
+  | G1 X120.000 Y52.000
+  | G1 X120.000 Y56.000
+  | G1 X120.000 Y60.000
+  | G1 X120.000 Y64.000
+  | G1 X120.000 Y68.000
+  | G1 X120.000 Y72.000
+  | G1 X120.000 Y76.000
+  | G1 X120.000 Y80.000
+  | G1 X115.000 Y80.000
+  | G1 X110.000 Y80.000
+  | G1 X105.000 Y80.000
+  | G1 X100.000 Y80.000
+  | G1 X95.000 Y80.000
+  | G1 X90.000 Y80.000
+  | G1 X85.000 Y80.000
+  | G1 X80.000 Y80.000
+  | G1 X75.000 Y80.000
+  | G1 X70.000 Y80.000
+  | G1 X65.000 Y80.000
+  | G1 X60.000 Y80.000
+  | G1 X55.000 Y80.000
+  | G1 X50.000 Y80.000
+  | G1 X45.000 Y80.000
+  | G1 X40.000 Y80.000
+  | G1 X35.000 Y80.000
+  | G1 X30.000 Y80.000
+  | G1 X25.000 Y80.000
+  | G1 X20.000 Y80.000
+  | G1 X15.000 Y80.000
+  | G1 X10.000 Y80.000
+  | G1 X5.000 Y80.000
+  | G1 X0.000 Y80.000
+  | G1 X0.000 Y76.000
+  | G1 X0.000 Y72.000
+  | G1 X0.000 Y68.000
+  | G1 X0.000 Y64.000
+  | G1 X0.000 Y60.000
+  | G1 X0.000 Y56.000
+  | G1 X0.000 Y52.000
+  | G1 X0.000 Y48.000
+  | G1 X0.000 Y44.000
+  | G1 X0.000 Y40.000
+  | G1 X0.000 Y36.000
+  | G1 X0.000 Y32.000
+  | G1 X0.000 Y28.000
+  | G1 X0.000 Y24.000
+  | G1 X0.000 Y20.000
+  | G1 X0.000 Y16.000
+  | G1 X0.000 Y12.000
+  | G1 X0.000 Y8.000
+  | G1 X0.000 Y4.000
+  | G1 X0.000 Y0.000
+  | G0 X130.000 Y0.000
+  | G1 X134.000 Y0.000
+  | G1 X138.000 Y0.000
+  | G1 X142.000 Y0.000
+  | G1 X146.000 Y0.000
+  | G1 X150.000 Y0.000
+  | G1 X154.000 Y0.000
+  | G1 X158.000 Y0.000
+  | G1 X162.000 Y0.000
+  | G1 X166.000 Y0.000
+  | G1 X170.000 Y0.000
+  | G1 X174.000 Y0.000
+  | G1 X178.000 Y0.000
+  | G1 X182.000 Y0.000
+  | G1 X186.000 Y0.000
+  | G1 X190.000 Y0.000
+  | G1 X190.000 Y4.000
+  | G1 X190.000 Y8.000
+  | G1 X190.000 Y12.000
+  | G1 X190.000 Y16.000
+  | G1 X190.000 Y20.000
+  | G1 X190.000 Y24.000
+  | G1 X190.000 Y28.000
+  | G1 X190.000 Y32.000
+  | G1 X190.000 Y36.000
+  | G1 X190.000 Y40.000
+  | G1 X190.000 Y44.000
+  | G1 X190.000 Y48.000
+  | G1 X190.000 Y52.000
+  | G1 X190.000 Y56.000
+  | G1 X190.000 Y60.000
+  | G1 X190.000 Y64.000
+  | G1 X190.000 Y68.000
+  | G1 X190.000 Y72.000
+  | G1 X190.000 Y76.000
+  | G1 X190.000 Y80.000
+  | G1 X186.000 Y80.000
+  | G1 X182.000 Y80.000
+  | G1 X178.000 Y80.000
+  | G1 X174.000 Y80.000
+  | G1 X170.000 Y80.000
+  | G1 X166.000 Y80.000
+  | G1 X162.000 Y80.000
+  | G1 X158.000 Y80.000
+  | G1 X154.000 Y80.000
+  | G1 X150.000 Y80.000
+  | G1 X146.000 Y80.000
+  | G1 X142.000 Y80.000
+  | G1 X138.000 Y80.000
+  | G1 X134.000 Y80.000
+  | G1 X130.000 Y80.000
+  | G1 X130.000 Y76.000
+  | G1 X130.000 Y72.000
+  | G1 X130.000 Y68.000
+  | G1 X130.000 Y64.000
+  | G1 X130.000 Y60.000
+  | G1 X130.000 Y56.000
+  | G1 X130.000 Y52.000
+  | G1 X130.000 Y48.000
+  | G1 X130.000 Y44.000
+  | G1 X130.000 Y40.000
+  | G1 X130.000 Y36.000
+  | G1 X130.000 Y32.000
+  | G1 X130.000 Y28.000
+  | G1 X130.000 Y24.000
+  | G1 X130.000 Y20.000
+  | G1 X130.000 Y16.000
+  | G1 X130.000 Y12.000
+  | G1 X130.000 Y8.000
+  | G1 X130.000 Y4.000
+  | G1 X130.000 Y0.000
+  | ; door
+  | G0 X120.000 Y120.000
+  | G1 X120.257 Y123.916
+  | G1 X121.022 Y127.765
+  | G1 X122.284 Y131.481
+  | G1 X124.019 Y135.000
+  | G1 X126.199 Y138.263
+  | G1 X128.787 Y141.213
+  | G1 X131.737 Y143.801
+  | G1 X135.000 Y145.981
+  | G1 X138.519 Y147.716
+  | G1 X142.235 Y148.978
+  | G1 X146.084 Y149.743
+  | G1 X150.000 Y150.000
+  | G1 X150.000 Y146.250
+  | G1 X150.000 Y142.500
+  | G1 X150.000 Y138.750
+  | G1 X150.000 Y135.000
+  | G1 X150.000 Y131.250
+  | G1 X150.000 Y127.500
+  | G1 X150.000 Y123.750
+  | G1 X150.000 Y120.000
+  | ; stairs
+  | G0 X200.000 Y120.000
+  | G1 X204.000 Y120.000
+  | G1 X208.000 Y120.000
+  | G1 X212.000 Y120.000
+  | G1 X216.000 Y120.000
+  | G1 X220.000 Y120.000
+  | G1 X220.000 Y123.333
+  | G1 X220.000 Y126.667
+  | G1 X220.000 Y130.000
+  | G1 X224.000 Y130.000
+  | G1 X228.000 Y130.000
+  | G1 X232.000 Y130.000
+  | G1 X236.000 Y130.000
+  | G1 X240.000 Y130.000
+  | G1 X240.000 Y133.333
+  | G1 X240.000 Y136.667
+  | G1 X240.000 Y140.000
+  | G1 X244.000 Y140.000
+  | G1 X248.000 Y140.000
+  | G1 X252.000 Y140.000
+  | G1 X256.000 Y140.000
+  | G1 X260.000 Y140.000
+  | G1 X260.000 Y143.333
+  | G1 X260.000 Y146.667
+  | G1 X260.000 Y150.000
+  | G1 X264.000 Y150.000
+  | G1 X268.000 Y150.000
+  | G1 X272.000 Y150.000
+  | G1 X276.000 Y150.000
+  | G1 X280.000 Y150.000
+  | G1 X280.000 Y153.333
+  | G1 X280.000 Y156.667
+  | G1 X280.000 Y160.000
+  | ; total length 1877.124
+> plot svg/broken.svg
+  ok: 2 segments, length 1.4142135623730951, bbox [1.0, 1.0, 2.0, 2.0]
+  no-d: no d attribute
+  garbage: error InvalidPathError: Path does not start with a command: 10 10 L 20 20
+  cut: error ValueError: not enough values to unpack (expected 2, got 1)
+  bad-arc: error InvalidPathError: Invalid path element A -5 5 0 0 1 10 10
+  flat-arc: error AttributeError: 'Arc' object has no attribute 'radius_scale'
+  comment: 2 segments, length 5.656854249492381, bbox [0.0, 0.0, 4.0, 4.0]
+  accent: error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 2: ordinal not in range(128)
+  empty: error TypeError: cannot unpack non-iterable NoneType object
+  wrote out/broken.gcode (16 lines, total length 7.0710678118654755)
+  | ; broken.svg, drawn by svg.path
+  | ; ok
+  | G0 X1.000 Y1.000
+  | G1 X2.000 Y2.000
+  | ; no-d: no d
+  | ; garbage: skipped
+  | ; cut: skipped
+  | ; bad-arc: skipped
+  | ; flat-arc: skipped
+  | ; comment
+  | G0 X0.000 Y0.000
+  | G1 X2.000 Y2.000
+  | G1 X4.000 Y4.000
+  | ; accent: skipped
+  | ; empty: skipped
+  | ; total length 7.071
+> plot svg/blank.svg
+  wrote out/blank.gcode (2 lines, total length 0.0)
+  | ; blank.svg, drawn by svg.path
+  | ; total length 0.000

@@ -1,0 +1,2802 @@
+// mini_svgpath: a port of svg.path 6.3 (MIT; Lennart Regebro and
+// contributors), the library that reads the `d` attribute of an SVG
+// <path> into segments (lines, Bézier curves, elliptical arcs) and
+// measures them: points along the path, tangents, lengths and bounding
+// boxes, as plotter, laser-cutter and font tools use it. It replays
+// data/jobs.tsv (see mk.py): the specification's paths, the grammar and
+// its errors, the tokenizer, measurements, editing a path in place, and a
+// small pen-plotter tool that turns the drawings under data/svg/ into
+// G-code under data/out/.
+//
+// The library computes with Python's int, float and complex, and what
+// it prints shows which one a value is (a path that starts without a
+// moveto starts at the int 0; a bounding box can hold an int). So the
+// port carries a Num that is one of the three, with Python's rules for
+// mixing them: an int or float meeting a complex becomes one with a 0.0
+// imaginary part first, which decides the sign of a zero.
+
+// ------------------------------------------------------------ code points
+
+fn chr_of(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn cps_of(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+fn cps_str(cs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for c in cs {
+        s.push(chr_of(*c));
+    }
+    s
+}
+
+fn lit(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+fn sub(cs: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let end = if hi > cs.len() { cs.len() } else { hi };
+    let mut k = if lo < 0 { 0 } else { lo };
+    while k < end {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn is(a: ref Vec[i64], s: Str) -> bool {
+    same(a, lit(s))
+}
+
+fn has(cs: ref Vec[i64], x: i64) -> bool {
+    for c in cs {
+        if *c == x {
+            return true;
+        }
+    }
+    false
+}
+
+// text.find(p, at): the first index at or after `at`, or -1.
+fn find_at(cs: ref Vec[i64], p: ref Vec[i64], at: i64) -> i64 {
+    let mut k = if at < 0 { 0 } else { at };
+    while k + p.len() <= cs.len() {
+        let mut j = 0;
+        while j < p.len() and cs[k + j] == p[j] {
+            j += 1;
+        }
+        if j == p.len() {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn utf8_cps(bytes: own Vec[u8]) -> Vec[i64] {
+    match String.from_utf8(bytes) {
+        Ok(s) => cps_of(s),
+        Err(_) => Vec.new(),
+    }
+}
+
+fn hex_text(s: ref String) -> Vec[i64] {
+    utf8_cps(hex_bytes(s))
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn split_cps(cs: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in cs {
+        if *c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.isspace() for one code point, as str.strip() uses it.
+fn is_space(c: i64) -> bool {
+    (c >= 9 and c <= 13) or (c >= 28 and c <= 32) or c == 0x85 or c == 0xa0 or c == 0x1680
+        or (c >= 0x2000 and c <= 0x200a) or c == 0x2028 or c == 0x2029 or c == 0x202f
+        or c == 0x205f or c == 0x3000
+}
+
+fn strip(cs: ref Vec[i64]) -> Vec[i64] {
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and is_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    sub(cs, lo, hi)
+}
+
+fn hex2(n: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(d[(n / 16) % 16]);
+    s.push(d[n % 16]);
+    s
+}
+
+fn hex_n(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut digits: Vec[char] = Vec.new();
+    let mut v = n;
+    let mut k = 0;
+    while k < width {
+        digits.push(d[v % 16]);
+        v = v / 16;
+        k += 1;
+    }
+    let mut s = String.new();
+    let mut j = digits.len() - 1;
+    while j >= 0 {
+        s.push(digits[j]);
+        j -= 1;
+    }
+    s
+}
+
+// repr() of a str: printable text as it is, the rest escaped.
+fn str_repr(cs: ref Vec[i64]) -> String {
+    let q: i64 = if has(cs, 39) and not has(cs, 34) { 34 } else { 39 };
+    let mut out = String.new();
+    out.push(chr_of(q));
+    for c in cs {
+        let n = *c;
+        if n == q or n == 92 {
+            out.push('\\');
+            out.push(chr_of(n));
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(chr_of(n));
+        }
+    }
+    out.push(chr_of(q));
+    out
+}
+
+// repr() of a bytes object whose bytes are ASCII.
+fn bytes_repr(bs: ref Vec[i64]) -> String {
+    let mut s = "b".to_string();
+    s.push_str(str_repr(bs));
+    s
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class and message.
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn no_attr(obj: Str, name: Str) -> Exc {
+    exc("AttributeError", f"'{obj}' object has no attribute '{name}'")
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "list index out of range".to_string())
+}
+
+fn domain_error() -> Exc {
+    exc("ValueError", "math domain error".to_string())
+}
+
+// ------------------------------------------------------------ exact decimals
+
+// x = m * 2**e for a finite x > 0, with m a whole number below 2**53.
+fn decompose(x: f64) -> (i64, i64) {
+    let mut v = x;
+    let mut e = 0;
+    while v >= 9007199254740992.0 {
+        v = v / 2.0;
+        e += 1;
+    }
+    while v < 4503599627370496.0 {
+        v = v * 2.0;
+        e -= 1;
+    }
+    (v as i64, e)
+}
+
+// A whole number as base-10**9 limbs, least significant first.
+fn big_mul(a: mut ref Vec[i64], k: i64) {
+    let mut carry = 0;
+    let mut i = 0;
+    while i < a.len() {
+        let t = a[i] * k + carry;
+        a[i] = t % 1000000000;
+        carry = t / 1000000000;
+        i += 1;
+    }
+    while carry > 0 {
+        a.push(carry % 1000000000);
+        carry = carry / 1000000000;
+    }
+}
+
+fn big_digits(a: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut top = true;
+    while i >= 0 {
+        let mut limb: Vec[i64] = Vec.new();
+        let mut v = a[i];
+        let mut k = 0;
+        while k < 9 {
+            limb.push(v % 10);
+            v = v / 10;
+            k += 1;
+        }
+        let mut j = 8;
+        if top {
+            while j > 0 and limb[j] == 0 {
+                j -= 1;
+            }
+            top = false;
+        }
+        while j >= 0 {
+            out.push(limb[j]);
+            j -= 1;
+        }
+        i -= 1;
+    }
+    out
+}
+
+// The exact decimal digits of a finite x > 0 and where its point goes:
+// x = 0.d1d2d3... * 10**point.
+fn exact_digits(x: f64) -> (Vec[i64], i64) {
+    let (m, e) = decompose(x);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(m % 1000000000);
+    b.push(m / 1000000000);
+    if e >= 0 {
+        let mut k = e;
+        while k >= 29 {
+            big_mul(mut b, 536870912);
+            k -= 29;
+        }
+        let mut p = 1;
+        while k > 0 {
+            p = p * 2;
+            k -= 1;
+        }
+        big_mul(mut b, p);
+        let d = big_digits(b);
+        let n = d.len();
+        (d, n)
+    } else {
+        let mut k = 0 - e;
+        while k >= 12 {
+            big_mul(mut b, 244140625);
+            k -= 12;
+        }
+        let mut p = 1;
+        while k > 0 {
+            p = p * 5;
+            k -= 1;
+        }
+        big_mul(mut b, p);
+        let d = big_digits(b);
+        let n = d.len();
+        (d, n + e)
+    }
+}
+
+// Rounds a digit string to n digits, half to even on the exact value.
+fn round_digits(d: ref Vec[i64], point: i64, n: i64) -> (Vec[i64], i64) {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(if k < d.len() { d[k] } else { 0 });
+        k += 1;
+    }
+    if d.len() <= n {
+        return (out, point);
+    }
+    let next = d[n];
+    let mut up = next > 5;
+    if next == 5 {
+        let mut rest = false;
+        let mut j = n + 1;
+        while j < d.len() {
+            if d[j] != 0 {
+                rest = true;
+            }
+            j += 1;
+        }
+        up = rest or (n > 0 and out[n - 1] % 2 == 1);
+    }
+    if not up {
+        return (out, point);
+    }
+    let mut j = n - 1;
+    while j >= 0 {
+        if out[j] == 9 {
+            out[j] = 0;
+            j -= 1;
+        } else {
+            out[j] += 1;
+            return (out, point);
+        }
+    }
+    let mut carried: Vec[i64] = Vec.new();
+    carried.push(1);
+    let mut i = 1;
+    while i < n {
+        carried.push(0);
+        i += 1;
+    }
+    (carried, point + 1)
+}
+
+fn digit_str(d: ref Vec[i64], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(chr_of(48 + (if k >= 0 and k < d.len() { d[k] } else { 0 })));
+        k += 1;
+    }
+    s
+}
+
+// format(x, 'G'): six significant digits, trailing zeros dropped.
+fn fmt_g(x: f64) -> String {
+    if x != x {
+        return "NAN".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "INF".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-INF".to_string();
+    }
+    let neg = x.is_sign_negative();
+    let sign = if neg { "-" } else { "" };
+    if x == 0.0 {
+        return f"{sign}0";
+    }
+    let a = if neg { -x } else { x };
+    let (d0, p0) = exact_digits(a);
+    let (d, p) = round_digits(d0, p0, 6);
+    let mut last = 5;
+    while last > 0 and d[last] == 0 {
+        last -= 1;
+    }
+    let exp = p - 1;
+    if exp >= -4 and exp < 6 {
+        let mut s = String.new();
+        if p <= 0 {
+            s.push_str("0.");
+            s.push_str(digit_str(d, p, 0));
+            s.push_str(digit_str(d, 0, last + 1));
+        } else if last + 1 <= p {
+            s.push_str(digit_str(d, 0, p));
+        } else {
+            s.push_str(digit_str(d, 0, p));
+            s.push('.');
+            s.push_str(digit_str(d, p, last + 1));
+        }
+        return f"{sign}{s}";
+    }
+    let mut s = digit_str(d, 0, 1);
+    if last > 0 {
+        s.push('.');
+        s.push_str(digit_str(d, 1, last + 1));
+    }
+    let e = if exp < 0 { -exp } else { exp };
+    let es = if e < 10 { f"0{e}" } else { f"{e}" };
+    let esign = if exp < 0 { "-" } else { "+" };
+    f"{sign}{s}E{esign}{es}"
+}
+
+// '%.3f' % x
+fn fmt_f3(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    let neg = x.is_sign_negative();
+    let sign = if neg { "-" } else { "" };
+    let a = if neg { -x } else { x };
+    let mut n: Vec[i64] = Vec.new();
+    if a == 0.0 {
+        n.push(0);
+    } else {
+        let (d, p) = exact_digits(a);
+        // x * 1000 = 0.d1d2... * 10**(p + 3): its whole part, rounded.
+        let q = p + 3;
+        let mut k = 0;
+        while k < q {
+            n.push(if k < d.len() { d[k] } else { 0 });
+            k += 1;
+        }
+        if n.len() == 0 {
+            n.push(0);
+        }
+        let mut up = false;
+        if q >= 0 and q < d.len() {
+            let next = d[q];
+            up = next > 5;
+            if next == 5 {
+                let mut rest = false;
+                let mut j = q + 1;
+                while j < d.len() {
+                    if d[j] != 0 {
+                        rest = true;
+                    }
+                    j += 1;
+                }
+                up = rest or n[n.len() - 1] % 2 == 1;
+            }
+        }
+        if up {
+            let mut j = n.len() - 1;
+            let mut done = false;
+            while j >= 0 and not done {
+                if n[j] == 9 {
+                    n[j] = 0;
+                    j -= 1;
+                } else {
+                    n[j] += 1;
+                    done = true;
+                }
+            }
+            if not done {
+                n.insert(0, 1);
+            }
+        }
+    }
+    while n.len() < 4 {
+        n.insert(0, 0);
+    }
+    let cut = n.len() - 3;
+    f"{sign}{digit_str(n, 0, cut)}.{digit_str(n, cut, n.len())}"
+}
+
+// repr() of a float.
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn pow10(k: i64) -> f64 {
+    let mut v = 1.0;
+    let mut i = 0;
+    while i < k {
+        v = v * 10.0;
+        i += 1;
+    }
+    v
+}
+
+// float() of a run of ASCII matching [-+]?\d*\.?\d*([eE][-+]?\d+)?, as
+// FLOAT_RE hands them over; None when float() refuses it. Exact for up to
+// 15 significant digits times a power of ten up to 22 (see README).
+fn py_float(s: ref Vec[i64]) -> Option[f64] {
+    let mut k = 0;
+    let mut neg = false;
+    if k < s.len() and (s[k] == 43 or s[k] == 45) {
+        neg = s[k] == 45;
+        k += 1;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut frac = 0;
+    let mut seen = false;
+    while k < s.len() and s[k] >= 48 and s[k] <= 57 {
+        digits.push(s[k] - 48);
+        seen = true;
+        k += 1;
+    }
+    if k < s.len() and s[k] == 46 {
+        k += 1;
+        while k < s.len() and s[k] >= 48 and s[k] <= 57 {
+            digits.push(s[k] - 48);
+            frac += 1;
+            seen = true;
+            k += 1;
+        }
+    }
+    if not seen {
+        return None;
+    }
+    let mut e = 0;
+    if k < s.len() and (s[k] == 101 or s[k] == 69) {
+        k += 1;
+        let mut eneg = false;
+        if k < s.len() and (s[k] == 43 or s[k] == 45) {
+            eneg = s[k] == 45;
+            k += 1;
+        }
+        while k < s.len() {
+            if e < 100000 {
+                e = e * 10 + (s[k] - 48);
+            }
+            k += 1;
+        }
+        if eneg {
+            e = -e;
+        }
+    }
+    let mut lo = 0;
+    while lo < digits.len() and digits[lo] == 0 {
+        lo += 1;
+    }
+    let mut hi = digits.len();
+    let mut scale = e - frac;
+    while hi > lo and digits[hi - 1] == 0 {
+        hi -= 1;
+        scale += 1;
+    }
+    let mut v = 0.0;
+    if hi > lo {
+        let nd = hi - lo;
+        let mut m: i64 = 0;
+        let mut i = lo;
+        while i < hi and i < lo + 18 {
+            m = m * 10 + digits[i];
+            i += 1;
+        }
+        if nd + scale > 310 {
+            v = 1.0 / 0.0;
+        } else if nd + scale < -330 {
+            v = 0.0;
+        } else if scale >= 0 {
+            v = (m as f64) * pow10(scale);
+        } else {
+            v = (m as f64) / pow10(0 - scale);
+        }
+    }
+    Some(if neg { -v } else { v })
+}
+
+fn int_of(s: ref Vec[i64]) -> i64 {
+    let mut v = 0;
+    let mut k = 0;
+    let mut neg = false;
+    if k < s.len() and s[k] == 45 {
+        neg = true;
+        k += 1;
+    }
+    while k < s.len() {
+        v = v * 10 + (s[k] - 48);
+        k += 1;
+    }
+    if neg { -v } else { v }
+}
+
+// ------------------------------------------------------------ numbers
+
+// A Python number: int, float or complex, None, or a bool flag
+// (0 False, 1 True, 2 None) as the tokenizer yields them.
+#[derive(Copy, Clone)]
+enum Num {
+    I(i64),
+    F(f64),
+    C(f64, f64),
+    Nil,
+    Flag(i64),
+}
+
+// 0 int, 1 float, 2 complex, 3 anything else
+fn kind(a: Num) -> i64 {
+    match a {
+        Num.I(_) => 0,
+        Num.F(_) => 1,
+        Num.C(_, _) => 2,
+        _ => 3,
+    }
+}
+
+// The real part as a float (an int converts), and the imaginary part.
+fn rf(a: Num) -> f64 {
+    match a {
+        Num.I(x) => x as f64,
+        Num.F(x) => x,
+        Num.C(x, _) => x,
+        Num.Flag(x) => x as f64,
+        Num.Nil => 0.0,
+    }
+}
+
+fn imf(a: Num) -> f64 {
+    match a {
+        Num.C(_, y) => y,
+        _ => 0.0,
+    }
+}
+
+fn ival(a: Num) -> i64 {
+    match a {
+        Num.I(x) => x,
+        _ => 0,
+    }
+}
+
+fn nf(x: f64) -> Num {
+    Num.F(x)
+}
+
+fn ni(x: i64) -> Num {
+    Num.I(x)
+}
+
+// x.real and x.imag
+fn re_of(a: Num) -> Num {
+    match a {
+        Num.C(x, _) => Num.F(x),
+        _ => a,
+    }
+}
+
+fn im_of(a: Num) -> Num {
+    match a {
+        Num.I(_) => Num.I(0),
+        Num.F(_) => Num.F(0.0),
+        Num.C(_, y) => Num.F(y),
+        _ => a,
+    }
+}
+
+// complex(re, im) for two real numbers
+fn cx(r: Num, i: Num) -> Num {
+    Num.C(rf(r), rf(i))
+}
+
+fn nadd(a: Num, b: Num) -> Num {
+    let ka = kind(a);
+    let kb = kind(b);
+    if ka == 0 and kb == 0 {
+        Num.I(ival(a) + ival(b))
+    } else if ka < 2 and kb < 2 {
+        Num.F(rf(a) + rf(b))
+    } else if ka > 2 or kb > 2 {
+        Num.Nil
+    } else {
+        Num.C(rf(a) + rf(b), imf(a) + imf(b))
+    }
+}
+
+fn nsub(a: Num, b: Num) -> Num {
+    let ka = kind(a);
+    let kb = kind(b);
+    if ka == 0 and kb == 0 {
+        Num.I(ival(a) - ival(b))
+    } else if ka < 2 and kb < 2 {
+        Num.F(rf(a) - rf(b))
+    } else if ka > 2 or kb > 2 {
+        Num.Nil
+    } else {
+        Num.C(rf(a) - rf(b), imf(a) - imf(b))
+    }
+}
+
+fn nmul(a: Num, b: Num) -> Num {
+    let ka = kind(a);
+    let kb = kind(b);
+    if ka == 0 and kb == 0 {
+        Num.I(ival(a) * ival(b))
+    } else if ka < 2 and kb < 2 {
+        Num.F(rf(a) * rf(b))
+    } else if ka > 2 or kb > 2 {
+        Num.Nil
+    } else {
+        let ar = rf(a);
+        let ai = imf(a);
+        let br = rf(b);
+        let bi = imf(b);
+        Num.C(ar * br - ai * bi, ar * bi + ai * br)
+    }
+}
+
+// a / b for real numbers
+fn ndiv(a: Num, b: Num) -> Result[Num, Exc] {
+    if rf(b) == 0.0 {
+        if kind(a) == 0 and kind(b) == 0 {
+            return Err(exc("ZeroDivisionError", "division by zero".to_string()));
+        }
+        return Err(exc("ZeroDivisionError", "float division by zero".to_string()));
+    }
+    Ok(Num.F(rf(a) / rf(b)))
+}
+
+// a / b where b is known not to be zero
+fn ndiv_ok(a: Num, b: Num) -> Num {
+    Num.F(rf(a) / rf(b))
+}
+
+// a ** n for a real a and a small whole n
+fn npow(a: Num, n: i64) -> Num {
+    match a {
+        Num.I(x) => {
+            let mut v = 1;
+            let mut k = 0;
+            while k < n {
+                v = v * x;
+                k += 1;
+            }
+            Num.I(v)
+        }
+        _ => Num.F(rf(a).pow(n as f64)),
+    }
+}
+
+fn nneg(a: Num) -> Num {
+    match a {
+        Num.I(x) => Num.I(0 - x),
+        Num.F(x) => Num.F(-x),
+        Num.C(x, y) => Num.C(-x, -y),
+        _ => a,
+    }
+}
+
+fn nabs(a: Num) -> Num {
+    match a {
+        Num.I(x) => Num.I(if x < 0 { 0 - x } else { x }),
+        Num.F(x) => Num.F(x.abs()),
+        Num.C(x, y) => Num.F(x.hypot(y)),
+        _ => a,
+    }
+}
+
+fn neq(a: Num, b: Num) -> bool {
+    let ka = kind(a);
+    let kb = kind(b);
+    if ka == 3 or kb == 3 {
+        return match a {
+            Num.Nil => match b {
+                Num.Nil => true,
+                _ => false,
+            },
+            _ => false,
+        };
+    }
+    if ka == 0 and kb == 0 {
+        return ival(a) == ival(b);
+    }
+    rf(a) == rf(b) and imf(a) == imf(b)
+}
+
+fn nlt(a: Num, b: Num) -> bool {
+    if kind(a) == 0 and kind(b) == 0 {
+        return ival(a) < ival(b);
+    }
+    rf(a) < rf(b)
+}
+
+// The real or imaginary part of a complex in its repr(): no ".0".
+fn cpart(x: f64) -> String {
+    let s = float_repr(x);
+    let cs = cps_of(s);
+    let n = cs.len();
+    if n > 2 and cs[n - 1] == 48 and cs[n - 2] == 46 {
+        return cps_str(sub(cs, 0, n - 2));
+    }
+    s
+}
+
+// str() and repr() of a Num
+fn num_str(a: Num) -> String {
+    match a {
+        Num.I(x) => f"{x}",
+        Num.F(x) => float_repr(x),
+        Num.C(x, y) => {
+            if x == 0.0 and not x.is_sign_negative() {
+                f"{cpart(y)}j"
+            } else {
+                let im = if y.is_sign_negative() and y == y { cpart(y) } else { f"+{cpart(y)}" };
+                f"({cpart(x)}{im}j)"
+            }
+        }
+        Num.Nil => "None".to_string(),
+        Num.Flag(x) => if x == 0 { "False".to_string() } else if x == 1 { "True".to_string() } else { "None".to_string() },
+    }
+}
+
+fn nums_repr(xs: ref Vec[Num]) -> String {
+    let mut s = "[".to_string();
+    let mut k = 0;
+    while k < xs.len() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(num_str(xs[k]));
+        k += 1;
+    }
+    s.push(']');
+    s
+}
+
+// min() and max() of a list, as Python picks: the first of equals.
+fn py_min(xs: ref Vec[Num]) -> Result[Num, Exc] {
+    if xs.len() == 0 {
+        return Err(exc("ValueError", "min() iterable argument is empty".to_string()));
+    }
+    let mut m = xs[0];
+    for x in xs {
+        if nlt(*x, m) {
+            m = *x;
+        }
+    }
+    Ok(m)
+}
+
+fn py_max(xs: ref Vec[Num]) -> Result[Num, Exc] {
+    if xs.len() == 0 {
+        return Err(exc("ValueError", "max() iterable argument is empty".to_string()));
+    }
+    let mut m = xs[0];
+    for x in xs {
+        if nlt(m, *x) {
+            m = *x;
+        }
+    }
+    Ok(m)
+}
+
+fn min2(a: Num, b: Num) -> Num {
+    if nlt(b, a) { b } else { a }
+}
+
+fn max2(a: Num, b: Num) -> Num {
+    if nlt(a, b) { b } else { a }
+}
+
+// sum() of ints and floats: ints added as ints until the first float,
+// then CPython's compensated (Neumaier) float sum.
+fn py_sum(xs: ref Vec[Num]) -> Num {
+    let mut k = 0;
+    let mut i_result = 0;
+    while k < xs.len() and kind(xs[k]) == 0 {
+        i_result += ival(xs[k]);
+        k += 1;
+    }
+    if k == xs.len() {
+        return Num.I(i_result);
+    }
+    let mut f = (i_result as f64) + rf(xs[k]);
+    k += 1;
+    let mut c = 0.0;
+    while k < xs.len() {
+        let item = xs[k];
+        if kind(item) == 1 {
+            let x = rf(item);
+            let t = f + x;
+            if f.abs() >= x.abs() {
+                c += (f - t) + x;
+            } else {
+                c += (x - t) + f;
+            }
+            f = t;
+        } else {
+            f += rf(item);
+        }
+        k += 1;
+    }
+    if c != 0.0 and c == c and c.abs() != 1.0 / 0.0 {
+        f += c;
+    }
+    Num.F(f)
+}
+
+const PI: f64 = 3.141592653589793;
+
+fn radians(x: f64) -> f64 {
+    x * (PI / 180.0)
+}
+
+fn degrees(x: f64) -> f64 {
+    x * (180.0 / PI)
+}
+
+// x % y for floats, with the sign of y
+fn py_mod(x: f64, y: f64) -> f64 {
+    let mut m = x % y;
+    if m != 0.0 {
+        if (y < 0.0) != (m < 0.0) {
+            m += y;
+        }
+    } else {
+        m = if y < 0.0 { -0.0 } else { 0.0 };
+    }
+    m
+}
+
+fn py_acos(x: f64) -> Result[f64, Exc] {
+    if x > 1.0 or x < -1.0 {
+        return Err(domain_error());
+    }
+    Ok(x.acos())
+}
+
+fn fdiv(a: f64, b: f64) -> Result[f64, Exc] {
+    if b == 0.0 {
+        return Err(exc("ZeroDivisionError", "float division by zero".to_string()));
+    }
+    Ok(a / b)
+}
+
+// math.floor and math.ceil, to an int
+fn floor_i(x: f64) -> i64 {
+    x.floor() as i64
+}
+
+fn ceil_i(x: f64) -> i64 {
+    x.ceil() as i64
+}
+
+// ------------------------------------------------------------ segments
+
+const K_MOVE: i64 = 0;
+const K_LINE: i64 = 1;
+const K_CLOSE: i64 = 2;
+const K_CUBIC: i64 = 3;
+const K_QUAD: i64 = 4;
+const K_ARC: i64 = 5;
+
+const ERROR: f64 = 1e-12;
+const MIN_DEPTH: i64 = 5;
+
+// One path segment. A quadratic curve keeps its control point in c1.
+// An arc is parameterized when it is built; `params` is false when
+// _parameterize() returned early and left radius_scale, center, theta and
+// delta unset.
+#[derive(Clone)]
+struct Seg {
+    kind: i64,
+    start: Num,
+    end: Num,
+    c1: Num,
+    c2: Num,
+    relative: bool,
+    vertical: bool,
+    horizontal: bool,
+    smooth: bool,
+    radius: Num,
+    rotation: Num,
+    arc: bool,
+    sweep: bool,
+    params: bool,
+    scale: Num,
+    center: Num,
+    theta: f64,
+    delta: f64,
+}
+
+fn seg_new(kind: i64, start: Num, end: Num, relative: bool) -> Seg {
+    Seg {
+        kind: kind,
+        start: start,
+        end: end,
+        c1: Num.Nil,
+        c2: Num.Nil,
+        relative: relative,
+        vertical: false,
+        horizontal: false,
+        smooth: false,
+        radius: Num.Nil,
+        rotation: Num.Nil,
+        arc: false,
+        sweep: false,
+        params: false,
+        scale: Num.Nil,
+        center: Num.Nil,
+        theta: 0.0,
+        delta: 0.0,
+    }
+}
+
+fn arc_new(start: Num, radius: Num, rotation: Num, arc: bool, sweep: bool, end: Num, relative: bool) -> Result[Seg, Exc] {
+    let mut a = seg_new(K_ARC, start, end, relative);
+    a.radius = radius;
+    a.rotation = rotation;
+    a.arc = arc;
+    a.sweep = sweep;
+    if neq(start, end) {
+        return Ok(a);
+    }
+    let rr = rf(radius);
+    let ri = imf(radius);
+    if rr == 0.0 or ri == 0.0 {
+        return Ok(a);
+    }
+    let cosr = radians(rf(rotation)).cos();
+    let sinr = radians(rf(rotation)).sin();
+    let dx = (rf(start) - rf(end)) / 2.0;
+    let dy = (imf(start) - imf(end)) / 2.0;
+    let x1prim = cosr * dx + sinr * dy;
+    let x1prim_sq = x1prim * x1prim;
+    let y1prim = -sinr * dx + cosr * dy;
+    let y1prim_sq = y1prim * y1prim;
+    let mut rx = rr;
+    let mut rx_sq = rx * rx;
+    let mut ry = ri;
+    let mut ry_sq = ry * ry;
+    let mut radius_scale = fdiv(x1prim_sq, rx_sq)? + fdiv(y1prim_sq, ry_sq)?;
+    if radius_scale > 1.0 {
+        radius_scale = radius_scale.sqrt();
+        rx = rx * radius_scale;
+        ry = ry * radius_scale;
+        rx_sq = rx * rx;
+        ry_sq = ry * ry;
+        a.scale = Num.F(radius_scale);
+    } else {
+        a.scale = Num.I(1);
+    }
+    let t1 = rx_sq * y1prim_sq;
+    let t2 = ry_sq * x1prim_sq;
+    let mut c = fdiv(rx_sq * ry_sq - t1 - t2, t1 + t2)?.abs().sqrt();
+    if arc == sweep {
+        c = -c;
+    }
+    let cxprim = fdiv(c * rx * y1prim, ry)?;
+    let cyprim = fdiv(-c * ry * x1prim, rx)?;
+    a.center = Num.C(
+        (cosr * cxprim - sinr * cyprim) + ((rf(start) + rf(end)) / 2.0),
+        (sinr * cxprim + cosr * cyprim) + ((imf(start) + imf(end)) / 2.0),
+    );
+    let ux = fdiv(x1prim - cxprim, rx)?;
+    let uy = fdiv(y1prim - cyprim, ry)?;
+    let vx = fdiv(-x1prim - cxprim, rx)?;
+    let vy = fdiv(-y1prim - cyprim, ry)?;
+    let n = (ux * ux + uy * uy).sqrt();
+    let p = ux;
+    let mut theta = degrees(py_acos(fdiv(p, n)?)?);
+    if uy < 0.0 {
+        theta = -theta;
+    }
+    a.theta = py_mod(theta, 360.0);
+    let n2 = ((ux * ux + uy * uy) * (vx * vx + vy * vy)).sqrt();
+    let p2 = ux * vx + uy * vy;
+    let mut d = fdiv(p2, n2)?;
+    if d > 1.0 {
+        d = 1.0;
+    } else if d < -1.0 {
+        d = -1.0;
+    }
+    let mut delta = degrees(py_acos(d)?);
+    if (ux * vy - uy * vx) < 0.0 {
+        delta = -delta;
+    }
+    a.delta = py_mod(delta, 360.0);
+    if not sweep {
+        a.delta = a.delta - 360.0;
+    }
+    a.params = true;
+    Ok(a)
+}
+
+// segment_length(): halve the curve until each piece is straight enough.
+fn segment_length(curve: ref Seg, start: Num, end: Num, start_point: Num, end_point: Num, error: Num, min_depth: Num, depth: i64) -> Num {
+    let mid = ndiv_ok(nadd(start, end), ni(2));
+    let mid_point = seg_point(curve, mid);
+    let length = nabs(nsub(end_point, start_point));
+    let first_half = nabs(nsub(mid_point, start_point));
+    let second_half = nabs(nsub(end_point, mid_point));
+    let length2 = nadd(first_half, second_half);
+    if nlt(error, nsub(length2, length)) or nlt(ni(depth), min_depth) {
+        let d = depth + 1;
+        return nadd(
+            segment_length(curve, start, mid, start_point, mid_point, error, min_depth, d),
+            segment_length(curve, mid, end, mid_point, end_point, error, min_depth, d),
+        );
+    }
+    length2
+}
+
+fn seg_point(s: ref Seg, pos: Num) -> Num {
+    let k = s.kind;
+    if k == K_MOVE {
+        return s.start;
+    }
+    if k == K_LINE or k == K_CLOSE {
+        let distance = nsub(s.end, s.start);
+        return nadd(s.start, nmul(distance, pos));
+    }
+    if k == K_CUBIC {
+        let om = nsub(ni(1), pos);
+        let a = nmul(npow(om, 3), s.start);
+        let b = nmul(nmul(nmul(ni(3), npow(om, 2)), pos), s.c1);
+        let c = nmul(nmul(nmul(ni(3), om), npow(pos, 2)), s.c2);
+        let d = nmul(npow(pos, 3), s.end);
+        return nadd(nadd(nadd(a, b), c), d);
+    }
+    if k == K_QUAD {
+        let om = nsub(ni(1), pos);
+        let a = nmul(npow(om, 2), s.start);
+        let b = nmul(nmul(nmul(ni(2), om), pos), s.c1);
+        let c = nmul(npow(pos, 2), s.end);
+        return nadd(nadd(a, b), c);
+    }
+    // the arc
+    if neq(s.start, s.end) {
+        return s.start;
+    }
+    if rf(s.radius) == 0.0 or imf(s.radius) == 0.0 {
+        let distance = nsub(s.end, s.start);
+        return nadd(s.start, nmul(distance, pos));
+    }
+    let angle = radians(rf(nadd(nf(s.theta), nmul(nf(s.delta), pos))));
+    let cosr = radians(rf(s.rotation)).cos();
+    let sinr = radians(rf(s.rotation)).sin();
+    let radius = nmul(s.radius, s.scale);
+    let x = cosr * angle.cos() * rf(radius) - sinr * angle.sin() * imf(radius) + rf(s.center);
+    let y = sinr * angle.cos() * rf(radius) + cosr * angle.sin() * imf(radius) + imf(s.center);
+    Num.C(x, y)
+}
+
+fn seg_tangent(s: ref Seg, pos: Num) -> Result[Num, Exc] {
+    let k = s.kind;
+    if k == K_MOVE {
+        return Ok(ni(0));
+    }
+    if k == K_LINE or k == K_CLOSE {
+        return Ok(nsub(s.end, s.start));
+    }
+    if k == K_CUBIC {
+        let om = nsub(ni(1), pos);
+        let t1 = nmul(nmul(ni(-3), npow(om, 2)), s.start);
+        let t2 = nmul(nmul(ni(3), npow(om, 2)), s.c1);
+        let t3 = nmul(nmul(nmul(ni(6), pos), om), s.c1);
+        let t4 = nmul(nmul(ni(3), npow(pos, 2)), s.c2);
+        let t5 = nmul(nmul(nmul(ni(6), pos), om), s.c2);
+        let t6 = nmul(nmul(ni(3), npow(pos, 2)), s.end);
+        return Ok(nadd(nadd(nsub(nsub(nadd(t1, t2), t3), t4), t5), t6));
+    }
+    if k == K_QUAD {
+        let a = nmul(s.start, nsub(nmul(ni(2), pos), ni(2)));
+        let b = nmul(nsub(nmul(ni(2), s.end), nmul(ni(4), s.c1)), pos);
+        let c = nmul(ni(2), s.c1);
+        return Ok(nadd(nadd(a, b), c));
+    }
+    if not s.params {
+        return Err(no_attr("Arc", "theta"));
+    }
+    let angle = radians(rf(nadd(nf(s.theta), nmul(nf(s.delta), pos))));
+    let cosr = radians(rf(s.rotation)).cos();
+    let sinr = radians(rf(s.rotation)).sin();
+    let radius = nmul(s.radius, s.scale);
+    let x = cosr * angle.cos() * rf(radius) - sinr * angle.sin() * imf(radius);
+    let y = sinr * angle.cos() * rf(radius) + cosr * angle.sin() * imf(radius);
+    Ok(nmul(Num.C(x, y), Num.C(0.0, 1.0)))
+}
+
+// QuadraticBezier.length(): the closed form, or the library's fallback
+// when the closed form divides by zero or leaves the domain.
+fn quad_length(s: ref Seg) -> Num {
+    let a = nadd(nsub(s.start, nmul(ni(2), s.c1)), s.end);
+    let b = nmul(ni(2), nsub(s.c1, s.start));
+    match quad_closed(a, b) {
+        Ok(v) => Num.F(v),
+        Err(_) => {
+            if rf(nabs(a)) < 1e-10 {
+                nabs(b)
+            } else {
+                let k = rf(nabs(b)) / rf(nabs(a));
+                if k >= 2.0 {
+                    Num.F(rf(nabs(b)) - rf(nabs(a)))
+                } else {
+                    Num.F(rf(nabs(a)) * (k.pow(2.0) / 2.0 - k + 1.0))
+                }
+            }
+        }
+    }
+}
+
+fn py_sqrt(x: f64) -> Result[f64, Exc] {
+    if x < 0.0 {
+        return Err(domain_error());
+    }
+    Ok(x.sqrt())
+}
+
+fn py_log(x: f64) -> Result[f64, Exc] {
+    if x <= 0.0 {
+        return Err(domain_error());
+    }
+    Ok(x.ln())
+}
+
+fn quad_closed(a: Num, b: Num) -> Result[f64, Exc] {
+    let ar = rf(a);
+    let ai = imf(a);
+    let br = rf(b);
+    let bi = imf(b);
+    let big_a = 4.0 * (ar.pow(2.0) + ai.pow(2.0));
+    let big_b = 4.0 * (ar * br + ai * bi);
+    let big_c = br.pow(2.0) + bi.pow(2.0);
+    let sabc = 2.0 * py_sqrt(big_a + big_b + big_c)?;
+    let a2 = py_sqrt(big_a)?;
+    let a32 = 2.0 * big_a * a2;
+    let c2 = 2.0 * py_sqrt(big_c)?;
+    let ba = fdiv(big_b, a2)?;
+    let lg = py_log(fdiv(2.0 * a2 + ba + sabc, ba + c2)?)?;
+    let top = a32 * sabc + a2 * big_b * (sabc - c2) + (4.0 * big_c * big_a - big_b.pow(2.0)) * lg;
+    fdiv(top, 4.0 * a32)
+}
+
+fn seg_length(s: ref Seg, error: Num, min_depth: Num) -> Num {
+    let k = s.kind;
+    if k == K_MOVE {
+        return ni(0);
+    }
+    if k == K_LINE or k == K_CLOSE {
+        let distance = nsub(s.end, s.start);
+        return Num.F((rf(distance).pow(2.0) + imf(distance).pow(2.0)).sqrt());
+    }
+    if k == K_QUAD {
+        return quad_length(s);
+    }
+    if k == K_ARC {
+        if neq(s.start, s.end) {
+            return ni(0);
+        }
+        if rf(s.radius) == 0.0 or imf(s.radius) == 0.0 {
+            let distance = nsub(s.end, s.start);
+            return Num.F((rf(distance).pow(2.0) + imf(distance).pow(2.0)).sqrt());
+        }
+        if rf(s.radius) == imf(s.radius) {
+            let radius = rf(nmul(re_of(s.radius), s.scale));
+            return Num.F((radius * s.delta * PI / 180.0).abs());
+        }
+    }
+    let start_point = seg_point(s, ni(0));
+    let end_point = seg_point(s, ni(1));
+    segment_length(s, ni(0), ni(1), start_point, end_point, error, min_depth, 0)
+}
+
+// _find_solutions_for_bezier(c2, c1, c0): roots of c2 t^2 + c1 t + c0 in [0, 1]
+fn bezier_roots(c2: Num, c1: Num, c0: Num) -> Vec[Num] {
+    let mut soln: Vec[Num] = Vec.new();
+    if neq(c2, ni(0)) {
+        if not neq(c1, ni(0)) {
+            soln.push(ndiv_ok(nneg(c0), c1));
+        }
+    } else {
+        let det = nsub(npow(c1, 2), nmul(nmul(ni(4), c2), c0));
+        if not nlt(det, ni(0)) {
+            let r = rf(det).pow(0.5);
+            soln.push(Num.F((-rf(c1) + r) / 2.0 / rf(c2)));
+            soln.push(Num.F((-rf(c1) - r) / 2.0 / rf(c2)));
+        }
+    }
+    let mut out: Vec[Num] = Vec.new();
+    for s in soln {
+        if rf(*s) >= 0.0 and rf(*s) <= 1.0 {
+            out.push(*s);
+        }
+    }
+    out
+}
+
+// _find_solutions_for_arc(a, b, c, d): a sin(x) + b cos(x) = 0 for
+// x = c + d t, t in [0, 1]
+fn arc_roots(a: f64, b: f64, c: f64, d: f64) -> Result[Vec[Num], Exc] {
+    let mut t_list: Vec[f64] = Vec.new();
+    if a == 0.0 {
+        let r0 = -0.5 + c / PI;
+        let r1 = d / PI - 0.5 + c / PI;
+        let lo = floor_i(if r1 < r0 { r1 } else { r0 });
+        let hi = ceil_i(if r1 > r0 { r1 } else { r0 });
+        let mut n = lo;
+        while n <= hi {
+            t_list.push(fdiv(PI / 2.0 - c + PI * (n as f64), d)?);
+            n += 1;
+        }
+    } else if b == 0.0 {
+        let r0 = c / PI;
+        let r1 = d / PI + c / PI;
+        let lo = floor_i(if r1 < r0 { r1 } else { r0 });
+        let hi = ceil_i(if r1 > r0 { r1 } else { r0 });
+        let mut n = lo;
+        while n <= hi {
+            t_list.push(fdiv(-c + PI * (n as f64), d)?);
+            n += 1;
+        }
+    } else {
+        let arct = (-b / a).atan();
+        let r0 = (c - arct) / PI;
+        let r1 = d / PI + (c - arct) / PI;
+        let lo = floor_i(if r1 < r0 { r1 } else { r0 });
+        let hi = ceil_i(if r1 > r0 { r1 } else { r0 });
+        let mut n = lo;
+        while n <= hi {
+            t_list.push(fdiv(arct - c + PI * (n as f64), d)?);
+            n += 1;
+        }
+    }
+    let mut out: Vec[Num] = Vec.new();
+    for t in t_list {
+        if *t >= 0.0 and *t <= 1.0 {
+            out.push(Num.F(*t));
+        }
+    }
+    Ok(out)
+}
+
+fn coords_box(s: ref Seg, xs: ref Vec[Num], ys: ref Vec[Num]) -> Result[Vec[Num], Exc] {
+    let mut xc: Vec[Num] = Vec.new();
+    let mut yc: Vec[Num] = Vec.new();
+    for t in xs {
+        xc.push(re_of(seg_point(s, *t)));
+    }
+    for t in ys {
+        yc.push(im_of(seg_point(s, *t)));
+    }
+    let mut out: Vec[Num] = Vec.new();
+    out.push(py_min(xc)?);
+    out.push(py_min(yc)?);
+    out.push(py_max(xc)?);
+    out.push(py_max(yc)?);
+    Ok(out)
+}
+
+fn with_ends(first: Num, last: Num, rest: own Vec[Num]) -> Vec[Num] {
+    let mut out: Vec[Num] = Vec.new();
+    out.push(first);
+    out.push(last);
+    for r in rest {
+        out.push(*r);
+    }
+    out
+}
+
+fn seg_bbox(s: ref Seg) -> Result[Vec[Num], Exc] {
+    let k = s.kind;
+    if k == K_MOVE or k == K_LINE or k == K_CLOSE {
+        let mut out: Vec[Num] = Vec.new();
+        out.push(min2(re_of(s.start), re_of(s.end)));
+        out.push(min2(im_of(s.start), im_of(s.end)));
+        out.push(max2(re_of(s.start), re_of(s.end)));
+        out.push(max2(im_of(s.start), im_of(s.end)));
+        return Ok(out);
+    }
+    if k == K_CUBIC {
+        let g0 = nsub(s.c1, s.start);
+        let g1 = nsub(s.c2, s.c1);
+        let g2 = nsub(s.end, s.c2);
+        let c0 = nmul(ni(3), g0);
+        let c1 = nadd(nmul(ni(-6), g0), nmul(ni(6), g1));
+        let c2 = nadd(nsub(nmul(ni(3), g0), nmul(ni(6), g1)), nmul(ni(3), g2));
+        let xs = with_ends(ni(0), ni(1), bezier_roots(re_of(c2), re_of(c1), re_of(c0)));
+        let ys = with_ends(ni(0), ni(1), bezier_roots(im_of(c2), im_of(c1), im_of(c0)));
+        return coords_box(s, xs, ys);
+    }
+    if k == K_QUAD {
+        let g0 = nsub(s.c1, s.start);
+        let g1 = nsub(s.end, s.c1);
+        let c0 = nmul(ni(2), g0);
+        let c1 = nadd(nmul(ni(-2), g0), nmul(ni(2), g1));
+        let xs = with_ends(ni(0), ni(1), bezier_roots(ni(0), re_of(c1), re_of(c0)));
+        let ys = with_ends(ni(0), ni(1), bezier_roots(ni(0), im_of(c1), im_of(c0)));
+        return coords_box(s, xs, ys);
+    }
+    let cosr = radians(rf(s.rotation)).cos();
+    let sinr = radians(rf(s.rotation)).sin();
+    if not s.params {
+        return Err(no_attr("Arc", "radius_scale"));
+    }
+    let radius = nmul(s.radius, s.scale);
+    let x_a = -cosr * rf(radius);
+    let x_b = -sinr * imf(radius);
+    let x_c = radians(s.theta);
+    let x_d = radians(s.delta);
+    let y_a = -sinr * rf(radius);
+    let y_b = cosr * imf(radius);
+    let y_c = radians(s.theta);
+    let y_d = radians(s.delta);
+    let xs = with_ends(ni(0), nf(1.0), arc_roots(x_a, x_b, x_c, x_d)?);
+    let ys = with_ends(ni(0), nf(1.0), arc_roots(y_a, y_b, y_c, y_d)?);
+    coords_box(s, xs, ys)
+}
+
+fn bool_str(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn seg_repr(s: ref Seg) -> String {
+    let k = s.kind;
+    if k == K_MOVE {
+        f"Move(to={num_str(s.start)})"
+    } else if k == K_LINE {
+        f"Line(start={num_str(s.start)}, end={num_str(s.end)})"
+    } else if k == K_CLOSE {
+        f"Close(start={num_str(s.start)}, end={num_str(s.end)})"
+    } else if k == K_CUBIC {
+        f"CubicBezier(start={num_str(s.start)}, control1={num_str(s.c1)}, control2={num_str(s.c2)}, end={num_str(s.end)}, smooth={bool_str(s.smooth)})"
+    } else if k == K_QUAD {
+        f"QuadraticBezier(start={num_str(s.start)}, control={num_str(s.c1)}, end={num_str(s.end)}, smooth={bool_str(s.smooth)})"
+    } else {
+        f"Arc(start={num_str(s.start)}, radius={num_str(s.radius)}, rotation={num_str(s.rotation)}, arc={bool_str(s.arc)}, sweep={bool_str(s.sweep)}, end={num_str(s.end)})"
+    }
+}
+
+// a == b for two segments: same class, and the fields its __eq__ reads.
+fn seg_eq(a: ref Seg, b: ref Seg) -> bool {
+    if a.kind != b.kind {
+        return false;
+    }
+    let k = a.kind;
+    if k == K_MOVE {
+        return neq(a.start, b.start);
+    }
+    if not (neq(a.start, b.start) and neq(a.end, b.end)) {
+        return false;
+    }
+    if k == K_CUBIC {
+        return neq(a.c1, b.c1) and neq(a.c2, b.c2);
+    }
+    if k == K_QUAD {
+        return neq(a.c1, b.c1);
+    }
+    if k == K_ARC {
+        return neq(a.radius, b.radius) and neq(a.rotation, b.rotation) and a.arc == b.arc and a.sweep == b.sweep;
+    }
+    true
+}
+
+fn g(x: Num) -> String {
+    fmt_g(rf(x))
+}
+
+fn none_end() -> Exc {
+    no_attr("NoneType", "end")
+}
+
+// segment._d(previous): its part of Path.d(); `prev` is the previous
+// segment's index in segs, or -1 for None.
+fn seg_d(segs: ref Vec[Seg], i: i64, prev: i64) -> Result[String, Exc] {
+    let s = ref segs[i];
+    let k = s.kind;
+    if k == K_MOVE {
+        let mut x = re_of(s.end);
+        let mut y = im_of(s.end);
+        let mut cmd = "M";
+        if s.relative {
+            cmd = "m";
+            if prev >= 0 {
+                x = nsub(x, re_of(segs[prev].end));
+                y = nsub(y, im_of(segs[prev].end));
+            }
+        }
+        return Ok(f"{cmd} {g(x)},{g(y)}");
+    }
+    if k == K_CLOSE {
+        return Ok(if s.relative { "z".to_string() } else { "Z".to_string() });
+    }
+    if k == K_LINE {
+        let mut x = re_of(s.end);
+        let mut y = im_of(s.end);
+        if s.relative {
+            if prev < 0 {
+                return Err(none_end());
+            }
+            x = nsub(x, re_of(segs[prev].end));
+            y = nsub(y, im_of(segs[prev].end));
+        }
+        if s.horizontal {
+            if prev < 0 {
+                return Err(none_end());
+            }
+            if neq(s.start, segs[prev].end) and neq(im_of(s.start), im_of(s.end)) {
+                let cmd = if s.relative { "h" } else { "H" };
+                return Ok(f"{cmd} {g(x)}");
+            }
+        }
+        if s.vertical {
+            if prev < 0 {
+                return Err(none_end());
+            }
+            if neq(s.start, segs[prev].end) and neq(re_of(s.start), re_of(s.end)) {
+                let cmd = if s.relative { "v" } else { "V" };
+                return Ok(f"{cmd} {g(y)}");
+            }
+        }
+        let cmd = if s.relative { "l" } else { "L" };
+        return Ok(f"{cmd} {g(x)},{g(y)}");
+    }
+    if k == K_CUBIC {
+        let mut c1 = s.c1;
+        let mut c2 = s.c2;
+        let mut end = s.end;
+        if s.relative and prev >= 0 {
+            c1 = nsub(c1, segs[prev].end);
+            c2 = nsub(c2, segs[prev].end);
+            end = nsub(end, segs[prev].end);
+        }
+        if s.smooth {
+            let smooth_from = if prev >= 0 and segs[prev].kind == K_CUBIC {
+                neq(s.start, segs[prev].end) and neq(nsub(s.c1, s.start), nsub(segs[prev].end, segs[prev].c2))
+            } else {
+                neq(s.c1, s.start)
+            };
+            if smooth_from {
+                let cmd = if s.relative { "s" } else { "S" };
+                return Ok(f"{cmd} {g(re_of(c2))},{g(im_of(c2))} {g(re_of(end))},{g(im_of(end))}");
+            }
+        }
+        let cmd = if s.relative { "c" } else { "C" };
+        return Ok(f"{cmd} {g(re_of(c1))},{g(im_of(c1))} {g(re_of(c2))},{g(im_of(c2))} {g(re_of(end))},{g(im_of(end))}");
+    }
+    if k == K_QUAD {
+        let mut control = s.c1;
+        let mut end = s.end;
+        if s.relative and prev >= 0 {
+            control = nsub(control, segs[prev].end);
+            end = nsub(end, segs[prev].end);
+        }
+        if s.smooth {
+            let smooth_from = if prev >= 0 and segs[prev].kind == K_QUAD {
+                neq(s.start, segs[prev].end) and neq(nsub(s.c1, s.start), nsub(segs[prev].end, segs[prev].c1))
+            } else {
+                neq(s.c1, s.start)
+            };
+            if smooth_from {
+                let cmd = if s.relative { "t" } else { "T" };
+                return Ok(f"{cmd} {g(re_of(end))},{g(im_of(end))}");
+            }
+        }
+        let cmd = if s.relative { "q" } else { "Q" };
+        return Ok(f"{cmd} {g(re_of(control))},{g(im_of(control))} {g(re_of(end))},{g(im_of(end))}");
+    }
+    let mut end = s.end;
+    let cmd = if s.relative { "a" } else { "A" };
+    if s.relative {
+        if prev < 0 {
+            return Err(none_end());
+        }
+        end = nsub(end, segs[prev].end);
+    }
+    let fa = if s.arc { 1 } else { 0 };
+    let fs = if s.sweep { 1 } else { 0 };
+    Ok(f"{cmd} {g(re_of(s.radius))},{g(im_of(s.radius))} {g(s.rotation)} {fa},{fs} {g(re_of(end))},{g(im_of(end))}")
+}
+
+// ------------------------------------------------------------ the path
+
+// A Path: its segments, and the lengths _calc_lengths() caches. `length`
+// is Nil while nothing is cached. The fractions list is only ever
+// appended to, as in the library, so it keeps stale entries once the
+// path has been edited.
+#[derive(Clone)]
+struct Path {
+    segs: Vec[Seg],
+    length: Num,
+    lengths: Vec[Num],
+    fractions: Vec[Num],
+}
+
+fn path_new() -> Path {
+    Path { segs: Vec.new(), length: Num.Nil, lengths: Vec.new(), fractions: Vec.new() }
+}
+
+fn is_nil(a: Num) -> bool {
+    kind(a) == 3
+}
+
+fn calc_lengths(p: mut ref Path, error: Num, min_depth: Num) {
+    if not is_nil(p.length) {
+        return;
+    }
+    let mut lengths: Vec[Num] = Vec.new();
+    for s in p.segs.iter() {
+        lengths.push(seg_length(s, error, min_depth));
+    }
+    let total = py_sum(lengths);
+    p.length = total;
+    if neq(total, ni(0)) {
+        p.lengths = lengths;
+    } else {
+        let mut ls: Vec[Num] = Vec.new();
+        for l in lengths {
+            ls.push(ndiv_ok(*l, total));
+        }
+        p.lengths = ls;
+    }
+    let mut fraction = ni(0);
+    let mut k = 0;
+    while k < p.lengths.len() {
+        fraction = nadd(fraction, p.lengths[k]);
+        p.fractions.push(fraction);
+        k += 1;
+    }
+}
+
+// bisect.bisect_right(a, x)
+fn bisect(a: ref Vec[Num], x: Num) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if nlt(x, a[mid]) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// _find_segment(pos): the segment's index and the position along it.
+fn find_segment(p: mut ref Path, pos: Num) -> Result[(i64, Num), Exc] {
+    let n = p.segs.len();
+    if neq(pos, nf(0.0)) {
+        if n == 0 {
+            return Err(index_error());
+        }
+        return Ok((0, pos));
+    }
+    if neq(pos, nf(1.0)) {
+        if n == 0 {
+            return Err(index_error());
+        }
+        return Ok((n - 1, pos));
+    }
+    calc_lengths(mut p, nf(ERROR), ni(MIN_DEPTH));
+    if neq(p.length, ni(0)) {
+        if n == 0 {
+            return Err(index_error());
+        }
+        return Ok((0, nf(0.0)));
+    }
+    let i = bisect(p.fractions, pos);
+    let segment_pos = if i == 0 {
+        ndiv(pos, p.fractions[0])?
+    } else {
+        if i >= p.fractions.len() {
+            return Err(index_error());
+        }
+        ndiv(nsub(pos, p.fractions[i - 1]), nsub(p.fractions[i], p.fractions[i - 1]))?
+    };
+    if i >= n {
+        return Err(index_error());
+    }
+    Ok((i, segment_pos))
+}
+
+fn path_repr(p: ref Path) -> String {
+    let mut s = "Path(".to_string();
+    let mut k = 0;
+    while k < p.segs.len() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(seg_repr(p.segs[k]));
+        k += 1;
+    }
+    s.push(')');
+    s
+}
+
+fn path_d(p: ref Path) -> Result[String, Exc] {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < p.segs.len() {
+        if k > 0 {
+            s.push(' ');
+        }
+        s.push_str(seg_d(p.segs, k, k - 1)?);
+        k += 1;
+    }
+    Ok(s)
+}
+
+fn path_bbox(p: ref Path) -> Result[Vec[Num], Exc] {
+    let mut xs: Vec[Num] = Vec.new();
+    let mut ys: Vec[Num] = Vec.new();
+    for s in p.segs.iter() {
+        let b = seg_bbox(s)?;
+        xs.push(b[0]);
+        xs.push(b[2]);
+        ys.push(b[1]);
+        ys.push(b[3]);
+    }
+    let mut out: Vec[Num] = Vec.new();
+    out.push(py_min(xs)?);
+    out.push(py_min(ys)?);
+    out.push(py_max(xs)?);
+    out.push(py_max(ys)?);
+    Ok(out)
+}
+
+fn path_eq(a: ref Path, b: ref Path) -> bool {
+    if a.segs.len() != b.segs.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < a.segs.len() {
+        if not seg_eq(a.segs[k], b.segs[k]) {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+// A list index as Python reads it, or -1 when out of range.
+fn norm_index(i: i64, n: i64) -> i64 {
+    let j = if i < 0 { i + n } else { i };
+    if j < 0 or j >= n { -1 } else { j }
+}
+
+// Sequence.index(): the first segment equal to `seg`.
+fn path_index(p: ref Path, seg: ref Seg) -> i64 {
+    let mut k = 0;
+    while k < p.segs.len() {
+        if seg_eq(p.segs[k], seg) {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+// ------------------------------------------------------------ the parser
+
+const COMMANDS: Str = "MmZzLlHhVvCcSsQqTtAa";
+
+fn is_command(c: i64) -> bool {
+    has(lit(COMMANDS), c)
+}
+
+fn is_upper(c: i64) -> bool {
+    c >= 65 and c <= 90
+}
+
+fn upper(c: i64) -> i64 {
+    if c >= 97 and c <= 122 { c - 32 } else { c }
+}
+
+// One token _tokenize_path() yields: its command letter and arguments.
+#[derive(Clone)]
+struct Tok {
+    cmd: i64,
+    args: Vec[Num],
+}
+
+fn tok_repr(t: ref Tok) -> String {
+    let mut s = f"('{chr_of(t.cmd)}'";
+    if t.args.len() == 0 {
+        s.push_str(",)");
+        return s;
+    }
+    for a in t.args {
+        s.push_str(", ");
+        s.push_str(num_str(*a));
+    }
+    s.push(')');
+    s
+}
+
+fn invalid(msg: own String) -> Exc {
+    exc("InvalidPathError", msg)
+}
+
+// A run of characters _commandify_path() produced: a command letter (with
+// cmd set), or the stripped text after one.
+#[derive(Clone)]
+struct Raw {
+    cmd: i64,
+    parts: Vec[Vec[i64]],
+}
+
+// _commandify_path(): COMMAND_RE.split() of the path, grouped into
+// (command, text...) tuples. A tuple with cmd -1 is the None the library
+// yields when the path has no command at all.
+fn commandify(pathdef: ref Vec[i64]) -> Result[Vec[Raw], Exc] {
+    let mut pieces: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in pathdef {
+        if is_command(*c) {
+            pieces.push(cur);
+            cur = Vec.new();
+            let mut one: Vec[i64] = Vec.new();
+            one.push(*c);
+            pieces.push(one);
+        } else {
+            cur.push(*c);
+        }
+    }
+    pieces.push(cur);
+    let mut out: Vec[Raw] = Vec.new();
+    let mut have = false;
+    let mut token = Raw { cmd: -1, parts: Vec.new() };
+    for piece in pieces.iter() {
+        let x = strip(piece);
+        if x.len() == 1 and is_command(x[0]) {
+            if have {
+                out.push(token.clone());
+            }
+            let mut parts: Vec[Vec[i64]] = Vec.new();
+            if x[0] == 122 or x[0] == 90 {
+                parts.push(Vec.new());
+            }
+            token = Raw { cmd: x[0], parts: parts };
+            have = true;
+        } else if x.len() > 0 {
+            if not have {
+                return Err(invalid(f"Path does not start with a command: {cps_str(pathdef)}"));
+            }
+            token.parts.push(x);
+        }
+    }
+    out.push(token);
+    Ok(out)
+}
+
+fn is_sep(c: i64) -> bool {
+    c == 0x20 or c == 0x9 or c == 0xd or c == 0xa or c == 0x2c
+}
+
+// The bytearray the tokenizer pops numbers off, and where it starts.
+struct ArgList {
+    b: Vec[i64],
+    at: i64,
+}
+
+fn strip_array(a: mut ref ArgList) {
+    while a.at < a.b.len() and is_sep(a.b[a.at]) {
+        a.at += 1;
+    }
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+// pop_number(): FLOAT_RE at the front, float() of what it matched.
+// Ok(None) is the library's InvalidPathError ("Expected a number").
+fn pop_number(a: mut ref ArgList) -> Result[Option[f64], Exc] {
+    let b = ref a.b;
+    let mut k = a.at;
+    if k < b.len() and (b[k] == 43 or b[k] == 45) {
+        k += 1;
+    }
+    while k < b.len() and is_digit(b[k]) {
+        k += 1;
+    }
+    if k < b.len() and b[k] == 46 {
+        k += 1;
+    }
+    while k < b.len() and is_digit(b[k]) {
+        k += 1;
+    }
+    if k < b.len() and (b[k] == 101 or b[k] == 69) {
+        let mut j = k + 1;
+        if j < b.len() and (b[j] == 43 or b[j] == 45) {
+            j += 1;
+        }
+        if j < b.len() and is_digit(b[j]) {
+            while j < b.len() and is_digit(b[j]) {
+                j += 1;
+            }
+            k = j;
+        }
+    }
+    if k == a.at {
+        return Ok(None);
+    }
+    let text = sub(b, a.at, k);
+    let v = match py_float(text) {
+        Some(v) => v,
+        None => {
+            return Err(exc("ValueError", f"could not convert string to float: {bytes_repr(text)}"));
+        }
+    };
+    a.at = k;
+    strip_array(mut a);
+    Ok(Some(v))
+}
+
+// The ascii codec's complaint about the first run it cannot encode.
+fn ascii_error(s: ref Vec[i64]) -> Option[Exc] {
+    let mut k = 0;
+    while k < s.len() and s[k] < 128 {
+        k += 1;
+    }
+    if k == s.len() {
+        return None;
+    }
+    let mut e = k;
+    while e < s.len() and s[e] >= 128 {
+        e += 1;
+    }
+    if e - k == 1 {
+        let c = s[k];
+        let shown = if c < 0x100 { f"\\x{hex2(c)}" } else if c < 0x10000 { f"\\u{hex_n(c, 4)}" } else { f"\\U{hex_n(c, 8)}" };
+        return Some(exc("UnicodeEncodeError", f"'ascii' codec can't encode character '{shown}' in position {k}: ordinal not in range(128)"));
+    }
+    Some(exc("UnicodeEncodeError", f"'ascii' codec can't encode characters in position {k}-{e - 1}: ordinal not in range(128)"))
+}
+
+// What _tokenize_path() yields before it stops, and the exception it
+// stops with, if any.
+struct Toks {
+    toks: Vec[Tok],
+    err: Option[Exc],
+}
+
+fn sequence_of(cmd: i64) -> Str {
+    let u = upper(cmd);
+    if u == 77 or u == 76 or u == 84 {
+        "c"
+    } else if u == 72 or u == 86 {
+        "s"
+    } else if u == 67 {
+        "ccc"
+    } else if u == 83 or u == 81 {
+        "cc"
+    } else if u == 65 {
+        "uusffc"
+    } else {
+        ""
+    }
+}
+
+fn tokenize(pathdef: ref Vec[i64]) -> Toks {
+    let mut out: Vec[Tok] = Vec.new();
+    let raws = match commandify(pathdef) {
+        Ok(r) => r,
+        Err(e) => {
+            return Toks { toks: out, err: Some(e) };
+        }
+    };
+    for raw in raws.iter() {
+        if raw.cmd < 0 {
+            return Toks { toks: out, err: Some(exc("TypeError", "cannot unpack non-iterable NoneType object".to_string())) };
+        }
+        if raw.parts.len() == 0 {
+            return Toks { toks: out, err: Some(exc("ValueError", "not enough values to unpack (expected 2, got 1)".to_string())) };
+        }
+        if raw.parts.len() > 1 {
+            return Toks { toks: out, err: Some(exc("ValueError", "too many values to unpack (expected 2)".to_string())) };
+        }
+        let mut command = raw.cmd;
+        if command == 122 or command == 90 {
+            out.push(Tok { cmd: command, args: Vec.new() });
+            continue;
+        }
+        let args = ref raw.parts[0];
+        let seq = lit(sequence_of(command));
+        if let Some(e) = ascii_error(args) {
+            return Toks { toks: out, err: Some(e) };
+        }
+        let mut arr = ArgList { b: args.clone(), at: 0 };
+        let mut implicit = false;
+        while arr.at < arr.b.len() {
+            let mut cargs: Vec[Num] = Vec.new();
+            let mut i = 0;
+            while i < seq.len() {
+                let kind_c = seq[i];
+                let mut bad = false;
+                if kind_c == 102 {
+                    // pop_flag
+                    if arr.at >= arr.b.len() {
+                        return Toks { toks: out, err: Some(exc("IndexError", "bytearray index out of range".to_string())) };
+                    }
+                    let flag = arr.b[arr.at];
+                    arr.at += 1;
+                    strip_array(mut arr);
+                    cargs.push(Num.Flag(if flag == 48 { 0 } else if flag == 49 { 1 } else { 2 }));
+                } else if kind_c == 99 {
+                    match pop_number(mut arr) {
+                        Err(e) => {
+                            return Toks { toks: out, err: Some(e) };
+                        }
+                        Ok(None) => {
+                            bad = true;
+                        }
+                        Ok(Some(x)) => match pop_number(mut arr) {
+                            Err(e) => {
+                                return Toks { toks: out, err: Some(e) };
+                            }
+                            Ok(None) => {
+                                bad = true;
+                            }
+                            Ok(Some(y)) => {
+                                cargs.push(Num.C(x, y));
+                            }
+                        },
+                    }
+                } else {
+                    match pop_number(mut arr) {
+                        Err(e) => {
+                            return Toks { toks: out, err: Some(e) };
+                        }
+                        Ok(None) => {
+                            bad = true;
+                        }
+                        Ok(Some(x)) => {
+                            if kind_c == 117 and x < 0.0 {
+                                bad = true;
+                            } else {
+                                cargs.push(Num.F(x));
+                            }
+                        }
+                    }
+                }
+                if bad {
+                    if i == 0 and implicit {
+                        return Toks { toks: out, err: None };
+                    }
+                    let msg = f"Invalid path element {chr_of(raw.cmd)} {cps_str(args)}";
+                    return Toks { toks: out, err: Some(invalid(msg)) };
+                }
+                i += 1;
+            }
+            out.push(Tok { cmd: command, args: cargs });
+            implicit = true;
+            if command == 109 {
+                command = 108;
+            } else if command == 77 {
+                command = 76;
+            }
+        }
+    }
+    Toks { toks: out, err: None }
+}
+
+fn line_seg(start: Num, end: Num, relative: bool, vertical: bool, horizontal: bool) -> Seg {
+    let mut s = seg_new(K_LINE, start, end, relative);
+    s.vertical = vertical;
+    s.horizontal = horizontal;
+    s
+}
+
+fn curve_seg(kind: i64, start: Num, c1: Num, c2: Num, end: Num, relative: bool, smooth: bool) -> Seg {
+    let mut s = seg_new(kind, start, end, relative);
+    s.c1 = c1;
+    s.c2 = c2;
+    s.smooth = smooth;
+    s
+}
+
+fn not_string_operand() -> Exc {
+    exc("TypeError", "'in <string>' requires string as left operand, not NoneType".to_string())
+}
+
+// parse_path(pathdef)
+fn parse_path(pathdef: ref Vec[i64]) -> Result[Path, Exc] {
+    let toks = tokenize(pathdef);
+    let mut p = path_new();
+    let mut start_pos = Num.Nil;
+    let mut last: i64 = -1;
+    let mut current_pos = ni(0);
+    for token in toks.toks.iter() {
+        let relative = not is_upper(token.cmd);
+        let command = upper(token.cmd);
+        let a = ref token.args;
+        if command == 77 {
+            let pos = a[0];
+            current_pos = if relative { nadd(current_pos, pos) } else { pos };
+            p.segs.push(seg_new(K_MOVE, current_pos, current_pos, relative));
+            start_pos = current_pos;
+        } else if command == 90 {
+            p.segs.push(seg_new(K_CLOSE, current_pos, start_pos, relative));
+            current_pos = start_pos;
+        } else if command == 76 {
+            let pos = if relative { nadd(a[0], current_pos) } else { a[0] };
+            p.segs.push(line_seg(current_pos, pos, relative, false, false));
+            current_pos = pos;
+        } else if command == 72 {
+            let hpos = if relative { nadd(a[0], re_of(current_pos)) } else { a[0] };
+            let pos = cx(hpos, im_of(current_pos));
+            p.segs.push(line_seg(current_pos, pos, relative, false, true));
+            current_pos = pos;
+        } else if command == 86 {
+            let vpos = if relative { nadd(a[0], im_of(current_pos)) } else { a[0] };
+            let pos = cx(re_of(current_pos), vpos);
+            p.segs.push(line_seg(current_pos, pos, relative, true, false));
+            current_pos = pos;
+        } else if command == 67 {
+            let mut c1 = a[0];
+            let mut c2 = a[1];
+            let mut end = a[2];
+            if relative {
+                c1 = nadd(c1, current_pos);
+                c2 = nadd(c2, current_pos);
+                end = nadd(end, current_pos);
+            }
+            p.segs.push(curve_seg(K_CUBIC, current_pos, c1, c2, end, relative, false));
+            current_pos = end;
+        } else if command == 83 {
+            let mut c2 = a[0];
+            let mut end = a[1];
+            if relative {
+                c2 = nadd(c2, current_pos);
+                end = nadd(end, current_pos);
+            }
+            if last < 0 {
+                return Err(not_string_operand());
+            }
+            let c1 = if last == 67 or last == 83 {
+                nsub(nadd(current_pos, current_pos), p.segs[p.segs.len() - 1].c2)
+            } else {
+                current_pos
+            };
+            p.segs.push(curve_seg(K_CUBIC, current_pos, c1, c2, end, relative, true));
+            current_pos = end;
+        } else if command == 81 {
+            let mut control = a[0];
+            let mut end = a[1];
+            if relative {
+                control = nadd(control, current_pos);
+                end = nadd(end, current_pos);
+            }
+            p.segs.push(curve_seg(K_QUAD, current_pos, control, Num.Nil, end, relative, false));
+            current_pos = end;
+        } else if command == 84 {
+            let mut end = a[0];
+            if relative {
+                end = nadd(end, current_pos);
+            }
+            if last < 0 {
+                return Err(not_string_operand());
+            }
+            let control = if last == 81 or last == 84 {
+                nsub(nadd(current_pos, current_pos), p.segs[p.segs.len() - 1].c1)
+            } else {
+                current_pos
+            };
+            p.segs.push(curve_seg(K_QUAD, current_pos, control, Num.Nil, end, relative, true));
+            current_pos = end;
+        } else if command == 65 {
+            let radius = cx(a[0], a[1]);
+            let rotation = a[2];
+            let arc = match a[3] {
+                Num.Flag(f) => f == 1,
+                _ => false,
+            };
+            let sweep = match a[4] {
+                Num.Flag(f) => f == 1,
+                _ => false,
+            };
+            let mut end = a[5];
+            if relative {
+                end = nadd(end, current_pos);
+            }
+            p.segs.push(arc_new(current_pos, radius, rotation, arc, sweep, end, relative)?);
+            current_pos = end;
+        }
+        last = command;
+    }
+    match toks.err {
+        Some(e) => Err(e),
+        None => Ok(p),
+    }
+}
+
+// ------------------------------------------------------------ files
+
+fn read_file(path: ref String) -> Result[Vec[i64], Exc] {
+    match fs.read_bytes(path.clone()) {
+        Ok(b) => Ok(utf8_cps(b)),
+        Err(e) => Err(exc("FileNotFoundError", f"{e}")),
+    }
+}
+
+fn write_inputs() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data/svg".to_string()) {
+        return Err(f"cannot create data/svg: {e}");
+    }
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    for line in split_on(svg_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        if let Err(e) = fs.write_bytes(f"data/{f[0]}", hex_bytes(f[1])) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// One attribute of an element: name and value.
+#[derive(Clone)]
+struct Attr {
+    name: Vec[i64],
+    value: Vec[i64],
+}
+
+fn in_set(c: i64, set: Str) -> bool {
+    has(lit(set), c)
+}
+
+// Every <path> element's attributes, in order (the oracle's scanner).
+fn svg_paths(text: ref Vec[i64]) -> Vec[Vec[Attr]] {
+    let mut out: Vec[Vec[Attr]] = Vec.new();
+    let tag = lit("<path");
+    let n = text.len();
+    let mut k = find_at(text, tag, 0);
+    while k >= 0 {
+        k += 5;
+        if k < n and not in_set(text[k], " \t\r\n/>") {
+            k = find_at(text, tag, k);
+            continue;
+        }
+        let mut attrs: Vec[Attr] = Vec.new();
+        while k < n {
+            while k < n and in_set(text[k], " \t\r\n") {
+                k += 1;
+            }
+            if k >= n or in_set(text[k], "/>") {
+                break;
+            }
+            let s = k;
+            while k < n and not in_set(text[k], " \t\r\n=/>") {
+                k += 1;
+            }
+            let name = sub(text, s, k);
+            while k < n and in_set(text[k], " \t\r\n") {
+                k += 1;
+            }
+            let mut value: Vec[i64] = Vec.new();
+            if k < n and text[k] == 61 {
+                k += 1;
+                while k < n and in_set(text[k], " \t\r\n") {
+                    k += 1;
+                }
+                let mut q: Vec[i64] = Vec.new();
+                q.push(text[k]);
+                let e = find_at(text, q, k + 1);
+                value = sub(text, k + 1, e);
+                k = e + 1;
+            }
+            let mut found = false;
+            for a in attrs.iter_mut() {
+                if same(a.name, name) {
+                    a.value = value.clone();
+                    found = true;
+                }
+            }
+            if not found {
+                attrs.push(Attr { name: name, value: value });
+            }
+        }
+        out.push(attrs);
+        k = find_at(text, tag, k);
+    }
+    out
+}
+
+fn attr_of(attrs: ref Vec[Attr], name: Str) -> Option[Vec[i64]] {
+    for a in attrs.iter() {
+        if is(a.name, name) {
+            return Some(a.value.clone());
+        }
+    }
+    None
+}
+
+// The pen-plotter tool: measure each path, then sample it to G-code.
+fn plot_one(d: ref Vec[i64], gcode: mut ref Vec[String]) -> Result[(Num, Vec[Num], i64), Exc] {
+    let mut p = parse_path(d)?;
+    calc_lengths(mut p, nf(1e-6), ni(MIN_DEPTH));
+    let length = p.length;
+    let bbox = path_bbox(p)?;
+    for seg in p.segs.iter() {
+        if seg.kind == K_MOVE {
+            gcode.push(f"G0 X{fmt_f3(rf(seg.end))} Y{fmt_f3(imf(seg.end))}\n");
+            continue;
+        }
+        let l = seg_length(seg, nf(1e-6), ni(MIN_DEPTH));
+        let mut steps = ceil_i(rf(l) / 4.0);
+        if steps > 24 {
+            steps = 24;
+        }
+        if steps < 1 {
+            steps = 1;
+        }
+        let mut k = 1;
+        while k <= steps {
+            let q = seg_point(seg, nf((k as f64) / (steps as f64)));
+            gcode.push(f"G1 X{fmt_f3(rf(q))} Y{fmt_f3(imf(q))}\n");
+            k += 1;
+        }
+    }
+    Ok((length, bbox, p.segs.len()))
+}
+
+fn plot(name: ref String, out_name: ref String) -> Result[(), Exc] {
+    println(f"> plot svg/{name}");
+    let text = read_file(f"data/svg/{name}")?;
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"; {name}, drawn by svg.path\n");
+    let mut total = nf(0.0);
+    let mut n = 0;
+    for attrs in svg_paths(text).iter() {
+        n += 1;
+        let pid = match attr_of(attrs, "id") {
+            Some(v) => cps_str(v),
+            None => f"path{n}",
+        };
+        let d = match attr_of(attrs, "d") {
+            Some(v) => v,
+            None => {
+                println(f"  {pid}: no d attribute");
+                lines.push(f"; {pid}: no d\n");
+                continue;
+            }
+        };
+        let mut gcode: Vec[String] = Vec.new();
+        match plot_one(d, mut gcode) {
+            Err(e) => {
+                println(f"  {pid}: error {e.cls}: {e.msg}");
+                lines.push(f"; {pid}: skipped\n");
+            }
+            Ok((length, bbox, count)) => {
+                total = nadd(total, length);
+                println(f"  {pid}: {count} segments, length {num_str(length)}, bbox {nums_repr(bbox)}");
+                lines.push(f"; {pid}\n");
+                for gl in gcode {
+                    lines.push(gl.clone());
+                }
+            }
+        }
+    }
+    lines.push(f"; total length {fmt_f3(rf(total))}\n");
+    let mut body = String.new();
+    for l in lines.iter() {
+        body.push_str(l);
+    }
+    let path = f"data/out/{out_name}";
+    if let Err(e) = fs.write(path.clone(), body) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    let back = read_file(path)?;
+    println(f"  wrote out/{out_name} ({lines.len()} lines, total length {num_str(total)})");
+    let parts = split_cps(back, 10);
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        println(f"  | {cps_str(parts[k])}");
+        k += 1;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn unesc(t: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < t.len() {
+        let c = t[k];
+        if c == 92 and k + 1 < t.len() {
+            let n = t[k + 1];
+            if n == 92 {
+                out.push(92);
+            } else if n == 116 {
+                out.push(9);
+            } else if n == 110 {
+                out.push(10);
+            } else if n == 114 {
+                out.push(13);
+            } else {
+                out.push(92);
+                out.push(n);
+            }
+            k += 2;
+        } else {
+            out.push(c);
+            k += 1;
+        }
+    }
+    out
+}
+
+// A job's number: an int unless it has a '.' or an 'e' in it.
+fn num_arg(s: ref Vec[i64]) -> Num {
+    if has(s, 46) or has(s, 101) or has(s, 69) {
+        match py_float(s) {
+            Some(v) => nf(v),
+            None => Num.Nil,
+        }
+    } else {
+        ni(int_of(s))
+    }
+}
+
+// The paths the jobs make, by number; `cur` and the saved names point
+// into it, so a kept path and the current one can be the same object.
+struct State {
+    paths: Vec[Path],
+    cur: i64,
+    names: Vec[Vec[i64]],
+    saved: Vec[i64],
+}
+
+fn saved_of(st: ref State, name: ref Vec[i64]) -> Result[i64, Exc] {
+    let mut k = 0;
+    while k < st.names.len() {
+        if same(st.names[k], name) {
+            return Ok(st.saved[k]);
+        }
+        k += 1;
+    }
+    Err(exc("KeyError", str_repr(name)))
+}
+
+// <name>[i]: a segment of a kept path.
+fn saved_seg(st: ref State, name: ref Vec[i64], i: ref Vec[i64]) -> Result[Seg, Exc] {
+    let pi = saved_of(st, name)?;
+    let segs = ref st.paths[pi].segs;
+    let j = norm_index(int_of(i), segs.len());
+    if j < 0 {
+        return Err(index_error());
+    }
+    Ok(segs[j].clone())
+}
+
+fn no_cur(st: ref State, what: Str) -> Result[(), Exc] {
+    if st.cur < 0 {
+        return Err(no_attr("NoneType", what));
+    }
+    Ok(())
+}
+
+fn run(st: mut ref State, f: ref Vec[Vec[i64]]) -> Result[(), Exc] {
+    let op = cps_str(f[0]);
+    let c = st.cur;
+    if op == "parse" {
+        let d = unesc(f[1]);
+        println(f"> parse_path({str_repr(d)})");
+        st.cur = -1;
+        let p = parse_path(d)?;
+        st.paths.push(p);
+        st.cur = st.paths.len() - 1;
+        let p = ref st.paths[st.cur];
+        println(f"  -> {path_repr(p)}");
+        println(f"  d: {path_d(p)?}");
+    } else if op == "tokens" {
+        let d = unesc(f[1]);
+        println(f"> _tokenize_path({str_repr(d)})");
+        let t = tokenize(d);
+        for tok in t.toks.iter() {
+            println(f"  - {tok_repr(tok)}");
+        }
+        if let Some(e) = t.err {
+            return Err(e);
+        }
+    } else if op == "point" or op == "tangent" {
+        println(f"> {op}({cps_str(f[1])})");
+        no_cur(st, if op == "point" { "point" } else { "tangent" })?;
+        let (i, pos) = find_segment(mut st.paths[c], num_arg(f[1]))?;
+        let seg = ref st.paths[c].segs[i];
+        let v = if op == "point" { seg_point(seg, pos) } else { seg_tangent(seg, pos)? };
+        println(f"  -> {num_str(v)}");
+    } else if op == "length" {
+        no_cur(st, "length")?;
+        let mut error = nf(ERROR);
+        let mut depth = ni(MIN_DEPTH);
+        if f.len() == 1 {
+            println("> length()");
+        } else if f.len() == 2 {
+            println(f"> length(error={cps_str(f[1])})");
+            error = num_arg(f[1]);
+        } else {
+            println(f"> length(error={cps_str(f[1])}, min_depth={cps_str(f[2])})");
+            error = num_arg(f[1]);
+            depth = num_arg(f[2]);
+        }
+        calc_lengths(mut st.paths[c], error, depth);
+        println(f"  -> {num_str(st.paths[c].length)}");
+    } else if op == "bbox" {
+        println("> boundingbox()");
+        no_cur(st, "boundingbox")?;
+        println(f"  -> {nums_repr(path_bbox(st.paths[c])?)}");
+    } else if op == "seg" {
+        let i = int_of(f[1]);
+        let what = cps_str(f[2]);
+        if f.len() > 3 {
+            println(f"> [{i}].{what}({cps_str(f[3])})");
+        } else {
+            println(f"> [{i}].{what}()");
+        }
+        let segs = ref st.paths[c].segs;
+        let j = norm_index(i, segs.len());
+        if j < 0 {
+            return Err(index_error());
+        }
+        let seg = ref segs[j];
+        if what == "repr" {
+            println(f"  -> {seg_repr(seg)}");
+        } else if what == "point" {
+            println(f"  -> {num_str(seg_point(seg, num_arg(f[3])))}");
+        } else if what == "tangent" {
+            println(f"  -> {num_str(seg_tangent(seg, num_arg(f[3]))?)}");
+        } else if what == "length" {
+            println(f"  -> {num_str(seg_length(seg, nf(ERROR), ni(MIN_DEPTH)))}");
+        } else if what == "bbox" {
+            println(f"  -> {nums_repr(seg_bbox(seg)?)}");
+        }
+    } else if op == "keep" {
+        let mut found = false;
+        let mut k = 0;
+        while k < st.names.len() {
+            if same(st.names[k], f[1]) {
+                st.saved[k] = c;
+                found = true;
+            }
+            k += 1;
+        }
+        if not found {
+            st.names.push(f[1].clone());
+            st.saved.push(c);
+        }
+        println(f"> keep as {cps_str(f[1])}");
+    } else if op == "use" {
+        st.cur = saved_of(st, f[1])?;
+        println(f"> use {cps_str(f[1])}");
+    } else if op == "eq" {
+        let name = cps_str(f[1]);
+        let o = saved_of(st, f[1])?;
+        println(f"> == {name}, != {name}");
+        let e = path_eq(st.paths[c], st.paths[o]);
+        println(f"  -> {bool_str(e)} {bool_str(not e)}");
+    } else if op == "append" or op == "remove" or op == "index" or op == "count" or op == "has" {
+        println(f"> {op}({cps_str(f[1])}[{cps_str(f[2])}])");
+        let seg = saved_seg(st, f[1], f[2])?;
+        let p = mut ref st.paths[c];
+        if op == "append" {
+            p.segs.push(seg);
+            p.length = Num.Nil;
+        } else if op == "remove" {
+            let k = path_index(p, seg);
+            if k < 0 {
+                return Err(exc("ValueError", String.new()));
+            }
+            p.segs.remove(k);
+            p.length = Num.Nil;
+        } else if op == "index" {
+            let k = path_index(p, seg);
+            if k < 0 {
+                return Err(exc("ValueError", String.new()));
+            }
+            println(f"  -> {k}");
+        } else if op == "count" {
+            let mut n = 0;
+            for s in p.segs.iter() {
+                if seg_eq(s, seg) {
+                    n += 1;
+                }
+            }
+            println(f"  -> {n}");
+        } else {
+            println(f"  -> {bool_str(path_index(p, seg) >= 0)}");
+        }
+    } else if op == "insert" or op == "set" {
+        let at = int_of(f[1]);
+        println(f"> {op}({at}, {cps_str(f[2])}[{cps_str(f[3])}])");
+        let seg = saved_seg(st, f[2], f[3])?;
+        let p = mut ref st.paths[c];
+        let n = p.segs.len();
+        if op == "insert" {
+            let mut j = if at < 0 { at + n } else { at };
+            if j < 0 {
+                j = 0;
+            }
+            if j > n {
+                j = n;
+            }
+            p.segs.insert(j, seg);
+        } else {
+            let j = norm_index(at, n);
+            if j < 0 {
+                return Err(exc("IndexError", "list assignment index out of range".to_string()));
+            }
+            p.segs[j] = seg;
+        }
+        p.length = Num.Nil;
+    } else if op == "del" {
+        println(f"> del [{cps_str(f[1])}]");
+        let p = mut ref st.paths[c];
+        let j = norm_index(int_of(f[1]), p.segs.len());
+        if j < 0 {
+            return Err(exc("IndexError", "list assignment index out of range".to_string()));
+        }
+        p.segs.remove(j);
+        p.length = Num.Nil;
+    } else if op == "pop" {
+        let at = if f.len() > 1 { int_of(f[1]) } else { -1 };
+        if f.len() > 1 {
+            println(f"> pop({at})");
+        } else {
+            println("> pop()");
+        }
+        let p = mut ref st.paths[c];
+        let j = norm_index(at, p.segs.len());
+        if j < 0 {
+            return Err(index_error());
+        }
+        let s = p.segs.remove(j);
+        p.length = Num.Nil;
+        println(f"  -> {seg_repr(s)}");
+    } else if op == "reverse" {
+        println("> reverse()");
+        return Err(exc("NotImplementedError", String.new()));
+    } else if op == "slice" {
+        println(f"> [{cps_str(f[1])}:{cps_str(f[2])}]");
+        let p = ref st.paths[c];
+        let n = p.segs.len();
+        let mut a = int_of(f[1]);
+        let mut b = int_of(f[2]);
+        if a < 0 {
+            a += n;
+        }
+        if b < 0 {
+            b += n;
+        }
+        if a < 0 {
+            a = 0;
+        }
+        if b > n {
+            b = n;
+        }
+        let mut s = "[".to_string();
+        let mut k = a;
+        while k < b {
+            if k > a {
+                s.push_str(", ");
+            }
+            s.push_str(seg_repr(p.segs[k]));
+            k += 1;
+        }
+        s.push(']');
+        println(f"  -> {s}");
+    } else if op == "len" {
+        println("> len()");
+        println(f"  -> {st.paths[c].segs.len()}");
+    } else if op == "clear" {
+        println("> clear()");
+        let p = mut ref st.paths[c];
+        while p.segs.len() > 0 {
+            let _ = p.segs.pop();
+            p.length = Num.Nil;
+        }
+    } else if op == "plot" {
+        plot(cps_str(f[1]), cps_str(f[2]))?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut st = State { paths: Vec.new(), cur: -1, names: Vec.new(), saved: Vec.new() };
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let f = split_cps(hex_text(hex), 9);
+        if is(f[0], "job") {
+            println(f"== {cps_str(f[1])}");
+            continue;
+        }
+        if let Err(e) = run(mut st, f) {
+            println(f"  error {e.cls}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("6a6f6209746865207061746873206f6620746865205356472073706563696669636174696f6e\n7061727365094d2031303020313030204c2033303020313030204c2032303020333030207a\n62626f78\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n62626f78\n7061727365094d3230302c33303020513430302c3530203630302c3330302054313030302c333030\n62626f78\n7061727365094d3330302c32303020682d31353020613135302c313530203020312c30203135302c2d313530207a\n62626f78\n7061727365094d3237352c31373520762d31353020613135302c313530203020302c30202d3135302c313530207a\n62626f78\n7061727365094d3630302c333530206c2035302c2d3235206132352c3235202d333020302c312035302c2d3235206c2035302c2d3235206132352c3530202d333020302c312035302c2d3235206c2035302c2d3235206132352c3735202d333020302c312035302c2d3235206c2035302c2d3235206132352c313030202d333020302c312035302c2d3235206c2035302c2d3235\n62626f78\n7061727365094d3130302c32303020433130302c313030203430302c313030203430302c323030\n62626f78\n7061727365094d3130302c353030204332352c343030203437352c343030203430302c353030\n62626f78\n7061727365094d3630302c38303020433632352c373030203732352c373030203735302c38303020533837352c393030203930302c383030\n62626f78\n6a6f6209746865206772616d6d6172\n7061727365096d2031302031302032302032302033302030\n7061727365094d3130203130203230203230\n7061727365094d20302030204c20313020302031302031302030203130207a206d2032302030206c2031302030\n7061727365094d31302d32304c2e352e352d3165322c33452d31\n7061727365094d312e352e352e352e35\n7061727365094d302c306c312d312d312d317a\n7061727365094d2031302031302061323020323020302031303130203130\n7061727365095c744d5c6e31305c723130204c2032302c3230\n7061727365094d203130203130204c203130203130\n7061727365094d20352035\n7061727365094d20302030204d203130203130204c203230203230\n7061727365094d2030203020412030203130203020302031203130203130\n7061727365094d203130203130204120352035203020302031203130203130\n7061727365094d203020302041203120312030203020312031302030\n7061727365094d203020302041203520352033302031203120332034\n");
+    s.push_str("7061727365094d20302030204120352035203020322031203130203130\n7061727365094d20302030204120332039202d36302031203020362036\n7061727365094c2031302031302032302030\n7061727365094320302031302031302031302031302030\n70617273650951203520352031302030\n706172736509482031302056203130\n7061727365096c203130203130\n70617273650941203520352030203020312031302030\n706172736509532031302031302032302030\n7061727365094d203130203130204c203230203230205a204c203330203330\n7061727365094d203130203130205a205a\n7061727365096d203130203130207a206d20352035207a\n7061727365094d2030203020532031302031302032302030\n7061727365094d203020302043203020313020313020313020313020302053203230202d31302032302030\n7061727365094d2030203020542031302030\n7061727365094d203020302051203520313020313020302054203230203020542033302030\n7061727365094d20302030204320312031203220322033203320542031302030\n7061727365094d203020302051203520352031302030205320313520352032302030\n7061727365094d2030203020632030202d352035202d35203520302073203520352035203020732035202d3520352030\n7061727365094d2030203020712035202d3520313020302074203130203020742031302030\n7061727365094d2031653220314532206c202d316531202e356531\n7061727365094d20302e3030303030312031303030303030204c203132333435363720302e3030303031323334\n7061727365094d203132333435362e352030204c20302e30303031202d302e30\n7061727365094d202d30202d30206c202d30202d30\n7061727365094d20302030204c2031653430302030\n7061727365094d20302030204c2031652d3430302035\n7061727365094d2033203320682034207620342068202d342076202d34\n7061727365094d2030203020562035204820352076203520682035\n7061727365094d203120322033203420352036205a20372038\n6a6f620962726f6b656e207061746873\n706172736509\n706172736509202020\n7061727365093130203130204c203230203230\n7061727365094d203130\n7061727365094d203130203130204c203230\n7061727365094d203130203130204c2032302032302078203330203330\n7061727365094d20302030204c203130203130204c\n7061727365094d20302030207a203130203130\n7061727365094d20302030204c202e2035\n7061727365094d20302030204c202d2035\n7061727365094d20302030204c2065352035\n");
+    s.push_str("7061727365094d203020302041202d352035203020302031203130203130\n7061727365094d20302030204120352035203020302031\n7061727365094d203020302041203520352030\n7061727365094d20302030204c203520c3a9\n7061727365094d20302030204c203130203130202320636f6d6d656e74\n7061727365094d2c31302c3130\n7061727365094d203130203130204c20312e352e35\n7061727365094d2030203020432031203220332034\n7061727365094d20302030205120312031\n7061727365094d20302030204c203120312032\n7061727365095a\n7061727365097a204d20312031\n7061727365094d20302030204c20312031205a204c203220322078\n7061727365094d203020302048\n6a6f620974686520746f6b656e697a6572\n746f6b656e73094d2031303020313030204c2033303020313030204c2032303020333030207a\n746f6b656e73094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n746f6b656e73094d3230302c33303020513430302c3530203630302c3330302054313030302c333030\n746f6b656e73096d2031302031302032302032302033302030\n746f6b656e73094d3130203130203230203230\n746f6b656e73094d20302030204c20313020302031302031302030203130207a206d2032302030206c2031302030\n746f6b656e73094d31302d32304c2e352e352d3165322c33452d31\n746f6b656e73094d312e352e352e352e35\n746f6b656e73094d302c306c312d312d312d317a\n746f6b656e73094d2031302031302061323020323020302031303130203130\n746f6b656e73095c744d5c6e31305c723130204c2032302c3230\n746f6b656e73094d203130203130204c203130203130\n746f6b656e73094d20352035\n746f6b656e73094d20302030204d203130203130204c203230203230\n746f6b656e73094d2030203020412030203130203020302031203130203130\n746f6b656e7309\n746f6b656e7309202020\n746f6b656e73093130203130204c203230203230\n746f6b656e73094d203130\n746f6b656e73094d203130203130204c203230\n746f6b656e73094d203130203130204c2032302032302078203330203330\n746f6b656e73094d20302030204c203130203130204c\n746f6b656e73094d20302030207a203130203130\n746f6b656e73094d20302030204c202e2035\n746f6b656e73094d20302030204c202d2035\n746f6b656e73094d20302030204c2065352035\n746f6b656e73094d203020302041202d352035203020302031203130203130\n746f6b656e73094d20302030204120352035203020302031\n");
+    s.push_str("746f6b656e73094d203020302041203520352030\n746f6b656e73094d20302030204c203520c3a9\n746f6b656e73094d20302030204c203130203130202320636f6d6d656e74\n746f6b656e73094d2c31302c3130\n746f6b656e73094d203130203130204c20312e352e35\n746f6b656e73094d2030203020432031203220332034\n746f6b656e73094d20302030205120312031\n746f6b656e73094d20302030204c203120312032\n746f6b656e73095a\n746f6b656e73097a204d20312031\n746f6b656e73094d20302030204c20312031205a204c203220322078\n746f6b656e73094d203020302048\n6a6f62096d6561737572696e67207468652073706563696669636174696f6e2773207061746873\n7061727365094d2031303020313030204c2033303020313030204c2032303020333030207a\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3230302c33303020513430302c3530203630302c3330302054313030302c333030\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3330302c32303020682d31353020613135302c313530203020312c30203135302c2d313530207a\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3237352c31373520762d31353020613135302c313530203020302c30202d3135302c313530207a\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n");
+    s.push_str("706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3130302c32303020433130302c313030203430302c313030203430302c323030\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3130302c353030204332352c343030203437352c343030203430302c353030\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n7061727365094d3630302c38303020433632352c373030203732352c373030203735302c38303020533837352c393030203930302c383030\n6c656e6774680931652d36\n706f696e740930\n706f696e7409302e30\n706f696e7409302e3235\n706f696e7409302e35\n706f696e7409302e3735\n706f696e740931\n706f696e7409312e30\n74616e67656e740930\n74616e67656e7409302e33\n74616e67656e7409312e30\n6a6f62096c656e6774687320746f206120676976656e206572726f72\n7061727365094d3630302c333530206c2035302c2d3235206132352c3235202d333020302c312035302c2d3235206c2035302c2d3235206132352c3530202d333020302c312035302c2d3235206c2035302c2d3235206132352c3735202d333020302c312035302c2d3235206c2035302c2d3235206132352c313030202d333020302c312035302c2d3235206c2035302c2d3235\n6c656e6774680931652d33\n6c656e677468\n7061727365094d3630302c333530206c2035302c2d3235206132352c3235202d333020302c312035302c2d3235206c2035302c2d3235206132352c3530202d333020302c312035302c2d3235206c2035302c2d3235206132352c3735202d333020302c312035302c2d3235206c2035302c2d3235206132352c313030202d333020302c312035302c2d3235206c2035302c2d3235\n6c656e6774680931652d360932\n7061727365094d3630302c333530206c2035302c2d3235206132352c3235202d333020302c312035302c2d3235206c2035302c2d3235206132352c3530202d333020302c312035302c2d3235206c2035302c2d3235206132352c3735202d333020302c312035302c2d3235206c2035302c2d3235206132352c313030202d333020302c312035302c2d3235206c2035302c2d3235\n");
+    s.push_str("6c656e6774680931652d36\n706f696e7409302e31\n706f696e7409302e35\n706f696e7409302e39\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e6774680931652d320930\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e6774680931652d320935\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e67746809302e350930\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e67746809310931\n7061727365094d3130302c32303020433130302c313030203235302c313030203235302c32303020533430302c333030203430302c323030\n6c656e6774680931652d390933\n6a6f62097365676d656e7473206f6e65206279206f6e65\n7061727365094d20302030204c203130203020512031352035203130203130204320352031352030203135203020313020412035203520302030203120302030205a\n736567092d310972657072\n73656709300972657072\n73656709310972657072\n73656709320972657072\n73656709330972657072\n73656709340972657072\n73656709350972657072\n73656709360972657072\n736567093009706f696e740930\n736567093009706f696e7409302e35\n736567093009706f696e740931\n73656709300974616e67656e740930\n73656709300974616e67656e7409302e35\n73656709300974616e67656e740931\n7365670930096c656e677468\n73656709300962626f78\n736567093109706f696e740930\n736567093109706f696e7409302e35\n736567093109706f696e740931\n73656709310974616e67656e740930\n73656709310974616e67656e7409302e35\n73656709310974616e67656e740931\n7365670931096c656e677468\n73656709310962626f78\n736567093209706f696e740930\n736567093209706f696e7409302e35\n736567093209706f696e740931\n73656709320974616e67656e740930\n73656709320974616e67656e7409302e35\n73656709320974616e67656e740931\n7365670932096c656e677468\n73656709320962626f78\n736567093309706f696e740930\n736567093309706f696e7409302e35\n");
+    s.push_str("736567093309706f696e740931\n73656709330974616e67656e740930\n73656709330974616e67656e7409302e35\n73656709330974616e67656e740931\n7365670933096c656e677468\n73656709330962626f78\n736567093409706f696e740930\n736567093409706f696e7409302e35\n736567093409706f696e740931\n73656709340974616e67656e740930\n73656709340974616e67656e7409302e35\n73656709340974616e67656e740931\n7365670934096c656e677468\n73656709340962626f78\n736567093509706f696e740930\n736567093509706f696e7409302e35\n736567093509706f696e740931\n73656709350974616e67656e740930\n73656709350974616e67656e7409302e35\n73656709350974616e67656e740931\n7365670935096c656e677468\n73656709350962626f78\n7061727365094d20302030204120302035203020302031203130203130204120352035203020302031203130203130\n736567093109706f696e7409302e35\n73656709310974616e67656e7409302e35\n7365670931096c656e67746809302e35\n73656709310962626f7809302e35\n736567093209706f696e7409302e35\n73656709320974616e67656e7409302e35\n7365670932096c656e67746809302e35\n73656709320962626f7809302e35\n7061727365094d203020302051203130203020323020302051203130203020302030205120313020313020323020323020512030203020302030\n7365670931096c656e677468\n73656709310962626f78\n7365670932096c656e677468\n73656709320962626f78\n7365670933096c656e677468\n73656709330962626f78\n7365670934096c656e677468\n73656709340962626f78\n7061727365094d2030203020512030203020333020343020512033302034302033302034302051202d313020302031302030\n7365670931096c656e677468\n7365670932096c656e677468\n7365670933096c656e677468\n7061727365094c203130203130205120323020302033302031302043203330203230203230203330203130203230\n62626f78\n706f696e7409302e35\n736567093009706f696e740930\n73656709300974616e67656e740931\n73656709300962626f78\n736567093109706f696e740930\n73656709310974616e67656e740931\n73656709310962626f78\n736567093209706f696e740930\n73656709320974616e67656e740931\n73656709320962626f78\n6a6f6209706f696e7473206265796f6e642074686520656e6473\n7061727365094d20302030204c2031302030204c203130203130\n706f696e74092d302e31\n706f696e740930\n");
+    s.push_str("706f696e7409302e34\n706f696e7409302e35\n706f696e7409302e35303030303031\n706f696e7409302e39393939393939393939\n706f696e740931\n706f696e7409312e35\n706f696e740932\n7061727365094c2031302030204c203130203130\n706f696e74092d302e31\n706f696e7409302e35\n706f696e7409312e35\n7061727365094d20302030204c20312030204c20312033\n706f696e7409302e393939393939393939393939393939\n706f696e7409302e3235\n7061727365094d20352035204d203130203130\n6c656e677468\n706f696e740930\n74616e67656e740930\n706f696e7409302e35\n74616e67656e7409302e35\n706f696e740931\n74616e67656e740931\n62626f78\n6a6f6209636f6d706172696e67207061746873\n7061727365094d20302030204c2031302030204c203130203130205a\n6b65657009737175617265\n7061727365094d302c30204c31302c302031302c3130207a\n657109737175617265\n7061727365096d20302030206c2031302030206c2030203130207a\n657109737175617265\n7061727365094d20302030204c2031302030204c203130203130\n657109737175617265\n7061727365094d20302030204c2031302030204c203130203130204c20302030\n657109737175617265\n7061727365094d203020302043203120312032203220332033\n6b6565700963\n7061727365094d20302030204320312031203220322033203320532035203520362036\n6b656570096373\n7061727365094d2030203020432031203120322032203320332043203420342035203520362036\n6571096373\n7061727365094d203020302041203520352030203020312031302030\n6b65657009617263\n7061727365094d203020302041203520352030203020302031302030\n657109617263\n7061727365094d203020302061203520352030203020312031302030\n657109617263\n7061727365094d2030203020412035203520302e30203020312031302030\n657109617263\n7061727365094d2030203020512031203120322032\n6b6565700971\n7061727365094d2030203020512031203120322032205420342030\n6b656570097174\n6a6f620965646974696e6720612070617468\n7061727365094d20302030204c2031302030204c203130203130204c2030203130205a\n6b65657009626f78\n6c656e677468\n706f696e7409302e35\n617070656e6409630931\n6c656e\n6c656e677468\n706f696e7409302e35\n706f696e7409302e39\n696e7365727409310971740932\n706f696e7409302e35\n7365740930096172630930\n706f696e7409302e33\n");
+    s.push_str("64656c0932\n706f696e7409302e33\n706f70\n706f700930\n706f70093939\n696e64657809626f780933\n696e64657809630931\n636f756e7409626f780932\n68617309626f780934\n6861730971740932\n72656d6f766509626f780933\n72656d6f766509626f780933\n736c69636509310933\n736c696365092d32093939\n72657665727365\n6c656e\n62626f78\n73656709390972657072\n64656c0939\n736574092d3109710931\n7061727365094d20302030204c20342030\n6b656570096c696e65\n7061727365094d20302030204c20342030\n706f696e7409302e35\n736574093109630931\n706f696e7409302e35\n6c656e677468\n636c656172\n6c656e\n62626f78\n706f696e7409302e35\n75736509626f78\n6c656e\n657109737175617265\n757365096c696e65\n6c656e677468\n6a6f620974686520706c6f74746572\n706c6f740969636f6e732e7376670969636f6e732e67636f6465\n706c6f74096c6f676f2e737667096c6f676f2e67636f6465\n706c6f7409666c6f6f72706c616e2e73766709666c6f6f72706c616e2e67636f6465\n706c6f740962726f6b656e2e7376670962726f6b656e2e67636f6465\n706c6f7409626c616e6b2e73766709626c616e6b2e67636f6465\n");
+    s
+}
+
+fn svg_text() -> String {
+    let mut s = String.new();
+    s.push_str("svg/blank.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22313022206865696768743d223130223e3c2f7376673e0a\nsvg/broken.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667223e0a20203c706174682069643d226f6b2220643d224d20312031204c20322032222f3e0a20203c706174682069643d226e6f2d6422207374726f6b653d22726564222f3e0a20203c706174682069643d22676172626167652220643d223130203130204c203230203230222f3e0a20203c706174682069643d226375742220643d224d20302030204c203130203130204c222f3e0a20203c706174682069643d226261642d6172632220643d224d203020302041202d352035203020302031203130203130222f3e0a20203c706174682069643d22666c61742d6172632220643d224d20302030204120302035203020302031203130203130222f3e0a20203c706174682069643d22636f6d6d656e742220643d224d20302030204c203420342023207468656e206120636f6d6d656e74222f3e0a20203c706174682069643d22616363656e742220643d224d20302030204c203520c3a9222f3e0a20203c706174682069643d22656d7074792220643d22222f3e0a3c2f7376673e0a\nsvg/floorplan.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222076696577426f783d223020302033303020323030223e0a20203c672069643d2277616c6c73223e0a202020203c706174682069643d226f757465722220643d224d2030203020482033303020562032303020482030205a222f3e0a202020203c706174682069643d226b69746368656e2220643d224d2030203020682031323020762038302068202d313230207a206d203133302030206820363020762038302068202d3630207a222f3e0a202020203c706174682069643d22646f6f722220643d224d20313230203132302061203330203330203020302030203330203330204c2031353020313230222f3e0a202020203c706174682069643d227374616972732220643d224d323030203132302068323020763130206832302076313020683230207631302068323020763130222f3e0a20203c2f673e0a3c2f7376673e0a\nsvg/icons.svg 3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222076696577426f783d22302030203936203234223e0a20203c212d2d206120746f6f6c62617227732069636f6e732c206f6e652032347832342063656c6c2065616368202d2d3e0a20203c706174682069643d2268656172742220643d224d3132203231204320352031352c20312031312c203420362043203620332c20313020332c2031322037204320313420332c20313820332c203230203620432032332031312c2031392031352c203132203231205a222f3e0a20203c706174682069643d22686f6d65222066696c6c3d226e6f6e652220643d224d3237203132204c33362034204c3435203132204d3239203130205632302048343320563130204d333420323020762d35206834207635222f3e0a20203c706174682069643d22636865636b22207374726f6b652d77696474683d27322720643d226d353120313220342e3520342e354c2036362c36222f3e0a20203c706174682069643d2272696e672220643d224d3834203132206120362036203020312030202d313220302061203620362030203120302031322030207a222f3e0a20203c7061746820643d224d38382034206c34203020302034202d342030207a222f3e0a3c2f7376673e0a\n");
+    s.push_str("svg/logo.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d2232303022206865696768743d22313230223e0a20203c706174682069643d2277617665220a2020202020202020643d224d31302c3630205133352c31302036302c363020543131302c363020543136302c363020543139302c3630222f3e0a20203c706174682069643d2273776f6f73682220643d224d32302031303020432036302037302c203132302037302c2031383020313030205320313230203131352c20323020313030222f3e0a20203c706174682069643d226c6561662220643d224d3130302c3230204134302c323020343520302c31203134302c3630204134302c323020343520302c31203130302c3230222f3e0a20203c706174682069643d2262616467652220643d224d33302c32306833306131302c31302030203020312031302c31307632306131302c31302030203020312d31302c3130682d33306131302c31302030203020312d31302d3130762d32306131302c31302030203020312031302d31307a222f3e0a3c2f7376673e0a\n");
+    s
+}
