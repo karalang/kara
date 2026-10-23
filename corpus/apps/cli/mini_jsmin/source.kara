@@ -1,0 +1,450 @@
+// mini_jsmin — a port of jsmin 3.0.1 (Dave St.Germain, MIT; the Python
+// translation of Douglas Crockford's jsmin): a JavaScript minifier. It strips
+// comments and collapses insignificant whitespace while preserving program
+// meaning — the entropy stage every web asset pipeline runs.
+//
+// jsmin is a character state machine over a stream. This port reproduces it
+// faithfully with an index cursor over a char array (chars as i64 code points,
+// -1 for end of input), so the minified bytes are byte-identical to the
+// library's. The subtle parts are all carried over: literal regular-expression
+// detection (a `/` after `{ ( , = : [ ? ! & | ;` or a `return`, with character
+// classes), line and block comments (and the `/*!` preserved-comment rule),
+// single- and double-quoted strings with backslash-escape counting, the
+// newline/space rules that keep `a + + b` from becoming `a++b`, and the
+// `return /re/` space. Each input line is the hex of an ASCII JavaScript
+// snippet; the job prints `min ` and the hex of the minified bytes.
+//
+// Scope: the input is treated as a byte/char stream and the test inputs are
+// ASCII, so a byte stream and a code-point stream coincide (jsmin's `> '~'`
+// non-ASCII branches never fire). Unterminated block comments (which hang the
+// library) are guarded rather than reproduced.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn hexval(b: u8) -> i64 {
+    let c = b as i64;
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    c - 97 + 10
+}
+
+fn hex2(b: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut v: Vec[u8] = Vec.new();
+    v.push(digs[b / 16]);
+    v.push(digs[b % 16]);
+    String.from_utf8(v).unwrap_or("")
+}
+
+// --- character classes (jsmin's string sets) --------------------------------
+
+// a-z A-Z 0-9 _ $ backslash ; `'' in STR` is true in Python, so EOF (-1) counts
+fn in_space_strings(c: i64) -> bool {
+    if c == -1 {
+        return true;
+    }
+    (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57)
+        or c == 95 or c == 36 or c == 92
+}
+
+fn in_quote_chars(c: i64) -> bool {
+    c == 39 or c == 34 // ' "
+}
+
+fn in_return_set(c: i64) -> bool {
+    c == 114 or c == 101 or c == 116 or c == 117 or c == 110 // r e t u n
+}
+
+fn in_starters(c: i64) -> bool {
+    c == 123 or c == 91 or c == 40 or c == 43 or c == 45 // { [ ( + -
+}
+
+// "}])+-/" plus the quote chars
+fn in_enders(c: i64) -> bool {
+    c == 125 or c == 93 or c == 41 or c == 43 or c == 45 or c == 47 or in_quote_chars(c)
+}
+
+fn in_newlinestart(c: i64) -> bool {
+    in_starters(c) or in_space_strings(c) or in_quote_chars(c)
+}
+
+fn in_newlineend(c: i64) -> bool {
+    in_enders(c) or in_space_strings(c) or in_quote_chars(c)
+}
+
+fn in_crlf(c: i64) -> bool {
+    c == 13 or c == 10
+}
+
+// "{(,=:[?!&|;"
+fn in_regex_prev(c: i64) -> bool {
+    c == 123 or c == 40 or c == 44 or c == 61 or c == 58 or c == 91
+        or c == 63 or c == 33 or c == 38 or c == 124 or c == 59
+}
+
+struct Jsmin {
+    s: Vec[i64],
+    pos: i64,
+    out: Vec[u8],
+    is_return: bool,
+    rbuf: Vec[u8],
+}
+
+impl Jsmin {
+    fn read(mut ref self) -> i64 {
+        if self.pos < self.s.len() {
+            let c = self.s[self.pos];
+            self.pos = self.pos + 1;
+            return c;
+        }
+        -1
+    }
+
+    fn rbuf_is_return(ref self) -> bool {
+        if self.rbuf.len() != 6 {
+            return false;
+        }
+        let want = str_bytes("return");
+        let mut i = 0;
+        while i < 6 {
+            if self.rbuf[i] != want[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        true
+    }
+
+    // the `write` closure: a single char, with return-literal tracking
+    fn wret(mut ref self, ch: i64) {
+        if in_return_set(ch) {
+            self.rbuf.push(ch as u8);
+            self.is_return = self.rbuf_is_return();
+        } else {
+            self.rbuf = Vec.new();
+            self.is_return = self.is_return and ch < 33;
+        }
+        self.out.push(ch as u8);
+        if self.is_return {
+            self.rbuf = Vec.new();
+        }
+    }
+
+    // write a multi-char string (the joined quote buffer): the else-branch of
+    // `write`, where `S in 'return'` is false and `S < '!'` iff S[0] < '!'
+    fn wstr(mut ref self, v: ref Vec[u8]) {
+        self.rbuf = Vec.new();
+        self.is_return = self.is_return and (v.len() > 0 and (v[0] as i64) < 33);
+        let mut i = 0;
+        while i < v.len() {
+            self.out.push(v[i]);
+            i = i + 1;
+        }
+    }
+
+    // returns [next2, do_newline as 0/1]
+    fn newline(mut ref self, prev_ns: i64, next2: i64, do_newline: bool) -> Vec[i64] {
+        let mut n2 = next2;
+        let mut dn = do_newline;
+        if prev_ns != -1 and (in_newlineend(prev_ns) or prev_ns > 126) {
+            let mut go = true;
+            while go {
+                if n2 < 33 {
+                    n2 = self.read();
+                    if n2 == -1 {
+                        go = false;
+                    }
+                } else {
+                    if in_newlinestart(n2) or n2 > 126 or n2 == 47 {
+                        dn = true;
+                    }
+                    go = false;
+                }
+            }
+        }
+        let mut res: Vec[i64] = Vec.new();
+        res.push(n2);
+        res.push(if dn { 1 } else { 0 });
+        res
+    }
+
+    fn line_comment(mut ref self, n1_in: i64) -> i64 {
+        let mut n1 = n1_in;
+        let mut go = true;
+        while go {
+            if n1 != -1 and not in_crlf(n1) {
+                n1 = self.read();
+            } else {
+                go = false;
+            }
+        }
+        let mut go2 = true;
+        while go2 {
+            if n1 != -1 and in_crlf(n1) {
+                n1 = self.read();
+            } else {
+                go2 = false;
+            }
+        }
+        n1
+    }
+
+    fn block_comment(mut ref self) {
+        let mut n1 = self.read();
+        let mut n2 = self.read();
+        let mut buf: Vec[u8] = Vec.new();
+        buf.push(47); // '/'
+        buf.push(42); // '*'
+        let mut go = true;
+        while go {
+            if (n1 == 42 and n2 == 47) or n2 == -1 {
+                go = false;
+            } else {
+                buf.push(n1 as u8);
+                n1 = n2;
+                n2 = self.read();
+            }
+        }
+        // preserve a /*! ... */ comment verbatim plus a trailing */ and newline
+        if buf.len() >= 3 and buf[0] == 47 and buf[1] == 42 and buf[2] == 33 {
+            let mut i = 0;
+            while i < buf.len() {
+                self.out.push(buf[i]);
+                i = i + 1;
+            }
+            self.out.push(42); // '*'
+            self.out.push(47); // '/'
+            self.out.push(10); // '\n'
+        }
+    }
+
+    fn regex_literal(mut ref self, next2: i64) {
+        self.rbuf = Vec.new();
+        let mut in_cc = false;
+        self.out.push(47); // '/'
+        let mut nxt = next2;
+        let mut go = true;
+        while go {
+            if nxt != -1 and (nxt != 47 or in_cc) {
+                self.out.push(nxt as u8);
+                if nxt == 92 { // backslash: next char is escaped
+                    let e = self.read();
+                    if e != -1 {
+                        self.out.push(e as u8);
+                    }
+                } else if nxt == 91 { // '[' opens a char class (cannot be empty)
+                    let e = self.read();
+                    if e != -1 {
+                        self.out.push(e as u8);
+                    }
+                    in_cc = true;
+                } else if nxt == 93 { // ']'
+                    in_cc = false;
+                }
+                nxt = self.read();
+            } else {
+                go = false;
+            }
+        }
+        self.out.push(47); // '/'
+    }
+
+    fn minify(mut ref self) {
+        let mut do_newline = false;
+        let mut do_space = false;
+        let mut in_quote = -1;
+        let mut quote_buf: Vec[u8] = Vec.new();
+        let mut previous = 59; // ';'
+        let mut previous_non_space = 59; // ';'
+        let mut next1 = self.read();
+
+        while next1 != -1 {
+            let mut next2 = self.read();
+            if in_quote != -1 {
+                quote_buf.push(next1 as u8);
+                if next1 == in_quote {
+                    let mut numslashes = 0;
+                    let mut k = quote_buf.len() - 2;
+                    let mut go = true;
+                    while go and k >= 0 {
+                        if quote_buf[k] != 92 {
+                            go = false;
+                        } else {
+                            numslashes = numslashes + 1;
+                            k = k - 1;
+                        }
+                    }
+                    if numslashes % 2 == 0 {
+                        in_quote = -1;
+                        self.wstr(quote_buf);
+                    }
+                }
+            } else if in_crlf(next1) {
+                let res = self.newline(previous_non_space, next2, do_newline);
+                next2 = res[0];
+                do_newline = res[1] == 1;
+            } else if next1 < 33 {
+                if (in_space_strings(previous_non_space) or previous_non_space > 126)
+                    and (in_space_strings(next2) or next2 > 126) {
+                    do_space = true;
+                } else if (previous_non_space == 45 or previous_non_space == 43)
+                    and next2 == previous_non_space {
+                    // protect + ++ and - -- sequences
+                    do_space = true;
+                } else if self.is_return and next2 == 47 {
+                    // returning a regex
+                    self.wret(32);
+                }
+            } else if next1 == 47 {
+                if do_space {
+                    self.wret(32);
+                }
+                if next2 == 47 {
+                    next2 = self.line_comment(next1);
+                    next1 = 10; // '\n'
+                    let res = self.newline(previous_non_space, next2, do_newline);
+                    next2 = res[0];
+                    do_newline = res[1] == 1;
+                } else if next2 == 42 {
+                    self.block_comment();
+                    next2 = self.read();
+                    if in_space_strings(previous_non_space) {
+                        do_space = true;
+                    }
+                    next1 = previous;
+                } else {
+                    if in_regex_prev(previous_non_space) or self.is_return {
+                        self.regex_literal(next2);
+                        next2 = self.read();
+                    } else {
+                        self.wret(47);
+                    }
+                }
+            } else {
+                if do_newline {
+                    self.wret(10);
+                    do_newline = false;
+                    do_space = false;
+                }
+                if do_space {
+                    do_space = false;
+                    self.wret(32);
+                }
+                self.wret(next1);
+                if in_quote_chars(next1) {
+                    in_quote = next1;
+                    quote_buf = Vec.new();
+                }
+            }
+
+            if next1 >= 33 {
+                previous_non_space = next1;
+            }
+            previous = next1;
+            next1 = next2;
+        }
+    }
+}
+
+fn minify_bytes(src: ref Vec[u8]) -> Vec[u8] {
+    let mut sv: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        sv.push(src[i] as i64);
+        i = i + 1;
+    }
+    let mut m = Jsmin { s: sv, pos: 0, out: Vec.new(), is_return: false, rbuf: Vec.new() };
+    m.minify();
+    m.out
+}
+
+fn run_job(line: String) -> String {
+    let hb = str_bytes(line);
+    let hn = hb.len();
+    let mut data: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < hn {
+        let hi = hexval(hb[i]);
+        let lo = hexval(hb[i + 1]);
+        data.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+
+    let min = minify_bytes(data);
+    let mut out = String.new();
+    out.push_str("min ");
+    let mut e = 0;
+    while e < min.len() {
+        out.push_str(hex2(min[e] as i64));
+        e = e + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("7661722078203d20313b\n");
+    s.push_str("66756e6374696f6e206628612c206229207b0a2020202072657475726e2061202b20623b0a7d0a\n");
+    s.push_str("2f2f206c696e6520636f6d6d656e740a7661722079203d20323b\n");
+    s.push_str("2f2a20626c6f636b202a2f20766172207a203d20333b\n");
+    s.push_str("2f2a21206b656570206d65202a2f0a7661722077203d20343b\n");
+    s.push_str("7661722073203d202768656c6c6f20776f726c64273b\n");
+    s.push_str("7661722064203d2022615c2262223b\n");
+    s.push_str("7661722072203d202f61622b632f673b\n");
+    s.push_str("766172207232203d202f5b2f5d2f3b\n");
+    s.push_str("696620286129207b2062203d2063202f20643b207d\n");
+    s.push_str("72657475726e202f72652f2e746573742878293b\n");
+    s.push_str("61203d2062202b202b20633b\n");
+    s.push_str("78203d2079202d202d7a3b\n");
+    s.push_str("766172206c6f6e67203d2031202b0a2020202032202b0a20202020333b\n");
+    s.push_str("6f626a203d207b20613a20312c0a20623a2032207d3b\n");
+    s.push_str("7661722071203d202769745c2773273b\n");
+    s.push_str("766172206e6573746564203d2022736179205c2268695c22223b\n");
+    s.push_str("666f7220287661722069203d20303b2069203c2031303b20692b2b29207b0a2020636f6e736f6c652e6c6f672869293b0a7d\n");
+    s.push_str("612020203d20202031203b\n");
+    s.push_str("7661722065203d20613d3d3d62203f2031203a20323b\n");
+    s.push_str("73203d2027273b0a74203d2022223b\n");
+    s.push_str("783d2f666f6f5c2f6261722f3b\n");
+    s.push_str("766172206d203d2061202f622f20633b\n");
+    s.push_str("66756e6374696f6e206728297b72657475726e7d\n");
+    s.push_str("2f2f2063310a2f2f2063320a76617220763d353b\n");
+    s.push_str("2f2a206d756c74690a6c696e650a636f6d6d656e74202a2f636f646528293b\n");
+    s.push_str("613d310a623d320a633d33\n");
+    s.push_str("76617220617272203d205b312c322c335d3b0a6172722e6d61702866756e6374696f6e2878297b72657475726e20782a323b7d293b\n");
+    s.push_str("6c6162656c3a20666f72283b3b297b627265616b206c6162656c3b7d\n");
+    s.push_str("766172207265203d202f5c642b2f3b\n");
+    s
+}
