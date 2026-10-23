@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9341 / 9502 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7648 / 7777 = 98.3%.
-- Every classified non-deferred program (context): 15666 / 16877 = 92.8%.
-- Bench variants (outside the gate): 214 / 869 = 24.6%; timeouts 596.
+- Every classified non-deferred program (context): 15667 / 16877 = 92.8%.
+- Bench variants (outside the gate): 215 / 869 = 24.7%; timeouts 595.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5289 / 5411 = 97.7%; failing mir-gap 47, check-refuses 41, e-not-refused 28, e-differs 4, b-fix-incomplete 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -62,7 +62,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3704): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3705): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -3762,6 +3762,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/801-900/890-find-and-replace-pattern/find_and_replace_pattern_table`
 - `katas/801-900/891-sum-of-subsequence-widths/differential`
 - `katas/801-900/891-sum-of-subsequence-widths/sum_subseq_widths_counting`
+- `katas/801-900/892-surface-area-of-3d-shapes/bench/surface_area`
 - `katas/801-900/892-surface-area-of-3d-shapes/differential`
 - `katas/801-900/892-surface-area-of-3d-shapes/surface_area_layers`
 - `katas/801-900/892-surface-area-of-3d-shapes/surface_area_voxels`
