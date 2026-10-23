@@ -1,0 +1,11 @@
+deck = [1,2,3,4,4,3,2,1]: true
+deck = [1,1,1,2,2,2,3,3]: false
+deck = [1]: false
+deck = [1,1]: true
+deck = [0,0,0,1,1,1,1,1,1]: true
+deck = [9999,9999,9999,9999,0,0,0,0,0,0]: true
+deck = [5,5,5,5,5,7,7,7]: false
+600 decks: 317 partitioned, checksum 29519558
+10000 cards: true
+9991 cards: true
+9999 cards: false

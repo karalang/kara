@@ -1,0 +1,121 @@
+// LeetCode #914: X of a Kind in a Deck of Cards -- the counts in a map.
+//
+// Count each value in a map, which holds only the values that occur, and
+// fold the counts with Euclid's algorithm; the map's order is arbitrary,
+// and a greatest common divisor does not depend on it. A partition exists
+// exactly when the result is at least 2. O(n) expected.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+fn has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut count: Map[i64, i64] = Map.new();
+    for card in deck.iter() {
+        let c = count.get(*card).unwrap_or(0);
+        count.insert(*card, c + 1);
+    }
+    let mut g = 0;
+    for (_, c) in count.iter() {
+        g = gcd(g, *c);
+    }
+    g >= 2
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(deck: Vec[i64]) {
+    let mut s = String.new();
+    for i in 0..deck.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{deck[i]}");
+    }
+    println(f"deck = [{s}]: {has_groups_size_x(deck)}");
+}
+
+// A deck of `kinds` values drawn from below `range`, each value's count a
+// multiple of `x` up to `most` (so a partition by x exists, x >= 2, unless
+// `spoil` takes one card away), shuffled.
+fn random_deck(seed: mut ref i64, kinds: i64, range: i64, x: i64, most: i64, spoil: bool) -> Vec[i64] {
+    let mut deck: Vec[i64] = Vec.new();
+    for _ in 0..kinds {
+        let v = next_random(mut seed) % range;
+        let copies = x * (1 + next_random(mut seed) % most);
+        for _ in 0..copies {
+            deck.push(v);
+        }
+    }
+    if spoil and deck.len() > 1 {
+        deck.pop();
+    }
+    let mut i = deck.len();
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        let keep = deck[i];
+        deck[i] = deck[j];
+        deck[j] = keep;
+    }
+    deck
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4, 4, 3, 2, 1]);
+    show(vec![1, 1, 1, 2, 2, 2, 3, 3]);
+    show(vec![1]);
+    show(vec![1, 1]);
+    show(vec![0, 0, 0, 1, 1, 1, 1, 1, 1]);
+    show(vec![9999, 9999, 9999, 9999, 0, 0, 0, 0, 0, 0]);
+    show(vec![5, 5, 5, 5, 5, 7, 7, 7]);
+    // random decks of up to 10^4 cards with groups of 2 to 13, half of
+    // them spoilt by one card
+    let mut seed = 914;
+    let mut yes = 0;
+    let mut check = 0;
+    for c in 0..600 {
+        let x = 2 + next_random(mut seed) % 12;
+        let kinds = 1 + next_random(mut seed) % 40;
+        let range = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 10000 };
+        let most = 1 + next_random(mut seed) % (10000 / (x * kinds) + 1).min(20);
+        let deck = random_deck(mut seed, kinds, range, x, most, c % 2 == 1);
+        if deck.len() <= 10000 {
+            let r = has_groups_size_x(deck);
+            if r {
+                yes += 1;
+            }
+            check = (check * 3 + if r { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"600 decks: {yes} partitioned, checksum {check}");
+    // LeetCode's largest: 10^4 cards
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        big.push(i % 5000);
+    }
+    show_size(big);
+    let mut primes: Vec[i64] = Vec.new();
+    for i in 0..9991 {
+        primes.push(i % 97);
+    }
+    show_size(primes);
+    let mut one: Vec[i64] = Vec.new();
+    for i in 0..9999 {
+        one.push(if i == 0 { 1 } else { 0 });
+    }
+    show_size(one);
+}
+
+fn show_size(deck: Vec[i64]) {
+    println(f"{deck.len()} cards: {has_groups_size_x(deck)}");
+}

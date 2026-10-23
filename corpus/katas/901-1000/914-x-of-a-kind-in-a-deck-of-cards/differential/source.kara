@@ -1,0 +1,361 @@
+// LeetCode #914: X of a Kind in a Deck of Cards -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: you are given an integer array deck where deck[i]
+// represents the number written on the ith card. Partition the cards into
+// one or more groups such that each group has exactly x cards where
+// x > 1, and all the cards in one group have the same integer written on
+// them. Return true if such a partition is possible, or false otherwise.
+
+// ---- the ★ arm: the counts' greatest common divisor -----------------------
+fn star_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        star_gcd(b, a % b)
+    }
+}
+
+fn star_has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut largest = 0;
+    for card in deck.iter() {
+        largest = largest.max(*card);
+    }
+    let mut count: Vec[i64] = Vec.filled(largest + 1, 0);
+    for card in deck.iter() {
+        count[*card] += 1;
+    }
+    let mut g = 0;
+    for c in count.iter() {
+        g = star_gcd(g, *c);
+    }
+    g >= 2
+}
+
+// ---- the sort arm: the deck sorted, the runs measured ---------------------
+fn sort_gcd(a: i64, b: i64) -> i64 {
+    let mut a = a;
+    let mut b = b;
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
+fn sort_has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut cards = deck.clone();
+    cards.sort();
+    let mut g = 0;
+    let mut start = 0;
+    for i in 1..cards.len() + 1 {
+        if i == cards.len() or cards[i] != cards[start] {
+            g = sort_gcd(g, i - start);
+            start = i;
+        }
+    }
+    g >= 2
+}
+
+// ---- the tries arm: every group size tried --------------------------------
+fn tries_has_groups_size_x(deck: Vec[i64]) -> bool {
+    let n = deck.len();
+    let mut largest = 0;
+    for card in deck.iter() {
+        largest = largest.max(*card);
+    }
+    let mut count: Vec[i64] = Vec.filled(largest + 1, 0);
+    for card in deck.iter() {
+        count[*card] += 1;
+    }
+    for x in 2..n + 1 {
+        if n % x == 0 {
+            let mut fits = true;
+            for c in count.iter() {
+                if *c % x != 0 {
+                    fits = false;
+                    break;
+                }
+            }
+            if fits {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- the map arm: the counts in a map -------------------------------------
+fn map_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        map_gcd(b, a % b)
+    }
+}
+
+fn map_has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut count: Map[i64, i64] = Map.new();
+    for card in deck.iter() {
+        let c = count.get(*card).unwrap_or(0);
+        count.insert(*card, c + 1);
+    }
+    let mut g = 0;
+    for (_, c) in count.iter() {
+        g = map_gcd(g, *c);
+    }
+    g >= 2
+}
+
+// ---- the primes arm: the prime factors of the smallest count --------------
+fn primes_has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut largest = 0;
+    for card in deck.iter() {
+        largest = largest.max(*card);
+    }
+    let mut count: Vec[i64] = Vec.filled(largest + 1, 0);
+    for card in deck.iter() {
+        count[*card] += 1;
+    }
+    let mut least = deck.len();
+    for c in count.iter() {
+        if *c > 0 and *c < least {
+            least = *c;
+        }
+    }
+    let mut rest = least;
+    let mut p = 2;
+    while rest > 1 {
+        if p * p > rest {
+            // what is left is itself prime
+            p = rest;
+        }
+        if rest % p == 0 {
+            while rest % p == 0 {
+                rest = rest / p;
+            }
+            let mut all = true;
+            for c in count.iter() {
+                if *c % p != 0 {
+                    all = false;
+                }
+            }
+            if all {
+                return true;
+            }
+        }
+        p += 1;
+    }
+    false
+}
+
+fn arm(x: i64, deck: Vec[i64]) -> bool {
+    if x == 0 {
+        star_has_groups_size_x(deck)
+    } else if x == 1 {
+        sort_has_groups_size_x(deck)
+    } else if x == 2 {
+        tries_has_groups_size_x(deck)
+    } else if x == 3 {
+        map_has_groups_size_x(deck)
+    } else {
+        primes_has_groups_size_x(deck)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// For each x > 1, deal the cards into groups: take the first card left
+// and look for x - 1 more of the same value among the rest. If every card
+// lands in a group of exactly x equal cards, x partitions the deck.
+fn literal(deck: Vec[i64]) -> bool {
+    let n = deck.len();
+    for x in 2..n + 1 {
+        let mut left = deck.clone();
+        let mut dealt = true;
+        while dealt and left.len() > 0 {
+            let v = left[0];
+            let mut group: Vec[i64] = Vec.new();
+            let mut rest: Vec[i64] = Vec.new();
+            for card in left.iter() {
+                if *card == v and group.len() < x {
+                    group.push(*card);
+                } else {
+                    rest.push(*card);
+                }
+            }
+            if group.len() < x {
+                dealt = false;
+            }
+            left = rest;
+        }
+        if dealt {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, deck: Vec[i64]) -> Vec[i64] {
+    let mut d = deck.clone();
+    let mut i = d.len();
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        let keep = d[i];
+        d[i] = d[j];
+        d[j] = keep;
+    }
+    d
+}
+
+// as in the harness: `kinds` values below `range`, each count a multiple
+// of x up to `most` times, less one card when `spoil`, shuffled
+fn random_deck(seed: mut ref i64, kinds: i64, range: i64, x: i64, most: i64, spoil: bool) -> Vec[i64] {
+    let mut deck: Vec[i64] = Vec.new();
+    for _ in 0..kinds {
+        let v = next_random(mut seed) % range;
+        let copies = x * (1 + next_random(mut seed) % most);
+        for _ in 0..copies {
+            deck.push(v);
+        }
+    }
+    if spoil and deck.len() > 1 {
+        deck.pop();
+    }
+    shuffled(mut seed, deck)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one deck over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, deck: Vec[i64], small: bool) {
+    let n = deck.len();
+    let want = if small { literal(deck) } else { false };
+    let mut answers: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, deck));
+    }
+    // P2: the deck shuffled again
+    let reshuffled = shuffled(mut seed, deck);
+    // P3: the values turned around, v renamed smallest + largest - v
+    let mut smallest = deck[0];
+    let mut largest = deck[0];
+    for card in deck.iter() {
+        smallest = smallest.min(*card);
+        largest = largest.max(*card);
+    }
+    let mut renamed: Vec[i64] = Vec.new();
+    for card in deck.iter() {
+        renamed.push(smallest + largest - *card);
+    }
+    // P4: the deck repeated two or three times
+    let times = 2 + next_random(mut seed) % 2;
+    let mut repeated: Vec[i64] = Vec.new();
+    for _ in 0..times {
+        for card in deck.iter() {
+            repeated.push(*card);
+        }
+    }
+    // P5: every card of one value taken out, when another value is left
+    let gone = deck[next_random(mut seed) % n];
+    let mut fewer: Vec[i64] = Vec.new();
+    for card in deck.iter() {
+        if *card != gone {
+            fewer.push(*card);
+        }
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: some x > 1 deals the deck into groups of x equal cards
+        if small {
+            check(mut t, 1, got == want);
+        }
+        check(mut t, 2, arm(x, reshuffled) == got);
+        check(mut t, 3, arm(x, renamed) == got);
+        check(mut t, 4, arm(x, repeated));
+        // a common divisor of all the counts divides the counts left
+        check(mut t, 5, fewer.len() == 0 or not got or arm(x, fewer));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 914;
+    let mut decks = 0;
+    let mut cards = 0;
+    let mut partitioned = 0;
+    // up to 12 cards against the statement, half built from groups and
+    // half drawn at random; then decks of up to 40 values below 3, 100 or
+    // 1000 in groups of 2 to 13, half spoilt by one card, of at most 3,333
+    // cards so that P4's three copies stay within 10^4
+    let mut c = 0;
+    while c < 3200 {
+        let small = c < 3000;
+        let range = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 1000 };
+        let mut deck: Vec[i64] = Vec.new();
+        if small and c % 2 == 0 {
+            let n = 1 + next_random(mut seed) % 12;
+            for _ in 0..n {
+                deck.push(next_random(mut seed) % range.min(4));
+            }
+        } else if small {
+            let x = 2 + next_random(mut seed) % 3;
+            let kinds = 1 + next_random(mut seed) % 3;
+            deck = random_deck(mut seed, kinds, range.min(5), x, 2, c % 4 == 1);
+        } else {
+            let x = 2 + next_random(mut seed) % 12;
+            let kinds = 1 + next_random(mut seed) % 40;
+            let most = 1 + next_random(mut seed) % (3333 / (x * kinds) + 1).min(20);
+            deck = random_deck(mut seed, kinds, range, x, most, c % 2 == 1);
+        }
+        if deck.len() <= (if small { 12 } else { 3333 }) {
+            decks += 1;
+            cards += deck.len();
+            if star_has_groups_size_x(deck) {
+                partitioned += 1;
+            }
+            properties(mut t, mut seed, deck, small);
+            c += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{decks} decks, {cards} cards, {partitioned} partitioned, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

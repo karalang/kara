@@ -1,0 +1,68 @@
+// LeetCode #914: X of a Kind in a Deck of Cards -- bench: the counts'
+// greatest common divisor.
+//
+// A partition into groups of x equal cards exists exactly when x divides
+// every value's count, so the best x to hope for is the greatest common
+// divisor of the counts, and any divisor of it of at least 2 would do as
+// well. Count each value in a table as long as the largest value, fold
+// the counts with Euclid's algorithm and ask whether the result is at
+// least 2. O(n + m) for the largest value m.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+fn has_groups_size_x(deck: Vec[i64]) -> bool {
+    let mut largest = 0;
+    for card in deck.iter() {
+        largest = largest.max(*card);
+    }
+    let mut count: Vec[i64] = Vec.filled(largest + 1, 0);
+    for card in deck.iter() {
+        count[*card] += 1;
+    }
+    let mut g = 0;
+    for c in count.iter() {
+        g = gcd(g, *c);
+    }
+    g >= 2
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 20000;
+    let mut seed = 914;
+    // 1666 values, six cards each: 9996 cards, partitioned by 2, 3 or 6
+    let mut deck: Vec[i64] = Vec.new();
+    for v in 0..1666 {
+        for _ in 0..6 {
+            deck.push(v * 6);
+        }
+    }
+    let n = deck.len();
+    let mut yes = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // one card rewritten to a value near its own, then put back
+        let i = (next_random(mut seed) * 32768 + next_random(mut seed)) % n;
+        let old = deck[i];
+        deck[i] = old + next_random(mut seed) % 3 * 6;
+        if deck[i] > 9995 {
+            deck[i] = old;
+        }
+        if has_groups_size_x(deck) {
+            yes += 1;
+            check = (check * 31 + r) % 1000000007;
+        }
+        deck[i] = old;
+    }
+    println(f"{rounds} rounds over {n} cards: {yes} partitioned, checksum {check}");
+}
