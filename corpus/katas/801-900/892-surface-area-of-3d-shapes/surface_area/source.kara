@@ -1,0 +1,77 @@
+// LeetCode #892: Surface Area of 3D Shapes -- six faces a cube, less the
+// shared ones.
+//
+// Each cube has 6 faces, and every face two cubes share hides both of
+// theirs. A tower of v cubes shares v - 1 faces inside it, so it shows
+// 4v + 2; two towers side by side share as many faces as the shorter
+// is tall. Count each tower, then take away twice the shorter of each
+// pair of neighbours, right and down so each pair is seen once. O(n^2).
+
+fn surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let v = grid[i][j];
+            if v > 0 {
+                area += 4 * v + 2;
+            }
+            if i + 1 < n {
+                area -= 2 * v.min(grid[i + 1][j]);
+            }
+            if j + 1 < n {
+                area -= 2 * v.min(grid[i][j + 1]);
+            }
+        }
+    }
+    area
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"grid = {grid} -> {surface_area(grid)}");
+}
+
+fn main() {
+    show([[1, 2], [3, 4]]);
+    show([[1, 1, 1], [1, 0, 1], [1, 1, 1]]);
+    show([[2, 2, 2], [2, 1, 2], [2, 2, 2]]);
+    show([[0]]);
+    show([[50]]);
+    show([[0, 3], [3, 0]]);
+    // random grids of LeetCode's sizes: up to 50 by 50, towers up to 50
+    // high, or, a third of the time, up to 3 high with a cell in three
+    // empty
+    let mut seed = 892;
+    let mut cubes = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let low = next_random(mut seed) % 3 == 0;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                let v = if low {
+                    if next_random(mut seed) % 3 == 0 { 0 } else { 1 + next_random(mut seed) % 3 }
+                } else {
+                    next_random(mut seed) % 51
+                };
+                cubes += v;
+                row.push(v);
+            }
+            grid.push(row);
+        }
+        let got = surface_area(grid);
+        total += got;
+        check = (check * 131 + got) % 1000000007;
+    }
+    println(f"300 grids of up to 50 by 50 ({cubes} cubes): surface area {total}, checksum {check}");
+}

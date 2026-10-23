@@ -1,0 +1,58 @@
+// LeetCode #892 bench: the ★ arm (six faces a cube, less the shared ones)
+// on 400 random grids of 50 by 50, LeetCode's largest, built once; then
+// 80 passes, each raising one tower of every grid by a cube and
+// measuring every grid again.
+
+fn surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let v = grid[i][j];
+            if v > 0 {
+                area += 4 * v + 2;
+            }
+            if i + 1 < n {
+                area -= 2 * v.min(grid[i + 1][j]);
+            }
+            if j + 1 < n {
+                area -= 2 * v.min(grid[i][j + 1]);
+            }
+        }
+    }
+    area
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 892;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..400 {
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..50 {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..50 {
+                row.push(next_random(mut seed) % 51);
+            }
+            grid.push(row);
+        }
+        grids.push(grid);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for pass in 0..80 {
+        for g in 0..grids.len() {
+            let i = (pass * 7 + g) % 50;
+            let j = (pass * 13 + g * 3) % 50;
+            grids[g][i][j] += 1;
+            let got = surface_area(grids[g]);
+            total += got;
+            check = (check * 131 + got) % 1000000007;
+        }
+    }
+    println(f"32000 measurements of 400 grids of 50 by 50: surface area {total}, checksum {check}");
+}

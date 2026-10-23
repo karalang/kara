@@ -1,0 +1,93 @@
+// LeetCode #892: Surface Area of 3D Shapes -- every cube built.
+//
+// Build the shapes as a grid of unit cubes, n by n by the tallest tower,
+// and count each face of each cube whose neighbour across it is empty or
+// outside. O(n^2 * tallest).
+
+fn surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut tallest = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            tallest = tallest.max(*v);
+        }
+    }
+    // filled[(i * n + j) * tallest + k] for the cube at height k
+    let mut filled: Vec[bool] = Vec.filled(n * n * tallest, false);
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..grid[i][j] {
+                filled[(i * n + j) * tallest + k] = true;
+            }
+        }
+    }
+    let di = [1, -1, 0, 0, 0, 0];
+    let dj = [0, 0, 1, -1, 0, 0];
+    let dk = [0, 0, 0, 0, 1, -1];
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..grid[i][j] {
+                for d in 0..6 {
+                    let a = i + di[d];
+                    let b = j + dj[d];
+                    let c = k + dk[d];
+                    let inside = a >= 0 and b >= 0 and c >= 0 and a < n and b < n and c < tallest;
+                    if not inside or not filled[(a * n + b) * tallest + c] {
+                        area += 1;
+                    }
+                }
+            }
+        }
+    }
+    area
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: Vec[Vec[i64]]) {
+    println(f"grid = {grid} -> {surface_area(grid)}");
+}
+
+fn main() {
+    show([[1, 2], [3, 4]]);
+    show([[1, 1, 1], [1, 0, 1], [1, 1, 1]]);
+    show([[2, 2, 2], [2, 1, 2], [2, 2, 2]]);
+    show([[0]]);
+    show([[50]]);
+    show([[0, 3], [3, 0]]);
+    // random grids of LeetCode's sizes: up to 50 by 50, towers up to 50
+    // high, or, a third of the time, up to 3 high with a cell in three
+    // empty
+    let mut seed = 892;
+    let mut cubes = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 50;
+        let low = next_random(mut seed) % 3 == 0;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                let v = if low {
+                    if next_random(mut seed) % 3 == 0 { 0 } else { 1 + next_random(mut seed) % 3 }
+                } else {
+                    next_random(mut seed) % 51
+                };
+                cubes += v;
+                row.push(v);
+            }
+            grid.push(row);
+        }
+        let got = surface_area(grid);
+        total += got;
+        check = (check * 131 + got) % 1000000007;
+    }
+    println(f"300 grids of up to 50 by 50 ({cubes} cubes): surface area {total}, checksum {check}");
+}

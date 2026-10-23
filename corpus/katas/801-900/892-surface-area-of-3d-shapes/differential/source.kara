@@ -1,0 +1,378 @@
+// LeetCode #892: Surface Area of 3D Shapes -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: an n x n grid where each value v = grid[i][j] is a tower
+// of v cubes of side 1 placed on top of cell (i, j). After placing them,
+// directly adjacent cubes are glued together, forming several irregular
+// 3D shapes. Return the total surface area of the resulting shapes; the
+// bottom face of each shape counts toward its surface area.
+
+// ---- the ★ arm: six faces a cube, less the shared ones --------------------
+fn star_surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let v = grid[i][j];
+            if v > 0 {
+                area += 4 * v + 2;
+            }
+            if i + 1 < n {
+                area -= 2 * v.min(grid[i + 1][j]);
+            }
+            if j + 1 < n {
+                area -= 2 * v.min(grid[i][j + 1]);
+            }
+        }
+    }
+    area
+}
+
+// ---- the faces arm: the faces each tower shows ----------------------------
+fn faces_surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            let v = grid[i][j];
+            if v == 0 {
+                continue;
+            }
+            area += 2;
+            area += (v - faces_height(grid, i - 1, j)).max(0);
+            area += (v - faces_height(grid, i + 1, j)).max(0);
+            area += (v - faces_height(grid, i, j - 1)).max(0);
+            area += (v - faces_height(grid, i, j + 1)).max(0);
+        }
+    }
+    area
+}
+
+// the tower at row i, column j, or 0 off the grid
+fn faces_height(grid: Vec[Vec[i64]], i: i64, j: i64) -> i64 {
+    if i < 0 or j < 0 or i >= grid.len() or j >= grid.len() {
+        0
+    } else {
+        grid[i][j]
+    }
+}
+
+// ---- the voxels arm: every cube built -------------------------------------
+fn voxels_surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut tallest = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            tallest = tallest.max(*v);
+        }
+    }
+    // filled[(i * n + j) * tallest + k] for the cube at height k
+    let mut filled: Vec[bool] = Vec.filled(n * n * tallest, false);
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..grid[i][j] {
+                filled[(i * n + j) * tallest + k] = true;
+            }
+        }
+    }
+    let di = [1, -1, 0, 0, 0, 0];
+    let dj = [0, 0, 1, -1, 0, 0];
+    let dk = [0, 0, 0, 0, 1, -1];
+    let mut area = 0;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..grid[i][j] {
+                for d in 0..6 {
+                    let a = i + di[d];
+                    let b = j + dj[d];
+                    let c = k + dk[d];
+                    let inside = a >= 0 and b >= 0 and c >= 0 and a < n and b < n and c < tallest;
+                    if not inside or not filled[(a * n + b) * tallest + c] {
+                        area += 1;
+                    }
+                }
+            }
+        }
+    }
+    area
+}
+
+// ---- the sweeps arm: the steps along each row and column ------------------
+fn sweeps_surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut area = 0;
+    for i in 0..n {
+        let mut across = 0;
+        let mut down = 0;
+        for j in 0..n {
+            if grid[i][j] > 0 {
+                area += 2;
+            }
+            area += (grid[i][j] - across).abs() + (grid[j][i] - down).abs();
+            across = grid[i][j];
+            down = grid[j][i];
+        }
+        area += across + down;
+    }
+    area
+}
+
+// ---- the layers arm: the outline of each layer ----------------------------
+fn layers_surface_area(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut tallest = 0;
+    let mut area = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            tallest = tallest.max(*v);
+            if *v > 0 {
+                area += 2;
+            }
+        }
+    }
+    for h in 1..tallest + 1 {
+        for i in 0..n {
+            for j in 0..n {
+                if grid[i][j] >= h {
+                    if i == 0 or grid[i - 1][j] < h {
+                        area += 1;
+                    }
+                    if i == n - 1 or grid[i + 1][j] < h {
+                        area += 1;
+                    }
+                    if j == 0 or grid[i][j - 1] < h {
+                        area += 1;
+                    }
+                    if j == n - 1 or grid[i][j + 1] < h {
+                        area += 1;
+                    }
+                }
+            }
+        }
+    }
+    area
+}
+
+fn arm(x: i64, grid: Vec[Vec[i64]]) -> i64 {
+    match x {
+        0 => star_surface_area(grid),
+        1 => faces_surface_area(grid),
+        2 => voxels_surface_area(grid),
+        3 => sweeps_surface_area(grid),
+        _ => layers_surface_area(grid),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// is there a cube at row i, column j, height k?
+fn cube(grid: Vec[Vec[i64]], i: i64, j: i64, k: i64) -> bool {
+    i >= 0 and j >= 0 and k >= 0 and i < grid.len() and j < grid.len() and k < grid[i][j]
+}
+
+// every unit square of the box around the shapes, at each of the three
+// orientations, counted when it has a cube on exactly one side: the
+// surface of the shapes, the faces glued between cubes falling inside
+fn literal(grid: Vec[Vec[i64]]) -> i64 {
+    let n = grid.len();
+    let mut tallest = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            tallest = tallest.max(*v);
+        }
+    }
+    let mut area = 0;
+    for i in 0..n + 1 {
+        for j in 0..n + 1 {
+            for k in 0..tallest + 1 {
+                let here = cube(grid, i, j, k);
+                if here != cube(grid, i - 1, j, k) {
+                    area += 1;
+                }
+                if here != cube(grid, i, j - 1, k) {
+                    area += 1;
+                }
+                if here != cube(grid, i, j, k - 1) {
+                    area += 1;
+                }
+            }
+        }
+    }
+    area
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// an n by n grid of towers up to `top` high, a cell in three empty when
+// `holes`
+fn random_grid(seed: mut ref i64, n: i64, top: i64, holes: bool) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            if holes and next_random(mut seed) % 3 == 0 {
+                row.push(0);
+            } else {
+                row.push(next_random(mut seed) % (top + 1));
+            }
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's area.
+fn properties(t: mut ref Tally, seed: mut ref i64, grid: Vec[Vec[i64]], small: bool) -> i64 {
+    let want = if small { literal(grid) } else { 0 };
+    let n = grid.len();
+    let mut towers = 0;
+    for row in grid.iter() {
+        for v in row.iter() {
+            if *v > 0 {
+                towers += 1;
+            }
+        }
+    }
+    // the grid turned a quarter, and reflected across its diagonal
+    let mut turned: Vec[Vec[i64]] = Vec.new();
+    let mut flipped: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut a: Vec[i64] = Vec.new();
+        let mut b: Vec[i64] = Vec.new();
+        for j in 0..n {
+            a.push(grid[n - 1 - j][i]);
+            b.push(grid[j][i]);
+        }
+        turned.push(a);
+        flipped.push(b);
+    }
+    // every tower `scale` times as tall
+    let scale = 2 + next_random(mut seed) % 3;
+    let mut scaled: Vec[Vec[i64]] = Vec.new();
+    for row in grid.iter() {
+        let mut r: Vec[i64] = Vec.new();
+        for v in row.iter() {
+            r.push(*v * scale);
+        }
+        scaled.push(r);
+    }
+    // the grid and another apart on one grid, an empty row and column
+    // between them
+    let m = 1 + next_random(mut seed) % 4;
+    let other = random_grid(mut seed, m, 6, true);
+    let size = n + m + 1;
+    let mut apart: Vec[Vec[i64]] = Vec.new();
+    for i in 0..size {
+        let mut r: Vec[i64] = Vec.new();
+        for j in 0..size {
+            if i < n and j < n {
+                r.push(grid[i][j]);
+            } else if i > n and j > n {
+                r.push(other[i - n - 1][j - n - 1]);
+            } else {
+                r.push(0);
+            }
+        }
+        apart.push(r);
+    }
+    // one tower a cube taller: it gains its four new sides less the two
+    // faces it shares with each neighbour taller than it was, and a top
+    // and a bottom if it was empty
+    let ri = next_random(mut seed) % n;
+    let rj = next_random(mut seed) % n;
+    let v = grid[ri][rj];
+    let mut raised = grid.clone();
+    raised[ri][rj] = v + 1;
+    let mut gain = 4;
+    if v == 0 {
+        gain += 2;
+    }
+    let di = [1, -1, 0, 0];
+    let dj = [0, 0, 1, -1];
+    for d in 0..4 {
+        let a = ri + di[d];
+        let b = rj + dj[d];
+        if a >= 0 and b >= 0 and a < n and b < n and grid[a][b] > v {
+            gain -= 2;
+        }
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, grid));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's area
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the same area turned a quarter, and reflected
+        check(mut t, 2, arm(x, turned) == got and arm(x, flipped) == got);
+        // P3: towers `scale` times as tall show `scale` times the sides
+        // and the same tops and bottoms
+        check(mut t, 3, arm(x, scaled) == scale * (got - 2 * towers) + 2 * towers);
+        // P4: two grids apart show both their areas
+        check(mut t, 4, arm(x, apart) == got + arm(x, other));
+        // P5: one tower a cube taller adds `gain`
+        check(mut t, 5, arm(x, raised) == got + gain);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 892;
+    let mut cases = 0;
+    let mut cells = 0;
+    let mut total = 0;
+    // up to 5 by 5 with towers up to 4 high against the statement; then
+    // up to 20 by 20 with towers up to 50 high or, half the time, 3
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 20 };
+        let top = if small { 4 } else if next_random(mut seed) % 2 == 0 { 3 } else { 50 };
+        let holes = next_random(mut seed) % 2 == 0;
+        let grid = random_grid(mut seed, n, top, holes);
+        cases += 1;
+        cells += n * n;
+        total += properties(mut t, mut seed, grid, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {cells} cells, surface area {total} in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
