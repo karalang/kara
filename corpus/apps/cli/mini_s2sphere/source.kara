@@ -1,0 +1,3982 @@
+// mini_s2sphere: a port of s2sphere 0.2.5 (MIT; Jonas Kunze, Sven
+// Kreiss), the pure-Python port of Google's S2 Geometry library behind the
+// cell ids of geospatial indexes, ride-hailing and delivery dispatch
+// grids, and the "which cells cover this circle" queries of location
+// services. S2 projects the sphere onto the six faces of a cube and walks
+// each face along a Hilbert curve, so a 64-bit cell id names a quadtree
+// cell at any of 31 levels and nearby places share id prefixes.
+//
+// The port covers cell ids (from lat/lng, tokens, parents and children,
+// neighbours, the wrapping walks), points and lat/lngs, spherical caps,
+// lat/lng rectangles, the two interval types, cells (bounds, areas,
+// subdivision), cell unions (normalization, union, intersection,
+// difference), the length and area metrics, and RegionCoverer, the
+// priority-queue search that picks at most N cells to cover or fill a
+// region. data/jobs.tsv (see mk.py) is a list of commands against those
+// classes plus a small place index (data/places.tsv) queried by radius
+// and by named zone (data/zones.tsv); oracle.py runs the same commands
+// against the real library. A job that raises prints `error <class>:
+// <message>`, including the library's own asserts and its two bugs that
+// the jobs reach: CellUnion.expand calls a CellId method that does not
+// exist, and asserts carry no message.
+//
+// Python's int and float are kept exact: ids are u64 below 2**64 - 1
+// with i128 for the arithmetic that leaves that range (CellId reduces
+// modulo 0xffffffffffffffff), every float operation keeps the library's
+// order, and drem is the IEEE remainder that Decimal.remainder_near
+// computes, with its two decimal errors.
+
+// ------------------------------------------------------------ text helpers
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn clen(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+// s[lo:hi] by code points, clamped the way Python slices clamp.
+fn substr(s: ref String, lo: i64, hi: i64) -> String {
+    let v = chars(s);
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn hex2(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut out = String.new();
+    out.push(ds[(n / 16) % 16]);
+    out.push(ds[n % 16]);
+    out
+}
+
+// Whether str.isprintable() holds: the controls, the C1 range, the spaces
+// other than U+0020, the line and paragraph separators, the format
+// characters and the private use area are not printable.
+fn printable(n: i64) -> bool {
+    if n < 32 or (n >= 127 and n <= 160) or n == 173 or n == 0x1680 {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    if n == 0x3000 or n == 0xFEFF or (n >= 0xFFF9 and n <= 0xFFFB) {
+        return false;
+    }
+    not (n >= 0xE000 and n <= 0xF8FF)
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(n) {
+            out.push_str("\\x");
+            out.push_str(hex2(n % 256));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == f64.INFINITY {
+        return "inf".to_string();
+    }
+    if x == -f64.INFINITY {
+        return "-inf".to_string();
+    }
+    if x == 0.0 {
+        return if x.to_bits() >> 63 == 1 { "-0.0".to_string() } else { "0.0".to_string() };
+    }
+    let s = f"{x}";
+    if s.contains(".") or s.contains("e") {
+        s
+    } else {
+        f"{s}.0"
+    }
+}
+
+// str.isspace, which str.strip and int() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    substr(s, lo, hi)
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut cut = 0;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' {
+            cut = i;
+        }
+        i += 1;
+    }
+    substr(path, 0, cut)
+}
+
+// ------------------------------------------------------------ exceptions
+
+// A Python exception: its class name as the job output prints it, and
+// str(e). The library's asserts raise AssertionError with no message.
+#[derive(Clone)]
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn chk(ok: bool) -> Result[(), Exc] {
+    if ok {
+        Ok(())
+    } else {
+        Err(exc("AssertionError", String.new()))
+    }
+}
+
+fn value_error(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+// ------------------------------------------------------------ numbers
+
+const PI: f64 = 3.141592653589793;
+const MAX_LEVEL: i64 = 30;
+const MAX_SIZE: i64 = 1073741824;
+const POS_BITS: i64 = 61;
+const SWAP_MASK: i64 = 1;
+const INVERT_MASK: i64 = 2;
+// CellId(id) keeps id % 0xffffffffffffffff, so ids live below 2**64 - 1.
+const ID_MOD: i128 = 18446744073709551615;
+const WRAP_OFFSET: i128 = 13835058055282163712;
+
+// math.radians and math.degrees: CPython multiplies by pi/180 and 180/pi.
+fn radians(d: f64) -> f64 {
+    d * (PI / 180.0)
+}
+
+fn degrees(r: f64) -> f64 {
+    r * (180.0 / PI)
+}
+
+// max(a, b) and min(a, b) keep the first argument unless the second is
+// strictly greater (or smaller), which decides between 0.0 and -0.0.
+fn fmax(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
+
+fn fmin(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+fn imax(a: i64, b: i64) -> i64 {
+    if b > a { b } else { a }
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if b < a { b } else { a }
+}
+
+// 2**n as a float, for -1022 <= n <= 1023.
+fn pow2(n: i64) -> f64 {
+    (((n + 1023) as u64) << 52).bits_as_f64()
+}
+
+fn ldexp(x: f64, n: i64) -> f64 {
+    x * pow2(n)
+}
+
+// The exponent of math.frexp(x): x == m * 2**e with 0.5 <= |m| < 1.
+fn frexp_exp(x: f64) -> i64 {
+    if x == 0.0 or x != x or x == f64.INFINITY or x == -f64.INFINITY {
+        return 0;
+    }
+    let bits = x.to_bits();
+    let e = ((bits >> 52) & 0x7ff) as i64;
+    if e == 0 {
+        return frexp_exp(x * pow2(54)) - 54;
+    }
+    e - 1022
+}
+
+// sphere.drem: Decimal(x).remainder_near(Decimal(y)), the IEEE remainder.
+// Decimal arithmetic raises when y is zero, or when the integer quotient
+// needs more than the context's 28 digits.
+fn drem(x: f64, y: f64) -> Result[f64, Exc] {
+    if y == 0.0 or x != x or y != y or x == f64.INFINITY or x == -f64.INFINITY {
+        return Err(exc("InvalidOperation", "[<class 'decimal.InvalidOperation'>]".to_string()));
+    }
+    let ax = x.abs();
+    let ay = y.abs();
+    if ay == f64.INFINITY {
+        return Ok(x);
+    }
+    if ax / ay >= 1e28 {
+        return Err(exc("InvalidOperation", "[<class 'decimal.DivisionImpossible'>]".to_string()));
+    }
+    // ax % (2 ay) is exact; it says whether trunc(ax / ay) is odd.
+    let a = ax % (2.0 * ay);
+    let mut odd = false;
+    let mut t = a;
+    if a >= ay {
+        t = a - ay;
+        odd = true;
+    }
+    let mut r = t;
+    if 2.0 * t > ay or (2.0 * t == ay and odd) {
+        r = t - ay;
+    }
+    Ok(if x < 0.0 { -r } else { r })
+}
+
+// ------------------------------------------------------------ Point
+
+#[derive(Copy, Clone)]
+struct P {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+fn pt3(x: f64, y: f64, z: f64) -> P {
+    P { x: x, y: y, z: z }
+}
+
+fn p_at(a: P, i: i64) -> f64 {
+    if i == 0 {
+        a.x
+    } else if i == 1 {
+        a.y
+    } else {
+        a.z
+    }
+}
+
+fn p_neg(a: P) -> P {
+    pt3(-a.x, -a.y, -a.z)
+}
+
+fn p_add(a: P, b: P) -> P {
+    pt3(a.x + b.x, a.y + b.y, a.z + b.z)
+}
+
+fn p_sub(a: P, b: P) -> P {
+    pt3(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+fn p_mul(a: P, k: f64) -> P {
+    pt3(a.x * k, a.y * k, a.z * k)
+}
+
+fn p_eq(a: P, b: P) -> bool {
+    a.x == b.x and a.y == b.y and a.z == b.z
+}
+
+fn p_largest(a: P) -> i64 {
+    let t0 = a.x.abs();
+    let t1 = a.y.abs();
+    let t2 = a.z.abs();
+    if t0 > t1 {
+        if t0 > t2 { 0 } else { 2 }
+    } else {
+        if t1 > t2 { 1 } else { 2 }
+    }
+}
+
+fn p_cross(a: P, b: P) -> P {
+    pt3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+}
+
+fn p_dot(a: P, b: P) -> f64 {
+    a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+fn p_norm2(a: P) -> f64 {
+    a.x * a.x + a.y * a.y + a.z * a.z
+}
+
+fn p_norm(a: P) -> f64 {
+    p_norm2(a).sqrt()
+}
+
+fn p_angle(a: P, b: P) -> f64 {
+    p_norm(p_cross(a, b)).atan2(p_dot(a, b))
+}
+
+fn p_normalize(a: P) -> P {
+    let mut n = p_norm(a);
+    if n != 0.0 {
+        n = 1.0 / n;
+    }
+    pt3(a.x * n, a.y * n, a.z * n)
+}
+
+fn is_unit_length(p: P) -> bool {
+    (p_norm(p) * p_norm(p) - 1.0).abs() <= 1e-15
+}
+
+// ------------------------------------------------------------ LatLng
+
+#[derive(Copy, Clone)]
+struct LatLng {
+    lat: f64,
+    lng: f64,
+}
+
+fn ll2(lat: f64, lng: f64) -> LatLng {
+    LatLng { lat: lat, lng: lng }
+}
+
+fn ll_degrees(lat: f64, lng: f64) -> LatLng {
+    ll2(radians(lat), radians(lng))
+}
+
+fn ll_from_point(p: P) -> LatLng {
+    ll2(p.z.atan2((p.x * p.x + p.y * p.y).sqrt()), p.y.atan2(p.x))
+}
+
+fn ll_valid(a: LatLng) -> bool {
+    a.lat.abs() <= PI / 2.0 and a.lng.abs() <= PI
+}
+
+fn ll_point(a: LatLng) -> P {
+    let cosphi = a.lat.cos();
+    pt3(a.lng.cos() * cosphi, a.lng.sin() * cosphi, a.lat.sin())
+}
+
+fn ll_normalized(a: LatLng) -> Result[LatLng, Exc] {
+    Ok(ll2(fmax(-PI / 2.0, fmin(PI / 2.0, a.lat)), drem(a.lng, 2.0 * PI)?))
+}
+
+fn ll_approx(a: LatLng, b: LatLng) -> bool {
+    (a.lat - b.lat).abs() < 1e-15 and (a.lng - b.lng).abs() < 1e-15
+}
+
+fn ll_distance(a: LatLng, b: LatLng) -> Result[f64, Exc] {
+    chk(ll_valid(a))?;
+    chk(ll_valid(b))?;
+    let dlat = (0.5 * (b.lat - a.lat)).sin();
+    let dlng = (0.5 * (b.lng - a.lng)).sin();
+    let x = dlat * dlat + dlng * dlng * a.lat.cos() * b.lat.cos();
+    Ok(2.0 * x.sqrt().atan2(fmax(0.0, 1.0 - x).sqrt()))
+}
+
+// ------------------------------------------------------------ faces
+
+fn valid_face_xyz_to_uv(face: i64, p: P) -> Result[(f64, f64), Exc] {
+    chk(p_dot(p, face_uv_to_xyz(face, 0.0, 0.0)) > 0.0)?;
+    Ok(if face == 0 {
+        (p.y / p.x, p.z / p.x)
+    } else if face == 1 {
+        (-p.x / p.y, p.z / p.y)
+    } else if face == 2 {
+        (-p.x / p.z, -p.y / p.z)
+    } else if face == 3 {
+        (p.z / p.x, p.y / p.x)
+    } else if face == 4 {
+        (p.z / p.y, -p.x / p.y)
+    } else {
+        (-p.y / p.z, -p.x / p.z)
+    })
+}
+
+fn xyz_to_face_uv(p: P) -> Result[(i64, f64, f64), Exc] {
+    let mut face = p_largest(p);
+    if p_at(p, face) < 0.0 {
+        face += 3;
+    }
+    let (u, v) = valid_face_xyz_to_uv(face, p)?;
+    Ok((face, u, v))
+}
+
+fn face_xyz_to_uv(face: i64, p: P) -> Result[(bool, f64, f64), Exc] {
+    if face < 3 {
+        if p_at(p, face) <= 0.0 {
+            return Ok((false, 0.0, 0.0));
+        }
+    } else {
+        if p_at(p, face - 3) >= 0.0 {
+            return Ok((false, 0.0, 0.0));
+        }
+    }
+    let (u, v) = valid_face_xyz_to_uv(face, p)?;
+    Ok((true, u, v))
+}
+
+fn face_uv_to_xyz(face: i64, u: f64, v: f64) -> P {
+    if face == 0 {
+        pt3(1.0, u, v)
+    } else if face == 1 {
+        pt3(-u, 1.0, v)
+    } else if face == 2 {
+        pt3(-u, -v, 1.0)
+    } else if face == 3 {
+        pt3(-1.0, -v, -u)
+    } else if face == 4 {
+        pt3(v, -1.0, -u)
+    } else {
+        pt3(v, u, -1.0)
+    }
+}
+
+fn get_u_norm(face: i64, u: f64) -> P {
+    if face == 0 {
+        pt3(u, -1.0, 0.0)
+    } else if face == 1 {
+        pt3(1.0, u, 0.0)
+    } else if face == 2 {
+        pt3(1.0, 0.0, u)
+    } else if face == 3 {
+        pt3(-u, 0.0, 1.0)
+    } else if face == 4 {
+        pt3(0.0, -u, 1.0)
+    } else {
+        pt3(0.0, -1.0, -u)
+    }
+}
+
+fn get_v_norm(face: i64, v: f64) -> P {
+    if face == 0 {
+        pt3(-v, 0.0, 1.0)
+    } else if face == 1 {
+        pt3(0.0, -v, 1.0)
+    } else if face == 2 {
+        pt3(0.0, -1.0, -v)
+    } else if face == 3 {
+        pt3(v, -1.0, 0.0)
+    } else if face == 4 {
+        pt3(1.0, v, 0.0)
+    } else {
+        pt3(1.0, 0.0, v)
+    }
+}
+
+// -get_u_norm(face, u) and -get_v_norm(face, v). The library builds those
+// points from int literals and the float u or v; negating an int 0 stays
+// 0, so only the float coordinate can come out as -0.0.
+fn neg_u_norm(face: i64, u: f64) -> P {
+    if face == 0 {
+        pt3(-u, 1.0, 0.0)
+    } else if face == 1 {
+        pt3(-1.0, -u, 0.0)
+    } else if face == 2 {
+        pt3(-1.0, 0.0, -u)
+    } else if face == 3 {
+        pt3(-(-u), 0.0, -1.0)
+    } else if face == 4 {
+        pt3(0.0, -(-u), -1.0)
+    } else {
+        pt3(0.0, 1.0, -(-u))
+    }
+}
+
+fn neg_v_norm(face: i64, v: f64) -> P {
+    if face == 0 {
+        pt3(-(-v), 0.0, -1.0)
+    } else if face == 1 {
+        pt3(0.0, -(-v), -1.0)
+    } else if face == 2 {
+        pt3(0.0, 1.0, -(-v))
+    } else if face == 3 {
+        pt3(-v, 1.0, 0.0)
+    } else if face == 4 {
+        pt3(-1.0, -v, 0.0)
+    } else {
+        pt3(-1.0, 0.0, -v)
+    }
+}
+
+// get_u_axis(face)[2] == 0 and get_v_axis(face)[2] == 0.
+fn u_axis_flat(face: i64) -> bool {
+    not (face == 3 or face == 4)
+}
+
+fn v_axis_flat(face: i64) -> bool {
+    not (face == 0 or face == 1)
+}
+
+fn ortho(a: P) -> P {
+    let mut k = p_largest(a) - 1;
+    if k < 0 {
+        k = 2;
+    }
+    let temp = if k == 0 {
+        pt3(1.0, 0.0053, 0.00457)
+    } else if k == 1 {
+        pt3(0.012, 1.0, 0.00457)
+    } else {
+        pt3(0.012, 0.0053, 1.0)
+    };
+    p_normalize(p_cross(a, temp))
+}
+
+fn robust_cross_prod(a: P, b: P) -> Result[P, Exc] {
+    chk(is_unit_length(a))?;
+    chk(is_unit_length(b))?;
+    let x = p_cross(p_add(b, a), p_sub(b, a));
+    if not p_eq(x, pt3(0.0, 0.0, 0.0)) {
+        return Ok(x);
+    }
+    Ok(ortho(a))
+}
+
+fn simple_crossing(a: P, b: P, c: P, d: P) -> bool {
+    let ab = p_cross(a, b);
+    let acb = -p_dot(ab, c);
+    let bda = p_dot(ab, d);
+    if acb * bda <= 0.0 {
+        return false;
+    }
+    let cd = p_cross(c, d);
+    let cbd = -p_dot(cd, b);
+    let dac = p_dot(cd, a);
+    acb * cbd > 0.0 and acb * dac > 0.0
+}
+
+fn girard_area(a: P, b: P, c: P) -> Result[f64, Exc] {
+    let ab = robust_cross_prod(a, b)?;
+    let bc = robust_cross_prod(b, c)?;
+    let ac = robust_cross_prod(a, c)?;
+    Ok(fmax(0.0, p_angle(ab, ac) - p_angle(ab, bc) + p_angle(bc, ac)))
+}
+
+fn tri_area(a: P, b: P, c: P) -> Result[f64, Exc] {
+    chk(is_unit_length(a))?;
+    chk(is_unit_length(b))?;
+    chk(is_unit_length(c))?;
+    let sa = p_angle(b, c);
+    let sb = p_angle(c, a);
+    let sc = p_angle(a, b);
+    let s = 0.5 * (sa + sb + sc);
+    if s >= 3e-4 {
+        let s2 = s * s;
+        let dmin = s - fmax(sa, fmax(sb, sc));
+        if dmin < 1e-2 * s * s2 * s2 {
+            let area = girard_area(a, b, c)?;
+            if dmin < 2.0 * (0.1 * area) {
+                return Ok(area);
+            }
+        }
+    }
+    let prod = (0.5 * s).tan() * (0.5 * (s - sa)).tan() * (0.5 * (s - sb)).tan() * (0.5 * (s - sc)).tan();
+    Ok(4.0 * fmax(0.0, prod).sqrt().atan())
+}
+
+fn simple_ccw(a: P, b: P, c: P) -> bool {
+    p_dot(p_cross(c, a), b) > 0.0
+}
+
+// ------------------------------------------------------------ LineInterval
+
+#[derive(Copy, Clone)]
+struct LineIv {
+    lo: f64,
+    hi: f64,
+}
+
+fn li(lo: f64, hi: f64) -> LineIv {
+    LineIv { lo: lo, hi: hi }
+}
+
+fn li_empty() -> LineIv {
+    li(1.0, 0.0)
+}
+
+fn li_bound(a: LineIv, i: i64) -> f64 {
+    if i == 0 { a.lo } else { a.hi }
+}
+
+fn li_from_pair(a: f64, b: f64) -> LineIv {
+    if a <= b { li(a, b) } else { li(b, a) }
+}
+
+fn li_is_empty(a: LineIv) -> bool {
+    a.lo > a.hi
+}
+
+fn li_eq(a: LineIv, b: LineIv) -> bool {
+    (a.lo == b.lo and a.hi == b.hi) or (li_is_empty(a) and li_is_empty(b))
+}
+
+fn li_contains(a: LineIv, b: LineIv) -> bool {
+    if li_is_empty(b) {
+        return true;
+    }
+    b.lo >= a.lo and b.hi <= a.hi
+}
+
+fn li_contains_pt(a: LineIv, p: f64) -> bool {
+    p >= a.lo and p <= a.hi
+}
+
+fn li_interior_contains(a: LineIv, b: LineIv) -> bool {
+    if li_is_empty(b) {
+        return true;
+    }
+    b.lo > a.lo and b.hi < a.hi
+}
+
+fn li_interior_contains_pt(a: LineIv, p: f64) -> bool {
+    p > a.lo and p < a.hi
+}
+
+fn li_intersects(a: LineIv, b: LineIv) -> bool {
+    if a.lo <= b.lo {
+        b.lo <= a.hi and b.lo <= b.hi
+    } else {
+        a.lo <= b.hi and a.lo <= a.hi
+    }
+}
+
+fn li_interior_intersects(a: LineIv, b: LineIv) -> bool {
+    b.lo < a.hi and a.lo < b.hi and a.lo < a.hi and b.lo <= b.hi
+}
+
+fn li_union(a: LineIv, b: LineIv) -> LineIv {
+    if li_is_empty(a) {
+        return b;
+    }
+    if li_is_empty(b) {
+        return a;
+    }
+    li(fmin(a.lo, b.lo), fmax(a.hi, b.hi))
+}
+
+fn li_intersection(a: LineIv, b: LineIv) -> LineIv {
+    li(fmax(a.lo, b.lo), fmin(a.hi, b.hi))
+}
+
+fn li_expanded(a: LineIv, radius: f64) -> Result[LineIv, Exc] {
+    chk(radius >= 0.0)?;
+    if li_is_empty(a) {
+        return Ok(a);
+    }
+    Ok(li(a.lo - radius, a.hi + radius))
+}
+
+fn li_center(a: LineIv) -> f64 {
+    0.5 * (a.lo + a.hi)
+}
+
+fn li_length(a: LineIv) -> f64 {
+    a.hi - a.lo
+}
+
+fn li_approx(a: LineIv, b: LineIv, max_error: f64) -> bool {
+    if li_is_empty(a) {
+        return li_length(b) <= max_error;
+    }
+    if li_is_empty(b) {
+        return li_length(a) <= max_error;
+    }
+    (b.lo - a.lo).abs() + (b.hi - a.hi).abs() <= max_error
+}
+
+// ------------------------------------------------------------ SphereInterval
+
+#[derive(Copy, Clone)]
+struct SphereIv {
+    lo: f64,
+    hi: f64,
+}
+
+fn si_valid(a: SphereIv) -> bool {
+    a.lo.abs() <= PI and a.hi.abs() <= PI and not (a.lo == -PI and a.hi != PI) and not (a.hi == -PI and a.lo != PI)
+}
+
+// SphereInterval(lo, hi): an endpoint of -pi becomes pi unless the other
+// endpoint is pi; then the interval must be valid.
+fn si(lo: f64, hi: f64) -> Result[SphereIv, Exc] {
+    let mut clo = lo;
+    let mut chi = hi;
+    if lo == -PI and hi != PI {
+        clo = PI;
+    }
+    if hi == -PI and lo != PI {
+        chi = PI;
+    }
+    let a = SphereIv { lo: clo, hi: chi };
+    chk(si_valid(a))?;
+    Ok(a)
+}
+
+// SphereInterval(lo, hi, args_checked=True), which still asserts validity.
+fn si_checked(lo: f64, hi: f64) -> Result[SphereIv, Exc] {
+    let a = SphereIv { lo: lo, hi: hi };
+    chk(si_valid(a))?;
+    Ok(a)
+}
+
+fn si_empty() -> SphereIv {
+    SphereIv { lo: PI, hi: -PI }
+}
+
+fn si_full() -> SphereIv {
+    SphereIv { lo: -PI, hi: PI }
+}
+
+fn si_bound(a: SphereIv, i: i64) -> f64 {
+    if i == 0 { a.lo } else { a.hi }
+}
+
+fn si_eq(a: SphereIv, b: SphereIv) -> bool {
+    a.lo == b.lo and a.hi == b.hi
+}
+
+fn positive_distance(a: f64, b: f64) -> f64 {
+    let d = b - a;
+    if d >= 0.0 {
+        return d;
+    }
+    (b + PI) - (a - PI)
+}
+
+fn si_from_pair(a0: f64, b0: f64) -> Result[SphereIv, Exc] {
+    chk(a0.abs() <= PI)?;
+    chk(b0.abs() <= PI)?;
+    let mut a = a0;
+    let mut b = b0;
+    if a == -PI {
+        a = PI;
+    }
+    if b == -PI {
+        b = PI;
+    }
+    if positive_distance(a, b) <= PI {
+        si_checked(a, b)
+    } else {
+        si_checked(b, a)
+    }
+}
+
+fn si_is_full(a: SphereIv) -> bool {
+    (a.hi - a.lo) == 2.0 * PI
+}
+
+fn si_is_inverted(a: SphereIv) -> bool {
+    a.lo > a.hi
+}
+
+fn si_is_empty(a: SphereIv) -> bool {
+    a.lo - a.hi == 2.0 * PI
+}
+
+fn si_center(a: SphereIv) -> f64 {
+    let center = 0.5 * (a.lo + a.hi);
+    if not si_is_inverted(a) {
+        return center;
+    }
+    if center <= 0.0 {
+        center + PI
+    } else {
+        center - PI
+    }
+}
+
+fn si_length(a: SphereIv) -> f64 {
+    let mut length = a.hi - a.lo;
+    if length >= 0.0 {
+        return length;
+    }
+    length += 2.0 * PI;
+    if length > 0.0 {
+        length
+    } else {
+        -1.0
+    }
+}
+
+fn si_complement(a: SphereIv) -> Result[SphereIv, Exc] {
+    if a.lo == a.hi {
+        return Ok(si_full());
+    }
+    si(a.hi, a.lo)
+}
+
+fn si_approx(a: SphereIv, b: SphereIv, max_error: f64) -> Result[bool, Exc] {
+    if si_is_empty(a) {
+        return Ok(si_length(b) <= max_error);
+    }
+    if si_is_empty(b) {
+        return Ok(si_length(a) <= max_error);
+    }
+    Ok(drem(b.lo - a.lo, 2.0 * PI)?.abs() + drem(b.hi - a.hi, 2.0 * PI)?.abs() <= max_error)
+}
+
+fn si_fast_contains(a: SphereIv, p: f64) -> bool {
+    if si_is_inverted(a) {
+        (p >= a.lo or p <= a.hi) and not si_is_empty(a)
+    } else {
+        p >= a.lo and p <= a.hi
+    }
+}
+
+fn si_contains(a: SphereIv, b: SphereIv) -> bool {
+    if si_is_inverted(a) {
+        if si_is_inverted(b) {
+            return b.lo >= a.lo and b.hi <= a.hi;
+        }
+        (b.lo >= a.lo or b.hi <= a.hi) and not si_is_empty(a)
+    } else {
+        if si_is_inverted(b) {
+            return si_is_full(a) or si_is_empty(b);
+        }
+        b.lo >= a.lo and b.hi <= a.hi
+    }
+}
+
+fn si_contains_pt(a: SphereIv, p0: f64) -> Result[bool, Exc] {
+    chk(p0.abs() <= PI)?;
+    let p = if p0 == -PI { PI } else { p0 };
+    Ok(si_fast_contains(a, p))
+}
+
+fn si_interior_contains(a: SphereIv, b: SphereIv) -> bool {
+    if si_is_inverted(a) {
+        if not si_is_inverted(b) {
+            return b.lo > a.lo or b.hi < a.hi;
+        }
+        (b.lo > a.lo and b.hi < a.hi) or si_is_empty(b)
+    } else {
+        if si_is_inverted(b) {
+            return si_is_full(a) or si_is_empty(b);
+        }
+        (b.lo > a.lo and b.hi < a.hi) or si_is_full(a)
+    }
+}
+
+fn si_interior_contains_pt(a: SphereIv, p0: f64) -> Result[bool, Exc] {
+    chk(p0.abs() <= PI)?;
+    let p = if p0 == -PI { PI } else { p0 };
+    if si_is_inverted(a) {
+        Ok(p > a.lo or p < a.hi)
+    } else {
+        Ok((p > a.lo and p < a.hi) or si_is_full(a))
+    }
+}
+
+fn si_intersects(a: SphereIv, b: SphereIv) -> bool {
+    if si_is_empty(a) or si_is_empty(b) {
+        return false;
+    }
+    if si_is_inverted(a) {
+        si_is_inverted(b) or b.lo <= a.hi or b.hi >= a.lo
+    } else {
+        if si_is_inverted(b) {
+            return b.lo <= a.hi or b.hi >= a.lo;
+        }
+        b.lo <= a.hi and b.hi >= a.lo
+    }
+}
+
+fn si_interior_intersects(a: SphereIv, b: SphereIv) -> bool {
+    if si_is_empty(a) or si_is_empty(b) or a.lo == a.hi {
+        return false;
+    }
+    if si_is_inverted(a) {
+        si_is_inverted(b) or b.lo < a.hi or b.hi > a.lo
+    } else {
+        if si_is_inverted(b) {
+            return b.lo < a.hi or b.hi > a.lo;
+        }
+        (b.lo < a.hi and b.hi > a.lo) or si_is_full(a)
+    }
+}
+
+fn si_union(a: SphereIv, b: SphereIv) -> Result[SphereIv, Exc] {
+    if si_is_empty(b) {
+        return Ok(a);
+    }
+    if si_fast_contains(a, b.lo) {
+        if si_fast_contains(a, b.hi) {
+            if si_contains(a, b) {
+                return Ok(a);
+            }
+            return Ok(si_full());
+        }
+        return si_checked(a.lo, b.hi);
+    }
+    if si_fast_contains(a, b.hi) {
+        return si_checked(b.lo, a.hi);
+    }
+    if si_is_empty(a) or si_fast_contains(b, a.lo) {
+        return Ok(b);
+    }
+    let dlo = positive_distance(b.hi, a.lo);
+    let dhi = positive_distance(a.hi, b.lo);
+    if dlo < dhi {
+        si_checked(b.lo, a.hi)
+    } else {
+        si_checked(a.lo, b.hi)
+    }
+}
+
+fn si_intersection(a: SphereIv, b: SphereIv) -> Result[SphereIv, Exc] {
+    if si_is_empty(b) {
+        return Ok(si_empty());
+    }
+    if si_fast_contains(a, b.lo) {
+        if si_fast_contains(a, b.hi) {
+            if si_length(b) < si_length(a) {
+                return Ok(b);
+            }
+            return Ok(a);
+        }
+        return si_checked(b.lo, a.hi);
+    }
+    if si_fast_contains(a, b.hi) {
+        return si_checked(a.lo, b.hi);
+    }
+    if si_fast_contains(b, a.lo) {
+        return Ok(a);
+    }
+    chk(not si_intersects(a, b))?;
+    Ok(si_empty())
+}
+
+fn si_expanded(a: SphereIv, radius: f64) -> Result[SphereIv, Exc] {
+    chk(radius >= 0.0)?;
+    if si_is_empty(a) {
+        return Ok(a);
+    }
+    if si_length(a) + 2.0 * radius >= 2.0 * PI - 1e-15 {
+        return Ok(si_full());
+    }
+    let mut lo = drem(a.lo - radius, 2.0 * PI)?;
+    let hi = drem(a.hi + radius, 2.0 * PI)?;
+    if lo <= -PI {
+        lo = PI;
+    }
+    si(lo, hi)
+}
+
+fn si_complement_center(a: SphereIv) -> Result[f64, Exc] {
+    if a.lo != a.hi {
+        return Ok(si_center(si_complement(a)?));
+    }
+    if a.hi <= 0.0 {
+        Ok(a.hi + PI)
+    } else {
+        Ok(a.hi - PI)
+    }
+}
+
+fn si_hausdorff(a: SphereIv, b: SphereIv) -> Result[f64, Exc] {
+    if si_contains(b, a) {
+        return Ok(0.0);
+    }
+    if si_is_empty(b) {
+        return Ok(PI);
+    }
+    let occ = si_complement_center(b)?;
+    if si_contains_pt(a, occ)? {
+        return Ok(positive_distance(b.hi, occ));
+    }
+    let mut hi_hi = 0.0;
+    if si_contains_pt(si(b.hi, occ)?, a.hi)? {
+        hi_hi = positive_distance(b.hi, a.hi);
+    }
+    let mut lo_lo = 0.0;
+    if si_contains_pt(si(occ, b.lo)?, a.lo)? {
+        lo_lo = positive_distance(a.lo, b.lo);
+    }
+    chk(hi_hi > 0.0 or lo_lo > 0.0)?;
+    Ok(fmax(hi_hi, lo_lo))
+}
+
+// ------------------------------------------------------------ CellId
+
+// A cell id is a u64 below 2**64 - 1: the face in the top three bits,
+// then two bits per level of the Hilbert curve position, then a 1 marking
+// the level. Arithmetic that can leave that range runs in i128 and goes
+// back through cid(), as CellId(id) reduces modulo 0xffffffffffffffff.
+fn cid(x: i128) -> u64 {
+    (((x % ID_MOD) + ID_MOD) % ID_MOD) as u64
+}
+
+fn wide(id: u64) -> i128 {
+    id as i128
+}
+
+fn id_face(id: u64) -> i64 {
+    (id >> 61) as i64
+}
+
+fn id_lsb(id: u64) -> u64 {
+    id & id.wrapping_neg()
+}
+
+fn lsb_for_level(level: i64) -> u64 {
+    (1 as u64) << ((2 * (MAX_LEVEL - level)) as u64)
+}
+
+fn id_valid(id: u64) -> bool {
+    id_face(id) < 6 and (id_lsb(id) & 0x1555555555555555) != 0
+}
+
+fn id_is_leaf(id: u64) -> bool {
+    (id & 1) != 0
+}
+
+fn id_is_face(id: u64) -> bool {
+    (id & (lsb_for_level(0) - 1)) == 0
+}
+
+fn id_level(id: u64) -> Result[i64, Exc] {
+    if id_is_leaf(id) {
+        return Ok(MAX_LEVEL);
+    }
+    let mut x = id & 0xffffffff;
+    let mut level = -1;
+    if x != 0 {
+        level += 16;
+    } else {
+        x = (id >> 32) & 0xffffffff;
+    }
+    x = x & x.wrapping_neg();
+    if x & 0x00005555 != 0 {
+        level += 8;
+    }
+    if x & 0x00550055 != 0 {
+        level += 4;
+    }
+    if x & 0x05050505 != 0 {
+        level += 2;
+    }
+    if x & 0x11111111 != 0 {
+        level += 1;
+    }
+    chk(level >= 0)?;
+    chk(level <= MAX_LEVEL)?;
+    Ok(level)
+}
+
+fn id_repr(id: u64) -> String {
+    f"CellId: {id:016x}"
+}
+
+fn to_token(id: u64) -> String {
+    let s = f"{id:016x}";
+    let cs = chars(s);
+    let mut n = cs.len();
+    while n > 0 and cs[n - 1] == '0' {
+        n -= 1;
+    }
+    substr(s, 0, n)
+}
+
+// CellId.from_token: int(token.ljust(16, '0'), 16).
+fn from_token(t: ref String) -> Result[u64, Exc] {
+    let mut s = t.clone();
+    while clen(s) < 16 {
+        s.push('0');
+    }
+    match parse_int(s, 16) {
+        Some(n) => Ok(cid(n)),
+        None => Err(value_error(f"invalid literal for int() with base 16: {str_repr(s)}")),
+    }
+}
+
+fn id_parent(id: u64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(not id_is_face(id))?;
+    let new_lsb = id_lsb(id) << 2;
+    Ok(cid(wide((id & new_lsb.wrapping_neg()) | new_lsb)))
+}
+
+fn id_parent_at(id: u64, level: i64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(level >= 0)?;
+    chk(level <= id_level(id)?)?;
+    let new_lsb = lsb_for_level(level);
+    Ok(cid(wide((id & new_lsb.wrapping_neg()) | new_lsb)))
+}
+
+fn id_child(id: u64, pos: i64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(not id_is_leaf(id))?;
+    let new_lsb = wide(id_lsb(id) >> 2);
+    Ok(cid(wide(id) + ((2 * pos + 1 - 4) as i128) * new_lsb))
+}
+
+fn id_contains(a: u64, b: u64) -> Result[bool, Exc] {
+    chk(id_valid(a))?;
+    chk(id_valid(b))?;
+    Ok(b >= range_min(a) and b <= range_max(a))
+}
+
+fn id_intersects(a: u64, b: u64) -> Result[bool, Exc] {
+    chk(id_valid(a))?;
+    chk(id_valid(b))?;
+    Ok(range_min(b) <= range_max(a) and range_max(b) >= range_min(a))
+}
+
+fn child_begin(id: u64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(not id_is_leaf(id))?;
+    let old = wide(id_lsb(id));
+    Ok(cid(wide(id) - old + old / 4))
+}
+
+fn child_begin_at(id: u64, level: i64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(level >= id_level(id)?)?;
+    chk(level <= MAX_LEVEL)?;
+    Ok(cid(wide(id) - wide(id_lsb(id)) + wide(lsb_for_level(level))))
+}
+
+fn child_end(id: u64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(not id_is_leaf(id))?;
+    let old = wide(id_lsb(id));
+    Ok(cid(wide(id) + old + old / 4))
+}
+
+fn child_end_at(id: u64, level: i64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    chk(level >= id_level(id)?)?;
+    chk(level <= MAX_LEVEL)?;
+    Ok(cid(wide(id) + wide(id_lsb(id)) + wide(lsb_for_level(level))))
+}
+
+fn id_prev(id: u64) -> u64 {
+    cid(wide(id) - wide(id_lsb(id)) * 2)
+}
+
+fn id_next(id: u64) -> u64 {
+    cid(wide(id) + wide(id_lsb(id)) * 2)
+}
+
+fn walk_ids(first: u64, end: u64) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut c = first;
+    while c != end {
+        out.push(c);
+        c = id_next(c);
+    }
+    out
+}
+
+fn id_children(id: u64) -> Result[Vec[u64], Exc] {
+    let b = child_begin(id)?;
+    let e = child_end(id)?;
+    Ok(walk_ids(b, e))
+}
+
+fn id_children_at(id: u64, level: i64) -> Result[Vec[u64], Exc] {
+    let b = child_begin_at(id, level)?;
+    let e = child_end_at(id, level)?;
+    Ok(walk_ids(b, e))
+}
+
+fn range_min(id: u64) -> u64 {
+    cid(wide(id) - (wide(id_lsb(id)) - 1))
+}
+
+fn range_max(id: u64) -> u64 {
+    cid(wide(id) + (wide(id_lsb(id)) - 1))
+}
+
+fn from_face_pos_level(face: i64, pos: i64, level: i64) -> Result[u64, Exc] {
+    id_parent_at(cid(((face as i128) << 61) + ((pos | 1) as i128)), level)
+}
+
+fn id_begin(level: i64) -> Result[u64, Exc] {
+    child_begin_at(from_face_pos_level(0, 0, 0)?, level)
+}
+
+fn id_end(level: i64) -> Result[u64, Exc] {
+    child_end_at(from_face_pos_level(5, 0, 0)?, level)
+}
+
+fn prev_wrap(id: u64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    let p = id_prev(id);
+    if wide(p) < WRAP_OFFSET {
+        return Ok(p);
+    }
+    Ok(cid(wide(p) + WRAP_OFFSET))
+}
+
+fn next_wrap(id: u64) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    let n = id_next(id);
+    if wide(n) < WRAP_OFFSET {
+        return Ok(n);
+    }
+    Ok(cid(wide(n) - WRAP_OFFSET))
+}
+
+// int(math.fmod(steps, step_wrap)) for the step counts the jobs use.
+fn fmod_int(a: i128, b: i128) -> i128 {
+    ((a as f64) % (b as f64)) as i128
+}
+
+fn advance_wrap(id: u64, steps0: i128) -> Result[u64, Exc] {
+    chk(id_valid(id))?;
+    if steps0 == 0 {
+        return Ok(id);
+    }
+    let mut steps = steps0;
+    let step_shift = 2 * (MAX_LEVEL - id_level(id)?) + 1;
+    if steps < 0 {
+        let min_steps = -(wide(id) >> step_shift);
+        if steps < min_steps {
+            let step_wrap = WRAP_OFFSET >> step_shift;
+            steps = fmod_int(steps, step_wrap);
+            if steps < min_steps {
+                steps += step_wrap;
+            }
+        }
+    } else {
+        let max_steps = (WRAP_OFFSET - wide(id)) >> step_shift;
+        if steps > max_steps {
+            let step_wrap = WRAP_OFFSET >> step_shift;
+            steps = fmod_int(steps, step_wrap);
+            if steps > max_steps {
+                steps -= step_wrap;
+            }
+        }
+    }
+    Ok(cid(wide(id) + (steps << step_shift)))
+}
+
+fn advance(id: u64, steps0: i128) -> Result[u64, Exc] {
+    if steps0 == 0 {
+        return Ok(id);
+    }
+    let mut steps = steps0;
+    let step_shift = 2 * (MAX_LEVEL - id_level(id)?) + 1;
+    if steps < 0 {
+        let min_steps = -(wide(id) >> step_shift);
+        if steps < min_steps {
+            steps = min_steps;
+        }
+    } else {
+        let max_steps = (WRAP_OFFSET + wide(id_lsb(id)) - wide(id)) >> step_shift;
+        if steps > max_steps {
+            steps = max_steps;
+        }
+    }
+    Ok(cid(wide(id) + (steps << step_shift)))
+}
+
+// POS_TO_IJ[orientation][pos], IJ_TO_POS[orientation][ij] and
+// POS_TO_ORIENTATION[pos]. The library batches four levels at a time
+// through its LOOKUP_POS and LOOKUP_IJ tables; this walks the same
+// transitions one level at a time.
+fn pos_to_ij(orientation: i64, pos: i64) -> i64 {
+    let row = if orientation == 0 { 180 } else if orientation == 1 { 120 } else if orientation == 2 { 75 } else { 135 };
+    (row >> (2 * pos)) & 3
+}
+
+fn ij_to_pos(orientation: i64, ij: i64) -> i64 {
+    let row = if orientation == 0 { 180 } else if orientation == 1 { 156 } else if orientation == 2 { 30 } else { 54 };
+    (row >> (2 * ij)) & 3
+}
+
+fn pos_to_orientation(pos: i64) -> i64 {
+    if pos == 0 {
+        SWAP_MASK
+    } else if pos == 3 {
+        INVERT_MASK | SWAP_MASK
+    } else {
+        0
+    }
+}
+
+fn from_face_ij(face: i64, i: i64, j: i64) -> u64 {
+    let mut n: u64 = (face as u64) << 60;
+    let mut o = face & SWAP_MASK;
+    let mut b = 29;
+    while b >= 0 {
+        let ij = (((i >> b) & 1) << 1) | ((j >> b) & 1);
+        let pos = ij_to_pos(o, ij);
+        n = n | ((pos as u64) << ((2 * b) as u64));
+        o = o ^ pos_to_orientation(pos);
+        b -= 1;
+    }
+    cid(wide(n) * 2 + 1)
+}
+
+// (face, i, j, orientation)
+fn to_face_ij_orientation(id: u64) -> (i64, i64, i64, i64) {
+    let face = id_face(id);
+    let mut o = face & SWAP_MASK;
+    let mut i = 0;
+    let mut j = 0;
+    let mut b = 29;
+    while b >= 0 {
+        let pos = ((id >> ((2 * b + 1) as u64)) & 3) as i64;
+        let ij = pos_to_ij(o, pos);
+        i = i | ((ij >> 1) << b);
+        j = j | ((ij & 1) << b);
+        o = o ^ pos_to_orientation(pos);
+        b -= 1;
+    }
+    if (id_lsb(id) & 0x1111111111111110) != 0 {
+        o = o ^ SWAP_MASK;
+    }
+    (face, i, j, o)
+}
+
+fn st_to_ij(s: f64) -> i64 {
+    imax(0, imin(MAX_SIZE - 1, ((MAX_SIZE as f64) * s).floor() as i64))
+}
+
+fn st_to_uv(s: f64) -> f64 {
+    if s >= 0.5 {
+        (1.0 / 3.0) * (4.0 * s * s - 1.0)
+    } else {
+        (1.0 / 3.0) * (1.0 - 4.0 * (1.0 - s) * (1.0 - s))
+    }
+}
+
+fn uv_to_st(u: f64) -> f64 {
+    if u >= 0.0 {
+        0.5 * (1.0 + 3.0 * u).sqrt()
+    } else {
+        1.0 - 0.5 * (1.0 - 3.0 * u).sqrt()
+    }
+}
+
+fn from_point(p: P) -> Result[u64, Exc] {
+    let (face, u, v) = xyz_to_face_uv(p)?;
+    Ok(from_face_ij(face, st_to_ij(uv_to_st(u)), st_to_ij(uv_to_st(v))))
+}
+
+fn from_lat_lng(a: LatLng) -> Result[u64, Exc] {
+    from_point(ll_point(a))
+}
+
+fn from_face_ij_wrap(face0: i64, i0: i64, j0: i64) -> Result[u64, Exc] {
+    let i = imax(-1, imin(MAX_SIZE, i0));
+    let j = imax(-1, imin(MAX_SIZE, j0));
+    let scale = 1.0 / (MAX_SIZE as f64);
+    let u0 = scale * (((i << 1) + 1 - MAX_SIZE) as f64);
+    let v0 = scale * (((j << 1) + 1 - MAX_SIZE) as f64);
+    let (face, u, v) = xyz_to_face_uv(face_uv_to_xyz(face0, u0, v0))?;
+    Ok(from_face_ij(face, st_to_ij(0.5 * (u + 1.0)), st_to_ij(0.5 * (v + 1.0))))
+}
+
+fn from_face_ij_same(face: i64, i: i64, j: i64, same_face: bool) -> Result[u64, Exc] {
+    if same_face {
+        Ok(from_face_ij(face, i, j))
+    } else {
+        from_face_ij_wrap(face, i, j)
+    }
+}
+
+// (face, si, ti)
+fn center_si_ti(id: u64) -> (i64, i64, i64) {
+    let (face, i, j, _o) = to_face_ij_orientation(id);
+    let delta = if id_is_leaf(id) {
+        1
+    } else if ((i ^ ((id >> 2) as i64)) & 1) != 0 {
+        2
+    } else {
+        0
+    };
+    (face, 2 * i + delta, 2 * j + delta)
+}
+
+fn to_point_raw(id: u64) -> P {
+    let (face, si, ti) = center_si_ti(id);
+    let k = 0.5 / (MAX_SIZE as f64);
+    face_uv_to_xyz(face, st_to_uv(k * (si as f64)), st_to_uv(k * (ti as f64)))
+}
+
+fn id_to_point(id: u64) -> P {
+    p_normalize(to_point_raw(id))
+}
+
+fn id_to_lat_lng(id: u64) -> LatLng {
+    ll_from_point(to_point_raw(id))
+}
+
+fn center_uv(id: u64) -> (f64, f64) {
+    let (_face, si, ti) = center_si_ti(id);
+    let k = 0.5 / (MAX_SIZE as f64);
+    (st_to_uv(k * (si as f64)), st_to_uv(k * (ti as f64)))
+}
+
+fn size_ij(level: i64) -> Result[i64, Exc] {
+    if level > MAX_LEVEL {
+        return Err(value_error("negative shift count".to_string()));
+    }
+    Ok(1 << (MAX_LEVEL - level))
+}
+
+fn edge_neighbors(id: u64) -> Result[Vec[u64], Exc] {
+    let level = id_level(id)?;
+    let size = size_ij(level)?;
+    let (face, i, j, _o) = to_face_ij_orientation(id);
+    let mut out: Vec[u64] = Vec.new();
+    out.push(id_parent_at(from_face_ij_same(face, i, j - size, j - size >= 0)?, level)?);
+    out.push(id_parent_at(from_face_ij_same(face, i + size, j, i + size < MAX_SIZE)?, level)?);
+    out.push(id_parent_at(from_face_ij_same(face, i, j + size, j + size < MAX_SIZE)?, level)?);
+    out.push(id_parent_at(from_face_ij_same(face, i - size, j, i - size >= 0)?, level)?);
+    Ok(out)
+}
+
+fn vertex_neighbors(id: u64, level: i64) -> Result[Vec[u64], Exc] {
+    chk(level < id_level(id)?)?;
+    let (face, i, j, _o) = to_face_ij_orientation(id);
+    let halfsize = size_ij(level + 1)?;
+    let size = halfsize << 1;
+    let mut ioffset = -size;
+    let mut isame = (i - size) >= 0;
+    if i & halfsize != 0 {
+        ioffset = size;
+        isame = (i + size) < MAX_SIZE;
+    }
+    let mut joffset = -size;
+    let mut jsame = (j - size) >= 0;
+    if j & halfsize != 0 {
+        joffset = size;
+        jsame = (j + size) < MAX_SIZE;
+    }
+    let mut out: Vec[u64] = Vec.new();
+    out.push(id_parent_at(id, level)?);
+    out.push(id_parent_at(from_face_ij_same(face, i + ioffset, j, isame)?, level)?);
+    out.push(id_parent_at(from_face_ij_same(face, i, j + joffset, jsame)?, level)?);
+    if isame or jsame {
+        out.push(id_parent_at(from_face_ij_same(face, i + ioffset, j + joffset, isame and jsame)?, level)?);
+    }
+    Ok(out)
+}
+
+fn all_neighbors(id: u64, nbr_level: i64) -> Result[Vec[u64], Exc] {
+    let (face, i0, j0, _o) = to_face_ij_orientation(id);
+    let size = size_ij(id_level(id)?)?;
+    let i = i0 & (-size);
+    let j = j0 & (-size);
+    let nbr_size = size_ij(nbr_level)?;
+    chk(nbr_size <= size)?;
+    let mut out: Vec[u64] = Vec.new();
+    let mut k = -nbr_size;
+    loop {
+        let mut same_face = false;
+        if k < 0 {
+            same_face = j + k >= 0;
+        } else if k >= size {
+            same_face = j + k < MAX_SIZE;
+        } else {
+            out.push(id_parent_at(from_face_ij_same(face, i + k, j - nbr_size, j - size >= 0)?, nbr_level)?);
+            out.push(id_parent_at(from_face_ij_same(face, i + k, j + size, j + size < MAX_SIZE)?, nbr_level)?);
+        }
+        out.push(id_parent_at(from_face_ij_same(face, i - nbr_size, j + k, same_face and i - size >= 0)?, nbr_level)?);
+        out.push(id_parent_at(from_face_ij_same(face, i + size, j + k, same_face and i + size < MAX_SIZE)?, nbr_level)?);
+        if k >= size {
+            break;
+        }
+        k += nbr_size;
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ Metric
+
+#[derive(Copy, Clone)]
+struct Metric {
+    deriv: f64,
+    dim: i64,
+}
+
+fn min_width() -> Metric {
+    Metric { deriv: 2.0 * (2.0).sqrt() / 3.0, dim: 1 }
+}
+
+fn avg_area() -> Metric {
+    Metric { deriv: 4.0 * PI / 6.0, dim: 2 }
+}
+
+fn m_value(m: Metric, level: i64) -> f64 {
+    ldexp(m.deriv, -m.dim * level)
+}
+
+fn m_min_level(m: Metric, value: f64) -> Result[i64, Exc] {
+    if value <= 0.0 {
+        return Ok(MAX_LEVEL);
+    }
+    let x = frexp_exp(value / m.deriv);
+    let level = imax(0, imin(MAX_LEVEL, -((x - 1) >> (m.dim - 1))));
+    chk(level == MAX_LEVEL or m_value(m, level) <= value)?;
+    chk(level == 0 or m_value(m, level - 1) > value)?;
+    Ok(level)
+}
+
+fn m_max_level(m: Metric, value: f64) -> Result[i64, Exc] {
+    if value <= 0.0 {
+        return Ok(MAX_LEVEL);
+    }
+    let x = frexp_exp(m.deriv / value);
+    let level = imax(0, imin(MAX_LEVEL, (x - 1) >> (m.dim - 1)));
+    chk(level == 0 or m_value(m, level) >= value)?;
+    chk(level == MAX_LEVEL or m_value(m, level + 1) < value)?;
+    Ok(level)
+}
+
+fn m_closest_level(m: Metric, value: f64) -> Result[i64, Exc] {
+    let k = if m.dim == 1 { (2.0).sqrt() } else { 2.0 };
+    m_min_level(m, k * value)
+}
+
+// ------------------------------------------------------------ Cap
+
+#[derive(Copy, Clone)]
+struct Cap {
+    axis: P,
+    height: f64,
+}
+
+fn round_up() -> f64 {
+    1.0 + 1.0 / 4503599627370496.0
+}
+
+fn cap_from_axis_height(axis: P, height: f64) -> Result[Cap, Exc] {
+    chk(is_unit_length(axis))?;
+    Ok(Cap { axis: axis, height: height })
+}
+
+fn height_for_angle(r: f64) -> Result[f64, Exc] {
+    chk(r >= 0.0)?;
+    if r >= PI {
+        return Ok(2.0);
+    }
+    let d = (0.5 * r).sin();
+    Ok(2.0 * d * d)
+}
+
+fn cap_from_axis_angle(axis: P, r: f64) -> Result[Cap, Exc] {
+    chk(is_unit_length(axis))?;
+    chk(r >= 0.0)?;
+    Ok(Cap { axis: axis, height: height_for_angle(r)? })
+}
+
+fn cap_from_axis_area(axis: P, area: f64) -> Result[Cap, Exc] {
+    chk(is_unit_length(axis))?;
+    Ok(Cap { axis: axis, height: area / (2.0 * PI) })
+}
+
+fn cap_empty() -> Cap {
+    Cap { axis: pt3(1.0, 0.0, 0.0), height: -1.0 }
+}
+
+fn cap_full() -> Cap {
+    Cap { axis: pt3(1.0, 0.0, 0.0), height: 2.0 }
+}
+
+fn cap_area(c: Cap) -> f64 {
+    2.0 * PI * fmax(0.0, c.height)
+}
+
+fn cap_is_empty(c: Cap) -> bool {
+    c.height < 0.0
+}
+
+fn cap_is_full(c: Cap) -> bool {
+    c.height >= 2.0
+}
+
+fn cap_angle(c: Cap) -> f64 {
+    if cap_is_empty(c) {
+        return -1.0;
+    }
+    2.0 * (0.5 * c.height).sqrt().asin()
+}
+
+fn cap_valid(c: Cap) -> bool {
+    is_unit_length(c.axis) and c.height <= 2.0
+}
+
+fn cap_add_point(c: mut ref Cap, p: P) -> Result[(), Exc] {
+    chk(is_unit_length(p))?;
+    if cap_is_empty(*c) {
+        c.axis = p;
+        c.height = 0.0;
+    } else {
+        let dist2 = p_norm2(p_sub(c.axis, p));
+        c.height = fmax(c.height, round_up() * 0.5 * dist2);
+    }
+    Ok(())
+}
+
+fn cap_complement(c: Cap) -> Result[Cap, Exc] {
+    let height = if cap_is_full(c) { -1.0 } else { 2.0 - fmax(c.height, 0.0) };
+    cap_from_axis_height(p_neg(c.axis), height)
+}
+
+fn cap_contains_cap(a: Cap, b: Cap) -> bool {
+    if cap_is_full(a) or cap_is_empty(b) {
+        return true;
+    }
+    cap_angle(a) >= p_angle(a.axis, b.axis) + cap_angle(b)
+}
+
+fn cap_contains_point(c: Cap, p: P) -> Result[bool, Exc] {
+    chk(is_unit_length(p))?;
+    Ok(p_norm2(p_sub(c.axis, p)) <= 2.0 * c.height)
+}
+
+fn cap_interior_contains_point(c: Cap, p: P) -> Result[bool, Exc] {
+    chk(is_unit_length(p))?;
+    Ok(cap_is_full(c) or p_norm2(p_sub(c.axis, p)) < 2.0 * c.height)
+}
+
+fn cap_intersects_cap(a: Cap, b: Cap) -> bool {
+    if cap_is_empty(a) or cap_is_empty(b) {
+        return false;
+    }
+    cap_angle(a) + cap_angle(b) >= p_angle(a.axis, b.axis)
+}
+
+fn cap_interior_intersects(a: Cap, b: Cap) -> bool {
+    if a.height <= 0.0 or cap_is_empty(b) {
+        return false;
+    }
+    cap_angle(a) + cap_angle(b) > p_angle(a.axis, b.axis)
+}
+
+fn cell_vertices(cell: Cell) -> Vec[P] {
+    let mut vs: Vec[P] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        vs.push(cell_vertex(cell, k));
+        k += 1;
+    }
+    vs
+}
+
+fn cap_contains_cell(c: Cap, cell: Cell) -> Result[bool, Exc] {
+    let mut vs: Vec[P] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        vs.push(cell_vertex(cell, k));
+        if not cap_contains_point(c, vs[k])? {
+            return Ok(false);
+        }
+        k += 1;
+    }
+    Ok(not cap_intersects_cell(cap_complement(c)?, cell, vs)?)
+}
+
+fn cap_intersects_cell(c: Cap, cell: Cell, vs: ref Vec[P]) -> Result[bool, Exc] {
+    if c.height >= 1.0 {
+        return Ok(false);
+    }
+    if cap_is_empty(c) {
+        return Ok(false);
+    }
+    if cell_contains_point(cell, c.axis)? {
+        return Ok(true);
+    }
+    let sin2_angle = c.height * (2.0 - c.height);
+    let mut k = 0;
+    while k < 4 {
+        let edge = cell_edge_raw(cell, k);
+        let dot = p_dot(c.axis, edge);
+        if dot > 0.0 {
+            k += 1;
+            continue;
+        }
+        if dot * dot > sin2_angle * p_norm2(edge) {
+            return Ok(false);
+        }
+        let dir = p_cross(edge, c.axis);
+        if p_dot(dir, vs[k]) < 0.0 and p_dot(dir, vs[(k + 1) & 3]) > 0.0 {
+            return Ok(true);
+        }
+        k += 1;
+    }
+    Ok(false)
+}
+
+fn cap_may_intersect(c: Cap, cell: Cell) -> Result[bool, Exc] {
+    let mut vs: Vec[P] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        vs.push(cell_vertex(cell, k));
+        if cap_contains_point(c, vs[k])? {
+            return Ok(true);
+        }
+        k += 1;
+    }
+    cap_intersects_cell(c, cell, vs)
+}
+
+fn cap_rect_bound(c: Cap) -> Result[Rect, Exc] {
+    if cap_is_empty(c) {
+        return Ok(rect_empty());
+    }
+    let axis_ll = ll_from_point(c.axis);
+    let cap_angle_r = cap_angle(c);
+    let mut all_longitudes = false;
+    let mut lng0 = -PI;
+    let mut lng1 = PI;
+    let mut lat0 = axis_ll.lat - cap_angle_r;
+    if lat0 <= -PI / 2.0 {
+        lat0 = -PI / 2.0;
+        all_longitudes = true;
+    }
+    let mut lat1 = axis_ll.lat + cap_angle_r;
+    if lat1 >= PI / 2.0 {
+        lat1 = PI / 2.0;
+        all_longitudes = true;
+    }
+    if not all_longitudes {
+        let sin_a = (c.height * (2.0 - c.height)).sqrt();
+        let sin_c = axis_ll.lat.cos();
+        if sin_a <= sin_c {
+            let angle_a = (sin_a / sin_c).asin();
+            lng0 = drem(axis_ll.lng - angle_a, 2.0 * PI)?;
+            lng1 = drem(axis_ll.lng + angle_a, 2.0 * PI)?;
+        }
+    }
+    Ok(Rect { lat: li(lat0, lat1), lng: si(lng0, lng1)? })
+}
+
+fn cap_approx(a: Cap, b: Cap) -> bool {
+    let e = 1e-14;
+    (p_angle(a.axis, b.axis) <= e and (a.height - b.height).abs() <= e) or (cap_is_empty(a) and b.height <= e) or (cap_is_empty(b) and a.height <= e) or (cap_is_full(a) and b.height >= 2.0 - e) or (cap_is_full(b) and a.height >= 2.0 - e)
+}
+
+fn cap_expanded(c: Cap, distance: f64) -> Result[Cap, Exc] {
+    chk(distance >= 0.0)?;
+    if cap_is_empty(c) {
+        return Ok(cap_empty());
+    }
+    cap_from_axis_angle(c.axis, cap_angle(c) + distance)
+}
+
+// ------------------------------------------------------------ LatLngRect
+
+#[derive(Copy, Clone)]
+struct Rect {
+    lat: LineIv,
+    lng: SphereIv,
+}
+
+fn rect_empty() -> Rect {
+    Rect { lat: li_empty(), lng: si_empty() }
+}
+
+fn full_lat() -> LineIv {
+    li(-PI / 2.0, PI / 2.0)
+}
+
+fn rect_from_pair(a: LatLng, b: LatLng) -> Result[Rect, Exc] {
+    chk(ll_valid(a))?;
+    chk(ll_valid(b))?;
+    Ok(Rect { lat: li_from_pair(a.lat, b.lat), lng: si_from_pair(a.lng, b.lng)? })
+}
+
+fn rect_eq(a: Rect, b: Rect) -> bool {
+    li_eq(a.lat, b.lat) and si_eq(a.lng, b.lng)
+}
+
+fn rect_is_empty(r: Rect) -> bool {
+    li_is_empty(r.lat)
+}
+
+fn rect_is_full(r: Rect) -> bool {
+    li_eq(r.lat, full_lat()) and si_is_full(r.lng)
+}
+
+fn rect_valid(r: Rect) -> bool {
+    r.lat.lo.abs() <= PI / 2.0 and r.lat.hi.abs() <= PI / 2.0 and si_valid(r.lng) and li_is_empty(r.lat) == si_is_empty(r.lng)
+}
+
+fn rect_is_point(r: Rect) -> bool {
+    r.lat.lo == r.lat.hi and r.lng.lo == r.lng.hi
+}
+
+fn rect_center(r: Rect) -> LatLng {
+    ll2(li_center(r.lat), si_center(r.lng))
+}
+
+fn rect_size(r: Rect) -> LatLng {
+    ll2(li_length(r.lat), si_length(r.lng))
+}
+
+fn rect_vertex(r: Rect, k: i64) -> LatLng {
+    ll2(li_bound(r.lat, k >> 1), si_bound(r.lng, (k >> 1) ^ (k & 1)))
+}
+
+fn rect_area(r: Rect) -> f64 {
+    if rect_is_empty(r) {
+        return 0.0;
+    }
+    si_length(r.lng) * (r.lat.hi.sin() - r.lat.lo.sin()).abs()
+}
+
+fn rect_union(a: Rect, b: Rect) -> Result[Rect, Exc] {
+    Ok(Rect { lat: li_union(a.lat, b.lat), lng: si_union(a.lng, b.lng)? })
+}
+
+fn rect_intersection(a: Rect, b: Rect) -> Result[Rect, Exc] {
+    let lat = li_intersection(a.lat, b.lat);
+    let lng = si_intersection(a.lng, b.lng)?;
+    if li_is_empty(lat) or si_is_empty(lng) {
+        return Ok(rect_empty());
+    }
+    Ok(Rect { lat: lat, lng: lng })
+}
+
+fn rect_convolve(r: Rect, angle: f64) -> Result[Rect, Exc] {
+    let cap = cap_from_axis_angle(pt3(1.0, 0.0, 0.0), angle)?;
+    let mut out = r;
+    let mut k = 0;
+    while k < 4 {
+        let vcap = cap_from_axis_height(ll_point(rect_vertex(r, k)), cap.height)?;
+        out = rect_union(out, cap_rect_bound(vcap)?)?;
+        k += 1;
+    }
+    Ok(out)
+}
+
+fn rect_contains_ll(r: Rect, p: LatLng) -> Result[bool, Exc] {
+    chk(ll_valid(p))?;
+    Ok(li_contains_pt(r.lat, p.lat) and si_contains_pt(r.lng, p.lng)?)
+}
+
+fn rect_contains_point(r: Rect, p: P) -> Result[bool, Exc] {
+    rect_contains_ll(r, ll_from_point(p))
+}
+
+fn rect_contains_rect(a: Rect, b: Rect) -> bool {
+    li_contains(a.lat, b.lat) and si_contains(a.lng, b.lng)
+}
+
+fn rect_contains_cell(r: Rect, cell: Cell) -> Result[bool, Exc] {
+    Ok(rect_contains_rect(r, cell_rect_bound(cell)?))
+}
+
+fn rect_interior_contains_ll(r: Rect, p: LatLng) -> Result[bool, Exc] {
+    chk(ll_valid(p))?;
+    Ok(li_interior_contains_pt(r.lat, p.lat) and si_interior_contains_pt(r.lng, p.lng)?)
+}
+
+fn rect_interior_contains_rect(a: Rect, b: Rect) -> bool {
+    li_interior_contains(a.lat, b.lat) and si_interior_contains(a.lng, b.lng)
+}
+
+fn rect_intersects_rect(a: Rect, b: Rect) -> bool {
+    li_intersects(a.lat, b.lat) and si_intersects(a.lng, b.lng)
+}
+
+fn rect_interior_intersects_rect(a: Rect, b: Rect) -> bool {
+    li_interior_intersects(a.lat, b.lat) and si_interior_intersects(a.lng, b.lng)
+}
+
+fn rect_may_intersect(r: Rect, cell: Cell) -> Result[bool, Exc] {
+    Ok(rect_intersects_rect(r, cell_rect_bound(cell)?))
+}
+
+fn intersects_lng_edge(a: P, b: P, lat: LineIv, lng: f64) -> bool {
+    simple_crossing(a, b, ll_point(ll2(lat.lo, lng)), ll_point(ll2(lat.hi, lng)))
+}
+
+fn intersects_lat_edge(a: P, b: P, lat: f64, lng: SphereIv) -> Result[bool, Exc] {
+    chk(is_unit_length(a))?;
+    chk(is_unit_length(b))?;
+    let mut z = p_normalize(robust_cross_prod(a, b)?);
+    if z.z < 0.0 {
+        z = p_neg(z);
+    }
+    let y = p_normalize(robust_cross_prod(z, pt3(0.0, 0.0, 1.0))?);
+    let x = p_cross(y, z);
+    chk(is_unit_length(x))?;
+    chk(x.z >= 0.0)?;
+    let sin_lat = lat.sin();
+    if sin_lat.abs() >= x.z {
+        return Ok(false);
+    }
+    chk(x.z > 0.0)?;
+    let cos_theta = sin_lat / x.z;
+    let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+    let theta = sin_theta.atan2(cos_theta);
+    let ab_theta = si_from_pair(p_dot(a, y).atan2(p_dot(a, x)), p_dot(b, y).atan2(p_dot(b, x)))?;
+    if si_contains_pt(ab_theta, theta)? {
+        let isect = p_add(p_mul(x, cos_theta), p_mul(y, sin_theta));
+        if si_contains_pt(lng, isect.y.atan2(isect.x))? {
+            return Ok(true);
+        }
+    }
+    if si_contains_pt(ab_theta, -theta)? {
+        let isect = p_sub(p_mul(x, cos_theta), p_mul(y, sin_theta));
+        if si_contains_pt(lng, isect.y.atan2(isect.x))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn rect_intersects_cell(r: Rect, cell: Cell) -> Result[bool, Exc] {
+    if rect_is_empty(r) {
+        return Ok(false);
+    }
+    if rect_contains_point(r, cell_center_raw(cell))? {
+        return Ok(true);
+    }
+    if cell_contains_point(cell, ll_point(rect_center(r)))? {
+        return Ok(true);
+    }
+    if not rect_intersects_rect(r, cell_rect_bound(cell)?) {
+        return Ok(false);
+    }
+    let mut cell_v: Vec[P] = Vec.new();
+    let mut cell_ll: Vec[LatLng] = Vec.new();
+    let mut i = 0;
+    while i < 4 {
+        cell_v.push(cell_vertex(cell, i));
+        cell_ll.push(ll_from_point(cell_v[i]));
+        if rect_contains_ll(r, cell_ll[i])? {
+            return Ok(true);
+        }
+        if cell_contains_point(cell, ll_point(rect_vertex(r, i)))? {
+            return Ok(true);
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < 4 {
+        let edge_lng = si_from_pair(cell_ll[i].lng, cell_ll[(i + 1) & 3].lng)?;
+        if not si_intersects(r.lng, edge_lng) {
+            i += 1;
+            continue;
+        }
+        let a = cell_v[i];
+        let b = cell_v[(i + 1) & 3];
+        if si_contains_pt(edge_lng, r.lng.lo)? {
+            if intersects_lng_edge(a, b, r.lat, r.lng.lo) {
+                return Ok(true);
+            }
+        }
+        if si_contains_pt(edge_lng, r.lng.hi)? {
+            if intersects_lng_edge(a, b, r.lat, r.lng.hi) {
+                return Ok(true);
+            }
+        }
+        if intersects_lat_edge(a, b, r.lat.lo, r.lng)? {
+            return Ok(true);
+        }
+        if intersects_lat_edge(a, b, r.lat.hi, r.lng)? {
+            return Ok(true);
+        }
+        i += 1;
+    }
+    Ok(false)
+}
+
+fn rect_expanded(r: Rect, margin: LatLng) -> Result[Rect, Exc] {
+    chk(margin.lat > 0.0)?;
+    chk(margin.lng > 0.0)?;
+    Ok(Rect { lat: li_intersection(li_expanded(r.lat, margin.lat)?, full_lat()), lng: si_expanded(r.lng, margin.lng)? })
+}
+
+fn rect_approx(a: Rect, b: Rect) -> Result[bool, Exc] {
+    Ok(li_approx(a.lat, b.lat, 1e-15) and si_approx(a.lng, b.lng, 1e-15)?)
+}
+
+fn rect_cap_bound(r: Rect) -> Result[Cap, Exc] {
+    if rect_is_empty(r) {
+        return Ok(cap_empty());
+    }
+    let mut pole_z = 1.0;
+    let mut pole_angle = PI / 2.0 - r.lat.lo;
+    if r.lat.lo + r.lat.hi < 0.0 {
+        pole_z = -1.0;
+        pole_angle = PI / 2.0 + r.lat.hi;
+    }
+    let pole_cap = cap_from_axis_angle(pt3(0.0, 0.0, pole_z), pole_angle)?;
+    let lng_span = r.lng.hi - r.lng.lo;
+    if drem(lng_span, 2.0 * PI)? >= 0.0 {
+        if lng_span < 2.0 * PI {
+            let mut mid_cap = cap_from_axis_angle(ll_point(rect_center(r)), 0.0)?;
+            let mut k = 0;
+            while k < 4 {
+                cap_add_point(mut mid_cap, ll_point(rect_vertex(r, k)))?;
+                k += 1;
+            }
+            if mid_cap.height < pole_cap.height {
+                return Ok(mid_cap);
+            }
+        }
+    }
+    Ok(pole_cap)
+}
+
+// ------------------------------------------------------------ Cell
+
+#[derive(Copy, Clone)]
+struct Cell {
+    id: u64,
+    face: i64,
+    orientation: i64,
+    level: i64,
+    u0: f64,
+    u1: f64,
+    v0: f64,
+    v1: f64,
+}
+
+fn cell_of(id: u64) -> Result[Cell, Exc] {
+    let (face, i, j, orientation) = to_face_ij_orientation(id);
+    let level = id_level(id)?;
+    let size = size_ij(id_level(id)?)?;
+    let k = 1.0 / (MAX_SIZE as f64);
+    let i_lo = i & (-size);
+    let j_lo = j & (-size);
+    Ok(Cell {
+        id: id,
+        face: face,
+        orientation: orientation,
+        level: level,
+        u0: st_to_uv(k * (i_lo as f64)),
+        u1: st_to_uv(k * ((i_lo + size) as f64)),
+        v0: st_to_uv(k * (j_lo as f64)),
+        v1: st_to_uv(k * ((j_lo + size) as f64)),
+    })
+}
+
+fn cell_u(c: Cell, i: i64) -> f64 {
+    if i == 0 { c.u0 } else { c.u1 }
+}
+
+fn cell_v(c: Cell, j: i64) -> f64 {
+    if j == 0 { c.v0 } else { c.v1 }
+}
+
+fn cell_edge_raw(c: Cell, k: i64) -> P {
+    if k == 0 {
+        get_v_norm(c.face, c.v0)
+    } else if k == 1 {
+        get_u_norm(c.face, c.u1)
+    } else if k == 2 {
+        neg_v_norm(c.face, c.v1)
+    } else {
+        neg_u_norm(c.face, c.u0)
+    }
+}
+
+fn cell_edge(c: Cell, k: i64) -> P {
+    p_normalize(cell_edge_raw(c, k))
+}
+
+fn cell_vertex_raw(c: Cell, k: i64) -> P {
+    face_uv_to_xyz(c.face, cell_u(c, (k >> 1) ^ (k & 1)), cell_v(c, k >> 1))
+}
+
+fn cell_vertex(c: Cell, k: i64) -> P {
+    p_normalize(cell_vertex_raw(c, k))
+}
+
+fn cell_exact_area(c: Cell) -> Result[f64, Exc] {
+    let v0 = cell_vertex(c, 0);
+    let v1 = cell_vertex(c, 1);
+    let v2 = cell_vertex(c, 2);
+    let v3 = cell_vertex(c, 3);
+    Ok(tri_area(v0, v1, v2)? + tri_area(v0, v2, v3)?)
+}
+
+fn cell_average_area(c: Cell) -> f64 {
+    m_value(avg_area(), c.level)
+}
+
+fn cell_approx_area(c: Cell) -> f64 {
+    if c.level < 2 {
+        return cell_average_area(c);
+    }
+    let d02 = p_sub(cell_vertex(c, 2), cell_vertex(c, 0));
+    let d13 = p_sub(cell_vertex(c, 3), cell_vertex(c, 1));
+    let flat_area = 0.5 * p_norm(p_cross(d02, d13));
+    flat_area * 2.0 / (1.0 + (1.0 - fmin((1.0 / PI) * flat_area, 1.0)).sqrt())
+}
+
+fn cell_subdivide(c: Cell) -> Result[Vec[Cell], Exc] {
+    let (um, vm) = center_uv(c.id);
+    let ids = id_children(c.id)?;
+    let mut out: Vec[Cell] = Vec.new();
+    let mut pos = 0;
+    while pos < ids.len() {
+        let ij = pos_to_ij(c.orientation, pos);
+        let i = ij >> 1;
+        let j = ij & 1;
+        let mut ch = c;
+        ch.id = ids[pos];
+        ch.level = c.level + 1;
+        ch.orientation = c.orientation ^ pos_to_orientation(pos);
+        if i == 0 {
+            ch.u0 = c.u0;
+            ch.u1 = um;
+        } else {
+            ch.u1 = c.u1;
+            ch.u0 = um;
+        }
+        if j == 0 {
+            ch.v0 = c.v0;
+            ch.v1 = vm;
+        } else {
+            ch.v1 = c.v1;
+            ch.v0 = vm;
+        }
+        out.push(ch);
+        pos += 1;
+    }
+    Ok(out)
+}
+
+fn cell_center_raw(c: Cell) -> P {
+    to_point_raw(c.id)
+}
+
+fn cell_center(c: Cell) -> P {
+    p_normalize(cell_center_raw(c))
+}
+
+fn cell_contains_cell(a: Cell, b: Cell) -> Result[bool, Exc] {
+    id_contains(a.id, b.id)
+}
+
+fn cell_contains_point(c: Cell, p: P) -> Result[bool, Exc] {
+    let (valid, u, v) = face_xyz_to_uv(c.face, p)?;
+    if not valid {
+        return Ok(false);
+    }
+    Ok(u >= c.u0 and u <= c.u1 and v >= c.v0 and v <= c.v1)
+}
+
+fn cell_may_intersect(a: Cell, b: Cell) -> Result[bool, Exc] {
+    id_intersects(a.id, b.id)
+}
+
+fn cell_latitude(c: Cell, i: i64, j: i64) -> f64 {
+    ll_from_point(face_uv_to_xyz(c.face, cell_u(c, i), cell_v(c, j))).lat
+}
+
+fn cell_longitude(c: Cell, i: i64, j: i64) -> f64 {
+    let p = face_uv_to_xyz(c.face, cell_u(c, i), cell_v(c, j));
+    p.y.atan2(p.x)
+}
+
+fn cell_cap_bound(c: Cell) -> Result[Cap, Exc] {
+    let u = 0.5 * (c.u0 + c.u1);
+    let v = 0.5 * (c.v0 + c.v1);
+    let mut cap = cap_from_axis_height(p_normalize(face_uv_to_xyz(c.face, u, v)), 0.0)?;
+    let mut k = 0;
+    while k < 4 {
+        cap_add_point(mut cap, cell_vertex(c, k))?;
+        k += 1;
+    }
+    Ok(cap)
+}
+
+fn cell_rect_bound(c: Cell) -> Result[Rect, Exc] {
+    if c.level > 0 {
+        let u = c.u0 + c.u1;
+        let v = c.v0 + c.v1;
+        let i = if u_axis_flat(c.face) { if u < 0.0 { 1 } else { 0 } } else { if u > 0.0 { 1 } else { 0 } };
+        let j = if v_axis_flat(c.face) { if v < 0.0 { 1 } else { 0 } } else { if v > 0.0 { 1 } else { 0 } };
+        let max_error = 1.0 / 2251799813685248.0;
+        let lat0 = li_from_pair(cell_latitude(c, i, j), cell_latitude(c, 1 - i, 1 - j));
+        let lat = li_intersection(li_expanded(lat0, max_error)?, full_lat());
+        if lat.lo == -PI / 2.0 or lat.hi == PI / 2.0 {
+            return Ok(Rect { lat: lat, lng: si_full() });
+        }
+        let lng = si_from_pair(cell_longitude(c, i, 1 - j), cell_longitude(c, 1 - i, j))?;
+        return Ok(Rect { lat: lat, lng: si_expanded(lng, max_error)? });
+    }
+    let pole_min_lat = (1.0 / 3.0).sqrt().asin();
+    let f = c.face;
+    if f == 0 {
+        Ok(Rect { lat: li(-PI / 4.0, PI / 4.0), lng: si(-PI / 4.0, PI / 4.0)? })
+    } else if f == 1 {
+        Ok(Rect { lat: li(-PI / 4.0, PI / 4.0), lng: si(PI / 4.0, 3.0 * PI / 4.0)? })
+    } else if f == 2 {
+        Ok(Rect { lat: li(pole_min_lat, PI / 2.0), lng: si(-PI, PI)? })
+    } else if f == 3 {
+        Ok(Rect { lat: li(-PI / 4.0, PI / 4.0), lng: si(3.0 * PI / 4.0, -3.0 * PI / 4.0)? })
+    } else if f == 4 {
+        Ok(Rect { lat: li(-PI / 4.0, PI / 4.0), lng: si(-3.0 * PI / 4.0, -PI / 4.0)? })
+    } else {
+        Ok(Rect { lat: li(-PI / 2.0, -pole_min_lat), lng: si(-PI, PI)? })
+    }
+}
+
+// ------------------------------------------------------------ CellUnion
+
+// bisect.bisect_left(ids, x, lo)
+fn bisect_left(ids: ref Vec[u64], x: u64, lo0: i64) -> i64 {
+    let mut lo = lo0;
+    let mut hi = ids.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if ids[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn sort_ids(ids: mut ref Vec[u64]) {
+    ids.sort();
+}
+
+// CellUnion.normalize: sort, drop contained cells, and replace each four
+// children of one parent by the parent. Returns the new list and whether
+// it got shorter.
+fn normalize(ids0: ref Vec[u64]) -> Result[(Vec[u64], bool), Exc] {
+    let mut ids = ids0.clone();
+    sort_ids(mut ids);
+    let mut output: Vec[u64] = Vec.new();
+    for c0 in ids {
+        let mut c = c0;
+        if output.len() > 0 and id_contains(output[output.len() - 1], c)? {
+            continue;
+        }
+        while output.len() > 0 and id_contains(c, output[output.len() - 1])? {
+            output.pop();
+        }
+        while output.len() >= 3 {
+            let n = output.len();
+            if (output[n - 3] ^ output[n - 2] ^ output[n - 1]) != c {
+                break;
+            }
+            let m0 = id_lsb(c) << 1;
+            let mask = 0xffffffffffffffff ^ (m0 + (m0 << 1));
+            let masked = c & mask;
+            if (output[n - 3] & mask) != masked or (output[n - 2] & mask) != masked or (output[n - 1] & mask) != masked or id_is_face(c) {
+                break;
+            }
+            output.pop();
+            output.pop();
+            output.pop();
+            c = id_parent(c)?;
+        }
+        output.push(c);
+    }
+    let shrank = output.len() < ids.len();
+    if shrank {
+        Ok((output, true))
+    } else {
+        Ok((ids, false))
+    }
+}
+
+fn union_new(ids: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let (out, _shrank) = normalize(ids)?;
+    Ok(out)
+}
+
+fn union_contains_id(u: ref Vec[u64], c: u64) -> bool {
+    let index = bisect_left(u, c, 0);
+    if index < u.len() and range_min(u[index]) <= c {
+        return true;
+    }
+    index != 0 and range_max(u[index - 1]) >= c
+}
+
+fn union_intersects_id(u: ref Vec[u64], c: u64) -> bool {
+    let index = bisect_left(u, c, 0);
+    if index != u.len() and range_min(u[index]) <= range_max(c) {
+        return true;
+    }
+    index != 0 and range_max(u[index - 1]) >= range_min(c)
+}
+
+fn union_contains_union(u: ref Vec[u64], v: ref Vec[u64]) -> bool {
+    for c in v {
+        if not union_contains_id(u, c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn union_intersects_union(u: ref Vec[u64], v: ref Vec[u64]) -> bool {
+    for c in v {
+        if union_intersects_id(u, c) {
+            return true;
+        }
+    }
+    false
+}
+
+fn union_eq(u: ref Vec[u64], v: ref Vec[u64]) -> bool {
+    if u.len() != v.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < u.len() {
+        if u[i] != v[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn get_union(x: ref Vec[u64], y: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let mut all = x.clone();
+    for c in y {
+        all.push(c);
+    }
+    union_new(all)
+}
+
+fn check_sorted(u: ref Vec[u64]) -> Result[(), Exc] {
+    let mut i = 0;
+    while i + 1 < u.len() {
+        chk(u[i] <= u[i + 1])?;
+        i += 1;
+    }
+    let (_out, shrank) = normalize(u)?;
+    chk(not shrank)
+}
+
+fn get_intersection_id(u: ref Vec[u64], c: u64) -> Result[Vec[u64], Exc] {
+    if union_contains_id(u, c) {
+        let mut one: Vec[u64] = Vec.new();
+        one.push(c);
+        return union_new(one);
+    }
+    let mut index = bisect_left(u, range_min(c), 0);
+    let idmax = range_max(c);
+    let mut hits: Vec[u64] = Vec.new();
+    while index != u.len() and u[index] <= idmax {
+        hits.push(u[index]);
+        index += 1;
+    }
+    union_new(hits)
+}
+
+fn get_intersection(x: ref Vec[u64], y: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let mut i = 0;
+    let mut j = 0;
+    let mut out: Vec[u64] = Vec.new();
+    while i < x.len() and j < y.len() {
+        let imin = range_min(x[i]);
+        let jmin = range_min(y[j]);
+        if imin > jmin {
+            if x[i] <= range_max(y[j]) {
+                out.push(x[i]);
+                i += 1;
+            } else {
+                j = bisect_left(y, imin, j + 1);
+                if x[i] <= range_max(y[j - 1]) {
+                    j -= 1;
+                }
+            }
+        } else if jmin > imin {
+            if y[j] <= range_max(x[i]) {
+                out.push(y[j]);
+                j += 1;
+            } else {
+                i = bisect_left(x, jmin, i + 1);
+                if y[j] <= range_max(x[i - 1]) {
+                    i -= 1;
+                }
+            }
+        } else {
+            if x[i] < y[j] {
+                out.push(x[i]);
+                i += 1;
+            } else {
+                out.push(y[j]);
+                j += 1;
+            }
+        }
+    }
+    let u = union_new(out)?;
+    check_sorted(u)?;
+    Ok(u)
+}
+
+fn difference_into(c: u64, y: ref Vec[u64], out: mut ref Vec[u64]) -> Result[(), Exc] {
+    if not union_intersects_id(y, c) {
+        out.push(c);
+    } else if not union_contains_id(y, c) {
+        for child in id_children(c)? {
+            difference_into(child, y, mut out)?;
+        }
+    }
+    Ok(())
+}
+
+fn get_difference(x: ref Vec[u64], y: ref Vec[u64]) -> Result[Vec[u64], Exc] {
+    let mut out: Vec[u64] = Vec.new();
+    for c in x {
+        difference_into(c, y, mut out)?;
+    }
+    let u = union_new(out)?;
+    check_sorted(u)?;
+    Ok(u)
+}
+
+// CellUnion.expand(level). s2sphere 0.2.5 calls a CellId method,
+// append_all_neighbors, that it never defines, so any non-empty union
+// raises AttributeError once its first cell is in the output.
+fn union_expand(u: mut ref Vec[u64], level: i64) -> Result[(), Exc] {
+    let mut output: Vec[u64] = Vec.new();
+    let level_lsb = lsb_for_level(level);
+    let mut i = u.len() - 1;
+    while i >= 0 {
+        let mut c = u[i];
+        if id_lsb(c) < level_lsb {
+            c = id_parent_at(c, level)?;
+            while i > 0 and id_contains(c, u[i - 1])? {
+                i -= 1;
+            }
+        }
+        output.push(c);
+        return Err(exc("AttributeError", "'CellId' object has no attribute 'append_all_neighbors'".to_string()));
+    }
+    *u = output;
+    Ok(())
+}
+
+fn union_expand_angle(u: mut ref Vec[u64], min_radius: f64, max_level_diff: i64) -> Result[(), Exc] {
+    let mut min_level = MAX_LEVEL;
+    for c in u.clone() {
+        min_level = imin(min_level, id_level(c)?);
+    }
+    let radius_level = m_max_level(min_width(), min_radius)?;
+    if radius_level == 0 and min_radius > m_value(min_width(), 0) {
+        union_expand(mut u, 0)?;
+    }
+    union_expand(mut u, imin(min_level + max_level_diff, radius_level))
+}
+
+fn denormalize(u: ref Vec[u64], min_level: i64, level_mod: i64) -> Result[Vec[u64], Exc] {
+    chk(min_level >= 0)?;
+    chk(min_level <= MAX_LEVEL)?;
+    chk(level_mod >= 1)?;
+    chk(level_mod <= 3)?;
+    let mut out: Vec[u64] = Vec.new();
+    for c in u {
+        let level = id_level(c)?;
+        let mut new_level = imax(min_level, level);
+        if level_mod > 1 {
+            new_level += (MAX_LEVEL - (new_level - min_level)) % level_mod;
+            new_level = imin(MAX_LEVEL, new_level);
+        }
+        if new_level == level {
+            out.push(c);
+        } else {
+            for child in id_children_at(c, new_level)? {
+                out.push(child);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn union_rect_bound(u: ref Vec[u64]) -> Result[Rect, Exc] {
+    let mut bound = rect_empty();
+    for c in u {
+        bound = rect_union(bound, cell_rect_bound(cell_of(c)?)?)?;
+    }
+    Ok(bound)
+}
+
+// ------------------------------------------------------------ regions
+
+enum Region {
+    RCap(Cap),
+    RRect(Rect),
+    RCell(Cell),
+}
+
+fn reg_may_intersect(r: ref Region, cell: Cell) -> Result[bool, Exc] {
+    match r {
+        Region.RCap(c) => cap_may_intersect(*c, cell),
+        Region.RRect(x) => rect_may_intersect(*x, cell),
+        Region.RCell(a) => cell_may_intersect(*a, cell),
+    }
+}
+
+fn reg_contains_cell(r: ref Region, cell: Cell) -> Result[bool, Exc] {
+    match r {
+        Region.RCap(c) => cap_contains_cell(*c, cell),
+        Region.RRect(x) => rect_contains_cell(*x, cell),
+        Region.RCell(a) => cell_contains_cell(*a, cell),
+    }
+}
+
+fn reg_contains_point(r: ref Region, p: P) -> Result[bool, Exc] {
+    match r {
+        Region.RCap(c) => cap_contains_point(*c, p),
+        Region.RRect(x) => rect_contains_point(*x, p),
+        Region.RCell(a) => cell_contains_point(*a, p),
+    }
+}
+
+fn reg_cap_bound(r: ref Region) -> Result[Cap, Exc] {
+    match r {
+        Region.RCap(c) => Ok(*c),
+        Region.RRect(x) => rect_cap_bound(*x),
+        Region.RCell(a) => cell_cap_bound(*a),
+    }
+}
+
+// ------------------------------------------------------------ RegionCoverer
+
+struct Cand {
+    cell: Cell,
+    terminal: bool,
+    children: Vec[i64],
+}
+
+// A heap entry: (priority, candidate), ordered as Python compares the
+// tuple, the priority first and then the candidate's cell id.
+#[derive(Copy, Clone)]
+struct HeapItem {
+    pri: i64,
+    cand: i64,
+}
+
+struct Coverer {
+    min_level: i64,
+    max_level: i64,
+    level_mod: i64,
+    max_cells: i64,
+    interior: bool,
+    result: Vec[u64],
+    pq: Vec[HeapItem],
+    cands: Vec[Cand],
+}
+
+fn coverer_new() -> Coverer {
+    Coverer {
+        min_level: 0,
+        max_level: MAX_LEVEL,
+        level_mod: 1,
+        max_cells: 8,
+        interior: false,
+        result: Vec.new(),
+        pq: Vec.new(),
+        cands: Vec.new(),
+    }
+}
+
+fn set_min_level(rc: mut ref Coverer, v: i64) -> Result[(), Exc] {
+    chk(v >= 0)?;
+    chk(v <= MAX_LEVEL)?;
+    rc.min_level = imax(0, imin(MAX_LEVEL, v));
+    Ok(())
+}
+
+fn set_max_level(rc: mut ref Coverer, v: i64) -> Result[(), Exc] {
+    chk(v >= 0)?;
+    chk(v <= MAX_LEVEL)?;
+    rc.max_level = imax(0, imin(MAX_LEVEL, v));
+    Ok(())
+}
+
+fn set_level_mod(rc: mut ref Coverer, v: i64) -> Result[(), Exc] {
+    chk(v >= 1)?;
+    chk(v <= 3)?;
+    rc.level_mod = imax(1, imin(3, v));
+    Ok(())
+}
+
+fn heap_less(rc: ref Coverer, a: HeapItem, b: HeapItem) -> bool {
+    if a.pri != b.pri {
+        return a.pri < b.pri;
+    }
+    rc.cands[a.cand].cell.id < rc.cands[b.cand].cell.id
+}
+
+// heapq.heappush and heapq.heappop, sift for sift.
+fn heap_siftdown(rc: mut ref Coverer, startpos: i64, pos0: i64) {
+    let mut pos = pos0;
+    let newitem = rc.pq[pos];
+    while pos > startpos {
+        let parentpos = (pos - 1) >> 1;
+        let parent = rc.pq[parentpos];
+        if heap_less(rc, newitem, parent) {
+            rc.pq[pos] = parent;
+            pos = parentpos;
+            continue;
+        }
+        break;
+    }
+    rc.pq[pos] = newitem;
+}
+
+fn heap_push(rc: mut ref Coverer, item: HeapItem) {
+    rc.pq.push(item);
+    let n = rc.pq.len();
+    heap_siftdown(mut rc, 0, n - 1);
+}
+
+fn heap_siftup(rc: mut ref Coverer, pos0: i64) {
+    let endpos = rc.pq.len();
+    let startpos = pos0;
+    let mut pos = pos0;
+    let newitem = rc.pq[pos];
+    let mut childpos = 2 * pos + 1;
+    while childpos < endpos {
+        let rightpos = childpos + 1;
+        if rightpos < endpos and not heap_less(rc, rc.pq[childpos], rc.pq[rightpos]) {
+            childpos = rightpos;
+        }
+        rc.pq[pos] = rc.pq[childpos];
+        pos = childpos;
+        childpos = 2 * pos + 1;
+    }
+    rc.pq[pos] = newitem;
+    heap_siftdown(mut rc, startpos, pos);
+}
+
+fn heap_pop(rc: mut ref Coverer) -> HeapItem {
+    let lastelt = match rc.pq.pop() {
+        Some(x) => x,
+        None => HeapItem { pri: 0, cand: -1 },
+    };
+    if rc.pq.len() > 0 {
+        let returnitem = rc.pq[0];
+        rc.pq[0] = lastelt;
+        heap_siftup(mut rc, 0);
+        return returnitem;
+    }
+    lastelt
+}
+
+// The index of the new candidate, or -1 for None.
+fn new_candidate(rc: mut ref Coverer, reg: ref Region, cell: Cell) -> Result[i64, Exc] {
+    if not reg_may_intersect(reg, cell)? {
+        return Ok(-1);
+    }
+    let mut is_terminal = false;
+    if cell.level >= rc.min_level {
+        if rc.interior {
+            if reg_contains_cell(reg, cell)? {
+                is_terminal = true;
+            } else if cell.level + rc.level_mod > rc.max_level {
+                return Ok(-1);
+            }
+        } else {
+            if cell.level + rc.level_mod > rc.max_level or reg_contains_cell(reg, cell)? {
+                is_terminal = true;
+            }
+        }
+    }
+    rc.cands.push(Cand { cell: cell, terminal: is_terminal, children: Vec.new() });
+    Ok(rc.cands.len() - 1)
+}
+
+fn expand_children(rc: mut ref Coverer, reg: ref Region, cand: i64, cell: Cell, num_levels0: i64) -> Result[i64, Exc] {
+    let num_levels = num_levels0 - 1;
+    let mut num_terminals = 0;
+    for child_cell in cell_subdivide(cell)? {
+        if num_levels > 0 {
+            if reg_may_intersect(reg, child_cell)? {
+                num_terminals += expand_children(mut rc, reg, cand, child_cell, num_levels)?;
+            }
+            continue;
+        }
+        let child = new_candidate(mut rc, reg, child_cell)?;
+        if child != -1 {
+            rc.cands[cand].children.push(child);
+            if rc.cands[child].terminal {
+                num_terminals += 1;
+            }
+        }
+    }
+    Ok(num_terminals)
+}
+
+fn max_children_shift(rc: ref Coverer) -> i64 {
+    2 * rc.level_mod
+}
+
+fn add_candidate(rc: mut ref Coverer, reg: ref Region, cand: i64) -> Result[(), Exc] {
+    if cand == -1 {
+        return Ok(());
+    }
+    if rc.cands[cand].terminal {
+        let id = rc.cands[cand].cell.id;
+        rc.result.push(id);
+        return Ok(());
+    }
+    chk(rc.cands[cand].children.len() == 0)?;
+    let cell = rc.cands[cand].cell;
+    let mut num_levels = rc.level_mod;
+    if cell.level < rc.min_level {
+        num_levels = 1;
+    }
+    let num_terminals = expand_children(mut rc, reg, cand, cell, num_levels)?;
+    let num_children = rc.cands[cand].children.len();
+    let shift = max_children_shift(rc);
+    if num_children == 0 {
+        // the candidate is dropped
+    } else if not rc.interior and num_terminals == (1 << shift) and cell.level >= rc.min_level {
+        rc.cands[cand].terminal = true;
+        add_candidate(mut rc, reg, cand)?;
+    } else {
+        let priority = (((cell.level << shift) + num_children) << shift) + num_terminals;
+        heap_push(mut rc, HeapItem { pri: priority, cand: cand });
+    }
+    Ok(())
+}
+
+fn face_cell(face: i64) -> Result[Cell, Exc] {
+    cell_of(from_face_pos_level(face, 0, 0)?)
+}
+
+fn initial_candidates(rc: mut ref Coverer, reg: ref Region) -> Result[(), Exc] {
+    if rc.max_cells >= 4 {
+        let cap = reg_cap_bound(reg)?;
+        let mut level = imin(m_max_level(min_width(), 2.0 * cap_angle(cap))?, imin(rc.max_level, MAX_LEVEL - 1));
+        if rc.level_mod > 1 and level > rc.min_level {
+            level -= (level - rc.min_level) % rc.level_mod;
+        }
+        if level > 0 {
+            let c = from_point(cap.axis)?;
+            for nb in vertex_neighbors(c, level)? {
+                let k = new_candidate(mut rc, reg, cell_of(nb)?)?;
+                add_candidate(mut rc, reg, k)?;
+            }
+            return Ok(());
+        }
+    }
+    let mut face = 0;
+    while face < 6 {
+        let k = new_candidate(mut rc, reg, face_cell(face)?)?;
+        add_candidate(mut rc, reg, k)?;
+        face += 1;
+    }
+    Ok(())
+}
+
+fn run_covering(rc: mut ref Coverer, reg: ref Region) -> Result[(), Exc] {
+    chk(rc.pq.len() == 0)?;
+    chk(rc.result.len() == 0)?;
+    initial_candidates(mut rc, reg)?;
+    while rc.pq.len() > 0 and (not rc.interior or rc.result.len() < rc.max_cells) {
+        let cand = heap_pop(mut rc).cand;
+        let result_size = if rc.interior { 0 } else { rc.pq.len() };
+        let level = rc.cands[cand].cell.level;
+        let num_children = rc.cands[cand].children.len();
+        if level < rc.min_level or num_children == 1 or rc.result.len() + result_size + num_children <= rc.max_cells {
+            let kids = rc.cands[cand].children.clone();
+            for child in kids {
+                add_candidate(mut rc, reg, child)?;
+            }
+        } else if rc.interior {
+            // the candidate is dropped
+        } else {
+            rc.cands[cand].terminal = true;
+            add_candidate(mut rc, reg, cand)?;
+        }
+    }
+    rc.pq = Vec.new();
+    rc.cands = Vec.new();
+    Ok(())
+}
+
+fn get_covering(rc: mut ref Coverer, reg: ref Region, interior: bool) -> Result[Vec[u64], Exc] {
+    rc.result = Vec.new();
+    rc.interior = interior;
+    run_covering(mut rc, reg)?;
+    let u = union_new(rc.result)?;
+    denormalize(u, rc.min_level, rc.level_mod)
+}
+
+// RegionCoverer.flood_fill from start's level-`level` parent.
+fn simple_covering(reg: ref Region, start: P, level: i64) -> Result[Vec[u64], Exc] {
+    let first = id_parent_at(from_point(start)?, level)?;
+    let mut seen: Vec[u64] = Vec.new();
+    let mut frontier: Vec[u64] = Vec.new();
+    let mut out: Vec[u64] = Vec.new();
+    seen.push(first);
+    frontier.push(first);
+    while frontier.len() != 0 {
+        let c = match frontier.pop() {
+            Some(x) => x,
+            None => 0,
+        };
+        if not reg_may_intersect(reg, cell_of(c)?)? {
+            continue;
+        }
+        out.push(c);
+        for nbr in edge_neighbors(c)? {
+            let mut known = false;
+            for s in seen {
+                if s == nbr {
+                    known = true;
+                }
+            }
+            if not known {
+                seen.push(nbr);
+                frontier.push(nbr);
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ parsing
+
+fn fld(f: ref Vec[String], i: i64) -> Result[String, Exc] {
+    if i < 0 or i >= f.len() {
+        return Err(exc("IndexError", "list index out of range".to_string()));
+    }
+    Ok(f[i].clone())
+}
+
+fn tail(f: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = from;
+    while i < f.len() {
+        out.push(f[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn head(f: ref Vec[String], n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < n and i < f.len() {
+        out.push(f[i].clone());
+        i += 1;
+    }
+    out
+}
+
+fn prefixed(kind: Str, f: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    out.push(kind.to_string());
+    for x in f {
+        out.push(x.clone());
+    }
+    out
+}
+
+// float(s)
+fn pfloat(s: ref String) -> Result[f64, Exc] {
+    let t = py_strip(s);
+    match f64.parse(t) {
+        Ok(x) => Ok(x),
+        Err(_) => Err(value_error(f"could not convert string to float: {str_repr(s)}")),
+    }
+}
+
+fn digit_of(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'z' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'Z' {
+        c as i64 - 55
+    } else {
+        99
+    }
+}
+
+// int(s, base) for base 10, 16 and 0 (prefix-detected): an optional sign,
+// a 0x / 0o / 0b prefix where the base allows one, and digits with single
+// underscores between them.
+fn parse_int(s: ref String, base0: i64) -> Option[i128] {
+    let cs = chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let mut base = base0;
+    if i + 1 < cs.len() and cs[i] == '0' {
+        let p = cs[i + 1];
+        if (p == 'x' or p == 'X') and (base == 16 or base == 0) {
+            base = 16;
+            i += 2;
+        } else if (p == 'o' or p == 'O') and base == 0 {
+            base = 8;
+            i += 2;
+        } else if (p == 'b' or p == 'B') and base == 0 {
+            base = 2;
+            i += 2;
+        }
+    }
+    let leading_zero_ok = base != 0;
+    if base == 0 {
+        base = 10;
+    }
+    let start = i;
+    let mut n: i128 = 0;
+    let mut digits = 0;
+    let mut nonzero = false;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '_' {
+            if i == start or i + 1 >= cs.len() or cs[i + 1] == '_' {
+                return None;
+            }
+            i += 1;
+            continue;
+        }
+        let d = digit_of(c);
+        if d >= base {
+            return None;
+        }
+        if d != 0 {
+            nonzero = true;
+        }
+        n = n * (base as i128) + (d as i128);
+        digits += 1;
+        i += 1;
+    }
+    if digits == 0 {
+        return None;
+    }
+    // int('012', 0) is an error: base 0 rejects a leading zero on a
+    // nonzero decimal.
+    if not leading_zero_ok and base == 10 and cs[start] == '0' and nonzero {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn pint(s: ref String) -> Result[i64, Exc] {
+    match parse_int(s, 10) {
+        Some(n) => Ok(n as i64),
+        None => Err(value_error(f"invalid literal for int() with base 10: {str_repr(s)}")),
+    }
+}
+
+fn pint_wide(s: ref String) -> Result[i128, Exc] {
+    match parse_int(s, 10) {
+        Some(n) => Ok(n),
+        None => Err(value_error(f"invalid literal for int() with base 10: {str_repr(s)}")),
+    }
+}
+
+// ------------------------------------------------------------ printing
+
+fn out(s: ref String) {
+    println(f"  {s}");
+}
+
+fn r(x: f64) -> String {
+    float_repr(x)
+}
+
+fn tf(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn ll_str(p: LatLng) -> String {
+    f"{r(degrees(p.lat))}, {r(degrees(p.lng))}"
+}
+
+fn pt_str(p: P) -> String {
+    f"({r(p.x)}, {r(p.y)}, {r(p.z)})"
+}
+
+fn toks(cs: ref Vec[u64]) -> String {
+    if cs.len() == 0 {
+        return "-".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for c in cs {
+        parts.push(to_token(c));
+    }
+    join_strs(parts, " ")
+}
+
+fn interval_str(name: Str, lo: f64, hi: f64) -> String {
+    f"{name} [{r(lo)}, {r(hi)}]"
+}
+
+fn rect_str(x: Rect) -> String {
+    if rect_is_empty(x) {
+        return "empty".to_string();
+    }
+    f"lat [{r(degrees(x.lat.lo))}, {r(degrees(x.lat.hi))}] lng [{r(degrees(x.lng.lo))}, {r(degrees(x.lng.hi))}]"
+}
+
+fn cap_str(c: Cap) -> String {
+    if cap_is_empty(c) {
+        return "empty".to_string();
+    }
+    f"axis {pt_str(c.axis)} height {r(c.height)}"
+}
+
+fn latlng(a: ref String, b: ref String) -> Result[LatLng, Exc] {
+    Ok(ll_degrees(pfloat(a)?, pfloat(b)?))
+}
+
+fn latlng_at(f: ref Vec[String], i: i64) -> Result[LatLng, Exc] {
+    latlng(fld(f, i)?, fld(f, i + 1)?)
+}
+
+fn unknown_op(op: ref String) -> Exc {
+    value_error(f"unknown op: {op}")
+}
+
+// `cap LAT LNG DEG`, `rect LAT LNG LAT LNG` or `cell TOKEN`.
+fn region(f: ref Vec[String]) -> Result[Region, Exc] {
+    let kind = fld(f, 0)?;
+    if kind == "cap" {
+        let axis = ll_point(latlng_at(f, 1)?);
+        let angle = radians(pfloat(fld(f, 3)?)?);
+        return Ok(Region.RCap(cap_from_axis_angle(axis, angle)?));
+    }
+    if kind == "rect" {
+        return Ok(Region.RRect(rect_from_pair(latlng_at(f, 1)?, latlng_at(f, 3)?)?));
+    }
+    if kind == "cell" {
+        return Ok(Region.RCell(cell_of(from_token(fld(f, 1)?)?)?));
+    }
+    Err(value_error(f"unknown region kind: {kind}"))
+}
+
+fn region_cap(f: ref Vec[String]) -> Result[Cap, Exc] {
+    match region(prefixed("cap", head(f, 3)))? {
+        Region.RCap(c) => Ok(c),
+        _ => Err(value_error("not a cap".to_string())),
+    }
+}
+
+fn region_rect(f: ref Vec[String]) -> Result[Rect, Exc] {
+    match region(prefixed("rect", head(f, 4)))? {
+        Region.RRect(x) => Ok(x),
+        _ => Err(value_error("not a rect".to_string())),
+    }
+}
+
+const EARTH_KM: f64 = 6371.0088;
+
+// ------------------------------------------------------------ commands
+
+fn cmd_cell(f: ref Vec[String]) -> Result[(), Exc] {
+    let mut c = from_lat_lng(latlng_at(f, 0)?)?;
+    if f.len() > 2 {
+        c = id_parent_at(c, pint(f[2])?)?;
+    }
+    out(id_repr(c));
+    out(f"token {to_token(c)} face {id_face(c)} level {id_level(c)?} leaf {tf(id_is_leaf(c))}");
+    out(f"center {ll_str(id_to_lat_lng(c))}");
+    let cell = cell_of(c)?;
+    out(f"orientation {cell.orientation}");
+    let mut k = 0;
+    while k < 4 {
+        out(f"vertex {k} {ll_str(ll_from_point(cell_vertex(cell, k)))}");
+        k += 1;
+    }
+    out(f"rect {rect_str(cell_rect_bound(cell)?)}");
+    out(f"cap {cap_str(cell_cap_bound(cell)?)}");
+    out(f"area exact {r(cell_exact_area(cell)?)} approx {r(cell_approx_area(cell))} average {r(cell_average_area(cell))}");
+    Ok(())
+}
+
+fn cmd_token(f: ref Vec[String]) -> Result[(), Exc] {
+    let c = from_token(fld(f, 0)?)?;
+    out(id_repr(c));
+    out(f"valid {tf(id_valid(c))}");
+    out(f"face {id_face(c)} level {id_level(c)?} leaf {tf(id_is_leaf(c))}");
+    out(f"token {to_token(c)}");
+    let mut chain: Vec[u64] = Vec.new();
+    let mut p = c;
+    while not id_is_face(p) {
+        p = id_parent(p)?;
+        chain.push(p);
+    }
+    out(f"parents {toks(chain)}");
+    let (_face, i, j, orient) = to_face_ij_orientation(c);
+    out(f"ij {i} {j} orientation {orient}");
+    out(f"center {ll_str(id_to_lat_lng(c))}");
+    Ok(())
+}
+
+fn cmd_id(f: ref Vec[String]) -> Result[(), Exc] {
+    let s = fld(f, 0)?;
+    let n = match parse_int(s, 0) {
+        Some(n) => n,
+        None => return Err(value_error(f"invalid literal for int() with base 0: {str_repr(s)}")),
+    };
+    let c = cid(n);
+    out(id_repr(c));
+    out(f"valid {tf(id_valid(c))}");
+    Ok(())
+}
+
+fn cmd_nav(f: ref Vec[String]) -> Result[(), Exc] {
+    let c = from_token(fld(f, 0)?)?;
+    let op = fld(f, 1)?;
+    let a = tail(f, 2);
+    if op == "parent" {
+        if a.len() == 0 {
+            out(to_token(id_parent(c)?));
+        } else {
+            out(to_token(id_parent_at(c, pint(a[0])?)?));
+        }
+    } else if op == "child" {
+        out(to_token(id_child(c, pint(fld(a, 0)?)?)?));
+    } else if op == "children" {
+        if a.len() == 0 {
+            out(toks(id_children(c)?));
+        } else {
+            out(toks(id_children_at(c, pint(a[0])?)?));
+        }
+    } else if op == "child_range" {
+        if a.len() == 0 {
+            let b = child_begin(c)?;
+            let e = child_end(c)?;
+            out(f"{id_repr(b)} {id_repr(e)}");
+        } else {
+            let lv = pint(a[0])?;
+            let b = child_begin_at(c, lv)?;
+            let e = child_end_at(c, lv)?;
+            out(f"{id_repr(b)} {id_repr(e)}");
+        }
+    } else if op == "next" {
+        out(id_repr(id_next(c)));
+    } else if op == "prev" {
+        out(id_repr(id_prev(c)));
+    } else if op == "next_wrap" {
+        out(id_repr(next_wrap(c)?));
+    } else if op == "prev_wrap" {
+        out(id_repr(prev_wrap(c)?));
+    } else if op == "advance" {
+        out(id_repr(advance(c, pint_wide(fld(a, 0)?)?)?));
+    } else if op == "advance_wrap" {
+        out(id_repr(advance_wrap(c, pint_wide(fld(a, 0)?)?)?));
+    } else if op == "range" {
+        out(f"{id_repr(range_min(c))} {id_repr(range_max(c))}");
+    } else if op == "edge" {
+        out(toks(edge_neighbors(c)?));
+    } else if op == "vertex" {
+        out(toks(vertex_neighbors(c, pint(fld(a, 0)?)?)?));
+    } else if op == "all" {
+        out(toks(all_neighbors(c, pint(fld(a, 0)?)?)?));
+    } else if op == "contains" {
+        out(tf(id_contains(c, from_token(fld(a, 0)?)?)?));
+    } else if op == "intersects" {
+        out(tf(id_intersects(c, from_token(fld(a, 0)?)?)?));
+    } else if op == "lt" {
+        let d = from_token(fld(a, 0)?)?;
+        out(f"{tf(c < d)} {tf(c == d)} {tf(c > d)}");
+    } else {
+        return Err(unknown_op(op));
+    }
+    Ok(())
+}
+
+fn cmd_walk(f: ref Vec[String]) -> Result[(), Exc] {
+    let level = pint(fld(f, 0)?)?;
+    let begin = id_begin(level)?;
+    let end = id_end(level)?;
+    let mut cells: Vec[String] = Vec.new();
+    let mut c = wide(begin);
+    let increment = wide(id_lsb(begin)) * 2;
+    while c != wide(end) {
+        cells.push(to_token(cid(c)));
+        c += increment;
+    }
+    out(f"{cells.len()} cells");
+    let first = join_strs(head(cells, 6), " ");
+    out(f"first {first}");
+    let from = if cells.len() > 6 { cells.len() - 6 } else { 0 };
+    let last = join_strs(tail(cells, from), " ");
+    out(f"last {last}");
+    out(f"begin {id_repr(begin)} end {id_repr(end)}");
+    Ok(())
+}
+
+fn cmd_latlng(f: ref Vec[String]) -> Result[(), Exc] {
+    let p = latlng_at(f, 0)?;
+    out(f"valid {tf(ll_valid(p))}");
+    let n = ll_normalized(p)?;
+    out(f"normalized {ll_str(n)} valid {tf(ll_valid(n))}");
+    let q = ll_point(p);
+    out(f"point {pt_str(q)}");
+    let back = ll_from_point(q);
+    out(f"back {ll_str(back)}");
+    out(f"approx {tf(ll_approx(back, p))}");
+    if f.len() > 2 {
+        let o = latlng_at(f, 2)?;
+        let d = ll_distance(p, o)?;
+        out(f"distance {r(d)} rad {r(degrees(d))} deg {r(d * EARTH_KM)} km");
+        out(f"angle {r(p_angle(q, ll_point(o)))}");
+        out(f"sum {ll_str(ll2(p.lat + o.lat, p.lng + o.lng))} diff {ll_str(ll2(p.lat - o.lat, p.lng - o.lng))}");
+    }
+    Ok(())
+}
+
+fn cmd_point(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = pt3(pfloat(fld(f, 0)?)?, pfloat(fld(f, 1)?)?, pfloat(fld(f, 2)?)?);
+    out(f"norm {r(p_norm(a))} norm2 {r(p_norm2(a))}");
+    let u = p_normalize(a);
+    out(f"normalized {pt_str(u)}");
+    out(f"largest {p_largest(a)}");
+    let (face, uu, vv) = xyz_to_face_uv(a)?;
+    out(f"face {face} uv {r(uu)} {r(vv)}");
+    out(f"ortho {pt_str(ortho(u))}");
+    out(f"latlng {ll_str(ll_from_point(a))}");
+    out(f"cell {to_token(from_point(a)?)}");
+    Ok(())
+}
+
+fn cmd_cap(f: ref Vec[String]) -> Result[(), Exc] {
+    let c = region_cap(f)?;
+    out(f"height {r(c.height)} area {r(cap_area(c))} angle {r(degrees(cap_angle(c)))}");
+    out(f"valid {tf(cap_valid(c))} empty {tf(cap_is_empty(c))} full {tf(cap_is_full(c))}");
+    out(f"rect {rect_str(cap_rect_bound(c)?)}");
+    let comp = cap_complement(c)?;
+    out(f"complement {cap_str(comp)}");
+    let rest = tail(f, 3);
+    let mut i = 0;
+    while i < rest.len() {
+        let p = latlng_at(rest, i)?;
+        let q = ll_point(p);
+        out(f"contains {ll_str(p)} {tf(cap_contains_point(c, q)?)} interior {tf(cap_interior_contains_point(c, q)?)}");
+        i += 2;
+    }
+    Ok(())
+}
+
+fn cmd_capop(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = region_cap(f)?;
+    let op = fld(f, 3)?;
+    let b = region_cap(tail(f, 4))?;
+    if op == "contains" {
+        out(tf(cap_contains_cap(a, b)));
+    } else if op == "intersects" {
+        out(tf(cap_intersects_cap(a, b)));
+    } else if op == "interior_intersects" {
+        out(tf(cap_interior_intersects(a, b)));
+    } else if op == "approx" {
+        out(tf(cap_approx(a, b)));
+    } else {
+        return Err(unknown_op(op));
+    }
+    Ok(())
+}
+
+fn cmd_capmisc(f: ref Vec[String]) -> Result[(), Exc] {
+    let op = fld(f, 0)?;
+    let mut c = cap_empty();
+    if op == "empty" {
+        c = cap_empty();
+    } else if op == "full" {
+        c = cap_full();
+    } else if op == "height" {
+        c = cap_from_axis_height(ll_point(latlng_at(f, 1)?), pfloat(fld(f, 3)?)?)?;
+    } else if op == "area" {
+        c = cap_from_axis_area(ll_point(latlng_at(f, 1)?), pfloat(fld(f, 3)?)?)?;
+    } else if op == "grow" {
+        c = cap_from_axis_height(ll_point(latlng_at(f, 1)?), 0.0)?;
+        let mut i = 3;
+        while i < f.len() {
+            cap_add_point(mut c, ll_point(latlng_at(f, i)?))?;
+            i += 2;
+        }
+    } else if op == "expanded" {
+        let c0 = cap_from_axis_angle(ll_point(latlng_at(f, 1)?), radians(pfloat(fld(f, 3)?)?))?;
+        c = cap_expanded(c0, radians(pfloat(fld(f, 4)?)?))?;
+    } else {
+        return Err(unknown_op(op));
+    }
+    out(f"cap {cap_str(c)}");
+    out(f"area {r(cap_area(c))} angle {r(degrees(cap_angle(c)))}");
+    out(f"rect {rect_str(cap_rect_bound(c)?)}");
+    Ok(())
+}
+
+fn cmd_rect(f: ref Vec[String]) -> Result[(), Exc] {
+    let x = region_rect(f)?;
+    out(f"rect {rect_str(x)}");
+    out(f"valid {tf(rect_valid(x))} empty {tf(rect_is_empty(x))} full {tf(rect_is_full(x))} point {tf(rect_is_point(x))}");
+    out(f"center {ll_str(rect_center(x))} size {ll_str(rect_size(x))}");
+    out(f"area {r(rect_area(x))}");
+    let mut k = 0;
+    while k < 4 {
+        out(f"vertex {k} {ll_str(rect_vertex(x, k))}");
+        k += 1;
+    }
+    out(f"cap {cap_str(rect_cap_bound(x)?)}");
+    let rest = tail(f, 4);
+    let mut i = 0;
+    while i < rest.len() {
+        let p = latlng_at(rest, i)?;
+        out(f"contains {ll_str(p)} {tf(rect_contains_ll(x, p)?)} interior {tf(rect_interior_contains_ll(x, p)?)}");
+        i += 2;
+    }
+    Ok(())
+}
+
+fn cmd_rectop(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = region_rect(f)?;
+    let op = fld(f, 4)?;
+    if op == "expanded" {
+        out(rect_str(rect_expanded(a, latlng_at(f, 5)?)?));
+        return Ok(());
+    }
+    if op == "convolve" {
+        out(rect_str(rect_convolve(a, radians(pfloat(fld(f, 5)?)?))?));
+        return Ok(());
+    }
+    if op == "cell" {
+        let cell = cell_of(from_token(fld(f, 5)?)?)?;
+        let contains = rect_contains_cell(a, cell)?;
+        let intersects = rect_intersects_cell(a, cell)?;
+        let may = rect_may_intersect(a, cell)?;
+        out(f"contains {tf(contains)} intersects {tf(intersects)} may {tf(may)}");
+        return Ok(());
+    }
+    let b = region_rect(tail(f, 5))?;
+    if op == "union" {
+        out(rect_str(rect_union(a, b)?));
+    } else if op == "intersection" {
+        out(rect_str(rect_intersection(a, b)?));
+    } else if op == "contains" {
+        out(tf(rect_contains_rect(a, b)));
+    } else if op == "intersects" {
+        out(tf(rect_intersects_rect(a, b)));
+    } else if op == "interior" {
+        out(f"{tf(rect_interior_contains_rect(a, b))} {tf(rect_interior_intersects_rect(a, b))}");
+    } else if op == "approx" {
+        out(tf(rect_approx(a, b)?));
+    } else if op == "eq" {
+        out(tf(rect_eq(a, b)));
+    } else {
+        return Err(unknown_op(op));
+    }
+    Ok(())
+}
+
+fn cmd_sint(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = si(pfloat(fld(f, 0)?)?, pfloat(fld(f, 1)?)?)?;
+    let head_s = interval_str("sint", a.lo, a.hi);
+    out(f"{head_s} length {r(si_length(a))} center {r(si_center(a))}");
+    out(f"full {tf(si_is_full(a))} empty {tf(si_is_empty(a))} inverted {tf(si_is_inverted(a))}");
+    let comp = si_complement(a)?;
+    out(interval_str("complement", comp.lo, comp.hi));
+    out(f"complement center {r(si_complement_center(a)?)}");
+    if f.len() > 2 {
+        let b = si(pfloat(fld(f, 2)?)?, pfloat(fld(f, 3)?)?)?;
+        let un = si_union(a, b)?;
+        out(interval_str("union", un.lo, un.hi));
+        let ins = si_intersection(a, b)?;
+        out(interval_str("intersection", ins.lo, ins.hi));
+        out(f"contains {tf(si_contains(a, b))} intersects {tf(si_intersects(a, b))} interior {tf(si_interior_contains(a, b))} {tf(si_interior_intersects(a, b))}");
+        out(f"hausdorff {r(si_hausdorff(a, b)?)}");
+    }
+    if f.len() > 4 {
+        let e = si_expanded(a, pfloat(fld(f, 4)?)?)?;
+        out(interval_str("expanded", e.lo, e.hi));
+    }
+    Ok(())
+}
+
+fn cmd_lint(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = li(pfloat(fld(f, 0)?)?, pfloat(fld(f, 1)?)?);
+    let b = li(pfloat(fld(f, 2)?)?, pfloat(fld(f, 3)?)?);
+    let head_s = interval_str("lint", a.lo, a.hi);
+    out(f"{head_s} length {r(li_length(a))} center {r(li_center(a))} empty {tf(li_is_empty(a))}");
+    let un = li_union(a, b);
+    out(interval_str("union", un.lo, un.hi));
+    let ins = li_intersection(a, b);
+    out(interval_str("intersection", ins.lo, ins.hi));
+    out(f"contains {tf(li_contains(a, b))} intersects {tf(li_intersects(a, b))} interior {tf(li_interior_contains(a, b))} {tf(li_interior_intersects(a, b))} eq {tf(li_eq(a, b))}");
+    let e = li_expanded(a, pfloat(fld(f, 4)?)?)?;
+    out(interval_str("expanded", e.lo, e.hi));
+    Ok(())
+}
+
+fn cmd_cover(f: ref Vec[String], interior: bool) -> Result[(), Exc] {
+    let mut rc = coverer_new();
+    set_min_level(mut rc, pint(fld(f, 0)?)?)?;
+    set_max_level(mut rc, pint(fld(f, 1)?)?)?;
+    rc.max_cells = pint(fld(f, 2)?)?;
+    set_level_mod(mut rc, pint(fld(f, 3)?)?)?;
+    let reg = region(tail(f, 4))?;
+    let cells = get_covering(mut rc, reg, interior)?;
+    out(f"{cells.len()} cells");
+    out(toks(cells));
+    if cells.len() > 0 {
+        let u = union_new(cells)?;
+        out(f"normalized {u.len()}");
+    }
+    Ok(())
+}
+
+fn cmd_simple(f: ref Vec[String]) -> Result[(), Exc] {
+    let reg = region(tail(f, 2))?;
+    let start = ll_point(latlng_at(f, 0)?);
+    let level = pint(fld(f, f.len() - 1)?)?;
+    let mut cells = simple_covering(reg, start, level)?;
+    out(f"{cells.len()} cells");
+    sort_ids(mut cells);
+    out(toks(cells));
+    Ok(())
+}
+
+fn union_of(field: ref String) -> Result[Vec[u64], Exc] {
+    let mut ids: Vec[u64] = Vec.new();
+    if field == "-" {
+        return Ok(ids);
+    }
+    for t in split_on(field, ',') {
+        ids.push(from_token(t)?);
+    }
+    union_new(ids)
+}
+
+fn cmd_union(f: ref Vec[String]) -> Result[(), Exc] {
+    let mut u = union_of(fld(f, 0)?)?;
+    out(f"{u.len()} cells {toks(u)}");
+    if f.len() <= 1 {
+        return Ok(());
+    }
+    let op = f[1].clone();
+    if op == "denormalize" {
+        out(toks(denormalize(u, pint(fld(f, 2)?)?, pint(fld(f, 3)?)?)?));
+    } else if op == "expand" {
+        union_expand(mut u, pint(fld(f, 2)?)?)?;
+        out(toks(u));
+    } else if op == "expand_angle" {
+        union_expand_angle(mut u, radians(pfloat(fld(f, 2)?)?), pint(fld(f, 3)?)?)?;
+        out(toks(u));
+    } else if op == "rect" {
+        out(rect_str(union_rect_bound(u)?));
+    } else if op == "has" {
+        out(tf(union_contains_id(u, from_token(fld(f, 2)?)?)));
+    } else if op == "hits" {
+        out(tf(union_intersects_id(u, from_token(fld(f, 2)?)?)));
+    } else if op == "point" {
+        out(tf(union_contains_id(u, from_point(ll_point(latlng_at(f, 2)?))?)));
+    } else {
+        let v = union_of(fld(f, 2)?)?;
+        let mut w: Vec[u64] = Vec.new();
+        if op == "union" {
+            w = get_union(u, v)?;
+        } else if op == "intersection" {
+            w = get_intersection(u, v)?;
+        } else if op == "difference" {
+            w = get_difference(u, v)?;
+        } else if op == "contains" {
+            out(tf(union_contains_union(u, v)));
+            return Ok(());
+        } else if op == "intersects" {
+            out(tf(union_intersects_union(u, v)));
+            return Ok(());
+        } else if op == "eq" {
+            out(tf(union_eq(u, v)));
+            return Ok(());
+        } else if op == "clip" {
+            w = get_intersection_id(u, from_token(fld(f, 2)?)?)?;
+        } else {
+            return Err(unknown_op(op));
+        }
+        out(f"{w.len()} cells {toks(w)}");
+    }
+    Ok(())
+}
+
+fn metric_named(name: ref String) -> Result[Metric, Exc] {
+    let sqrt2 = (2.0).sqrt();
+    if name == "min_angle_span" {
+        Ok(Metric { deriv: 4.0 / 3.0, dim: 1 })
+    } else if name == "max_angle_span" {
+        Ok(Metric { deriv: 1.704897179199218452, dim: 1 })
+    } else if name == "avg_edge" {
+        Ok(Metric { deriv: 1.459213746386106062, dim: 1 })
+    } else if name == "min_width" {
+        Ok(Metric { deriv: 2.0 * sqrt2 / 3.0, dim: 1 })
+    } else if name == "max_diag" {
+        Ok(Metric { deriv: 2.438654594434021032, dim: 1 })
+    } else if name == "avg_area" {
+        Ok(Metric { deriv: 4.0 * PI / 6.0, dim: 2 })
+    } else if name == "min_area" {
+        Ok(Metric { deriv: 8.0 * sqrt2 / 9.0, dim: 2 })
+    } else if name == "max_area" {
+        Ok(Metric { deriv: 2.635799256963161491, dim: 2 })
+    } else {
+        Err(exc("KeyError", str_repr(name)))
+    }
+}
+
+fn cmd_metric(f: ref Vec[String]) -> Result[(), Exc] {
+    let m = metric_named(fld(f, 0)?)?;
+    let v = pfloat(fld(f, 1)?)?;
+    out(f"deriv {r(m.deriv)}");
+    let lo = m_min_level(m, v)?;
+    let hi = m_max_level(m, v)?;
+    let closest = m_closest_level(m, v)?;
+    out(f"min {lo} max {hi} closest {closest}");
+    for level in [0, 1, 10, 30] {
+        out(f"value {level} {r(m_value(m, level))}");
+    }
+    Ok(())
+}
+
+fn cmd_drem(f: ref Vec[String]) -> Result[(), Exc] {
+    out(r(drem(pfloat(fld(f, 0)?)?, pfloat(fld(f, 1)?)?)?));
+    Ok(())
+}
+
+fn cmd_area(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = ll_point(latlng_at(f, 0)?);
+    let b = ll_point(latlng_at(f, 2)?);
+    let c = ll_point(latlng_at(f, 4)?);
+    let area = tri_area(a, b, c)?;
+    out(f"area {r(area)} girard {r(girard_area(a, b, c)?)}");
+    out(f"ccw {tf(simple_ccw(a, b, c))}");
+    out(f"cross {pt_str(robust_cross_prod(a, b)?)}");
+    Ok(())
+}
+
+fn cmd_crossing(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = ll_point(latlng_at(f, 0)?);
+    let b = ll_point(latlng_at(f, 2)?);
+    let c = ll_point(latlng_at(f, 4)?);
+    let d = ll_point(latlng_at(f, 6)?);
+    out(tf(simple_crossing(a, b, c, d)));
+    Ok(())
+}
+
+fn cmd_subdivide(f: ref Vec[String]) -> Result[(), Exc] {
+    let cell = cell_of(from_token(fld(f, 0)?)?)?;
+    for child in cell_subdivide(cell)? {
+        out(f"{to_token(child.id)} orientation {child.orientation} center {ll_str(ll_from_point(cell_center(child)))}");
+        out(f"  rect {rect_str(cell_rect_bound(child)?)}");
+    }
+    Ok(())
+}
+
+fn cmd_cellop(f: ref Vec[String]) -> Result[(), Exc] {
+    let a = cell_of(from_token(fld(f, 0)?)?)?;
+    let op = fld(f, 1)?;
+    if op == "contains" {
+        out(tf(cell_contains_cell(a, cell_of(from_token(fld(f, 2)?)?)?)?));
+    } else if op == "point" {
+        out(tf(cell_contains_point(a, ll_point(latlng_at(f, 2)?))?));
+    } else if op == "may" {
+        out(tf(cell_may_intersect(a, cell_of(from_token(fld(f, 2)?)?)?)?));
+    } else if op == "edges" {
+        let mut k = 0;
+        while k < 4 {
+            out(f"edge {k} {pt_str(cell_edge(a, k))}");
+            k += 1;
+        }
+    } else if op == "cap" {
+        let c = region_cap(tail(f, 2))?;
+        let contains = cap_contains_cell(c, a)?;
+        let may = cap_may_intersect(c, a)?;
+        out(f"contains {tf(contains)} may {tf(may)}");
+    } else {
+        return Err(unknown_op(op));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the place index
+
+struct Place {
+    name: String,
+    lat: f64,
+    lng: f64,
+}
+
+struct World {
+    places: Vec[Place],
+    zone_names: Vec[String],
+    zones: Vec[Vec[String]],
+}
+
+fn read_rows(path: Str) -> Result[Vec[Vec[String]], Exc] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(s) => s,
+        Err(_) => return Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: '{path}'")),
+    };
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for line in split_on(text, '\n') {
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        rows.push(split_on(line, '\t'));
+    }
+    Ok(rows)
+}
+
+fn load_world() -> Result[World, Exc] {
+    let mut places: Vec[Place] = Vec.new();
+    for row in read_rows("data/places.tsv")? {
+        places.push(Place { name: row[0].clone(), lat: pfloat(row[1])?, lng: pfloat(row[2])? });
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut zones: Vec[Vec[String]] = Vec.new();
+    for row in read_rows("data/zones.tsv")? {
+        names.push(row[0].clone());
+        zones.push(tail(row, 1));
+    }
+    Ok(World { places: places, zone_names: names, zones: zones })
+}
+
+fn cmd_index(w: ref World, f: ref Vec[String]) -> Result[(), Exc] {
+    let level = pint(fld(f, 0)?)?;
+    let mut keys: Vec[String] = Vec.new();
+    let mut names: Vec[Vec[String]] = Vec.new();
+    for p in w.places {
+        let t = to_token(id_parent_at(from_lat_lng(ll_degrees(p.lat, p.lng))?, level)?);
+        let mut k = 0;
+        while k < keys.len() and keys[k] != t {
+            k += 1;
+        }
+        if k == keys.len() {
+            keys.push(t);
+            names.push(Vec.new());
+        }
+        names[k].push(p.name.clone());
+    }
+    let mut order: Vec[String] = keys.clone();
+    order.sort();
+    for t in order {
+        let mut k = 0;
+        while keys[k] != t {
+            k += 1;
+        }
+        let joined = join_strs(names[k], ",");
+        out(f"{t} {joined}");
+    }
+    Ok(())
+}
+
+fn cmd_near(w: ref World, f: ref Vec[String]) -> Result[(), Exc] {
+    let center = latlng_at(f, 0)?;
+    let km = pfloat(fld(f, 2)?)?;
+    let mut rc = coverer_new();
+    rc.max_cells = pint(fld(f, 3)?)?;
+    set_max_level(mut rc, pint(fld(f, 4)?)?)?;
+    let cap = cap_from_axis_angle(ll_point(center), km / EARTH_KM)?;
+    let cover = union_new(get_covering(mut rc, Region.RCap(cap), false)?)?;
+    out(f"covering {cover.len()} cells");
+    let mut dists: Vec[f64] = Vec.new();
+    let mut hits: Vec[String] = Vec.new();
+    let mut candidates = 0;
+    for p in w.places {
+        let q = ll_degrees(p.lat, p.lng);
+        if not union_contains_id(cover, from_lat_lng(q)?) {
+            continue;
+        }
+        candidates += 1;
+        let d = ll_distance(center, q)? * EARTH_KM;
+        if d <= km {
+            // sorted() of (distance, name) pairs: insert in order.
+            let mut k = 0;
+            while k < dists.len() and (dists[k] < d or (dists[k] == d and hits[k] < p.name)) {
+                k += 1;
+            }
+            dists.insert(k, d);
+            hits.insert(k, p.name.clone());
+        }
+    }
+    out(f"candidates {candidates}");
+    let mut k = 0;
+    while k < hits.len() {
+        let d = dists[k];
+        out(f"{hits[k]} {d:.1} km");
+        k += 1;
+    }
+    Ok(())
+}
+
+fn cmd_zone(w: ref World, f: ref Vec[String]) -> Result[(), Exc] {
+    let name = fld(f, 0)?;
+    let mut z = -1;
+    let mut k = 0;
+    while k < w.zone_names.len() {
+        if w.zone_names[k] == name {
+            z = k;
+        }
+        k += 1;
+    }
+    if z < 0 {
+        return Err(exc("KeyError", str_repr(name)));
+    }
+    let reg = region(w.zones[z])?;
+    let mut rc = coverer_new();
+    rc.max_cells = pint(fld(f, 1)?)?;
+    set_max_level(mut rc, pint(fld(f, 2)?)?)?;
+    let inner = union_new(get_covering(mut rc, reg, true)?)?;
+    let outer = union_new(get_covering(mut rc, reg, false)?)?;
+    out(f"outer {outer.len()} inner {inner.len()}");
+    let mut inside: Vec[String] = Vec.new();
+    for p in w.places {
+        let q = ll_degrees(p.lat, p.lng);
+        let c = from_lat_lng(q)?;
+        if union_contains_id(inner, c) {
+            inside.push(p.name.clone());
+        } else if union_contains_id(outer, c) and reg_contains_point(reg, ll_point(q))? {
+            inside.push(f"{p.name}*");
+        }
+    }
+    if inside.len() == 0 {
+        out("inside -".to_string());
+    } else {
+        let joined = join_strs(inside, " ");
+        out(f"inside {joined}");
+    }
+    Ok(())
+}
+
+fn run_job(w: ref World, f: ref Vec[String]) -> Result[(), Exc] {
+    let cmd = f[0].clone();
+    let a = tail(f, 1);
+    if cmd == "cell" {
+        cmd_cell(a)
+    } else if cmd == "token" {
+        cmd_token(a)
+    } else if cmd == "id" {
+        cmd_id(a)
+    } else if cmd == "nav" {
+        cmd_nav(a)
+    } else if cmd == "walk" {
+        cmd_walk(a)
+    } else if cmd == "latlng" {
+        cmd_latlng(a)
+    } else if cmd == "point" {
+        cmd_point(a)
+    } else if cmd == "cap" {
+        cmd_cap(a)
+    } else if cmd == "capop" {
+        cmd_capop(a)
+    } else if cmd == "capmisc" {
+        cmd_capmisc(a)
+    } else if cmd == "rect" {
+        cmd_rect(a)
+    } else if cmd == "rectop" {
+        cmd_rectop(a)
+    } else if cmd == "sint" {
+        cmd_sint(a)
+    } else if cmd == "lint" {
+        cmd_lint(a)
+    } else if cmd == "cover" {
+        cmd_cover(a, false)
+    } else if cmd == "interior" {
+        cmd_cover(a, true)
+    } else if cmd == "simple" {
+        cmd_simple(a)
+    } else if cmd == "union" {
+        cmd_union(a)
+    } else if cmd == "metric" {
+        cmd_metric(a)
+    } else if cmd == "drem" {
+        cmd_drem(a)
+    } else if cmd == "area" {
+        cmd_area(a)
+    } else if cmd == "crossing" {
+        cmd_crossing(a)
+    } else if cmd == "subdivide" {
+        cmd_subdivide(a)
+    } else if cmd == "cellop" {
+        cmd_cellop(a)
+    } else if cmd == "index" {
+        cmd_index(w, a)
+    } else if cmd == "near" {
+        cmd_near(w, a)
+    } else if cmd == "zone" {
+        cmd_zone(w, a)
+    } else {
+        Err(exc("KeyError", str_repr(cmd)))
+    }
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    let _ = fs.remove_dir_all("data/out".to_string());
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let w = match load_world() {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln(f"setup failed: {e.cls}: {e.msg}");
+            return;
+        }
+    };
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let job = hex_string(line);
+        if job.starts_with("#") {
+            println(job);
+            continue;
+        }
+        let f = split_on(job, '\t');
+        let shown = join_strs(f, " ");
+        println(f"> {shown}");
+        if let Err(e) = run_job(w, f) {
+            println(f"  error {e.cls}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("232063656c6c206964732066726f6d206c61742f6c6e67\n63656c6c0933372e37373439092d3132322e34313934093330\n63656c6c0933372e37373439092d3132322e34313934093132\n63656c6c0933372e37373439092d3132322e343139340930\n63656c6c0934302e37313238092d37342e30303630093135\n63656c6c0935312e35303734092d302e313237380938\n63656c6c0933352e36373632093133392e36353033093230\n63656c6c092d33332e38363838093135312e323039330935\n63656c6c093009300931\n63656c6c09393009300933\n63656c6c092d393009300933\n63656c6c0930093138300934\n63656c6c0930092d3138300934\n63656c6c0934350934350932\n63656c6c092d3435092d3133350936\n63656c6c0931652d390931652d39093239\n63656c6c0936342e31343636092d32312e39343236093130\n63656c6c092d37372e38343139093136362e363836330937\n63656c6c0933372e37373439092d3132322e34313934093331\n63656c6c0933372e37373439092d3132322e34313934092d31\n63656c6c09393509323030\n63656c6c092d31322e35092d343030\n2320746f6b656e7320616e642072617720696473\n746f6b656e093839633235\n746f6b656e09383963323539\n746f6b656e0931\n746f6b656e0933\n746f6b656e0935\n746f6b656e0937\n746f6b656e0939\n746f6b656e0962\n746f6b656e093437\n746f6b656e0938303835383038633061353366333362\n746f6b656e0930\n746f6b656e0958\n746f6b656e09\n746f6b656e09666666666666666666666666666666\n746f6b656e0966666666666666666666666666666666\n746f6b656e09383038353830386330613533663333\n746f6b656e0931303030303030303030303030303031\n746f6b656e0963\n746f6b656e0964\n746f6b656e0932656635396264333532623933616333\n69640930\n69640931\n6964092d31\n696409307831303030303030303030303030303030\n696409307866666666666666666666666666666666\n69640930783130303030303030303030303030303030\n6964092d307831303030303030303030303030303030\n696409307863303030303030303030303030303030\n6964093132333435363738393031323334353637383930\n696409307835\n23206e617669676174696f6e\n6e617609383963323509706172656e74\n6e617609383963323509706172656e740933\n6e617609383963323509706172656e74093132\n6e6176093109706172656e74\n6e6176093830383538303863306135336633336209706172656e74093136\n6e6176093839633235096368696c640930\n");
+    s.push_str("6e6176093839633235096368696c640933\n6e61760938303835383038633061353366333362096368696c640930\n6e6176093839633235096368696c6472656e\n6e61760931096368696c6472656e\n6e6176093839633235096368696c6472656e093133\n6e6176093839633235096368696c645f72616e6765\n6e6176093839633235096368696c645f72616e6765093131\n6e6176093839633235096368696c645f72616e67650939\n6e61760938303835383038633061353366333362096368696c645f72616e6765\n6e6176093839633235096e657874\n6e61760938396332350970726576\n6e617609310970726576\n6e61760962096e657874\n6e6176093109707265765f77726170\n6e61760962096e6578745f77726170\n6e6176093839633235096e6578745f77726170\n6e617609383963323509616476616e6365093130\n6e617609383963323509616476616e6365092d3130\n6e617609383963323509616476616e63650931303030303030\n6e617609383963323509616476616e6365092d31303030303030\n6e617609383963323509616476616e63650930\n6e6176093109616476616e63650937\n6e617609383963323509616476616e63655f777261700931303030303030\n6e617609383963323509616476616e63655f77726170092d31303030303030\n6e6176093109616476616e63655f77726170092d31\n6e6176096209616476616e63655f77726170093133\n6e6176093309616476616e63655f77726170092d38\n6e61760938396332350972616e6765\n6e617609383038353830386330613533663333620972616e6765\n6e617609310972616e6765\n6e61760938396332350965646765\n6e617609310965646765\n6e617609350965646765\n6e617609383038353830386330613533663333620965646765\n6e617609383963323509766572746578093130\n6e6176093839633235097665727465780933\n6e61760931097665727465780930\n6e617609383963323509766572746578093132\n6e617609383963323509616c6c093132\n6e617609383963323509616c6c093133\n6e6176093109616c6c0931\n6e617609383963323509616c6c093131\n6e617609383963323509636f6e7461696e7309383963323539\n6e61760938396332353909636f6e7461696e73093839633235\n6e617609383963323509696e746572736563747309383963323539\n6e617609383963323509696e7465727365637473093839633234\n6e617609383963323509636f6e7461696e730930\n6e6176093839633235096c7409383963323539\n6e6176093839633235096c74093839633235\n6e61760938396332350974656c65706f7274\n");
+    s.push_str("77616c6b0930\n77616c6b0931\n77616c6b0932\n23206c61742f6c6e6720616e6420706f696e7473\n6c61746c6e670933372e37373439092d3132322e343139340934302e37313238092d37342e30303630\n6c61746c6e670935312e35303734092d302e313237380933352e36373632093133392e36353033\n6c61746c6e67092d33332e38363838093135312e32303933092d33332e38363838092d32382e37393037\n6c61746c6e6709300930093009313830\n6c61746c6e670939300930092d39300930\n6c61746c6e6709343509313930093435092d313730\n6c61746c6e67093130300930\n6c61746c6e67092d393109333730\n6c61746c6e670930092d313830\n6c61746c6e670931322e3509353430\n6c61746c6e670933372e37373439092d3132322e343139340933372e37373439092d3132322e34313934\n706f696e74093109300930\n706f696e7409300930092d32\n706f696e740933092d34093132\n706f696e74093109310931\n706f696e74092d302e3509302e3509302e31\n706f696e74093009300930\n706f696e740931652d3330300931652d3330300930\n706f696e7409302e33092d302e3909302e3331\n232063617073\n6361700933372e37373439092d3132322e3431393409310933372e38303434092d3132322e323731320934302e37313238092d37342e30303630\n6361700933372e37373439092d3132322e343139340930\n63617009393009300933300937300931300935390930092d3630093435\n6361700930093009393009300939300930092d3930\n63617009300931373909350930092d313738093009313735\n636170092d33332e38363838093135312e32303933093137392e39\n63617009313009323009313830\n636170093130093230092d31\n6361706f700933372e37373439092d3132322e3431393409313009636f6e7461696e730933372e37373439092d3132322e343139340932\n6361706f700933372e37373439092d3132322e34313934093209636f6e7461696e730933372e37373439092d3132322e34313934093130\n6361706f700933372e37373439092d3132322e3431393409313009696e74657273656374730934302e37313238092d37342e30303630093330\n6361706f700933372e37373439092d3132322e3431393409313009696e74657273656374730934302e37313238092d37342e30303630093430\n6361706f700933372e37373439092d3132322e3431393409313009696e746572696f725f696e74657273656374730934302e37313238092d37342e303036300933312e33\n6361706f700933372e37373439092d3132322e3431393409313009617070726f780933372e37373439092d3132322e34313934093130\n");
+    s.push_str("6361706f700933372e37373439092d3132322e3431393409313009736c6963650933372e37373439092d3132322e34313934093130\n6361706d69736309656d707479\n6361706d6973630966756c6c\n6361706d697363096865696768740935312e35303734092d302e3132373809302e3235\n6361706d69736309617265610933352e36373632093133392e3635303309312e30\n6361706d6973630967726f770933372e37373439092d3132322e343139340933372e38303434092d3132322e323731320933372e33333832092d3132312e38383633\n6361706d6973630967726f7709300930093009313830\n6361706d69736309657870616e6465640933372e37373439092d3132322e3431393409310932\n6361706d69736309657870616e6465640933372e37373439092d3132322e3431393409393009313030\n6361706d69736309657870616e6465640933372e37373439092d3132322e343139340931092d32\n23206c61742f6c6e67207265637473\n726563740933372e32092d3132322e360933382e30092d3132312e370933372e37373439092d3132322e343139340933382e30092d3132322e30093430092d3734\n72656374092d343009313730092d3130092d313730092d31382e31323438093137382e34353031092d3230092d313735092d323009313630\n72656374093130093230093130093230093130093230\n72656374092d3930092d3138300939300931383009300930\n72656374093630092d31300933350933300935312e35303734092d302e31323738\n7265637409383909300938392e35093138300938392e32093930\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709756e696f6e093430092d3830093435092d3730\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709696e74657273656374696f6e0933372e35092d313232093339092d313230\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709636f6e7461696e730933372e35092d3132322e350933372e38092d3132322e32\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709696e74657273656374730933382e31092d313232093339092d313231\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709696e746572696f720933372e32092d3132322e360933372e39092d313232\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709617070726f780933372e32092d3132322e360933382e30092d3132312e37\n726563746f700933372e32092d3132322e360933382e30092d3132312e370965710933382e30092d3132312e370933372e32092d3132322e36\n");
+    s.push_str("726563746f700933372e32092d3132322e360933382e30092d3132312e3709696e74657273656374696f6e092d313009300930093130\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709657870616e64656409310932\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709657870616e64656409300931\n726563746f700933372e32092d3132322e360933382e30092d3132312e3709636f6e766f6c76650931\n726563746f700933372e32092d3132322e360933382e30092d3132312e370963656c6c0938303866\n726563746f700933372e32092d3132322e360933382e30092d3132312e370963656c6c0938303835\n726563746f700933372e32092d3132322e360933382e30092d3132312e370963656c6c093839633235\n726563746f700933372e32092d3132322e360933382e30092d3132312e370963656c6c0931\n726563746f70092d343009313730092d3130092d31373009756e696f6e092d3330092d313735092d35092d313630\n726563746f70092d343009313730092d3130092d31373009696e74657273656374696f6e092d3330092d313735092d35092d313630\n726563746f70092d343009313730092d3130092d31373009636f6e7461696e73092d333009313735092d3135092d313735\n726563746f70092d343009313730092d3130092d31373009636f6e766f6c76650935\n726563746f70093830092d323009383909323009636f6e766f6c76650935\n726563746f70092d343009313730092d3130092d3137300963656c6c0937\n2320696e74657276616c73\n73696e740930093109302e35093209302e3235\n73696e740933092d33092d32093209302e31\n73696e74092d332e31343135393236353335383937393309332e3134313539323635333538393739330931092d310930\n73696e7409332e313431353932363533353839373933092d332e313431353932363533353839373933093009310931\n73696e74093109310931093109332e32\n73696e74092d332e3134313539323635333538393739330930093009332e31343135393236353335383937393309302e35\n73696e740932092d32092d322e3509322e3509302e35\n73696e74093009310932093309302e35\n73696e7409310932\n73696e7409340930\n73696e740930092d332e313431353932363533353839373933\n6c696e740930093109302e35093209302e3235\n6c696e74093109300930093109302e35\n6c696e74092d310931092d302e3509302e350930\n6c696e7409320933093009310931\n6c696e740930093109300931092d31\n6472656d093709362e323833313835333037313739353836\n");
+    s.push_str("6472656d092d332e350932\n6472656d09322e350931\n6472656d09332e350931\n6472656d092d322e350931\n6472656d0931653330300933\n6472656d09350930\n6472656d09302e3109302e33\n232063656c6c73\n7375626469766964650931\n7375626469766964650935\n737562646976696465093839633235\n7375626469766964650938303835\n7375626469766964650931303030303030303030303030303034\n7375626469766964650938303835383038633061353366333362\n63656c6c6f7009383963323509636f6e7461696e7309383963323539\n63656c6c6f700938396332353909636f6e7461696e73093839633235\n63656c6c6f7009383963323509706f696e740934302e37313238092d37342e30303630\n63656c6c6f7009383963323509706f696e74093337092d313232\n63656c6c6f70093839633235096d6179093839633234\n63656c6c6f700931096564676573\n63656c6c6f70093839633235096564676573\n63656c6c6f70093839633235096361700934302e37092d37340931\n63656c6c6f70093839633235096361700934302e37092d373409302e3031\n63656c6c6f70093839633235096361700930093009313030\n617265610933372e37373439092d3132322e343139340933372e38303434092d3132322e323731320933372e33333832092d3132312e38383633\n617265610930093009300939300939300930\n617265610930093009300931652d370931652d370930\n61726561093009300930093009300930\n617265610931300931300931300931302e303030303030310931302e30303030303031093130\n61726561093009300930093138300930093930\n63726f7373696e670930092d31300930093130092d313009300931300930\n63726f7373696e670930092d31300930093130093509300931300930\n63726f7373696e6709300930093009313009300931300930093230\n2320726567696f6e20636f766572696e6773\n636f766572093009333009380931096361700933372e37373439092d3132322e3431393409302e31\n696e746572696f72093009313609380931096361700933372e37373439092d3132322e3431393409302e31\n636f766572093009333009380931096361700934302e37313238092d37342e303036300932\n696e746572696f72093009313609380931096361700934302e37313238092d37342e303036300932\n636f766572093009333009380931096361700939300930093130\n696e746572696f72093009313609380931096361700939300930093130\n636f76657209300933300938093109636170093009313830093330\n696e746572696f7209300931360938093109636170093009313830093330\n");
+    s.push_str("636f76657209300933300938093109726563740933372e32092d3132322e360933382e30092d3132312e37\n696e746572696f7209300931360938093109726563740933372e32092d3132322e360933382e30092d3132312e37\n636f7665720930093330093809310972656374092d343009313730092d3130092d313730\n696e746572696f720930093136093809310972656374092d343009313730092d3130092d313730\n636f7665720930093330093809310972656374092d3130092d3130093130093130\n696e746572696f720930093136093809310972656374092d3130092d3130093130093130\n636f76657209340931300932300932096361700933372e37373439092d3132322e3431393409302e31\n636f766572093009313209340931096361700934302e37313238092d37342e303036300932\n636f7665720930093509323009310972656374092d343009313730092d3130092d313730\n636f76657209313009313009310931096361700933372e37373439092d3132322e3431393409302e31\n636f7665720930093330093309330972656374092d3130092d3130093130093130\n636f766572093009333009310931096361700935312e35303734092d302e313237380931\n636f7665720930093330093809310963656c6c093839633235\n696e746572696f720930093330093809310963656c6c093839633235\n696e746572696f72093509380933300931096361700934302e37313238092d37342e303036300932\n696e746572696f72093009333009380931096361700933372e37373439092d3132322e343139340930\n636f766572093009333009380931096361700933372e37373439092d3132322e34313934092d31\n636f766572093009333009380931096361700933372e37373439092d3132322e3431393409313830\n636f76657209300933300938093109706f6c79676f6e09310932\n636f766572093009333109380931096361700933372e37373439092d3132322e3431393409302e31\n636f766572093009333009380934096361700933372e37373439092d3132322e3431393409302e31\n73696d706c650933372e37373439092d3132322e34313934096361700933372e37373439092d3132322e3431393409302e31093132\n73696d706c650933372e37373439092d3132322e3431393409726563740933372e37092d3132322e350933372e38092d3132322e34093133\n73696d706c650934302e37313238092d37342e30303630096361700933372e37373439092d3132322e3431393409302e31093132\n232063656c6c20756e696f6e73\n756e696f6e0938396332352c3839633235392c3839633234\n");
+    s.push_str("756e696f6e093839633235342c3839633235632c3839633235312c383963323537\n756e696f6e09383963323530342c383963323530632c383963323531342c38396332353163\n756e696f6e09312c332c352c372c392c62\n756e696f6e09352c312c332c37\n756e696f6e0938396332352c3839633235\n756e696f6e092d\n756e696f6e0938396332352c3830383509756e696f6e0938396332342c38303866\n756e696f6e0938396332352c3830383509696e74657273656374696f6e093839633235342c383038662c3830383534\n756e696f6e0938396332352c3830383509696e74657273656374696f6e092d\n756e696f6e09383963323509646966666572656e636509383963323534\n756e696f6e0938396332352c3830383509646966666572656e636509383038352c38396332353034\n756e696f6e093109646966666572656e63650931\n756e696f6e0938396332352c3830383509636f6e7461696e73093839633235342c3830383534\n756e696f6e0938396332352c3830383509636f6e7461696e73093839633235342c38303866\n756e696f6e0938396332352c3830383509696e746572736563747309383038662c38303834\n756e696f6e0938396332352c3830383509696e746572736563747309383038662c3830383534\n756e696f6e0938396332352c3830383509657109383038352c3839633235\n756e696f6e0938396332352c3830383509636c697009383963\n756e696f6e0938396332352c3830383509636c69700938396332353034\n756e696f6e0938396332352c38303835096861730938396332353034\n756e696f6e0938396332352c383038350968617309383963\n756e696f6e0938396332352c38303835096869747309383963\n756e696f6e0938396332352c3830383509706f696e740934302e37313238092d37342e30303630\n756e696f6e0938396332352c3830383509706f696e7409300930\n756e696f6e0938396332352c383038350964656e6f726d616c697a650931300931\n756e696f6e0938396332352c383038350964656e6f726d616c697a650931320932\n756e696f6e0938396332352c310964656e6f726d616c697a6509300933\n756e696f6e0938396332352c383038350972656374\n756e696f6e092d0972656374\n756e696f6e09383963323509657870616e640938\n756e696f6e09383963323509657870616e645f616e676c6509310932\n23206d657472696373\n6d6574726963096d696e5f776964746809302e303031\n6d6574726963096d61785f6469616709302e35\n6d6574726963096176675f656467650931652d36\n6d6574726963096176675f617265610931652d3130\n");
+    s.push_str("6d6574726963096d696e5f6172656109302e35\n6d6574726963096d61785f617265610930\n6d6574726963096d696e5f616e676c655f7370616e092d31\n6d6574726963096d61785f616e676c655f7370616e0931652d3230\n6d65747269630974696c650931\n232074686520706c61636520696e646578\n696e6465780932\n696e6465780936\n6e6561720933372e37373439092d3132322e343139340936300938093330\n6e6561720933372e37373439092d3132322e34313934093330093136093330\n6e6561720935312e35303734092d302e31323738093430300938093136\n6e6561720935312e35303734092d302e313237380932303030093132093132\n6e6561720933352e36373632093133392e363530330935300938093330\n6e656172092d33332e38363838093135312e323039330933303030093230093130\n6e6561720930093138300932353030093130093130\n6e656172093930093009313530300938093330\n6e6561720930093009310938093330\n7a6f6e65096261795f61726561093132093136\n7a6f6e65096575726f7065093230093130\n7a6f6e6509646174656c696e65093136093130\n7a6f6e6509746f6b796f5f6261790938093134\n7a6f6e65096172637469630931300938\n7a6f6e6509666163655f63656c6c09380934\n7a6f6e650961746c616e74697309380938\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("places.tsv 23206e616d65096c6174096c6e670a73616e5f6672616e636973636f0933372e37373439092d3132322e343139340a6f616b6c616e640933372e38303434092d3132322e323731320a6265726b656c65790933372e38373135092d3132322e3237330a70616c6f5f616c746f0933372e34343139092d3132322e3134330a73616e5f6a6f73650933372e33333832092d3132312e383836330a73617573616c69746f0933372e38353931092d3132322e343835330a6c6f735f616e67656c65730933342e30353232092d3131382e323433370a73656174746c650934372e36303632092d3132322e333332310a76616e636f757665720934392e32383237092d3132332e313230370a6e65775f796f726b0934302e37313238092d37342e3030360a6e657761726b0934302e37333537092d37342e313732340a626f73746f6e0934322e33363031092d37312e303538390a6368696361676f0934312e38373831092d38372e363239380a6d657869636f5f636974790931392e34333236092d39392e313333320a686f6e6f6c756c750932312e33303639092d3135372e383538330a616e63686f726167650936312e32313831092d3134392e393030330a6c6f6e646f6e0935312e35303734092d302e313237380a677265656e776963680935312e3437363909302e303030350a70617269730934382e3835363609322e333532320a6265726c696e0935322e35320931332e3430350a6d61647269640934302e34313638092d332e373033380a726f6d650934312e393032380931322e343936340a7265796b6a6176696b0936342e31343636092d32312e393432360a636169726f0933302e303434340933312e323335370a6e6169726f6269092d312e323932310933362e383231390a636170655f746f776e092d33332e393234390931382e343234310a64756261690932352e323034380935352e323730380a6d756d6261690931392e3037360937322e383737370a6368656e6e61690931332e303832370938302e323730370a73696e6761706f726509312e33353231093130332e383139380a6265696a696e670933392e39303432093131362e343037340a746f6b796f0933352e36373632093133392e363530330a796f6b6f68616d610933352e34343337093133392e3633380a73656f756c0933372e35363635093132362e3937380a7379646e6579092d33332e38363838093135312e323039330a6175636b6c616e64092d33362e38343835093137342e373633330a73757661092d31382e31323438093137382e343530310a61706961092d31332e38353036092d3137312e373531330a73616f5f7061756c6f092d32332e35353035092d34362e363333330a6275656e6f735f6169726573092d33342e36303337092d35382e333831360a75736875616961092d35342e38303139092d36382e3330330a6d636d7572646f092d37372e38343139093136362e363836330a6c6f6e67796561726279656e0937382e323233320931352e363236370a6e756c6c5f69736c616e6409302e3009302e300a6e6f7274685f706f6c650939302e3009302e300a736f7574685f706f6c65092d39302e3009302e300a\n");
+    s.push_str("zones.tsv 23206e616d6509726567696f6e0a6261795f6172656109726563740933372e32092d3132322e360933382e30092d3132312e370a6575726f706509726563740933352e30092d31302e300936302e300933302e300a646174656c696e650972656374092d34302e30093137302e30092d31302e30092d3137302e300a746f6b796f5f626179096361700933352e35093133392e3809302e350a617263746963096361700939302e3009302e300932332e350a666163655f63656c6c0963656c6c09310a\n");
+    s
+}
