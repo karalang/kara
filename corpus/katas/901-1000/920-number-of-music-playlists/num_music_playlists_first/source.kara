@@ -1,0 +1,91 @@
+// LeetCode #920: Number of Music Playlists -- songs named in the order they
+// are first heard.
+//
+// Name the songs 1, 2, ..., n in the order each is first played. A named
+// playlist then has no choice in its new songs: the next new song is the
+// next name. A repeat can be any of the j - k songs heard that were not
+// among the last k. So shapes[i][j] = shapes[i - 1][j - 1] + shapes[i -
+// 1][j] * max(j - k, 0), and every shape with all n songs stands for n!
+// playlists, one for each way to give the names to real songs. O(goal * n).
+
+fn num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut shapes: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..goal + 1 {
+        shapes.push(Vec.filled(n + 1, 0));
+    }
+    shapes[0][0] = 1;
+    for i in 1..goal + 1 {
+        for j in 1..(i.min(n) + 1) {
+            let mut ways = shapes[i - 1][j - 1];
+            if j > k {
+                ways = (ways + shapes[i - 1][j] * (j - k)) % modulus;
+            }
+            shapes[i][j] = ways;
+        }
+    }
+    let mut naming = 1;
+    for s in 1..n + 1 {
+        naming = naming * s % modulus;
+    }
+    shapes[goal][n] * naming % modulus
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, goal: i64, k: i64) {
+    println(f"n = {n}, goal = {goal}, k = {k}: {num_music_playlists(n, goal, k)}");
+}
+
+fn main() {
+    // LeetCode's three examples
+    show(3, 3, 1);
+    show(2, 3, 0);
+    show(2, 3, 1);
+    // one song; every song once; the gap as long as it can be; no gap
+    show(1, 1, 0);
+    show(1, 5, 0);
+    show(5, 5, 4);
+    show(4, 9, 3);
+    show(3, 6, 0);
+    show(10, 20, 3);
+    // the largest
+    show(100, 100, 0);
+    show(100, 100, 99);
+    show(50, 100, 10);
+    show(99, 100, 0);
+    show(1, 100, 0);
+    // every n, goal and k with goal up to 30
+    let mut count = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for goal in 1..31 {
+        for n in 1..goal + 1 {
+            for k in 0..n {
+                let r = num_music_playlists(n, goal, k);
+                count += 1;
+                sum += r;
+                check = (check * 1000003 + r) % 1000000007;
+            }
+        }
+    }
+    println(f"every case with goal up to 30: {count} cases, answers summing to {sum}, checksum {check}");
+    // 300 random cases up to LeetCode's limit of 100
+    let mut seed = 920;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let goal = 1 + next_random(mut seed) % 100;
+        let n = 1 + next_random(mut seed) % goal;
+        let k = next_random(mut seed) % n;
+        let r = num_music_playlists(n, goal, k);
+        sum += r;
+        check = (check * 1000003 + r) % 1000000007;
+    }
+    println(f"300 random cases: answers summing to {sum}, checksum {check}");
+}

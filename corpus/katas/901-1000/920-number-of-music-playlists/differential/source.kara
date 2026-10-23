@@ -1,0 +1,305 @@
+// LeetCode #920: Number of Music Playlists -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: your music player contains n different songs. You want
+// to listen to goal songs (not necessarily different) during your trip.
+// To avoid boredom, you will create a playlist so that every song is
+// played at least once, and a song can only be played again only if k
+// other songs have been played. Given n, goal and k, return the number
+// of possible playlists, modulo 10^9 + 7.
+
+// ---- the ★ arm: a table over the length and the distinct songs ------------
+fn star_num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut dp: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..goal + 1 {
+        dp.push(Vec.filled(n + 1, 0));
+    }
+    dp[0][0] = 1;
+    for i in 1..goal + 1 {
+        for j in 1..(i.min(n) + 1) {
+            let fresh = dp[i - 1][j - 1] * (n - j + 1) % modulus;
+            let again = if j > k { dp[i - 1][j] * (j - k) % modulus } else { 0 };
+            dp[i][j] = (fresh + again) % modulus;
+        }
+    }
+    dp[goal][n]
+}
+
+// ---- the incl arm: inclusion and exclusion over the songs left out --------
+fn incl_power_mod(base: i64, exp: i64, modulus: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % modulus;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % modulus;
+        }
+        b = b * b % modulus;
+        e /= 2;
+    }
+    result
+}
+
+// The playlists of `goal` songs drawn from m songs that keep the rule.
+fn incl_free_count(m: i64, goal: i64, k: i64, modulus: i64) -> i64 {
+    if m <= k {
+        return 0;
+    }
+    let mut ways = 1;
+    for t in 0..k {
+        ways = ways * (m - t) % modulus;
+    }
+    ways * incl_power_mod(m - k, goal - k, modulus) % modulus
+}
+
+fn incl_num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    // row n of Pascal's triangle
+    let mut choose: Vec[i64] = Vec.filled(n + 1, 0);
+    choose[0] = 1;
+    for r in 1..n + 1 {
+        let mut c = r;
+        while c > 0 {
+            choose[c] = (choose[c] + choose[c - 1]) % modulus;
+            c -= 1;
+        }
+    }
+    let mut total = 0;
+    for i in 0..n + 1 {
+        let term = choose[i] * incl_free_count(n - i, goal, k, modulus) % modulus;
+        if i % 2 == 0 {
+            total = (total + term) % modulus;
+        } else {
+            total = (total - term + modulus) % modulus;
+        }
+    }
+    total
+}
+
+// ---- the memo arm: the recurrence from the top, memoised ------------------
+fn memo_count(i: i64, j: i64, n: i64, k: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if i == 0 {
+        return if j == 0 { 1 } else { 0 };
+    }
+    if j == 0 or j > i {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let modulus = 1000000007;
+    let mut ways = memo_count(i - 1, j - 1, n, k, mut memo) * (n - j + 1) % modulus;
+    if j > k {
+        ways = (ways + memo_count(i - 1, j, n, k, mut memo) * (j - k)) % modulus;
+    }
+    memo[i][j] = ways;
+    ways
+}
+
+fn memo_num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..goal + 1 {
+        memo.push(Vec.filled(n + 1, -1));
+    }
+    memo_count(goal, n, n, k, mut memo)
+}
+
+// ---- the row arm: the table kept as one row -------------------------------
+fn row_num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut row: Vec[i64] = Vec.filled(n + 1, 0);
+    row[0] = 1;
+    for i in 1..goal + 1 {
+        let mut j = i.min(n);
+        while j >= 1 {
+            let again = if j > k { row[j] * (j - k) % modulus } else { 0 };
+            row[j] = (row[j - 1] * (n - j + 1) + again) % modulus;
+            j -= 1;
+        }
+        row[0] = 0;
+    }
+    row[n]
+}
+
+// ---- the first arm: songs named in the order first heard ------------------
+fn first_num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut shapes: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..goal + 1 {
+        shapes.push(Vec.filled(n + 1, 0));
+    }
+    shapes[0][0] = 1;
+    for i in 1..goal + 1 {
+        for j in 1..(i.min(n) + 1) {
+            let mut ways = shapes[i - 1][j - 1];
+            if j > k {
+                ways = (ways + shapes[i - 1][j] * (j - k)) % modulus;
+            }
+            shapes[i][j] = ways;
+        }
+    }
+    let mut naming = 1;
+    for s in 1..n + 1 {
+        naming = naming * s % modulus;
+    }
+    shapes[goal][n] * naming % modulus
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, n: i64, goal: i64, k: i64) -> i64 {
+    if x == 0 {
+        star_num_music_playlists(n, goal, k)
+    } else if x == 1 {
+        incl_num_music_playlists(n, goal, k)
+    } else if x == 2 {
+        memo_num_music_playlists(n, goal, k)
+    } else if x == 3 {
+        row_num_music_playlists(n, goal, k)
+    } else {
+        first_num_music_playlists(n, goal, k)
+    }
+}
+
+// The statement read literally: play the songs one at a time, a song only
+// when at least k other songs have been played since it was last played,
+// and count the playlists of goal songs in which every song was played.
+fn lit_count(n: i64, goal: i64, k: i64, list: mut ref Vec[i64]) -> i64 {
+    if list.len() == goal {
+        for s in 0..n {
+            if not list.contains(s) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    let mut total = 0;
+    for s in 0..n {
+        let mut allowed = true;
+        let mut t = list.len() - 1;
+        while t >= 0 {
+            if list[t] == s {
+                // list.len() - 1 - t other songs since s was last played
+                allowed = list.len() - 1 - t >= k;
+                break;
+            }
+            t -= 1;
+        }
+        if allowed {
+            list.push(s);
+            total += lit_count(n, goal, k, mut list);
+            list.pop();
+        }
+    }
+    total
+}
+
+fn literal(n: i64, goal: i64, k: i64) -> i64 {
+    let mut list: Vec[i64] = Vec.new();
+    lit_count(n, goal, k, mut list)
+}
+
+fn factorial(n: i64) -> i64 {
+    let mut f = 1;
+    for s in 1..n + 1 {
+        f = f * s % 1000000007;
+    }
+    f
+}
+
+// Every song played at least once and no gap: the ways to split the goal
+// plays into n named groups, a Stirling number of the second kind times n!.
+fn onto(n: i64, goal: i64) -> i64 {
+    let mut stirling: Vec[i64] = Vec.filled(n + 1, 0);
+    stirling[0] = 1;
+    for i in 1..goal + 1 {
+        let mut j = i.min(n);
+        while j >= 1 {
+            stirling[j] = (stirling[j - 1] + j * stirling[j]) % 1000000007;
+            j -= 1;
+        }
+        stirling[0] = 0;
+    }
+    stirling[n] * factorial(n) % 1000000007
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, n: i64, goal: i64, k: i64, small: bool) {
+    let want = if small { literal(n, goal, k) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, n, goal, k));
+    }
+    let whole = factorial(n);
+    for x in 0..5 {
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got[x] == want);
+        }
+        // P2: as many songs as plays: each song once, in any order
+        check(mut t, 2, arm(x, n, n, k) == whole);
+        // P3: no gap: every way to play each song at least once
+        check(mut t, 3, arm(x, n, goal, 0) == onto(n, goal));
+        // P4: one play more than songs: n! orders, and the repeat is one of
+        // the (n - k)(n - k + 1) / 2 song-and-place pairs the gap allows
+        check(mut t, 4, arm(x, n, n + 1, k) == whole * ((n - k) * (n - k + 1) / 2) % 1000000007);
+        // P5: the longest gap: the first n songs repeat in the same order
+        check(mut t, 5, arm(x, n, goal, n - 1) == whole);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == got[x] {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 920;
+    let mut cases = 0;
+    let mut sum = 0;
+    // 1 to 7 plays of 1 to 4 songs against the statement, then cases up to
+    // LeetCode's limit of 100 plays
+    for c in 0..3200 {
+        let small = c < 3000;
+        let goal = if small { 1 + next_random(mut seed) % 7 } else { 1 + next_random(mut seed) % 100 };
+        let top = if small { goal.min(4) } else { goal };
+        let n = 1 + next_random(mut seed) % top;
+        let k = next_random(mut seed) % n;
+        cases += 1;
+        sum += star_num_music_playlists(n, goal, k);
+        properties(mut t, n, goal, k, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

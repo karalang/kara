@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/920-number-of-music-playlists/bench/num_music_playlists.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "93324e271"
+extracted_src = "3d4c00fe"
+model_rev = "aafbe785"
+model_src = "3d4c00fe"

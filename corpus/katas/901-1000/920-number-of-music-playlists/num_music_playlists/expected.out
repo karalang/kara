@@ -1,0 +1,16 @@
+n = 3, goal = 3, k = 1: 6
+n = 2, goal = 3, k = 0: 6
+n = 2, goal = 3, k = 1: 2
+n = 1, goal = 1, k = 0: 1
+n = 1, goal = 5, k = 0: 1
+n = 5, goal = 5, k = 4: 120
+n = 4, goal = 9, k = 3: 24
+n = 3, goal = 6, k = 0: 540
+n = 10, goal = 20, k = 3: 994409817
+n = 100, goal = 100, k = 0: 437918130
+n = 100, goal = 100, k = 99: 437918130
+n = 50, goal = 100, k = 10: 663536800
+n = 99, goal = 100, k = 0: 676947288
+n = 1, goal = 100, k = 0: 1
+every case with goal up to 30: 4960 cases, answers summing to 2148678725271, checksum 610643868
+300 random cases: answers summing to 125050579270, checksum 780964471

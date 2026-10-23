@@ -1,0 +1,120 @@
+// LeetCode #920: Number of Music Playlists -- inclusion and exclusion over
+// the songs left out.
+//
+// Without the rule that every song is played, the playlists drawn from m
+// songs are easy to count: the first k songs must all differ, m * (m - 1)
+// * ... * (m - k + 1) ways, and each later song must avoid the k just
+// played, m - k ways, so m!/(m - k)! * (m - k)^(goal - k), or 0 when m <= k.
+// Taking away those that leave out some song, by inclusion and exclusion
+// over the i songs left out, the answer is the sum of (-1)^i * C(n, i)
+// times that count for m = n - i. O(n * goal), with C(n, i) from Pascal's
+// triangle.
+
+fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % modulus;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % modulus;
+        }
+        b = b * b % modulus;
+        e /= 2;
+    }
+    result
+}
+
+// The playlists of `goal` songs drawn from m songs that keep the rule.
+fn free_count(m: i64, goal: i64, k: i64, modulus: i64) -> i64 {
+    if m <= k {
+        return 0;
+    }
+    let mut ways = 1;
+    for t in 0..k {
+        ways = ways * (m - t) % modulus;
+    }
+    ways * power_mod(m - k, goal - k, modulus) % modulus
+}
+
+fn num_music_playlists(n: i64, goal: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    // row n of Pascal's triangle
+    let mut choose: Vec[i64] = Vec.filled(n + 1, 0);
+    choose[0] = 1;
+    for r in 1..n + 1 {
+        let mut c = r;
+        while c > 0 {
+            choose[c] = (choose[c] + choose[c - 1]) % modulus;
+            c -= 1;
+        }
+    }
+    let mut total = 0;
+    for i in 0..n + 1 {
+        let term = choose[i] * free_count(n - i, goal, k, modulus) % modulus;
+        if i % 2 == 0 {
+            total = (total + term) % modulus;
+        } else {
+            total = (total - term + modulus) % modulus;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, goal: i64, k: i64) {
+    println(f"n = {n}, goal = {goal}, k = {k}: {num_music_playlists(n, goal, k)}");
+}
+
+fn main() {
+    // LeetCode's three examples
+    show(3, 3, 1);
+    show(2, 3, 0);
+    show(2, 3, 1);
+    // one song; every song once; the gap as long as it can be; no gap
+    show(1, 1, 0);
+    show(1, 5, 0);
+    show(5, 5, 4);
+    show(4, 9, 3);
+    show(3, 6, 0);
+    show(10, 20, 3);
+    // the largest
+    show(100, 100, 0);
+    show(100, 100, 99);
+    show(50, 100, 10);
+    show(99, 100, 0);
+    show(1, 100, 0);
+    // every n, goal and k with goal up to 30
+    let mut count = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for goal in 1..31 {
+        for n in 1..goal + 1 {
+            for k in 0..n {
+                let r = num_music_playlists(n, goal, k);
+                count += 1;
+                sum += r;
+                check = (check * 1000003 + r) % 1000000007;
+            }
+        }
+    }
+    println(f"every case with goal up to 30: {count} cases, answers summing to {sum}, checksum {check}");
+    // 300 random cases up to LeetCode's limit of 100
+    let mut seed = 920;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let goal = 1 + next_random(mut seed) % 100;
+        let n = 1 + next_random(mut seed) % goal;
+        let k = next_random(mut seed) % n;
+        let r = num_music_playlists(n, goal, k);
+        sum += r;
+        check = (check * 1000003 + r) % 1000000007;
+    }
+    println(f"300 random cases: answers summing to {sum}, checksum {check}");
+}
