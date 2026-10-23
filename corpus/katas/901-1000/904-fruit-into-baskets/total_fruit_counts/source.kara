@@ -1,0 +1,98 @@
+// LeetCode #904: Fruit Into Baskets -- a sliding window over an array of
+// counts.
+//
+// The same window with the counts in an array indexed by type, since
+// every type is below n, and the number of types in the window kept
+// alongside: a count rising from 0 adds a type, one falling to 0 drops
+// it. O(n).
+
+fn total_fruit(fruits: Vec[i64]) -> i64 {
+    let n = fruits.len();
+    let mut counts: Vec[i64] = Vec.filled(n, 0);
+    let mut types = 0;
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..n {
+        if counts[fruits[right]] == 0 {
+            types += 1;
+        }
+        counts[fruits[right]] += 1;
+        while types > 2 {
+            counts[fruits[left]] -= 1;
+            if counts[fruits[left]] == 0 {
+                types -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(fruits: Vec[i64]) {
+    let mut listed = String.new();
+    for i in 0..fruits.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{fruits[i]}");
+    }
+    println(f"fruits = [{listed}] -> {total_fruit(fruits)}");
+}
+
+// `len` trees of types below `kinds` (and below `len`), in runs of up to
+// `run` trees of one type
+fn random_trees(seed: mut ref i64, len: i64, kinds: i64, run: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let k = kinds.min(len);
+    while out.len() < len {
+        let f = next_random(mut seed) % k;
+        let r = 1 + next_random(mut seed) % run;
+        for _ in 0..r {
+            if out.len() < len {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    show(vec![1, 2, 1]);
+    show(vec![0, 1, 2, 2]);
+    show(vec![1, 2, 3, 2, 2]);
+    show(vec![3, 3, 3, 1, 2, 1, 1, 2, 3, 3, 4]);
+    show(vec![0]);
+    show(vec![0, 0, 0, 0]);
+    show(vec![0, 1, 0, 1, 0, 1]);
+    show(vec![0, 1, 2, 3, 4, 5]);
+    show(vec![1, 0, 1, 4, 1, 4, 1, 2, 3]);
+    // random cases of up to 1000 trees, from 2 types to as many as trees,
+    // in runs of up to 1 to 5 trees
+    let mut seed = 904;
+    let mut check = 0;
+    let mut sum = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 1000;
+        let kinds = if c % 4 == 0 { 2 } else if c % 4 == 1 { 3 } else if c % 4 == 2 { 5 } else { len };
+        let got = total_fruit(random_trees(mut seed, len, kinds, 1 + c % 5));
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"300 cases: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest: 10^5 trees of 3 types in runs of up to 50, and
+    // 10^5 trees of 2 types with a third every 30000
+    println(f"100000 trees of 3 types -> {total_fruit(random_trees(mut seed, 100000, 3, 50))}");
+    let mut two: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        two.push(if i % 30000 == 29999 { 2 } else { i % 2 });
+    }
+    println(f"100000 trees of 2 types, a third every 30000 -> {total_fruit(two)}");
+}

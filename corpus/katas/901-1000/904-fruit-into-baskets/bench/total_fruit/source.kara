@@ -1,0 +1,60 @@
+// LeetCode #904: Fruit Into Baskets -- bench program.
+//
+// The last-run arm (`total_fruit_last.kara`): the last two types and the
+// last run, over one row of 1,000,000 trees built once, of 3 types in runs
+// of 1 to 50 trees. Each round finds the most fruit, folds it into a
+// checksum and changes one tree's type.
+
+fn total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut last = -1;
+    let mut before = -1;
+    let mut run = 0;
+    let mut current = 0;
+    let mut best = 0;
+    for f in fruits.iter() {
+        if *f == last or *f == before {
+            current += 1;
+        } else {
+            current = run + 1;
+        }
+        if *f == last {
+            run += 1;
+        } else {
+            run = 1;
+            before = last;
+            last = *f;
+        }
+        best = best.max(current);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let trees = 1000000;
+    let rounds = 240;
+    let mut seed = 904;
+    let mut fruits: Vec[i64] = Vec.new();
+    while fruits.len() < trees {
+        let f = next_random(mut seed) % 3;
+        let r = 1 + next_random(mut seed) % 50;
+        for _ in 0..r {
+            if fruits.len() < trees {
+                fruits.push(f);
+            }
+        }
+    }
+    let mut check = 0;
+    let mut total = 0;
+    for round in 0..rounds {
+        let got = total_fruit(fruits);
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+        fruits[round * 7919 % trees] = next_random(mut seed) % 3;
+    }
+    println(f"{rounds} rounds over {trees} trees: answers summing to {total}, checksum {check}");
+}

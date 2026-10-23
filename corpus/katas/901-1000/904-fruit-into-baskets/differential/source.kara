@@ -1,0 +1,318 @@
+// LeetCode #904: Fruit Into Baskets -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: you are visiting a farm that has a single row of fruit
+// trees arranged from left to right, given as an integer array fruits
+// where fruits[i] is the type of fruit the i-th tree produces. You have
+// two baskets, and each basket can only hold a single type of fruit;
+// starting from any tree, you must pick exactly one fruit from every tree
+// (including the start tree) while moving to the right, and stop once you
+// reach a tree with fruit that cannot fit in your baskets. Return the
+// maximum number of fruits you can pick.
+
+// ---- the ★ arm: a sliding window over a map of counts ---------------------
+fn star_total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..fruits.len() {
+        let f = fruits[right];
+        counts.insert(f, counts.get_or(f, 0) + 1);
+        while counts.len() > 2 {
+            let g = fruits[left];
+            let c = counts.get_or(g, 0) - 1;
+            if c == 0 {
+                counts.remove(g);
+            } else {
+                counts.insert(g, c);
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+// ---- the counts arm: a sliding window over an array of counts -------------
+fn counts_total_fruit(fruits: Vec[i64]) -> i64 {
+    let n = fruits.len();
+    let mut counts: Vec[i64] = Vec.filled(n, 0);
+    let mut types = 0;
+    let mut left = 0;
+    let mut best = 0;
+    for right in 0..n {
+        if counts[fruits[right]] == 0 {
+            types += 1;
+        }
+        counts[fruits[right]] += 1;
+        while types > 2 {
+            counts[fruits[left]] -= 1;
+            if counts[fruits[left]] == 0 {
+                types -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+// ---- the last arm: the last two types and the last run --------------------
+fn last_total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut last = -1;
+    let mut before = -1;
+    let mut run = 0;
+    let mut current = 0;
+    let mut best = 0;
+    for f in fruits.iter() {
+        if *f == last or *f == before {
+            current += 1;
+        } else {
+            current = run + 1;
+        }
+        if *f == last {
+            run += 1;
+        } else {
+            run = 1;
+            before = last;
+            last = *f;
+        }
+        best = best.max(current);
+    }
+    best
+}
+
+// ---- the blocks arm: runs of one type -------------------------------------
+fn blocks_total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut types: Vec[i64] = Vec.new();
+    let mut lengths: Vec[i64] = Vec.new();
+    for f in fruits.iter() {
+        let r = types.len();
+        if r > 0 and types[r - 1] == *f {
+            lengths[r - 1] += 1;
+        } else {
+            types.push(*f);
+            lengths.push(1);
+        }
+    }
+    let mut best = 0;
+    let mut start = 0;
+    let mut total = 0;
+    for r in 0..types.len() {
+        // a third type: the window keeps only the run before this one
+        if r >= 2 and types[r] != types[r - 1] and types[r] != types[r - 2] and r - start >= 2 {
+            start = r - 1;
+            total = lengths[r - 1];
+        }
+        total += lengths[r];
+        best = best.max(total);
+    }
+    best
+}
+
+// ---- the search arm: a binary search on the length ------------------------
+fn search_fits(fruits: Vec[i64], len: i64) -> bool {
+    let n = fruits.len();
+    let mut counts: Vec[i64] = Vec.filled(n, 0);
+    let mut types = 0;
+    for i in 0..n {
+        if counts[fruits[i]] == 0 {
+            types += 1;
+        }
+        counts[fruits[i]] += 1;
+        if i >= len {
+            counts[fruits[i - len]] -= 1;
+            if counts[fruits[i - len]] == 0 {
+                types -= 1;
+            }
+        }
+        if i >= len - 1 and types <= 2 {
+            return true;
+        }
+    }
+    false
+}
+
+fn search_total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut lo = 1;
+    let mut hi = fruits.len();
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if search_fits(fruits, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+fn arm(x: i64, fruits: Vec[i64]) -> i64 {
+    match x {
+        0 => star_total_fruit(fruits.clone()),
+        1 => counts_total_fruit(fruits.clone()),
+        2 => last_total_fruit(fruits.clone()),
+        3 => blocks_total_fruit(fruits.clone()),
+        _ => search_total_fruit(fruits.clone()),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every stretch of trees tried, its types listed afresh, and the longest
+// with at most two types kept
+fn literal(fruits: Vec[i64]) -> i64 {
+    let n = fruits.len();
+    let mut best = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut seen: Vec[i64] = Vec.new();
+            for k in i..j + 1 {
+                if not seen.contains(fruits[k]) {
+                    seen.push(fruits[k]);
+                }
+            }
+            if seen.len() <= 2 {
+                best = best.max(j - i + 1);
+            }
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` trees of types below `kinds` (and below `len`), in runs of up to
+// `run` trees of one type
+fn random_trees(seed: mut ref i64, len: i64, kinds: i64, run: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let k = kinds.min(len);
+    while out.len() < len {
+        let f = next_random(mut seed) % k;
+        let r = 1 + next_random(mut seed) % run;
+        for _ in 0..r {
+            if out.len() < len {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, fruits: Vec[i64], small: bool) {
+    let n = fruits.len();
+    let want = if small { literal(fruits) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, fruits));
+    }
+    // P2: the longest run of one type, and how many types there are
+    let mut longest_run = 0;
+    let mut run = 0;
+    let mut types: Vec[bool] = Vec.filled(n, false);
+    let mut kinds = 0;
+    for i in 0..n {
+        run = if i > 0 and fruits[i] == fruits[i - 1] { run + 1 } else { 1 };
+        longest_run = longest_run.max(run);
+        if not types[fruits[i]] {
+            types[fruits[i]] = true;
+            kinds += 1;
+        }
+    }
+    // P3: the trees in reverse order
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(fruits[n - 1 - i]);
+    }
+    // P4: the types renamed, each moved on by the same amount round n
+    let shift = next_random(mut seed) % n;
+    let mut renamed: Vec[i64] = Vec.new();
+    for f in fruits.iter() {
+        renamed.push((*f + shift) % n);
+    }
+    // P5: a second row after this one, and one more tree
+    let other = random_trees(mut seed, 1 + next_random(mut seed) % n, n, 3);
+    let mut joined = fruits.clone();
+    for f in other.iter() {
+        joined.push(*f);
+    }
+    let mut longer = fruits.clone();
+    longer.push(next_random(mut seed) % (n + 1));
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's longest stretch
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: at least the longest run and at least 2 trees when there
+        // are 2, at most n, and all n when there are at most 2 types
+        let ok = got >= longest_run and got >= n.min(2) and got <= n and (kinds > 2 or got == n);
+        check(mut t, 2, ok);
+        // P3: the same for the row read backwards
+        check(mut t, 3, arm(x, reversed) == got);
+        // P4: the same for the types renamed
+        check(mut t, 4, arm(x, renamed) == got);
+        // P5: two rows joined give at least the longer of the two answers
+        // and at most their sum; one more tree adds at most 1
+        let o = arm(x, other);
+        let j = arm(x, joined);
+        let l = arm(x, longer);
+        check(mut t, 5, j >= got.max(o) and j <= got + o and (l == got or l == got + 1));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 904;
+    let mut cases = 0;
+    let mut trees = 0;
+    // up to 10 trees against the statement; then up to 500; from 2 types
+    // to as many as trees, in runs of up to 1 to 5
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 500 };
+        let kinds = if c % 4 == 0 { 2 } else if c % 4 == 1 { 3 } else if c % 4 == 2 { 5 } else { len };
+        let fruits = random_trees(mut seed, len, kinds, 1 + c % 5);
+        cases += 1;
+        trees += len;
+        properties(mut t, mut seed, fruits, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {trees} trees, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

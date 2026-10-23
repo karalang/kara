@@ -1,0 +1,111 @@
+// LeetCode #904: Fruit Into Baskets -- a binary search on the length.
+//
+// If some stretch of length L has at most two types, so does every
+// shorter stretch inside it, so the lengths that can be picked are 1 to
+// the answer. Search that length: a length is possible when a window of
+// that many trees slid along the row, its types counted in an array,
+// ever holds two types or fewer. O(n log n).
+
+fn fits(fruits: Vec[i64], len: i64) -> bool {
+    let n = fruits.len();
+    let mut counts: Vec[i64] = Vec.filled(n, 0);
+    let mut types = 0;
+    for i in 0..n {
+        if counts[fruits[i]] == 0 {
+            types += 1;
+        }
+        counts[fruits[i]] += 1;
+        if i >= len {
+            counts[fruits[i - len]] -= 1;
+            if counts[fruits[i - len]] == 0 {
+                types -= 1;
+            }
+        }
+        if i >= len - 1 and types <= 2 {
+            return true;
+        }
+    }
+    false
+}
+
+fn total_fruit(fruits: Vec[i64]) -> i64 {
+    let mut lo = 1;
+    let mut hi = fruits.len();
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if fits(fruits, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(fruits: Vec[i64]) {
+    let mut listed = String.new();
+    for i in 0..fruits.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{fruits[i]}");
+    }
+    println(f"fruits = [{listed}] -> {total_fruit(fruits)}");
+}
+
+// `len` trees of types below `kinds` (and below `len`), in runs of up to
+// `run` trees of one type
+fn random_trees(seed: mut ref i64, len: i64, kinds: i64, run: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let k = kinds.min(len);
+    while out.len() < len {
+        let f = next_random(mut seed) % k;
+        let r = 1 + next_random(mut seed) % run;
+        for _ in 0..r {
+            if out.len() < len {
+                out.push(f);
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    show(vec![1, 2, 1]);
+    show(vec![0, 1, 2, 2]);
+    show(vec![1, 2, 3, 2, 2]);
+    show(vec![3, 3, 3, 1, 2, 1, 1, 2, 3, 3, 4]);
+    show(vec![0]);
+    show(vec![0, 0, 0, 0]);
+    show(vec![0, 1, 0, 1, 0, 1]);
+    show(vec![0, 1, 2, 3, 4, 5]);
+    show(vec![1, 0, 1, 4, 1, 4, 1, 2, 3]);
+    // random cases of up to 1000 trees, from 2 types to as many as trees,
+    // in runs of up to 1 to 5 trees
+    let mut seed = 904;
+    let mut check = 0;
+    let mut sum = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 1000;
+        let kinds = if c % 4 == 0 { 2 } else if c % 4 == 1 { 3 } else if c % 4 == 2 { 5 } else { len };
+        let got = total_fruit(random_trees(mut seed, len, kinds, 1 + c % 5));
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"300 cases: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest: 10^5 trees of 3 types in runs of up to 50, and
+    // 10^5 trees of 2 types with a third every 30000
+    println(f"100000 trees of 3 types -> {total_fruit(random_trees(mut seed, 100000, 3, 50))}");
+    let mut two: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        two.push(if i % 30000 == 29999 { 2 } else { i % 2 });
+    }
+    println(f"100000 trees of 2 types, a third every 30000 -> {total_fruit(two)}");
+}
