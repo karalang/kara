@@ -1,0 +1,10 @@
+head = [1, 2, 3, 4, 5] -> [3, 4, 5]
+head = [1, 2, 3, 4, 5, 6] -> [4, 5, 6]
+head = [1] -> [1]
+head = [1, 2] -> [2]
+head = [1, 2, 3] -> [2, 3]
+head = [7, 7, 7, 7] -> [7, 7]
+head = [100, 1, 100, 1, 100, 1, 100] -> [1, 100, 1, 100]
+head = [1, 2, ... (100 nodes)] -> [51, 52, ... (50 nodes)]
+head = [100, 100, ... (99 nodes)] -> [100, 100, ... (50 nodes)]
+3000 lists of 1 to 100 nodes: middle values sum to 151895, 75727 nodes from the middle on, checksum 849803814

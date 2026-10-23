@@ -1,0 +1,60 @@
+// LeetCode #876 bench: the ★ arm (slow and fast pointers) on 2,000,000
+// searches over 2,000 lists of 1 to 100 nodes, LeetCode's sizes.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut slow = head;
+    let mut fast = head;
+    while let Some(f) = fast {
+        let Some(after) = f.next else {
+            break;
+        };
+        fast = after.next;
+        if let Some(s) = slow {
+            slow = s.next;
+        }
+    }
+    slow
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn main() {
+    let mut seed = 876;
+    let mut lists: Vec[Option[ListNode]] = Vec.new();
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 100 + 1);
+        }
+        lists.push(from_values(values));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for k in 0..2000000 {
+        let middle = middle_node(lists[(k * 7 + k / 2000) % 2000]);
+        if let Some(m) = middle {
+            total += m.val;
+            check = (check * 131 + m.val) % 1000000007;
+        }
+    }
+    println(f"2000000 searches over 2000 lists: middle values sum to {total}, checksum {check}");
+}

@@ -1,0 +1,106 @@
+// LeetCode #876: Middle of the Linked List -- slow and fast pointers.
+//
+// Two walks from the head, the fast one two nodes a step and the slow
+// one one: when the fast walk cannot take two more nodes, the slow one
+// has taken half as many steps and stands on the middle, the second of
+// the two middles when the length is even. One pass, O(n).
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut slow = head;
+    let mut fast = head;
+    while let Some(f) = fast {
+        let Some(after) = f.next else {
+            break;
+        };
+        fast = after.next;
+        if let Some(s) = slow {
+            slow = s.next;
+        }
+    }
+    slow
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn to_values(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    values
+}
+
+fn text(values: Vec[i64]) -> String {
+    if values.len() > 8 {
+        return f"[{values[0]}, {values[1]}, ... ({values.len()} nodes)]";
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for v in values.iter() {
+        parts.push(f"{v}");
+    }
+    f"[{parts.join(", ")}]"
+}
+
+fn show(values: Vec[i64]) {
+    let answer = to_values(middle_node(from_values(values)));
+    println(f"head = {text(values)} -> {text(answer)}");
+}
+
+fn main() {
+    show([1, 2, 3, 4, 5]);
+    show([1, 2, 3, 4, 5, 6]);
+    show([1]);
+    show([1, 2]);
+    show([1, 2, 3]);
+    show([7, 7, 7, 7]);
+    show([100, 1, 100, 1, 100, 1, 100]);
+    let mut up: Vec[i64] = Vec.new();
+    for v in 1..101 {
+        up.push(v);
+    }
+    show(up);
+    let mut hundreds: Vec[i64] = Vec.new();
+    for _ in 0..99 {
+        hundreds.push(100);
+    }
+    show(hundreds);
+    // random lists of LeetCode's sizes: 1 to 100 nodes valued 1 to 100
+    let mut seed = 876;
+    let mut values_sum = 0;
+    let mut nodes_sum = 0;
+    let mut check = 0;
+    for k in 0..3000 {
+        let n = if k < 100 { k + 1 } else { next_random(mut seed) % 100 + 1 };
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % 100 + 1);
+        }
+        let rest = to_values(middle_node(from_values(values)));
+        values_sum += rest[0];
+        nodes_sum += rest.len();
+        check = (check * 131 + rest[0] * 101 + rest.len()) % 1000000007;
+    }
+    println(f"3000 lists of 1 to 100 nodes: middle values sum to {values_sum}, {nodes_sum} nodes from the middle on, checksum {check}");
+}

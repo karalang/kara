@@ -1,0 +1,247 @@
+// LeetCode #876: Middle of the Linked List -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given the head of a singly linked list, return the
+// middle node of the linked list. If there are two middle nodes, return
+// the second middle node.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+// ---- the ★ arm: slow and fast pointers ------------------------------------
+fn star_middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut slow = head;
+    let mut fast = head;
+    while let Some(f) = fast {
+        let Some(after) = f.next else {
+            break;
+        };
+        fast = after.next;
+        if let Some(s) = slow {
+            slow = s.next;
+        }
+    }
+    slow
+}
+
+// ---- the count arm: count, then walk half way -----------------------------
+fn count_middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut n = 0;
+    let mut cur = head;
+    while let Some(node) = cur {
+        n += 1;
+        cur = node.next;
+    }
+    let mut middle = head;
+    for _ in 0..n / 2 {
+        if let Some(node) = middle {
+            middle = node.next;
+        }
+    }
+    middle
+}
+
+// ---- the array arm: the nodes in an array ---------------------------------
+fn array_middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut nodes: Vec[ListNode] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        nodes.push(node);
+        cur = node.next;
+    }
+    if nodes.is_empty() { None } else { Some(nodes[nodes.len() / 2]) }
+}
+
+// ---- the recursive arm: found as the recursion unwinds --------------------
+fn recursive_middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let (_, middle) = recursive_find(head, 0);
+    middle
+}
+
+// (the length of the whole list, the middle node once it is known)
+fn recursive_find(node: Option[ListNode], index: i64) -> (i64, Option[ListNode]) {
+    let Some(n) = node else {
+        return (index, None);
+    };
+    let (length, middle) = recursive_find(n.next, index + 1);
+    if index == length / 2 { (length, Some(n)) } else { (length, middle) }
+}
+
+// ---- the parity arm: one walk and a lagging pointer -----------------------
+fn parity_middle_node(head: Option[ListNode]) -> Option[ListNode] {
+    let mut middle = head;
+    let mut cur = head;
+    let mut passed = 0;
+    while let Some(node) = cur {
+        cur = node.next;
+        passed += 1;
+        if passed % 2 == 0 {
+            if let Some(m) = middle {
+                middle = m.next;
+            }
+        }
+    }
+    middle
+}
+
+fn arm(a: i64, head: Option[ListNode]) -> Option[ListNode] {
+    match a {
+        0 => star_middle_node(head),
+        1 => count_middle_node(head),
+        2 => array_middle_node(head),
+        3 => recursive_middle_node(head),
+        _ => parity_middle_node(head),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the nodes counted from 1: an odd list has one middle node, at (n + 1)
+// / 2; an even list has two, at n / 2 and n / 2 + 1, and the second is
+// returned
+fn literal(head: Option[ListNode]) -> Option[ListNode] {
+    let n = to_values(head).len();
+    let wanted = if n % 2 == 1 { (n + 1) / 2 } else { n / 2 + 1 };
+    let mut cur = head;
+    let mut at = 1;
+    while at < wanted {
+        if let Some(node) = cur {
+            cur = node.next;
+        }
+        at += 1;
+    }
+    cur
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn to_values(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    values
+}
+
+// where `node` sits in the list from `head`, counted from 0: its value is
+// marked for a moment and the marked place read from the head; -1 when
+// `node` is none or not in the list
+fn position(head: Option[ListNode], node: Option[ListNode]) -> i64 {
+    let Some(n) = node else {
+        return -1;
+    };
+    let saved = n.val;
+    n.val = -1;
+    let values = to_values(head);
+    n.val = saved;
+    let mut at = -1;
+    let mut marks = 0;
+    for i in 0..values.len() {
+        if values[i] == -1 {
+            at = i;
+            marks += 1;
+        }
+    }
+    if marks == 1 { at } else { -1 }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one list of values, each over the five arms;
+// returns the value of the ★ arm's middle node
+fn properties(t: mut ref Tally, seed: mut ref i64, values: Vec[i64]) -> i64 {
+    let n = values.len();
+    let head = from_values(values);
+    let want = position(head, literal(head));
+    let mut longer = values.clone();
+    longer.push(next_random(mut seed) % 100 + 1);
+    longer.push(next_random(mut seed) % 100 + 1);
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(values[n - 1 - i]);
+    }
+    let mut star = 0;
+    for x in 0..5 {
+        let got = arm(x, head);
+        let at = position(head, got);
+        if x == 0 and at >= 0 {
+            star = values[at];
+        }
+        // P1: the statement's node, the list's own and not a copy
+        check(mut t, 1, at >= 0 and at == want);
+        // P2: the values from the answer on are the last n - n / 2 values
+        check(mut t, 2, to_values(got) == values[n / 2..n].to_vec());
+        // P3: the list is unchanged
+        check(mut t, 3, to_values(head) == values);
+        // P4: two nodes added at the end move the middle one node on
+        let long_head = from_values(longer);
+        check(mut t, 4, position(long_head, arm(x, long_head)) == n / 2 + 1);
+        // P5: a node put in front keeps an odd list's middle and moves an
+        // even list's back to the first middle
+        let front = Some(ListNode { val: next_random(mut seed) % 100 + 1, next: head });
+        let moved = position(head, arm(x, front));
+        check(mut t, 5, moved == if n % 2 == 1 { at } else { at - 1 });
+        // P6: reversed, an odd list's middle value is the same, and an even
+        // list's is the first middle's
+        let back = to_values(arm(x, from_values(reversed)));
+        check(mut t, 6, back.len() > 0 and back[0] == values[n - 1 - n / 2]);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut total = 0;
+    let mut seed = 876;
+    // every length from 1 to 100, then random lists of LeetCode's sizes
+    for k in 0..2000 {
+        let n = if k < 100 { k + 1 } else { next_random(mut seed) % 100 + 1 };
+        let limit = if k % 2 == 0 { 100 } else { 3 };
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            values.push(next_random(mut seed) % limit + 1);
+        }
+        total += properties(mut t, mut seed, values);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"2000 lists, middle values sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
