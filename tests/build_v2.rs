@@ -172,8 +172,11 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: the v2 build does not honour `--simd-report`, `--target=wasm_browser` yet; \
-         `karac build --legacy` does until M3 deletes it\n"
+        "error: the v2 build does not honour `--simd-report` yet; \
+         `karac build --legacy` does until M3 deletes it\n\
+         error: `--target=wasm_browser` builds the browser wasm bindings, which goes to the \
+         archive with the legacy backend at M3 and returns on v2 on demand; \
+         `karac build --legacy` builds it until then\n"
     );
     let json = karac(
         &dir,
@@ -181,13 +184,37 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     );
     assert_eq!(json.status.code(), Some(1));
     assert!(
-        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: the v2 build does not honour `--crate-type`"),
+        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which goes to the archive"),
         "{}",
         text(&json.stdout)
     );
     // The host's own name for itself is not a cross target.
     let native = karac(&dir, &["build", "a.kara", "--target=native"]);
     built(&native);
+}
+
+/// Auto-parallelisation goes to the archive with the legacy backend, so the
+/// v2 build says it ignores `KARAC_AUTO_PAR=1` rather than building a
+/// sequential binary in silence (B-2026-10-22-21).
+#[test]
+fn build_v2_says_it_ignores_auto_par() {
+    let dir = scratch("autopar");
+    std::fs::write(dir.join("a.kara"), "fn main() {\n    println(\"a\");\n}\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .env_remove("KARAC_LEGACY")
+        .env("KARAC_AUTO_PAR", "1")
+        .current_dir(&dir)
+        .args(["build", "a.kara"])
+        .output()
+        .unwrap();
+    built(&out);
+    assert!(
+        text(&out.stderr).contains(
+            "warning: `KARAC_AUTO_PAR=1` is ignored: auto-parallelisation goes to the archive"
+        ),
+        "{}",
+        text(&out.stderr)
+    );
 }
 
 /// `--legacy` and `KARAC_LEGACY=1` reach the legacy build, which prints its

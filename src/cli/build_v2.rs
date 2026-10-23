@@ -197,38 +197,80 @@ fn refuse_unsupported(a: &BuildArgs) {
             && (crate::target::is_v1_target_name(t)
                 || *t != crate::build_cache::host_target_triple())
     });
+    // B-2026-10-22-21: a feature that goes to the archive with the legacy
+    // backend is refused by name, so deleting legacy turns no working
+    // command into an unknown-flag error.
+    let archived_target = match target {
+        Some("wasm_browser") => Some("the browser wasm bindings"),
+        Some("gpu") => Some("GPU compute"),
+        _ => None,
+    };
     let refused: Vec<String> = [
         (a.concurrency_report, "--concurrency-report".to_string()),
         (a.simd_report, "--simd-report".to_string()),
         (a.enable_hot_swap, "--enable-hot-swap".to_string()),
         (
-            target.is_some(),
+            target.is_some() && archived_target.is_none(),
             format!("--target={}", target.unwrap_or("")),
         ),
-        (a.bindings.is_some(), "--bindings".to_string()),
-        (a.wasm_threads, "--features=wasm-threads".to_string()),
         (
             a.monomorphization_budget,
             "--monomorphization-budget".to_string(),
-        ),
-        (
-            a.crate_type != NativeCrateType::Bin,
-            "--crate-type".to_string(),
         ),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(format!("`{flag}`")))
     .collect();
+    let archived: Vec<(String, &str)> = [
+        (
+            archived_target.is_some(),
+            format!("--target={}", target.unwrap_or("")),
+            archived_target.unwrap_or(""),
+        ),
+        (
+            a.bindings.is_some(),
+            "--bindings".to_string(),
+            "the wasm component bindings",
+        ),
+        (
+            a.wasm_threads,
+            "--features=wasm-threads".to_string(),
+            "threaded wasm",
+        ),
+        (
+            a.crate_type != NativeCrateType::Bin,
+            "--crate-type".to_string(),
+            "the exported C ABI",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(on, flag, feature)| on.then_some((format!("`{flag}`"), feature)))
+    .collect();
+    let mut lines = Vec::new();
     if !refused.is_empty() {
-        fail_with(
-            &format!(
-                "error: the v2 build does not honour {} yet; `karac build --legacy` does \
-                 until M3 deletes it",
-                refused.join(", ")
-            ),
-            a.output,
-        );
+        lines.push(format!(
+            "error: the v2 build does not honour {} yet; `karac build --legacy` does \
+             until M3 deletes it",
+            refused.join(", ")
+        ));
+    }
+    for (flag, feature) in archived {
+        lines.push(format!(
+            "error: {flag} builds {feature}, which goes to the archive with the legacy \
+             backend at M3 and returns on v2 on demand; `karac build --legacy` builds it \
+             until then"
+        ));
+    }
+    if !lines.is_empty() {
+        fail_with(&lines.join("\n"), a.output);
         process::exit(1);
+    }
+    if std::env::var("KARAC_AUTO_PAR").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "warning: `KARAC_AUTO_PAR=1` is ignored: auto-parallelisation goes to the \
+             archive with the legacy backend at M3 and returns on v2 in M4; \
+             `karac build --legacy` honours it until then"
+        );
     }
 }
 

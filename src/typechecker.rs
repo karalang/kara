@@ -823,6 +823,9 @@ pub enum TypeErrorKind {
     /// (M4a) that the v2 backends do not run yet: the TLS server and
     /// WebSocket.
     DeferredToM4a,
+    /// B-2026-10-22-21 — a feature that goes to the archive with the legacy
+    /// backend (M3) and returns on v2 on demand: GPU compute (`gpu.*`).
+    ArchivedWithLegacy,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1453,7 +1456,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::FnKindMismatch
         | TypeErrorKind::CapturePrefixRemoved
         | TypeErrorKind::RemovedInCore
-        | TypeErrorKind::DeferredToM4a => Some(DC::TypeMismatch),
+        | TypeErrorKind::DeferredToM4a
+        | TypeErrorKind::ArchivedWithLegacy => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)

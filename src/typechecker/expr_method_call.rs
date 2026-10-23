@@ -1548,6 +1548,24 @@ impl<'a> super::TypeChecker<'a> {
         // resolver-reserved module name (like `ast` / `process`), so this never
         // shadows a user binding.
         if let ExprKind::Identifier(module) = &object.kind {
+            // B-2026-10-22-21: GPU compute goes to the archive with the
+            // legacy backend, so the v2 check names it rather than let a
+            // program reach an internal MIR error.
+            if module == "gpu" && self.cli_lint_overrides.strict_core {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                self.type_error(
+                    format!(
+                        "`gpu.{method}` is not available: GPU compute (`gpu.*` and `#[gpu]` \
+                         kernels) goes to the archive with the legacy backend at M3 and \
+                         returns on v2 on demand"
+                    ),
+                    *span,
+                    TypeErrorKind::ArchivedWithLegacy,
+                );
+                return Type::Error;
+            }
             if module == "gpu" && method == "dispatch" {
                 return self.infer_gpu_dispatch(args, span);
             }

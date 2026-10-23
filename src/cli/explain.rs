@@ -835,6 +835,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_DEFERRED_M4A",
         ty("DeferredToM4a", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // B-2026-10-22-21: features archived with the legacy backend.
+    (
+        "E_ARCHIVED",
+        ty("ArchivedWithLegacy", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

@@ -11948,3 +11948,22 @@ fn a_named_default_of_an_option_ref_is_lent() {
         "value 'empty' moved here, used again here",
     );
 }
+
+/// GPU compute goes to the archive with the legacy backend at M3 and comes
+/// back on v2 on demand, so check refuses `gpu.*` by name rather than
+/// leaving it to fail later in the build (B-2026-10-22-21).
+#[test]
+fn gpu_compute_is_refused_as_archived() {
+    rejected(
+        "gpu-dispatch-archived",
+        "#[gpu] fn double(x: f32) -> f32 { x * 2.0 }\n\
+         fn main() {\n    let buf: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n    \
+         let out = gpu.dispatch(double, buf);\n    for v in out { println(f\"{v}\") }\n}\n",
+        "`gpu.dispatch` is not available: GPU compute",
+    );
+    rejected(
+        "gpu-sum-archived",
+        "fn main() {\n    let xs: Vec[f32] = [1.0, 2.0];\n    println(f\"{gpu.sum(xs)}\")\n}\n",
+        "`gpu.sum` is not available: GPU compute (`gpu.*` and `#[gpu]` kernels) goes to the archive",
+    );
+}
