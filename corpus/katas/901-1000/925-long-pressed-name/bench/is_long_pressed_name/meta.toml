@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/925-long-pressed-name/bench/is_long_pressed_name.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "208570b87"
+extracted_src = "e0ca1e0d"
+model_rev = "aafbe785"
+model_src = "e0ca1e0d"
