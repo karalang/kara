@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 428 |
 | missing-feature | 344 |
 | codegen-gap | 292 |
-| false-positive | 288 |
+| false-positive | 289 |
 | other | 199 |
 | diagnostics | 192 |
 | perf | 184 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3045 |
 | interp | 1055 |
-| typecheck | 579 |
+| typecheck | 580 |
 | ownership | 133 |
 | other | 127 |
 | cli | 93 |
@@ -189,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-23-7 | 2026-10-23 | typecheck | low | A `vec![..]` of integer literals inside a tuple literal is typed `Vec[i64]` even where the tuple's expected type says `Vec[u8]`: `let b: (String, Vec[u8]) = ("x".to_string(), vec![1, 2]);` and `v.push(("y".to_string(), vec![3]))` on a `Vec[(String, Vec[u8])]` are refused, while `let a: Vec[u8] = vec![1, 2];` and `let c: Option[Vec[u8]] = Some(vec![1, 2]);` are accepted | — |
 | B-2026-10-23-8 | 2026-10-23 | typecheck+interp+codegen | low | `karac check` accepts `*o` on a String bound by a pattern over a bare `for` element (a destructuring `for (o, n) in v` over a `Vec[(String, i64)]`, or `if let Some(f) = g` inside `for g in v` over a `Vec[Option[String]]`), typing it as a borrow, while every MIR front end (`__mir-run`, `__mir-llvm-run`, `build --mir`) types it as `String` and refuses the `*` | — |
 | B-2026-10-23-10 | 2026-10-23 | typecheck | low | A top-level `fn todo(..)` (likewise `unreachable`, `panic`) is accepted but never called: `todo(1, 2)` is checked against the builtin, "todo() takes 0 or 1 argument(s), found 2", although design.md § The prelude says any local name shadows a prelude name | — |
+| B-2026-10-23-11 | 2026-10-23 | typecheck | medium | `let mut w = v;` with `v` a `for` element of `Copy` type is still treated as a `ref` to the element when `w` is passed `mut` to a `mut ref` parameter: `karac check`, `run` and `build` all refuse `for v in xs.iter() { let mut w = v; bump(mut w); }` with "`w` is a `ref` to an element of the collection the `for` iterates (§4.6), so a `mut` argument cannot modify it", although core-semantics.md §3 (line 97, clarified 2026-10-22) says a `let mut` of a reference to a `Copy` value copies it. `__mir-run` runs the same program and prints the right values | — |
 
 ### Relocated
 
