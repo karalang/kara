@@ -1,0 +1,2595 @@
+// mini_dbfread: a port of dbfread 2.0.7 (MIT; Ole Martin Bjørndalen, UiT
+// The Arctic University of Norway), the library that reads the DBF tables
+// of dBase, FoxBASE, FoxPro and Visual FoxPro, with their memo files. It
+// is how GIS shapefile attributes, old accounting and point-of-sale
+// systems and government data dumps get read from Python today.
+//
+// It replays data/jobs.tsv (see mk.py) over the tables and memo files of
+// a town archive's legacy systems: what DBF() makes of each header, every
+// record under each option (encodings and decode errors, raw mode, lower-
+// case names, the record factories, the FieldParser subclasses from the
+// library's examples), the deleted records, load() and unload(), the
+// memo file readers, the field parsers one value at a time, the
+// case-insensitive file finder, and the damaged files other tools left
+// behind. Then the library's dbfinfo, print_invalid_values and
+// custom_field_type examples, and four programs that write data/out/: a
+// CSV export, a JSON export, an SQL migration and a month-end ledger.
+//
+// The port reads the files the way the library does, through a position
+// in the file, so a record length that disagrees with the fields, a
+// missing end marker or a memo that runs past the end of its file gives
+// what dbfread gives.
+
+// ------------------------------------------------------------ text helpers
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+fn atoi(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut out = String.new();
+    out.push(ds[(n / 16) % 16]);
+    out.push(ds[n % 16]);
+    out
+}
+
+fn hexn(n: i64, width: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut digits: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        digits.push(ds[m % 16]);
+        m = m / 16;
+    }
+    while digits.len() < width {
+        digits.push('0');
+    }
+    let mut out = String.new();
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push(digits[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out
+}
+
+fn zpad(n: i64, w: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    let mut k = s.len();
+    while k < w {
+        out.push('0');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+// Whether str.isprintable() holds, for the characters the code pages here
+// can produce: controls, the C1 range, no-break space, soft hyphen and the
+// private use area are not printable.
+fn printable(n: i64) -> bool {
+    if n < 32 or (n >= 127 and n <= 160) or n == 173 {
+        return false;
+    }
+    not (n >= 0xE000 and n <= 0xF8FF)
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(n) {
+            if n < 256 {
+                out.push_str("\\x");
+                out.push_str(hex2(n));
+            } else {
+                out.push_str("\\u");
+                out.push_str(hexn(n, 4));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ bytes
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let end = if to > b.len() { b.len() } else { to };
+    let mut i = if from < 0 { 0 } else { from };
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        out.push(b);
+    }
+    out
+}
+
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push(chr(*x as i64));
+    }
+    out
+}
+
+fn bytes_eq(a: ref Vec[u8], s: Str) -> bool {
+    let t = bytes_of(s);
+    if a.len() != t.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != t[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn has_byte(set: ref Vec[u8], x: u8) -> bool {
+    for y in set {
+        if *y == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_ws(x: u8) -> bool {
+    x == 32 or (x >= 9 and x <= 13)
+}
+
+// bytes.strip() with no argument: ASCII whitespace.
+fn strip_ws(b: ref Vec[u8]) -> Vec[u8] {
+    let mut i = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    sub(b, i, j)
+}
+
+// bytes.strip(chars) / rstrip(chars).
+fn strip_set(b: ref Vec[u8], set: ref Vec[u8], left: bool) -> Vec[u8] {
+    let mut i = 0;
+    let mut j = b.len();
+    if left {
+        while i < j and has_byte(set, b[i]) {
+            i += 1;
+        }
+    }
+    while j > i and has_byte(set, b[j - 1]) {
+        j -= 1;
+    }
+    sub(b, i, j)
+}
+
+fn replace_byte(b: ref Vec[u8], from: u8, to: u8) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b {
+        out.push(if *x == from { to } else { *x });
+    }
+    out
+}
+
+fn find_byte(b: ref Vec[u8], x: u8) -> i64 {
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == x {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// `needle in haystack` for bytes: a substring test.
+fn bytes_in(needle: ref Vec[u8], hay: Str) -> bool {
+    let h = bytes_of(hay);
+    let mut i = 0;
+    while i + needle.len() <= h.len() {
+        let mut ok = true;
+        let mut k = 0;
+        while k < needle.len() {
+            if h[i + k] != needle[k] {
+                ok = false;
+                break;
+            }
+            k += 1;
+        }
+        if ok {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// repr() of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut sq = false;
+    let mut dq = false;
+    for x in b {
+        if *x == 39 {
+            sq = true;
+        }
+        if *x == 34 {
+            dq = true;
+        }
+    }
+    let q: u8 = if sq and not dq { 34 } else { 39 };
+    let mut out = String.new();
+    out.push('b');
+    out.push(chr(q as i64));
+    for x in b {
+        let n = *x as i64;
+        if *x == q or n == 92 {
+            out.push('\\');
+            out.push(chr(n));
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n < 32 or n >= 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(n));
+        } else {
+            out.push(chr(n));
+        }
+    }
+    out.push(chr(q as i64));
+    out
+}
+
+fn hex_upper(b: ref Vec[u8]) -> String {
+    let ds: Vec[char] = "0123456789ABCDEF".chars().collect();
+    let mut out = String.new();
+    for x in b {
+        let n = *x as i64;
+        out.push(ds[n / 16]);
+        out.push(ds[n % 16]);
+    }
+    out
+}
+
+fn u16le(b: ref Vec[u8], at: i64) -> i64 {
+    b[at] as i64 + b[at + 1] as i64 * 256
+}
+
+fn u32le(b: ref Vec[u8], at: i64) -> i64 {
+    u16le(b, at) + u16le(b, at + 2) * 65536
+}
+
+fn u32be(b: ref Vec[u8], at: i64) -> i64 {
+    ((b[at] as i64 * 256 + b[at + 1] as i64) * 256 + b[at + 2] as i64) * 256 + b[at + 3] as i64
+}
+
+fn u16be(b: ref Vec[u8], at: i64) -> i64 {
+    b[at] as i64 * 256 + b[at + 1] as i64
+}
+
+fn i32le(b: ref Vec[u8], at: i64) -> i64 {
+    let u = u32le(b, at);
+    if u >= 2147483648 { u - 4294967296 } else { u }
+}
+
+// '<q': eight little-endian bytes, two's complement.
+fn i64le(b: ref Vec[u8], at: i64) -> i64 {
+    let mut v: i64 = if b[at + 7] >= 0x80 { -1 } else { 0 };
+    let mut k = 7;
+    while k >= 0 {
+        v = (v << 8) | b[at + k] as i64;
+        k -= 1;
+    }
+    v
+}
+
+fn f64le(b: ref Vec[u8], at: i64) -> f64 {
+    i64le(b, at).bits_as_f64()
+}
+
+// ------------------------------------------------------------ exceptions
+
+// A Python exception: its class (with its module when that is not
+// builtins, as the jobs print it) and str() of it.
+#[derive(Clone)]
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn value_error(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn struct_error(n: i64) -> Exc {
+    exc("struct.error", f"unpack requires a buffer of {n} bytes")
+}
+
+fn not_found(path: ref String) -> Exc {
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")
+}
+
+// ValueError and its subclass UnicodeDecodeError, which is what the
+// print_invalid_values parser catches.
+fn is_value_error(e: ref Exc) -> bool {
+    e.cls == "ValueError" or e.cls == "UnicodeDecodeError"
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error {e.cls}: {e.msg}"
+}
+
+// ------------------------------------------------------------ codecs
+
+// Bytes 0x80..0xff of the eight-bit code pages, four hex digits a code
+// point (0000 where the code page leaves the byte undefined), as CPython's
+// codec tables have them; the low half of each is ASCII.
+fn codec_table(name: ref String) -> Vec[i64] {
+    let src = if name == "cp437" {
+        CP437
+    } else if name == "cp850" {
+        CP850
+    } else if name == "cp865" {
+        CP865
+    } else if name == "cp866" {
+        CP866
+    } else if name == "cp1251" {
+        CP1251
+    } else if name == "cp1252" {
+        CP1252
+    } else if name == "mac_roman" {
+        MAC_ROMAN
+    } else {
+        ""
+    };
+    let cs: Vec[char] = src.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k + 3 < cs.len() {
+        out.push(((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) * 16 + hex_val(cs[k + 2])) * 16 + hex_val(cs[k + 3]));
+        k += 4;
+    }
+    out
+}
+
+fn known_codec(name: ref String) -> bool {
+    name == "ascii" or name == "latin-1" or name == "utf-8" or codec_table(name).len() == 128
+}
+
+fn decode_err(codec: Str, b: ref Vec[u8], from: i64, to: i64, why: Str) -> Exc {
+    if to - from == 1 {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode byte 0x{hex2(b[from] as i64)} in position {from}: {why}")
+    } else {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode bytes in position {from}-{to - 1}: {why}")
+    }
+}
+
+// What an error handler puts in place of b[from..to].
+fn handle(out: mut ref String, b: ref Vec[u8], from: i64, to: i64, errors: ref String, one: bool) {
+    if errors == "replace" {
+        if one {
+            out.push(chr(0xFFFD));
+        } else {
+            let mut i = from;
+            while i < to {
+                out.push(chr(0xFFFD));
+                i += 1;
+            }
+        }
+    } else if errors == "backslashreplace" {
+        let mut i = from;
+        while i < to {
+            out.push_str("\\x");
+            out.push_str(hex2(b[i] as i64));
+            i += 1;
+        }
+    }
+}
+
+fn is_cont(x: u8) -> bool {
+    x >= 0x80 and x <= 0xBF
+}
+
+fn decode_utf8(b: ref Vec[u8], errors: ref String) -> Result[String, Exc] {
+    let mut out = String.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let x = b[i] as i64;
+        if x < 0x80 {
+            out.push(chr(x));
+            i += 1;
+            continue;
+        }
+        let need = if x >= 0xC2 and x <= 0xDF { 1 } else if x >= 0xE0 and x <= 0xEF { 2 } else if x >= 0xF0 and x <= 0xF4 { 3 } else { 0 };
+        if need == 0 {
+            if errors == "strict" {
+                return Err(decode_err("utf-8", b, i, i + 1, "invalid start byte"));
+            }
+            handle(mut out, b, i, i + 1, errors, true);
+            i += 1;
+            continue;
+        }
+        // How many of the following bytes continue the sequence validly.
+        let mut good = 0;
+        let mut k = 1;
+        while k <= need and i + k < n {
+            let y = b[i + k];
+            let ok = if k == 1 and x == 0xE0 {
+                y >= 0xA0 and y <= 0xBF
+            } else if k == 1 and x == 0xED {
+                y >= 0x80 and y <= 0x9F
+            } else if k == 1 and x == 0xF0 {
+                y >= 0x90 and y <= 0xBF
+            } else if k == 1 and x == 0xF4 {
+                y >= 0x80 and y <= 0x8F
+            } else {
+                is_cont(y)
+            };
+            if not ok {
+                break;
+            }
+            good += 1;
+            k += 1;
+        }
+        if good == need {
+            let mut cp = if need == 1 { x - 0xC0 } else if need == 2 { x - 0xE0 } else { x - 0xF0 };
+            let mut j = 1;
+            while j <= need {
+                cp = cp * 64 + (b[i + j] as i64 - 0x80);
+                j += 1;
+            }
+            out.push(chr(cp));
+            i += need + 1;
+            continue;
+        }
+        let at_end = i + 1 + good >= n;
+        let why = if at_end { "unexpected end of data" } else { "invalid continuation byte" };
+        let to = if at_end { n } else { i + 1 + good };
+        if errors == "strict" {
+            return Err(decode_err("utf-8", b, i, to, why));
+        }
+        handle(mut out, b, i, to, errors, true);
+        i = to;
+    }
+    Ok(out)
+}
+
+// bytes.decode(encoding, errors) for the code pages dbfread names.
+fn decode(b: ref Vec[u8], encoding: ref String, errors: ref String) -> Result[String, Exc] {
+    if encoding == "utf-8" {
+        return decode_utf8(b, errors);
+    }
+    let table = codec_table(encoding);
+    let ascii = encoding == "ascii";
+    let latin = encoding == "latin-1";
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let x = b[i] as i64;
+        if x < 128 or latin {
+            out.push(chr(x));
+        } else if not ascii and table[x - 128] != 0 {
+            out.push(chr(table[x - 128]));
+        } else if errors == "strict" {
+            if ascii {
+                return Err(decode_err("ascii", b, i, i + 1, "ordinal not in range(128)"));
+            }
+            return Err(decode_err("charmap", b, i, i + 1, "character maps to <undefined>"));
+        } else {
+            handle(mut out, b, i, i + 1, errors, true);
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ code page tables
+
+const CP437: Str = "00c700fc00e900e200e400e000e500e700ea00eb00e800ef00ee00ec00c400c500c900e600c600f400f600f200fb00f900ff00d600dc00a200a300a520a7019200e100ed00f300fa00f100d100aa00ba00bf231000ac00bd00bc00a100ab00bb259125922593250225242561256225562555256325512557255d255c255b251025142534252c251c2500253c255e255f255a25542569256625602550256c25672568256425652559255825522553256b256a2518250c25882584258c2590258003b100df039303c003a303c300b503c403a6039803a903b4221e03c603b52229226100b1226522642320232100f7224800b0221900b7221a207f00b225a000a0";
+
+const CP850: Str = "00c700fc00e900e200e400e000e500e700ea00eb00e800ef00ee00ec00c400c500c900e600c600f400f600f200fb00f900ff00d600dc00f800a300d800d7019200e100ed00f300fa00f100d100aa00ba00bf00ae00ac00bd00bc00a100ab00bb2591259225932502252400c100c200c000a9256325512557255d00a200a5251025142534252c251c2500253c00e300c3255a25542569256625602550256c00a400f000d000ca00cb00c8013100cd00ce00cf2518250c2588258400a600cc258000d300df00d400d200f500d500b500fe00de00da00db00d900fd00dd00af00b400ad00b1201700be00b600a700f700b800b000a800b700b900b300b225a000a0";
+
+const CP865: Str = "00c700fc00e900e200e400e000e500e700ea00eb00e800ef00ee00ec00c400c500c900e600c600f400f600f200fb00f900ff00d600dc00f800a300d820a7019200e100ed00f300fa00f100d100aa00ba00bf231000ac00bd00bc00a100ab00a4259125922593250225242561256225562555256325512557255d255c255b251025142534252c251c2500253c255e255f255a25542569256625602550256c25672568256425652559255825522553256b256a2518250c25882584258c2590258003b100df039303c003a303c300b503c403a6039803a903b4221e03c603b52229226100b1226522642320232100f7224800b0221900b7221a207f00b225a000a0";
+
+const CP866: Str = "0410041104120413041404150416041704180419041a041b041c041d041e041f0420042104220423042404250426042704280429042a042b042c042d042e042f0430043104320433043404350436043704380439043a043b043c043d043e043f259125922593250225242561256225562555256325512557255d255c255b251025142534252c251c2500253c255e255f255a25542569256625602550256c25672568256425652559255825522553256b256a2518250c25882584258c259025800440044104420443044404450446044704480449044a044b044c044d044e044f040104510404045404070457040e045e00b0221900b7221a211600a425a000a0";
+
+const CP1251: Str = "04020403201a0453201e20262020202120ac203004092039040a040c040b040f045220182019201c201d202220132014000021220459203a045a045c045b045f00a0040e045e040800a4049000a600a7040100a9040400ab00ac00ad00ae040700b000b104060456049100b500b600b704512116045400bb04580405045504570410041104120413041404150416041704180419041a041b041c041d041e041f0420042104220423042404250426042704280429042a042b042c042d042e042f0430043104320433043404350436043704380439043a043b043c043d043e043f0440044104420443044404450446044704480449044a044b044c044d044e044f";
+
+const CP1252: Str = "20ac0000201a0192201e20262020202102c620300160203901520000017d0000000020182019201c201d20222013201402dc21220161203a01530000017e017800a000a100a200a300a400a500a600a700a800a900aa00ab00ac00ad00ae00af00b000b100b200b300b400b500b600b700b800b900ba00bb00bc00bd00be00bf00c000c100c200c300c400c500c600c700c800c900ca00cb00cc00cd00ce00cf00d000d100d200d300d400d500d600d700d800d900da00db00dc00dd00de00df00e000e100e200e300e400e500e600e700e800e900ea00eb00ec00ed00ee00ef00f000f100f200f300f400f500f600f700f800f900fa00fb00fc00fd00fe00ff";
+
+const MAC_ROMAN: Str = "00c400c500c700c900d100d600dc00e100e000e200e400e300e500e700e900e800ea00eb00ed00ec00ee00ef00f100f300f200f400f600f500fa00f900fb00fc202000b000a200a300a7202200b600df00ae00a9212200b400a8226000c600d8221e00b12264226500a500b522022211220f03c0222b00aa00ba03a900e600f800bf00a100ac221a01922248220600ab00bb202600a000c000c300d50152015320132014201c201d2018201900f725ca00ff0178204420ac2039203afb01fb02202100b7201a201e203000c200ca00c100cb00c800cd00ce00cf00cc00d300d4f8ff00d200da00db00d9013102c602dc00af02d802d902da00b802dd02db02c7";
+
+// ------------------------------------------------------------ values
+
+// What a field parser gives. Bytes carries which class it is: 0 bytes,
+// 1 TextMemo, 2 PictureMemo, 3 ObjectMemo, 4 BinaryMemo (the last three
+// are BinaryMemo subclasses), 5 InvalidValue. A Dt is a datetime with
+// microseconds; a Dec is a decimal.Decimal, coefficient and exponent.
+#[derive(Clone)]
+enum Val {
+    Non,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bytes(Vec[u8], i64),
+    Date(i64, i64, i64),
+    Dt(i64, i64, i64, i64, i64, i64, i64),
+    Dec(i64, i64),
+}
+
+const B_PLAIN: i64 = 0;
+const B_TEXT: i64 = 1;
+const B_PICTURE: i64 = 2;
+const B_OBJECT: i64 = 3;
+const B_BINARY: i64 = 4;
+const B_INVALID: i64 = 5;
+
+fn type_name(v: ref Val) -> String {
+    let s = match v {
+        Val.Non => "NoneType",
+        Val.Bool(_) => "bool",
+        Val.Int(_) => "int",
+        Val.Float(_) => "float",
+        Val.Str(_) => "str",
+        Val.Bytes(_, k) => if *k == B_TEXT {
+            "TextMemo"
+        } else if *k == B_PICTURE {
+            "PictureMemo"
+        } else if *k == B_OBJECT {
+            "ObjectMemo"
+        } else if *k == B_BINARY {
+            "BinaryMemo"
+        } else if *k == B_INVALID {
+            "InvalidValue"
+        } else {
+            "bytes"
+        },
+        Val.Date(_, _, _) => "date",
+        Val.Dt(_, _, _, _, _, _, _) => "datetime",
+        Val.Dec(_, _) => "Decimal",
+    };
+    s.to_string()
+}
+
+// The digits of |c|, also for the most negative i64.
+fn abs_digits(c: i64) -> String {
+    if c == 0 {
+        return "0".to_string();
+    }
+    let mut ds: Vec[char] = Vec.new();
+    let mut m = c;
+    while m != 0 {
+        let d = m % 10;
+        ds.push(chr(48 + (if d < 0 { -d } else { d })));
+        m = m / 10;
+    }
+    let mut out = String.new();
+    let mut i = ds.len() - 1;
+    while i >= 0 {
+        out.push(ds[i]);
+        i -= 1;
+    }
+    out
+}
+
+// str() of a Decimal with a non-positive exponent.
+fn dec_str(c: i64, e: i64) -> String {
+    let digits = abs_digits(c);
+    let mut out = String.new();
+    if c < 0 {
+        out.push('-');
+    }
+    if e == 0 {
+        out.push_str(digits);
+        return out;
+    }
+    let n = digits.len();
+    let point = n + e;
+    if point > 0 {
+        out.push_str(digits.substring(0, point));
+        out.push('.');
+        out.push_str(digits.substring(point, n));
+    } else {
+        out.push_str("0.");
+        let mut k = point;
+        while k < 0 {
+            out.push('0');
+            k += 1;
+        }
+        out.push_str(digits);
+    }
+    out
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p = 1;
+    let mut k = 0;
+    while k < n {
+        p = p * 10;
+        k += 1;
+    }
+    p
+}
+
+// Decimal + Decimal, exact at the smaller exponent.
+fn dec_add(a: ref Val, b: ref Val) -> Val {
+    match (a, b) {
+        (Val.Dec(c1, e1), Val.Dec(c2, e2)) => {
+            if *e1 <= *e2 {
+                Val.Dec(*c1 + *c2 * pow10(*e2 - *e1), *e1)
+            } else {
+                Val.Dec(*c1 * pow10(*e1 - *e2) + *c2, *e2)
+            }
+        }
+        _ => a.clone(),
+    }
+}
+
+fn date_str(y: i64, m: i64, d: i64) -> String {
+    f"{zpad(y, 4)}-{zpad(m, 2)}-{zpad(d, 2)}"
+}
+
+fn dt_str(v: ref Val) -> String {
+    match v {
+        Val.Dt(y, mo, d, h, mi, s, us) => {
+            let mut out = f"{date_str(*y, *mo, *d)} {zpad(*h, 2)}:{zpad(*mi, 2)}:{zpad(*s, 2)}";
+            if *us != 0 {
+                out.push_str(f".{zpad(*us, 6)}");
+            }
+            out
+        }
+        _ => String.new(),
+    }
+}
+
+fn val_repr(v: ref Val) -> String {
+    match v {
+        Val.Non => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => f"{x}",
+        Val.Str(s) => str_repr(s),
+        Val.Bytes(b, k) => if *k == B_INVALID {
+            f"InvalidValue({bytes_repr(b)})"
+        } else {
+            bytes_repr(b)
+        },
+        Val.Date(y, m, d) => f"datetime.date({y}, {m}, {d})",
+        Val.Dt(y, mo, d, h, mi, s, us) => {
+            let mut out = f"datetime.datetime({y}, {mo}, {d}, {h}, {mi}";
+            if *s != 0 or *us != 0 {
+                out.push_str(f", {s}");
+            }
+            if *us != 0 {
+                out.push_str(f", {us}");
+            }
+            out.push(')');
+            out
+        }
+        Val.Dec(c, e) => f"Decimal('{dec_str(*c, *e)}')",
+    }
+}
+
+// str() of a value, as csv, the SQL literals and json's default=str use it.
+fn val_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        Val.Bytes(b, _) => bytes_repr(b),
+        Val.Date(y, m, d) => date_str(*y, *m, *d),
+        Val.Dt(_, _, _, _, _, _, _) => dt_str(v),
+        Val.Dec(c, e) => dec_str(*c, *e),
+        _ => val_repr(v),
+    }
+}
+
+// ------------------------------------------------------------ calendar
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if is_leap(y) { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn valid_date(y: i64, m: i64, d: i64) -> bool {
+    y >= 1 and y <= 9999 and m >= 1 and m <= 12 and d >= 1 and d <= days_in_month(y, m)
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let z = y - 1;
+    z * 365 + z / 4 - z / 100 + z / 400
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut n = 0;
+    let mut k = 1;
+    while k < m {
+        n += days_in_month(y, k);
+        k += 1;
+    }
+    n
+}
+
+fn ymd2ord(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+// datetime's _ord2ymd: the proleptic Gregorian date of ordinal n >= 1.
+fn ord2ymd(n0: i64) -> (i64, i64, i64) {
+    let mut n = n0 - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    let year = n400 * 400 + n100 * 100 + n4 * 4 + n1 + 1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let mut m = 1;
+    while n >= days_in_month(year, m) {
+        n -= days_in_month(year, m);
+        m += 1;
+    }
+    (year, m, n + 1)
+}
+
+const MAX_ORDINAL: i64 = 3652059;
+
+// ------------------------------------------------------------ numbers
+
+// int(data) for bytes: whitespace, a sign, digits with single underscores
+// between them.
+fn py_int(b: ref Vec[u8], base: i64) -> Option[i64] {
+    let t = strip_ws(b);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == 43 or t[i] == 45) {
+        neg = t[i] == 45;
+        i += 1;
+    }
+    if base == 16 and i + 1 < t.len() and t[i] == 48 and (t[i + 1] == 120 or t[i + 1] == 88) {
+        i += 2;
+        if i < t.len() and t[i] == 95 {
+            i += 1;
+        }
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        let c = t[i] as i64;
+        if c == 95 {
+            if not prev_digit or i + 1 >= t.len() {
+                return None;
+            }
+            prev_digit = false;
+            i += 1;
+            continue;
+        }
+        let d = hex_val(chr(c));
+        if d < 0 or d >= base {
+            return None;
+        }
+        v = v * base + d;
+        prev_digit = true;
+        i += 1;
+    }
+    if not prev_digit {
+        return None;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// Digits with single underscores between them, from t[i]; the digits and
+// where they stop.
+fn digitpart(t: ref Vec[u8], at: i64) -> (String, i64) {
+    let mut out = String.new();
+    let mut i = at;
+    while i < t.len() {
+        let c = t[i];
+        if c >= 48 and c <= 57 {
+            out.push(chr(c as i64));
+            i += 1;
+        } else if c == 95 and out.len() > 0 and i + 1 < t.len() and t[i + 1] >= 48 and t[i + 1] <= 57 {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    (out, i)
+}
+
+// float(data) for bytes, over the decimal forms (no inf or nan).
+fn py_float(b: ref Vec[u8]) -> Option[f64] {
+    let t = strip_ws(b);
+    let mut i = 0;
+    let mut sign = String.new();
+    if i < t.len() and (t[i] == 43 or t[i] == 45) {
+        if t[i] == 45 {
+            sign.push('-');
+        }
+        i += 1;
+    }
+    let (ip, j) = digitpart(t, i);
+    i = j;
+    let mut fp = String.new();
+    if i < t.len() and t[i] == 46 {
+        let (f, k) = digitpart(t, i + 1);
+        fp = f;
+        i = k;
+    }
+    if ip.len() == 0 and fp.len() == 0 {
+        return None;
+    }
+    let mut ex = "0".to_string();
+    if i < t.len() and (t[i] == 101 or t[i] == 69) {
+        i += 1;
+        let mut esign = String.new();
+        if i < t.len() and (t[i] == 43 or t[i] == 45) {
+            if t[i] == 45 {
+                esign.push('-');
+            }
+            i += 1;
+        }
+        let (e, k) = digitpart(t, i);
+        if e.len() == 0 {
+            return None;
+        }
+        ex = f"{esign}{e}";
+        i = k;
+    }
+    if i != t.len() {
+        return None;
+    }
+    let ip2 = if ip.len() == 0 { "0".to_string() } else { ip };
+    let fp2 = if fp.len() == 0 { "0".to_string() } else { fp };
+    match f64.parse(f"{sign}{ip2}.{fp2}e{ex}") {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+fn float_error(b: ref Vec[u8]) -> Exc {
+    value_error(f"could not convert string to float: {bytes_repr(b)}")
+}
+
+// ------------------------------------------------------------ memo files
+
+// An open memo file: 0 a FakeMemoFile, 1 Visual FoxPro (.fpt), 2 dBase
+// III and 3 dBase IV (.dbt).
+struct Memo {
+    kind: i64,
+    data: Vec[u8],
+    blocksize: i64,
+}
+
+fn fake_memo() -> Memo {
+    Memo { kind: 0, data: Vec.new(), blocksize: 0 }
+}
+
+fn ends_with_ci(s: ref String, ext: Str) -> bool {
+    s.to_lowercase().ends_with(ext)
+}
+
+// open_memofile(filename, dbversion)
+fn open_memo(path: ref String, dbversion: i64) -> Result[Memo, Exc] {
+    let data = match fs.read_bytes(path.clone()) {
+        Ok(d) => d,
+        Err(_) => return Err(not_found(path)),
+    };
+    if ends_with_ci(path, ".fpt") {
+        if data.len() < 512 {
+            return Err(struct_error(512));
+        }
+        let bs = u16be(data, 6);
+        return Ok(Memo { kind: 1, data: data, blocksize: bs });
+    }
+    Ok(Memo { kind: if dbversion == 0x83 { 2 } else { 3 }, data: data, blocksize: 512 })
+}
+
+// memofile[index]
+fn memo_get(m: ref Memo, index: i64) -> Result[Val, Exc] {
+    if m.kind == 0 or index <= 0 {
+        return Ok(Val.Non);
+    }
+    let n = m.data.len();
+    if m.kind == 1 {
+        let at = index * m.blocksize;
+        if at + 8 > n {
+            return Err(struct_error(8));
+        }
+        let t = u32be(m.data, at);
+        let len = u32be(m.data, at + 4);
+        if at + 8 + len > n {
+            return Err(exc("OSError", "EOF reached while reading memo".to_string()));
+        }
+        let k = if t == 0 { B_PICTURE } else if t == 1 { B_TEXT } else if t == 2 { B_OBJECT } else { B_BINARY };
+        return Ok(Val.Bytes(sub(m.data, at + 8, at + 8 + len), k));
+    }
+    if m.kind == 2 {
+        let at = index * 512;
+        let mut end = at;
+        loop {
+            if end >= n {
+                return Ok(Val.Bytes(sub(m.data, at, n), B_PLAIN));
+            }
+            end = if end + 512 > n { n } else { end + 512 };
+            let mut i = at;
+            while i < end {
+                if m.data[i] == 0x1a {
+                    return Ok(Val.Bytes(sub(m.data, at, i), B_PLAIN));
+                }
+                i += 1;
+            }
+        }
+    }
+    let at = index * 512;
+    if at + 8 > n {
+        return Err(struct_error(8));
+    }
+    let len = u32le(m.data, at + 4);
+    let body = sub(m.data, at + 8, at + 8 + len);
+    let cut = find_byte(body, 0x1f);
+    Ok(Val.Bytes(if cut >= 0 { sub(body, 0, cut) } else { body }, B_PLAIN))
+}
+
+// ------------------------------------------------------------ field parser
+
+// What a FieldParser needs from its table, and which subclass it is:
+// "" for FieldParser itself, or one of the three the jobs name.
+struct Ctx {
+    dbversion: i64,
+    encoding: String,
+    errors: String,
+    parser: String,
+}
+
+fn supported(c: ref Ctx, t: ref String) -> bool {
+    "0CDFILMNOTYBGPV+@".contains(t.as_str()) and t.len() == 1 or (c.parser == "hexx" and t == "X")
+}
+
+fn memo_index(data: ref Vec[u8]) -> Result[i64, Exc] {
+    if data.len() == 4 {
+        return Ok(u32le(data, 0));
+    }
+    match py_int(data, 10) {
+        Some(n) => Ok(n),
+        None => {
+            if strip_set(data, bytes_of(" \x00"), true).len() == 0 {
+                Ok(0)
+            } else {
+                Err(value_error(f"Memo index is not an integer: {bytes_repr(data)}"))
+            }
+        }
+    }
+}
+
+fn decode_text(c: ref Ctx, b: ref Vec[u8]) -> Result[String, Exc] {
+    decode(b, c.encoding, c.errors)
+}
+
+fn parse_c(c: ref Ctx, data: ref Vec[u8]) -> Result[Val, Exc] {
+    Ok(Val.Str(decode_text(c, strip_set(data, bytes_of("\x00 "), false))?))
+}
+
+fn parse_d(data: ref Vec[u8]) -> Result[Val, Exc] {
+    let y = py_int(sub(data, 0, 4), 10);
+    let m = py_int(sub(data, 4, 6), 10);
+    let d = py_int(sub(data, 6, 8), 10);
+    match (y, m, d) {
+        (Some(y), Some(m), Some(d)) => {
+            if valid_date(y, m, d) {
+                return Ok(Val.Date(y, m, d));
+            }
+        }
+        _ => {}
+    }
+    if strip_set(data, bytes_of(" 0"), true).len() == 0 {
+        Ok(Val.Non)
+    } else {
+        Err(value_error(f"invalid date {bytes_repr(data)}"))
+    }
+}
+
+fn parse_t(data: ref Vec[u8]) -> Result[Val, Exc] {
+    if strip_ws(data).len() == 0 {
+        return Ok(Val.Non);
+    }
+    if data.len() != 8 {
+        return Err(struct_error(8));
+    }
+    let day = u32le(data, 0);
+    let msec = u32le(data, 4);
+    if day == 0 {
+        return Ok(Val.Non);
+    }
+    let ord = day - 1721425;
+    if ord > 2147483647 {
+        return Err(exc("OverflowError", "signed integer is greater than maximum".to_string()));
+    }
+    if ord < 1 {
+        return Err(value_error("ordinal must be >= 1".to_string()));
+    }
+    if ord > MAX_ORDINAL {
+        let (y, _, _) = ord2ymd(ord);
+        return Err(value_error(f"year {y} is out of range"));
+    }
+    let days = ord + msec / 86400000;
+    let rest = msec % 86400000;
+    if days > MAX_ORDINAL {
+        return Err(exc("OverflowError", "date value out of range".to_string()));
+    }
+    let (y, m, d) = ord2ymd(days);
+    let secs = rest / 1000;
+    Ok(Val.Dt(y, m, d, secs / 3600, (secs / 60) % 60, secs % 60, (rest % 1000) * 1000))
+}
+
+fn parse_l(data: ref Vec[u8]) -> Result[Val, Exc] {
+    if bytes_in(data, "TtYy") {
+        Ok(Val.Bool(true))
+    } else if bytes_in(data, "FfNn") {
+        Ok(Val.Bool(false))
+    } else if bytes_in(data, "? ") {
+        Ok(Val.Non)
+    } else {
+        Err(value_error(f"Illegal value for logical field: {bytes_repr(data)}"))
+    }
+}
+
+fn parse_n(data0: ref Vec[u8]) -> Result[Val, Exc] {
+    let data = strip_set(strip_ws(data0), bytes_of("*"), true);
+    match py_int(data, 10) {
+        Some(n) => Ok(Val.Int(n)),
+        None => {
+            if strip_ws(data).len() == 0 {
+                return Ok(Val.Non);
+            }
+            let fixed = replace_byte(data, 44, 46);
+            match py_float(fixed) {
+                Some(x) => Ok(Val.Float(x)),
+                None => Err(float_error(fixed)),
+            }
+        }
+    }
+}
+
+fn parse_f(data0: ref Vec[u8]) -> Result[Val, Exc] {
+    let data = strip_set(strip_ws(data0), bytes_of("*"), true);
+    if data.len() == 0 {
+        return Ok(Val.Non);
+    }
+    match py_float(data) {
+        Some(x) => Ok(Val.Float(x)),
+        None => Err(float_error(data)),
+    }
+}
+
+fn parse_m(c: ref Ctx, memo: ref Memo, data: ref Vec[u8]) -> Result[Val, Exc] {
+    let v = memo_get(memo, memo_index(data)?)?;
+    match v {
+        Val.Bytes(b, k) => {
+            if k == B_PICTURE or k == B_OBJECT or k == B_BINARY {
+                Ok(Val.Bytes(b, k))
+            } else {
+                Ok(Val.Str(decode_text(c, b)?))
+            }
+        }
+        other => Ok(other),
+    }
+}
+
+// The library's own parse(), one method a field type.
+fn base_parse(c: ref Ctx, memo: ref Memo, t: ref String, data: ref Vec[u8]) -> Result[Val, Exc] {
+    if t == "0" {
+        Ok(Val.Bytes(data.clone(), B_PLAIN))
+    } else if t == "C" {
+        if c.parser == "reverse" {
+            // examples/custom_field_type.py: parseC reverses the text. A
+            // V field still has the library's parseC, bound before.
+            let s = decode(strip_set(data, bytes_of(" 0"), false), "utf-8".to_string(), "strict".to_string())?;
+            let cs: Vec[char] = s.chars().collect();
+            let mut out = String.new();
+            let mut i = cs.len() - 1;
+            while i >= 0 {
+                out.push(cs[i]);
+                i -= 1;
+            }
+            return Ok(Val.Str(out));
+        }
+        parse_c(c, data)
+    } else if t == "V" {
+        parse_c(c, data)
+    } else if t == "D" {
+        parse_d(data)
+    } else if t == "F" {
+        parse_f(data)
+    } else if t == "I" or t == "+" {
+        if data.len() != 4 {
+            return Err(struct_error(4));
+        }
+        Ok(Val.Int(i32le(data, 0)))
+    } else if t == "L" {
+        parse_l(data)
+    } else if t == "M" {
+        parse_m(c, memo, data)
+    } else if t == "N" {
+        parse_n(data)
+    } else if t == "O" {
+        if data.len() != 8 {
+            return Err(struct_error(8));
+        }
+        Ok(Val.Float(f64le(data, 0)))
+    } else if t == "T" or t == "@" {
+        parse_t(data)
+    } else if t == "Y" {
+        if data.len() != 8 {
+            return Err(struct_error(8));
+        }
+        let mut co = i64le(data, 0);
+        let mut ex = -4;
+        while ex < 0 and co % 10 == 0 {
+            co = co / 10;
+            ex += 1;
+        }
+        Ok(Val.Dec(co, ex))
+    } else if t == "B" {
+        if c.dbversion >= 0x30 and c.dbversion <= 0x32 {
+            if data.len() != 8 {
+                return Err(struct_error(8));
+            }
+            return Ok(Val.Float(f64le(data, 0)));
+        }
+        memo_get(memo, memo_index(data)?)
+    } else if t == "G" or t == "P" {
+        memo_get(memo, memo_index(data)?)
+    } else if t == "X" and c.parser == "hexx" {
+        // A vendor's 'X' field: a hexadecimal counter.
+        let d = strip_ws(data);
+        if d.len() == 0 {
+            return Ok(Val.Non);
+        }
+        match py_int(d, 16) {
+            Some(n) => Ok(Val.Int(n)),
+            None => Err(value_error(f"invalid literal for int() with base 16: {bytes_repr(d)}")),
+        }
+    } else {
+        Err(value_error(f"Unknown field type: {str_repr(t)}"))
+    }
+}
+
+// parser.parse(field, data), with print_invalid_values.py's subclass
+// turning a ValueError into an InvalidValue.
+fn parse_field(c: ref Ctx, memo: ref Memo, t: ref String, data: ref Vec[u8]) -> Result[Val, Exc] {
+    match base_parse(c, memo, t, data) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if c.parser == "lenient" and is_value_error(e) {
+                Ok(Val.Bytes(data.clone(), B_INVALID))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ ifiles
+
+fn last_slash(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = cs.len() - 1;
+    while i >= 0 {
+        if cs[i] == '/' {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// os.path.split(p), for paths without repeated slashes.
+fn path_split(p: ref String) -> (String, String) {
+    let cs: Vec[char] = p.chars().collect();
+    let i = last_slash(p);
+    if i < 0 {
+        return (String.new(), p.clone());
+    }
+    let mut head = String.new();
+    let mut tail = String.new();
+    let mut k = 0;
+    while k < cs.len() {
+        if k < i {
+            head.push(cs[k]);
+        } else if k > i {
+            tail.push(cs[k]);
+        }
+        k += 1;
+    }
+    if i == 0 {
+        head.push('/');
+    }
+    (head, tail)
+}
+
+fn path_join(dir: ref String, name: ref String) -> String {
+    if dir.len() == 0 {
+        name.clone()
+    } else if dir.ends_with("/") {
+        f"{dir}{name}"
+    } else {
+        f"{dir}/{name}"
+    }
+}
+
+// os.path.splitext(p)[0]: drops the last extension of the base name,
+// unless the only dots lead it.
+fn strip_ext(p: ref String) -> String {
+    let (head, tail) = path_split(p);
+    let cs: Vec[char] = tail.chars().collect();
+    let mut first = 0;
+    while first < cs.len() and cs[first] == '.' {
+        first += 1;
+    }
+    let mut dot = -1;
+    let mut i = first;
+    while i < cs.len() {
+        if cs[i] == '.' {
+            dot = i;
+        }
+        i += 1;
+    }
+    if dot < 0 {
+        return p.clone();
+    }
+    let mut base = String.new();
+    let mut k = 0;
+    while k < dot {
+        base.push(cs[k]);
+        k += 1;
+    }
+    let cut = p.len() - tail.len();
+    let _ = head;
+    f"{p.substring(0, cut)}{base}"
+}
+
+// ipat(): every cased character becomes [Uu], its upper and lower case.
+fn ipat(pat: ref String) -> String {
+    let (dirname, base) = path_split(pat);
+    let mut out = String.new();
+    for c in base.chars() {
+        let s = c.to_string();
+        let u = s.to_uppercase();
+        let l = s.to_lowercase();
+        if u != l {
+            out.push('[');
+            out.push_str(u);
+            out.push_str(l);
+            out.push(']');
+        } else {
+            out.push(c);
+        }
+    }
+    path_join(dirname, out)
+}
+
+// fnmatch.fnmatch(name, pat) on POSIX: *, ? and [...] sets.
+fn fn_match(name: ref Vec[char], i: i64, pat: ref Vec[char], j: i64) -> bool {
+    if j == pat.len() {
+        return i == name.len();
+    }
+    let p = pat[j];
+    if p == '*' {
+        let mut k = i;
+        while k <= name.len() {
+            if fn_match(name, k, pat, j + 1) {
+                return true;
+            }
+            k += 1;
+        }
+        return false;
+    }
+    if p == '?' {
+        return i < name.len() and fn_match(name, i + 1, pat, j + 1);
+    }
+    if p == '[' {
+        // Find the closing bracket; a ']' first in the set is literal.
+        let mut k = j + 1;
+        if k < pat.len() and pat[k] == '!' {
+            k += 1;
+        }
+        if k < pat.len() and pat[k] == ']' {
+            k += 1;
+        }
+        while k < pat.len() and pat[k] != ']' {
+            k += 1;
+        }
+        if k < pat.len() {
+            if i >= name.len() {
+                return false;
+            }
+            let mut s = j + 1;
+            let negate = pat[s] == '!';
+            if negate {
+                s += 1;
+            }
+            let c = name[i];
+            let mut hit = false;
+            let mut q = s;
+            while q < k {
+                if q + 2 < k and pat[q + 1] == '-' {
+                    if c >= pat[q] and c <= pat[q + 2] {
+                        hit = true;
+                    }
+                    q += 3;
+                } else {
+                    if c == pat[q] {
+                        hit = true;
+                    }
+                    q += 1;
+                }
+            }
+            return hit != negate and fn_match(name, i + 1, pat, k + 1);
+        }
+        // No closing bracket: a literal '['.
+    }
+    i < name.len() and name[i] == p and fn_match(name, i + 1, pat, j + 1)
+}
+
+fn fnmatch(name: ref String, pat: ref String) -> bool {
+    let n: Vec[char] = name.chars().collect();
+    let p: Vec[char] = pat.chars().collect();
+    fn_match(n, 0, p, 0)
+}
+
+fn has_magic(s: ref String) -> bool {
+    s.contains("*") or s.contains("?") or s.contains("[")
+}
+
+// glob.glob(pattern) when only the base name may hold wildcards; the
+// directory's entries come back sorted, and the jobs never let two match.
+fn glob(pattern: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let (dirname, base) = path_split(pattern);
+    if not has_magic(base) {
+        if base.len() > 0 and fs.exists(pattern.clone()) {
+            out.push(pattern.clone());
+        }
+        return out;
+    }
+    let dir = if dirname.len() == 0 { ".".to_string() } else { dirname.clone() };
+    let names = match fs.read_dir(dir) {
+        Ok(ns) => ns,
+        Err(_) => return out,
+    };
+    for name in names {
+        if name.starts_with(".") and not base.starts_with(".") {
+            continue;
+        }
+        if fnmatch(name, base) {
+            out.push(path_join(dirname, name));
+        }
+    }
+    out
+}
+
+// ifind(pat, ext)
+fn ifind(pat: ref String, ext: ref String) -> Option[String] {
+    let p = if ext.len() > 0 { f"{strip_ext(pat)}{ext}" } else { pat.clone() };
+    let files = glob(ipat(p));
+    if files.len() > 0 { Some(files[0].clone()) } else { None }
+}
+
+// ------------------------------------------------------------ tables
+
+const VERSIONS: Str = "02 FoxBASE|03 FoxBASE+/Dbase III plus, no memory|30 Visual FoxPro|31 Visual FoxPro, autoincrement enabled|32 Visual FoxPro with field type Varchar or Varbinary|43 dBASE IV SQL table files, no memo|63 dBASE IV SQL system files, no memo|83 FoxBASE+/dBASE III PLUS, with memo|8b dBASE IV with memo|cb dBASE IV SQL table files, with memo|f5 FoxPro 2.x (or earlier) with memo|e5 HiPer-Six format with SMT memo file|fb FoxBASE";
+
+const CODEPAGES: Str = "00 ascii|01 cp437|02 cp850|03 cp1252|04 mac_roman|08 cp865|09 cp437|0a cp850|0b cp437|0d cp437|0e cp850|0f cp437|10 cp850|11 cp437|12 cp850|13 cp932|14 cp850|15 cp437|16 cp850|17 cp865|18 cp437|19 cp437|1a cp850|1b cp437|1c cp863|1d cp850|1f cp852|22 cp852|23 cp852|24 cp860|25 cp850|26 cp866|37 cp850|40 cp852|4d cp936|4e cp949|4f cp950|50 cp874|57 cp1252|58 cp1252|59 cp1252|64 cp852|65 cp866|66 cp865|67 cp861|6a cp737|6b cp857|78 cp950|79 cp949|7a cp936|7b cp932|7c cp874|7d cp1255|7e cp1256|c8 cp1250|c9 cp1251|ca cp1254|cb cp1253|96 mac_cyrillic|97 mac_latin2|98 mac_greek";
+
+fn table_lookup(table: Str, key: i64) -> Option[String] {
+    let k = hex2(key);
+    for entry in split_on(table.to_string(), '|') {
+        if entry.substring(0, 2) == k {
+            return Some(entry.substring(3, entry.len()));
+        }
+    }
+    None
+}
+
+fn dbversion_string(v: i64) -> String {
+    match table_lookup(VERSIONS, v) {
+        Some(s) => s,
+        None => f"Unknown (0x{hex2(v)})",
+    }
+}
+
+fn guess_encoding(lang: i64) -> Result[String, Exc] {
+    match table_lookup(CODEPAGES, lang) {
+        Some(s) => Ok(s),
+        None => Err(exc("LookupError", f"Unable to guess encoding for languager driver byte 0x{hexn(lang, 1)}")),
+    }
+}
+
+#[derive(Clone)]
+struct Field {
+    name: String,
+    ftype: String,
+    address: i64,
+    length: i64,
+    decimal_count: i64,
+    raw: Vec[u8],
+}
+
+// DBF()'s keyword arguments, and the jobs' rec= and parser=.
+#[derive(Clone)]
+struct Opts {
+    encoding: String,
+    ignorecase: bool,
+    lowernames: bool,
+    load: bool,
+    raw: bool,
+    ignore_missing: bool,
+    errors: String,
+    rec: String,
+    parser: String,
+}
+
+fn default_opts() -> Opts {
+    Opts {
+        encoding: String.new(),
+        ignorecase: true,
+        lowernames: false,
+        load: false,
+        raw: false,
+        ignore_missing: false,
+        errors: "strict".to_string(),
+        rec: "ordered".to_string(),
+        parser: String.new(),
+    }
+}
+
+fn opts_of(parts: ref Vec[String], from: i64) -> Opts {
+    let mut o = default_opts();
+    let mut i = from;
+    while i < parts.len() {
+        let p = parts[i].clone();
+        let at = match p.find("=") {
+            Some(k) => k,
+            None => p.len(),
+        };
+        let k = p.substring(0, at);
+        let v = p.substring(at + 1, p.len());
+        if k == "rec" {
+            o.rec = v;
+        } else if k == "parser" {
+            o.parser = v;
+        } else if k == "lowernames" {
+            o.lowernames = v == "1";
+        } else if k == "ignorecase" {
+            o.ignorecase = v == "1";
+        } else if k == "load" {
+            o.load = v == "1";
+        } else if k == "raw" {
+            o.raw = v == "1";
+        } else if k == "ignore_missing_memofile" {
+            o.ignore_missing = v == "1";
+        } else if k == "encoding" {
+            o.encoding = v;
+        } else if k == "char_decode_errors" {
+            o.errors = v;
+        }
+        i += 1;
+    }
+    o
+}
+
+// A record: the field names and values in order.
+#[derive(Clone)]
+struct Rec {
+    names: Vec[String],
+    vals: Vec[Val],
+}
+
+struct Table {
+    name: String,
+    filename: String,
+    memofilename: Option[String],
+    header: Vec[u8],
+    dbversion: i64,
+    numrecords: i64,
+    headerlen: i64,
+    recordlen: i64,
+    date: Val,
+    encoding: String,
+    fields: Vec[Field],
+    o: Opts,
+    loaded: bool,
+    records: Vec[Rec],
+    deleted: Vec[Rec],
+}
+
+fn read_file(path: ref String) -> Result[Vec[u8], Exc] {
+    match fs.read_bytes(path.clone()) {
+        Ok(d) => Ok(d),
+        Err(_) => Err(not_found(path)),
+    }
+}
+
+fn ctx_of(t: ref Table) -> Ctx {
+    Ctx { dbversion: t.dbversion, encoding: t.encoding.clone(), errors: t.o.errors.clone(), parser: t.o.parser.clone() }
+}
+
+// DBF(filename, ...)
+fn open_dbf(filename: ref String, o: ref Opts) -> Result[Table, Exc] {
+    let (_, base) = path_split(filename);
+    let name = strip_ext(base).to_lowercase();
+    let found = if o.ignorecase {
+        match ifind(filename, String.new()) {
+            Some(f) => f,
+            None => return Err(exc("dbfread.exceptions.DBFNotFound", f"could not find file {str_repr(filename)}")),
+        }
+    } else {
+        filename.clone()
+    };
+    let data = read_file(found)?;
+    if data.len() < 32 {
+        return Err(struct_error(32));
+    }
+    let header = sub(data, 0, 32);
+    let lang = data[29] as i64;
+    let encoding = if o.encoding.len() > 0 {
+        o.encoding.clone()
+    } else {
+        match guess_encoding(lang) {
+            Ok(e) => e,
+            Err(_) => "ascii".to_string(),
+        }
+    };
+    let mut t = Table {
+        name: name,
+        filename: found,
+        memofilename: None,
+        header: header,
+        dbversion: data[0] as i64,
+        numrecords: u32le(data, 4),
+        headerlen: u16le(data, 8),
+        recordlen: u16le(data, 10),
+        date: Val.Non,
+        encoding: encoding,
+        fields: Vec.new(),
+        o: o.clone(),
+        loaded: false,
+        records: Vec.new(),
+        deleted: Vec.new(),
+    };
+    // The field descriptors, up to a \r or \n, or the end of the file.
+    let mut pos = 32;
+    loop {
+        if pos >= data.len() or data[pos] == 13 or data[pos] == 10 {
+            break;
+        }
+        if pos + 32 > data.len() {
+            return Err(struct_error(32));
+        }
+        let raw = sub(data, pos, pos + 32);
+        pos += 32;
+        let ftype = chr(raw[11] as i64).to_string();
+        let mut length = raw[16] as i64;
+        let mut dec = raw[17] as i64;
+        if ftype == "C" {
+            length = length + dec * 256;
+            dec = 0;
+        }
+        let nul = find_byte(raw, 0);
+        let nb = sub(raw, 0, if nul >= 0 and nul < 11 { nul } else { 11 });
+        let mut fname = decode(nb, t.encoding, o.errors)?;
+        if o.lowernames {
+            fname = fname.to_lowercase();
+        }
+        t.fields.push(Field { name: fname, ftype: ftype, address: u32le(raw, 12), length: length, decimal_count: dec, raw: raw });
+    }
+    // _check_headers()
+    let c = ctx_of(t);
+    for f in t.fields {
+        if f.ftype == "I" and f.length != 4 {
+            return Err(value_error(f"Field type I must have length 4 (was {f.length})"));
+        } else if f.ftype == "L" and f.length != 1 {
+            return Err(value_error(f"Field type L must have length 1 (was {f.length})"));
+        } else if not supported(c, f.ftype) {
+            return Err(value_error(f"Unknown field type: {str_repr(f.ftype)}"));
+        }
+    }
+    let y = data[1] as i64;
+    let year = if y < 80 { 2000 + y } else { 1900 + y };
+    let (m, d) = (data[2] as i64, data[3] as i64);
+    if valid_date(year, m, d) {
+        t.date = Val.Date(year, m, d);
+    }
+    // _get_memofilename()
+    let mut memo = false;
+    for f in t.fields {
+        if "MGPB".contains(f.ftype.as_str()) {
+            memo = true;
+        }
+    }
+    if memo {
+        let mut path: Option[String] = ifind(t.filename, ".fpt".to_string());
+        if path.is_none() {
+            path = ifind(t.filename, ".dbt".to_string());
+        }
+        match path {
+            Some(p) => t.memofilename = Some(p),
+            None => {
+                if not o.ignore_missing {
+                    return Err(exc("dbfread.exceptions.MissingMemoFile", f"missing memo file for {t.filename}"));
+                }
+            }
+        }
+    }
+    if o.load {
+        load(mut t)?;
+    }
+    Ok(t)
+}
+
+// _iter_records(record_type): the records go to `out` as they are read,
+// so a parse error leaves the records before it there.
+fn iter_records(t: ref Table, flag: u8, out: mut ref Vec[Rec]) -> Result[(), Exc] {
+    let data = read_file(t.filename)?;
+    let memo = match t.memofilename.clone() {
+        Some(p) => if t.o.raw { fake_memo() } else { open_memo(p, t.dbversion)? },
+        None => fake_memo(),
+    };
+    let c = ctx_of(t);
+    let mut pos = t.headerlen;
+    loop {
+        if pos >= data.len() {
+            break;
+        }
+        let sep = data[pos];
+        pos += 1;
+        if sep == flag {
+            let mut r = Rec { names: Vec.new(), vals: Vec.new() };
+            for f in t.fields {
+                let chunk = sub(data, pos, pos + f.length);
+                pos += f.length;
+                r.names.push(f.name.clone());
+                if t.o.raw {
+                    r.vals.push(Val.Bytes(chunk, B_PLAIN));
+                } else {
+                    r.vals.push(parse_field(c, memo, f.ftype, chunk)?);
+                }
+            }
+            out.push(r);
+        } else if sep == 0x1a {
+            break;
+        } else {
+            pos += t.recordlen - 1;
+        }
+    }
+    Ok(())
+}
+
+// Every record of one kind, printing each as it comes, as the jobs that
+// walk a table do; the error, if any, after the records before it.
+fn walk(t: ref Table, flag: u8, show: bool) -> Result[Vec[Rec], Exc] {
+    let mut got: Vec[Rec] = Vec.new();
+    let r = if t.loaded {
+        got = if flag == 32 { t.records.clone() } else { t.deleted.clone() };
+        Ok(())
+    } else {
+        iter_records(t, flag, mut got)
+    };
+    if show {
+        let mut first = true;
+        for rec in got {
+            if first {
+                println(f"  type: {rec_type(t)}");
+                first = false;
+            }
+            println(f"  {rec_repr(t, rec)}");
+        }
+    }
+    r?;
+    Ok(got)
+}
+
+fn count_records(t: ref Table, flag: u8) -> Result[i64, Exc] {
+    if t.loaded {
+        return Ok(if flag == 32 { t.records.len() } else { t.deleted.len() });
+    }
+    let data = read_file(t.filename)?;
+    let mut pos = t.headerlen;
+    let mut n = 0;
+    loop {
+        if pos >= data.len() {
+            break;
+        }
+        let sep = data[pos];
+        pos += 1;
+        if sep == flag {
+            n += 1;
+            pos += t.recordlen - 1;
+        } else if sep == 0x1a {
+            break;
+        } else {
+            pos += t.recordlen - 1;
+        }
+    }
+    Ok(n)
+}
+
+fn load(t: mut ref Table) -> Result[(), Exc] {
+    if not t.loaded {
+        let mut rs: Vec[Rec] = Vec.new();
+        iter_records(t, 32, mut rs)?;
+        let mut ds: Vec[Rec] = Vec.new();
+        iter_records(t, 42, mut ds)?;
+        t.records = rs;
+        t.deleted = ds;
+        t.loaded = true;
+    }
+    Ok(())
+}
+
+fn unload(t: mut ref Table) {
+    t.records = Vec.new();
+    t.deleted = Vec.new();
+    t.loaded = false;
+}
+
+fn table_repr(t: ref Table) -> String {
+    let status = if t.loaded { "loaded" } else { "unloaded" };
+    f"<{status} DBF table {str_repr(t.filename)}>"
+}
+
+fn rec_type(t: ref Table) -> String {
+    if t.o.rec == "dict" {
+        "dict".to_string()
+    } else if t.o.rec == "none" {
+        "list".to_string()
+    } else {
+        "OrderedDict".to_string()
+    }
+}
+
+// The jobs print a dict record as a plain dict, and recfactory=None's
+// list of (name, value) pairs as it is.
+fn rec_repr(t: ref Table, r: ref Rec) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut i = 0;
+    let list = t.o.rec == "none";
+    while i < r.names.len() {
+        if list {
+            parts.push(f"({str_repr(r.names[i])}, {val_repr(r.vals[i])})");
+        } else {
+            parts.push(f"{str_repr(r.names[i])}: {val_repr(r.vals[i])}");
+        }
+        i += 1;
+    }
+    if list {
+        f"[{join_strs(parts, ", ")}]"
+    } else {
+        f"{{{join_strs(parts, ", ")}}}"
+    }
+}
+
+fn get(r: ref Rec, name: Str) -> Val {
+    let mut i = 0;
+    while i < r.names.len() {
+        if r.names[i] == name {
+            return r.vals[i].clone();
+        }
+        i += 1;
+    }
+    Val.Non
+}
+
+// ------------------------------------------------------------ the programs
+
+// examples/dbfinfo.py
+fn dbfinfo(paths: ref Vec[String]) -> Result[(), Exc] {
+    let mut o = default_opts();
+    o.ignore_missing = true;
+    for p in paths {
+        println(f"{p}:");
+        let t = open_dbf(p, o)?;
+        println(f"  Name: {t.name}");
+        let memo = match t.memofilename.clone() {
+            Some(m) => m,
+            None => String.new(),
+        };
+        println(f"  Memo File: {memo}");
+        println(f"  DB Version: {dbversion_string(t.dbversion)}");
+        println(f"  Records: {count_records(t, 32)?}");
+        println(f"  Deleted Records: {count_records(t, 42)?}");
+        println(f"  Last Updated: {val_str(t.date)}");
+        println(f"  Character Encoding: {t.encoding}");
+        println("  Fields:");
+        for f in t.fields {
+            println(f"    {f.name} ({f.ftype} {f.length})");
+        }
+    }
+    Ok(())
+}
+
+// examples/print_invalid_values.py
+fn invalid(path: ref String) -> Result[(), Exc] {
+    let mut o = default_opts();
+    o.parser = "lenient".to_string();
+    let t = open_dbf(path, o)?;
+    let mut got: Vec[Rec] = Vec.new();
+    let r = iter_records(t, 32, mut got);
+    let mut i = 0;
+    for rec in got {
+        let mut k = 0;
+        while k < rec.names.len() {
+            match rec.vals[k] {
+                Val.Bytes(_, kind) => {
+                    if kind == B_INVALID {
+                        println(f"records[{i}][{str_repr(rec.names[k])}] == {val_repr(rec.vals[k])}");
+                    }
+                }
+                _ => {}
+            }
+            k += 1;
+        }
+        i += 1;
+    }
+    r
+}
+
+// examples/custom_field_type.py
+fn reverse(path: ref String) -> Result[(), Exc] {
+    let mut o = default_opts();
+    o.parser = "reverse".to_string();
+    let t = open_dbf(path, o)?;
+    let mut got: Vec[Rec] = Vec.new();
+    let r = iter_records(t, 32, mut got);
+    for rec in got {
+        println(val_str(get(rec, "NAME")));
+    }
+    r
+}
+
+fn csv_field(v: ref Val) -> String {
+    let s = match v {
+        Val.Non => String.new(),
+        _ => val_str(v),
+    };
+    if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r") {
+        let mut out = String.new();
+        out.push('"');
+        for c in s.chars() {
+            if c == '"' {
+                out.push('"');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    } else {
+        s
+    }
+}
+
+fn csv_row(vals: ref Vec[Val]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in vals {
+        parts.push(csv_field(v));
+    }
+    join_strs(parts, ",")
+}
+
+fn dirname_of(path: ref String) -> String {
+    let (head, _) = path_split(path);
+    head
+}
+
+fn write_text(path: ref String, text: ref String) -> Result[(), Exc] {
+    let _ = fs.create_dir_all(dirname_of(path));
+    match fs.write(path.clone(), text.clone()) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(not_found(path)),
+    }
+}
+
+// Exports a table as CSV: a header row of field names and a row a record,
+// as the library's print_csv.py example does. A record that fails to
+// parse leaves the rows before it in the file.
+fn to_csv(path: ref String, dest: ref String, o: ref Opts) -> Result[(), Exc] {
+    let t = open_dbf(path, o)?;
+    let mut names: Vec[Val] = Vec.new();
+    for f in t.fields {
+        names.push(Val.Str(f.name.clone()));
+    }
+    let mut text = csv_row(names);
+    text.push('\n');
+    let mut got: Vec[Rec] = Vec.new();
+    let r = if t.loaded {
+        got = t.records.clone();
+        Ok(())
+    } else {
+        iter_records(t, 32, mut got)
+    };
+    for rec in got {
+        text.push_str(csv_row(rec.vals));
+        text.push('\n');
+    }
+    write_text(dest, text)?;
+    r?;
+    println(f"  wrote {dest} ({got.len()} rows)");
+    Ok(())
+}
+
+fn json_str(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 32 {
+            out.push_str("\\u");
+            out.push_str(hexn(n, 4));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_val(v: ref Val) -> String {
+    match v {
+        Val.Non => "null".to_string(),
+        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Float(x) => f"{x}",
+        _ => json_str(val_str(v)),
+    }
+}
+
+// Exports a table as a JSON array of objects, indented by two; dates,
+// timestamps, currency and binary memos become their str().
+fn to_json(path: ref String, dest: ref String, o: ref Opts) -> Result[(), Exc] {
+    let t = open_dbf(path, o)?;
+    let rows = walk(t, 32, false)?;
+    let mut text = String.new();
+    if rows.len() == 0 {
+        text.push_str("[]");
+    } else {
+        text.push_str("[\n");
+        let mut i = 0;
+        while i < rows.len() {
+            text.push_str("  {\n");
+            let r = rows[i].clone();
+            let mut k = 0;
+            while k < r.names.len() {
+                text.push_str(f"    {json_str(r.names[k])}: {json_val(r.vals[k])}");
+                if k + 1 < r.names.len() {
+                    text.push(',');
+                }
+                text.push('\n');
+                k += 1;
+            }
+            text.push_str("  }");
+            if i + 1 < rows.len() {
+                text.push(',');
+            }
+            text.push('\n');
+            i += 1;
+        }
+        text.push(']');
+    }
+    text.push('\n');
+    write_text(dest, text)?;
+    println(f"  wrote {dest} ({rows.len()} records)");
+    Ok(())
+}
+
+// Column types from the library's dbf2sqlite script, plus the ones it
+// leaves to TEXT that a SQL database can hold better.
+fn sql_type(t: ref String) -> String {
+    let pairs = "F FLOAT|L BOOLEAN|I INTEGER|C TEXT|N REAL|M TEXT|D DATE|T DATETIME|0 INTEGER|Y NUMERIC|+ INTEGER|@ DATETIME|O FLOAT|V TEXT|G BLOB|P BLOB";
+    for p in split_on(pairs.to_string(), '|') {
+        if p.substring(0, 1) == t {
+            return p.substring(2, p.len());
+        }
+    }
+    "TEXT".to_string()
+}
+
+fn sql_literal(v: ref Val) -> String {
+    match v {
+        Val.Non => "NULL".to_string(),
+        Val.Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
+        Val.Int(_) => val_str(v),
+        Val.Float(_) => val_str(v),
+        Val.Dec(_, _) => val_str(v),
+        Val.Bytes(b, _) => f"X'{hex_upper(b)}'",
+        Val.Date(_, _, _) => f"'{val_str(v)}'",
+        Val.Dt(_, _, _, _, _, _, _) => f"'{val_str(v)}'",
+        Val.Str(s) => {
+            let mut out = "'".to_string();
+            for c in s.chars() {
+                if c == '\'' {
+                    out.push('\'');
+                }
+                out.push(c);
+            }
+            out.push('\'');
+            out
+        }
+    }
+}
+
+// Migrates tables to one SQL script, as dbf2sqlite does with its schema
+// dump: a CREATE TABLE and an INSERT a record, each table in a
+// transaction. A decode error stops the run before anything is written.
+fn to_sql(dest: ref String, encoding: ref String, errors: ref String, paths: ref Vec[String]) -> Result[(), Exc] {
+    let mut lines: Vec[String] = Vec.new();
+    for p in paths {
+        let mut o = default_opts();
+        o.lowernames = true;
+        o.encoding = if encoding == "-" { String.new() } else { encoding.clone() };
+        o.errors = errors.clone();
+        let got = match open_dbf(p, o) {
+            Ok(t) => match walk(t, 32, false) {
+                Ok(rows) => Ok((t, rows)),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        let (t, rows) = match got {
+            Ok(x) => x,
+            Err(e) => {
+                if e.cls == "UnicodeDecodeError" {
+                    println(f"  {err_line(e)}");
+                    println("  Please use --encoding or --char-decode-errors.");
+                    return Ok(());
+                }
+                return Err(e);
+            }
+        };
+        let deleted = count_records(t, 42)?;
+        lines.push(f"-- {p}: {dbversion_string(t.dbversion)}, {rows.len()} rows, {deleted} deleted records skipped");
+        lines.push("BEGIN;".to_string());
+        lines.push(f"DROP TABLE IF EXISTS \"{t.name}\";");
+        let mut defs: Vec[String] = Vec.new();
+        for f in t.fields {
+            defs.push(f"\"{f.name}\" {sql_type(f.ftype)}");
+        }
+        lines.push(f"CREATE TABLE \"{t.name}\" ({join_strs(defs, ", ")});");
+        for r in rows {
+            let mut vs: Vec[String] = Vec.new();
+            for v in r.vals {
+                vs.push(sql_literal(v));
+            }
+            lines.push(f"INSERT INTO \"{t.name}\" VALUES ({join_strs(vs, ", ")});");
+        }
+        lines.push("COMMIT;".to_string());
+    }
+    let mut text = join_strs(lines, "\n");
+    text.push('\n');
+    write_text(dest, text)?;
+    println(f"  wrote {dest} ({paths.len()} tables)");
+    Ok(())
+}
+
+fn dt_key(v: ref Val) -> Vec[i64] {
+    match v {
+        Val.Dt(y, mo, d, h, mi, s, us) => vec![*y, *mo, *d, *h, *mi, *s, *us],
+        _ => Vec.new(),
+    }
+}
+
+fn key_greater(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    let mut i = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return a[i] > b[i];
+        }
+        i += 1;
+    }
+    a.len() > b.len()
+}
+
+#[derive(Clone)]
+struct Account {
+    name: String,
+    orders: i64,
+    total: Val,
+    unpaid: Val,
+    last: Val,
+}
+
+// The shop's month-end report from its order book: orders, totals, what
+// is still unpaid and the last order date, a line a customer.
+fn ledger(path: ref String, dest: ref String) -> Result[(), Exc] {
+    let t = open_dbf(path, default_opts())?;
+    let rows = walk(t, 32, false)?;
+    let mut acc: Vec[Account] = Vec.new();
+    for r in rows {
+        let name = val_str(get(r, "CUSTOMER"));
+        let mut at = -1;
+        let mut i = 0;
+        while i < acc.len() {
+            if acc[i].name == name {
+                at = i;
+            }
+            i += 1;
+        }
+        if at < 0 {
+            acc.push(Account { name: name, orders: 0, total: Val.Dec(0, 0), unpaid: Val.Dec(0, 0), last: Val.Non });
+            at = acc.len() - 1;
+        }
+        let total = get(r, "TOTAL");
+        let paid = match get(r, "PAID") {
+            Val.Bool(b) => b,
+            _ => false,
+        };
+        let when = get(r, "ORDERED");
+        acc[at].orders += 1;
+        acc[at].total = dec_add(acc[at].total, total);
+        if not paid {
+            acc[at].unpaid = dec_add(acc[at].unpaid, total);
+        }
+        let later = match acc[at].last {
+            Val.Non => true,
+            _ => key_greater(dt_key(when), dt_key(acc[at].last)),
+        };
+        if later {
+            acc[at].last = when;
+        }
+    }
+    // sorted(by), by customer name.
+    let mut order: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < acc.len() {
+        let mut j = order.len();
+        while j > 0 and acc[order[j - 1]].name > acc[i].name {
+            j -= 1;
+        }
+        order.insert(j, i);
+        i += 1;
+    }
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"{pad_right("customer", 12)} {pad_left("orders", 6)} {pad_left("total", 16)} {pad_left("unpaid", 14)}  last order");
+    let mut grand = Val.Dec(0, 0);
+    let mut count = 0;
+    for k in order {
+        let a = acc[k].clone();
+        grand = dec_add(grand, a.total);
+        count += a.orders;
+        let last = match a.last {
+            Val.Dt(y, mo, d, h, mi, _, _) => f"{date_str(y, mo, d)} {zpad(h, 2)}:{zpad(mi, 2)}",
+            _ => String.new(),
+        };
+        lines.push(f"{pad_right(a.name, 12)} {pad_left(f"{a.orders}", 6)} {pad_left(val_str(a.total), 16)} {pad_left(val_str(a.unpaid), 14)}  {last}");
+    }
+    lines.push(f"{pad_right("all", 12)} {pad_left(f"{count}", 6)} {pad_left(val_str(grand), 16)}");
+    let mut text = join_strs(lines, "\n");
+    text.push('\n');
+    write_text(dest, text)?;
+    println(f"  wrote {dest}");
+    Ok(())
+}
+
+fn cat(path: ref String) {
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(s) => s,
+        Err(_) => {
+            println(f"  {err_line(not_found(path))}");
+            return;
+        }
+    };
+    // open() in text mode reads with universal newlines: "\r\n" and a
+    // lone "\r" both come back as "\n".
+    let mut norm = String.new();
+    let mut after_cr = false;
+    for c in text.chars() {
+        if c == '\r' {
+            norm.push('\n');
+            after_cr = true;
+        } else {
+            if not (c == '\n' and after_cr) {
+                norm.push(c);
+            }
+            after_cr = false;
+        }
+    }
+    let mut lines = split_on(norm, '\n');
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    println(f"  {path} ({lines.len()} lines)");
+    for ln in lines {
+        println(f"  | {ln}");
+    }
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn opt_repr(s: ref Option[String]) -> String {
+    match s {
+        Some(x) => str_repr(x),
+        None => "None".to_string(),
+    }
+}
+
+fn header_repr(h: ref Vec[u8]) -> String {
+    f"DBFHeader(dbversion={h[0]}, year={h[1]}, month={h[2]}, day={h[3]}, numrecords={u32le(h, 4)}, headerlen={u16le(h, 8)}, recordlen={u16le(h, 10)}, reserved1={u16le(h, 12)}, incomplete_transaction={h[14]}, encryption_flag={h[15]}, free_record_thread={u32le(h, 16)}, reserved2={u32le(h, 20)}, reserved3={u32le(h, 24)}, mdx_flag={h[28]}, language_driver={h[29]}, reserved4={u16le(h, 30)})"
+}
+
+fn field_repr(f: ref Field) -> String {
+    let r = f.raw.clone();
+    f"DBFField(name={str_repr(f.name)}, type={str_repr(f.ftype)}, address={f.address}, length={f.length}, decimal_count={f.decimal_count}, reserved1={u16le(r, 18)}, workarea_id={r[20]}, reserved2={r[21]}, reserved3={r[22]}, set_fields_flag={r[23]}, reserved4={bytes_repr(sub(r, 24, 31))}, index_field_flag={r[31]})"
+}
+
+fn names_repr(t: ref Table) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for f in t.fields {
+        parts.push(str_repr(f.name));
+    }
+    f"[{join_strs(parts, ", ")}]"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn iter_name(t: ref Table) -> String {
+    if t.loaded { "list".to_string() } else { "RecordIterator".to_string() }
+}
+
+fn run(parts: ref Vec[String]) -> Result[(), Exc] {
+    let verb = parts[0].clone();
+    if verb == "version" {
+        println("  2.0.7");
+        println("  VersionInfo(major=2, minor=0, micro=7, releaselevel='', serial=0)");
+    } else if verb == "dbversion" {
+        println(f"  {dbversion_string(atoi(parts[1]))}");
+    } else if verb == "codepage" {
+        match guess_encoding(atoi(parts[1])) {
+            Ok(e) => println(f"  {e}"),
+            Err(e) => println(f"  {err_line(e)}"),
+        }
+    } else if verb == "info" {
+        let t = open_dbf(parts[1], opts_of(parts, 2))?;
+        println(f"  repr: {table_repr(t)}");
+        println(f"  name: {str_repr(t.name)}");
+        println(f"  filename: {str_repr(t.filename)}");
+        println(f"  memofilename: {opt_repr(t.memofilename)}");
+        println(f"  dbversion: {dbversion_string(t.dbversion)}");
+        println(f"  date: {val_repr(t.date)}");
+        println(f"  encoding: {t.encoding}");
+        println(f"  field_names: {names_repr(t)}");
+        println(f"  loaded: {py_bool(t.loaded)}");
+        let n = count_records(t, 32)?;
+        let d = count_records(t, 42)?;
+        println(f"  len: {n} deleted: {d}");
+    } else if verb == "header" {
+        let t = open_dbf(parts[1], opts_of(parts, 2))?;
+        println(f"  {header_repr(t.header)}");
+        for f in t.fields {
+            println(f"  {field_repr(f)}");
+        }
+    } else if verb == "records" or verb == "deleted" {
+        let t = open_dbf(parts[1], opts_of(parts, 2))?;
+        walk(t, if verb == "records" { 32 } else { 42 }, true)?;
+    } else if verb == "load" {
+        let mut t = open_dbf(parts[1], default_opts())?;
+        println(f"  {table_repr(t)} {py_bool(t.loaded)} {iter_name(t)} {count_records(t, 32)?}");
+        load(mut t)?;
+        println(f"  {table_repr(t)} {py_bool(t.loaded)} {iter_name(t)} {t.records.len()} {t.deleted.len()}");
+        println(f"  iterated: {walk(t, 32, false)?.len()}");
+        load(mut t)?;
+        unload(mut t);
+        println(f"  {table_repr(t)} {py_bool(t.loaded)} {iter_name(t)} {count_records(t, 42)?}");
+        let mut o = default_opts();
+        o.load = true;
+        let mut t2 = open_dbf(parts[1], o)?;
+        println(f"  in with: {table_repr(t2)} {count_records(t2, 32)?}");
+        unload(mut t2);
+        println(f"  after with: {table_repr(t2)} {py_bool(t2.loaded)}");
+    } else if verb == "memo" {
+        for i in split_on(parts[3], ',') {
+            let got = match open_memo(parts[1], atoi(parts[2])) {
+                Ok(m) => memo_get(m, atoi(i)),
+                Err(e) => Err(e),
+            };
+            match got {
+                Ok(v) => println(f"  {i} {type_name(v)} {val_repr(v)}"),
+                Err(e) => println(f"  {i} {err_line(e)}"),
+            }
+        }
+    } else if verb == "parse" {
+        let mut c = Ctx { dbversion: 2, encoding: "ascii".to_string(), errors: "strict".to_string(), parser: String.new() };
+        let mut i = 3;
+        while i < parts.len() {
+            let kv = split_on(parts[i], '=');
+            if kv[0] == "dbversion" {
+                c.dbversion = atoi(kv[1]);
+            } else if kv[0] == "encoding" {
+                c.encoding = kv[1].clone();
+            } else if kv[0] == "char_decode_errors" {
+                c.errors = kv[1].clone();
+            } else if kv[0] == "parser" {
+                c.parser = kv[1].clone();
+            }
+            i += 1;
+        }
+        let data = if parts[2] == "-" { Vec.new() } else { hex_bytes(parts[2]) };
+        let v = parse_field(c, fake_memo(), parts[1], data)?;
+        println(f"  {type_name(v)} {val_repr(v)}");
+    } else if verb == "ipat" {
+        let p = if parts[1] == "-" { String.new() } else { parts[1].clone() };
+        println(f"  {str_repr(ipat(p))}");
+    } else if verb == "ifnmatch" {
+        println(f"  {py_bool(fnmatch(parts[1], ipat(parts[2])))}");
+    } else if verb == "ifind" {
+        let ext = if parts[2] == "-" { String.new() } else { parts[2].clone() };
+        println(f"  {opt_repr(ifind(parts[1], ext))}");
+    } else if verb == "dbfinfo" {
+        let mut ps: Vec[String] = Vec.new();
+        let mut i = 1;
+        while i < parts.len() {
+            ps.push(parts[i].clone());
+            i += 1;
+        }
+        dbfinfo(ps)?;
+    } else if verb == "invalid" {
+        invalid(parts[1])?;
+    } else if verb == "reverse" {
+        reverse(parts[1])?;
+    } else if verb == "csv" {
+        to_csv(parts[1], parts[2], opts_of(parts, 3))?;
+    } else if verb == "json" {
+        to_json(parts[1], parts[2], opts_of(parts, 3))?;
+    } else if verb == "sql" {
+        let mut ps: Vec[String] = Vec.new();
+        let mut i = 4;
+        while i < parts.len() {
+            ps.push(parts[i].clone());
+            i += 1;
+        }
+        to_sql(parts[1], parts[2], parts[3], ps)?;
+    } else if verb == "ledger" {
+        ledger(parts[1], parts[2])?;
+    } else if verb == "cat" {
+        cat(parts[1]);
+    }
+    Ok(())
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        if let Err(e) = fs.write_bytes(path, hex_bytes(f[1])) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    let _ = fs.remove_dir_all("data/out".to_string());
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut n = 0;
+    let mut nerr = 0;
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let parts = split_on(hex_string(line), '\t');
+        println(f"> {join_strs(parts, " ")}");
+        if let Err(e) = run(parts) {
+            println(f"  {err_line(e)}");
+            nerr += 1;
+        }
+        n += 1;
+    }
+    println(f"{n} jobs, {nerr} ended in an error");
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("76657273696f6e\n646276657273696f6e0932\n646276657273696f6e0933\n646276657273696f6e093438\n646276657273696f6e093439\n646276657273696f6e093530\n646276657273696f6e093637\n646276657273696f6e093939\n646276657273696f6e09313331\n646276657273696f6e09313339\n646276657273696f6e09323033\n646276657273696f6e09323435\n646276657273696f6e09323239\n646276657273696f6e09323531\n646276657273696f6e0930\n646276657273696f6e0934\n646276657273696f6e09313233\n646276657273696f6e09323535\n636f6465706167650930\n636f6465706167650931\n636f6465706167650932\n636f6465706167650933\n636f6465706167650934\n636f6465706167650938\n636f646570616765093139\n636f646570616765093338\n636f646570616765093837\n636f64657061676509313030\n636f64657061676509313034\n636f64657061676509313235\n636f64657061676509313530\n636f64657061676509323030\n636f64657061676509323031\n636f64657061676509313533\n636f64657061676509323535\n646266696e666f09646174612f6c65676163792f50454f504c452e44424609646174612f6c65676163792f6f72646572732e64626609646174612f6c65676163792f5469636b6574732e44424609646174612f6c65676163792f6e6f7465732e64626609646174612f6c65676163792f696e76656e746f72792e646266\n646266696e666f09646174612f6c65676163792f6b756e6465722e64626609646174612f6c65676163792f6b6c69656e74792e64626609646174612f6c65676163792f4b4c49454e54595f572e44424609646174612f6c65676163792f6d656e752e64626609646174612f6c65676163792f656d7074792e64626609646174612f6c65676163792f6e616d65732e64626609646174612f6c65676163792f666c6167732e64626609646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e646266\n696e666f09646174612f6c65676163792f50454f504c452e444246\n696e666f09646174612f6c65676163792f70656f706c652e646266\n696e666f09646174612f6c65676163792f50656f706c652e446266096c6f7765726e616d65733d31\n696e666f09646174612f6c65676163792f6f72646572732e646266\n696e666f09646174612f6c65676163792f5469636b6574732e444246\n696e666f09646174612f6c65676163792f6e6f7465732e646266\n696e666f09646174612f6c65676163792f696e76656e746f72792e646266\n696e666f09646174612f6c65676163792f696e76656e746f72792e646266096c6f7765726e616d65733d31\n");
+    s.push_str("696e666f09646174612f6c65676163792f6b756e6465722e646266096c6f7765726e616d65733d31\n696e666f09646174612f6c65676163792f6b6c69656e74792e646266\n696e666f09646174612f6c65676163792f4b4c49454e54595f572e444246096c6f7765726e616d65733d31\n696e666f09646174612f6c65676163792f6d656e752e646266\n696e666f09646174612f6c65676163792f6578706f72742e646266\n696e666f09646174612f6c65676163792f757466382e646266\n696e666f09646174612f6c65676163792f626f74682e646266\n696e666f09646174612f6c65676163792f706c61696e332e646266\n696e666f09646174612f6c65676163792f656d7074792e646266\n696e666f09646174612f6c65676163792f6c6f6e67636861722e646266\n696e666f09646174612f6c65676163792f6e616d65732e646266\n696e666f09646174612f6c65676163792f6e616d65732e646266096c6f7765726e616d65733d31\n696e666f09646174612f6c65676163792f666c6167732e646266\n696e666f09646174612f6c65676163792f6e756d626572732e646266\n696e666f09646174612f6c65676163792f63757272656e63792e646266\n696e666f09646174612f6c65676163792f74696d65732e646266\n696e666f09646174612f6c65676163792f696e762a2e646266\n696e666f09646174612f6c65676163792f4f72643f72732e444246\n68656164657209646174612f6c65676163792f50454f504c452e444246\n68656164657209646174612f6c65676163792f6f72646572732e646266\n68656164657209646174612f6c65676163792f5469636b6574732e444246\n68656164657209646174612f6c65676163792f6e6f7465732e646266\n68656164657209646174612f6c65676163792f696e76656e746f72792e646266\n68656164657209646174612f6c65676163792f6e616d65732e646266\n68656164657209646174612f6c65676163792f6c6f6e67636861722e646266\n68656164657209646174612f6c65676163792f656d7074792e646266\n68656164657209646174612f6c65676163792f6b756e6465722e646266096c6f7765726e616d65733d31\n68656164657209646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266\n7265636f72647309646174612f6c65676163792f50454f504c452e444246\n7265636f72647309646174612f6c65676163792f50454f504c452e444246097265633d64696374\n7265636f72647309646174612f6c65676163792f50454f504c452e444246097265633d6e6f6e65\n7265636f72647309646174612f6c65676163792f50454f504c452e444246096c6f7765726e616d65733d31\n");
+    s.push_str("7265636f72647309646174612f6c65676163792f50454f504c452e444246097261773d31\n7265636f72647309646174612f6c65676163792f50454f504c452e44424609656e636f64696e673d6c6174696e2d31\n7265636f72647309646174612f6c65676163792f50454f504c452e44424609656e636f64696e673d6173636969\n7265636f72647309646174612f6c65676163792f50454f504c452e44424609656e636f64696e673d617363696909636861725f6465636f64655f6572726f72733d7265706c616365\n7265636f72647309646174612f6c65676163792f50454f504c452e44424609656e636f64696e673d617363696909636861725f6465636f64655f6572726f72733d69676e6f7265\n7265636f72647309646174612f6c65676163792f50454f504c452e44424609656e636f64696e673d617363696909636861725f6465636f64655f6572726f72733d6261636b736c6173687265706c616365\n7265636f72647309646174612f6c65676163792f6f72646572732e646266\n7265636f72647309646174612f6c65676163792f6f72646572732e646266097261773d31\n7265636f72647309646174612f6c65676163792f6f72646572732e646266096c6f61643d31\n7265636f72647309646174612f6c65676163792f5469636b6574732e444246\n7265636f72647309646174612f6c65676163792f6e6f7465732e646266\n7265636f72647309646174612f6c65676163792f6e6f7465732e646266097261773d31\n7265636f72647309646174612f6c65676163792f696e76656e746f72792e646266\n7265636f72647309646174612f6c65676163792f6b756e6465722e646266\n7265636f72647309646174612f6c65676163792f6b756e6465722e64626609656e636f64696e673d6370383530\n7265636f72647309646174612f6c65676163792f6b6c69656e74792e646266\n7265636f72647309646174612f6c65676163792f4b4c49454e54595f572e444246\n7265636f72647309646174612f6c65676163792f6b6c69656e74792e64626609656e636f64696e673d637031323531\n7265636f72647309646174612f6c65676163792f6b6c69656e74792e64626609656e636f64696e673d63703132353109636861725f6465636f64655f6572726f72733d737472696374\n7265636f72647309646174612f6c65676163792f6d656e752e646266\n7265636f72647309646174612f6c65676163792f6d656e752e64626609656e636f64696e673d637031323532\n7265636f72647309646174612f6c65676163792f6578706f72742e646266\n7265636f72647309646174612f6c65676163792f6578706f72742e64626609656e636f64696e673d637031323532\n");
+    s.push_str("7265636f72647309646174612f6c65676163792f6578706f72742e64626609636861725f6465636f64655f6572726f72733d7265706c616365\n7265636f72647309646174612f6c65676163792f6578706f72742e64626609656e636f64696e673d63703132353209636861725f6465636f64655f6572726f72733d7265706c616365\n7265636f72647309646174612f6c65676163792f6578706f72742e64626609656e636f64696e673d6c6174696e2d31\n7265636f72647309646174612f6c65676163792f757466382e646266\n7265636f72647309646174612f6c65676163792f757466382e64626609656e636f64696e673d7574662d38\n7265636f72647309646174612f6c65676163792f757466382e64626609656e636f64696e673d7574662d3809636861725f6465636f64655f6572726f72733d7265706c616365\n7265636f72647309646174612f6c65676163792f757466382e64626609656e636f64696e673d7574662d3809636861725f6465636f64655f6572726f72733d69676e6f7265\n7265636f72647309646174612f6c65676163792f757466382e64626609656e636f64696e673d7574662d3809636861725f6465636f64655f6572726f72733d6261636b736c6173687265706c616365\n7265636f72647309646174612f6c65676163792f757466382e64626609656e636f64696e673d7574662d38097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f626f74682e646266\n7265636f72647309646174612f6c65676163792f706c61696e332e646266\n7265636f72647309646174612f6c65676163792f656d7074792e646266\n7265636f72647309646174612f6c65676163792f6c6f6e67636861722e646266\n7265636f72647309646174612f6c65676163792f6e616d65732e646266\n7265636f72647309646174612f6c65676163792f666c6167732e646266\n7265636f72647309646174612f6c65676163792f6e756d626572732e646266\n7265636f72647309646174612f6c65676163792f6e756d626572732e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f63757272656e63792e646266\n7265636f72647309646174612f6c65676163792f74696d65732e646266\n7265636f72647309646174612f6c65676163792f70656f706c652e6462660969676e6f7265636173653d30\n7265636f72647309646174612f6c65676163792f50454f504c452e4442460969676e6f7265636173653d30\n7265636f72647309646174612f6c65676163792f6e6f74686572652e646266\n7265636f72647309646174612f6c65676163792f6e6f74686572652e6462660969676e6f7265636173653d30\n");
+    s.push_str("7265636f72647309646174612f6c65676163792f50454f504c452e444246097061727365723d72657665727365\n7265636f72647309646174612f6c65676163792f6d656e752e646266097061727365723d72657665727365\n7265636f72647309646174612f6c65676163792f5469636b6574732e444246097061727365723d72657665727365\n7265636f72647309646174612f6c65676163792f757466382e646266097061727365723d72657665727365\n64656c6574656409646174612f6c65676163792f50454f504c452e444246\n64656c6574656409646174612f6c65676163792f6f72646572732e646266\n64656c6574656409646174612f6c65676163792f6f72646572732e646266096c6f61643d31\n64656c6574656409646174612f6c65676163792f6e6f7465732e646266\n64656c6574656409646174612f6c65676163792f6b6c69656e74792e646266\n64656c6574656409646174612f6c65676163792f666c6167732e646266\n64656c6574656409646174612f6c65676163792f656d7074792e646266\n64656c6574656409646174612f6c65676163792f50454f504c452e444246097261773d31\n6c6f616409646174612f6c65676163792f50454f504c452e444246\n6c6f616409646174612f6c65676163792f6f72646572732e646266\n6c6f616409646174612f6c65676163792f656d7074792e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266097061727365723d68657878\n7265636f72647309646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266097061727365723d68657878\n696e666f09646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f62726f6b656e2f756e6b6e6f776e5f747970652e646266097061727365723d6c656e69656e74\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f696e742e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f696e742e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6c6f676963616c2e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6c6f676963616c2e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f73686f72742e646266\n");
+    s.push_str("7265636f72647309646174612f6c65676163792f62726f6b656e2f73686f72742e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6375745f6669656c64732e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6375745f6669656c64732e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6e6f5f7465726d696e61746f722e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6e6f5f7465726d696e61746f722e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6e6f5f656f665f6d61726b65722e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6e6f5f656f665f6d61726b65722e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f7061646465642e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f7061646465642e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266097061727365723d6c656e69656e74\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266097261773d31\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266097261773d31\n696e666f09646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e6462660969676e6f72655f6d697373696e675f6d656d6f66696c653d31\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e6462660969676e6f72655f6d697373696e675f6d656d6f66696c653d31\n696e666f09646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e646266097261773d31\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6d697373696e675f6d656d6f2e646266097261773d31\n696e666f09646174612f6c65676163792f62726f6b656e2f7666705f646f75626c652e646266\n");
+    s.push_str("7265636f72647309646174612f6c65676163792f62726f6b656e2f7666705f646f75626c652e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f7666705f646f75626c652e6462660969676e6f72655f6d697373696e675f6d656d6f66696c653d31\n7265636f72647309646174612f6c65676163792f62726f6b656e2f7666705f646f75626c652e6462660969676e6f72655f6d697373696e675f6d656d6f66696c653d31\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e646266097061727365723d6c656e69656e74\n696e666f09646174612f6c65676163792f62726f6b656e2f74696e795f6670742e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f74696e795f6670742e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f74696e795f6670742e646266097261773d31\n7265636f72647309646174612f6c65676163792f62726f6b656e2f74696e795f6670742e646266097261773d31\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e64626609656e636f64696e673d637031323532\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e64626609656e636f64696e673d637031323532\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e64626609636861725f6465636f64655f6572726f72733d7265706c616365\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6e616d652e64626609636861725f6465636f64655f6572726f72733d7265706c616365\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f74696d652e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f74696d652e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f74696d652e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f74696d652e646266097061727365723d6c656e69656e74\n");
+    s.push_str("696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6175746f2e646266\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6175746f2e646266\n696e666f09646174612f6c65676163792f62726f6b656e2f6261645f6175746f2e646266097061727365723d6c656e69656e74\n7265636f72647309646174612f6c65676163792f62726f6b656e2f6261645f6175746f2e646266097061727365723d6c656e69656e74\n64656c6574656409646174612f6c65676163792f62726f6b656e2f7061646465642e646266\n68656164657209646174612f6c65676163792f62726f6b656e2f6e6f5f7465726d696e61746f722e646266\n68656164657209646174612f6c65676163792f62726f6b656e2f7061646465642e646266\n6d656d6f09646174612f6c65676163792f4f52444552532e46505409343809302c2d312c382c392c31302c31312c31322c31332c31342c37\n6d656d6f09646174612f6c65676163792f4e4f5445532e4442540931333109312c322c332c352c362c372c30\n6d656d6f09646174612f6c65676163792f696e76656e746f72792e6462740931333909312c322c332c342c30\n6d656d6f09646174612f6c65676163792f706c61696e332e64627409330931\n6d656d6f09646174612f6c65676163792f706c61696e332e646274093133310931\n6d656d6f09646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e66707409343809382c39\n6d656d6f09646174612f6c65676163792f62726f6b656e2f6261645f6d656d6f2e66707409343809353030\n6d656d6f09646174612f6c65676163792f62726f6b656e2f74696e795f6670742e6670740934380931\n6d656d6f09646174612f6c65676163792f6e6f74686572652e6670740934380931\n70617273650930093030\n706172736509300961616666\n70617273650930092d\n70617273650943093734363537333734\n706172736509430937343635373337343230323030303030\n7061727365094309323032303663363536313634\n7061727365094309303036643639363430303230\n70617273650943092d\n7061727365094309323032303230\n70617273650943093734363136323039\n7061727365094309363336313636653909656e636f64696e673d637031323532\n70617273650943093633363136366539\n7061727365094309363336313636653909636861725f6465636f64655f6572726f72733d7265706c616365\n7061727365095609373636313732363336383631373232303230\n706172736509440933303330333033303330333033303330\n706172736509440932303230323032303230323032303230\n");
+    s.push_str("706172736509440933313339333733303330333133303331\n706172736509440934653666373434393665373436373732\n706172736509440933323330333233343330333233333330\n706172736509440933303330333033303230333033303330\n706172736509440932303332333033323230333132303339\n706172736509440932623331356633303330333133303332\n706172736509440932643330333033313330333133303331\n70617273650944093332333033323334333033313330\n7061727365094409333233303332333433303331333033313738\n706172736509440933393339333933393331333233333331\n706172736509440933303330333033313330333133303331\n7061727365094609333132653335\n7061727365094609323032303264333232653332333532303230\n7061727365094609326132613261\n70617273650946092d\n706172736509460933313635326433303337\n706172736509460933313332\n706172736509460932613333326533353261\n7061727365094609363136323633\n70617273650946093331356633303265333035663331\n7061727365094609303933373061\n7061727365094609326432653335363532623332\n70617273650946093331326536353333\n706172736509460933313635\n70617273650946093330326533333330333033303330333033303330333033303330333033303330333033303334\n70617273650949093031303030303030\n7061727365092b093031303030303030\n70617273650949096666666666666666\n7061727365092b096666666666666666\n70617273650949093030303030303830\n7061727365092b093030303030303830\n70617273650949093130323730303030\n7061727365092b093130323730303030\n706172736509490930313030\n7061727365094c093534\n7061727365094c093734\n7061727365094c093539\n7061727365094c093739\n7061727365094c093436\n7061727365094c093636\n7061727365094c093465\n7061727365094c093665\n7061727365094c093366\n7061727365094c093230\n7061727365094c093738\n7061727365094c093331\n7061727365094c092d\n7061727365094c0935343539\n7061727365094e093331\n7061727365094e09323032303334333232303230\n7061727365094e09326433313337\n7061727365094e09333132653335\n7061727365094e09333132633335\n7061727365094e093261\n7061727365094e092d\n7061727365094e0933313566333033303330\n7061727365094e093330333033313332\n7061727365094e0932623333\n7061727365094e09333136353332\n");
+    s.push_str("7061727365094e093339326533393339\n7061727365094e0932643330\n7061727365094e09363236313634\n7061727365094e0933313263333232633333\n7061727365094e0933313332326533333330\n7061727365094f0930303030303030303030303066383366\n7061727365094f0930303030303030303030303030303830\n7061727365094f0937646333393432356164343962323534\n7061727365094f0930313030303030303030303030303030\n7061727365094f0963393736626539663063323466653430\n7061727365094f0930303030\n706172736509540962643837323530303030303030303030\n706172736509400962643837323530303030303030303030\n706172736509540962643837323530306663636533383030\n706172736509400962643837323530306663636533383030\n706172736509540932303230323032303230323032303230\n706172736509400932303230323032303230323032303230\n706172736509540930303030303030303035303030303030\n706172736509400930303030303030303035303030303030\n706172736509540935323434316130306366303730303030\n706172736509400935323434316130306366303730303030\n706172736509540935313434316130303030303030303030\n706172736509400935313434316130303030303030303030\n706172736509540932636665353130303030303030303030\n706172736509400932636665353130303030303030303030\n706172736509540932646665353130303030303030303030\n706172736509400932646665353130303030303030303030\n706172736509540966666666666666663030303030303030\n706172736509400966666666666666663030303030303030\n706172736509540935303434316138303030303030303030\n706172736509400935303434316138303030303030303030\n706172736509540935313434316138303030303030303030\n706172736509400935313434316138303030303030303030\n706172736509540932636665353130306666356232363035\n706172736509400932636665353130306666356232363035\n706172736509540932636665353130303030356332363035\n706172736509400932636665353130303030356332363035\n706172736509540939373861323530306666666666666666\n706172736509400939373861323530306666666666666666\n706172736509590930303030303030303030303030303030\n706172736509590930313030303030303030303030303030\n706172736509590966666666666666666666666666666666\n706172736509590931303237303030303030303030303030\n");
+    s.push_str("706172736509590931356364356230373030303030303030\n706172736509590935306333303030303030303030303030\n706172736509590930303030303030303030303030303830\n70617273650942093030303030303030303030303034343009646276657273696f6e3d3438\n70617273650942093030303030303030303030303034343009646276657273696f6e3d3530\n7061727365094209323032303230323032303230323032303230333709646276657273696f6e3d33\n70617273650942093030303009646276657273696f6e3d3439\n7061727365094d093037303030303030\n7061727365094d093230323032303230323032303230323032303335\n7061727365094d093230323032303230323032303230323032303230\n7061727365094d093030303030303030303030303030303030303030\n7061727365094d09363136323633\n70617273650947093037303030303030\n70617273650947093230323032303230323032303230323032303335\n70617273650947093230323032303230323032303230323032303230\n70617273650947093030303030303030303030303030303030303030\n7061727365094709363136323633\n70617273650950093037303030303030\n70617273650950093230323032303230323032303230323032303335\n70617273650950093230323032303230323032303230323032303230\n70617273650950093030303030303030303030303030303030303030\n7061727365095009363136323633\n706172736509580936363636\n706172736509580936363636097061727365723d68657878\n7061727365095809333037383331343632303230097061727365723d68657878\n70617273650958093731097061727365723d68657878\n70617273650958093731097061727365723d6c656e69656e74\n706172736509440934653666373434393665373436373732097061727365723d6c656e69656e74\n7061727365094c093738097061727365723d6c656e69656e74\n70617273650943093633363136366539097061727365723d6c656e69656e74\n70617273650949093031097061727365723d6c656e69656e74\n706172736509430936663663366336353638323033303330097061727365723d72657665727365\n706172736509430937343732633361363230097061727365723d72657665727365\n7061727365094309373437326536097061727365723d72657665727365\n7061727365095609363136323633097061727365723d72657665727365\n6970617409646174612f6c65676163792f70656f706c652e646266\n697061740953747261c39f652e646266\n697061740961315f62322e444246\n");
+    s.push_str("69706174096469722fc386c398c3852e667074\n6970617409782d5b315d2e646266\n6970617409323032342e313233\n69706174092d\n69666e6d617463680950454f504c452e4442460970656f706c652e646266\n69666e6d617463680950656f706c652e6462660950454f504c452e444246\n69666e6d617463680970656f706c652e6462780970656f706c652e646266\n69666e6d6174636809537472617373652e6462660973747261c39f652e646266\n69666e6d6174636809535452415353452e4442460973747261c39f652e646266\n69666e6d617463680953747261c39f652e64626609535452415353452e444246\n69666e6d61746368096e6f7465732e646274092a2e444254\n69666e6d6174636809612e646266093f2e646266\n6966696e6409646174612f6c65676163792f70656f706c652e646266092d\n6966696e6409646174612f6c65676163792f6f72646572732e646266092e667074\n6966696e6409646174612f6c65676163792f6f72646572732e646266092e646274\n6966696e6409646174612f6c65676163792f4e4f5445532e646266092e646274\n6966696e6409646174612f6c65676163792f626f74682e646266092e646274\n6966696e6409646174612f6c65676163792f6e6f74686572652e646266092d\n6966696e6409646174612f6e6f77686572652f70656f706c652e646266092d\n6966696e6409646174612f6c65676163792f7469636b2a092d\n6966696e6409646174612f6c65676163792f62726f6b656e2f4241445f4d454d4f2e444246092e667074\n696e76616c696409646174612f6c65676163792f62726f6b656e2f6261645f76616c7565732e646266\n696e76616c696409646174612f6c65676163792f50454f504c452e444246\n7265766572736509646174612f6c65676163792f50454f504c452e444246\n63737609646174612f6c65676163792f50454f504c452e44424609646174612f6f75742f70656f706c652e637376\n63617409646174612f6f75742f70656f706c652e637376\n63737609646174612f6c65676163792f6f72646572732e64626609646174612f6f75742f6f72646572732e637376\n63617409646174612f6f75742f6f72646572732e637376\n63737609646174612f6c65676163792f6e6f7465732e64626609646174612f6f75742f6e6f7465732e637376\n63617409646174612f6f75742f6e6f7465732e637376\n63737609646174612f6c65676163792f6578706f72742e64626609646174612f6f75742f6578706f72742e637376\n63617409646174612f6f75742f6578706f72742e637376\n63737609646174612f6c65676163792f6578706f72742e64626609646174612f6f75742f6578706f72742e63737609656e636f64696e673d637031323532\n");
+    s.push_str("63617409646174612f6f75742f6578706f72742e637376\n6a736f6e09646174612f6c65676163792f50454f504c452e44424609646174612f6f75742f70656f706c652e6a736f6e\n63617409646174612f6f75742f70656f706c652e6a736f6e\n6a736f6e09646174612f6c65676163792f6f72646572732e64626609646174612f6f75742f6f72646572732e6a736f6e096c6f7765726e616d65733d31\n63617409646174612f6f75742f6f72646572732e6a736f6e\n6a736f6e09646174612f6c65676163792f6b6c69656e74792e64626609646174612f6f75742f6b6c69656e74792e6a736f6e\n63617409646174612f6f75742f6b6c69656e74792e6a736f6e\n6a736f6e09646174612f6c65676163792f656d7074792e64626609646174612f6f75742f656d7074792e6a736f6e\n63617409646174612f6f75742f656d7074792e6a736f6e\n73716c09646174612f6f75742f617263686976652e73716c092d0973747269637409646174612f6c65676163792f50454f504c452e44424609646174612f6c65676163792f6f72646572732e64626609646174612f6c65676163792f5469636b6574732e44424609646174612f6c65676163792f6e6f7465732e64626609646174612f6c65676163792f696e76656e746f72792e64626609646174612f6c65676163792f6b756e6465722e646266\n63617409646174612f6f75742f617263686976652e73716c\n73716c09646174612f6f75742f6578706f72742e73716c092d0973747269637409646174612f6c65676163792f6d656e752e64626609646174612f6c65676163792f6578706f72742e646266\n63617409646174612f6f75742f6578706f72742e73716c\n73716c09646174612f6f75742f6578706f72742e73716c096370313235320973747269637409646174612f6c65676163792f6d656e752e64626609646174612f6c65676163792f6578706f72742e646266\n63617409646174612f6f75742f6578706f72742e73716c\n73716c09646174612f6f75742f6578706f7274322e73716c092d097265706c61636509646174612f6c65676163792f6578706f72742e64626609646174612f6c65676163792f757466382e646266\n63617409646174612f6f75742f6578706f7274322e73716c\n6c656467657209646174612f6c65676163792f6f72646572732e64626609646174612f6f75742f6c65646765722e747874\n63617409646174612f6f75742f6c65646765722e747874\n63617409646174612f6f75742f6e6f74686572652e747874\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("legacy/PEOPLE.DBF 037c030f06000000e100430000000000000000000000000000000000005700004e414d45000000000000004300000000190000000000000000000000000000004249525448444154450000440000000008000000000000000000000000000000434954590000000000000043000000001400000000000000000000000000000053414c41525900000000004e000000000a02000000000000000000000000000041435449564500000000004c00000000010000000000000000000000000000004b494453000000000000004e00000000020000000000000000000000000000000d20416c696365204c696e64717669737420202020202020202020313938373033303147f67465626f7267202020202020202020202020202020343530302e303054203220426f62204f27427269656e202020202020202020202020202031393830313131324475626c696e2020202020202020202020202020202020333230302e35304620302a4361726c204c756e642020202020202020202020202020202031393735303130314f736c6f20202020202020202020202020202020202020313030302e30305420312044f6727465204dfc6c6c65722020202020202020202020202020202020202020204bf66c6e2c204e52572020202020202020202020202020202020202020203f2020204a6f73e9204efaf1657a202020202020202020202020202020313939393132333153e36f205061756c6f2020202020202020202020202031323030302e37357920332045766520224576696522205061726b20202020202020202020323030303032323953656f756c202020202020202020202020202020202020202020302e31304e2a2a1a\nlegacy/ORDERS.FPT 0000000f00000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000001944656c6976657220746f20746865206261636b20646f6f722e0000000000000000000000000000000000000000000000000000000000000000000001000000284c6965666572756e672066fc72204de4727a2c2062697474650d0a7a776569204b6172746f6e732e00000000000000000000000000000000000000000000001089504e470d0a1a0a0000000d49484452000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000008d0cf11e04f4c4532000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070000000f76656e646f7220626c6f62200001020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000001f5061696420696e20636173683b2073656520274c656467657227207461622e0000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("legacy/orders.dbf 307c0304080000004802360000000000000000000000000000000000000300004944000000000000000000490100000004000000000000000000000000000000435553544f4d455200000043050000000f0000000000000000000000000000004f52444552454400000000541400000008000000000000000000000000000000544f54414c000000000000591c00000008040000000000000000000000000000524154450000000000000042240000000800000000000000000000000000000050414944000000000000004c2c000000010000000000000000000000000000004e4f5445000000000000004d2d000000040000000000000000000000000000004c4f474f000000000000004731000000040000000000000000000000000000005f4e756c6c466c616773003035000000010000000000000000000000000000000d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200100000041636d6520202020202020202020209b8a25003bda0902d012130000000000333333333333b33f54080000000b000000002002000000426f6c74202620436f2020202020209f8a2500000000009f860100000000009a9999999999c93f46000000000000000000200300000041636d652020202020202020202020b68a2500ff5b260578ecffffffffffff000000000000f03f54090000000d000000002004000000436972727573202020202020202020c38a2500002e9302000000000000000048afbc9af2d77a3e460a00000000000000022005000000426f6c74202620436f202020202020d28a250074d8a50315cd5b070000000050efe2d6e41a2b44540c00000000000000002a0600000044656c746120202020202020202020d38a2500e8030000e4dd0b00000000000000000000000080540d0000000000000000200700000041636d652020202020202020202020d48a250080ee3600e110000000000000343333333333d33f460e0000000a000000002008000000436972727573202020202020202020d58a2500952cb30280c3c901000000000000000000000840460000000000000000001a\n");
+    s.push_str("legacy/Tickets.DBF 327c030f04000000c801310000000000000000000000000000000000000300005449434b455400000000002b01000000040000000000000000000000000000005355424a454354000000005605000000140000000000000000000000000000004f50454e4544000000000040190000000800000000000000000000000000000053434f52450000000000004f210000000800000000000000000000000000000053544154555300000000004329000000080000000000000000000000000000000d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020010000005072696e746572206a616d202020202020202020f28a25008062ee0100000000000012406f70656e20202020200200000056504e20646f776e202020202020202020202020f38a2500000000000000000000000240636c6f7365642020200300000020202020202020202020202020202020202020200000000000000000000000000000f8bf77616974696e672020040000004e6577206c6170746f702020202020202020202058682500185826050080e03779c3414320202020202020201a\nlegacy/NOTES.DBT 070000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000052696e672074686520706c756d6265722e1a1a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000426f696c65722073657276696365206c6f670d0a30313a20707265737375726520322e31206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30323a20707265737375726520312e32206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30333a20707265737375726520322e33206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30343a20707265737375726520312e34206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30353a20707265737375726520322e35206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30363a20707265737375726520312e36206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30373a20707265737375726520322e37206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30383a20707265737375726520312e38206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a30393a20707265737375726520322e39206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a31303a20707265737375726520312e30206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a31313a20707265737375726520322e31206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a31323a20707265737375726520312e32206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a31333a20707265737375726520322e33206261722c20616c6c2076616c76657320636865636b65642c206361668220627265616b0d0a1a1a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000526f6f663a2074776f2074696c6573206c6f6f73652e1a1a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004c61737420656e7472792c206e6f20656e64206d61726b65722082\n");
+    s.push_str("legacy/notes.dbf 837b0301060000008100270000000000000000000000000000000000000100005449544c45000000000000430100000014000000000000000000000000000000424f4459000000000000004d150000000a0000000000000000000000000000004352454154454400000000441f000000080000000000000000000000000000000d20506c756d6265722020202020202020202020202020202020202020202031323032333031303520426f696c6572202020202020202020202020202020202020202020202032323032333031313020456d70747920202020202020202020202020202020202020202020202020323032333031313120526f6f66202020202020202020202020202020202020202020202020203532303233303230312a4f6c642020202020202020202020202020202020202020202020202020353230323230313031204c617374202020202020202020202020202020202020202020202020203632303233303330311a\nlegacy/inventory.dbt 0400000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffff08001d000000477294e165204d2c204661726265206772816e1f1f202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020ffff080023000000537061726520706172742c2073656520636174616c6f6775651f1f202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020ffff08001f0000005772697474656e20627920616e6f7468657220746f6f6c20202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020\n");
+    s.push_str("legacy/inventory.dbf 8b7a0b1e04000000c10034000000000000000000000000000000000000020000534b550000000000000000430100000008000000000000000000000000000000475299535345000000000043000000001400000000000000000000000000000051545900000000000000004e1d00000005000000000000000000000000000000505249434500000000000046220000000802000000000000000000000000000044455343520000000000004d2a0000000a0000000000000000000000000000000d20412d3130302020205363687261756265209d34202020202020202020202032353020202020302e31352020202020202020203120412d3230302020204d75747465722020202020202020202020202020203132303020202020302e30352020202020202020203220422d3330302020204b6162656c2c20336d20202020202020202020202020202d342020202031322e353030303030303030303020432d3430302020204c616d706520202020202020202020202020202020202020372020202a2a2a2a2a202020202020202020331a\nlegacy/kunder.dbf 037c030f0200000081002c0000000000000000000000000000000000000800004e41564e00000000000000430000000014000000000000000000000000000000425900000000000000000043000000000f000000000000000000000000000000469d4454000000000000004400000000080000000000000000000000000000000d20539b72656e2092729b20202020202020202020208f6c6573756e6420202020202020203139363530373034208f736520429b202020202020202020202020202092729b736b9b62696e67202020202031393732303232391a\nlegacy/klienty.dbf 037c030f0300000081002a000000000000000000000000000000000000260000888c9f0000000000000000430000000014000000000000000000000000000000474f524f4400000000000043000000000f00000000000000000000000000000042414c414e5300000000004e00000000060000000000000000000000000000000d2088a2a0ad208fa5e2e0aea22020202020202020208caee1aaa2a0202020202020202020202031353030208eabeca3a02091aca8e0adaea2a020202020202091a0adaae22d8fa5e2a5e0a1e3e0a32020202d32302a93a4a0abf1ad20202020202020202020202020208aa0a7a0adec2020202020202020202020202020301a\nlegacy/KLIENTY_W.DBF 037c030f0300000081002a000000000000000000000000000000000000c90000c8ccdf0000000000000000430000000014000000000000000000000000000000474f524f4400000000000043000000000f00000000000000000000000000000042414c414e5300000000004e00000000060000000000000000000000000000000d20c8e2e0ed20cfe5f2f0eee2202020202020202020cceef1eae2e020202020202020202020203135303020ceebfce3e020d1ece8f0edeee2e0202020202020d1e0edeaf22dcfe5f2e5f0e1f3f0e32020202d32302ad3e4e0ebb8ed2020202020202020202020202020cae0e7e0edfc2020202020202020202020202020301a\n");
+    s.push_str("legacy/menu.dbf 037c030f0300000061001b000000000000000000000000000000000000040000444953480000000000000043000000001400000000000000000000000000000050524943450000000000004e00000000060200000000000000000000000000000d2043728f6d652062729e6c8e6520202020202020202020362e353020417066656c7374729f64656c20202020202020202020352e3235204361668e206175206c61697420202020202020202020202020331a\nlegacy/export.dbf 037c030f03000000610011000000000000000000000000000000000000990000434954590000000000000043000000000c000000000000000000000000000000434f4445000000000000004300000000040000000000000000000000000000000d204f736c6f20202020202020204e4f2020204d616c6df62020202020202053452020205afc72696368812020202020434820201a\nlegacy/utf8.dbf 037c030f06000000610016000000000000000000000000000000000000000000544558540000000000000043000000001000000000000000000000000000000057485900000000000000004300000000050000000000000000000000000000000d206e61c3af766520636166c3a9202020206f6b20202020707269636520e282ac352020202020206f6b2020202063757420636166c32020202020202020656e6420202062616420ff206279746520202020202073746172742068616c6620c341202020202020202020636f6e742020746872656520e2822020202020202020656f6420201a\nlegacy/both.dbf 307c030f010000006801080000000000000000000000000000000000000000004e000000000000000000004e01000000030000000000000000000000000000004d000000000000000000004d04000000040000000000000000000000000000000d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020202031080000001a\nlegacy/both.fpt 0000000900000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000c66726f6d20746865206670740000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("legacy/BOTH.DBT 030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000066726f6d20746865206462741a1a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("legacy/plain3.dbf 037c030f0100000041000b0000000000000000000000000000000000000000004d000000000000000000004d000000000a0000000000000000000000000000000d20202020202020202020311a\nlegacy/plain3.dbt 030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000064426173652049494920746578741a1a\nlegacy/empty.dbf 030000000000000041000400000000000000000000000000000000000000000041000000000000000000004300000000030000000000000000000000000000000d1a\nlegacy/longchar.dbf 037c030f0100000061002f0100000000000000000000000000000000000000004e4f54450000000000000043000000002c0100000000000000000000000000004b000000000000000000004e00000000020000000000000000000000000000000d207878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878656e642020202020202020311a\n");
+    s.push_str("legacy/names.dbf 037c0d010100000081000a000000000000000000000000000000000000000000454c4556454e434841525343000000000300000000000000000000000000000041420058595a00000000004300000000030000000000000000000000000000006c6f7765725f63617365004e00000000030000000000000000000000000000000d206162636465662031321a\nlegacy/flags.dbf 0363021d0500000041000500000000000000000000000000000000000000000056000000000000000000004300000000040000000000000000000000000000000d206c697665586f6464202a676f6e65006e756c20206c6173741a\nlegacy/numbers.dbf 037c030f13000000810025000000000000000000000000000000000000000000524157000000000000000043000000000c0000000000000000000000000000004e000000000000000000004e000000000c020000000000000000000000000000460000000000000000000046000000000c0300000000000000000000000000000d20313220202020202020202020202020202020202020203132202020202020202020203132202d3320202020202020202020202020202020202020202d33202020202020202020202d33202b3720202020202020202020202020202020202020202b37202020202020202020202b372020303031322020202020202020202020202020203030313220202020202020203030313220315f3030302020202020202020202020202020315f30303020202020202020315f3030302031322e3530202020202020202020202020202031322e35302020202020202031322e353020312c35202020202020202020202020202020202020312c35202020202020202020312c35202a2a2a2020202020202020202020202020202020202a2a2a2020202020202020202a2a2a2020202020202020202020202020202020202020202020202020202020202020202020202020316533202020202020202020202020202020202020316533202020202020202020316533202d302e30202020202020202020202020202020202d302e3020202020202020202d302e30202e3520202020202020202020202020202020202020202e35202020202020202020202e3520352e2020202020202020202020202020202020202020352e20202020202020202020352e20312e322e332020202020202020202020202020312e322e3320202020202020312e322e3320315f302e352020202020202020202020202020315f302e3520202020202020315f302e3520302e31202020202020202020202020202020202020302e31202020202020202020302e3120322e35452d33202020202020202020202020322e35452d33202020202020322e35452d33202d202020202020202020202020202020202020202020202d20202020202020202020202d203132203334202020202020202020202020202031322033342020202020202031322033341a\n");
+    s.push_str("legacy/currency.dbf 307c030f08000000680113000000000000000000000000000000000000000000574841540000000000000043010000000a000000000000000000000000000000414d540000000000000000590b000000080400000000000000000000000000000d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002072656e74202020202020001bb7000000000020726566756e6420202020fbffffffffffffff207a65726f20202020202000000000000000002063656e742020202020206400000000000000206d617820202020202020ffffffffffffff7f206d696e20202020202020000000000000008020726f756e64202020202010270000000000002074656e20202020202020a0860100000000001a\nlegacy/times.dbf 307c030f08000000680113000000000000000000000000000000000000000000574841540000000000000043010000000a0000000000000000000000000000005400000000000000000000540b000000080000000000000000000000000000000d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000206e6f6f6e2020202020202f8b2500002e9302206d7320202020202020202f8b25000100000020626c616e6b20202020202020202020202020207a65726f64617920202000000000020000002065706f636820202020208c3d250000000000206669727374202020202052441a0000000000206e657874646179202020048c2500055c2605207765656b2020202020205968250000840c241a\n");
+    s.push_str("legacy/broken/unknown_type.dbf 037c030f0400000061000b000000000000000000000000000000000000000000434f44450000000000000043000000000400000000000000000000000000000048455800000000000000005800000000060000000000000000000000000000000d2061202020202020206666206220202020203078314620632020202020202020202064202020202020207a7a1a\nlegacy/broken/bad_int.dbf 307c030f0100000048010300000000000000000000000000000000000000000049440000000000000000004901000000020000000000000000000000000000000d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002001001a\nlegacy/broken/bad_logical.dbf 037c030f010000004100040000000000000000000000000000000000000000004f4b0000000000000000004c00000000030000000000000000000000000000000d205945531a\nlegacy/broken/short.dbf 037c030f010000004100\nlegacy/broken/cut_fields.dbf 037c030f01000000610009000000000000000000000000000000000000000000410000000000000000000043000000000400000000000000000000000000000042000000000000000000\nlegacy/broken/no_terminator.dbf 037c030f0100000061000900000000000000000000000000000000000000000041000000000000000000004300000000040000000000000000000000000000004200000000000000000000430000000004000000000000000000000000000000\nlegacy/broken/no_eof_marker.dbf 037c030f01000000610009000000000000000000000000000000000000000000410000000000000000000043000000000400000000000000000000000000000042000000000000000000004300000000040000000000000000000000000000000d20616263647778797a\nlegacy/broken/padded.dbf 037c030f0400000041000600000000000000000000000000000000000000000041000000000000000000004300000000030000000000000000000000000000000d206f6e6520202074776f20202a64656c20202074687220201a\n");
+    s.push_str("legacy/broken/bad_values.dbf 307c030f05000000e8012600000000000000000000000000000000000000000044000000000000000000004401000000080000000000000000000000000000004c000000000000000000004c09000000010000000000000000000000000000004e000000000000000000004e0a0000000600000000000000000000000000000046000000000000000000004610000000060000000000000000000000000000004d000000000000000000004d160000000a00000000000000000000000000000043000000000000000000004320000000060000000000000000000000000000000d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020323032343032323954202020203432202020312e352020202020202020202066696e6520202032303234313330317820312e322e33202020202d2d6d656d6f3132202020206f6b202020202032303234616230313f20202020202020202020202a00000000000000000000636166e92020203030303030303030202020202020372020203265322020202020202020203881782020202020203230323420323174202020315f322020202b2e35202030203020202020202020202020201a\nlegacy/broken/bad_values.fpt 0000000900000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000b61207265616c206d656d6f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("legacy/broken/missing_memo.dbf 837c030f0200000061001000000000000000000000000000000000000000000054000000000000000000004301000000050000000000000000000000000000004d000000000000000000004d060000000a0000000000000000000000000000000d206f6e652020202020202020202020312074776f2020202020202020202020201a\nlegacy/broken/vfp_double.dbf 307c030f0100000048010900000000000000000000000000000000000000000058000000000000000000004201000000080000000000000000000000000000000d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000f43f1a\nlegacy/broken/bad_memo.dbf 307c030f0300000068010a0000000000000000000000000000000000000000004b000000000000000000004301000000050000000000000000000000000000004d000000000000000000004d06000000040000000000000000000000000000000d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000206f6b20202008000000206c6f6e672009000000207061737420f40100001a\nlegacy/broken/bad_memo.fpt 0000000a00000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000466696e650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000003e878787878787878787878787878787878787878787878787878787878787878787878787878787878\n");
+    s.push_str("legacy/broken/tiny_fpt.dbf 307c030f010000004801050000000000000000000000000000000000000000004d000000000000000000004d01000000040000000000000000000000000000000d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000001a\nlegacy/broken/tiny_fpt.fpt 0000000900000040\nlegacy/broken/bad_name.dbf 037c030f010000004100040000000000000000000000000000000000000000004ee44d45000000000000004300000000030000000000000000000000000000000d206162631a\nlegacy/broken/bad_time.dbf 307c030f0600000068010f000000000000000000000000000000000000000000570000000000000000000043010000000600000000000000000000000000000054000000000000000000005407000000080000000000000000000000000000000d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000206f6b20202020978a250000000000206561726c792051441a0000000000206279746573200102030405060708206c61737420202cfe5100ff5b2605206f76657220202cfe5100005c260520616674657220988a2500000000001a\nlegacy/broken/bad_auto.dbf 317c030f010000006801070000000000000000000000000000000000000000004b000000000000000000002b010000000200000000000000000000000000000053000000000000000000004f03000000040000000000000000000000000000000d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200100000000001a\n");
+    s
+}

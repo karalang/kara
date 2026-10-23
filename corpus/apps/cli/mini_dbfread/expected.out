@@ -1,0 +1,2003 @@
+> version
+  2.0.7
+  VersionInfo(major=2, minor=0, micro=7, releaselevel='', serial=0)
+> dbversion 2
+  FoxBASE
+> dbversion 3
+  FoxBASE+/Dbase III plus, no memory
+> dbversion 48
+  Visual FoxPro
+> dbversion 49
+  Visual FoxPro, autoincrement enabled
+> dbversion 50
+  Visual FoxPro with field type Varchar or Varbinary
+> dbversion 67
+  dBASE IV SQL table files, no memo
+> dbversion 99
+  dBASE IV SQL system files, no memo
+> dbversion 131
+  FoxBASE+/dBASE III PLUS, with memo
+> dbversion 139
+  dBASE IV with memo
+> dbversion 203
+  dBASE IV SQL table files, with memo
+> dbversion 245
+  FoxPro 2.x (or earlier) with memo
+> dbversion 229
+  HiPer-Six format with SMT memo file
+> dbversion 251
+  FoxBASE
+> dbversion 0
+  Unknown (0x00)
+> dbversion 4
+  Unknown (0x04)
+> dbversion 123
+  Unknown (0x7b)
+> dbversion 255
+  Unknown (0xff)
+> codepage 0
+  ascii
+> codepage 1
+  cp437
+> codepage 2
+  cp850
+> codepage 3
+  cp1252
+> codepage 4
+  mac_roman
+> codepage 8
+  cp865
+> codepage 19
+  cp932
+> codepage 38
+  cp866
+> codepage 87
+  cp1252
+> codepage 100
+  cp852
+> codepage 104
+  error LookupError: Unable to guess encoding for languager driver byte 0x68
+> codepage 125
+  cp1255
+> codepage 150
+  mac_cyrillic
+> codepage 200
+  cp1250
+> codepage 201
+  cp1251
+> codepage 153
+  error LookupError: Unable to guess encoding for languager driver byte 0x99
+> codepage 255
+  error LookupError: Unable to guess encoding for languager driver byte 0xff
+> dbfinfo data/legacy/PEOPLE.DBF data/legacy/orders.dbf data/legacy/Tickets.DBF data/legacy/notes.dbf data/legacy/inventory.dbf
+data/legacy/PEOPLE.DBF:
+  Name: people
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 5
+  Deleted Records: 1
+  Last Updated: 2024-03-15
+  Character Encoding: cp1252
+  Fields:
+    NAME (C 25)
+    BIRTHDATE (D 8)
+    CITY (C 20)
+    SALARY (N 10)
+    ACTIVE (L 1)
+    KIDS (N 2)
+data/legacy/orders.dbf:
+  Name: orders
+  Memo File: data/legacy/ORDERS.FPT
+  DB Version: Visual FoxPro
+  Records: 7
+  Deleted Records: 1
+  Last Updated: 2024-03-04
+  Character Encoding: cp1252
+  Fields:
+    ID (I 4)
+    CUSTOMER (C 15)
+    ORDERED (T 8)
+    TOTAL (Y 8)
+    RATE (B 8)
+    PAID (L 1)
+    NOTE (M 4)
+    LOGO (G 4)
+    _NullFlags (0 1)
+data/legacy/Tickets.DBF:
+  Name: tickets
+  Memo File: 
+  DB Version: Visual FoxPro with field type Varchar or Varbinary
+  Records: 4
+  Deleted Records: 0
+  Last Updated: 2024-03-15
+  Character Encoding: cp1252
+  Fields:
+    TICKET (+ 4)
+    SUBJECT (V 20)
+    OPENED (@ 8)
+    SCORE (O 8)
+    STATUS (C 8)
+data/legacy/notes.dbf:
+  Name: notes
+  Memo File: data/legacy/NOTES.DBT
+  DB Version: FoxBASE+/dBASE III PLUS, with memo
+  Records: 5
+  Deleted Records: 1
+  Last Updated: 2023-03-01
+  Character Encoding: cp437
+  Fields:
+    TITLE (C 20)
+    BODY (M 10)
+    CREATED (D 8)
+data/legacy/inventory.dbf:
+  Name: inventory
+  Memo File: data/legacy/inventory.dbt
+  DB Version: dBASE IV with memo
+  Records: 4
+  Deleted Records: 0
+  Last Updated: 2022-11-30
+  Character Encoding: cp850
+  Fields:
+    SKU (C 8)
+    GRÖSSE (C 20)
+    QTY (N 5)
+    PRICE (F 8)
+    DESCR (M 10)
+> dbfinfo data/legacy/kunder.dbf data/legacy/klienty.dbf data/legacy/KLIENTY_W.DBF data/legacy/menu.dbf data/legacy/empty.dbf data/legacy/names.dbf data/legacy/flags.dbf data/legacy/broken/missing_memo.dbf
+data/legacy/kunder.dbf:
+  Name: kunder
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 2
+  Deleted Records: 0
+  Last Updated: 2024-03-15
+  Character Encoding: cp865
+  Fields:
+    NAVN (C 20)
+    BY (C 15)
+    FØDT (D 8)
+data/legacy/klienty.dbf:
+  Name: klienty
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 2
+  Deleted Records: 1
+  Last Updated: 2024-03-15
+  Character Encoding: cp866
+  Fields:
+    ИМЯ (C 20)
+    GOROD (C 15)
+    BALANS (N 6)
+data/legacy/KLIENTY_W.DBF:
+  Name: klienty_w
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 2
+  Deleted Records: 1
+  Last Updated: 2024-03-15
+  Character Encoding: cp1251
+  Fields:
+    ИМЯ (C 20)
+    GOROD (C 15)
+    BALANS (N 6)
+data/legacy/menu.dbf:
+  Name: menu
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 3
+  Deleted Records: 0
+  Last Updated: 2024-03-15
+  Character Encoding: mac_roman
+  Fields:
+    DISH (C 20)
+    PRICE (N 6)
+data/legacy/empty.dbf:
+  Name: empty
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 0
+  Deleted Records: 0
+  Last Updated: None
+  Character Encoding: ascii
+  Fields:
+    A (C 3)
+data/legacy/names.dbf:
+  Name: names
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 1
+  Deleted Records: 0
+  Last Updated: None
+  Character Encoding: ascii
+  Fields:
+    ELEVENCHARS (C 3)
+    AB (C 3)
+    lower_case (N 3)
+data/legacy/flags.dbf:
+  Name: flags
+  Memo File: 
+  DB Version: FoxBASE+/Dbase III plus, no memory
+  Records: 2
+  Deleted Records: 1
+  Last Updated: None
+  Character Encoding: ascii
+  Fields:
+    V (C 4)
+data/legacy/broken/missing_memo.dbf:
+  Name: missing_memo
+  Memo File: 
+  DB Version: FoxBASE+/dBASE III PLUS, with memo
+  Records: 2
+  Deleted Records: 0
+  Last Updated: 2024-03-15
+  Character Encoding: ascii
+  Fields:
+    T (C 5)
+    M (M 10)
+> info data/legacy/PEOPLE.DBF
+  repr: <unloaded DBF table 'data/legacy/PEOPLE.DBF'>
+  name: 'people'
+  filename: 'data/legacy/PEOPLE.DBF'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1252
+  field_names: ['NAME', 'BIRTHDATE', 'CITY', 'SALARY', 'ACTIVE', 'KIDS']
+  loaded: False
+  len: 5 deleted: 1
+> info data/legacy/people.dbf
+  repr: <unloaded DBF table 'data/legacy/PEOPLE.DBF'>
+  name: 'people'
+  filename: 'data/legacy/PEOPLE.DBF'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1252
+  field_names: ['NAME', 'BIRTHDATE', 'CITY', 'SALARY', 'ACTIVE', 'KIDS']
+  loaded: False
+  len: 5 deleted: 1
+> info data/legacy/People.Dbf lowernames=1
+  repr: <unloaded DBF table 'data/legacy/PEOPLE.DBF'>
+  name: 'people'
+  filename: 'data/legacy/PEOPLE.DBF'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1252
+  field_names: ['name', 'birthdate', 'city', 'salary', 'active', 'kids']
+  loaded: False
+  len: 5 deleted: 1
+> info data/legacy/orders.dbf
+  repr: <unloaded DBF table 'data/legacy/orders.dbf'>
+  name: 'orders'
+  filename: 'data/legacy/orders.dbf'
+  memofilename: 'data/legacy/ORDERS.FPT'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 4)
+  encoding: cp1252
+  field_names: ['ID', 'CUSTOMER', 'ORDERED', 'TOTAL', 'RATE', 'PAID', 'NOTE', 'LOGO', '_NullFlags']
+  loaded: False
+  len: 7 deleted: 1
+> info data/legacy/Tickets.DBF
+  repr: <unloaded DBF table 'data/legacy/Tickets.DBF'>
+  name: 'tickets'
+  filename: 'data/legacy/Tickets.DBF'
+  memofilename: None
+  dbversion: Visual FoxPro with field type Varchar or Varbinary
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1252
+  field_names: ['TICKET', 'SUBJECT', 'OPENED', 'SCORE', 'STATUS']
+  loaded: False
+  len: 4 deleted: 0
+> info data/legacy/notes.dbf
+  repr: <unloaded DBF table 'data/legacy/notes.dbf'>
+  name: 'notes'
+  filename: 'data/legacy/notes.dbf'
+  memofilename: 'data/legacy/NOTES.DBT'
+  dbversion: FoxBASE+/dBASE III PLUS, with memo
+  date: datetime.date(2023, 3, 1)
+  encoding: cp437
+  field_names: ['TITLE', 'BODY', 'CREATED']
+  loaded: False
+  len: 5 deleted: 1
+> info data/legacy/inventory.dbf
+  repr: <unloaded DBF table 'data/legacy/inventory.dbf'>
+  name: 'inventory'
+  filename: 'data/legacy/inventory.dbf'
+  memofilename: 'data/legacy/inventory.dbt'
+  dbversion: dBASE IV with memo
+  date: datetime.date(2022, 11, 30)
+  encoding: cp850
+  field_names: ['SKU', 'GRÖSSE', 'QTY', 'PRICE', 'DESCR']
+  loaded: False
+  len: 4 deleted: 0
+> info data/legacy/inventory.dbf lowernames=1
+  repr: <unloaded DBF table 'data/legacy/inventory.dbf'>
+  name: 'inventory'
+  filename: 'data/legacy/inventory.dbf'
+  memofilename: 'data/legacy/inventory.dbt'
+  dbversion: dBASE IV with memo
+  date: datetime.date(2022, 11, 30)
+  encoding: cp850
+  field_names: ['sku', 'grösse', 'qty', 'price', 'descr']
+  loaded: False
+  len: 4 deleted: 0
+> info data/legacy/kunder.dbf lowernames=1
+  repr: <unloaded DBF table 'data/legacy/kunder.dbf'>
+  name: 'kunder'
+  filename: 'data/legacy/kunder.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp865
+  field_names: ['navn', 'by', 'født']
+  loaded: False
+  len: 2 deleted: 0
+> info data/legacy/klienty.dbf
+  repr: <unloaded DBF table 'data/legacy/klienty.dbf'>
+  name: 'klienty'
+  filename: 'data/legacy/klienty.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp866
+  field_names: ['ИМЯ', 'GOROD', 'BALANS']
+  loaded: False
+  len: 2 deleted: 1
+> info data/legacy/KLIENTY_W.DBF lowernames=1
+  repr: <unloaded DBF table 'data/legacy/KLIENTY_W.DBF'>
+  name: 'klienty_w'
+  filename: 'data/legacy/KLIENTY_W.DBF'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1251
+  field_names: ['имя', 'gorod', 'balans']
+  loaded: False
+  len: 2 deleted: 1
+> info data/legacy/menu.dbf
+  repr: <unloaded DBF table 'data/legacy/menu.dbf'>
+  name: 'menu'
+  filename: 'data/legacy/menu.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: mac_roman
+  field_names: ['DISH', 'PRICE']
+  loaded: False
+  len: 3 deleted: 0
+> info data/legacy/export.dbf
+  repr: <unloaded DBF table 'data/legacy/export.dbf'>
+  name: 'export'
+  filename: 'data/legacy/export.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['CITY', 'CODE']
+  loaded: False
+  len: 3 deleted: 0
+> info data/legacy/utf8.dbf
+  repr: <unloaded DBF table 'data/legacy/utf8.dbf'>
+  name: 'utf8'
+  filename: 'data/legacy/utf8.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['TEXT', 'WHY']
+  loaded: False
+  len: 6 deleted: 0
+> info data/legacy/both.dbf
+  repr: <unloaded DBF table 'data/legacy/both.dbf'>
+  name: 'both'
+  filename: 'data/legacy/both.dbf'
+  memofilename: 'data/legacy/both.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['N', 'M']
+  loaded: False
+  len: 1 deleted: 0
+> info data/legacy/plain3.dbf
+  repr: <unloaded DBF table 'data/legacy/plain3.dbf'>
+  name: 'plain3'
+  filename: 'data/legacy/plain3.dbf'
+  memofilename: 'data/legacy/plain3.dbt'
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['M']
+  loaded: False
+  len: 1 deleted: 0
+> info data/legacy/empty.dbf
+  repr: <unloaded DBF table 'data/legacy/empty.dbf'>
+  name: 'empty'
+  filename: 'data/legacy/empty.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: None
+  encoding: ascii
+  field_names: ['A']
+  loaded: False
+  len: 0 deleted: 0
+> info data/legacy/longchar.dbf
+  repr: <unloaded DBF table 'data/legacy/longchar.dbf'>
+  name: 'longchar'
+  filename: 'data/legacy/longchar.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['NOTE', 'K']
+  loaded: False
+  len: 1 deleted: 0
+> info data/legacy/names.dbf
+  repr: <unloaded DBF table 'data/legacy/names.dbf'>
+  name: 'names'
+  filename: 'data/legacy/names.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: None
+  encoding: ascii
+  field_names: ['ELEVENCHARS', 'AB', 'lower_case']
+  loaded: False
+  len: 1 deleted: 0
+> info data/legacy/names.dbf lowernames=1
+  repr: <unloaded DBF table 'data/legacy/names.dbf'>
+  name: 'names'
+  filename: 'data/legacy/names.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: None
+  encoding: ascii
+  field_names: ['elevenchars', 'ab', 'lower_case']
+  loaded: False
+  len: 1 deleted: 0
+> info data/legacy/flags.dbf
+  repr: <unloaded DBF table 'data/legacy/flags.dbf'>
+  name: 'flags'
+  filename: 'data/legacy/flags.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: None
+  encoding: ascii
+  field_names: ['V']
+  loaded: False
+  len: 2 deleted: 1
+> info data/legacy/numbers.dbf
+  repr: <unloaded DBF table 'data/legacy/numbers.dbf'>
+  name: 'numbers'
+  filename: 'data/legacy/numbers.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['RAW', 'N', 'F']
+  loaded: False
+  len: 19 deleted: 0
+> info data/legacy/currency.dbf
+  repr: <unloaded DBF table 'data/legacy/currency.dbf'>
+  name: 'currency'
+  filename: 'data/legacy/currency.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['WHAT', 'AMT']
+  loaded: False
+  len: 8 deleted: 0
+> info data/legacy/times.dbf
+  repr: <unloaded DBF table 'data/legacy/times.dbf'>
+  name: 'times'
+  filename: 'data/legacy/times.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['WHAT', 'T']
+  loaded: False
+  len: 8 deleted: 0
+> info data/legacy/inv*.dbf
+  repr: <unloaded DBF table 'data/legacy/inventory.dbf'>
+  name: 'inv*'
+  filename: 'data/legacy/inventory.dbf'
+  memofilename: 'data/legacy/inventory.dbt'
+  dbversion: dBASE IV with memo
+  date: datetime.date(2022, 11, 30)
+  encoding: cp850
+  field_names: ['SKU', 'GRÖSSE', 'QTY', 'PRICE', 'DESCR']
+  loaded: False
+  len: 4 deleted: 0
+> info data/legacy/Ord?rs.DBF
+  repr: <unloaded DBF table 'data/legacy/orders.dbf'>
+  name: 'ord?rs'
+  filename: 'data/legacy/orders.dbf'
+  memofilename: 'data/legacy/ORDERS.FPT'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 4)
+  encoding: cp1252
+  field_names: ['ID', 'CUSTOMER', 'ORDERED', 'TOTAL', 'RATE', 'PAID', 'NOTE', 'LOGO', '_NullFlags']
+  loaded: False
+  len: 7 deleted: 1
+> header data/legacy/PEOPLE.DBF
+  DBFHeader(dbversion=3, year=124, month=3, day=15, numrecords=6, headerlen=225, recordlen=67, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=87, reserved4=0)
+  DBFField(name='NAME', type='C', address=0, length=25, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='BIRTHDATE', type='D', address=0, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='CITY', type='C', address=0, length=20, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='SALARY', type='N', address=0, length=10, decimal_count=2, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='ACTIVE', type='L', address=0, length=1, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='KIDS', type='N', address=0, length=2, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/orders.dbf
+  DBFHeader(dbversion=48, year=124, month=3, day=4, numrecords=8, headerlen=584, recordlen=54, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=3, reserved4=0)
+  DBFField(name='ID', type='I', address=1, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='CUSTOMER', type='C', address=5, length=15, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='ORDERED', type='T', address=20, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='TOTAL', type='Y', address=28, length=8, decimal_count=4, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='RATE', type='B', address=36, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='PAID', type='L', address=44, length=1, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='NOTE', type='M', address=45, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='LOGO', type='G', address=49, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='_NullFlags', type='0', address=53, length=1, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/Tickets.DBF
+  DBFHeader(dbversion=50, year=124, month=3, day=15, numrecords=4, headerlen=456, recordlen=49, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=3, reserved4=0)
+  DBFField(name='TICKET', type='+', address=1, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='SUBJECT', type='V', address=5, length=20, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='OPENED', type='@', address=25, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='SCORE', type='O', address=33, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='STATUS', type='C', address=41, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/notes.dbf
+  DBFHeader(dbversion=131, year=123, month=3, day=1, numrecords=6, headerlen=129, recordlen=39, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=1, reserved4=0)
+  DBFField(name='TITLE', type='C', address=1, length=20, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='BODY', type='M', address=21, length=10, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='CREATED', type='D', address=31, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/inventory.dbf
+  DBFHeader(dbversion=139, year=122, month=11, day=30, numrecords=4, headerlen=193, recordlen=52, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=2, reserved4=0)
+  DBFField(name='SKU', type='C', address=1, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='GRÖSSE', type='C', address=0, length=20, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='QTY', type='N', address=29, length=5, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='PRICE', type='F', address=34, length=8, decimal_count=2, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='DESCR', type='M', address=42, length=10, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/names.dbf
+  DBFHeader(dbversion=3, year=124, month=13, day=1, numrecords=1, headerlen=129, recordlen=10, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='ELEVENCHARS', type='C', address=0, length=3, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='AB', type='C', address=0, length=3, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='lower_case', type='N', address=0, length=3, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/longchar.dbf
+  DBFHeader(dbversion=3, year=124, month=3, day=15, numrecords=1, headerlen=97, recordlen=303, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='NOTE', type='C', address=0, length=300, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='K', type='N', address=0, length=2, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/empty.dbf
+  DBFHeader(dbversion=3, year=0, month=0, day=0, numrecords=0, headerlen=65, recordlen=4, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='A', type='C', address=0, length=3, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/kunder.dbf lowernames=1
+  DBFHeader(dbversion=3, year=124, month=3, day=15, numrecords=2, headerlen=129, recordlen=44, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=8, reserved4=0)
+  DBFField(name='navn', type='C', address=0, length=20, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='by', type='C', address=0, length=15, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='født', type='D', address=0, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/broken/bad_values.dbf
+  DBFHeader(dbversion=48, year=124, month=3, day=15, numrecords=5, headerlen=488, recordlen=38, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='D', type='D', address=1, length=8, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='L', type='L', address=9, length=1, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='N', type='N', address=10, length=6, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='F', type='F', address=16, length=6, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='M', type='M', address=22, length=10, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='C', type='C', address=32, length=6, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> records data/legacy/PEOPLE.DBF
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'Göteborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'Dörte Müller', 'BIRTHDATE': None, 'CITY': 'Köln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'José Núñez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'São Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/PEOPLE.DBF rec=dict
+  type: dict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'Göteborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'Dörte Müller', 'BIRTHDATE': None, 'CITY': 'Köln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'José Núñez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'São Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/PEOPLE.DBF rec=none
+  type: list
+  [('NAME', 'Alice Lindqvist'), ('BIRTHDATE', datetime.date(1987, 3, 1)), ('CITY', 'Göteborg'), ('SALARY', 4500.0), ('ACTIVE', True), ('KIDS', 2)]
+  [('NAME', "Bob O'Brien"), ('BIRTHDATE', datetime.date(1980, 11, 12)), ('CITY', 'Dublin'), ('SALARY', 3200.5), ('ACTIVE', False), ('KIDS', 0)]
+  [('NAME', 'Dörte Müller'), ('BIRTHDATE', None), ('CITY', 'Köln, NRW'), ('SALARY', None), ('ACTIVE', None), ('KIDS', None)]
+  [('NAME', 'José Núñez'), ('BIRTHDATE', datetime.date(1999, 12, 31)), ('CITY', 'São Paulo'), ('SALARY', 12000.75), ('ACTIVE', True), ('KIDS', 3)]
+  [('NAME', 'Eve "Evie" Park'), ('BIRTHDATE', datetime.date(2000, 2, 29)), ('CITY', 'Seoul'), ('SALARY', 0.1), ('ACTIVE', False), ('KIDS', None)]
+> records data/legacy/PEOPLE.DBF lowernames=1
+  type: OrderedDict
+  {'name': 'Alice Lindqvist', 'birthdate': datetime.date(1987, 3, 1), 'city': 'Göteborg', 'salary': 4500.0, 'active': True, 'kids': 2}
+  {'name': "Bob O'Brien", 'birthdate': datetime.date(1980, 11, 12), 'city': 'Dublin', 'salary': 3200.5, 'active': False, 'kids': 0}
+  {'name': 'Dörte Müller', 'birthdate': None, 'city': 'Köln, NRW', 'salary': None, 'active': None, 'kids': None}
+  {'name': 'José Núñez', 'birthdate': datetime.date(1999, 12, 31), 'city': 'São Paulo', 'salary': 12000.75, 'active': True, 'kids': 3}
+  {'name': 'Eve "Evie" Park', 'birthdate': datetime.date(2000, 2, 29), 'city': 'Seoul', 'salary': 0.1, 'active': False, 'kids': None}
+> records data/legacy/PEOPLE.DBF raw=1
+  type: OrderedDict
+  {'NAME': b'Alice Lindqvist          ', 'BIRTHDATE': b'19870301', 'CITY': b'G\xf6teborg            ', 'SALARY': b'   4500.00', 'ACTIVE': b'T', 'KIDS': b' 2'}
+  {'NAME': b"Bob O'Brien              ", 'BIRTHDATE': b'19801112', 'CITY': b'Dublin              ', 'SALARY': b'   3200.50', 'ACTIVE': b'F', 'KIDS': b' 0'}
+  {'NAME': b'D\xf6rte M\xfcller             ', 'BIRTHDATE': b'        ', 'CITY': b'K\xf6ln, NRW           ', 'SALARY': b'          ', 'ACTIVE': b'?', 'KIDS': b'  '}
+  {'NAME': b'Jos\xe9 N\xfa\xf1ez               ', 'BIRTHDATE': b'19991231', 'CITY': b'S\xe3o Paulo           ', 'SALARY': b'  12000.75', 'ACTIVE': b'y', 'KIDS': b' 3'}
+  {'NAME': b'Eve "Evie" Park          ', 'BIRTHDATE': b'20000229', 'CITY': b'Seoul               ', 'SALARY': b'      0.10', 'ACTIVE': b'N', 'KIDS': b'**'}
+> records data/legacy/PEOPLE.DBF encoding=latin-1
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'Göteborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'Dörte Müller', 'BIRTHDATE': None, 'CITY': 'Köln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'José Núñez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'São Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/PEOPLE.DBF encoding=ascii
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xf6 in position 1: ordinal not in range(128)
+> records data/legacy/PEOPLE.DBF encoding=ascii char_decode_errors=replace
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'G�teborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'D�rte M�ller', 'BIRTHDATE': None, 'CITY': 'K�ln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'Jos� N��ez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'S�o Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/PEOPLE.DBF encoding=ascii char_decode_errors=ignore
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'Gteborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'Drte Mller', 'BIRTHDATE': None, 'CITY': 'Kln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'Jos Nez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'So Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/PEOPLE.DBF encoding=ascii char_decode_errors=backslashreplace
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'G\\xf6teborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'D\\xf6rte M\\xfcller', 'BIRTHDATE': None, 'CITY': 'K\\xf6ln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'Jos\\xe9 N\\xfa\\xf1ez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'S\\xe3o Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/orders.dbf
+  type: OrderedDict
+  {'ID': 1, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 1, 5, 9, 30, 0, 123000), 'TOTAL': Decimal('125'), 'RATE': 0.075, 'PAID': True, 'NOTE': 'Deliver to the back door.', 'LOGO': b'\xd0\xcf\x11\xe0OLE2', '_NullFlags': b'\x00'}
+  {'ID': 2, 'CUSTOMER': 'Bolt & Co', 'ORDERED': datetime.datetime(2024, 1, 9, 0, 0), 'TOTAL': Decimal('9.9999'), 'RATE': 0.2, 'PAID': False, 'NOTE': None, 'LOGO': None, '_NullFlags': b'\x00'}
+  {'ID': 3, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 2, 1, 23, 59, 59, 999000), 'TOTAL': Decimal('-0.5'), 'RATE': 1.0, 'PAID': True, 'NOTE': 'Lieferung für März, bitte\r\nzwei Kartons.', 'LOGO': b"Paid in cash; see 'Ledger' tab.", '_NullFlags': b'\x00'}
+  {'ID': 4, 'CUSTOMER': 'Cirrus', 'ORDERED': datetime.datetime(2024, 2, 14, 12, 0), 'TOTAL': Decimal('0'), 'RATE': 1e-07, 'PAID': False, 'NOTE': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR', 'LOGO': None, '_NullFlags': b'\x02'}
+  {'ID': 5, 'CUSTOMER': 'Bolt & Co', 'ORDERED': datetime.datetime(2024, 2, 29, 17, 0, 0, 500000), 'TOTAL': Decimal('12345.6789'), 'RATE': 2.5e+20, 'PAID': True, 'NOTE': b'vendor blob \x00\x01\x02', 'LOGO': None, '_NullFlags': b'\x00'}
+  {'ID': 7, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 3, 2, 1, 0), 'TOTAL': Decimal('0.4321'), 'RATE': 0.30000000000000004, 'PAID': False, 'NOTE': '', 'LOGO': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR', '_NullFlags': b'\x00'}
+  {'ID': 8, 'CUSTOMER': 'Cirrus', 'ORDERED': datetime.datetime(2024, 3, 3, 12, 34, 56, 789000), 'TOTAL': Decimal('3000'), 'RATE': 3.0, 'PAID': False, 'NOTE': None, 'LOGO': None, '_NullFlags': b'\x00'}
+> records data/legacy/orders.dbf raw=1
+  type: OrderedDict
+  {'ID': b'\x01\x00\x00\x00', 'CUSTOMER': b'Acme           ', 'ORDERED': b'\x9b\x8a%\x00;\xda\t\x02', 'TOTAL': b'\xd0\x12\x13\x00\x00\x00\x00\x00', 'RATE': b'333333\xb3?', 'PAID': b'T', 'NOTE': b'\x08\x00\x00\x00', 'LOGO': b'\x0b\x00\x00\x00', '_NullFlags': b'\x00'}
+  {'ID': b'\x02\x00\x00\x00', 'CUSTOMER': b'Bolt & Co      ', 'ORDERED': b'\x9f\x8a%\x00\x00\x00\x00\x00', 'TOTAL': b'\x9f\x86\x01\x00\x00\x00\x00\x00', 'RATE': b'\x9a\x99\x99\x99\x99\x99\xc9?', 'PAID': b'F', 'NOTE': b'\x00\x00\x00\x00', 'LOGO': b'\x00\x00\x00\x00', '_NullFlags': b'\x00'}
+  {'ID': b'\x03\x00\x00\x00', 'CUSTOMER': b'Acme           ', 'ORDERED': b'\xb6\x8a%\x00\xff[&\x05', 'TOTAL': b'x\xec\xff\xff\xff\xff\xff\xff', 'RATE': b'\x00\x00\x00\x00\x00\x00\xf0?', 'PAID': b'T', 'NOTE': b'\t\x00\x00\x00', 'LOGO': b'\r\x00\x00\x00', '_NullFlags': b'\x00'}
+  {'ID': b'\x04\x00\x00\x00', 'CUSTOMER': b'Cirrus         ', 'ORDERED': b'\xc3\x8a%\x00\x00.\x93\x02', 'TOTAL': b'\x00\x00\x00\x00\x00\x00\x00\x00', 'RATE': b'H\xaf\xbc\x9a\xf2\xd7z>', 'PAID': b'F', 'NOTE': b'\n\x00\x00\x00', 'LOGO': b'\x00\x00\x00\x00', '_NullFlags': b'\x02'}
+  {'ID': b'\x05\x00\x00\x00', 'CUSTOMER': b'Bolt & Co      ', 'ORDERED': b'\xd2\x8a%\x00t\xd8\xa5\x03', 'TOTAL': b'\x15\xcd[\x07\x00\x00\x00\x00', 'RATE': b'P\xef\xe2\xd6\xe4\x1a+D', 'PAID': b'T', 'NOTE': b'\x0c\x00\x00\x00', 'LOGO': b'\x00\x00\x00\x00', '_NullFlags': b'\x00'}
+  {'ID': b'\x07\x00\x00\x00', 'CUSTOMER': b'Acme           ', 'ORDERED': b'\xd4\x8a%\x00\x80\xee6\x00', 'TOTAL': b'\xe1\x10\x00\x00\x00\x00\x00\x00', 'RATE': b'433333\xd3?', 'PAID': b'F', 'NOTE': b'\x0e\x00\x00\x00', 'LOGO': b'\n\x00\x00\x00', '_NullFlags': b'\x00'}
+  {'ID': b'\x08\x00\x00\x00', 'CUSTOMER': b'Cirrus         ', 'ORDERED': b'\xd5\x8a%\x00\x95,\xb3\x02', 'TOTAL': b'\x80\xc3\xc9\x01\x00\x00\x00\x00', 'RATE': b'\x00\x00\x00\x00\x00\x00\x08@', 'PAID': b'F', 'NOTE': b'\x00\x00\x00\x00', 'LOGO': b'\x00\x00\x00\x00', '_NullFlags': b'\x00'}
+> records data/legacy/orders.dbf load=1
+  type: OrderedDict
+  {'ID': 1, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 1, 5, 9, 30, 0, 123000), 'TOTAL': Decimal('125'), 'RATE': 0.075, 'PAID': True, 'NOTE': 'Deliver to the back door.', 'LOGO': b'\xd0\xcf\x11\xe0OLE2', '_NullFlags': b'\x00'}
+  {'ID': 2, 'CUSTOMER': 'Bolt & Co', 'ORDERED': datetime.datetime(2024, 1, 9, 0, 0), 'TOTAL': Decimal('9.9999'), 'RATE': 0.2, 'PAID': False, 'NOTE': None, 'LOGO': None, '_NullFlags': b'\x00'}
+  {'ID': 3, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 2, 1, 23, 59, 59, 999000), 'TOTAL': Decimal('-0.5'), 'RATE': 1.0, 'PAID': True, 'NOTE': 'Lieferung für März, bitte\r\nzwei Kartons.', 'LOGO': b"Paid in cash; see 'Ledger' tab.", '_NullFlags': b'\x00'}
+  {'ID': 4, 'CUSTOMER': 'Cirrus', 'ORDERED': datetime.datetime(2024, 2, 14, 12, 0), 'TOTAL': Decimal('0'), 'RATE': 1e-07, 'PAID': False, 'NOTE': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR', 'LOGO': None, '_NullFlags': b'\x02'}
+  {'ID': 5, 'CUSTOMER': 'Bolt & Co', 'ORDERED': datetime.datetime(2024, 2, 29, 17, 0, 0, 500000), 'TOTAL': Decimal('12345.6789'), 'RATE': 2.5e+20, 'PAID': True, 'NOTE': b'vendor blob \x00\x01\x02', 'LOGO': None, '_NullFlags': b'\x00'}
+  {'ID': 7, 'CUSTOMER': 'Acme', 'ORDERED': datetime.datetime(2024, 3, 2, 1, 0), 'TOTAL': Decimal('0.4321'), 'RATE': 0.30000000000000004, 'PAID': False, 'NOTE': '', 'LOGO': b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR', '_NullFlags': b'\x00'}
+  {'ID': 8, 'CUSTOMER': 'Cirrus', 'ORDERED': datetime.datetime(2024, 3, 3, 12, 34, 56, 789000), 'TOTAL': Decimal('3000'), 'RATE': 3.0, 'PAID': False, 'NOTE': None, 'LOGO': None, '_NullFlags': b'\x00'}
+> records data/legacy/Tickets.DBF
+  type: OrderedDict
+  {'TICKET': 1, 'SUBJECT': 'Printer jam', 'OPENED': datetime.datetime(2024, 4, 1, 9, 0), 'SCORE': 4.5, 'STATUS': 'open'}
+  {'TICKET': 2, 'SUBJECT': 'VPN down', 'OPENED': datetime.datetime(2024, 4, 2, 0, 0), 'SCORE': 2.25, 'STATUS': 'closed'}
+  {'TICKET': 3, 'SUBJECT': '', 'OPENED': None, 'SCORE': -1.5, 'STATUS': 'waiting'}
+  {'TICKET': 4, 'SUBJECT': 'New laptop', 'OPENED': datetime.datetime(1999, 12, 31, 23, 59, 59), 'SCORE': 1e+16, 'STATUS': ''}
+> records data/legacy/notes.dbf
+  type: OrderedDict
+  {'TITLE': 'Plumber', 'BODY': 'Ring the plumber.', 'CREATED': datetime.date(2023, 1, 5)}
+  {'TITLE': 'Boiler', 'BODY': 'Boiler service log\r\n01: pressure 2.1 bar, all valves checked, café break\r\n02: pressure 1.2 bar, all valves checked, café break\r\n03: pressure 2.3 bar, all valves checked, café break\r\n04: pressure 1.4 bar, all valves checked, café break\r\n05: pressure 2.5 bar, all valves checked, café break\r\n06: pressure 1.6 bar, all valves checked, café break\r\n07: pressure 2.7 bar, all valves checked, café break\r\n08: pressure 1.8 bar, all valves checked, café break\r\n09: pressure 2.9 bar, all valves checked, café break\r\n10: pressure 1.0 bar, all valves checked, café break\r\n11: pressure 2.1 bar, all valves checked, café break\r\n12: pressure 1.2 bar, all valves checked, café break\r\n13: pressure 2.3 bar, all valves checked, café break\r\n', 'CREATED': datetime.date(2023, 1, 10)}
+  {'TITLE': 'Empty', 'BODY': None, 'CREATED': datetime.date(2023, 1, 11)}
+  {'TITLE': 'Roof', 'BODY': 'Roof: two tiles loose.', 'CREATED': datetime.date(2023, 2, 1)}
+  {'TITLE': 'Last', 'BODY': 'Last entry, no end marker é', 'CREATED': datetime.date(2023, 3, 1)}
+> records data/legacy/notes.dbf raw=1
+  type: OrderedDict
+  {'TITLE': b'Plumber             ', 'BODY': b'         1', 'CREATED': b'20230105'}
+  {'TITLE': b'Boiler              ', 'BODY': b'         2', 'CREATED': b'20230110'}
+  {'TITLE': b'Empty               ', 'BODY': b'          ', 'CREATED': b'20230111'}
+  {'TITLE': b'Roof                ', 'BODY': b'         5', 'CREATED': b'20230201'}
+  {'TITLE': b'Last                ', 'BODY': b'         6', 'CREATED': b'20230301'}
+> records data/legacy/inventory.dbf
+  type: OrderedDict
+  {'SKU': 'A-100', 'GRÖSSE': 'Schraube Ø4', 'QTY': 250, 'PRICE': 0.15, 'DESCR': 'Größe M, Farbe grün'}
+  {'SKU': 'A-200', 'GRÖSSE': 'Mutter', 'QTY': 1200, 'PRICE': 0.05, 'DESCR': 'Spare part, see catalogue'}
+  {'SKU': 'B-300', 'GRÖSSE': 'Kabel, 3m', 'QTY': -4, 'PRICE': 12.5, 'DESCR': None}
+  {'SKU': 'C-400', 'GRÖSSE': 'Lampe', 'QTY': 7, 'PRICE': None, 'DESCR': 'Written by another tool        '}
+> records data/legacy/kunder.dbf
+  type: OrderedDict
+  {'NAVN': 'Søren Ærø', 'BY': 'Ålesund', 'FØDT': datetime.date(1965, 7, 4)}
+  {'NAVN': 'Åse Bø', 'BY': 'Ærøskøbing', 'FØDT': datetime.date(1972, 2, 29)}
+> records data/legacy/kunder.dbf encoding=cp850
+  type: OrderedDict
+  {'NAVN': 'Søren Ærø', 'BY': 'Ålesund', 'FØDT': datetime.date(1965, 7, 4)}
+  {'NAVN': 'Åse Bø', 'BY': 'Ærøskøbing', 'FØDT': datetime.date(1972, 2, 29)}
+> records data/legacy/klienty.dbf
+  type: OrderedDict
+  {'ИМЯ': 'Иван Петров', 'GOROD': 'Москва', 'BALANS': 1500}
+  {'ИМЯ': 'Ольга Смирнова', 'GOROD': 'Санкт-Петербург', 'BALANS': -20}
+> records data/legacy/KLIENTY_W.DBF
+  type: OrderedDict
+  {'ИМЯ': 'Иван Петров', 'GOROD': 'Москва', 'BALANS': 1500}
+  {'ИМЯ': 'Ольга Смирнова', 'GOROD': 'Санкт-Петербург', 'BALANS': -20}
+> records data/legacy/klienty.dbf encoding=cp1251
+  type: OrderedDict
+  {'€Њџ': '€ў\xa0\xad ЏҐва®ў', 'GOROD': 'Њ®бЄў\xa0', 'BALANS': 1500}
+  {'€Њџ': 'Ћ«мЈ\xa0 ‘¬Ёа\xad®ў\xa0', 'GOROD': '‘\xa0\xadЄв-ЏҐвҐаЎгаЈ', 'BALANS': -20}
+> records data/legacy/klienty.dbf encoding=cp1251 char_decode_errors=strict
+  type: OrderedDict
+  {'€Њџ': '€ў\xa0\xad ЏҐва®ў', 'GOROD': 'Њ®бЄў\xa0', 'BALANS': 1500}
+  {'€Њџ': 'Ћ«мЈ\xa0 ‘¬Ёа\xad®ў\xa0', 'GOROD': '‘\xa0\xadЄв-ЏҐвҐаЎгаЈ', 'BALANS': -20}
+> records data/legacy/menu.dbf
+  type: OrderedDict
+  {'DISH': 'Crème brûlée', 'PRICE': 6.5}
+  {'DISH': 'Apfelstrüdel', 'PRICE': 5.25}
+  {'DISH': 'Café au lait', 'PRICE': 3}
+> records data/legacy/menu.dbf encoding=cp1252
+  error UnicodeDecodeError: 'charmap' codec can't decode byte 0x8f in position 2: character maps to <undefined>
+> records data/legacy/export.dbf
+  type: OrderedDict
+  {'CITY': 'Oslo', 'CODE': 'NO'}
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xf6 in position 4: ordinal not in range(128)
+> records data/legacy/export.dbf encoding=cp1252
+  type: OrderedDict
+  {'CITY': 'Oslo', 'CODE': 'NO'}
+  {'CITY': 'Malmö', 'CODE': 'SE'}
+  error UnicodeDecodeError: 'charmap' codec can't decode byte 0x81 in position 6: character maps to <undefined>
+> records data/legacy/export.dbf char_decode_errors=replace
+  type: OrderedDict
+  {'CITY': 'Oslo', 'CODE': 'NO'}
+  {'CITY': 'Malm�', 'CODE': 'SE'}
+  {'CITY': 'Z�rich�', 'CODE': 'CH'}
+> records data/legacy/export.dbf encoding=cp1252 char_decode_errors=replace
+  type: OrderedDict
+  {'CITY': 'Oslo', 'CODE': 'NO'}
+  {'CITY': 'Malmö', 'CODE': 'SE'}
+  {'CITY': 'Zürich�', 'CODE': 'CH'}
+> records data/legacy/export.dbf encoding=latin-1
+  type: OrderedDict
+  {'CITY': 'Oslo', 'CODE': 'NO'}
+  {'CITY': 'Malmö', 'CODE': 'SE'}
+  {'CITY': 'Zürich\x81', 'CODE': 'CH'}
+> records data/legacy/utf8.dbf
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 2: ordinal not in range(128)
+> records data/legacy/utf8.dbf encoding=utf-8
+  type: OrderedDict
+  {'TEXT': 'naïve café', 'WHY': 'ok'}
+  {'TEXT': 'price €5', 'WHY': 'ok'}
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 7: unexpected end of data
+> records data/legacy/utf8.dbf encoding=utf-8 char_decode_errors=replace
+  type: OrderedDict
+  {'TEXT': 'naïve café', 'WHY': 'ok'}
+  {'TEXT': 'price €5', 'WHY': 'ok'}
+  {'TEXT': 'cut caf�', 'WHY': 'end'}
+  {'TEXT': 'bad � byte', 'WHY': 'start'}
+  {'TEXT': 'half �A', 'WHY': 'cont'}
+  {'TEXT': 'three �', 'WHY': 'eod'}
+> records data/legacy/utf8.dbf encoding=utf-8 char_decode_errors=ignore
+  type: OrderedDict
+  {'TEXT': 'naïve café', 'WHY': 'ok'}
+  {'TEXT': 'price €5', 'WHY': 'ok'}
+  {'TEXT': 'cut caf', 'WHY': 'end'}
+  {'TEXT': 'bad  byte', 'WHY': 'start'}
+  {'TEXT': 'half A', 'WHY': 'cont'}
+  {'TEXT': 'three ', 'WHY': 'eod'}
+> records data/legacy/utf8.dbf encoding=utf-8 char_decode_errors=backslashreplace
+  type: OrderedDict
+  {'TEXT': 'naïve café', 'WHY': 'ok'}
+  {'TEXT': 'price €5', 'WHY': 'ok'}
+  {'TEXT': 'cut caf\\xc3', 'WHY': 'end'}
+  {'TEXT': 'bad \\xff byte', 'WHY': 'start'}
+  {'TEXT': 'half \\xc3A', 'WHY': 'cont'}
+  {'TEXT': 'three \\xe2\\x82', 'WHY': 'eod'}
+> records data/legacy/utf8.dbf encoding=utf-8 parser=lenient
+  type: OrderedDict
+  {'TEXT': 'naïve café', 'WHY': 'ok'}
+  {'TEXT': 'price €5', 'WHY': 'ok'}
+  {'TEXT': InvalidValue(b'cut caf\xc3        '), 'WHY': 'end'}
+  {'TEXT': InvalidValue(b'bad \xff byte      '), 'WHY': 'start'}
+  {'TEXT': InvalidValue(b'half \xc3A         '), 'WHY': 'cont'}
+  {'TEXT': InvalidValue(b'three \xe2\x82        '), 'WHY': 'eod'}
+> records data/legacy/both.dbf
+  type: OrderedDict
+  {'N': 1, 'M': 'from the fpt'}
+> records data/legacy/plain3.dbf
+  type: OrderedDict
+  {'M': 'I text\x1a\x1a'}
+> records data/legacy/empty.dbf
+> records data/legacy/longchar.dbf
+  type: OrderedDict
+  {'NOTE': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxend', 'K': 1}
+> records data/legacy/names.dbf
+  type: OrderedDict
+  {'ELEVENCHARS': 'abc', 'AB': 'def', 'lower_case': 12}
+> records data/legacy/flags.dbf
+  type: OrderedDict
+  {'V': 'live'}
+  {'V': 'last'}
+> records data/legacy/numbers.dbf
+  type: OrderedDict
+  {'RAW': '12', 'N': 12, 'F': 12.0}
+  {'RAW': '-3', 'N': -3, 'F': -3.0}
+  {'RAW': '+7', 'N': 7, 'F': 7.0}
+  {'RAW': ' 0012', 'N': 12, 'F': 12.0}
+  {'RAW': '1_000', 'N': 1000, 'F': 1000.0}
+  {'RAW': '12.50', 'N': 12.5, 'F': 12.5}
+  error ValueError: could not convert string to float: b'1,5'
+> records data/legacy/numbers.dbf parser=lenient
+  type: OrderedDict
+  {'RAW': '12', 'N': 12, 'F': 12.0}
+  {'RAW': '-3', 'N': -3, 'F': -3.0}
+  {'RAW': '+7', 'N': 7, 'F': 7.0}
+  {'RAW': ' 0012', 'N': 12, 'F': 12.0}
+  {'RAW': '1_000', 'N': 1000, 'F': 1000.0}
+  {'RAW': '12.50', 'N': 12.5, 'F': 12.5}
+  {'RAW': '1,5', 'N': 1.5, 'F': InvalidValue(b'         1,5')}
+  {'RAW': '***', 'N': None, 'F': None}
+  {'RAW': '', 'N': None, 'F': None}
+  {'RAW': '1e3', 'N': 1000.0, 'F': 1000.0}
+  {'RAW': '-0.0', 'N': -0.0, 'F': -0.0}
+  {'RAW': '.5', 'N': 0.5, 'F': 0.5}
+  {'RAW': '5.', 'N': 5.0, 'F': 5.0}
+  {'RAW': '1.2.3', 'N': InvalidValue(b'       1.2.3'), 'F': InvalidValue(b'       1.2.3')}
+  {'RAW': '1_0.5', 'N': 10.5, 'F': 10.5}
+  {'RAW': '0.1', 'N': 0.1, 'F': 0.1}
+  {'RAW': '2.5E-3', 'N': 0.0025, 'F': 0.0025}
+  {'RAW': '-', 'N': InvalidValue(b'           -'), 'F': InvalidValue(b'           -')}
+  {'RAW': '12 34', 'N': InvalidValue(b'       12 34'), 'F': InvalidValue(b'       12 34')}
+> records data/legacy/currency.dbf
+  type: OrderedDict
+  {'WHAT': 'rent', 'AMT': Decimal('1200')}
+  {'WHAT': 'refund', 'AMT': Decimal('-0.0005')}
+  {'WHAT': 'zero', 'AMT': Decimal('0')}
+  {'WHAT': 'cent', 'AMT': Decimal('0.01')}
+  {'WHAT': 'max', 'AMT': Decimal('922337203685477.5807')}
+  {'WHAT': 'min', 'AMT': Decimal('-922337203685477.5808')}
+  {'WHAT': 'round', 'AMT': Decimal('1')}
+  {'WHAT': 'ten', 'AMT': Decimal('10')}
+> records data/legacy/times.dbf
+  type: OrderedDict
+  {'WHAT': 'noon', 'T': datetime.datetime(2024, 6, 1, 12, 0)}
+  {'WHAT': 'ms', 'T': datetime.datetime(2024, 6, 1, 0, 0, 0, 1000)}
+  {'WHAT': 'blank', 'T': None}
+  {'WHAT': 'zeroday', 'T': None}
+  {'WHAT': 'epoch', 'T': datetime.datetime(1970, 1, 1, 0, 0)}
+  {'WHAT': 'first', 'T': datetime.datetime(1, 1, 1, 0, 0)}
+  {'WHAT': 'nextday', 'T': datetime.datetime(2025, 1, 1, 0, 0, 0, 5000)}
+  {'WHAT': 'week', 'T': datetime.datetime(2000, 1, 8, 0, 0)}
+> records data/legacy/people.dbf ignorecase=0
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/legacy/people.dbf'
+> records data/legacy/PEOPLE.DBF ignorecase=0
+  type: OrderedDict
+  {'NAME': 'Alice Lindqvist', 'BIRTHDATE': datetime.date(1987, 3, 1), 'CITY': 'Göteborg', 'SALARY': 4500.0, 'ACTIVE': True, 'KIDS': 2}
+  {'NAME': "Bob O'Brien", 'BIRTHDATE': datetime.date(1980, 11, 12), 'CITY': 'Dublin', 'SALARY': 3200.5, 'ACTIVE': False, 'KIDS': 0}
+  {'NAME': 'Dörte Müller', 'BIRTHDATE': None, 'CITY': 'Köln, NRW', 'SALARY': None, 'ACTIVE': None, 'KIDS': None}
+  {'NAME': 'José Núñez', 'BIRTHDATE': datetime.date(1999, 12, 31), 'CITY': 'São Paulo', 'SALARY': 12000.75, 'ACTIVE': True, 'KIDS': 3}
+  {'NAME': 'Eve "Evie" Park', 'BIRTHDATE': datetime.date(2000, 2, 29), 'CITY': 'Seoul', 'SALARY': 0.1, 'ACTIVE': False, 'KIDS': None}
+> records data/legacy/nothere.dbf
+  error dbfread.exceptions.DBFNotFound: could not find file 'data/legacy/nothere.dbf'
+> records data/legacy/nothere.dbf ignorecase=0
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/legacy/nothere.dbf'
+> records data/legacy/PEOPLE.DBF parser=reverse
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf6 in position 1: invalid start byte
+> records data/legacy/menu.dbf parser=reverse
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8f in position 2: invalid start byte
+> records data/legacy/Tickets.DBF parser=reverse
+  type: OrderedDict
+  {'TICKET': 1, 'SUBJECT': 'Printer jam', 'OPENED': datetime.datetime(2024, 4, 1, 9, 0), 'SCORE': 4.5, 'STATUS': 'nepo'}
+  {'TICKET': 2, 'SUBJECT': 'VPN down', 'OPENED': datetime.datetime(2024, 4, 2, 0, 0), 'SCORE': 2.25, 'STATUS': 'desolc'}
+  {'TICKET': 3, 'SUBJECT': '', 'OPENED': None, 'SCORE': -1.5, 'STATUS': 'gnitiaw'}
+  {'TICKET': 4, 'SUBJECT': 'New laptop', 'OPENED': datetime.datetime(1999, 12, 31, 23, 59, 59), 'SCORE': 1e+16, 'STATUS': ''}
+> records data/legacy/utf8.dbf parser=reverse
+  type: OrderedDict
+  {'TEXT': 'éfac evïan', 'WHY': 'ko'}
+  {'TEXT': '5€ ecirp', 'WHY': 'ko'}
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 7: unexpected end of data
+> deleted data/legacy/PEOPLE.DBF
+  type: OrderedDict
+  {'NAME': 'Carl Lund', 'BIRTHDATE': datetime.date(1975, 1, 1), 'CITY': 'Oslo', 'SALARY': 1000.0, 'ACTIVE': True, 'KIDS': 1}
+> deleted data/legacy/orders.dbf
+  type: OrderedDict
+  {'ID': 6, 'CUSTOMER': 'Delta', 'ORDERED': datetime.datetime(2024, 3, 1, 0, 0, 1), 'TOTAL': Decimal('77.77'), 'RATE': -0.0, 'PAID': True, 'NOTE': "Paid in cash; see 'Ledger' tab.", 'LOGO': None, '_NullFlags': b'\x00'}
+> deleted data/legacy/orders.dbf load=1
+  type: OrderedDict
+  {'ID': 6, 'CUSTOMER': 'Delta', 'ORDERED': datetime.datetime(2024, 3, 1, 0, 0, 1), 'TOTAL': Decimal('77.77'), 'RATE': -0.0, 'PAID': True, 'NOTE': "Paid in cash; see 'Ledger' tab.", 'LOGO': None, '_NullFlags': b'\x00'}
+> deleted data/legacy/notes.dbf
+  type: OrderedDict
+  {'TITLE': 'Old', 'BODY': 'Roof: two tiles loose.', 'CREATED': datetime.date(2022, 1, 1)}
+> deleted data/legacy/klienty.dbf
+  type: OrderedDict
+  {'ИМЯ': 'Удалён', 'GOROD': 'Казань', 'BALANS': 0}
+> deleted data/legacy/flags.dbf
+  type: OrderedDict
+  {'V': 'gone'}
+> deleted data/legacy/empty.dbf
+> deleted data/legacy/PEOPLE.DBF raw=1
+  type: OrderedDict
+  {'NAME': b'Carl Lund                ', 'BIRTHDATE': b'19750101', 'CITY': b'Oslo                ', 'SALARY': b'   1000.00', 'ACTIVE': b'T', 'KIDS': b' 1'}
+> load data/legacy/PEOPLE.DBF
+  <unloaded DBF table 'data/legacy/PEOPLE.DBF'> False RecordIterator 5
+  <loaded DBF table 'data/legacy/PEOPLE.DBF'> True list 5 1
+  iterated: 5
+  <unloaded DBF table 'data/legacy/PEOPLE.DBF'> False RecordIterator 1
+  in with: <loaded DBF table 'data/legacy/PEOPLE.DBF'> 5
+  after with: <unloaded DBF table 'data/legacy/PEOPLE.DBF'> False
+> load data/legacy/orders.dbf
+  <unloaded DBF table 'data/legacy/orders.dbf'> False RecordIterator 7
+  <loaded DBF table 'data/legacy/orders.dbf'> True list 7 1
+  iterated: 7
+  <unloaded DBF table 'data/legacy/orders.dbf'> False RecordIterator 1
+  in with: <loaded DBF table 'data/legacy/orders.dbf'> 7
+  after with: <unloaded DBF table 'data/legacy/orders.dbf'> False
+> load data/legacy/empty.dbf
+  <unloaded DBF table 'data/legacy/empty.dbf'> False RecordIterator 0
+  <loaded DBF table 'data/legacy/empty.dbf'> True list 0 0
+  iterated: 0
+  <unloaded DBF table 'data/legacy/empty.dbf'> False RecordIterator 0
+  in with: <loaded DBF table 'data/legacy/empty.dbf'> 0
+  after with: <unloaded DBF table 'data/legacy/empty.dbf'> False
+> info data/legacy/broken/unknown_type.dbf
+  error ValueError: Unknown field type: 'X'
+> records data/legacy/broken/unknown_type.dbf
+  error ValueError: Unknown field type: 'X'
+> info data/legacy/broken/unknown_type.dbf parser=hexx
+  repr: <unloaded DBF table 'data/legacy/broken/unknown_type.dbf'>
+  name: 'unknown_type'
+  filename: 'data/legacy/broken/unknown_type.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['CODE', 'HEX']
+  loaded: False
+  len: 4 deleted: 0
+> records data/legacy/broken/unknown_type.dbf parser=hexx
+  type: OrderedDict
+  {'CODE': 'a', 'HEX': 255}
+  {'CODE': 'b', 'HEX': 31}
+  {'CODE': 'c', 'HEX': None}
+  error ValueError: invalid literal for int() with base 16: b'zz'
+> info data/legacy/broken/unknown_type.dbf parser=lenient
+  error ValueError: Unknown field type: 'X'
+> records data/legacy/broken/unknown_type.dbf parser=lenient
+  error ValueError: Unknown field type: 'X'
+> info data/legacy/broken/bad_int.dbf
+  error ValueError: Field type I must have length 4 (was 2)
+> records data/legacy/broken/bad_int.dbf
+  error ValueError: Field type I must have length 4 (was 2)
+> info data/legacy/broken/bad_logical.dbf
+  error ValueError: Field type L must have length 1 (was 3)
+> records data/legacy/broken/bad_logical.dbf
+  error ValueError: Field type L must have length 1 (was 3)
+> info data/legacy/broken/short.dbf
+  error struct.error: unpack requires a buffer of 32 bytes
+> records data/legacy/broken/short.dbf
+  error struct.error: unpack requires a buffer of 32 bytes
+> info data/legacy/broken/cut_fields.dbf
+  error struct.error: unpack requires a buffer of 32 bytes
+> records data/legacy/broken/cut_fields.dbf
+  error struct.error: unpack requires a buffer of 32 bytes
+> info data/legacy/broken/no_terminator.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/no_terminator.dbf'>
+  name: 'no_terminator'
+  filename: 'data/legacy/broken/no_terminator.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['A', 'B']
+  loaded: False
+  len: 0 deleted: 0
+> records data/legacy/broken/no_terminator.dbf
+> info data/legacy/broken/no_eof_marker.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/no_eof_marker.dbf'>
+  name: 'no_eof_marker'
+  filename: 'data/legacy/broken/no_eof_marker.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['A', 'B']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/no_eof_marker.dbf
+  type: OrderedDict
+  {'A': 'abcd', 'B': 'wxyz'}
+> info data/legacy/broken/padded.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/padded.dbf'>
+  name: 'padded'
+  filename: 'data/legacy/broken/padded.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['A']
+  loaded: False
+  len: 3 deleted: 1
+> records data/legacy/broken/padded.dbf
+  type: OrderedDict
+  {'A': 'one'}
+  {'A': '  t'}
+> info data/legacy/broken/bad_values.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/bad_values.dbf'>
+  name: 'bad_values'
+  filename: 'data/legacy/broken/bad_values.dbf'
+  memofilename: 'data/legacy/broken/bad_values.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['D', 'L', 'N', 'F', 'M', 'C']
+  loaded: False
+  len: 5 deleted: 0
+> records data/legacy/broken/bad_values.dbf
+  type: OrderedDict
+  {'D': datetime.date(2024, 2, 29), 'L': True, 'N': 42, 'F': 1.5, 'M': None, 'C': 'fine'}
+  error ValueError: invalid date b'20241301'
+> info data/legacy/broken/bad_values.dbf parser=lenient
+  repr: <unloaded DBF table 'data/legacy/broken/bad_values.dbf'>
+  name: 'bad_values'
+  filename: 'data/legacy/broken/bad_values.dbf'
+  memofilename: 'data/legacy/broken/bad_values.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['D', 'L', 'N', 'F', 'M', 'C']
+  loaded: False
+  len: 5 deleted: 0
+> records data/legacy/broken/bad_values.dbf parser=lenient
+  type: OrderedDict
+  {'D': datetime.date(2024, 2, 29), 'L': True, 'N': 42, 'F': 1.5, 'M': None, 'C': 'fine'}
+  {'D': InvalidValue(b'20241301'), 'L': InvalidValue(b'x'), 'N': InvalidValue(b' 1.2.3'), 'F': InvalidValue(b'    --'), 'M': InvalidValue(b'memo12    '), 'C': 'ok'}
+  {'D': InvalidValue(b'2024ab01'), 'L': None, 'N': None, 'F': None, 'M': None, 'C': InvalidValue(b'caf\xe9  ')}
+  {'D': None, 'L': None, 'N': 7, 'F': 200.0, 'M': 'a real memo', 'C': InvalidValue(b'\x81x    ')}
+  {'D': datetime.date(202, 4, 21), 'L': True, 'N': 12, 'F': 0.5, 'M': InvalidValue(b'  0 0     '), 'C': ''}
+> info data/legacy/broken/bad_values.dbf raw=1
+  repr: <unloaded DBF table 'data/legacy/broken/bad_values.dbf'>
+  name: 'bad_values'
+  filename: 'data/legacy/broken/bad_values.dbf'
+  memofilename: 'data/legacy/broken/bad_values.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['D', 'L', 'N', 'F', 'M', 'C']
+  loaded: False
+  len: 5 deleted: 0
+> records data/legacy/broken/bad_values.dbf raw=1
+  type: OrderedDict
+  {'D': b'20240229', 'L': b'T', 'N': b'    42', 'F': b'   1.5', 'M': b'          ', 'C': b'fine  '}
+  {'D': b'20241301', 'L': b'x', 'N': b' 1.2.3', 'F': b'    --', 'M': b'memo12    ', 'C': b'ok    '}
+  {'D': b'2024ab01', 'L': b'?', 'N': b'      ', 'F': b'     *', 'M': b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', 'C': b'caf\xe9  '}
+  {'D': b'00000000', 'L': b' ', 'N': b'     7', 'F': b'   2e2', 'M': b'         8', 'C': b'\x81x    '}
+  {'D': b' 2024 21', 'L': b't', 'N': b'   1_2', 'F': b'   +.5', 'M': b'  0 0     ', 'C': b'      '}
+> info data/legacy/broken/missing_memo.dbf
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/missing_memo.dbf
+> records data/legacy/broken/missing_memo.dbf
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/missing_memo.dbf
+> info data/legacy/broken/missing_memo.dbf ignore_missing_memofile=1
+  repr: <unloaded DBF table 'data/legacy/broken/missing_memo.dbf'>
+  name: 'missing_memo'
+  filename: 'data/legacy/broken/missing_memo.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/dBASE III PLUS, with memo
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['T', 'M']
+  loaded: False
+  len: 2 deleted: 0
+> records data/legacy/broken/missing_memo.dbf ignore_missing_memofile=1
+  type: OrderedDict
+  {'T': 'one', 'M': None}
+  {'T': 'two', 'M': None}
+> info data/legacy/broken/missing_memo.dbf raw=1
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/missing_memo.dbf
+> records data/legacy/broken/missing_memo.dbf raw=1
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/missing_memo.dbf
+> info data/legacy/broken/vfp_double.dbf
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/vfp_double.dbf
+> records data/legacy/broken/vfp_double.dbf
+  error dbfread.exceptions.MissingMemoFile: missing memo file for data/legacy/broken/vfp_double.dbf
+> info data/legacy/broken/vfp_double.dbf ignore_missing_memofile=1
+  repr: <unloaded DBF table 'data/legacy/broken/vfp_double.dbf'>
+  name: 'vfp_double'
+  filename: 'data/legacy/broken/vfp_double.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['X']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/vfp_double.dbf ignore_missing_memofile=1
+  type: OrderedDict
+  {'X': 1.25}
+> info data/legacy/broken/bad_memo.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/bad_memo.dbf'>
+  name: 'bad_memo'
+  filename: 'data/legacy/broken/bad_memo.dbf'
+  memofilename: 'data/legacy/broken/bad_memo.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['K', 'M']
+  loaded: False
+  len: 3 deleted: 0
+> records data/legacy/broken/bad_memo.dbf
+  type: OrderedDict
+  {'K': 'ok', 'M': 'fine'}
+  error OSError: EOF reached while reading memo
+> info data/legacy/broken/bad_memo.dbf parser=lenient
+  repr: <unloaded DBF table 'data/legacy/broken/bad_memo.dbf'>
+  name: 'bad_memo'
+  filename: 'data/legacy/broken/bad_memo.dbf'
+  memofilename: 'data/legacy/broken/bad_memo.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['K', 'M']
+  loaded: False
+  len: 3 deleted: 0
+> records data/legacy/broken/bad_memo.dbf parser=lenient
+  type: OrderedDict
+  {'K': 'ok', 'M': 'fine'}
+  error OSError: EOF reached while reading memo
+> info data/legacy/broken/tiny_fpt.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/tiny_fpt.dbf'>
+  name: 'tiny_fpt'
+  filename: 'data/legacy/broken/tiny_fpt.dbf'
+  memofilename: 'data/legacy/broken/tiny_fpt.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['M']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/tiny_fpt.dbf
+  error struct.error: unpack requires a buffer of 512 bytes
+> info data/legacy/broken/tiny_fpt.dbf raw=1
+  repr: <unloaded DBF table 'data/legacy/broken/tiny_fpt.dbf'>
+  name: 'tiny_fpt'
+  filename: 'data/legacy/broken/tiny_fpt.dbf'
+  memofilename: 'data/legacy/broken/tiny_fpt.fpt'
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['M']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/tiny_fpt.dbf raw=1
+  type: OrderedDict
+  {'M': b'\x00\x00\x00\x00'}
+> info data/legacy/broken/bad_name.dbf
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xe4 in position 1: ordinal not in range(128)
+> records data/legacy/broken/bad_name.dbf
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xe4 in position 1: ordinal not in range(128)
+> info data/legacy/broken/bad_name.dbf encoding=cp1252
+  repr: <unloaded DBF table 'data/legacy/broken/bad_name.dbf'>
+  name: 'bad_name'
+  filename: 'data/legacy/broken/bad_name.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: cp1252
+  field_names: ['NäME']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/bad_name.dbf encoding=cp1252
+  type: OrderedDict
+  {'NäME': 'abc'}
+> info data/legacy/broken/bad_name.dbf char_decode_errors=replace
+  repr: <unloaded DBF table 'data/legacy/broken/bad_name.dbf'>
+  name: 'bad_name'
+  filename: 'data/legacy/broken/bad_name.dbf'
+  memofilename: None
+  dbversion: FoxBASE+/Dbase III plus, no memory
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['N�ME']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/bad_name.dbf char_decode_errors=replace
+  type: OrderedDict
+  {'N�ME': 'abc'}
+> info data/legacy/broken/bad_time.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/bad_time.dbf'>
+  name: 'bad_time'
+  filename: 'data/legacy/broken/bad_time.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['W', 'T']
+  loaded: False
+  len: 6 deleted: 0
+> records data/legacy/broken/bad_time.dbf
+  type: OrderedDict
+  {'W': 'ok', 'T': datetime.datetime(2024, 1, 1, 0, 0)}
+  error ValueError: ordinal must be >= 1
+> info data/legacy/broken/bad_time.dbf parser=lenient
+  repr: <unloaded DBF table 'data/legacy/broken/bad_time.dbf'>
+  name: 'bad_time'
+  filename: 'data/legacy/broken/bad_time.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['W', 'T']
+  loaded: False
+  len: 6 deleted: 0
+> records data/legacy/broken/bad_time.dbf parser=lenient
+  type: OrderedDict
+  {'W': 'ok', 'T': datetime.datetime(2024, 1, 1, 0, 0)}
+  {'W': 'early', 'T': InvalidValue(b'QD\x1a\x00\x00\x00\x00\x00')}
+  {'W': 'bytes', 'T': InvalidValue(b'\x01\x02\x03\x04\x05\x06\x07\x08')}
+  {'W': 'last', 'T': datetime.datetime(9999, 12, 31, 23, 59, 59, 999000)}
+  error OverflowError: date value out of range
+> info data/legacy/broken/bad_auto.dbf
+  repr: <unloaded DBF table 'data/legacy/broken/bad_auto.dbf'>
+  name: 'bad_auto'
+  filename: 'data/legacy/broken/bad_auto.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro, autoincrement enabled
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['K', 'S']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/bad_auto.dbf
+  error struct.error: unpack requires a buffer of 4 bytes
+> info data/legacy/broken/bad_auto.dbf parser=lenient
+  repr: <unloaded DBF table 'data/legacy/broken/bad_auto.dbf'>
+  name: 'bad_auto'
+  filename: 'data/legacy/broken/bad_auto.dbf'
+  memofilename: None
+  dbversion: Visual FoxPro, autoincrement enabled
+  date: datetime.date(2024, 3, 15)
+  encoding: ascii
+  field_names: ['K', 'S']
+  loaded: False
+  len: 1 deleted: 0
+> records data/legacy/broken/bad_auto.dbf parser=lenient
+  error struct.error: unpack requires a buffer of 4 bytes
+> deleted data/legacy/broken/padded.dbf
+  type: OrderedDict
+  {'A': 'del'}
+> header data/legacy/broken/no_terminator.dbf
+  DBFHeader(dbversion=3, year=124, month=3, day=15, numrecords=1, headerlen=97, recordlen=9, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='A', type='C', address=0, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+  DBFField(name='B', type='C', address=0, length=4, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> header data/legacy/broken/padded.dbf
+  DBFHeader(dbversion=3, year=124, month=3, day=15, numrecords=4, headerlen=65, recordlen=6, reserved1=0, incomplete_transaction=0, encryption_flag=0, free_record_thread=0, reserved2=0, reserved3=0, mdx_flag=0, language_driver=0, reserved4=0)
+  DBFField(name='A', type='C', address=0, length=3, decimal_count=0, reserved1=0, workarea_id=0, reserved2=0, reserved3=0, set_fields_flag=0, reserved4=b'\x00\x00\x00\x00\x00\x00\x00', index_field_flag=0)
+> memo data/legacy/ORDERS.FPT 48 0,-1,8,9,10,11,12,13,14,7
+  0 NoneType None
+  -1 NoneType None
+  8 TextMemo b'Deliver to the back door.'
+  9 TextMemo b'Lieferung f\xfcr M\xe4rz, bitte\r\nzwei Kartons.'
+  10 PictureMemo b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR'
+  11 ObjectMemo b'\xd0\xcf\x11\xe0OLE2'
+  12 BinaryMemo b'vendor blob \x00\x01\x02'
+  13 TextMemo b"Paid in cash; see 'Ledger' tab."
+  14 TextMemo b''
+  7 PictureMemo b''
+> memo data/legacy/NOTES.DBT 131 1,2,3,5,6,7,0
+  1 bytes b'Ring the plumber.'
+  2 bytes b'Boiler service log\r\n01: pressure 2.1 bar, all valves checked, caf\x82 break\r\n02: pressure 1.2 bar, all valves checked, caf\x82 break\r\n03: pressure 2.3 bar, all valves checked, caf\x82 break\r\n04: pressure 1.4 bar, all valves checked, caf\x82 break\r\n05: pressure 2.5 bar, all valves checked, caf\x82 break\r\n06: pressure 1.6 bar, all valves checked, caf\x82 break\r\n07: pressure 2.7 bar, all valves checked, caf\x82 break\r\n08: pressure 1.8 bar, all valves checked, caf\x82 break\r\n09: pressure 2.9 bar, all valves checked, caf\x82 break\r\n10: pressure 1.0 bar, all valves checked, caf\x82 break\r\n11: pressure 2.1 bar, all valves checked, caf\x82 break\r\n12: pressure 1.2 bar, all valves checked, caf\x82 break\r\n13: pressure 2.3 bar, all valves checked, caf\x82 break\r\n'
+  3 bytes b'essure 1.0 bar, all valves checked, caf\x82 break\r\n11: pressure 2.1 bar, all valves checked, caf\x82 break\r\n12: pressure 1.2 bar, all valves checked, caf\x82 break\r\n13: pressure 2.3 bar, all valves checked, caf\x82 break\r\n'
+  5 bytes b'Roof: two tiles loose.'
+  6 bytes b'Last entry, no end marker \x82'
+  7 bytes b''
+  0 NoneType None
+> memo data/legacy/inventory.dbt 139 1,2,3,4,0
+  1 bytes b'Gr\x94\xe1e M, Farbe gr\x81n'
+  2 bytes b'Spare part, see catalogue'
+  3 bytes b'Written by another tool        '
+  4 error struct.error: unpack requires a buffer of 8 bytes
+  0 NoneType None
+> memo data/legacy/plain3.dbt 3 1
+  1 bytes b'I text\x1a\x1a'
+> memo data/legacy/plain3.dbt 131 1
+  1 bytes b'dBase III text'
+> memo data/legacy/broken/bad_memo.fpt 48 8,9
+  8 TextMemo b'fine'
+  9 error OSError: EOF reached while reading memo
+> memo data/legacy/broken/bad_memo.fpt 48 500
+  500 error struct.error: unpack requires a buffer of 8 bytes
+> memo data/legacy/broken/tiny_fpt.fpt 48 1
+  1 error struct.error: unpack requires a buffer of 512 bytes
+> memo data/legacy/nothere.fpt 48 1
+  1 error FileNotFoundError: [Errno 2] No such file or directory: 'data/legacy/nothere.fpt'
+> parse 0 00
+  bytes b'\x00'
+> parse 0 aaff
+  bytes b'\xaa\xff'
+> parse 0 -
+  bytes b''
+> parse C 74657374
+  str 'test'
+> parse C 7465737420200000
+  str 'test'
+> parse C 20206c656164
+  str '  lead'
+> parse C 006d69640020
+  str '\x00mid'
+> parse C -
+  str ''
+> parse C 202020
+  str ''
+> parse C 74616209
+  str 'tab\t'
+> parse C 636166e9 encoding=cp1252
+  str 'café'
+> parse C 636166e9
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+> parse C 636166e9 char_decode_errors=replace
+  str 'caf�'
+> parse V 766172636861722020
+  str 'varchar'
+> parse D 3030303030303030
+  NoneType None
+> parse D 2020202020202020
+  NoneType None
+> parse D 3139373030313031
+  date datetime.date(1970, 1, 1)
+> parse D 4e6f74496e746772
+  error ValueError: invalid date b'NotIntgr'
+> parse D 3230323430323330
+  error ValueError: invalid date b'20240230'
+> parse D 3030303020303030
+  NoneType None
+> parse D 2032303220312039
+  date datetime.date(202, 1, 9)
+> parse D 2b315f3030313032
+  date datetime.date(10, 1, 2)
+> parse D 2d30303130313031
+  error ValueError: invalid date b'-0010101'
+> parse D 32303234303130
+  error ValueError: invalid date b'2024010'
+> parse D 323032343031303178
+  date datetime.date(2024, 1, 1)
+> parse D 3939393931323331
+  date datetime.date(9999, 12, 31)
+> parse D 3030303130313031
+  date datetime.date(1, 1, 1)
+> parse F 312e35
+  float 1.5
+> parse F 20202d322e32352020
+  float -2.25
+> parse F 2a2a2a
+  NoneType None
+> parse F -
+  NoneType None
+> parse F 31652d3037
+  float 1e-07
+> parse F 3132
+  float 12.0
+> parse F 2a332e352a
+  float 3.5
+> parse F 616263
+  error ValueError: could not convert string to float: b'abc'
+> parse F 315f302e305f31
+  float 10.01
+> parse F 09370a
+  float 7.0
+> parse F 2d2e35652b32
+  float -50.0
+> parse F 312e6533
+  float 1000.0
+> parse F 3165
+  error ValueError: could not convert string to float: b'1e'
+> parse F 302e3330303030303030303030303030303034
+  float 0.30000000000000004
+> parse I 01000000
+  int 1
+> parse + 01000000
+  int 1
+> parse I ffffffff
+  int -1
+> parse + ffffffff
+  int -1
+> parse I 00000080
+  int -2147483648
+> parse + 00000080
+  int -2147483648
+> parse I 10270000
+  int 10000
+> parse + 10270000
+  int 10000
+> parse I 0100
+  error struct.error: unpack requires a buffer of 4 bytes
+> parse L 54
+  bool True
+> parse L 74
+  bool True
+> parse L 59
+  bool True
+> parse L 79
+  bool True
+> parse L 46
+  bool False
+> parse L 66
+  bool False
+> parse L 4e
+  bool False
+> parse L 6e
+  bool False
+> parse L 3f
+  NoneType None
+> parse L 20
+  NoneType None
+> parse L 78
+  error ValueError: Illegal value for logical field: b'x'
+> parse L 31
+  error ValueError: Illegal value for logical field: b'1'
+> parse L -
+  bool True
+> parse L 5459
+  error ValueError: Illegal value for logical field: b'TY'
+> parse N 31
+  int 1
+> parse N 202034322020
+  int 42
+> parse N 2d3137
+  int -17
+> parse N 312e35
+  float 1.5
+> parse N 312c35
+  float 1.5
+> parse N 2a
+  NoneType None
+> parse N -
+  NoneType None
+> parse N 315f303030
+  int 1000
+> parse N 30303132
+  int 12
+> parse N 2b33
+  int 3
+> parse N 316532
+  float 100.0
+> parse N 392e3939
+  float 9.99
+> parse N 2d30
+  int 0
+> parse N 626164
+  error ValueError: could not convert string to float: b'bad'
+> parse N 312c322c33
+  error ValueError: could not convert string to float: b'1.2.3'
+> parse N 31322e3330
+  float 12.3
+> parse O 000000000000f83f
+  float 1.5
+> parse O 0000000000000080
+  float -0.0
+> parse O 7dc39425ad49b254
+  float 1e+100
+> parse O 0100000000000000
+  float 5e-324
+> parse O c976be9f0c24fe40
+  float 123456.789
+> parse O 0000
+  error struct.error: unpack requires a buffer of 8 bytes
+> parse T bd87250000000000
+  datetime datetime.datetime(2022, 1, 1, 0, 0)
+> parse @ bd87250000000000
+  datetime datetime.datetime(2022, 1, 1, 0, 0)
+> parse T bd872500fcce3800
+  datetime datetime.datetime(2022, 1, 1, 1, 2, 3, 4000)
+> parse @ bd872500fcce3800
+  datetime datetime.datetime(2022, 1, 1, 1, 2, 3, 4000)
+> parse T 2020202020202020
+  NoneType None
+> parse @ 2020202020202020
+  NoneType None
+> parse T 0000000005000000
+  NoneType None
+> parse @ 0000000005000000
+  NoneType None
+> parse T 52441a00cf070000
+  datetime datetime.datetime(1, 1, 1, 0, 0, 1, 999000)
+> parse @ 52441a00cf070000
+  datetime datetime.datetime(1, 1, 1, 0, 0, 1, 999000)
+> parse T 51441a0000000000
+  error ValueError: ordinal must be >= 1
+> parse @ 51441a0000000000
+  error ValueError: ordinal must be >= 1
+> parse T 2cfe510000000000
+  datetime datetime.datetime(9999, 12, 31, 0, 0)
+> parse @ 2cfe510000000000
+  datetime datetime.datetime(9999, 12, 31, 0, 0)
+> parse T 2dfe510000000000
+  error ValueError: year 10000 is out of range
+> parse @ 2dfe510000000000
+  error ValueError: year 10000 is out of range
+> parse T ffffffff00000000
+  error OverflowError: signed integer is greater than maximum
+> parse @ ffffffff00000000
+  error OverflowError: signed integer is greater than maximum
+> parse T 50441a8000000000
+  error ValueError: year 5879611 is out of range
+> parse @ 50441a8000000000
+  error ValueError: year 5879611 is out of range
+> parse T 51441a8000000000
+  error OverflowError: signed integer is greater than maximum
+> parse @ 51441a8000000000
+  error OverflowError: signed integer is greater than maximum
+> parse T 2cfe5100ff5b2605
+  datetime datetime.datetime(9999, 12, 31, 23, 59, 59, 999000)
+> parse @ 2cfe5100ff5b2605
+  datetime datetime.datetime(9999, 12, 31, 23, 59, 59, 999000)
+> parse T 2cfe5100005c2605
+  error OverflowError: date value out of range
+> parse @ 2cfe5100005c2605
+  error OverflowError: date value out of range
+> parse T 978a2500ffffffff
+  datetime datetime.datetime(2024, 2, 19, 17, 2, 47, 295000)
+> parse @ 978a2500ffffffff
+  datetime datetime.datetime(2024, 2, 19, 17, 2, 47, 295000)
+> parse Y 0000000000000000
+  Decimal Decimal('0')
+> parse Y 0100000000000000
+  Decimal Decimal('0.0001')
+> parse Y ffffffffffffffff
+  Decimal Decimal('-0.0001')
+> parse Y 1027000000000000
+  Decimal Decimal('1')
+> parse Y 15cd5b0700000000
+  Decimal Decimal('12345.6789')
+> parse Y 50c3000000000000
+  Decimal Decimal('5')
+> parse Y 0000000000000080
+  Decimal Decimal('-922337203685477.5808')
+> parse B 0000000000000440 dbversion=48
+  float 2.5
+> parse B 0000000000000440 dbversion=50
+  float 2.5
+> parse B 20202020202020202037 dbversion=3
+  NoneType None
+> parse B 0000 dbversion=49
+  error struct.error: unpack requires a buffer of 8 bytes
+> parse M 07000000
+  NoneType None
+> parse M 20202020202020202035
+  NoneType None
+> parse M 20202020202020202020
+  NoneType None
+> parse M 00000000000000000000
+  NoneType None
+> parse M 616263
+  error ValueError: Memo index is not an integer: b'abc'
+> parse G 07000000
+  NoneType None
+> parse G 20202020202020202035
+  NoneType None
+> parse G 20202020202020202020
+  NoneType None
+> parse G 00000000000000000000
+  NoneType None
+> parse G 616263
+  error ValueError: Memo index is not an integer: b'abc'
+> parse P 07000000
+  NoneType None
+> parse P 20202020202020202035
+  NoneType None
+> parse P 20202020202020202020
+  NoneType None
+> parse P 00000000000000000000
+  NoneType None
+> parse P 616263
+  error ValueError: Memo index is not an integer: b'abc'
+> parse X 6666
+  error ValueError: Unknown field type: 'X'
+> parse X 6666 parser=hexx
+  int 255
+> parse X 307831462020 parser=hexx
+  int 31
+> parse X 71 parser=hexx
+  error ValueError: invalid literal for int() with base 16: b'q'
+> parse X 71 parser=lenient
+  InvalidValue InvalidValue(b'q')
+> parse D 4e6f74496e746772 parser=lenient
+  InvalidValue InvalidValue(b'NotIntgr')
+> parse L 78 parser=lenient
+  InvalidValue InvalidValue(b'x')
+> parse C 636166e9 parser=lenient
+  InvalidValue InvalidValue(b'caf\xe9')
+> parse I 01 parser=lenient
+  error struct.error: unpack requires a buffer of 4 bytes
+> parse C 6f6c6c6568203030 parser=reverse
+  str 'hello'
+> parse C 7472c3a620 parser=reverse
+  str 'ært'
+> parse C 7472e6 parser=reverse
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe6 in position 2: unexpected end of data
+> parse V 616263 parser=reverse
+  str 'abc'
+> ipat data/legacy/people.dbf
+  'data/legacy/[Pp][Ee][Oo][Pp][Ll][Ee].[Dd][Bb][Ff]'
+> ipat Straße.dbf
+  '[Ss][Tt][Rr][Aa][SSß][Ee].[Dd][Bb][Ff]'
+> ipat a1_b2.DBF
+  '[Aa]1_[Bb]2.[Dd][Bb][Ff]'
+> ipat dir/ÆØÅ.fpt
+  'dir/[Ææ][Øø][Åå].[Ff][Pp][Tt]'
+> ipat x-[1].dbf
+  '[Xx]-[1].[Dd][Bb][Ff]'
+> ipat 2024.123
+  '2024.123'
+> ipat -
+  ''
+> ifnmatch PEOPLE.DBF people.dbf
+  True
+> ifnmatch People.dbf PEOPLE.DBF
+  True
+> ifnmatch people.dbx people.dbf
+  False
+> ifnmatch Strasse.dbf straße.dbf
+  False
+> ifnmatch STRASSE.DBF straße.dbf
+  False
+> ifnmatch Straße.dbf STRASSE.DBF
+  False
+> ifnmatch notes.dbt *.DBT
+  True
+> ifnmatch a.dbf ?.dbf
+  True
+> ifind data/legacy/people.dbf -
+  'data/legacy/PEOPLE.DBF'
+> ifind data/legacy/orders.dbf .fpt
+  'data/legacy/ORDERS.FPT'
+> ifind data/legacy/orders.dbf .dbt
+  None
+> ifind data/legacy/NOTES.dbf .dbt
+  'data/legacy/NOTES.DBT'
+> ifind data/legacy/both.dbf .dbt
+  'data/legacy/BOTH.DBT'
+> ifind data/legacy/nothere.dbf -
+  None
+> ifind data/nowhere/people.dbf -
+  None
+> ifind data/legacy/tick* -
+  'data/legacy/Tickets.DBF'
+> ifind data/legacy/broken/BAD_MEMO.DBF .fpt
+  'data/legacy/broken/bad_memo.fpt'
+> invalid data/legacy/broken/bad_values.dbf
+records[1]['D'] == InvalidValue(b'20241301')
+records[1]['L'] == InvalidValue(b'x')
+records[1]['N'] == InvalidValue(b' 1.2.3')
+records[1]['F'] == InvalidValue(b'    --')
+records[1]['M'] == InvalidValue(b'memo12    ')
+records[2]['D'] == InvalidValue(b'2024ab01')
+records[2]['C'] == InvalidValue(b'caf\xe9  ')
+records[3]['C'] == InvalidValue(b'\x81x    ')
+records[4]['M'] == InvalidValue(b'  0 0     ')
+> invalid data/legacy/PEOPLE.DBF
+> reverse data/legacy/PEOPLE.DBF
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf6 in position 1: invalid start byte
+> csv data/legacy/PEOPLE.DBF data/out/people.csv
+  wrote data/out/people.csv (5 rows)
+> cat data/out/people.csv
+  data/out/people.csv (6 lines)
+  | NAME,BIRTHDATE,CITY,SALARY,ACTIVE,KIDS
+  | Alice Lindqvist,1987-03-01,Göteborg,4500.0,True,2
+  | Bob O'Brien,1980-11-12,Dublin,3200.5,False,0
+  | Dörte Müller,,"Köln, NRW",,,
+  | José Núñez,1999-12-31,São Paulo,12000.75,True,3
+  | "Eve ""Evie"" Park",2000-02-29,Seoul,0.1,False,
+> csv data/legacy/orders.dbf data/out/orders.csv
+  wrote data/out/orders.csv (7 rows)
+> cat data/out/orders.csv
+  data/out/orders.csv (9 lines)
+  | ID,CUSTOMER,ORDERED,TOTAL,RATE,PAID,NOTE,LOGO,_NullFlags
+  | 1,Acme,2024-01-05 09:30:00.123000,125,0.075,True,Deliver to the back door.,b'\xd0\xcf\x11\xe0OLE2',b'\x00'
+  | 2,Bolt & Co,2024-01-09 00:00:00,9.9999,0.2,False,,,b'\x00'
+  | 3,Acme,2024-02-01 23:59:59.999000,-0.5,1.0,True,"Lieferung für März, bitte
+  | zwei Kartons.","b""Paid in cash; see 'Ledger' tab.""",b'\x00'
+  | 4,Cirrus,2024-02-14 12:00:00,0,1e-07,False,b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR',,b'\x02'
+  | 5,Bolt & Co,2024-02-29 17:00:00.500000,12345.6789,2.5e+20,True,b'vendor blob \x00\x01\x02',,b'\x00'
+  | 7,Acme,2024-03-02 01:00:00,0.4321,0.30000000000000004,False,,b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR',b'\x00'
+  | 8,Cirrus,2024-03-03 12:34:56.789000,3000,3.0,False,,,b'\x00'
+> csv data/legacy/notes.dbf data/out/notes.csv
+  wrote data/out/notes.csv (5 rows)
+> cat data/out/notes.csv
+  data/out/notes.csv (20 lines)
+  | TITLE,BODY,CREATED
+  | Plumber,Ring the plumber.,2023-01-05
+  | Boiler,"Boiler service log
+  | 01: pressure 2.1 bar, all valves checked, café break
+  | 02: pressure 1.2 bar, all valves checked, café break
+  | 03: pressure 2.3 bar, all valves checked, café break
+  | 04: pressure 1.4 bar, all valves checked, café break
+  | 05: pressure 2.5 bar, all valves checked, café break
+  | 06: pressure 1.6 bar, all valves checked, café break
+  | 07: pressure 2.7 bar, all valves checked, café break
+  | 08: pressure 1.8 bar, all valves checked, café break
+  | 09: pressure 2.9 bar, all valves checked, café break
+  | 10: pressure 1.0 bar, all valves checked, café break
+  | 11: pressure 2.1 bar, all valves checked, café break
+  | 12: pressure 1.2 bar, all valves checked, café break
+  | 13: pressure 2.3 bar, all valves checked, café break
+  | ",2023-01-10
+  | Empty,,2023-01-11
+  | Roof,Roof: two tiles loose.,2023-02-01
+  | Last,"Last entry, no end marker é",2023-03-01
+> csv data/legacy/export.dbf data/out/export.csv
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xf6 in position 4: ordinal not in range(128)
+> cat data/out/export.csv
+  data/out/export.csv (2 lines)
+  | CITY,CODE
+  | Oslo,NO
+> csv data/legacy/export.dbf data/out/export.csv encoding=cp1252
+  error UnicodeDecodeError: 'charmap' codec can't decode byte 0x81 in position 6: character maps to <undefined>
+> cat data/out/export.csv
+  data/out/export.csv (3 lines)
+  | CITY,CODE
+  | Oslo,NO
+  | Malmö,SE
+> json data/legacy/PEOPLE.DBF data/out/people.json
+  wrote data/out/people.json (5 records)
+> cat data/out/people.json
+  data/out/people.json (42 lines)
+  | [
+  |   {
+  |     "NAME": "Alice Lindqvist",
+  |     "BIRTHDATE": "1987-03-01",
+  |     "CITY": "Göteborg",
+  |     "SALARY": 4500.0,
+  |     "ACTIVE": true,
+  |     "KIDS": 2
+  |   },
+  |   {
+  |     "NAME": "Bob O'Brien",
+  |     "BIRTHDATE": "1980-11-12",
+  |     "CITY": "Dublin",
+  |     "SALARY": 3200.5,
+  |     "ACTIVE": false,
+  |     "KIDS": 0
+  |   },
+  |   {
+  |     "NAME": "Dörte Müller",
+  |     "BIRTHDATE": null,
+  |     "CITY": "Köln, NRW",
+  |     "SALARY": null,
+  |     "ACTIVE": null,
+  |     "KIDS": null
+  |   },
+  |   {
+  |     "NAME": "José Núñez",
+  |     "BIRTHDATE": "1999-12-31",
+  |     "CITY": "São Paulo",
+  |     "SALARY": 12000.75,
+  |     "ACTIVE": true,
+  |     "KIDS": 3
+  |   },
+  |   {
+  |     "NAME": "Eve \"Evie\" Park",
+  |     "BIRTHDATE": "2000-02-29",
+  |     "CITY": "Seoul",
+  |     "SALARY": 0.1,
+  |     "ACTIVE": false,
+  |     "KIDS": null
+  |   }
+  | ]
+> json data/legacy/orders.dbf data/out/orders.json lowernames=1
+  wrote data/out/orders.json (7 records)
+> cat data/out/orders.json
+  data/out/orders.json (79 lines)
+  | [
+  |   {
+  |     "id": 1,
+  |     "customer": "Acme",
+  |     "ordered": "2024-01-05 09:30:00.123000",
+  |     "total": "125",
+  |     "rate": 0.075,
+  |     "paid": true,
+  |     "note": "Deliver to the back door.",
+  |     "logo": "b'\\xd0\\xcf\\x11\\xe0OLE2'",
+  |     "_nullflags": "b'\\x00'"
+  |   },
+  |   {
+  |     "id": 2,
+  |     "customer": "Bolt & Co",
+  |     "ordered": "2024-01-09 00:00:00",
+  |     "total": "9.9999",
+  |     "rate": 0.2,
+  |     "paid": false,
+  |     "note": null,
+  |     "logo": null,
+  |     "_nullflags": "b'\\x00'"
+  |   },
+  |   {
+  |     "id": 3,
+  |     "customer": "Acme",
+  |     "ordered": "2024-02-01 23:59:59.999000",
+  |     "total": "-0.5",
+  |     "rate": 1.0,
+  |     "paid": true,
+  |     "note": "Lieferung für März, bitte\r\nzwei Kartons.",
+  |     "logo": "b\"Paid in cash; see 'Ledger' tab.\"",
+  |     "_nullflags": "b'\\x00'"
+  |   },
+  |   {
+  |     "id": 4,
+  |     "customer": "Cirrus",
+  |     "ordered": "2024-02-14 12:00:00",
+  |     "total": "0",
+  |     "rate": 1e-07,
+  |     "paid": false,
+  |     "note": "b'\\x89PNG\\r\\n\\x1a\\n\\x00\\x00\\x00\\rIHDR'",
+  |     "logo": null,
+  |     "_nullflags": "b'\\x02'"
+  |   },
+  |   {
+  |     "id": 5,
+  |     "customer": "Bolt & Co",
+  |     "ordered": "2024-02-29 17:00:00.500000",
+  |     "total": "12345.6789",
+  |     "rate": 2.5e+20,
+  |     "paid": true,
+  |     "note": "b'vendor blob \\x00\\x01\\x02'",
+  |     "logo": null,
+  |     "_nullflags": "b'\\x00'"
+  |   },
+  |   {
+  |     "id": 7,
+  |     "customer": "Acme",
+  |     "ordered": "2024-03-02 01:00:00",
+  |     "total": "0.4321",
+  |     "rate": 0.30000000000000004,
+  |     "paid": false,
+  |     "note": "",
+  |     "logo": "b'\\x89PNG\\r\\n\\x1a\\n\\x00\\x00\\x00\\rIHDR'",
+  |     "_nullflags": "b'\\x00'"
+  |   },
+  |   {
+  |     "id": 8,
+  |     "customer": "Cirrus",
+  |     "ordered": "2024-03-03 12:34:56.789000",
+  |     "total": "3000",
+  |     "rate": 3.0,
+  |     "paid": false,
+  |     "note": null,
+  |     "logo": null,
+  |     "_nullflags": "b'\\x00'"
+  |   }
+  | ]
+> json data/legacy/klienty.dbf data/out/klienty.json
+  wrote data/out/klienty.json (2 records)
+> cat data/out/klienty.json
+  data/out/klienty.json (12 lines)
+  | [
+  |   {
+  |     "ИМЯ": "Иван Петров",
+  |     "GOROD": "Москва",
+  |     "BALANS": 1500
+  |   },
+  |   {
+  |     "ИМЯ": "Ольга Смирнова",
+  |     "GOROD": "Санкт-Петербург",
+  |     "BALANS": -20
+  |   }
+  | ]
+> json data/legacy/empty.dbf data/out/empty.json
+  wrote data/out/empty.json (0 records)
+> cat data/out/empty.json
+  data/out/empty.json (1 lines)
+  | []
+> sql data/out/archive.sql - strict data/legacy/PEOPLE.DBF data/legacy/orders.dbf data/legacy/Tickets.DBF data/legacy/notes.dbf data/legacy/inventory.dbf data/legacy/kunder.dbf
+  wrote data/out/archive.sql (6 tables)
+> cat data/out/archive.sql
+  data/out/archive.sql (72 lines)
+  | -- data/legacy/PEOPLE.DBF: FoxBASE+/Dbase III plus, no memory, 5 rows, 1 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "people";
+  | CREATE TABLE "people" ("name" TEXT, "birthdate" DATE, "city" TEXT, "salary" REAL, "active" BOOLEAN, "kids" REAL);
+  | INSERT INTO "people" VALUES ('Alice Lindqvist', '1987-03-01', 'Göteborg', 4500.0, 1, 2);
+  | INSERT INTO "people" VALUES ('Bob O''Brien', '1980-11-12', 'Dublin', 3200.5, 0, 0);
+  | INSERT INTO "people" VALUES ('Dörte Müller', NULL, 'Köln, NRW', NULL, NULL, NULL);
+  | INSERT INTO "people" VALUES ('José Núñez', '1999-12-31', 'São Paulo', 12000.75, 1, 3);
+  | INSERT INTO "people" VALUES ('Eve "Evie" Park', '2000-02-29', 'Seoul', 0.1, 0, NULL);
+  | COMMIT;
+  | -- data/legacy/orders.dbf: Visual FoxPro, 7 rows, 1 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "orders";
+  | CREATE TABLE "orders" ("id" INTEGER, "customer" TEXT, "ordered" DATETIME, "total" NUMERIC, "rate" TEXT, "paid" BOOLEAN, "note" TEXT, "logo" BLOB, "_nullflags" INTEGER);
+  | INSERT INTO "orders" VALUES (1, 'Acme', '2024-01-05 09:30:00.123000', 125, 0.075, 1, 'Deliver to the back door.', X'D0CF11E04F4C4532', X'00');
+  | INSERT INTO "orders" VALUES (2, 'Bolt & Co', '2024-01-09 00:00:00', 9.9999, 0.2, 0, NULL, NULL, X'00');
+  | INSERT INTO "orders" VALUES (3, 'Acme', '2024-02-01 23:59:59.999000', -0.5, 1.0, 1, 'Lieferung für März, bitte
+  | zwei Kartons.', X'5061696420696E20636173683B2073656520274C656467657227207461622E', X'00');
+  | INSERT INTO "orders" VALUES (4, 'Cirrus', '2024-02-14 12:00:00', 0, 1e-07, 0, X'89504E470D0A1A0A0000000D49484452', NULL, X'02');
+  | INSERT INTO "orders" VALUES (5, 'Bolt & Co', '2024-02-29 17:00:00.500000', 12345.6789, 2.5e+20, 1, X'76656E646F7220626C6F6220000102', NULL, X'00');
+  | INSERT INTO "orders" VALUES (7, 'Acme', '2024-03-02 01:00:00', 0.4321, 0.30000000000000004, 0, '', X'89504E470D0A1A0A0000000D49484452', X'00');
+  | INSERT INTO "orders" VALUES (8, 'Cirrus', '2024-03-03 12:34:56.789000', 3000, 3.0, 0, NULL, NULL, X'00');
+  | COMMIT;
+  | -- data/legacy/Tickets.DBF: Visual FoxPro with field type Varchar or Varbinary, 4 rows, 0 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "tickets";
+  | CREATE TABLE "tickets" ("ticket" INTEGER, "subject" TEXT, "opened" DATETIME, "score" FLOAT, "status" TEXT);
+  | INSERT INTO "tickets" VALUES (1, 'Printer jam', '2024-04-01 09:00:00', 4.5, 'open');
+  | INSERT INTO "tickets" VALUES (2, 'VPN down', '2024-04-02 00:00:00', 2.25, 'closed');
+  | INSERT INTO "tickets" VALUES (3, '', NULL, -1.5, 'waiting');
+  | INSERT INTO "tickets" VALUES (4, 'New laptop', '1999-12-31 23:59:59', 1e+16, '');
+  | COMMIT;
+  | -- data/legacy/notes.dbf: FoxBASE+/dBASE III PLUS, with memo, 5 rows, 1 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "notes";
+  | CREATE TABLE "notes" ("title" TEXT, "body" TEXT, "created" DATE);
+  | INSERT INTO "notes" VALUES ('Plumber', 'Ring the plumber.', '2023-01-05');
+  | INSERT INTO "notes" VALUES ('Boiler', 'Boiler service log
+  | 01: pressure 2.1 bar, all valves checked, café break
+  | 02: pressure 1.2 bar, all valves checked, café break
+  | 03: pressure 2.3 bar, all valves checked, café break
+  | 04: pressure 1.4 bar, all valves checked, café break
+  | 05: pressure 2.5 bar, all valves checked, café break
+  | 06: pressure 1.6 bar, all valves checked, café break
+  | 07: pressure 2.7 bar, all valves checked, café break
+  | 08: pressure 1.8 bar, all valves checked, café break
+  | 09: pressure 2.9 bar, all valves checked, café break
+  | 10: pressure 1.0 bar, all valves checked, café break
+  | 11: pressure 2.1 bar, all valves checked, café break
+  | 12: pressure 1.2 bar, all valves checked, café break
+  | 13: pressure 2.3 bar, all valves checked, café break
+  | ', '2023-01-10');
+  | INSERT INTO "notes" VALUES ('Empty', NULL, '2023-01-11');
+  | INSERT INTO "notes" VALUES ('Roof', 'Roof: two tiles loose.', '2023-02-01');
+  | INSERT INTO "notes" VALUES ('Last', 'Last entry, no end marker é', '2023-03-01');
+  | COMMIT;
+  | -- data/legacy/inventory.dbf: dBASE IV with memo, 4 rows, 0 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "inventory";
+  | CREATE TABLE "inventory" ("sku" TEXT, "grösse" TEXT, "qty" REAL, "price" FLOAT, "descr" TEXT);
+  | INSERT INTO "inventory" VALUES ('A-100', 'Schraube Ø4', 250, 0.15, 'Größe M, Farbe grün');
+  | INSERT INTO "inventory" VALUES ('A-200', 'Mutter', 1200, 0.05, 'Spare part, see catalogue');
+  | INSERT INTO "inventory" VALUES ('B-300', 'Kabel, 3m', -4, 12.5, NULL);
+  | INSERT INTO "inventory" VALUES ('C-400', 'Lampe', 7, NULL, 'Written by another tool        ');
+  | COMMIT;
+  | -- data/legacy/kunder.dbf: FoxBASE+/Dbase III plus, no memory, 2 rows, 0 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "kunder";
+  | CREATE TABLE "kunder" ("navn" TEXT, "by" TEXT, "født" DATE);
+  | INSERT INTO "kunder" VALUES ('Søren Ærø', 'Ålesund', '1965-07-04');
+  | INSERT INTO "kunder" VALUES ('Åse Bø', 'Ærøskøbing', '1972-02-29');
+  | COMMIT;
+> sql data/out/export.sql - strict data/legacy/menu.dbf data/legacy/export.dbf
+  error UnicodeDecodeError: 'ascii' codec can't decode byte 0xf6 in position 4: ordinal not in range(128)
+  Please use --encoding or --char-decode-errors.
+> cat data/out/export.sql
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/out/export.sql'
+> sql data/out/export.sql cp1252 strict data/legacy/menu.dbf data/legacy/export.dbf
+  error UnicodeDecodeError: 'charmap' codec can't decode byte 0x8f in position 2: character maps to <undefined>
+  Please use --encoding or --char-decode-errors.
+> cat data/out/export.sql
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/out/export.sql'
+> sql data/out/export2.sql - replace data/legacy/export.dbf data/legacy/utf8.dbf
+  wrote data/out/export2.sql (2 tables)
+> cat data/out/export2.sql
+  data/out/export2.sql (19 lines)
+  | -- data/legacy/export.dbf: FoxBASE+/Dbase III plus, no memory, 3 rows, 0 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "export";
+  | CREATE TABLE "export" ("city" TEXT, "code" TEXT);
+  | INSERT INTO "export" VALUES ('Oslo', 'NO');
+  | INSERT INTO "export" VALUES ('Malm�', 'SE');
+  | INSERT INTO "export" VALUES ('Z�rich�', 'CH');
+  | COMMIT;
+  | -- data/legacy/utf8.dbf: FoxBASE+/Dbase III plus, no memory, 6 rows, 0 deleted records skipped
+  | BEGIN;
+  | DROP TABLE IF EXISTS "utf8";
+  | CREATE TABLE "utf8" ("text" TEXT, "why" TEXT);
+  | INSERT INTO "utf8" VALUES ('na��ve caf��', 'ok');
+  | INSERT INTO "utf8" VALUES ('price ���5', 'ok');
+  | INSERT INTO "utf8" VALUES ('cut caf�', 'end');
+  | INSERT INTO "utf8" VALUES ('bad � byte', 'start');
+  | INSERT INTO "utf8" VALUES ('half �A', 'cont');
+  | INSERT INTO "utf8" VALUES ('three ��', 'eod');
+  | COMMIT;
+> ledger data/legacy/orders.dbf data/out/ledger.txt
+  wrote data/out/ledger.txt
+> cat data/out/ledger.txt
+  data/out/ledger.txt (5 lines)
+  | customer     orders            total         unpaid  last order
+  | Acme              3         124.9321         0.4321  2024-03-02 01:00
+  | Bolt & Co         2       12355.6788         9.9999  2024-02-29 17:00
+  | Cirrus            2             3000           3000  2024-03-03 12:34
+  | all               7       15480.6109
+> cat data/out/nothere.txt
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/out/nothere.txt'
+417 jobs, 79 ended in an error
