@@ -1,0 +1,323 @@
+// mini_persiantools — a port of the persiantools library (Majid Hajiloo, MIT):
+// conversion between the Gregorian and the Jalali (Persian / Shamsi) calendar,
+// plus the Persian-digit transform (ASCII 0..9 -> U+06F0..U+06F9).
+//
+// Each input line is either
+//     g YYYY-MM-DD   convert a Gregorian date to Jalali
+//     j YYYY-MM-DD   convert a Jalali date to Gregorian
+// and the job prints the converted date in ISO form and its Persian-digit
+// rendering:  <iso> <fa>
+//
+// The Gregorian side is the proleptic ordinal used by CPython's datetime
+// (ymd<->ordinal over the 400/100/4-year cycle). The Jalali side is the plain
+// 33-year arithmetic rule the library uses for this range: a year is leap when
+// (25*y + 11) % 33 < 8, and a fixed count of leap years precedes each position
+// in the 33-year cycle. The two calendars are tied together by a single
+// constant, the Gregorian ordinal of Jalali day zero (EPOCH_ORDINAL). Every
+// step is integer arithmetic over i64, so the four backends agree by
+// construction. (Kāra has no bitwise operators; none are needed here.)
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+// --- Gregorian proleptic ordinal (CPython _ymd2ord / _ord2ymd) --------------
+
+fn g_is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn g_days_before_year(y: i64) -> i64 {
+    let yy = y - 1;
+    yy * 365 + yy / 4 - yy / 100 + yy / 400
+}
+
+// days before month m (1..12) within year y; index 0 unused
+fn g_days_before_month(y: i64, m: i64) -> i64 {
+    let dbm = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let mut d = dbm[m];
+    if m > 2 and g_is_leap(y) {
+        d = d + 1;
+    }
+    d
+}
+
+fn ymd2ord(y: i64, m: i64, d: i64) -> i64 {
+    g_days_before_year(y) + g_days_before_month(y, m) + d
+}
+
+// inverse: ordinal -> [year, month, day]
+fn ord2ymd(ord: i64) -> Vec[i64] {
+    let gdays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut n = ord - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year = year + n100 * 100 + n4 * 4 + n1;
+    let mut out: Vec[i64] = Vec.new();
+    if n1 == 4 or n100 == 4 {
+        out.push(year - 1);
+        out.push(12);
+        out.push(31);
+        return out;
+    }
+    let leap = g_is_leap(year);
+    let mut doy = n; // 0-based day of year
+    let mut m = 0;
+    let mut go = true;
+    while go {
+        let mut dim = gdays[m];
+        if m == 1 and leap {
+            dim = dim + 1;
+        }
+        if doy < dim {
+            go = false;
+        } else {
+            doy = doy - dim;
+            m = m + 1;
+        }
+    }
+    out.push(year);
+    out.push(m + 1);
+    out.push(doy + 1);
+    out
+}
+
+// --- Jalali (modern range: plain 33-year rule) ------------------------------
+
+fn j_is_leap(y: i64) -> bool {
+    (25 * y + 11) % 33 < 8
+}
+
+// leap years preceding each 0-based position in the 33-year cycle
+fn leaps_before_cycle_year(phase: i64) -> i64 {
+    let t = [0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+             5, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8];
+    t[phase]
+}
+
+fn j_days_before_year(y: i64) -> i64 {
+    let ym1 = y - 1;
+    let cycles = ym1 / 33;
+    let phase = ym1 % 33;
+    365 * ym1 + 8 * cycles + leaps_before_cycle_year(phase) - 1
+}
+
+fn j_days_before_month(jm: i64) -> i64 {
+    let dbm = [-1, 0, 31, 62, 93, 124, 155, 186, 216, 246, 276, 306, 336];
+    dbm[jm]
+}
+
+fn j_toordinal(jy: i64, jm: i64, jd: i64) -> i64 {
+    j_days_before_year(jy) + j_days_before_month(jm) + jd
+}
+
+// Jalali day number (days since Jalali day zero) -> [year, month, day]
+fn j_from_days(days: i64) -> Vec[i64] {
+    let mut jy = days * 33 / 12053 + 1;
+    let mut go = true;
+    while go {
+        if days <= j_days_before_year(jy) {
+            jy = jy - 1;
+        } else {
+            go = false;
+        }
+    }
+    let mut go2 = true;
+    while go2 {
+        if days > j_days_before_year(jy + 1) {
+            jy = jy + 1;
+        } else {
+            go2 = false;
+        }
+    }
+    let doy = days - j_days_before_year(jy);
+    let mut jm = 0;
+    let mut jd = 0;
+    if doy <= 186 {
+        jm = 1 + (doy - 1) / 31;
+        jd = 1 + (doy - 1) % 31;
+    } else {
+        jm = 7 + (doy - 187) / 30;
+        jd = 1 + (doy - 187) % 30;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    out.push(jy);
+    out.push(jm);
+    out.push(jd);
+    out
+}
+
+// Gregorian ordinal of Jalali day zero
+fn epoch_ordinal() -> i64 {
+    226895
+}
+
+fn g2j(gy: i64, gm: i64, gd: i64) -> Vec[i64] {
+    j_from_days(ymd2ord(gy, gm, gd) - epoch_ordinal())
+}
+
+fn j2g(jy: i64, jm: i64, jd: i64) -> Vec[i64] {
+    ord2ymd(epoch_ordinal() + j_toordinal(jy, jm, jd))
+}
+
+// --- formatting -------------------------------------------------------------
+
+// n as a width-`w` zero-padded decimal string (n >= 0, fits in w digits)
+fn padnum(n: i64, w: i64) -> String {
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    let mut v = n;
+    if v == 0 {
+        rev.push(digs[0]);
+    }
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    while rev.len() < w {
+        rev.push(digs[0]);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn iso(y: i64, m: i64, d: i64) -> String {
+    let mut s = String.new();
+    s.push_str(padnum(y, 4));
+    s.push_str("-");
+    s.push_str(padnum(m, 2));
+    s.push_str("-");
+    s.push_str(padnum(d, 2));
+    s
+}
+
+// ASCII digits -> Persian digits U+06F0..U+06F9 (UTF-8 bytes 0xDB, 0xB0+d);
+// any other byte (the '-') is kept as is
+fn en_to_fa(s: String) -> String {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = b[i] as i64;
+        if c >= 48 and c <= 57 {
+            out.push(219 as u8);           // 0xDB
+            out.push((176 + (c - 48)) as u8); // 0xB0 + digit
+        } else {
+            out.push(b[i]);
+        }
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// --- jobs -------------------------------------------------------------------
+
+// parse "YYYY-MM-DD" (starting at byte `start` of `b`) into [y, m, d]
+fn parse_date(b: ref Vec[u8], start: i64) -> Vec[i64] {
+    let n = b.len();
+    let mut fields: Vec[i64] = Vec.new();
+    let mut cur = 0;
+    let mut i = start;
+    while i < n {
+        let c = b[i] as i64;
+        if c == 45 { // '-'
+            fields.push(cur);
+            cur = 0;
+        } else {
+            cur = cur * 10 + (c - 48);
+        }
+        i = i + 1;
+    }
+    fields.push(cur);
+    fields
+}
+
+fn run_job(line: String) -> String {
+    let b = str_bytes(line.clone());
+    let kind = b[0] as i64; // 'g' = 103, 'j' = 106
+    let ymd = parse_date(b, 2);
+    let conv = if kind == 103 {
+        g2j(ymd[0], ymd[1], ymd[2])
+    } else {
+        j2g(ymd[0], ymd[1], ymd[2])
+    };
+    let s = iso(conv[0], conv[1], conv[2]);
+    let mut out = String.new();
+    out.push_str(s.clone());
+    out.push_str(" ");
+    out.push_str(en_to_fa(s));
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("g 1850-01-01\n");
+    s.push_str("g 1900-03-21\n");
+    s.push_str("g 1979-02-11\n");
+    s.push_str("g 2000-02-29\n");
+    s.push_str("g 2001-03-20\n");
+    s.push_str("g 2016-03-20\n");
+    s.push_str("g 2021-03-21\n");
+    s.push_str("g 2023-12-31\n");
+    s.push_str("g 2024-02-29\n");
+    s.push_str("g 2024-03-20\n");
+    s.push_str("g 2025-03-21\n");
+    s.push_str("g 2026-10-23\n");
+    s.push_str("g 2099-12-31\n");
+    s.push_str("j 1228-10-11\n");
+    s.push_str("j 1300-01-01\n");
+    s.push_str("j 1357-11-22\n");
+    s.push_str("j 1395-12-30\n");
+    s.push_str("j 1399-12-30\n");
+    s.push_str("j 1400-01-01\n");
+    s.push_str("j 1402-06-31\n");
+    s.push_str("j 1403-07-01\n");
+    s.push_str("j 1403-12-30\n");
+    s.push_str("j 1404-01-01\n");
+    s.push_str("j 1404-07-30\n");
+    s.push_str("j 1478-12-29\n");
+    s
+}
