@@ -1,0 +1,331 @@
+// LeetCode #873: Length of Longest Fibonacci Subsequence -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: a sequence is Fibonacci-like when it has at least 3
+// values and each value from the third on is the sum of the two before
+// it. Given a strictly increasing array, return the length of its longest
+// Fibonacci-like subsequence, or 0 when it has none.
+
+// ---- the ★ arm: the longest run ending in each pair, through a value index 
+fn star_len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..n {
+        index.insert(arr[i], i);
+    }
+    let mut longest: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        longest.push(Vec.filled(n, 2));
+    }
+    let mut best = 0;
+    for k in 0..n {
+        for j in 0..k {
+            let before = arr[k] - arr[j];
+            if before < arr[j] {
+                if let Some(i) = index.get(before) {
+                    longest[j][k] = longest[i][j] + 1;
+                    best = best.max(longest[j][k]);
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- the pointers arm: the pairs before each value found with two pointers 
+fn pointers_len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut longest: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        longest.push(Vec.filled(n, 2));
+    }
+    let mut best = 0;
+    for k in 2..n {
+        let mut i = 0;
+        let mut j = k - 1;
+        while i < j {
+            let sum = arr[i] + arr[j];
+            if sum == arr[k] {
+                longest[j][k] = longest[i][j] + 1;
+                best = best.max(longest[j][k]);
+                i += 1;
+                j -= 1;
+            } else if sum < arr[k] {
+                i += 1;
+            } else {
+                j -= 1;
+            }
+        }
+    }
+    best
+}
+
+// ---- the greedy arm: every pair extended as far as it goes ----------------
+fn greedy_len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let mut values: Set[i64] = Set.new();
+    for x in arr.iter() {
+        values.insert(*x);
+    }
+    let mut best = 0;
+    for i in 0..arr.len() {
+        for j in i + 1..arr.len() {
+            let mut a = arr[i];
+            let mut b = arr[j];
+            let mut length = 2;
+            while values.contains(a + b) {
+                let next = a + b;
+                a = b;
+                b = next;
+                length += 1;
+            }
+            if length >= 3 {
+                best = best.max(length);
+            }
+        }
+    }
+    best
+}
+
+// ---- the search arm: the value before each pair found by binary search ----
+fn search_len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut longest: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        longest.push(Vec.filled(n, 2));
+    }
+    let mut best = 0;
+    for k in 0..n {
+        for j in 0..k {
+            let i = search_position(arr, j, arr[k] - arr[j]);
+            if i >= 0 {
+                longest[j][k] = longest[i][j] + 1;
+                best = best.max(longest[j][k]);
+            }
+        }
+    }
+    best
+}
+
+// the index of value in arr[0..end], or -1
+fn search_position(arr: Vec[i64], end: i64, value: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = end;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if arr[mid] < value {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < end and arr[lo] == value { lo } else { -1 }
+}
+
+// ---- the memo arm: the longest run starting at each pair, by memoized recursion 
+fn memo_len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..arr.len() {
+        index.insert(arr[i], i);
+    }
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    let mut best = 0;
+    for i in 0..arr.len() {
+        for j in i + 1..arr.len() {
+            let length = memo_from_pair(arr, index, mut memo, i, j);
+            if length >= 3 {
+                best = best.max(length);
+            }
+        }
+    }
+    best
+}
+
+fn memo_from_pair(arr: Vec[i64], index: Map[i64, i64], memo: mut ref Map[(i64, i64), i64], i: i64, j: i64) -> i64 {
+    if let Some(length) = memo.get((i, j)) {
+        return length;
+    }
+    let length = match index.get(arr[i] + arr[j]) {
+        Some(k) => 1 + memo_from_pair(arr, index, mut memo, j, k),
+        None => 2,
+    };
+    memo.insert((i, j), length);
+    length
+}
+
+fn arm(a: i64, arr: Vec[i64]) -> i64 {
+    match a {
+        0 => star_len_longest_fib_subseq(arr),
+        1 => pointers_len_longest_fib_subseq(arr),
+        2 => greedy_len_longest_fib_subseq(arr),
+        3 => search_len_longest_fib_subseq(arr),
+        _ => memo_len_longest_fib_subseq(arr),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every subsequence, built one value at a time from left to right and
+// given up as soon as a value is not the sum of the two before it; the
+// longest that reaches 3 values
+fn literal_longest(arr: Vec[i64], chosen: mut ref Vec[i64], from: i64) -> i64 {
+    let mut best = if chosen.len() >= 3 { chosen.len() } else { 0 };
+    for next in from..arr.len() {
+        let c = chosen.len();
+        if c < 2 or chosen[c - 1] + chosen[c - 2] == arr[next] {
+            chosen.push(arr[next]);
+            best = best.max(literal_longest(arr, mut chosen, next + 1));
+            chosen.pop();
+        }
+    }
+    best
+}
+
+fn literal(arr: Vec[i64]) -> i64 {
+    let mut chosen: Vec[i64] = Vec.new();
+    literal_longest(arr, mut chosen, 0)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn increasing(seed: mut ref i64, n: i64, gap: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    let mut x = 0;
+    for _ in 0..n {
+        x += 1 + next_random(mut seed) % gap;
+        arr.push(x);
+    }
+    arr
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000 + 1
+}
+
+fn scattered(seed: mut ref i64, n: i64, run: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut a = next_random(mut seed) % 1000 + 1;
+    let mut b = a + next_random(mut seed) % 1000 + 1;
+    vals.push(a);
+    vals.push(b);
+    while vals.len() < run and a + b <= 1000000000 {
+        let next = a + b;
+        a = b;
+        b = next;
+        vals.push(b);
+    }
+    while vals.len() < n {
+        vals.push(big(mut seed));
+    }
+    vals.sort();
+    let mut arr: Vec[i64] = Vec.new();
+    for x in vals.iter() {
+        if arr.len() == 0 or arr[arr.len() - 1] != *x {
+            arr.push(*x);
+        }
+    }
+    arr
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one array, each over the five arms (P1 only when
+// `small`); returns the ★ arm's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: Vec[i64], small: bool) -> i64 {
+    let n = arr.len();
+    let want = if small { literal(arr) } else { 0 };
+    let factor = next_random(mut seed) % 3 + 2;
+    let mut scaled: Vec[i64] = Vec.new();
+    for x in arr.iter() {
+        scaled.push(*x * factor);
+    }
+    let gone = next_random(mut seed) % n;
+    let mut dropped: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i != gone {
+            dropped.push(arr[i]);
+        }
+    }
+    let mut above = arr.clone();
+    above.push(arr[n - 1] + 1 + next_random(mut seed) % 1000);
+    let mut summed = arr.clone();
+    summed.push(arr[n - 1] + arr[n - 2]);
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, arr));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: 0, or a length from 3 to n
+        check(mut t, 2, got == 0 or (got >= 3 and got <= n));
+        // P3: every value multiplied by the same factor gives the same answer
+        check(mut t, 3, arm(x, scaled) == got);
+        // P4: dropping a value never gives a longer run
+        if n > 3 {
+            check(mut t, 4, arm(x, dropped) <= got);
+        }
+        // P5: a value above all the others never shortens the longest run,
+        // and the sum of the last two values added makes one of 3 at least
+        check(mut t, 5, arm(x, above) >= got and arm(x, summed) >= got.max(3));
+        // P6: at least two of the other arms give the same answer
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut seed = 873;
+    // small arrays against the statement
+    for k in 0..1500 {
+        let arr = increasing(mut seed, k % 10 + 3, k % 5 + 1);
+        count += 1;
+        total += properties(mut t, mut seed, arr, true);
+    }
+    // larger arrays: dense, or up to 10^9 with a run planted
+    for k in 0..200 {
+        let n = next_random(mut seed) % 60 + 20;
+        let arr = if k % 2 == 0 { increasing(mut seed, n, k % 6 + 1) } else { scattered(mut seed, n, next_random(mut seed) % 20 + 2) };
+        count += 1;
+        total += properties(mut t, mut seed, arr, false);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} arrays, lengths sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

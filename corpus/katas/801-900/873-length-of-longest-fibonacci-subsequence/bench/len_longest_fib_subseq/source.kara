@@ -1,0 +1,88 @@
+// LeetCode #873 bench: the ★ arm (the longest run ending in each pair,
+// found through a value index) on 100 arrays of 1000 values, LeetCode's
+// largest: dense arrays and arrays up to 10^9 with a run planted.
+
+fn len_longest_fib_subseq(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..n {
+        index.insert(arr[i], i);
+    }
+    let mut longest: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        longest.push(Vec.filled(n, 2));
+    }
+    let mut best = 0;
+    for k in 0..n {
+        for j in 0..k {
+            let before = arr[k] - arr[j];
+            if before < arr[j] {
+                if let Some(i) = index.get(before) {
+                    longest[j][k] = longest[i][j] + 1;
+                    best = best.max(longest[j][k]);
+                }
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn increasing(seed: mut ref i64, n: i64, gap: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    let mut x = 0;
+    for _ in 0..n {
+        x += 1 + next_random(mut seed) % gap;
+        arr.push(x);
+    }
+    arr
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000 + 1
+}
+
+fn scattered(seed: mut ref i64, n: i64, run: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut a = next_random(mut seed) % 1000 + 1;
+    let mut b = a + next_random(mut seed) % 1000 + 1;
+    vals.push(a);
+    vals.push(b);
+    while vals.len() < run and a + b <= 1000000000 {
+        let next = a + b;
+        a = b;
+        b = next;
+        vals.push(b);
+    }
+    while vals.len() < n {
+        vals.push(big(mut seed));
+    }
+    vals.sort();
+    let mut arr: Vec[i64] = Vec.new();
+    for x in vals.iter() {
+        if arr.len() == 0 or arr[arr.len() - 1] != *x {
+            arr.push(*x);
+        }
+    }
+    arr
+}
+
+fn main() {
+    let mut seed = 873;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for k in 0..100 {
+        arrays.push(if k % 2 == 0 { increasing(mut seed, 1000, k % 5 + 2) } else { scattered(mut seed, 1000, 10 + k % 30) });
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for arr in arrays.iter() {
+        let answer = len_longest_fib_subseq(*arr);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"100 arrays of 1000 values: lengths sum to {total}, checksum {check}");
+}
