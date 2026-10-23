@@ -233,8 +233,10 @@ fn build(
 ) {
     let output = a.output;
     if a.release {
-        // `dbg()` is stripped from release builds (design.md § `dbg()`).
+        // `dbg()` and contracts are stripped from release builds (design.md
+        // § `dbg()`, § Contracts).
         std::env::set_var("KARAC_STRIP_DBG", "1");
+        std::env::set_var("KARAC_STRIP_CONTRACTS", "1");
     }
     let source = match &project {
         Some(p) => p.text.clone(),

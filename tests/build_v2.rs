@@ -255,3 +255,32 @@ fn build_v2_builds_a_package_with_a_path_dependency() {
         assert_eq!(ran(&app.join("app")), "42\n");
     }
 }
+
+/// `--release` strips `dbg()`'s printing (its value stays) and the contracts.
+#[test]
+fn build_v2_release_strips_dbg_and_contracts() {
+    let dir = scratch("release");
+    std::fs::write(
+        dir.join("r.kara"),
+        "fn half(x: i64) -> i64\n    requires x > 0\n{\n    x / 2\n}\n\n\
+         fn main() {\n    let x = dbg(1 + 2);\n    println(f\"{x} {half(-4)}\");\n}\n",
+    )
+    .unwrap();
+    let debug = karac(&dir, &["build", "r.kara", "-o", "debug"]);
+    built(&debug);
+    let release = karac(&dir, &["build", "--release", "r.kara", "-o", "release"]);
+    built(&release);
+    if LLVM {
+        let out = Command::new(dir.join("debug")).output().unwrap();
+        assert_eq!(out.status.code(), Some(101), "{}", text(&out.stderr));
+        assert!(
+            text(&out.stderr).contains("[r.kara:8] 1 + 2 = 3"),
+            "{}",
+            text(&out.stderr)
+        );
+        let out = Command::new(dir.join("release")).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), "3 -2\n");
+        assert_eq!(text(&out.stderr), "");
+    }
+}

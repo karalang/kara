@@ -3539,6 +3539,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `requires` must hold, and each `old(e)` its `ensures` clauses read
     /// is evaluated now. An `ensures(result)` clause reads the return place.
     fn contracts_on_entry(&mut self, f: &'a Function) -> R<()> {
+        self.b.suspends = f.effects.as_ref().is_some_and(|e| {
+            e.items.iter().any(|i| {
+                matches!(i, ast::EffectItem::Verb(v) if matches!(v.kind, ast::EffectVerbKind::Suspends))
+            })
+        });
+        // A release build strips the contracts (design.md § Contracts).
+        if release_strips("KARAC_STRIP_CONTRACTS") {
+            return Ok(());
+        }
         for r in &f.requires {
             self.contract_check(r)?;
         }
@@ -3573,11 +3582,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.old_vals.insert(o.id, l);
         }
         self.ensures = &f.ensures;
-        self.b.suspends = f.effects.as_ref().is_some_and(|e| {
-            e.items.iter().any(|i| {
-                matches!(i, ast::EffectItem::Verb(v) if matches!(v.kind, ast::EffectVerbKind::Suspends))
-            })
-        });
         Ok(())
     }
 
@@ -7846,8 +7850,12 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The library's `dbg` writing `[file:line] text = <value>` to stderr,
-    /// for `value`, a reference to what `a` evaluated to.
+    /// for `value`, a reference to what `a` evaluated to. A release build
+    /// evaluates the argument and prints nothing (design.md § `dbg()`).
     fn dbg_print(&mut self, e: &Expr, a: &Expr, value: Operand) {
+        if release_strips("KARAC_STRIP_DBG") {
+            return;
+        }
         let (off, len) = (a.span.offset, a.span.length);
         let text = self
             .lcx
@@ -17202,6 +17210,13 @@ fn returns_from_fn(e: &Expr) -> bool {
         found |= matches!(x.kind, ExprKind::Return(_));
     });
     found
+}
+
+/// Whether a release build asked for this debug-only machinery to go:
+/// `KARAC_STRIP_DBG` (`dbg()`) or `KARAC_STRIP_CONTRACTS` (contracts), each
+/// `1` or `true`, as on the legacy backend. `karac build --release` sets both.
+fn release_strips(var: &str) -> bool {
+    matches!(std::env::var(var).as_deref(), Ok("1" | "true"))
 }
 
 fn is_place_expr(e: &Expr) -> bool {
