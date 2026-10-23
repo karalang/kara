@@ -57,6 +57,7 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod expr_method_tensor;
 mod expr_ops;
@@ -2524,6 +2525,9 @@ pub struct TypeChecker<'a> {
     pub(super) into_iter_hinted: bool,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
+    /// core §14.9: which functions can start a branch or a task, computed on
+    /// the first `with_provider` whose provider is not `CrossTask`.
+    pub(super) forking: Option<provider_share::Forking>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::core_borrowed_receivers`].
@@ -3450,6 +3454,7 @@ impl<'a> TypeChecker<'a> {
             into_iter_sites: FxHashMap::default(),
             into_iter_hinted: false,
             core_once_calls: FxHashSet::default(),
+            forking: None,
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
             core_collect_keeps_refs: FxHashSet::default(),

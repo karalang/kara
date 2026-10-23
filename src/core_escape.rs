@@ -25,6 +25,12 @@ pub struct CoreEscape {
     pub escaping_closures: FxHashSet<SpanKey>,
     /// Non-escaping function parameters a body stores, returns or binds.
     pub errors: Vec<(Span, String)>,
+    /// Why each closure in [`Self::escaping_closures`] escapes ("returned",
+    /// "stored in a collection", ...), for a diagnostic that names it.
+    pub reasons: FxHashMap<SpanKey, &'static str>,
+    /// A named function used as a value in an escaping position, with the
+    /// reason: `return tick` takes `tick` as a value (core §14.3, §14.5).
+    pub escaping_fn_values: Vec<(Span, String, &'static str)>,
 }
 
 /// Per parameter: `Some(true)` for `escaping Fn(..)`, `Some(false)` for a
@@ -231,8 +237,12 @@ impl Walker<'_> {
     fn walk_expr(&mut self, e: &Expr, pos: Pos) {
         match &e.kind {
             ExprKind::Identifier(n) => match (self.lookup(n), pos) {
-                (Some(Bound::Closure(k)), Pos::Escape(_)) => {
+                (Some(Bound::Closure(k)), Pos::Escape(why)) => {
                     self.out.escaping_closures.insert(k);
+                    self.out.reasons.insert(k, why);
+                }
+                (None, Pos::Escape(why)) if self.sigs.contains_key(n) => {
+                    self.out.escaping_fn_values.push((e.span, n.clone(), why));
                 }
                 (Some(Bound::NonEscParam), Pos::Escape(why)) => self.non_escaping(e, n, why),
                 (Some(Bound::NonEscParam), Pos::Bind) => {
@@ -241,10 +251,10 @@ impl Walker<'_> {
                 _ => {}
             },
             ExprKind::Closure { params, body, .. } => {
-                if matches!(pos, Pos::Escape(_)) {
-                    self.out
-                        .escaping_closures
-                        .insert(SpanKey::from_span(&e.span));
+                if let Pos::Escape(why) = pos {
+                    let k = SpanKey::from_span(&e.span);
+                    self.out.escaping_closures.insert(k);
+                    self.out.reasons.insert(k, why);
                 }
                 let mut scope = FxHashMap::default();
                 for p in params {

@@ -11967,3 +11967,93 @@ fn gpu_compute_is_refused_as_archived() {
         "`gpu.sum` is not available: GPU compute (`gpu.*` and `#[gpu]` kernels) goes to the archive",
     );
 }
+
+const CLK: &str = "trait Ticker { fn now(self) -> i64; }
+effect resource Clk: Ticker;
+struct F { t: i64 }
+impl Ticker for F { fn now(self) -> i64 { self.t } }
+fn tick() -> i64 { Clk.now() }
+";
+
+/// core §14.5: a closure that uses `R`, directly or through a callee, and a
+/// function taken as a value whose effects reach `R`, cannot leave the
+/// `with_provider` that binds `R` (B-2026-10-20-8). Plain data can.
+#[test]
+fn a_provider_cannot_leave_its_scope_through_a_callee_or_a_function_value() {
+    let cases = [
+        (
+            "provider-escape-callee",
+            "fn main() {\n    let g = with_provider[Clk](F { t: 1 }, || { return || tick(); });\n    println(g());\n}\n",
+            "this closure uses provider-rooted resource `Clk`, whose provider is bound by the `with_provider` at 7:13, so it cannot be returned",
+        ),
+        (
+            "provider-escape-tail",
+            "fn main() {\n    let g = with_provider[Clk](F { t: 1 }, || { || tick() });\n    println(g());\n}\n",
+            "this closure uses provider-rooted resource `Clk`",
+        ),
+        (
+            "provider-escape-fn-value",
+            "fn main() {\n    let g = with_provider[Clk](F { t: 1 }, || { return tick; });\n    println(g());\n}\n",
+            "function `tick`, taken as a value, uses provider-rooted resource `Clk`",
+        ),
+        (
+            "provider-escape-push",
+            "fn main() {\n    let mut v: Vec[Fn() -> i64 with reads(Clk)] = Vec.new();\n    with_provider[Clk](F { t: 1 }, || { v.push(|| tick()); });\n    println(v.len());\n}\n",
+            "so it cannot be stored in a collection",
+        ),
+        (
+            "provider-escape-field",
+            "struct Holder { f: Fn() -> i64 with reads(Clk) }\nfn main() {\n    let h = with_provider[Clk](F { t: 1 }, || { Holder { f: || Clk.now() } });\n    println((h.f)());\n}\n",
+            "so it cannot be stored in a struct field",
+        ),
+    ];
+    for (tag, main, expect) in cases {
+        rejected(tag, &format!("{CLK}{main}"), expect);
+    }
+    // Check only: the MIR builder does not lower a closure other than the
+    // body closure that uses the provider yet (B-2026-10-23-9).
+    accepted(
+        "provider-plain-data-leaves",
+        &format!(
+            "{CLK}fn apply(f: Fn() -> i64 with reads(Clk)) -> i64 reads(Clk) {{ f() }}\n\
+             fn main() {{\n    let x = with_provider[Clk](F {{ t: 7 }}, || {{ let c = || tick() + 1; c() }});\n    \
+             let y = with_provider[Clk](F {{ t: 3 }}, || apply(|| tick() * 2));\n    println(x + y);\n}}\n"
+        ),
+    );
+}
+
+const SHARED_CLK: &str = "trait Ticker { fn now(self) -> i64; }
+effect resource Clk: Ticker;
+shared struct S { t: i64 }
+impl Ticker for S { fn now(self) -> i64 { self.t } }
+fn tick() -> i64 { Clk.now() }
+fn fan() { let mut tg = TaskGroup.new(); tg.spawn(|| println(tick())); }
+";
+
+/// core §14.9: a provider must be `CrossTask` only when a branch or a task
+/// inside the scope shares it, in the body or in a function it reaches
+/// (B-2026-10-20-8). A sequential scope may bind a `shared struct`.
+#[test]
+fn a_provider_need_be_cross_task_only_when_a_task_shares_it() {
+    accepted_and_runs(
+        "provider-shared-sequential",
+        &format!(
+            "{SHARED_CLK}fn main() {{\n    let x = with_provider[Clk](S {{ t: 1 }}, || tick() + 1);\n    \
+             providers {{ Clk => S {{ t: 3 }} }} in {{ println(x + tick()); }}\n}}\n"
+        ),
+        "5\n",
+    );
+    let expect = "provider for resource `Clk` (type `S`) cannot cross a task boundary";
+    rejected(
+        "provider-shared-by-a-task",
+        &format!("{SHARED_CLK}fn main() {{ with_provider[Clk](S {{ t: 1 }}, || fan()); }}\n"),
+        expect,
+    );
+    rejected(
+        "provider-shared-by-a-task-block",
+        &format!(
+            "{SHARED_CLK}fn main() {{ providers {{ Clk => S {{ t: 2 }} }} in {{ fan(); }} }}\n"
+        ),
+        expect,
+    );
+}

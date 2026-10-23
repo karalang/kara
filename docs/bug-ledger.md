@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 344 |
-| codegen-gap | 291 |
+| codegen-gap | 292 |
 | false-positive | 287 |
 | other | 199 |
 | diagnostics | 192 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3044 |
-| interp | 1054 |
+| codegen | 3045 |
+| interp | 1055 |
 | typecheck | 578 |
 | ownership | 133 |
 | other | 127 |
@@ -191,6 +191,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-23-6 | 2026-10-23 | cli+interp | medium | The v2 REPL carries no values across cells: a later cell replays every earlier statement cell, so their side effects run again (a `read_line()` waits for input again, a file is written again, a clock is read again) and a slow cell slows every cell after it; `%show` and `--auto-clone` / `%set auto-clone` are legacy-only, and `:provide` does not check that the provider implements the resource's trait | — |
 | B-2026-10-23-7 | 2026-10-23 | typecheck | low | A `vec![..]` of integer literals inside a tuple literal is typed `Vec[i64]` even where the tuple's expected type says `Vec[u8]`: `let b: (String, Vec[u8]) = ("x".to_string(), vec![1, 2]);` and `v.push(("y".to_string(), vec![3]))` on a `Vec[(String, Vec[u8])]` are refused, while `let a: Vec[u8] = vec![1, 2];` and `let c: Option[Vec[u8]] = Some(vec![1, 2]);` are accepted | — |
 | B-2026-10-23-8 | 2026-10-23 | typecheck+interp+codegen | low | `karac check` accepts `*o` on a String bound by a pattern over a bare `for` element (a destructuring `for (o, n) in v` over a `Vec[(String, i64)]`, or `if let Some(f) = g` inside `for g in v` over a `Vec[Option[String]]`), typing it as a borrow, while every MIR front end (`__mir-run`, `__mir-llvm-run`, `build --mir`) types it as `String` and refuses the `*` | — |
+| B-2026-10-23-9 | 2026-10-23 | interp+codegen | medium | The MIR builder refuses a closure inside `with_provider[R]`, other than the body closure itself, that uses `R` ("a closure or function value that uses `Clk`'s provider, other than the closure given to `with_provider`, is not lowered yet"), though `karac check` accepts it: a closure called in place, or passed to a non-escaping parameter, is the ordinary §14.3/§14.5 case | — |
 
 ### Relocated
 

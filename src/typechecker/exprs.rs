@@ -10358,18 +10358,24 @@ impl<'a> super::TypeChecker<'a> {
                 // call form only, which left the block form — the shape the
                 // spec's own examples use for multi-resource setup — silently
                 // accepting a provider implementing nothing at all.
+                //
+                // Under the strict commands the cross-task rule applies only
+                // when the body can share the provider with a branch or a
+                // task (core §14.9, B-2026-10-20-8).
                 for b in bindings {
                     let provider_ty = self.infer_expr(&b.value);
                     if let Err(path) =
                         is_cross_task_safe_with(&provider_ty, &self.env.structs, &self.env.enums)
                     {
-                        let descr = format!("provider for resource `{}`", b.resource);
-                        self.emit_cross_task_unsafe_value(
-                            &descr,
-                            &provider_ty,
-                            &path,
-                            &b.resource_span,
-                        );
+                        if self.provider_may_be_shared(None, Some(body)) {
+                            let descr = format!("provider for resource `{}`", b.resource);
+                            self.emit_cross_task_unsafe_value(
+                                &descr,
+                                &provider_ty,
+                                &path,
+                                &b.resource_span,
+                            );
+                        }
                     }
                     self.check_provider_satisfies_declared_bound(
                         &b.resource,

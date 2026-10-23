@@ -1160,6 +1160,9 @@ impl<'a> super::TypeChecker<'a> {
         // included. Regular call dispatch follows unchanged. (The
         // `providers { R => p } in { body }` block form is checked at the
         // `ExprKind::Providers` arm in `exprs.rs`.)
+        // Under the strict commands the provider must be cross-task-safe only
+        // when the scope can share it with a branch or a task (core §14.9,
+        // B-2026-10-20-8; `provider_share.rs`).
         if let ExprKind::Index { object, index } = &callee.kind {
             let is_with_provider = match &object.kind {
                 ExprKind::Identifier(n) => n == "with_provider",
@@ -1181,13 +1184,15 @@ impl<'a> super::TypeChecker<'a> {
                 if let Err(path) =
                     is_cross_task_safe_with(&provider_ty, &self.env.structs, &self.env.enums)
                 {
-                    let descr = format!("provider for resource `{resource}`");
-                    self.emit_cross_task_unsafe_value(
-                        &descr,
-                        &provider_ty,
-                        &path,
-                        &provider_expr.span,
-                    );
+                    if self.provider_may_be_shared(Some(&args[1].value), None) {
+                        let descr = format!("provider for resource `{resource}`");
+                        self.emit_cross_task_unsafe_value(
+                            &descr,
+                            &provider_ty,
+                            &path,
+                            &provider_expr.span,
+                        );
+                    }
                 }
                 self.check_provider_satisfies_declared_bound(
                     &resource,

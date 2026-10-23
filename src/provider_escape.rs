@@ -88,6 +88,11 @@ pub enum EscapeKind {
     /// another worker and outlive the provider scope, so any closure
     /// argument is treated as escaping.
     Spawn,
+    /// v2 core §14.5 (`check_core_provider_escape`): a closure or function
+    /// value that uses the provider, directly or through a callee, in a
+    /// position core §9.3 calls escaping. `what` names the value, `why` the
+    /// position ("returned", "stored in a collection", ...).
+    Core { what: String, why: &'static str },
 }
 
 impl EscapeError {
@@ -103,6 +108,18 @@ impl EscapeError {
             }
             EscapeKind::ChannelSend => "value sent via channel".to_string(),
             EscapeKind::Spawn => "value spawned as a task".to_string(),
+            EscapeKind::Core { what, why } => {
+                return format!(
+                    "{what} uses provider-rooted resource `{}`, whose provider is bound by the \
+                     `with_provider` at {}:{}, so it cannot be {why}: a provider cannot leave \
+                     its scope (core-semantics §14.5). Return plain data computed from `{}` \
+                     instead",
+                    self.resource,
+                    self.provider_span.line,
+                    self.provider_span.column,
+                    self.resource
+                );
+            }
         };
         format!(
             "closure captures provider-rooted resource `{}` but escapes its provider scope ({})",
@@ -143,6 +160,155 @@ pub fn check_provider_escape(
         }
     }
     checker.errors
+}
+
+/// v2 core §14.5 (B-2026-10-20-8): a closure that uses `R` captures the
+/// hidden reference to `R`'s provider, and so does a named function taken as
+/// a value whose effects reach `R` (§14.3). Either one in a position core
+/// §9.3 calls escaping (returned, stored, sent to a task), inside the
+/// `with_provider[R]` / `providers { }` that binds `R`, is refused.
+///
+/// [`check_provider_escape`] sees only a closure that names `R` itself; this
+/// pass also sees one that reaches `R` through a callee, by the effect
+/// checker's inferred effects, and a function value. Escaping positions are
+/// [`crate::core_escape`]'s, plus the value a `with_provider` body closure
+/// returns, which flows out of the `with_provider`. Run by the strict
+/// commands only.
+pub fn check_core_provider_escape(
+    program: &Program,
+    effects: &crate::effectchecker::EffectCheckResult,
+) -> Vec<EscapeError> {
+    let esc = crate::core_escape::analyze(program);
+    // Function name (bare, or `Type.method`) → the resources its effects
+    // reach; an instance method call is matched by its method name alone.
+    let mut fn_res: HashMap<String, Vec<String>> = HashMap::new();
+    let mut method_res: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, set) in &effects.inferred_effects {
+        for te in &set.effects {
+            let r = te.effect.resource.clone();
+            if let Some((_, m)) = name.rsplit_once('.') {
+                push_unique(method_res.entry(m.to_string()).or_default(), r.clone());
+            }
+            push_unique(fn_res.entry(name.clone()).or_default(), r);
+        }
+    }
+    let uses = |body: &Expr| -> Vec<String> {
+        let mut out = Vec::new();
+        collect_resource_refs(body, &mut out);
+        crate::span_visitor::for_each_expr(body, &mut |x| {
+            let rs = match &x.kind {
+                ExprKind::Identifier(f) => fn_res.get(f),
+                ExprKind::Path { segments, .. } => fn_res.get(&segments.join(".")),
+                ExprKind::MethodCall { method, .. } => method_res.get(method),
+                _ => None,
+            };
+            for r in rs.into_iter().flatten() {
+                push_unique(&mut out, r.clone());
+            }
+        });
+        out
+    };
+    let mut errors = Vec::new();
+    let mut fns: Vec<&Function> = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => fns.push(f),
+            Item::ImplBlock(imp) => {
+                for i in &imp.items {
+                    if let ImplItem::Method(m) = i {
+                        fns.push(m.as_ref());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let escaping_fns: HashMap<SpanKey, (&String, &'static str)> = esc
+        .escaping_fn_values
+        .iter()
+        .map(|(sp, n, why)| (SpanKey::from_span(sp), (n, *why)))
+        .collect();
+    for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
+        // (resource, binding site, extent of the scope it is bound in).
+        let mut scopes: Vec<(String, Span, Span)> = Vec::new();
+        // (value, what, why): every closure or function value that escapes.
+        let mut cands: Vec<(Span, String, Vec<String>, &'static str)> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| match &e.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some((r, _, body)) = match_with_provider(callee, args) {
+                    scopes.push((r, e.span, body.span));
+                    // The body closure's value is the `with_provider`'s.
+                    if let ExprKind::Closure { body: inner, .. } = &body.kind {
+                        let tail = match &inner.kind {
+                            ExprKind::Block(b) => b.final_expr.as_deref(),
+                            _ => Some(&**inner),
+                        };
+                        match tail.map(|t| &t.kind) {
+                            Some(ExprKind::Closure { body: cb, .. }) => {
+                                let t = tail.unwrap();
+                                cands.push((t.span, "this closure".into(), uses(cb), "returned"));
+                            }
+                            Some(ExprKind::Identifier(n)) if fn_res.contains_key(n) => {
+                                let t = tail.unwrap();
+                                cands.push((
+                                    t.span,
+                                    format!("function `{n}`, taken as a value,"),
+                                    fn_res[n].clone(),
+                                    "returned",
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            ExprKind::Providers { bindings, .. } => {
+                for b in bindings {
+                    scopes.push((b.resource.clone(), b.resource_span, e.span));
+                }
+            }
+            ExprKind::Closure { body, .. } => {
+                if let Some(why) = esc.reasons.get(&SpanKey::from_span(&e.span)) {
+                    cands.push((e.span, "this closure".into(), uses(body), why));
+                }
+            }
+            ExprKind::Identifier(n) => {
+                if let Some((_, why)) = escaping_fns.get(&SpanKey::from_span(&e.span)) {
+                    if let Some(rs) = fn_res.get(n) {
+                        cands.push((
+                            e.span,
+                            format!("function `{n}`, taken as a value,"),
+                            rs.clone(),
+                            why,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        });
+        let within = |inner: &Span, outer: &Span| {
+            inner.offset >= outer.offset
+                && inner.offset + inner.length <= outer.offset + outer.length
+        };
+        for (span, what, used, why) in cands {
+            for (r, site, extent) in &scopes {
+                if used.contains(r) && within(&span, extent) {
+                    errors.push(EscapeError {
+                        resource: r.clone(),
+                        provider_span: *site,
+                        closure_span: span,
+                        escape_span: span,
+                        kind: EscapeKind::Core {
+                            what: what.clone(),
+                            why,
+                        },
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    errors
 }
 
 /// Pre-pass: for each top-level function and impl method, compute the set

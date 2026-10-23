@@ -2240,10 +2240,22 @@ impl Pipeline {
         if self.has_parse_errors() {
             return;
         }
-        self.provider_escape = Some(crate::provider_escape_check(
-            &self.parsed.program,
-            self.typed.as_ref(),
-        ));
+        let mut errors = crate::provider_escape_check(&self.parsed.program, self.typed.as_ref());
+        // v2 core §14.5 (B-2026-10-20-8): also a closure that reaches the
+        // provider through a callee, and a function value that does.
+        if self.strict_core {
+            if let Some(effects) = self.effects.as_ref() {
+                for e in crate::provider_escape::check_core_provider_escape(
+                    &self.parsed.program,
+                    effects,
+                ) {
+                    if !errors.iter().any(|o| o.closure_span == e.closure_span) {
+                        errors.push(e);
+                    }
+                }
+            }
+        }
+        self.provider_escape = Some(errors);
     }
 
     /// Phase 6 line 31 slice 1: run the RAII-across-yield check. Depends
