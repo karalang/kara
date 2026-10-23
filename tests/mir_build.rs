@@ -742,6 +742,77 @@ fn main() {
     }
 }
 
+/// B-2026-10-13-36: a VecDeque's push, pop and indexing run in line on the
+/// compiled backends, with the slot wrapped by a compare and subtract. The
+/// pushes and pops here wrap round the buffer, grow it from either end, and
+/// carry elements of 1, 8, 16 and 32 bytes (one owning a String), so each
+/// backend must agree with the interpreter.
+#[test]
+fn mir_deque_push_and_pop_run_in_line() {
+    const SRC: &str = r#"struct P { a: i64, s: String }
+
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    for i in 0..1000 {
+        if i % 3 == 0 { q.push_front(i); } else { q.push_back(i); }
+        if i % 5 == 0 {
+            match q.pop_front() { Some(x) => { sum += x; } None => {} }
+        }
+        if i % 7 == 0 {
+            match q.pop_back() { Some(x) => { sum += 2 * x; } None => {} }
+        }
+    }
+    let mut w = 0;
+    for i in 0..q.len() { w += q[i] * (i as i64 % 13); }
+    println(f"{sum} {q.len()} {w} {q.front()} {q.back()} {q.get(5)} {q.get(100000)}");
+    while q.len() > 0 { q.pop_back(); }
+    println(f"{q.pop_front()} {q.pop_back()} {q.is_empty()}");
+
+    let mut b: VecDeque[u8] = VecDeque.new();
+    for r in 0..50 {
+        for k in 0..(r % 9) { b.push_back((r * 7 + k) as u8); }
+        for _ in 0..(r % 4) { b.pop_front(); }
+        b.push_front(r as u8);
+    }
+    let mut t = 0;
+    for x in b { t = t * 31 + (x as i64); t = t % 1000003; }
+    println(f"{b.len()} {t}");
+
+    let mut pq: VecDeque[(i64, i64)] = VecDeque.new();
+    for i in 0..300 {
+        pq.push_back((i, i * i));
+        if i % 2 == 1 { let (x, y) = pq.pop_front().unwrap(); pq.push_back((y % 97, x)); }
+    }
+    let mut z = 0;
+    for i in 0..pq.len() { let (x, y) = pq[i]; z += x * 3 + y; }
+    println(f"{pq.len()} {z}");
+
+    let mut sq: VecDeque[P] = VecDeque.new();
+    for i in 0..40 {
+        sq.push_back(P { a: i, s: f"s{i}" });
+        if i % 3 == 0 { sq.push_front(P { a: -i, s: f"f{i}" }); }
+        if i % 4 == 0 { let p = sq.pop_front().unwrap(); println(f"{p.a}{p.s}"); }
+        if i % 6 == 5 { let p = sq.pop_back().unwrap(); println(f"{p.s}"); }
+    }
+    let mut line = String.new();
+    for p in sq { line.push_str(p.s); line.push_str(","); }
+    println(line);
+}
+"#;
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    let want = interp.output.clone();
+    assert!(
+        want.starts_with("241348 658 1955125 Some(999) Some(998) Some(966) None\n"),
+        "{want}"
+    );
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

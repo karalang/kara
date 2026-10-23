@@ -96,14 +96,110 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("push_back" | "push_front", [x]) => {
                 let x = self.operand_ptr(x)?;
-                let front = self
-                    .llcx
-                    .i8_type()
-                    .const_int(u64::from(method == "push_front"), false);
+                let front = method == "push_front";
+                let flag = self.llcx.i8_type().const_int(u64::from(front), false);
+                if size == 0 {
+                    self.rt(
+                        "deque_push",
+                        &[q.into(), x.into(), self.i64(size).into(), flag.into()],
+                    )?;
+                    return Ok(Some(()));
+                }
+                // With room, the element goes into its slot here; a full
+                // ring grows in the runtime (B-2026-10-13-36).
+                let cap = self.load_i64(self.offset(q, 24)?)?;
+                let room = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, len, cap, "")
+                    .map_err(e)?;
+                let f = self.cur_fn()?;
+                let (fast, slow, done) = (
+                    self.llcx.append_basic_block(f, "deque.room"),
+                    self.llcx.append_basic_block(f, "deque.grow"),
+                    self.llcx.append_basic_block(f, "deque.pushed"),
+                );
+                self.builder
+                    .build_conditional_branch(room, fast, slow)
+                    .map_err(e)?;
+                self.builder.position_at_end(fast);
+                let head = self.load_i64(self.offset(q, 8)?)?;
+                let at = if front {
+                    // The slot before `head`, wrapping to the last.
+                    let first = self.is_zero(head)?;
+                    let back = self
+                        .builder
+                        .build_int_sub(head, self.i64(1), "")
+                        .map_err(e)?;
+                    let last = self
+                        .builder
+                        .build_int_sub(cap, self.i64(1), "")
+                        .map_err(e)?;
+                    let h = self
+                        .builder
+                        .build_select(first, last, back, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    self.store(self.offset(q, 8)?, h.into())?;
+                    h
+                } else {
+                    self.wrap(head, len, cap)?
+                };
+                let buf = self.load_ptr(q)?;
+                let to = self.elem_ptr(buf, at, size)?;
+                self.builder
+                    .build_memcpy(to, 1, x, 1, self.i64(size))
+                    .map_err(e)?;
+                let n = self
+                    .builder
+                    .build_int_add(len, self.i64(1), "")
+                    .map_err(e)?;
+                self.store(self.offset(q, 16)?, n.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(slow);
                 self.rt(
                     "deque_push",
-                    &[q.into(), x.into(), self.i64(size).into(), front.into()],
+                    &[q.into(), x.into(), self.i64(size).into(), flag.into()],
                 )?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+            }
+            ("pop_back" | "pop_front", []) if size != 0 => {
+                // In line: the end element is copied out and the ring
+                // narrowed, with no division and no `memcpy` call.
+                let d = self.place_ptr(dest)?;
+                let (some, none) = self.option_variants(dty)?;
+                self.store_tag(d, dty, none)?;
+                let out = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                let any = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, len, self.i64(0), "")
+                    .map_err(e)?;
+                let front = method == "pop_front";
+                self.if_then(any, |cx| {
+                    let head = cx.load_i64(cx.offset(q, 8)?)?;
+                    let cap = cx.load_i64(cx.offset(q, 24)?)?;
+                    let n = cx.builder.build_int_sub(len, cx.i64(1), "").map_err(e)?;
+                    let at = if front { head } else { cx.wrap(head, n, cap)? };
+                    let buf = cx.load_ptr(q)?;
+                    let from = cx.elem_ptr(buf, at, size)?;
+                    cx.builder
+                        .build_memcpy(out, 1, from, 1, cx.i64(size))
+                        .map_err(e)?;
+                    if front {
+                        let next = cx.builder.build_int_add(head, cx.i64(1), "").map_err(e)?;
+                        let end = cx
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, next, cap, "")
+                            .map_err(e)?;
+                        let h = cx
+                            .builder
+                            .build_select(end, cx.i64(0), next, "")
+                            .map_err(e)?;
+                        cx.store(cx.offset(q, 8)?, h)?;
+                    }
+                    cx.store(cx.offset(q, 16)?, n.into())?;
+                    cx.store_tag(d, dty, some)
+                })?;
             }
             ("pop_back" | "pop_front", []) => {
                 let d = self.place_ptr(dest)?;
@@ -181,8 +277,37 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// Element `i`'s slot: `(head + i) % cap` as a compare and subtract,
+    /// since `head < cap` and `i < len <= cap`.
     fn slot(&self, q: PointerValue<'ctx>, i: IntValue<'ctx>, size: u64) -> R<PointerValue<'ctx>> {
-        self.mrt_ptr("deque_slot", &[q.into(), i.into(), self.i64(size).into()])
+        if size == 0 {
+            return self.mrt_ptr("deque_slot", &[q.into(), i.into(), self.i64(size).into()]);
+        }
+        let head = self.load_i64(self.offset(q, 8)?)?;
+        let cap = self.load_i64(self.offset(q, 24)?)?;
+        let at = self.wrap(head, i, cap)?;
+        let buf = self.load_ptr(q)?;
+        self.elem_ptr(buf, at, size)
+    }
+
+    /// `(head + i) % cap` for `head < cap` and `i <= cap`.
+    fn wrap(
+        &self,
+        head: IntValue<'ctx>,
+        i: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let at = self.builder.build_int_nuw_add(head, i, "").map_err(e)?;
+        let past = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, at, cap, "")
+            .map_err(e)?;
+        let back = self.builder.build_int_sub(at, cap, "").map_err(e)?;
+        Ok(self
+            .builder
+            .build_select(past, back, at, "")
+            .map_err(e)?
+            .into_int_value())
     }
 
     /// Writes `Some(ref elem i)` or `None` at `dest` (an `Option[ref T]`).
