@@ -1,0 +1,1110 @@
+// mini_pyaes: a port of pyaes 1.6.1 (MIT, Richard Moore), the pure-Python
+// AES block cipher with its five modes of operation (ECB, CBC, CFB, OFB and
+// CTR), the feeders that chunk and pad a stream of bytes for them, and the
+// stream helpers a small backup tool encrypts its files with. Every step of
+// data/jobs.tsv is a call on pyaes (see mk.py and README.md).
+//
+// Bytes are held as a Vec of byte values. The files the jobs encrypt are
+// written to data/plain/ first, and the streams really read and write
+// files under data/, in chunks of the block size asked for.
+
+// ------------------------------------------------------------ helpers
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: Str) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_num(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.chars() {
+        v = v * 16 + hex_val(c);
+    }
+    v
+}
+
+fn hex_bytes(s: ref String) -> Vec[i64] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        out.push(hex_val(cs[k]) * 16 + hex_val(cs[k + 1]));
+        k += 2;
+    }
+    out
+}
+
+fn hex_of(b: ref Vec[i64]) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    for x in b {
+        out.push(d[(*x >> 4) & 15]);
+        out.push(d[*x & 15]);
+    }
+    out
+}
+
+// int() of a decimal string.
+fn int_of(s: ref String) -> i64 {
+    let mut neg = false;
+    let mut v = 0;
+    for c in s.chars() {
+        if c == '-' {
+            neg = true;
+        } else {
+            v = v * 10 + (c as i64 - 48);
+        }
+    }
+    if neg { -v } else { v }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+// data[lo:hi], clamped the way Python slices are.
+fn slice(data: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let end = if hi > data.len() { data.len() } else { hi };
+    let mut k = if lo < 0 { 0 } else { lo };
+    while k < end {
+        out.push(data[k]);
+        k += 1;
+    }
+    out
+}
+
+fn push_all(out: mut ref Vec[i64], xs: ref Vec[i64]) {
+    for x in xs {
+        out.push(*x);
+    }
+}
+
+// [a ^ b for (a, b) in zip(xs, ys)]
+fn xor_zip(xs: ref Vec[i64], ys: ref Vec[i64]) -> Vec[i64] {
+    let n = if xs.len() < ys.len() { xs.len() } else { ys.len() };
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(xs[k] ^ ys[k]);
+        k += 1;
+    }
+    out
+}
+
+// Python's % and //, which round toward negative infinity.
+fn py_mod(a: i64, b: i64) -> i64 {
+    let r = a % b;
+    if r != 0 and (r < 0) != (b < 0) { r + b } else { r }
+}
+
+fn py_div(a: i64, b: i64) -> i64 {
+    (a - py_mod(a, b)) / b
+}
+
+fn fnv(b: ref Vec[i64]) -> i64 {
+    let mut h = 2166136261;
+    for x in b {
+        h = ((h ^ *x) * 16777619) & 4294967295;
+    }
+    h
+}
+
+// How oracle.py prints bytes.
+fn show(b: ref Vec[i64]) -> String {
+    if b.len() > 64 {
+        f"{b.len()} bytes, fnv1a {fnv(b):08x}"
+    } else {
+        f"{hex_of(b)} ({b.len()} bytes)"
+    }
+}
+
+// repr() of a list of ints.
+fn list_repr(b: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    let mut k = 0;
+    while k < b.len() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{b[k]}");
+        k += 1;
+    }
+    s.push_str("]");
+    s
+}
+
+// ------------------------------------------------------------ AES (aes.py)
+
+struct Tables {
+    s: Vec[i64],
+    si: Vec[i64],
+    t1: Vec[i64],
+    t2: Vec[i64],
+    t3: Vec[i64],
+    t4: Vec[i64],
+    t5: Vec[i64],
+    t6: Vec[i64],
+    t7: Vec[i64],
+    t8: Vec[i64],
+    u1: Vec[i64],
+    u2: Vec[i64],
+    u3: Vec[i64],
+    u4: Vec[i64],
+    rcon: Vec[i64],
+}
+
+// The AES class's tables, in the order gen_kara.py writes them.
+fn load_tables() -> Tables {
+    let mut by: Vec[Vec[i64]] = Vec.new();
+    for line in split_on(table_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let mut v: Vec[i64] = Vec.new();
+        let mut k = 1;
+        while k < f.len() {
+            v.push(hex_num(f[k]));
+            k += 1;
+        }
+        by.push(v);
+    }
+    Tables {
+        s: by[0].clone(),
+        si: by[1].clone(),
+        t1: by[2].clone(),
+        t2: by[3].clone(),
+        t3: by[4].clone(),
+        t4: by[5].clone(),
+        t5: by[6].clone(),
+        t6: by[7].clone(),
+        t7: by[8].clone(),
+        t8: by[9].clone(),
+        u1: by[10].clone(),
+        u2: by[11].clone(),
+        u3: by[12].clone(),
+        u4: by[13].clone(),
+        rcon: by[14].clone(),
+    }
+}
+
+// The round keys, flattened: round r's four words start at r * 4. As in
+// the library they are the signed words struct.unpack('>i') gives.
+struct Aes {
+    rounds: i64,
+    ke: Vec[i64],
+    kd: Vec[i64],
+}
+
+fn none_len() -> Exc {
+    exc("TypeError", "object of type 'NoneType' has no len()")
+}
+
+fn aes_new(tb: ref Tables, key: ref Option[Vec[i64]]) -> Result[Aes, Exc] {
+    let k = match key {
+        Some(k) => k.clone(),
+        None => {
+            return Err(none_len());
+        }
+    };
+    let n = k.len();
+    if n != 16 and n != 24 and n != 32 {
+        return Err(exc("ValueError", "Invalid key size"));
+    }
+    let rounds = if n == 16 { 10 } else if n == 24 { 12 } else { 14 };
+    let round_key_count = (rounds + 1) * 4;
+    let mut ke: Vec[i64] = Vec.new();
+    let mut kd: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < round_key_count {
+        ke.push(0);
+        kd.push(0);
+        i += 1;
+    }
+    let kc = n / 4;
+    let mut tk: Vec[i64] = Vec.new();
+    i = 0;
+    while i < kc {
+        let w = (k[4 * i] << 24) | (k[4 * i + 1] << 16) | (k[4 * i + 2] << 8) | k[4 * i + 3];
+        tk.push(if w >= 2147483648 { w - 4294967296 } else { w });
+        i += 1;
+    }
+    i = 0;
+    while i < kc {
+        ke[i] = tk[i];
+        kd[(rounds - i / 4) * 4 + i % 4] = tk[i];
+        i += 1;
+    }
+    // Key expansion (fips-197 section 5.2)
+    let mut rconpointer = 0;
+    let mut t = kc;
+    while t < round_key_count {
+        let tt = tk[kc - 1];
+        tk[0] = tk[0]
+            ^ ((tb.s[(tt >> 16) & 255] << 24)
+                ^ (tb.s[(tt >> 8) & 255] << 16)
+                ^ (tb.s[tt & 255] << 8)
+                ^ tb.s[(tt >> 24) & 255]
+                ^ (tb.rcon[rconpointer] << 24));
+        rconpointer += 1;
+        if kc != 8 {
+            let mut j = 1;
+            while j < kc {
+                tk[j] = tk[j] ^ tk[j - 1];
+                j += 1;
+            }
+        } else {
+            // Key expansion for 256-bit keys is "slightly different"
+            let mut j = 1;
+            while j < kc / 2 {
+                tk[j] = tk[j] ^ tk[j - 1];
+                j += 1;
+            }
+            let tt = tk[kc / 2 - 1];
+            tk[kc / 2] = tk[kc / 2]
+                ^ (tb.s[tt & 255]
+                    ^ (tb.s[(tt >> 8) & 255] << 8)
+                    ^ (tb.s[(tt >> 16) & 255] << 16)
+                    ^ (tb.s[(tt >> 24) & 255] << 24));
+            j = kc / 2 + 1;
+            while j < kc {
+                tk[j] = tk[j] ^ tk[j - 1];
+                j += 1;
+            }
+        }
+        let mut j = 0;
+        while j < kc and t < round_key_count {
+            ke[t] = tk[j];
+            kd[(rounds - t / 4) * 4 + t % 4] = tk[j];
+            j += 1;
+            t += 1;
+        }
+    }
+    // Inverse-Cipher-ify the decryption round key (fips-197 section 5.3)
+    let mut r = 1;
+    while r < rounds {
+        let mut j = 0;
+        while j < 4 {
+            let tt = kd[r * 4 + j];
+            kd[r * 4 + j] = tb.u1[(tt >> 24) & 255]
+                ^ tb.u2[(tt >> 16) & 255]
+                ^ tb.u3[(tt >> 8) & 255]
+                ^ tb.u4[tt & 255];
+            j += 1;
+        }
+        r += 1;
+    }
+    Ok(Aes { rounds: rounds, ke: ke, kd: kd })
+}
+
+fn compact_word(b: ref Vec[i64], at: i64) -> i64 {
+    (b[at] << 24) | (b[at + 1] << 16) | (b[at + 2] << 8) | b[at + 3]
+}
+
+// AES.encrypt and AES.decrypt: one 16-byte block in, a list of 16 out.
+fn aes_block(tb: ref Tables, a: ref Aes, encrypt: bool, block: ref Vec[i64]) -> Result[Vec[i64], Exc] {
+    if block.len() != 16 {
+        return Err(exc("ValueError", "wrong block length"));
+    }
+    let rounds = a.rounds;
+    let s1 = if encrypt { 1 } else { 3 };
+    let s3 = if encrypt { 3 } else { 1 };
+    let keys = if encrypt { a.ke.clone() } else { a.kd.clone() };
+    let mut t: Vec[i64] = Vec.new();
+    for i in 0..4 {
+        t.push(compact_word(block, 4 * i) ^ keys[i]);
+    }
+    let mut r = 1;
+    while r < rounds {
+        let mut next: Vec[i64] = Vec.new();
+        for i in 0..4 {
+            let w0 = (t[i] >> 24) & 255;
+            let w1 = (t[(i + s1) % 4] >> 16) & 255;
+            let w2 = (t[(i + 2) % 4] >> 8) & 255;
+            let w3 = t[(i + s3) % 4] & 255;
+            let v = if encrypt {
+                tb.t1[w0] ^ tb.t2[w1] ^ tb.t3[w2] ^ tb.t4[w3]
+            } else {
+                tb.t5[w0] ^ tb.t6[w1] ^ tb.t7[w2] ^ tb.t8[w3]
+            };
+            next.push(v ^ keys[r * 4 + i]);
+        }
+        t = next;
+        r += 1;
+    }
+    // The last round is special
+    let sbox = if encrypt { tb.s.clone() } else { tb.si.clone() };
+    let mut result: Vec[i64] = Vec.new();
+    for i in 0..4 {
+        let tt = keys[rounds * 4 + i];
+        result.push((sbox[(t[i] >> 24) & 255] ^ (tt >> 24)) & 255);
+        result.push((sbox[(t[(i + s1) % 4] >> 16) & 255] ^ (tt >> 16)) & 255);
+        result.push((sbox[(t[(i + 2) % 4] >> 8) & 255] ^ (tt >> 8)) & 255);
+        result.push((sbox[t[(i + s3) % 4] & 255] ^ tt) & 255);
+    }
+    Ok(result)
+}
+
+// Counter(initial_value): the low 128 bits of the value, high byte first,
+// as [((initial_value >> i) % 256) for i in range(120, -1, -8)] gives
+// them (two's complement for a negative value). The value is a decimal
+// string, since it may be any size.
+fn counter_bytes(dec: ref String) -> Vec[i64] {
+    let mut neg = false;
+    let mut digits: Vec[i64] = Vec.new();
+    for c in dec.chars() {
+        if c == '-' {
+            neg = true;
+        } else {
+            digits.push(c as i64 - 48);
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..16 {
+        out.push(0);
+    }
+    for k in 0..16 {
+        let mut rem = 0;
+        let mut q: Vec[i64] = Vec.new();
+        for d in digits.iter() {
+            let cur = rem * 10 + *d;
+            q.push(cur / 256);
+            rem = cur % 256;
+        }
+        out[15 - k] = rem;
+        digits = q;
+    }
+    if neg {
+        let mut carry = 1;
+        let mut k = 15;
+        while k >= 0 {
+            let v = (255 - out[k]) + carry;
+            out[k] = v & 255;
+            carry = v >> 8;
+            k -= 1;
+        }
+    }
+    out
+}
+
+// Counter.increment (overflow rolls back to 0).
+fn increment(c: mut ref Vec[i64]) {
+    let mut i = c.len() - 1;
+    while i >= 0 {
+        c[i] += 1;
+        if c[i] < 256 {
+            return;
+        }
+        c[i] = 0;
+        i -= 1;
+    }
+}
+
+// ------------------------------------------------------------ modes
+
+const ECB: i64 = 0;
+const CBC: i64 = 1;
+const CFB: i64 = 2;
+const OFB: i64 = 3;
+const CTR: i64 = 4;
+
+// One AESModeOfOperation object. `reg` is CBC's last cipherblock, CFB's
+// shift register or OFB's last precipherblock; `rem` and `pos` are what
+// OFB and CTR have left of their last keystream block. `reg_list` is true
+// while CFB's shift register is the list [0] * 16 it starts as without an
+// IV, which the library cannot concatenate bytes onto.
+struct Mode {
+    kind: i64,
+    aes: Aes,
+    reg: Vec[i64],
+    reg_list: bool,
+    rem: Vec[i64],
+    pos: i64,
+    seg: i64,
+    counter: i64,
+}
+
+struct Feeder {
+    mode: i64,
+    encrypt: bool,
+    buf: Vec[i64],
+    done: bool,
+    padding: String,
+}
+
+// The objects the jobs make, and the names they are bound to. A name bound
+// again gets a new object; the old one lives on for whatever holds it, as
+// a Python object does.
+struct State {
+    modes: Vec[Mode],
+    counters: Vec[Vec[i64]],
+    feeders: Vec[Feeder],
+    mode_ix: Map[String, i64],
+    counter_ix: Map[String, i64],
+    feeder_ix: Map[String, i64],
+}
+
+fn lookup(m: ref Map[String, i64], name: ref String) -> i64 {
+    match m.get(name.clone()) {
+        Some(v) => *v,
+        None => -1,
+    }
+}
+
+fn val(f: ref String) -> Option[Vec[i64]] {
+    if f == "-" { None } else { Some(hex_bytes(f)) }
+}
+
+fn iv_reg(iv: ref Option[Vec[i64]]) -> Result[Vec[i64], Exc] {
+    match iv {
+        None => {
+            let mut z: Vec[i64] = Vec.new();
+            for _ in 0..16 {
+                z.push(0);
+            }
+            Ok(z)
+        }
+        Some(v) => {
+            if v.len() != 16 {
+                Err(exc("ValueError", "initialization vector must be 16 bytes"))
+            } else {
+                Ok(v.clone())
+            }
+        }
+    }
+}
+
+// mode <name> <kind> <key> [<iv>|<counter>] [<segment size>], as
+// oracle.py's make_mode() calls the constructors: each checks its
+// arguments in the library's order (the IV before the key).
+fn make_mode(tb: ref Tables, st: mut ref State, f: ref Vec[String]) -> Result[Mode, Exc] {
+    let key = val(f[3]);
+    let kind = f[2].clone();
+    let iv: Option[Vec[i64]] = if f.len() > 4 and kind != "ctr" { val(f[4]) } else { None };
+    if kind == "ecb" {
+        let aes = aes_new(tb, key)?;
+        return Ok(Mode { kind: ECB, aes: aes, reg: Vec.new(), reg_list: false, rem: Vec.new(), pos: 0, seg: 0, counter: -1 });
+    }
+    if kind == "cbc" or kind == "ofb" {
+        let reg = iv_reg(iv)?;
+        let aes = aes_new(tb, key)?;
+        let k = if kind == "cbc" { CBC } else { OFB };
+        return Ok(Mode { kind: k, aes: aes, reg: reg, reg_list: false, rem: Vec.new(), pos: 0, seg: 0, counter: -1 });
+    }
+    if kind == "cfb" {
+        let mut seg = int_of(f[5]);
+        if seg == 0 {
+            seg = 1;
+        }
+        let reg = iv_reg(iv)?;
+        let aes = aes_new(tb, key)?;
+        return Ok(Mode { kind: CFB, aes: aes, reg: reg, reg_list: iv.is_none(), rem: Vec.new(), pos: 0, seg: seg, counter: -1 });
+    }
+    let aes = aes_new(tb, key)?;
+    let counter = if f.len() > 4 {
+        lookup(st.counter_ix, f[4])
+    } else {
+        st.counters.push(counter_bytes("1".to_string()));
+        st.counters.len() - 1
+    };
+    Ok(Mode { kind: CTR, aes: aes, reg: Vec.new(), reg_list: false, rem: Vec.new(), pos: 0, seg: 0, counter: counter })
+}
+
+// mode.encrypt(data) or mode.decrypt(data).
+fn crypt(tb: ref Tables, st: mut ref State, mi: i64, encrypt: bool, data: ref Vec[i64]) -> Result[Vec[i64], Exc] {
+    let kind = st.modes[mi].kind;
+    let what = if encrypt { "plaintext" } else { "ciphertext" };
+    if kind == ECB or kind == CBC {
+        if data.len() != 16 {
+            return Err(exc("ValueError", f"{what} block must be 16 bytes"));
+        }
+        if kind == ECB {
+            return aes_block(tb, st.modes[mi].aes, encrypt, data);
+        }
+        if encrypt {
+            let pre = xor_zip(data, st.modes[mi].reg);
+            let c = aes_block(tb, st.modes[mi].aes, true, pre)?;
+            st.modes[mi].reg = c.clone();
+            return Ok(c);
+        }
+        let d = aes_block(tb, st.modes[mi].aes, false, data)?;
+        let p = xor_zip(d, st.modes[mi].reg);
+        st.modes[mi].reg = data.clone();
+        return Ok(p);
+    }
+    if kind == CFB {
+        let seg = st.modes[mi].seg;
+        if py_mod(data.len(), seg) != 0 {
+            return Err(exc("ValueError", f"{what} block must be a multiple of segment_size"));
+        }
+        let mut out: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while seg > 0 and i < data.len() {
+            let segment = slice(data, i, i + seg);
+            let x = aes_block(tb, st.modes[mi].aes, true, st.modes[mi].reg)?;
+            let xs = slice(x, 0, segment.len());
+            let other = xor_zip(segment, xs);
+            // Shift the top bits out and the ciphertext in
+            if st.modes[mi].reg_list {
+                return Err(exc("TypeError", "can only concatenate list (not \"bytes\") to list"));
+            }
+            let cipher = if encrypt { other.clone() } else { segment.clone() };
+            let reg = st.modes[mi].reg.clone();
+            let mut next = slice(reg, cipher.len(), reg.len());
+            push_all(mut next, cipher);
+            st.modes[mi].reg = next;
+            push_all(mut out, other);
+            i += seg;
+        }
+        return Ok(out);
+    }
+    if kind == OFB {
+        // AES-OFB is symmetric
+        let mut out: Vec[i64] = Vec.new();
+        for p in data {
+            if st.modes[mi].pos == st.modes[mi].rem.len() {
+                let block = aes_block(tb, st.modes[mi].aes, true, st.modes[mi].reg)?;
+                st.modes[mi].rem = block;
+                st.modes[mi].pos = 0;
+                st.modes[mi].reg = Vec.new();
+            }
+            let pre = st.modes[mi].rem[st.modes[mi].pos];
+            st.modes[mi].pos += 1;
+            st.modes[mi].reg.push(pre);
+            out.push(*p ^ pre);
+        }
+        return Ok(out);
+    }
+    // CTR, symmetric too
+    let c = st.modes[mi].counter;
+    while st.modes[mi].rem.len() - st.modes[mi].pos < data.len() {
+        let block = aes_block(tb, st.modes[mi].aes, true, st.counters[c])?;
+        let mut rem = slice(st.modes[mi].rem, st.modes[mi].pos, st.modes[mi].rem.len());
+        push_all(mut rem, block);
+        st.modes[mi].rem = rem;
+        st.modes[mi].pos = 0;
+        increment(mut st.counters[c]);
+    }
+    let pos = st.modes[mi].pos;
+    let ks = slice(st.modes[mi].rem, pos, pos + data.len());
+    let out = xor_zip(data, ks);
+    st.modes[mi].pos = pos + out.len();
+    Ok(out)
+}
+
+// ------------------------------------------------------------ feeders (blockfeeder.py)
+
+fn invalid_padding() -> Exc {
+    exc("Exception", "invalid padding option")
+}
+
+fn can_consume(m: ref Mode, size: i64) -> i64 {
+    if m.kind == ECB or m.kind == CBC {
+        if size >= 16 { 16 } else { 0 }
+    } else if m.kind == CFB {
+        m.seg * py_div(size, m.seg)
+    } else {
+        size
+    }
+}
+
+fn strip_pkcs7(data: ref Vec[i64]) -> Result[Vec[i64], Exc] {
+    if data.len() % 16 != 0 {
+        return Err(exc("ValueError", "invalid length"));
+    }
+    let pad = data[data.len() - 1];
+    if pad > 16 {
+        return Err(exc("ValueError", "invalid padding byte"));
+    }
+    // data[:-pad], which is empty for a pad of 0
+    if pad == 0 {
+        return Ok(Vec.new());
+    }
+    Ok(slice(data, 0, data.len() - pad))
+}
+
+// _final_encrypt / _final_decrypt of the mode's family.
+fn final_block(tb: ref Tables, st: mut ref State, mi: i64, encrypt: bool, data: ref Vec[i64], padding: ref String) -> Result[Vec[i64], Exc] {
+    let kind = st.modes[mi].kind;
+    if kind == ECB or kind == CBC {
+        if encrypt {
+            let mut d = data.clone();
+            if padding == "default" {
+                let pad = 16 - data.len() % 16;
+                for _ in 0..pad {
+                    d.push(pad);
+                }
+            } else if padding == "none" {
+                if data.len() != 16 {
+                    return Err(exc("Exception", "invalid data length for final block"));
+                }
+            } else {
+                return Err(invalid_padding());
+            }
+            if d.len() == 32 {
+                let mut a = crypt(tb, mut st, mi, true, slice(d, 0, 16))?;
+                let b = crypt(tb, mut st, mi, true, slice(d, 16, 32))?;
+                push_all(mut a, b);
+                return Ok(a);
+            }
+            return crypt(tb, mut st, mi, true, d);
+        }
+        if padding == "default" {
+            let p = crypt(tb, mut st, mi, false, data)?;
+            return strip_pkcs7(p);
+        }
+        if padding == "none" {
+            if data.len() != 16 {
+                return Err(exc("Exception", "invalid data length for final block"));
+            }
+            return crypt(tb, mut st, mi, false, data);
+        }
+        return Err(invalid_padding());
+    }
+    if kind == CFB {
+        // CFB can handle a non-segment-sized block at the end using the
+        // remaining cipherblock
+        if padding != "default" {
+            return Err(invalid_padding());
+        }
+        let seg = st.modes[mi].seg;
+        let mut padded = data.clone();
+        let faux = seg - py_mod(data.len(), seg);
+        for _ in 0..faux {
+            padded.push(0);
+        }
+        let out = crypt(tb, mut st, mi, encrypt, padded)?;
+        return Ok(slice(out, 0, data.len()));
+    }
+    if padding != "none" and padding != "default" {
+        return Err(invalid_padding());
+    }
+    crypt(tb, mut st, mi, encrypt, data)
+}
+
+// BlockFeeder.feed(data); None is the final call.
+fn feed(tb: ref Tables, st: mut ref State, fi: i64, data: ref Option[Vec[i64]]) -> Result[Vec[i64], Exc] {
+    if st.feeders[fi].done {
+        return Err(exc("ValueError", "already finished feeder"));
+    }
+    let mi = st.feeders[fi].mode;
+    let encrypt = st.feeders[fi].encrypt;
+    match data {
+        None => {
+            // Finalize; process the spare bytes we were keeping
+            let buf = st.feeders[fi].buf.clone();
+            let padding = st.feeders[fi].padding.clone();
+            let result = final_block(tb, mut st, mi, encrypt, buf, padding)?;
+            st.feeders[fi].done = true;
+            st.feeders[fi].buf = Vec.new();
+            return Ok(result);
+        }
+        Some(d) => {
+            push_all(mut st.feeders[fi].buf, d);
+        }
+    }
+    // We keep 16 bytes around so we can determine padding
+    let mut result: Vec[i64] = Vec.new();
+    while st.feeders[fi].buf.len() > 16 {
+        let n = can_consume(st.modes[mi], st.feeders[fi].buf.len() - 16);
+        if n == 0 {
+            break;
+        }
+        let chunk = slice(st.feeders[fi].buf, 0, n);
+        let out = crypt(tb, mut st, mi, encrypt, chunk)?;
+        push_all(mut result, out);
+        let buf = st.feeders[fi].buf.clone();
+        st.feeders[fi].buf = slice(buf, n, buf.len());
+    }
+    Ok(result)
+}
+
+fn new_feeder(st: mut ref State, mi: i64, encrypt: bool, padding: ref String) -> i64 {
+    st.feeders.push(Feeder { mode: mi, encrypt: encrypt, buf: Vec.new(), done: false, padding: padding.clone() });
+    st.feeders.len() - 1
+}
+
+// ------------------------------------------------------------ files
+
+fn not_found(p: ref String) -> Exc {
+    Exc { kind: "FileNotFoundError".to_string(), msg: f"[Errno 2] No such file or directory: 'data/{p}'" }
+}
+
+fn read_file(p: ref String) -> Result[Vec[i64], Exc] {
+    match fs.read_bytes(f"data/{p}") {
+        Ok(b) => {
+            let mut out: Vec[i64] = Vec.new();
+            for x in b.iter() {
+                out.push(*x as i64);
+            }
+            Ok(out)
+        }
+        Err(_) => Err(not_found(p)),
+    }
+}
+
+fn to_u8(b: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b {
+        out.push(*x as u8);
+    }
+    out
+}
+
+fn write_file(p: ref String, b: ref Vec[i64]) -> Result[(), Exc] {
+    match fs.write_bytes(f"data/{p}", to_u8(b)) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Exc { kind: "OSError".to_string(), msg: f"{e}" }),
+    }
+}
+
+fn io_err(e: IoError) -> Exc {
+    Exc { kind: "OSError".to_string(), msg: f"{e}" }
+}
+
+// encrypt_stream / decrypt_stream: the mode under an Encrypter (or a
+// Decrypter), fed in_stream.read(block_size) until it comes back empty,
+// each result written to out_stream as it comes, then feed().
+fn stream(tb: ref Tables, st: mut ref State, mi: i64, encrypt: bool, src: ref String, dst: ref String, block: i64, padding: ref String) -> Result[(), Exc] {
+    let fin = match File.open(f"data/{src}") {
+        Ok(h) => h,
+        Err(_) => {
+            return Err(not_found(src));
+        }
+    };
+    let fout = match File.create(f"data/{dst}") {
+        Ok(h) => h,
+        Err(e) => {
+            return Err(io_err(e));
+        }
+    };
+    let fi = new_feeder(mut st, mi, encrypt, padding);
+    loop {
+        // BufferedReader.read(n): up to n bytes, or all that is left for a
+        // negative n, or nothing for 0
+        let mut chunk: Vec[i64] = Vec.new();
+        while block != 0 {
+            let room = if block < 0 { 8192 } else { block - chunk.len() };
+            if room == 0 {
+                break;
+            }
+            let mut buf: Vec[u8] = Vec.new();
+            for _ in 0..room {
+                buf.push(0u8);
+            }
+            let n = match fin.read(mut buf[0..room]) {
+                Ok(n) => n,
+                Err(e) => {
+                    return Err(io_err(e));
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            let mut k = 0;
+            while k < n {
+                chunk.push(buf[k] as i64);
+                k += 1;
+            }
+        }
+        if chunk.len() == 0 {
+            break;
+        }
+        let converted = feed(tb, mut st, fi, Some(chunk))?;
+        write_all(fout, converted)?;
+    }
+    let converted = feed(tb, mut st, fi, None)?;
+    write_all(fout, converted)?;
+    Ok(())
+}
+
+fn write_all(f: ref File, b: ref Vec[i64]) -> Result[(), Exc] {
+    let bytes = to_u8(b);
+    let mut off = 0;
+    while off < bytes.len() {
+        let n = match f.write(bytes[off..bytes.len()]) {
+            Ok(n) => n,
+            Err(e) => {
+                return Err(io_err(e));
+            }
+        };
+        off += n;
+    }
+    Ok(())
+}
+
+fn compare(a: ref String, b: ref String) -> Result[String, Exc] {
+    let x = read_file(a)?;
+    let y = read_file(b)?;
+    if xor_same(x, y) {
+        return Ok(f"same ({x.len()} bytes)");
+    }
+    let mut n = 0;
+    while n < x.len() and n < y.len() and x[n] == y[n] {
+        n += 1;
+    }
+    Ok(f"differ at byte {n} ({x.len()} and {y.len()} bytes)")
+}
+
+// The files data/plain/ holds, as mk.py writes them.
+fn write_plain_files() -> Result[(), Exc] {
+    if let Err(e) = fs.create_dir_all("data/plain".to_string()) {
+        return Err(io_err(e));
+    }
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(io_err(e));
+    }
+    for line in split_on(plain_files_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let body = if f[1] == "-" { Vec.new() } else { hex_bytes(f[1]) };
+        write_file(f"plain/{f[0]}", body)?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn bind(m: mut ref Map[String, i64], name: ref String, ix: i64) {
+    m.insert(name.clone(), ix);
+}
+
+// One step of jobs.tsv; what it returns goes to `out`, one "  -> " line
+// each, and an exception is the step's last line.
+fn step(tb: ref Tables, st: mut ref State, f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), Exc] {
+    let op = f[0].clone();
+    if op == "mode" {
+        let m = make_mode(tb, mut st, f)?;
+        st.modes.push(m);
+        bind(mut st.mode_ix, f[1], st.modes.len() - 1);
+        out.push("ok".to_string());
+    } else if op == "counter" {
+        st.counters.push(counter_bytes(f[2]));
+        bind(mut st.counter_ix, f[1], st.counters.len() - 1);
+        out.push("ok".to_string());
+    } else if op == "value" {
+        let c = lookup(st.counter_ix, f[1]);
+        out.push(list_repr(st.counters[c]));
+    } else if op == "aes" {
+        let a = aes_new(tb, val(f[1]))?;
+        let r = aes_block(tb, a, f[2] == "encrypt", hex_bytes(f[3]))?;
+        out.push(list_repr(r));
+    } else if op == "encrypt" or op == "decrypt" {
+        let mi = lookup(st.mode_ix, f[1]);
+        let r = crypt(tb, mut st, mi, op == "encrypt", hex_bytes(f[2]))?;
+        out.push(show(r));
+    } else if op == "feeder" {
+        let mi = lookup(st.mode_ix, f[2]);
+        let padding = if f.len() > 4 { f[4].clone() } else { "default".to_string() };
+        let fi = new_feeder(mut st, mi, f[3] == "encrypter", padding);
+        bind(mut st.feeder_ix, f[1], fi);
+        out.push("ok".to_string());
+    } else if op == "feed" {
+        let fi = lookup(st.feeder_ix, f[1]);
+        let data: Option[Vec[i64]] = if f.len() > 2 { Some(hex_bytes(f[2])) } else { None };
+        let r = feed(tb, mut st, fi, data)?;
+        out.push(show(r));
+    } else if op == "pipe" {
+        let fe = lookup(st.feeder_ix, f[1]);
+        let fd = lookup(st.feeder_ix, f[2]);
+        let data = hex_bytes(f[3]);
+        let mut c = feed(tb, mut st, fe, Some(data.clone()))?;
+        let c2 = feed(tb, mut st, fe, None)?;
+        push_all(mut c, c2);
+        out.push(f"ciphertext {show(c)}");
+        let mut p = feed(tb, mut st, fd, Some(c))?;
+        let p2 = feed(tb, mut st, fd, None)?;
+        push_all(mut p, p2);
+        out.push(f"plaintext {show(p)}");
+        out.push(if xor_same(p, data) { "same".to_string() } else { "differs".to_string() });
+    } else if op == "roundtrip" {
+        let a = lookup(st.mode_ix, f[1]);
+        let b = lookup(st.mode_ix, f[2]);
+        let data = hex_bytes(f[3]);
+        let c = crypt(tb, mut st, a, true, data)?;
+        out.push(f"ciphertext {show(c)}");
+        let p = crypt(tb, mut st, b, false, c)?;
+        out.push(f"plaintext {show(p)}");
+        out.push(if xor_same(p, data) { "same".to_string() } else { "differs".to_string() });
+    } else if op == "stream" {
+        let mi = lookup(st.mode_ix, f[2]);
+        let block = int_of(f[5]);
+        let padding = if f.len() > 6 { f[6].clone() } else { "default".to_string() };
+        stream(tb, mut st, mi, f[1] == "encrypt", f[3], f[4], block, padding)?;
+        out.push(show(read_file(f[4])?));
+    } else if op == "cut" {
+        let b = read_file(f[1])?;
+        let n = int_of(f[3]);
+        let cut = slice(b, 0, n);
+        write_file(f[2], cut)?;
+        out.push(show(cut));
+    } else if op == "compare" {
+        out.push(compare(f[1], f[2])?);
+    } else if op == "size" {
+        out.push(show(read_file(f[1])?));
+    }
+    Ok(())
+}
+
+fn xor_same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn main() {
+    if let Err(e) = write_plain_files() {
+        eprintln(f"{e.kind}: {e.msg}");
+        return;
+    }
+    let tb = load_tables();
+    let mut st = State {
+        modes: Vec.new(),
+        counters: Vec.new(),
+        feeders: Vec.new(),
+        mode_ix: Map.new(),
+        counter_ix: Map.new(),
+        feeder_ix: Map.new(),
+    };
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, '\t');
+        if f[0] == "job" {
+            println(f"== {f[1]}");
+            continue;
+        }
+        let mut shown = String.new();
+        let mut k = 0;
+        while k < f.len() {
+            if k > 0 {
+                shown.push(' ');
+            }
+            if f[k].len() == 0 {
+                shown.push_str("''");
+            } else {
+                shown.push_str(f[k]);
+            }
+            k += 1;
+        }
+        println(f"> {shown}");
+        let mut out: Vec[String] = Vec.new();
+        let r = step(tb, mut st, f, mut out);
+        for x in out.iter() {
+            println(f"  -> {x}");
+        }
+        if let Err(e) = r {
+            println(f"  error {e.kind}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn table_text() -> String {
+    let mut s = String.new();
+    s.push_str("S 63 7c 77 7b f2 6b 6f c5 30 1 67 2b fe d7 ab 76 ca 82 c9 7d fa 59 47 f0 ad d4 a2 af 9c a4 72 c0 b7 fd 93 26 36 3f f7 cc 34 a5 e5 f1 71 d8 31 15 4 c7 23 c3 18 96 5 9a 7 12 80 e2 eb 27 b2 75 9 83 2c 1a 1b 6e 5a a0 52 3b d6 b3 29 e3 2f 84 53 d1 0 ed 20 fc b1 5b 6a cb be 39 4a 4c 58 cf d0 ef aa fb 43 4d 33 85 45 f9 2 7f 50 3c 9f a8 51 a3 40 8f 92 9d 38 f5 bc b6 da 21 10 ff f3 d2 cd c 13 ec 5f 97 44 17 c4 a7 7e 3d 64 5d 19 73 60 81 4f dc 22 2a 90 88 46 ee b8 14 de 5e b db e0 32 3a a 49 6 24 5c c2 d3 ac 62 91 95 e4 79 e7 c8 37 6d 8d d5 4e a9 6c 56 f4 ea 65 7a ae 8 ba 78 25 2e 1c a6 b4 c6 e8 dd 74 1f 4b bd 8b 8a 70 3e b5 66 48 3 f6 e 61 35 57 b9 86 c1 1d 9e e1 f8 98 11 69 d9 8e 94 9b 1e 87 e9 ce 55 28 df 8c a1 89 d bf e6 42 68 41 99 2d f b0 54 bb 16\nSi 52 9 6a d5 30 36 a5 38 bf 40 a3 9e 81 f3 d7 fb 7c e3 39 82 9b 2f ff 87 34 8e 43 44 c4 de e9 cb 54 7b 94 32 a6 c2 23 3d ee 4c 95 b 42 fa c3 4e 8 2e a1 66 28 d9 24 b2 76 5b a2 49 6d 8b d1 25 72 f8 f6 64 86 68 98 16 d4 a4 5c cc 5d 65 b6 92 6c 70 48 50 fd ed b9 da 5e 15 46 57 a7 8d 9d 84 90 d8 ab 0 8c bc d3 a f7 e4 58 5 b8 b3 45 6 d0 2c 1e 8f ca 3f f 2 c1 af bd 3 1 13 8a 6b 3a 91 11 41 4f 67 dc ea 97 f2 cf ce f0 b4 e6 73 96 ac 74 22 e7 ad 35 85 e2 f9 37 e8 1c 75 df 6e 47 f1 1a 71 1d 29 c5 89 6f b7 62 e aa 18 be 1b fc 56 3e 4b c6 d2 79 20 9a db c0 fe 78 cd 5a f4 1f dd a8 33 88 7 c7 31 b1 12 10 59 27 80 ec 5f 60 51 7f a9 19 b5 4a d 2d e5 7a 9f 93 c9 9c ef a0 e0 3b 4d ae 2a f5 b0 c8 eb bb 3c 83 53 99 61 17 2b 4 7e ba 77 d6 26 e1 69 14 63 55 21 c 7d\nT1 c66363a5 f87c7c84 ee777799 f67b7b8d fff2f20d d66b6bbd de6f6fb1 91c5c554 60303050 2010103 ce6767a9 562b2b7d e7fefe19 b5d7d762 4dababe6 ec76769a 8fcaca45 1f82829d 89c9c940 fa7d7d87 effafa15 b25959eb 8e4747c9 fbf0f00b 41adadec b3d4d467 5fa2a2fd 45afafea 239c9cbf 53a4a4f7 e4727296 9bc0c05b 75b7b7c2 e1fdfd1c 3d9393ae 4c26266a 6c36365a 7e3f3f41 f5f7f702 83cccc4f 6834345c 51a5a5f4 d1e5e534 f9f1f108 e2717193 abd8d873 62313153 2a15153f 804040c 95c7c752 46232365 9dc3c35e 30181828 379696a1 a05050f 2f9a9ab5 e070709 24121236 1b80809b dfe2e23d cdebeb26 4e272769 7fb2b2cd ea75759f 1209091b 1d83839e 582c2c74 341a1a2e 361b1b2d dc6e6eb2 b45a5aee 5ba0a0fb a45252f6 763b3b4d b7d6d661 7db3b3ce 5229297b dde3e33e 5e2f2f71 13848497 a65353f5 b9d1d168 0 c1eded2c 40202060 e3fcfc1f 79b1b1c8 b65b5bed d46a6abe 8dcbcb46 67bebed9 7239394b 944a4ade 984c4cd4 b05858e8 85cfcf4a bbd0d06b c5efef2a 4faaaae5 edfbfb16 864343c5 9a4d4dd7 66333355 11858594 8a4545cf e9f9f910 4020206 fe7f7f81 a05050f0 783c3c44 259f9fba 4ba8a8e3 a25151f3 5da3a3fe 804040c0 58f8f8a 3f9292ad 219d9dbc 70383848 f1f5f504 63bcbcdf 77b6b6c1 afdada75 42212163 20101030 e5ffff1a fdf3f30e bfd2d26d 81cdcd4c 180c0c14 26131335 c3ecec2f be5f5fe1 359797a2 884444cc 2e171739 93c4c457 55a7a7f2 fc7e7e82 7a3d3d47 c86464ac ba5d5de7 3219192b e6737395 c06060a0 19818198 9e4f4fd1 a3dcdc7f 44222266 542a2a7e 3b9090ab b888883 8c4646ca c7eeee29 6bb8b8d3 2814143c a7dede79 bc5e5ee2 160b0b1d addbdb76 dbe0e03b 64323256 743a3a4e 140a0a1e 924949db c06060a 4824246c b85c5ce4 9fc2c25d bdd3d36e 43acacef c46262a6 399191a8 319595a4 d3e4e437 f279798b d5e7e732 8bc8c843 6e373759 da6d6db7 18d8d8c b1d5d564 9c4e4ed2 49a9a9e0 d86c6cb4 ac5656fa f3f4f407 cfeaea25 ca6565af f47a7a8e 47aeaee9 10080818 6fbabad5 f0787888 4a25256f 5c2e2e72 381c1c24 57a6a6f1 73b4b4c7 97c6c651 cbe8e823 a1dddd7c e874749c 3e1f1f21 964b4bdd 61bdbddc d8b8b86 f8a8a85 e0707090 7c3e3e42 71b5b5c4 cc6666aa 904848d8 6030305 f7f6f601 1c0e0e12 c26161a3 6a35355f ae5757f9 69b9b9d0 17868691 99c1c158 3a1d1d27 279e9eb9 d9e1e138 ebf8f813 2b9898b3 22111133 d26969bb a9d9d970 78e8e89 339494a7 2d9b9bb6 3c1e1e22 15878792 c9e9e920 87cece49 aa5555ff 50282878 a5dfdf7a 38c8c8f 59a1a1f8 9898980 1a0d0d17 65bfbfda d7e6e631 844242c6 d06868b8 824141c3 299999b0 5a2d2d77 1e0f0f11 7bb0b0cb a85454fc 6dbbbbd6 2c16163a\n");
+    s.push_str("T2 a5c66363 84f87c7c 99ee7777 8df67b7b dfff2f2 bdd66b6b b1de6f6f 5491c5c5 50603030 3020101 a9ce6767 7d562b2b 19e7fefe 62b5d7d7 e64dabab 9aec7676 458fcaca 9d1f8282 4089c9c9 87fa7d7d 15effafa ebb25959 c98e4747 bfbf0f0 ec41adad 67b3d4d4 fd5fa2a2 ea45afaf bf239c9c f753a4a4 96e47272 5b9bc0c0 c275b7b7 1ce1fdfd ae3d9393 6a4c2626 5a6c3636 417e3f3f 2f5f7f7 4f83cccc 5c683434 f451a5a5 34d1e5e5 8f9f1f1 93e27171 73abd8d8 53623131 3f2a1515 c080404 5295c7c7 65462323 5e9dc3c3 28301818 a1379696 f0a0505 b52f9a9a 90e0707 36241212 9b1b8080 3ddfe2e2 26cdebeb 694e2727 cd7fb2b2 9fea7575 1b120909 9e1d8383 74582c2c 2e341a1a 2d361b1b b2dc6e6e eeb45a5a fb5ba0a0 f6a45252 4d763b3b 61b7d6d6 ce7db3b3 7b522929 3edde3e3 715e2f2f 97138484 f5a65353 68b9d1d1 0 2cc1eded 60402020 1fe3fcfc c879b1b1 edb65b5b bed46a6a 468dcbcb d967bebe 4b723939 de944a4a d4984c4c e8b05858 4a85cfcf 6bbbd0d0 2ac5efef e54faaaa 16edfbfb c5864343 d79a4d4d 55663333 94118585 cf8a4545 10e9f9f9 6040202 81fe7f7f f0a05050 44783c3c ba259f9f e34ba8a8 f3a25151 fe5da3a3 c0804040 8a058f8f ad3f9292 bc219d9d 48703838 4f1f5f5 df63bcbc c177b6b6 75afdada 63422121 30201010 1ae5ffff efdf3f3 6dbfd2d2 4c81cdcd 14180c0c 35261313 2fc3ecec e1be5f5f a2359797 cc884444 392e1717 5793c4c4 f255a7a7 82fc7e7e 477a3d3d acc86464 e7ba5d5d 2b321919 95e67373 a0c06060 98198181 d19e4f4f 7fa3dcdc 66442222 7e542a2a ab3b9090 830b8888 ca8c4646 29c7eeee d36bb8b8 3c281414 79a7dede e2bc5e5e 1d160b0b 76addbdb 3bdbe0e0 56643232 4e743a3a 1e140a0a db924949 a0c0606 6c482424 e4b85c5c 5d9fc2c2 6ebdd3d3 ef43acac a6c46262 a8399191 a4319595 37d3e4e4 8bf27979 32d5e7e7 438bc8c8 596e3737 b7da6d6d 8c018d8d 64b1d5d5 d29c4e4e e049a9a9 b4d86c6c faac5656 7f3f4f4 25cfeaea afca6565 8ef47a7a e947aeae 18100808 d56fbaba 88f07878 6f4a2525 725c2e2e 24381c1c f157a6a6 c773b4b4 5197c6c6 23cbe8e8 7ca1dddd 9ce87474 213e1f1f dd964b4b dc61bdbd 860d8b8b 850f8a8a 90e07070 427c3e3e c471b5b5 aacc6666 d8904848 5060303 1f7f6f6 121c0e0e a3c26161 5f6a3535 f9ae5757 d069b9b9 91178686 5899c1c1 273a1d1d b9279e9e 38d9e1e1 13ebf8f8 b32b9898 33221111 bbd26969 70a9d9d9 89078e8e a7339494 b62d9b9b 223c1e1e 92158787 20c9e9e9 4987cece ffaa5555 78502828 7aa5dfdf 8f038c8c f859a1a1 80098989 171a0d0d da65bfbf 31d7e6e6 c6844242 b8d06868 c3824141 b0299999 775a2d2d 111e0f0f cb7bb0b0 fca85454 d66dbbbb 3a2c1616\n");
+    s.push_str("T3 63a5c663 7c84f87c 7799ee77 7b8df67b f20dfff2 6bbdd66b 6fb1de6f c55491c5 30506030 1030201 67a9ce67 2b7d562b fe19e7fe d762b5d7 abe64dab 769aec76 ca458fca 829d1f82 c94089c9 7d87fa7d fa15effa 59ebb259 47c98e47 f00bfbf0 adec41ad d467b3d4 a2fd5fa2 afea45af 9cbf239c a4f753a4 7296e472 c05b9bc0 b7c275b7 fd1ce1fd 93ae3d93 266a4c26 365a6c36 3f417e3f f702f5f7 cc4f83cc 345c6834 a5f451a5 e534d1e5 f108f9f1 7193e271 d873abd8 31536231 153f2a15 40c0804 c75295c7 23654623 c35e9dc3 18283018 96a13796 50f0a05 9ab52f9a 7090e07 12362412 809b1b80 e23ddfe2 eb26cdeb 27694e27 b2cd7fb2 759fea75 91b1209 839e1d83 2c74582c 1a2e341a 1b2d361b 6eb2dc6e 5aeeb45a a0fb5ba0 52f6a452 3b4d763b d661b7d6 b3ce7db3 297b5229 e33edde3 2f715e2f 84971384 53f5a653 d168b9d1 0 ed2cc1ed 20604020 fc1fe3fc b1c879b1 5bedb65b 6abed46a cb468dcb bed967be 394b7239 4ade944a 4cd4984c 58e8b058 cf4a85cf d06bbbd0 ef2ac5ef aae54faa fb16edfb 43c58643 4dd79a4d 33556633 85941185 45cf8a45 f910e9f9 2060402 7f81fe7f 50f0a050 3c44783c 9fba259f a8e34ba8 51f3a251 a3fe5da3 40c08040 8f8a058f 92ad3f92 9dbc219d 38487038 f504f1f5 bcdf63bc b6c177b6 da75afda 21634221 10302010 ff1ae5ff f30efdf3 d26dbfd2 cd4c81cd c14180c 13352613 ec2fc3ec 5fe1be5f 97a23597 44cc8844 17392e17 c45793c4 a7f255a7 7e82fc7e 3d477a3d 64acc864 5de7ba5d 192b3219 7395e673 60a0c060 81981981 4fd19e4f dc7fa3dc 22664422 2a7e542a 90ab3b90 88830b88 46ca8c46 ee29c7ee b8d36bb8 143c2814 de79a7de 5ee2bc5e b1d160b db76addb e03bdbe0 32566432 3a4e743a a1e140a 49db9249 60a0c06 246c4824 5ce4b85c c25d9fc2 d36ebdd3 acef43ac 62a6c462 91a83991 95a43195 e437d3e4 798bf279 e732d5e7 c8438bc8 37596e37 6db7da6d 8d8c018d d564b1d5 4ed29c4e a9e049a9 6cb4d86c 56faac56 f407f3f4 ea25cfea 65afca65 7a8ef47a aee947ae 8181008 bad56fba 7888f078 256f4a25 2e725c2e 1c24381c a6f157a6 b4c773b4 c65197c6 e823cbe8 dd7ca1dd 749ce874 1f213e1f 4bdd964b bddc61bd 8b860d8b 8a850f8a 7090e070 3e427c3e b5c471b5 66aacc66 48d89048 3050603 f601f7f6 e121c0e 61a3c261 355f6a35 57f9ae57 b9d069b9 86911786 c15899c1 1d273a1d 9eb9279e e138d9e1 f813ebf8 98b32b98 11332211 69bbd269 d970a9d9 8e89078e 94a73394 9bb62d9b 1e223c1e 87921587 e920c9e9 ce4987ce 55ffaa55 28785028 df7aa5df 8c8f038c a1f859a1 89800989 d171a0d bfda65bf e631d7e6 42c68442 68b8d068 41c38241 99b02999 2d775a2d f111e0f b0cb7bb0 54fca854 bbd66dbb 163a2c16\n");
+    s.push_str("T4 6363a5c6 7c7c84f8 777799ee 7b7b8df6 f2f20dff 6b6bbdd6 6f6fb1de c5c55491 30305060 1010302 6767a9ce 2b2b7d56 fefe19e7 d7d762b5 ababe64d 76769aec caca458f 82829d1f c9c94089 7d7d87fa fafa15ef 5959ebb2 4747c98e f0f00bfb adadec41 d4d467b3 a2a2fd5f afafea45 9c9cbf23 a4a4f753 727296e4 c0c05b9b b7b7c275 fdfd1ce1 9393ae3d 26266a4c 36365a6c 3f3f417e f7f702f5 cccc4f83 34345c68 a5a5f451 e5e534d1 f1f108f9 717193e2 d8d873ab 31315362 15153f2a 4040c08 c7c75295 23236546 c3c35e9d 18182830 9696a137 5050f0a 9a9ab52f 707090e 12123624 80809b1b e2e23ddf ebeb26cd 2727694e b2b2cd7f 75759fea 9091b12 83839e1d 2c2c7458 1a1a2e34 1b1b2d36 6e6eb2dc 5a5aeeb4 a0a0fb5b 5252f6a4 3b3b4d76 d6d661b7 b3b3ce7d 29297b52 e3e33edd 2f2f715e 84849713 5353f5a6 d1d168b9 0 eded2cc1 20206040 fcfc1fe3 b1b1c879 5b5bedb6 6a6abed4 cbcb468d bebed967 39394b72 4a4ade94 4c4cd498 5858e8b0 cfcf4a85 d0d06bbb efef2ac5 aaaae54f fbfb16ed 4343c586 4d4dd79a 33335566 85859411 4545cf8a f9f910e9 2020604 7f7f81fe 5050f0a0 3c3c4478 9f9fba25 a8a8e34b 5151f3a2 a3a3fe5d 4040c080 8f8f8a05 9292ad3f 9d9dbc21 38384870 f5f504f1 bcbcdf63 b6b6c177 dada75af 21216342 10103020 ffff1ae5 f3f30efd d2d26dbf cdcd4c81 c0c1418 13133526 ecec2fc3 5f5fe1be 9797a235 4444cc88 1717392e c4c45793 a7a7f255 7e7e82fc 3d3d477a 6464acc8 5d5de7ba 19192b32 737395e6 6060a0c0 81819819 4f4fd19e dcdc7fa3 22226644 2a2a7e54 9090ab3b 8888830b 4646ca8c eeee29c7 b8b8d36b 14143c28 dede79a7 5e5ee2bc b0b1d16 dbdb76ad e0e03bdb 32325664 3a3a4e74 a0a1e14 4949db92 6060a0c 24246c48 5c5ce4b8 c2c25d9f d3d36ebd acacef43 6262a6c4 9191a839 9595a431 e4e437d3 79798bf2 e7e732d5 c8c8438b 3737596e 6d6db7da 8d8d8c01 d5d564b1 4e4ed29c a9a9e049 6c6cb4d8 5656faac f4f407f3 eaea25cf 6565afca 7a7a8ef4 aeaee947 8081810 babad56f 787888f0 25256f4a 2e2e725c 1c1c2438 a6a6f157 b4b4c773 c6c65197 e8e823cb dddd7ca1 74749ce8 1f1f213e 4b4bdd96 bdbddc61 8b8b860d 8a8a850f 707090e0 3e3e427c b5b5c471 6666aacc 4848d890 3030506 f6f601f7 e0e121c 6161a3c2 35355f6a 5757f9ae b9b9d069 86869117 c1c15899 1d1d273a 9e9eb927 e1e138d9 f8f813eb 9898b32b 11113322 6969bbd2 d9d970a9 8e8e8907 9494a733 9b9bb62d 1e1e223c 87879215 e9e920c9 cece4987 5555ffaa 28287850 dfdf7aa5 8c8c8f03 a1a1f859 89898009 d0d171a bfbfda65 e6e631d7 4242c684 6868b8d0 4141c382 9999b029 2d2d775a f0f111e b0b0cb7b 5454fca8 bbbbd66d 16163a2c\n");
+    s.push_str("T5 51f4a750 7e416553 1a17a4c3 3a275e96 3bab6bcb 1f9d45f1 acfa58ab 4be30393 2030fa55 ad766df6 88cc7691 f5024c25 4fe5d7fc c52acbd7 26354480 b562a38f deb15a49 25ba1b67 45ea0e98 5dfec0e1 c32f7502 814cf012 8d4697a3 6bd3f9c6 38f5fe7 15929c95 bf6d7aeb 955259da d4be832d 587421d3 49e06929 8ec9c844 75c2896a f48e7978 99583e6b 27b971dd bee14fb6 f088ad17 c920ac66 7dce3ab4 63df4a18 e51a3182 97513360 62537f45 b16477e0 bb6bae84 fe81a01c f9082b94 70486858 8f45fd19 94de6c87 527bf8b7 ab73d323 724b02e2 e31f8f57 6655ab2a b2eb2807 2fb5c203 86c57b9a d33708a5 302887f2 23bfa5b2 2036aba ed16825c 8acf1c2b a779b492 f307f2f0 4e69e2a1 65daf4cd 605bed5 d134621f c4a6fe8a 342e539d a2f355a0 58ae132 a4f6eb75 b83ec39 4060efaa 5e719f06 bd6e1051 3e218af9 96dd063d dd3e05ae 4de6bd46 91548db5 71c45d05 406d46f 605015ff 1998fb24 d6bde997 894043cc 67d99e77 b0e842bd 7898b88 e7195b38 79c8eedb a17c0a47 7c420fe9 f8841ec9 0 9808683 322bed48 1e1170ac 6c5a724e fd0efffb f853856 3daed51e 362d3927 a0fd964 685ca621 9b5b54d1 24362e3a c0a67b1 9357e70f b4ee96d2 1b9b919e 80c0c54f 61dc20a2 5a774b69 1c121a16 e293ba0a c0a02ae5 3c22e043 121b171d e090d0b f28bc7ad 2db6a8b9 141ea9c8 57f11985 af75074c ee99ddbb a37f60fd f701269f 5c72f5bc 44663bc5 5bfb7e34 8b432976 cb23c6dc b6edfc68 b8e4f163 d731dcca 42638510 13972240 84c61120 854a247d d2bb3df8 aef93211 c729a16d 1d9e2f4b dcb230f3 d8652ec 77c1e3d0 2bb3166c a970b999 119448fa 47e96422 a8fc8cc4 a0f03f1a 567d2cd8 223390ef 87494ec7 d938d1c1 8ccaa2fe 98d40b36 a6f581cf a57ade28 dab78e26 3fadbfa4 2c3a9de4 5078920d 6a5fcc9b 547e4662 f68d13c2 90d8b8e8 2e39f75e 82c3aff5 9f5d80be 69d0937c 6fd52da9 cf2512b3 c8ac993b 10187da7 e89c636e db3bbb7b cd267809 6e5918f4 ec9ab701 834f9aa8 e6956e65 aaffe67e 21bccf08 ef15e8e6 bae79bd9 4a6f36ce ea9f09d4 29b07cd6 31a4b2af 2a3f2331 c6a59430 35a266c0 744ebc37 fc82caa6 e090d0b0 33a7d815 f104984a 41ecdaf7 7fcd500e 1791f62f 764dd68d 43efb04d ccaa4d54 e49604df 9ed1b5e3 4c6a881b c12c1fb8 4665517f 9d5eea04 18c355d fa877473 fb0b412e b3671d5a 92dbd252 e9105633 6dd64713 9ad7618c 37a10c7a 59f8148e eb133c89 cea927ee b761c935 e11ce5ed 7a47b13c 9cd2df59 55f2733f 1814ce79 73c737bf 53f7cdea 5ffdaa5b df3d6f14 7844db86 caaff381 b968c43e 3824342c c2a3405f 161dc372 bce2250c 283c498b ff0d9541 39a80171 80cb3de d8b4e49c 6456c190 7bcb8461 d532b670 486c5c74 d0b85742\n");
+    s.push_str("T6 5051f4a7 537e4165 c31a17a4 963a275e cb3bab6b f11f9d45 abacfa58 934be303 552030fa f6ad766d 9188cc76 25f5024c fc4fe5d7 d7c52acb 80263544 8fb562a3 49deb15a 6725ba1b 9845ea0e e15dfec0 2c32f75 12814cf0 a38d4697 c66bd3f9 e7038f5f 9515929c ebbf6d7a da955259 2dd4be83 d3587421 2949e069 448ec9c8 6a75c289 78f48e79 6b99583e dd27b971 b6bee14f 17f088ad 66c920ac b47dce3a 1863df4a 82e51a31 60975133 4562537f e0b16477 84bb6bae 1cfe81a0 94f9082b 58704868 198f45fd 8794de6c b7527bf8 23ab73d3 e2724b02 57e31f8f 2a6655ab 7b2eb28 32fb5c2 9a86c57b a5d33708 f2302887 b223bfa5 ba02036a 5ced1682 2b8acf1c 92a779b4 f0f307f2 a14e69e2 cd65daf4 d50605be 1fd13462 8ac4a6fe 9d342e53 a0a2f355 32058ae1 75a4f6eb 390b83ec aa4060ef 65e719f 51bd6e10 f93e218a 3d96dd06 aedd3e05 464de6bd b591548d 571c45d 6f0406d4 ff605015 241998fb 97d6bde9 cc894043 7767d99e bdb0e842 8807898b 38e7195b db79c8ee 47a17c0a e97c420f c9f8841e 0 83098086 48322bed ac1e1170 4e6c5a72 fbfd0eff 560f8538 1e3daed5 27362d39 640a0fd9 21685ca6 d19b5b54 3a24362e b10c0a67 f9357e7 d2b4ee96 9e1b9b91 4f80c0c5 a261dc20 695a774b 161c121a ae293ba e5c0a02a 433c22e0 1d121b17 b0e090d adf28bc7 b92db6a8 c8141ea9 8557f119 4caf7507 bbee99dd fda37f60 9ff70126 bc5c72f5 c544663b 345bfb7e 768b4329 dccb23c6 68b6edfc 63b8e4f1 cad731dc 10426385 40139722 2084c611 7d854a24 f8d2bb3d 11aef932 6dc729a1 4b1d9e2f f3dcb230 ec0d8652 d077c1e3 6c2bb316 99a970b9 fa119448 2247e964 c4a8fc8c 1aa0f03f d8567d2c ef223390 c787494e c1d938d1 fe8ccaa2 3698d40b cfa6f581 28a57ade 26dab78e a43fadbf e42c3a9d d507892 9b6a5fcc 62547e46 c2f68d13 e890d8b8 5e2e39f7 f582c3af be9f5d80 7c69d093 a96fd52d b3cf2512 3bc8ac99 a710187d 6ee89c63 7bdb3bbb 9cd2678 f46e5918 1ec9ab7 a8834f9a 65e6956e 7eaaffe6 821bccf e6ef15e8 d9bae79b ce4a6f36 d4ea9f09 d629b07c af31a4b2 312a3f23 30c6a594 c035a266 37744ebc a6fc82ca b0e090d0 1533a7d8 4af10498 f741ecda e7fcd50 2f1791f6 8d764dd6 4d43efb0 54ccaa4d dfe49604 e39ed1b5 1b4c6a88 b8c12c1f 7f466551 49d5eea 5d018c35 73fa8774 2efb0b41 5ab3671d 5292dbd2 33e91056 136dd647 8c9ad761 7a37a10c 8e59f814 89eb133c eecea927 35b761c9 ede11ce5 3c7a47b1 599cd2df 3f55f273 791814ce bf73c737 ea53f7cd 5b5ffdaa 14df3d6f 867844db 81caaff3 3eb968c4 2c382434 5fc2a340 72161dc3 cbce225 8b283c49 41ff0d95 7139a801 de080cb3 9cd8b4e4 906456c1 617bcb84 70d532b6 74486c5c 42d0b857\n");
+    s.push_str("T7 a75051f4 65537e41 a4c31a17 5e963a27 6bcb3bab 45f11f9d 58abacfa 3934be3 fa552030 6df6ad76 769188cc 4c25f502 d7fc4fe5 cbd7c52a 44802635 a38fb562 5a49deb1 1b6725ba e9845ea c0e15dfe 7502c32f f012814c 97a38d46 f9c66bd3 5fe7038f 9c951592 7aebbf6d 59da9552 832dd4be 21d35874 692949e0 c8448ec9 896a75c2 7978f48e 3e6b9958 71dd27b9 4fb6bee1 ad17f088 ac66c920 3ab47dce 4a1863df 3182e51a 33609751 7f456253 77e0b164 ae84bb6b a01cfe81 2b94f908 68587048 fd198f45 6c8794de f8b7527b d323ab73 2e2724b 8f57e31f ab2a6655 2807b2eb c2032fb5 7b9a86c5 8a5d337 87f23028 a5b223bf 6aba0203 825ced16 1c2b8acf b492a779 f2f0f307 e2a14e69 f4cd65da bed50605 621fd134 fe8ac4a6 539d342e 55a0a2f3 e132058a eb75a4f6 ec390b83 efaa4060 9f065e71 1051bd6e 8af93e21 63d96dd 5aedd3e bd464de6 8db59154 5d0571c4 d46f0406 15ff6050 fb241998 e997d6bd 43cc8940 9e7767d9 42bdb0e8 8b880789 5b38e719 eedb79c8 a47a17c fe97c42 1ec9f884 0 86830980 ed48322b 70ac1e11 724e6c5a fffbfd0e 38560f85 d51e3dae 3927362d d9640a0f a621685c 54d19b5b 2e3a2436 67b10c0a e70f9357 96d2b4ee 919e1b9b c54f80c0 20a261dc 4b695a77 1a161c12 ba0ae293 2ae5c0a0 e0433c22 171d121b d0b0e09 c7adf28b a8b92db6 a9c8141e 198557f1 74caf75 ddbbee99 60fda37f 269ff701 f5bc5c72 3bc54466 7e345bfb 29768b43 c6dccb23 fc68b6ed f163b8e4 dccad731 85104263 22401397 112084c6 247d854a 3df8d2bb 3211aef9 a16dc729 2f4b1d9e 30f3dcb2 52ec0d86 e3d077c1 166c2bb3 b999a970 48fa1194 642247e9 8cc4a8fc 3f1aa0f0 2cd8567d 90ef2233 4ec78749 d1c1d938 a2fe8cca b3698d4 81cfa6f5 de28a57a 8e26dab7 bfa43fad 9de42c3a 920d5078 cc9b6a5f 4662547e 13c2f68d b8e890d8 f75e2e39 aff582c3 80be9f5d 937c69d0 2da96fd5 12b3cf25 993bc8ac 7da71018 636ee89c bb7bdb3b 7809cd26 18f46e59 b701ec9a 9aa8834f 6e65e695 e67eaaff cf0821bc e8e6ef15 9bd9bae7 36ce4a6f 9d4ea9f 7cd629b0 b2af31a4 23312a3f 9430c6a5 66c035a2 bc37744e caa6fc82 d0b0e090 d81533a7 984af104 daf741ec 500e7fcd f62f1791 d68d764d b04d43ef 4d54ccaa 4dfe496 b5e39ed1 881b4c6a 1fb8c12c 517f4665 ea049d5e 355d018c 7473fa87 412efb0b 1d5ab367 d25292db 5633e910 47136dd6 618c9ad7 c7a37a1 148e59f8 3c89eb13 27eecea9 c935b761 e5ede11c b13c7a47 df599cd2 733f55f2 ce791814 37bf73c7 cdea53f7 aa5b5ffd 6f14df3d db867844 f381caaf c43eb968 342c3824 405fc2a3 c372161d 250cbce2 498b283c 9541ff0d 17139a8 b3de080c e49cd8b4 c1906456 84617bcb b670d532 5c74486c 5742d0b8\n");
+    s.push_str("T8 f4a75051 4165537e 17a4c31a 275e963a ab6bcb3b 9d45f11f fa58abac e303934b 30fa5520 766df6ad cc769188 24c25f5 e5d7fc4f 2acbd7c5 35448026 62a38fb5 b15a49de ba1b6725 ea0e9845 fec0e15d 2f7502c3 4cf01281 4697a38d d3f9c66b 8f5fe703 929c9515 6d7aebbf 5259da95 be832dd4 7421d358 e0692949 c9c8448e c2896a75 8e7978f4 583e6b99 b971dd27 e14fb6be 88ad17f0 20ac66c9 ce3ab47d df4a1863 1a3182e5 51336097 537f4562 6477e0b1 6bae84bb 81a01cfe 82b94f9 48685870 45fd198f de6c8794 7bf8b752 73d323ab 4b02e272 1f8f57e3 55ab2a66 eb2807b2 b5c2032f c57b9a86 3708a5d3 2887f230 bfa5b223 36aba02 16825ced cf1c2b8a 79b492a7 7f2f0f3 69e2a14e daf4cd65 5bed506 34621fd1 a6fe8ac4 2e539d34 f355a0a2 8ae13205 f6eb75a4 83ec390b 60efaa40 719f065e 6e1051bd 218af93e dd063d96 3e05aedd e6bd464d 548db591 c45d0571 6d46f04 5015ff60 98fb2419 bde997d6 4043cc89 d99e7767 e842bdb0 898b8807 195b38e7 c8eedb79 7c0a47a1 420fe97c 841ec9f8 0 80868309 2bed4832 1170ac1e 5a724e6c efffbfd 8538560f aed51e3d 2d392736 fd9640a 5ca62168 5b54d19b 362e3a24 a67b10c 57e70f93 ee96d2b4 9b919e1b c0c54f80 dc20a261 774b695a 121a161c 93ba0ae2 a02ae5c0 22e0433c 1b171d12 90d0b0e 8bc7adf2 b6a8b92d 1ea9c814 f1198557 75074caf 99ddbbee 7f60fda3 1269ff7 72f5bc5c 663bc544 fb7e345b 4329768b 23c6dccb edfc68b6 e4f163b8 31dccad7 63851042 97224013 c6112084 4a247d85 bb3df8d2 f93211ae 29a16dc7 9e2f4b1d b230f3dc 8652ec0d c1e3d077 b3166c2b 70b999a9 9448fa11 e9642247 fc8cc4a8 f03f1aa0 7d2cd856 3390ef22 494ec787 38d1c1d9 caa2fe8c d40b3698 f581cfa6 7ade28a5 b78e26da adbfa43f 3a9de42c 78920d50 5fcc9b6a 7e466254 8d13c2f6 d8b8e890 39f75e2e c3aff582 5d80be9f d0937c69 d52da96f 2512b3cf ac993bc8 187da710 9c636ee8 3bbb7bdb 267809cd 5918f46e 9ab701ec 4f9aa883 956e65e6 ffe67eaa bccf0821 15e8e6ef e79bd9ba 6f36ce4a 9f09d4ea b07cd629 a4b2af31 3f23312a a59430c6 a266c035 4ebc3774 82caa6fc 90d0b0e0 a7d81533 4984af1 ecdaf741 cd500e7f 91f62f17 4dd68d76 efb04d43 aa4d54cc 9604dfe4 d1b5e39e 6a881b4c 2c1fb8c1 65517f46 5eea049d 8c355d01 877473fa b412efb 671d5ab3 dbd25292 105633e9 d647136d d7618c9a a10c7a37 f8148e59 133c89eb a927eece 61c935b7 1ce5ede1 47b13c7a d2df599c f2733f55 14ce7918 c737bf73 f7cdea53 fdaa5b5f 3d6f14df 44db8678 aff381ca 68c43eb9 24342c38 a3405fc2 1dc37216 e2250cbc 3c498b28 d9541ff a8017139 cb3de08 b4e49cd8 56c19064 cb84617b 32b670d5 6c5c7448 b85742d0\n");
+    s.push_str("U1 0 e090d0b 1c121a16 121b171d 3824342c 362d3927 24362e3a 2a3f2331 70486858 7e416553 6c5a724e 62537f45 486c5c74 4665517f 547e4662 5a774b69 e090d0b0 ee99ddbb fc82caa6 f28bc7ad d8b4e49c d6bde997 c4a6fe8a caaff381 90d8b8e8 9ed1b5e3 8ccaa2fe 82c3aff5 a8fc8cc4 a6f581cf b4ee96d2 bae79bd9 db3bbb7b d532b670 c729a16d c920ac66 e31f8f57 ed16825c ff0d9541 f104984a ab73d323 a57ade28 b761c935 b968c43e 9357e70f 9d5eea04 8f45fd19 814cf012 3bab6bcb 35a266c0 27b971dd 29b07cd6 38f5fe7 d8652ec 1f9d45f1 119448fa 4be30393 45ea0e98 57f11985 59f8148e 73c737bf 7dce3ab4 6fd52da9 61dc20a2 ad766df6 a37f60fd b16477e0 bf6d7aeb 955259da 9b5b54d1 894043cc 87494ec7 dd3e05ae d33708a5 c12c1fb8 cf2512b3 e51a3182 eb133c89 f9082b94 f701269f 4de6bd46 43efb04d 51f4a750 5ffdaa5b 75c2896a 7bcb8461 69d0937c 67d99e77 3daed51e 33a7d815 21bccf08 2fb5c203 58ae132 b83ec39 1998fb24 1791f62f 764dd68d 7844db86 6a5fcc9b 6456c190 4e69e2a1 4060efaa 527bf8b7 5c72f5bc 605bed5 80cb3de 1a17a4c3 141ea9c8 3e218af9 302887f2 223390ef 2c3a9de4 96dd063d 98d40b36 8acf1c2b 84c61120 aef93211 a0f03f1a b2eb2807 bce2250c e6956e65 e89c636e fa877473 f48e7978 deb15a49 d0b85742 c2a3405f ccaa4d54 41ecdaf7 4fe5d7fc 5dfec0e1 53f7cdea 79c8eedb 77c1e3d0 65daf4cd 6bd3f9c6 31a4b2af 3fadbfa4 2db6a8b9 23bfa5b2 9808683 7898b88 15929c95 1b9b919e a17c0a47 af75074c bd6e1051 b3671d5a 99583e6b 97513360 854a247d 8b432976 d134621f df3d6f14 cd267809 c32f7502 e9105633 e7195b38 f5024c25 fb0b412e 9ad7618c 94de6c87 86c57b9a 88cc7691 a2f355a0 acfa58ab bee14fb6 b0e842bd ea9f09d4 e49604df f68d13c2 f8841ec9 d2bb3df8 dcb230f3 cea927ee c0a02ae5 7a47b13c 744ebc37 6655ab2a 685ca621 42638510 4c6a881b 5e719f06 5078920d a0fd964 406d46f 161dc372 1814ce79 322bed48 3c22e043 2e39f75e 2030fa55 ec9ab701 e293ba0a f088ad17 fe81a01c d4be832d dab78e26 c8ac993b c6a59430 9cd2df59 92dbd252 80c0c54f 8ec9c844 a4f6eb75 aaffe67e b8e4f163 b6edfc68 c0a67b1 2036aba 10187da7 1e1170ac 342e539d 3a275e96 283c498b 26354480 7c420fe9 724b02e2 605015ff 6e5918f4 44663bc5 4a6f36ce 587421d3 567d2cd8 37a10c7a 39a80171 2bb3166c 25ba1b67 f853856 18c355d 13972240 1d9e2f4b 47e96422 49e06929 5bfb7e34 55f2733f 7fcd500e 71c45d05 63df4a18 6dd64713 d731dcca d938d1c1 cb23c6dc c52acbd7 ef15e8e6 e11ce5ed f307f2f0 fd0efffb a779b492 a970b999 bb6bae84 b562a38f 9f5d80be 91548db5 834f9aa8 8d4697a3\n");
+    s.push_str("U2 0 b0e090d 161c121a 1d121b17 2c382434 27362d39 3a24362e 312a3f23 58704868 537e4165 4e6c5a72 4562537f 74486c5c 7f466551 62547e46 695a774b b0e090d0 bbee99dd a6fc82ca adf28bc7 9cd8b4e4 97d6bde9 8ac4a6fe 81caaff3 e890d8b8 e39ed1b5 fe8ccaa2 f582c3af c4a8fc8c cfa6f581 d2b4ee96 d9bae79b 7bdb3bbb 70d532b6 6dc729a1 66c920ac 57e31f8f 5ced1682 41ff0d95 4af10498 23ab73d3 28a57ade 35b761c9 3eb968c4 f9357e7 49d5eea 198f45fd 12814cf0 cb3bab6b c035a266 dd27b971 d629b07c e7038f5f ec0d8652 f11f9d45 fa119448 934be303 9845ea0e 8557f119 8e59f814 bf73c737 b47dce3a a96fd52d a261dc20 f6ad766d fda37f60 e0b16477 ebbf6d7a da955259 d19b5b54 cc894043 c787494e aedd3e05 a5d33708 b8c12c1f b3cf2512 82e51a31 89eb133c 94f9082b 9ff70126 464de6bd 4d43efb0 5051f4a7 5b5ffdaa 6a75c289 617bcb84 7c69d093 7767d99e 1e3daed5 1533a7d8 821bccf 32fb5c2 32058ae1 390b83ec 241998fb 2f1791f6 8d764dd6 867844db 9b6a5fcc 906456c1 a14e69e2 aa4060ef b7527bf8 bc5c72f5 d50605be de080cb3 c31a17a4 c8141ea9 f93e218a f2302887 ef223390 e42c3a9d 3d96dd06 3698d40b 2b8acf1c 2084c611 11aef932 1aa0f03f 7b2eb28 cbce225 65e6956e 6ee89c63 73fa8774 78f48e79 49deb15a 42d0b857 5fc2a340 54ccaa4d f741ecda fc4fe5d7 e15dfec0 ea53f7cd db79c8ee d077c1e3 cd65daf4 c66bd3f9 af31a4b2 a43fadbf b92db6a8 b223bfa5 83098086 8807898b 9515929c 9e1b9b91 47a17c0a 4caf7507 51bd6e10 5ab3671d 6b99583e 60975133 7d854a24 768b4329 1fd13462 14df3d6f 9cd2678 2c32f75 33e91056 38e7195b 25f5024c 2efb0b41 8c9ad761 8794de6c 9a86c57b 9188cc76 a0a2f355 abacfa58 b6bee14f bdb0e842 d4ea9f09 dfe49604 c2f68d13 c9f8841e f8d2bb3d f3dcb230 eecea927 e5c0a02a 3c7a47b1 37744ebc 2a6655ab 21685ca6 10426385 1b4c6a88 65e719f d507892 640a0fd9 6f0406d4 72161dc3 791814ce 48322bed 433c22e0 5e2e39f7 552030fa 1ec9ab7 ae293ba 17f088ad 1cfe81a0 2dd4be83 26dab78e 3bc8ac99 30c6a594 599cd2df 5292dbd2 4f80c0c5 448ec9c8 75a4f6eb 7eaaffe6 63b8e4f1 68b6edfc b10c0a67 ba02036a a710187d ac1e1170 9d342e53 963a275e 8b283c49 80263544 e97c420f e2724b02 ff605015 f46e5918 c544663b ce4a6f36 d3587421 d8567d2c 7a37a10c 7139a801 6c2bb316 6725ba1b 560f8538 5d018c35 40139722 4b1d9e2f 2247e964 2949e069 345bfb7e 3f55f273 e7fcd50 571c45d 1863df4a 136dd647 cad731dc c1d938d1 dccb23c6 d7c52acb e6ef15e8 ede11ce5 f0f307f2 fbfd0eff 92a779b4 99a970b9 84bb6bae 8fb562a3 be9f5d80 b591548d a8834f9a a38d4697\n");
+    s.push_str("U3 0 d0b0e09 1a161c12 171d121b 342c3824 3927362d 2e3a2436 23312a3f 68587048 65537e41 724e6c5a 7f456253 5c74486c 517f4665 4662547e 4b695a77 d0b0e090 ddbbee99 caa6fc82 c7adf28b e49cd8b4 e997d6bd fe8ac4a6 f381caaf b8e890d8 b5e39ed1 a2fe8cca aff582c3 8cc4a8fc 81cfa6f5 96d2b4ee 9bd9bae7 bb7bdb3b b670d532 a16dc729 ac66c920 8f57e31f 825ced16 9541ff0d 984af104 d323ab73 de28a57a c935b761 c43eb968 e70f9357 ea049d5e fd198f45 f012814c 6bcb3bab 66c035a2 71dd27b9 7cd629b0 5fe7038f 52ec0d86 45f11f9d 48fa1194 3934be3 e9845ea 198557f1 148e59f8 37bf73c7 3ab47dce 2da96fd5 20a261dc 6df6ad76 60fda37f 77e0b164 7aebbf6d 59da9552 54d19b5b 43cc8940 4ec78749 5aedd3e 8a5d337 1fb8c12c 12b3cf25 3182e51a 3c89eb13 2b94f908 269ff701 bd464de6 b04d43ef a75051f4 aa5b5ffd 896a75c2 84617bcb 937c69d0 9e7767d9 d51e3dae d81533a7 cf0821bc c2032fb5 e132058a ec390b83 fb241998 f62f1791 d68d764d db867844 cc9b6a5f c1906456 e2a14e69 efaa4060 f8b7527b f5bc5c72 bed50605 b3de080c a4c31a17 a9c8141e 8af93e21 87f23028 90ef2233 9de42c3a 63d96dd b3698d4 1c2b8acf 112084c6 3211aef9 3f1aa0f0 2807b2eb 250cbce2 6e65e695 636ee89c 7473fa87 7978f48e 5a49deb1 5742d0b8 405fc2a3 4d54ccaa daf741ec d7fc4fe5 c0e15dfe cdea53f7 eedb79c8 e3d077c1 f4cd65da f9c66bd3 b2af31a4 bfa43fad a8b92db6 a5b223bf 86830980 8b880789 9c951592 919e1b9b a47a17c 74caf75 1051bd6e 1d5ab367 3e6b9958 33609751 247d854a 29768b43 621fd134 6f14df3d 7809cd26 7502c32f 5633e910 5b38e719 4c25f502 412efb0b 618c9ad7 6c8794de 7b9a86c5 769188cc 55a0a2f3 58abacfa 4fb6bee1 42bdb0e8 9d4ea9f 4dfe496 13c2f68d 1ec9f884 3df8d2bb 30f3dcb2 27eecea9 2ae5c0a0 b13c7a47 bc37744e ab2a6655 a621685c 85104263 881b4c6a 9f065e71 920d5078 d9640a0f d46f0406 c372161d ce791814 ed48322b e0433c22 f75e2e39 fa552030 b701ec9a ba0ae293 ad17f088 a01cfe81 832dd4be 8e26dab7 993bc8ac 9430c6a5 df599cd2 d25292db c54f80c0 c8448ec9 eb75a4f6 e67eaaff f163b8e4 fc68b6ed 67b10c0a 6aba0203 7da71018 70ac1e11 539d342e 5e963a27 498b283c 44802635 fe97c42 2e2724b 15ff6050 18f46e59 3bc54466 36ce4a6f 21d35874 2cd8567d c7a37a1 17139a8 166c2bb3 1b6725ba 38560f85 355d018c 22401397 2f4b1d9e 642247e9 692949e0 7e345bfb 733f55f2 500e7fcd 5d0571c4 4a1863df 47136dd6 dccad731 d1c1d938 c6dccb23 cbd7c52a e8e6ef15 e5ede11c f2f0f307 fffbfd0e b492a779 b999a970 ae84bb6b a38fb562 80be9f5d 8db59154 9aa8834f 97a38d46\n");
+    s.push_str("U4 0 90d0b0e 121a161c 1b171d12 24342c38 2d392736 362e3a24 3f23312a 48685870 4165537e 5a724e6c 537f4562 6c5c7448 65517f46 7e466254 774b695a 90d0b0e0 99ddbbee 82caa6fc 8bc7adf2 b4e49cd8 bde997d6 a6fe8ac4 aff381ca d8b8e890 d1b5e39e caa2fe8c c3aff582 fc8cc4a8 f581cfa6 ee96d2b4 e79bd9ba 3bbb7bdb 32b670d5 29a16dc7 20ac66c9 1f8f57e3 16825ced d9541ff 4984af1 73d323ab 7ade28a5 61c935b7 68c43eb9 57e70f93 5eea049d 45fd198f 4cf01281 ab6bcb3b a266c035 b971dd27 b07cd629 8f5fe703 8652ec0d 9d45f11f 9448fa11 e303934b ea0e9845 f1198557 f8148e59 c737bf73 ce3ab47d d52da96f dc20a261 766df6ad 7f60fda3 6477e0b1 6d7aebbf 5259da95 5b54d19b 4043cc89 494ec787 3e05aedd 3708a5d3 2c1fb8c1 2512b3cf 1a3182e5 133c89eb 82b94f9 1269ff7 e6bd464d efb04d43 f4a75051 fdaa5b5f c2896a75 cb84617b d0937c69 d99e7767 aed51e3d a7d81533 bccf0821 b5c2032f 8ae13205 83ec390b 98fb2419 91f62f17 4dd68d76 44db8678 5fcc9b6a 56c19064 69e2a14e 60efaa40 7bf8b752 72f5bc5c 5bed506 cb3de08 17a4c31a 1ea9c814 218af93e 2887f230 3390ef22 3a9de42c dd063d96 d40b3698 cf1c2b8a c6112084 f93211ae f03f1aa0 eb2807b2 e2250cbc 956e65e6 9c636ee8 877473fa 8e7978f4 b15a49de b85742d0 a3405fc2 aa4d54cc ecdaf741 e5d7fc4f fec0e15d f7cdea53 c8eedb79 c1e3d077 daf4cd65 d3f9c66b a4b2af31 adbfa43f b6a8b92d bfa5b223 80868309 898b8807 929c9515 9b919e1b 7c0a47a1 75074caf 6e1051bd 671d5ab3 583e6b99 51336097 4a247d85 4329768b 34621fd1 3d6f14df 267809cd 2f7502c3 105633e9 195b38e7 24c25f5 b412efb d7618c9a de6c8794 c57b9a86 cc769188 f355a0a2 fa58abac e14fb6be e842bdb0 9f09d4ea 9604dfe4 8d13c2f6 841ec9f8 bb3df8d2 b230f3dc a927eece a02ae5c0 47b13c7a 4ebc3774 55ab2a66 5ca62168 63851042 6a881b4c 719f065e 78920d50 fd9640a 6d46f04 1dc37216 14ce7918 2bed4832 22e0433c 39f75e2e 30fa5520 9ab701ec 93ba0ae2 88ad17f0 81a01cfe be832dd4 b78e26da ac993bc8 a59430c6 d2df599c dbd25292 c0c54f80 c9c8448e f6eb75a4 ffe67eaa e4f163b8 edfc68b6 a67b10c 36aba02 187da710 1170ac1e 2e539d34 275e963a 3c498b28 35448026 420fe97c 4b02e272 5015ff60 5918f46e 663bc544 6f36ce4a 7421d358 7d2cd856 a10c7a37 a8017139 b3166c2b ba1b6725 8538560f 8c355d01 97224013 9e2f4b1d e9642247 e0692949 fb7e345b f2733f55 cd500e7f c45d0571 df4a1863 d647136d 31dccad7 38d1c1d9 23c6dccb 2acbd7c5 15e8e6ef 1ce5ede1 7f2f0f3 efffbfd 79b492a7 70b999a9 6bae84bb 62a38fb5 5d80be9f 548db591 4f9aa883 4697a38d\n");
+    s.push_str("rcon 1 2 4 8 10 20 40 80 1b 36 6c d8 ab 4d 9a 2f 5e bc 63 c6 97 35 6a d4 b3 7d fa ef c5 91\n");
+    s
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job\tknown answers (FIPS-197 and SP 800-38A)\naes\t000102030405060708090a0b0c0d0e0f\tencrypt\t00112233445566778899aabbccddeeff\naes\t000102030405060708090a0b0c0d0e0f1011121314151617\tencrypt\t00112233445566778899aabbccddeeff\naes\t000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\tencrypt\t00112233445566778899aabbccddeeff\naes\t000102030405060708090a0b0c0d0e0f\tdecrypt\t69c4e0d86a7b0430d8cdb78070b4c55a\naes\t000102030405060708090a0b0c0d0e0f1011121314151617\tdecrypt\tdda97ca4864cdfe06eaf70a0ec0d7191\naes\t000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\tdecrypt\t8ea2b7ca516745bfeafc49904b496089\nmode\tm\tecb\t2b7e151628aed2a6abf7158809cf4f3c\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcbc\t2b7e151628aed2a6abf7158809cf4f3c\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t2b7e151628aed2a6abf7158809cf4f3c\t000102030405060708090a0b0c0d0e0f\t16\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t2b7e151628aed2a6abf7158809cf4f3c\t000102030405060708090a0b0c0d0e0f\t1\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tofb\t2b7e151628aed2a6abf7158809cf4f3c\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\ncounter\tc0\t320270990202665973124521174155042619135\nmode\tm\tctr\t2b7e151628aed2a6abf7158809cf4f3c\tc0\n");
+    s.push_str("encrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tecb\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcbc\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\t000102030405060708090a0b0c0d0e0f\t16\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\t000102030405060708090a0b0c0d0e0f\t1\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tofb\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\ncounter\tc1\t320270990202665973124521174155042619135\nmode\tm\tctr\t8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b\tc1\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tecb\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\n");
+    s.push_str("encrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcbc\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\t000102030405060708090a0b0c0d0e0f\t16\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tcfb\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\t000102030405060708090a0b0c0d0e0f\t1\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\nmode\tm\tofb\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\t000102030405060708090a0b0c0d0e0f\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\ncounter\tc2\t320270990202665973124521174155042619135\nmode\tm\tctr\t603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\tc2\nencrypt\tm\t6bc1bee22e409f96e93d7e117393172a\nencrypt\tm\tae2d8a571e03ac9c9eb76fac45af8e51\nencrypt\tm\t30c81c46a35ce411e5fbc1191a0a52ef\nencrypt\tm\tf69f2445df4f9b17ad2b417be66c3710\njob\tone message per mode\nmode\tsend\tecb\tb3f96e988ca49943315597b9e8042443\nencrypt\tsend\t496e766f69636520323032362d303131\nencrypt\tsend\t37207061696420696e2066756c6c2e20\nencrypt\tsend\t5468616e6b20796f7521202020202020\nmode\tsend\tcbc\t83c2db8dac623cfeeee13919eb377a1ed35e17c42f09e5de\t855b31c9ba3342bada3856d0f2ac71eb\nencrypt\tsend\t496e766f69636520323032362d303131\nencrypt\tsend\t37207061696420696e2066756c6c2e20\n");
+    s.push_str("encrypt\tsend\t5468616e6b20796f7521202020202020\nmode\tsend\tcfb\te7fd04915e7a98a527f96bfb4c81d284c0b6ef91bfc31b5aed386a92806b3e77\t723085077e992d4e73991fa2268e8ea1\t8\nencrypt\tsend\t496e766f69636520\nencrypt\tsend\t323032362d3031313720706169642069\nencrypt\tsend\t6e2066756c6c2e205468616e6b20796f7521202020202020\nmode\tsend\tofb\tad60f5103599155c0082615da553307f\t91d326b6e7d86d46821ff2e5d20f2f6a\nencrypt\tsend\t496e766f69\nencrypt\tsend\t636520323032362d30313137207061696420696e\nencrypt\tsend\t2066756c6c2e205468616e6b20796f7521\ncounter\tn\t1000\nmode\tsend\tctr\t8a682e2a0f8308eb976a0defaf8cc15a9e67d1327b61a84331777e2bbc266ad7\tn\nencrypt\tsend\t496e766f69\nencrypt\tsend\t636520323032362d30313137207061696420696e\nencrypt\tsend\t2066756c6c2e205468616e6b20796f7521\njob\ta message round trip\nmode\ta\tecb\t1891718ac2cfc5bdde8051ee20fd1898\nmode\tb\tecb\t1891718ac2cfc5bdde8051ee20fd1898\nroundtrip\ta\tb\t4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121\nmode\ta\tcbc\t83dbb39d6747bbf58955a83b9cab2f5e\t4747191958366e20fc1e77d361982c10\nmode\tb\tcbc\t83dbb39d6747bbf58955a83b9cab2f5e\t4747191958366e20fc1e77d361982c10\nroundtrip\ta\tb\t4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121\nmode\ta\tcfb\tbdfb6aeec19919bde448e105a2370653\t9914ee12a22d254a007f24cfa9b3a94b\t4\nmode\tb\tcfb\tbdfb6aeec19919bde448e105a2370653\t9914ee12a22d254a007f24cfa9b3a94b\t4\nroundtrip\ta\tb\t4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121\nmode\ta\tofb\t9f525134a4e22ab99331164845014b19\t16f6ff6cee3a765c615cfb4d58ca3374\nmode\tb\tofb\t9f525134a4e22ab99331164845014b19\t16f6ff6cee3a765c615cfb4d58ca3374\nroundtrip\ta\tb\t4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121\ncounter\trt\t7\nmode\ta\tctr\tfce4b840d06f4c8dcc1d53201e3d20f8\trt\ncounter\trt\t7\nmode\tb\tctr\tfce4b840d06f4c8dcc1d53201e3d20f8\trt\nroundtrip\ta\tb\t4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121\n");
+    s.push_str("job\treusing a mode\nmode\tcbc\tcbc\td9c0d34144c1defc65b0d4f0501b8315\tabababababababababababababababab\nencrypt\tcbc\t666972737420626c6f636b2068657265\ndecrypt\tcbc\t00000000000000000000000000000000\nencrypt\tcbc\t666972737420626c6f636b2068657265\nmode\tofb\tofb\td9c0d34144c1defc65b0d4f0501b8315\tabababababababababababababababab\nencrypt\tofb\t616263\nencrypt\tofb\t6465666768696a6b6c6d6e6f707172737475767778797a\ndecrypt\tofb\t616263\nmode\tofb\tofb\td9c0d34144c1defc65b0d4f0501b8315\tabababababababababababababababab\nencrypt\tofb\t6162636465666768696a6b6c6d6e6f707172737475767778797a\nencrypt\tofb\t\ncounter\tshared\t0\nmode\tc1\tctr\td9c0d34144c1defc65b0d4f0501b8315\tshared\nmode\tc2\tctr\td9c0d34144c1defc65b0d4f0501b8315\tshared\nencrypt\tc1\t736576656e7465656e2062797465732121\nvalue\tshared\nencrypt\tc2\t736576656e7465656e2062797465732121\nvalue\tshared\nencrypt\tc1\t6d6f7265\nvalue\tshared\nmode\tc3\tctr\td9c0d34144c1defc65b0d4f0501b8315\nencrypt\tc3\t00000000000000000000000000000000000000000000000000000000000000000000000000000000\nmode\tecb\tecb\td9c0d34144c1defc65b0d4f0501b8315\nencrypt\tecb\t00000000000000000000000000000000\nencrypt\tecb\t00000000000000000000000000000000\njob\tcounters\ncounter\tc\t0\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t1\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t255\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t256\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t65535\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("value\tc\ncounter\tc\t18446744073709551616\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t340282366920938463463374607431768211455\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t340282366920938463463374607431768211456\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t1361129467683753853853498429727072845829\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t-1\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t-256\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t-170141183460469231731687303715884105728\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\ncounter\tc\t8727963568087712425891397479476727340041449\nvalue\tc\nmode\tm\tctr\t332daf8d957f47641228f8617ac321b4\tc\nencrypt\tm\t000000000000000000000000000000000000000000000000000000000000000000\nvalue\tc\njob\tfeeders\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5ac\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0\nfeed\tf\n");
+    s.push_str("mode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2\nfeed\tf\t68\nfeed\tf\t2f\nfeed\tf\tf5\nfeed\tf\tbb\nfeed\tf\t82\nfeed\tf\t48\nfeed\tf\t0e\nfeed\tf\td4\nfeed\tf\t9b\nfeed\tf\t61\nfeed\tf\t27\nfeed\tf\tee\nfeed\tf\tb4\nfeed\tf\t7a\nfeed\tf\t41\nfeed\tf\t07\nfeed\tf\tcd\nfeed\tf\t94\nfeed\tf\t5a\nfeed\tf\t20\nfeed\tf\te6\nfeed\tf\tad\nfeed\tf\t73\nfeed\tf\t39\nfeed\tf\t00\nfeed\tf\tc6\nfeed\tf\t8c\nfeed\tf\t53\nfeed\tf\t19\nfeed\tf\tdf\nfeed\tf\ta6\nfeed\tf\t6c\nfeed\tf\t32\nfeed\tf\tf8\nfeed\tf\tbf\nfeed\tf\t85\nfeed\tf\t4b\nfeed\tf\t12\nfeed\tf\td8\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9\nfeed\tf\t0e799df215dd6edefb\nfeed\tf\t0730092dc19c4eabc6711ed4e3258978\nfeed\tf\t6c\nfeed\tf\t32fd629b773ed9676153763a4b072c\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\t\nfeed\tf\t\nfeed\tf\ta2072d\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5ac\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\n");
+    s.push_str("feeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2\nfeed\tf\t68\nfeed\tf\t2f\nfeed\tf\tf5\nfeed\tf\tbb\nfeed\tf\t82\nfeed\tf\t48\nfeed\tf\t0e\nfeed\tf\td4\nfeed\tf\t9b\nfeed\tf\t61\nfeed\tf\t27\nfeed\tf\tee\nfeed\tf\tb4\nfeed\tf\t7a\nfeed\tf\t41\nfeed\tf\t07\nfeed\tf\tcd\nfeed\tf\t94\nfeed\tf\t5a\nfeed\tf\t20\nfeed\tf\te6\nfeed\tf\tad\nfeed\tf\t73\nfeed\tf\t39\nfeed\tf\t00\nfeed\tf\tc6\nfeed\tf\t8c\nfeed\tf\t53\nfeed\tf\t19\nfeed\tf\tdf\nfeed\tf\ta6\nfeed\tf\t6c\nfeed\tf\t32\nfeed\tf\tf8\nfeed\tf\tbf\nfeed\tf\t85\nfeed\tf\t4b\nfeed\tf\t12\nfeed\tf\td8\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9\nfeed\tf\t0e799df215dd6edefb\nfeed\tf\t0730092dc19c4eabc6711ed4e3258978\nfeed\tf\t6c\nfeed\tf\t32fd629b773ed9676153763a4b072c\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f\n");
+    s.push_str("feed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\t\nfeed\tf\t\nfeed\tf\ta2072d\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5ac\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2\nfeed\tf\t68\nfeed\tf\t2f\nfeed\tf\tf5\nfeed\tf\tbb\nfeed\tf\t82\nfeed\tf\t48\nfeed\tf\t0e\nfeed\tf\td4\nfeed\tf\t9b\nfeed\tf\t61\nfeed\tf\t27\nfeed\tf\tee\nfeed\tf\tb4\nfeed\tf\t7a\nfeed\tf\t41\nfeed\tf\t07\nfeed\tf\tcd\nfeed\tf\t94\nfeed\tf\t5a\nfeed\tf\t20\nfeed\tf\te6\nfeed\tf\tad\nfeed\tf\t73\nfeed\tf\t39\nfeed\tf\t00\nfeed\tf\tc6\nfeed\tf\t8c\nfeed\tf\t53\nfeed\tf\t19\nfeed\tf\tdf\nfeed\tf\ta6\nfeed\tf\t6c\nfeed\tf\t32\nfeed\tf\tf8\nfeed\tf\tbf\nfeed\tf\t85\nfeed\tf\t4b\nfeed\tf\t12\nfeed\tf\td8\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\n");
+    s.push_str("feeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9\nfeed\tf\t0e799df215dd6edefb\nfeed\tf\t0730092dc19c4eabc6711ed4e3258978\nfeed\tf\t6c\nfeed\tf\t32fd629b773ed9676153763a4b072c\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tf\tm\tencrypter\nfeed\tf\t\nfeed\tf\t\nfeed\tf\ta2072d\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5ac\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2\nfeed\tf\t68\nfeed\tf\t2f\nfeed\tf\tf5\nfeed\tf\tbb\nfeed\tf\t82\n");
+    s.push_str("feed\tf\t48\nfeed\tf\t0e\nfeed\tf\td4\nfeed\tf\t9b\nfeed\tf\t61\nfeed\tf\t27\nfeed\tf\tee\nfeed\tf\tb4\nfeed\tf\t7a\nfeed\tf\t41\nfeed\tf\t07\nfeed\tf\tcd\nfeed\tf\t94\nfeed\tf\t5a\nfeed\tf\t20\nfeed\tf\te6\nfeed\tf\tad\nfeed\tf\t73\nfeed\tf\t39\nfeed\tf\t00\nfeed\tf\tc6\nfeed\tf\t8c\nfeed\tf\t53\nfeed\tf\t19\nfeed\tf\tdf\nfeed\tf\ta6\nfeed\tf\t6c\nfeed\tf\t32\nfeed\tf\tf8\nfeed\tf\tbf\nfeed\tf\t85\nfeed\tf\t4b\nfeed\tf\t12\nfeed\tf\td8\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9\nfeed\tf\t0e799df215dd6edefb\nfeed\tf\t0730092dc19c4eabc6711ed4e3258978\nfeed\tf\t6c\nfeed\tf\t32fd629b773ed9676153763a4b072c\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\nfeed\tf\t\nfeed\tf\t\nfeed\tf\ta2072d\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5ac\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\n");
+    s.push_str("feed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2\nfeed\tf\t68\nfeed\tf\t2f\nfeed\tf\tf5\nfeed\tf\tbb\nfeed\tf\t82\nfeed\tf\t48\nfeed\tf\t0e\nfeed\tf\td4\nfeed\tf\t9b\nfeed\tf\t61\nfeed\tf\t27\nfeed\tf\tee\nfeed\tf\tb4\nfeed\tf\t7a\nfeed\tf\t41\nfeed\tf\t07\nfeed\tf\tcd\nfeed\tf\t94\nfeed\tf\t5a\nfeed\tf\t20\nfeed\tf\te6\nfeed\tf\tad\nfeed\tf\t73\nfeed\tf\t39\nfeed\tf\t00\nfeed\tf\tc6\nfeed\tf\t8c\nfeed\tf\t53\nfeed\tf\t19\nfeed\tf\tdf\nfeed\tf\ta6\nfeed\tf\t6c\nfeed\tf\t32\nfeed\tf\tf8\nfeed\tf\tbf\nfeed\tf\t85\nfeed\tf\t4b\nfeed\tf\t12\nfeed\tf\td8\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9\nfeed\tf\t0e799df215dd6edefb\nfeed\tf\t0730092dc19c4eabc6711ed4e3258978\nfeed\tf\t6c\nfeed\tf\t32fd629b773ed9676153763a4b072c\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\ta2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\nfeed\tf\t\nfeed\tf\t\nfeed\tf\ta2072d\nfeed\tf\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t6c\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t0aeeb1c1412b0cb732285c45257b9e66\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\n");
+    s.push_str("pipe\tfe\tfd\tea1b26e16878170d14b69445077228ad0c78c515fb\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\td44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674\nmode\te\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t\nmode\te\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t6c\nmode\te\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t0aeeb1c1412b0cb732285c45257b9e66\nmode\te\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\tea1b26e16878170d14b69445077228ad0c78c515fb\nmode\te\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\td44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674\nmode\te\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nmode\td\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t\nmode\te\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nmode\td\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\n");
+    s.push_str("feeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t6c\nmode\te\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nmode\td\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t0aeeb1c1412b0cb732285c45257b9e66\nmode\te\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nmode\td\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\tea1b26e16878170d14b69445077228ad0c78c515fb\nmode\te\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nmode\td\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t3\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\td44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674\nmode\te\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t\nmode\te\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t6c\nmode\te\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t0aeeb1c1412b0cb732285c45257b9e66\nmode\te\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nmode\td\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\tea1b26e16878170d14b69445077228ad0c78c515fb\nmode\te\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\n");
+    s.push_str("mode\td\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\td44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674\nmode\te\tctr\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t\nmode\te\tctr\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t6c\nmode\te\tctr\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t0aeeb1c1412b0cb732285c45257b9e66\nmode\te\tctr\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\tea1b26e16878170d14b69445077228ad0c78c515fb\nmode\te\tctr\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\td44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674\njob\tpadding\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\n");
+    s.push_str("feeder\tf\tm\tencrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tbogus\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\n");
+    s.push_str("mode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\n");
+    s.push_str("mode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tbogus\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\n");
+    s.push_str("mode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tdecrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tdecrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nfeeder\tf\tm\tdecrypter\tbogus\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141\n");
+    s.push_str("feed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tofb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\tm\tdecrypter\tbogus\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tnone\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\n");
+    s.push_str("feeder\tf\tm\tencrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\tpkcs7\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t41414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tencrypter\t\nfeed\tf\t4141414141414141414141414141414141414141\nfeed\tf\nfeed\tf\nfeed\tf\t42\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tnone\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tdefault\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tctr\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tf\tm\tdecrypter\tbogus\nfeed\tf\t4141414141414141414141414141414141414141414141414141414141414141\nfeed\tf\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nencrypt\tm\t41414141414141414141414141414100\n");
+    s.push_str("encrypt\tm\t41414141414141414141414141414105\nencrypt\tm\t41414141414141414141414141414110\nencrypt\tm\t41414141414141414141414141414111\nencrypt\tm\t414141414141414141414141414141ff\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\tnone\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t41414141414141414141414141414100\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\tnone\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t41414141414141414141414141414105\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\tnone\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t41414141414141414141414141414110\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\tnone\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t41414141414141414141414141414111\nmode\te\tecb\t48d854becf40a0d140626d7c1bf6105a\nmode\td\tecb\t48d854becf40a0d140626d7c1bf6105a\nfeeder\tfe\te\tencrypter\tnone\nfeeder\tfd\td\tdecrypter\npipe\tfe\tfd\t414141414141414141414141414141ff\nmode\td\tcbc\t7a634b8cdaa7a1ff4793e775d66ef465\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nfeeder\tf\td\tdecrypter\nfeed\tf\tdf097885d16cb8733c681dacfd15e95946d944626f3deaa9808d92097f3122117ace9480531ca6804e8644a35c83b69e\nfeed\tf\njob\tbad arguments\nmode\tm\tecb\t\nmode\tm\tecb\t00\nmode\tm\tecb\t0000000000000000\nmode\tm\tecb\t000000000000000000000000000000\nmode\tm\tecb\t0000000000000000000000000000000000\nmode\tm\tecb\t0000000000000000000000000000000000000000\nmode\tm\tecb\t0000000000000000000000000000000000000000000000\nmode\tm\tecb\t00000000000000000000000000000000000000000000000000\nmode\tm\tecb\t00000000000000000000000000000000000000000000000000000000000000\nmode\tm\tecb\t000000000000000000000000000000000000000000000000000000000000000000\nmode\tm\tecb\t00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    s.push_str("mode\tm\tecb\t-\nmode\tm\tctr\t-\nmode\tm\tcbc\t000000000000000000000000000000\t00000000000000000000000000000000\nmode\tm\tcbc\t000000000000000000000000000000\t000000000000000000000000000000\nmode\tm\tcbc\t00000000000000000000000000000000\t0000000000000000000000000000000000\nmode\tm\tcfb\t00000000000000000000000000000000\t0000000000000000\t1\nmode\tm\tcfb\t000000000000000000000000000000\t0000000000000000\t1\nmode\tm\tofb\t00000000000000000000000000000000\t\nmode\tm\tofb\t00000000000000\t00000000000000000000000000000000\nmode\tm\tctr\t00000000000000\naes\t00000000000000000000000000000000\tencrypt\t000000000000000000000000000000\naes\t00000000000000000000000000000000\tdecrypt\t0000000000000000000000000000000000\naes\t000000000000000000000000\tencrypt\t00000000000000000000000000000000\nmode\tm\tecb\t48d854becf40a0d140626d7c1bf6105a\nencrypt\tm\t000000000000000000000000000000\nencrypt\tm\t0000000000000000000000000000000000000000000000000000000000000000\ndecrypt\tm\t\nmode\tm\tcbc\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\nencrypt\tm\t0000000000000000000000000000000000\ndecrypt\tm\t0000000000000000\nencrypt\tm\t00000000000000000000000000000000\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t4\nencrypt\tm\t000000000000\ndecrypt\tm\t00000000000000000000\nencrypt\tm\t000000000000000000000000\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t-\t4\nencrypt\tm\t\nencrypt\tm\t0000000000000000\ndecrypt\tm\t00000000\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t-\t16\nfeeder\tf\tm\tencrypter\nfeed\tf\t00000000000000000000000000000000000000000000000000000000000000000000000000000000\nfeed\tf\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t0\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t2\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\n");
+    s.push_str("encrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t5\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t16\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t20\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t-4\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t-3\nencrypt\tm\t11111111111111111111111111111111111111111111111111111111111111111111111111111111\nencrypt\tm\t2222222222222222222222222222222222222222\nmode\tm\tcfb\t48d854becf40a0d140626d7c1bf6105a\t5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\t20\nfeeder\tf\tm\tencrypter\nfeed\tf\t3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333\nfeed\tf\nfeeder\tf\tm\tencrypter\nfeed\tf\nfeed\tf\njob\tfiles\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/aligned.bin.ecb\tout/aligned.bin.ecb.txt\t8192\ncompare\tplain/aligned.bin\tout/aligned.bin.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/block.bin.ecb\tout/block.bin.ecb.txt\t8192\n");
+    s.push_str("compare\tplain/block.bin\tout/block.bin.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/empty.txt.ecb\tout/empty.txt.ecb.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/notes.txt.ecb\tout/notes.txt.ecb.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/one.txt.ecb\tout/one.txt.ecb.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.ecb\t1000\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/report.csv.ecb\tout/report.csv.ecb.txt\t1000\ncompare\tplain/report.csv\tout/report.csv.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/settings.ini.ecb\tout/settings.ini.ecb.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.ecb.txt\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.ecb\t8192\nmode\tm\tecb\t83d3c3ecb423644bbe2ead94933a04f9\nstream\tdecrypt\tm\tout/thumbnail.bin.ecb\tout/thumbnail.bin.ecb.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.ecb.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/aligned.bin.cbc\tout/aligned.bin.cbc.txt\t8192\n");
+    s.push_str("compare\tplain/aligned.bin\tout/aligned.bin.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/block.bin.cbc\tout/block.bin.cbc.txt\t8192\ncompare\tplain/block.bin\tout/block.bin.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/empty.txt.cbc\tout/empty.txt.cbc.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/notes.txt.cbc\tout/notes.txt.cbc.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/one.txt.cbc\tout/one.txt.cbc.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.cbc\t1000\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/report.csv.cbc\tout/report.csv.cbc.txt\t1000\ncompare\tplain/report.csv\tout/report.csv.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\n");
+    s.push_str("stream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/settings.ini.cbc\tout/settings.ini.cbc.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.cbc.txt\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.cbc\t8192\nmode\tm\tcbc\t20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11\t5d6a6088cb7334f699a3ea42840f23b5\nstream\tdecrypt\tm\tout/thumbnail.bin.cbc\tout/thumbnail.bin.cbc.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.cbc.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/aligned.bin.cfb1\tout/aligned.bin.cfb1.txt\t8192\ncompare\tplain/aligned.bin\tout/aligned.bin.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/block.bin.cfb1\tout/block.bin.cfb1.txt\t8192\ncompare\tplain/block.bin\tout/block.bin.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/empty.txt.cfb1\tout/empty.txt.cfb1.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\n");
+    s.push_str("stream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/notes.txt.cfb1\tout/notes.txt.cfb1.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/one.txt.cfb1\tout/one.txt.cfb1.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.cfb1\t1000\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/report.csv.cfb1\tout/report.csv.cfb1.txt\t1000\ncompare\tplain/report.csv\tout/report.csv.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/settings.ini.cfb1\tout/settings.ini.cfb1.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.cfb1.txt\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.cfb1\t8192\nmode\tm\tcfb\te05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca\t01a362902d5714227c2c0d70c1ae8a11\t1\nstream\tdecrypt\tm\tout/thumbnail.bin.cfb1\tout/thumbnail.bin.cfb1.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.cfb1.txt\n");
+    s.push_str("mode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/aligned.bin.cfb16\tout/aligned.bin.cfb16.txt\t8192\ncompare\tplain/aligned.bin\tout/aligned.bin.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/block.bin.cfb16\tout/block.bin.cfb16.txt\t8192\ncompare\tplain/block.bin\tout/block.bin.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/empty.txt.cfb16\tout/empty.txt.cfb16.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/notes.txt.cfb16\tout/notes.txt.cfb16.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/one.txt.cfb16\tout/one.txt.cfb16.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.cfb16\t1000\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\n");
+    s.push_str("stream\tdecrypt\tm\tout/report.csv.cfb16\tout/report.csv.cfb16.txt\t1000\ncompare\tplain/report.csv\tout/report.csv.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/settings.ini.cfb16\tout/settings.ini.cfb16.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.cfb16.txt\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.cfb16\t8192\nmode\tm\tcfb\t280702760ed1fd04b40dd2989839c48f\t79d6f70a9c56d70c437646ade3461cdb\t16\nstream\tdecrypt\tm\tout/thumbnail.bin.cfb16\tout/thumbnail.bin.cfb16.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.cfb16.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/aligned.bin.ofb\tout/aligned.bin.ofb.txt\t8192\ncompare\tplain/aligned.bin\tout/aligned.bin.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/block.bin.ofb\tout/block.bin.ofb.txt\t8192\ncompare\tplain/block.bin\tout/block.bin.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\n");
+    s.push_str("stream\tdecrypt\tm\tout/empty.txt.ofb\tout/empty.txt.ofb.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/notes.txt.ofb\tout/notes.txt.ofb.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/one.txt.ofb\tout/one.txt.ofb.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.ofb\t1000\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/report.csv.ofb\tout/report.csv.ofb.txt\t1000\ncompare\tplain/report.csv\tout/report.csv.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tdecrypt\tm\tout/settings.ini.ofb\tout/settings.ini.ofb.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.ofb.txt\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.ofb\t8192\nmode\tm\tofb\t2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7\t6c090fd2a232ce678230d1e177ef0b4c\n");
+    s.push_str("stream\tdecrypt\tm\tout/thumbnail.bin.ofb\tout/thumbnail.bin.ofb.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.ofb.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/aligned.bin.ctr\tout/aligned.bin.ctr.txt\t8192\ncompare\tplain/aligned.bin\tout/aligned.bin.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/block.bin\tout/block.bin.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/block.bin.ctr\tout/block.bin.ctr.txt\t8192\ncompare\tplain/block.bin\tout/block.bin.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/empty.txt.ctr\tout/empty.txt.ctr.txt\t8192\ncompare\tplain/empty.txt\tout/empty.txt.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/notes.txt.ctr\tout/notes.txt.ctr.txt\t8192\ncompare\tplain/notes.txt\tout/notes.txt.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/one.txt\tout/one.txt.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/one.txt.ctr\tout/one.txt.ctr.txt\t8192\ncompare\tplain/one.txt\tout/one.txt.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/report.csv\tout/report.csv.ctr\t1000\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/report.csv.ctr\tout/report.csv.ctr.txt\t1000\n");
+    s.push_str("compare\tplain/report.csv\tout/report.csv.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.ini.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/settings.ini.ctr\tout/settings.ini.ctr.txt\t8192\ncompare\tplain/settings.ini\tout/settings.ini.ctr.txt\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.bin.ctr\t8192\ncounter\tctr\t4242\nmode\tm\tctr\t333a35276c06445183084fb2d0838a0d\tctr\nstream\tdecrypt\tm\tout/thumbnail.bin.ctr\tout/thumbnail.bin.ctr.txt\t8192\ncompare\tplain/thumbnail.bin\tout/thumbnail.bin.ctr.txt\njob\tstream options\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.8192\t8192\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.8192\tout/notes.cbc.8192.txt\t8192\ncompare\tplain/notes.txt\tout/notes.cbc.8192.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.4096\t4096\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.4096\tout/notes.cbc.4096.txt\t4096\ncompare\tplain/notes.txt\tout/notes.cbc.4096.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.100\t100\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.100\tout/notes.cbc.100.txt\t100\ncompare\tplain/notes.txt\tout/notes.cbc.100.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.17\t17\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\n");
+    s.push_str("stream\tdecrypt\tm\tout/notes.cbc.17\tout/notes.cbc.17.txt\t17\ncompare\tplain/notes.txt\tout/notes.cbc.17.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.16\t16\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.16\tout/notes.cbc.16.txt\t16\ncompare\tplain/notes.txt\tout/notes.cbc.16.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.15\t15\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.15\tout/notes.cbc.15.txt\t15\ncompare\tplain/notes.txt\tout/notes.cbc.15.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.1\t1\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.1\tout/notes.cbc.1.txt\t1\ncompare\tplain/notes.txt\tout/notes.cbc.1.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.0\t0\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.0\tout/notes.cbc.0.txt\t0\ncompare\tplain/notes.txt\tout/notes.cbc.0.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cbc.-1\t-1\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.cbc.-1\tout/notes.cbc.-1.txt\t-1\ncompare\tplain/notes.txt\tout/notes.cbc.-1.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.none\t256\tnone\nsize\tout/aligned.bin.none\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\n");
+    s.push_str("stream\tdecrypt\tm\tout/aligned.bin.none\tout/aligned.bin.none.txt\t256\tnone\nsize\tout/aligned.bin.none.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.none\t256\tnone\nsize\tout/notes.txt.none\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.txt.none\tout/notes.txt.none.txt\t256\tnone\nsize\tout/notes.txt.none.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.none\t256\tnone\nsize\tout/empty.txt.none\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/empty.txt.none\tout/empty.txt.none.txt\t256\tnone\nsize\tout/empty.txt.none.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.default\t256\tdefault\nsize\tout/aligned.bin.default\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/aligned.bin.default\tout/aligned.bin.default.txt\t256\tdefault\nsize\tout/aligned.bin.default.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.default\t256\tdefault\nsize\tout/notes.txt.default\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.txt.default\tout/notes.txt.default.txt\t256\tdefault\nsize\tout/notes.txt.default.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.default\t256\tdefault\nsize\tout/empty.txt.default\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/empty.txt.default\tout/empty.txt.default.txt\t256\tdefault\nsize\tout/empty.txt.default.txt\n");
+    s.push_str("mode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/aligned.bin\tout/aligned.bin.pkcs7\t256\tpkcs7\nsize\tout/aligned.bin.pkcs7\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/aligned.bin.pkcs7\tout/aligned.bin.pkcs7.txt\t256\tpkcs7\nsize\tout/aligned.bin.pkcs7.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.txt.pkcs7\t256\tpkcs7\nsize\tout/notes.txt.pkcs7\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/notes.txt.pkcs7\tout/notes.txt.pkcs7.txt\t256\tpkcs7\nsize\tout/notes.txt.pkcs7.txt\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/empty.txt\tout/empty.txt.pkcs7\t256\tpkcs7\nsize\tout/empty.txt.pkcs7\nmode\tm\tcbc\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tdecrypt\tm\tout/empty.txt.pkcs7\tout/empty.txt.pkcs7.txt\t256\tpkcs7\nsize\tout/empty.txt.pkcs7.txt\nmode\tm\tofb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.ofb.none\t64\tnone\nsize\tout/notes.ofb.none\nmode\tm\tcfb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\t3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cfb3.none\t64\tnone\nsize\tout/notes.cfb3.none\nmode\tm\tofb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.ofb.default\t64\tdefault\nsize\tout/notes.ofb.default\nmode\tm\tcfb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\t3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cfb3.default\t64\tdefault\nsize\tout/notes.cfb3.default\nmode\tm\tofb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.ofb.pkcs7\t64\tpkcs7\n");
+    s.push_str("size\tout/notes.ofb.pkcs7\nmode\tm\tcfb\t4839b4d16f1b0bb6d2ad3eff98931496\tc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\t3\nstream\tencrypt\tm\tplain/notes.txt\tout/notes.cfb3.pkcs7\t64\tpkcs7\nsize\tout/notes.cfb3.pkcs7\njob\tdamaged files\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tencrypt\tm\tplain/settings.ini\tout/settings.cbc\t8192\ncut\tout/settings.cbc\tout/settings.cbc.cut0\t0\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut0\tout/settings.cut0.txt\t8192\nsize\tout/settings.cut0.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut15\t15\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut15\tout/settings.cut15.txt\t8192\nsize\tout/settings.cut15.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut16\t16\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut16\tout/settings.cut16.txt\t8192\nsize\tout/settings.cut16.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut100\t100\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut100\tout/settings.cut100.txt\t8192\nsize\tout/settings.cut100.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut255\t255\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut255\tout/settings.cut255.txt\t8192\nsize\tout/settings.cut255.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut256\t256\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut256\tout/settings.cut256.txt\t8192\nsize\tout/settings.cut256.txt\ncut\tout/settings.cbc\tout/settings.cbc.cut271\t271\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc.cut271\tout/settings.cut271.txt\t8192\n");
+    s.push_str("size\tout/settings.cut271.txt\nmode\tm\tcbc\tf1e30e93513281f7e2ec4b9d5150b5bb\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc\tout/settings.wrong.txt\t8192\nsize\tout/settings.wrong.txt\nmode\tm\tcbc\t7aa65c7b1012fbdb16fbd22b1ef15064\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc\tout/settings.wrong.txt\t8192\nsize\tout/settings.wrong.txt\nmode\tm\tcbc\t1d02ffe7986afd88aaf79bec7ce03080\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc\tout/settings.wrong.txt\t8192\nsize\tout/settings.wrong.txt\nmode\tm\tcbc\tf9646d0c6bba20b83820cf7290b67c25\t7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e\nstream\tdecrypt\tm\tout/settings.cbc\tout/settings.wrong.txt\t8192\nsize\tout/settings.wrong.txt\nmode\tm\tcbc\t41f0c27c00e8018f7715b5f50f67b5b5\t00000000000000000000000000000000\nstream\tdecrypt\tm\tout/settings.cbc\tout/settings.wrongiv.txt\t8192\nsize\tout/settings.wrongiv.txt\ncompare\tplain/settings.ini\tout/settings.wrongiv.txt\nmode\tm\tctr\t41f0c27c00e8018f7715b5f50f67b5b5\nstream\tencrypt\tm\tplain/thumbnail.bin\tout/thumbnail.ctr\t512\ncut\tout/thumbnail.ctr\tout/thumbnail.ctr.cut\t1234\nmode\tm\tctr\t41f0c27c00e8018f7715b5f50f67b5b5\nstream\tdecrypt\tm\tout/thumbnail.ctr.cut\tout/thumbnail.cut.bin\t512\ncompare\tplain/thumbnail.bin\tout/thumbnail.cut.bin\nmode\tm\tctr\t41f0c27c00e8018f7715b5f50f67b5b5\nstream\tdecrypt\tm\tplain/missing.bin\tout/missing.bin\t512\ncompare\tplain/notes.txt\tplain/missing.bin\n");
+    s
+}
+
+fn plain_files_text() -> String {
+    let mut s = String.new();
+    s.push_str("aligned.bin b0bda4e809554ceb0ed36c786870aa219dbf8af64163789fdc91943c9a493ffdb5536980a3fc99eeff8eb9d43790a7c1fbc27ca561d79ae4d8f0783dd3dd2d5e3112bd436e6b27528c9f2a38bf86db81db0be8fa7eefaac6fd42ec420fa27d9a3c327828035a4e90ce40989c96099ed856d0a6ed3163febe62c0c944e752892aedeb7028fa80661fdda8d9f955d3493e834a8f7711eaf04320a0e53af3a4a8855d757e3aea97c878d00fc747949b322c7cb1798fb83ed7ce4f1b1a1dcb4f3224a3077b566d56ca12c0ac397cea18b31a573e3e2ebc160bd506693fe4060c7f7ed9db3e751875c666c5b90793f003237e2c27b54bb529e5d35ec22d873d94e80b15289f8e86ab13ebf66d0a813e15dad315a5b6de3d31bc3e6f5ebaff079dc4446f25769a4db2091a6cff18406b04308e28f01ae0eae5e78e5075c044fde06aa0010b9c900640016a3fa90bc810897e297d40b74955fcc03c1b3f164db7163598e113e769490f515386a1ba10c55c1a1c2ecc6710152f9fbfe5f49412cdf57aa32873311cadd5534e5b20fd1121365ede51ce012dc337da8fc9cc128bd636923aed6451a2cb4b5ed2d35eadc1becda1e7ff7d5d99f7cacb25ddff68b26b91d6d4491f1ff23a2aca580994a01b31da3bb04f10534b48a1c8f93ac46f7c24be9dea54da74049428f05713f8b015151485b05ac1bc3c50742b82f855fee398753ff325ce26d16ffe26480ac3b4a70035d56038c76f63a4fb4b382ee8eddf606d1467d6330f506464c6a2062d84c98bf48537015943b8dfee8194f5b71466146074bf7c41067a0a1227dd1e6ef8754e09ecaeccb012349705230d64f84b734b05b8723230e346fac0a1726bbde8a0e02b623cb205b4cf65f88b1b95e46bfb9e1337f90e377fadcc268cd805542d44da144059ca8eff7fe17f10389eb44af9a54448cb2990b0a617fc4188036a9e58d37bdc7e2e84cd3fa2520ad9979ec262f84f46619b72502974f916f97e3713d565179022f41ff5044129d1789adbaa302eeb86327b14362f7bd765a48ef264b226a1b3be34984fc856bbbe8cbda3db5be0d161b6e2b03aafc44d85004ad569e8aed29dc90825b38378c2278e192e2bdaa5ba3066e87c34a2e612cf86cb16fb6e9760a6bc86fff92c40f466f5c5b474a5165c4abaa4b2fdff7ae099ad29eff13d7704270ec65dfabb460bd23ada6d8db5cb7007282f886bbf176d3ded7c96234ce7767638e2798c2921bdc3d470914e015caebf2ba13858d9577211bfdb4469937e6fedb1f08a896e6ac4923c9f588f8260cecb3811f89b46d0a86f9a5f329b0bd5a5e3f109c8c880b9d695e97ef9282f708881c999010cfd1ac5aff71f9692ac84d1b071446a225aa6ac265326aef20024943b564e8b84f6cf82274d34a9246c22aaada8baaa6df1c8fe9cf3aeadc4ee13aa5056\n");
+    s.push_str("block.bin 53c37d788eb44db7482f6d463d19e570\nempty.txt -\nnotes.txt 4261636b7570206e6f7465732c207765656b2034320a3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d0a0a2d20526f7461746520746865206f666673697465206472697665206f6e204672696461792e0a2d20546865206275696c64207365727665722773206469736b206973203831252066756c6c3b207072756e65206f6c64206172746966616374732e0a2d2041736b2050726979612061626f757420746865207072696e746572207175657565206f6e20666c6f6f7220332e0a2d20436166c3a9206f726465723a2074776f20666c6174207768697465732c206f6e652074656120286e6f207375676172292e0a0a526573746f7265206472696c6c3a207069636b2074687265652072616e646f6d2066696c65732066726f6d206c617374206d6f6e7468277320617263686976652c20726573746f72650a7468656d20746f202f746d702f726573746f72652d6472696c6c20616e6420636f6d7061726520636865636b73756d7320616761696e73742074686520636174616c6f6775652e0a\none.txt 78\nreport.csv 646174652c686f73742c66696c65732c62797465732c7365636f6e64732c7374617475730a323032362d30322d30312c7765622d312c38372c3335323532342c322c6f6b0a323032362d30322d30312c7765622d322c3138382c3935323232302c352c6f6b0a323032362d30322d30312c64622d312c3238392c313735363534322c31302c6f6b0a323032362d30322d30312c63616368652d312c3339302c323736353439302c31352c6f6b0a323032362d30322d30312c6d61696c2c3439312c333937393036342c32302c6f6b0a323032362d30322d30322c7765622d312c3132342c3632383036302c332c6f6b0a323032362d30322d30322c7765622d322c3232352c313336373535302c372c6f6b0a323032362d30322d30322c64622d312c3332362c323331313636362c31322c6f6b0a323032362d30322d30322c63616368652d312c3432372c333436303430382c31372c6f6b0a323032362d30322d30322c6d61696c2c3532382c343831333737362c32342c6f6b0a323032362d30322d30332c7765622d312c3136312c3937383535382c342c6f6b0a323032362d30322d30332c7765622d322c3236322c313835373834322c392c6f6b0a323032362d30322d30332c64622d312c3336332c323934313735322c31342c6f6b0a323032362d30322d30332c63616368652d312c3436342c343233303238382c32302c6f6b0a323032362d30322d30332c6d61696c2c3536352c313731373033352c31312c6f6b0a323032362d30322d30342c7765622d312c3139382c313430343031382c362c6f6b0a323032362d30322d30342c7765622d322c3239392c323432333039362c31312c6f6b0a323032362d30322d30342c64622d312c3430302c333634363830302c31372c6f6b0a323032362d30322d30342c63616368652d312c3530312c313532323533392c31302c6f6b0a323032362d30322d30342c6d61696c2c3630322c323433393330342c31342c6f6b0a323032362d30322d30352c7765622d312c3233352c313930343434302c382c6f6b0a323032362d30322d30352c7765622d322c3333362c333036333331322c31342c6f6b0a323032362d30322d30352c64622d312c3433372c313332383034332c382c6f6b0a323032362d30322d30352c63616368652d312c3533382c323137393937362c31322c6f6b0a323032362d30322d30352c6d61696c2c3633392c333233363533352c31372c6f6b0a323032362d30322d30362c7765622d312c3237322c323437393832342c31302c6f6b0a323032362d30322d30362c7765622d322c3337332c313133333534372c362c6f6b0a323032362d30322d30362c64622d312c3437342c313932303634382c31302c6f6b0a323032362d30322d30362c63616368652d312c3537352c323931323337352c31352c6f6b0a323032362d30322d30362c6d61696c2c3637362c343130383732382c32312c6f6b0a323032362d30322d30372c7765622d312c3330392c3933393035312c342c6f6b0a323032362d30322d30372c7765622d322c3431302c313636313332302c382c6f6b0a323032362d30322d30372c64622d312c3531312c323538383231352c31332c6f6b0a323032362d30322d30372c63616368652d312c3631322c333731393733362c31382c6f6b0a323032362d30322d30372c6d61696c2c3731332c353035353838332c32352c72657472790a323032362d30322d30382c7765622d312c3334362c313430313939322c362c6f6b0a323032362d30322d30382c7765622d322c3434372c323236343035352c31312c6f6b0a323032362d30322d30382c64622d312c3534382c333333303734342c31362c6f6b0a323032362d30322d30382c63616368652d312c3634392c343630323035392c32322c72657472790a323032362d30322d30382c6d61696c2c3735302c363037383030302c32392c6f6b0a323032362d30322d30392c7765622d312c3338332c313933393839352c382c6f6b0a323032362d30322d30392c7765622d322c3438342c323934313735322c31332c6f6b0a323032362d30322d30392c64622d312c3538352c343134383233352c31392c72657472790a323032362d30322d30392c63616368652d312c3638362c353535393334342c32362c6f6b0a323032362d30322d30392c6d61696c2c3738372c373137353037392c33332c6f6b0a323032362d30322d31302c7765622d312c3432302c323535323736302c31312c6f6b0a323032362d30322d31302c7765622d322c3532312c333639343431312c31362c72657472790a323032362d30322d31302c64622d312c3632322c353034303638382c32332c6f6b0a323032362d30322d31302c63616368652d312c3732332c363539313539312c33302c6f6b0a323032362d30322d31302c6d61696c2c3832342c323530343133362c31352c6f6b0a323032362d30322d31312c7765622d312c3435372c333234303538372c31332c72657472790a323032362d30322d31312c7765622d322c3535382c343532323033322c32302c6f6b0a323032362d30322d31312c64622d312c3635392c363030383130332c32372c6f6b0a323032362d30322d31312c63616368652d312c3736302c323330393634302c31332c6f6b0a323032362d30322d31312c6d61696c2c3836312c333438383737322c31382c6f6b0a323032362d30322d31322c7765622d312c3439342c343030333337362c31372c6f6b0a323032362d30322d31322c7765622d322c3539352c353432343631352c32332c6f6b0a323032362d30322d31322c64622d312c3639362c323131353134342c31312c6f6b0a323032362d30322d31322c63616368652d312c3739372c333232393434342c31362c6f6b0a323032362d30322d31322c6d61696c2c3839382c343534383337302c32332c6f6b0a323032362d30322d31332c7765622d312c3533312c343834313132372c32302c6f6b0a323032362d30322d31332c7765622d322c3633322c313932303634382c392c6f6b0a323032362d30322d31332c64622d312c3733332c323937303131362c31342c6f6b0a323032362d30322d31332c63616368652d312c3833342c343232343231302c32302c6f6b0a323032362d30322d31332c6d61696c2c3933352c353638323933302c32372c6f6b0a323032362d30322d31342c7765622d312c3536382c313732363135322c372c6f6b0a323032362d30322d31342c7765622d322c3636392c323731303738382c31322c6f6b0a323032362d30322d31342c64622d312c3737302c333930303035302c31382c6f6b0a323032362d30322d31342c63616368652d312c3837312c353239333933382c32352c6f6b0a323032362d30322d31342c6d61696c2c37322c3531303535322c372c6f6b0a323032362d30322d31352c7765622d312c3630352c323435313436302c31302c6f6b0a323032362d30322d31352c7765622d322c3730362c333537353839302c31362c6f6b0a323032362d30322d31352c64622d312c3830372c343930343934362c32322c6f6b0a323032362d30322d31352c63616368652d312c3930382c363433383632382c32392c6f6b0a323032362d30322d31352c6d61696c2c3130392c3838333333362c382c6f6b0a323032362d30322d31362c7765622d312c3634322c333235313733302c31342c6f6b0a323032362d30322d31362c7765622d322c3734332c343531353935342c32302c6f6b0a323032362d30322d31362c64622d312c3834342c353938343830342c32362c6f6b0a323032362d30322d31362c63616368652d312c3934352c373635383238302c33342c6f6b0a323032362d30322d31362c6d61696c2c3134362c313333313038322c31302c6f6b0a323032362d30322d31372c7765622d312c3637392c343132363936322c31372c6f6b0a323032362d30322d31372c7765622d322c3738302c353533303938302c32342c6f6b0a323032362d30322d31372c64622d312c3838312c373133393632342c33312c6f6b0a323032362d30322d31372c63616368652d312c38322c3734373539342c362c6f6b0a323032362d30322d31372c6d61696c2c3138332c3535363133372c372c6f6b0a323032362d30322d31382c7765622d312c3731362c353037373135362c32312c6f6b0a323032362d30322d31382c7765622d322c3831372c363632303936382c32382c6f6b0a323032362d30322d31382c64622d312c3931382c383336393430362c33362c6f6b0a323032362d30322d31382c63616368652d312c3131392c3336313634312c352c6f6b0a323032362d30322d31382c6d61696c2c3232302c3839313434302c382c72657472790a323032362d30322d31392c7765622d312c3735332c363130323331322c32352c6f6b0a323032362d30322d31392c7765622d322c3835342c373738353931382c33332c6f6b0a323032362d30322d31392c64622d312c35352c3136373134352c332c6f6b0a323032362d30322d31392c63616368652d312c3135362c3633323131322c362c72657472790a323032362d30322d31392c6d61696c2c3235372c313330313730352c31302c6f6b0a323032362d30322d32302c7765622d312c3739302c373230323433302c32392c6f6b0a323032362d30322d32302c7765622d322c3839312c323730373734392c31322c6f6b0a323032362d30322d32302c64622d312c39322c3337323738342c342c72657472790a323032362d30322d32302c63616368652d312c3139332c3937373534352c372c6f6b0a323032362d30322d32302c6d61696c2c3239342c313738363933322c31322c6f6b0a323032362d30322d32312c7765622d312c3832372c323531333235332c31312c6f6b0a323032362d30322d32312c7765622d322c3932382c333736303235362c31372c72657472790a323032362d30322d32312c64622d312c3132392c3635333338352c352c6f6b0a323032362d30322d32312c63616368652d312c3233302c313339373934302c392c6f6b0a323032362d30322d32312c6d61696c2c3333312c323334373132312c31342c6f6b0a323032362d30322d32322c7765622d312c3836342c333530303932382c31352c72657472790a323032362d30322d32322c7765622d322c36352c3332393232352c332c6f6b0a323032362d30322d32322c64622d312c3136362c313030383934382c372c6f6b0a323032362d30322d32322c63616368652d312c3236372c313839333239372c31312c6f6b0a323032362d30322d32322c6d61696c2c3336382c323938323237322c31362c6f6b0a323032362d30322d32332c7765622d312c3930312c343536333536352c31392c6f6b0a323032362d30322d32332c7765622d322c3130322c3631393935362c342c6f6b0a323032362d30322d32332c64622d312c3230332c313433393437332c382c6f6b0a323032362d30322d32332c63616368652d312c3330342c323436333631362c31332c6f6b0a323032362d30322d32332c6d61696c2c3430352c333639323338352c31392c6f6b0a323032362d30322d32342c7765622d312c3933382c353730313136342c32332c6f6b0a323032362d30322d32342c7765622d322c3133392c3938353634392c352c6f6b0a323032362d30322d32342c64622d312c3234302c313934343936302c31302c6f6b0a323032362d30322d32342c63616368652d312c3334312c333130383839372c31362c6f6b0a323032362d30322d32342c6d61696c2c3434322c313334333233382c31302c6f6b0a323032362d30322d32352c7765622d312c37352c3533313832352c332c6f6b0a323032362d30322d32352c7765622d322c3137362c313432363330342c372c6f6b0a323032362d30322d32352c64622d312c3237372c323532353430392c31332c6f6b0a323032362d30322d32352c63616368652d312c3337382c313134383734322c382c6f6b0a323032362d30322d32352c6d61696c2c3437392c313934303930382c31322c6f6b0a323032362d30322d32362c7765622d312c3131322c3930373634382c342c6f6b0a323032362d30322d32362c7765622d322c3231332c313934313932312c392c6f6b0a323032362d30322d32362c64622d312c3331342c3935343234362c362c6f6b0a323032362d30322d32362c63616368652d312c3431352c313638313538302c31302c6f6b0a323032362d30322d32362c6d61696c2c3531362c323631333534302c31352c6f6b0a323032362d30322d32372c7765622d312c3134392c313335383433332c362c6f6b0a323032362d30322d32372c7765622d322c3235302c3735393735302c352c6f6b0a323032362d30322d32372c64622d312c3335312c313432323235322c382c6f6b0a323032362d30322d32372c63616368652d312c3435322c323238393338302c31332c6f6b0a323032362d30322d32372c6d61696c2c3535332c333336313133342c31382c6f6b0a323032362d30322d32382c7765622d312c3138362c3536353235342c332c6f6b0a323032362d30322d32382c7765622d322c3238372c313136323932342c362c6f6b0a323032362d30322d32382c64622d312c3338382c313936353232302c31302c6f6b0a323032362d30322d32382c63616368652d312c3438392c323937323134322c31352c6f6b0a323032362d30322d32382c6d61696c2c3539302c343138333639302c32312c6f6b0a\n");
+    s.push_str("settings.ini 5b6261636b75705d0a7363686564756c65203d2030323a33300a72657461696e5f64617973203d2033300a636f6d7072657373203d207a7374640a6578636c756465203d202a2e746d702c206e6f64655f6d6f64756c65732f2c202e63616368652f0a0a5b7461726765745d0a686f7374203d20617263686976652e6578616d706c652e696e7465726e616c0a70617468203d202f7372762f6261636b7570732f7b686f73746e616d657d0a\nthumbnail.bin 6c4e74921325222e31a1cd13be12ed426966ce24fc23d7da8d2097616a06956ec28ad403136828d4571e3c5dee6e5ec04a91115f5d3b513ec253a416ad6ee5389411d0289aa34cf5c0347c59caf08495f3611b0b5068d59804f92eb7299955577999be78c01066870299e57f6cd235bcfb8f449deee23be1eccc8cbff5bfbec20bdbf86b9ce54f85b607cf46e94a4b2afbd4e58f4fe15c11128218a32b18f772df8fd57a475bdee4743493265c919dd98be654598a9d0f1f0ed42adde0dcd85e906ead1cd9abea9ed3da8898dbe003c1427eeb72b84d2c03777b18e52f43397fb42ed9ca6a0b4dab6caf06137f6d55d9b9540152f12b8bb6e52d3c322e85f3cce488b0fb11b4df02d66c65105f716c198820ef724c6e042ff2a3ec3cf6d9dc3eb8348927e7de769babc9fd0695241f7a479a0b49e24d6f673495827c9f79ceccc7e9bec703c1ec6f817e276e37be45f38d7aaf50cb02a55544bc556a409ba06eaa61a7537e951776f14439bf5d77b97df37731fe1fc37df1bacebe7cf2792a1df9539a427092d1a692d18d712087500f104bebccf5cacf342d84132dcc4945d04c77f00cf1f0f1f9fddd7afd9826e3a17ead3431664d73153695aef2e844c7803a84022a18e75067ca2259dbdd8c4b2cd35465a58a85428d6cbbe6455ca38a245b342713feafc4e79057808106f05fa8a7fad4a178aa129369ad139e409c65b5493db73fba7f2772e834496a2c8cf70b9355db9c49f5bd20c3238d74ae68302a9a590b27669150fe6a710b0b6797eb502f1fd10f149c1a2b12d4ad3fbc3fc37be73e7943181c1786aec51edecf48136c130e0e71f3d801adf07ac9788359f7a1c7a55b0ae85754004beada5b7bd94859d7dbea3bfce14b9df3cb3b961aeea294d44708f4f07ce064da9697f98480610f123fbee448efcef3b3815a129a369e4ba4dad87a46c191aaf283ae30017636855cf0e0e5ee3964a8ca527e631b69c2becf172313035f41cc2d6776790bf49fb44fa7aab507f9e4b4cef80002b4bfe6e5eeb641383e8ec7bf21fb474bba307492811c73ccab66260d582936667f6fe3ba996f8b601087fb7d66f8791f26638d1a8b0794a3f1b802adff9e7a0792b38f3268fa58039180b6fd9614646c66c5c342042063b1f226518c5c0f235e05c1c447f20f009ad8b2ce38470861ab938eed02851f3a6fc6eaeaa1073489e2f1d359f1d066db9dff551d26118cc753c4f6e352a6bb6f54853aa4e598c5040c6e1f26269ab741831ca17abd8e58eedc13357d2bffae5cd84650594fa67aed5394df04e1e8b98bc447cebdf854242ebf9683948527af58742262e1d7ca0b9b307a49c917512610d99913bfccfca8df746518fe57b775bca030a912769c30661a39964fc36db428392aaa56331d9b59719a2c959947baded38a5dc623b3a1a689e9ff6ddad61d2b5d12ca5c2550b7f5314bf630446e34188546b7d4d7a816b3f6a1bafb56221771bc68aaa8992db30a2990b0a74fc59dc12f7ced13891346e5d97a00d12fea5c53ce458412874b46f0d38390d3b3e4ab314846385e318beb95a88c09c85cc5a2270cc18f72e8442affa73ad08a676217c049bad08ac9a9bb1adeef0db6d54da247edf302a1b3ae15901ccea6a664d89ac7a9f0ed71460570ccf0ba44759318140aeaf41675e121c1f9aa564cfea1deea9ce002c6e9a236c0035806e5dc8dbeb1c87adc04c86936e494caebf86a160bc099670695ccd4d564178eea2ac3bcd82fda16c20271438538b8f3a5e3c3bcf8d415b61591f1d57a1561097f4a0317fe479635c0494868a673bd9e9c45df8b3dde684446f2319cbc893841dd7d7296c8b15650eb1126d0304efc42e75698797296eb89b2ef62223579f4af1cfaea32cd2571de5e92e171bc81cb589f4ec5812eb4f4fe71c25e5e7b9dedcb53fb42e3a65a3f572f045346e2c48457db653e980aefdd1a9ba1fc4826ad7b0b9bb652a0eb0a1934779f534439cf7eb7b5d3dbb89d01fd5547c614d9cf61f7ea0c64f36134ec55ec4d9bb9665b5a11f143d074d981a1ac288e677e090e71b7ddbd3efb1f18b74df8cb305da1dd1d957d9d94e2f24c86430b87bd12ce7b95155ec77a44d12f2558cf079618ef5ad063d1dd57fcfb966a18754c00a923ad8568e54251a57013ecceea1904c148682ad16819509aedf90385def3681afd3df809e945fbf6f35ac608c01bb430a3a0e539b76ab994bf0b0be1bf942e3d57c3a84ee2e9b00f529d695cc923dc3df899b8f238e7c9c26a6438848f4988ea26d64c914946a8c986738f247e49b6c040ec5a5463a9b7fde59e43c6c728aff9640f9b2895731bfa8676eeb757a77891723185b8afc8bc1c294fe500de49da4309064f6d3f89417c4b3c3f6dca535c898700ef74945b11f72d0fd4884cc6439f0b521eb8bea05226cc5d3a9e5265987f76f052e28b7bec66e978c9b88ab521e5658cc15f8bd086d0027297a264f7654b379a64590b40864156207ce70f2faced0d4cf1bc1d301553e4130ed27a1ffcc5c396de318dc218616ca0a56d544b1b8ffb2a6425ecd936856bd857850cf693c5127b78c38818d89c218ffca3d122a8a327bdd3f471e223408e582a13919363241be2ea65755bffcc6f8639dffccc8a028a9ef6812365125b452c3fd4810fa4b9d663ec71cba3c5c84e1d147b4f61f8831c6485227b783dae89ec4e2055828e5c3c95363e02076269b5ec44ce42f82bfed4a93830f033da1251300e50850458e54411802493a00d859d8a83304caa5c4baa02c704fbb0225d968f39bb87ac3c2ce66f827bf68600f6fd9088fae58ec143970aeaf513054e694fa186b9d593710a1b47f49ca1d07292cd960a8286be93bc9257585bb04a940d7500aca2e7d12f56db308ede0f979b330633c322a74f0a909482cb8e4b992d21ff4264ce347dade71dc30798b5f3b2b19f006931be5c5f969423fae75c08517de600679535b02597d99719240dfbf1e29195b50746fbc8a68bd19cbc59b038fa20d16b506182cd3e08457bda8fc88ea0d38960fcb4457e9970256b67bda81a6ea84f2956300adfb2a165e410b272c3c15e7520698252b8453bb71d3ffd092fb374105aff1b6191cd9d8f0e20ee10c61f29f1aea4283ab084e51f6c9c93ebafa07cacb4a3999f1d66f35aaf60bcbcd0912c94c2071d149d2d65f40ed7f765d20eb9bcf09b23dbb9559b5f802a938b1af060f714e9d9f8b718b4cfbc46a091cfd322d8c63d302e9e728e3639d6ec98da12bcb25ca2d500351dc9472f430685e0c9af98eee338b00495c47693ba3ef949d1395d528b884251159df51d25a2593bc6599320e4b479239734b8443002c79f04ce8faefa6bd742d727713f44ec261aa4186213981ca0334fd694058eaf1a148374e12849f5d63f3a60534df95a04b33ae29d8158e63e6c95a3a18e2ebd09e02622ea77cf9f5981183e32ff9a670b4061b2dc217a8d6a064192789767a5ad3bc6d14455e4e0764149bca70d818852f7ef7eb6ab58873e392b9bb1d892df1e5c39788579e13045b5a3d0492e0537f211be3ec3d6494ccf3c2cb8e30805e1737d590f459a1c08df160072b21c7eec03c7a5ea9d5ca55438491adea7e11a26c5d5fd8f1e72efdf5c9c379b788e441e9c4f7c7bdaf3c4188f97cf07951a28232c9bfdefa6b7b12ed47f2042333caf45d6e21be91354ff10ed5d222a456a8752bf0932287522ba6c5ef7935f7ddd18dac9b85b2bdf38adb36ad5ec404e8b8f2b97557231256c6212133c68ebec2bd6548d091339d85525791d35034049339825ccb997034c4b02970b8678de18dc412c390d1a0c9464c2db1fb74123cd1cfbb8766b78958278f0745d0d992f9baab1d9e6fb4a9bab1dd95088917de074fc0f5daca4eddf61ab86202309a5d60b4b7fd4ab0d7bdfb638c35170fc8f70d48c2c8b879dceda7f9c1b1372b273cc01780194a17a83cf4d6dd955ee304fca8585aabb1e8cf47d750307c6653fdc0814e99191e07a3c64087472d41b6695e6219de1648aaa36c1da98a3b012eab683dd56864480447c957e05e6470ed43abd3e8d2affe32f6b9d4813454a92e9db34f478382498121d5a48d88d26e0b31546740ddb0341536d0a542c470bfc762213f105ffaa411af7acfea5bfe8a93afd7a5dd54ee8bb4e14ff999a006b6ac763196bb6344d9395e0823823d50581a3cd508f9dda276a583674ad17c8e3f116763d\n");
+    s
+}

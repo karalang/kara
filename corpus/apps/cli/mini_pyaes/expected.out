@@ -1,0 +1,3567 @@
+== known answers (FIPS-197 and SP 800-38A)
+> aes 000102030405060708090a0b0c0d0e0f encrypt 00112233445566778899aabbccddeeff
+  -> [105, 196, 224, 216, 106, 123, 4, 48, 216, 205, 183, 128, 112, 180, 197, 90]
+> aes 000102030405060708090a0b0c0d0e0f1011121314151617 encrypt 00112233445566778899aabbccddeeff
+  -> [221, 169, 124, 164, 134, 76, 223, 224, 110, 175, 112, 160, 236, 13, 113, 145]
+> aes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f encrypt 00112233445566778899aabbccddeeff
+  -> [142, 162, 183, 202, 81, 103, 69, 191, 234, 252, 73, 144, 75, 73, 96, 137]
+> aes 000102030405060708090a0b0c0d0e0f decrypt 69c4e0d86a7b0430d8cdb78070b4c55a
+  -> [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+> aes 000102030405060708090a0b0c0d0e0f1011121314151617 decrypt dda97ca4864cdfe06eaf70a0ec0d7191
+  -> [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+> aes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f decrypt 8ea2b7ca516745bfeafc49904b496089
+  -> [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+> mode m ecb 2b7e151628aed2a6abf7158809cf4f3c
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 3ad77bb40d7a3660a89ecaf32466ef97 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> f5d3d58503b9699de785895a96fdbaaf (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 43b1cd7f598ece23881b00e3ed030688 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 7b0c785e27e8ad3f8223207104725dd4 (16 bytes)
+> mode m cbc 2b7e151628aed2a6abf7158809cf4f3c 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 7649abac8119b246cee98e9b12e9197d (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 5086cb9b507219ee95db113a917678b2 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 73bed6b8e3c1743b7116e69e22229516 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 3ff1caa1681fac09120eca307586e1a7 (16 bytes)
+> mode m cfb 2b7e151628aed2a6abf7158809cf4f3c 000102030405060708090a0b0c0d0e0f 16
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 3b3fd92eb72dad20333449f8e83cfb4a (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> c8a64537a0b3a93fcde3cdad9f1ce58b (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 26751f67a3cbb140b1808cf187a4f4df (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> c04b05357c5d1c0eeac4c66f9ff7f2e6 (16 bytes)
+> mode m cfb 2b7e151628aed2a6abf7158809cf4f3c 000102030405060708090a0b0c0d0e0f 1
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 3b79424c9c0dd436bace9e0ed4586a4f (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 32b9ded50ae3ba69d472e88267fb5052 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 70cbad1e257691f7c47c5038297edda3 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 2ff26d0ed19174096161ecc14086dd62 (16 bytes)
+> mode m ofb 2b7e151628aed2a6abf7158809cf4f3c 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 3b3fd92eb72dad20333449f8e83cfb4a (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 7789508d16918f03f53c52dac54ed825 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 9740051e9c5fecf64344f7a82260edcc (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 304c6528f659c77866a510d9c1d6ae5e (16 bytes)
+> counter c0 320270990202665973124521174155042619135
+  -> ok
+> mode m ctr 2b7e151628aed2a6abf7158809cf4f3c c0
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 874d6191b620e3261bef6864990db6ce (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 9806f66b7970fdff8617187bb9fffdff (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 5ae4df3edbd5d35e5b4f09020db03eab (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 1e031dda2fbe03d1792170a0f3009cee (16 bytes)
+> mode m ecb 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> bd334f1d6e45f25ff712a214571fa5cc (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 974104846d0ad3ad7734ecb3ecee4eef (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> ef7afd2270e2e60adce0ba2face6444e (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 9a4b41ba738d6c72fb16691603c18e0e (16 bytes)
+> mode m cbc 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 4f021db243bc633d7178183a9fa071e8 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> b4d9ada9ad7dedf4e5e738763f69145a (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 571b242012fb7ae07fa9baac3df102e0 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 08b0e27988598881d920a9e64f5615cd (16 bytes)
+> mode m cfb 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b 000102030405060708090a0b0c0d0e0f 16
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> cdc80d6fddf18cab34c25909c99a4174 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 67ce7f7f81173621961a2b70171d3d7a (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 2e1e8a1dd59b88b1c8e60fed1efac4c9 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> c05f9f9ca9834fa042ae8fba584b09ff (16 bytes)
+> mode m cfb 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b 000102030405060708090a0b0c0d0e0f 1
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> cda2521ef0a905ca44cd057cbf0d47a0 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 678a7bcfb6aeaa3047b38936021f48bb (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> b63cefdac02b2e840904efce6f4326be (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 228683739063dc30e937ffedd63e3c94 (16 bytes)
+> mode m ofb 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> cdc80d6fddf18cab34c25909c99a4174 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> fcc28b8d4c63837c09e81700c1100401 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 8d9a9aeac0f6596f559c6d4daf59a5f2 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 6d9f200857ca6c3e9cac524bd9acc92a (16 bytes)
+> counter c1 320270990202665973124521174155042619135
+  -> ok
+> mode m ctr 8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b c1
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 1abc932417521ca24f2b0459fe7e6e0b (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 090339ec0aa6faefd5ccc2c6f4ce8e94 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 1e36b26bd1ebc670d1bd1d665620abf7 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 4f78a7f6d29809585a97daec58c6b050 (16 bytes)
+> mode m ecb 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> f3eed1bdb5d2a03c064b5a7e3db181f8 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 591ccb10d410ed26dc5ba74a31362870 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> b6ed21b99ca6f4f9f153e7b1beafed1d (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 23304b7a39f9f3ff067d8d8f9e24ecc7 (16 bytes)
+> mode m cbc 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> f58c4c04d6e5f1ba779eabfb5f7bfbd6 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 9cfc4e967edb808d679f777bc6702c7d (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 39f23369a9d9bacfa530e26304231461 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> b2eb05e2c39be9fcda6c19078c6a9d1b (16 bytes)
+> mode m cfb 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4 000102030405060708090a0b0c0d0e0f 16
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> dc7e84bfda79164b7ecd8486985d3860 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 39ffed143b28b1c832113c6331e5407b (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> df10132415e54b92a13ed0a8267ae2f9 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 75a385741ab9cef82031623d55b1e471 (16 bytes)
+> mode m cfb 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4 000102030405060708090a0b0c0d0e0f 1
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> dc1f1a8520a64db55fcc8ac554844e88 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 9700adc6e10c63cf2d8cd2d8ce668f3e (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> b9191719c47444fb43bff9b9883c2cd0 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 51120402009f974998c89d195722a75b (16 bytes)
+> mode m ofb 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4 000102030405060708090a0b0c0d0e0f
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> dc7e84bfda79164b7ecd8486985d3860 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> 4febdc6740d20b3ac88f6ad82a4fb08d (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 71ab47a086e86eedf39d1c5bba97c408 (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> 0126141d67f37be8538f5a8be740e484 (16 bytes)
+> counter c2 320270990202665973124521174155042619135
+  -> ok
+> mode m ctr 603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4 c2
+  -> ok
+> encrypt m 6bc1bee22e409f96e93d7e117393172a
+  -> 601ec313775789a5b7a7f504bbf3d228 (16 bytes)
+> encrypt m ae2d8a571e03ac9c9eb76fac45af8e51
+  -> f443e3ca4d62b59aca84e990cacaf5c5 (16 bytes)
+> encrypt m 30c81c46a35ce411e5fbc1191a0a52ef
+  -> 2b0930daa23de94ce87017ba2d84988d (16 bytes)
+> encrypt m f69f2445df4f9b17ad2b417be66c3710
+  -> dfc9c58db67aada613c2dd08457941a6 (16 bytes)
+== one message per mode
+> mode send ecb b3f96e988ca49943315597b9e8042443
+  -> ok
+> encrypt send 496e766f69636520323032362d303131
+  -> e204cac08a4dfee0d8e699bd65298275 (16 bytes)
+> encrypt send 37207061696420696e2066756c6c2e20
+  -> 8dcdf6f3e2b532939a99a043dd0ab5a8 (16 bytes)
+> encrypt send 5468616e6b20796f7521202020202020
+  -> 4ffe09c259dfa792c7ea0c71d32a4d37 (16 bytes)
+> mode send cbc 83c2db8dac623cfeeee13919eb377a1ed35e17c42f09e5de 855b31c9ba3342bada3856d0f2ac71eb
+  -> ok
+> encrypt send 496e766f69636520323032362d303131
+  -> 4f10c8390f9421200e287acc1ca2f420 (16 bytes)
+> encrypt send 37207061696420696e2066756c6c2e20
+  -> f7d29c875c02111d475c404d88df1562 (16 bytes)
+> encrypt send 5468616e6b20796f7521202020202020
+  -> 8d41b2103794718702424e03ba3f02d5 (16 bytes)
+> mode send cfb e7fd04915e7a98a527f96bfb4c81d284c0b6ef91bfc31b5aed386a92806b3e77 723085077e992d4e73991fa2268e8ea1 8
+  -> ok
+> encrypt send 496e766f69636520
+  -> e6d0d98ea94c79e5 (8 bytes)
+> encrypt send 323032362d3031313720706169642069
+  -> 3d9881c5dc9ef1a336222cd14cb47146 (16 bytes)
+> encrypt send 6e2066756c6c2e205468616e6b20796f7521202020202020
+  -> 937a6fe11bc3bd5942896733051f27ca71d5bfc341bf5cf5 (24 bytes)
+> mode send ofb ad60f5103599155c0082615da553307f 91d326b6e7d86d46821ff2e5d20f2f6a
+  -> ok
+> encrypt send 496e766f69
+  -> ac7a674e0d (5 bytes)
+> encrypt send 636520323032362d30313137207061696420696e
+  -> 4591ed142b3980d98972f7f536a88da96d2f5757 (20 bytes)
+> encrypt send 2066756c6c2e205468616e6b20796f7521
+  -> be952f131554b932f83fe02468bfc6bf1b (17 bytes)
+> counter n 1000
+  -> ok
+> mode send ctr 8a682e2a0f8308eb976a0defaf8cc15a9e67d1327b61a84331777e2bbc266ad7 n
+  -> ok
+> encrypt send 496e766f69
+  -> 950a0cb787 (5 bytes)
+> encrypt send 636520323032362d30313137207061696420696e
+  -> 43a7a72c02dd177a04db59e0369088d1212618f3 (20 bytes)
+> encrypt send 2066756c6c2e205468616e6b20796f7521
+  -> f3609478e520da713ac094f6b8642c8871 (17 bytes)
+== a message round trip
+> mode a ecb 1891718ac2cfc5bdde8051ee20fd1898
+  -> ok
+> mode b ecb 1891718ac2cfc5bdde8051ee20fd1898
+  -> ok
+> roundtrip a b 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121
+  error ValueError: plaintext block must be 16 bytes
+> mode a cbc 83dbb39d6747bbf58955a83b9cab2f5e 4747191958366e20fc1e77d361982c10
+  -> ok
+> mode b cbc 83dbb39d6747bbf58955a83b9cab2f5e 4747191958366e20fc1e77d361982c10
+  -> ok
+> roundtrip a b 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121
+  error ValueError: plaintext block must be 16 bytes
+> mode a cfb bdfb6aeec19919bde448e105a2370653 9914ee12a22d254a007f24cfa9b3a94b 4
+  -> ok
+> mode b cfb bdfb6aeec19919bde448e105a2370653 9914ee12a22d254a007f24cfa9b3a94b 4
+  -> ok
+> roundtrip a b 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121
+  error ValueError: plaintext block must be a multiple of segment_size
+> mode a ofb 9f525134a4e22ab99331164845014b19 16f6ff6cee3a765c615cfb4d58ca3374
+  -> ok
+> mode b ofb 9f525134a4e22ab99331164845014b19 16f6ff6cee3a765c615cfb4d58ca3374
+  -> ok
+> roundtrip a b 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121
+  -> ciphertext b3c24da07fb7a5c76826331b48a15fdfee261d9f562501c27f4f88b77132514924b87ee05d4dc956ac877e83b97400 (47 bytes)
+  -> plaintext 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121 (47 bytes)
+  -> same
+> counter rt 7
+  -> ok
+> mode a ctr fce4b840d06f4c8dcc1d53201e3d20f8 rt
+  -> ok
+> counter rt 7
+  -> ok
+> mode b ctr fce4b840d06f4c8dcc1d53201e3d20f8 rt
+  -> ok
+> roundtrip a b 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121
+  -> ciphertext 968e8c6611589403fa4e9e2fcda51e4e453c8a931734d02a7d6326f715dc3f1a5185989e4c75b5a29cfbd65dcc8f07 (47 bytes)
+  -> plaintext 4d65657420617420746865206e6f72746820656e7472616e63652061742030393a3135207368617270212121212121 (47 bytes)
+  -> same
+== reusing a mode
+> mode cbc cbc d9c0d34144c1defc65b0d4f0501b8315 abababababababababababababababab
+  -> ok
+> encrypt cbc 666972737420626c6f636b2068657265
+  -> 78961f951a918dad08022dade5338f49 (16 bytes)
+> decrypt cbc 00000000000000000000000000000000
+  -> 92fa1ea0354f0c74c19c97e15eb0b648 (16 bytes)
+> encrypt cbc 666972737420626c6f636b2068657265
+  -> a8aba8e3a2f1ca0703eeb994308530c7 (16 bytes)
+> mode ofb ofb d9c0d34144c1defc65b0d4f0501b8315 abababababababababababababababab
+  -> ok
+> encrypt ofb 616263
+  -> 4a8053 (3 bytes)
+> encrypt ofb 6465666768696a6b6c6d6e6f707172737475767778797a
+  -> 99c23c43d3c8963f5eae7d68baca126e6cfba1a4567e3a (23 bytes)
+> decrypt ofb 616263
+  -> f02f65 (3 bytes)
+> mode ofb ofb d9c0d34144c1defc65b0d4f0501b8315 abababababababababababababababab
+  -> ok
+> encrypt ofb 6162636465666768696a6b6c6d6e6f707172737475767778797a
+  -> 4a805399c23c43d3c8963f5eae7d68baca126e6cfba1a4567e3a (26 bytes)
+> encrypt ofb ''
+  ->  (0 bytes)
+> counter shared 0
+  -> ok
+> mode c1 ctr d9c0d34144c1defc65b0d4f0501b8315 shared
+  -> ok
+> mode c2 ctr d9c0d34144c1defc65b0d4f0501b8315 shared
+  -> ok
+> encrypt c1 736576656e7465656e2062797465732121
+  -> fdeda16fe3c3289ca6fe217960edde7356 (17 bytes)
+> value shared
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+> encrypt c2 736576656e7465656e2062797465732121
+  -> 9db8908d12dff0fd3a6774fec16d00e00c (17 bytes)
+> value shared
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+> encrypt c1 6d6f7265
+  -> d6630577 (4 bytes)
+> value shared
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+> mode c3 ctr d9c0d34144c1defc65b0d4f0501b8315
+  -> ok
+> encrypt c3 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+  -> 77bb0c7712269d396b236e879c6c1201eedde6e87cab959854471687b50873c12d07c9af2a575db0 (40 bytes)
+> mode ecb ecb d9c0d34144c1defc65b0d4f0501b8315
+  -> ok
+> encrypt ecb 00000000000000000000000000000000
+  -> 8e88d70a8db74df9c8de43001488ad52 (16 bytes)
+> encrypt ecb 00000000000000000000000000000000
+  -> 8e88d70a8db74df9c8de43001488ad52 (16 bytes)
+== counters
+> counter c 0
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> cac237e2382923e2eb218057b856a04396c4d0506321ce48a7d8ffc8881bbf44e7 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+> counter c 1
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> 96c4d0506321ce48a7d8ffc8881bbf44e7c131eff672f62058ca6c5720df3e9b9d (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4]
+> counter c 255
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> 86e288823401874fd6a95da5c2c1eb71e94d24c876d8f22a21532fe323a6ee36bc (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2]
+> counter c 256
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> e94d24c876d8f22a21532fe323a6ee36bc55dc8392e510052b8c2f151109156e09 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3]
+> counter c 65535
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> cbd2dc9b9bcc2aa37fc844f174a79e8cfd93b7fcb743bae6c4be0d9f7988fcc0d5 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2]
+> counter c 18446744073709551616
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> 59a4976e338ff51e1f71f8dbe376694f1e22fcfdc54fce025f52c903a34525efe8 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3]
+> counter c 340282366920938463463374607431768211455
+  -> ok
+> value c
+  -> [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> f3e7a87164ba4fd407bdaade71391d8bcac237e2382923e2eb218057b856a04396 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+> counter c 340282366920938463463374607431768211456
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> cac237e2382923e2eb218057b856a04396c4d0506321ce48a7d8ffc8881bbf44e7 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+> counter c 1361129467683753853853498429727072845829
+  -> ok
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> b6b58fae1409186801223f35fb4985d743b8afb2464501ee2862ed3996662b87dc (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8]
+> counter c -1
+  -> ok
+> value c
+  -> [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> f3e7a87164ba4fd407bdaade71391d8bcac237e2382923e2eb218057b856a04396 (33 bytes)
+> value c
+  -> [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]
+> counter c -256
+  -> ok
+> value c
+  -> [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> 9e1132b710020a6e3f23346b181be265981adf55c41ebd1a45aa7602d573c3a36c (33 bytes)
+> value c
+  -> [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 3]
+> counter c -170141183460469231731687303715884105728
+  -> ok
+> value c
+  -> [128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> e604c1119c66ec4fcdcf4cffb8feb67e5e9ef46d3c776f27bc9fb70bd369ca94ff (33 bytes)
+> value c
+  -> [128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3]
+> counter c 8727963568087712425891397479476727340041449
+  -> ok
+> value c
+  -> [45, 254, 238, 26, 245, 120, 140, 254, 195, 23, 109, 52, 193, 31, 132, 233]
+> mode m ctr 332daf8d957f47641228f8617ac321b4 c
+  -> ok
+> encrypt m 000000000000000000000000000000000000000000000000000000000000000000
+  -> 20109adc4d1a823e07dcf16ebfaa6d4f1b468a4b2f99dea6d7121decb72b192bc5 (33 bytes)
+> value c
+  -> [45, 254, 238, 26, 245, 120, 140, 254, 195, 23, 109, 52, 193, 31, 132, 236]
+== feeders
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f
+  -> fa72c78a072ace9dae69c6d3f17b69d9 (16 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5ac
+  ->  (0 bytes)
+> feed f
+  -> 0db45488ea8c08ce52091a2fed4c4b3c (16 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830
+  ->  (0 bytes)
+> feed f
+  -> c7d4ddda7617b7e13349625ca88cd30dfa72c78a072ace9dae69c6d3f17b69d9 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0
+  ->  (0 bytes)
+> feed f
+  -> c7d4ddda7617b7e13349625ca88cd30dff628f9b978bf42f1cb16e854fe0c949 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6
+  ->  (0 bytes)
+> feed f
+  -> c7d4ddda7617b7e13349625ca88cd30d0a3befd0ad746064aa79f1cbfa916f92 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b
+  -> c7d4ddda7617b7e13349625ca88cd30d (16 bytes)
+> feed f
+  -> 99ae3d8018758471658cc63dd7fcae15fa72c78a072ace9dae69c6d3f17b69d9 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09
+  -> c7d4ddda7617b7e13349625ca88cd30d (16 bytes)
+> feed f
+  -> 99ae3d8018758471658cc63dd7fcae15a61b671ae3681348c4104e1a96abce24 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2
+  ->  (0 bytes)
+> feed f 68
+  ->  (0 bytes)
+> feed f 2f
+  ->  (0 bytes)
+> feed f f5
+  ->  (0 bytes)
+> feed f bb
+  ->  (0 bytes)
+> feed f 82
+  ->  (0 bytes)
+> feed f 48
+  ->  (0 bytes)
+> feed f 0e
+  ->  (0 bytes)
+> feed f d4
+  ->  (0 bytes)
+> feed f 9b
+  ->  (0 bytes)
+> feed f 61
+  ->  (0 bytes)
+> feed f 27
+  ->  (0 bytes)
+> feed f ee
+  ->  (0 bytes)
+> feed f b4
+  ->  (0 bytes)
+> feed f 7a
+  ->  (0 bytes)
+> feed f 41
+  ->  (0 bytes)
+> feed f 07
+  ->  (0 bytes)
+> feed f cd
+  ->  (0 bytes)
+> feed f 94
+  ->  (0 bytes)
+> feed f 5a
+  ->  (0 bytes)
+> feed f 20
+  ->  (0 bytes)
+> feed f e6
+  ->  (0 bytes)
+> feed f ad
+  ->  (0 bytes)
+> feed f 73
+  ->  (0 bytes)
+> feed f 39
+  ->  (0 bytes)
+> feed f 00
+  ->  (0 bytes)
+> feed f c6
+  ->  (0 bytes)
+> feed f 8c
+  ->  (0 bytes)
+> feed f 53
+  ->  (0 bytes)
+> feed f 19
+  ->  (0 bytes)
+> feed f df
+  ->  (0 bytes)
+> feed f a6
+  -> a38f41fe597c7ff146df0eb98bcc7da8 (16 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32
+  ->  (0 bytes)
+> feed f f8
+  ->  (0 bytes)
+> feed f bf
+  ->  (0 bytes)
+> feed f 85
+  ->  (0 bytes)
+> feed f 4b
+  ->  (0 bytes)
+> feed f 12
+  ->  (0 bytes)
+> feed f d8
+  ->  (0 bytes)
+> feed f
+  -> d391f27c584e8e30e31870c6505c43ccc6db81c40a7217cc89b57af189f78bf4 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9
+  ->  (0 bytes)
+> feed f 0e799df215dd6edefb
+  ->  (0 bytes)
+> feed f 0730092dc19c4eabc6711ed4e3258978
+  -> 803988d93cb78a7bf65c1e6f7adf02cb (16 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32fd629b773ed9676153763a4b072c
+  -> 1b4cbae5fd5565438866a8e6d2885ee6 (16 bytes)
+> feed f
+  -> c4acb7a28b52c58811bab9a8285c054afa72c78a072ace9dae69c6d3f17b69d9 (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f
+  -> 80 bytes, fnv1a 3c4c7967
+> feed f
+  -> e9c00b6c91dcb20e235b6427a756e549bafa5cd620521b0f50aecd03cb0257fd (32 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f ''
+  ->  (0 bytes)
+> feed f a2072d
+  ->  (0 bytes)
+> feed f
+  -> c5f22c662b4206e0d4a740e39d1da40d (16 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f
+  -> f2c8612251deecf7151a5499d93944ef (16 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5ac
+  ->  (0 bytes)
+> feed f
+  -> 75636699561ef720b9061dfe3aa6462b (16 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830
+  ->  (0 bytes)
+> feed f
+  -> fdf9e99ee474729dd852b162a17bc1890e018b9f3c6a7a8648529413558cf69b (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0
+  ->  (0 bytes)
+> feed f
+  -> fdf9e99ee474729dd852b162a17bc189d7d0e10611e703997fa42705e54d7210 (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6
+  ->  (0 bytes)
+> feed f
+  -> fdf9e99ee474729dd852b162a17bc189680658943438a6b3f18033aaa2ab24bc (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b
+  -> fdf9e99ee474729dd852b162a17bc189 (16 bytes)
+> feed f
+  -> 453c63134fc92346845cc4e62e595f25a238394fdcbb37f968cdf45460e3f3c4 (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09
+  -> fdf9e99ee474729dd852b162a17bc189 (16 bytes)
+> feed f
+  -> 453c63134fc92346845cc4e62e595f2580c2e3f93aa14499dfa877ffe6283370 (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2
+  ->  (0 bytes)
+> feed f 68
+  ->  (0 bytes)
+> feed f 2f
+  ->  (0 bytes)
+> feed f f5
+  ->  (0 bytes)
+> feed f bb
+  ->  (0 bytes)
+> feed f 82
+  ->  (0 bytes)
+> feed f 48
+  ->  (0 bytes)
+> feed f 0e
+  ->  (0 bytes)
+> feed f d4
+  ->  (0 bytes)
+> feed f 9b
+  ->  (0 bytes)
+> feed f 61
+  ->  (0 bytes)
+> feed f 27
+  ->  (0 bytes)
+> feed f ee
+  ->  (0 bytes)
+> feed f b4
+  ->  (0 bytes)
+> feed f 7a
+  ->  (0 bytes)
+> feed f 41
+  ->  (0 bytes)
+> feed f 07
+  ->  (0 bytes)
+> feed f cd
+  ->  (0 bytes)
+> feed f 94
+  ->  (0 bytes)
+> feed f 5a
+  ->  (0 bytes)
+> feed f 20
+  ->  (0 bytes)
+> feed f e6
+  ->  (0 bytes)
+> feed f ad
+  ->  (0 bytes)
+> feed f 73
+  ->  (0 bytes)
+> feed f 39
+  ->  (0 bytes)
+> feed f 00
+  ->  (0 bytes)
+> feed f c6
+  ->  (0 bytes)
+> feed f 8c
+  ->  (0 bytes)
+> feed f 53
+  ->  (0 bytes)
+> feed f 19
+  ->  (0 bytes)
+> feed f df
+  ->  (0 bytes)
+> feed f a6
+  -> 8f3059a78e7e9e613b9175eb7c5d94e1 (16 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32
+  ->  (0 bytes)
+> feed f f8
+  ->  (0 bytes)
+> feed f bf
+  ->  (0 bytes)
+> feed f 85
+  ->  (0 bytes)
+> feed f 4b
+  ->  (0 bytes)
+> feed f 12
+  ->  (0 bytes)
+> feed f d8
+  ->  (0 bytes)
+> feed f
+  -> 5fa7709777c081235d2f357b4ee6f87adc5c44dac7d852dd11249844f5c3af9c (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9
+  ->  (0 bytes)
+> feed f 0e799df215dd6edefb
+  ->  (0 bytes)
+> feed f 0730092dc19c4eabc6711ed4e3258978
+  -> 951cd74deb8571fef0c5c09fa8052df3 (16 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32fd629b773ed9676153763a4b072c
+  -> b88f969d2ca540050918ffe7ae319618 (16 bytes)
+> feed f
+  -> 588a709c3c344b6c8ad893c0e73e5eb9ae8d3b00b0dd6fe625f5bbd7a486afe2 (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f
+  -> 80 bytes, fnv1a d56f706c
+> feed f
+  -> 80fbf91663bfe33a202b93e4c5a04ecce45a9b743bf227d30f58eeb12a8efc93 (32 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f ''
+  ->  (0 bytes)
+> feed f a2072d
+  ->  (0 bytes)
+> feed f
+  -> faa89cc4f6dfecb6fb9cfae00bb8e1b2 (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5ac
+  ->  (0 bytes)
+> feed f
+  -> b9c98f2e30 (5 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830
+  ->  (0 bytes)
+> feed f
+  -> b9c98f2e305c59a1bfa4850362ea66cc (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0
+  ->  (0 bytes)
+> feed f
+  -> b9c98f2e305c59a1bfa4850362ea66cca5 (17 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6
+  -> b9c98f2e305c59a1bfa4850362ea66 (15 bytes)
+> feed f
+  -> cca54648e23b498ab32791f996a1cb8e (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b
+  -> b9c98f2e305c59a1bfa4850362ea66 (15 bytes)
+> feed f
+  -> cca54648e23b498ab32791f996a1cb8e4e (17 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09
+  -> b9c98f2e305c59a1bfa4850362ea66 (15 bytes)
+> feed f
+  -> cca54648e23b498ab32791f996a1cb8e4e36 (18 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2
+  ->  (0 bytes)
+> feed f 68
+  ->  (0 bytes)
+> feed f 2f
+  ->  (0 bytes)
+> feed f f5
+  ->  (0 bytes)
+> feed f bb
+  ->  (0 bytes)
+> feed f 82
+  ->  (0 bytes)
+> feed f 48
+  ->  (0 bytes)
+> feed f 0e
+  ->  (0 bytes)
+> feed f d4
+  ->  (0 bytes)
+> feed f 9b
+  ->  (0 bytes)
+> feed f 61
+  ->  (0 bytes)
+> feed f 27
+  ->  (0 bytes)
+> feed f ee
+  ->  (0 bytes)
+> feed f b4
+  ->  (0 bytes)
+> feed f 7a
+  ->  (0 bytes)
+> feed f 41
+  ->  (0 bytes)
+> feed f 07
+  ->  (0 bytes)
+> feed f cd
+  ->  (0 bytes)
+> feed f 94
+  -> b9a68d (3 bytes)
+> feed f 5a
+  ->  (0 bytes)
+> feed f 20
+  ->  (0 bytes)
+> feed f e6
+  -> 8b9011 (3 bytes)
+> feed f ad
+  ->  (0 bytes)
+> feed f 73
+  ->  (0 bytes)
+> feed f 39
+  -> b378f1 (3 bytes)
+> feed f 00
+  ->  (0 bytes)
+> feed f c6
+  ->  (0 bytes)
+> feed f 8c
+  -> c4e041 (3 bytes)
+> feed f 53
+  ->  (0 bytes)
+> feed f 19
+  ->  (0 bytes)
+> feed f df
+  -> d76ba9 (3 bytes)
+> feed f a6
+  ->  (0 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32
+  -> 5ffe02 (3 bytes)
+> feed f f8
+  ->  (0 bytes)
+> feed f bf
+  ->  (0 bytes)
+> feed f 85
+  -> 6874ca (3 bytes)
+> feed f 4b
+  ->  (0 bytes)
+> feed f 12
+  ->  (0 bytes)
+> feed f d8
+  -> e21043 (3 bytes)
+> feed f
+  -> e5f5e75e23df0a66e5333e45fc397ac2 (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9
+  ->  (0 bytes)
+> feed f 0e799df215dd6edefb
+  ->  (0 bytes)
+> feed f 0730092dc19c4eabc6711ed4e3258978
+  -> b9c98f2e305c5962e3804652306d51 (15 bytes)
+> feed f 6c
+  ->  (0 bytes)
+> feed f 32fd629b773ed9676153763a4b072c
+  -> 0782ee0c6b99420794b74e8939a609 (15 bytes)
+> feed f
+  -> 5bfac11ace9b13cb77c3e24f890135669de0 (18 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f
+  -> 84 bytes, fnv1a 9ea563f9
+> feed f
+  -> 7342c7b1f0ba4fc4fb8065614a044d8a (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f ''
+  ->  (0 bytes)
+> feed f a2072d
+  ->  (0 bytes)
+> feed f
+  -> b9c98f (3 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f
+  ->  (0 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5ac
+  ->  (0 bytes)
+> feed f
+  -> b9c98f1fd8 (5 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830
+  ->  (0 bytes)
+> feed f
+  -> b9c98f1fd8c2028353782e3c3f1e998f (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0
+  -> b9 (1 bytes)
+> feed f
+  -> c98f1fd8c2028353782e3c3f1e998f22 (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6
+  -> b9c98f1fd8c2028353782e3c3f1e99 (15 bytes)
+> feed f
+  -> 8f22a378a3a9e190d7ae8021acc45cd0 (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b
+  -> b9c98f1fd8c2028353782e3c3f1e998f (16 bytes)
+> feed f
+  -> 22a378a3a9e190d7ae8021acc45cd007 (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09
+  -> b9c98f1fd8c2028353782e3c3f1e998f22 (17 bytes)
+> feed f
+  -> a378a3a9e190d7ae8021acc45cd0074b (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2
+  ->  (0 bytes)
+> feed f 68
+  ->  (0 bytes)
+> feed f 2f
+  ->  (0 bytes)
+> feed f f5
+  ->  (0 bytes)
+> feed f bb
+  ->  (0 bytes)
+> feed f 82
+  ->  (0 bytes)
+> feed f 48
+  ->  (0 bytes)
+> feed f 0e
+  ->  (0 bytes)
+> feed f d4
+  ->  (0 bytes)
+> feed f 9b
+  ->  (0 bytes)
+> feed f 61
+  ->  (0 bytes)
+> feed f 27
+  ->  (0 bytes)
+> feed f ee
+  ->  (0 bytes)
+> feed f b4
+  ->  (0 bytes)
+> feed f 7a
+  ->  (0 bytes)
+> feed f 41
+  ->  (0 bytes)
+> feed f 07
+  -> b9 (1 bytes)
+> feed f cd
+  -> a6 (1 bytes)
+> feed f 94
+  -> 8d (1 bytes)
+> feed f 5a
+  -> 2f (1 bytes)
+> feed f 20
+  -> cf (1 bytes)
+> feed f e6
+  -> 96 (1 bytes)
+> feed f ad
+  -> b3 (1 bytes)
+> feed f 73
+  -> 40 (1 bytes)
+> feed f 39
+  -> a2 (1 bytes)
+> feed f 00
+  -> 48 (1 bytes)
+> feed f c6
+  -> d1 (1 bytes)
+> feed f 8c
+  -> ba (1 bytes)
+> feed f 53
+  -> 0d (1 bytes)
+> feed f 19
+  -> eb (1 bytes)
+> feed f df
+  -> 8b (1 bytes)
+> feed f a6
+  -> fe (1 bytes)
+> feed f 6c
+  -> c5 (1 bytes)
+> feed f 32
+  -> 99 (1 bytes)
+> feed f f8
+  -> a4 (1 bytes)
+> feed f bf
+  -> 84 (1 bytes)
+> feed f 85
+  -> 37 (1 bytes)
+> feed f 4b
+  -> 5a (1 bytes)
+> feed f 12
+  -> 4e (1 bytes)
+> feed f d8
+  -> ae (1 bytes)
+> feed f
+  -> e0025e23d4bea98a2efea31344715ba4 (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9
+  ->  (0 bytes)
+> feed f 0e799df215dd6edefb
+  ->  (0 bytes)
+> feed f 0730092dc19c4eabc6711ed4e3258978
+  -> b9c98f1fd8c202400f4e42883e312f44 (16 bytes)
+> feed f 6c
+  -> c5 (1 bytes)
+> feed f 32fd629b773ed9676153763a4b072c
+  -> 6439f3d620ad761f73867b6482ff54 (15 bytes)
+> feed f
+  -> 2efea6ce5a4d77a5d7607304aa18c73a (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f
+  -> 84 bytes, fnv1a 2df7cc6c
+> feed f
+  -> 87789c29c0dba415e48915eff94846bf (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f ''
+  ->  (0 bytes)
+> feed f a2072d
+  ->  (0 bytes)
+> feed f
+  -> b9c98f (3 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f
+  ->  (0 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5ac
+  ->  (0 bytes)
+> feed f
+  -> eac73f3d89 (5 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830
+  ->  (0 bytes)
+> feed f
+  -> eac73f3d8958c45f5d8801cef66cfd7c (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0
+  -> ea (1 bytes)
+> feed f
+  -> c73f3d8958c45f5d8801cef66cfd7c9d (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba6
+  -> eac73f3d8958c45f5d8801cef66cfd (15 bytes)
+> feed f
+  -> 7c9dc447562c96220723f0eb4dd18cf4 (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b
+  -> eac73f3d8958c45f5d8801cef66cfd7c (16 bytes)
+> feed f
+  -> 9dc447562c96220723f0eb4dd18cf4e1 (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09
+  -> eac73f3d8958c45f5d8801cef66cfd7c9d (17 bytes)
+> feed f
+  -> c447562c96220723f0eb4dd18cf4e1f9 (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2
+  ->  (0 bytes)
+> feed f 68
+  ->  (0 bytes)
+> feed f 2f
+  ->  (0 bytes)
+> feed f f5
+  ->  (0 bytes)
+> feed f bb
+  ->  (0 bytes)
+> feed f 82
+  ->  (0 bytes)
+> feed f 48
+  ->  (0 bytes)
+> feed f 0e
+  ->  (0 bytes)
+> feed f d4
+  ->  (0 bytes)
+> feed f 9b
+  ->  (0 bytes)
+> feed f 61
+  ->  (0 bytes)
+> feed f 27
+  ->  (0 bytes)
+> feed f ee
+  ->  (0 bytes)
+> feed f b4
+  ->  (0 bytes)
+> feed f 7a
+  ->  (0 bytes)
+> feed f 41
+  ->  (0 bytes)
+> feed f 07
+  -> ea (1 bytes)
+> feed f cd
+  -> a8 (1 bytes)
+> feed f 94
+  -> 3d (1 bytes)
+> feed f 5a
+  -> 0d (1 bytes)
+> feed f 20
+  -> 9e (1 bytes)
+> feed f e6
+  -> 0c (1 bytes)
+> feed f ad
+  -> 75 (1 bytes)
+> feed f 73
+  -> 9c (1 bytes)
+> feed f 39
+  -> ac (1 bytes)
+> feed f 00
+  -> b8 (1 bytes)
+> feed f c6
+  -> fe (1 bytes)
+> feed f 8c
+  -> 48 (1 bytes)
+> feed f 53
+  -> c4 (1 bytes)
+> feed f 19
+  -> 99 (1 bytes)
+> feed f df
+  -> ef (1 bytes)
+> feed f a6
+  -> 0d (1 bytes)
+> feed f 6c
+  -> 7a (1 bytes)
+> feed f 32
+  -> fe (1 bytes)
+> feed f f8
+  -> 9b (1 bytes)
+> feed f bf
+  -> 71 (1 bytes)
+> feed f 85
+  -> b2 (1 bytes)
+> feed f 4b
+  -> 2d (1 bytes)
+> feed f 12
+  -> fc (1 bytes)
+> feed f d8
+  -> 7e (1 bytes)
+> feed f
+  -> 6d7294c2c16e8d6c9cfb281e6d38cee9 (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9
+  ->  (0 bytes)
+> feed f 0e799df215dd6edefb
+  ->  (0 bytes)
+> feed f 0730092dc19c4eabc6711ed4e3258978
+  -> eac73f3d8958c49c01be6d7af7434bb7 (16 bytes)
+> feed f 6c
+  -> 7a (1 bytes)
+> feed f 32fd629b773ed9676153763a4b072c
+  -> 03060653571fa692034c9a7152dbb2 (15 bytes)
+> feed f
+  -> 9cfb2dc37304e2e8dc187ddc98846669 (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f a2072dc5acd6f9cd25ab9ea1dc416830e0f7487dbe5d730a7782b90343fba62b09b45a87997628ccaf3cf18aa8353f1502992036952cc8969393e6e6415ac2cf72c11b9dc849c3abaa03f68c04937ffec107898f0a5a460d3bc641afaacd84041706699f
+  -> 84 bytes, fnv1a 1e834939
+> feed f
+  -> ef2e1ac9cca1b8e907f87dbaadb8e58f (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f ''
+  ->  (0 bytes)
+> feed f a2072d
+  ->  (0 bytes)
+> feed f
+  -> eac73f (3 bytes)
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ''
+  -> ciphertext fa72c78a072ace9dae69c6d3f17b69d9 (16 bytes)
+  -> plaintext  (0 bytes)
+  -> same
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 6c
+  -> ciphertext 524352532fa0e3bafc13388e5412e056 (16 bytes)
+  -> plaintext 6c (1 bytes)
+  -> same
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 0aeeb1c1412b0cb732285c45257b9e66
+  -> ciphertext 1a38dcf37f3b18e649098f9c82ba8503fa72c78a072ace9dae69c6d3f17b69d9 (32 bytes)
+  -> plaintext 0aeeb1c1412b0cb732285c45257b9e66 (16 bytes)
+  -> same
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ea1b26e16878170d14b69445077228ad0c78c515fb
+  -> ciphertext e051be38f48e06e761eb01d4173549eb2dabbf02d9cee464f36022d32e47ac66 (32 bytes)
+  -> plaintext ea1b26e16878170d14b69445077228ad0c78c515fb (21 bytes)
+  -> same
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674
+  -> ciphertext bb9f5c2ca8a061a8c4711b3d07f923f58c8a9d087bd3653f27195e1ce08e2aede4f0e493faaf88509346951fd52ef4c7fa72c78a072ace9dae69c6d3f17b69d9 (64 bytes)
+  -> plaintext d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674 (48 bytes)
+  -> same
+> mode e cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ''
+  -> ciphertext f2c8612251deecf7151a5499d93944ef (16 bytes)
+  -> plaintext  (0 bytes)
+  -> same
+> mode e cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 6c
+  -> ciphertext fe567a9b07526ded8748fb3696c4e12d (16 bytes)
+  -> plaintext 6c (1 bytes)
+  -> same
+> mode e cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 0aeeb1c1412b0cb732285c45257b9e66
+  -> ciphertext f94449931601fb67d241662e7cc36f725c01511bbf2ab80a54f86bd7c0adaec8 (32 bytes)
+  -> plaintext 0aeeb1c1412b0cb732285c45257b9e66 (16 bytes)
+  -> same
+> mode e cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ea1b26e16878170d14b69445077228ad0c78c515fb
+  -> ciphertext 9a36d3a0013e79a6cc94f7952af8c3a21d34d6946b05aef04e16ee0d824096d6 (32 bytes)
+  -> plaintext ea1b26e16878170d14b69445077228ad0c78c515fb (21 bytes)
+  -> same
+> mode e cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674
+  -> ciphertext 08fd7ad294969262d2d995b88fb8c0cbb2cb66e218032c06f91469768c127d1c94d756ab873bccbcbc785cdb6cde33bc7a46702fdb3a0819eb07c9cf2f600dc3 (64 bytes)
+  -> plaintext d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674 (48 bytes)
+  -> same
+> mode e cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> mode d cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ''
+  -> ciphertext  (0 bytes)
+  -> plaintext  (0 bytes)
+  -> same
+> mode e cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> mode d cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 6c
+  -> ciphertext 77 (1 bytes)
+  -> plaintext 6c (1 bytes)
+  -> same
+> mode e cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> mode d cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 0aeeb1c1412b0cb732285c45257b9e66
+  -> ciphertext 1120132ef4419fed9c55a656d2b26d98 (16 bytes)
+  -> plaintext 0aeeb1c1412b0cb732285c45257b9e66 (16 bytes)
+  -> same
+> mode e cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> mode d cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ea1b26e16878170d14b69445077228ad0c78c515fb
+  -> ciphertext f1d584910ffb5ae0598da6db7c8c30ee5ab19dfc99 (21 bytes)
+  -> plaintext ea1b26e16878170d14b69445077228ad0c78c515fb (21 bytes)
+  -> same
+> mode e cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> mode d cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 3
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674
+  -> ciphertext cf8fcb97e67708d3999567089f6b5e5bbf7c973e6d01c2956246a39f61959b55112b50fcd2d0656e6ed4c226f825c684 (48 bytes)
+  -> plaintext d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674 (48 bytes)
+  -> same
+> mode e ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ''
+  -> ciphertext  (0 bytes)
+  -> plaintext  (0 bytes)
+  -> same
+> mode e ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 6c
+  -> ciphertext 77 (1 bytes)
+  -> plaintext 6c (1 bytes)
+  -> same
+> mode e ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 0aeeb1c1412b0cb732285c45257b9e66
+  -> ciphertext 1120131b353ff7f944fbecd8c6246fd9 (16 bytes)
+  -> plaintext 0aeeb1c1412b0cb732285c45257b9e66 (16 bytes)
+  -> same
+> mode e ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ea1b26e16878170d14b69445077228ad0c78c515fb
+  -> ciphertext f1d5843b1c6cec43626524d8e42dd912ce2cf5cbec (21 bytes)
+  -> plaintext ea1b26e16878170d14b69445077228ad0c78c515fb (21 bytes)
+  -> same
+> mode e ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> mode d ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674
+  -> ciphertext cf8fcb4b1ea24d3d0267ec36d01c11489cbcb81372b767c75a08431801be61871c2cf48fa6e8704ec64f6c3a352bf662 (48 bytes)
+  -> plaintext d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674 (48 bytes)
+  -> same
+> mode e ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ''
+  -> ciphertext  (0 bytes)
+  -> plaintext  (0 bytes)
+  -> same
+> mode e ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 6c
+  -> ciphertext 24 (1 bytes)
+  -> plaintext 6c (1 bytes)
+  -> same
+> mode e ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 0aeeb1c1412b0cb732285c45257b9e66
+  -> ciphertext 422ea33964a531254a0bc32a0f560b2a (16 bytes)
+  -> plaintext 0aeeb1c1412b0cb732285c45257b9e66 (16 bytes)
+  -> same
+> mode e ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd ea1b26e16878170d14b69445077228ad0c78c515fb
+  -> ciphertext a2db34194df62a9f6c950b2a2d5fbde1714bca3e69 (21 bytes)
+  -> plaintext ea1b26e16878170d14b69445077228ad0c78c515fb (21 bytes)
+  -> same
+> mode e ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674
+  -> ciphertext 9c817b694f388be10c97c3c4196e75bb23db87e6f7c0d517d77889f9146e4561ae297f828fa1e503cd3762e207b75731 (48 bytes)
+  -> plaintext d44169916ab6b67374b45cab3343e0f75ee888cd650b841a830adbb7861917ab5ee0af2367d23932764e4c48a5783674 (48 bytes)
+  -> same
+== padding
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid data length for final block
+> feed f
+  error Exception: invalid data length for final block
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> d3eb432d9229105c44af0d48aacbbeb5 (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid data length for final block
+> feed f
+  error Exception: invalid data length for final block
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  -> fa72c78a072ace9dae69c6d3f17b69d9 (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> d3eb432d9229105c44af0d48aacbbeb5fa72c78a072ace9dae69c6d3f17b69d9 (32 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> d3eb432d9229105c44af0d48aacbbeb52960a7b7ac96655a93f8e75b73a4d1d0 (32 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> a45c153b9ac32330ddd391fb8874478a (16 bytes)
+> feed f
+  -> a45c153b9ac32330ddd391fb8874478a (16 bytes)
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> a45c153b9ac32330ddd391fb8874478a (16 bytes)
+> feed f
+  error ValueError: invalid padding byte
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter bogus
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> a45c153b9ac32330ddd391fb8874478a (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid data length for final block
+> feed f
+  error Exception: invalid data length for final block
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 848409aa93881352c16b72e6bc93c90d (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid data length for final block
+> feed f
+  error Exception: invalid data length for final block
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  -> f2c8612251deecf7151a5499d93944ef (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 848409aa93881352c16b72e6bc93c90d3ab8e6fb4b09644d8be944e29751d998 (32 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 848409aa93881352c16b72e6bc93c90dab77680b670916277071ede04b006819 (32 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> fe064f61c099796a8789cba1d22e1dd0 (16 bytes)
+> feed f
+  -> e51d547adb8262719c92d0bac93506cb (16 bytes)
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> fe064f61c099796a8789cba1d22e1dd0 (16 bytes)
+> feed f
+  error ValueError: invalid padding byte
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter bogus
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> fe064f61c099796a8789cba1d22e1dd0 (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fa9af (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 5a8fa9afa0ddbe153624ee58ffe162f5 (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fa9af (4 bytes)
+> feed f
+  -> a0ddbe153624ee58ffe162f53b6d5494 (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fa9af (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fa9af (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m decrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8f1cebdb113261c370d22fb961f450 (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m decrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8f1cebdb113261c370d22fb961f450 (16 bytes)
+> feed f
+  -> 92aa92aa92aa92aa92aa92aa92aa92aa (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> feeder f m decrypter bogus
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8f1cebdb113261c370d22fb961f450 (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 5a8fe39b3555ba0f3792f1dca21eb0fe (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fe39b (4 bytes)
+> feed f
+  -> 3555ba0f3792f1dca21eb0fe8315719f (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 5a8fe39b3555ba0f3792f1dca21eb0fe (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fe39b (4 bytes)
+> feed f
+  -> 3555ba0f3792f1dca21eb0fe8315719f (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 5a (1 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fe39b (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 35 (1 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 5a (1 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 5a8fe39b (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 35 (1 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8fe39b3555ba0f3792f1dca21eb0fe (16 bytes)
+> feed f
+  -> 8315719f56fda29c9843d9eec6e6376d (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8fe39b3555ba0f3792f1dca21eb0fe (16 bytes)
+> feed f
+  -> 8315719f56fda29c9843d9eec6e6376d (16 bytes)
+> mode m ofb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f m decrypter bogus
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 5a8fe39b3555ba0f3792f1dca21eb0fe (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 098153b964cf7cd33962de2e6b6cd40d (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 098153b9 (4 bytes)
+> feed f
+  -> 64cf7cd33962de2e6b6cd40d3c724e6a (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  -> 098153b964cf7cd33962de2e6b6cd40d (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 098153b9 (4 bytes)
+> feed f
+  -> 64cf7cd33962de2e6b6cd40d3c724e6a (16 bytes)
+> feed f
+  error ValueError: already finished feeder
+> feed f 42
+  error ValueError: already finished feeder
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 09 (1 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter pkcs7
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 098153b9 (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 64 (1 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f ''
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  ->  (0 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 41414141414141414141414141414141
+  ->  (0 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 09 (1 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m encrypter ''
+  -> ok
+> feed f 4141414141414141414141414141414141414141
+  -> 098153b9 (4 bytes)
+> feed f
+  error Exception: invalid padding option
+> feed f
+  error Exception: invalid padding option
+> feed f 42
+  -> 64 (1 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter none
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 098153b964cf7cd33962de2e6b6cd40d (16 bytes)
+> feed f
+  -> 3c724e6ad38a104c1533130fd336138b (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter default
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 098153b964cf7cd33962de2e6b6cd40d (16 bytes)
+> feed f
+  -> 3c724e6ad38a104c1533130fd336138b (16 bytes)
+> mode m ctr 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder f m decrypter bogus
+  -> ok
+> feed f 4141414141414141414141414141414141414141414141414141414141414141
+  -> 098153b964cf7cd33962de2e6b6cd40d (16 bytes)
+> feed f
+  error Exception: invalid padding option
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> encrypt m 41414141414141414141414141414100
+  -> 17e36216edcc20a49387f67299dd9c70 (16 bytes)
+> encrypt m 41414141414141414141414141414105
+  -> 02de863d6d6f33848fd31f2f9c388174 (16 bytes)
+> encrypt m 41414141414141414141414141414110
+  -> 1e4744585e3470ff303674c76abe49eb (16 bytes)
+> encrypt m 41414141414141414141414141414111
+  -> d55f241447853c9e3958cdd04e4df4e1 (16 bytes)
+> encrypt m 414141414141414141414141414141ff
+  -> cff9e9d3ef9af2f01bbd4e9300aa8c0f (16 bytes)
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter none
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 41414141414141414141414141414100
+  -> ciphertext 17e36216edcc20a49387f67299dd9c70 (16 bytes)
+  -> plaintext  (0 bytes)
+  -> differs
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter none
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 41414141414141414141414141414105
+  -> ciphertext 02de863d6d6f33848fd31f2f9c388174 (16 bytes)
+  -> plaintext 4141414141414141414141 (11 bytes)
+  -> differs
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter none
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 41414141414141414141414141414110
+  -> ciphertext 1e4744585e3470ff303674c76abe49eb (16 bytes)
+  -> plaintext  (0 bytes)
+  -> differs
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter none
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 41414141414141414141414141414111
+  -> ciphertext d55f241447853c9e3958cdd04e4df4e1 (16 bytes)
+  error ValueError: invalid padding byte
+> mode e ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> mode d ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> feeder fe e encrypter none
+  -> ok
+> feeder fd d decrypter
+  -> ok
+> pipe fe fd 414141414141414141414141414141ff
+  -> ciphertext cff9e9d3ef9af2f01bbd4e9300aa8c0f (16 bytes)
+  error ValueError: invalid padding byte
+> mode d cbc 7a634b8cdaa7a1ff4793e775d66ef465 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> feeder f d decrypter
+  -> ok
+> feed f df097885d16cb8733c681dacfd15e95946d944626f3deaa9808d92097f3122117ace9480531ca6804e8644a35c83b69e
+  -> 338465a7051596098d55a22e0e0f66fd9b631b2b699244cf5765ae592b436417 (32 bytes)
+> feed f
+  error ValueError: invalid padding byte
+== bad arguments
+> mode m ecb ''
+  error ValueError: Invalid key size
+> mode m ecb 00
+  error ValueError: Invalid key size
+> mode m ecb 0000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 0000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 0000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 0000000000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 00000000000000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 00000000000000000000000000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 000000000000000000000000000000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb -
+  error TypeError: object of type 'NoneType' has no len()
+> mode m ctr -
+  error TypeError: object of type 'NoneType' has no len()
+> mode m cbc 000000000000000000000000000000 00000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m cbc 000000000000000000000000000000 000000000000000000000000000000
+  error ValueError: initialization vector must be 16 bytes
+> mode m cbc 00000000000000000000000000000000 0000000000000000000000000000000000
+  error ValueError: initialization vector must be 16 bytes
+> mode m cfb 00000000000000000000000000000000 0000000000000000 1
+  error ValueError: initialization vector must be 16 bytes
+> mode m cfb 000000000000000000000000000000 0000000000000000 1
+  error ValueError: initialization vector must be 16 bytes
+> mode m ofb 00000000000000000000000000000000 ''
+  error ValueError: initialization vector must be 16 bytes
+> mode m ofb 00000000000000 00000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ctr 00000000000000
+  error ValueError: Invalid key size
+> aes 00000000000000000000000000000000 encrypt 000000000000000000000000000000
+  error ValueError: wrong block length
+> aes 00000000000000000000000000000000 decrypt 0000000000000000000000000000000000
+  error ValueError: wrong block length
+> aes 000000000000000000000000 encrypt 00000000000000000000000000000000
+  error ValueError: Invalid key size
+> mode m ecb 48d854becf40a0d140626d7c1bf6105a
+  -> ok
+> encrypt m 000000000000000000000000000000
+  error ValueError: plaintext block must be 16 bytes
+> encrypt m 0000000000000000000000000000000000000000000000000000000000000000
+  error ValueError: plaintext block must be 16 bytes
+> decrypt m ''
+  error ValueError: ciphertext block must be 16 bytes
+> mode m cbc 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  -> ok
+> encrypt m 0000000000000000000000000000000000
+  error ValueError: plaintext block must be 16 bytes
+> decrypt m 0000000000000000
+  error ValueError: ciphertext block must be 16 bytes
+> encrypt m 00000000000000000000000000000000
+  -> 1bcea2da7414fb4e76d3b09de35ff1bf (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 4
+  -> ok
+> encrypt m 000000000000
+  error ValueError: plaintext block must be a multiple of segment_size
+> decrypt m 00000000000000000000
+  error ValueError: ciphertext block must be a multiple of segment_size
+> encrypt m 000000000000000000000000
+  -> 1bcea2dade56dde19ee3c772 (12 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a - 4
+  -> ok
+> encrypt m ''
+  ->  (0 bytes)
+> encrypt m 0000000000000000
+  error TypeError: can only concatenate list (not "bytes") to list
+> decrypt m 00000000
+  error TypeError: can only concatenate list (not "bytes") to list
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a - 16
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f 00000000000000000000000000000000000000000000000000000000000000000000000000000000
+  error TypeError: can only concatenate list (not "bytes") to list
+> feed f
+  error TypeError: can only concatenate list (not "bytes") to list
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 0
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  -> 0a2af7c5ab1e5fefcfd291bdf2956291564e961bcf35ac718ce26366e901f6ca52e4a05cecfcf462 (40 bytes)
+> encrypt m 2222222222222222222222222222222222222222
+  -> b3f996250de99eab9d17c5f6aea409b07b389608 (20 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 2
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  -> 0adfdf0a78b83b0dbbc6b5150a7c805d1374e963195589a7e2546653633122f72dc877f3b4bff837 (40 bytes)
+> encrypt m 2222222222222222222222222222222222222222
+  -> 524531066b09b7d9bd1fc5ea32422535f0fc9c09 (20 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 5
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  -> 0adfb3cb659105c5c86b74b58daf72ac754e55e129e744979f8ca9517f6c7910d764bf4ebb8426ae (40 bytes)
+> encrypt m 2222222222222222222222222222222222222222
+  -> 2f10e2d1ba1ba076517b54953d59d26697661293 (20 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 16
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  error ValueError: plaintext block must be a multiple of segment_size
+> encrypt m 2222222222222222222222222222222222222222
+  error ValueError: plaintext block must be a multiple of segment_size
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 20
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  -> 0adfb3cb6505ea5f67c2a18cf24ee0ae7655f5b3ea8d346ac2c0fa50d0836e20 (32 bytes)
+> encrypt m 2222222222222222222222222222222222222222
+  -> f25f1788d7488697a40325aaf448748b (16 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a -4
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  ->  (0 bytes)
+> encrypt m 2222222222222222222222222222222222222222
+  ->  (0 bytes)
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a -3
+  -> ok
+> encrypt m 11111111111111111111111111111111111111111111111111111111111111111111111111111111
+  error ValueError: plaintext block must be a multiple of segment_size
+> encrypt m 2222222222222222222222222222222222222222
+  error ValueError: plaintext block must be a multiple of segment_size
+> mode m cfb 48d854becf40a0d140626d7c1bf6105a 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a 20
+  -> ok
+> feeder f m encrypter
+  -> ok
+> feed f 3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333
+  -> 28fd91e94727c87d45e083aed06cc28c (16 bytes)
+> feed f
+  -> 3054401f5b711c631fdeb7b781655f601f5fb63610ac0faf1705682146c1 (30 bytes)
+> feeder f m encrypter
+  -> ok
+> feed f
+  ->  (0 bytes)
+> feed f
+  error ValueError: already finished feeder
+== files
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.ecb 8192
+  -> 1040 bytes, fnv1a 697360d9
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/aligned.bin.ecb out/aligned.bin.ecb.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.ecb.txt
+  -> same (1024 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.ecb 8192
+  -> bb72e9e9b346be02e54f0994af498c90ce101b9506a8ba0d5c41c368e441f2a8 (32 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/block.bin.ecb out/block.bin.ecb.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.ecb.txt
+  -> same (16 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.ecb 8192
+  -> ce101b9506a8ba0d5c41c368e441f2a8 (16 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/empty.txt.ecb out/empty.txt.ecb.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.ecb.txt
+  -> same (0 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.ecb 8192
+  -> 400 bytes, fnv1a 61796529
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/notes.txt.ecb out/notes.txt.ecb.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.ecb.txt
+  -> same (391 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.ecb 8192
+  -> 60f6658f39aaff79d6a44db8fc94f869 (16 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/one.txt.ecb out/one.txt.ecb.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.ecb.txt
+  -> same (1 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.ecb 1000
+  -> 4896 bytes, fnv1a c43fa3c0
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/report.csv.ecb out/report.csv.ecb.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.ecb.txt
+  -> same (4892 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.ecb 8192
+  -> 176 bytes, fnv1a 3ff015a5
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/settings.ini.ecb out/settings.ini.ecb.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.ecb.txt
+  -> same (172 bytes)
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.ecb 8192
+  -> 3008 bytes, fnv1a 1141f2f3
+> mode m ecb 83d3c3ecb423644bbe2ead94933a04f9
+  -> ok
+> stream decrypt m out/thumbnail.bin.ecb out/thumbnail.bin.ecb.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.ecb.txt
+  -> same (3000 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.cbc 8192
+  -> 1040 bytes, fnv1a 2704c3b3
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/aligned.bin.cbc out/aligned.bin.cbc.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.cbc.txt
+  -> same (1024 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.cbc 8192
+  -> cf3807601d1f3e1b9f86dc1720aab1d309fe2d6297b333bcf68a961b784aa9d0 (32 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/block.bin.cbc out/block.bin.cbc.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.cbc.txt
+  -> same (16 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.cbc 8192
+  -> 4080f51ebe0ac65a13ff6f863a8f57e0 (16 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/empty.txt.cbc out/empty.txt.cbc.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.cbc.txt
+  -> same (0 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.cbc 8192
+  -> 400 bytes, fnv1a bede18dc
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/notes.txt.cbc out/notes.txt.cbc.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.cbc.txt
+  -> same (391 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.cbc 8192
+  -> 33902380a77a0dd2f1197bd5deca0396 (16 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/one.txt.cbc out/one.txt.cbc.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.cbc.txt
+  -> same (1 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.cbc 1000
+  -> 4896 bytes, fnv1a 3c054cd4
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/report.csv.cbc out/report.csv.cbc.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.cbc.txt
+  -> same (4892 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.cbc 8192
+  -> 176 bytes, fnv1a fc3742db
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/settings.ini.cbc out/settings.ini.cbc.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.cbc.txt
+  -> same (172 bytes)
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.cbc 8192
+  -> 3008 bytes, fnv1a 5b83e394
+> mode m cbc 20d05cbca0a8656c0857e6b9d463d3acdaaecdb96cd9ba11 5d6a6088cb7334f699a3ea42840f23b5
+  -> ok
+> stream decrypt m out/thumbnail.bin.cbc out/thumbnail.bin.cbc.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.cbc.txt
+  -> same (3000 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.cfb1 8192
+  -> 1024 bytes, fnv1a 35f856b0
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/aligned.bin.cfb1 out/aligned.bin.cfb1.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.cfb1.txt
+  -> same (1024 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.cfb1 8192
+  -> d0a9ac7e2c6bad126b13c7ffea8a78d9 (16 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/block.bin.cfb1 out/block.bin.cfb1.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.cfb1.txt
+  -> same (16 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.cfb1 8192
+  ->  (0 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/empty.txt.cfb1 out/empty.txt.cfb1.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.cfb1.txt
+  -> same (0 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.cfb1 8192
+  -> 391 bytes, fnv1a 61975623
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/notes.txt.cfb1 out/notes.txt.cfb1.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.cfb1.txt
+  -> same (391 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.cfb1 8192
+  -> fb (1 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/one.txt.cfb1 out/one.txt.cfb1.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.cfb1.txt
+  -> same (1 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.cfb1 1000
+  -> 4892 bytes, fnv1a 42c1ee6e
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/report.csv.cfb1 out/report.csv.cfb1.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.cfb1.txt
+  -> same (4892 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.cfb1 8192
+  -> 172 bytes, fnv1a 24255547
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/settings.ini.cfb1 out/settings.ini.cfb1.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.cfb1.txt
+  -> same (172 bytes)
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.cfb1 8192
+  -> 3000 bytes, fnv1a 05e8c70f
+> mode m cfb e05dc908172e8398d5d4b1b8562aa424e431eb85d946b7522e860b9582a1ccca 01a362902d5714227c2c0d70c1ae8a11 1
+  -> ok
+> stream decrypt m out/thumbnail.bin.cfb1 out/thumbnail.bin.cfb1.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.cfb1.txt
+  -> same (3000 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.cfb16 8192
+  -> 1024 bytes, fnv1a b75ba02e
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/aligned.bin.cfb16 out/aligned.bin.cfb16.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.cfb16.txt
+  -> same (1024 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.cfb16 8192
+  -> 9db70856ec03ae404329aa0482929c6b (16 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/block.bin.cfb16 out/block.bin.cfb16.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.cfb16.txt
+  -> same (16 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.cfb16 8192
+  ->  (0 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/empty.txt.cfb16 out/empty.txt.cfb16.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.cfb16.txt
+  -> same (0 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.cfb16 8192
+  -> 391 bytes, fnv1a 5a6f1bc7
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/notes.txt.cfb16 out/notes.txt.cfb16.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.cfb16.txt
+  -> same (391 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.cfb16 8192
+  -> b6 (1 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/one.txt.cfb16 out/one.txt.cfb16.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.cfb16.txt
+  -> same (1 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.cfb16 1000
+  -> 4892 bytes, fnv1a bb03c109
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/report.csv.cfb16 out/report.csv.cfb16.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.cfb16.txt
+  -> same (4892 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.cfb16 8192
+  -> 172 bytes, fnv1a 88eaf474
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/settings.ini.cfb16 out/settings.ini.cfb16.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.cfb16.txt
+  -> same (172 bytes)
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.cfb16 8192
+  -> 3000 bytes, fnv1a 78bd0019
+> mode m cfb 280702760ed1fd04b40dd2989839c48f 79d6f70a9c56d70c437646ade3461cdb 16
+  -> ok
+> stream decrypt m out/thumbnail.bin.cfb16 out/thumbnail.bin.cfb16.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.cfb16.txt
+  -> same (3000 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.ofb 8192
+  -> 1024 bytes, fnv1a 80735c08
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/aligned.bin.ofb out/aligned.bin.ofb.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.ofb.txt
+  -> same (1024 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.ofb 8192
+  -> 984fcdaf56405071b09ab6d29781389a (16 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/block.bin.ofb out/block.bin.ofb.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.ofb.txt
+  -> same (16 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.ofb 8192
+  ->  (0 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/empty.txt.ofb out/empty.txt.ofb.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.ofb.txt
+  -> same (0 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.ofb 8192
+  -> 391 bytes, fnv1a 9399b33f
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/notes.txt.ofb out/notes.txt.ofb.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.ofb.txt
+  -> same (391 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.ofb 8192
+  -> b3 (1 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/one.txt.ofb out/one.txt.ofb.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.ofb.txt
+  -> same (1 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.ofb 1000
+  -> 4892 bytes, fnv1a bff890a7
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/report.csv.ofb out/report.csv.ofb.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.ofb.txt
+  -> same (4892 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.ofb 8192
+  -> 172 bytes, fnv1a 86da46d6
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/settings.ini.ofb out/settings.ini.ofb.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.ofb.txt
+  -> same (172 bytes)
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.ofb 8192
+  -> 3000 bytes, fnv1a 838625e1
+> mode m ofb 2653b59ab556409f0f4060527c3125da2b16510360e69e614189c5de946073a7 6c090fd2a232ce678230d1e177ef0b4c
+  -> ok
+> stream decrypt m out/thumbnail.bin.ofb out/thumbnail.bin.ofb.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.ofb.txt
+  -> same (3000 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.ctr 8192
+  -> 1024 bytes, fnv1a 704bf157
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/aligned.bin.ctr out/aligned.bin.ctr.txt 8192
+  -> 1024 bytes, fnv1a b90a484c
+> compare plain/aligned.bin out/aligned.bin.ctr.txt
+  -> same (1024 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/block.bin out/block.bin.ctr 8192
+  -> 399b9dfca183bcee4bb4ea79c922d025 (16 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/block.bin.ctr out/block.bin.ctr.txt 8192
+  -> 53c37d788eb44db7482f6d463d19e570 (16 bytes)
+> compare plain/block.bin out/block.bin.ctr.txt
+  -> same (16 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.ctr 8192
+  ->  (0 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/empty.txt.ctr out/empty.txt.ctr.txt 8192
+  ->  (0 bytes)
+> compare plain/empty.txt out/empty.txt.ctr.txt
+  -> same (0 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.ctr 8192
+  -> 391 bytes, fnv1a a3cb1abc
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/notes.txt.ctr out/notes.txt.ctr.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.txt.ctr.txt
+  -> same (391 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/one.txt out/one.txt.ctr 8192
+  -> 12 (1 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/one.txt.ctr out/one.txt.ctr.txt 8192
+  -> 78 (1 bytes)
+> compare plain/one.txt out/one.txt.ctr.txt
+  -> same (1 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/report.csv out/report.csv.ctr 1000
+  -> 4892 bytes, fnv1a c317d387
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/report.csv.ctr out/report.csv.ctr.txt 1000
+  -> 4892 bytes, fnv1a c91b9d88
+> compare plain/report.csv out/report.csv.ctr.txt
+  -> same (4892 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.ini.ctr 8192
+  -> 172 bytes, fnv1a 3081679e
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/settings.ini.ctr out/settings.ini.ctr.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> compare plain/settings.ini out/settings.ini.ctr.txt
+  -> same (172 bytes)
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.bin.ctr 8192
+  -> 3000 bytes, fnv1a 71f6faee
+> counter ctr 4242
+  -> ok
+> mode m ctr 333a35276c06445183084fb2d0838a0d ctr
+  -> ok
+> stream decrypt m out/thumbnail.bin.ctr out/thumbnail.bin.ctr.txt 8192
+  -> 3000 bytes, fnv1a 6cf053d6
+> compare plain/thumbnail.bin out/thumbnail.bin.ctr.txt
+  -> same (3000 bytes)
+== stream options
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.8192 8192
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.8192 out/notes.cbc.8192.txt 8192
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.8192.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.4096 4096
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.4096 out/notes.cbc.4096.txt 4096
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.4096.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.100 100
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.100 out/notes.cbc.100.txt 100
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.100.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.17 17
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.17 out/notes.cbc.17.txt 17
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.17.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.16 16
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.16 out/notes.cbc.16.txt 16
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.16.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.15 15
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.15 out/notes.cbc.15.txt 15
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.15.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.1 1
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.1 out/notes.cbc.1.txt 1
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.1.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.0 0
+  -> a4a95596e27a6603e1832bf033bec6c0 (16 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.0 out/notes.cbc.0.txt 0
+  error ValueError: ciphertext block must be 16 bytes
+> compare plain/notes.txt out/notes.cbc.0.txt
+  -> differ at byte 0 (391 and 0 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cbc.-1 -1
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.cbc.-1 out/notes.cbc.-1.txt -1
+  -> 391 bytes, fnv1a 32925a7c
+> compare plain/notes.txt out/notes.cbc.-1.txt
+  -> same (391 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.none 256 none
+  -> 1024 bytes, fnv1a d8ee3887
+> size out/aligned.bin.none
+  -> 1024 bytes, fnv1a d8ee3887
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/aligned.bin.none out/aligned.bin.none.txt 256 none
+  -> 1024 bytes, fnv1a b90a484c
+> size out/aligned.bin.none.txt
+  -> 1024 bytes, fnv1a b90a484c
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.none 256 none
+  error Exception: invalid data length for final block
+> size out/notes.txt.none
+  -> 368 bytes, fnv1a c22d7c3b
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.txt.none out/notes.txt.none.txt 256 none
+  -> 368 bytes, fnv1a 2efee673
+> size out/notes.txt.none.txt
+  -> 368 bytes, fnv1a 2efee673
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.none 256 none
+  error Exception: invalid data length for final block
+> size out/empty.txt.none
+  ->  (0 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/empty.txt.none out/empty.txt.none.txt 256 none
+  error Exception: invalid data length for final block
+> size out/empty.txt.none.txt
+  ->  (0 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.default 256 default
+  -> 1040 bytes, fnv1a f2f6bb3d
+> size out/aligned.bin.default
+  -> 1040 bytes, fnv1a f2f6bb3d
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/aligned.bin.default out/aligned.bin.default.txt 256 default
+  -> 1024 bytes, fnv1a b90a484c
+> size out/aligned.bin.default.txt
+  -> 1024 bytes, fnv1a b90a484c
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.default 256 default
+  -> 400 bytes, fnv1a d5b95447
+> size out/notes.txt.default
+  -> 400 bytes, fnv1a d5b95447
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.txt.default out/notes.txt.default.txt 256 default
+  -> 391 bytes, fnv1a 32925a7c
+> size out/notes.txt.default.txt
+  -> 391 bytes, fnv1a 32925a7c
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.default 256 default
+  -> a4a95596e27a6603e1832bf033bec6c0 (16 bytes)
+> size out/empty.txt.default
+  -> a4a95596e27a6603e1832bf033bec6c0 (16 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/empty.txt.default out/empty.txt.default.txt 256 default
+  ->  (0 bytes)
+> size out/empty.txt.default.txt
+  ->  (0 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/aligned.bin out/aligned.bin.pkcs7 256 pkcs7
+  error Exception: invalid padding option
+> size out/aligned.bin.pkcs7
+  -> 1008 bytes, fnv1a cb5baa7a
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/aligned.bin.pkcs7 out/aligned.bin.pkcs7.txt 256 pkcs7
+  error Exception: invalid padding option
+> size out/aligned.bin.pkcs7.txt
+  -> 992 bytes, fnv1a f27929ab
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.txt.pkcs7 256 pkcs7
+  error Exception: invalid padding option
+> size out/notes.txt.pkcs7
+  -> 368 bytes, fnv1a c22d7c3b
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/notes.txt.pkcs7 out/notes.txt.pkcs7.txt 256 pkcs7
+  error Exception: invalid padding option
+> size out/notes.txt.pkcs7.txt
+  -> 352 bytes, fnv1a 9c16f3cc
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/empty.txt out/empty.txt.pkcs7 256 pkcs7
+  error Exception: invalid padding option
+> size out/empty.txt.pkcs7
+  ->  (0 bytes)
+> mode m cbc 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream decrypt m out/empty.txt.pkcs7 out/empty.txt.pkcs7.txt 256 pkcs7
+  error Exception: invalid padding option
+> size out/empty.txt.pkcs7.txt
+  ->  (0 bytes)
+> mode m ofb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.ofb.none 64 none
+  -> 391 bytes, fnv1a 8110a999
+> size out/notes.ofb.none
+  -> 391 bytes, fnv1a 8110a999
+> mode m cfb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3 3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cfb3.none 64 none
+  error Exception: invalid padding option
+> size out/notes.cfb3.none
+  -> 375 bytes, fnv1a ef9fb994
+> mode m ofb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.ofb.default 64 default
+  -> 391 bytes, fnv1a 8110a999
+> size out/notes.ofb.default
+  -> 391 bytes, fnv1a 8110a999
+> mode m cfb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3 3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cfb3.default 64 default
+  -> 391 bytes, fnv1a e4ba8fd2
+> size out/notes.cfb3.default
+  -> 391 bytes, fnv1a e4ba8fd2
+> mode m ofb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.ofb.pkcs7 64 pkcs7
+  error Exception: invalid padding option
+> size out/notes.ofb.pkcs7
+  -> 375 bytes, fnv1a 3360f737
+> mode m cfb 4839b4d16f1b0bb6d2ad3eff98931496 c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3 3
+  -> ok
+> stream encrypt m plain/notes.txt out/notes.cfb3.pkcs7 64 pkcs7
+  error Exception: invalid padding option
+> size out/notes.cfb3.pkcs7
+  -> 375 bytes, fnv1a ef9fb994
+== damaged files
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream encrypt m plain/settings.ini out/settings.cbc 8192
+  -> 176 bytes, fnv1a e828567e
+> cut out/settings.cbc out/settings.cbc.cut0 0
+  ->  (0 bytes)
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut0 out/settings.cut0.txt 8192
+  error ValueError: ciphertext block must be 16 bytes
+> size out/settings.cut0.txt
+  ->  (0 bytes)
+> cut out/settings.cbc out/settings.cbc.cut15 15
+  -> ab8ed285fa0f4736e948f4dbddbea8 (15 bytes)
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut15 out/settings.cut15.txt 8192
+  error ValueError: ciphertext block must be 16 bytes
+> size out/settings.cut15.txt
+  ->  (0 bytes)
+> cut out/settings.cbc out/settings.cbc.cut16 16
+  -> ab8ed285fa0f4736e948f4dbddbea8d8 (16 bytes)
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut16 out/settings.cut16.txt 8192
+  error ValueError: invalid padding byte
+> size out/settings.cut16.txt
+  ->  (0 bytes)
+> cut out/settings.cbc out/settings.cbc.cut100 100
+  -> 100 bytes, fnv1a 017d49b6
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut100 out/settings.cut100.txt 8192
+  error ValueError: ciphertext block must be 16 bytes
+> size out/settings.cut100.txt
+  -> 80 bytes, fnv1a b410023f
+> cut out/settings.cbc out/settings.cbc.cut255 255
+  -> 176 bytes, fnv1a e828567e
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut255 out/settings.cut255.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> size out/settings.cut255.txt
+  -> 172 bytes, fnv1a 7a80b140
+> cut out/settings.cbc out/settings.cbc.cut256 256
+  -> 176 bytes, fnv1a e828567e
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut256 out/settings.cut256.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> size out/settings.cut256.txt
+  -> 172 bytes, fnv1a 7a80b140
+> cut out/settings.cbc out/settings.cbc.cut271 271
+  -> 176 bytes, fnv1a e828567e
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc.cut271 out/settings.cut271.txt 8192
+  -> 172 bytes, fnv1a 7a80b140
+> size out/settings.cut271.txt
+  -> 172 bytes, fnv1a 7a80b140
+> mode m cbc f1e30e93513281f7e2ec4b9d5150b5bb 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc out/settings.wrong.txt 8192
+  error ValueError: invalid padding byte
+> size out/settings.wrong.txt
+  -> 160 bytes, fnv1a ca4483ec
+> mode m cbc 7aa65c7b1012fbdb16fbd22b1ef15064 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc out/settings.wrong.txt 8192
+  error ValueError: invalid padding byte
+> size out/settings.wrong.txt
+  -> 160 bytes, fnv1a f68dcf96
+> mode m cbc 1d02ffe7986afd88aaf79bec7ce03080 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc out/settings.wrong.txt 8192
+  error ValueError: invalid padding byte
+> size out/settings.wrong.txt
+  -> 160 bytes, fnv1a c14c10a7
+> mode m cbc f9646d0c6bba20b83820cf7290b67c25 7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e
+  -> ok
+> stream decrypt m out/settings.cbc out/settings.wrong.txt 8192
+  error ValueError: invalid padding byte
+> size out/settings.wrong.txt
+  -> 160 bytes, fnv1a 1a2585d3
+> mode m cbc 41f0c27c00e8018f7715b5f50f67b5b5 00000000000000000000000000000000
+  -> ok
+> stream decrypt m out/settings.cbc out/settings.wrongiv.txt 8192
+  -> 172 bytes, fnv1a ca695b34
+> size out/settings.wrongiv.txt
+  -> 172 bytes, fnv1a ca695b34
+> compare plain/settings.ini out/settings.wrongiv.txt
+  -> differ at byte 0 (172 and 172 bytes)
+> mode m ctr 41f0c27c00e8018f7715b5f50f67b5b5
+  -> ok
+> stream encrypt m plain/thumbnail.bin out/thumbnail.ctr 512
+  -> 3000 bytes, fnv1a 76efbf10
+> cut out/thumbnail.ctr out/thumbnail.ctr.cut 1234
+  -> 1234 bytes, fnv1a 7249eb30
+> mode m ctr 41f0c27c00e8018f7715b5f50f67b5b5
+  -> ok
+> stream decrypt m out/thumbnail.ctr.cut out/thumbnail.cut.bin 512
+  -> 1234 bytes, fnv1a c02fb970
+> compare plain/thumbnail.bin out/thumbnail.cut.bin
+  -> differ at byte 1234 (3000 and 1234 bytes)
+> mode m ctr 41f0c27c00e8018f7715b5f50f67b5b5
+  -> ok
+> stream decrypt m plain/missing.bin out/missing.bin 512
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/plain/missing.bin'
+> compare plain/notes.txt plain/missing.bin
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/plain/missing.bin'
