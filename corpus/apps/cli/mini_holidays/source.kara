@@ -1,0 +1,3442 @@
+// mini_holidays: a port of holidays 0.62 (MIT; the Vacanza team,
+// dr-prodigy and ryanss), the library that payroll, billing, scheduling
+// and trading systems ask whether a date is a working day. A holidays
+// object is a dict from dates to holiday names that fills itself one
+// calendar year at a time, the first time any date of that year is asked
+// for. This port covers the United States, the United Kingdom, Germany,
+// France, the Netherlands, the New York Stock Exchange and the European
+// Central Bank's TARGET2 calendar, with their subdivisions, categories,
+// observed-day rules, special one-off closures and gettext translations,
+// and the dict behaviour around them: insertion order, merged names, the
+// on-demand years, sums of calendars and shallow copies.
+
+// ------------------------------------------------------------ text helpers
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+fn atoi(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut out = String.new();
+    out.push(ds[(n / 16) % 16]);
+    out.push(ds[n % 16]);
+    out
+}
+
+fn hexn(n: i64, width: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut digits: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        digits.push(ds[m % 16]);
+        m = m / 16;
+    }
+    while digits.len() < width {
+        digits.push('0');
+    }
+    let mut out = String.new();
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push(digits[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out
+}
+
+fn zpad(n: i64, w: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    let mut k = s.len();
+    while k < w {
+        out.push('0');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+
+// Whether str.isprintable() holds: the controls, the C1 range, the spaces
+// other than U+0020, the line and paragraph separators, the format
+// characters and the private use area are not printable.
+fn printable(n: i64) -> bool {
+    if n < 32 or (n >= 127 and n <= 160) or n == 173 or n == 0x1680 {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    if n == 0x3000 or n == 0xFEFF or (n >= 0xFFF9 and n <= 0xFFFB) {
+        return false;
+    }
+    not (n >= 0xE000 and n <= 0xF8FF)
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(n) {
+            if n < 256 {
+                out.push_str("\\x");
+                out.push_str(hex2(n));
+            } else if n < 0x10000 {
+                out.push_str("\\u");
+                out.push_str(hexn(n, 4));
+            } else {
+                out.push_str("\\U");
+                out.push_str(hexn(n, 8));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = from;
+    while i < to {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn chars_str(cs: ref Vec[char], from: i64, to: i64) -> String {
+    let mut out = String.new();
+    let mut i = from;
+    while i < to {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ exceptions
+
+// A Python exception: the class as the job output names it and str(e).
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn not_found(path: ref String) -> Exc {
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")
+}
+
+fn key_error_date(o: i64) -> Exc {
+    exc("KeyError", date_repr(o))
+}
+
+fn value_error(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error {e.cls}: {e.msg}"
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut cut = 0;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' {
+            cut = i;
+        }
+        i += 1;
+    }
+    chars_str(cs, 0, cut)
+}
+
+fn list_repr(xs: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs {
+        parts.push(str_repr(x));
+    }
+    f"[{join_strs(parts, ", ")}]"
+}
+
+fn contains_str(xs: ref Vec[String], s: ref String) -> bool {
+    for x in xs {
+        if *x == *s {
+            return true;
+        }
+    }
+    false
+}
+
+// sorted() of strings: code point order, which is UTF-8 byte order.
+fn sort_strs(xs: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < xs.len() {
+        let mut j = i;
+        while j > 0 and xs[j] < xs[j - 1] {
+            let t = xs[j].clone();
+            xs[j] = xs[j - 1].clone();
+            xs[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+// ------------------------------------------------------------ dates
+
+// A date is its proleptic Gregorian ordinal, as date.toordinal() gives it:
+// 0001-01-01 is 1.
+const MON: i64 = 0;
+const TUE: i64 = 1;
+const WED: i64 = 2;
+const THU: i64 = 3;
+const FRI: i64 = 4;
+const SAT: i64 = 5;
+const SUN: i64 = 6;
+
+const JAN: i64 = 1;
+const FEB: i64 = 2;
+const MAR: i64 = 3;
+const APR: i64 = 4;
+const MAY: i64 = 5;
+const JUN: i64 = 6;
+const JUL: i64 = 7;
+const AUG: i64 = 8;
+const SEP: i64 = 9;
+const OCT: i64 = 10;
+const NOV: i64 = 11;
+const DEC: i64 = 12;
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if is_leap(y) { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + p / 4 - p / 100 + p / 400
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut n = 0;
+    let mut k = 1;
+    while k < m {
+        n += days_in_month(y, k);
+        k += 1;
+    }
+    n
+}
+
+fn ymd(y: i64, m: i64, d: i64) -> i64 {
+    days_before_year(y) + days_before_month(y, m) + d
+}
+
+fn year_of(o: i64) -> i64 {
+    let mut y = (o * 400) / 146097 + 1;
+    while days_before_year(y) >= o {
+        y -= 1;
+    }
+    while days_before_year(y + 1) < o {
+        y += 1;
+    }
+    y
+}
+
+fn month_of(o: i64) -> i64 {
+    let y = year_of(o);
+    let mut doy = o - days_before_year(y);
+    let mut m = 1;
+    while doy > days_in_month(y, m) {
+        doy -= days_in_month(y, m);
+        m += 1;
+    }
+    m
+}
+
+fn day_of(o: i64) -> i64 {
+    let y = year_of(o);
+    o - days_before_year(y) - days_before_month(y, month_of(o))
+}
+
+fn weekday(o: i64) -> i64 {
+    (o + 6) % 7
+}
+
+// str(date)
+fn date_str(o: i64) -> String {
+    f"{zpad(year_of(o), 4)}-{zpad(month_of(o), 2)}-{zpad(day_of(o), 2)}"
+}
+
+// f"{d:%Y%m%d}"
+fn date_compact(o: i64) -> String {
+    f"{zpad(year_of(o), 4)}{zpad(month_of(o), 2)}{zpad(day_of(o), 2)}"
+}
+
+// repr(date)
+fn date_repr(o: i64) -> String {
+    f"datetime.date({year_of(o)}, {month_of(o)}, {day_of(o)})"
+}
+
+fn dates_repr(xs: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs {
+        parts.push(date_repr(*x));
+    }
+    f"[{join_strs(parts, ", ")}]"
+}
+
+const DAY_NAMES: Str = "Monday Tuesday Wednesday Thursday Friday Saturday Sunday";
+
+fn day_name(o: i64) -> String {
+    split_on(DAY_NAMES.to_string(), ' ')[weekday(o)].clone()
+}
+
+// gregorian._get_nth_weekday_from
+fn nth_weekday_from(n: i64, wd: i64, from: i64) -> i64 {
+    let fw = weekday(from);
+    if n > 0 {
+        from + (n - 1) * 7 + (wd - fw + 7) % 7
+    } else {
+        from + (n + 1) * 7 - (fw - wd + 7) % 7
+    }
+}
+
+// gregorian._get_nth_weekday_of_month; n = -1 is the last one.
+fn nth_weekday_of_month(n: i64, wd: i64, month: i64, year: i64) -> i64 {
+    if n < 0 {
+        let mut m = month + 1;
+        let mut y = year;
+        if m > 12 {
+            m = 1;
+            y += 1;
+        }
+        nth_weekday_from(n, wd, ymd(y, m, 1) - 1)
+    } else {
+        nth_weekday_from(n, wd, ymd(year, month, 1))
+    }
+}
+
+// dateutil.easter.easter(year), the western method.
+fn easter(y: i64) -> i64 {
+    let g = y % 19;
+    let c = y / 100;
+    let h = (c - c / 4 - (8 * c + 13) / 25 + 19 * g + 15) % 30;
+    let i = h - (h / 28) * (1 - (h / 28) * (29 / (h + 1)) * ((21 - g) / 11));
+    let j = (y + y / 4 + i + 2 - c + c / 4) % 7;
+    let p = i - j;
+    let d = 1 + (p + 27 + (p + 6) / 40) % 31;
+    let m = 3 + (p + 26) / 30;
+    ymd(y, m, d)
+}
+
+// ------------------------------------------------------------ int sets
+
+// A Python set of positive ints, kept as CPython lays it out: a table of
+// slots probed linearly and then by the perturbed recurrence, resized to
+// four times its size whenever it is three fifths full. A set iterates in
+// table order, and the years of a holidays object are one, so this is the
+// order a multi-year object fills itself in.
+struct IntSet {
+    table: Vec[i64],
+    fill: i64,
+}
+
+const LINEAR_PROBES: i64 = 9;
+
+fn intset_new() -> IntSet {
+    let mut t: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 8 {
+        t.push(0);
+        k += 1;
+    }
+    IntSet { table: t, fill: 0 }
+}
+
+fn insert_clean(t: mut ref Vec[i64], key: i64) {
+    let mask = t.len() - 1;
+    let mut perturb = key;
+    let mut i = key % (mask + 1);
+    loop {
+        if t[i] == 0 {
+            t[i] = key;
+            return;
+        }
+        if i + LINEAR_PROBES <= mask {
+            let mut j = 1;
+            while j <= LINEAR_PROBES {
+                if t[i + j] == 0 {
+                    t[i + j] = key;
+                    return;
+                }
+                j += 1;
+            }
+        }
+        perturb = perturb / 32;
+        i = (i * 5 + 1 + perturb) % (mask + 1);
+    }
+}
+
+fn intset_resize(s: mut ref IntSet, minused: i64) {
+    let mut n = 8;
+    while n <= minused {
+        n = n * 2;
+    }
+    let old = s.table.clone();
+    let mut t: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        t.push(0);
+        k += 1;
+    }
+    for key in old {
+        if key != 0 {
+            insert_clean(mut t, key);
+        }
+    }
+    s.table = t;
+}
+
+fn intset_add(s: mut ref IntSet, key: i64) {
+    let mask = s.table.len() - 1;
+    let mut perturb = key;
+    let mut i = key % (mask + 1);
+    loop {
+        let mut probes = if i + LINEAR_PROBES <= mask { LINEAR_PROBES } else { 0 };
+        let mut j = i;
+        loop {
+            if s.table[j] == 0 {
+                s.table[j] = key;
+                s.fill += 1;
+                if s.fill * 5 >= mask * 3 {
+                    let used = s.fill;
+                    intset_resize(mut s, if used > 50000 { used * 2 } else { used * 4 });
+                }
+                return;
+            }
+            if s.table[j] == key {
+                return;
+            }
+            if probes == 0 {
+                break;
+            }
+            probes -= 1;
+            j += 1;
+        }
+        perturb = perturb / 32;
+        i = (i * 5 + 1 + perturb) % (mask + 1);
+    }
+}
+
+fn intset_has(s: ref IntSet, key: i64) -> bool {
+    for k in s.table {
+        if k == key {
+            return true;
+        }
+    }
+    false
+}
+
+fn intset_order(s: ref IntSet) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for k in s.table {
+        if k != 0 {
+            out.push(k);
+        }
+    }
+    out
+}
+
+// set_merge: merging into an empty set copies the table when the sizes
+// match, else reinserts; otherwise the other set's keys are added in its
+// table order, after one resize up front.
+fn intset_merge(s: mut ref IntSet, o: ref IntSet) {
+    if o.fill == 0 {
+        return;
+    }
+    let mask = s.table.len() - 1;
+    if (s.fill + o.fill) * 5 >= mask * 3 {
+        let need = (s.fill + o.fill) * 2;
+        intset_resize(mut s, need);
+    }
+    if s.fill == 0 and s.table.len() == o.table.len() {
+        s.table = o.table.clone();
+        s.fill = o.fill;
+        return;
+    }
+    if s.fill == 0 {
+        s.fill = o.fill;
+        for k in o.table {
+            if k != 0 {
+                insert_clean(mut s.table, k);
+            }
+        }
+        return;
+    }
+    for k in o.table {
+        if k != 0 {
+            intset_add(mut s, k);
+        }
+    }
+}
+
+// a | b
+fn intset_union(a: ref IntSet, b: ref IntSet) -> IntSet {
+    let mut r = intset_new();
+    intset_merge(mut r, a);
+    intset_merge(mut r, b);
+    r
+}
+
+// str() of the set.
+fn intset_str(s: ref IntSet) -> String {
+    let ks = intset_order(s);
+    if ks.len() == 0 {
+        return "set()".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for k in ks {
+        parts.push(f"{k}");
+    }
+    f"{{{join_strs(parts, ", ")}}}"
+}
+
+fn intset_eq(a: ref IntSet, b: ref IntSet) -> bool {
+    let xa = intset_order(a);
+    let xb = intset_order(b);
+    if xa.len() != xb.len() {
+        return false;
+    }
+    for k in xa {
+        if not intset_has(b, k) {
+            return false;
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ the objects
+
+// The value of an attribute as getattr(h, name, None) sees it: absent,
+// None, a str, or the list a sum of calendars makes of it.
+#[derive(Clone)]
+enum Attr {
+    Absent,
+    NoneV,
+    S(String),
+    L(Vec[String]),
+}
+
+fn attr_repr(a: ref Attr) -> String {
+    match a {
+        Attr.S(s) => str_repr(s),
+        Attr.L(xs) => list_repr(xs),
+        _ => "None".to_string(),
+    }
+}
+
+// f"{value}"
+fn attr_str(a: ref Attr) -> String {
+    match a {
+        Attr.S(s) => s.clone(),
+        Attr.L(xs) => list_repr(xs),
+        _ => "None".to_string(),
+    }
+}
+
+fn attr_truthy(a: ref Attr) -> bool {
+    match a {
+        Attr.S(s) => s.len() > 0,
+        Attr.L(xs) => xs.len() > 0,
+        _ => false,
+    }
+}
+
+fn attr_eq(a: ref Attr, b: ref Attr) -> bool {
+    match a {
+        Attr.S(x) => match b {
+            Attr.S(y) => *x == *y,
+            _ => false,
+        },
+        Attr.L(xs) => match b {
+            Attr.L(ys) => {
+                if xs.len() != ys.len() {
+                    return false;
+                }
+                let mut k = 0;
+                while k < xs.len() {
+                    if xs[k] != ys[k] {
+                        return false;
+                    }
+                    k += 1;
+                }
+                true
+            }
+            _ => false,
+        },
+        _ => match b {
+            Attr.S(_) => false,
+            Attr.L(_) => false,
+            _ => true,
+        },
+    }
+}
+
+fn attr_list(a: ref Attr) -> Vec[String] {
+    match a {
+        Attr.S(s) => vec![s.clone()],
+        Attr.L(xs) => xs.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn attr_is(a: ref Attr, s: Str) -> bool {
+    match a {
+        Attr.S(x) => *x == s,
+        _ => false,
+    }
+}
+
+// The entities: five countries, two markets, and a sum of calendars.
+const E_US: i64 = 0;
+const E_GB: i64 = 1;
+const E_DE: i64 = 2;
+const E_FR: i64 = 3;
+const E_NL: i64 = 4;
+const E_NYSE: i64 = 5;
+const E_ECB: i64 = 6;
+const E_SUM: i64 = 7;
+
+// A holidays object: the attributes the library keeps, and the dict
+// itself as a slot table that remembers insertion order. A popped key
+// leaves a dead slot; setting it again appends a new one, as dict does.
+struct Hol {
+    entity: i64,
+    country: Attr,
+    market: Attr,
+    subdiv: Attr,
+    norm_subdiv: String,
+    categories: Vec[String],
+    language: Attr,
+    observed: bool,
+    expand: bool,
+    years: i64,
+    cat: i64,
+    keys: Vec[i64],
+    vals: Vec[String],
+    live: Vec[bool],
+    slot: Map[i64, i64],
+    nlive: i64,
+    year: i64,
+    operands: Vec[i64],
+}
+
+// One row of a special-holidays table.
+struct Special {
+    entity: String,
+    table: String,
+    year: i64,
+    month: i64,
+    day: i64,
+    name: String,
+}
+
+// Everything the script works on: the objects, the year sets (shared by
+// an object and its copies), the gettext catalogs, the script's names for
+// its objects, and the special-holiday tables.
+struct World {
+    hols: Vec[Hol],
+    sets: Vec[IntSet],
+    cats: Vec[Map[String, String]],
+    cat_paths: Vec[String],
+    names: Vec[String],
+    slots: Vec[i64],
+    specials: Vec[Special],
+}
+
+fn new_hol(entity: i64) -> Hol {
+    Hol {
+        entity: entity,
+        country: Attr.Absent,
+        market: Attr.Absent,
+        subdiv: Attr.NoneV,
+        norm_subdiv: String.new(),
+        categories: Vec.new(),
+        language: Attr.NoneV,
+        observed: true,
+        expand: true,
+        years: 0,
+        cat: -1,
+        keys: Vec.new(),
+        vals: Vec.new(),
+        live: Vec.new(),
+        slot: Map.new(),
+        nlive: 0,
+        year: 0,
+        operands: Vec.new(),
+    }
+}
+
+// ------------------------------------------------------------ dict primitives
+
+fn raw_slot(h: ref Hol, o: i64) -> i64 {
+    match h.slot.get(o) {
+        Some(s) => *s,
+        None => -1,
+    }
+}
+
+fn raw_get(h: ref Hol, o: i64) -> Option[String] {
+    let s = raw_slot(h, o);
+    if s < 0 {
+        None
+    } else {
+        Some(h.vals[s].clone())
+    }
+}
+
+fn raw_set(h: mut ref Hol, o: i64, v: own String) {
+    let s = raw_slot(h, o);
+    if s >= 0 {
+        h.vals[s] = v;
+        return;
+    }
+    let n = h.keys.len();
+    h.keys.push(o);
+    h.vals.push(v);
+    h.live.push(true);
+    h.slot.insert(o, n);
+    h.nlive += 1;
+}
+
+fn raw_pop(h: mut ref Hol, o: i64) -> Option[String] {
+    let s = raw_slot(h, o);
+    if s < 0 {
+        return None;
+    }
+    h.live[s] = false;
+    h.slot.remove(o);
+    h.nlive -= 1;
+    Some(h.vals[s].clone())
+}
+
+fn raw_clear(h: mut ref Hol) {
+    h.keys = Vec.new();
+    h.vals = Vec.new();
+    h.live = Vec.new();
+    h.slot = Map.new();
+    h.nlive = 0;
+}
+
+// dict.items(), in insertion order.
+fn item_keys(h: ref Hol) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < h.keys.len() {
+        if h.live[k] {
+            out.push(h.keys[k]);
+        }
+        k += 1;
+    }
+    out
+}
+
+fn item_vals(h: ref Hol) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < h.keys.len() {
+        if h.live[k] {
+            out.push(h.vals[k].clone());
+        }
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ gettext
+
+// The catalog of a GNU .mo file: a little- or big-endian header, then two
+// tables of (length, offset) pairs for the original and translated
+// strings. The empty msgid is the header entry and is kept like any other,
+// as GNUTranslations keeps it.
+fn mo_word(b: ref Vec[u8], at: i64, le: bool) -> i64 {
+    let b0 = b[at] as i64;
+    let b1 = b[at + 1] as i64;
+    let b2 = b[at + 2] as i64;
+    let b3 = b[at + 3] as i64;
+    if le {
+        b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+    } else {
+        b3 + b2 * 256 + b1 * 65536 + b0 * 16777216
+    }
+}
+
+fn mo_str(b: ref Vec[u8], len: i64, off: i64) -> String {
+    match String.from_utf8(sub(b, off, off + len)) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn parse_mo(b: ref Vec[u8]) -> Result[Map[String, String], String] {
+    let mut m: Map[String, String] = Map.new();
+    if b.len() < 20 {
+        return Err("Bad magic number".to_string());
+    }
+    let le = b[0] as i64 == 0xde and b[1] as i64 == 0x12 and b[2] as i64 == 0x04 and b[3] as i64 == 0x95;
+    let be = b[0] as i64 == 0x95 and b[1] as i64 == 0x04 and b[2] as i64 == 0x12 and b[3] as i64 == 0xde;
+    if not le and not be {
+        return Err("Bad magic number".to_string());
+    }
+    let n = mo_word(b, 8, le);
+    let orig = mo_word(b, 12, le);
+    let trans = mo_word(b, 16, le);
+    let mut k = 0;
+    while k < n {
+        let mlen = mo_word(b, orig + k * 8, le);
+        let moff = mo_word(b, orig + k * 8 + 4, le);
+        let tlen = mo_word(b, trans + k * 8, le);
+        let toff = mo_word(b, trans + k * 8 + 4, le);
+        m.insert(mo_str(b, mlen, moff), mo_str(b, tlen, toff));
+        k += 1;
+    }
+    Ok(m)
+}
+
+// The catalog index for a language directory and domain, read on first use.
+fn load_catalog(w: mut ref World, lang: ref String, domain: Str) -> Result[i64, Exc] {
+    let path = f"data/locale/{lang}/LC_MESSAGES/{domain}.mo";
+    let mut k = 0;
+    while k < w.cat_paths.len() {
+        if w.cat_paths[k] == path {
+            return Ok(k);
+        }
+        k += 1;
+    }
+    let bytes = match fs.read_bytes(path.clone()) {
+        Ok(b) => b,
+        Err(_) => return Err(exc("FileNotFoundError", f"[Errno 2] No translation file found for domain: {str_repr(domain.to_string())}")),
+    };
+    let m = match parse_mo(bytes) {
+        Ok(m) => m,
+        Err(e) => return Err(exc("OSError", e)),
+    };
+    w.cats.push(m);
+    w.cat_paths.push(path);
+    Ok(w.cats.len() - 1)
+}
+
+// self.tr(name)
+fn tr(w: ref World, i: i64, s: ref String) -> String {
+    let c = w.hols[i].cat;
+    if c < 0 {
+        return s.clone();
+    }
+    match w.cats[c].get(s) {
+        Some(t) => t.clone(),
+        None => s.clone(),
+    }
+}
+
+// ------------------------------------------------------------ the dict API
+
+// __keytransform__ for a date already parsed: with expand on, a date in a
+// year the object has not seen adds the year and computes it, first.
+fn expand_for(w: mut ref World, i: i64, o: i64) {
+    if not w.hols[i].expand {
+        return;
+    }
+    let y = year_of(o);
+    let sid = w.hols[i].years;
+    if intset_has(w.sets[sid], y) {
+        return;
+    }
+    intset_add(mut w.sets[sid], y);
+    populate(mut w, i, y);
+}
+
+fn h_contains(w: mut ref World, i: i64, o: i64) -> bool {
+    expand_for(mut w, i, o);
+    raw_slot(w.hols[i], o) >= 0
+}
+
+fn h_get(w: mut ref World, i: i64, o: i64) -> Option[String] {
+    expand_for(mut w, i, o);
+    raw_get(w.hols[i], o)
+}
+
+fn h_getitem(w: mut ref World, i: i64, o: i64) -> Result[String, Exc] {
+    match h_get(mut w, i, o) {
+        Some(v) => Ok(v),
+        None => Err(key_error_date(o)),
+    }
+}
+
+fn h_pop(w: mut ref World, i: i64, o: i64) -> Result[String, Exc] {
+    expand_for(mut w, i, o);
+    match raw_pop(mut w.hols[i], o) {
+        Some(v) => Ok(v),
+        None => Err(key_error_date(o)),
+    }
+}
+
+const DELIM: Str = "; ";
+
+fn split_names(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let cs: Vec[char] = s.chars().collect();
+    let mut k = 0;
+    while k < cs.len() {
+        if cs[k] == ';' and k + 1 < cs.len() and cs[k + 1] == ' ' {
+            out.push(cur);
+            cur = String.new();
+            k += 2;
+        } else {
+            cur.push(cs[k]);
+            k += 1;
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// get_list()
+fn h_get_list(w: mut ref World, i: i64, o: i64) -> Vec[String] {
+    let v = match h_get(mut w, i, o) {
+        Some(v) => v,
+        None => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for n in split_names(v) {
+        if n.len() > 0 {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
+// __setitem__: a date that already has holidays keeps all the names, as a
+// sorted set joined with "; ".
+fn h_setitem(w: mut ref World, i: i64, o: i64, value: own String) {
+    let mut v = value;
+    if h_contains(mut w, i, o) {
+        let cur = match h_get(mut w, i, o) {
+            Some(c) => c,
+            None => String.new(),
+        };
+        let mut names: Vec[String] = Vec.new();
+        for n in split_names(cur) {
+            if not contains_str(names, n) {
+                names.push(n.clone());
+            }
+        }
+        for n in split_names(v) {
+            if not contains_str(names, n) {
+                names.push(n.clone());
+            }
+        }
+        sort_strs(mut names);
+        v = join_strs(names, DELIM);
+    }
+    expand_for(mut w, i, o);
+    raw_set(mut w.hols[i], o, v);
+}
+
+// _add_holiday(): only a date in the year being computed is added.
+fn add_holiday(w: mut ref World, i: i64, name: ref String, o: i64) -> i64 {
+    if year_of(o) != w.hols[i].year {
+        return -1;
+    }
+    let t = tr(w, i, name);
+    h_setitem(mut w, i, o, t);
+    o
+}
+
+fn add(w: mut ref World, i: i64, name: Str, o: i64) -> i64 {
+    add_holiday(mut w, i, name.to_string(), o)
+}
+
+// _add_holiday_<mon>_<day>()
+fn add_md(w: mut ref World, i: i64, name: Str, m: i64, d: i64) -> i64 {
+    let y = w.hols[i].year;
+    add(mut w, i, name, ymd(y, m, d))
+}
+
+// _add_holiday_<n>th_<weekday>_of_<mon>(); n = -1 for last.
+fn add_nth(w: mut ref World, i: i64, name: Str, n: i64, wd: i64, m: i64) -> i64 {
+    let y = w.hols[i].year;
+    add(mut w, i, name, nth_weekday_of_month(n, wd, m, y))
+}
+
+// ------------------------------------------------------------ observed days
+
+// An observance rule: for each weekday, the days to move by (+7 and -7 are
+// the next and previous working day), NO_RULE for a weekday it does not
+// list and DROP for one it maps to None.
+const NO_RULE: i64 = 0;
+const DROP: i64 = 99;
+
+struct Rule {
+    d: Vec[i64],
+}
+
+fn rule(mon: i64, tue: i64, wed: i64, thu: i64, fri: i64, sat: i64, sun: i64) -> Rule {
+    Rule { d: vec![mon, tue, wed, thu, fri, sat, sun] }
+}
+
+// ObservedRule.__add__: the right-hand rule wins where both list a day.
+fn rule_plus(a: ref Rule, b: ref Rule) -> Rule {
+    let mut d: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 7 {
+        d.push(if b.d[k] != NO_RULE { b.d[k] } else { a.d[k] });
+        k += 1;
+    }
+    Rule { d: d }
+}
+
+fn sat_to_prev_fri() -> Rule {
+    rule(0, 0, 0, 0, 0, -1, 0)
+}
+
+fn sun_to_next_mon() -> Rule {
+    rule(0, 0, 0, 0, 0, 0, 1)
+}
+
+fn sat_sun_to_next_mon() -> Rule {
+    rule(0, 0, 0, 0, 0, 2, 1)
+}
+
+fn sat_sun_to_next_mon_tue() -> Rule {
+    rule(0, 0, 0, 0, 0, 2, 2)
+}
+
+fn mon_to_next_tue() -> Rule {
+    rule(1, 0, 0, 0, 0, 0, 0)
+}
+
+fn fri_to_prev_thu() -> Rule {
+    rule(0, 0, 0, 0, -1, 0, 0)
+}
+
+fn sat_sun_to_prev_fri() -> Rule {
+    rule(0, 0, 0, 0, 0, -1, -2)
+}
+
+fn ga_in_washington_birthday() -> Rule {
+    rule(1, -1, -1, 1, -1, -2, -2)
+}
+
+fn default_rule(entity: i64) -> Rule {
+    if entity == E_GB {
+        sat_sun_to_next_mon()
+    } else {
+        rule_plus(sat_to_prev_fri(), sun_to_next_mon())
+    }
+}
+
+fn is_observed_entity(entity: i64) -> bool {
+    entity == E_US or entity == E_GB or entity == E_NYSE
+}
+
+fn observed_since(entity: i64) -> i64 {
+    if entity == E_GB { 1875 } else { 0 }
+}
+
+fn is_weekend(o: i64) -> bool {
+    weekday(o) >= SAT
+}
+
+// _get_next_workday()
+fn next_workday(w: mut ref World, i: i64, dt: i64, delta: i64) -> i64 {
+    let mut d = dt + delta;
+    while year_of(d) == w.hols[i].year {
+        if h_contains(mut w, i, d) or is_weekend(d) {
+            d = d + delta;
+        } else {
+            return d;
+        }
+    }
+    dt
+}
+
+// _get_observed_date(); -1 stands for None.
+fn observed_date(w: mut ref World, i: i64, dt: i64, r: ref Rule) -> i64 {
+    let delta = r.d[weekday(dt)];
+    if delta == DROP {
+        return -1;
+    }
+    if delta != 0 {
+        if delta == 7 or delta == -7 {
+            return next_workday(mut w, i, dt, delta / 7);
+        }
+        return dt + delta;
+    }
+    dt
+}
+
+fn label(base: ref String, name: ref String) -> String {
+    let cs: Vec[char] = base.chars().collect();
+    let mut out = String.new();
+    let mut k = 0;
+    let mut done = false;
+    while k < cs.len() {
+        if not done and cs[k] == '%' and k + 1 < cs.len() and cs[k + 1] == 's' {
+            out.push_str(name);
+            k += 2;
+            done = true;
+        } else {
+            out.push(cs[k]);
+            k += 1;
+        }
+    }
+    out
+}
+
+const OBSERVED_LABEL: Str = "%s (observed)";
+
+// _add_observed(): returns whether a day was observed and the date it
+// went to (-1 for None, when the rule drops the holiday).
+fn add_observed(w: mut ref World, i: i64, dt: i64, name: ref String, r: ref Rule) -> (bool, i64) {
+    let since = observed_since(w.hols[i].entity);
+    if not w.hols[i].observed or (since > 0 and w.hols[i].year < since) {
+        return (false, dt);
+    }
+    let obs = observed_date(mut w, i, dt, r);
+    if obs == dt {
+        return (false, dt);
+    }
+    if obs < 0 {
+        let _ = h_pop(mut w, i, dt);
+        return (false, -1);
+    }
+    let lbl = tr(w, i, OBSERVED_LABEL.to_string());
+    let names = if name.len() > 0 { vec![name.clone()] } else { h_get_list(mut w, i, dt) };
+    for n in names {
+        let hn = tr(w, i, n);
+        add_holiday(mut w, i, label(lbl, hn), obs);
+    }
+    (true, obs)
+}
+
+fn observe(w: mut ref World, i: i64, dt: i64) {
+    let r = default_rule(w.hols[i].entity);
+    add_observed(mut w, i, dt, String.new(), r);
+}
+
+fn observe_rule(w: mut ref World, i: i64, dt: i64, r: ref Rule) {
+    add_observed(mut w, i, dt, String.new(), r);
+}
+
+// _move_holiday()
+fn move_holiday(w: mut ref World, i: i64, dt: i64) {
+    let r = default_rule(w.hols[i].entity);
+    let (moved, _) = add_observed(mut w, i, dt, String.new(), r);
+    if moved {
+        let _ = h_pop(mut w, i, dt);
+    }
+}
+
+// ------------------------------------------------------------ populating
+
+fn has_category(h: ref Hol, c: Str) -> bool {
+    for x in h.categories {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+// _sorted_categories: the default category first, then the rest sorted.
+fn sorted_categories(h: ref Hol) -> Vec[String] {
+    let mut rest: Vec[String] = Vec.new();
+    let mut has_public = false;
+    for c in h.categories {
+        if c == "public" {
+            has_public = true;
+        } else {
+            rest.push(c.clone());
+        }
+    }
+    sort_strs(mut rest);
+    let mut out: Vec[String] = Vec.new();
+    if has_public {
+        out.push("public".to_string());
+    }
+    for c in rest {
+        out.push(c.clone());
+    }
+    out
+}
+
+fn entity_code(entity: i64) -> String {
+    let codes = vec!["US", "GB", "DE", "FR", "NL", "NYSE", "ECB", ""];
+    codes[entity].to_string()
+}
+
+fn has_specials(entity: i64) -> bool {
+    entity == E_GB or entity == E_DE or entity == E_NYSE or entity == E_ECB
+}
+
+fn start_year(entity: i64) -> i64 {
+    if entity == E_US {
+        1777
+    } else if entity == E_GB {
+        1872
+    } else if entity == E_DE {
+        1990
+    } else if entity == E_NYSE {
+        1863
+    } else if entity == E_ECB {
+        2000
+    } else {
+        1801
+    }
+}
+
+// _add_special_holidays() for one table.
+fn add_specials(w: mut ref World, i: i64, table: ref String, observed: bool) {
+    let code = entity_code(w.hols[i].entity);
+    let y = w.hols[i].year;
+    let mut rows: Vec[(i64, i64, String)] = Vec.new();
+    for s in w.specials {
+        if s.entity == code and s.table == *table and s.year == y {
+            rows.push((s.month, s.day, s.name.clone()));
+        }
+    }
+    for (m, d, name) in rows {
+        let n = if observed {
+            label(tr(w, i, OBSERVED_LABEL.to_string()), tr(w, i, name))
+        } else {
+            tr(w, i, name)
+        };
+        add_holiday(mut w, i, n, ymd(y, m, d));
+    }
+}
+
+// _populate(year)
+#[allow(mutual_recursion_note)]
+fn populate(w: mut ref World, i: i64, year: i64) {
+    let entity = w.hols[i].entity;
+    if entity == E_SUM {
+        populate_sum(mut w, i, year);
+        return;
+    }
+    if year < start_year(entity) or year > 2100 {
+        return;
+    }
+    w.hols[i].year = year;
+    populate_common(mut w, i);
+    populate_subdiv(mut w, i);
+}
+
+// HolidaySum._populate: each original computes the year, and its whole
+// dict is then set into the sum, key by key.
+fn populate_sum(w: mut ref World, i: i64, year: i64) {
+    let ops = w.hols[i].operands.clone();
+    for op in ops {
+        populate(mut w, op, year);
+        let ks = item_keys(w.hols[op]);
+        let vs = item_vals(w.hols[op]);
+        let mut k = 0;
+        while k < ks.len() {
+            h_setitem(mut w, i, ks[k], vs[k].clone());
+            k += 1;
+        }
+    }
+}
+
+fn populate_common(w: mut ref World, i: i64) {
+    let cats = sorted_categories(w.hols[i]);
+    let entity = w.hols[i].entity;
+    for c in cats {
+        populate_category(mut w, i, c);
+    }
+    if has_specials(entity) {
+        for c in cats {
+            add_specials(mut w, i, f"special_{c}_holidays", false);
+        }
+        if is_observed_entity(entity) and w.hols[i].observed {
+            for c in cats {
+                add_specials(mut w, i, f"special_{c}_holidays_observed", true);
+            }
+        }
+    }
+}
+
+fn populate_subdiv(w: mut ref World, i: i64) {
+    let entity = w.hols[i].entity;
+    if entity == E_US {
+        if not has_category(w.hols[i], "public") {
+            return;
+        }
+        us_subdiv_common(mut w, i);
+    } else if entity == E_GB {
+        if not attr_is(w.hols[i].subdiv, "SCT") {
+            gb_subdiv_common(mut w, i);
+        }
+    }
+    if not attr_truthy(w.hols[i].subdiv) {
+        return;
+    }
+    let cats = sorted_categories(w.hols[i]);
+    let norm = w.hols[i].norm_subdiv.clone();
+    for c in cats {
+        populate_subdiv_category(mut w, i, norm, c);
+    }
+    if has_specials(entity) {
+        for c in cats {
+            add_specials(mut w, i, f"special_{norm}_{c}_holidays", false);
+        }
+        if is_observed_entity(entity) and w.hols[i].observed {
+            for c in cats {
+                add_specials(mut w, i, f"special_{norm}_{c}_holidays_observed", true);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the entities
+
+fn words(s: Str) -> Vec[String] {
+    split_on(s.to_string(), ' ')
+}
+
+fn subdivisions(entity: i64) -> Vec[String] {
+    if entity == E_US {
+        words("AK AL AR AS AZ CA CO CT DC DE FL GA GU HI IA ID IL IN KS KY LA MA MD ME MI MN MO MP MS MT NC ND NE NH NJ NM NV NY OH OK OR PA PR RI SC SD TN TX UM UT VA VI VT WA WI WV WY")
+    } else if entity == E_GB {
+        words("ENG NIR SCT WLS")
+    } else if entity == E_DE {
+        words("BB BE BW BY HB HE HH MV NI NW RP SH SL SN ST TH")
+    } else if entity == E_FR {
+        words("BL GES GP GY MF MQ NC PF RE WF YT")
+    } else {
+        Vec.new()
+    }
+}
+
+// subdivisions_aliases, as alias|code pairs.
+fn aliases(entity: i64) -> Vec[String] {
+    if entity == E_GB {
+        split_on("England|ENG,Northern Ireland|NIR,Scotland|SCT,Wales|WLS".to_string(), ',')
+    } else if entity == E_DE {
+        split_on("Brandenburg|BB,Berlin|BE,Baden-Württemberg|BW,Bayern|BY,Bremen|HB,Hessen|HE,Hamburg|HH,Mecklenburg-Vorpommern|MV,Niedersachsen|NI,Nordrhein-Westfalen|NW,Rheinland-Pfalz|RP,Schleswig-Holstein|SH,Saarland|SL,Sachsen|SN,Sachsen-Anhalt|ST,Thüringen|TH".to_string(), ',')
+    } else {
+        Vec.new()
+    }
+}
+
+fn deprecated_subdivisions(entity: i64) -> Vec[String] {
+    if entity == E_US {
+        words("FM MH PW")
+    } else if entity == E_GB {
+        words("UK")
+    } else if entity == E_DE {
+        words("BYP")
+    } else if entity == E_FR {
+        split_on("Alsace-Moselle,Guadeloupe,Guyane,La Réunion,Martinique,Mayotte,Métropole,Nouvelle-Calédonie,Polynésie Française,Saint-Barthélémy,Saint-Martin,Wallis-et-Futuna".to_string(), ',')
+    } else {
+        Vec.new()
+    }
+}
+
+fn supported_categories(entity: i64) -> Vec[String] {
+    if entity == E_US {
+        words("public unofficial")
+    } else if entity == E_DE {
+        words("catholic public")
+    } else if entity == E_NL {
+        words("optional public")
+    } else {
+        words("public")
+    }
+}
+
+fn supported_languages(entity: i64) -> Vec[String] {
+    if entity == E_DE {
+        words("de en_US th uk")
+    } else if entity == E_FR {
+        words("en_US fr uk")
+    } else if entity == E_NL {
+        words("en_US nl uk")
+    } else {
+        Vec.new()
+    }
+}
+
+// The names the holidays module answers to, for country_holidays() and
+// financial_holidays() alike.
+fn lookup_entity(name: ref String) -> i64 {
+    let table = vec![
+        "US USA UnitedStates",
+        "GB UK GBR UnitedKingdom",
+        "DE DEU Germany",
+        "FR FRA France",
+        "NL NLD Netherlands",
+        "NYSE XNYS NewYorkStockExchange",
+        "ECB TAR EuropeanCentralBank",
+    ];
+    let mut e = 0;
+    while e < table.len() {
+        for n in words(table[e]) {
+            if n == *name {
+                return e;
+            }
+        }
+        e += 1;
+    }
+    -1
+}
+
+// _normalized_subdiv
+fn normalize_subdiv(entity: i64, s: ref String) -> String {
+    let mut code = s.clone();
+    for pair in aliases(entity) {
+        let f = split_on(pair, '|');
+        if f[0] == *s {
+            code = f[1].clone();
+        }
+    }
+    let mut out = String.new();
+    for c in code.chars() {
+        if c == '-' or c == ' ' {
+            out.push('_');
+        } else {
+            out.push(c);
+        }
+    }
+    out.to_lowercase()
+}
+
+// ------------------------------------------------------------ Christian and international days
+
+fn easter_of(w: ref World, i: i64) -> i64 {
+    easter(w.hols[i].year)
+}
+
+fn add_easter(w: mut ref World, i: i64, name: Str, days: i64) -> i64 {
+    let e = easter_of(w, i);
+    add(mut w, i, name, e + days)
+}
+
+fn add_good_friday(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, -2)
+}
+
+fn add_easter_sunday(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 0)
+}
+
+fn add_easter_monday(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 1)
+}
+
+fn add_ascension(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 39)
+}
+
+fn add_whit_sunday(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 49)
+}
+
+fn add_whit_monday(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 50)
+}
+
+fn add_corpus_christi(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_easter(mut w, i, name, 60)
+}
+
+fn christmas_of(w: ref World, i: i64) -> i64 {
+    ymd(w.hols[i].year, DEC, 25)
+}
+
+fn add_christmas(w: mut ref World, i: i64, name: Str) -> i64 {
+    let c = christmas_of(w, i);
+    add(mut w, i, name, c)
+}
+
+fn add_christmas_two(w: mut ref World, i: i64, name: Str) -> i64 {
+    let c = christmas_of(w, i);
+    add(mut w, i, name, c + 1)
+}
+
+fn add_christmas_eve(w: mut ref World, i: i64, name: Str) -> i64 {
+    let c = christmas_of(w, i);
+    add(mut w, i, name, c - 1)
+}
+
+fn add_new_years(w: mut ref World, i: i64, name: Str) -> i64 {
+    add_md(mut w, i, name, JAN, 1)
+}
+
+fn next_year_new_years(w: ref World, i: i64) -> i64 {
+    ymd(w.hols[i].year + 1, JAN, 1)
+}
+
+// ------------------------------------------------------------ United States
+
+fn us_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1871 {
+        let d = add_new_years(mut w, i, "New Year's Day");
+        observe(mut w, i, d);
+        let next = next_year_new_years(w, i);
+        let r = default_rule(E_US);
+        add_observed(mut w, i, next, "New Year's Day".to_string(), r);
+    }
+    if y >= 1888 {
+        if y >= 1971 {
+            add_nth(mut w, i, "Memorial Day", -1, MON, MAY);
+        } else {
+            add_md(mut w, i, "Memorial Day", MAY, 30);
+        }
+    }
+    if y >= 2021 {
+        let d = add_md(mut w, i, "Juneteenth National Independence Day", JUN, 19);
+        observe(mut w, i, d);
+    }
+    if y >= 1871 {
+        let d = add_md(mut w, i, "Independence Day", JUL, 4);
+        observe(mut w, i, d);
+    }
+    if y >= 1894 {
+        add_nth(mut w, i, "Labor Day", 1, MON, SEP);
+    }
+    if y >= 1938 {
+        let name = if y >= 1954 { "Veterans Day" } else { "Armistice Day" };
+        if y >= 1971 and y <= 1977 {
+            add_nth(mut w, i, name, 4, MON, OCT);
+        } else {
+            let d = add_md(mut w, i, name, NOV, 11);
+            observe(mut w, i, d);
+        }
+    }
+    if y >= 1871 {
+        add_nth(mut w, i, "Thanksgiving", 4, THU, NOV);
+    }
+    if y >= 1871 {
+        let d = add_christmas(mut w, i, "Christmas Day");
+        observe(mut w, i, d);
+    }
+}
+
+fn us_unofficial(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1847 {
+        add_md(mut w, i, "Valentine's Day", FEB, 14);
+    }
+    add_md(mut w, i, "Saint Patrick's Day", MAR, 17);
+    add_md(mut w, i, "Halloween", OCT, 31);
+    let s = w.hols[i].subdiv.clone();
+    let island = attr_is(s, "AS") or attr_is(s, "GU") or attr_is(s, "MP") or attr_is(s, "PR") or attr_is(s, "UM") or attr_is(s, "VI");
+    if not island {
+        if y >= 1886 {
+            add_md(mut w, i, "Groundhog Day", FEB, 2);
+        }
+        if y >= 1848 and y % 4 == 0 {
+            let d = nth_weekday_of_month(1, MON, NOV, y) + 1;
+            add(mut w, i, "Election Day", d);
+        }
+    }
+}
+
+fn subdiv_in(h: ref Hol, list: Str) -> bool {
+    for s in words(list) {
+        if attr_is(h.subdiv, s) {
+            return true;
+        }
+    }
+    false
+}
+
+// UnitedStates._populate_subdiv_holidays, before the subdivision methods.
+fn us_subdiv_common(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1986 and not subdiv_in(w.hols[i], "AL AR AZ GA ID MS NH") {
+        add_nth(mut w, i, "Martin Luther King Jr. Day", 3, MON, JAN);
+    }
+    if y >= 1879 and not subdiv_in(w.hols[i], "AL AR DE FL GA IN NM PR VI") {
+        if y >= 1971 {
+            add_nth(mut w, i, "Washington's Birthday", 3, MON, FEB);
+        } else {
+            add_md(mut w, i, "Washington's Birthday", FEB, 22);
+        }
+    }
+    if y >= 1937 and subdiv_in(w.hols[i], "AS AZ CT GA ID IL IN MA MD MO MT NJ NY OH PA UT WV") {
+        if y >= 1971 {
+            add_nth(mut w, i, "Columbus Day", 2, MON, OCT);
+        } else {
+            add_md(mut w, i, "Columbus Day", OCT, 12);
+        }
+    }
+}
+
+fn us_ca(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1971 and y <= 2009 {
+        let d = add_md(mut w, i, "Lincoln's Birthday", FEB, 12);
+        observe(mut w, i, d);
+    }
+    if y >= 2014 {
+        add_md(mut w, i, "Susan B. Anthony Day", FEB, 15);
+    }
+    if y >= 1995 {
+        let d = add_md(mut w, i, "Cesar Chavez Day", MAR, 31);
+        observe_rule(mut w, i, d, sun_to_next_mon());
+    }
+    if y >= 1971 and y <= 2008 {
+        add_nth(mut w, i, "Columbus Day", 2, MON, OCT);
+    }
+    if y >= 1975 {
+        let d = nth_weekday_of_month(4, THU, NOV, y) + 1;
+        add(mut w, i, "Day After Thanksgiving", d);
+    }
+}
+
+fn us_dc(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1789 and (y - 1789) % 4 == 0 {
+        let d = if y >= 1937 {
+            add_md(mut w, i, "Inauguration Day", JAN, 20)
+        } else {
+            add_md(mut w, i, "Inauguration Day", MAR, 4)
+        };
+        observe_rule(mut w, i, d, sun_to_next_mon());
+    }
+    if y >= 2005 {
+        let d = add_md(mut w, i, "Emancipation Day", APR, 16);
+        observe(mut w, i, d);
+    }
+    if y >= 1971 {
+        add_nth(mut w, i, if y >= 2019 { "Indigenous Peoples' Day" } else { "Columbus Day" }, 2, MON, OCT);
+    }
+}
+
+fn us_ga(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1986 {
+        add_nth(mut w, i, if y >= 2012 { "Martin Luther King Jr. Day" } else { "Robert E. Lee's Birthday" }, 3, MON, JAN);
+    }
+    if y >= 1866 {
+        let name = if y >= 2016 { "State Holiday" } else { "Confederate Memorial Day" };
+        if y == 2020 {
+            add_md(mut w, i, name, APR, 10);
+        } else {
+            add_nth(mut w, i, name, 4, MON, APR);
+        }
+    }
+    if y >= 1986 {
+        let d = nth_weekday_of_month(4, THU, NOV, y) + 1;
+        add(mut w, i, if y >= 2016 { "State Holiday" } else { "Robert E. Lee's Birthday" }, d);
+    }
+    let c = christmas_of(w, i);
+    let d = observed_date(mut w, i, c, ga_in_washington_birthday());
+    add(mut w, i, "Washington's Birthday", d);
+}
+
+fn us_il(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1971 {
+        let d = add_md(mut w, i, "Lincoln's Birthday", FEB, 12);
+        observe(mut w, i, d);
+    }
+    if y >= 1978 {
+        add_nth(mut w, i, "Casimir Pulaski Day", 1, MON, MAR);
+    }
+    if y >= 2008 and y % 2 == 0 {
+        let d = nth_weekday_of_month(1, MON, NOV, y) + 1;
+        add(mut w, i, "Election Day", d);
+    }
+}
+
+fn us_ma(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1901 {
+        let d = add_md(mut w, i, "Evacuation Day", MAR, 17);
+        observe_rule(mut w, i, d, sat_sun_to_next_mon());
+    }
+    if y >= 1894 {
+        if y >= 1969 {
+            add_nth(mut w, i, "Patriots' Day", 3, MON, APR);
+        } else {
+            add_md(mut w, i, "Patriots' Day", APR, 19);
+        }
+    }
+}
+
+fn us_ny(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1971 {
+        let d = add_md(mut w, i, "Lincoln's Birthday", FEB, 12);
+        observe(mut w, i, d);
+    }
+    if y >= 2004 {
+        add_md(mut w, i, "Susan B. Anthony Day", FEB, 15);
+    }
+    if y >= 2015 or (y >= 2008 and y % 2 == 0) {
+        let d = nth_weekday_of_month(1, MON, NOV, y) + 1;
+        add(mut w, i, "Election Day", d);
+    }
+}
+
+fn us_tx(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1931 {
+        add_md(mut w, i, "Confederate Memorial Day", JAN, 19);
+    }
+    if y >= 1874 {
+        add_md(mut w, i, "Texas Independence Day", MAR, 2);
+    }
+    if y >= 2000 {
+        add_md(mut w, i, "Cesar Chavez Day", MAR, 31);
+    }
+    add_good_friday(mut w, i, "Good Friday");
+    if y >= 1875 {
+        add_md(mut w, i, "San Jacinto Day", APR, 21);
+    }
+    if y >= 1980 {
+        add_md(mut w, i, "Emancipation Day In Texas", JUN, 19);
+    }
+    if y >= 1973 {
+        add_md(mut w, i, "Lyndon Baines Johnson Day", AUG, 27);
+    }
+    if y >= 1975 {
+        let d = nth_weekday_of_month(4, THU, NOV, y) + 1;
+        add(mut w, i, "Friday After Thanksgiving", d);
+    }
+    if y >= 1981 {
+        let d = add_christmas_eve(mut w, i, "Christmas Eve");
+        let r = rule_plus(fri_to_prev_thu(), sat_sun_to_prev_fri());
+        add_observed(mut w, i, d, "Christmas Eve".to_string(), r);
+    }
+    if y >= 1981 {
+        add_christmas_two(mut w, i, "Day After Christmas");
+    }
+}
+
+// ------------------------------------------------------------ United Kingdom
+
+fn gb_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    add_good_friday(mut w, i, "Good Friday");
+    if y >= 1978 {
+        if y == 1995 or y == 2020 {
+            add_md(mut w, i, "May Day", MAY, 8);
+        } else {
+            add_nth(mut w, i, "May Day", 1, MON, MAY);
+        }
+    }
+    if y >= 1971 {
+        if y == 2002 or y == 2012 {
+            add_md(mut w, i, "Spring Bank Holiday", JUN, 4);
+        } else if y == 2022 {
+            add_md(mut w, i, "Spring Bank Holiday", JUN, 2);
+        } else {
+            add_nth(mut w, i, "Spring Bank Holiday", -1, MON, MAY);
+        }
+    }
+}
+
+// UnitedKingdom._populate_subdiv_holidays, for every subdivision but SCT.
+fn gb_subdiv_common(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1975 {
+        let d = add_new_years(mut w, i, "New Year's Day");
+        observe(mut w, i, d);
+    }
+    let d = add_christmas(mut w, i, "Christmas Day");
+    observe_rule(mut w, i, d, sat_sun_to_next_mon_tue());
+    let d2 = add_christmas_two(mut w, i, "Boxing Day");
+    observe_rule(mut w, i, d2, sat_sun_to_next_mon_tue());
+}
+
+fn gb_eng_wls(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    add_easter_monday(mut w, i, "Easter Monday");
+    if y <= 1970 {
+        add_whit_monday(mut w, i, "Whit Monday");
+    }
+    if y >= 1971 {
+        add_nth(mut w, i, "Late Summer Bank Holiday", -1, MON, AUG);
+    }
+}
+
+fn gb_nir(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1903 {
+        let d = add_md(mut w, i, "Saint Patrick's Day", MAR, 17);
+        observe(mut w, i, d);
+    }
+    add_easter_monday(mut w, i, "Easter Monday");
+    if y <= 1970 {
+        add_whit_monday(mut w, i, "Whit Monday");
+    }
+    let d = add_md(mut w, i, "Battle of the Boyne", JUL, 12);
+    observe(mut w, i, d);
+    if y >= 1971 {
+        add_nth(mut w, i, "Late Summer Bank Holiday", -1, MON, AUG);
+    }
+}
+
+fn gb_sct(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    let jan_1 = add_new_years(mut w, i, "New Year's Day");
+    let d = add_md(mut w, i, "New Year Holiday", JAN, 2);
+    observe_rule(mut w, i, d, rule_plus(sat_sun_to_next_mon_tue(), mon_to_next_tue()));
+    observe(mut w, i, jan_1);
+    add_nth(mut w, i, "Summer Bank Holiday", 1, MON, AUG);
+    if y >= 2006 {
+        let d = add_md(mut w, i, "Saint Andrew's Day", NOV, 30);
+        observe(mut w, i, d);
+    }
+    let c = add_christmas(mut w, i, "Christmas Day");
+    observe_rule(mut w, i, c, if y >= 1974 { sat_sun_to_next_mon_tue() } else { sat_sun_to_next_mon() });
+    if y >= 1974 {
+        let b = add_christmas_two(mut w, i, "Boxing Day");
+        observe_rule(mut w, i, b, sat_sun_to_next_mon_tue());
+    }
+}
+
+// ------------------------------------------------------------ Germany
+
+fn de_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1991 {
+        add_new_years(mut w, i, "Neujahr");
+        add_good_friday(mut w, i, "Karfreitag");
+        add_easter_monday(mut w, i, "Ostermontag");
+        add_md(mut w, i, "Erster Mai", MAY, 1);
+        add_ascension(mut w, i, "Christi Himmelfahrt");
+        add_whit_monday(mut w, i, "Pfingstmontag");
+    }
+    add_md(mut w, i, "Tag der Deutschen Einheit", OCT, 3);
+    if y <= 1994 {
+        add(mut w, i, "Buß- und Bettag", nth_weekday_from(-1, WED, ymd(y, NOV, 22)));
+    }
+    add_christmas(mut w, i, "Erster Weihnachtstag");
+    add_christmas_two(mut w, i, "Zweiter Weihnachtstag");
+    if attr_is(w.hols[i].subdiv, "BYP") {
+        de_by(mut w, i);
+    }
+}
+
+fn de_reformation(w: mut ref World, i: i64) {
+    add_md(mut w, i, "Reformationstag", OCT, 31);
+}
+
+fn de_bb(w: mut ref World, i: i64) {
+    if w.hols[i].year >= 1991 {
+        add_easter_sunday(mut w, i, "Ostersonntag");
+        add_whit_sunday(mut w, i, "Pfingstsonntag");
+    }
+    de_reformation(mut w, i);
+}
+
+fn de_womens_day(w: mut ref World, i: i64) {
+    add_md(mut w, i, "Internationaler Frauentag", MAR, 8);
+}
+
+fn de_by(w: mut ref World, i: i64) {
+    if w.hols[i].year >= 1991 {
+        add_md(mut w, i, "Heilige Drei Könige", JAN, 6);
+        add_corpus_christi(mut w, i, "Fronleichnam");
+    }
+    add_md(mut w, i, "Allerheiligen", NOV, 1);
+}
+
+fn de_corpus_all_saints(w: mut ref World, i: i64) {
+    if w.hols[i].year >= 1991 {
+        add_corpus_christi(mut w, i, "Fronleichnam");
+    }
+    add_md(mut w, i, "Allerheiligen", NOV, 1);
+}
+
+fn de_subdiv_public(w: mut ref World, i: i64, s: ref String) {
+    let y = w.hols[i].year;
+    if *s == "bb" {
+        de_bb(mut w, i);
+    } else if *s == "be" {
+        if y >= 2019 {
+            de_womens_day(mut w, i);
+        }
+    } else if *s == "bw" or *s == "by" {
+        de_by(mut w, i);
+    } else if *s == "hb" or *s == "hh" or *s == "ni" or *s == "sh" {
+        if y >= 2018 {
+            de_reformation(mut w, i);
+        }
+    } else if *s == "he" {
+        if y >= 1991 {
+            add_corpus_christi(mut w, i, "Fronleichnam");
+        }
+    } else if *s == "mv" {
+        if y >= 2023 {
+            de_womens_day(mut w, i);
+        }
+        de_reformation(mut w, i);
+    } else if *s == "nw" or *s == "rp" {
+        de_corpus_all_saints(mut w, i);
+    } else if *s == "sl" {
+        if y >= 1991 {
+            add_corpus_christi(mut w, i, "Fronleichnam");
+            add_md(mut w, i, "Mariä Himmelfahrt", AUG, 15);
+        }
+        add_md(mut w, i, "Allerheiligen", NOV, 1);
+    } else if *s == "sn" {
+        de_reformation(mut w, i);
+        if y >= 1995 {
+            add(mut w, i, "Buß- und Bettag", nth_weekday_from(-1, WED, ymd(y, NOV, 22)));
+        }
+    } else if *s == "st" {
+        if y >= 1991 {
+            add_md(mut w, i, "Heilige Drei Könige", JAN, 6);
+        }
+        de_reformation(mut w, i);
+    } else if *s == "th" {
+        if y >= 2019 {
+            add_md(mut w, i, "Weltkindertag", SEP, 20);
+        }
+        de_reformation(mut w, i);
+    }
+}
+
+// ------------------------------------------------------------ France
+
+fn fr_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    if y >= 1811 {
+        add_new_years(mut w, i, "Jour de l'an");
+    }
+    if y >= 1919 {
+        add_md(mut w, i, if y >= 1948 { "Fête du Travail" } else { "Fête du Travail et de la Concorde sociale" }, MAY, 1);
+    }
+    if (y >= 1953 and y <= 1959) or y >= 1982 {
+        add_md(mut w, i, "Fête de la Victoire", MAY, 8);
+    }
+    if y >= 1880 {
+        add_md(mut w, i, "Fête nationale", JUL, 14);
+    }
+    if y >= 1918 {
+        add_md(mut w, i, "Armistice", NOV, 11);
+    }
+    if y >= 1886 {
+        add_easter_monday(mut w, i, "Lundi de Pâques");
+        if y != 2005 and y != 2006 and y != 2007 {
+            add_whit_monday(mut w, i, "Lundi de Pentecôte");
+        }
+    }
+    if y >= 1802 {
+        add_ascension(mut w, i, "Ascension");
+        add_md(mut w, i, "Assomption", AUG, 15);
+        add_md(mut w, i, "Toussaint", NOV, 1);
+        add_christmas(mut w, i, "Noël");
+    }
+    let s = attr_str(w.hols[i].subdiv);
+    let old = vec!["Alsace-Moselle|ges", "Guadeloupe|gp", "Guyane|gy", "La Réunion|re", "Martinique|mq", "Mayotte|yt", "Nouvelle-Calédonie|nc", "Polynésie Française|pf", "Saint-Barthélémy|bl", "Saint-Martin|mf", "Wallis-et-Futuna|wf"];
+    if attr_truthy(w.hols[i].subdiv) {
+        for pair in old {
+            let f = split_on(pair.to_string(), '|');
+            if f[0] == s {
+                fr_subdiv(mut w, i, f[1]);
+            }
+        }
+    }
+}
+
+fn fr_subdiv(w: mut ref World, i: i64, s: ref String) {
+    let y = w.hols[i].year;
+    if *s == "bl" {
+        add_md(mut w, i, "Abolition de l'esclavage", OCT, 9);
+    } else if *s == "ges" {
+        add_good_friday(mut w, i, "Vendredi saint");
+        add_christmas_two(mut w, i, "Saint Étienne");
+    } else if *s == "gp" {
+        add_good_friday(mut w, i, "Vendredi saint");
+        add_easter(mut w, i, "Mi-Carême", -24);
+        add_md(mut w, i, "Abolition de l'esclavage", MAY, 27);
+        add_md(mut w, i, "Fête de Victor Schoelcher", JUL, 21);
+    } else if *s == "gy" {
+        add_md(mut w, i, "Abolition de l'esclavage", JUN, 10);
+    } else if *s == "mf" {
+        if y >= 2018 {
+            add_md(mut w, i, "Abolition de l'esclavage", MAY, 28);
+        }
+    } else if *s == "mq" {
+        add_good_friday(mut w, i, "Vendredi saint");
+        add_md(mut w, i, "Abolition de l'esclavage", MAY, 22);
+        add_md(mut w, i, "Fête de Victor Schoelcher", JUL, 21);
+    } else if *s == "nc" {
+        add_md(mut w, i, "Fête de la Citoyenneté", SEP, 24);
+    } else if *s == "pf" {
+        add_good_friday(mut w, i, "Vendredi saint");
+        add_md(mut w, i, "Arrivée de l'Évangile", MAR, 5);
+        add_md(mut w, i, "Fête de l'autonomie", JUN, 29);
+    } else if *s == "re" {
+        if y >= 1981 {
+            add_md(mut w, i, "Abolition de l'esclavage", DEC, 20);
+        }
+    } else if *s == "wf" {
+        add_md(mut w, i, "Saint Pierre Chanel", APR, 28);
+        add_md(mut w, i, "Fête du Territoire", JUL, 29);
+    } else if *s == "yt" {
+        add_md(mut w, i, "Abolition de l'esclavage", APR, 27);
+    }
+}
+
+// ------------------------------------------------------------ Netherlands
+
+fn nl_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    add_new_years(mut w, i, "Nieuwjaarsdag");
+    add_easter_sunday(mut w, i, "Eerste paasdag");
+    add_easter_monday(mut w, i, "Tweede paasdag");
+    if y >= 1891 {
+        let name = if y >= 2014 { "Koningsdag" } else { "Koninginnedag" };
+        let mut dt = if y >= 2014 {
+            ymd(y, APR, 27)
+        } else if y >= 1949 {
+            ymd(y, APR, 30)
+        } else {
+            ymd(y, AUG, 31)
+        };
+        if weekday(dt) == SUN {
+            dt = dt + if y >= 1980 { -1 } else { 1 };
+        }
+        add(mut w, i, name, dt);
+    }
+    if y >= 1950 and y % 5 == 0 {
+        add_md(mut w, i, "Bevrijdingsdag", MAY, 5);
+    }
+    add_ascension(mut w, i, "Hemelvaartsdag");
+    add_whit_sunday(mut w, i, "Eerste Pinksterdag");
+    add_whit_monday(mut w, i, "Tweede Pinksterdag");
+    add_christmas(mut w, i, "Eerste Kerstdag");
+    add_christmas_two(mut w, i, "Tweede Kerstdag");
+}
+
+fn nl_optional(w: mut ref World, i: i64) {
+    add_good_friday(mut w, i, "Goede Vrijdag");
+    if w.hols[i].year >= 1990 {
+        add_md(mut w, i, "Bevrijdingsdag", MAY, 5);
+    }
+}
+
+// ------------------------------------------------------------ New York Stock Exchange
+
+fn nyse_public(w: mut ref World, i: i64) {
+    let y = w.hols[i].year;
+    let d = add_new_years(mut w, i, "New Year's Day");
+    move_holiday(mut w, i, d);
+    if y >= 1998 {
+        add_nth(mut w, i, "Martin Luther King Jr. Day", 3, MON, JAN);
+    }
+    if (y >= 1896 and y <= 1953) or y == 1968 {
+        let d = add_md(mut w, i, "Lincoln's Birthday", FEB, 12);
+        move_holiday(mut w, i, d);
+    }
+    if y <= 1970 {
+        let d = add_md(mut w, i, "Washington's Birthday", FEB, 22);
+        move_holiday(mut w, i, d);
+    } else {
+        add_nth(mut w, i, "Washington's Birthday", 3, MON, FEB);
+    }
+    if y != 1898 and y != 1906 and y != 1907 {
+        add_good_friday(mut w, i, "Good Friday");
+    }
+    if y >= 1873 {
+        if y <= 1970 {
+            let d = add_md(mut w, i, "Memorial Day", MAY, 30);
+            move_holiday(mut w, i, d);
+        } else {
+            add_nth(mut w, i, "Memorial Day", -1, MON, MAY);
+        }
+    }
+    if y >= 1916 and y <= 1953 {
+        let d = add_md(mut w, i, "Flag Day", JUN, 14);
+        move_holiday(mut w, i, d);
+    }
+    if y >= 2022 {
+        let d = add_md(mut w, i, "Juneteenth National Independence Day", JUN, 19);
+        move_holiday(mut w, i, d);
+    }
+    let d = add_md(mut w, i, "Independence Day", JUL, 4);
+    move_holiday(mut w, i, d);
+    if y >= 1887 {
+        add_nth(mut w, i, "Labor Day", 1, MON, SEP);
+    }
+    if y >= 1909 and y <= 1953 {
+        let d = add_md(mut w, i, "Columbus Day", OCT, 12);
+        move_holiday(mut w, i, d);
+    }
+    if y <= 1968 or y == 1972 or y == 1976 or y == 1980 {
+        let d = nth_weekday_of_month(1, MON, NOV, y) + 1;
+        add(mut w, i, "Election Day", d);
+    }
+    if y == 1918 or y == 1921 or (y >= 1934 and y <= 1953) {
+        let d = add_md(mut w, i, "Veteran's Day", NOV, 11);
+        move_holiday(mut w, i, d);
+    }
+    add_nth(mut w, i, "Thanksgiving Day", 4, THU, NOV);
+    let c = add_christmas(mut w, i, "Christmas Day");
+    move_holiday(mut w, i, c);
+    if y == 1914 {
+        let begin = ymd(y, JUL, 31);
+        let end = ymd(y, NOV, 27);
+        let mut dt = begin;
+        while dt <= end {
+            if not (is_weekend(dt) or h_contains(mut w, i, dt)) {
+                add(mut w, i, "World War I", dt);
+            }
+            dt += 1;
+        }
+    } else if y == 1968 {
+        let begin = ymd(y, JUN, 12);
+        let end = ymd(y, DEC, 24);
+        let mut dt = begin;
+        while dt <= end {
+            add(mut w, i, "Paper Crisis", dt);
+            dt += 7;
+        }
+    }
+}
+
+// ------------------------------------------------------------ European Central Bank
+
+fn ecb_public(w: mut ref World, i: i64) {
+    add_new_years(mut w, i, "New Year's Day");
+    add_good_friday(mut w, i, "Good Friday");
+    add_easter_monday(mut w, i, "Easter Monday");
+    add_md(mut w, i, "1 May (Labour Day)", MAY, 1);
+    add_christmas(mut w, i, "Christmas Day");
+    add_christmas_two(mut w, i, "26 December");
+}
+
+// ------------------------------------------------------------ dispatch
+
+// _populate_<category>_holidays, where the entity has one.
+fn populate_category(w: mut ref World, i: i64, c: ref String) {
+    let e = w.hols[i].entity;
+    if *c == "public" {
+        if e == E_US {
+            us_public(mut w, i);
+        } else if e == E_GB {
+            gb_public(mut w, i);
+        } else if e == E_DE {
+            de_public(mut w, i);
+        } else if e == E_FR {
+            fr_public(mut w, i);
+        } else if e == E_NL {
+            nl_public(mut w, i);
+        } else if e == E_NYSE {
+            nyse_public(mut w, i);
+        } else if e == E_ECB {
+            ecb_public(mut w, i);
+        }
+    } else if *c == "unofficial" and e == E_US {
+        us_unofficial(mut w, i);
+    } else if *c == "optional" and e == E_NL {
+        nl_optional(mut w, i);
+    }
+}
+
+// _populate_subdiv_<subdiv>_<category>_holidays, where the entity has one.
+fn populate_subdiv_category(w: mut ref World, i: i64, s: ref String, c: ref String) {
+    let e = w.hols[i].entity;
+    if e == E_US and *c == "public" {
+        if *s == "ca" {
+            us_ca(mut w, i);
+        } else if *s == "dc" {
+            us_dc(mut w, i);
+        } else if *s == "ga" {
+            us_ga(mut w, i);
+        } else if *s == "il" {
+            us_il(mut w, i);
+        } else if *s == "ma" {
+            us_ma(mut w, i);
+        } else if *s == "ny" {
+            us_ny(mut w, i);
+        } else if *s == "tx" {
+            us_tx(mut w, i);
+        }
+    } else if e == E_GB and *c == "public" {
+        if *s == "eng" or *s == "wls" {
+            gb_eng_wls(mut w, i);
+        } else if *s == "nir" {
+            gb_nir(mut w, i);
+        } else if *s == "sct" {
+            gb_sct(mut w, i);
+        }
+    } else if e == E_DE {
+        if *c == "public" {
+            de_subdiv_public(mut w, i, s);
+        } else if *c == "catholic" and *s == "by" {
+            if w.hols[i].year >= 1991 {
+                add_md(mut w, i, "Mariä Himmelfahrt", AUG, 15);
+            }
+        }
+    } else if e == E_FR and *c == "public" {
+        fr_subdiv(mut w, i, s);
+    }
+}
+
+// ------------------------------------------------------------ dates from the script
+
+const MONTH_NAMES: Str = "january february march april may june july august september october november december";
+
+fn month_number(s: ref String) -> i64 {
+    let low = s.to_lowercase();
+    let mut k = 0;
+    for m in words(MONTH_NAMES) {
+        k += 1;
+        if low == m or (low.len() == 3 and m.substring(0, 3) == low) {
+            return k;
+        }
+    }
+    0
+}
+
+fn all_digits(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_ymd(y: i64, m: i64, d: i64) -> i64 {
+    if y < 1 or y > 9999 or m < 1 or m > 12 or d < 1 or d > days_in_month(y, m) {
+        -1
+    } else {
+        ymd(y, m, d)
+    }
+}
+
+// The date forms the script writes, read as dateutil.parser.parse reads
+// them: Y-M-D and Y/M/D, M/D/Y (month first, its default), YYYYMMDD, and
+// "July 4, 2024" or "4 Jul 2024". -1 when there is no valid date.
+fn parse_date_text(s: ref String) -> i64 {
+    let mut seps = 0;
+    let mut sep = ' ';
+    for c in s.chars() {
+        if c == '-' or c == '/' {
+            seps += 1;
+            sep = c;
+        }
+    }
+    if seps == 2 {
+        let f = split_on(s, sep);
+        if f.len() == 3 and all_digits(f[0]) and all_digits(f[1]) and all_digits(f[2]) {
+            if f[0].len() == 4 {
+                return valid_ymd(atoi(f[0]), atoi(f[1]), atoi(f[2]));
+            }
+            if f[2].len() == 4 and sep == '/' {
+                return valid_ymd(atoi(f[2]), atoi(f[0]), atoi(f[1]));
+            }
+        }
+        return -1;
+    }
+    if all_digits(s) and s.len() == 8 {
+        return valid_ymd(atoi(s.substring(0, 4)), atoi(s.substring(4, 6)), atoi(s.substring(6, 8)));
+    }
+    let mut toks: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' or c == ',' {
+            if cur.len() > 0 {
+                toks.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        toks.push(cur);
+    }
+    if toks.len() == 3 and all_digits(toks[2]) {
+        let m0 = month_number(toks[0]);
+        if m0 > 0 and all_digits(toks[1]) {
+            return valid_ymd(atoi(toks[2]), m0, atoi(toks[1]));
+        }
+        let m1 = month_number(toks[1]);
+        if m1 > 0 and all_digits(toks[0]) {
+            return valid_ymd(atoi(toks[2]), m1, atoi(toks[0]));
+        }
+    }
+    -1
+}
+
+const EPOCH: i64 = 719163;
+
+// A key of the script: "@<seconds>" is a POSIX timestamp, "date(y,m,d)" a
+// date, "dt(y,m,d,h,m)" a datetime, and anything else a str.
+fn parse_key(s: ref String) -> Result[i64, Exc] {
+    if s.starts_with("@") {
+        let body = s.substring(1, s.len());
+        let ip = split_on(body, '.')[0].clone();
+        let secs = atoi(ip);
+        let mut days = secs / 86400;
+        if secs < 0 and secs % 86400 != 0 {
+            days -= 1;
+        }
+        return Ok(EPOCH + days);
+    }
+    if s.starts_with("date(") or s.starts_with("dt(") {
+        let open = if s.starts_with("date(") { 5 } else { 3 };
+        let f = split_on(s.substring(open, s.len() - 1), ',');
+        return Ok(ymd(atoi(f[0]), atoi(f[1]), atoi(f[2])));
+    }
+    let o = parse_date_text(s);
+    if o < 0 {
+        return Err(value_error(f"Cannot parse date from string '{s}'"));
+    }
+    Ok(o)
+}
+
+// __keytransform__ of a script key.
+fn key_of(w: mut ref World, i: i64, s: ref String) -> Result[i64, Exc] {
+    let o = parse_key(s)?;
+    expand_for(mut w, i, o);
+    Ok(o)
+}
+
+// ------------------------------------------------------------ building objects
+
+fn find_name(w: ref World, name: ref String) -> i64 {
+    let mut k = 0;
+    while k < w.names.len() {
+        if w.names[k] == *name {
+            return w.slots[k];
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn bind(w: mut ref World, name: ref String, i: i64) {
+    let mut k = 0;
+    while k < w.names.len() {
+        if w.names[k] == *name {
+            w.slots[k] = i;
+            return;
+        }
+        k += 1;
+    }
+    w.names.push(name.clone());
+    w.slots.push(i);
+}
+
+fn lookup(w: ref World, name: ref String) -> Result[i64, Exc] {
+    let i = find_name(w, name);
+    if i < 0 {
+        return Err(exc("KeyError", str_repr(name)));
+    }
+    Ok(i)
+}
+
+// country_holidays() / financial_holidays(), then HolidayBase.__init__.
+fn make(w: mut ref World, code: ref String, opts: ref Vec[String], market_fn: bool) -> Result[i64, Exc] {
+    let e = lookup_entity(code);
+    if e < 0 {
+        if market_fn {
+            return Err(exc("NotImplementedError", f"Financial market {code} not available"));
+        }
+        return Err(exc("NotImplementedError", f"Country {code} not available"));
+    }
+    let mut years: Vec[i64] = Vec.new();
+    let mut subdiv = String.new();
+    let mut prov = String.new();
+    let mut state = String.new();
+    let mut language = String.new();
+    let mut cats: Vec[String] = Vec.new();
+    let mut h = new_hol(e);
+    for o in opts {
+        let kv = split_on(o, '=');
+        let k = kv[0].clone();
+        let v = kv[1].clone();
+        if k == "years" {
+            if v.contains("..") {
+                let f = split_on(v, '.');
+                let mut y = atoi(f[0]);
+                while y <= atoi(f[2]) {
+                    years.push(y);
+                    y += 1;
+                }
+            } else {
+                for y in split_on(v, ',') {
+                    years.push(atoi(y));
+                }
+            }
+        } else if k == "observed" {
+            h.observed = v == "1";
+        } else if k == "expand" {
+            h.expand = v == "1";
+        } else if k == "categories" or k == "category" {
+            for c in split_on(v, ',') {
+                if not contains_str(cats, c) {
+                    cats.push(c.clone());
+                }
+            }
+        } else if k == "subdiv" {
+            subdiv = v;
+        } else if k == "prov" {
+            prov = v;
+        } else if k == "state" {
+            state = v;
+        } else if k == "language" {
+            language = v;
+        }
+    }
+    if cats.len() == 0 {
+        cats.push("public".to_string());
+    }
+    let supported = supported_categories(e);
+    let mut unknown: Vec[String] = Vec.new();
+    for c in cats {
+        if not contains_str(supported, c) {
+            unknown.push(c.clone());
+        }
+    }
+    if unknown.len() > 0 {
+        return Err(value_error(f"Category is not supported: {join_strs(unknown, ", ")}."));
+    }
+    if subdiv.len() == 0 {
+        subdiv = if prov.len() > 0 { prov } else { state };
+    }
+    let ecode = entity_code(e);
+    if subdiv.len() > 0 {
+        let mut ok = contains_str(subdivisions(e), subdiv) or contains_str(deprecated_subdivisions(e), subdiv);
+        for pair in aliases(e) {
+            if split_on(pair, '|')[0] == subdiv {
+                ok = true;
+            }
+        }
+        if not ok {
+            return Err(exc("NotImplementedError", f"Entity `{ecode}` does not have subdivision {subdiv}"));
+        }
+        h.subdiv = Attr.S(subdiv.clone());
+        h.norm_subdiv = normalize_subdiv(e, subdiv);
+    }
+    if e == E_NYSE or e == E_ECB {
+        h.market = Attr.S(ecode.clone());
+    } else {
+        h.country = Attr.S(ecode.clone());
+    }
+    h.categories = cats;
+    if language.len() > 0 {
+        h.language = Attr.S(language.to_lowercase());
+        if contains_str(supported_languages(e), language) {
+            h.cat = load_catalog(mut w, language, ecode)?;
+        }
+    }
+    let mut set = intset_new();
+    for y in years {
+        intset_add(mut set, y);
+    }
+    w.sets.push(set);
+    h.years = w.sets.len() - 1;
+    w.hols.push(h);
+    let i = w.hols.len() - 1;
+    let sid = w.hols[i].years;
+    for y in intset_order(w.sets[sid]) {
+        populate(mut w, i, y);
+    }
+    Ok(i)
+}
+
+fn country_attr(h: ref Hol) -> Attr {
+    match h.country {
+        Attr.Absent => Attr.NoneV,
+        _ => h.country.clone(),
+    }
+}
+
+fn market_attr(h: ref Hol) -> Attr {
+    match h.market {
+        Attr.Absent => Attr.NoneV,
+        _ => h.market.clone(),
+    }
+}
+
+// HolidaySum's rule for country, market and subdiv: two different values
+// make a list of both, otherwise the first one that is set.
+fn join_attr(a: ref Attr, b: ref Attr) -> Attr {
+    if attr_truthy(a) and attr_truthy(b) and not attr_eq(a, b) {
+        let mut xs = attr_list(a);
+        for x in attr_list(b) {
+            xs.push(x.clone());
+        }
+        return Attr.L(xs);
+    }
+    if attr_truthy(a) { a.clone() } else { b.clone() }
+}
+
+// h1 + h2
+fn make_sum(w: mut ref World, a: i64, b: i64) -> i64 {
+    let mut h = new_hol(E_SUM);
+    for x in vec![a, b] {
+        if w.hols[x].entity == E_SUM {
+            for o in w.hols[x].operands {
+                h.operands.push(o);
+            }
+        } else {
+            h.operands.push(x);
+        }
+    }
+    let u = intset_union(w.sets[w.hols[a].years], w.sets[w.hols[b].years]);
+    let mut set = intset_new();
+    for y in intset_order(u) {
+        intset_add(mut set, y);
+    }
+    w.sets.push(set);
+    h.years = w.sets.len() - 1;
+    h.expand = w.hols[a].expand or w.hols[b].expand;
+    h.observed = w.hols[a].observed or w.hols[b].observed;
+    h.country = join_attr(country_attr(w.hols[a]), country_attr(w.hols[b]));
+    h.market = join_attr(market_attr(w.hols[a]), market_attr(w.hols[b]));
+    h.subdiv = join_attr(w.hols[a].subdiv, w.hols[b].subdiv);
+    h.categories = vec!["public".to_string()];
+    w.hols.push(h);
+    let i = w.hols.len() - 1;
+    let sid = w.hols[i].years;
+    for y in intset_order(w.sets[sid]) {
+        populate(mut w, i, y);
+    }
+    i
+}
+
+// copy.copy(): the dict and the attributes, the years set shared.
+fn make_copy(w: mut ref World, a: i64) -> i64 {
+    let h = clone_shallow(w.hols[a]);
+    w.hols.push(h);
+    w.hols.len() - 1
+}
+
+fn clone_shallow(src: ref Hol) -> Hol {
+    let mut h = new_hol(src.entity);
+    h.country = src.country.clone();
+    h.market = src.market.clone();
+    h.subdiv = src.subdiv.clone();
+    h.norm_subdiv = src.norm_subdiv.clone();
+    h.categories = src.categories.clone();
+    h.language = src.language.clone();
+    h.observed = src.observed;
+    h.expand = src.expand;
+    h.years = src.years;
+    h.cat = src.cat;
+    h.year = src.year;
+    h.operands = src.operands.clone();
+    let ks = item_keys(src);
+    let vs = item_vals(src);
+    let mut k = 0;
+    while k < ks.len() {
+        raw_set(mut h, ks[k], vs[k].clone());
+        k += 1;
+    }
+    h
+}
+
+// __eq__: the attributes, then the dicts.
+fn hol_eq(w: ref World, a: i64, b: i64) -> bool {
+    let x = ref w.hols[a];
+    let y = ref w.hols[b];
+    if not attr_eq(country_attr(x), country_attr(y)) or x.expand != y.expand or not attr_eq(x.language, y.language) {
+        return false;
+    }
+    if not attr_eq(market_attr(x), market_attr(y)) or x.observed != y.observed or not attr_eq(x.subdiv, y.subdiv) {
+        return false;
+    }
+    if not intset_eq(w.sets[x.years], w.sets[y.years]) {
+        return false;
+    }
+    if x.nlive != y.nlive {
+        return false;
+    }
+    let ks = item_keys(x);
+    let vs = item_vals(x);
+    let mut k = 0;
+    while k < ks.len() {
+        match raw_get(y, ks[k]) {
+            Some(v) => {
+                if v != vs[k] {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+        k += 1;
+    }
+    true
+}
+
+// __setattr__ for categories and observed: a non-empty object is cleared
+// and every year in its set is computed again.
+fn repopulate(w: mut ref World, i: i64) {
+    if w.hols[i].nlive == 0 {
+        return;
+    }
+    raw_clear(mut w.hols[i]);
+    let sid = w.hols[i].years;
+    for y in intset_order(w.sets[sid]) {
+        populate(mut w, i, y);
+    }
+}
+
+// ------------------------------------------------------------ queries
+
+fn dict_repr(h: ref Hol) -> String {
+    let ks = item_keys(h);
+    let vs = item_vals(h);
+    let mut parts: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < ks.len() {
+        parts.push(f"{date_repr(ks[k])}: {str_repr(vs[k])}");
+        k += 1;
+    }
+    f"{{{join_strs(parts, ", ")}}}"
+}
+
+fn hol_repr(w: ref World, i: i64) -> String {
+    let h = ref w.hols[i];
+    if h.nlive > 0 {
+        return dict_repr(h);
+    }
+    let has_market = match h.market {
+        Attr.Absent => false,
+        _ => true,
+    };
+    let has_country = match h.country {
+        Attr.Absent => false,
+        _ => true,
+    };
+    if has_market {
+        return f"holidays.financial_holidays({attr_repr(h.market)})";
+    }
+    if has_country {
+        let mut out = f"holidays.country_holidays({attr_repr(h.country)}";
+        if attr_truthy(h.subdiv) {
+            out.push_str(f", subdiv={attr_repr(h.subdiv)}");
+        }
+        out.push(')');
+        return out;
+    }
+    "holidays.HolidayBase()".to_string()
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn hol_str(w: ref World, i: i64) -> String {
+    let h = ref w.hols[i];
+    if h.nlive > 0 {
+        return dict_repr(h);
+    }
+    let years = intset_str(w.sets[h.years]);
+    f"{{'country': {attr_str(country_attr(h))}, 'expand': {py_bool(h.expand)}, 'language': {attr_str(h.language)}, 'market': {attr_str(market_attr(h))}, 'observed': {py_bool(h.observed)}, 'subdiv': {attr_str(h.subdiv)}, 'years': {years}}}"
+}
+
+fn lower_contains(hay: ref String, needle: ref String) -> bool {
+    hay.to_lowercase().contains(needle.to_lowercase())
+}
+
+fn char_prefix(s: ref String, n: i64) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    chars_str(cs, 0, if n < cs.len() { n } else { cs.len() })
+}
+
+// get_named()
+fn get_named(w: ref World, i: i64, text: ref String, lookup: ref String, split: bool) -> Result[Vec[i64], Exc] {
+    let lookups = words("icontains exact contains startswith iexact istartswith");
+    if not contains_str(lookups, lookup) {
+        return Err(exc("AttributeError", f"Unknown lookup type: {lookup}"));
+    }
+    let h = ref w.hols[i];
+    let ks = item_keys(h);
+    let vs = item_vals(h);
+    let n = text.chars().count();
+    let low = text.to_lowercase();
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < ks.len() {
+        let names = if split { split_names(vs[k]) } else { vec![vs[k].clone()] };
+        for name in names {
+            let hit = if *lookup == "icontains" {
+                lower_contains(name, text)
+            } else if *lookup == "exact" {
+                name == *text
+            } else if *lookup == "contains" {
+                name.contains(text.clone())
+            } else if *lookup == "startswith" {
+                char_prefix(name, n) == *text
+            } else if *lookup == "iexact" {
+                name.to_lowercase() == low
+            } else {
+                char_prefix(name, n).to_lowercase() == low
+            };
+            if hit {
+                out.push(ks[k]);
+            }
+        }
+        k += 1;
+    }
+    Ok(out)
+}
+
+// pop_named()
+fn pop_named(w: mut ref World, i: i64, name: ref String) -> Result[Vec[i64], Exc] {
+    let exact = name.contains(DELIM);
+    let dts = get_named(w, i, name, "icontains".to_string(), not exact)?;
+    if dts.len() == 0 {
+        return Err(exc("KeyError", str_repr(name)));
+    }
+    let mut popped: Vec[i64] = Vec.new();
+    for dt in dts {
+        let cur = h_getitem(mut w, i, dt)?;
+        let names = split_names(cur);
+        h_pop(mut w, i, dt)?;
+        popped.push(dt);
+        if not exact {
+            let mut keep: Vec[String] = Vec.new();
+            for n in names {
+                if not lower_contains(n, name) {
+                    keep.push(n.clone());
+                }
+            }
+            if keep.len() > 0 {
+                h_setitem(mut w, i, dt, join_strs(keep, DELIM));
+            }
+        }
+    }
+    Ok(popped)
+}
+
+// is_working_day(): a weekend day is a working day only if it is one of
+// the weekend_workdays, which none of these calendars has.
+fn working_date(w: mut ref World, i: i64, o: i64) -> bool {
+    expand_for(mut w, i, o);
+    if is_weekend(o) {
+        false
+    } else {
+        not h_contains(mut w, i, o)
+    }
+}
+
+// get_nth_working_day()
+fn nth_working(w: mut ref World, i: i64, start: i64, n: i64) -> i64 {
+    let dir = if n > 0 { 1 } else { -1 };
+    let mut dt = start;
+    let mut k = 0;
+    let count = if n < 0 { -n } else { n };
+    while k < count {
+        dt += dir;
+        while not working_date(mut w, i, dt) {
+            dt += dir;
+        }
+        k += 1;
+    }
+    dt
+}
+
+// get_working_days_count()
+fn count_working(w: mut ref World, i: i64, a: i64, b: i64) -> i64 {
+    let (lo, hi) = if a > b { (b, a) } else { (a, b) };
+    let mut n = 0;
+    let mut d = lo;
+    while d <= hi {
+        if working_date(mut w, i, d) {
+            n += 1;
+        }
+        d += 1;
+    }
+    n
+}
+
+// h[start:stop:step]
+fn slice(w: mut ref World, i: i64, a: ref String, b: ref String, step_arg: ref String) -> Result[Vec[i64], Exc] {
+    if a.len() == 0 or b.len() == 0 {
+        return Err(value_error("Both start and stop must be given.".to_string()));
+    }
+    let start = key_of(mut w, i, a)?;
+    let stop = key_of(mut w, i, b)?;
+    let mut step = if step_arg.len() == 0 {
+        1
+    } else if step_arg.starts_with("td:") {
+        atoi(step_arg.substring(3, step_arg.len()))
+    } else {
+        atoi(step_arg)
+    };
+    if step == 0 {
+        return Err(value_error("Step value must not be zero.".to_string()));
+    }
+    let diff = stop - start;
+    if (diff < 0 and step >= 0) or (diff >= 0 and step < 0) {
+        step = -step;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut delta = 0;
+    while (step > 0 and delta < diff) or (step < 0 and delta > diff) {
+        let day = start + delta;
+        if h_contains(mut w, i, day) {
+            out.push(day);
+        }
+        delta += step;
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_rows(name: ref String) -> Result[Vec[Vec[String]], Exc] {
+    let path = f"data/{name}";
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(not_found(path)),
+    };
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    let mut first = true;
+    for ln in split_on(text, '\n') {
+        if ln.len() == 0 {
+            continue;
+        }
+        if first {
+            first = false;
+            continue;
+        }
+        rows.push(split_on(ln, ','));
+    }
+    Ok(rows)
+}
+
+// Pay on the 15th and the last day of each month, or on the working day
+// before when that is a holiday or a weekend.
+fn payroll(w: mut ref World, i: i64, year: i64) {
+    let mut moved = 0;
+    let mut m = 1;
+    while m <= 12 {
+        for day in vec![15, days_in_month(year, m)] {
+            let d = ymd(year, m, day);
+            if working_date(mut w, i, d) {
+                continue;
+            }
+            let pay = nth_working(mut w, i, d, -1);
+            let why = match h_get(mut w, i, d) {
+                Some(n) => if n.len() > 0 { n } else { day_name(d) },
+                None => day_name(d),
+            };
+            println(f"  {date_str(d)} {why} -> paid {date_str(pay)} ({day_name(pay)})");
+            moved += 1;
+        }
+        m += 1;
+    }
+    println(f"  {moved} of 24 pay dates moved");
+}
+
+// Each ticket is due a number of business days after it was opened, on
+// its team's calendar.
+fn sla(w: mut ref World, name: ref String) -> Result[(), Exc] {
+    let rows = read_rows(name)?;
+    for r in rows {
+        let tid = r[0].clone();
+        let res = sla_row(mut w, r);
+        match res {
+            Ok(line) => println(f"  {line}"),
+            Err(e) => println(f"  {tid} {err_line(e)}"),
+        }
+    }
+    Ok(())
+}
+
+fn sla_row(w: mut ref World, r: ref Vec[String]) -> Result[String, Exc] {
+    let i = lookup(w, r[1])?;
+    let opened = key_of(mut w, i, r[2])?;
+    let due = nth_working(mut w, i, opened, atoi(r[3]));
+    Ok(f"{r[0]} {r[1]} opened {r[2]} +{r[3]} -> due {date_str(due)} {day_name(due)}")
+}
+
+// Who is off on each weekday of a range, on their own country's calendar.
+fn pto(w: mut ref World, name: ref String, a: ref String, b: ref String) -> Result[(), Exc] {
+    let rows = read_rows(name)?;
+    let start = parse_date_text(a);
+    let end = parse_date_text(b);
+    let mut people: Vec[String] = Vec.new();
+    let mut cals: Vec[i64] = Vec.new();
+    let mut off: Vec[i64] = Vec.new();
+    for r in rows {
+        people.push(r[0].clone());
+        cals.push(lookup(w, r[1])?);
+        off.push(0);
+    }
+    let mut d = start;
+    while d <= end {
+        if weekday(d) < SAT {
+            let mut who: Vec[String] = Vec.new();
+            let mut k = 0;
+            while k < people.len() {
+                let c = cals[k];
+                if h_contains(mut w, c, d) {
+                    let n = h_getitem(mut w, c, d)?;
+                    who.push(f"{people[k]} ({n})");
+                    off[k] += 1;
+                }
+                k += 1;
+            }
+            if who.len() > 0 {
+                println(f"  {date_str(d)} {day_name(d).substring(0, 3)}: {join_strs(who, ", ")}");
+            }
+        }
+        d += 1;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < people.len() {
+        parts.push(f"{people[k]} {off[k]}");
+        k += 1;
+    }
+    println(f"  days off: {join_strs(parts, ", ")}");
+    Ok(())
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f" {n}" } else { f"{n}" }
+}
+
+// Trading days a month, and the days the market is closed.
+fn trading(w: mut ref World, i: i64, year: i64) {
+    let mut total = 0;
+    let mut m = 1;
+    while m <= 12 {
+        let first = ymd(year, m, 1);
+        let last = ymd(year, m, days_in_month(year, m));
+        let n = count_working(mut w, i, first, last);
+        total += n;
+        let ks = item_keys(w.hols[i]);
+        let vs = item_vals(w.hols[i]);
+        let mut days: Vec[i64] = Vec.new();
+        let mut names: Vec[String] = Vec.new();
+        let mut k = 0;
+        while k < ks.len() {
+            if ks[k] >= first and ks[k] <= last {
+                let mut j = days.len();
+                days.push(ks[k]);
+                names.push(vs[k].clone());
+                while j > 0 and days[j] < days[j - 1] {
+                    let t = days[j];
+                    days[j] = days[j - 1];
+                    days[j - 1] = t;
+                    let tn = names[j].clone();
+                    names[j] = names[j - 1].clone();
+                    names[j - 1] = tn;
+                    j -= 1;
+                }
+            }
+            k += 1;
+        }
+        let mut closed: Vec[String] = Vec.new();
+        k = 0;
+        while k < days.len() {
+            closed.push(f"{day_of(days[k])} {names[k]}");
+            k += 1;
+        }
+        let tail = if closed.len() > 0 { f": {join_strs(closed, "; ")}" } else { String.new() };
+        println(f"  {year}-{zpad(m, 2)} {pad2(n)} trading days{tail}");
+        m += 1;
+    }
+    println(f"  {year}: {total} trading days");
+}
+
+fn ics_text(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '\\' or c == ';' or c == ',' {
+            out.push('\\');
+        }
+        out.push(c.clone());
+    }
+    out
+}
+
+// An iCalendar file of one year's holidays, written and read back.
+fn ics(w: mut ref World, i: i64, year: i64, path: ref String) -> Result[(), Exc] {
+    let days = slice(mut w, i, f"{year}-01-01", f"{year + 1}-01-01", String.new())?;
+    let mut lines: Vec[String] = vec!["BEGIN:VCALENDAR".to_string(), "VERSION:2.0".to_string(), "PRODID:-//mini_holidays//holidays 0.62//EN".to_string()];
+    let mut n = 0;
+    for d in days {
+        n += 1;
+        let name = h_getitem(mut w, i, d)?;
+        lines.push("BEGIN:VEVENT".to_string());
+        lines.push(f"UID:{date_compact(d)}-{n}@mini-holidays");
+        lines.push(f"DTSTART;VALUE=DATE:{date_compact(d)}");
+        lines.push(f"DTEND;VALUE=DATE:{date_compact(d + 1)}");
+        lines.push(f"SUMMARY:{ics_text(name)}");
+        lines.push("END:VEVENT".to_string());
+    }
+    lines.push("END:VCALENDAR".to_string());
+    let full = f"data/out/{path}";
+    let _ = fs.create_dir_all(dirname_of(full));
+    let mut text = join_strs(lines, "\r\n");
+    text.push_str("\r\n");
+    if let Err(e) = fs.write(full.clone(), text) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    let back = match fs.read_bytes(full.clone()) {
+        Ok(b) => b,
+        Err(_) => return Err(not_found(full)),
+    };
+    println(f"  wrote {path}: {back.len()} bytes, {days.len()} events");
+    let s = match String.from_utf8(back) {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    };
+    for ln in split_on(s, '\n') {
+        let t = if ln.ends_with("\r") { ln.substring(0, ln.len() - 1) } else { ln.clone() };
+        if t.starts_with("SUMMARY:") or t.starts_with("DTSTART") {
+            println(f"  {t}");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the script
+
+fn arg(p: ref Vec[String], k: i64) -> String {
+    if k < p.len() { p[k].clone() } else { String.new() }
+}
+
+fn print_items(w: ref World, i: i64, sorted: bool) {
+    let mut ks = item_keys(w.hols[i]);
+    let mut vs = item_vals(w.hols[i]);
+    if sorted {
+        let mut a = 1;
+        while a < ks.len() {
+            let mut j = a;
+            while j > 0 and ks[j] < ks[j - 1] {
+                let t = ks[j];
+                ks[j] = ks[j - 1];
+                ks[j - 1] = t;
+                let tn = vs[j].clone();
+                vs[j] = vs[j - 1].clone();
+                vs[j - 1] = tn;
+                j -= 1;
+            }
+            a += 1;
+        }
+    }
+    let mut k = 0;
+    while k < ks.len() {
+        println(f"  {date_str(ks[k])} {vs[k]}");
+        k += 1;
+    }
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => str_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn rest(p: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut k = from;
+    while k < p.len() {
+        out.push(p[k].clone());
+        k += 1;
+    }
+    out
+}
+
+fn update_pairs(w: mut ref World, i: i64, args: ref Vec[String]) -> Result[(), Exc] {
+    for kv in args {
+        let cut = match kv.find("=") {
+            Some(c) => c,
+            None => kv.len(),
+        };
+        let k = kv.substring(0, cut);
+        let v = kv.substring(cut + 1, kv.len());
+        let o = key_of(mut w, i, k)?;
+        h_setitem(mut w, i, o, v);
+    }
+    Ok(())
+}
+
+fn run(w: mut ref World, p: ref Vec[String]) -> Result[(), Exc] {
+    let op = p[0].clone();
+    if op == "country" or op == "market" {
+        let i = make(mut w, p[2], rest(p, 3), op == "market")?;
+        bind(mut w, p[1], i);
+        return Ok(());
+    }
+    if op == "sla" {
+        return sla(mut w, p[1]);
+    }
+    if op == "pto" {
+        return pto(mut w, p[1], p[2], p[3]);
+    }
+    if op == "add" {
+        let a = lookup(w, p[2])?;
+        let b = lookup(w, p[3])?;
+        let i = make_sum(mut w, a, b);
+        bind(mut w, p[1], i);
+        return Ok(());
+    }
+    if op == "copy" {
+        let a = lookup(w, p[2])?;
+        let i = make_copy(mut w, a);
+        bind(mut w, p[1], i);
+        return Ok(());
+    }
+    let i = lookup(w, p[1])?;
+    let a0 = arg(p, 2);
+    let a1 = arg(p, 3);
+    let a2 = arg(p, 4);
+    if op == "items" {
+        print_items(w, i, false);
+    } else if op == "sorted" {
+        print_items(w, i, true);
+    } else if op == "len" {
+        println(f"  {w.hols[i].nlive}");
+    } else if op == "bool" {
+        println(f"  {py_bool(w.hols[i].nlive > 0)}");
+    } else if op == "repr" {
+        println(f"  {hol_repr(w, i)}");
+    } else if op == "str" {
+        println(f"  {hol_str(w, i)}");
+    } else if op == "years" {
+        println(f"  {intset_str(w.sets[w.hols[i].years])}");
+    } else if op == "attrs" {
+        let h = ref w.hols[i];
+        println(f"  country = {attr_repr(country_attr(h))}");
+        println(f"  market = {attr_repr(market_attr(h))}");
+        println(f"  subdiv = {attr_repr(h.subdiv)}");
+        println(f"  language = {attr_repr(h.language)}");
+        println(f"  observed = {py_bool(h.observed)}");
+        println(f"  expand = {py_bool(h.expand)}");
+        let mut cs = h.categories.clone();
+        sort_strs(mut cs);
+        println(f"  categories = {list_repr(cs)}");
+    } else if op == "get" {
+        let o = key_of(mut w, i, a0)?;
+        let v = raw_get(w.hols[i], o);
+        if p.len() > 3 and v.is_none() {
+            println(f"  {str_repr(a1.substring(1, a1.len()))}");
+        } else {
+            println(f"  {opt_repr(v)}");
+        }
+    } else if op == "item" {
+        let o = key_of(mut w, i, a0)?;
+        let v = h_getitem(mut w, i, o)?;
+        println(f"  {str_repr(v)}");
+    } else if op == "in" {
+        let o = key_of(mut w, i, a0)?;
+        println(f"  {py_bool(raw_slot(w.hols[i], o) >= 0)}");
+    } else if op == "getlist" {
+        let o = key_of(mut w, i, a0)?;
+        println(f"  {list_repr(h_get_list(mut w, i, o))}");
+    } else if op == "named" {
+        let lookup = if p.len() > 3 { a1 } else { "icontains".to_string() };
+        let split = not (p.len() > 4 and a2 != "split=1");
+        let ds = get_named(w, i, a0, lookup, split)?;
+        println(f"  {dates_repr(ds)}");
+    } else if op == "pop" {
+        let o = key_of(mut w, i, a0)?;
+        match raw_pop(mut w.hols[i], o) {
+            Some(v) => println(f"  {str_repr(v)}"),
+            None => {
+                if p.len() > 3 {
+                    println(f"  {str_repr(a1.substring(1, a1.len()))}");
+                } else {
+                    return Err(key_error_date(o));
+                }
+            }
+        }
+    } else if op == "popnamed" {
+        let ds = pop_named(mut w, i, a0)?;
+        println(f"  {dates_repr(ds)}");
+    } else if op == "update" or op == "append" {
+        update_pairs(mut w, i, rest(p, 2))?;
+    } else if op == "updatelist" {
+        for k in rest(p, 2) {
+            let o = key_of(mut w, i, k)?;
+            h_setitem(mut w, i, o, "Holiday".to_string());
+        }
+    } else if op == "updateone" {
+        let o = key_of(mut w, i, a0)?;
+        h_setitem(mut w, i, o, "Holiday".to_string());
+    } else if op == "slice" {
+        let ds = slice(mut w, i, a0, a1, a2)?;
+        println(f"  {dates_repr(ds)}");
+    } else if op == "working" {
+        let o = key_of(mut w, i, a0)?;
+        println(f"  {py_bool(working_date(mut w, i, o))}");
+    } else if op == "nth" {
+        let o = key_of(mut w, i, a0)?;
+        println(f"  {date_str(nth_working(mut w, i, o, atoi(a1)))}");
+    } else if op == "count" {
+        let x = key_of(mut w, i, a0)?;
+        let y = key_of(mut w, i, a1)?;
+        println(f"  {count_working(mut w, i, x, y)}");
+    } else if op == "set" {
+        if a0 == "categories" {
+            let mut cs: Vec[String] = Vec.new();
+            for c in split_on(a1, ',') {
+                if not contains_str(cs, c) {
+                    cs.push(c.clone());
+                }
+            }
+            w.hols[i].categories = cs;
+            repopulate(mut w, i);
+        } else if a0 == "observed" {
+            w.hols[i].observed = a1 == "1";
+            repopulate(mut w, i);
+        } else {
+            w.hols[i].expand = a1 == "1";
+        }
+    } else if op == "eq" {
+        let j = lookup(w, a0)?;
+        let e = hol_eq(w, i, j);
+        println(f"  {py_bool(e)} {py_bool(not e)}");
+    } else if op == "payroll" {
+        payroll(mut w, i, atoi(a0));
+    } else if op == "trading" {
+        trading(mut w, i, atoi(a0));
+    } else if op == "ics" {
+        ics(mut w, i, atoi(a0), a1)?;
+    }
+    Ok(())
+}
+
+fn load_specials() -> Vec[Special] {
+    let mut out: Vec[Special] = Vec.new();
+    for line in split_on(static_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(hex_string(line), '|');
+        out.push(Special {
+            entity: f[0].clone(),
+            table: f[1].clone(),
+            year: atoi(f[2]),
+            month: atoi(f[3]),
+            day: atoi(f[4]),
+            name: f[5].clone(),
+        });
+    }
+    out
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    let _ = fs.remove_dir_all("data/out".to_string());
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut w = World {
+        hols: Vec.new(),
+        sets: Vec.new(),
+        cats: Vec.new(),
+        cat_paths: Vec.new(),
+        names: Vec.new(),
+        slots: Vec.new(),
+        specials: load_specials(),
+    };
+    let mut n = 0;
+    let mut nerr = 0;
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let parts = split_on(hex_string(line), '\t');
+        println(f"> {join_strs(parts, " ")}");
+        if let Err(e) = run(mut w, parts) {
+            println(f"  {err_line(e)}");
+            nerr += 1;
+        }
+        n += 1;
+    }
+    println(f"{n} steps, {nerr} ended in an error");
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("636f756e7472790975730955530979656172733d32303234\n6974656d73097573\n6c656e097573\n626f6f6c097573\n67657409757309323032342d30372d3034\n67657409757309323032342d30372d3035\n67657409757309323032342d30372d3036093d576f726b646179\n6974656d09757309323032342d31312d3238\n6974656d09757309323032342d30372d3035\n696e0975730930372f30342f32303234\n696e097573094a756c7920342c2032303234\n696e0975730934204a756c2032303234\n696e097573093230323430373034\n696e09757309323032342f30372f3034\n696e097573094031373230303531323030\n696e0975730940313732303133373539392e39\n696e097573094031373230313337363030\n696e097573096461746528323032342c372c3429\n696e09757309647428323032342c372c342c32332c353929\n696e09757309323032342d30322d3330\n696e09757309323032342d31332d3031\n696e09757309746f6d6f72726f77\n696e09757309\n7965617273097573\n6174747273097573\n636f756e747279096c617a79095553\n6c656e096c617a79\n626f6f6c096c617a79\n72657072096c617a79\n737472096c617a79\n7965617273096c617a79\n696e096c617a7909323032332d31322d3235\n7965617273096c617a79\n6c656e096c617a79\n696e096c617a7909323032362d30312d3032\n7965617273096c617a79\n6974656d73096c617a79\n636f756e74727909666978656409555309657870616e643d30\n696e09666978656409323032342d31322d3235\n67657409666978656409323032342d31322d3235\n6c656e096669786564\n737472096669786564\n636f756e747279096d616e79095553410979656172733d323031382e2e32303237\n7965617273096d616e79\n6c656e096d616e79\n6e616d6564096d616e79094a756e657465656e7468\n636f756e747279096665770955530979656172733d323033302c323032322c323032372c323032342c323034312c32303139\n796561727309666577\n6e616d656409666577094368726973746d6173\n636f756e747279096f62730955530979656172733d323032312c323032322c32303237\n736f72746564096f6273\n636f756e747279096e6f6f627309556e697465645374617465730979656172733d32303231096f627365727665643d30\n736f72746564096e6f6f6273\n736574096f6273096f627365727665640930\n6c656e096f6273\n676574096f627309323032312d31322d3234\n736574096f6273096f627365727665640931\n676574096f627309323032312d31322d3234\n7965617273096f6273\n");
+    s.push_str("636f756e747279097478095553097375626469763d54580979656172733d32303231\n736f72746564097478\n636f756e747279096361095553097375626469763d43410979656172733d32303234\n6974656d73096361\n636f756e747279096761095553097375626469763d47410979656172733d323032342c32303235\n736f72746564096761\n636f756e747279096d61095553097375626469763d4d410979656172733d32303235\n6974656d73096d61\n636f756e747279096463095553097375626469763d44430979656172733d323032352c32303231\n736f72746564096463\n636f756e74727909696c095553097375626469763d494c0979656172733d32303234\n6974656d7309696c\n636f756e747279096e79095553097375626469763d4e590979656172733d32303233\n6974656d73096e79\n636f756e747279097761095553097375626469763d57410979656172733d32303234\n6974656d73097761\n636f756e74727909756e6f66660955530963617465676f72793d756e6f6666696369616c0979656172733d32303234\n6974656d7309756e6f6666\n636f756e74727909626f74680955530963617465676f726965733d756e6f6666696369616c2c7075626c6963097375626469763d4e590979656172733d32303234\n6974656d7309626f7468\n617474727309626f7468\n636f756e7472790962616431095553097375626469763d5a5a\n636f756e74727909626164320955530963617465676f726965733d62616e6b\n636f756e74727909626164330955530963617465676f726965733d7075626c69632c62616e6b097375626469763d5a5a\n636f756e747279096f6c640955530973746174653d54580979656172733d32303234\n6174747273096f6c64\n6c656e096f6c64\n636f756e747279096f6c64320955530970726f763d4d410979656172733d32303234\n6c656e096f6c6432\n636f756e74727909666d095553097375626469763d464d0979656172733d32303234\n6c656e09666d\n636f756e747279096561726c790955530979656172733d313737362c313737372c313837302c313837312c313933382c313935342c313937312c31393836\n736f72746564096561726c79\n636f756e747279096c6174650955530979656172733d323130302c32313031\n6c656e096c617465\n7965617273096c617465\n636f756e7472790967620947420979656172733d32303232\n6974656d73096762\n636f756e7472790973637409554b097375626469763d53636f746c616e640979656172733d323032322c32303233\n736f7274656409736374\n617474727309736374\n636f756e747279096e6972094742097375626469763d4e49520979656172733d32303233\n");
+    s.push_str("6974656d73096e6972\n636f756e74727909776c7309556e697465644b696e67646f6d097375626469763d574c530979656172733d313937302c31393731\n736f7274656409776c73\n636f756e74727909656e6709474252097375626469763d456e676c616e640979656172733d313837342c313837352c313937372c323031312c32303230\n736f7274656409656e67\n636f756e747279096762756b094742097375626469763d554b0979656172733d32303234\n6974656d73096762756b\n636f756e74727909676265094742097375626469763d534354\n7265707209676265\n73747209676265\n636f756e74727909676278094742097375626469763d436f726e77616c6c\n636f756e7472790964650944450979656172733d32303234\n6974656d73096465\n636f756e747279096465656e0944450979656172733d32303234096c616e67756167653d656e5f5553\n6974656d73096465656e\n636f756e7472790964656279094765726d616e79097375626469763d42590963617465676f726965733d7075626c69632c636174686f6c69630979656172733d32303234096c616e67756167653d656e5f5553\n6974656d730964656279\n636f756e747279096465627932094445097375626469763d42617965726e0979656172733d32303234\n6974656d73096465627932\n636f756e7472790964656361740944450963617465676f726965733d636174686f6c69630979656172733d32303234\n6c656e096465636174\n636f756e74727909646563617432094445097375626469763d42590963617465676f726965733d636174686f6c69630979656172733d32303234\n6974656d7309646563617432\n636f756e7472790964657468094445097375626469763d5468c3bc72696e67656e0979656172733d32303234096c616e67756167653d756b\n6974656d730964657468\n636f756e74727909646574683209444555097375626469763d54480979656172733d32303234096c616e67756167653d7468\n6974656d73096465746832\n636f756e747279096465454e0944450979656172733d32303234096c616e67756167653d656e5f7573\n676574096465454e09323032342d31302d3033\n6174747273096465454e\n636f756e7472790964656a610944450979656172733d32303234096c616e67756167653d6a61\n6765740964656a6109323032342d31302d3033\n636f756e747279096465736e094445097375626469763d534e0979656172733d323031372c313939342c31393935096c616e67756167653d656e5f5553\n736f72746564096465736e\n636f756e7472790964656265094445097375626469763d42450979656172733d323032302c323032352c32303238096c616e67756167653d656e5f5553\n");
+    s.push_str("6e616d6564096465626509616e6e6976657273617279\n6765746c697374096465626509323032352d30352d3038\n636f756e74727909646539300944450979656172733d313938392c313939302c31393931\n736f727465640964653930\n636f756e747279096465627970094445097375626469763d4259500979656172733d32303234\n6c656e096465627970\n636f756e7472790964656d76094445097375626469763d4d65636b6c656e627572672d566f72706f6d6d65726e0979656172733d323032322c32303233\n6e616d65640964656d760946726175656e746167\n636f756e7472790964656277094445097375626469763d426164656e2d57c3bc727474656d626572670979656172733d32303234096c616e67756167653d756b\n736f727465640964656277\n636f756e7472790966720946520979656172733d32303235\n6974656d73096672\n636f756e7472790966726770094652097375626469763d47500979656172733d32303235096c616e67756167653d656e5f5553\n6974656d730966726770\n636f756e747279096672616d094672616e6365097375626469763d416c736163652d4d6f73656c6c650979656172733d32303235\n6974656d73096672616d\n636f756e7472790966727265094652097375626469763d4c612052c3a9756e696f6e0979656172733d313938302c31393831\n6e616d65640966727265096573636c6176616765\n636f756e747279096672706609465241097375626469763d50460979656172733d32303235096c616e67756167653d756b\n6974656d730966727066\n636f756e74727909667230360946520979656172733d323030352c323030382c313934372c31393438096c616e67756167653d656e5f5553\n6e616d65640966723036094d6f6e646179\n6e616d65640966723036094c61626f72\n636f756e747279096e6c094e4c0979656172733d32303235\n6974656d73096e6c\n636f756e747279096e6c6f7074094e65746865726c616e64730963617465676f726965733d6f7074696f6e616c2c7075626c69630979656172733d32303235096c616e67756167653d656e5f5553\n6974656d73096e6c6f7074\n636f756e747279096e6c6b094e4c440979656172733d313934382c313934392c313937392c313938302c323031342c32303137096c616e67756167653d656e5f5553\n6e616d6564096e6c6b09277320446179\n636f756e747279096e6c78094e4c097375626469763d4e48\n6d61726b6574096e797365094e5953450979656172733d32303234\n6974656d73096e797365\n636f756e74096e79736509323032342d30312d303109323032342d31322d3331\n6d61726b657409786e797309584e59530979656172733d323032322c32303231\n");
+    s.push_str("736f7274656409786e7973\n6d61726b657409777731094e5953450979656172733d31393134\n6c656e09777731\n636f756e740977773109313931342d30372d303109313931342d31322d3331\n736c6963650977773109313931342d30372d323809313931342d30382d3036\n6d61726b6574097061706572094e6577596f726b53746f636b45786368616e67650979656172733d31393638\n6e616d6564097061706572095061706572\n6e616d6564097061706572096f09636f6e7461696e73\n6d61726b6574096f6c64094e5953450979656172733d313838382c313933332c313934352c323030312c323031322c323031382c32303235\n736f72746564096f6c64\n6d61726b657409656362094543420979656172733d323030302c32303234\n736f7274656409656362\n6d61726b65740974617209544152\n7265707209746172\n73747209746172\n6d61726b6574096c7365094c5345\n6d61726b6574096e79737562094e595345097375626469763d4e59\n6d61726b65740975736d0955530979656172733d32303234\n6c656e0975736d\n636f756e747279096e7963094e5953450979656172733d32303234\n6c656e096e7963\n636f756e747279097878095858\n6e616d656409747809646179\n6e616d6564097478094441590969636f6e7461696e73\n6e616d65640974780944617909636f6e7461696e73\n6e616d6564097478094368726973746d617320446179096578616374\n6e616d6564097478096368726973746d61732064617909696578616374\n6e616d6564097478094368726973740973746172747377697468\n6e616d656409747809636872697374096973746172747377697468\n6e616d6564097478096368726973746d6173\n6e616d6564097478096368726973746d61730969636f6e7461696e730973706c69743d30\n6e616d6564097478094368726973746d61732044617920286f62736572766564293b204368726973746d6173204576650965786163740973706c69743d30\n6e616d6564097478094368726973746d61732044617920286f62736572766564293b204368726973746d617320457665096578616374\n6e616d65640974780945766509626f677573\n6765746c69737409747809323032312d31322d3234\n6765746c69737409747809323032312d31322d3233\n6765746c69737409747809323032312d31322d3232\n636f756e74727909726d095553097375626469763d54580979656172733d32303231\n706f706e616d656409726d095468616e6b73\n67657409726d09323032312d31312d3236\n706f706e616d656409726d094368726973746d6173\n706f706e616d656409726d094368726973746d6173\n");
+    s.push_str("636f756e74727909726d32095553097375626469763d54580979656172733d32303231\n706f706e616d656409726d32094368726973746d61732044617920286f62736572766564293b204368726973746d617320457665\n706f706e616d656409726d32094e6f7468696e67\n706f7009726d3209323032312d30372d3035\n706f7009726d3209323032312d30372d3035\n706f7009726d3209323032312d30372d3035093d676f6e65\n75706461746509726d3209323032312d30332d30313d466f756e646572732044617909323032312d30312d30313d457874726120446179\n7570646174656c69737409726d3209323032312d30332d30320930332f30332f32303231\n7570646174656f6e6509726d3209323032312d30332d3034\n617070656e6409726d3209323032312d30372d30353d4261636b20416761696e\n75706461746509726d3209323032312d30332d30313d466f756e64657273204461793b205365636f6e64204e616d65\n67657409726d3209323032312d30332d3031\n796561727309726d32\n75706461746509726d3209323033302d30362d30313d46757475726520446179\n796561727309726d32\n6c656e09726d32\n6974656d7309726d32\n636f756e74727909726d330955530979656172733d3230323109657870616e643d30\n75706461746509726d3309323033302d30362d30313d46757475726520446179\n796561727309726d33\n6974656d7309726d33\n6e616d656409726d3309467574757265\n636f756e7472790972670955530979656172733d32303234\n736c69636509726709323032342d31322d323009323032352d30312d3035\n7965617273097267\n736c69636509726709323032342d31322d333109323032342d31322d3031\n736c69636509726709323032342d31312d303109323032342d31322d33310937\n736c69636509726709323032342d31312d323809323032342d31322d33310974643a37\n736c69636509726709323032342d31322d333109323032342d31312d3031092d37\n736c69636509726709323032342d31322d333109323032342d31312d30310974643a37\n736c69636509726709323032342d31312d303109323032342d31322d33310930\n736c69636509726709323032342d30312d303109\n736c69636509726709323032342d30372d303409323032342d30372d3034\n776f726b696e6709726709323032342d30372d3034\n776f726b696e6709726709323032342d30372d3036\n776f726b696e6709726709323032342d30372d3035\n6e746809726709323032342d30372d30330931\n6e746809726709323032342d30372d3035092d31\n6e746809726709323032342d31322d32300935\n");
+    s.push_str("6e746809726709323032342d31322d33310930\n6e746809726709323032342d31312d3237092d32\n636f756e7409726709323032342d30312d303109323032342d31322d3331\n636f756e7409726709323032342d31322d333109323032342d30312d3031\n636f756e7409726709323032342d30372d303409323032342d30372d3034\n636f756e747279096c7a095553\n6e7468096c7a09323032392d31322d3231093130\n7965617273096c7a\n636f756e74727909610955530979656172733d32303234\n636f756e74727909620944450979656172733d32303234096c616e67756167653d656e5f5553\n61646409616209610962\n6974656d73096162\n6174747273096162\n636f756e7472790963094742097375626469763d5343540979656172733d32303233\n616464096162630961620963\n617474727309616263\n796561727309616263\n6c656e09616263\n696e0961626309323032352d30312d3031\n796561727309616263\n6c656e09616263\n6765740961626309323032352d30312d3032\n776f726b696e670961626309323032342d31322d3236\n79656172730961\n79656172730963\n6c656e0963\n636f756e7472790964095553097375626469763d4341\n636f756e7472790965095553097375626469763d5458\n6164640964653209640965\n73747209646532\n7265707209646532\n6765740964653209323032342d31312d3239\n796561727309646532\n79656172730964\n616464096d6b74096e79736509656362\n6174747273096d6b74\n676574096d6b7409323032342d31322d3236\n676574096d6b7409323032342d30372d3034\n636f756e7472790973310955530979656172733d32303233\n636f756e747279097332094e4c0979656172733d32303234096c616e67756167653d656e5f5553\n61646409733132097331097332\n796561727309733132\n6974656d7309733132\n696e09733209323032362d30342d3237\n7965617273097332\n696e0973313209323032352d30342d3237\n796561727309733132\n6765740973313209323032362d30342d3237\n796561727309733132\n636f756e7472790966310955530979656172733d3230323409657870616e643d30\n636f756e747279096632095553097375626469763d54580979656172733d3230323409657870616e643d30\n61646409663132096631096632\n696e0966313209323032352d30312d3031\n617474727309663132\n636f756e747279096f7269670955530979656172733d32303234\n636f7079096370096f726967\n6571096370096f726967\n696e09637009323033312d30312d3031\n7965617273096f726967\n");
+    s.push_str("696e096f72696709323033312d30312d3031\n6571096370096f726967\n6c656e096f726967\n6c656e096370\n65710961097331\n636f756e7472790961320955530979656172733d32303234\n65710961096132\n636f756e7472790961330955530979656172733d32303234096f627365727665643d30\n6571096132096133\n706f7009613209323032342d30312d3031\n75706461746509613209323032342d30312d30313d4e65772059656172277320446179\n65710961096132\n636f756e747279096361740955530979656172733d323032342c32303235\n736574096361740963617465676f7269657309756e6f6666696369616c\n6c656e09636174\n736f7274656409636174\n736574096361740963617465676f726965730962616e6b\n6c656e09636174\n736574096361740963617465676f72696573097075626c69632c756e6f6666696369616c\n6c656e09636174\n7365740963617409657870616e640930\n696e0963617409323032362d30312d3031\n6c656e09636174\n636f756e74727909656d70095553\n73657409656d700963617465676f7269657309756e6f6666696369616c\n696e09656d7009323032342d31302d3331\n67657409656d7009323032342d30372d3034\n72657072096e6c\n73747209656362\n636f756e747279096e796332095553097375626469763d4e59\n706179726f6c6c096e7963320932303235\n706179726f6c6c096e7973650932303234\n636f756e747279097465616d5f7573095553097375626469763d4341\n636f756e747279097465616d5f6465094445097375626469763d4259096c616e67756167653d656e5f5553\n636f756e747279097465616d5f6762094742097375626469763d534354\n636f756e747279097465616d5f6672094652096c616e67756167653d656e5f5553\n636f756e747279097465616d5f6e6c094e4c096c616e67756167653d656e5f5553\n736c61097469636b6574732e637376\n70746f097465616d2e63737609323032342d31322d323009323032352d30312d3037\n70746f097465616d2e63737609323032352d30342d313409323032352d30352d3132\n70746f096d697373696e672e63737609323032352d30342d313409323032352d30352d3132\n74726164696e67096e7973650932303234\n74726164696e6709786e79730932303031\n696373097465616d5f646509323032350964655f62795f323032352e696373\n696373096e6c6f70740932303235096e6c5f323032352e696373\n696373097465616d5f66720932303236097375622f66722e696373\n696373096e6f626f6479093230323509782e696373\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("tickets.csv 69642c7465616d2c6f70656e65642c627573696e6573735f646179730a494e432d313030312c7465616d5f75732c323032342d31312d32372c330a494e432d313030322c7465616d5f64652c323032342d31322d32332c320a494e432d313030332c7465616d5f67622c323032342d31322d32342c310a494e432d313030342c7465616d5f66722c323032352d30342d33302c320a494e432d313030352c7465616d5f6e6c2c323032352d30342d32352c310a494e432d313030362c7465616d5f75732c323032352d30332d32382c320a494e432d313030372c7465616d5f64652c323032352d30352d32382c330a494e432d313030382c7465616d5f67622c323032352d31322d32332c340a494e432d313030392c7465616d5f6e6c2c323032352d31322d32342c350a494e432d313031302c7465616d5f66722c323032352d30372d31312c2d320a494e432d313031312c7465616d5f78782c323032352d30372d31312c320a494e432d313031322c7465616d5f75732c323032352d30322d33302c310a494e432d313031332c7465616d5f64652c323032352d31302d30322c300a\nteam.csv 706572736f6e2c63616c656e6461720a416e612c7465616d5f75730a426f2c7465616d5f64650a4368656e2c7465616d5f67620a446172612c7465616d5f66720a456c692c7465616d5f6e6c0a46656d692c7465616d5f75730a\nlocale/de/LC_MESSAGES/DE.mo de12049500000000010000001c00000024000000000000002c000000000000002c000000980100002d0000000050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e36300a504f542d4372656174696f6e2d446174653a20323032332d30342d30342031363a31332b303330300a504f2d5265766973696f6e2d446174653a20323032342d31302d33302030323a31342b303730300a4c6173742d5472616e736c61746f723a205050737972697573203c70707379726975734070707379726975732e6465763e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a2064650a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e350a00\nlocale/en_US/LC_MESSAGES/DE.mo de12049500000000170000001c000000d4000000000000008c010000000000008c010000670000008d0100002e000000f501000067000000240200000d0000008c020000100000009a02000013000000ab0200000a000000bf02000014000000ca0200000c000000df02000014000000ec02000019000000010300000a0000001b030000120000002603000007000000390300000b000000410300000c0000004d0300000d0000005a0300000e000000680300000f0000007703000019000000870300000d000000a103000015000000af0300009b010000c50300005c0000006105000034000000be0500005c000000f30500000f0000005006000019000000600600000d0000007a06000009000000880600000d000000920600000e000000a006000008000000af06000019000000b80600000b000000d20600000e000000de0600000e000000ed0600000d000000fc0600000d0000000a0700000b000000180700000b000000240700000f000000300700001000000040070000140000005107000017000000660700000037352e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f70610037352e204a616872657374616720646573204175667374616e64657320766f6d2031372e204a756e6920313935330038302e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f706100416c6c65726865696c6967656e004275c39f2d20756e642042657474616700436872697374692048696d6d656c666168727400457273746572204d61690045727374657220576569686e61636874737461670046726f6e6c656963686e616d004865696c6967652044726569204bc3b66e69676500496e7465726e6174696f6e616c65722046726175656e746167004b617266726569746167004d617269c3a42048696d6d656c6661687274004e65756a616872004f737465726d6f6e746167004f73746572736f6e6e746167005066696e6773746d6f6e746167005066696e677374736f6e6e746167005265666f726d6174696f6e7374616700546167206465722044657574736368656e2045696e686569740057656c746b696e646572746167005a77656974657220576569686e61636874737461670050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e36300a504f542d4372656174696f6e2d446174653a20323032332d30342d30342031363a31332b303330300a504f2d5265766973696f6e2d446174653a20323032342d31302d33302030323a31342b303730300a4c6173742d5472616e736c61746f723a205050737972697573203c70707379726975734070707379726975732e6465763e0a4c616e67756167652d5465616d3a20486f6c6964617973206c6f63616c697a6174696f6e207465616d0a4c616e67756167653a20656e5f55530a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e350a003735746820616e6e6976657273617279206f6620746865206c696265726174696f6e2066726f6d204e617a69736d20616e642074686520656e64206f6620746865205365636f6e6420576f726c642057617220696e204575726f7065003735746820616e6e6976657273617279206f66207468652045617374204765726d616e207570726973696e67206f662031393533003830746820616e6e6976657273617279206f6620746865206c696265726174696f6e2066726f6d204e617a69736d20616e642074686520656e64206f6620746865205365636f6e6420576f726c642057617220696e204575726f706500416c6c205361696e7473272044617900526570656e74616e636520616e64205072617965722044617900417363656e73696f6e20446179004c61626f7220446179004368726973746d61732044617900436f727075732043687269737469004570697068616e7900496e7465726e6174696f6e616c20576f6d656e27732044617900476f6f642046726964617900417373756d7074696f6e20446179004e6577205965617227732044617900456173746572204d6f6e646179004561737465722053756e6461790057686974204d6f6e64617900576869742053756e646179005265666f726d6174696f6e20446179004765726d616e20556e6974792044617900576f726c64204368696c6472656e277320446179005365636f6e6420446179206f66204368726973746d617300\n");
+    s.push_str("locale/th/LC_MESSAGES/DE.mo de12049500000000170000001c000000d4000000000000008c010000000000008c010000670000008d0100002e000000f501000067000000240200000d0000008c020000100000009a02000013000000ab0200000a000000bf02000014000000ca0200000c000000df02000014000000ec02000019000000010300000a0000001b030000120000002603000007000000390300000b000000410300000c0000004d0300000d0000005a0300000e000000680300000f0000007703000019000000870300000d000000a103000015000000af0300008d010000c503000006010000530500009c0000005a06000006010000f706000042000000fe070000570000004108000066000000990800001b00000000090000360000001c0900003f000000530900004b0000009309000021000000df09000030000000010a00006c000000320a0000270000009f0a000033000000c70a000036000000fb0a00005d000000320b000036000000900b000030000000c70b000033000000f80b0000210000002c0c00003f0000004e0c00000037352e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f70610037352e204a616872657374616720646573204175667374616e64657320766f6d2031372e204a756e6920313935330038302e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f706100416c6c65726865696c6967656e004275c39f2d20756e642042657474616700436872697374692048696d6d656c666168727400457273746572204d61690045727374657220576569686e61636874737461670046726f6e6c656963686e616d004865696c6967652044726569204bc3b66e69676500496e7465726e6174696f6e616c65722046726175656e746167004b617266726569746167004d617269c3a42048696d6d656c6661687274004e65756a616872004f737465726d6f6e746167004f73746572736f6e6e746167005066696e6773746d6f6e746167005066696e677374736f6e6e746167005265666f726d6174696f6e7374616700546167206465722044657574736368656e2045696e686569740057656c746b696e646572746167005a77656974657220576569686e61636874737461670050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e36300a504f542d4372656174696f6e2d446174653a20323032342d30392d30352032333a32312b303730300a504f2d5265766973696f6e2d446174653a20323032342d31302d33302030323a31342b303730300a4c6173742d5472616e736c61746f723a205050737972697573203c70707379726975734070707379726975732e6465763e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a2074680a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d313b20706c7572616c3d303b0a47656e6572617465642d42793a204c696e67766120352e302e330a582d47656e657261746f723a20506f6564697420332e350a00e0b8a7e0b8b1e0b899e0b884e0b8a3e0b89ae0b8a3e0b8ade0b89a20373520e0b89be0b8b5e0b882e0b8ade0b887e0b881e0b8b2e0b8a3e0b89be0b8a5e0b894e0b89be0b8a5e0b988e0b8ade0b8a2e0b888e0b8b2e0b881e0b8a3e0b8b0e0b89ae0b8ade0b89ae0b88ae0b8b2e0b895e0b8b4e0b8aae0b8b1e0b887e0b884e0b8a1e0b899e0b8b4e0b8a2e0b8a1e0b981e0b8a5e0b8b0e0b881e0b8b2e0b8a3e0b8aae0b8b4e0b989e0b899e0b8aae0b8b8e0b894e0b8aae0b887e0b884e0b8a3e0b8b2e0b8a1e0b982e0b8a5e0b881e0b884e0b8a3e0b8b1e0b989e0b887e0b897e0b8b5e0b988e0b8aae0b8ade0b887e0b983e0b899e0b8a2e0b8b8e0b982e0b8a3e0b89b00e0b8a7e0b8b1e0b899e0b884e0b8a3e0b89ae0b8a3e0b8ade0b89a20373520e0b89be0b8b5e0b882e0b8ade0b887e0b881e0b8b2e0b8a3e0b881e0b988e0b8ade0b881e0b8b2e0b8a3e0b881e0b8b3e0b980e0b8a3e0b8b4e0b89ae0b983e0b899e0b980e0b8a2e0b8ade0b8a3e0b8a1e0b899e0b8b5e0b895e0b8b0e0b8a7e0b8b1e0b899e0b8ade0b8ade0b88120e0b8842ee0b8a82e203139353300e0b8a7e0b8b1e0b899e0b884e0b8a3e0b89ae0b8a3e0b8ade0b89a20383020e0b89be0b8b5e0b882e0b8ade0b887e0b881e0b8b2e0b8a3e0b89be0b8a5e0b894e0b89be0b8a5e0b988e0b8ade0b8a2e0b888e0b8b2e0b881e0b8a3e0b8b0e0b89ae0b8ade0b89ae0b88ae0b8b2e0b895e0b8b4e0b8aae0b8b1e0b887e0b884e0b8a1e0b899e0b8b4e0b8a2e0b8a1e0b981e0b8a5e0b8b0e0b881e0b8b2e0b8a3e0b8aae0b8b4e0b989e0b899e0b8aae0b8b8e0b894e0b8aae0b887e0b884e0b8a3e0b8b2e0b8a1e0b982e0b8a5e0b881e0b884e0b8a3e0b8b1e0b989e0b887e0b897e0b8b5e0b988e0b8aae0b8ade0b887e0b983e0b899e0b8a2e0b8b8e0b982e0b8a3e0b89b00e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b899e0b8b1e0b881e0b89ae0b8b8e0b88de0b897e0b8b1e0b989e0b887e0b8abe0b8a5e0b8b2e0b8a200e0b8a7e0b8b1e0b899e0b981e0b8abe0b988e0b887e0b881e0b8b2e0b8a3e0b8ade0b898e0b8b4e0b8a9e0b890e0b8b2e0b899e0b981e0b8a5e0b8b0e0b881e0b8b2e0b8a3e0b881e0b8a5e0b8b1e0b89ae0b983e0b88800e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b89ee0b8a3e0b8b0e0b980e0b8a2e0b88be0b8b9e0b980e0b888e0b989e0b8b2e0b980e0b8aae0b894e0b987e0b888e0b882e0b8b6e0b989e0b899e0b8aae0b8a7e0b8a3e0b8a3e0b884e0b98c00e0b8a7e0b8b1e0b899e0b981e0b8a3e0b887e0b887e0b8b2e0b89900e0b8a7e0b8b1e0b899e0b884e0b8a3e0b8b4e0b8aae0b895e0b98ce0b8a1e0b8b2e0b8aae0b8a7e0b8b1e0b899e0b981e0b8a3e0b88100e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b89ee0b8a3e0b8b0e0b884e0b8a3e0b8b4e0b8aae0b895e0b8a7e0b8a3e0b881e0b8b2e0b8a200e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b89ee0b8a3e0b8b0e0b884e0b8a3e0b8b4e0b8aae0b895e0b98ce0b981e0b8aae0b894e0b887e0b8ade0b887e0b884e0b98c00e0b8a7e0b8b1e0b899e0b8aae0b895e0b8a3e0b8b5e0b8aae0b8b2e0b881e0b8a500e0b8a7e0b8b1e0b899e0b8a8e0b8b8e0b881e0b8a3e0b98ce0b89be0b8a3e0b8b0e0b980e0b8aae0b8a3e0b8b4e0b89000e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b981e0b8a1e0b988e0b89ee0b8a3e0b8b0e0b8a3e0b8b1e0b89ae0b980e0b881e0b8b5e0b8a2e0b8a3e0b895e0b8b4e0b8a2e0b881e0b882e0b8b6e0b989e0b899e0b8aae0b8a7e0b8a3e0b8a3e0b884e0b98c00e0b8a7e0b8b1e0b899e0b882e0b8b6e0b989e0b899e0b89be0b8b5e0b983e0b8abe0b8a1e0b98800e0b8a7e0b8b1e0b899e0b888e0b8b1e0b899e0b897e0b8a3e0b98ce0b8ade0b8b5e0b8aae0b980e0b895e0b8ade0b8a3e0b98c00e0b8a7e0b8b1e0b899e0b8ade0b8b2e0b897e0b8b4e0b895e0b8a2e0b98ce0b8ade0b8b5e0b8aae0b980e0b895e0b8ade0b8a3e0b98c00e0b8a7e0b8b1e0b899e0b888e0b8b1e0b899e0b897e0b8a3e0b98ce0b8abe0b8a5e0b8b1e0b887e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b89ee0b8a3e0b8b0e0b888e0b8b4e0b895e0b980e0b888e0b989e0b8b200e0b8a7e0b8b1e0b899e0b8aae0b8a1e0b982e0b8a0e0b88ae0b89ee0b8a3e0b8b0e0b888e0b8b4e0b895e0b980e0b888e0b989e0b8b200e0b8a7e0b8b1e0b899e0b981e0b8abe0b988e0b887e0b881e0b8b2e0b8a3e0b89be0b88fe0b8b4e0b8a3e0b8b9e0b89b00e0b8a7e0b8b1e0b899e0b8a3e0b8a7e0b8a1e0b88ae0b8b2e0b895e0b8b4e0b980e0b8a2e0b8ade0b8a3e0b8a1e0b8b1e0b89900e0b8a7e0b8b1e0b899e0b980e0b894e0b987e0b881e0b8aae0b8b2e0b881e0b8a500e0b8a7e0b8b1e0b899e0b884e0b8a3e0b8b4e0b8aae0b895e0b98ce0b8a1e0b8b2e0b8aae0b8a7e0b8b1e0b899e0b897e0b8b5e0b988e0b8aae0b8ade0b88700\n");
+    s.push_str("locale/uk/LC_MESSAGES/DE.mo de12049500000000170000001c000000d4000000000000008c010000000000008c010000670000008d0100002e000000f501000067000000240200000d0000008c020000100000009a02000013000000ab0200000a000000bf02000014000000ca0200000c000000df02000014000000ec02000019000000010300000a0000001b030000120000002603000007000000390300000b000000410300000c0000004d0300000d0000005a0300000e000000680300000f0000007703000019000000870300000d000000a103000015000000af030000e1010000c5030000ab000000a70500005300000053060000ab000000a70600001e000000530700002d0000007207000025000000a007000013000000c607000022000000da07000034000000fd07000016000000320800002e000000490800001f000000780800003d0000009808000011000000d608000027000000e8080000120000001009000020000000230900000c000000440900001d000000510900002a0000006f090000280000009a09000022000000c30900000037352e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f70610037352e204a616872657374616720646573204175667374616e64657320766f6d2031372e204a756e6920313935330038302e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f706100416c6c65726865696c6967656e004275c39f2d20756e642042657474616700436872697374692048696d6d656c666168727400457273746572204d61690045727374657220576569686e61636874737461670046726f6e6c656963686e616d004865696c6967652044726569204bc3b66e69676500496e7465726e6174696f6e616c65722046726175656e746167004b617266726569746167004d617269c3a42048696d6d656c6661687274004e65756a616872004f737465726d6f6e746167004f73746572736f6e6e746167005066696e6773746d6f6e746167005066696e677374736f6e6e746167005265666f726d6174696f6e7374616700546167206465722044657574736368656e2045696e686569740057656c746b696e646572746167005a77656974657220576569686e61636874737461670050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e36300a504f542d4372656174696f6e2d446174653a20323032332d30342d30342031363a31332b303330300a504f2d5265766973696f6e2d446174653a20323032342d31302d33302030323a31352b303730300a4c6173742d5472616e736c61746f723a205050737972697573203c70707379726975734070707379726975732e6465763e0a4c616e67756167652d5465616d3a20486f6c6964617973206c6f63616c697a6174696f6e207465616d0a4c616e67756167653a20756b0a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d333b20706c7572616c3d286e2531303d3d31202626206e25313030213d3131203f2030203a206e2531303e3d32202626206e2531303c3d3420262620286e253130303c3132207c7c206e253130303e313429203f2031203a2032293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e350a0037352dd182d0b020d180d196d187d0bdd0b8d186d18f20d0b2d0b8d0b7d0b2d0bed0bbd0b5d0bdd0bdd18f20d0b2d196d0b420d0bdd0b0d186d196d0bed0bdd0b0d0bb2dd181d0bed186d196d0b0d0bbd196d0b7d0bcd18320d182d0b020d0b7d0b0d0b2d0b5d180d188d0b5d0bdd0bdd18f20d094d180d183d0b3d0bed19720d181d0b2d196d182d0bed0b2d0bed19720d0b2d196d0b9d0bdd0b820d0b220d084d0b2d180d0bed0bfd1960037352dd182d0b020d180d196d187d0bdd0b8d186d18f20d09fd0bed0b2d181d182d0b0d0bdd0bdd18f203139353320d18320d0a1d185d196d0b4d0bdd196d0b920d09dd196d0bcd0b5d187d187d0b8d0bdd1960038302dd182d0b020d180d196d187d0bdd0b8d186d18f20d0b2d0b8d0b7d0b2d0bed0bbd0b5d0bdd0bdd18f20d0b2d196d0b420d0bdd0b0d186d196d0bed0bdd0b0d0bb2dd181d0bed186d196d0b0d0bbd196d0b7d0bcd18320d182d0b020d0b7d0b0d0b2d0b5d180d188d0b5d0bdd0bdd18f20d094d180d183d0b3d0bed19720d181d0b2d196d182d0bed0b2d0bed19720d0b2d196d0b9d0bdd0b820d0b220d084d0b2d180d0bed0bfd19600d094d0b5d0bdd18c20d183d181d196d18520d181d0b2d18fd182d0b8d18500d094d0b5d0bdd18c20d0bcd0bed0bbd0b8d182d0b2d0b820d182d0b020d0bfd0bed0bad0b0d18fd0bdd0bdd18f00d092d0bed0b7d0bdd0b5d181d196d0bdd0bdd18f20d093d0bed181d0bfd0bed0b4d0bdd19400d094d0b5d0bdd18c20d0bfd180d0b0d186d19600d09fd0b5d180d188d0b8d0b920d0b4d0b5d0bdd18c20d0a0d196d0b7d0b4d0b2d0b000d0a1d0b2d18fd182d0be20d0a2d196d0bbd0b020d19620d09ad180d0bed0b2d19620d0a5d180d0b8d181d182d0bed0b2d0b8d18500d091d0bed0b3d0bed18fd0b2d0bbd0b5d0bdd0bdd18f00d09cd196d0b6d0bdd0b0d180d0bed0b4d0bdd0b8d0b920d0b6d196d0bdd0bed187d0b8d0b920d0b4d0b5d0bdd18c00d0a1d182d180d0b0d181d0bdd0b020d0bfcabcd18fd182d0bdd0b8d186d18f00d092d0bdd0b5d0b1d0bed0b2d0b7d18fd182d182d18f20d09fd180d0b5d181d0b2d18fd182d0bed19720d094d196d0b2d0b820d09cd0b0d180d196d19700d09dd0bed0b2d0b8d0b920d180d196d0ba00d092d0b5d0bbd0b8d0bad0bed0b4d0bdd196d0b920d0bfd0bed0bdd0b5d0b4d196d0bbd0bed0ba00d092d0b5d0bbd0b8d0bad0b4d0b5d0bdd18c00d094d0b5d0bdd18c20d0a1d0b2d18fd182d0bed0b3d0be20d094d183d185d0b000d0a2d180d196d0b9d186d18f00d094d0b5d0bdd18c20d0a0d0b5d184d0bed180d0bcd0b0d186d196d19700d094d0b5d0bdd18c20d0bdd196d0bcd0b5d186d18cd0bad0bed19720d194d0b4d0bdd0bed181d182d19600d092d181d0b5d181d0b2d196d182d0bdd196d0b920d0b4d0b5d0bdd18c20d0b4d196d182d0b5d0b900d094d180d183d0b3d0b8d0b920d0b4d0b5d0bdd18c20d0a0d196d0b7d0b4d0b2d0b000\n");
+    s.push_str("locale/en_US/LC_MESSAGES/FR.mo de12049500000000170000001c000000d4000000000000008c010000000000008c010000180000008d01000009000000a601000017000000b001000009000000c80100000a000000d20100001a000000dd01000014000000f8010000180000000d0200001400000026020000130000003b020000100000004f0200002a000000600200000f0000008b0200000c0000009b02000013000000a802000010000000bc0200000a000000cd02000005000000d802000013000000de0200000e000000f202000009000000010300000e0000000b030000980100001a03000014000000b30400000d000000c80400000e000000d60400000d000000e50400000e000000f30400001a00000002050000150000001d0500000f000000330500000b00000043050000190000004f05000009000000690500001c000000730500000c000000900500000e0000009d0500000b000000ac0500000d000000b805000009000000c60500000d000000d00500001b000000de05000013000000fa0500000f0000000e0600000b0000001e0600000041626f6c6974696f6e206465206c276573636c61766167650041726d697374696365004172726976c3a965206465206c27c38976616e67696c6500417363656e73696f6e004173736f6d7074696f6e0046c3aa746520646520566963746f72205363686f656c636865720046c3aa7465206465206c276175746f6e6f6d69650046c3aa7465206465206c61204369746f79656e6e6574c3a90046c3aa7465206465206c6120566963746f6972650046c3aa7465206475205465727269746f6972650046c3aa7465206475205472617661696c0046c3aa7465206475205472617661696c206574206465206c6120436f6e636f72646520736f6369616c650046c3aa7465206e6174696f6e616c65004a6f7572206465206c27616e004c756e64692064652050656e746563c3b47465004c756e64692064652050c3a271756573004d692d436172c3aa6d65004e6fc3ab6c005361696e7420506965727265204368616e656c005361696e7420c3897469656e6e6500546f75737361696e740056656e6472656469207361696e740050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e32320a504f542d4372656174696f6e2d446174653a20323032332d30332d32332031343a34342b303230300a504f2d5265766973696f6e2d446174653a20323032332d30332d32332031343a34372b303230300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a20656e5f55530a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a47656e6572617465642d42793a204c696e67756120342e31352e300a582d47656e657261746f723a20506f6564697420332e322e320a0041626f6c6974696f6e206f6620536c61766572790041726d69737469636520446179004d697373696f6e6172792044617900417363656e73696f6e2044617900417373756d7074696f6e20446179004665617374206f6620566963746f72205363686f656c6368657200496e7465726e616c204175746f6e6f6d792044617900436974697a656e736869702044617900566963746f72792044617900466573746976616c206f6620746865205465727269746f7279004c61626f7220446179004c61626f7220616e6420536f6369616c20436f6e636f726420446179004e6174696f6e616c20446179004e657720596561722773204461790057686974204d6f6e64617900456173746572204d6f6e646179004d692d436172656d65004368726973746d617320446179004665617374206f66205361696e74205065746572204368616e656c005361696e74205374657068656e27732044617900416c6c205361696e7473272044617900476f6f642046726964617900\n");
+    s.push_str("locale/fr/LC_MESSAGES/FR.mo de12049500000000010000001c00000024000000000000002c000000000000002c000000940100002d0000000050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e32320a504f542d4372656174696f6e2d446174653a20323032332d30332d32332031343a34342b303230300a504f2d5265766973696f6e2d446174653a20323032332d30332d32332031343a34352b303230300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a2066720a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e203e2031293b0a47656e6572617465642d42793a204c696e67756120342e31352e300a582d47656e657261746f723a20506f6564697420332e322e320a00\nlocale/uk/LC_MESSAGES/FR.mo de12049500000000170000001c000000d4000000000000008c010000000000008c010000180000008d01000009000000a601000017000000b001000009000000c80100000a000000d20100001a000000dd01000014000000f8010000180000000d0200001400000026020000130000003b020000100000004f0200002a000000600200000f0000008b0200000c0000009b02000013000000a802000010000000bc0200000a000000cd02000005000000d802000013000000de0200000e000000f202000009000000010300000e0000000b030000dc0100001a0300002c000000f70400001b000000240500001d00000040050000250000005e0500003d0000008405000028000000c20500001b000000eb050000210000000706000019000000290600001b00000043060000130000005f060000380000007306000021000000ac06000011000000ce06000020000000e006000027000000010700001a000000290700001d000000440700002f0000006207000026000000920700001e000000b90700001f000000d80700000041626f6c6974696f6e206465206c276573636c61766167650041726d697374696365004172726976c3a965206465206c27c38976616e67696c6500417363656e73696f6e004173736f6d7074696f6e0046c3aa746520646520566963746f72205363686f656c636865720046c3aa7465206465206c276175746f6e6f6d69650046c3aa7465206465206c61204369746f79656e6e6574c3a90046c3aa7465206465206c6120566963746f6972650046c3aa7465206475205465727269746f6972650046c3aa7465206475205472617661696c0046c3aa7465206475205472617661696c206574206465206c6120436f6e636f72646520736f6369616c650046c3aa7465206e6174696f6e616c65004a6f7572206465206c27616e004c756e64692064652050656e746563c3b47465004c756e64692064652050c3a271756573004d692d436172c3aa6d65004e6fc3ab6c005361696e7420506965727265204368616e656c005361696e7420c3897469656e6e6500546f75737361696e740056656e6472656469207361696e740050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e34320a504f542d4372656174696f6e2d446174653a20323032332d30332d32332031343a34342b303230300a504f2d5265766973696f6e2d446174653a20323032342d30312d32332032303a35342b303230300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a20756b0a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d333b20706c7572616c3d286e2531303d3d31202626206e25313030213d3131203f2030203a206e2531303e3d32202626206e2531303c3d3420262620286e253130303c3132207c7c206e253130303e313429203f2031203a2032293b0a47656e6572617465642d42793a204c696e67756120342e31352e300a582d47656e657261746f723a20506f6564697420332e340a00d094d0b5d0bdd18c20d181d0bad0b0d181d183d0b2d0b0d0bdd0bdd18f20d180d0b0d0b1d181d182d0b2d0b000d094d0b5d0bdd18c20d0bfd0b5d180d0b5d0bcd0b8d180cabcd18f00d094d0b5d0bdd18c20d0bcd196d181d196d0bed0bdd0b5d180d196d0b200d092d0bed0b7d0bdd0b5d181d196d0bdd0bdd18f20d093d0bed181d0bfd0bed0b4d0bdd19400d092d0bdd0b5d0b1d0bed0b2d0b7d18fd182d182d18f20d09fd180d0b5d181d0b2d18fd182d0bed19720d094d196d0b2d0b820d09cd0b0d180d196d19700d094d0b5d0bdd18c20d092d196d0bad182d0bed180d0b020d0a8d0bed0bbd18cd188d0b5d180d0b000d094d0b5d0bdd18c20d0b0d0b2d182d0bed0bdd0bed0bcd196d19700d094d0b5d0bdd18c20d0b3d180d0bed0bcd0b0d0b4d18fd0bdd181d182d0b2d0b000d094d0b5d0bdd18c20d09fd0b5d180d0b5d0bcd0bed0b3d0b800d094d0b5d0bdd18c20d0a2d0b5d180d0b8d182d0bed180d196d19700d094d0b5d0bdd18c20d0bfd180d0b0d186d19600d094d0b5d0bdd18c20d0bfd180d0b0d186d19620d182d0b020d0a1d183d181d0bfd196d0bbd18cd0bdd0bed19720d0b7d0b3d0bed0b4d0b800d09dd0b0d186d196d0bed0bdd0b0d0bbd18cd0bdd0b520d181d0b2d18fd182d0be00d09dd0bed0b2d0b8d0b920d180d196d0ba00d094d0b5d0bdd18c20d0a1d0b2d18fd182d0bed0b3d0be20d094d183d185d0b000d092d0b5d0bbd0b8d0bad0bed0b4d0bdd196d0b920d0bfd0bed0bdd0b5d0b4d196d0bbd0bed0ba00d0a1d0b2d18fd182d0be20d09cd1962dd09ad0b0d180d0b5d0bc00d0a0d196d0b7d0b4d0b2d0be20d0a5d180d0b8d181d182d0bed0b2d0b500d094d0b5d0bdd18c20d0a1d0b2d18fd182d0bed0b3d0be20d09fcabcd194d180d0b020d0a8d0b0d0bdd0b5d0bbd18f00d094d0b5d0bdd18c20d0a1d0b2d18fd182d0bed0b3d0be20d0a1d182d0b5d184d0b0d0bdd0b000d094d0b5d0bdd18c20d183d181d196d18520d181d0b2d18fd182d0b8d18500d0a1d182d180d0b0d181d0bdd0b020d0bfcabcd18fd182d0bdd0b8d186d18f00\n");
+    s.push_str("locale/en_US/LC_MESSAGES/NL.mo de120495000000000d0000001c0000008400000000000000ec00000000000000ec0000000e000000ed0000000f000000fc000000120000000c0100000e0000001f0100000d0000002e0100000e0000003c0100000d0000004b0100000a000000590100000d000000640100000f0000007201000012000000820100000e000000950100009b010000a40100000e000000400300000d0000004f0300000b0000005d0300000d000000690300000b000000770300000d000000830300000b000000910300000a0000009d0300000e000000a803000017000000b70300000b000000cf0300000d000000db0300000042657672696a64696e677364616700456572737465204b65727374646167004565727374652050696e6b7374657264616700456572737465207061617364616700476f656465205672696a6461670048656d656c766161727473646167004b6f6e696e67696e6e65646167004b6f6e696e6773646167004e696575776a6161727364616700547765656465204b65727374646167005477656564652050696e6b737465726461670054776565646520706161736461670050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e32330a504f542d4372656174696f6e2d446174653a20323032332d30342d30392031383a31312b303330300a504f2d5265766973696f6e2d446174653a20323032332d30342d30392031383a31352b303330300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a20656e5f55530a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e322e320a004c696265726174696f6e20446179004368726973746d61732044617900576869742053756e646179004561737465722053756e64617900476f6f642046726964617900417363656e73696f6e2044617900517565656e277320446179004b696e67277320446179004e65772059656172277320446179005365636f6e6420446179206f66204368726973746d61730057686974204d6f6e64617900456173746572204d6f6e64617900\n");
+    s.push_str("locale/nl/LC_MESSAGES/NL.mo de12049500000000010000001c00000024000000000000002c000000000000002c000000980100002d0000000050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e32330a504f542d4372656174696f6e2d446174653a20323032332d30342d30392031383a31312b303330300a504f2d5265766973696f6e2d446174653a20323032332d30342d30392031383a31332b303330300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a206e6c0a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d323b20706c7572616c3d286e20213d2031293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e322e320a00\nlocale/uk/LC_MESSAGES/NL.mo de120495000000000d0000001c0000008400000000000000ec00000000000000ec0000000e000000ed0000000f000000fc000000120000000c0100000e0000001f0100000d0000002e0100000e0000003c0100000d0000004b0100000a000000590100000d000000640100000f0000007201000012000000820100000e00000095010000e1010000a40100001d000000860300001d000000a40300000c000000c203000012000000cf0300001f000000e20300002500000002040000190000002804000015000000420400001100000058040000220000006a040000200000008d04000027000000ae0400000042657672696a64696e677364616700456572737465204b65727374646167004565727374652050696e6b7374657264616700456572737465207061617364616700476f656465205672696a6461670048656d656c766161727473646167004b6f6e696e67696e6e65646167004b6f6e696e6773646167004e696575776a6161727364616700547765656465204b65727374646167005477656564652050696e6b737465726461670054776565646520706161736461670050726f6a6563742d49642d56657273696f6e3a20486f6c696461797320302e32330a504f542d4372656174696f6e2d446174653a20323032332d30342d30392031383a31312b303330300a504f2d5265766973696f6e2d446174653a20323032332d30342d30392031383a31392b303330300a4c6173742d5472616e736c61746f723a207e4a68656c6c69636f203c6a68656c6c69636f40676d61696c2e636f6d3e0a4c616e67756167652d5465616d3a20486f6c6964617973204c6f63616c697a6174696f6e205465616d0a4c616e67756167653a20756b0a4d494d452d56657273696f6e3a20312e300a436f6e74656e742d547970653a20746578742f706c61696e3b20636861727365743d5554462d380a436f6e74656e742d5472616e736665722d456e636f64696e673a20386269740a506c7572616c2d466f726d733a206e706c7572616c733d333b20706c7572616c3d286e2531303d3d31202626206e25313030213d3131203f2030203a206e2531303e3d32202626206e2531303c3d3420262620286e253130303c3132207c7c206e253130303e313429203f2031203a2032293b0a47656e6572617465642d42793a207079676574746578742e707920312e350a582d47656e657261746f723a20506f6564697420332e322e320a00d094d0b5d0bdd18c20d0b2d0b8d0b7d0b2d0bed0bbd0b5d0bdd0bdd18f00d0a0d196d0b7d0b4d0b2d0be20d0a5d180d0b8d181d182d0bed0b2d0b500d0a2d180d196d0b9d186d18f00d092d0b5d0bbd0b8d0bad0b4d0b5d0bdd18c00d0a1d182d180d0b0d181d0bdd0b020d0bfcabcd18fd182d0bdd0b8d186d18f00d092d0bed0b7d0bdd0b5d181d196d0bdd0bdd18f20d093d0bed181d0bfd0bed0b4d0bdd19400d094d0b5d0bdd18c20d0bad0bed180d0bed0bbd0b5d0b2d0b800d094d0b5d0bdd18c20d0bad0bed180d0bed0bbd18f00d09dd0bed0b2d0b8d0b920d180d196d0ba00d094d180d183d0b3d0b8d0b920d0b4d0b5d0bdd18c20d0a0d196d0b7d0b4d0b2d0b000d094d0b5d0bdd18c20d0a1d0b2d18fd182d0bed0b3d0be20d094d183d185d0b000d092d0b5d0bbd0b8d0bad0bed0b4d0bdd196d0b920d0bfd0bed0bdd0b5d0b4d196d0bbd0bed0ba00\n");
+    s
+}
+
+fn static_text() -> String {
+    let mut s = String.new();
+    s.push_str("47427c7370656369616c5f7075626c69635f686f6c69646179737c313937377c367c377c53696c766572204a7562696c6565206f6620456c697a6162657468204949\n47427c7370656369616c5f7075626c69635f686f6c69646179737c313938317c377c32397c57656464696e67206f6620436861726c657320616e64204469616e61\n47427c7370656369616c5f7075626c69635f686f6c69646179737c313939397c31327c33317c4d696c6c656e6e69756d2043656c6562726174696f6e73\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323030327c367c337c476f6c64656e204a7562696c6565206f6620456c697a6162657468204949\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323031317c347c32397c57656464696e67206f662057696c6c69616d20616e6420436174686572696e65\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323031327c367c357c4469616d6f6e64204a7562696c6565206f6620456c697a6162657468204949\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323032327c367c337c506c6174696e756d204a7562696c6565206f6620456c697a6162657468204949\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323032327c397c31397c53746174652046756e6572616c206f6620517565656e20456c697a6162657468204949\n47427c7370656369616c5f7075626c69635f686f6c69646179737c323032337c357c387c436f726f6e6174696f6e206f6620436861726c657320494949\n44457c7370656369616c5f7075626c69635f686f6c69646179737c323031377c31307c33317c5265666f726d6174696f6e73746167\n44457c7370656369616c5f62655f7075626c69635f686f6c69646179737c323032307c357c387c37352e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f7061\n44457c7370656369616c5f62655f7075626c69635f686f6c69646179737c323032357c357c387c38302e204a61687265737461672064657220426566726569756e6720766f6d204e6174696f6e616c736f7a69616c69736d757320756e6420646572204265656e646967756e6720646573205a77656974656e2057656c746b726965677320696e204575726f7061\n44457c7370656369616c5f62655f7075626c69635f686f6c69646179737c323032387c367c31377c37352e204a616872657374616720646573204175667374616e64657320766f6d2031372e204a756e692031393533\n");
+    s.push_str("4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838387c337c31327c426c697a7a617264206f662031383838\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838387c337c31337c426c697a7a617264206f662031383838\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838387c31317c33307c5468616e6b73676976696e67204672696461792031383838\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838397c347c32397c43656e74656e6e69616c206f662057617368696e67746f6e20496e61756775726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838397c347c33307c43656e74656e6e69616c206f662057617368696e67746f6e20496e61756775726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313838397c357c317c43656e74656e6e69616c206f662057617368696e67746f6e20496e61756775726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839327c31307c31327c436f6c756d6269616e2043656c6562726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839327c31307c32317c436f6c756d6269616e2043656c6562726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839337c347c32377c436f6c756d6269616e2043656c6562726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839377c347c32377c4772616e742773204269727468646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839387c357c347c4368617274657220446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839397c357c32397c4d6f6e646179206265666f7265204465636f726174696f6e20446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839397c377c337c4d6f6e646179206265666f726520496e646570656e64656e636520446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313839397c397c32397c41646d6972616c2044657765792043656c6562726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313930307c31327c32347c4368726973746d617320457665\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313930317c377c357c46726964617920616674657220496e646570656e64656e636520446179\n");
+    s.push_str("4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313930317c397c31397c46756e6572616c206f6620507265736964656e74204d634b696e6c6579\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313930337c347c32327c4f70656e696e67206f66206e6577204e595345206275696c64696e67\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931377c367c357c447261667420526567697374726174696f6e20446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931387c317c32387c486561746c65737320446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931387c327c347c486561746c65737320446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931387c327c31317c486561746c65737320446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931387c397c31327c447261667420526567697374726174696f6e20446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931387c31317c31317c41726d69737469636520446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931397c337c32357c486f6d65636f6d696e672044617920666f722032377468204469766973696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931397c357c367c5061726164652044617920666f722037377468204469766973696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313931397c397c31307c52657475726e206f662047656e6572616c205065727368696e67\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313932337c387c337c4465617468206f6620507265736964656e742057617272656e20472e2048617264696e67\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313932337c387c31307c46756e6572616c206f6620507265736964656e742057617272656e20472e2048617264696e67\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313932377c367c31337c50617261646520666f7220436f6c6f6e656c20436861726c6573204c696e646265726768\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313932397c31317c317c436174636820557020446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313932397c31317c32397c436174636820557020446179\n");
+    s.push_str("4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c367c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c377c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c387c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c397c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c31307c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c31337c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313933337c337c31347c5370656369616c2042616e6b20486f6c69646179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313934357c387c31357c562d4a2044617920285757494929\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313934357c387c31367c562d4a2044617920285757494929\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313934357c31327c32347c4368726973746d617320457665\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313935347c31327c32347c4368726973746d617320457665\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313935367c31327c32347c4368726973746d617320457665\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313935387c31327c32367c446179206166746572204368726973746d6173\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936317c357c32397c446179206265666f7265204465636f726174696f6e20446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936337c31317c32357c46756e6572616c206f6620507265736964656e74204a6f686e20462e204b656e6e656479\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936357c31327c32347c4368726973746d617320457665\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936387c347c397c446179206f66204d6f75726e696e6720666f72204d617274696e204c7574686572204b696e67204a722e\n");
+    s.push_str("4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936387c377c357c44617920616674657220496e646570656e64656e636520446179\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936397c327c31307c486561767920536e6f77\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936397c337c33317c46756e6572616c206f6620507265736964656e742044776967687420442e20456973656e686f776572\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313936397c377c32317c4e6174696f6e616c2050617274696369706174696f6e20696e204c756e6172204578706c6f726174696f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313937327c31327c32387c46756e6572616c20666f7220507265736964656e7420486172727920532e205472756d616e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313937337c317c32357c46756e6572616c20666f7220507265736964656e74204c796e646f6e20422e204a6f686e736f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313937377c377c31347c426c61636b6f757420696e204e657720596f726b2043697479\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313938357c397c32377c487572726963616e6520476c6f726961\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c313939347c347c32377c46756e6572616c20666f7220507265736964656e742052696368617264204d2e204e69786f6e\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030317c397c31317c436c6f73656420666f7220536570742031312c20323030312041747461636b73\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030317c397c31327c436c6f73656420666f7220536570742031312c20323030312041747461636b73\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030317c397c31337c436c6f73656420666f7220536570742031312c20323030312041747461636b73\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030317c397c31347c436c6f73656420666f7220536570742031312c20323030312041747461636b73\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030347c367c31317c446179206f66204d6f75726e696e6720666f7220507265736964656e7420526f6e616c6420572e2052656167616e\n");
+    s.push_str("4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323030377c317c327c446179206f66204d6f75726e696e6720666f7220507265736964656e7420476572616c6420522e20466f7264\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323031327c31307c32397c487572726963616e652053616e6479\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323031327c31307c33307c487572726963616e652053616e6479\n4e5953457c7370656369616c5f7075626c69635f686f6c69646179737c323031387c31327c357c446179206f66204d6f75726e696e6720666f7220507265736964656e742047656f72676520482e572e2042757368\n4543427c7370656369616c5f7075626c69635f686f6c69646179737c323030307c31327c33317c4164646974696f6e616c20636c6f73696e6720646179\n");
+    s
+}
