@@ -37273,7 +37273,8 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
 
     // Both SSO legs of the AOT lane. Skips gracefully when the runtime
     // archive is absent and the link fails, like every other build-and-run
-    // fixture here.
+    // fixture here. `KARAC_SSO` is the legacy backend's, so the build asks
+    // for it: `karac build` runs v2 by default (M3 item 1).
     let mut aot_legs_run = 0;
     for sso in ["0", "1"] {
         let exe = tmp.join("envffi");
@@ -37281,7 +37282,7 @@ fn test_sso_inline_string_survives_the_env_ffi_boundary() {
         let built = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_SSO", sso)
-            .args(["build", "envffi.kara"])
+            .args(["build", "--legacy", "envffi.kara"])
             .output();
         if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
             continue;
@@ -37416,7 +37417,7 @@ fn test_sso_string_slice_routes_match_the_interpreter() {
         let built = Command::new(env!("CARGO_BIN_EXE_karac"))
             .current_dir(&tmp)
             .env("KARAC_SSO", sso)
-            .args(["build", "slice.kara"])
+            .args(["build", "--legacy", "slice.kara"])
             .output();
         if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
             continue;
@@ -37496,7 +37497,7 @@ fn test_sso_string_slice_failure_reports_the_actual_range() {
             let built = Command::new(env!("CARGO_BIN_EXE_karac"))
                 .current_dir(&tmp)
                 .env("KARAC_SSO", sso)
-                .args(["build", "fail.kara"])
+                .args(["build", "--legacy", "fail.kara"])
                 .output();
             if !built.map(|o| o.status.success()).unwrap_or(false) || !exe.exists() {
                 continue;
