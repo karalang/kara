@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9401 / 9562 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7683 / 7812 = 98.3%.
-- Every classified non-deferred program (context): 15730 / 16947 = 92.8%.
-- Bench variants (outside the gate): 218 / 879 = 24.8%; timeouts 601.
+- Every classified non-deferred program (context): 15731 / 16947 = 92.8%.
+- Bench variants (outside the gate): 219 / 879 = 24.9%; timeouts 601.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5289 / 5411 = 97.7%; failing mir-gap 47, check-refuses 41, e-not-refused 28, e-differs 4, b-fix-incomplete 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -62,7 +62,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3756): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3757): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -3811,6 +3811,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/901-1000/902-numbers-at-most-n-given-digit-set/numbers_at_most_n_dp`
 - `katas/901-1000/902-numbers-at-most-n-given-digit-set/numbers_at_most_n_recursive`
 - `katas/901-1000/902-numbers-at-most-n-given-digit-set/numbers_at_most_n_search`
+- `katas/901-1000/903-valid-permutations-for-di-sequence/bench/num_perms_di_sequence`
 - `katas/901-1000/903-valid-permutations-for-di-sequence/differential`
 - `katas/901-1000/903-valid-permutations-for-di-sequence/num_perms_di_sequence`
 - `katas/901-1000/903-valid-permutations-for-di-sequence/num_perms_di_sequence_cubic`
