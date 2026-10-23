@@ -1,0 +1,107 @@
+// LeetCode #917: Reverse Only Letters -- the letters through a stack.
+//
+// Push every letter of the string on a stack, in order. Then build the
+// answer from the front: a letter is replaced by whatever the stack pops,
+// which hands the letters back last first, and anything else is copied
+// through. O(n) time and space.
+
+fn reverse_only_letters(s: String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            stack.push(c);
+        }
+    }
+    let mut out = String.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            out.push(stack.pop().unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_letter(b: u8) -> bool {
+    (b as char).is_ascii_alphabetic()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    println(f"\"{s}\": \"{reverse_only_letters(s)}\"");
+}
+
+// A string of `len` characters from ASCII 33 to 122, leaving out '"'
+// and '\', as the constraints allow; `letters` in 100 of them are
+// letters, half each case.
+fn random_string(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        if next_random(mut seed) % 100 < letters {
+            let c = next_random(mut seed) % 26;
+            if next_random(mut seed) % 2 == 0 {
+                s.push((97 + c) as u8 as char);
+            } else {
+                s.push((65 + c) as u8 as char);
+            }
+        } else {
+            let mut b = 34;
+            while b == 34 or b == 92 {
+                b = 33 + next_random(mut seed) % 90;
+            }
+            s.push(b as u8 as char);
+        }
+    }
+    s
+}
+
+fn fold(check: i64, s: String) -> i64 {
+    let mut h = check;
+    for b in s.bytes() {
+        h = (h * 31 + b as i64) % 1000000007;
+    }
+    (h * 31 + 7) % 1000000007
+}
+
+fn main() {
+    show("ab-cd");
+    show("a-bC-dEf-ghIj");
+    show("Test1ng-Leet=code-Q!");
+    show("7_28]");
+    show("a");
+    show("?");
+    show("z<*zj");
+    show("Ab");
+    show("[a]");
+    show("aZ09^_`{zA");
+    // random strings of 1 to 100 characters, some letters to all letters
+    let mut seed = 917;
+    let mut letters = 0;
+    let mut check = 0;
+    for c in 0..500 {
+        let len = 1 + next_random(mut seed) % 100;
+        let s = random_string(mut seed, len, c % 101);
+        let r = reverse_only_letters(s);
+        for b in r.bytes() {
+            if is_letter(b) {
+                letters += 1;
+            }
+        }
+        check = fold(check, r);
+    }
+    println(f"500 strings: {letters} letters, checksum {check}");
+    // the longest: 100 characters, 10000 times over
+    let mut check = 0;
+    for c in 0..10000 {
+        let s = random_string(mut seed, 100, c % 101);
+        check = fold(check, reverse_only_letters(s));
+    }
+    println(f"10000 strings of 100: checksum {check}");
+}

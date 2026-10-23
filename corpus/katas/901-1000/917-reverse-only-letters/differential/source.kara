@@ -1,0 +1,339 @@
+// LeetCode #917: Reverse Only Letters -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: given a string s, reverse the string according to the
+// following rules: all the characters that are not English letters
+// remain in the same position, and all the English letters (lowercase or
+// uppercase) should be reversed. Return s after reversing it.
+
+// ---- the ★ arm: two pointers swapping letters -----------------------------
+fn star_is_letter(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z')
+}
+
+fn star_reverse_only_letters(s: String) -> String {
+    let mut bytes: Vec[u8] = s.bytes().to_vec();
+    let mut i = 0;
+    let mut j = bytes.len();
+    while i < j {
+        if not star_is_letter(bytes[i]) {
+            i += 1;
+        } else if not star_is_letter(bytes[j - 1]) {
+            j -= 1;
+        } else {
+            let keep = bytes[i];
+            bytes[i] = bytes[j - 1];
+            bytes[j - 1] = keep;
+            i += 1;
+            j -= 1;
+        }
+    }
+    let mut out = String.new();
+    for b in bytes.iter() {
+        out.push(*b as char);
+    }
+    out
+}
+
+// ---- the stack arm: the letters through a stack ---------------------------
+fn stack_reverse_only_letters(s: String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            stack.push(c);
+        }
+    }
+    let mut out = String.new();
+    for c in s.chars() {
+        if c.is_ascii_alphabetic() {
+            out.push(stack.pop().unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn stack_is_letter(b: u8) -> bool {
+    (b as char).is_ascii_alphabetic()
+}
+
+// ---- the positions arm: the letters' positions mirrored -------------------
+fn positions_is_letter(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z')
+}
+
+fn positions_reverse_only_letters(s: String) -> String {
+    let bytes: Vec[u8] = s.bytes().to_vec();
+    let mut at: Vec[i64] = Vec.new();
+    for i in 0..bytes.len() {
+        if positions_is_letter(bytes[i]) {
+            at.push(i);
+        }
+    }
+    let mut out_bytes = bytes.clone();
+    let k = at.len();
+    for t in 0..k {
+        out_bytes[at[t]] = bytes[at[k - 1 - t]];
+    }
+    String.from_utf8(out_bytes).unwrap()
+}
+
+// ---- the backward arm: a reader walking backwards -------------------------
+fn backward_is_letter(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z')
+}
+
+fn backward_reverse_only_letters(s: String) -> String {
+    let bytes = s.bytes();
+    let mut out = String.new();
+    let mut j = bytes.len();
+    for i in 0..bytes.len() {
+        if backward_is_letter(bytes[i]) {
+            j -= 1;
+            while not backward_is_letter(bytes[j]) {
+                j -= 1;
+            }
+            out.push(bytes[j] as char);
+        } else {
+            out.push(bytes[i] as char);
+        }
+    }
+    out
+}
+
+// ---- the recursive arm: swapping by recursion -----------------------------
+fn recursive_is_letter(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z')
+}
+
+fn recursive_swap_letters(bytes: mut ref Vec[u8], i: i64, j: i64) {
+    if j - i < 2 {
+        return;
+    }
+    if not recursive_is_letter(bytes[i]) {
+        recursive_swap_letters(mut bytes, i + 1, j);
+    } else if not recursive_is_letter(bytes[j - 1]) {
+        recursive_swap_letters(mut bytes, i, j - 1);
+    } else {
+        bytes.swap(i, j - 1);
+        recursive_swap_letters(mut bytes, i + 1, j - 1);
+    }
+}
+
+fn recursive_reverse_only_letters(s: String) -> String {
+    let mut bytes: Vec[u8] = s.bytes().to_vec();
+    let n = bytes.len();
+    recursive_swap_letters(mut bytes, 0, n);
+    String.from_utf8(bytes).unwrap()
+}
+
+fn arm(x: i64, s: String) -> String {
+    if x == 0 {
+        star_reverse_only_letters(s)
+    } else if x == 1 {
+        stack_reverse_only_letters(s)
+    } else if x == 2 {
+        positions_reverse_only_letters(s)
+    } else if x == 3 {
+        backward_reverse_only_letters(s)
+    } else {
+        recursive_reverse_only_letters(s)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+fn letter(b: u8) -> bool {
+    (b >= 97 and b <= 122) or (b >= 65 and b <= 90)
+}
+
+// r answers s when it is as long, every character of s that is not an
+// English letter stands at the same place in r, and the letters of r,
+// read in order, are the letters of s read from the end
+fn answers(s: String, r: String) -> bool {
+    let a: Vec[u8] = s.bytes().to_vec();
+    let b: Vec[u8] = r.bytes().to_vec();
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if not letter(a[i]) and b[i] != a[i] {
+            return false;
+        }
+        if letter(a[i]) != letter(b[i]) {
+            return false;
+        }
+    }
+    let mut forward: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if letter(b[i]) {
+            forward.push(b[i]);
+        }
+    }
+    let mut backward: Vec[u8] = Vec.new();
+    let mut i = a.len();
+    while i > 0 {
+        i -= 1;
+        if letter(a[i]) {
+            backward.push(a[i]);
+        }
+    }
+    forward == backward
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a character from ASCII 33 to 122 other than '"' and '\'
+fn random_char(seed: mut ref i64) -> u8 {
+    let mut b = 34;
+    while b == 34 or b == 92 {
+        b = 33 + next_random(mut seed) % 90;
+    }
+    b as u8
+}
+
+fn from_bytes(bytes: Vec[u8]) -> String {
+    let mut s = String.new();
+    for b in bytes.iter() {
+        s.push(*b as char);
+    }
+    s
+}
+
+// every letter's case swapped
+fn case_swapped(s: String) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        if b >= 97 and b <= 122 {
+            out.push(b - 32);
+        } else if b >= 65 and b <= 90 {
+            out.push(b + 32);
+        } else {
+            out.push(b);
+        }
+    }
+    from_bytes(out)
+}
+
+fn reversed(s: String) -> String {
+    let mut out: Vec[u8] = s.bytes().to_vec();
+    out.reverse();
+    from_bytes(out)
+}
+
+// `c` put in at index `p`
+fn inserted(s: String, p: i64, c: u8) -> String {
+    let mut out: Vec[u8] = s.bytes().to_vec();
+    out.insert(p, c);
+    from_bytes(out)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one string over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, small: bool) {
+    let mut answers_by: Vec[String] = Vec.new();
+    for x in 0..5 {
+        answers_by.push(arm(x, s));
+    }
+    // P5: a character that is not a letter put in at random
+    let mut c = random_char(mut seed);
+    while letter(c) {
+        c = random_char(mut seed);
+    }
+    let p = next_random(mut seed) % (s.len() + 1);
+    let longer = inserted(s, p, c);
+    for x in 0..5 {
+        let got = answers_by[x].clone();
+        // P1: non-letters stay, letters read backwards
+        if small {
+            check(mut t, 1, answers(s, got));
+        }
+        // P2: done twice, nothing changed
+        check(mut t, 2, arm(x, got) == s);
+        // P3: every letter's case swapped first swaps it in the answer
+        check(mut t, 3, arm(x, case_swapped(s)) == case_swapped(got));
+        // P4: the string reversed first reverses the answer
+        check(mut t, 4, arm(x, reversed(s)) == reversed(got));
+        // P5: the inserted non-letter just stands in the answer
+        check(mut t, 5, arm(x, longer) == inserted(got, p, c));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers_by[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 917;
+    let mut strings = 0;
+    let mut chars = 0;
+    let mut letters = 0;
+    // 1 to 8 characters from a, z, A, Z and the four characters just
+    // outside the letter ranges, checked against the statement; then 1 to
+    // 100 from every allowed character, from no letters to all letters
+    let edge: Vec[u8] = vec![b'a', b'z', b'A', b'Z', b'@', b'[', b'`', b'{'];
+    for c in 0..3200 {
+        let small = c < 3000;
+        let mut bytes: Vec[u8] = Vec.new();
+        if small {
+            let len = 1 + next_random(mut seed) % 8;
+            for _ in 0..len {
+                bytes.push(edge[next_random(mut seed) % 8]);
+            }
+        } else {
+            let len = 1 + next_random(mut seed) % 100;
+            let share = (c - 3000) % 101;
+            for _ in 0..len {
+                if next_random(mut seed) % 100 < share {
+                    let k = next_random(mut seed) % 52;
+                    bytes.push(if k < 26 { (97 + k) as u8 } else { (65 + k - 26) as u8 });
+                } else {
+                    bytes.push(random_char(mut seed));
+                }
+            }
+        }
+        let s = from_bytes(bytes);
+        strings += 1;
+        chars += s.len();
+        for b in s.bytes() {
+            if letter(b) {
+                letters += 1;
+            }
+        }
+        properties(mut t, mut seed, s, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{strings} strings, {chars} characters, {letters} letters, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
