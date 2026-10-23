@@ -1,0 +1,130 @@
+// LeetCode #890: Find and Replace Pattern -- two maps per word.
+//
+// A word matches when some one-to-one renaming of letters turns the
+// pattern into it. Walk the pattern and the word together, keeping the
+// letter each pattern letter has become and the pattern letter each word
+// letter came from; a clash with either map rules the word out. The
+// words that match are kept in their order. O(total letters).
+
+fn find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    let mut to: Map[u8, u8] = Map.new();
+    let mut from: Map[u8, u8] = Map.new();
+    for i in 0..p.len() {
+        if to.contains_key(p[i]) {
+            if to[p[i]] != w[i] {
+                return false;
+            }
+        } else {
+            to.insert(p[i], w[i]);
+        }
+        if from.contains_key(w[i]) {
+            if from[w[i]] != p[i] {
+                return false;
+            }
+        } else {
+            from.insert(w[i], p[i]);
+        }
+    }
+    true
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(words: Vec[String], pattern: String) {
+    let found = find_and_replace_pattern(words, pattern);
+    println(f"words = {words}, pattern = {pattern} -> {found}");
+}
+
+fn strings(list: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in list.iter() {
+        out.push(s.to_string());
+    }
+    out
+}
+
+// a random word of `len` letters from the first `letters` of the alphabet
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// the pattern with its letters renamed by a random one-to-one map, or, half
+// the time, by one that sends two letters to the same one
+fn renamed(seed: mut ref i64, pattern: String) -> String {
+    let mut map: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        map.push(c);
+    }
+    for i in 1..26 {
+        let j = next_random(mut seed) % (i + 1);
+        map.swap(i, j);
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let a = next_random(mut seed) % 26;
+        let b = next_random(mut seed) % 26;
+        map[a] = map[b];
+    }
+    let mut w = String.new();
+    for b in pattern.bytes() {
+        w.push((97 + map[(b - 97) as i64]) as u8 as char);
+    }
+    w
+}
+
+fn main() {
+    show(strings(["abc", "deq", "mee", "aqq", "dkd", "ccc"]), "abb".to_string());
+    show(strings(["a", "b", "c"]), "a".to_string());
+    show(strings(["ab", "ba", "aa", "bb", "zy"]), "xy".to_string());
+    show(strings(["aa", "bb", "ab"]), "cc".to_string());
+    show(strings(["abab", "baba", "abba", "cdcd", "ccdd"]), "xyxy".to_string());
+    show(strings(["abcdefghijklmnopqrst", "bcdefghijklmnopqrsta", "aacdefghijklmnopqrst"]), "tsrqponmlkjihgfedcba".to_string());
+    // random cases of LeetCode's sizes: up to 50 words of up to 20
+    // letters, from alphabets of 2 to 26 letters; half the words are the
+    // pattern renamed
+    let mut seed = 890;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let len = 1 + next_random(mut seed) % 20;
+        let letters = 2 + next_random(mut seed) % 25;
+        let pattern = random_word(mut seed, len, letters);
+        let count = 1 + next_random(mut seed) % 50;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            if next_random(mut seed) % 2 == 0 {
+                words.push(renamed(mut seed, pattern));
+            } else {
+                words.push(random_word(mut seed, len, letters));
+            }
+        }
+        let kept = find_and_replace_pattern(words, pattern);
+        found += kept.len();
+        for w in kept.iter() {
+            for b in w.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"3000 cases of up to 50 words of up to 20 letters: {found} match, checksum {check}");
+}

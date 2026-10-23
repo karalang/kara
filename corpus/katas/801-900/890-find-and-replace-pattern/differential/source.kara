@@ -1,0 +1,404 @@
+// LeetCode #890: Find and Replace Pattern -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given a list of strings `words` and a string `pattern`,
+// return the words that match the pattern, in any order. A word matches
+// if there is a permutation of letters p so that replacing every letter x
+// of the pattern with p(x) gives the word. The arms keep the words in
+// their order.
+
+// ---- the ★ arm: two maps per word -----------------------------------------
+fn star_find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if star_matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn star_matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    let mut to: Map[u8, u8] = Map.new();
+    let mut from: Map[u8, u8] = Map.new();
+    for i in 0..p.len() {
+        if to.contains_key(p[i]) {
+            if to[p[i]] != w[i] {
+                return false;
+            }
+        } else {
+            to.insert(p[i], w[i]);
+        }
+        if from.contains_key(w[i]) {
+            if from[w[i]] != p[i] {
+                return false;
+            }
+        } else {
+            from.insert(w[i], p[i]);
+        }
+    }
+    true
+}
+
+// ---- the shape arm: the shape of each word --------------------------------
+fn shape_find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if shape_matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+// each letter replaced by the index of its first appearance
+fn shape_shape(s: String) -> Vec[i64] {
+    let b = s.bytes();
+    let mut first: Vec[i64] = Vec.filled(26, -1);
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..b.len() {
+        let c = (b[i] - 97) as i64;
+        if first[c] < 0 {
+            first[c] = i;
+        }
+        out.push(first[c]);
+    }
+    out
+}
+
+fn shape_matches(word: String, pattern: String) -> bool {
+    shape_shape(word) == shape_shape(pattern)
+}
+
+// ---- the onemap arm: one map and a count ----------------------------------
+fn onemap_find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if onemap_matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn onemap_matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    let mut to: Map[u8, u8] = Map.new();
+    let mut used: Set[u8] = Set.new();
+    for i in 0..p.len() {
+        if to.contains_key(p[i]) {
+            if to[p[i]] != w[i] {
+                return false;
+            }
+        } else {
+            to.insert(p[i], w[i]);
+            used.insert(w[i]);
+        }
+    }
+    used.len() == to.len()
+}
+
+// ---- the table arm: two tables of 26 letters ------------------------------
+fn table_find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if table_matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn table_matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    let mut to: Vec[i64] = Vec.filled(26, -1);
+    let mut from: Vec[i64] = Vec.filled(26, -1);
+    for i in 0..p.len() {
+        let a = (p[i] - 97) as i64;
+        let b = (w[i] - 97) as i64;
+        if to[a] < 0 and from[b] < 0 {
+            to[a] = b;
+            from[b] = a;
+        } else if to[a] != b or from[b] != a {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the pairs arm: every pair of positions -------------------------------
+fn pairs_find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if pairs_matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn pairs_matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    for i in 0..p.len() {
+        for j in i + 1..p.len() {
+            if (p[i] == p[j]) != (w[i] == w[j]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn arm(x: i64, words: Vec[String], pattern: String) -> Vec[String] {
+    match x {
+        0 => star_find_and_replace_pattern(words, pattern),
+        1 => shape_find_and_replace_pattern(words, pattern),
+        2 => onemap_find_and_replace_pattern(words, pattern),
+        3 => table_find_and_replace_pattern(words, pattern),
+        _ => pairs_find_and_replace_pattern(words, pattern),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// a permutation of letters searched for: each letter of the pattern, in
+// order of first appearance, sent to each letter not yet taken, from the
+// first `letters` of the alphabet (every word here is drawn from them, so
+// no other letter can appear in a match), and the pattern rewritten by
+// each assignment compared with the word
+fn literal(words: Vec[String], pattern: String, letters: i64) -> Vec[String] {
+    let mut distinct: Vec[u8] = Vec.new();
+    for b in pattern.bytes() {
+        if not distinct.contains(b) {
+            distinct.push(b);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        let mut image: Vec[i64] = Vec.filled(26, -1);
+        let mut taken: Vec[bool] = Vec.filled(26, false);
+        if assign(word, pattern, distinct, 0, letters, mut image, mut taken) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn assign(word: String, pattern: String, distinct: Vec[u8], k: i64, letters: i64, image: mut ref Vec[i64], taken: mut ref Vec[bool]) -> bool {
+    if k == distinct.len() {
+        let mut rewritten = String.new();
+        for b in pattern.bytes() {
+            rewritten.push((97 + image[(b - 97) as i64]) as u8 as char);
+        }
+        return rewritten == word;
+    }
+    for c in 0..letters {
+        if not taken[c] {
+            taken[c] = true;
+            image[(distinct[k] - 97) as i64] = c;
+            let found = assign(word, pattern, distinct, k + 1, letters, mut image, mut taken);
+            taken[c] = false;
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// a random permutation of the 26 letters, or, with `merge`, one with two
+// letters sent to the same one
+fn letter_map(seed: mut ref i64, merge: bool) -> Vec[i64] {
+    let mut map: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        map.push(c);
+    }
+    for i in 1..26 {
+        let j = next_random(mut seed) % (i + 1);
+        map.swap(i, j);
+    }
+    if merge {
+        let a = next_random(mut seed) % 26;
+        let b = next_random(mut seed) % 26;
+        map[a] = map[b];
+    }
+    map
+}
+
+fn apply(map: Vec[i64], s: String) -> String {
+    let mut w = String.new();
+    for b in s.bytes() {
+        w.push((97 + map[(b - 97) as i64]) as u8 as char);
+    }
+    w
+}
+
+// `part` is `whole` with some entries left out, in the same order
+fn subsequence(part: Vec[String], whole: Vec[String]) -> bool {
+    let mut j = 0;
+    for i in 0..whole.len() {
+        if j < part.len() and part[j] == whole[i] {
+            j += 1;
+        }
+    }
+    j == part.len()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the number of words the ★ arm keeps.
+fn properties(t: mut ref Tally, seed: mut ref i64, words: Vec[String], pattern: String, letters: i64, small: bool) -> i64 {
+    let want = if small { literal(words, pattern, letters) } else { Vec.new() };
+    let mut with_pattern = words.clone();
+    with_pattern.push(pattern.clone());
+    let rename = letter_map(mut seed, false);
+    let other = letter_map(mut seed, false);
+    let mut renamed_words: Vec[String] = Vec.new();
+    let mut reversed: Vec[String] = Vec.new();
+    let mut doubled: Vec[String] = Vec.new();
+    for i in 0..words.len() {
+        renamed_words.push(apply(other, words[i]));
+        reversed.push(words[words.len() - 1 - i].clone());
+        doubled.push(words[i].clone());
+        doubled.push(words[i].clone());
+    }
+    let mut answers: Vec[Vec[String]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, words, pattern));
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's words
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: some of the words, in their order, and the pattern itself
+        // kept when it is one of them
+        let last = arm(x, with_pattern, pattern);
+        check(mut t, 2, subsequence(got, words) and last.len() > 0 and last[last.len() - 1] == pattern);
+        // P3: a word matches the pattern exactly when the pattern matches
+        // the word
+        let mut symmetric = true;
+        let mut kept = 0;
+        for i in 0..words.len() {
+            let mut one: Vec[String] = Vec.new();
+            one.push(pattern.clone());
+            let back = arm(x, one, words[i]).len() == 1;
+            let forward = kept < got.len() and got[kept] == words[i];
+            if forward {
+                kept += 1;
+            }
+            if back != forward {
+                symmetric = false;
+            }
+        }
+        check(mut t, 3, symmetric);
+        // P4: the pattern's letters renamed one-to-one keep the same words,
+        // and so do the words' letters renamed
+        let same_pattern = arm(x, words, apply(rename, pattern)) == got;
+        let mut renamed_got: Vec[String] = Vec.new();
+        for w in got.iter() {
+            renamed_got.push(apply(other, w));
+        }
+        check(mut t, 4, same_pattern and arm(x, renamed_words, pattern) == renamed_got);
+        // P5: the words reversed keep the same words reversed, and each word
+        // given twice is kept twice
+        let back = arm(x, reversed, pattern);
+        let mut back_ok = back.len() == got.len();
+        if back_ok {
+            for i in 0..got.len() {
+                if back[i] != got[got.len() - 1 - i] {
+                    back_ok = false;
+                }
+            }
+        }
+        check(mut t, 5, back_ok and arm(x, doubled, pattern).len() == 2 * got.len());
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0].len()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 890;
+    // up to 8 words of up to 6 letters from 2 to 4 letters of the
+    // alphabet against the statement; then LeetCode's sizes, 50 words of
+    // up to 20 letters; half the words the pattern renamed, half of those
+    // by a map that merges two letters
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 20 };
+        let letters = if small { 2 + next_random(mut seed) % 3 } else { 2 + next_random(mut seed) % 25 };
+        let count = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 50 };
+        let pattern = random_word(mut seed, len, letters);
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            if next_random(mut seed) % 2 == 0 {
+                let map = letter_map(mut seed, next_random(mut seed) % 2 == 0);
+                let mut w = String.new();
+                for b in pattern.bytes() {
+                    // kept within the first `letters` letters, so that the
+                    // statement's search covers every letter a word uses
+                    w.push((97 + map[(b - 97) as i64] % letters) as u8 as char);
+                }
+                words.push(w);
+            } else {
+                words.push(random_word(mut seed, len, letters));
+            }
+        }
+        cases += 1;
+        total += properties(mut t, mut seed, words, pattern, letters, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {total} words kept in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,7 @@
+words = [abc, deq, mee, aqq, dkd, ccc], pattern = abb -> [mee, aqq]
+words = [a, b, c], pattern = a -> [a, b, c]
+words = [ab, ba, aa, bb, zy], pattern = xy -> [ab, ba, zy]
+words = [aa, bb, ab], pattern = cc -> [aa, bb]
+words = [abab, baba, abba, cdcd, ccdd], pattern = xyxy -> [abab, baba, cdcd]
+words = [abcdefghijklmnopqrst, bcdefghijklmnopqrsta, aacdefghijklmnopqrst], pattern = tsrqponmlkjihgfedcba -> [abcdefghijklmnopqrst, bcdefghijklmnopqrsta]
+3000 cases of up to 50 words of up to 20 letters: 42301 match, checksum 538094985

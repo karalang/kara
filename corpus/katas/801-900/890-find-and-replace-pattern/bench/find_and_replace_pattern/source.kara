@@ -1,0 +1,56 @@
+// LeetCode #890 bench: the table arm (two tables of 26 letters), its
+// tables fixed arrays, with every one of 6000 words of 10 letters taken in
+// turn as the pattern for all 6000.
+
+fn find_and_replace_pattern(words: Vec[String], pattern: String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words.iter() {
+        if matches(word, pattern) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn matches(word: String, pattern: String) -> bool {
+    let w = word.bytes();
+    let p = pattern.bytes();
+    let mut to = [-1; 26];
+    let mut from = [-1; 26];
+    for i in 0..p.len() {
+        let a = (p[i] - 97) as i64;
+        let b = (w[i] - 97) as i64;
+        if to[a] < 0 and from[b] < 0 {
+            to[a] = b;
+            from[b] = a;
+        } else if to[a] != b or from[b] != a {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 890;
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..6000 {
+        let mut w = String.new();
+        for _ in 0..10 {
+            w.push((97 + next_random(mut seed) % 3) as u8 as char);
+        }
+        words.push(w);
+    }
+    let mut found = 0;
+    let mut check = 0;
+    for k in 0..words.len() {
+        let kept = find_and_replace_pattern(words, words[k]);
+        found += kept.len();
+        check = (check * 131 + kept.len()) % 1000000007;
+    }
+    println(f"6000 patterns over 6000 words of 10 letters: {found} matches, checksum {check}");
+}
