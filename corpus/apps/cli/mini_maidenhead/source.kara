@@ -1,0 +1,541 @@
+// mini_maidenhead — maidenhead 1.8.0 (SciVision), the Maidenhead / QTH
+// locator converter amateur-radio operators use to exchange positions
+// ("FN31pr" is the 2.5 x 5 arc-minute square around the ARRL station in
+// Newington, CT). It ports to_maiden at every precision, to_location,
+// to_location_rect, to_geoJSONObject (as json.dumps prints it), google_maps,
+// and the `python -m maidenhead` command's main(), with the library's exact
+// ValueError messages.
+//
+// to_maiden treats the locator as a mixed-radix integer and leans on two
+// Python float semantics: `%` on floats takes the sign of the divisor, and
+// int() truncates. py_mod is fmod with CPython's sign fix-up. The command
+// prints coordinates with '%.7f', which fixed() reproduces exactly: the float
+// is expanded as m / 2^k, m * 10^7 / 2^k is rounded half to even in i128, and
+// the digits are written out. The locator's decimal coordinates come from
+// Python's int / int true division, which is correctly rounded, as is an f64
+// division of the same two exact integers. The library's check that later
+// pairs use A..X letters can never fire (`0 > v >= 24`), so like the library
+// the port accepts "FN31ZZ". jobs_text() holds data/jobs.tsv.
+
+struct Rect {
+    lat1: f64,
+    lon1: f64,
+    lat2: f64,
+    lon2: f64,
+    latc: f64,
+    lonc: f64,
+}
+
+// ----------------------------------------------------------- small helpers
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_i64(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn bytes_str(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+fn has_byte(s: String, c: u8) -> bool {
+    let mut found = false;
+    for x in s.bytes().to_vec() {
+        if x == c {
+            found = true;
+        }
+    }
+    found
+}
+
+// Python's // and % on integers: floor division, remainder with the
+// divisor's sign.
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floormod(a: i64, b: i64) -> i64 {
+    a - floordiv(a, b) * b
+}
+
+// Python's float %: fmod, then moved into the divisor's sign.
+fn py_mod(x: f64, w: f64) -> f64 {
+    let mut m = x % w;
+    if m != 0.0 {
+        if (w < 0.0) != (m < 0.0) {
+            m += w;
+        }
+    } else {
+        m = if w < 0.0 { -0.0 } else { 0.0 };
+    }
+    m
+}
+
+// '%.<nd>f' % x, correctly rounded half to even like CPython.
+fn fixed(x: f64, nd: i64) -> String {
+    let neg = x < 0.0 or (x == 0.0 and 1.0 / x < 0.0);
+    let a = if x < 0.0 { -x } else { x };
+    let mut k = 0;
+    let mut y = a;
+    while y != y.floor() {
+        y = y * 2.0;
+        k += 1;
+    }
+    let mut num = (y as i64) as i128;
+    let mut i = 0;
+    while i < nd {
+        num = num * 10;
+        i += 1;
+    }
+    let mut den: i128 = 1;
+    i = 0;
+    while i < k {
+        den = den * 2;
+        i += 1;
+    }
+    let mut q = num / den;
+    let r = num - q * den;
+    if 2 * r > den or (2 * r == den and q % 2 == 1) {
+        q += 1;
+    }
+    let mut s = f"{q}";
+    while s.len() <= nd {
+        s = f"0{s}";
+    }
+    let body = f"{s.substring(0, s.len() - nd)}.{s.substring(s.len() - nd, s.len())}";
+    if neg { f"-{body}" } else { body }
+}
+
+// ----------------------------------------------------------------- to_maiden
+
+fn radix_list(precision: i64) -> Vec[i64] {
+    let mut radix: Vec[i64] = Vec.new();
+    radix.push(18);
+    let mut i = 0;
+    while i < precision - 1 {
+        radix.push(if i % 2 == 1 { 24 } else { 10 });
+        i += 1;
+    }
+    radix
+}
+
+// The library's convert(): least significant position first.
+fn convert_digits(v: i64, radix: Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut val = v;
+    let mut n = radix.len();
+    while n > 0 {
+        let r = radix[n - 1];
+        let p = floordiv(val, r);
+        let q = floormod(val, r);
+        if r == 10 {
+            out.push(b'0' + q as u8);
+        } else if n == 3 {
+            out.push(b'a' + q as u8);
+        } else {
+            out.push(b'A' + q as u8);
+        }
+        val = p;
+        n -= 1;
+    }
+    out
+}
+
+fn to_maiden(lat: f64, lon: f64, precision: i64) -> String {
+    let radix = radix_list(precision);
+    let mut multiplier = 1;
+    for r in radix.clone() {
+        multiplier = multiplier * r;
+    }
+    let mut first_two = radix[0];
+    if radix.len() > 1 {
+        first_two = first_two * radix[1];
+    }
+    let int_lat = floordiv(((lat + 90.0) * (multiplier as f64) + 0.5) as i64, first_two);
+    let int_lon = floordiv((py_mod(lon + 180.0, 360.0) * (floordiv(multiplier, 2) as f64) + 0.5) as i64, first_two);
+    let a = convert_digits(int_lat, radix.clone());
+    let b = convert_digits(int_lon, radix);
+    let mut seq: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < a.len() {
+        seq.push(a[i]);
+        seq.push(b[i]);
+        i += 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut j = seq.len() - 1;
+    while j >= 0 {
+        out.push(seq[j]);
+        j -= 1;
+    }
+    bytes_str(out)
+}
+
+// ------------------------------------------------------------ to_location
+
+fn is_py_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn strip_upper(s: String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut lo = 0;
+    let mut hi = b.len();
+    while lo < hi and is_py_space(b[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(b[hi - 1]) {
+        hi -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = lo;
+    while i < hi {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+        i += 1;
+    }
+    out
+}
+
+// convert() of to_location_rect: the (numerator, denominator) of one axis.
+fn convert_axis(chars: Vec[u8], precision: i64) -> Result[(i64, i64), String] {
+    let mut val: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < precision and i < chars.len() {
+        let c = chars[i];
+        if i % 2 == 0 {
+            val.push(c as i64 - 65);
+        } else if c >= b'0' and c <= b'9' {
+            val.push((c - b'0') as i64);
+        } else {
+            let ch = bytes_str([c]);
+            return Err(f"ValueError: invalid literal for int() with base 10: '{ch}'");
+        }
+        i += 1;
+    }
+    if val[0] >= 18 {
+        return Err("ValueError: Locator uses A through R characters for the first pair".to_string());
+    }
+    let mut nom = 0;
+    let mut den = 1;
+    i = 0;
+    while i < val.len() {
+        let w = if i == precision - 1 { 1 } else if i % 2 == 1 { 24 } else { 10 };
+        nom = (nom + val[i]) * w;
+        den = den * w;
+        i += 1;
+    }
+    Ok((nom, den))
+}
+
+fn to_location_rect(maiden: String) -> Result[Rect, String] {
+    let m = strip_upper(maiden);
+    let n = m.len();
+    if n < 2 or n % 2 == 1 {
+        return Err("ValueError: Maidenhead locator requires even number of characters".to_string());
+    }
+    let precision = n / 2;
+    let mut lat_chars: Vec[u8] = Vec.new();
+    let mut lon_chars: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if i % 2 == 1 {
+            lat_chars.push(m[i]);
+        } else {
+            lon_chars.push(m[i]);
+        }
+        i += 1;
+    }
+    let (lat_nom, lat_den) = match convert_axis(lat_chars, precision) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let (lon_nom, lon_den) = match convert_axis(lon_chars, precision) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let la = 10 * (lat_nom - 9 * lat_den);
+    let lo = 20 * (lon_nom - 9 * lon_den);
+    let ld = lat_den as f64;
+    let od = lon_den as f64;
+    Ok(Rect {
+        lat1: (la as f64) / ld,
+        lon1: (lo as f64) / od,
+        lat2: ((la + 10) as f64) / ld,
+        lon2: ((lo + 20) as f64) / od,
+        latc: ((la + 5) as f64) / ld,
+        lonc: ((lo + 10) as f64) / od,
+    })
+}
+
+fn to_location(maiden: String, center: bool) -> Result[(f64, f64), String] {
+    match to_location_rect(maiden) {
+        Ok(r) => if center { Ok((r.latc, r.lonc)) } else { Ok((r.lat1, r.lon1)) },
+        Err(e) => Err(e),
+    }
+}
+
+// ---------------------------------------------------- geoJSON and the URL
+
+fn json_str(s: String) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'"');
+    for c in s.bytes().to_vec() {
+        if c == b'"' or c == b'\\' {
+            out.push(b'\\');
+        }
+        out.push(c);
+    }
+    out.push(b'"');
+    bytes_str(out)
+}
+
+fn to_geojson(maiden: String, center: bool, square: bool) -> Result[String, String] {
+    let r = match to_location_rect(maiden.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+    let name = json_str(maiden);
+    let mut feats: Vec[String] = Vec.new();
+    if center {
+        feats.push(f"{{\"type\": \"Feature\", \"properties\": {{\"QTHLocator_Centerpoint\": {name}}}, \"geometry\": {{\"type\": \"Point\", \"coordinates\": [{r.lonc}, {r.latc}]}}}}");
+    }
+    if square {
+        let ring = f"[[{r.lon1}, {r.lat1}], [{r.lon2}, {r.lat1}], [{r.lon2}, {r.lat2}], [{r.lon1}, {r.lat2}], [{r.lon1}, {r.lat1}]]";
+        feats.push(f"{{\"type\": \"Feature\", \"properties\": {{\"QTHLocator\": {name}}}, \"geometry\": {{\"type\": \"Polygon\", \"coordinates\": [{ring}]}}}}");
+    }
+    let mut body = String.new();
+    let mut i = 0;
+    while i < feats.len() {
+        if i > 0 {
+            body.push_str(", ");
+        }
+        body.push_str(feats[i]);
+        i += 1;
+    }
+    Ok(f"{{\"type\": \"FeatureCollection\", \"features\": [{body}]}}")
+}
+
+fn google_maps(maiden: String, center: bool) -> Result[String, String] {
+    match to_location(maiden, center) {
+        Ok((a, b)) => Ok(f"https://www.google.com/maps/@?api=1&map_action=map&center={a},{b}"),
+        Err(e) => Err(e),
+    }
+}
+
+// ------------------------------------------------- python -m maidenhead
+
+// main(loc, precision, url, center, geojson, nosquare): the lines it prints.
+fn cli_main(loc: String, precision: i64, url: bool, center: bool, geojson: bool, nosquare: bool) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    let mut maiden = loc.clone();
+    if has_byte(loc, b',') {
+        let parts = split_on(loc.clone(), b',');
+        maiden = to_maiden(to_f64(parts[0].clone()), to_f64(parts[1].clone()), precision);
+        lines.push(maiden.clone());
+    } else if geojson {
+        match to_geojson(loc.clone(), center, not nosquare) {
+            Ok(s) => lines.push(s),
+            Err(e) => {
+                lines.push(e);
+                return lines;
+            }
+        }
+    } else {
+        match to_location(loc.clone(), center) {
+            Ok((a, b)) => lines.push(f"{fixed(a, 7)} {fixed(b, 7)}"),
+            Err(e) => {
+                lines.push(e);
+                return lines;
+            }
+        }
+    }
+    if url {
+        match google_maps(maiden, center) {
+            Ok(s) => lines.push(s),
+            Err(e) => lines.push(e),
+        }
+    }
+    lines
+}
+
+// --------------------------------------------------------------- the jobs
+
+fn unwrap_str(r: own Result[String, String]) -> String {
+    match r {
+        Ok(s) => s,
+        Err(e) => e,
+    }
+}
+
+fn run_job(f: Vec[String]) -> String {
+    let op = f[0].clone();
+    if op == "maiden" {
+        to_maiden(to_f64(f[1].clone()), to_f64(f[2].clone()), to_i64(f[3].clone()))
+    } else if op == "loc" {
+        match to_location(f[1].clone(), f[2] == "1") {
+            Ok((a, b)) => f"({a}, {b})",
+            Err(e) => e,
+        }
+    } else if op == "rect" {
+        match to_location_rect(f[1].clone()) {
+            Ok(r) => f"(({r.lat1}, {r.lon1}), ({r.lat2}, {r.lon2}), ({r.latc}, {r.lonc}))",
+            Err(e) => e,
+        }
+    } else if op == "geo" {
+        unwrap_str(to_geojson(f[1].clone(), f[2] == "1", f[3] == "1"))
+    } else if op == "url" {
+        unwrap_str(google_maps(f[1].clone(), f[2] == "1"))
+    } else {
+        "unknown op".to_string()
+    }
+}
+
+fn join_args(f: Vec[String]) -> String {
+    let mut out = String.new();
+    let mut i = 1;
+    while i < f.len() {
+        if i > 1 {
+            out.push_str(", ");
+        }
+        out.push_str(f[i]);
+        i += 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            if f[0] == "cli" {
+                let flags = f[3].clone();
+                out.push_str(f"cli({join_args(f.clone())}):\n");
+                let printed = cli_main(f[1].clone(), to_i64(f[2].clone()), has_byte(flags.clone(), b'u'), has_byte(flags.clone(), b'c'), has_byte(flags.clone(), b'g'), has_byte(flags, b'n'));
+                for ln in printed {
+                    out.push_str(f"  {ln}\n");
+                }
+            } else {
+                out.push_str(f"{f[0]}({join_args(f.clone())}) => {run_job(f)}\n");
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("maiden\t41.714775\t-72.727260\t3\n");
+    s.push_str("maiden\t41.714775\t-72.727260\t4\n");
+    s.push_str("maiden\t41.714775\t-72.727260\t5\n");
+    s.push_str("maiden\t41.714775\t-72.727260\t6\n");
+    s.push_str("maiden\t41.714775\t-72.727260\t2\n");
+    s.push_str("maiden\t41.714775\t-72.727260\t1\n");
+    s.push_str("maiden\t40.0\t-105.0\t3\n");
+    s.push_str("maiden\t51.4778\t-0.0015\t4\n");
+    s.push_str("maiden\t35.6895\t139.6917\t3\n");
+    s.push_str("maiden\t-33.8688\t151.2093\t4\n");
+    s.push_str("maiden\t-77.8463\t166.6683\t3\n");
+    s.push_str("maiden\t64.1466\t-21.9426\t5\n");
+    s.push_str("maiden\t0.0\t0.0\t3\n");
+    s.push_str("maiden\t-90.0\t-180.0\t3\n");
+    s.push_str("maiden\t89.999\t179.999\t4\n");
+    s.push_str("maiden\t90.0\t180.0\t3\n");
+    s.push_str("maiden\t12.5\t540.0\t3\n");
+    s.push_str("maiden\t12.5\t-540.0\t3\n");
+    s.push_str("maiden\t-12.5\t-359.99\t4\n");
+    s.push_str("loc\tFN31pr\t0\n");
+    s.push_str("loc\tFN31pr\t1\n");
+    s.push_str("loc\tfn31PR\t0\n");
+    s.push_str("loc\t  FN31pr \t1\n");
+    s.push_str("loc\tFN31\t0\n");
+    s.push_str("loc\tFN\t1\n");
+    s.push_str("loc\tFN31pr33\t0\n");
+    s.push_str("loc\tFN31pr33\t1\n");
+    s.push_str("loc\tFN31pr33ab\t1\n");
+    s.push_str("loc\tJJ00aa\t0\n");
+    s.push_str("loc\tAA00aa00\t0\n");
+    s.push_str("loc\tRR99xx99xx\t1\n");
+    s.push_str("loc\tFN31ZZ\t0\n");
+    s.push_str("loc\tFN3\t0\n");
+    s.push_str("loc\tF\t0\n");
+    s.push_str("loc\t\t0\n");
+    s.push_str("loc\tSN31\t0\n");
+    s.push_str("loc\tFS31\t0\n");
+    s.push_str("loc\tFNA1\t0\n");
+    s.push_str("loc\tF31N\t0\n");
+    s.push_str("rect\tFN31pr\n");
+    s.push_str("rect\tIO91wm\n");
+    s.push_str("rect\tQF56od\n");
+    s.push_str("rect\tJJ00\n");
+    s.push_str("rect\tDM79lr44\n");
+    s.push_str("geo\tFN31pr\t1\t1\n");
+    s.push_str("geo\tFN31pr\t0\t1\n");
+    s.push_str("geo\tFN31pr\t1\t0\n");
+    s.push_str("geo\tFN31pr\t0\t0\n");
+    s.push_str("geo\tio91WM\t1\t1\n");
+    s.push_str("url\tFN31pr\t0\n");
+    s.push_str("url\tFN31pr\t1\n");
+    s.push_str("url\tPM95vq\t1\n");
+    s.push_str("cli\tFN31pr\t6\t\n");
+    s.push_str("cli\tFN31pr\t6\tc\n");
+    s.push_str("cli\tFN31pr\t6\tu\n");
+    s.push_str("cli\tFN31pr\t6\tcu\n");
+    s.push_str("cli\tFN31pr\t6\tg\n");
+    s.push_str("cli\tFN31pr\t6\tgc\n");
+    s.push_str("cli\tFN31pr\t6\tgcn\n");
+    s.push_str("cli\tFN31pr\t6\tgu\n");
+    s.push_str("cli\t41.714775,-72.727260\t3\t\n");
+    s.push_str("cli\t41.714775,-72.727260\t4\tu\n");
+    s.push_str("cli\t41.714775,-72.727260\t4\tcu\n");
+    s.push_str("cli\t-33.8688,151.2093\t6\t\n");
+    s.push_str("cli\tQF56od\t3\tc\n");
+    s.push_str("cli\tAA00aa\t3\t\n");
+    s
+}

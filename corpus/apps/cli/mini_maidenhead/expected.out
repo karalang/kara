@@ -1,0 +1,85 @@
+maiden(41.714775, -72.727260, 3) => FN31pr
+maiden(41.714775, -72.727260, 4) => FN31pr21
+maiden(41.714775, -72.727260, 5) => FN31pr21RN
+maiden(41.714775, -72.727260, 6) => FN31pr21RN41
+maiden(41.714775, -72.727260, 2) => FN31
+maiden(41.714775, -72.727260, 1) => RF
+maiden(40.0, -105.0, 3) => DN70ma
+maiden(51.4778, -0.0015, 4) => IO91xl94
+maiden(35.6895, 139.6917, 3) => PM95uq
+maiden(-33.8688, 151.2093, 4) => QF56od51
+maiden(-77.8463, 166.6683, 3) => RB32id
+maiden(64.1466, -21.9426, 5) => HP94ad65VE
+maiden(0.0, 0.0, 3) => JJ00aa
+maiden(-90.0, -180.0, 3) => AA00aa
+maiden(89.999, 179.999, 4) => RR99xx99
+maiden(90.0, 180.0, 3) => AA00aa
+maiden(12.5, 540.0, 3) => AK02am
+maiden(12.5, -540.0, 3) => AK02am
+maiden(-12.5, -359.99, 4) => JH07am10
+loc(FN31pr, 0) => (41.708333333333336, -72.75)
+loc(FN31pr, 1) => (41.729166666666664, -72.70833333333333)
+loc(fn31PR, 0) => (41.708333333333336, -72.75)
+loc(  FN31pr , 1) => (41.729166666666664, -72.70833333333333)
+loc(FN31, 0) => (41.0, -74.0)
+loc(FN, 1) => (45.0, -70.0)
+loc(FN31pr33, 0) => (41.72083333333333, -72.725)
+loc(FN31pr33, 1) => (41.72291666666667, -72.72083333333333)
+loc(FN31pr33ab, 1) => (41.72109375, -72.72482638888889)
+loc(JJ00aa, 0) => (0.0, 0.0)
+loc(AA00aa00, 0) => (-90.0, -180.0)
+loc(RR99xx99xx, 1) => (89.99991319444445, 179.9998263888889)
+loc(FN31ZZ, 0) => (42.041666666666664, -71.91666666666667)
+loc(FN3, 0) => ValueError: Maidenhead locator requires even number of characters
+loc(F, 0) => ValueError: Maidenhead locator requires even number of characters
+loc(, 0) => ValueError: Maidenhead locator requires even number of characters
+loc(SN31, 0) => ValueError: Locator uses A through R characters for the first pair
+loc(FS31, 0) => ValueError: Locator uses A through R characters for the first pair
+loc(FNA1, 0) => ValueError: invalid literal for int() with base 10: 'A'
+loc(F31N, 0) => ValueError: invalid literal for int() with base 10: 'N'
+rect(FN31pr) => ((41.708333333333336, -72.75), (41.75, -72.66666666666667), (41.729166666666664, -72.70833333333333))
+rect(IO91wm) => ((51.5, -0.16666666666666666), (51.541666666666664, -0.08333333333333333), (51.520833333333336, -0.125))
+rect(QF56od) => ((-33.875, 151.16666666666666), (-33.833333333333336, 151.25), (-33.854166666666664, 151.20833333333334))
+rect(JJ00) => ((0.0, 0.0), (1.0, 2.0), (0.5, 1.0))
+rect(DM79lr44) => ((39.725, -105.05), (39.729166666666664, -105.04166666666667), (39.72708333333333, -105.04583333333333))
+geo(FN31pr, 1, 1) => {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator_Centerpoint": "FN31pr"}, "geometry": {"type": "Point", "coordinates": [-72.70833333333333, 41.729166666666664]}}, {"type": "Feature", "properties": {"QTHLocator": "FN31pr"}, "geometry": {"type": "Polygon", "coordinates": [[[-72.75, 41.708333333333336], [-72.66666666666667, 41.708333333333336], [-72.66666666666667, 41.75], [-72.75, 41.75], [-72.75, 41.708333333333336]]]}}]}
+geo(FN31pr, 0, 1) => {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator": "FN31pr"}, "geometry": {"type": "Polygon", "coordinates": [[[-72.75, 41.708333333333336], [-72.66666666666667, 41.708333333333336], [-72.66666666666667, 41.75], [-72.75, 41.75], [-72.75, 41.708333333333336]]]}}]}
+geo(FN31pr, 1, 0) => {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator_Centerpoint": "FN31pr"}, "geometry": {"type": "Point", "coordinates": [-72.70833333333333, 41.729166666666664]}}]}
+geo(FN31pr, 0, 0) => {"type": "FeatureCollection", "features": []}
+geo(io91WM, 1, 1) => {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator_Centerpoint": "io91WM"}, "geometry": {"type": "Point", "coordinates": [-0.125, 51.520833333333336]}}, {"type": "Feature", "properties": {"QTHLocator": "io91WM"}, "geometry": {"type": "Polygon", "coordinates": [[[-0.16666666666666666, 51.5], [-0.08333333333333333, 51.5], [-0.08333333333333333, 51.541666666666664], [-0.16666666666666666, 51.541666666666664], [-0.16666666666666666, 51.5]]]}}]}
+url(FN31pr, 0) => https://www.google.com/maps/@?api=1&map_action=map&center=41.708333333333336,-72.75
+url(FN31pr, 1) => https://www.google.com/maps/@?api=1&map_action=map&center=41.729166666666664,-72.70833333333333
+url(PM95vq, 1) => https://www.google.com/maps/@?api=1&map_action=map&center=35.6875,139.79166666666666
+cli(FN31pr, 6, ):
+  41.7083333 -72.7500000
+cli(FN31pr, 6, c):
+  41.7291667 -72.7083333
+cli(FN31pr, 6, u):
+  41.7083333 -72.7500000
+  https://www.google.com/maps/@?api=1&map_action=map&center=41.708333333333336,-72.75
+cli(FN31pr, 6, cu):
+  41.7291667 -72.7083333
+  https://www.google.com/maps/@?api=1&map_action=map&center=41.729166666666664,-72.70833333333333
+cli(FN31pr, 6, g):
+  {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator": "FN31pr"}, "geometry": {"type": "Polygon", "coordinates": [[[-72.75, 41.708333333333336], [-72.66666666666667, 41.708333333333336], [-72.66666666666667, 41.75], [-72.75, 41.75], [-72.75, 41.708333333333336]]]}}]}
+cli(FN31pr, 6, gc):
+  {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator_Centerpoint": "FN31pr"}, "geometry": {"type": "Point", "coordinates": [-72.70833333333333, 41.729166666666664]}}, {"type": "Feature", "properties": {"QTHLocator": "FN31pr"}, "geometry": {"type": "Polygon", "coordinates": [[[-72.75, 41.708333333333336], [-72.66666666666667, 41.708333333333336], [-72.66666666666667, 41.75], [-72.75, 41.75], [-72.75, 41.708333333333336]]]}}]}
+cli(FN31pr, 6, gcn):
+  {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator_Centerpoint": "FN31pr"}, "geometry": {"type": "Point", "coordinates": [-72.70833333333333, 41.729166666666664]}}]}
+cli(FN31pr, 6, gu):
+  {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"QTHLocator": "FN31pr"}, "geometry": {"type": "Polygon", "coordinates": [[[-72.75, 41.708333333333336], [-72.66666666666667, 41.708333333333336], [-72.66666666666667, 41.75], [-72.75, 41.75], [-72.75, 41.708333333333336]]]}}]}
+  https://www.google.com/maps/@?api=1&map_action=map&center=41.708333333333336,-72.75
+cli(41.714775,-72.727260, 3, ):
+  FN31pr
+cli(41.714775,-72.727260, 4, u):
+  FN31pr21
+  https://www.google.com/maps/@?api=1&map_action=map&center=41.7125,-72.73333333333333
+cli(41.714775,-72.727260, 4, cu):
+  FN31pr21
+  https://www.google.com/maps/@?api=1&map_action=map&center=41.71458333333333,-72.72916666666667
+cli(-33.8688,151.2093, 6, ):
+  QF56od51CL77
+cli(QF56od, 3, c):
+  -33.8541667 151.2083333
+cli(AA00aa, 3, ):
+  -90.0000000 -180.0000000
