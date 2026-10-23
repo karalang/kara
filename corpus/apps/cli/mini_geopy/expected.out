@@ -1,0 +1,1113 @@
+# points from strings
+> point 41.5,-81.0
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ W
+  decimal 41.5, -81.0
+  with altitude 41 30m 0s N, 81 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 -81.0 0.0
+> point 41.5;-81.0
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ W
+  decimal 41.5, -81.0
+  with altitude 41 30m 0s N, 81 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 -81.0 0.0
+> point 41.5 -81.0
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ W
+  decimal 41.5, -81.0
+  with altitude 41 30m 0s N, 81 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 -81.0 0.0
+> point +41.5 -81.0
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ W
+  decimal 41.5, -81.0
+  with altitude 41 30m 0s N, 81 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 -81.0 0.0
+> point 41.5 N -81.0 W
+  repr Point(41.5, 81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s E
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ E
+  decimal 41.5, 81.0
+  with altitude 41 30m 0s N, 81 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 81.0 0.0
+> point 41.5 N, 81.0 W
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ W
+  decimal 41.5, -81.0
+  with altitude 41 30m 0s N, 81 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 -81.0 0.0
+> point -41.5 S, 81.0 E, 2.5km
+  repr Point(41.5, 81.0, 2.5)
+  str 41 30m 0s N, 81 0m 0s E, 2.5km
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ E, 2.5km
+  decimal 41.5, 81.0, 2.5km
+  with altitude 41 30m 0s N, 81 0m 0s E, 2.5km
+  altitude 2.5km 2500.0m 1.5534279805933349mi 8202.099737532808ft 1.3498920086393087nm 1.3498920086393087nmi
+  items 41.5 81.0 2.5
+> point -41.5 S;81.0 E
+  repr Point(41.5, 81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s E
+  unicode 41° 30′ 0″ N, 81° 0′ 0″ E
+  decimal 41.5, 81.0
+  with altitude 41 30m 0s N, 81 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 41.5 81.0 0.0
+> point 23 26m 22s N 23 27m 30s E
+  repr Point(23.439444444444444, 23.458333333333332, 0.0)
+  str 23 26m 22s N, 23 27m 30s E
+  unicode 23° 26′ 22″ N, 23° 27′ 30″ E
+  decimal 23.439444444444444, 23.458333333333332
+  with altitude 23 26m 22s N, 23 27m 30s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 23.439444444444444 23.458333333333332 0.0
+> point 23 26m 22s N 23 27m 30s E 21.0mi
+  repr Point(23.439444444444444, 23.458333333333332, 33.796224)
+  str 23 26m 22s N, 23 27m 30s E, 33.796224km
+  unicode 23° 26′ 22″ N, 23° 27′ 30″ E, 33.796224km
+  decimal 23.439444444444444, 23.458333333333332, 33.796224km
+  with altitude 23 26m 22s N, 23 27m 30s E, 33.796224km
+  altitude 33.796224km 33796.224m 21.0mi 110880.0ft 18.248501079913606nm 18.248501079913606nmi
+  items 23.439444444444444 23.458333333333332 33.796224
+> point 3 26' 22" N 23 27' 30" E
+  repr Point(3.4394444444444443, 23.458333333333332, 0.0)
+  str 3 26m 22s N, 23 27m 30s E
+  unicode 3° 26′ 22″ N, 23° 27′ 30″ E
+  decimal 3.4394444444444443, 23.458333333333332
+  with altitude 3 26m 22s N, 23 27m 30s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 3.4394444444444443 23.458333333333332 0.0
+> point UT: N 39°20' 0'' / W 74°35' 0''
+  repr Point(39.333333333333336, -74.58333333333333, 0.0)
+  str 39 20m 8.52651e-12s N, 74 34m 60s W
+  unicode 39° 20′ 8.52651e-12″ N, 74° 34′ 60″ W
+  decimal 39.333333333333336, -74.58333333333333
+  with altitude 39 20m 8.52651e-12s N, 74 34m 60s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 39.333333333333336 -74.58333333333333 0.0
+> point 40°26′46″N 79°58′56″W
+  repr Point(40.44611111111111, -79.98222222222222, 0.0)
+  str 40 26m 46s N, 79 58m 56s W
+  unicode 40° 26′ 46″ N, 79° 58′ 56″ W
+  decimal 40.44611111111111, -79.98222222222222
+  with altitude 40 26m 46s N, 79 58m 56s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.44611111111111 -79.98222222222222 0.0
+> point 40° 26′ 46″ N, 79° 58′ 56″ W
+  repr Point(40.44611111111111, -79.98222222222222, 0.0)
+  str 40 26m 46s N, 79 58m 56s W
+  unicode 40° 26′ 46″ N, 79° 58′ 56″ W
+  decimal 40.44611111111111, -79.98222222222222
+  with altitude 40 26m 46s N, 79 58m 56s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.44611111111111 -79.98222222222222 0.0
+> point 40.446° N 79.982° W
+  repr Point(40.446, -79.982, 0.0)
+  str 40 26m 45.6s N, 79 58m 55.2s W
+  unicode 40° 26′ 45.6″ N, 79° 58′ 55.2″ W
+  decimal 40.446, -79.982
+  with altitude 40 26m 45.6s N, 79 58m 55.2s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.446 -79.982 0.0
+> point 40.446D N 79.982D W
+  repr Point(40.446, -79.982, 0.0)
+  str 40 26m 45.6s N, 79 58m 55.2s W
+  unicode 40° 26′ 45.6″ N, 79° 58′ 55.2″ W
+  decimal 40.446, -79.982
+  with altitude 40 26m 45.6s N, 79 58m 55.2s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.446 -79.982 0.0
+> point 40*26m N 79*58m W
+  repr Point(40.43333333333333, -79.96666666666667, 0.0)
+  str 40 25m 60s N, 79 58m 6.82121e-12s W
+  unicode 40° 25′ 60″ N, 79° 58′ 6.82121e-12″ W
+  decimal 40.43333333333333, -79.96666666666667
+  with altitude 40 25m 60s N, 79 58m 6.82121e-12s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.43333333333333 -79.96666666666667 0.0
+> point 51.5074, -0.1278, 35m
+  repr Point(51.5074, -0.1278, 0.035)
+  str 51 30m 26.64s N, 0 7m 40.08s W, 0.035km
+  unicode 51° 30′ 26.64″ N, 0° 7′ 40.08″ W, 0.035km
+  decimal 51.5074, -0.1278, 0.035km
+  with altitude 51 30m 26.64s N, 0 7m 40.08s W, 0.035km
+  altitude 0.035km 35.0m 0.02174799172830669mi 114.82939632545933ft 0.018898488120950324nm 0.018898488120950324nmi
+  items 51.5074 -0.1278 0.035
+> point 51.5074 -0.1278 100 ft
+  repr Point(51.5074, -0.1278, 0.03048)
+  str 51 30m 26.64s N, 0 7m 40.08s W, 0.03048km
+  unicode 51° 30′ 26.64″ N, 0° 7′ 40.08″ W, 0.03048km
+  decimal 51.5074, -0.1278, 0.03048km
+  with altitude 51 30m 26.64s N, 0 7m 40.08s W, 0.03048km
+  altitude 0.03048km 30.48m 0.01893939393939394mi 100.0ft 0.01645788336933045nm 0.01645788336933045nmi
+  items 51.5074 -0.1278 0.03048
+> point 0 0 1.5nmi
+  repr Point(0.0, 0.0, 2.778)
+  str 0 0m 0s N, 0 0m 0s E, 2.778km
+  unicode 0° 0′ 0″ N, 0° 0′ 0″ E, 2.778km
+  decimal 0.0, 0.0, 2.778km
+  with altitude 0 0m 0s N, 0 0m 0s E, 2.778km
+  altitude 2.778km 2778.0m 1.7261691720353136mi 9114.173228346455ft 1.5nm 1.5nmi
+  items 0.0 0.0 2.778
+> point 0 0 1nm
+  repr Point(0.0, 0.0, 1.852)
+  str 0 0m 0s N, 0 0m 0s E, 1.852km
+  unicode 0° 0′ 0″ N, 0° 0′ 0″ E, 1.852km
+  decimal 0.0, 0.0, 1.852km
+  with altitude 0 0m 0s N, 0 0m 0s E, 1.852km
+  altitude 1.852km 1852.0m 1.1507794480235425mi 6076.115485564304ft 1.0nm 1.0nmi
+  items 0.0 0.0 1.852
+> point 0 0 3 KM
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point N 40 E 70
+  repr Point(40.0, 70.0, 0.0)
+  str 40 0m 0s N, 70 0m 0s E
+  unicode 40° 0′ 0″ N, 70° 0′ 0″ E
+  decimal 40.0, 70.0
+  with altitude 40 0m 0s N, 70 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.0 70.0 0.0
+> point S 33.9 E 18.4
+  repr Point(-33.9, 18.4, 0.0)
+  str 33 53m 60s S, 18 23m 60s E
+  unicode 33° 53′ 60″ S, 18° 23′ 60″ E
+  decimal -33.9, 18.4
+  with altitude 33 53m 60s S, 18 23m 60s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items -33.9 18.4 0.0
+> point 40.7 N 74 W 10m
+  repr Point(40.7, -74.0, 0.01)
+  str 40 42m 1.02318e-11s N, 74 0m 0s W, 0.01km
+  unicode 40° 42′ 1.02318e-11″ N, 74° 0′ 0″ W, 0.01km
+  decimal 40.7, -74.0, 0.01km
+  with altitude 40 42m 1.02318e-11s N, 74 0m 0s W, 0.01km
+  altitude 0.01km 10.0m 0.006213711922373339mi 32.808398950131235ft 0.005399568034557235nm 0.005399568034557235nmi
+  items 40.7 -74.0 0.01
+> point Location: 40.7128, -74.0060
+  repr Point(40.7128, -74.006, 0.0)
+  str 40 42m 46.08s N, 74 0m 21.6s W
+  unicode 40° 42′ 46.08″ N, 74° 0′ 21.6″ W
+  decimal 40.7128, -74.006
+  with altitude 40 42m 46.08s N, 74 0m 21.6s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.7128 -74.006 0.0
+> point lat=40.7128 lon=-74.0060
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point   12.5 , 45.5  
+  repr Point(12.5, 45.5, 0.0)
+  str 12 30m 0s N, 45 30m 0s E
+  unicode 12° 30′ 0″ N, 45° 30′ 0″ E
+  decimal 12.5, 45.5
+  with altitude 12 30m 0s N, 45 30m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 12.5 45.5 0.0
+> point 12.5/45.5
+  repr Point(12.5, 45.5, 0.0)
+  str 12 30m 0s N, 45 30m 0s E
+  unicode 12° 30′ 0″ N, 45° 30′ 0″ E
+  decimal 12.5, 45.5
+  with altitude 12 30m 0s N, 45 30m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 12.5 45.5 0.0
+> point 12.5\t45.5
+  repr Point(12.5, 45.5, 0.0)
+  str 12 30m 0s N, 45 30m 0s E
+  unicode 12° 30′ 0″ N, 45° 30′ 0″ E
+  decimal 12.5, 45.5
+  with altitude 12 30m 0s N, 45 30m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 12.5 45.5 0.0
+> point 12.5\u00a045.5
+  repr Point(12.5, 45.5, 0.0)
+  str 12 30m 0s N, 45 30m 0s E
+  unicode 12° 30′ 0″ N, 45° 30′ 0″ E
+  decimal 12.5, 45.5
+  with altitude 12 30m 0s N, 45 30m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 12.5 45.5 0.0
+> point 12.5,,45.5
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point 1.5
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point abc
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point 
+  error ValueError: Failed to create Point instance from string: unknown format.
+> point 91 0
+  error ValueError: Latitude must be in the [-90; 90] range.
+> point -90 0
+  repr Point(-90.0, 0.0, 0.0)
+  str 90 0m 0s S, 0 0m 0s E
+  unicode 90° 0′ 0″ S, 0° 0′ 0″ E
+  decimal -90.0, 0.0
+  with altitude 90 0m 0s S, 0 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items -90.0 0.0 0.0
+> point 0 190
+  repr Point(0.0, -170.0, 0.0)
+  str 0 0m 0s N, 170 0m 0s W
+  unicode 0° 0′ 0″ N, 170° 0′ 0″ W
+  decimal 0.0, -170.0
+  with altitude 0 0m 0s N, 170 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 -170.0 0.0
+> point 0 -190
+  repr Point(0.0, 170.0, 0.0)
+  str 0 0m 0s N, 170 0m 0s E
+  unicode 0° 0′ 0″ N, 170° 0′ 0″ E
+  decimal 0.0, 170.0
+  with altitude 0 0m 0s N, 170 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 170.0 0.0
+> point 0 540
+  repr Point(0.0, -180.0, 0.0)
+  str 0 0m 0s N, 180 0m 0s W
+  unicode 0° 0′ 0″ N, 180° 0′ 0″ W
+  decimal 0.0, -180.0
+  with altitude 0 0m 0s N, 180 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 -180.0 0.0
+> point 0 -180
+  repr Point(0.0, -180.0, 0.0)
+  str 0 0m 0s N, 180 0m 0s W
+  unicode 0° 0′ 0″ N, 180° 0′ 0″ W
+  decimal 0.0, -180.0
+  with altitude 0 0m 0s N, 180 0m 0s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 -180.0 0.0
+> point 0 180
+  repr Point(0.0, 180.0, 0.0)
+  str 0 0m 0s N, 180 0m 0s E
+  unicode 0° 0′ 0″ N, 180° 0′ 0″ E
+  decimal 0.0, 180.0
+  with altitude 0 0m 0s N, 180 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 180.0 0.0
+> point 0 360
+  repr Point(0.0, 0.0, 0.0)
+  str 0 0m 0s N, 0 0m 0s E
+  unicode 0° 0′ 0″ N, 0° 0′ 0″ E
+  decimal 0.0, 0.0
+  with altitude 0 0m 0s N, 0 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0 0.0 0.0
+> point 10.5.5 20
+  repr Point(5.5, 20.0, 0.0)
+  str 5 30m 0s N, 20 0m 0s E
+  unicode 5° 30′ 0″ N, 20° 0′ 0″ E
+  decimal 5.5, 20.0
+  with altitude 5 30m 0s N, 20 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 5.5 20.0 0.0
+> point 1e5 2
+  repr Point(5.0, 2.0, 0.0)
+  str 5 0m 0s N, 2 0m 0s E
+  unicode 5° 0′ 0″ N, 2° 0′ 0″ E
+  decimal 5.0, 2.0
+  with altitude 5 0m 0s N, 2 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 5.0 2.0 0.0
+> point 0.0001 0.00001
+  repr Point(0.0001, 1e-05, 0.0)
+  str 0 0m 0.36s N, 0 0m 0.036s E
+  unicode 0° 0′ 0.36″ N, 0° 0′ 0.036″ E
+  decimal 0.0001, 1e-05
+  with altitude 0 0m 0.36s N, 0 0m 0.036s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 0.0001 1e-05 0.0
+> point 89.99999999 179.99999999
+  repr Point(89.99999999, 179.99999999, 0.0)
+  str 89 59m 60s N, 179 59m 60s E
+  unicode 89° 59′ 60″ N, 179° 59′ 60″ E
+  decimal 89.99999999, 179.99999999
+  with altitude 89 59m 60s N, 179 59m 60s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 89.99999999 179.99999999 0.0
+> point 12 59m 59.9999999s N 1 2m 3.5s W
+  repr Point(12.999999999972221, -1.0343055555555556, 0.0)
+  str 12 59m 60s N, 1 2m 3.5s W
+  unicode 12° 59′ 60″ N, 1° 2′ 3.5″ W
+  decimal 12.999999999972221, -1.0343055555555556
+  with altitude 12 59m 60s N, 1 2m 3.5s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 12.999999999972221 -1.0343055555555556 0.0
+> point 40 26.767m N 79 58.933m W
+  repr Point(40.44611666666667, -79.98221666666667, 0.0)
+  str 40 26m 46.02s N, 79 58m 55.98s W
+  unicode 40° 26′ 46.02″ N, 79° 58′ 55.98″ W
+  decimal 40.44611666666667, -79.98221666666667
+  with altitude 40 26m 46.02s N, 79 58m 55.98s W, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 40.44611666666667 -79.98221666666667 0.0
+> point 45 60m 0s N 0 0m 3600s E
+  repr Point(46.0, 1.0, 0.0)
+  str 46 0m 0s N, 1 0m 0s E
+  unicode 46° 0′ 0″ N, 1° 0′ 0″ E
+  decimal 46.0, 1.0
+  with altitude 46 0m 0s N, 1 0m 0s E, 0.0km
+  altitude 0.0km 0.0m 0.0mi 0.0ft 0.0nm 0.0nmi
+  items 46.0 1.0 0.0
+# points from numbers
+> make f:41.5 f:-81.0 f:0.0
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  decimal 41.5, -81.0
+> make i:41 i:-81 -
+  repr Point(41.0, -81.0, 0.0)
+  str 41 0m 0s N, 81 0m 0s W
+  decimal 41.0, -81.0
+> make f:41.5 f:-81 f:12.3
+  repr Point(41.5, -81.0, 12.3)
+  str 41 30m 0s N, 81 0m 0s W, 12.3km
+  decimal 41.5, -81.0, 12.3km
+> make i:0 i:0 i:0
+  repr Point(0.0, 0.0, 0.0)
+  str 0 0m 0s N, 0 0m 0s E
+  decimal 0.0, 0.0
+> make - - -
+  repr Point(0.0, 0.0, 0.0)
+  str 0 0m 0s N, 0 0m 0s E
+  decimal 0.0, 0.0
+> make f:41.5 - -
+  error ValueError: A single number has been passed to the Point constructor. This is probably a mistake, because constructing a Point with just a latitude seems senseless. If this is exactly what was meant, then pass the zero longitude explicitly to get rid of this error.
+> make - f:-81.0 -
+  repr Point(0.0, -81.0, 0.0)
+  str 0 0m 0s N, 81 0m 0s W
+  decimal 0.0, -81.0
+> make f:90 f:180 f:0
+  repr Point(90.0, 180.0, 0.0)
+  str 90 0m 0s N, 180 0m 0s E
+  decimal 90.0, 180.0
+> make f:90.0000001 f:0 -
+  error ValueError: Latitude must be in the [-90; 90] range.
+> make f:-91 f:0 -
+  error ValueError: Latitude must be in the [-90; 90] range.
+> make f:0 f:181 -
+  repr Point(0.0, -179.0, 0.0)
+  str 0 0m 0s N, 179 0m 0s W
+  decimal 0.0, -179.0
+> make f:0 f:-181 -
+  repr Point(0.0, 179.0, 0.0)
+  str 0 0m 0s N, 179 0m 0s E
+  decimal 0.0, 179.0
+> make f:0 f:900 -
+  repr Point(0.0, -180.0, 0.0)
+  str 0 0m 0s N, 180 0m 0s W
+  decimal 0.0, -180.0
+> make f:0 f:-540 -
+  repr Point(0.0, -180.0, 0.0)
+  str 0 0m 0s N, 180 0m 0s W
+  decimal 0.0, -180.0
+> make f:0 f:1e300 -
+  repr Point(0.0, 0.0, 0.0)
+  str 0 0m 0s N, 0 0m 0s E
+  decimal 0.0, 0.0
+> make f:inf f:0 -
+  error ValueError: Point coordinates must be finite. (inf, 0.0, 0.0) has been passed as coordinates.
+> make f:0 f:nan -
+  error ValueError: Point coordinates must be finite. (0.0, nan, 0.0) has been passed as coordinates.
+> make f:0 f:0 f:-inf
+  error ValueError: Point coordinates must be finite. (0.0, 0.0, -inf) has been passed as coordinates.
+> make s:41.5 s:-81 -
+  repr Point(41.5, -81.0, 0.0)
+  str 41 30m 0s N, 81 0m 0s W
+  decimal 41.5, -81.0
+> make s:abc f:0 -
+  error ValueError: could not convert string to float: 'abc'
+> make s: 12.5  s:1_000 -
+  repr Point(12.5, -80.0, 0.0)
+  str 12 30m 0s N, 80 0m 0s W
+  decimal 12.5, -80.0
+> make f:-0.0 f:-0.0 f:-0.0
+  repr Point(0.0, 0.0, 0.0)
+  str 0 0m 0s N, 0 0m 0s E
+  decimal 0.0, 0.0
+> make f:12.3456789 f:-98.7654321 f:-0.25
+  repr Point(12.3456789, -98.7654321, -0.25)
+  str 12 20m 44.444s N, 98 45m 55.5556s W, -0.25km
+  decimal 12.3456789, -98.7654321, -0.25km
+> make f:1e-10 f:-1e-10 f:1e-7
+  repr Point(1e-10, -1e-10, 1e-07)
+  str 0 0m 3.6e-07s N, 0 0m 3.6e-07s W, 1e-07km
+  decimal 1e-10, -1e-10, 1e-07km
+> seq f:41.5 f:-81
+  repr Point(41.5, -81.0, 0.0)
+> seq f:41.5 f:-81 f:1
+  repr Point(41.5, -81.0, 1.0)
+> seq f:1 f:2 f:3 f:4
+  error ValueError: When creating a Point from sequence, it must not have more than 3 items.
+> seq f:1
+  error ValueError: A single number has been passed to the Point constructor. This is probably a mistake, because constructing a Point with just a latitude seems senseless. If this is exactly what was meant, then pass the zero longitude explicitly to get rid of this error.
+> seq
+  repr Point(0.0, 0.0, 0.0)
+> seq s:41.5 s:-81.0
+  repr Point(41.5, -81.0, 0.0)
+> seq i:10 i:200
+  repr Point(10.0, -160.0, 0.0)
+> lonlat -71.312796 41.49008
+  repr Point(41.49008, -71.312796, 0.0)
+> lonlat -81.695391 41.499498 0.5
+  repr Point(41.499498, -81.695391, 0.5)
+> lonlat 190 10
+  repr Point(10.0, -170.0, 0.0)
+> lonlat 0 95
+  error ValueError: Latitude must be in the [-90; 90] range.
+# degrees and units
+> degrees 0 ascii
+  0 0' 0"
+> degrees 0 unicode
+  0° 0′ 0″
+> degrees 0 latin1
+  0° 0' 0"
+> degrees 0 html
+  0&deg; 0&prime; 0&Prime;
+> degrees 0 xml
+  0&#176; 0&#8242; 0&#8243;
+> degrees 0 abbr
+  0deg 0arcmin 0arcsec
+> degrees 0 default
+  0 0' 0"
+> degrees 41.5 ascii
+  41 30' 0"
+> degrees 41.5 unicode
+  41° 30′ 0″
+> degrees 41.5 latin1
+  41° 30' 0"
+> degrees 41.5 html
+  41&deg; 30&prime; 0&Prime;
+> degrees 41.5 xml
+  41&#176; 30&#8242; 0&#8243;
+> degrees 41.5 abbr
+  41deg 30arcmin 0arcsec
+> degrees 41.5 default
+  41 30' 0"
+> degrees 81.0 ascii
+  81 0' 0"
+> degrees 81.0 unicode
+  81° 0′ 0″
+> degrees 81.0 latin1
+  81° 0' 0"
+> degrees 81.0 html
+  81&deg; 0&prime; 0&Prime;
+> degrees 81.0 xml
+  81&#176; 0&#8242; 0&#8243;
+> degrees 81.0 abbr
+  81deg 0arcmin 0arcsec
+> degrees 81.0 default
+  81 0' 0"
+> degrees 23.439444 ascii
+  23 26' 21.9984"
+> degrees 23.439444 unicode
+  23° 26′ 21.9984″
+> degrees 23.439444 latin1
+  23° 26' 21.9984"
+> degrees 23.439444 html
+  23&deg; 26&prime; 21.9984&Prime;
+> degrees 23.439444 xml
+  23&#176; 26&#8242; 21.9984&#8243;
+> degrees 23.439444 abbr
+  23deg 26arcmin 21.9984arcsec
+> degrees 23.439444 default
+  23 26' 21.9984"
+> degrees 0.5 ascii
+  0 30' 0"
+> degrees 0.5 unicode
+  0° 30′ 0″
+> degrees 0.5 latin1
+  0° 30' 0"
+> degrees 0.5 html
+  0&deg; 30&prime; 0&Prime;
+> degrees 0.5 xml
+  0&#176; 30&#8242; 0&#8243;
+> degrees 0.5 abbr
+  0deg 30arcmin 0arcsec
+> degrees 0.5 default
+  0 30' 0"
+> degrees 1e-9 ascii
+  0 0' 3.6e-06"
+> degrees 1e-9 unicode
+  0° 0′ 3.6e-06″
+> degrees 1e-9 latin1
+  0° 0' 3.6e-06"
+> degrees 1e-9 html
+  0&deg; 0&prime; 3.6e-06&Prime;
+> degrees 1e-9 xml
+  0&#176; 0&#8242; 3.6e-06&#8243;
+> degrees 1e-9 abbr
+  0deg 0arcmin 3.6e-06arcsec
+> degrees 1e-9 default
+  0 0' 3.6e-06"
+> degrees 59.999999999 ascii
+  59 59' 60"
+> degrees 59.999999999 unicode
+  59° 59′ 60″
+> degrees 59.999999999 latin1
+  59° 59' 60"
+> degrees 59.999999999 html
+  59&deg; 59&prime; 60&Prime;
+> degrees 59.999999999 xml
+  59&#176; 59&#8242; 60&#8243;
+> degrees 59.999999999 abbr
+  59deg 59arcmin 60arcsec
+> degrees 59.999999999 default
+  59 59' 60"
+> degrees 12.999999 ascii
+  12 59' 59.9964"
+> degrees 12.999999 unicode
+  12° 59′ 59.9964″
+> degrees 12.999999 latin1
+  12° 59' 59.9964"
+> degrees 12.999999 html
+  12&deg; 59&prime; 59.9964&Prime;
+> degrees 12.999999 xml
+  12&#176; 59&#8242; 59.9964&#8243;
+> degrees 12.999999 abbr
+  12deg 59arcmin 59.9964arcsec
+> degrees 12.999999 default
+  12 59' 59.9964"
+> degrees 179.9999999999 ascii
+  179 59' 60"
+> degrees 179.9999999999 unicode
+  179° 59′ 60″
+> degrees 179.9999999999 latin1
+  179° 59' 60"
+> degrees 179.9999999999 html
+  179&deg; 59&prime; 60&Prime;
+> degrees 179.9999999999 xml
+  179&#176; 59&#8242; 60&#8243;
+> degrees 179.9999999999 abbr
+  179deg 59arcmin 60arcsec
+> degrees 179.9999999999 default
+  179 59' 60"
+> degrees 123.456789 ascii
+  123 27' 24.4404"
+> degrees 123.456789 unicode
+  123° 27′ 24.4404″
+> degrees 123.456789 latin1
+  123° 27' 24.4404"
+> degrees 123.456789 html
+  123&deg; 27&prime; 24.4404&Prime;
+> degrees 123.456789 xml
+  123&#176; 27&#8242; 24.4404&#8243;
+> degrees 123.456789 abbr
+  123deg 27arcmin 24.4404arcsec
+> degrees 123.456789 default
+  123 27' 24.4404"
+> degrees 0.0002777 ascii
+  0 0' 0.99972"
+> degrees 0.0002777 unicode
+  0° 0′ 0.99972″
+> degrees 0.0002777 latin1
+  0° 0' 0.99972"
+> degrees 0.0002777 html
+  0&deg; 0&prime; 0.99972&Prime;
+> degrees 0.0002777 xml
+  0&#176; 0&#8242; 0.99972&#8243;
+> degrees 0.0002777 abbr
+  0deg 0arcmin 0.99972arcsec
+> degrees 0.0002777 default
+  0 0' 0.99972"
+> degrees 360.25 ascii
+  360 15' 0"
+> degrees 360.25 unicode
+  360° 15′ 0″
+> degrees 360.25 latin1
+  360° 15' 0"
+> degrees 360.25 html
+  360&deg; 15&prime; 0&Prime;
+> degrees 360.25 xml
+  360&#176; 15&#8242; 0&#8243;
+> degrees 360.25 abbr
+  360deg 15arcmin 0arcsec
+> degrees 360.25 default
+  360 15' 0"
+> parse_degrees 41 30 0 N
+  41.5
+> parse_degrees 41 30 0 S
+  -41.5
+> parse_degrees -41 30 0 -
+  -41.5
+> parse_degrees -41 30 0 S
+  41.5
+> parse_degrees 0 0 0 W
+  -0.0
+> parse_degrees 12 0 36 E
+  12.01
+> parse_degrees 12 0.5 0 -
+  12.008333333333333
+> parse_degrees 12 61 61 N
+  13.03361111111111
+> parse_degrees 1 1 1 X
+  error ValueError: Invalid direction! Should be one of [NSEW].
+> parse_degrees -0 30 0 -
+  0.5
+> parse_degrees 0.5 0 0 W
+  -0.5
+> altitude 712 m
+  0.712
+> altitude 712 km
+  712.0
+> altitude 712 mi
+  1145.852928
+> altitude 712 ft
+  0.2170176
+> altitude 712 nm
+  1318.624
+> altitude 712 nmi
+  1318.624
+> altitude 0 m
+  0.0
+> altitude -3.5 ft
+  -0.0010668000000000001
+> altitude 1 yd
+  error NotImplementedError: Bad distance unit specified, valid are: dict_keys(['km', 'm', 'mi', 'ft', 'nm', 'nmi'])
+> altitude - km
+  None
+> units kilometers miles=1
+  1.609344
+> units kilometers meters=1500
+  1.5
+> units kilometers feet=5280
+  1.609344
+> units kilometers nautical=1
+  1.852
+> units kilometers meters=1000 miles=1 feet=1 nautical=1
+  4.461648800000001
+> units kilometers
+  0.0
+> units km miles=26.2
+  42.1648128
+> units meters kilometers=1.5
+  1500.0
+> units meters miles=1
+  1609.344
+> units meters nautical=2 feet=3
+  3704.9144
+> units miles kilometers=42.195
+  26.218757456454306
+> units miles feet=5280
+  1.0
+> units miles nautical=1 meters=1
+  1.1514008192157799
+> units mi kilometers=0
+  0.0
+> units feet kilometers=1
+  3280.839895013123
+> units feet miles=1
+  5280.0
+> units feet meters=0.3048
+  1.0
+> units feet nautical=1 miles=1
+  11356.115485564305
+> units ft
+  0.0
+> units nautical kilometers=1.852
+  1.0
+> units nautical miles=1
+  0.8689762419006479
+> units nautical feet=6076.12
+  1.0000007429805615
+> units nm meters=1
+  0.0005399568034557236
+> units degrees radians=3.141592653589793
+  180.0
+> units degrees arcminutes=90
+  1.5
+> units degrees arcseconds=3600
+  1.0
+> units degrees radians=1 arcminutes=1 arcseconds=1
+  57.312723957526764
+> units degrees
+  0.0
+> units radians degrees=180
+  3.141592653589793
+> units radians degrees=1 arcminutes=60
+  0.03490658503988659
+> units rad arcseconds=1
+  4.84813681109536e-06
+> units arcminutes degrees=1.5
+  90.0
+> units arcminutes radians=1
+  3437.746770784939
+> units arcminutes arcseconds=30
+  0.5
+> units arcmin degrees=-0.25
+  -15.0
+> units arcseconds degrees=1
+  3600.0
+> units arcseconds arcminutes=1.5
+  90.0
+> units arcsec radians=0.001
+  206.26480624709637
+> units kilometers yards=3
+  error TypeError: kilometers() got an unexpected keyword argument 'yards'
+# distances
+> dist distance 41.49008,-71.312796 41.499498,-81.695391
+  repr Distance(866.4554329098685)
+  str 866.4554329098685 km
+  km 866.4554329098685 m 866455.4329098684 mi 538.3904453677203 ft 2842701.551541563 nm 467.84850589085767
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391
+  repr Distance(866.4554329098685)
+  str 866.4554329098685 km
+  km 866.4554329098685 m 866455.4329098684 mi 538.3904453677203 ft 2842701.551541563 nm 467.84850589085767
+> dist great_circle 41.49008,-71.312796 41.499498,-81.695391
+  repr Distance(864.2144943393625)
+  str 864.2144943393625 km
+  km 864.2144943393625 m 864214.4943393626 mi 536.9979906964344 ft 2835349.3908771737 nm 466.6384958635867
+> dist geodesic -41.32,174.81 40.96,-5.50
+  repr Distance(19959.67926735382)
+  str 19959.67926735382 km
+  km 19959.67926735382 m 19959679.267353818 mi 12402.369703030437 ft 65484512.03200071 nm 10777.364615201845
+> dist great_circle -41.32,174.81 40.96,-5.50
+  repr Distance(19967.404214191498)
+  str 19967.404214191498 km
+  km 19967.404214191498 m 19967404.214191496 mi 12407.169762456937 ft 65509856.345772624 nm 10781.535752803184
+> dist geodesic 40,160 40.1,160.1
+  repr Distance(14.003702498106211)
+  str 14.003702498106211 km
+  km 14.003702498106211 m 14003.702498106211 mi 8.701497316985188 ft 45943.90583368179 nm 7.56139443742236
+> dist geodesic 40,160 40.1,160.1 40.2,160.2
+  repr Distance(27.999954644813474)
+  str 27.999954644813474 km
+  km 27.999954644813474 m 27999.954644813475 mi 17.398365200239024 ft 91863.36825726205 nm 15.118766006918722
+> dist geodesic 43.668613,40.258916 43.658852,40.250839
+  repr Distance(1.265133525953574)
+  str 1.265133525953574 km
+  km 1.265133525953574 m 1265.133525953574 mi 0.7861175273611943 ft 4150.700544467106 nm 0.6831174546185604
+> dist geodesic 0,0 0,180
+  repr Distance(20003.931458625444)
+  str 20003.931458625444 km
+  km 20003.931458625444 m 20003931.458625443 mi 12429.866739880003 ft 65629696.386566415 nm 10801.258886946784
+> dist geodesic 0,0 0.5,179.5
+  repr Distance(19936.288578965312)
+  str 19936.288578965312 km
+  km 19936.288578965312 m 19936288.578965314 mi 12387.83540309922 ft 65407770.92836388 nm 10764.734653868958
+> dist geodesic 90,0 -90,0
+  repr Distance(20003.931458625444)
+  str 20003.931458625444 km
+  km 20003.931458625444 m 20003931.458625443 mi 12429.866739880003 ft 65629696.386566415 nm 10801.258886946784
+> dist great_circle 90,0 -90,0
+  repr Distance(20015.115070354455)
+  str 20015.115070354455 km
+  km 20015.115070354455 m 20015115.070354454 mi 12436.815914033577 ft 65666388.02609729 nm 10807.297554187071
+> dist geodesic 10,20 10,20
+  repr Distance(0.0)
+  str 0.0 km
+  km 0.0 m 0.0 mi 0.0 ft 0.0 nm 0.0
+> dist great_circle 10,20 10,20
+  repr Distance(0.0)
+  str 0.0 km
+  km 0.0 m 0.0 mi 0.0 ft 0.0 nm 0.0
+> dist geodesic 41.49008,-71.312796,100 41.499498,-81.695391,100
+  repr Distance(866.4554329098685)
+  str 866.4554329098685 km
+  km 866.4554329098685 m 866455.4329098684 mi 538.3904453677203 ft 2842701.551541563 nm 467.84850589085767
+> dist geodesic 41.49008,-71.312796,0 41.499498,-81.695391,1
+  error ValueError: Calculating distance between points with different altitudes is not supported
+> dist great_circle 1,2,0.0000001 3,4,0
+  repr Distance(314.4033951652916)
+  str 314.4033951652916 km
+  km 314.4033951652916 m 314403.3951652916 mi 195.36121249732287 ft 1031507.2019858648 nm 169.76425224907754
+> dist geodesic s:41.5 N 81.0 W s:40°26′46″N 79°58′56″W
+  repr Distance(145.03705015427556)
+  str 145.03705015427556 km
+  km 145.03705015427556 m 145037.05015427555 mi 90.12184477294821 ft 475843.3404011665 nm 78.31374198395008
+> dist great_circle s:51.5074 N, 0.1278 W s:48 51m 24s N 2 21m 3s E
+  repr Distance(343.50017271230024)
+  str 343.50017271230024 km
+  km 343.50017271230024 m 343500.17271230026 mi 213.44111185197212 ft 1126969.0705784129 nm 185.47525524422258
+> dist geodesic s:not a point 1,2
+  error ValueError: Failed to create Point instance from string: unknown format.
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=WGS-84
+  repr Distance(866.4554329098685)
+  str 866.4554329098685 km
+  km 866.4554329098685 m 866455.4329098684 mi 538.3904453677203 ft 2842701.551541563 nm 467.84850589085767
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=GRS-80
+  repr Distance(866.455432916117)
+  str 866.455432916117 km
+  km 866.455432916117 m 866455.432916117 mi 538.3904453716029 ft 2842701.5515620634 nm 467.84850589423166
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=Airy (1830)
+  repr Distance(866.3729634229604)
+  str 866.3729634229604 km
+  km 866.3729634229604 m 866372.9634229604 mi 538.339201204317 ft 2842430.9823587937 nm 467.80397593032416
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=Intl 1924
+  repr Distance(866.4949268637765)
+  str 866.4949268637765 km
+  km 866.4949268637765 m 866494.9268637765 mi 538.4149857729462 ft 2842831.1248811563 nm 467.8698309199657
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=Clarke (1880)
+  repr Distance(866.4914838716729)
+  str 866.4914838716729 km
+  km 866.4914838716729 m 866491.4838716729 mi 538.4128463968381 ft 2842819.828975305 nm 467.8679718529551
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=GRS-67
+  repr Distance(866.4585882810526)
+  str 866.4585882810526 km
+  km 866.4585882810526 m 866458.5882810525 mi 538.3924060244749 ft 2842711.9038092275 nm 467.850209654996
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=6377.0,6356.0,0.003367003367003367
+  repr Distance(866.3063690403129)
+  str 866.3063690403129 km
+  km 866.3063690403129 m 866306.369040313 mi 538.297821373375 ft 2842212.49685142 nm 467.7680178403417
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=6378.137,0,0.0
+  repr Distance(865.1813931328895)
+  str 865.1813931328895 km
+  km 865.1813931328895 m 865181.3931328895 mi 537.598793752541 ft 2838521.6310134167 nm 467.16057944540466
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 ellipsoid=Mars
+  error Exception: Invalid ellipsoid. See geopy.distance.ELLIPSOIDS
+> dist great_circle 41.49008,-71.312796 41.499498,-81.695391 radius=6378.137
+  repr Distance(865.1813931328896)
+  str 865.1813931328896 km
+  km 865.1813931328896 m 865181.3931328896 mi 537.5987937525412 ft 2838521.631013417 nm 467.1605794454047
+> dist great_circle 41.49008,-71.312796 41.499498,-81.695391 radius=1
+  repr Distance(0.13564797888989993)
+  str 0.13564797888989993 km
+  km 0.13564797888989993 m 135.64797888989995 mi 0.08428774636740183 ft 445.03930081988165 nm 0.07324404907661983
+> dist geodesic 41.49008,-71.312796 41.499498,-81.695391 miles=10
+  repr Distance(882.5488729098685)
+  str 882.5488729098685 km
+  km 882.5488729098685 m 882548.8729098685 mi 548.3904453677203 ft 2895501.551541563 nm 476.5382683098642
+> dist great_circle miles=10
+  repr Distance(16.09344)
+  str 16.09344 km
+  km 16.09344 m 16093.44 mi 10.0 ft 52800.0 nm 8.68976241900648
+> dist distance kilometers=2 meters=500
+  repr Distance(2.5)
+  str 2.5 km
+  km 2.5 m 2500.0 mi 1.5534279805933349 ft 8202.099737532808 nm 1.3498920086393087
+> dist distance n:1.42
+  repr Distance(1.42)
+  str 1.42 km
+  km 1.42 m 1420.0 mi 0.8823470929770141 ft 4658.7926509186345 nm 0.7667386609071274
+> dist distance
+  repr Distance(0.0)
+  str 0.0 km
+  km 0.0 m 0.0 mi 0.0 ft 0.0 nm 0.0
+> dist distance yards=3
+  error TypeError: kilometers() got an unexpected keyword argument 'yards'
+> dist Distance miles=2
+  repr Distance(3.218688)
+  str 3.218688 km
+  km 3.218688 m 3218.688 mi 2.0 ft 10560.0 nm 1.7379524838012959
+> dist Distance 41.49008,-71.312796 41.499498,-81.695391
+  error NotImplementedError: Distance is an abstract class
+# destinations
+> dest distance 34,148 90 miles=10
+  repr Point(33.99987666492774, 148.17419994321995, 0.0)
+  str 33 59m 59.556s N, 148 10m 27.1198s E
+> dest distance 34,148 90 miles=10 override=100
+  repr Point(33.99523822910477, 149.08238904409637, 0.0)
+  str 33 59m 42.8576s N, 149 4m 56.6006s E
+> dest distance 0,0 0 kilometers=10000
+  repr Point(89.98240075856276, 0.0, 0.0)
+  str 89 58m 56.6427s N, 0 0m 0s E
+> dest distance 0,179.9 90 kilometers=50
+  repr Point(0.0, -179.65084235794023, 0.0)
+  str 0 0m 0s N, 179 39m 3.03249s W
+> dest distance 89.9,0 0 kilometers=50
+  repr Point(89.65234825431592, 180.0, 0.0)
+  str 89 39m 8.45372s N, 180 0m 0s E
+> dest distance s:51.5074 N, 0.1278 W -45 kilometers=1000
+  repr Point(57.33328252160477, -11.903167056199615, 0.0)
+  str 57 19m 59.8171s N, 11 54m 11.4014s W
+> dest distance -33.8688,151.2093 270.5 nautical=500
+  repr Point(-33.39189329840226, 141.24139334087303, 0.0)
+  str 33 23m 30.8159s S, 141 14m 29.016s E
+> dest geodesic 34,148 90 miles=10
+  repr Point(33.99987666492774, 148.17419994321995, 0.0)
+  str 33 59m 59.556s N, 148 10m 27.1198s E
+> dest geodesic 34,148 90 miles=10 override=100
+  repr Point(33.99523822910477, 149.08238904409637, 0.0)
+  str 33 59m 42.8576s N, 149 4m 56.6006s E
+> dest geodesic 0,0 0 kilometers=10000
+  repr Point(89.98240075856276, 0.0, 0.0)
+  str 89 58m 56.6427s N, 0 0m 0s E
+> dest geodesic 0,179.9 90 kilometers=50
+  repr Point(0.0, -179.65084235794023, 0.0)
+  str 0 0m 0s N, 179 39m 3.03249s W
+> dest geodesic 89.9,0 0 kilometers=50
+  repr Point(89.65234825431592, 180.0, 0.0)
+  str 89 39m 8.45372s N, 180 0m 0s E
+> dest geodesic s:51.5074 N, 0.1278 W -45 kilometers=1000
+  repr Point(57.33328252160477, -11.903167056199615, 0.0)
+  str 57 19m 59.8171s N, 11 54m 11.4014s W
+> dest geodesic -33.8688,151.2093 270.5 nautical=500
+  repr Point(-33.39189329840226, 141.24139334087303, 0.0)
+  str 33 23m 30.8159s S, 141 14m 29.016s E
+> dest great_circle 34,148 90 miles=10
+  repr Point(33.99987670062886, 148.17457765888685, 0.0)
+  str 33 59m 59.5561s N, 148 10m 28.4796s E
+> dest great_circle 34,148 90 miles=10 override=100
+  repr Point(33.99523960980006, 149.0847358047755, 0.0)
+  str 33 59m 42.8626s N, 149 5m 5.0489s E
+> dest great_circle 0,0 0 kilometers=10000
+  repr Point(89.93203354929076, 0.0, 0.0)
+  str 89 55m 55.3208s N, 0 0m 0s E
+> dest great_circle 0,179.9 90 kilometers=50
+  repr Point(2.7533461615023487e-17, -179.65033983225354, 0.0)
+  str 0 0m 9.91205e-14s N, 179 39m 1.2234s W
+> dest great_circle 89.9,0 0 kilometers=50
+  repr Point(89.65033983225415, 180.0, 0.0)
+  str 89 39m 1.2234s N, 180 0m 0s E
+> dest great_circle s:51.5074 N, 0.1278 W -45 kilometers=1000
+  repr Point(57.337493466311074, -11.946091164733728, 0.0)
+  str 57 20m 14.9765s N, 11 56m 45.9282s W
+> dest great_circle -33.8688,151.2093 270.5 nautical=500
+  repr Point(-33.39222433700279, 141.22000383995007, 0.0)
+  str 33 23m 32.0076s S, 141 13m 12.0138s E
+> dest geodesic 34,148 90 miles=10 ellipsoid=Airy (1830)
+  repr Point(33.99987664385862, 148.17421626161618, 0.0)
+  str 33 59m 59.5559s N, 148 10m 27.1785s E
+> dest great_circle 34,148 90 miles=10 radius=3389.5
+  repr Point(33.99956438318141, 148.32814076109452, 0.0)
+  str 33 59m 58.4318s N, 148 19m 41.3067s E
+> dest Distance 34,148 90 miles=10
+  error NotImplementedError: Distance is an abstract class
+# distance arithmetic
+> arith add d:miles=2 d:kilometers=1
+  Distance Distance(4.218688)
+> arith sub d:miles=2 d:kilometers=1
+  Distance Distance(2.218688)
+> arith neg d:miles=2 -
+  Distance Distance(-3.218688)
+> arith mul d:kilometers=6 n:5
+  Distance Distance(30.0)
+> arith rmul d:kilometers=6 n:2.5
+  Distance Distance(15.0)
+> arith div d:kilometers=6 n:5
+  Distance Distance(1.2)
+> arith div d:kilometers=6 d:kilometers=4
+  1.5
+> arith div d:kilometers=6 n:0
+  error ZeroDivisionError: float division by zero
+> arith floordiv d:kilometers=7 n:2
+  Distance Distance(3.0)
+> arith floordiv d:kilometers=-7 n:2
+  Distance Distance(-4.0)
+> arith floordiv d:kilometers=7 d:kilometers=-2
+  -4.0
+> arith floordiv d:kilometers=0.3 n:0.1
+  Distance Distance(2.0)
+> arith floordiv d:kilometers=1 n:0
+  error ZeroDivisionError: float floor division by zero
+> arith abs d:kilometers=-3 -
+  Distance Distance(3.0)
+> arith bool d:kilometers=0 -
+  False
+> arith bool d:meters=1 -
+  True
+> arith eq d:kilometers=2 d:meters=2000
+  True
+> arith gt d:kilometers=2 d:miles=1
+  True
+> arith lt d:kilometers=2 d:miles=1
+  False
+> arith ge d:kilometers=2 n:2
+  True
+> arith le d:kilometers=2 n:1.5
+  False
+> arith ne d:kilometers=1.609344 d:miles=1
+  False
+> arith add d:kilometers=1 n:1
+  error TypeError: Distance instance must be added with Distance instance.
+> arith sub d:kilometers=1 n:1
+  error TypeError: Distance instance must be added with Distance instance.
+> arith mul d:kilometers=1 d:kilometers=1
+  error TypeError: Distance instance must be multiplicated with numbers.
+> arith rmul d:kilometers=1 d:kilometers=1
+  error TypeError: Distance instance must be multiplicated with numbers.
+> arith add gc:kilometers=1,radius=10 d:kilometers=2
+  great_circle Distance(3.0)
+  model 6371.009
+> arith mul geo:kilometers=1,ellipsoid=Airy (1830) n:3
+  geodesic Distance(3.0)
+  model (6378.137, 6356.7523142, 0.0033528106647474805)
+> arith units d:kilometers=42.195 -
+  repr Distance(42.195)
+  str 42.195 km
+  km 42.195 m 42195.0 mi 26.218757456454306 ft 138435.03937007874 nm 22.783477321814253
+> arith units d:miles=1 -
+  repr Distance(1.609344)
+  str 1.609344 km
+  km 1.609344 m 1609.344 mi 1.0 ft 5280.0 nm 0.8689762419006479
+> arith units d:nautical=1 -
+  repr Distance(1.852)
+  str 1.852 km
+  km 1.852 m 1852.0 mi 1.1507794480235425 ft 6076.115485564304 nm 1.0
+> arith units d:feet=1 -
+  repr Distance(0.00030480000000000004)
+  str 0.00030480000000000004 km
+  km 0.00030480000000000004 m 0.3048 mi 0.0001893939393939394 ft 1.0 nm 0.00016457883369330455
+# programs
+> route in/route.txt
+  0 51.5074, -0.1278
+  1 51.507222222222225, -0.1275
+  2 50.8225, -0.1372
+  3 49.4944, 0.1079
+  4 48.85666666666667, 2.350833333333333
+  5 45.764, 4.8357
+  6 43.2965, 5.3698
+  7 43.7, 7.266666666666667
+  leg 0-1 geodesic 0.028723794580318908 great_circle 0.028668273104216102
+  leg 1-2 geodesic 76.17934724072438 great_circle 76.14074879483624
+  leg 2-3 geodesic 148.76178524683144 great_circle 148.70659177324308
+  leg 3-4 geodesic 178.24949606371484 great_circle 177.78984235677467
+  leg 4-5 geodesic 391.76864164181467 great_circle 391.5551635088976
+  leg 5-6 geodesic 277.4603073538258 great_circle 277.619150118044
+  leg 6-7 geodesic 159.82809801863834 great_circle 159.4406355180845
+  total 1232.2763993601297 km (765.7010554363328 mi, 665.3760255724243 nm)
+  great circle 1231.2808003429843 km
+> nearest in/cities.txt 48.8566 N, 2.3522 E 5
+  skip Nowhere: Failed to create Point instance from string: unknown format.
+  from 48° 51′ 23.76″ N, 2° 21′ 7.92″ E
+  Paris 48.8566, 2.3522 0.0 km 0.0 mi
+  London 51.5074, -0.1278 343.92312009098924 km 213.70391916892177 mi
+  Reykjavik 64.1466, -21.9426 2238.152797270606 km 1390.7236720493602 mi
+  Istanbul 41.0082, 28.9784 2260.758377692661 km 1404.7701285074295 mi
+  Moscow 55.7558, 37.6173 2493.6548423013624 km 1549.4852823891983 mi
+> nearest in/cities.txt -17.7134, 178.065 4
+  skip Nowhere: Failed to create Point instance from string: unknown format.
+  from 17° 42′ 48.24″ S, 178° 3′ 54″ E
+  Suva -18.1248, 178.4501 61.140348186161575 km 37.990851046240934 mi
+  Apia -13.8507, -171.7514 1171.5630598960358 km 727.9755353088188 mi
+  Auckland -36.8485, 174.7633 2145.0663107475098 km 1332.8824109373195 mi
+  Sydney -33.867777777777775, 151.21 3217.1027673193576 km 1999.0149820792556 mi
+> nearest in/cities.txt 0 0 3
+  skip Nowhere: Failed to create Point instance from string: unknown format.
+  from 0° 0′ 0″ N, 0° 0′ 0″ E
+  Lagos 6.5244, 3.3792 813.2673144289464 km 505.34088077436917 mi
+  Cairo 30.0444, 31.2357 4690.649445694079 km 2914.6344384383196 mi
+  Rio de Janeiro -22.9068, -43.1729 5313.719414275339 km 3301.792167662935 mi
+> fence in/stops.txt 40.7484, -73.9857 5
+  in 40.7484, -73.9857 0.0 m
+  in 40.758, -73.9855 1067.6057313914664 m
+  out 40.7061, -74.0087 5087.2124727946175 m
+  out 40.6892, -74.0445 8239.504933307251 m
+  in 40.7829, -73.9654 4199.9356663095 m
+  out 40.6413, -73.7781 21169.571257755062 m
+  out 40.8296, -73.9262 10325.480764121741 m
+  out 41.0, -74.5 51503.18823882359 m
+  40.7128, -74.0060, 10m error ValueError: Calculating distance between points with different altitudes is not supported
+  40.75, -73.99, 1.2km error ValueError: Calculating distance between points with different altitudes is not supported
+  3 inside 5.0 km of 40 44m 54.24s N, 73 59m 8.52s W
+> fence in/stops.txt 40.7484, -73.9857 0.5
+  in 40.7484, -73.9857 0.0 m
+  out 40.758, -73.9855 1067.6057313914664 m
+  out 40.7061, -74.0087 5087.2124727946175 m
+  out 40.6892, -74.0445 8239.504933307251 m
+  out 40.7829, -73.9654 4199.9356663095 m
+  out 40.6413, -73.7781 21169.571257755062 m
+  out 40.8296, -73.9262 10325.480764121741 m
+  out 41.0, -74.5 51503.18823882359 m
+  40.7128, -74.0060, 10m error ValueError: Calculating distance between points with different altitudes is not supported
+  40.75, -73.99, 1.2km error ValueError: Calculating distance between points with different altitudes is not supported
+  1 inside 0.5 km of 40 44m 54.24s N, 73 59m 8.52s W
+> route in/missing.txt
+  error OSError: cannot read in/missing.txt
