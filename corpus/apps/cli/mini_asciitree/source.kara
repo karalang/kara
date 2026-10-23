@@ -1,0 +1,377 @@
+// mini_asciitree — a port of the asciitree library (Marc Brinkmann, MIT): the
+// renderer that draws a tree as indented ASCII or Unicode box-drawing art, the
+// shape every CLI uses for `tree`-style output — a dependency listing, a file
+// hierarchy, a parse tree, a nested-config dump.
+//
+// Each block in data/jobs.tsv is one tree to render: a depth-0 line (carrying
+// the block's drawing style) followed by its descendants, one node per line as
+// `<style>\t<depth>\t<label>`, each attached to the most recent line of smaller
+// depth. The port rebuilds the library's recursive LeftAligned.render exactly,
+// over an arena of parallel Vecs rather than nested dicts, and prints each
+// block under a `=== block <n> (<style>) ===` header.
+//
+// Five box styles — ascii (`+-|+`, the library default), light/heavy/double
+// (single-code-point box glyphs) and blank — plus the older `legacy` form
+// (`  +--`). The glyphs are whole strings concatenated at the String level, so
+// the multi-byte Unicode cases render by code point, not by byte.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let neg = n < 0;
+    let mut v = if neg { -n } else { n };
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45); // '-'
+    }
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn atoi(s: String) -> i64 {
+    let b = str_bytes(s.clone());
+    let neg = b.len() > 0 and b[0] == 45;
+    let mut v = 0;
+    let mut i = if neg { 1 } else { 0 };
+    while i < b.len() {
+        v = v * 10 + (b[i] as i64 - 48);
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn repeat(s: String, n: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        out.push_str(s);
+        i = i + 1;
+    }
+    out
+}
+
+// --- BoxStyle line builders (indent=1, horiz=2, label_space=1) ---
+// g = [vr, h, v, ur]: the junction, horizontal, vertical and last-junction
+// glyphs. A continuation tail under the LAST child is a single space for the
+// vertical column, because the library pads by `len(VERTICAL)` code points.
+
+fn box_child_head(g: Vec[String], label: String) -> String {
+    let mut s = String.new();
+    s.push_str(" ");
+    s.push_str(g[0]);
+    s.push_str(repeat(g[1], 2));
+    s.push_str(" ");
+    s.push_str(label);
+    s
+}
+
+fn box_child_tail(g: Vec[String], line: String) -> String {
+    let mut s = String.new();
+    s.push_str(" ");
+    s.push_str(g[2]);
+    s.push_str("  ");
+    s.push_str(line);
+    s
+}
+
+fn box_last_head(g: Vec[String], label: String) -> String {
+    let mut s = String.new();
+    s.push_str(" ");
+    s.push_str(g[3]);
+    s.push_str(repeat(g[1], 2));
+    s.push_str(" ");
+    s.push_str(label);
+    s
+}
+
+fn box_last_tail(line: String) -> String {
+    let mut s = String.new();
+    s.push_str("    ");
+    s.push_str(line);
+    s
+}
+
+// --- LegacyStyle line builders ---
+
+fn leg_head(label: String) -> String {
+    let mut s = String.new();
+    s.push_str("  +--");
+    s.push_str(label);
+    s
+}
+
+fn leg_child_tail(line: String) -> String {
+    let mut s = String.new();
+    s.push_str("  |");
+    s.push_str(line);
+    s
+}
+
+fn leg_last_tail(line: String) -> String {
+    let mut s = String.new();
+    s.push_str("   ");
+    s.push_str(line);
+    s
+}
+
+fn glyphs(style: String) -> Vec[String] {
+    let mut g: Vec[String] = Vec.new();
+    if style == "light" {
+        g.push("├"); g.push("─"); g.push("│"); g.push("└");
+    } else if style == "heavy" {
+        g.push("┣"); g.push("━"); g.push("┃"); g.push("┗");
+    } else if style == "double" {
+        g.push("╠"); g.push("═"); g.push("║"); g.push("╚");
+    } else if style == "blank" {
+        g.push(" "); g.push(" "); g.push(" "); g.push(" ");
+    } else {
+        g.push("+"); g.push("-"); g.push("|"); g.push("+");
+    }
+    g
+}
+
+struct Tree {
+    label: Vec[String],
+    kids: Vec[Vec[i64]],
+}
+
+impl Tree {
+    fn add(mut ref self, lbl: own String) -> i64 {
+        self.label.push(lbl);
+        let empty: Vec[i64] = Vec.new();
+        self.kids.push(empty);
+        self.label.len() - 1
+    }
+}
+
+fn render(t: ref Tree, idx: i64, g: ref Vec[String], legacy: bool) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(t.label[idx].clone());
+    let kn = t.kids[idx].len();
+    let mut n = 0;
+    while n < kn {
+        let c = t.kids[idx][n];
+        let last = n == kn - 1;
+        let ct = render(t, c, g, legacy);
+        let head = ct[0].clone();
+        if legacy {
+            lines.push(leg_head(head));
+        } else if last {
+            lines.push(box_last_head(g, head));
+        } else {
+            lines.push(box_child_head(g, head));
+        }
+        let mut j = 1;
+        while j < ct.len() {
+            let l = ct[j].clone();
+            if legacy {
+                if last {
+                    lines.push(leg_last_tail(l));
+                } else {
+                    lines.push(leg_child_tail(l));
+                }
+            } else {
+                if last {
+                    lines.push(box_last_tail(l));
+                } else {
+                    lines.push(box_child_tail(g, l));
+                }
+            }
+            j = j + 1;
+        }
+        n = n + 1;
+    }
+    lines
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let mut styles: Vec[String] = Vec.new();
+    let mut depths: Vec[i64] = Vec.new();
+    let mut labels: Vec[String] = Vec.new();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                let lb = str_bytes(line.clone());
+                let mut t1 = -1;
+                let mut t2 = -1;
+                let mut k = 0;
+                while k < lb.len() {
+                    if lb[k] == 9 {
+                        if t1 == -1 {
+                            t1 = k;
+                        } else if t2 == -1 {
+                            t2 = k;
+                        }
+                    }
+                    k = k + 1;
+                }
+                styles.push(line.substring(0, t1));
+                depths.push(atoi(line.substring(t1 + 1, t2)));
+                labels.push(line.substring(t2 + 1, line.len()));
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+
+    let mut out = String.new();
+    let total = depths.len();
+    let mut blk = 0;
+    let mut p = 0;
+    while p < total {
+        let bstyle = styles[p].clone();
+        let mut q = p + 1;
+        while q < total and depths[q] != 0 {
+            q = q + 1;
+        }
+        let mut t = Tree { label: Vec.new(), kids: Vec.new() };
+        let mut sd: Vec[i64] = Vec.new();
+        let mut si: Vec[i64] = Vec.new();
+        let mut root = 0;
+        let mut m = p;
+        while m < q {
+            let d = depths[m];
+            let nid = t.add(labels[m].clone());
+            if d == 0 {
+                root = nid;
+                sd = Vec.new();
+                si = Vec.new();
+                sd.push(0);
+                si.push(nid);
+            } else {
+                while sd.len() > 0 and sd[sd.len() - 1] >= d {
+                    sd.pop();
+                    si.pop();
+                }
+                let parent = si[si.len() - 1];
+                t.kids[parent].push(nid);
+                sd.push(d);
+                si.push(nid);
+            }
+            m = m + 1;
+        }
+        let legacy = bstyle == "legacy";
+        let g = glyphs(bstyle.clone());
+        out.push_str("=== block ");
+        out.push_str(itoa(blk));
+        out.push_str(" (");
+        out.push_str(bstyle);
+        out.push_str(") ===\n");
+        let lines = render(t, root, g, legacy);
+        let mut li = 0;
+        while li < lines.len() {
+            out.push_str(lines[li]);
+            out.push_str("\n");
+            li = li + 1;
+        }
+        blk = blk + 1;
+        p = q;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("ascii\t0\troot\n");
+    s.push_str("ascii\t1\tsub1\n");
+    s.push_str("ascii\t2\tleaf1\n");
+    s.push_str("ascii\t2\tleaf2\n");
+    s.push_str("ascii\t1\tsub2\n");
+    s.push_str("ascii\t2\tleaf3\n");
+    s.push_str("ascii\t1\tsub3\n");
+    s.push_str("light\t0\tasciitree\n");
+    s.push_str("light\t1\tsometimes\n");
+    s.push_str("light\t2\tyou\n");
+    s.push_str("light\t2\tjust\n");
+    s.push_str("light\t1\twant\n");
+    s.push_str("light\t2\tto\n");
+    s.push_str("light\t2\tdraw\n");
+    s.push_str("light\t3\ttrees\n");
+    s.push_str("light\t1\tin\n");
+    s.push_str("light\t1\tyour\n");
+    s.push_str("light\t1\tterminal\n");
+    s.push_str("heavy\t0\tP\n");
+    s.push_str("heavy\t1\tA\n");
+    s.push_str("heavy\t2\tB\n");
+    s.push_str("heavy\t2\tC\n");
+    s.push_str("heavy\t1\tD\n");
+    s.push_str("double\t0\t/\n");
+    s.push_str("double\t1\tetc\n");
+    s.push_str("double\t2\tnginx\n");
+    s.push_str("double\t3\tnginx.conf\n");
+    s.push_str("double\t2\thosts\n");
+    s.push_str("double\t1\thome\n");
+    s.push_str("double\t2\talice\n");
+    s.push_str("double\t2\tbob\n");
+    s.push_str("double\t1\tvar\n");
+    s.push_str("double\t2\tlog\n");
+    s.push_str("blank\t0\troot\n");
+    s.push_str("blank\t1\ta\n");
+    s.push_str("blank\t2\taa\n");
+    s.push_str("blank\t1\tb\n");
+    s.push_str("legacy\t0\troot\n");
+    s.push_str("legacy\t1\tsub1\n");
+    s.push_str("legacy\t2\tleaf1\n");
+    s.push_str("legacy\t2\tleaf2\n");
+    s.push_str("legacy\t1\tsub2\n");
+    s.push_str("legacy\t2\tleaf3\n");
+    s.push_str("ascii\t0\tsingle\n");
+    s.push_str("ascii\t0\tr\n");
+    s.push_str("ascii\t1\tonly-child\n");
+    s.push_str("ascii\t2\tgrand\n");
+    s.push_str("light\t0\tdeep\n");
+    s.push_str("light\t1\tl1\n");
+    s.push_str("light\t2\tl2\n");
+    s.push_str("light\t3\tl3\n");
+    s.push_str("light\t4\tl4\n");
+    s.push_str("light\t1\tsibling\n");
+    s.push_str("ascii\t0\tFilesystem\n");
+    s.push_str("ascii\t1\tbin\n");
+    s.push_str("ascii\t1\tboot\n");
+    s.push_str("ascii\t2\tgrub\n");
+    s.push_str("ascii\t1\tdev\n");
+    s.push_str("ascii\t1\tetc\n");
+    s.push_str("ascii\t2\tinit.d\n");
+    s.push_str("ascii\t2\trc.d\n");
+    s.push_str("ascii\t3\trc.local\n");
+    s.push_str("ascii\t1\tusr\n");
+    s.push_str("ascii\t2\tbin\n");
+    s.push_str("ascii\t2\tlib\n");
+    s.push_str("ascii\t2\tlocal\n");
+    s.push_str("ascii\t3\tbin\n");
+    s.push_str("ascii\t1\tvar\n");
+    s.push_str("ascii\t2\tlog\n");
+    s.push_str("ascii\t3\tsyslog\n");
+    s.push_str("ascii\t2\ttmp\n");
+    s
+}

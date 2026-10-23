@@ -1,0 +1,81 @@
+=== block 0 (ascii) ===
+root
+ +-- sub1
+ |   +-- leaf1
+ |   +-- leaf2
+ +-- sub2
+ |   +-- leaf3
+ +-- sub3
+=== block 1 (light) ===
+asciitree
+ ├── sometimes
+ │   ├── you
+ │   └── just
+ ├── want
+ │   ├── to
+ │   └── draw
+ │       └── trees
+ ├── in
+ ├── your
+ └── terminal
+=== block 2 (heavy) ===
+P
+ ┣━━ A
+ ┃   ┣━━ B
+ ┃   ┗━━ C
+ ┗━━ D
+=== block 3 (double) ===
+/
+ ╠══ etc
+ ║   ╠══ nginx
+ ║   ║   ╚══ nginx.conf
+ ║   ╚══ hosts
+ ╠══ home
+ ║   ╠══ alice
+ ║   ╚══ bob
+ ╚══ var
+     ╚══ log
+=== block 4 (blank) ===
+root
+     a
+         aa
+     b
+=== block 5 (legacy) ===
+root
+  +--sub1
+  |  +--leaf1
+  |  +--leaf2
+  +--sub2
+     +--leaf3
+=== block 6 (ascii) ===
+single
+=== block 7 (ascii) ===
+r
+ +-- only-child
+     +-- grand
+=== block 8 (light) ===
+deep
+ ├── l1
+ │   └── l2
+ │       └── l3
+ │           └── l4
+ └── sibling
+=== block 9 (ascii) ===
+Filesystem
+ +-- bin
+ +-- boot
+ |   +-- grub
+ +-- dev
+ +-- etc
+ |   +-- init.d
+ |   +-- rc.d
+ |       +-- rc.local
+ +-- usr
+ |   +-- bin
+ |   +-- lib
+ |   +-- local
+ |       +-- bin
+ +-- var
+     +-- log
+     |   +-- syslog
+     +-- tmp
