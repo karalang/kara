@@ -1,0 +1,128 @@
+// LeetCode #927: Three Equal Parts -- the parts compared as slices.
+//
+// The third part, from its first 1 to the end, spells the value. Find the
+// first 1 of each third of the 1s, cut a copy of that many digits from
+// each of the three starts, and compare the copies whole; the first two
+// copies must also end before the next one starts. O(n), O(n) space.
+
+fn three_equal_parts(arr: Vec[i64]) -> Vec[i64] {
+    let n = arr.len();
+    let mut ones = 0;
+    for v in arr.iter() {
+        ones += *v;
+    }
+    if ones == 0 {
+        return vec![0, n - 1];
+    }
+    if ones % 3 != 0 {
+        return vec![-1, -1];
+    }
+    let third = ones / 3;
+    let mut starts: Vec[i64] = Vec.new();
+    let mut seen = 0;
+    for k in 0..n {
+        if arr[k] == 1 {
+            if seen % third == 0 {
+                starts.push(k);
+            }
+            seen += 1;
+        }
+    }
+    let length = n - starts[2];
+    if starts[0] + length > starts[1] or starts[1] + length > starts[2] {
+        return vec![-1, -1];
+    }
+    let first = arr[starts[0]..starts[0] + length].to_vec();
+    let second = arr[starts[1]..starts[1] + length].to_vec();
+    let last = arr[starts[2]..n].to_vec();
+    if first == last and second == last {
+        vec![starts[0] + length - 1, starts[1] + length]
+    } else {
+        vec![-1, -1]
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    let mut text = String.from("[");
+    for i in 0..arr.len() {
+        if i > 0 {
+            text = text + ",";
+        }
+        text = text + f"{arr[i]}";
+    }
+    let got = three_equal_parts(arr);
+    println(f"{text}]: [{got[0]},{got[1]}]");
+}
+
+// a value of up to `width` digits written three times, each copy with up
+// to `pad` leading 0s, then perhaps one digit flipped
+fn random_case(seed: mut ref i64, width: i64, pad: i64) -> Vec[i64] {
+    let w = 1 + next_random(mut seed) % width;
+    let mut value: Vec[i64] = Vec.new();
+    for _ in 0..w {
+        value.push(next_random(mut seed) % 2);
+    }
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..3 {
+        let zeros = next_random(mut seed) % (pad + 1);
+        for _ in 0..zeros {
+            arr.push(0);
+        }
+        for v in value.iter() {
+            arr.push(*v);
+        }
+    }
+    if next_random(mut seed) % 2 == 0 {
+        let at = next_random(mut seed) % arr.len();
+        arr[at] = 1 - arr[at];
+    }
+    arr
+}
+
+fn main() {
+    // LeetCode's three examples
+    show(vec![1, 0, 1, 0, 1]);
+    show(vec![1, 1, 0, 1, 1]);
+    show(vec![1, 1, 0, 0, 1]);
+    // all 0s; 1s not a multiple of three; leading 0s in every part;
+    // trailing 0s that the middle part cannot hold; three single 1s
+    show(vec![0, 0, 0, 0]);
+    show(vec![1, 0, 1, 1, 1]);
+    show(vec![0, 1, 0, 0, 1, 0, 0, 0, 1, 0]);
+    show(vec![1, 0, 1, 1, 0, 0]);
+    show(vec![1, 1, 1]);
+    show(vec![0, 1, 1, 0, 1, 1, 0, 0, 1, 1]);
+    // 300 random arrays of up to 3 * 400 digits
+    let mut seed = 927;
+    let mut found = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let arr = random_case(mut seed, 300, 100);
+        let got = three_equal_parts(arr);
+        if got[0] >= 0 {
+            found += 1;
+        }
+        check = (check * 1000003 + got[0] + 1) % 1000000007;
+        check = (check * 1000003 + got[1] + 1) % 1000000007;
+    }
+    println(f"300 random arrays: {found} split, checksum {check}");
+    // LeetCode's largest, 30000 digits: all 0s, all 1s, and three 0s
+    // followed by "100" written 9999 times
+    let zeros: Vec[i64] = Vec.filled(30000, 0);
+    let ones: Vec[i64] = Vec.filled(30000, 1);
+    let mut pattern: Vec[i64] = Vec.new();
+    for k in 0..30000 {
+        pattern.push(if k >= 3 and k % 3 == 0 { 1 } else { 0 });
+    }
+    let a = three_equal_parts(zeros);
+    let b = three_equal_parts(ones);
+    let c = three_equal_parts(pattern);
+    println(f"30000 digits: all 0s [{a[0]},{a[1]}], all 1s [{b[0]},{b[1]}], 100 repeated [{c[0]},{c[1]}]");
+}
