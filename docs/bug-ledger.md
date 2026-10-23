@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 342 |
+| missing-feature | 343 |
 | codegen-gap | 291 |
 | false-positive | 286 |
 | other | 199 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 3043 |
 | interp | 1052 |
-| typecheck | 575 |
+| typecheck | 576 |
 | ownership | 133 |
 | other | 127 |
 | cli | 92 |
@@ -189,6 +189,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-46 | 2026-10-22 | typecheck | medium | `karac check` accepts a bare enum variant used to BUILD a value (`enum E { A(String), B } fn main() { let p = B; ... }`), and v2 runs it as `E.B`; design.md:1310 says a variant is built with its qualified name, and only a pattern may leave the enum name out | — |
 | B-2026-10-23-3 | 2026-10-23 | interp+codegen | medium | A method call whose receiver is a `const` of a primitive type (`const TOL0: f64 = 2.2e-16; TOL0.sqrt()`, also `.abs()` on an f64 or i64 const) passes `karac check` and runs under `karac run --interp`, but v2 lowers it as an associated call on the type: `__mir-run` stops at "call of unknown function f64.sqrt" and `__mir-llvm-run`, `__mir-llvm-asan` and `build --mir` refuse with "native `f64.sqrt` is not lowered yet"; copying the const into a local first (`let t = TOL0; t.sqrt()`) works | — |
 | B-2026-10-23-4 | 2026-10-23 | interp+codegen | low | Float Display breaks an exact tie between two equally short decimals away from zero, where Python's repr keeps the even last digit: -75455689800034.625 prints -75455689800034.63 on every v2 backend and in `--interp`, Python prints -75455689800034.62; library/core-types.md § Printing says only "the shortest digits that read back", so which of the two is unspecified | — |
+| B-2026-10-23-5 | 2026-10-23 | typecheck | low | `to_vec()` on a `Vec[T]` receiver is refused ("no method 'to_vec' on type 'Vec'") though library/collections.md says a Vec finds every Slice method, to_vec among them | — |
 
 ### Relocated
 
