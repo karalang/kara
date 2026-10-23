@@ -894,18 +894,40 @@ impl Walk<'_, '_> {
             .find_map(|s| s.iter().rev().find(|(n, _, _)| n == name))
     }
 
+    /// Whether `e` is a `Copy` value, or a reference to one.
+    fn holds_a_copy(&self, e: &Expr) -> bool {
+        let Some((t, _)) = self.node_types.get(&e.id) else {
+            return false;
+        };
+        let mut t = t;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        self.tc.is_copy_type_during_check(t)
+    }
+
     fn origin_of(&self, name: &str) -> Origin {
         self.lookup(name).map_or(Origin::Owned, |b| b.1)
     }
 
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                is_mut,
+                pattern,
+                value,
+                ..
+            } => {
                 self.expr(value);
                 self.check_mut_ref_bindings(pattern, value);
                 // A local bound to a read-only borrow is one too (§5.9),
                 // and the same edit to the borrow's declaration fixes it.
+                // A `let mut` of a `Copy` value read through a reference
+                // copies it, so that local is its own (§3; B-2026-10-23-11).
                 let (origin, fix) = match &value.kind {
+                    ExprKind::Identifier(_) if *is_mut && self.holds_a_copy(value) => {
+                        (Origin::Owned, None)
+                    }
                     ExprKind::Identifier(n) => self
                         .lookup(n)
                         .map_or((Origin::Owned, None), |b| (b.1, b.2.clone())),

@@ -12210,3 +12210,18 @@ fn collection_terminals_go_through_iter_and_f64_from_widens() {
         "1.5 1.5\n",
     );
 }
+
+/// A `let mut` of a `Copy` `for` element copies it (core-semantics.md §3),
+/// so the copy can be passed `mut`; the collection is not written
+/// (B-2026-10-23-11).
+#[test]
+fn a_let_mut_copy_of_a_for_element_is_its_own() {
+    accepted_and_runs(
+        "let-mut-copy-of-for-elem",
+        "fn bump(x: mut ref i64) {\n    *x += 1;\n}\n\
+         fn main() {\n    for v in vec![1, 2] {\n        let mut w = v;\n        bump(mut w);\n        \
+         println(f\"{w}\");\n    }\n    let xs = vec![10];\n    for v in xs.iter() {\n        \
+         let mut w = v;\n        bump(mut w);\n        println(f\"{w} {xs[0]}\");\n    }\n}\n",
+        "2\n3\n11 10\n",
+    );
+}
