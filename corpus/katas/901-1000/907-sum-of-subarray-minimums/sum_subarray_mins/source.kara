@@ -1,0 +1,91 @@
+// LeetCode #907: Sum of Subarray Minimums -- how far each element reaches.
+//
+// Give every subarray's minimum to its rightmost smallest element. Element
+// i is that for the subarrays that start after the last element to its
+// left smaller than it, and end before the first element to its right
+// smaller than or equal to it. Two passes with a stack of indices whose
+// values rise find both ends, and element i adds arr[i] times the number
+// of starts times the number of ends. O(n).
+
+fn sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut left: Vec[i64] = Vec.filled(n, 0);
+    let mut right: Vec[i64] = Vec.filled(n, 0);
+    let mut stack: Vec[i64] = Vec.new();
+    for i in 0..n {
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] >= arr[i] {
+            stack.pop();
+        }
+        left[i] = if stack.len() > 0 { i - stack[stack.len() - 1] } else { i + 1 };
+        stack.push(i);
+    }
+    stack.clear();
+    for k in 0..n {
+        let i = n - 1 - k;
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] > arr[i] {
+            stack.pop();
+        }
+        right[i] = if stack.len() > 0 { stack[stack.len() - 1] - i } else { n - i };
+        stack.push(i);
+    }
+    let mut total = 0;
+    for i in 0..n {
+        total = (total + arr[i] * left[i] % 1000000007 * right[i]) % 1000000007;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    let mut listed = String.new();
+    for i in 0..arr.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{arr[i]}");
+    }
+    println(f"arr = [{listed}] -> {sum_subarray_mins(arr)}");
+}
+
+fn main() {
+    show(vec![3, 1, 2, 4]);
+    show(vec![11, 81, 94, 43, 3]);
+    show(vec![1]);
+    show(vec![2, 2, 2]);
+    show(vec![1, 2, 3, 4, 5]);
+    show(vec![5, 4, 3, 2, 1]);
+    show(vec![3, 1, 3, 1, 3]);
+    show(vec![30000, 1, 30000]);
+    // random cases of up to 1000 numbers up to 3, 100 or 30000
+    let mut seed = 907;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 1000;
+        let top = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 30000 };
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            arr.push(1 + next_random(mut seed) % top);
+        }
+        check = (check * 1000003 + sum_subarray_mins(arr)) % 1000000007;
+    }
+    println(f"300 cases: checksum {check}");
+    // LeetCode's largest: 30000 random numbers, 1 to 30000 rising, and
+    // 30000 copies of 30000
+    let mut random: Vec[i64] = Vec.new();
+    let mut rising: Vec[i64] = Vec.new();
+    let mut flat: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        random.push(1 + next_random(mut seed) % 30000);
+        rising.push(i + 1);
+        flat.push(30000);
+    }
+    println(f"30000 random numbers -> {sum_subarray_mins(random)}");
+    println(f"1 to 30000 rising -> {sum_subarray_mins(rising)}");
+    println(f"30000 copies of 30000 -> {sum_subarray_mins(flat)}");
+}

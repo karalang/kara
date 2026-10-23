@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/907-sum-of-subarray-minimums/sum_subarray_mins_dp.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "6613f6eda"
+extracted_src = "7c3cb483"
+model_rev = "aafbe785"
+model_src = "7c3cb483"

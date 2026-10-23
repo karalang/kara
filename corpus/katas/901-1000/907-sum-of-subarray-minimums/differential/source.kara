@@ -1,0 +1,284 @@
+// LeetCode #907: Sum of Subarray Minimums -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an array of integers arr, find the sum of min(b),
+// where b ranges over every (contiguous) subarray of arr. Since the answer
+// may be large, return the answer modulo 10^9 + 7.
+
+// ---- the ★ arm: how far each element reaches ------------------------------
+fn star_sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut left: Vec[i64] = Vec.filled(n, 0);
+    let mut right: Vec[i64] = Vec.filled(n, 0);
+    let mut stack: Vec[i64] = Vec.new();
+    for i in 0..n {
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] >= arr[i] {
+            stack.pop();
+        }
+        left[i] = if stack.len() > 0 { i - stack[stack.len() - 1] } else { i + 1 };
+        stack.push(i);
+    }
+    stack.clear();
+    for k in 0..n {
+        let i = n - 1 - k;
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] > arr[i] {
+            stack.pop();
+        }
+        right[i] = if stack.len() > 0 { stack[stack.len() - 1] - i } else { n - i };
+        stack.push(i);
+    }
+    let mut total = 0;
+    for i in 0..n {
+        total = (total + arr[i] * left[i] % 1000000007 * right[i]) % 1000000007;
+    }
+    total
+}
+
+// ---- the pop arm: one pass, adding on the pop -----------------------------
+fn pop_sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for i in 0..n + 1 {
+        let here = if i < n { arr[i] } else { 0 };
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] >= here {
+            let m = stack.pop().unwrap();
+            let start = if stack.len() > 0 { stack[stack.len() - 1] } else { -1 };
+            total = (total + arr[m] * (m - start) % 1000000007 * (i - m)) % 1000000007;
+        }
+        stack.push(i);
+    }
+    total
+}
+
+// ---- the dp arm: the sums of subarrays ending at each place ---------------
+fn dp_sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut ending: Vec[i64] = Vec.filled(n, 0);
+    let mut stack: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for i in 0..n {
+        while stack.len() > 0 and arr[stack[stack.len() - 1]] >= arr[i] {
+            stack.pop();
+        }
+        ending[i] = if stack.len() > 0 {
+            let p = stack[stack.len() - 1];
+            (ending[p] + arr[i] * (i - p)) % 1000000007
+        } else {
+            arr[i] * (i + 1) % 1000000007
+        };
+        stack.push(i);
+        total = (total + ending[i]) % 1000000007;
+    }
+    total
+}
+
+// ---- the split arm: split at the minimum ----------------------------------
+fn split_sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    // table[k][i]: the leftmost smallest index of arr[i .. i + 2^k)
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    let mut first: Vec[i64] = Vec.new();
+    for i in 0..n {
+        first.push(i);
+    }
+    table.push(first);
+    let mut k = 1;
+    while (1 << k) <= n {
+        let mut row: Vec[i64] = Vec.new();
+        let half = 1 << (k - 1);
+        for i in 0..n - (1 << k) + 1 {
+            let a = table[k - 1][i];
+            let b = table[k - 1][i + half];
+            row.push(if arr[b] < arr[a] { b } else { a });
+        }
+        table.push(row);
+        k += 1;
+    }
+    let mut total = 0;
+    let mut ranges: Vec[(i64, i64)] = vec![(0, n - 1)];
+    while ranges.len() > 0 {
+        let (l, r) = ranges.pop().unwrap();
+        if l > r {
+            continue;
+        }
+        let mut level = 0;
+        while (2 << level) <= r - l + 1 {
+            level += 1;
+        }
+        let a = table[level][l];
+        let b = table[level][r + 1 - (1 << level)];
+        let m = if arr[b] < arr[a] { b } else { a };
+        total = (total + arr[m] * (m - l + 1) % 1000000007 * (r - m + 1)) % 1000000007;
+        ranges.push((l, m - 1));
+        ranges.push((m + 1, r));
+    }
+    total
+}
+
+// ---- the merge arm: the largest elements first ----------------------------
+fn merge_sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    // largest first, and of equal values the rightmost first
+    order.sort_by_key(|i| -(arr[i] * (n + 1) + i));
+    // reach[i]: for an end of a run, the run's length; 0 for an element
+    // still off
+    let mut reach: Vec[i64] = Vec.filled(n, 0);
+    let mut total = 0;
+    for i in order.iter() {
+        let at = *i;
+        let left = if at > 0 { reach[at - 1] } else { 0 };
+        let right = if at + 1 < n { reach[at + 1] } else { 0 };
+        total = (total + arr[at] * (left + 1) % 1000000007 * (right + 1)) % 1000000007;
+        let length = left + right + 1;
+        reach[at - left] = length;
+        reach[at + right] = length;
+    }
+    total
+}
+
+fn arm(x: i64, arr: Vec[i64]) -> i64 {
+    match x {
+        0 => star_sum_subarray_mins(arr),
+        1 => pop_sum_subarray_mins(arr),
+        2 => dp_sum_subarray_mins(arr),
+        3 => split_sum_subarray_mins(arr),
+        _ => merge_sum_subarray_mins(arr),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every subarray taken, its minimum found afresh, and the minimums summed
+fn literal(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut total = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut least = arr[i];
+            for k in i..j + 1 {
+                least = least.min(arr[k]);
+            }
+            total += least;
+        }
+    }
+    total % 1000000007
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: Vec[i64], small: bool) {
+    let n = arr.len();
+    let m = 1000000007;
+    let want = if small { literal(arr) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, arr));
+    }
+    // P2: the least and largest element, and the sum of all
+    let subarrays = n * (n + 1) / 2;
+    let mut least = arr[0];
+    let mut most = arr[0];
+    let mut sum = 0;
+    for v in arr.iter() {
+        least = least.min(*v);
+        most = most.max(*v);
+        sum += *v;
+    }
+    // P3: the array reversed
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(arr[n - 1 - i]);
+    }
+    // P4: every element times 3
+    let mut tripled: Vec[i64] = Vec.new();
+    for v in arr.iter() {
+        tripled.push(*v * 3);
+    }
+    // P5: every element plus the same amount
+    let plus = 1 + next_random(mut seed) % 100;
+    let mut raised: Vec[i64] = Vec.new();
+    for v in arr.iter() {
+        raised.push(*v + plus);
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's sum
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: between every subarray's minimum being the least element and
+        // its being the largest, and at least the single elements' sum
+        // (every case here sums to less than 10^9 + 7)
+        check(mut t, 2, got >= subarrays * least and got <= subarrays * most and got >= sum);
+        // P3: the same sum for the array reversed
+        check(mut t, 3, arm(x, reversed) == got);
+        // P4: three times the sum for every element tripled
+        check(mut t, 4, arm(x, tripled) == got * 3 % m);
+        // P5: every minimum raised by the same amount
+        check(mut t, 5, arm(x, raised) == (got + plus * subarrays) % m);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 907;
+    let mut cases = 0;
+    let mut numbers = 0;
+    // up to 12 numbers against the statement; then up to 200; numbers up
+    // to 3, 100 or 30000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 200 };
+        let top = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 30000 };
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            arr.push(1 + next_random(mut seed) % top);
+        }
+        cases += 1;
+        numbers += len;
+        properties(mut t, mut seed, arr, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {numbers} numbers, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

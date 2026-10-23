@@ -1,0 +1,104 @@
+// LeetCode #907: Sum of Subarray Minimums -- split at the minimum.
+//
+// In arr[l..r] the leftmost smallest element m is the minimum of every
+// subarray that contains it, (m - l + 1) * (r - m + 1) of them; the rest
+// lie wholly left or right of m, so split there and go on. A sparse table
+// of range minimums finds m in O(1), and a stack of ranges stands in for
+// the recursion, which can be n deep. O(n log n).
+
+fn sum_subarray_mins(arr: Vec[i64]) -> i64 {
+    let n = arr.len();
+    // table[k][i]: the leftmost smallest index of arr[i .. i + 2^k)
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    let mut first: Vec[i64] = Vec.new();
+    for i in 0..n {
+        first.push(i);
+    }
+    table.push(first);
+    let mut k = 1;
+    while (1 << k) <= n {
+        let mut row: Vec[i64] = Vec.new();
+        let half = 1 << (k - 1);
+        for i in 0..n - (1 << k) + 1 {
+            let a = table[k - 1][i];
+            let b = table[k - 1][i + half];
+            row.push(if arr[b] < arr[a] { b } else { a });
+        }
+        table.push(row);
+        k += 1;
+    }
+    let mut total = 0;
+    let mut ranges: Vec[(i64, i64)] = vec![(0, n - 1)];
+    while ranges.len() > 0 {
+        let (l, r) = ranges.pop().unwrap();
+        if l > r {
+            continue;
+        }
+        let mut level = 0;
+        while (2 << level) <= r - l + 1 {
+            level += 1;
+        }
+        let a = table[level][l];
+        let b = table[level][r + 1 - (1 << level)];
+        let m = if arr[b] < arr[a] { b } else { a };
+        total = (total + arr[m] * (m - l + 1) % 1000000007 * (r - m + 1)) % 1000000007;
+        ranges.push((l, m - 1));
+        ranges.push((m + 1, r));
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    let mut listed = String.new();
+    for i in 0..arr.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{arr[i]}");
+    }
+    println(f"arr = [{listed}] -> {sum_subarray_mins(arr)}");
+}
+
+fn main() {
+    show(vec![3, 1, 2, 4]);
+    show(vec![11, 81, 94, 43, 3]);
+    show(vec![1]);
+    show(vec![2, 2, 2]);
+    show(vec![1, 2, 3, 4, 5]);
+    show(vec![5, 4, 3, 2, 1]);
+    show(vec![3, 1, 3, 1, 3]);
+    show(vec![30000, 1, 30000]);
+    // random cases of up to 1000 numbers up to 3, 100 or 30000
+    let mut seed = 907;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 1000;
+        let top = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 30000 };
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            arr.push(1 + next_random(mut seed) % top);
+        }
+        check = (check * 1000003 + sum_subarray_mins(arr)) % 1000000007;
+    }
+    println(f"300 cases: checksum {check}");
+    // LeetCode's largest: 30000 random numbers, 1 to 30000 rising, and
+    // 30000 copies of 30000
+    let mut random: Vec[i64] = Vec.new();
+    let mut rising: Vec[i64] = Vec.new();
+    let mut flat: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        random.push(1 + next_random(mut seed) % 30000);
+        rising.push(i + 1);
+        flat.push(30000);
+    }
+    println(f"30000 random numbers -> {sum_subarray_mins(random)}");
+    println(f"1 to 30000 rising -> {sum_subarray_mins(rising)}");
+    println(f"30000 copies of 30000 -> {sum_subarray_mins(flat)}");
+}
