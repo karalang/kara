@@ -132,13 +132,21 @@ pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> 
     let module = compile_mir(&llcx, "main", program, tys)?;
     if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
         let tm = super::driver::create_target_machine()?;
+        // Inlining as well: every argument is passed by pointer, and a
+        // small callee left out of line costs its loads and stores at each
+        // call. On kata 3629's bench (release build) the run drops from
+        // 24.5 s to 8.1 s (legacy's JIT: 7.2 s), at a compile cost the
+        // largest programs feel: the 20,000-line mini_pyasn1 app takes
+        // 10.5 s to start where it took 7.6 s.
+        // `KARAC_MIR_JIT_INLINE=0` leaves it at `sroa`.
+        let passes = if std::env::var("KARAC_MIR_JIT_INLINE").as_deref() == Ok("0") {
+            "function(sroa)"
+        } else {
+            "function(sroa),cgscc(inline),function(sroa,instcombine<no-verify-fixpoint>,simplifycfg)"
+        };
         module
-            .run_passes(
-                "function(sroa)",
-                &tm,
-                inkwell::passes::PassBuilderOptions::create(),
-            )
-            .map_err(|e| format!("sroa: {}", e.to_string()))?;
+            .run_passes(passes, &tm, inkwell::passes::PassBuilderOptions::create())
+            .map_err(|e| format!("{passes}: {}", e.to_string()))?;
         // `sroa` grows a name per split (`_463.sroa.0.sroa.0...`); past
         // the IR parser's length limit two such names read back as one.
         for f in module.get_functions() {
