@@ -125,13 +125,18 @@ fn build_v2_builds_a_package() {
     let out = karac(&bad, &["build"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        text(&out.stderr).contains("src/util.kara:6:5:"),
+        // The package's own path for the file: `src\util.kara` on Windows.
+        text(&out.stderr)
+            .replace('\\', "/")
+            .contains("src/util.kara:6:5:"),
         "{}",
         text(&out.stderr)
     );
     let json = karac(&bad, &["build", "--output=json"]);
     assert!(
-        text(&json.stdout).contains("\"file\":\"src/util.kara\",\"line\":6"),
+        text(&json.stdout)
+            .replace("\\\\", "/")
+            .contains("\"file\":\"src/util.kara\",\"line\":6"),
         "{}",
         text(&json.stdout)
     );
