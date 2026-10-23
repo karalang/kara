@@ -1,0 +1,101 @@
+// LeetCode #875: Koko Eating Bananas -- binary search between bounds from
+// the total.
+//
+// No speed below ceil(total / h) can finish, since every hour eats at
+// most k bananas. And each pile takes under p / k + 1 hours, so the hours
+// are below total / k + n, and any k with total / k <= h - n finishes when
+// h > n (k = the largest pile otherwise). The search runs between these
+// two bounds, often far closer together than 1 and the largest pile.
+// O(n log M).
+
+fn min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let n = piles.len();
+    let mut total = 0;
+    let mut largest = 0;
+    for p in piles.iter() {
+        total += *p;
+        largest = largest.max(*p);
+    }
+    let mut lo = (total + h - 1) / h;
+    let mut hi = if h > n { largest.min((total + h - n - 1) / (h - n)).max(lo) } else { largest };
+    while lo < hi {
+        let k = lo + (hi - lo) / 2;
+        let mut spent = 0;
+        for p in piles.iter() {
+            spent += (*p + k - 1) / k;
+        }
+        if spent <= h {
+            hi = k;
+        } else {
+            lo = k + 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 1 to limit (up to 10^9)
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+fn show(piles: Vec[i64], h: i64) {
+    let mut text: Vec[String] = Vec.new();
+    for p in piles.iter() {
+        text.push(f"{p}");
+    }
+    let shown = if text.len() > 8 { f"{text[0]}, {text[1]}, ... ({text.len()} piles)" } else { text.join(", ") };
+    println(f"piles = [{shown}], h = {h} -> {min_eating_speed(piles, h)}");
+}
+
+fn main() {
+    show([3, 6, 7, 11], 8);
+    show([30, 11, 23, 4, 20], 5);
+    show([30, 11, 23, 4, 20], 6);
+    show([1], 1);
+    show([1000000000], 1);
+    show([1000000000], 1000000000);
+    show([1000000000], 999999999);
+    show([5, 5, 5, 5], 7);
+    show([1, 1, 1, 999999999], 10);
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        big.push(1000000000);
+    }
+    show(big, 10000);
+    show(big, 1000000000);
+    // small piles
+    let mut seed = 875;
+    let mut total = 0;
+    for k in 0..3000 {
+        let n = k % 8 + 1;
+        let mut piles: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            piles.push(next_random(mut seed) % 20 + 1);
+        }
+        let h = n + next_random(mut seed) % 30;
+        total += min_eating_speed(piles, h);
+    }
+    println(f"3000 sets of 1 to 8 piles: speeds sum to {total}");
+    // LeetCode's largest: 10^4 piles up to 10^9, h up to 10^9
+    total = 0;
+    let mut check = 0;
+    for k in 0..20 {
+        let mut piles: Vec[i64] = Vec.new();
+        let limit = if k % 2 == 0 { 1000000000 } else { 1000 };
+        for _ in 0..10000 {
+            piles.push(up_to(mut seed, limit));
+        }
+        let h = 10000 + up_to(mut seed, if k % 3 == 0 { 1000000000 - 10000 } else { 100000 }) - 1;
+        let answer = min_eating_speed(piles, h);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"20 sets of 10000 piles: speeds sum to {total}, checksum {check}");
+}

@@ -1,0 +1,296 @@
+// LeetCode #875: Koko Eating Bananas -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: there are n piles of bananas and the guards return in h
+// hours (h >= n). Koko picks a speed of k bananas an hour; each hour she
+// eats k bananas from one pile, or the whole pile if it has fewer, and
+// eats nothing more that hour. Return the smallest integer k with which
+// she eats every banana within h hours.
+
+// ---- the ★ arm: binary search on the speed --------------------------------
+fn star_min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = 1;
+    for p in piles.iter() {
+        hi = hi.max(*p);
+    }
+    while lo < hi {
+        let k = (lo + hi) / 2;
+        if star_hours(piles, k) <= h {
+            hi = k;
+        } else {
+            lo = k + 1;
+        }
+    }
+    lo
+}
+
+fn star_hours(piles: Vec[i64], k: i64) -> i64 {
+    let mut total = 0;
+    for p in piles.iter() {
+        total += (*p + k - 1) / k;
+    }
+    total
+}
+
+// ---- the bounds arm: binary search between bounds from the total ----------
+fn bounds_min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let n = piles.len();
+    let mut total = 0;
+    let mut largest = 0;
+    for p in piles.iter() {
+        total += *p;
+        largest = largest.max(*p);
+    }
+    let mut lo = (total + h - 1) / h;
+    let mut hi = if h > n { largest.min((total + h - n - 1) / (h - n)).max(lo) } else { largest };
+    while lo < hi {
+        let k = lo + (hi - lo) / 2;
+        let mut spent = 0;
+        for p in piles.iter() {
+            spent += (*p + k - 1) / k;
+        }
+        if spent <= h {
+            hi = k;
+        } else {
+            lo = k + 1;
+        }
+    }
+    lo
+}
+
+// ---- the gallop arm: galloping up, then binary search ---------------------
+fn gallop_min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let mut fast = 1;
+    while not gallop_finishes(piles, h, fast) {
+        fast *= 2;
+    }
+    let mut lo = fast / 2 + 1;
+    let mut hi = fast;
+    while lo < hi {
+        let k = (lo + hi) / 2;
+        if gallop_finishes(piles, h, k) {
+            hi = k;
+        } else {
+            lo = k + 1;
+        }
+    }
+    hi
+}
+
+// whether speed k eats every pile within h hours; stops counting once the
+// hours run out
+fn gallop_finishes(piles: Vec[i64], h: i64, k: i64) -> bool {
+    let mut left = h;
+    for p in piles.iter() {
+        left -= (*p + k - 1) / k;
+        if left < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the recursive arm: the search written as recursion -------------------
+fn recursive_min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let mut largest = 0;
+    for p in piles.iter() {
+        largest = largest.max(*p);
+    }
+    recursive_slowest(piles, h, 1, largest)
+}
+
+fn recursive_slowest(piles: Vec[i64], h: i64, lo: i64, hi: i64) -> i64 {
+    if lo == hi {
+        return lo;
+    }
+    let k = (lo + hi) / 2;
+    let mut spent = 0;
+    for p in piles.iter() {
+        spent += *p / k;
+        if *p % k != 0 {
+            spent += 1;
+        }
+    }
+    if spent <= h { recursive_slowest(piles, h, lo, k) } else { recursive_slowest(piles, h, k + 1, hi) }
+}
+
+// ---- the grouped arm: equal piles counted once ----------------------------
+fn grouped_min_eating_speed(piles: Vec[i64], h: i64) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    let mut largest = 0;
+    for p in piles.iter() {
+        count.insert(*p, (count.get(*p) ?? 0) + 1);
+        largest = largest.max(*p);
+    }
+    let mut lo = 1;
+    let mut hi = largest;
+    while lo < hi {
+        let k = (lo + hi) / 2;
+        let mut spent = 0;
+        for (size, times) in count.iter() {
+            spent += (*size + k - 1) / k * *times;
+        }
+        if spent <= h {
+            hi = k;
+        } else {
+            lo = k + 1;
+        }
+    }
+    lo
+}
+
+fn arm(a: i64, piles: Vec[i64], h: i64) -> i64 {
+    match a {
+        0 => star_min_eating_speed(piles, h),
+        1 => bounds_min_eating_speed(piles, h),
+        2 => gallop_min_eating_speed(piles, h),
+        3 => recursive_min_eating_speed(piles, h),
+        _ => grouped_min_eating_speed(piles, h),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the hours Koko takes at speed k: each hour she eats k bananas from a
+// pile with bananas left, or the whole pile if it has fewer, and nothing
+// more that hour
+fn literal_hours(piles: Vec[i64], k: i64) -> i64 {
+    let mut left = piles.clone();
+    let mut spent = 0;
+    for i in 0..left.len() {
+        while left[i] > 0 {
+            left[i] -= k.min(left[i]);
+            spent += 1;
+        }
+    }
+    spent
+}
+
+// the smallest integer speed that eats every banana within h hours
+fn literal(piles: Vec[i64], h: i64) -> i64 {
+    let mut k = 1;
+    while literal_hours(piles, k) > h {
+        k += 1;
+    }
+    k
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+// the hours at speed k, by division
+fn hours_at(piles: Vec[i64], k: i64) -> i64 {
+    let mut spent = 0;
+    for p in piles.iter() {
+        spent += (*p + k - 1) / k;
+    }
+    spent
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one set of piles, each over the five arms (P1
+// only when `small`); returns the ★ arm's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, piles: Vec[i64], h: i64, small: bool) -> i64 {
+    let n = piles.len();
+    let want = if small { literal(piles, h) } else { 0 };
+    let more = h + 1 + next_random(mut seed) % (h + 1);
+    let mut shuffled = piles.clone();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        shuffled.swap(i, j);
+    }
+    let factor = next_random(mut seed) % 4 + 2;
+    let mut scaled: Vec[i64] = Vec.new();
+    for p in piles.iter() {
+        scaled.push(*p * factor);
+    }
+    let mut star = 0;
+    for x in 0..5 {
+        let got = arm(x, piles, h);
+        if x == 0 {
+            star = got;
+        }
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the answer finishes in time and one slower does not
+        check(mut t, 2, got >= 1 and hours_at(piles, got) <= h and (got == 1 or hours_at(piles, got - 1) > h));
+        // P3: more hours never need a faster speed
+        check(mut t, 3, arm(x, piles, more) <= got);
+        // P4: the order of the piles does not matter
+        check(mut t, 4, arm(x, shuffled, h) == got);
+        // P5: every pile multiplied by c needs a speed above c (answer - 1)
+        // and at most c answer
+        let s = arm(x, scaled, h);
+        check(mut t, 5, s > factor * (got - 1) and s <= factor * got);
+        // P6: one more pile, no bigger than the answer, and one more hour
+        // keep the answer
+        let mut added = piles.clone();
+        added.push(1 + next_random(mut seed) % got);
+        check(mut t, 6, arm(x, added, h + 1) == got);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut seed = 875;
+    // small piles against the statement
+    for k in 0..1500 {
+        let n = k % 8 + 1;
+        let mut piles: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            piles.push(next_random(mut seed) % 20 + 1);
+        }
+        let h = n + next_random(mut seed) % 30;
+        count += 1;
+        total += properties(mut t, mut seed, piles, h, true);
+    }
+    // larger piles, up to 10^9 or up to 1000
+    for k in 0..200 {
+        let n = next_random(mut seed) % 60 + 1;
+        let limit = if k % 2 == 0 { 1000000000 } else { 1000 };
+        let mut piles: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            piles.push(up_to(mut seed, limit));
+        }
+        let h = n + up_to(mut seed, if k % 3 == 0 { 1000000 } else { 100 }) - 1;
+        count += 1;
+        total += properties(mut t, mut seed, piles, h, false);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} sets of piles, speeds sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
