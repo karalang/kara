@@ -1,0 +1,118 @@
+// LeetCode #880: Decoded String at Index -- the tape's length, then back
+// from the end.
+//
+// The decoded length is found going forward: a letter adds one, a digit d
+// multiplies by d. Going back, at each character with the tape's length
+// `size` there, k can be taken modulo size, since the tape is some
+// shorter tape repeated; a digit d divides size by d and a letter takes
+// one off. The answer is the first letter met with k a multiple of size,
+// that is, the letter that ends the tape of length k. O(length of s).
+
+fn is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let mut size = 0;
+    for i in 0..bytes.len() {
+        if is_digit(bytes[i]) {
+            size *= (bytes[i] - d0) as i64;
+        } else {
+            size += 1;
+        }
+    }
+    let mut k = k;
+    let mut i = bytes.len() - 1;
+    loop {
+        k %= size;
+        if k == 0 and not is_digit(bytes[i]) {
+            return s[i..i + 1].to_string();
+        }
+        if is_digit(bytes[i]) {
+            size /= (bytes[i] - d0) as i64;
+        } else {
+            size -= 1;
+        }
+        i -= 1;
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn show(s: String, k: i64) {
+    println(f"s = \"{s}\", k = {k} -> \"{decode_at_index(s, k)}\"");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 1 to limit (up to 10^9)
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+// an encoded string of `length` characters starting with a letter, from
+// `alphabet` letters, whose decoded length stays at most `bound`; returns
+// the string and its decoded length
+fn encoded(seed: mut ref i64, length: i64, alphabet: i64, bound: i64) -> (String, i64) {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let digits = "0123456789";
+    let mut s = String.new();
+    let mut size = 0;
+    for i in 0..length {
+        let d = next_random(mut seed) % 8 + 2;
+        if i > 0 and next_random(mut seed) % 3 == 0 and size * d <= bound {
+            s.push_str(digits[d..d + 1]);
+            size *= d;
+        } else if size < bound {
+            let x = next_random(mut seed) % alphabet;
+            s.push_str(letters[x..x + 1]);
+            size += 1;
+        }
+    }
+    (s, size)
+}
+
+fn main() {
+    show("leet2code3", 10);
+    show("ha22", 5);
+    show("a2345678999999999999999", 1);
+    show("leet2code3", 36);
+    show("abc", 3);
+    show("a2b3c4", 40);
+    show("a2b3c4", 39);
+    show("y959q969u3hb22odq595", 222280369);
+    show("a2345678999999999999999", 1000000000);
+    show("abcdefghijklmnopqrstuvwxyz9z9y9x9w9v9u9t9s9r9", 1000000000);
+    // small cases: up to 12 characters, decoded up to 200 letters
+    let mut seed = 880;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let length = next_random(mut seed) % 11 + 2;
+        let (s, size) = encoded(mut seed, length, 4, 200);
+        let k = up_to(mut seed, size);
+        let answer = decode_at_index(s, k).bytes()[0] as i64;
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"3000 cases of up to 12 characters: letters sum to {total}, checksum {check}");
+    // LeetCode's sizes: up to 100 characters, k up to 10^9
+    total = 0;
+    check = 0;
+    for _ in 0..2000 {
+        let length = next_random(mut seed) % 99 + 2;
+        let (s, size) = encoded(mut seed, length, 26, 1000000000000000000);
+        let k = up_to(mut seed, size.min(1000000000));
+        let answer = decode_at_index(s, k).bytes()[0] as i64;
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"2000 cases of up to 100 characters: letters sum to {total}, checksum {check}");
+}

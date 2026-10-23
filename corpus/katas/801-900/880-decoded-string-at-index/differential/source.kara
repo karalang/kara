@@ -1,0 +1,361 @@
+// LeetCode #880: Decoded String at Index -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: an encoded string s is decoded onto a tape one character
+// at a time: a letter is written onto the tape, and for a digit d the
+// entire current tape is written d - 1 more times. Given k, return the k-th
+// letter (1-indexed) of the decoded string.
+
+// ---- the ★ arm: the tape's length, then back from the end -----------------
+fn star_is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn star_decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let mut size = 0;
+    for i in 0..bytes.len() {
+        if star_is_digit(bytes[i]) {
+            size *= (bytes[i] - d0) as i64;
+        } else {
+            size += 1;
+        }
+    }
+    let mut k = k;
+    let mut i = bytes.len() - 1;
+    loop {
+        k %= size;
+        if k == 0 and not star_is_digit(bytes[i]) {
+            return s[i..i + 1].to_string();
+        }
+        if star_is_digit(bytes[i]) {
+            size /= (bytes[i] - d0) as i64;
+        } else {
+            size -= 1;
+        }
+        i -= 1;
+    }
+}
+
+// ---- the search arm: binary search on the tape's lengths ------------------
+fn search_is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn search_decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let n = bytes.len();
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut size = 0;
+    for i in 0..n {
+        if search_is_digit(bytes[i]) {
+            size *= (bytes[i] - d0) as i64;
+        } else {
+            size += 1;
+        }
+        sizes.push(size);
+    }
+    let mut k = k;
+    loop {
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if sizes[mid] >= k {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        if not search_is_digit(bytes[lo]) {
+            return s[lo..lo + 1].to_string();
+        }
+        k = (k - 1) % sizes[lo - 1] + 1;
+    }
+}
+
+// ---- the recursive arm: recursion from the end ----------------------------
+fn recursive_is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn recursive_decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let mut sizes: Vec[i64] = Vec.new();
+    let mut size = 0;
+    for i in 0..bytes.len() {
+        if recursive_is_digit(bytes[i]) {
+            size *= (bytes[i] - d0) as i64;
+        } else {
+            size += 1;
+        }
+        sizes.push(size);
+    }
+    let at = recursive_locate(bytes, sizes, bytes.len() - 1, k);
+    s[at..at + 1].to_string()
+}
+
+fn recursive_locate(bytes: Slice[u8], sizes: Vec[i64], i: i64, k: i64) -> i64 {
+    if recursive_is_digit(bytes[i]) {
+        recursive_locate(bytes, sizes, i - 1, (k - 1) % sizes[i - 1] + 1)
+    } else if sizes[i] == k {
+        i
+    } else {
+        recursive_locate(bytes, sizes, i - 1, k)
+    }
+}
+
+// ---- the restart arm: forward, starting over ------------------------------
+fn restart_is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn restart_decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let mut k = k;
+    let mut end = bytes.len();
+    loop {
+        let mut size = 0;
+        let mut i = 0;
+        while i < end {
+            if restart_is_digit(bytes[i]) {
+                let d = (bytes[i] - d0) as i64;
+                if size * d >= k {
+                    k = (k - 1) % size + 1;
+                    end = i;
+                    break;
+                }
+                size *= d;
+            } else {
+                size += 1;
+                if size == k {
+                    return s[i..i + 1].to_string();
+                }
+            }
+            i += 1;
+        }
+    }
+}
+
+// ---- the runs arm: runs of letters and digits -----------------------------
+fn runs_is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn runs_decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let n = bytes.len();
+    // run j: its counts[j] letters start at starts[j], and the tape is
+    // before[j] long ahead of it
+    let mut starts: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut before: Vec[i64] = Vec.new();
+    let mut size = 0;
+    let mut i = 0;
+    while i < n {
+        starts.push(i);
+        before.push(size);
+        while i < n and not runs_is_digit(bytes[i]) {
+            size += 1;
+            i += 1;
+        }
+        counts.push(size - before[before.len() - 1]);
+        let mut times = 1;
+        while i < n and runs_is_digit(bytes[i]) {
+            times *= (bytes[i] - d0) as i64;
+            i += 1;
+        }
+        size *= times;
+    }
+    let mut k = k;
+    let mut j = starts.len() - 1;
+    loop {
+        k = (k - 1) % (before[j] + counts[j]) + 1;
+        if k > before[j] {
+            let at = starts[j] + k - before[j] - 1;
+            return s[at..at + 1].to_string();
+        }
+        j -= 1;
+    }
+}
+
+fn arm(x: i64, s: String, k: i64) -> String {
+    match x {
+        0 => star_decode_at_index(s, k),
+        1 => search_decode_at_index(s, k),
+        2 => recursive_decode_at_index(s, k),
+        3 => restart_decode_at_index(s, k),
+        _ => runs_decode_at_index(s, k),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the tape written out: each letter written onto it, and for each digit d
+// the entire tape so far written d - 1 more times; then its k-th letter
+fn literal(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let mut tape = String.new();
+    for i in 0..bytes.len() {
+        if star_is_digit(bytes[i]) {
+            tape = tape.repeat((bytes[i] - d0) as i64);
+        } else {
+            tape.push_str(s[i..i + 1]);
+        }
+    }
+    tape[k - 1..k].to_string()
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+// `extra` more characters after `start`, a tape `size` long, from
+// `alphabet` letters, the decoded length staying at most `bound`; returns
+// the string and its decoded length
+fn extend(seed: mut ref i64, start: String, size: i64, extra: i64, alphabet: i64, bound: i64) -> (String, i64) {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let digits = "0123456789";
+    let mut s = start.clone();
+    let mut size = size;
+    for _ in 0..extra {
+        let d = next_random(mut seed) % 8 + 2;
+        if size > 0 and next_random(mut seed) % 3 == 0 and size * d <= bound {
+            s.push_str(digits[d..d + 1]);
+            size *= d;
+        } else if size < bound {
+            let x = next_random(mut seed) % alphabet;
+            s.push_str(letters[x..x + 1]);
+            size += 1;
+        }
+    }
+    (s, size)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's letter.
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, size: i64, k: i64, small: bool, bound: i64) -> i64 {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let n = bytes.len();
+    let want = if small { literal(s, k) } else { String.new() };
+    let (longer, _) = extend(mut seed, s, size, next_random(mut seed) % 6 + 1, 26, bound);
+    // the tape ahead of the last character, and the run of letters s
+    // starts with
+    let last_digit = star_is_digit(bytes[n - 1]);
+    let ahead = if last_digit { size / (bytes[n - 1] - d0) as i64 } else { size - 1 };
+    let mut run = 0;
+    while run < n and not star_is_digit(bytes[run]) {
+        run += 1;
+    }
+    let early = up_to(mut seed, run);
+    let mut answers: Vec[String] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, s, k));
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the answer is one letter of s
+        let mut found = false;
+        for i in 0..n {
+            if not star_is_digit(bytes[i]) and s[i..i + 1] == got {
+                found = true;
+            }
+        }
+        check(mut t, 2, found);
+        // P3: more characters after s change nothing, since its tape is
+        // the start of the longer one's
+        check(mut t, 3, arm(x, longer, k) == got);
+        // P4: after a digit the tape repeats the one ahead of it, so k
+        // gives the same letter as k within that one; after a letter, the
+        // last letter of the tape is that letter
+        if last_digit {
+            check(mut t, 4, arm(x, s, (k - 1) % ahead + 1) == got);
+        } else {
+            check(mut t, 4, arm(x, s, size) == s[n - 1..n].to_string());
+        }
+        // P5: within the letters s starts with, the k-th letter is s's
+        check(mut t, 5, arm(x, s, early) == s[early - 1..early].to_string());
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0].bytes()[0] as i64
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 880;
+    // up to 12 characters and a tape up to 300 letters against the
+    // statement; then LeetCode's sizes, up to 100 characters with k up to
+    // 10^9, against the rest
+    for c in 0..6000 {
+        let small = c < 3000;
+        let bound = if small { 300 } else { 1000000000000000000 };
+        let first = next_random(mut seed) % 26;
+        let letters = "abcdefghijklmnopqrstuvwxyz";
+        let length = if small { next_random(mut seed) % 11 + 1 } else { next_random(mut seed) % 99 + 1 };
+        let (s, size) = extend(mut seed, letters[first..first + 1].to_string(), 1, length, if small { 4 } else { 26 }, bound);
+        let k = up_to(mut seed, size.min(1000000000));
+        cases += 1;
+        total += properties(mut t, mut seed, s, size, k, small, bound);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, letters sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

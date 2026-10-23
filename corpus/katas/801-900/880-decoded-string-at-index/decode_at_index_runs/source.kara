@@ -1,0 +1,129 @@
+// LeetCode #880: Decoded String at Index -- runs of letters and digits.
+//
+// s splits into runs, each some letters and then some digits; run j
+// writes its letters after the tape so far and repeats the whole by the
+// product of its digits. Going back over the runs, k is first moved into
+// one copy, (k - 1) % (before + letters) + 1, where `before` is the tape's
+// length ahead of run j; then k past `before` lands on one of run j's
+// letters, and otherwise the walk goes on into the run before.
+// O(length of s).
+
+fn is_digit(b: u8) -> bool {
+    let d0: u8 = b'0';
+    let d9: u8 = b'9';
+    b >= d0 and b <= d9
+}
+
+fn decode_at_index(s: String, k: i64) -> String {
+    let bytes = s.bytes();
+    let d0: u8 = b'0';
+    let n = bytes.len();
+    // run j: its counts[j] letters start at starts[j], and the tape is
+    // before[j] long ahead of it
+    let mut starts: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut before: Vec[i64] = Vec.new();
+    let mut size = 0;
+    let mut i = 0;
+    while i < n {
+        starts.push(i);
+        before.push(size);
+        while i < n and not is_digit(bytes[i]) {
+            size += 1;
+            i += 1;
+        }
+        counts.push(size - before[before.len() - 1]);
+        let mut times = 1;
+        while i < n and is_digit(bytes[i]) {
+            times *= (bytes[i] - d0) as i64;
+            i += 1;
+        }
+        size *= times;
+    }
+    let mut k = k;
+    let mut j = starts.len() - 1;
+    loop {
+        k = (k - 1) % (before[j] + counts[j]) + 1;
+        if k > before[j] {
+            let at = starts[j] + k - before[j] - 1;
+            return s[at..at + 1].to_string();
+        }
+        j -= 1;
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn show(s: String, k: i64) {
+    println(f"s = \"{s}\", k = {k} -> \"{decode_at_index(s, k)}\"");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 1 to limit (up to 10^9)
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+// an encoded string of `length` characters starting with a letter, from
+// `alphabet` letters, whose decoded length stays at most `bound`; returns
+// the string and its decoded length
+fn encoded(seed: mut ref i64, length: i64, alphabet: i64, bound: i64) -> (String, i64) {
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let digits = "0123456789";
+    let mut s = String.new();
+    let mut size = 0;
+    for i in 0..length {
+        let d = next_random(mut seed) % 8 + 2;
+        if i > 0 and next_random(mut seed) % 3 == 0 and size * d <= bound {
+            s.push_str(digits[d..d + 1]);
+            size *= d;
+        } else if size < bound {
+            let x = next_random(mut seed) % alphabet;
+            s.push_str(letters[x..x + 1]);
+            size += 1;
+        }
+    }
+    (s, size)
+}
+
+fn main() {
+    show("leet2code3", 10);
+    show("ha22", 5);
+    show("a2345678999999999999999", 1);
+    show("leet2code3", 36);
+    show("abc", 3);
+    show("a2b3c4", 40);
+    show("a2b3c4", 39);
+    show("y959q969u3hb22odq595", 222280369);
+    show("a2345678999999999999999", 1000000000);
+    show("abcdefghijklmnopqrstuvwxyz9z9y9x9w9v9u9t9s9r9", 1000000000);
+    // small cases: up to 12 characters, decoded up to 200 letters
+    let mut seed = 880;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let length = next_random(mut seed) % 11 + 2;
+        let (s, size) = encoded(mut seed, length, 4, 200);
+        let k = up_to(mut seed, size);
+        let answer = decode_at_index(s, k).bytes()[0] as i64;
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"3000 cases of up to 12 characters: letters sum to {total}, checksum {check}");
+    // LeetCode's sizes: up to 100 characters, k up to 10^9
+    total = 0;
+    check = 0;
+    for _ in 0..2000 {
+        let length = next_random(mut seed) % 99 + 2;
+        let (s, size) = encoded(mut seed, length, 26, 1000000000000000000);
+        let k = up_to(mut seed, size.min(1000000000));
+        let answer = decode_at_index(s, k).bytes()[0] as i64;
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"2000 cases of up to 100 characters: letters sum to {total}, checksum {check}");
+}

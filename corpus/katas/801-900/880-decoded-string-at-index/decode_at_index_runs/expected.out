@@ -1,0 +1,12 @@
+s = "leet2code3", k = 10 -> "o"
+s = "ha22", k = 5 -> "h"
+s = "a2345678999999999999999", k = 1 -> "a"
+s = "leet2code3", k = 36 -> "e"
+s = "abc", k = 3 -> "c"
+s = "a2b3c4", k = 40 -> "c"
+s = "a2b3c4", k = 39 -> "b"
+s = "y959q969u3hb22odq595", k = 222280369 -> "y"
+s = "a2345678999999999999999", k = 1000000000 -> "a"
+s = "abcdefghijklmnopqrstuvwxyz9z9y9x9w9v9u9t9s9r9", k = 1000000000 -> "c"
+3000 cases of up to 12 characters: letters sum to 295579, checksum 332104854
+2000 cases of up to 100 characters: letters sum to 218463, checksum 916108342

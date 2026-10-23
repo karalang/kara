@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/880-decoded-string-at-index/bench/decode_at_index.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "1723035a5"
+extracted_src = "ea3e4d0f"
+model_rev = "aafbe785"
+model_src = "ea3e4d0f"
