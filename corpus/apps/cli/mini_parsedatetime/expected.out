@@ -1,0 +1,2841 @@
+== every phrase on a friday afternoon
+> now (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> Calendar(Constants(None), version=2)
+> parse 'now'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse 'right now'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse 'today'
+  -> (2026, 10, 23, 9, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'midnight'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'breakfast'
+  -> (2026, 10, 23, 8, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2026, 10, 23, 19, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'morning'
+  -> (2026, 10, 23, 6, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2026, 10, 23, 13, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'evening'
+  -> (2026, 10, 23, 18, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2026, 10, 23, 21, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'tonight'
+  -> (2026, 10, 23, 21, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'eoy'
+  -> (2026, 12, 31, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'monday'
+  -> (2026, 10, 26, 14, 30, 15, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tue'
+  -> (2026, 10, 27, 14, 30, 15, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tues'
+  -> (2026, 10, 27, 14, 30, 15, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2026, 10, 28, 14, 30, 15, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thu'
+  -> (2026, 10, 29, 14, 30, 15, 3, 302, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2026, 10, 30, 14, 30, 15, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sat'
+  -> (2026, 10, 24, 14, 30, 15, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2026, 10, 25, 14, 30, 15, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sunday'
+  -> (2026, 10, 25, 14, 30, 15, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2026, 10, 26, 9, 0, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last friday'
+  -> (2026, 10, 16, 9, 0, 0, 4, 289, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2026, 10, 23, 9, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next sunday'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2026, 10, 18, 9, 0, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'previous tuesday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2026, 10, 21, 9, 0, 0, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prev thu'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last week'
+  -> (2026, 10, 16, 9, 0, 0, 4, 289, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'last month'
+  -> (2026, 9, 1, 9, 0, 0, 1, 244, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'this month'
+  -> (2026, 10, 31, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'end of month'
+  -> (2026, 10, 31, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'end of week'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'end of day'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'end of year'
+  -> (2026, 12, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'next year'
+  -> (2027, 1, 1, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'last year'
+  -> (2025, 1, 1, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'this year'
+  -> (2026, 12, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'next hour'
+  -> (2026, 10, 23, 15, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'last hour'
+  -> (2026, 10, 23, 13, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'this hour'
+  -> (2026, 10, 23, 14, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'next day'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last day'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this day'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'next minute'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in 5 minutes'
+  -> (2026, 10, 23, 14, 35, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse 'in 2 hours'
+  -> (2026, 10, 23, 16, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5 hours ago'
+  -> (2026, 10, 23, 9, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '3 days ago'
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 weeks ago'
+  -> (2026, 10, 9, 14, 30, 15, 4, 282, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'in 3 weeks'
+  -> (2026, 11, 13, 14, 30, 15, 4, 317, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'in 6 months'
+  -> (2027, 4, 23, 14, 30, 15, 4, 113, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2 years ago'
+  -> (2024, 10, 23, 14, 30, 15, 2, 297, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 1.5 hours'
+  -> (2026, 10, 23, 16, 0, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '2.5 days'
+  -> (2026, 10, 26, 2, 30, 15, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '0.5 months'
+  -> (2026, 11, 8, 2, 30, 15, 6, 312, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '1.25 years'
+  -> (2028, 1, 23, 14, 30, 15, 6, 23, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse '-3 days'
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '10 secs'
+  -> (2026, 10, 23, 14, 30, 25, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_SEC)
+> parse '45 min'
+  -> (2026, 10, 23, 15, 15, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '1 hr'
+  -> (2026, 10, 23, 15, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'a day'
+  -> (2026, 10, 24, 14, 30, 15, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'an hour'
+  -> (2026, 10, 23, 15, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2026, 11, 6, 14, 30, 15, 4, 310, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'five days ago'
+  -> (2026, 10, 18, 14, 30, 15, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'twenty minutes'
+  -> (2026, 10, 23, 14, 50, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse 'eleven hours'
+  -> (2026, 10, 24, 1, 30, 15, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'twelve days'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'ten years ago'
+  -> (2016, 10, 23, 14, 30, 15, 6, 297, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'zero days'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 0 hours'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '100 days'
+  -> (2027, 1, 31, 14, 30, 15, 6, 31, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2029, 7, 19, 14, 30, 15, 3, 200, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '90 days ago'
+  -> (2026, 7, 25, 14, 30, 15, 5, 206, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5h'
+  -> (2026, 10, 23, 19, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '30m'
+  -> (2026, 10, 23, 15, 0, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '2d'
+  -> (2026, 10, 25, 14, 30, 15, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1w'
+  -> (2026, 10, 30, 14, 30, 15, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '3y'
+  -> (2029, 10, 23, 14, 30, 15, 1, 296, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse '5 h 30 m'
+  -> (2026, 10, 23, 20, 0, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '2 d ago'
+  -> (2026, 10, 21, 14, 30, 15, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 10 s'
+  -> (2026, 10, 23, 14, 30, 25, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_SEC)
+> parse '5 hours 30 minutes'
+  -> (2026, 10, 23, 20, 0, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1 day 2 hours'
+  -> (2026, 10, 24, 16, 30, 15, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '3 mins'
+  -> (2026, 10, 23, 14, 33, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '2 mths'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in 13 months'
+  -> (2027, 11, 23, 14, 30, 15, 1, 327, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '36 months ago'
+  -> (2023, 10, 23, 14, 30, 15, 0, 296, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '1,5 hours'
+  -> (2026, 10, 23, 19, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'in 99999 years'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, -1) pdtContext()
+> parse 'in 10000 days'
+  -> (2054, 3, 10, 14, 30, 15, 1, 69, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 5000000 days'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, -1) pdtContext()
+> parse '7 wk'
+  -> (2026, 12, 11, 14, 30, 15, 4, 345, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '4 dy'
+  -> (2026, 10, 27, 14, 30, 15, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 yr'
+  -> (2028, 10, 23, 14, 30, 15, 0, 297, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 3.75 weeks'
+  -> (2026, 11, 18, 20, 30, 15, 2, 322, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '0.1 seconds'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_SEC)
+> parse 'in 2,5 days'
+  -> (2026, 10, 28, 14, 30, 15, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5 pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 p.m.'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '17:45'
+  -> (2026, 10, 23, 17, 45, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2026, 10, 23, 9, 5, 30, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12am'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12pm'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:15 am'
+  -> (2026, 10, 23, 0, 15, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '12:00 pm'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '0930'
+  -> (2026, 10, 23, 9, 30, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '24:00'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '23:59:59'
+  -> (2026, 10, 23, 23, 59, 59, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '7a'
+  -> (2026, 10, 23, 7, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '7p'
+  -> (2026, 10, 23, 19, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2026, 10, 23, 11, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'noon tomorrow'
+  -> (2026, 10, 24, 12, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'tomorrow at noon'
+  -> (2026, 10, 24, 12, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'tomorrow 5pm'
+  -> (2026, 10, 24, 17, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday at 9am'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'next friday at 5pm'
+  -> (2026, 10, 30, 17, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'monday 10:30'
+  -> (2026, 10, 26, 10, 30, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse 'at 6:15'
+  -> (2026, 10, 23, 6, 15, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '6.30pm'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '12:60'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '9:5'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '10:00:60'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '13pm'
+  -> (2026, 10, 23, 13, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '0am'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '00:00'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '8:00:00.250'
+  -> (2026, 10, 23, 8, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse 'at 9'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'march 31'
+  -> (2027, 3, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'march 31st'
+  -> (2027, 3, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'may 2027'
+  -> (2027, 5, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH)
+> parse 'july 4th'
+  -> (2027, 7, 4, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'dec 25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'jan 1st'
+  -> (2027, 1, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'feb 29 2028'
+  -> (2028, 2, 29, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '31 august'
+  -> (2027, 8, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '1st march'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'sept 9'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'october'
+  -> (2027, 10, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'nov 2026'
+  -> (2026, 11, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '31st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '1st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '3rd of march'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '12/25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/2026'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026-12-25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '1.5.2027'
+  -> (2027, 1, 5, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '02/30'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/50'
+  -> (1950, 5, 6, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/23'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2027, 10, 22, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '1/1/1999'
+  -> (1999, 1, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2027, 7, 4, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '30/12/2026'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'august 32'
+  -> (2032, 8, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH)
+> parse 'june 0'
+  -> (2027, 6, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'feb 30 2027'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '3 days after tomorrow'
+  -> (2026, 10, 27, 9, 0, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 hours before noon'
+  -> (2026, 10, 23, 10, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR)
+> parse 'one day before thursday'
+  -> (2026, 10, 21, 9, 0, 0, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'a week from today'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_DAY)
+> parse '10 minutes after 4pm'
+  -> (2026, 10, 23, 16, 10, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '3 weeks from now'
+  -> (2026, 11, 13, 14, 30, 15, 4, 317, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'next 4 hrs'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in 2 days at 3pm'
+  -> (2026, 10, 25, 15, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 10, 24, 18, 45, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse 'the day after tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 1/2 hours'
+  -> (2026, 10, 23, 16, 30, 15, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5 days from monday'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'an hour before midnight'
+  -> (2026, 10, 22, 23, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR)
+> parse '2 weeks after dec 25'
+  -> (2028, 1, 8, 14, 30, 15, 5, 8, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_WEEK | pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2027, 1, 23, 14, 30, 15, 5, 23, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse '1 year ago today'
+  -> (2025, 10, 23, 9, 0, 0, 3, 296, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_DAY)
+> parse 'monday next week'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'next friday 9am'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'last monday at noon'
+  -> (2026, 10, 19, 12, 0, 0, 0, 292, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'dec 25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '7pm on dec 25'
+  -> (2026, 12, 25, 19, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'tomorrow morning'
+  -> (2026, 10, 24, 6, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'friday evening'
+  -> (2026, 10, 30, 18, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'yesterday afternoon'
+  -> (2026, 10, 22, 13, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse 'tonight at 11'
+  -> (2026, 10, 23, 21, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse 'next week monday'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eod friday'
+  -> (2026, 10, 30, 17, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR)
+> parse 'eod tomorrow'
+  -> (2026, 10, 24, 17, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse ''
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '   '
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'hello world'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse "xyz o'clock"
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'at'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'next'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'from'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse "'tomorrow'"
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '"friday"'
+  -> (2026, 10, 30, 14, 30, 15, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tomorrow.'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'mon. at 5pm'
+  -> (2026, 10, 26, 17, 0, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'Tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'NEXT WEEK'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'TOMORROW AT 5PM'
+  -> (2026, 10, 24, 17, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '  friday  '
+  -> (2026, 10, 30, 14, 30, 15, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5 cats'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in a while'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '-'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '--'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'in -3 days'
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1-2'
+  -> (2027, 1, 2, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'week'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'month'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'monday monday'
+  -> (2026, 10, 26, 14, 30, 15, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon noon'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'a.m.'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'p'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '12/25/2026 5pm'
+  -> (2026, 12, 25, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '5pm 12/25/2026'
+  -> (2026, 12, 25, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'tomorrow tomorrow'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next next week'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'jan'
+  -> (2027, 1, 1, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'j'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '0'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '00'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '1'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '31'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '32'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '2026'
+  -> (2026, 10, 23, 20, 26, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '99'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '2026 10 23'
+  -> (2026, 10, 23, 20, 26, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+== the old flag style and parseDT
+> Calendar(Constants(None), version=1)
+> parse 'now'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 2
+> parse 'right now'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 2
+> parse 'today'
+  -> (2026, 10, 23, 9, 0, 0, 4, 296, -1) 1
+> parse 'tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) 1
+> parse 'yesterday'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) 1
+> parse 'noon'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) 2
+> parse 'midnight'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) 2
+> parse 'lunch'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) 2
+> parse 'breakfast'
+  -> (2026, 10, 23, 8, 0, 0, 4, 296, 0) 2
+> parse 'dinner'
+  -> (2026, 10, 23, 19, 0, 0, 4, 296, 0) 2
+> parse 'morning'
+  -> (2026, 10, 23, 6, 0, 0, 4, 296, 0) 2
+> parse 'afternoon'
+  -> (2026, 10, 23, 13, 0, 0, 4, 296, 0) 2
+> parse 'evening'
+  -> (2026, 10, 23, 18, 0, 0, 4, 296, 0) 2
+> parse 'night'
+  -> (2026, 10, 23, 21, 0, 0, 4, 296, 0) 2
+> parse 'tonight'
+  -> (2026, 10, 23, 21, 0, 0, 4, 296, 0) 2
+> parse 'eod'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 4, 296, 0) 1
+> parse 'eoy'
+  -> (2026, 12, 31, 9, 0, 0, 4, 296, 0) 1
+> parse 'monday'
+  -> (2026, 10, 26, 14, 30, 15, 0, 299, -1) 1
+> parse 'tue'
+  -> (2026, 10, 27, 14, 30, 15, 1, 300, -1) 1
+> parse 'in 5 minutes'
+  -> (2026, 10, 23, 14, 35, 15, 4, 296, -1) 2
+> parse 'in 2 hours'
+  -> (2026, 10, 23, 16, 30, 15, 4, 296, -1) 2
+> parse '5 hours ago'
+  -> (2026, 10, 23, 9, 30, 15, 4, 296, -1) 2
+> parse '3 days ago'
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) 1
+> parse '2 weeks ago'
+  -> (2026, 10, 9, 14, 30, 15, 4, 282, -1) 1
+> parse 'in 3 weeks'
+  -> (2026, 11, 13, 14, 30, 15, 4, 317, -1) 1
+> parse 'in 6 months'
+  -> (2027, 4, 23, 14, 30, 15, 4, 113, -1) 1
+> parse '2 years ago'
+  -> (2024, 10, 23, 14, 30, 15, 2, 297, -1) 1
+> parse 'in 1.5 hours'
+  -> (2026, 10, 23, 16, 0, 15, 4, 296, -1) 2
+> parse '2.5 days'
+  -> (2026, 10, 26, 2, 30, 15, 0, 299, -1) 1
+> parse '0.5 months'
+  -> (2026, 11, 8, 2, 30, 15, 6, 312, -1) 1
+> parse '1.25 years'
+  -> (2028, 1, 23, 14, 30, 15, 6, 23, -1) 1
+> parse '-3 days'
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) 1
+> parse '10 secs'
+  -> (2026, 10, 23, 14, 30, 25, 4, 296, -1) 2
+> parse '45 min'
+  -> (2026, 10, 23, 15, 15, 15, 4, 296, -1) 2
+> parse '1 hr'
+  -> (2026, 10, 23, 15, 30, 15, 4, 296, -1) 2
+> parse 'a day'
+  -> (2026, 10, 24, 14, 30, 15, 5, 297, -1) 1
+> parse 'an hour'
+  -> (2026, 10, 23, 15, 30, 15, 4, 296, -1) 2
+> parse 'two weeks'
+  -> (2026, 11, 6, 14, 30, 15, 4, 310, -1) 1
+> parse 'five days ago'
+  -> (2026, 10, 18, 14, 30, 15, 6, 291, -1) 1
+> parse '5pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> parse '5 pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> parse '5:30pm'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) 2
+> parse '5:30 p.m.'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) 2
+> parse '5:30 P.M.'
+  -> (2026, 10, 23, 17, 30, 0, 4, 296, 0) 2
+> parse '17:45'
+  -> (2026, 10, 23, 17, 45, 0, 4, 296, 0) 2
+> parse '9:05:30'
+  -> (2026, 10, 23, 9, 5, 30, 4, 296, 0) 2
+> parse '12am'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) 2
+> parse '12pm'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) 2
+> parse '12:15 am'
+  -> (2026, 10, 23, 0, 15, 0, 4, 296, 0) 2
+> parse '12:00 pm'
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) 2
+> parse '0930'
+  -> (2026, 10, 23, 9, 30, 0, 4, 296, 0) 2
+> parse '1700'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> parse '24:00'
+  -> (2026, 10, 23, 0, 0, 0, 4, 296, 0) 2
+> parse '25:00'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse '23:59:59'
+  -> (2026, 10, 23, 23, 59, 59, 4, 296, 0) 2
+> parse '7a'
+  -> (2026, 10, 23, 7, 0, 0, 4, 296, 0) 2
+> parse '7p'
+  -> (2026, 10, 23, 19, 0, 0, 4, 296, 0) 2
+> parse '11 a.m.'
+  -> (2026, 10, 23, 11, 0, 0, 4, 296, 0) 2
+> parse 'noon tomorrow'
+  -> (2026, 10, 24, 12, 0, 0, 5, 297, -1) 3
+> parse 'march 31'
+  -> (2027, 3, 31, 14, 30, 15, 4, 296, 0) 1
+> parse 'march 31st'
+  -> (2027, 3, 31, 14, 30, 15, 4, 296, 0) 1
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 14, 30, 15, 4, 296, 0) 1
+> parse 'may 2027'
+  -> (2027, 5, 1, 14, 30, 15, 4, 296, 0) 1
+> parse 'july 4th'
+  -> (2027, 7, 4, 14, 30, 15, 4, 296, 0) 1
+> parse 'dec 25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) 1
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) 1
+> parse 'jan 1st'
+  -> (2027, 1, 1, 14, 30, 15, 4, 296, 0) 1
+> parse 'feb 29'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'feb 29 2028'
+  -> (2028, 2, 29, 14, 30, 15, 4, 296, 0) 1
+> parse '31 august'
+  -> (2027, 8, 31, 14, 30, 15, 4, 296, 0) 1
+> parse '1st march'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) 1
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 14, 30, 15, 4, 296, 0) 1
+> parse 'sept 9'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'october'
+  -> (2027, 10, 1, 14, 30, 15, 4, 296, 0) 1
+> parse 'nov 2026'
+  -> (2026, 11, 1, 14, 30, 15, 4, 296, 0) 1
+> parse 'the 31st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse '31st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse '1st'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse '3rd of march'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) 1
+> parse '3 days after tomorrow'
+  -> (2026, 10, 27, 9, 0, 0, 1, 300, -1) 1
+> parse '2 hours before noon'
+  -> (2026, 10, 23, 10, 0, 0, 4, 296, -1) 2
+> parse 'one day before thursday'
+  -> (2026, 10, 21, 9, 0, 0, 2, 294, -1) 1
+> parse '2 days after friday'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, -1) 1
+> parse 'a week from today'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) 1
+> parse '10 minutes after 4pm'
+  -> (2026, 10, 23, 16, 10, 0, 4, 296, -1) 2
+> parse '3 weeks from now'
+  -> (2026, 11, 13, 14, 30, 15, 4, 317, -1) 3
+> parse 'next 4 hrs'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'in 2 days at 3pm'
+  -> (2026, 10, 25, 15, 0, 0, 6, 298, -1) 3
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 10, 24, 18, 45, 0, 5, 297, -1) 3
+> parse 'the day after tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) 1
+> parse '1 1/2 hours'
+  -> (2026, 10, 23, 16, 30, 15, 4, 296, -1) 2
+> parse '5 days from monday'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) 1
+> parse 'an hour before midnight'
+  -> (2026, 10, 22, 23, 0, 0, 3, 295, -1) 2
+> parse '2 weeks after dec 25'
+  -> (2028, 1, 8, 14, 30, 15, 5, 8, -1) 1
+> parse '3 months from now'
+  -> (2027, 1, 23, 14, 30, 15, 5, 23, -1) 3
+> parse '1 year ago today'
+  -> (2025, 10, 23, 9, 0, 0, 3, 296, -1) 1
+> parse 'monday next week'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) 1
+> parse 'next friday 9am'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) 3
+> parse 'last monday at noon'
+  -> (2026, 10, 19, 12, 0, 0, 0, 292, -1) 3
+> parse ''
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse '   '
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'hello world'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse "xyz o'clock"
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'at'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'next'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'in'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse 'from'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> parse "'tomorrow'"
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) 1
+> parse '"friday"'
+  -> (2026, 10, 30, 14, 30, 15, 4, 303, -1) 1
+> parseDT 'tomorrow at 5pm'
+  -> datetime.datetime(2026, 10, 24, 17, 0) 3
+> parse 'tomorrow at 5pm' version=2
+  -> (2026, 10, 24, 17, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parseDT 'noon'
+  -> datetime.datetime(2026, 10, 23, 12, 0) 2
+> parse 'noon' version=2
+  -> (2026, 10, 23, 12, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parseDT '3 days ago'
+  -> datetime.datetime(2026, 10, 20, 14, 30, 15) 1
+> parse '3 days ago' version=2
+  -> (2026, 10, 20, 14, 30, 15, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parseDT 'dec 25'
+  -> datetime.datetime(2026, 12, 25, 14, 30, 15) 1
+> parse 'dec 25' version=2
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parseDT 'next week'
+  -> datetime.datetime(2026, 10, 30, 9, 0) 1
+> parse 'next week' version=2
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parseDT 'hello'
+  -> datetime.datetime(2026, 10, 23, 14, 30, 15) 0
+> parse 'hello' version=2
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parseDT '17:45:30'
+  -> datetime.datetime(2026, 10, 23, 17, 45, 30) 2
+> parse '17:45:30' version=2
+  -> (2026, 10, 23, 17, 45, 30, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+== other clocks
+> now (2026, 2, 2, 8, 0, 0, 0, 33, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2026, 2, 3, 9, 0, 0, 1, 34, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2026, 2, 2, 12, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2026, 2, 2, 12, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2026, 2, 2, 19, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2026, 2, 2, 13, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2026, 2, 2, 21, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2026, 2, 2, 17, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2026, 12, 31, 9, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2026, 2, 3, 8, 0, 0, 1, 34, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2026, 2, 4, 8, 0, 0, 2, 35, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2026, 2, 6, 8, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2026, 2, 8, 8, 0, 0, 6, 39, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2026, 2, 9, 9, 0, 0, 0, 40, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2026, 2, 6, 9, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2026, 2, 1, 9, 0, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2026, 1, 28, 9, 0, 0, 2, 28, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 2, 9, 9, 0, 0, 0, 40, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2026, 2, 6, 17, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2026, 1, 1, 9, 0, 0, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2026, 2, 2, 8, 5, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2026, 1, 30, 8, 0, 0, 4, 30, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2026, 8, 2, 8, 0, 0, 6, 214, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2026, 2, 4, 20, 0, 0, 2, 35, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2026, 1, 30, 8, 0, 0, 4, 30, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2026, 2, 2, 9, 0, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2026, 2, 16, 8, 0, 0, 0, 47, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2026, 2, 2, 19, 0, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2028, 10, 29, 8, 0, 0, 6, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2026, 2, 2, 17, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2026, 2, 2, 17, 30, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2026, 2, 2, 17, 30, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2026, 2, 2, 9, 5, 30, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2026, 2, 2, 12, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2026, 2, 2, 12, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2026, 2, 2, 17, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext()
+> parse '7a'
+  -> (2026, 2, 2, 7, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2026, 2, 2, 11, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2026, 3, 31, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2026, 7, 4, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext()
+> parse '31 august'
+  -> (2026, 8, 31, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2026, 10, 1, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext()
+> parse '1st'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext()
+> parse '12/25'
+  -> (2026, 12, 25, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2026, 2, 2, 8, 0, 0, 0, 33, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2026, 10, 22, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2026, 7, 4, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2026, 6, 1, 8, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2026, 2, 6, 9, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2026, 2, 8, 9, 0, 0, 6, 39, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2026, 2, 23, 8, 0, 0, 0, 54, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 2, 3, 18, 45, 0, 1, 34, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2026, 2, 7, 9, 0, 0, 5, 38, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2026, 5, 2, 8, 0, 0, 5, 122, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2026, 2, 13, 9, 0, 0, 4, 44, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 0, 33, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2026, 2, 6, 18, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> now (2025, 12, 31, 23, 59, 59, 2, 365, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2026, 1, 1, 9, 0, 0, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2025, 12, 31, 12, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2025, 12, 31, 12, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2025, 12, 31, 19, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2025, 12, 31, 13, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2025, 12, 31, 21, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2025, 12, 31, 17, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2025, 12, 31, 9, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2026, 1, 6, 23, 59, 59, 1, 6, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2026, 1, 7, 23, 59, 59, 2, 7, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2026, 1, 2, 23, 59, 59, 4, 2, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2026, 1, 4, 23, 59, 59, 6, 4, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2026, 1, 5, 9, 0, 0, 0, 5, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2026, 1, 2, 9, 0, 0, 4, 2, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2025, 12, 28, 9, 0, 0, 6, 362, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2025, 12, 24, 9, 0, 0, 2, 358, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 1, 7, 9, 0, 0, 2, 7, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2026, 1, 2, 17, 0, 0, 4, 2, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2025, 11, 1, 9, 0, 0, 5, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2026, 1, 1, 0, 4, 59, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2025, 12, 28, 23, 59, 59, 6, 362, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2026, 6, 30, 23, 59, 59, 1, 181, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2026, 1, 3, 11, 59, 59, 5, 3, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2025, 12, 28, 23, 59, 59, 6, 362, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2026, 1, 1, 0, 59, 59, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2026, 1, 14, 23, 59, 59, 2, 14, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2026, 1, 1, 10, 59, 59, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2028, 9, 26, 23, 59, 59, 1, 270, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2025, 12, 31, 17, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2025, 12, 31, 17, 30, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2025, 12, 31, 17, 30, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2025, 12, 31, 9, 5, 30, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2025, 12, 31, 12, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2025, 12, 31, 12, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2025, 12, 31, 17, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext()
+> parse '7a'
+  -> (2025, 12, 31, 7, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2025, 12, 31, 11, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2026, 3, 31, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2026, 7, 4, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext()
+> parse '31 august'
+  -> (2026, 8, 31, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2026, 10, 1, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext()
+> parse '1st'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext()
+> parse '12/25'
+  -> (2026, 12, 25, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2025, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2026, 10, 22, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2026, 7, 4, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2026, 6, 1, 23, 59, 59, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2026, 1, 4, 9, 0, 0, 6, 4, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2026, 1, 4, 9, 0, 0, 6, 4, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2026, 1, 21, 23, 59, 59, 2, 21, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 1, 1, 18, 45, 0, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2026, 1, 3, 9, 0, 0, 5, 3, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2026, 3, 31, 23, 59, 59, 1, 90, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2026, 1, 9, 9, 0, 0, 4, 9, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 2, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2026, 1, 2, 18, 0, 0, 4, 2, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> now (2028, 2, 29, 12, 0, 0, 1, 60, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2028, 3, 1, 9, 0, 0, 2, 61, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2028, 2, 29, 19, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2028, 2, 29, 13, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2028, 2, 29, 21, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2028, 2, 29, 17, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2028, 12, 31, 9, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2028, 3, 7, 12, 0, 0, 1, 67, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2028, 3, 1, 12, 0, 0, 2, 61, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2028, 3, 3, 12, 0, 0, 4, 63, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2028, 3, 5, 12, 0, 0, 6, 65, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2028, 3, 6, 9, 0, 0, 0, 66, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2028, 3, 3, 9, 0, 0, 4, 63, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2028, 2, 27, 9, 0, 0, 6, 58, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2028, 2, 23, 9, 0, 0, 2, 54, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2028, 3, 7, 9, 0, 0, 1, 67, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2028, 3, 3, 17, 0, 0, 4, 63, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2028, 1, 1, 9, 0, 0, 5, 1, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2028, 2, 29, 12, 5, 0, 1, 60, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2028, 2, 26, 12, 0, 0, 5, 57, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2028, 8, 29, 12, 0, 0, 1, 242, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2028, 3, 3, 0, 0, 0, 4, 63, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2028, 2, 26, 12, 0, 0, 5, 57, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2028, 2, 29, 13, 0, 0, 1, 60, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2028, 3, 14, 12, 0, 0, 1, 74, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2028, 2, 29, 23, 0, 0, 1, 60, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2030, 11, 25, 12, 0, 0, 0, 329, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2028, 2, 29, 17, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2028, 2, 29, 17, 30, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2028, 2, 29, 17, 30, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2028, 2, 29, 9, 5, 30, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2028, 2, 29, 17, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext()
+> parse '7a'
+  -> (2028, 2, 29, 7, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2028, 2, 29, 11, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2028, 3, 31, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2028, 7, 4, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '31 august'
+  -> (2028, 8, 31, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2028, 10, 1, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext()
+> parse '1st'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext()
+> parse '12/25'
+  -> (2028, 12, 25, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2028, 2, 29, 12, 0, 0, 1, 60, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2028, 10, 22, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2028, 7, 4, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2028, 6, 1, 12, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2028, 3, 4, 9, 0, 0, 5, 64, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2028, 3, 5, 9, 0, 0, 6, 65, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2028, 3, 21, 12, 0, 0, 1, 81, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2028, 3, 1, 18, 45, 0, 2, 61, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2028, 3, 4, 9, 0, 0, 5, 64, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2028, 5, 29, 12, 0, 0, 0, 150, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2028, 3, 10, 9, 0, 0, 4, 70, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2028, 12, 25, 19, 0, 0, 1, 60, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2028, 3, 3, 18, 0, 0, 4, 63, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> now (2026, 1, 31, 0, 0, 0, 5, 31, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2026, 2, 1, 9, 0, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2026, 1, 31, 12, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2026, 1, 31, 12, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2026, 1, 31, 19, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2026, 1, 31, 13, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2026, 1, 31, 21, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2026, 1, 31, 17, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2026, 12, 31, 9, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2026, 2, 3, 0, 0, 0, 1, 34, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2026, 2, 4, 0, 0, 0, 2, 35, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2026, 2, 6, 0, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2026, 2, 1, 0, 0, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2026, 2, 2, 9, 0, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2026, 1, 30, 9, 0, 0, 4, 30, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2026, 1, 25, 9, 0, 0, 6, 25, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2026, 1, 28, 9, 0, 0, 2, 28, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 2, 7, 9, 0, 0, 5, 38, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2026, 1, 30, 17, 0, 0, 4, 30, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2025, 12, 1, 9, 0, 0, 0, 335, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2026, 1, 31, 0, 5, 0, 5, 31, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2026, 1, 28, 0, 0, 0, 2, 28, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2026, 7, 31, 0, 0, 0, 4, 212, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2026, 2, 2, 12, 0, 0, 0, 33, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2026, 1, 28, 0, 0, 0, 2, 28, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2026, 1, 31, 1, 0, 0, 5, 31, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2026, 2, 14, 0, 0, 0, 5, 45, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2026, 1, 31, 11, 0, 0, 5, 31, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2028, 10, 27, 0, 0, 0, 4, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2026, 1, 31, 17, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2026, 1, 31, 17, 30, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2026, 1, 31, 17, 30, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2026, 1, 31, 9, 5, 30, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2026, 1, 31, 12, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2026, 1, 31, 12, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2026, 1, 31, 17, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, 0) pdtContext()
+> parse '7a'
+  -> (2026, 1, 31, 7, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2026, 1, 31, 11, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2026, 3, 31, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2026, 7, 4, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, 0) pdtContext()
+> parse '31 august'
+  -> (2026, 8, 31, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2026, 10, 1, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, 0) pdtContext()
+> parse '1st'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, 0) pdtContext()
+> parse '12/25'
+  -> (2026, 12, 25, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2026, 1, 31, 0, 0, 0, 5, 31, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2026, 10, 22, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2026, 7, 4, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2026, 6, 1, 0, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2026, 2, 4, 9, 0, 0, 2, 35, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2026, 2, 1, 9, 0, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2026, 2, 21, 0, 0, 0, 5, 52, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 2, 1, 18, 45, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2026, 1, 31, 9, 0, 0, 5, 31, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2026, 4, 30, 0, 0, 0, 3, 120, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2026, 2, 6, 9, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 5, 31, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2026, 2, 6, 18, 0, 0, 4, 37, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> now (2027, 3, 14, 1, 59, 26, 6, 73, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2027, 3, 15, 9, 0, 0, 0, 74, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2027, 3, 14, 12, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2027, 3, 14, 12, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2027, 3, 14, 19, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2027, 3, 14, 13, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2027, 3, 14, 21, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2027, 3, 14, 17, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2027, 12, 31, 9, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2027, 3, 16, 1, 59, 26, 1, 75, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2027, 3, 17, 1, 59, 26, 2, 76, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2027, 3, 19, 1, 59, 26, 4, 78, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2027, 3, 21, 1, 59, 26, 6, 80, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2027, 3, 15, 9, 0, 0, 0, 74, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2027, 3, 12, 9, 0, 0, 4, 71, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2027, 3, 7, 9, 0, 0, 6, 66, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2027, 3, 10, 9, 0, 0, 2, 69, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2027, 3, 21, 9, 0, 0, 6, 80, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2027, 3, 12, 17, 0, 0, 4, 71, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2027, 2, 1, 9, 0, 0, 0, 32, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2027, 3, 14, 2, 4, 26, 6, 73, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2027, 3, 11, 1, 59, 26, 3, 70, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2027, 9, 14, 1, 59, 26, 1, 257, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2027, 3, 16, 13, 59, 26, 1, 75, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2027, 3, 11, 1, 59, 26, 3, 70, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2027, 3, 14, 2, 59, 26, 6, 73, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2027, 3, 28, 1, 59, 26, 6, 87, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2027, 3, 14, 12, 59, 26, 6, 73, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2027, 3, 14, 1, 59, 26, 6, 73, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2029, 12, 8, 1, 59, 26, 5, 342, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2027, 3, 14, 17, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2027, 3, 14, 17, 30, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2027, 3, 14, 17, 30, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2027, 3, 14, 9, 5, 30, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2027, 3, 14, 12, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2027, 3, 14, 12, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2027, 3, 14, 17, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2027, 3, 14, 1, 59, 26, 6, 73, 0) pdtContext()
+> parse '7a'
+  -> (2027, 3, 14, 7, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2027, 3, 14, 11, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2027, 3, 31, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2027, 7, 4, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2028, 2, 29, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '31 august'
+  -> (2027, 8, 31, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2027, 10, 1, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2027, 3, 14, 1, 59, 26, 6, 73, 0) pdtContext()
+> parse '1st'
+  -> (2027, 3, 14, 1, 59, 26, 6, 73, 0) pdtContext()
+> parse '12/25'
+  -> (2027, 12, 25, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2027, 3, 14, 1, 59, 26, 6, 73, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2027, 10, 22, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2027, 7, 4, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2027, 6, 1, 1, 59, 26, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2027, 3, 18, 9, 0, 0, 3, 77, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2027, 3, 14, 9, 0, 0, 6, 73, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2027, 4, 4, 1, 59, 26, 6, 94, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2027, 3, 15, 18, 45, 0, 0, 74, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2027, 3, 13, 9, 0, 0, 5, 72, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2027, 6, 14, 1, 59, 26, 0, 165, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2027, 3, 19, 9, 0, 0, 4, 78, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2027, 12, 25, 19, 0, 0, 6, 73, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2027, 3, 19, 18, 0, 0, 4, 78, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> now (2026, 10, 25, 9, 0, 0, 6, 298, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow'
+  -> (2026, 10, 26, 9, 0, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon'
+  -> (2026, 10, 25, 12, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'lunch'
+  -> (2026, 10, 25, 12, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'dinner'
+  -> (2026, 10, 25, 19, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'afternoon'
+  -> (2026, 10, 25, 13, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'night'
+  -> (2026, 10, 25, 21, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eod'
+  -> (2026, 10, 25, 17, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'eoy'
+  -> (2026, 12, 31, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'tue'
+  -> (2026, 10, 27, 9, 0, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'wed'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'sun'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next monday'
+  -> (2026, 10, 26, 9, 0, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this friday'
+  -> (2026, 10, 23, 9, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last sunday'
+  -> (2026, 10, 18, 9, 0, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'prior wednesday'
+  -> (2026, 10, 21, 9, 0, 0, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'this week'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (2026, 9, 1, 9, 0, 0, 1, 244, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 5 minutes'
+  -> (2026, 10, 25, 9, 5, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_MIN)
+> parse '3 days ago'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 6 months'
+  -> (2027, 4, 25, 9, 0, 0, 6, 115, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2.5 days'
+  -> (2026, 10, 27, 21, 0, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '-3 days'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '1 hr'
+  -> (2026, 10, 25, 10, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'two weeks'
+  -> (2026, 11, 8, 9, 0, 0, 6, 312, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'eleven hours'
+  -> (2026, 10, 25, 20, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'zero days'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 1000 days'
+  -> (2029, 7, 21, 9, 0, 0, 5, 202, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '5pm'
+  -> (2026, 10, 25, 17, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '5:30pm'
+  -> (2026, 10, 25, 17, 30, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5:30 P.M.'
+  -> (2026, 10, 25, 17, 30, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '9:05:30'
+  -> (2026, 10, 25, 9, 5, 30, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+> parse '12pm'
+  -> (2026, 10, 25, 12, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12:00 pm'
+  -> (2026, 10, 25, 12, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '1700'
+  -> (2026, 10, 25, 17, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '25:00'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, 0) pdtContext()
+> parse '7a'
+  -> (2026, 10, 25, 7, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '11 a.m.'
+  -> (2026, 10, 25, 11, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'march 31'
+  -> (2027, 3, 31, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'mar 3rd 2027'
+  -> (2027, 3, 3, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'july 4th'
+  -> (2027, 7, 4, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'december 25, 2026'
+  -> (2026, 12, 25, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'feb 29'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, 0) pdtContext()
+> parse '31 august'
+  -> (2027, 8, 31, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2nd feb 2027'
+  -> (2027, 2, 2, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'october'
+  -> (2027, 10, 1, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'the 31st'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, 0) pdtContext()
+> parse '1st'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, 0) pdtContext()
+> parse '12/25'
+  -> (2026, 12, 25, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25/26'
+  -> (2026, 12, 25, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026/1/5'
+  -> (2026, 1, 5, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/25'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, 0) pdtContext()
+> parse '5/6/49'
+  -> (2049, 5, 6, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2026.12.31'
+  -> (2026, 12, 31, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '10/22'
+  -> (2027, 10, 22, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '7-4'
+  -> (2027, 7, 4, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'aug 21 2007'
+  -> (2007, 8, 21, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'june 0'
+  -> (2027, 6, 1, 9, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days after tomorrow'
+  -> (2026, 10, 29, 9, 0, 0, 3, 302, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '2 days after friday'
+  -> (2026, 10, 25, 9, 0, 0, 6, 298, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 weeks from now'
+  -> (2026, 11, 15, 9, 0, 0, 6, 319, -1) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_NOW)
+> parse 'tomorrow at 6:45pm'
+  -> (2026, 10, 26, 18, 45, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+> parse '5 days from monday'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 months from now'
+  -> (2027, 1, 25, 9, 0, 0, 0, 25, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_NOW)
+> parse 'next friday 9am'
+  -> (2026, 10, 30, 9, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse '12/25 at 7pm'
+  -> (2026, 12, 25, 19, 0, 0, 6, 298, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'friday evening'
+  -> (2026, 10, 30, 18, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+> parse '2 hours after 2026-10-30 10:00'
+  -> (2026, 10, 30, 12, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+== the edges of the calendar
+> now (9999, 12, 15, 10, 0, 0, 2, 349, 0)
+> Calendar(Constants(None), version=2)
+> parse 'next month'
+  error OverflowError: year is out of range
+> parse 'next year'
+  -> (10000, 1, 1, 9, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 2 weeks'
+  -> (9999, 12, 29, 10, 0, 0, 2, 363, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'tomorrow'
+  -> (9999, 12, 16, 9, 0, 0, 3, 350, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (9999, 12, 14, 9, 0, 0, 1, 348, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 30 days'
+  -> (9999, 12, 15, 10, 0, 0, 2, 349, -1) pdtContext()
+> parse '3 days ago'
+  -> (9999, 12, 12, 10, 0, 0, 6, 346, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (9999, 12, 22, 9, 0, 0, 2, 356, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  -> (9999, 11, 1, 9, 0, 0, 0, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2 years ago'
+  -> (9997, 12, 15, 10, 0, 0, 0, 349, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 1 year'
+  -> (9999, 12, 15, 10, 0, 0, 2, 349, -1) pdtContext()
+> parse 'eom'
+  -> (9999, 12, 31, 9, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'eoy'
+  -> (9999, 12, 31, 9, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'monday'
+  -> (9999, 12, 20, 10, 0, 0, 0, 354, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last monday'
+  -> (9999, 12, 13, 9, 0, 0, 0, 347, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this week'
+  -> (9999, 12, 17, 17, 0, 0, 4, 351, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '1 month ago'
+  -> (9999, 11, 15, 10, 0, 0, 0, 319, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 months'
+  -> (9999, 12, 15, 10, 0, 0, 2, 349, -1) pdtContext()
+> parse 'jan 5'
+  -> (10000, 1, 5, 10, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25'
+  -> (9999, 12, 25, 10, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'dec 25 2000'
+  -> (2000, 12, 25, 10, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'in 100 years'
+  -> (9999, 12, 15, 10, 0, 0, 2, 349, -1) pdtContext()
+> parse 'noon'
+  -> (9999, 12, 15, 12, 0, 0, 2, 349, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'in 1 hour'
+  -> (9999, 12, 15, 11, 0, 0, 2, 349, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> now (9999, 12, 31, 23, 0, 0, 4, 365, 0)
+> Calendar(Constants(None), version=2)
+> parse 'next month'
+  error OverflowError: year is out of range
+> parse 'next year'
+  -> (10000, 1, 1, 9, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 2 weeks'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> parse 'tomorrow'
+  error OverflowError: date value out of range
+> parse 'yesterday'
+  -> (9999, 12, 30, 9, 0, 0, 3, 364, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 30 days'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> parse '3 days ago'
+  -> (9999, 12, 28, 23, 0, 0, 1, 362, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  error OverflowError: date value out of range
+> parse 'last month'
+  -> (9999, 11, 1, 9, 0, 0, 0, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '2 years ago'
+  -> (9997, 12, 31, 23, 0, 0, 2, 365, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 1 year'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> parse 'eom'
+  -> (9999, 12, 31, 9, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'eoy'
+  -> (9999, 12, 31, 9, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'monday'
+  error OverflowError: date value out of range
+> parse 'last monday'
+  -> (9999, 12, 27, 9, 0, 0, 0, 361, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this week'
+  -> (9999, 12, 31, 17, 0, 0, 4, 365, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '1 month ago'
+  -> (9999, 11, 30, 23, 0, 0, 1, 334, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 months'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> parse 'jan 5'
+  -> (10000, 1, 5, 23, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25'
+  -> (10000, 12, 25, 23, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'dec 25 2000'
+  -> (2000, 12, 25, 23, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'in 100 years'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> parse 'noon'
+  -> (9999, 12, 31, 12, 0, 0, 4, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'in 1 hour'
+  -> (9999, 12, 31, 23, 0, 0, 4, 365, -1) pdtContext()
+> now (1, 1, 2, 0, 0, 0, 1, 2, 0)
+> Calendar(Constants(None), version=2)
+> parse 'next month'
+  -> (1, 2, 1, 9, 0, 0, 3, 32, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'next year'
+  -> (2, 1, 1, 9, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'in 2 weeks'
+  -> (1, 1, 16, 0, 0, 0, 1, 16, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'tomorrow'
+  -> (1, 1, 3, 9, 0, 0, 2, 3, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (1, 1, 1, 9, 0, 0, 0, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'in 30 days'
+  -> (1, 2, 1, 0, 0, 0, 3, 32, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse '3 days ago'
+  -> (1, 1, 2, 0, 0, 0, 1, 2, 0) pdtContext()
+> parse 'next week'
+  -> (1, 1, 9, 9, 0, 0, 1, 9, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'last month'
+  error OverflowError: year is out of range
+> parse '2 years ago'
+  -> (1, 1, 2, 0, 0, 0, 1, 2, 0) pdtContext()
+> parse 'in 1 year'
+  -> (2, 1, 2, 0, 0, 0, 2, 2, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'eom'
+  -> (1, 1, 31, 9, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'eoy'
+  -> (1, 12, 31, 9, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'monday'
+  -> (1, 1, 8, 0, 0, 0, 0, 8, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last monday'
+  -> (1, 1, 1, 9, 0, 0, 0, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'this week'
+  -> (1, 1, 5, 17, 0, 0, 4, 5, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse '1 month ago'
+  -> (1, 1, 2, 0, 0, 0, 1, 2, 0) pdtContext()
+> parse 'in 3 months'
+  -> (1, 4, 2, 0, 0, 0, 0, 92, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'jan 5'
+  -> (1, 1, 5, 0, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25'
+  -> (2001, 12, 25, 0, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'dec 25 2000'
+  -> (2000, 12, 25, 0, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'in 100 years'
+  -> (101, 1, 2, 0, 0, 0, 6, 2, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'noon'
+  -> (1, 1, 2, 12, 0, 0, 1, 2, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse 'in 1 hour'
+  -> (1, 1, 2, 1, 0, 0, 1, 2, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+== an explicit source time
+> now (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> Calendar(Constants(None), version=2)
+> parse 'tomorrow' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 16, 9, 0, 0, 4, 16, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 2, 1, 9, 0, 0, 6, 32, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 days' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 18, 10, 0, 0, 6, 18, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 16, 10, 0, 0, 4, 16, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 15, 12, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse '5pm' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 15, 17, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'eom' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 31, 9, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next year' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2027, 1, 1, 9, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'march 1' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 3, 1, 10, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 12, 25, 10, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2 weeks ago' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 1, 10, 0, 0, 3, 1, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'monday at 9' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 19, 10, 0, 0, 0, 19, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'now' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 15, 10, 0, 0, 3, 15, 0) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse '' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 15, 10, 0, 0, 3, 15, 0) pdtContext()
+> parse 'hello' sourceTime=(2026, 1, 15, 10, 0, 0, 3, 15, 0)
+  -> (2026, 1, 15, 10, 0, 0, 3, 15, 0) pdtContext()
+> parse 'tomorrow' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 7, 1, 9, 0, 0, 2, 182, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 7, 1, 9, 0, 0, 2, 182, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 days' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 7, 3, 23, 0, 0, 4, 184, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 7, 4, 23, 0, 0, 5, 185, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 12, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse '5pm' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 17, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'eom' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 9, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next year' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2027, 1, 1, 9, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'march 1' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2027, 3, 1, 23, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 12, 25, 23, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2 weeks ago' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 16, 23, 0, 0, 1, 167, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'monday at 9' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 7, 7, 23, 0, 0, 1, 188, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'now' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 23, 0, 0, 0, 0, -1) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse '' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 23, 0, 0, 0, 0, -1) pdtContext()
+> parse 'hello' sourceTime=(2026, 6, 30, 23, 0, 0, 0, 0, -1)
+  -> (2026, 6, 30, 23, 0, 0, 0, 0, -1) pdtContext()
+> parse 'tomorrow' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 1, 9, 0, 0, 4, 61, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 1, 9, 0, 0, 4, 61, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 days' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 3, 6, 30, 0, 6, 63, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 1, 6, 30, 0, 4, 61, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 12, 0, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse '5pm' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 17, 0, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'eom' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 9, 0, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next year' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2025, 1, 1, 9, 0, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'march 1' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 1, 6, 30, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 12, 25, 6, 30, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2 weeks ago' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 15, 6, 30, 0, 3, 46, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'monday at 9' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 3, 4, 6, 30, 0, 0, 64, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'now' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 6, 30, 0, 3, 60, 1) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse '' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 6, 30, 0, 3, 60, 1) pdtContext()
+> parse 'hello' sourceTime=(2024, 2, 29, 6, 30, 0, 3, 60, 1)
+  -> (2024, 2, 29, 6, 30, 0, 3, 60, 1) pdtContext()
+> parse 'tomorrow' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 1, 9, 0, 0, 4, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 1, 9, 0, 0, 4, 1, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse 'in 3 days' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 3, 18, 45, 30, 6, 3, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'friday' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 1, 18, 45, 30, 4, 1, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'noon' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 12, 0, 0, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+> parse '5pm' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 17, 0, 0, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse 'eom' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 9, 0, 0, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next year' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 1, 9, 0, 0, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_YEAR)
+> parse 'march 1' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 3, 1, 18, 45, 30, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/25' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 12, 25, 18, 45, 30, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '2 weeks ago' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 17, 18, 45, 30, 3, 351, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'monday at 9' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2027, 1, 4, 18, 45, 30, 0, 4, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'now' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 18, 45, 30, 3, 365, 0) pdtContext(accuracy=pdtContext.ACU_NOW)
+> parse '' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 18, 45, 30, 3, 365, 0) pdtContext()
+> parse 'hello' sourceTime=(2026, 12, 31, 18, 45, 30, 3, 365, 0)
+  -> (2026, 12, 31, 18, 45, 30, 3, 365, 0) pdtContext()
+== the constants
+> now (2026, 10, 21, 16, 5, 0, 2, 294, 0)
+> Calendar(Constants(None), version=2)
+> ptc.StartHour = 8
+> parse 'tomorrow'
+  -> (2026, 10, 22, 8, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 8, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 8, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 8, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 8, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 8, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 8, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.StartTimeFromSourceTime = True
+> parse 'tomorrow'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 16, 5, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 16, 5, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 16, 5, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.YearParseStyle = 0
+> parse 'tomorrow'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 9, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2026, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2026, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.DOWParseStyle = -1
+> parse 'tomorrow'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 14, 16, 5, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 20, 16, 5, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 15, 16, 5, 0, 3, 288, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 9, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 19, 16, 5, 0, 0, 292, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.DOWParseStyle = 0
+> parse 'tomorrow'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 20, 16, 5, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 9, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 19, 16, 5, 0, 0, 292, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.CurrentDOWParseStyle = True
+> parse 'tomorrow'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 9, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.BirthdayEpoch = 30
+> parse 'tomorrow'
+  -> (2026, 10, 22, 9, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 9, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 9, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 9, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (1931, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 9, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 9, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.StartHour = 0
+> parse 'tomorrow'
+  -> (2026, 10, 22, 0, 0, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next week'
+  -> (2026, 10, 28, 0, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_WEEK)
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  -> (2026, 10, 28, 0, 0, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'last wednesday'
+  -> (2026, 10, 14, 0, 0, 0, 2, 287, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next month'
+  -> (2026, 11, 1, 0, 0, 0, 6, 305, -1) pdtContext(accuracy=pdtContext.ACU_MONTH)
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 0, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  -> (2026, 10, 20, 0, 0, 0, 1, 293, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> Calendar(Constants(None), version=2)
+> ptc.StartHour = 24
+> parse 'tomorrow'
+  error ValueError: hour must be in 0..23
+> parse 'next week'
+  error ValueError: hour must be in 0..23
+> parse 'wednesday'
+  -> (2026, 10, 28, 16, 5, 0, 2, 301, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'tuesday'
+  -> (2026, 10, 27, 16, 5, 0, 1, 300, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'thursday'
+  -> (2026, 10, 22, 16, 5, 0, 3, 295, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next wednesday'
+  error ValueError: hour must be in 0..23
+> parse 'last wednesday'
+  error ValueError: hour must be in 0..23
+> parse 'next month'
+  error ValueError: hour must be in 0..23
+> parse '3 days ago'
+  -> (2026, 10, 18, 16, 5, 0, 6, 291, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'jan 5'
+  -> (2027, 1, 5, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 21'
+  -> (2026, 10, 21, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'oct 20'
+  -> (2027, 10, 20, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/29'
+  -> (2029, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/31'
+  -> (2031, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '5/6/99'
+  -> (1999, 5, 6, 16, 5, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse 'eom'
+  -> (2026, 10, 31, 24, 0, 0, 2, 294, 0) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'yesterday'
+  error ValueError: hour must be in 0..23
+> parse 'monday'
+  -> (2026, 10, 26, 16, 5, 0, 0, 299, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+== the australian locale
+> now (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> Calendar(Constants('en_AU'), version=2)
+> parse '12/05'
+  -> (2027, 5, 12, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12/05/2027'
+  -> (2027, 5, 12, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '05-12-2027'
+  -> (2027, 12, 5, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '25/12'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '13/1/27'
+  -> (2027, 1, 13, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '1/13/27'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse '2026-12-25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '12.05.2027'
+  -> (2027, 5, 12, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '31/4'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> parse 'tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) pdtContext(accuracy=pdtContext.ACU_DAY)
+> parse 'next friday at 5pm'
+  -> (2026, 10, 30, 17, 0, 0, 4, 303, -1) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> parse 'dec 25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '25 dec'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '4-5pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_HOUR)
+> parse '12/05 at 9am'
+  -> (2027, 5, 12, 9, 0, 0, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+> evalRanges '06/07/06 - 08/09/06'
+  -> (2006, 7, 6, 14, 30, 15, 4, 296, 0) (2006, 9, 8, 14, 30, 15, 4, 296, 0) 1
+> evalRanges '25-12-2026 - 1-1-2027'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> Calendar(Constants('en_US'), version=2)
+> parse '12/05'
+  -> (2026, 12, 5, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '05-12-2027'
+  -> (2027, 5, 12, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+> parse '25/12'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) pdtContext()
+> Calendar(Constants('fr_FR_missing'), version=2)
+> parse '12/05'
+  -> (2026, 12, 5, 14, 30, 15, 4, 296, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+== ranges
+> Calendar(Constants(None), version=2)
+> evalRanges '4-5pm'
+  -> (2026, 10, 23, 16, 0, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '4:30-5pm'
+  -> (2026, 10, 23, 16, 30, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '10am - 2pm'
+  -> (2026, 10, 23, 10, 0, 0, 4, 296, 0) (2026, 10, 23, 14, 0, 0, 4, 296, 0) 2
+> evalRanges '4:00:55 pm - 5:90:44 am'
+  -> (2026, 10, 23, 16, 0, 55, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges '4p-5p'
+  -> (2026, 10, 23, 16, 0, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '06/07/06 - 08/09/06'
+  -> (2006, 6, 7, 14, 30, 15, 4, 296, 0) (2006, 8, 9, 14, 30, 15, 4, 296, 0) 1
+> evalRanges 'march 31 - june 1st, 2006'
+  -> (2027, 3, 31, 20, 6, 0, 4, 296, 0) (2027, 6, 1, 20, 6, 0, 4, 296, 0) 1
+> evalRanges 'Aug 21 - Sep 4, 2007'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges 'march 1rd -13th'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) (2027, 3, 13, 14, 30, 15, 4, 296, 0) 1
+> evalRanges 'march 1st - 13th'
+  -> (2027, 3, 1, 14, 30, 15, 4, 296, 0) (2027, 3, 13, 14, 30, 15, 4, 296, 0) 1
+> evalRanges '9:30 - 11:00'
+  -> (2026, 10, 23, 9, 30, 0, 4, 296, 0) (2026, 10, 23, 11, 0, 0, 4, 296, 0) 2
+> evalRanges 'next week'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges ''
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges 'tomorrow 4-5pm'
+  -> (2026, 10, 24, 16, 0, 0, 5, 297, -1) (2026, 10, 24, 17, 0, 0, 5, 297, -1) 2
+> evalRanges '4 - 5'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges '10:00-11:30'
+  -> (2026, 10, 23, 10, 0, 0, 4, 296, 0) (2026, 10, 23, 11, 30, 0, 4, 296, 0) 2
+> evalRanges '9am-5pm tomorrow'
+  -> (2026, 10, 24, 9, 0, 0, 5, 297, -1) (2026, 10, 24, 17, 0, 0, 5, 297, -1) 2
+> evalRanges '1/2 - 3/4'
+  -> (2027, 1, 2, 14, 30, 15, 4, 296, 0) (2027, 3, 4, 14, 30, 15, 4, 296, 0) 1
+> evalRanges 'july 4 - 7'
+  -> (2027, 7, 4, 14, 30, 15, 4, 296, 0) (2027, 7, 7, 14, 30, 15, 4, 296, 0) 1
+> evalRanges 'dec 24 - jan 2'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges '8:00 - 17:00 friday'
+  -> (2026, 10, 30, 8, 0, 0, 4, 303, -1) (2026, 10, 30, 17, 0, 0, 4, 303, -1) 2
+> evalRanges '2-3am'
+  -> (2026, 10, 23, 14, 0, 0, 4, 296, 0) (2026, 10, 23, 3, 0, 0, 4, 296, 0) 2
+> evalRanges 'noon - 2pm'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges 'march 3 - april 4'
+  -> (2027, 3, 3, 14, 30, 15, 4, 296, 0) (2027, 4, 4, 14, 30, 15, 4, 296, 0) 1
+> evalRanges '4-5'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges '5pm-4pm'
+  -> (2026, 10, 23, 17, 0, 0, 4, 296, 0) (2026, 10, 23, 16, 0, 0, 4, 296, 0) 2
+> evalRanges 'nov 1 - 15th, 2026'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> Calendar(Constants(None), version=1)
+> evalRanges '4-5pm'
+  -> (2026, 10, 23, 16, 0, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '4:30-5pm'
+  -> (2026, 10, 23, 16, 30, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '10am - 2pm'
+  -> (2026, 10, 23, 10, 0, 0, 4, 296, 0) (2026, 10, 23, 14, 0, 0, 4, 296, 0) 2
+> evalRanges '4:00:55 pm - 5:90:44 am'
+  -> (2026, 10, 23, 16, 0, 55, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+> evalRanges '4p-5p'
+  -> (2026, 10, 23, 16, 0, 0, 4, 296, 0) (2026, 10, 23, 17, 0, 0, 4, 296, 0) 2
+> evalRanges '06/07/06 - 08/09/06'
+  -> (2006, 6, 7, 14, 30, 15, 4, 296, 0) (2006, 8, 9, 14, 30, 15, 4, 296, 0) 1
+> evalRanges 'march 31 - june 1st, 2006'
+  -> (2027, 3, 31, 20, 6, 0, 4, 296, 0) (2027, 6, 1, 20, 6, 0, 4, 296, 0) 1
+> evalRanges 'Aug 21 - Sep 4, 2007'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0) (2026, 10, 23, 14, 30, 15, 4, 296, 0) 0
+== finding dates in text
+> Calendar(Constants(None), version=2)
+> nlp "Let's meet tomorrow at 5pm or next friday at noon, not 3 days ago."
+  - datetime.datetime(2026, 10, 24, 17, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR) 11 26 'tomorrow at 5pm'
+  - datetime.datetime(2026, 10, 30, 12, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY) 30 49 'next friday at noon'
+  - datetime.datetime(2026, 10, 20, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_DAY) 55 65 '3 days ago'
+> nlp "I'll be there in 2 hours."
+  - datetime.datetime(2026, 10, 23, 16, 30, 15) pdtContext(accuracy=pdtContext.ACU_HOUR) 14 24 'in 2 hours'
+> nlp 'The meeting is on March 31st at 3pm in room 4.'
+  - datetime.datetime(2027, 3, 31, 15, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR) 15 35 'on March 31st at 3pm'
+> nlp 'Call me at 9:30 tonight or tomorrow morning.'
+  - datetime.datetime(2026, 10, 23, 9, 30) pdtContext(accuracy=pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN) 8 23 'at 9:30 tonight'
+  - datetime.datetime(2026, 10, 24, 6, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY) 27 43 'tomorrow morning'
+> nlp 'From 12/24 to 01/02 the office is closed.'
+  - datetime.datetime(2026, 12, 24, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY) 0 10 'From 12/24'
+  - datetime.datetime(2027, 1, 2, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY) 14 19 '01/02'
+> nlp 'Next is the word month.'
+  -> None
+> nlp 'Ship it next month, review next week, and celebrate next year.'
+  - datetime.datetime(2026, 11, 1, 9, 0) pdtContext(accuracy=pdtContext.ACU_MONTH) 8 18 'next month'
+  - datetime.datetime(2026, 10, 30, 9, 0) pdtContext(accuracy=pdtContext.ACU_WEEK) 27 36 'next week'
+  - datetime.datetime(2027, 1, 1, 9, 0) pdtContext(accuracy=pdtContext.ACU_YEAR) 52 61 'next year'
+> nlp 'On monday at 10am we plan; on friday we ship.'
+  - datetime.datetime(2026, 10, 26, 10, 0) pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR) 0 17 'On monday at 10am'
+  - datetime.datetime(2026, 10, 30, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_DAY) 27 36 'on friday'
+> nlp 'Nothing to see here.'
+  -> None
+> nlp ''
+  -> None
+> nlp 'Back in 5 minutes.'
+  - datetime.datetime(2026, 10, 23, 14, 35, 15) pdtContext(accuracy=pdtContext.ACU_MIN) 5 17 'in 5 minutes'
+> nlp 'the 5pm train, the 6:15 bus, and the 7 a.m. ferry'
+  - datetime.datetime(2026, 10, 23, 17, 0) pdtContext(accuracy=pdtContext.ACU_HOUR) 4 7 '5pm'
+  - datetime.datetime(2026, 10, 23, 6, 15) pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN) 19 23 '6:15'
+  - datetime.datetime(2026, 10, 23, 7, 0) pdtContext(accuracy=pdtContext.ACU_HOUR) 37 40 '7 a'
+> nlp 'Due 2026-11-30, reminder 3 days before.'
+  - datetime.datetime(2026, 11, 30, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY) 4 14 '2026-11-30'
+  - datetime.datetime(2026, 10, 20, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_DAY) 25 38 '3 days before'
+> nlp 'It happened 2 weeks ago yesterday.'
+  - datetime.datetime(2026, 10, 8, 9, 0) pdtContext(accuracy=pdtContext.ACU_WEEK | pdtContext.ACU_DAY) 12 33 '2 weeks ago yesterday'
+> nlp 'at noon on dec 25 and at midnight on dec 31'
+  - datetime.datetime(2026, 12, 25, 12, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY) 0 17 'at noon on dec 25'
+  - datetime.datetime(2026, 12, 31, 0, 0) pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY) 22 43 'at midnight on dec 31'
+> nlp 'Pay 5 dollars in 2 days, then 10 on the 1st.'
+  - datetime.datetime(2026, 10, 25, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_DAY) 14 23 'in 2 days'
+> nlp 'Lunch at 12:30 pm, dinner at 7:00 pm.'
+  - datetime.datetime(2026, 10, 23, 12, 30) pdtContext(accuracy=pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN) 0 17 'Lunch at 12:30 pm'
+  - datetime.datetime(2026, 10, 23, 19, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN) 19 36 'dinner at 7:00 pm'
+> nlp 'Mom said "call me tonight" and "see you in 2 weeks".'
+  - datetime.datetime(2026, 10, 23, 21, 0) pdtContext(accuracy=pdtContext.ACU_HALFDAY) 18 25 'tonight'
+  - datetime.datetime(2026, 11, 6, 14, 30, 15) pdtContext(accuracy=pdtContext.ACU_WEEK) 40 50 'in 2 weeks'
+> nlp 'in 3 hours in 4 hours in 5 hours'
+  - datetime.datetime(2026, 10, 24, 2, 30, 15) pdtContext(accuracy=pdtContext.ACU_HOUR) 0 32 'in 3 hours in 4 hours in 5 hours'
+> nlp 'tomorrow tomorrow tomorrow'
+  - datetime.datetime(2026, 10, 26, 9, 0) pdtContext(accuracy=pdtContext.ACU_DAY) 0 26 'tomorrow tomorrow tomorrow'
+> nlp 'Sync at eod, then again next monday at 9.'
+  - datetime.datetime(2026, 10, 26, 9, 0) pdtContext(accuracy=pdtContext.ACU_DAY) 24 35 'next monday'
+> Calendar(Constants(None), version=1)
+> nlp "Let's meet tomorrow at 5pm or next friday at noon, not 3 days ago."
+  - datetime.datetime(2026, 10, 24, 17, 0) 3 11 26 'tomorrow at 5pm'
+  - datetime.datetime(2026, 10, 30, 12, 0) 3 30 49 'next friday at noon'
+  - datetime.datetime(2026, 10, 20, 14, 30, 15) 1 55 65 '3 days ago'
+> nlp "I'll be there in 2 hours."
+  - datetime.datetime(2026, 10, 23, 16, 30, 15) 2 14 24 'in 2 hours'
+> nlp 'The meeting is on March 31st at 3pm in room 4.'
+  - datetime.datetime(2027, 3, 31, 15, 0) 3 15 35 'on March 31st at 3pm'
+> nlp 'Call me at 9:30 tonight or tomorrow morning.'
+  - datetime.datetime(2026, 10, 23, 9, 30) 2 8 23 'at 9:30 tonight'
+  - datetime.datetime(2026, 10, 24, 6, 0) 3 27 43 'tomorrow morning'
+> nlp 'From 12/24 to 01/02 the office is closed.'
+  - datetime.datetime(2026, 12, 24, 14, 30, 15) 1 0 10 'From 12/24'
+  - datetime.datetime(2027, 1, 2, 14, 30, 15) 1 14 19 '01/02'
+> nlp 'Next is the word month.'
+  -> None
+== the helpers
+> Calendar(Constants(None), version=2)
+> inc datetime.datetime(2026, 1, 31, 9, 0) month=1 year=None
+  -> datetime.datetime(2026, 2, 28, 9, 0)
+> inc datetime.datetime(2026, 1, 31, 9, 0) month=None year=1
+  -> datetime.datetime(2027, 1, 31, 9, 0)
+> inc datetime.datetime(2024, 2, 29, 0, 0) month=None year=1
+  -> datetime.datetime(2025, 2, 28, 0, 0)
+> inc datetime.datetime(2026, 3, 31, 12, 0) month=-1 year=None
+  -> datetime.datetime(2026, 2, 28, 12, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=2.5 year=None
+  -> datetime.datetime(2027, 1, 7, 12, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=-0.5 year=None
+  -> datetime.datetime(2026, 10, 7, 12, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=13 year=None
+  -> datetime.datetime(2027, 11, 23, 0, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=-13 year=None
+  -> datetime.datetime(2025, 9, 23, 0, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=0 year=0
+  -> datetime.datetime(2026, 10, 23, 0, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=None year=0.5
+  -> datetime.datetime(2027, 4, 23, 0, 0)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month=None year=-1.25
+  -> datetime.datetime(2025, 7, 23, 0, 0)
+> inc datetime.datetime(2026, 1, 1, 0, 0) month=12 year=None
+  -> datetime.datetime(2027, 1, 1, 0, 0)
+> inc datetime.datetime(2026, 1, 1, 0, 0) month=-12 year=None
+  -> datetime.datetime(2025, 1, 1, 0, 0)
+> inc datetime.datetime(2026, 12, 15, 0, 0) month=1 year=None
+  -> datetime.datetime(2027, 1, 15, 0, 0)
+> inc datetime.datetime(9999, 6, 1, 0, 0) month=None year=1
+  error OverflowError: year is out of range
+> inc datetime.datetime(1, 6, 1, 0, 0) month=-7 year=None
+  error OverflowError: year is out of range
+> inc datetime.datetime(2026, 5, 31, 6, 7, 8) month=1.5 year=1.5
+  -> datetime.datetime(2028, 1, 15, 18, 7, 8)
+> inc datetime.datetime(2026, 10, 23, 0, 0) month='x' year=None
+  -> datetime.datetime(2026, 10, 23, 0, 0)
+> _convertUnitAsWords 'one'
+  -> 1
+> _convertUnitAsWords 'twenty one'
+  -> 21
+> _convertUnitAsWords 'twenty-one'
+  -> 21
+> _convertUnitAsWords 'one hundred'
+  -> 100
+> _convertUnitAsWords 'one hundred and five'
+  -> 105
+> _convertUnitAsWords 'two thousand twenty six'
+  -> 2026
+> _convertUnitAsWords 'three million, four hundred thousand and seven'
+  -> 3400007
+> _convertUnitAsWords 'ninety nine'
+  -> 99
+> _convertUnitAsWords 'a hundred'
+  -> 100
+> _convertUnitAsWords ''
+  error Exception: Unknown number: 
+> _convertUnitAsWords 'eleven'
+  -> 11
+> _convertUnitAsWords 'twelve hundred'
+  -> 1200
+> _convertUnitAsWords 'one billion'
+  -> 1000000000
+> _convertUnitAsWords 'seven thousand, two'
+  -> 7002
+> _convertUnitAsWords 'five dozen'
+  error Exception: Unknown number: dozen
+> _convertUnitAsWords 'zero'
+  -> 0
+> _convertUnitAsWords 'one quintillion'
+  -> 1000000000000000000
+> _quantityToReal ''
+  -> 1.0
+> _quantityToReal '5'
+  -> 5.0
+> _quantityToReal '2.5'
+  -> 2.5
+> _quantityToReal '1,5'
+  -> 1.5
+> _quantityToReal 'five'
+  -> 5.0
+> _quantityToReal 'a'
+  -> 1.0
+> _quantityToReal 'an'
+  -> 1.0
+> _quantityToReal 'twelve'
+  -> 0.0
+> _quantityToReal '-3'
+  -> -3.0
+> _quantityToReal ' 7 '
+  -> 7.0
+> _quantityToReal 'x'
+  -> 0.0
+> _quantityToReal '1e3'
+  -> 1000.0
+> _quantityToReal '0.000'
+  -> 0.0
+> _CalculateDOWDelta(0, 0, -1, 1, 0)
+  -> -7
+> _CalculateDOWDelta(0, 0, 0, 1, 0)
+  -> 0
+> _CalculateDOWDelta(0, 0, 1, 1, 0)
+  -> 7
+> _CalculateDOWDelta(0, 0, 2, 1, 0)
+  -> 7
+> _CalculateDOWDelta(0, 3, -1, 1, 0)
+  -> -4
+> _CalculateDOWDelta(0, 3, 0, 1, 0)
+  -> 3
+> _CalculateDOWDelta(0, 3, 1, 1, 0)
+  -> 10
+> _CalculateDOWDelta(0, 3, 2, 1, 0)
+  -> 3
+> _CalculateDOWDelta(0, 6, -1, 1, 0)
+  -> -1
+> _CalculateDOWDelta(0, 6, 0, 1, 0)
+  -> 6
+> _CalculateDOWDelta(0, 6, 1, 1, 0)
+  -> 13
+> _CalculateDOWDelta(0, 6, 2, 1, 0)
+  -> 6
+> _CalculateDOWDelta(1, 0, -1, 1, 0)
+  -> -1
+> _CalculateDOWDelta(1, 0, 0, 1, 0)
+  -> -1
+> _CalculateDOWDelta(1, 0, 1, 1, 0)
+  -> 6
+> _CalculateDOWDelta(1, 0, 2, 1, 0)
+  -> 6
+> _CalculateDOWDelta(1, 3, -1, 1, 0)
+  -> -5
+> _CalculateDOWDelta(1, 3, 0, 1, 0)
+  -> 2
+> _CalculateDOWDelta(1, 3, 1, 1, 0)
+  -> 9
+> _CalculateDOWDelta(1, 3, 2, 1, 0)
+  -> 2
+> _CalculateDOWDelta(1, 6, -1, 1, 0)
+  -> -2
+> _CalculateDOWDelta(1, 6, 0, 1, 0)
+  -> 5
+> _CalculateDOWDelta(1, 6, 1, 1, 0)
+  -> 12
+> _CalculateDOWDelta(1, 6, 2, 1, 0)
+  -> 5
+> _CalculateDOWDelta(2, 0, -1, 1, 0)
+  -> -2
+> _CalculateDOWDelta(2, 0, 0, 1, 0)
+  -> -2
+> _CalculateDOWDelta(2, 0, 1, 1, 0)
+  -> 5
+> _CalculateDOWDelta(2, 0, 2, 1, 0)
+  -> 5
+> _CalculateDOWDelta(2, 3, -1, 1, 0)
+  -> -6
+> _CalculateDOWDelta(2, 3, 0, 1, 0)
+  -> 1
+> _CalculateDOWDelta(2, 3, 1, 1, 0)
+  -> 8
+> _CalculateDOWDelta(2, 3, 2, 1, 0)
+  -> 1
+> _CalculateDOWDelta(2, 6, -1, 1, 0)
+  -> -3
+> _CalculateDOWDelta(2, 6, 0, 1, 0)
+  -> 4
+> _CalculateDOWDelta(2, 6, 1, 1, 0)
+  -> 11
+> _CalculateDOWDelta(2, 6, 2, 1, 0)
+  -> 4
+> _CalculateDOWDelta(3, 0, -1, 1, 0)
+  -> -3
+> _CalculateDOWDelta(3, 0, 0, 1, 0)
+  -> -3
+> _CalculateDOWDelta(3, 0, 1, 1, 0)
+  -> 4
+> _CalculateDOWDelta(3, 0, 2, 1, 0)
+  -> 4
+> _CalculateDOWDelta(3, 3, -1, 1, 0)
+  -> -7
+> _CalculateDOWDelta(3, 3, 0, 1, 0)
+  -> 0
+> _CalculateDOWDelta(3, 3, 1, 1, 0)
+  -> 7
+> _CalculateDOWDelta(3, 3, 2, 1, 0)
+  -> 7
+> _CalculateDOWDelta(3, 6, -1, 1, 0)
+  -> -4
+> _CalculateDOWDelta(3, 6, 0, 1, 0)
+  -> 3
+> _CalculateDOWDelta(3, 6, 1, 1, 0)
+  -> 10
+> _CalculateDOWDelta(3, 6, 2, 1, 0)
+  -> 3
+> _CalculateDOWDelta(4, 0, -1, 1, 0)
+  -> -4
+> _CalculateDOWDelta(4, 0, 0, 1, 0)
+  -> -4
+> _CalculateDOWDelta(4, 0, 1, 1, 0)
+  -> 3
+> _CalculateDOWDelta(4, 0, 2, 1, 0)
+  -> 3
+> _CalculateDOWDelta(4, 3, -1, 1, 0)
+  -> -1
+> _CalculateDOWDelta(4, 3, 0, 1, 0)
+  -> -1
+> _CalculateDOWDelta(4, 3, 1, 1, 0)
+  -> 6
+> _CalculateDOWDelta(4, 3, 2, 1, 0)
+  -> 6
+> _CalculateDOWDelta(4, 6, -1, 1, 0)
+  -> -5
+> _CalculateDOWDelta(4, 6, 0, 1, 0)
+  -> 2
+> _CalculateDOWDelta(4, 6, 1, 1, 0)
+  -> 9
+> _CalculateDOWDelta(4, 6, 2, 1, 0)
+  -> 2
+> _CalculateDOWDelta(5, 0, -1, 1, 0)
+  -> -5
+> _CalculateDOWDelta(5, 0, 0, 1, 0)
+  -> -5
+> _CalculateDOWDelta(5, 0, 1, 1, 0)
+  -> 2
+> _CalculateDOWDelta(5, 0, 2, 1, 0)
+  -> 2
+> _CalculateDOWDelta(5, 3, -1, 1, 0)
+  -> -2
+> _CalculateDOWDelta(5, 3, 0, 1, 0)
+  -> -2
+> _CalculateDOWDelta(5, 3, 1, 1, 0)
+  -> 5
+> _CalculateDOWDelta(5, 3, 2, 1, 0)
+  -> 5
+> _CalculateDOWDelta(5, 6, -1, 1, 0)
+  -> -6
+> _CalculateDOWDelta(5, 6, 0, 1, 0)
+  -> 1
+> _CalculateDOWDelta(5, 6, 1, 1, 0)
+  -> 8
+> _CalculateDOWDelta(5, 6, 2, 1, 0)
+  -> 1
+> _CalculateDOWDelta(6, 0, -1, 1, 0)
+  -> -6
+> _CalculateDOWDelta(6, 0, 0, 1, 0)
+  -> -6
+> _CalculateDOWDelta(6, 0, 1, 1, 0)
+  -> 1
+> _CalculateDOWDelta(6, 0, 2, 1, 0)
+  -> 1
+> _CalculateDOWDelta(6, 3, -1, 1, 0)
+  -> -3
+> _CalculateDOWDelta(6, 3, 0, 1, 0)
+  -> -3
+> _CalculateDOWDelta(6, 3, 1, 1, 0)
+  -> 4
+> _CalculateDOWDelta(6, 3, 2, 1, 0)
+  -> 4
+> _CalculateDOWDelta(6, 6, -1, 1, 0)
+  -> -7
+> _CalculateDOWDelta(6, 6, 0, 1, 0)
+  -> 0
+> _CalculateDOWDelta(6, 6, 1, 1, 0)
+  -> 7
+> _CalculateDOWDelta(6, 6, 2, 1, 0)
+  -> 7
+> _CalculateDOWDelta(4, 4, 2, 1, 1)
+  -> 0
+> _CalculateDOWDelta(4, 4, 2, -1, 0)
+  -> -7
+> _CalculateDOWDelta(4, 1, 2, -1, 0)
+  -> -3
+> _CalculateDOWDelta(4, 1, 2, 0, 0)
+  -> -3
+> _CalculateDOWDelta(4, 6, 2, 0, 1)
+  -> 2
+> _CalculateDOWDelta(0, 6, 2, -1, 0)
+  -> -1
+> _CalculateDOWDelta(6, 0, 1, -1, 0)
+  -> 1
+> _CalculateDOWDelta(6, 0, -1, 1, 0)
+  -> -6
+> _CalculateDOWDelta(3, 3, 2, 5, 0)
+  -> 0
+> _CalculateDOWDelta(3, 3, 2, 5, 1)
+  -> 0
+> parseDate '05/28/2006'
+  -> (2006, 5, 28, 14, 30, 15, 4, 296, 0)
+> parseDate '04.21'
+  -> (2027, 4, 21, 14, 30, 15, 4, 296, 0)
+> parseDate '12/25'
+  -> (2026, 12, 25, 14, 30, 15, 4, 296, 0)
+> parseDate '1/1/1'
+  -> (2001, 1, 1, 14, 30, 15, 4, 296, 0)
+> parseDate '13/1'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDate '2/29'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDate '2/29/2028'
+  -> (2028, 2, 29, 14, 30, 15, 4, 296, 0)
+> parseDate '2026/02/03'
+  -> (2026, 2, 3, 14, 30, 15, 4, 296, 0)
+> parseDate '10/23'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDate '10/24'
+  -> (2026, 10, 24, 14, 30, 15, 4, 296, 0)
+> parseDate '6/6/49'
+  -> (2049, 6, 6, 14, 30, 15, 4, 296, 0)
+> parseDate '6/6/50'
+  -> (1950, 6, 6, 14, 30, 15, 4, 296, 0)
+> parseDate '0/0'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDateText 'may 31st, 2006'
+  -> (2006, 5, 31, 14, 30, 15, 4, 296, 0)
+> parseDateText 'jan 1st'
+  -> (2027, 1, 1, 14, 30, 15, 4, 296, 0)
+> parseDateText 'july 2006'
+  -> (2006, 7, 1, 14, 30, 15, 4, 296, 0)
+> parseDateText 'oct 23'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDateText 'oct 22'
+  -> (2027, 10, 22, 14, 30, 15, 4, 296, 0)
+> parseDateText 'feb 30'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> parseDateText 'december'
+  -> (2026, 12, 1, 14, 30, 15, 4, 296, 0)
+> parseDateText 'mar 5th 49'
+  -> (2049, 3, 5, 14, 30, 15, 4, 296, 0)
+> parseDateText 'mar 5th 50'
+  -> (1950, 3, 5, 14, 30, 15, 4, 296, 0)
+> parseDateText 'sep 31 2026'
+  -> (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+== the reminders tool
+> now (2026, 10, 23, 14, 30, 15, 4, 296, 0)
+> Calendar(Constants(None), version=2)
+> agenda inbox/empty.txt
+  wrote out/empty.agenda (0 lines)
+> agenda inbox/family.txt
+  wrote out/family.agenda (15 lines)
+  | 1	20-37	Tuesday at 4:15pm	2026-10-27 16:15:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2	17-30	at 3:20 today	2026-10-23 03:20:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2	43-49	at 5pm	2026-10-23 17:00:00	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 3	21-29	 Dec 2nd	2026-12-02 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 3	41-55	saturday after	2026-10-24 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 4	14-38	2026-11-14 at 06:45 from	2026-11-14 06:45:00	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 5	18-25	tonight	2026-10-23 21:00:00	pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+  | 5	40-50	in 2 weeks	2026-11-06 14:30:15	pdtContext(accuracy=pdtContext.ACU_WEEK)
+  | 6	16-27	in 6 months	2027-04-23 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH)
+  | 7	28-45	 august next year	2027-08-01 09:00:00	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH)
+  | 8	0-8	Tomorrow	2026-10-24 09:00:00	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 8	17-24	at 10am	2026-10-23 10:00:00	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 8	26-32	Sunday	2026-10-25 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 9	23-29	3 days	2026-10-26 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 9	44-50	friday	2026-10-30 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+> agenda inbox/ops.txt
+  wrote out/ops.agenda (16 lines)
+  | 1	34-44	2027-01-15	2027-01-15 14:30:15	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 2	22-29	90 days	2027-01-21 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 2	49-60	30 days ago	2026-09-23 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 3	20-23	2am	2026-10-23 02:00:00	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 3	26-39	4am on Sunday	2026-10-25 04:00:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 4	12-23	at 01:00:00	2026-10-23 01:00:00	pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+  | 4	28-36	13:00:00	2026-10-23 13:00:00	pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN | pdtContext.ACU_SEC)
+  | 5	43-53	15 minutes	2026-10-23 14:45:15	pdtContext(accuracy=pdtContext.ACU_MIN)
+  | 6	22-28	5 days	2026-10-28 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 6	46-51	10/19	2027-10-19 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 7	15-25	in 3 weeks	2026-11-13 14:30:15	pdtContext(accuracy=pdtContext.ACU_WEEK)
+  | 8	11-18	tuesday	2026-10-27 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 8	22-27	11/10	2026-11-10 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 8	37-50	after on 12/8	2026-12-08 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 9	4-6	5h	2026-10-23 19:30:15	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 9	19-29	45 min ago	2026-10-23 13:45:15	pdtContext(accuracy=pdtContext.ACU_MIN)
+> agenda inbox/standup.txt
+  wrote out/standup.agenda (14 lines)
+  | 1	17-35	tomorrow at 9:30am	2026-10-24 09:30:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2	9-27	next friday at 3pm	2026-10-30 15:00:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 3	22-28	monday	2026-10-26 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 4	14-24	from 12/24	2026-12-24 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 4	28-33	01/02	2027-01-02 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 4	40-50	on jan 5th	2027-01-05 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 5	12-43	in 2 hours? Or tomorrow morning	2026-10-24 06:00:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY | pdtContext.ACU_HOUR)
+  | 6	24-50	on March 31st 2027 at noon	2027-03-31 12:00:00	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HALFDAY)
+  | 7	10-23	3 days before	2026-10-20 14:30:15	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 7	35-43	on 11/20	2026-11-20 14:30:15	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 8	-	No dates in this line at all.
+  | 9	0-5	Lunch	2026-10-23 12:00:00	pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+  | 9	27-50	at 12:30 pm on Thursday	2026-10-29 12:30:00	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 10	20-32	end of month	2026-10-31 09:00:00	pdtContext(accuracy=pdtContext.ACU_MONTH)
+> todo todo.txt
+  wrote out/todo.sorted (15 lines)
+  | 2026-10-23 19:30:00	Dinner reservation	7:30pm	pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2026-10-23 21:00:00	Gym	tonight	pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+  | 2026-10-24 08:00:00	Call the plumber	tomorrow at 8am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2026-10-24 11:00:00	Haircut	saturday at 11am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2026-10-25 14:30:15	Book flights	2 days from now	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_NOW)
+  | 2026-10-26 14:30:15	Water plants	in 72 hours	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 2026-10-29 09:00:00	Vet	thursday 9am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2026-10-30 09:00:00	Team offsite	next friday	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 2026-10-31 09:00:00	Pay rent	eom	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 2026-11-01 09:00:00	Replace smoke detector batteries	next month	pdtContext(accuracy=pdtContext.ACU_MONTH)
+  | 2026-11-03 14:15:00	Dentist	11/03/2026 2:15pm	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2026-11-13 14:30:15	Renew passport	in 3 weeks	pdtContext(accuracy=pdtContext.ACU_WEEK)
+  | 2026-12-31 14:30:15	Quarterly report	12/31	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 2027-04-15 14:30:15	File taxes	april 15th	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | someday	Read that book	someday
+> now (2026, 12, 30, 20, 0, 0, 2, 364, 0)
+> todo todo.txt
+  wrote out/todo.late (15 lines)
+  | 2026-11-03 14:15:00	Dentist	11/03/2026 2:15pm	pdtContext(accuracy=pdtContext.ACU_YEAR | pdtContext.ACU_MONTH | pdtContext.ACU_DAY | pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2026-12-30 19:30:00	Dinner reservation	7:30pm	pdtContext(accuracy=pdtContext.ACU_HOUR | pdtContext.ACU_MIN)
+  | 2026-12-30 21:00:00	Gym	tonight	pdtContext(accuracy=pdtContext.ACU_HALFDAY)
+  | 2026-12-31 08:00:00	Call the plumber	tomorrow at 8am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2026-12-31 09:00:00	Pay rent	eom	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 2026-12-31 09:00:00	Vet	thursday 9am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2026-12-31 20:00:00	Quarterly report	12/31	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | 2027-01-01 09:00:00	Replace smoke detector batteries	next month	pdtContext(accuracy=pdtContext.ACU_MONTH)
+  | 2027-01-01 20:00:00	Book flights	2 days from now	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_NOW)
+  | 2027-01-02 11:00:00	Haircut	saturday at 11am	pdtContext(accuracy=pdtContext.ACU_DAY | pdtContext.ACU_HOUR)
+  | 2027-01-02 20:00:00	Water plants	in 72 hours	pdtContext(accuracy=pdtContext.ACU_HOUR)
+  | 2027-01-08 09:00:00	Team offsite	next friday	pdtContext(accuracy=pdtContext.ACU_DAY)
+  | 2027-01-20 20:00:00	Renew passport	in 3 weeks	pdtContext(accuracy=pdtContext.ACU_WEEK)
+  | 2027-04-15 20:00:00	File taxes	april 15th	pdtContext(accuracy=pdtContext.ACU_MONTH | pdtContext.ACU_DAY)
+  | someday	Read that book	someday
