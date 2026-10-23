@@ -326,6 +326,11 @@ jobs:
       - name: WASM E2E (cargo test --test cli wasm)
         run: cargo test --features llvm --test cli wasm
 
+      # `build --mir --target=wasm_wasi`: the MIR backend's wasm32 module,
+      # run under node's WASI against the native output (B-2026-10-22-23).
+      - name: WASM E2E on MIR (cargo test --test mir_wasm)
+        run: cargo test --features llvm --test mir_wasm
+
   # The `--features llvm` codegen surface — the load-bearing correctness gate
   # that, until now, ran ZERO times in CI (`test` runs `cargo test --all`, no
   # `--features llvm`, so the real-binary codegen E2E + the self-hosting oracle

@@ -36,9 +36,11 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     let output = a.output;
     let manifest = run_manifest_preamble(filename, output, None, false);
     #[cfg(feature = "llvm")]
-    apply_cpu(&a, |pick| {
-        manifest_release_field_for(filename, output, pick)
-    });
+    if !set_wasm_target(&a) {
+        apply_cpu(&a, |pick| {
+            manifest_release_field_for(filename, output, pick)
+        });
+    }
     // The `[link]` table's libraries, for the program's `extern "C"`
     // functions (B-2026-10-22-10).
     super::args::install_manifest_link(filename);
@@ -47,7 +49,9 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("main");
-    let exe = a.out_path.map_or_else(|| stem.to_string(), str::to_string);
+    let exe = a
+        .out_path
+        .map_or_else(|| format!("{stem}{}", exe_suffix(&a)), str::to_string);
     build(filename, project, manifest.as_ref(), a, &exe);
 }
 
@@ -90,7 +94,9 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         process::exit(1);
     }
     #[cfg(feature = "llvm")]
-    apply_cpu(&a, |pick| pick(&mf));
+    if !set_wasm_target(&a) {
+        apply_cpu(&a, |pick| pick(&mf));
+    }
     if !mf.link_libs.is_empty() || !mf.link_search_paths.is_empty() {
         crate::target::set_native_link_config(mf.link_libs.clone(), mf.link_search_paths.clone());
     }
@@ -143,16 +149,51 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     let project = (!tree.parse_errors.is_empty()
         || tree.tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1)
         .then(|| super::run_v2::combine(&root, &tree.tree, output, "build"));
-    let exe = a
-        .out_path
-        .map_or_else(|| root.join(&mf.name).display().to_string(), str::to_string);
+    let exe = a.out_path.map_or_else(
+        || {
+            let name = format!("{}{}", mf.name, exe_suffix(&a));
+            root.join(name).display().to_string()
+        },
+        str::to_string,
+    );
     build(&filename, project, Some(&mf), a, &exe);
+}
+
+/// `--target=wasm_wasi`: a plain wasm32-wasip1 module, linked against
+/// `libkarac_runtime_wasm.a` (M3 item 4, B-2026-10-22-23). The component
+/// model (`--bindings`) and `wasm_browser` are not on v2 yet.
+fn is_wasm_wasi(a: &BuildArgs) -> bool {
+    a.target == Some("wasm_wasi")
+}
+
+/// The output's extension when `-o` does not name it.
+fn exe_suffix(a: &BuildArgs) -> &'static str {
+    if is_wasm_wasi(a) {
+        ".wasm"
+    } else {
+        ""
+    }
+}
+
+/// Makes wasm32-wasip1 the active target for `--target=wasm_wasi`; true
+/// when it did (the native CPU baseline then does not apply).
+#[cfg(feature = "llvm")]
+fn set_wasm_target(a: &BuildArgs) -> bool {
+    if !is_wasm_wasi(a) {
+        return false;
+    }
+    if let Err(e) = crate::target::set_active_target("wasm_wasi") {
+        fail_with(&e, a.output);
+        process::exit(1);
+    }
+    true
 }
 
 /// A flag the v2 build does not honour yet: refused by name, exit 1.
 fn refuse_unsupported(a: &BuildArgs) {
     let target = a.target.filter(|t| {
         *t != "native"
+            && *t != "wasm_wasi"
             && (crate::target::is_v1_target_name(t)
                 || *t != crate::build_cache::host_target_triple())
     });

@@ -113,6 +113,15 @@ fn link_wasm_executable(
     if !output.status.success() {
         return Err(format_wasm_link_error("wasm-ld failed", &output.stderr));
     }
+    // A call whose signature disagrees with its definition links as an
+    // `unreachable` stub and traps at run time; refuse it here instead
+    // (B-2026-10-22-23).
+    if String::from_utf8_lossy(&output.stderr).contains("function signature mismatch") {
+        return Err(format_wasm_link_error(
+            "wasm-ld: a call does not match its definition",
+            &output.stderr,
+        ));
+    }
     Ok(())
 }
 

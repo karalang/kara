@@ -106,13 +106,16 @@ pub unsafe extern "C" fn karac_crypto_mir(
     op: i32,
     alg: i64,
     a: *const u8,
-    a_len: usize,
+    a_len: u64,
     b: *const u8,
-    b_len: usize,
+    b_len: u64,
     h: i64,
     out: *mut u8,
-    out_len: usize,
+    out_len: u64,
 ) -> i64 {
+    let a_len = a_len as usize;
+    let b_len = b_len as usize;
+    let out_len = out_len as usize;
     // SAFETY: the caller's contract, for every unsafe call below.
     let (a, b) = unsafe { (bytes(a, a_len), bytes(b, b_len)) };
     let state = |h: i64| h as *mut CryptoState;

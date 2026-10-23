@@ -134,7 +134,9 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         // `noalias`, `mod.rs`), so it runs after, with the cleanup it
         // leaves for.
         if opt >= 2 && super::mir::noalias_flag() {
-            passes.push_str(",cgscc(argpromotion),function(sroa,instcombine,simplifycfg)");
+            passes.push_str(
+                ",cgscc(argpromotion),function(sroa,instcombine<no-verify-fixpoint>,simplifycfg)",
+            );
             // Promoting once before `default<O2>` as well lets its inliner
             // and loop passes see scalar parameters rather than pointers: a
             // small function reached through a self-call (which the inliner

@@ -385,11 +385,12 @@ unsafe fn search(m: &MirMap, key: *const u8, cmp: CmpFn) -> Result<usize, usize>
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_map_insert(
     hp: *mut *mut MirMap,
-    entry_size: usize,
+    entry_size: u64,
     entry: *const u8,
     hash: Option<HashFn>,
     cmp: Option<CmpFn>,
 ) -> i64 {
+    let entry_size = entry_size as usize;
     // SAFETY: the caller's contract.
     let hv = hash.map(|hash| unsafe { hash(entry) });
     // SAFETY: as above.
@@ -404,10 +405,11 @@ pub unsafe extern "C" fn karac_mir_map_insert(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_map_insert_hv(
     hp: *mut *mut MirMap,
-    entry_size: usize,
+    entry_size: u64,
     entry: *const u8,
     hv: u64,
 ) -> i64 {
+    let entry_size = entry_size as usize;
     // SAFETY: the caller's contract.
     unsafe { insert(hp, entry_size, entry, Some(hv), None) }
 }

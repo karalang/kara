@@ -55,7 +55,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
-use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -308,6 +308,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
 
     /// `free` (and `malloc`, `calloc`), declared once.
     pub fn libc_fn(&self, name: &str) -> FunctionValue<'ctx> {
+        if matches!(name, "malloc" | "calloc") && crate::target::active_target_is_wasm() {
+            return self.libc_size_shim(name);
+        }
         if let Some(f) = self.module.get_function(name) {
             return f;
         }
@@ -323,9 +326,100 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.module.add_function(name, ty, Some(Linkage::External))
     }
 
+    /// On a 32-bit target `malloc` and `calloc` take 32-bit sizes, while
+    /// MIR sizes are always `i64`.
+    fn libc_size_shim(&self, name: &str) -> FunctionValue<'ctx> {
+        let i64t = self.llcx.i64_type();
+        let arity = if name == "calloc" { 2 } else { 1 };
+        let ty = self.ptr_ty().fn_type(&vec![i64t.into(); arity], false);
+        self.narrow_shim(name, ty, &[0, 1][..arity])
+    }
+
+    /// The `usize` parameters of the runtime entry points shared with the
+    /// legacy backend, which keep their pointer-width C types (the
+    /// `karac_mir_*` ones take `u64` instead).
+    fn usize_params(name: &str) -> Option<&'static [u32]> {
+        Some(match name {
+            "karac_alloc_fallible" | "karac_alloc_or_panic" => &[0],
+            "karac_alloc_zeroed_or_panic" => &[0, 1],
+            "karac_cpu_supports" | "karac_free_buf" | "karac_hash_bytes" => &[1],
+            "karac_hash_bytes_fx" | "karac_realloc_or_panic" => &[1],
+            "karac_stable_siphash24" => &[1],
+            "karac_runtime_http_builder_add_header" => &[2, 4],
+            "karac_runtime_http_builder_new" => &[1, 3],
+            "karac_runtime_http_builder_set_body" => &[2],
+            _ => return None,
+        })
+    }
+
+    /// `name` called with the `i64` arguments of `ty`, through a private
+    /// shim that truncates the `narrow` ones to `i32`: on a 32-bit target
+    /// they are `usize` on the C side, and MIR sizes are always `i64`.
+    fn narrow_shim(
+        &self,
+        name: &str,
+        ty: FunctionType<'ctx>,
+        narrow: &[u32],
+    ) -> FunctionValue<'ctx> {
+        let shim = format!("__karac_{name}64");
+        if let Some(f) = self.module.get_function(&shim) {
+            return f;
+        }
+        let i32t = self.llcx.i32_type();
+        let params: Vec<BasicMetadataTypeEnum<'ctx>> = ty
+            .get_param_types()
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| {
+                if narrow.contains(&(i as u32)) {
+                    i32t.into()
+                } else {
+                    t
+                }
+            })
+            .collect();
+        let real = self.module.get_function(name).unwrap_or_else(|| {
+            let rty = match ty.get_return_type() {
+                Some(r) => r.fn_type(&params, false),
+                None => self.llcx.void_type().fn_type(&params, false),
+            };
+            self.module.add_function(name, rty, Some(Linkage::External))
+        });
+        let f = self.module.add_function(&shim, ty, Some(Linkage::Private));
+        let saved = self.builder.get_insert_block();
+        let b = self.llcx.append_basic_block(f, "entry");
+        self.builder.position_at_end(b);
+        let args: Vec<BasicMetadataValueEnum<'ctx>> = f
+            .get_param_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                if narrow.contains(&(i as u32)) {
+                    let v = v.into_int_value();
+                    self.builder.build_int_truncate(v, i32t, "").unwrap().into()
+                } else {
+                    v.into()
+                }
+            })
+            .collect();
+        let r = self.builder.build_call(real, &args, "").unwrap();
+        match r.try_as_basic_value().basic() {
+            Some(r) => self.builder.build_return(Some(&r)).unwrap(),
+            None => self.builder.build_return(None).unwrap(),
+        };
+        if let Some(saved) = saved {
+            self.builder.position_at_end(saved);
+        }
+        f
+    }
+
     /// The external function `name` of type `ty`, declared once (a
     /// runtime entry point).
     pub fn extern_fn(&self, name: &str, ty: FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        if let Some(narrow) = Self::usize_params(name) {
+            if crate::target::active_target_is_wasm() {
+                return self.narrow_shim(name, ty, narrow);
+            }
+        }
         self.module.get_function(name).unwrap_or_else(|| {
             let f = self.module.add_function(name, ty, Some(Linkage::External));
             self.bool_abi(f, true);
@@ -989,6 +1083,23 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.builder
             .build_return(Some(&code))
             .map_err(|e| e.to_string())?;
+        // On wasm32-wasip1, `_start` enters at `__main_void`, whose libc
+        // definition chains to the `__main_argc_argv` clang mints for a C
+        // `main`; defining it here calls `main` instead (B-2026-10-22-23).
+        if crate::target::active_target_is_wasm() {
+            let shim = self.module.add_function("__main_void", fty, None);
+            self.builder
+                .position_at_end(self.llcx.append_basic_block(shim, "entry"));
+            let code = self
+                .builder
+                .build_call(cmain, &[], "")
+                .map_err(|e| e.to_string())?
+                .try_as_basic_value()
+                .unwrap_basic();
+            self.builder
+                .build_return(Some(&code))
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 

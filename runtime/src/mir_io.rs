@@ -28,13 +28,7 @@ pub(crate) unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
         p
     };
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawVec {
-            ptr,
-            len: b.len(),
-            cap: b.len(),
-        })
-    };
+    unsafe { out.write(RawVec::new(ptr, b.len(), b.len())) };
 }
 
 /// The code for a `file.rs` result, its value written to `value`. An
@@ -474,7 +468,8 @@ pub unsafe extern "C" fn karac_mir_std_stream(op: i32, value: *mut i64, msg: *mu
 /// # Safety
 /// `p` is readable for `n` bytes; `out` is writable for a `String`.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: usize) -> i32 {
+pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: u64) -> i32 {
+    let n = n as usize;
     let name = if n == 0 {
         &[][..]
     } else {
@@ -806,13 +801,15 @@ static MIR_RESPONSE_HEADERS: std::sync::LazyLock<
 pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
     op: i32,
     a: *const u8,
-    a_len: usize,
+    a_len: u64,
     b: *const u8,
-    b_len: usize,
+    b_len: u64,
     handle: i64,
     status: *mut i64,
     out: *mut RawVec,
 ) -> i32 {
+    let a_len = a_len as usize;
+    let b_len = b_len as usize;
     let mut st = 0i64;
     let (mut body, mut body_len) = (std::ptr::null_mut::<u8>(), 0i64);
     let (mut msg, mut msg_len) = (std::ptr::null_mut::<u8>(), 0i64);
@@ -866,11 +863,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
                 free(p.cast());
             }
         }
-        RawVec {
-            ptr: q,
-            len: n,
-            cap,
-        }
+        RawVec::new(q, n, cap)
     };
     let ok = st > 0;
     let s = if ok {
@@ -915,9 +908,10 @@ fn mir_response_headers(body: *const u8) -> i64 {
 pub unsafe extern "C" fn karac_runtime_http_client_mir_header(
     body: *const u8,
     name: *const u8,
-    name_len: usize,
+    name_len: u64,
     out: *mut RawVec,
 ) -> i32 {
+    let name_len = name_len as usize;
     let h = mir_response_headers(body);
     // SAFETY: the caller's contract; a hit is a NUL-terminated string the
     // header table keeps until exit.
@@ -969,13 +963,7 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, 
         }
     }
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawVec {
-            ptr: items,
-            len: n,
-            cap: n,
-        })
-    };
+    unsafe { out.write(RawVec::new(items, n, n)) };
 }
 
 // `Server.serve` on the MIR backend: the blocking one-request-at-a-time
@@ -1003,9 +991,10 @@ thread_local! {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_http_bind(
     addr: *const u8,
-    len: usize,
+    len: u64,
     msg: *mut RawVec,
 ) -> *mut http1::Server {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let addr = unsafe { bytes_at(addr, len) };
     match http1::Server::bind(&String::from_utf8_lossy(addr)) {
@@ -1062,10 +1051,12 @@ pub unsafe extern "C" fn karac_mir_http_respond(
     server: *mut http1::Server,
     status: i64,
     body: *const u8,
-    body_len: usize,
+    body_len: u64,
     headers: *const RawVec,
-    headers_len: usize,
+    headers_len: u64,
 ) {
+    let body_len = body_len as usize;
+    let headers_len = headers_len as usize;
     let mut pairs = Vec::with_capacity(headers_len);
     for i in 0..headers_len {
         // SAFETY: the caller's contract: two `String`s per pair.
@@ -1097,9 +1088,10 @@ pub unsafe extern "C" fn karac_mir_http_respond(
 pub unsafe extern "C" fn karac_mir_http_request(
     op: i32,
     name: *const u8,
-    name_len: usize,
+    name_len: u64,
     out: *mut RawVec,
 ) -> i32 {
+    let name_len = name_len as usize;
     MIR_REQUEST.with(|r| {
         let r = r.borrow();
         // SAFETY: the caller's contract.
@@ -1160,11 +1152,5 @@ unsafe fn pairs_of(out: *mut RawVec, pairs: &[(String, String)]) {
         }
     }
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawVec {
-            ptr: items,
-            len: n,
-            cap: n,
-        })
-    };
+    unsafe { out.write(RawVec::new(items, n, n)) };
 }

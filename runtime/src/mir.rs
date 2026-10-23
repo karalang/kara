@@ -16,8 +16,34 @@ use crate::alloc::karac_realloc_or_panic;
 #[repr(C)]
 pub struct RawVec {
     pub ptr: *mut u8,
+    #[cfg(target_pointer_width = "32")]
+    _ptr_hi: u32,
     pub len: usize,
+    #[cfg(target_pointer_width = "32")]
+    _len_hi: u32,
     pub cap: usize,
+    #[cfg(target_pointer_width = "32")]
+    _cap_hi: u32,
+}
+
+impl RawVec {
+    /// A vector of `len` elements in `cap` slots at `ptr`. Compiled code's
+    /// layout is three 64-bit words whatever the target, so on a 32-bit one
+    /// (wasm32) each field is padded to 8 bytes, the high half zero
+    /// (B-2026-10-22-23).
+    pub const fn new(ptr: *mut u8, len: usize, cap: usize) -> Self {
+        RawVec {
+            ptr,
+            #[cfg(target_pointer_width = "32")]
+            _ptr_hi: 0,
+            len,
+            #[cfg(target_pointer_width = "32")]
+            _len_hi: 0,
+            cap,
+            #[cfg(target_pointer_width = "32")]
+            _cap_hi: 0,
+        }
+    }
 }
 
 thread_local! {
@@ -152,7 +178,8 @@ pub extern "C" fn karac_mir_fmt_begin() {
 /// # Safety
 /// `ptr` is readable for `len` bytes of UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_fmt_str(ptr: *const u8, len: usize) {
+pub unsafe extern "C" fn karac_mir_fmt_str(ptr: *const u8, len: u64) {
+    let len = len as usize;
     // SAFETY: the caller's contract; a `str` holds UTF-8.
     append_bytes(unsafe { bytes(ptr, len) });
 }
@@ -247,12 +274,13 @@ pub unsafe extern "C" fn karac_mir_fmt_end_string(out: *mut RawVec) {
 pub unsafe extern "C" fn karac_mir_fmt_spec(
     out: *mut RawVec,
     spec: *const u8,
-    spec_len: usize,
+    spec_len: u64,
     kind: i32,
     lo: u64,
     hi: u64,
     f: f64,
 ) {
+    let spec_len = spec_len as usize;
     use crate::fmt::format_spec::FormatSpec;
     // SAFETY: the caller's contract.
     let spec_bytes = unsafe { bytes(spec, spec_len) };
@@ -332,13 +360,7 @@ unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
         p
     };
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawVec {
-            ptr,
-            len: b.len(),
-            cap: b.len(),
-        })
-    };
+    unsafe { out.write(RawVec::new(ptr, b.len(), b.len())) };
 }
 
 /// `f"{v}"` for a signed integer `v`, as a `String` at `out`.
@@ -395,13 +417,7 @@ pub unsafe extern "C" fn karac_mir_env_args(out: *mut RawVec) {
         unsafe { string_of(ptr.add(i * size).cast(), a.as_bytes()) };
     }
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawVec {
-            ptr,
-            len: args.len(),
-            cap: args.len(),
-        })
-    };
+    unsafe { out.write(RawVec::new(ptr, args.len(), args.len())) };
 }
 
 /// `String.from(s)`: a copy of the `str` `ptr[..len]`.
@@ -409,7 +425,8 @@ pub unsafe extern "C" fn karac_mir_env_args(out: *mut RawVec) {
 /// # Safety
 /// `out` is writable for a `String`; `ptr` readable for `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_string_from(out: *mut RawVec, ptr: *const u8, len: usize) {
+pub unsafe extern "C" fn karac_mir_string_from(out: *mut RawVec, ptr: *const u8, len: u64) {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     unsafe { string_of(out, bytes(ptr, len)) };
 }
@@ -419,7 +436,9 @@ pub unsafe extern "C" fn karac_mir_string_from(out: *mut RawVec, ptr: *const u8,
 /// # Safety
 /// `v` is a live `String` or `Vec` of `size`-byte elements.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: usize, size: usize) {
+pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: u64) {
+    let more = more as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     let v = unsafe { &mut *v };
     let want = v.len.checked_add(more).expect("capacity overflow");
@@ -468,11 +487,9 @@ fn capacity_bytes(n: usize, size: usize) -> Option<usize> {
 /// # Safety
 /// `v` is a live `String` or `Vec` of `size`-byte elements.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_vec_try_reserve(
-    v: *mut RawVec,
-    more: usize,
-    size: usize,
-) -> i64 {
+pub unsafe extern "C" fn karac_mir_vec_try_reserve(v: *mut RawVec, more: u64, size: u64) -> i64 {
+    let more = more as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     let v = unsafe { &mut *v };
     let Some(want) = v.len.checked_add(more) else {
@@ -523,7 +540,9 @@ pub unsafe extern "C" fn karac_mir_vec_try_reserve(
 /// # Safety
 /// `out` is writable for a `Vec`.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: usize, size: usize) -> i64 {
+pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: u64, size: u64) -> i64 {
+    let n = n as usize;
+    let size = size as usize;
     let Some(bytes) = capacity_bytes(n, size) else {
         return -2;
     };
@@ -537,14 +556,16 @@ pub unsafe extern "C" fn karac_mir_vec_try_alloc(out: *mut RawVec, n: usize, siz
         (p, n)
     };
     // SAFETY: the caller's contract.
-    unsafe { out.write(RawVec { ptr, len: 0, cap }) };
+    unsafe { out.write(RawVec::new(ptr, 0, cap)) };
     -1
 }
 
 /// -1 when `n` elements of `size` bytes can be represented, -2 when not:
 /// the check of `VecDeque.try_with_capacity`, which allocates nothing.
 #[no_mangle]
-pub extern "C" fn karac_mir_capacity_fits(n: usize, size: usize) -> i64 {
+pub extern "C" fn karac_mir_capacity_fits(n: u64, size: u64) -> i64 {
+    let n = n as usize;
+    let size = size as usize;
     if capacity_bytes(n, size).is_some() {
         -1
     } else {
@@ -558,7 +579,9 @@ pub extern "C" fn karac_mir_capacity_fits(n: usize, size: usize) -> i64 {
 /// # Safety
 /// `out` is writable for a `Vec`.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: usize, size: usize) {
+pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: u64, size: u64) {
+    let n = n as usize;
+    let size = size as usize;
     let bytes = n.checked_mul(size).expect("capacity overflow");
     let ptr = if bytes == 0 {
         std::ptr::null_mut()
@@ -567,7 +590,7 @@ pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: usize, size: u
     };
     let cap = if bytes == 0 { 0 } else { n };
     // SAFETY: the caller's contract.
-    unsafe { out.write(RawVec { ptr, len: n, cap }) };
+    unsafe { out.write(RawVec::new(ptr, n, cap)) };
 }
 
 /// Whether `a[..an]` and `b[..bn]` hold the same bytes.
@@ -575,12 +598,9 @@ pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: usize, size: u
 /// # Safety
 /// Each pointer is readable for its length.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_bytes_eq(
-    a: *const u8,
-    an: usize,
-    b: *const u8,
-    bn: usize,
-) -> u8 {
+pub unsafe extern "C" fn karac_mir_bytes_eq(a: *const u8, an: u64, b: *const u8, bn: u64) -> u8 {
+    let an = an as usize;
+    let bn = bn as usize;
     // SAFETY: the caller's contract.
     u8::from(unsafe { bytes(a, an) == bytes(b, bn) })
 }
@@ -590,12 +610,9 @@ pub unsafe extern "C" fn karac_mir_bytes_eq(
 /// # Safety
 /// Each pointer is readable for its length.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_bytes_cmp(
-    a: *const u8,
-    an: usize,
-    b: *const u8,
-    bn: usize,
-) -> i32 {
+pub unsafe extern "C" fn karac_mir_bytes_cmp(a: *const u8, an: u64, b: *const u8, bn: u64) -> i32 {
+    let an = an as usize;
+    let bn = bn as usize;
     // SAFETY: the caller's contract.
     match unsafe { bytes(a, an).cmp(bytes(b, bn)) } {
         std::cmp::Ordering::Less => -1,
@@ -609,10 +626,11 @@ pub unsafe extern "C" fn karac_mir_bytes_cmp(
 /// # Safety
 /// As [`karac_mir_vec_reserve`]; `elem` readable for `size` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_vec_push(v: *mut RawVec, elem: *const u8, size: usize) {
+pub unsafe extern "C" fn karac_mir_vec_push(v: *mut RawVec, elem: *const u8, size: u64) {
+    let size = size as usize;
     // SAFETY: the caller's contract.
     unsafe {
-        karac_mir_vec_reserve(v, 1, size);
+        karac_mir_vec_reserve(v, 1, size as u64);
         let v = &mut *v;
         if size != 0 {
             std::ptr::copy_nonoverlapping(elem, v.ptr.add(v.len * size), size);
@@ -626,10 +644,11 @@ pub unsafe extern "C" fn karac_mir_vec_push(v: *mut RawVec, elem: *const u8, siz
 /// # Safety
 /// `s` is a live `String`; `ptr` readable for `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_string_push_str(s: *mut RawVec, ptr: *const u8, len: usize) {
+pub unsafe extern "C" fn karac_mir_string_push_str(s: *mut RawVec, ptr: *const u8, len: u64) {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     unsafe {
-        karac_mir_vec_reserve(s, len, 1);
+        karac_mir_vec_reserve(s, len as u64, 1);
         let v = &mut *s;
         if len != 0 {
             std::ptr::copy_nonoverlapping(ptr, v.ptr.add(v.len), len);
@@ -649,7 +668,7 @@ pub unsafe extern "C" fn karac_mir_string_push_char(s: *mut RawVec, c: u32) {
         .unwrap_or('\u{fffd}')
         .encode_utf8(&mut buf);
     // SAFETY: the caller's contract.
-    unsafe { karac_mir_string_push_str(s, t.as_ptr(), t.len()) };
+    unsafe { karac_mir_string_push_str(s, t.as_ptr(), t.len() as u64) };
 }
 
 /// # Safety
@@ -668,10 +687,12 @@ unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
 pub unsafe extern "C" fn karac_mir_str_test(
     op: i32,
     a: *const u8,
-    an: usize,
+    an: u64,
     b: *const u8,
-    bn: usize,
+    bn: u64,
 ) -> u8 {
+    let an = an as usize;
+    let bn = bn as usize;
     // SAFETY: the caller's contract.
     let (a, b) = unsafe { (text(a, an), text(b, bn)) };
     u8::from(match op {
@@ -688,7 +709,8 @@ pub unsafe extern "C" fn karac_mir_str_test(
 /// # Safety
 /// `out` is writable for a `String`; `s` readable for `n` bytes of UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const u8, n: usize) {
+pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const u8, n: u64) {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     // The trims and an ASCII sort build the result in place, with no
@@ -788,11 +810,12 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_
 pub unsafe extern "C" fn karac_mir_str_slice(
     out: *mut RawVec,
     s: *const u8,
-    n: usize,
+    n: u64,
     lo: i64,
     hi: i64,
     mode: i32,
 ) -> u8 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     match str_range(s, lo, hi, mode) {
@@ -815,13 +838,14 @@ pub unsafe extern "C" fn karac_mir_str_slice(
 /// `out` is writable for two words; `s` readable for `n` bytes of UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_str_view(
-    out: *mut usize,
+    out: *mut u64,
     s: *const u8,
-    n: usize,
+    n: u64,
     lo: i64,
     hi: i64,
     mode: i32,
 ) -> u8 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     let (p, len) = match str_range(s, lo, hi, mode) {
@@ -837,8 +861,8 @@ pub unsafe extern "C" fn karac_mir_str_view(
     };
     // SAFETY: as above.
     unsafe {
-        out.write(p as usize);
-        out.add(1).write(len);
+        out.write(p as usize as u64);
+        out.add(1).write(len as u64);
     }
     0
 }
@@ -849,7 +873,8 @@ pub unsafe extern "C" fn karac_mir_str_view(
 /// # Safety
 /// `s` is readable for `n` bytes of UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_char_at_byte(s: *const u8, n: usize, i: i64) -> i64 {
+pub unsafe extern "C" fn karac_mir_char_at_byte(s: *const u8, n: u64, i: i64) -> i64 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     if i < 0 || i as usize >= s.len() {
@@ -868,7 +893,8 @@ pub unsafe extern "C" fn karac_mir_char_at_byte(s: *const u8, n: usize, i: i64) 
 /// # Safety
 /// `s` is readable for `n` bytes of UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_char_before_byte(s: *const u8, n: usize, i: i64) -> i64 {
+pub unsafe extern "C" fn karac_mir_char_before_byte(s: *const u8, n: u64, i: i64) -> i64 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     if i <= 0 || i as usize > s.len() {
@@ -887,7 +913,8 @@ pub unsafe extern "C" fn karac_mir_char_before_byte(s: *const u8, n: usize, i: i
 /// # Safety
 /// `out` is writable for a `String`; `p` readable for `n` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_str_from_utf8(out: *mut RawVec, p: *const u8, n: usize) -> i32 {
+pub unsafe extern "C" fn karac_mir_str_from_utf8(out: *mut RawVec, p: *const u8, n: u64) -> i32 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let b = unsafe { bytes(p, n) };
     match std::str::from_utf8(b) {
@@ -909,12 +936,15 @@ pub unsafe extern "C" fn karac_mir_str_from_utf8(out: *mut RawVec, p: *const u8,
 pub unsafe extern "C" fn karac_mir_str_replace(
     out: *mut RawVec,
     s: *const u8,
-    sn: usize,
+    sn: u64,
     a: *const u8,
-    an: usize,
+    an: u64,
     b: *const u8,
-    bn: usize,
+    bn: u64,
 ) {
+    let sn = sn as usize;
+    let an = an as usize;
+    let bn = bn as usize;
     // SAFETY: the caller's contract.
     let t = unsafe { text(s, sn).replace(text(a, an), text(b, bn)) };
     // SAFETY: as above.
@@ -929,11 +959,13 @@ pub unsafe extern "C" fn karac_mir_str_replace(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_str_find(
     s: *const u8,
-    sn: usize,
+    sn: u64,
     needle: *const u8,
-    nn: usize,
+    nn: u64,
     c: i64,
 ) -> i64 {
+    let sn = sn as usize;
+    let nn = nn as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, sn) };
     let at = if c >= 0 {
@@ -951,7 +983,8 @@ pub unsafe extern "C" fn karac_mir_str_find(
 /// # Safety
 /// `s` is readable for `n` bytes of UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_str_chars(op: i32, s: *const u8, n: usize, i: i64) -> i64 {
+pub unsafe extern "C" fn karac_mir_str_chars(op: i32, s: *const u8, n: u64, i: i64) -> i64 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     if op == 1 {
@@ -973,10 +1006,12 @@ pub unsafe extern "C" fn karac_mir_str_strip(
     out: *mut RawVec,
     op: i32,
     s: *const u8,
-    sn: usize,
+    sn: u64,
     p: *const u8,
-    pn: usize,
+    pn: u64,
 ) -> u8 {
+    let sn = sn as usize;
+    let pn = pn as usize;
     // SAFETY: the caller's contract.
     let (s, p) = unsafe { (text(s, sn), text(p, pn)) };
     let rest = if op == 0 {
@@ -1004,13 +1039,16 @@ pub unsafe extern "C" fn karac_mir_str_strip(
 pub unsafe extern "C" fn karac_mir_str_replacen(
     out: *mut RawVec,
     s: *const u8,
-    sn: usize,
+    sn: u64,
     a: *const u8,
-    an: usize,
+    an: u64,
     b: *const u8,
-    bn: usize,
+    bn: u64,
     n: i64,
 ) {
+    let sn = sn as usize;
+    let an = an as usize;
+    let bn = bn as usize;
     // SAFETY: the caller's contract.
     let t = unsafe { text(s, sn).replacen(text(a, an), text(b, bn), n.max(0) as usize) };
     // SAFETY: as above.
@@ -1136,11 +1174,13 @@ mod big_stack {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_bsearch(
     buf: *const u8,
-    n: usize,
-    size: usize,
+    n: u64,
+    size: u64,
     cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
     key: *const u8,
 ) -> i64 {
+    let n = n as usize;
+    let size = size as usize;
     let at = |i: usize| {
         // SAFETY: the caller's contract.
         let o = unsafe { cmp(buf.add(i * size), key) };
@@ -1292,7 +1332,9 @@ pub extern "C" fn karac_mir_rand_next() -> u64 {
 /// # Safety
 /// `p` and `v` are readable for `n` and `vn` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: usize, v: *const u8, vn: usize) {
+pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: u64, v: *const u8, vn: u64) {
+    let n = n as usize;
+    let vn = vn as usize;
     // SAFETY: the caller's contract.
     let (name, val) = unsafe { (bytes(p, n), bytes(v, vn)) };
     if let (Ok(name), Ok(val)) = (std::str::from_utf8(name), std::str::from_utf8(val)) {
@@ -1338,7 +1380,8 @@ pub unsafe extern "C" fn karac_mir_cstr_len(p: *const u8) -> i64 {
 /// # Safety
 /// `p` is readable for `n` bytes; `out` is writable for a pointer.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_to_cstring(out: *mut *mut u8, p: *const u8, n: usize) -> u8 {
+pub unsafe extern "C" fn karac_mir_to_cstring(out: *mut *mut u8, p: *const u8, n: u64) -> u8 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let b = unsafe { bytes(p, n) };
     if b.contains(&0) {
@@ -1472,7 +1515,8 @@ pub extern "C" fn karac_mir_limiter_new(rate: i64, cap: i64) -> i64 {
 /// # Safety
 /// `p` is readable for `n` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: usize) -> u8 {
+pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: u64) -> u8 {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let key = unsafe { bytes(p, n) }.to_vec();
     LIMITERS.with(|l| {
@@ -1515,7 +1559,8 @@ pub extern "C" fn karac_mir_sleep_ms(ms: i64) {
 /// # Safety
 /// `out` is writable for a `String`; `s` readable for `sn` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn: usize, n: i64) {
+pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn: u64, n: i64) {
+    let sn = sn as usize;
     // SAFETY: the caller's contract.
     let t = unsafe { text(s, sn).repeat(n.max(0) as usize) };
     // SAFETY: as above.
@@ -1532,10 +1577,12 @@ pub unsafe extern "C" fn karac_mir_str_split(
     out: *mut RawVec,
     op: i32,
     s: *const u8,
-    sn: usize,
+    sn: u64,
     sep: *const u8,
-    sepn: usize,
+    sepn: u64,
 ) {
+    let sn = sn as usize;
+    let sepn = sepn as usize;
     // SAFETY: the caller's contract.
     let (s, sep) = unsafe { (text(s, sn), text(sep, sepn)) };
     let parts: Vec<&str> = match op {
@@ -1546,7 +1593,7 @@ pub unsafe extern "C" fn karac_mir_str_split(
     let size = std::mem::size_of::<RawVec>();
     // SAFETY: as above; the new buffer holds `parts.len()` Strings.
     unsafe {
-        karac_mir_vec_alloc(out, parts.len(), size);
+        karac_mir_vec_alloc(out, parts.len() as u64, size as u64);
         let buf = (*out).ptr as *mut RawVec;
         for (i, p) in parts.iter().enumerate() {
             string_of(buf.add(i), p.as_bytes());
@@ -1564,11 +1611,14 @@ pub unsafe extern "C" fn karac_mir_str_split(
 pub unsafe extern "C" fn karac_mir_str_join(
     out: *mut RawVec,
     elems: *const u8,
-    n: usize,
-    stride: usize,
+    n: u64,
+    stride: u64,
     sep: *const u8,
-    sepn: usize,
+    sepn: u64,
 ) {
+    let n = n as usize;
+    let stride = stride as usize;
+    let sepn = sepn as usize;
     let mut t = String::new();
     for i in 0..n {
         // SAFETY: the caller's contract.
@@ -1615,12 +1665,14 @@ extern "C" {
 pub unsafe extern "C" fn karac_mir_fs(
     op: i32,
     path: *const u8,
-    path_len: usize,
+    path_len: u64,
     text: *const u8,
-    text_len: usize,
+    text_len: u64,
     out: *mut RawVec,
     value: *mut i64,
 ) -> i32 {
+    let path_len = path_len as usize;
+    let text_len = text_len as usize;
     use std::io::ErrorKind as K;
     // SAFETY: the caller's contract.
     let path = String::from_utf8_lossy(unsafe { bytes(path, path_len) }).into_owned();
@@ -1630,7 +1682,11 @@ pub unsafe extern "C" fn karac_mir_fs(
     let lines_out = |lines: &[&str]| {
         // SAFETY: `out` is writable for a `Vec` of `String`s.
         unsafe {
-            karac_mir_vec_alloc(out, lines.len(), std::mem::size_of::<RawVec>());
+            karac_mir_vec_alloc(
+                out,
+                lines.len() as u64,
+                std::mem::size_of::<RawVec>() as u64,
+            );
             let buf = (*out).ptr.cast::<RawVec>();
             for (i, l) in lines.iter().enumerate() {
                 string_of(buf.add(i), l.as_bytes());
@@ -1855,9 +1911,37 @@ fn fs_read_dir(path: &str) -> std::io::Result<Vec<String>> {
 #[repr(C)]
 pub struct RawDeque {
     pub ptr: *mut u8,
+    #[cfg(target_pointer_width = "32")]
+    _ptr_hi: u32,
     pub head: usize,
+    #[cfg(target_pointer_width = "32")]
+    _head_hi: u32,
     pub len: usize,
+    #[cfg(target_pointer_width = "32")]
+    _len_hi: u32,
     pub cap: usize,
+    #[cfg(target_pointer_width = "32")]
+    _cap_hi: u32,
+}
+
+impl RawDeque {
+    /// As [`RawVec::new`], with the ring's `head` (B-2026-10-22-23).
+    pub const fn new(ptr: *mut u8, head: usize, len: usize, cap: usize) -> Self {
+        RawDeque {
+            ptr,
+            #[cfg(target_pointer_width = "32")]
+            _ptr_hi: 0,
+            head,
+            #[cfg(target_pointer_width = "32")]
+            _head_hi: 0,
+            len,
+            #[cfg(target_pointer_width = "32")]
+            _len_hi: 0,
+            cap,
+            #[cfg(target_pointer_width = "32")]
+            _cap_hi: 0,
+        }
+    }
 }
 
 impl RawDeque {
@@ -1896,23 +1980,14 @@ impl RawDeque {
 /// # Safety
 /// `out` is writable for a deque.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_deque_alloc(out: *mut RawDeque, n: usize, size: usize) {
-    let mut v = RawVec {
-        ptr: std::ptr::null_mut(),
-        len: 0,
-        cap: 0,
-    };
+pub unsafe extern "C" fn karac_mir_deque_alloc(out: *mut RawDeque, n: u64, size: u64) {
+    let n = n as usize;
+    let size = size as usize;
+    let mut v = RawVec::new(std::ptr::null_mut(), 0, 0);
     // SAFETY: `v` is a writable vector.
-    unsafe { karac_mir_vec_alloc(&mut v, n, size) };
+    unsafe { karac_mir_vec_alloc(&mut v, n as u64, size as u64) };
     // SAFETY: the caller's contract.
-    unsafe {
-        out.write(RawDeque {
-            ptr: v.ptr,
-            head: 0,
-            len: n,
-            cap: v.cap,
-        })
-    };
+    unsafe { out.write(RawDeque::new(v.ptr, 0, n, v.cap)) };
 }
 
 /// The element `i` of the deque at `q` (in bounds).
@@ -1920,11 +1995,9 @@ pub unsafe extern "C" fn karac_mir_deque_alloc(out: *mut RawDeque, n: usize, siz
 /// # Safety
 /// `q` is a live deque of `size`-byte elements with more than `i` of them.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_deque_slot(
-    q: *const RawDeque,
-    i: usize,
-    size: usize,
-) -> *mut u8 {
+pub unsafe extern "C" fn karac_mir_deque_slot(q: *const RawDeque, i: u64, size: u64) -> *mut u8 {
+    let i = i as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     unsafe { (*q).slot(i, size) }
 }
@@ -1937,9 +2010,10 @@ pub unsafe extern "C" fn karac_mir_deque_slot(
 pub unsafe extern "C" fn karac_mir_deque_push(
     q: *mut RawDeque,
     elem: *const u8,
-    size: usize,
+    size: u64,
     front: u8,
 ) {
+    let size = size as usize;
     // SAFETY: the caller's contract.
     let q = unsafe { &mut *q };
     q.grow(size);
@@ -1961,10 +2035,12 @@ pub unsafe extern "C" fn karac_mir_deque_push(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_deque_insert(
     q: *mut RawDeque,
-    i: usize,
+    i: u64,
     elem: *const u8,
-    size: usize,
+    size: u64,
 ) -> u8 {
+    let i = i as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     let q = unsafe { &mut *q };
     if i > q.len {
@@ -1991,9 +2067,10 @@ pub unsafe extern "C" fn karac_mir_deque_insert(
 pub unsafe extern "C" fn karac_mir_deque_pop(
     q: *mut RawDeque,
     out: *mut u8,
-    size: usize,
+    size: u64,
     front: u8,
 ) -> u8 {
+    let size = size as usize;
     // SAFETY: the caller's contract.
     let q = unsafe { &mut *q };
     if q.len == 0 {
@@ -2018,10 +2095,12 @@ pub unsafe extern "C" fn karac_mir_deque_pop(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_sort(
     buf: *mut u8,
-    n: usize,
-    size: usize,
+    n: u64,
+    size: u64,
     cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
 ) {
+    let n = n as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     unsafe { merge_sort(buf, n, size, &mut |a, b| cmp(a, b)) };
 }
@@ -2033,7 +2112,8 @@ pub unsafe extern "C" fn karac_mir_sort(
 /// # Safety
 /// `buf` holds `n` integers of that width, aligned to it.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_sort_int(buf: *mut u8, n: usize, kind: i64) {
+pub unsafe extern "C" fn karac_mir_sort_int(buf: *mut u8, n: u64, kind: i64) {
+    let n = n as usize;
     if n < 2 {
         return;
     }
@@ -2061,11 +2141,13 @@ pub unsafe extern "C" fn karac_mir_sort_int(buf: *mut u8, n: usize, kind: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_sort_ctx(
     buf: *mut u8,
-    n: usize,
-    size: usize,
+    n: u64,
+    size: u64,
     cmp: unsafe extern "C" fn(*const u8, *const u8, *const u8) -> i32,
     ctx: *const u8,
 ) {
+    let n = n as usize;
+    let size = size as usize;
     // SAFETY: the caller's contract.
     unsafe { merge_sort(buf, n, size, &mut |a, b| cmp(ctx, a, b)) };
 }
@@ -2241,7 +2323,8 @@ static FORGOTTEN: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::ne
 /// # Safety
 /// `p` is readable for `n` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: usize) {
+pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: u64) {
+    let n = n as usize;
     // SAFETY: the caller's contract.
     let bytes = unsafe { std::slice::from_raw_parts(p, n) }.to_vec();
     FORGOTTEN
@@ -2355,7 +2438,8 @@ pub(crate) fn deadlock(what: &str) -> ! {
 /// # Safety
 /// `ptr` is readable for `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: usize) -> ! {
+pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
+    let len = len as usize;
     if !panic_begins() {
         karac_mir_exit(101)
     }
@@ -2377,10 +2461,12 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: usize) -> ! {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_abort_at(
     ptr: *const u8,
-    len: usize,
+    len: u64,
     at: *const u8,
-    at_len: usize,
+    at_len: u64,
 ) -> ! {
+    let len = len as usize;
+    let at_len = at_len as usize;
     if !panic_begins() {
         karac_mir_exit(101)
     }
@@ -2405,7 +2491,8 @@ pub unsafe extern "C" fn karac_mir_abort_at(
 /// # Safety
 /// `ptr` is readable for `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_fmt_str_debug(ptr: *const u8, len: usize) {
+pub unsafe extern "C" fn karac_mir_fmt_str_debug(ptr: *const u8, len: u64) {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let b = unsafe { bytes(ptr, len) };
     append(&format!("{:?}", String::from_utf8_lossy(b)));
@@ -2510,11 +2597,12 @@ const CHAR_OPS: &[&str] = &[
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_parse_int128(
     ptr: *const u8,
-    len: usize,
+    len: u64,
     radix: i64,
     signed: u8,
     out: *mut u8,
 ) -> u8 {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
         return 0;
@@ -2585,12 +2673,13 @@ fn short_decimal(raw: &[u8], radix: i64) -> Option<(bool, i128)> {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_parse_int(
     ptr: *const u8,
-    len: usize,
+    len: u64,
     radix: i64,
     bits: u32,
     signed: u8,
     out: *mut i64,
 ) -> u8 {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let raw = unsafe { bytes(ptr, len) };
     if !(2..=36).contains(&radix) {
@@ -2638,7 +2727,8 @@ pub unsafe extern "C" fn karac_mir_parse_int(
 /// # Safety
 /// `ptr` is readable for `len` bytes; `out` is writable.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: usize, out: *mut f64) -> u8 {
+pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: u64, out: *mut f64) -> u8 {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
         return 0;
@@ -2660,7 +2750,8 @@ pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: usize, out: *m
 /// # Safety
 /// `ptr` is readable for `len` bytes; `out` is writable.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_parse_f32(ptr: *const u8, len: usize, out: *mut f64) -> u8 {
+pub unsafe extern "C" fn karac_mir_parse_f32(ptr: *const u8, len: u64, out: *mut f64) -> u8 {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let Ok(text) = std::str::from_utf8(unsafe { bytes(ptr, len) }) else {
         return 0;
@@ -2728,11 +2819,7 @@ static ARENA_IDS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::n
 pub extern "C" fn karac_mir_arena_new() -> *mut RawArena {
     let id = ARENA_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     Box::into_raw(Box::new(RawArena {
-        items: RawVec {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        },
+        items: RawVec::new(std::ptr::null_mut(), 0, 0),
         id,
     }))
 }
@@ -2778,18 +2865,15 @@ pub extern "C" fn karac_mir_interner_new() -> *mut MirInterner {
 pub unsafe extern "C" fn karac_mir_interner_intern(
     h: *mut MirInterner,
     ptr: *const u8,
-    len: usize,
+    len: u64,
 ) -> i64 {
+    let len = len as usize;
     // SAFETY: the caller's contract.
     let (t, b) = unsafe { (&mut *h, bytes(ptr, len)) };
     if let Some(&id) = t.ids.get(b) {
         return id as i64;
     }
-    let mut s = Box::new(RawVec {
-        ptr: std::ptr::null_mut(),
-        len: 0,
-        cap: 0,
-    });
+    let mut s = Box::new(RawVec::new(std::ptr::null_mut(), 0, 0));
     // SAFETY: `s` is a writable `String`.
     unsafe { string_of(&mut *s, b) };
     t.strings.push(s);
@@ -2801,11 +2885,7 @@ pub unsafe extern "C" fn karac_mir_interner_intern(
 struct EmptyString(RawVec);
 // SAFETY: it is never written; its null buffer is never read.
 unsafe impl Sync for EmptyString {}
-static EMPTY_STRING: EmptyString = EmptyString(RawVec {
-    ptr: std::ptr::null_mut(),
-    len: 0,
-    cap: 0,
-});
+static EMPTY_STRING: EmptyString = EmptyString(RawVec::new(std::ptr::null_mut(), 0, 0));
 
 /// `Interner.resolve(sym)`: the interned `String`, or an empty one for a
 /// symbol out of range.
@@ -2963,11 +3043,12 @@ struct MirChanState {
 /// A new channel with one end of each kind.
 #[no_mangle]
 pub extern "C" fn karac_mir_chan_new(
-    size: usize,
+    size: u64,
     cap: i64,
     bounded: u8,
     drop: Option<unsafe extern "C" fn(*mut u8)>,
 ) -> *mut MirChan {
+    let size = size as usize;
     Box::into_raw(Box::new(MirChan {
         queue: std::sync::Mutex::new(MirChanState {
             queue: std::collections::VecDeque::new(),
@@ -3120,16 +3201,16 @@ pub unsafe extern "C" fn karac_mir_chan_drop_receiver(h: *mut MirChan) {
 /// `s` is readable for `n` bytes of UTF-8; `out` is writable for `n`
 /// `u32`s.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_str_decode(out: *mut u32, s: *const u8, n: usize) -> usize {
+pub unsafe extern "C" fn karac_mir_str_decode(out: *mut u32, s: *const u8, n: u64) -> u64 {
     // SAFETY: the caller's contract.
-    let text = unsafe { std::str::from_utf8_unchecked(bytes(s, n)) };
+    let text = unsafe { std::str::from_utf8_unchecked(bytes(s, n as usize)) };
     let mut k = 0;
     for c in text.chars() {
         // SAFETY: a string of `n` bytes has at most `n` chars.
         unsafe { out.add(k).write(u32::from(c)) };
         k += 1;
     }
-    k
+    k as u64
 }
 
 /// The chars `c[..k]` as a new `String` at `out`.
@@ -3137,7 +3218,8 @@ pub unsafe extern "C" fn karac_mir_str_decode(out: *mut u32, s: *const u8, n: us
 /// # Safety
 /// `c` holds `k` valid chars; `out` is writable for a `String`.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_string_from_chars(out: *mut RawVec, c: *const u32, k: usize) {
+pub unsafe extern "C" fn karac_mir_string_from_chars(out: *mut RawVec, c: *const u32, k: u64) {
+    let k = k as usize;
     let mut text = String::with_capacity(k);
     for i in 0..k {
         // SAFETY: the caller's contract.
@@ -3198,11 +3280,12 @@ pub struct MirPool {
 /// `create` is a live erased function value, which the pool now owns.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_pool_new(
-    size: usize,
+    size: u64,
     max: i64,
     create: *const MirFnBytes,
     drop: Option<unsafe extern "C" fn(*mut u8)>,
 ) -> *mut MirPool {
+    let size = size as usize;
     Box::into_raw(Box::new(MirPool {
         refs: 1,
         size,
@@ -3438,7 +3521,7 @@ mod tests {
         let ok = unsafe {
             karac_mir_parse_int(
                 text.as_ptr(),
-                text.len(),
+                text.len() as u64,
                 radix,
                 bits,
                 signed as u8,
@@ -3511,11 +3594,7 @@ mod tests {
     }
 
     fn end_string() -> String {
-        let mut out = RawVec {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        };
+        let mut out = RawVec::new(std::ptr::null_mut(), 0, 0);
         // SAFETY: `out` is a writable `String`.
         unsafe { karac_mir_fmt_end_string(&mut out) };
         if out.ptr.is_null() {
@@ -3537,7 +3616,7 @@ mod tests {
     /// extremes.
     #[test]
     fn formats_nest_and_print_integers() {
-        let s = |t: &str| unsafe { karac_mir_fmt_str(t.as_ptr(), t.len()) };
+        let s = |t: &str| unsafe { karac_mir_fmt_str(t.as_ptr(), t.len() as u64) };
         karac_mir_fmt_begin();
         s("a");
         karac_mir_fmt_i64(i64::MIN);

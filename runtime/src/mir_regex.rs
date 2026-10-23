@@ -92,17 +92,21 @@ fn find_from(re: &regex::Regex, s: &str, at: i64, last_end: i64, n: usize) -> Op
 pub unsafe extern "C" fn karac_regex_mir(
     op: i32,
     pat: *const u8,
-    pat_len: usize,
+    pat_len: u64,
     s: *const u8,
-    s_len: usize,
+    s_len: u64,
     rep: *const u8,
-    rep_len: usize,
+    rep_len: u64,
     a: i64,
     b: i64,
     slots: *mut i64,
-    n: usize,
+    n: u64,
     out: *mut RawVec,
 ) -> i64 {
+    let pat_len = pat_len as usize;
+    let s_len = s_len as usize;
+    let rep_len = rep_len as usize;
+    let n = n as usize;
     // SAFETY: the caller's contract, for every unsafe call below.
     let pattern = unsafe { text(pat, pat_len) };
     match op {

@@ -167,12 +167,12 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     std::fs::write(dir.join("a.kara"), "fn main() {\n    println(\"a\");\n}\n").unwrap();
     let out = karac(
         &dir,
-        &["build", "a.kara", "--simd-report", "--target=wasm_wasi"],
+        &["build", "a.kara", "--simd-report", "--target=wasm_browser"],
     );
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: the v2 build does not honour `--simd-report`, `--target=wasm_wasi` yet; \
+        "error: the v2 build does not honour `--simd-report`, `--target=wasm_browser` yet; \
          `karac build --legacy` does until M3 deletes it\n"
     );
     let json = karac(
