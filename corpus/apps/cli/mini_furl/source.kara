@@ -1,0 +1,3860 @@
+// mini_furl: a port of furl 2.1.4 (Unlicense; Ansgar Grunseid), the URL
+// builder and parser behind many HTTP clients and crawlers. A furl holds a
+// URL as its parts (scheme, username, password, host, port, a Path, a
+// Query and a Fragment) and lets each be added to, set or removed, then
+// writes the URL back out.
+//
+// It stands on the urllib.parse port of mini_urlparse (urlsplit, urljoin,
+// urlunsplit, quote, unquote) and the Punycode of mini_idna. The query is
+// orderedmultidict's omdict1D, as furl keeps it.
+//
+// The run writes its inputs into data/, runs the jobs of jobs_text() and
+// prints each result as oracle.py prints the library's.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+// The data files spell tabs, line ends and control characters as \t,
+// \n, \r and \xNN.
+fn unescape(line: Str) -> String {
+    let b = to_bytes(line);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let n = b[i + 1];
+            if n == b't' {
+                out.push(b'\t');
+                i += 2;
+                continue;
+            }
+            if n == b'n' {
+                out.push(b'\n');
+                i += 2;
+                continue;
+            }
+            if n == b'r' {
+                out.push(b'\r');
+                i += 2;
+                continue;
+            }
+            if n == b'\\' {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if n == b'x' and i + 3 < b.len() {
+                out.push(hex_val(b[i + 2]) * 16 + hex_val(b[i + 3]));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// A stable sort of (name, count) pairs: the highest count first, then
+// by name.
+fn sort_counts(names: ref Vec[String], counts: ref Vec[i64]) -> Vec[i64] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..names.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 {
+            let a = order[j - 1];
+            let b = order[j];
+            let after = counts[a] < counts[b] or (counts[a] == counts[b] and names[a] > names[b]);
+            if not after {
+                break;
+            }
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    order
+}
+
+fn bump(names: mut ref Vec[String], counts: mut ref Vec[i64], name: Str) {
+    for i in 0..names.len() {
+        if names[i] == name {
+            counts[i] += 1;
+            return;
+        }
+    }
+    names.push(name.to_string());
+    counts.push(1);
+}
+
+// ------------------------------------------------------------ ipaddress
+
+// IPv4Address's parser: four decimal octets, no leading zeros.
+fn is_ipv4(s: Str) -> bool {
+    let parts = split_on(s, b'.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for i in 0..parts.len() {
+        let b = to_bytes(parts[i]);
+        if b.len() == 0 or b.len() > 3 {
+            return false;
+        }
+        let mut n: i64 = 0;
+        for k in 0..b.len() {
+            if not is_digit(b[k]) {
+                return false;
+            }
+            n = n * 10 + (b[k] - b'0') as i64;
+        }
+        if n > 255 or (b.len() > 1 and b[0] == b'0') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or b.len() > 4 {
+        return false;
+    }
+    for k in 0..b.len() {
+        if not is_hex(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// IPv6Address's parser: at most one `::`, eight hextets in all, an IPv4
+// tail, and a `%scope`.
+fn is_ipv6(s: Str) -> bool {
+    let (addr, has_scope, scope) = partition(s, b'%');
+    if has_scope and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return false;
+    }
+    let mut parts = split_on(addr, b':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+    }
+    let mut hi = n;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else if n != 8 or parts[0].len() == 0 or parts[n - 1].len() == 0 {
+        return false;
+    }
+    for i in 0..hi {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    for i in n - lo..n {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// urllib.parse's _check_bracketed_host.
+fn check_bracketed_host(host: Str) -> Result[(), String] {
+    let b = to_bytes(host);
+    if b.len() > 0 and (b[0] == b'v' or b[0] == b'V') {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let mut i: i64 = 1;
+        while i < b.len() and is_hex(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i >= b.len() or b[i] != b'.' or i + 1 >= b.len() {
+            return Err("IPvFuture address is invalid".to_string());
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err("An IPv4 address cannot be in brackets".to_string());
+    }
+    if not is_ipv6(host) {
+        return Err(f"{py_repr(host)} does not appear to be an IPv4 or IPv6 address");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ split and parse
+
+fn uses_relative(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"], s)
+}
+
+fn uses_netloc(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services"], s)
+}
+
+fn uses_params(s: Str) -> bool {
+    contains_str(["", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms", "sftp", "tel"], s)
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alnum(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+#[derive(Clone)]
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+#[derive(Clone)]
+struct Parsed {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+impl Split {
+    fn repr(ref self) -> String {
+        f"SplitResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+
+    // _userinfo
+    fn username(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (user, _, _) = partition(userinfo, b':');
+        Some(user)
+    }
+
+    fn password(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (_, have_password, password) = partition(userinfo, b':');
+        if have_password { Some(password) } else { None }
+    }
+
+    // _hostinfo: the host and the port as written.
+    fn hostinfo(ref self) -> (String, Option[String]) {
+        let (_, _, hostinfo) = rpartition(self.netloc, b'@');
+        let (_, have_open_br, bracketed) = partition(hostinfo, b'[');
+        let mut host = String.new();
+        let mut port = String.new();
+        if have_open_br {
+            let (h, _, rest) = partition(bracketed, b']');
+            let (_, _, p) = partition(rest, b':');
+            host = h;
+            port = p;
+        } else {
+            let (h, _, p) = partition(hostinfo, b':');
+            host = h;
+            port = p;
+        }
+        if port.len() == 0 { (host, None) } else { (host, Some(port)) }
+    }
+
+    fn hostname(ref self) -> Option[String] {
+        let (host, _) = self.hostinfo();
+        if host.len() == 0 {
+            return None;
+        }
+        // a scope's zone keeps its case
+        let (h, percent, zone) = partition(host, b'%');
+        if percent { Some(f"{lower(h)}%{zone}") } else { Some(lower(h)) }
+    }
+
+    fn port(ref self) -> Result[Option[i64], String] {
+        let (_, port) = self.hostinfo();
+        let p = match port {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let b = to_bytes(p);
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if not is_digit(b[i]) {
+                return Err(f"Port could not be cast to integer value as {py_repr(p)}");
+            }
+            if n <= 1000000 {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if n > 65535 {
+            return Err("Port out of range 0-65535".to_string());
+        }
+        Ok(Some(n))
+    }
+}
+
+impl Parsed {
+    fn repr(ref self) -> String {
+        f"ParseResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, params={py_repr(self.params)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+}
+
+// _splitnetloc: the netloc runs to the first of / ? #.
+fn split_netloc(url: Str, start: i64) -> (String, String) {
+    let b = to_bytes(url);
+    let mut delim = b.len();
+    for i in start..b.len() {
+        if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+            delim = i;
+            break;
+        }
+    }
+    (byte_str(b, start, delim), byte_str(b, delim, b.len()))
+}
+
+fn check_bracketed_netloc(netloc: Str) -> Result[(), String] {
+    let (_, _, host_and_port) = rpartition(netloc, b'@');
+    let (before, have_open_br, bracketed) = partition(host_and_port, b'[');
+    if have_open_br {
+        if before.len() > 0 {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        let (host, _, port) = partition(bracketed, b']');
+        if port.len() > 0 and first_byte(port) != b':' {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        return check_bracketed_host(host);
+    }
+    let (host, _, _) = partition(host_and_port, b':');
+    check_bracketed_host(host)
+}
+
+fn urlsplit(url_in: Str, scheme_in: Str) -> Result[Split, String] {
+    // lstrip the C0 controls and space, then drop every tab and line end
+    let ub = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < ub.len() and ub[st] <= 32 {
+        st += 1;
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in st..ub.len() {
+        let c = ub[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            kept.push(c);
+        }
+    }
+    let mut url = from_bytes(kept);
+    let mut scheme = strip_scheme(scheme_in);
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let i = find_byte(url, b':');
+    if i > 0 and is_alpha(first_byte(url)) {
+        let b = to_bytes(url);
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(b[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(byte_str(b, 0, i));
+            url = byte_str(b, i + 1, b.len());
+        }
+    }
+    if starts_with(url, "//") {
+        let (n, rest) = split_netloc(url, 2);
+        netloc = n;
+        url = rest;
+        let open = has_byte(netloc, b'[');
+        let close = has_byte(netloc, b']');
+        if open != close {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        if open and close {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_byte(url, b'#') {
+        let (u, _, f) = partition(url, b'#');
+        url = u;
+        fragment = f;
+    }
+    if has_byte(url, b'?') {
+        let (u, _, q) = partition(url, b'?');
+        url = u;
+        query = q;
+    }
+    Ok(Split { scheme: scheme, netloc: netloc, path: url, query: query, fragment: fragment })
+}
+
+// The scheme argument: C0 controls and space stripped at both ends, tabs
+// and line ends dropped.
+fn strip_scheme(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and b[st] <= 32 {
+        st += 1;
+    }
+    while en > st and b[en - 1] <= 32 {
+        en -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in st..en {
+        if b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _splitparams: the params follow the `;` in the last segment.
+fn split_params(url: Str) -> (String, String) {
+    let i = if has_byte(url, b'/') {
+        let b = to_bytes(url);
+        let mut at: i64 = -1;
+        for k in rfind_byte(url, b'/')..b.len() {
+            if b[k] == b';' {
+                at = k;
+                break;
+            }
+        }
+        if at < 0 {
+            return (url.to_string(), String.new());
+        }
+        at
+    } else {
+        find_byte(url, b';')
+    };
+    (slice(url, 0, i), slice_from(url, i + 1))
+}
+
+fn urlparse(url: Str, scheme: Str) -> Result[Parsed, String] {
+    let s = urlsplit(url, scheme)?;
+    let mut path = s.path.clone();
+    let mut params = String.new();
+    if uses_params(s.scheme) and has_byte(path, b';') {
+        let (p, a) = split_params(path);
+        path = p;
+        params = a;
+    }
+    Ok(Parsed { scheme: s.scheme, netloc: s.netloc, path: path, params: params, query: s.query, fragment: s.fragment })
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and first_byte(url) != b'/' {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if starts_with(url, "//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and uses_netloc(scheme) and (url.len() == 0 or first_byte(url) == b'/') {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn unsplit(s: ref Split) -> String {
+    urlunsplit(s.scheme, s.netloc, s.path, s.query, s.fragment)
+}
+
+fn urlunparse(p: ref Parsed) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment)
+}
+
+fn urljoin(base: Str, url: Str) -> Result[String, String] {
+    if base.len() == 0 {
+        return Ok(url.to_string());
+    }
+    if url.len() == 0 {
+        return Ok(base.to_string());
+    }
+    let b = urlparse(base, "")?;
+    let mut u = urlparse(url, b.scheme)?;
+    if u.scheme != b.scheme or not uses_relative(u.scheme) {
+        return Ok(url.to_string());
+    }
+    if uses_netloc(u.scheme) {
+        if u.netloc.len() > 0 {
+            return Ok(urlunparse(u));
+        }
+        u.netloc = b.netloc.clone();
+    }
+    if u.path.len() == 0 and u.params.len() == 0 {
+        u.path = b.path.clone();
+        u.params = b.params.clone();
+        if u.query.len() == 0 {
+            u.query = b.query.clone();
+        }
+        return Ok(urlunparse(u));
+    }
+    let mut base_parts = split_on(b.path, b'/');
+    if base_parts[base_parts.len() - 1].len() > 0 {
+        // the last segment is not a directory
+        base_parts.pop();
+    }
+    let mut segments: Vec[String] = Vec.new();
+    if first_byte(u.path) == b'/' {
+        segments = split_on(u.path, b'/');
+    } else {
+        let rel = split_on(u.path, b'/');
+        let mut all = base_parts.clone();
+        for i in 0..rel.len() {
+            all.push(rel[i].clone());
+        }
+        // drop the empty segments between the first and the last
+        for i in 0..all.len() {
+            if i == 0 or i == all.len() - 1 or all[i].len() > 0 {
+                segments.push(all[i].clone());
+            }
+        }
+    }
+    let mut resolved: Vec[String] = Vec.new();
+    for i in 0..segments.len() {
+        if segments[i] == ".." {
+            if resolved.len() > 0 {
+                resolved.pop();
+            }
+        } else if segments[i] != "." {
+            resolved.push(segments[i].clone());
+        }
+    }
+    let last = segments[segments.len() - 1].clone();
+    if last == "." or last == ".." {
+        resolved.push(String.new());
+    }
+    let joined = join(resolved, "/");
+    u.path = if joined.len() > 0 { joined } else { "/".to_string() };
+    Ok(urlunparse(u))
+}
+
+fn urldefrag(url: Str) -> Result[(String, String), String] {
+    if not has_byte(url, b'#') {
+        return Ok((url.to_string(), String.new()));
+    }
+    let mut p = urlparse(url, "")?;
+    let frag = p.fragment.clone();
+    p.fragment = String.new();
+    Ok((urlunparse(p), frag))
+}
+
+// ------------------------------------------------------------ quoting
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote_plus(s: Str, safe: Str) -> String {
+    if not has_byte(s, b' ') {
+        return quote(s, safe);
+    }
+    replace_byte(quote(s, f"{safe} "), b' ', "+")
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+// unquote: the ASCII runs are unquoted and decoded as UTF-8 one run at a
+// time; the rest is kept as it is.
+fn unquote(s: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, utf8_replace(run));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_plus(s: Str) -> String {
+    unquote(replace_byte(s, b'+', " "))
+}
+
+
+// ------------------------------------------------------------ json.loads
+
+// A value as json.loads makes it. An object keeps its pairs as written;
+// a lookup takes the last value for a key and iteration each key once,
+// as the dict Python builds from them does.
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+// The strict decoder of the json module: whitespace is space, tab, CR
+// and LF; strings refuse control characters and unknown escapes; numbers
+// follow `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`; NaN, Infinity
+// and -Infinity are accepted; nothing may follow the document. atoma
+// turns every failure into one message, so only success matters.
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(ref self) -> i64 {
+        if self.at < self.b.len() {
+            self.b[self.at] as i64
+        } else {
+            -1
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, ()] {
+        let c = self.peek();
+        if c == 123 {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                if self.peek() != 34 {
+                    return Err(());
+                }
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(());
+                }
+                self.ws();
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(());
+                }
+                self.ws();
+            }
+        }
+        if c == 91 {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(());
+                }
+                self.ws();
+            }
+        }
+        if c == 34 {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if let Some(v) = self.number() {
+            return Ok(v);
+        }
+        if self.eat("NaN") {
+            return Ok(JValue.Float(f64.NAN));
+        }
+        if self.eat("Infinity") {
+            return Ok(JValue.Float(f64.INFINITY));
+        }
+        if self.eat("-Infinity") {
+            return Ok(JValue.Float(f64.NEG_INFINITY));
+        }
+        Err(())
+    }
+
+    fn hex4(mut ref self) -> Result[i64, ()] {
+        let mut v = 0;
+        for _ in 0..4 {
+            let c = self.peek();
+            let d = if c >= 48 and c <= 57 {
+                c - 48
+            } else if c >= 97 and c <= 102 {
+                c - 87
+            } else if c >= 65 and c <= 70 {
+                c - 55
+            } else {
+                return Err(());
+            };
+            self.at += 1;
+            v = v * 16 + d;
+        }
+        Ok(v)
+    }
+
+    fn string(mut ref self) -> Result[String, ()] {
+        self.at += 1;
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            let c = self.peek();
+            if c < 0 {
+                return Err(());
+            }
+            self.at += 1;
+            if c == 34 {
+                break;
+            }
+            if c < 32 {
+                return Err(());
+            }
+            if c != 92 {
+                out.push(c as u8);
+                continue;
+            }
+            let e = self.peek();
+            self.at += 1;
+            if e == 34 or e == 92 or e == 47 {
+                out.push(e as u8);
+            } else if e == 98 {
+                out.push(8);
+            } else if e == 102 {
+                out.push(12);
+            } else if e == 110 {
+                out.push(10);
+            } else if e == 114 {
+                out.push(13);
+            } else if e == 116 {
+                out.push(9);
+            } else if e == 117 {
+                let mut cp = self.hex4()?;
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let back = self.at - 2;
+                    let lo = self.hex4()?;
+                    if lo >= 0xDC00 and lo < 0xE000 {
+                        cp = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00);
+                    } else {
+                        self.at = back;
+                    }
+                }
+                push_cp(mut out, cp);
+            } else {
+                return Err(());
+            }
+        }
+        match String.from_utf8(out) {
+            Ok(s) => Ok(s),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn digits(mut ref self) -> i64 {
+        let st = self.at;
+        while self.peek() >= 48 and self.peek() <= 57 {
+            self.at += 1;
+        }
+        self.at - st
+    }
+
+    // NUMBER_RE at the current position, or None with the position kept.
+    fn number(mut ref self) -> Option[JValue] {
+        let st = self.at;
+        if self.peek() == 45 {
+            self.at += 1;
+        }
+        if self.peek() == 48 {
+            self.at += 1;
+        } else if self.digits() == 0 {
+            self.at = st;
+            return None;
+        }
+        let int_end = self.at;
+        let mut is_float = false;
+        if self.peek() == 46 {
+            self.at += 1;
+            if self.digits() == 0 {
+                self.at = int_end;
+            } else {
+                is_float = true;
+            }
+        }
+        let frac_end = self.at;
+        if self.peek() == 101 or self.peek() == 69 {
+            self.at += 1;
+            if self.peek() == 43 or self.peek() == 45 {
+                self.at += 1;
+            }
+            if self.digits() == 0 {
+                self.at = frac_end;
+            } else {
+                is_float = true;
+            }
+        }
+        let t = String.from_utf8(self.b[st..self.at].to_vec()).unwrap_or(String.new());
+        if is_float {
+            return match f64.parse(t) {
+                Ok(f) => Some(JValue.Float(f)),
+                Err(_) => None,
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Some(JValue.Int(i)),
+            Err(_) => None,
+        }
+    }
+}
+
+fn push_cp(out: mut ref Vec[u8], c: i64) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 + c / 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 + c / 4096) as u8);
+        out.push((0x80 + c / 64 % 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    } else {
+        out.push((0xF0 + c / 262144) as u8);
+        out.push((0x80 + c / 4096 % 64) as u8);
+        out.push((0x80 + c / 64 % 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    }
+}
+
+// json.loads(s) over text that is already str.
+fn json_loads(b: own Vec[u8]) -> Result[JValue, ()] {
+    let mut r = JsonReader { b: b, at: 0 };
+    r.ws();
+    let v = r.value()?;
+    r.ws();
+    if r.at != r.b.len() {
+        return Err(());
+    }
+    Ok(v)
+}
+
+fn type_name(v: ref JValue) -> String {
+    let n = match v {
+        JValue.Null => "NoneType",
+        JValue.Bool(_) => "bool",
+        JValue.Int(_) => "int",
+        JValue.Float(_) => "float",
+        JValue.Str(_) => "str",
+        JValue.List(_) => "list",
+        JValue.Obj(_) => "dict",
+    };
+    n.to_string()
+}
+
+fn truthy(v: ref JValue) -> bool {
+    match v {
+        JValue.Null => false,
+        JValue.Bool(b) => *b,
+        JValue.Int(i) => *i != 0,
+        JValue.Float(f) => *f != 0.0,
+        JValue.Str(s) => s.len() > 0,
+        JValue.List(l) => l.len() > 0,
+        JValue.Obj(m) => m.len() > 0,
+    }
+}
+
+
+// ------------------------------------------------------------ code points
+
+fn cps_of(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push((c as u32) as i64);
+    }
+    out
+}
+
+fn cps_str(cs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(char.try_from(*c as u32).unwrap_or('?'));
+    }
+    s
+}
+
+fn sub(cs: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = from;
+    while i < to {
+        v.push(cs[i]);
+        i += 1;
+    }
+    v
+}
+
+// ------------------------------------------------------------ Punycode
+
+// RFC 3492 as Python's encodings.punycode writes and reads it.
+
+fn puny_t(j: i64, bias: i64) -> i64 {
+    let r = 36 * (j + 1) - bias;
+    if r < 1 {
+        1
+    } else if r > 26 {
+        26
+    } else {
+        r
+    }
+}
+
+fn puny_adapt(delta0: i64, first: bool, numchars: i64) -> i64 {
+    let mut delta = if first { delta0 / 700 } else { delta0 / 2 };
+    delta += delta / numchars;
+    let mut divisions = 0;
+    while delta > 455 {
+        delta = delta / 35;
+        divisions += 36;
+    }
+    divisions + (36 * delta / (delta + 38))
+}
+
+fn puny_digit(d: i64) -> i64 {
+    if d < 26 { 97 + d } else { 48 + d - 26 }
+}
+
+fn punycode_encode(text: ref Vec[i64]) -> Vec[i64] {
+    let mut base: Vec[i64] = Vec.new();
+    let mut extended: Vec[i64] = Vec.new();
+    for c in text.iter() {
+        if *c < 128 {
+            base.push(*c);
+        } else {
+            let mut seen = false;
+            for e in extended.iter() {
+                if *e == *c {
+                    seen = true;
+                }
+            }
+            if not seen {
+                extended.push(*c);
+            }
+        }
+    }
+    extended.sort();
+    // Insertion unsort coding.
+    let mut deltas: Vec[i64] = Vec.new();
+    let mut oldchar: i64 = 0x80;
+    let mut oldindex: i64 = -1;
+    for ch in extended.iter() {
+        let c = *ch;
+        let mut curlen: i64 = 0;
+        for x in text.iter() {
+            if *x < c {
+                curlen += 1;
+            }
+        }
+        let mut delta = (curlen + 1) * (c - oldchar);
+        let mut index: i64 = -1;
+        let mut pos: i64 = -1;
+        loop {
+            // selective_find
+            let mut found = false;
+            loop {
+                pos += 1;
+                if pos == text.len() {
+                    break;
+                }
+                let x = text[pos];
+                if x == c {
+                    index += 1;
+                    found = true;
+                    break;
+                } else if x < c {
+                    index += 1;
+                }
+            }
+            if not found {
+                break;
+            }
+            delta += index - oldindex;
+            deltas.push(delta - 1);
+            oldindex = index;
+            delta = 0;
+        }
+        oldchar = c;
+    }
+    // Bias adaptation and the variable-length integers.
+    let mut out: Vec[i64] = Vec.new();
+    let mut bias: i64 = 72;
+    for points in 0..deltas.len() {
+        let mut n = deltas[points];
+        let mut j: i64 = 0;
+        loop {
+            let t = puny_t(j, bias);
+            if n < t {
+                out.push(puny_digit(n));
+                break;
+            }
+            out.push(puny_digit(t + (n - t) % (36 - t)));
+            n = (n - t) / (36 - t);
+            j += 1;
+        }
+        bias = puny_adapt(deltas[points], points == 0, base.len() + points + 1);
+    }
+    if base.len() > 0 {
+        let mut r = base.clone();
+        r.push(45);
+        for c in out.iter() {
+            r.push(*c);
+        }
+        return r;
+    }
+    out
+}
+
+const PUNY_CAP: i64 = 35184372088832;
+
+// The text a Punycode string decodes to, or None where Python's codec
+// raises. Numbers are capped well past the point where the character
+// they lead to is out of range, which is an error either way.
+fn punycode_decode(text: ref Vec[i64]) -> Option[Vec[i64]] {
+    let mut dash: i64 = -1;
+    for i in 0..text.len() {
+        if text[i] == 45 {
+            dash = i;
+        }
+    }
+    let mut base: Vec[i64] = Vec.new();
+    let mut ext: Vec[i64] = Vec.new();
+    if dash >= 0 {
+        base = sub(text, 0, dash);
+    }
+    for i in (dash + 1)..text.len() {
+        let c = text[i];
+        ext.push(if c >= 97 and c <= 122 { c - 32 } else { c });
+    }
+    let mut ch: i64 = 0x80;
+    let mut pos: i64 = -1;
+    let mut bias: i64 = 72;
+    let mut extpos: i64 = 0;
+    while extpos < ext.len() {
+        // decode_generalized_number
+        let mut p = extpos;
+        let mut result: i64 = 0;
+        let mut w: i64 = 1;
+        let mut j: i64 = 0;
+        loop {
+            if p >= ext.len() {
+                return None;
+            }
+            let c = ext[p];
+            p += 1;
+            let digit = if c >= 65 and c <= 90 {
+                c - 65
+            } else if c >= 48 and c <= 57 {
+                c - 22
+            } else {
+                return None;
+            };
+            let t = puny_t(j, bias);
+            result += digit * w;
+            if result > PUNY_CAP {
+                result = PUNY_CAP;
+            }
+            if digit < t {
+                break;
+            }
+            w = w * (36 - t);
+            if w > PUNY_CAP {
+                w = PUNY_CAP;
+            }
+            j += 1;
+        }
+        let delta = result;
+        pos += delta + 1;
+        ch += pos / (base.len() + 1);
+        if ch > 0x10FFFF {
+            return None;
+        }
+        pos = pos % (base.len() + 1);
+        base.insert(pos, ch);
+        bias = puny_adapt(delta, extpos == 0, base.len());
+        extpos = p;
+    }
+    Some(base)
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class name and str().
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: Str) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn value_error(msg: Str) -> PyErr {
+    py_err("ValueError", msg)
+}
+
+// ------------------------------------------------------------ values
+
+// A query value as furl keeps it: None, a string, an int or a bool,
+// whatever the caller handed in. Only a string is unquoted on the way in;
+// str() turns the others into text on the way out.
+#[derive(Clone)]
+enum Pv {
+    Null,
+    Str(String),
+    Int(i64),
+    Bool(bool),
+}
+
+fn pv_of(v: ref JValue) -> Pv {
+    match v {
+        JValue.Bool(b) => Pv.Bool(*b),
+        JValue.Int(i) => Pv.Int(*i),
+        JValue.Str(s) => Pv.Str(s.clone()),
+        _ => Pv.Null,
+    }
+}
+
+fn pv_repr(v: ref Pv) -> String {
+    match v {
+        Pv.Null => "None".to_string(),
+        Pv.Str(s) => py_repr(s),
+        Pv.Int(i) => f"{i}",
+        Pv.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+    }
+}
+
+// str(v) for a value that is not None.
+fn pv_str(v: ref Pv) -> String {
+    match v {
+        Pv.Null => "None".to_string(),
+        Pv.Str(s) => s.clone(),
+        Pv.Int(i) => f"{i}",
+        Pv.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+    }
+}
+
+// Python's ==, where True == 1 and False == 0.
+fn pv_num(v: ref Pv) -> Option[i64] {
+    match v {
+        Pv.Int(i) => Some(*i),
+        Pv.Bool(b) => Some(if *b { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn pv_eq(a: ref Pv, b: ref Pv) -> bool {
+    match (pv_num(a), pv_num(b)) {
+        (Some(x), Some(y)) => return x == y,
+        _ => {}
+    }
+    match (a, b) {
+        (Pv.Null, Pv.Null) => true,
+        (Pv.Str(x), Pv.Str(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn is_list(v: ref JValue) -> bool {
+    match v {
+        JValue.List(_) => true,
+        _ => false,
+    }
+}
+
+fn is_true(v: ref JValue) -> bool {
+    match v {
+        JValue.Bool(b) => *b,
+        _ => false,
+    }
+}
+
+fn jstr(v: ref JValue) -> Option[String] {
+    match v {
+        JValue.Str(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn jlist(v: ref JValue) -> Vec[JValue] {
+    match v {
+        JValue.List(l) => l.clone(),
+        _ => Vec.new(),
+    }
+}
+
+// The strings of a list of path segments.
+fn jsegs(v: ref JValue) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in jlist(v).iter() {
+        out.push(jstr(x).unwrap_or(String.new()));
+    }
+    out
+}
+
+fn opt_repr_s(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn strs_repr(v: ref Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(v[i]));
+    }
+    out.push_str("]");
+    out
+}
+
+// ------------------------------------------------------------ omdict1D
+
+// One (key, value) item. orderedmultidict keeps a linked item list and a
+// map from each key to its nodes; furl only ever reads the items in
+// order and the values of one key, so one vector of items is the same
+// thing to every caller.
+#[derive(Clone)]
+struct Item {
+    k: String,
+    v: Pv,
+}
+
+#[derive(Clone)]
+struct Omd {
+    items: Vec[Item],
+}
+
+impl Omd {
+    fn new() -> Omd {
+        Omd { items: Vec.new() }
+    }
+
+    fn has(ref self, k: Str) -> bool {
+        for it in self.items.iter() {
+            if it.k == k {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn count(ref self, k: Str) -> i64 {
+        let mut n: i64 = 0;
+        for it in self.items.iter() {
+            if it.k == k {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    // len(omd): the number of distinct keys.
+    fn len(ref self) -> i64 {
+        let mut seen: Vec[String] = Vec.new();
+        for it in self.items.iter() {
+            if not seen.contains(it.k) {
+                seen.push(it.k.clone());
+            }
+        }
+        seen.len()
+    }
+
+    fn get(ref self, k: Str) -> Option[Pv] {
+        for it in self.items.iter() {
+            if it.k == k {
+                return Some(it.v.clone());
+            }
+        }
+        None
+    }
+
+    fn add1(mut ref self, k: Str, v: own Pv) {
+        self.items.push(Item { k: k.to_string(), v: v });
+    }
+
+    // omdict1D.add: a list is several values, anything else one.
+    fn add(mut ref self, k: Str, v: ref JValue) {
+        if is_list(v) {
+            for x in jlist(v).iter() {
+                self.add1(k, pv_of(x));
+            }
+        } else {
+            self.add1(k, pv_of(v));
+        }
+    }
+
+    fn pop_all(mut ref self, k: Str) {
+        let mut kept: Vec[Item] = Vec.new();
+        for it in self.items.iter() {
+            if it.k != k {
+                kept.push(it.clone());
+            }
+        }
+        self.items = kept;
+    }
+
+    // setlist: the key's values are replaced in place, extra values are
+    // appended at the end and surplus ones removed; no values removes the
+    // key.
+    fn setlist(mut ref self, k: Str, vals: ref Vec[Pv]) {
+        if vals.len() == 0 {
+            self.pop_all(k);
+            return;
+        }
+        let mut seen: i64 = 0;
+        let mut kept: Vec[Item] = Vec.new();
+        for it in self.items.iter() {
+            if it.k == k {
+                if seen < vals.len() {
+                    kept.push(Item { k: it.k.clone(), v: vals[seen].clone() });
+                }
+                seen += 1;
+            } else {
+                kept.push(it.clone());
+            }
+        }
+        while seen < vals.len() {
+            kept.push(Item { k: k.to_string(), v: vals[seen].clone() });
+            seen += 1;
+        }
+        self.items = kept;
+    }
+
+    // popvalue(key, value): the last item of key with that value goes.
+    fn popvalue(mut ref self, k: Str, v: ref Pv) -> Result[(), PyErr] {
+        if not self.has(k) {
+            return Ok(());
+        }
+        let mut at: i64 = -1;
+        for i in 0..self.items.len() {
+            if self.items[i].k == k and pv_eq(self.items[i].v, v) {
+                at = i;
+            }
+        }
+        if at < 0 {
+            return Err(value_error(f"{pv_repr(v)} is not in list"));
+        }
+        self.items.remove(at);
+        Ok(())
+    }
+
+    // update() (one value per key) and updateall() (as many values as the
+    // key already has), omdict1D's way: a list is several values.
+    fn update(mut ref self, pairs: ref Vec[(String, JValue)], at_most_one: bool) {
+        let mut rk: Vec[String] = Vec.new();
+        let mut rv: Vec[Vec[Pv]] = Vec.new();
+        let mut lk: Vec[String] = Vec.new();
+        let mut lv: Vec[Pv] = Vec.new();
+        for (key, values) in pairs.iter() {
+            let mut vals: Vec[JValue] = Vec.new();
+            let l = jlist(values);
+            if is_list(values) and l.len() > 0 {
+                vals = l;
+            } else {
+                vals.push(values.clone());
+            }
+            for value in vals.iter() {
+                let mut ri: i64 = -1;
+                for i in 0..rk.len() {
+                    if rk[i] == *key {
+                        ri = i;
+                    }
+                }
+                if is_list(value) {
+                    // value == []: the key is replaced by nothing
+                    if ri < 0 {
+                        rk.push(key.clone());
+                        rv.push(Vec.new());
+                    } else {
+                        rv[ri] = Vec.new();
+                    }
+                    let mut nk: Vec[String] = Vec.new();
+                    let mut nv: Vec[Pv] = Vec.new();
+                    for i in 0..lk.len() {
+                        if lk[i] != *key {
+                            nk.push(lk[i].clone());
+                            nv.push(lv[i].clone());
+                        }
+                    }
+                    lk = nk;
+                    lv = nv;
+                } else if self.has(key) and (ri < 0 or rv[ri].len() == 0) {
+                    if ri < 0 {
+                        rk.push(key.clone());
+                        rv.push([pv_of(value)]);
+                    } else {
+                        rv[ri] = [pv_of(value)];
+                    }
+                } else if self.has(key) and not at_most_one and rv[ri].len() < self.count(key) {
+                    rv[ri].push(pv_of(value));
+                } else if at_most_one {
+                    if ri < 0 {
+                        rk.push(key.clone());
+                        rv.push([pv_of(value)]);
+                    } else {
+                        rv[ri] = [pv_of(value)];
+                    }
+                } else {
+                    lk.push(key.clone());
+                    lv.push(pv_of(value));
+                }
+            }
+        }
+        for i in 0..rk.len() {
+            self.setlist(rk[i], rv[i]);
+        }
+        for i in 0..lk.len() {
+            self.add1(lk[i], lv[i].clone());
+        }
+    }
+
+    fn items_repr(ref self) -> String {
+        let mut out = "[".to_string();
+        for i in 0..self.items.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(f"({py_repr(self.items[i].k)}, {pv_repr(self.items[i].v)})");
+        }
+        out.push_str("]");
+        out
+    }
+}
+
+// ------------------------------------------------------------ Query
+
+const SAFE_KEY_CHARS: Str = "/?:@-._~!$'()*+,;";
+const SAFE_VALUE_CHARS: Str = "/?:@-._~!$'()*+,;=";
+
+// encode()'s dont_quote: True, False or the characters to leave alone.
+#[derive(Clone)]
+enum DontQuote {
+    All,
+    None_,
+    Chars(String),
+}
+
+// create_quote_fn: only characters of the charset may be left alone.
+fn quote_with(s: Str, charset: Str, dq: ref DontQuote, plus: bool) -> String {
+    let wanted = match dq {
+        DontQuote.All => charset.to_string(),
+        DontQuote.None_ => String.new(),
+        DontQuote.Chars(c) => c.clone(),
+    };
+    let mut safe: Vec[u8] = Vec.new();
+    for c in to_bytes(wanted).iter() {
+        if has_byte(charset, *c) and not safe.contains(*c) {
+            safe.push(*c);
+        }
+    }
+    let q = quote(s, from_bytes(safe));
+    if plus { q.replace("%20", "+") } else { q }
+}
+
+// _extract_items_from_querystr: split on '&', then on the first '=';
+// '+' is a space; a pair with no '=' has the value None.
+fn querystr_items(qs: Str) -> Vec[(String, JValue)] {
+    let mut out: Vec[(String, JValue)] = Vec.new();
+    for pairstr in split_on(qs, b'&').iter() {
+        let (key, eq, value) = partition(pairstr, b'=');
+        let k = unquote(replace_byte(key, b'+', " "));
+        if eq {
+            out.push((k, JValue.Str(unquote(replace_byte(value, b'+', " ")))));
+        } else {
+            out.push((k, JValue.Null));
+        }
+    }
+    out
+}
+
+// Query._items: the (key, value) items of a query string, a dict or a
+// list of pairs; anything false is no items.
+fn query_items(v: ref JValue) -> Vec[(String, JValue)] {
+    if not truthy(v) {
+        return Vec.new();
+    }
+    match v {
+        JValue.Str(s) => querystr_items(s),
+        JValue.Obj(m) => m.clone(),
+        JValue.List(l) => {
+            let mut out: Vec[(String, JValue)] = Vec.new();
+            for p in l.iter() {
+                let pair = jlist(p);
+                out.push((jstr(pair[0]).unwrap_or(String.new()), pair[1].clone()));
+            }
+            out
+        }
+        _ => Vec.new(),
+    }
+}
+
+#[derive(Clone)]
+struct Query {
+    params: Omd,
+}
+
+impl Query {
+    fn new() -> Query {
+        Query { params: Omd.new() }
+    }
+
+    fn load(mut ref self, v: ref JValue) {
+        self.params = Omd.new();
+        self.params.update(query_items(v), false);
+    }
+
+    fn load_str(mut ref self, s: Str) {
+        self.load(JValue.Str(s.to_string()));
+    }
+
+    fn add(mut ref self, v: ref JValue) {
+        for (k, x) in query_items(v).iter() {
+            self.params.add(k, x);
+        }
+    }
+
+    fn set(mut ref self, v: ref JValue) {
+        self.params.update(query_items(v), false);
+    }
+
+    // The params setter: clear, then add each item.
+    fn set_params(mut ref self, v: ref JValue) {
+        let items = query_items(v);
+        self.params = Omd.new();
+        for (k, x) in items.iter() {
+            self.params.add(k, x);
+        }
+    }
+
+    // remove(): True clears; a pair removes one value, a key every value.
+    fn remove(mut ref self, v: ref JValue) -> Result[(), PyErr] {
+        if is_true(v) {
+            self.load_str("");
+            return Ok(());
+        }
+        match v {
+            JValue.Obj(_) => {
+                for (k, x) in query_items(v).iter() {
+                    self.params.popvalue(k, pv_of(x))?;
+                }
+            }
+            JValue.List(l) => {
+                for item in l.iter() {
+                    let pair = jlist(item);
+                    if is_list(item) and pair.len() == 2 {
+                        let k = jstr(pair[0]).unwrap_or(String.new());
+                        self.params.popvalue(k, pv_of(pair[1]))?;
+                    } else {
+                        self.params.pop_all(jstr(item).unwrap_or(String.new()));
+                    }
+                }
+            }
+            JValue.Str(s) => self.params.pop_all(s),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn encode(ref self, delim: Str, plus: bool, dq: ref DontQuote) -> String {
+        let mut pairs: Vec[String] = Vec.new();
+        for it in self.params.items.iter() {
+            let qk = quote_with(it.k, SAFE_KEY_CHARS, dq, plus);
+            match it.v {
+                Pv.Null => pairs.push(qk),
+                _ => {
+                    let mut qv = quote_with(pv_str(it.v), SAFE_VALUE_CHARS, dq, plus);
+                    if qk.len() == 0 {
+                        // '=' stays as written in queries like '?==='
+                        qv = qv.replace("%3D", "=");
+                    }
+                    pairs.push(f"{qk}={qv}");
+                }
+            }
+        }
+        join(pairs, delim)
+    }
+
+    fn str(ref self) -> String {
+        self.encode("&", true, DontQuote.Chars(String.new()))
+    }
+}
+
+// ------------------------------------------------------------ Path
+
+// _isabsolute holds what furl assigned it: True, False, or the empty
+// segment list itself when an empty path was loaded (`segments and ...`).
+#[derive(Clone)]
+enum Abs {
+    F,
+    T,
+    Empty,
+}
+
+fn abs_repr(a: ref Abs) -> String {
+    let s = match a {
+        Abs.F => "False",
+        Abs.T => "True",
+        Abs.Empty => "[]",
+    };
+    s.to_string()
+}
+
+fn abs_truthy(a: ref Abs) -> bool {
+    match a {
+        Abs.T => true,
+        _ => false,
+    }
+}
+
+// What a path's _force_absolute(self) needs from its owner: a URL path is
+// forced absolute when it has segments and the URL has a netloc, and
+// working out the netloc can raise (an IDNA label too long). A fragment
+// path is never forced.
+#[derive(Clone)]
+struct Force {
+    url: bool,
+    netloc: bool,
+    err: Option[PyErr],
+}
+
+fn never() -> Force {
+    Force { url: false, netloc: false, err: None }
+}
+
+const SAFE_SEGMENT_CHARS: Str = ":@-._~!$&'()*+,;=";
+
+// is_valid_encoded_path_segment: word characters, -.~:@!$&'()*+,;= and
+// %XX escapes. Characters past ASCII are taken as word characters.
+fn valid_segment(s: Str) -> bool {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c >= 128 or is_word(c) or has_byte("-.~:@!$&'()*+,;=", c) {
+            i += 1;
+        } else if c == b'%' and i + 2 < b.len() and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            i += 3;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+// _segments_from_path: a well-formed segment is unquoted; any other is
+// quoted and then unquoted, which leaves it as it was.
+fn segments_from_path(p: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for seg in split_on(p, b'/').iter() {
+        if valid_segment(seg) {
+            out.push(unquote(seg));
+        } else {
+            out.push(seg.clone());
+        }
+    }
+    out
+}
+
+fn segs_eq_empty(v: ref Vec[String]) -> bool {
+    v.len() == 1 and v[0].len() == 0
+}
+
+// join_path_segments
+fn join_path_segments(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut finals: Vec[String] = Vec.new();
+    for idx in 0..2 {
+        let mut segments = if idx == 0 { a.clone() } else { b.clone() };
+        if segments.len() == 0 or segs_eq_empty(segments) {
+            continue;
+        }
+        if finals.len() == 0 {
+            finals = segments;
+            continue;
+        }
+        if finals[finals.len() - 1].len() == 0 and (segments[0].len() > 0 or segments.len() > 1) {
+            finals.pop();
+        } else if finals[finals.len() - 1].len() > 0 and segments[0].len() == 0 and segments.len() > 1 {
+            segments.remove(0);
+        }
+        for s in segments.into_iter() {
+            finals.push(s);
+        }
+    }
+    finals
+}
+
+fn segs_eq(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// remove_path_segments
+fn remove_path_segments(segments0: ref Vec[String], remove0: ref Vec[String]) -> Vec[String] {
+    let mut segments = segments0.clone();
+    let mut remove = remove0.clone();
+    if segs_eq_empty(segments) {
+        segments.push(String.new());
+    }
+    if segs_eq_empty(remove) {
+        remove.push(String.new());
+    }
+    if segs_eq(remove, segments) {
+        return Vec.new();
+    }
+    if remove.len() > segments.len() {
+        return segments;
+    }
+    let mut toremove = remove.clone();
+    if remove.len() > 1 and remove[0].len() == 0 {
+        toremove.remove(0);
+    }
+    let n = toremove.len();
+    if n > 0 {
+        let mut tail: Vec[String] = Vec.new();
+        for i in (segments.len() - n)..segments.len() {
+            tail.push(segments[i].clone());
+        }
+        if segs_eq(toremove, tail) {
+            let mut ret: Vec[String] = Vec.new();
+            for i in 0..(segments.len() - n) {
+                ret.push(segments[i].clone());
+            }
+            if remove[0].len() > 0 and ret.len() > 0 {
+                ret.push(String.new());
+            }
+            return ret;
+        }
+    }
+    segments
+}
+
+// posixpath.normpath
+fn normpath(path: Str) -> String {
+    if path.len() == 0 {
+        return ".".to_string();
+    }
+    let mut initial: i64 = 0;
+    if starts_with(path, "/") {
+        initial = 1;
+        if starts_with(path, "//") and not starts_with(path, "///") {
+            initial = 2;
+        }
+    }
+    let mut comps: Vec[String] = Vec.new();
+    for comp in split_on(path, b'/').iter() {
+        if comp.len() == 0 or comp == "." {
+            continue;
+        }
+        if comp != ".." or (initial == 0 and comps.len() == 0) or (comps.len() > 0 and comps[comps.len() - 1] == "..") {
+            comps.push(comp.clone());
+        } else if comps.len() > 0 {
+            comps.pop();
+        }
+    }
+    let mut out = String.new();
+    for _ in 0..initial {
+        out.push_str("/");
+    }
+    out.push_str(join(comps, "/"));
+    if out.len() == 0 {
+        return ".".to_string();
+    }
+    out
+}
+
+#[derive(Clone)]
+struct Path {
+    segs: Vec[String],
+    abs: Abs,
+}
+
+impl Path {
+    fn new() -> Path {
+        Path { segs: Vec.new(), abs: Abs.F }
+    }
+
+    fn force(ref self, fc: ref Force) -> Result[bool, PyErr] {
+        if not fc.url or self.segs.len() == 0 {
+            return Ok(false);
+        }
+        match fc.err {
+            Some(e) => Err(e.clone()),
+            None => Ok(fc.netloc),
+        }
+    }
+
+    // The isabsolute property: True when forced, else _isabsolute.
+    fn isabs(ref self, fc: ref Force) -> Result[Abs, PyErr] {
+        if self.force(fc)? {
+            return Ok(Abs.T);
+        }
+        Ok(self.abs.clone())
+    }
+
+    fn isabsolute(ref self, fc: ref Force) -> Result[bool, PyErr] {
+        Ok(abs_truthy(self.isabs(fc)?))
+    }
+
+    fn load_segs(mut ref self, segs0: own Vec[String], fc: ref Force) -> Result[(), PyErr] {
+        let mut segs = segs0;
+        // _force_absolute and isabsolute both see the old segments
+        if self.force(fc)? {
+            self.abs = if segs.len() > 0 { Abs.T } else { Abs.F };
+        } else if segs.len() == 0 {
+            self.abs = Abs.Empty;
+        } else {
+            self.abs = if segs[0].len() == 0 { Abs.T } else { Abs.F };
+        }
+        if self.isabsolute(fc)? and segs.len() > 1 and segs[0].len() == 0 {
+            segs.remove(0);
+        }
+        self.segs = segs;
+        Ok(())
+    }
+
+    // load(): a false value is the empty path, a list is segments, a
+    // string is parsed.
+    fn load(mut ref self, v: ref JValue, fc: ref Force) -> Result[(), PyErr] {
+        if not truthy(v) {
+            return self.load_segs(Vec.new(), fc);
+        }
+        match v {
+            JValue.Str(s) => self.load_segs(segments_from_path(s), fc),
+            _ => self.load_segs(jsegs(v), fc),
+        }
+    }
+
+    fn load_str(mut ref self, s: Str, fc: ref Force) -> Result[(), PyErr] {
+        self.load(JValue.Str(s.to_string()), fc)
+    }
+
+    fn arg_segs(v: ref JValue) -> Vec[String] {
+        match v {
+            JValue.Str(s) => segments_from_path(s),
+            _ => jsegs(v),
+        }
+    }
+
+    fn add(mut ref self, v: ref JValue, fc: ref Force) -> Result[(), PyErr] {
+        let mut newsegs = Path.arg_segs(v);
+        if segs_eq_empty(self.segs) and newsegs.len() > 0 and newsegs[0].len() > 0 {
+            newsegs.insert(0, String.new());
+        }
+        if self.isabsolute(fc)? and self.segs.len() > 0 and self.segs[0].len() > 0 {
+            self.segs.insert(0, String.new());
+        }
+        let joined = join_path_segments(self.segs, newsegs);
+        self.load_segs(joined, fc)
+    }
+
+    fn remove(mut ref self, v: ref JValue, fc: ref Force) -> Result[(), PyErr] {
+        if is_true(v) {
+            return self.load_segs(Vec.new(), fc);
+        }
+        let segs = Path.arg_segs(v);
+        let mut base: Vec[String] = Vec.new();
+        if self.isabsolute(fc)? {
+            base.push(String.new());
+        }
+        for s in self.segs.iter() {
+            base.push(s.clone());
+        }
+        let ret = remove_path_segments(base, segs);
+        self.load_segs(ret, fc)
+    }
+
+    fn isdir(ref self) -> bool {
+        self.segs.len() == 0 or self.segs[self.segs.len() - 1].len() == 0
+    }
+
+    fn str(ref self, fc: ref Force) -> Result[String, PyErr] {
+        let mut segs = self.segs.clone();
+        if self.isabsolute(fc)? {
+            if segs.len() == 0 {
+                segs = [String.new(), String.new()];
+            } else {
+                segs.insert(0, String.new());
+            }
+        }
+        let mut quoted: Vec[String] = Vec.new();
+        for s in segs.iter() {
+            quoted.push(quote(s, SAFE_SEGMENT_CHARS));
+        }
+        Ok(join(quoted, "/"))
+    }
+
+    fn normalize(mut ref self, fc: ref Force) -> Result[(), PyErr] {
+        let s = self.str(fc)?;
+        if s.len() > 0 {
+            let mut normalized = normpath(s);
+            if self.isdir() {
+                normalized.push_str("/");
+            }
+            if starts_with(normalized, "//") {
+                let b = to_bytes(normalized);
+                let mut i: i64 = 0;
+                while i < b.len() and b[i] == b'/' {
+                    i += 1;
+                }
+                normalized = f"/{byte_str(b, i, b.len())}";
+            }
+            self.load_str(normalized, fc)?;
+        }
+        Ok(())
+    }
+
+    fn set_isabsolute(mut ref self, v: bool, fc: ref Force) -> Result[(), PyErr] {
+        if self.force(fc)? {
+            return Err(py_err("AttributeError", "Path.isabsolute is True and read-only for URLs with a netloc (a username, password, host, and/or port). A URL path must start with a '/' to separate itself from a netloc."));
+        }
+        self.abs = if v { Abs.T } else { Abs.F };
+        Ok(())
+    }
+
+    fn dict_lines(ref self, prefix: Str, fc: ref Force, out: mut ref Vec[String]) -> Result[(), PyErr] {
+        let enc = self.str(fc)?;
+        let dir = self.isdir();
+        let ia = self.isabs(fc)?;
+        out.push(f"  {prefix}encoded: {py_repr(enc)}");
+        out.push(f"  {prefix}isdir: {py_bool(dir)}");
+        out.push(f"  {prefix}isfile: {py_bool(not dir)}");
+        out.push(f"  {prefix}segments: {strs_repr(self.segs)}");
+        out.push(f"  {prefix}isabsolute: {abs_repr(ia)}");
+        Ok(())
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------ Fragment
+
+#[derive(Clone)]
+struct Fragment {
+    path: Path,
+    query: Query,
+    sep: bool,
+}
+
+impl Fragment {
+    fn new() -> Fragment {
+        Fragment { path: Path.new(), query: Query.new(), sep: true }
+    }
+
+    // load(): a '?' splits path from query only when the part after it
+    // holds an '='; with no '?', an '=' makes the whole fragment a query.
+    fn load(mut ref self, v: ref JValue) -> Result[(), PyErr] {
+        let fc = never();
+        self.path.load_str("", fc)?;
+        self.query.load_str("");
+        let fragment = jstr(v).unwrap_or(String.new());
+        let (head, has_q, tail) = partition(fragment, b'?');
+        if not has_q {
+            if has_byte(fragment, b'=') {
+                self.query.load_str(fragment);
+            } else {
+                self.path.load_str(fragment, fc)?;
+            }
+        } else if has_byte(tail, b'=') {
+            self.path.load_str(head, fc)?;
+            self.query.load_str(tail);
+        } else {
+            self.path.load_str(fragment, fc)?;
+        }
+        Ok(())
+    }
+
+    fn add(mut ref self, path: ref Option[JValue], args: ref Option[JValue]) -> Result[(), PyErr] {
+        if let Some(p) = path {
+            self.path.add(p, never())?;
+        }
+        if let Some(a) = args {
+            self.query.add(a);
+        }
+        Ok(())
+    }
+
+    fn set(mut ref self, path: ref Option[JValue], args: ref Option[JValue], sep: ref Option[JValue]) -> Result[(), PyErr] {
+        if let Some(p) = path {
+            self.path.load(p, never())?;
+        }
+        if let Some(a) = args {
+            self.query.load(a);
+        }
+        if let Some(JValue.Bool(b)) = sep {
+            self.sep = *b;
+        }
+        Ok(())
+    }
+
+    fn remove(mut ref self, fragment: ref Option[JValue], path: ref Option[JValue], args: ref Option[JValue]) -> Result[(), PyErr] {
+        if let Some(f) = fragment {
+            if is_true(f) {
+                self.load(JValue.Str(String.new()))?;
+            }
+        }
+        if let Some(p) = path {
+            self.path.remove(p, never())?;
+        }
+        if let Some(a) = args {
+            self.query.remove(a)?;
+        }
+        Ok(())
+    }
+
+    fn str(ref self) -> String {
+        let mut path = self.path.str(never()).unwrap_or(String.new());
+        let query = self.query.str();
+        if path.len() > 0 and (query.len() == 0 or not self.sep) {
+            path = path.replace("%3F", "?");
+        }
+        let sep = if path.len() > 0 and query.len() > 0 and self.sep { "?" } else { "" };
+        f"{path}{sep}{query}"
+    }
+
+    fn dict_lines(ref self, out: mut ref Vec[String]) {
+        out.push(f"  fragment.encoded: {py_repr(self.str())}");
+        out.push(f"  fragment.separator: {py_bool(self.sep)}");
+        self.path.dict_lines("fragment.path.", never(), out).unwrap();
+        out.push(f"  fragment.query.encoded: {py_repr(self.query.str())}");
+        out.push(f"  fragment.query.params: {self.query.params.items_repr()}");
+    }
+}
+
+// ------------------------------------------------------------ schemes
+
+fn default_port(scheme: ref Option[String]) -> Option[i64] {
+    let s = match scheme {
+        Some(s) => s.clone(),
+        None => return None,
+    };
+    let names = ["acap", "afp", "dict", "dns", "ftp", "git", "gopher", "hdl", "http", "https", "imap", "ipp", "ipps", "irc", "ircs", "ldap", "ldaps", "mms", "msrp", "mtqp", "nfs", "nntp", "nntps", "pop", "prospero", "redis", "rsync", "rtsp", "rtsps", "rtspu", "sftp", "sip", "sips", "smb", "snews", "snmp", "ssh", "svn", "telnet", "tftp", "ventrilo", "vnc", "wais", "ws", "wss", "xmpp"];
+    let ports = [674, 548, 2628, 53, 21, 9418, 70, 2641, 80, 443, 143, 631, 631, 194, 6697, 389, 636, 1755, 2855, 1038, 111, 119, 563, 110, 1525, 6379, 873, 554, 322, 5005, 22, 5060, 5061, 445, 563, 161, 22, 3690, 23, 69, 3784, 5900, 210, 80, 443, 5222];
+    for i in 0..names.len() {
+        if names[i] == s {
+            return Some(ports[i]);
+        }
+    }
+    None
+}
+
+// get_scheme: the text before the first ':' of the part before any path,
+// query or fragment, if it starts with a letter; '' for a leading ':'.
+fn get_scheme(url: Str) -> Option[String] {
+    if starts_with(url, ":") {
+        return Some(String.new());
+    }
+    let (a, _, _) = partition(url, b'#');
+    let (b, _, _) = partition(a, b'?');
+    let (c, _, _) = partition(b, b'/');
+    let i = find_byte(c, b':');
+    if i <= 0 {
+        return None;
+    }
+    let scheme = slice(url, 0, i);
+    if not is_alpha(first_byte(scheme)) {
+        return None;
+    }
+    Some(scheme)
+}
+
+fn furl_strip_scheme(url: Str) -> String {
+    let n = get_scheme(url).unwrap_or(String.new()).len();
+    let rest = slice_from(url, n);
+    if starts_with(rest, ":") { slice_from(rest, 1) } else { rest }
+}
+
+fn with_scheme(url: Str, scheme: ref Option[String]) -> String {
+    let after = furl_strip_scheme(url);
+    match scheme {
+        Some(s) => f"{s}:{after}",
+        None => after,
+    }
+}
+
+fn has_netloc(url: Str) -> bool {
+    match get_scheme(url) {
+        Some(s) => starts_with(url, f"{s}://"),
+        None => starts_with(url, "//"),
+    }
+}
+
+// furl's urlsplit: split as if the scheme were http, then put the scheme
+// back; the netloc is None unless '//' follows the scheme.
+struct Tokens {
+    scheme: Option[String],
+    netloc: Option[String],
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+fn furl_urlsplit(url0: Str) -> Result[Tokens, PyErr] {
+    let original = get_scheme(url0);
+    let url = match original {
+        Some(_) => with_scheme(url0, Some("http".to_string())),
+        None => url0.to_string(),
+    };
+    let s = match urlsplit(url, "") {
+        Ok(s) => s,
+        Err(m) => return Err(value_error(m)),
+    };
+    let netloc = if starts_with(furl_strip_scheme(url), "//") { Some(s.netloc.clone()) } else { None };
+    Ok(Tokens { scheme: original, netloc: netloc, path: s.path, query: s.query, fragment: s.fragment })
+}
+
+fn furl_urljoin(base: Str, url: Str) -> Result[String, PyErr] {
+    let base_scheme = if has_netloc(base) { get_scheme(base) } else { None };
+    let url_scheme = if has_netloc(url) { get_scheme(url) } else { None };
+    let root = match base_scheme {
+        Some(_) => with_scheme(base, Some("http".to_string())),
+        None => base.to_string(),
+    };
+    let mut joined = match urljoin(root, url) {
+        Ok(j) => j,
+        Err(m) => return Err(value_error(m)),
+    };
+    let new_scheme = match url_scheme {
+        Some(s) => Some(s),
+        None => base_scheme,
+    };
+    if new_scheme.is_some() and has_netloc(joined) {
+        joined = with_scheme(joined, new_scheme);
+    }
+    Ok(joined)
+}
+
+// urllib.parse.urlsplit('http://%s/' % x), which furl calls only for the
+// ValueError it may raise.
+fn check_split(x: ref Option[String]) -> Result[(), PyErr] {
+    let shown = match x {
+        Some(s) => s.clone(),
+        None => "None".to_string(),
+    };
+    match urlsplit(f"http://{shown}/", "") {
+        Ok(_) => Ok(()),
+        Err(m) => Err(value_error(m)),
+    }
+}
+
+const INVALID_HOST_CHARS: Str = "!@#$%^&'\"*()+=:;/";
+
+fn is_valid_host(host: Str) -> bool {
+    let mut toks = split_on(host, b'.');
+    if toks[toks.len() - 1].len() == 0 {
+        toks.pop();
+    }
+    for t in toks.iter() {
+        for c in to_bytes(t).iter() {
+            if has_byte(INVALID_HOST_CHARS, *c) {
+                return false;
+            }
+        }
+    }
+    for t in toks.iter() {
+        if t.len() == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_valid_port(p: Str) -> bool {
+    let b = to_bytes(p);
+    if b.len() == 0 {
+        return false;
+    }
+    let mut n: i64 = 0;
+    for c in b.iter() {
+        if not is_digit(*c) {
+            return false;
+        }
+        if n < 100000 {
+            n = n * 10 + (*c - b'0') as i64;
+        }
+    }
+    n > 0 and n <= 65535
+}
+
+fn parse_port(p: Str) -> i64 {
+    let mut n: i64 = 0;
+    for c in to_bytes(p).iter() {
+        n = n * 10 + (*c - b'0') as i64;
+    }
+    n
+}
+
+// ------------------------------------------------------------ IDNA
+
+// The "label too long" error of the idna codec, positions in characters.
+fn idna_too_long(host: Str, start: i64, end: i64) -> PyErr {
+    let _ = host;
+    py_err("UnicodeEncodeError", f"'idna' codec can't encode characters in position {start}-{end - 1}: label too long")
+}
+
+fn is_ascii_str(s: Str) -> bool {
+    for c in to_bytes(s).iter() {
+        if *c >= 128 {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_label_dot(c: i64) -> bool {
+    c == 0x2E or c == 0x3002 or c == 0xFF0E or c == 0xFF61
+}
+
+// host.encode('idna'): an ASCII name is checked label by label and kept;
+// otherwise each label that is not ASCII becomes xn-- and Punycode.
+// nameprep is taken as the identity, which it is for the lower-case
+// letters the hosts here hold.
+fn idna_encode(host: ref Option[String]) -> Result[Option[String], PyErr] {
+    let h = match host {
+        Some(h) => h.clone(),
+        None => return Ok(None),
+    };
+    if h.len() == 0 {
+        return Ok(Some(h));
+    }
+    let cs = cps_of(h);
+    let mut labels: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let ascii = is_ascii_str(h);
+    for c in cs.iter() {
+        if (ascii and *c == 0x2E) or (not ascii and is_label_dot(*c)) {
+            labels.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    labels.push(cur);
+    if ascii {
+        let mut offset: i64 = 0;
+        for i in 0..labels.len() {
+            if labels[i].len() >= 64 {
+                return Err(idna_too_long(h, offset, offset + labels[i].len()));
+            }
+            offset += labels[i].len() + 1;
+        }
+        return Ok(Some(h));
+    }
+    let mut trailing = false;
+    if labels[labels.len() - 1].len() == 0 {
+        labels.pop();
+        trailing = true;
+    }
+    let mut out = String.new();
+    let mut offset: i64 = 0;
+    for i in 0..labels.len() {
+        if i > 0 {
+            out.push_str(".");
+        }
+        let l = labels[i].clone();
+        let mut asc = true;
+        for c in l.iter() {
+            if *c >= 128 {
+                asc = false;
+            }
+        }
+        let enc = if asc { cps_str(l) } else { f"xn--{cps_str(punycode_encode(l))}" };
+        if enc.len() == 0 or enc.len() >= 64 {
+            return Err(idna_too_long(h, offset, offset + l.len()));
+        }
+        out.push_str(enc);
+        offset += l.len() + 1;
+    }
+    if trailing {
+        out.push_str(".");
+    }
+    Ok(Some(out))
+}
+
+// host.decode('idna') for a host starting with xn--: each xn-- label is
+// Punycode. The labels here all round-trip, so ToASCII's check is not
+// repeated.
+fn idna_decode(host: Str) -> String {
+    let mut labels = split_on(host, b'.');
+    let mut trailing = false;
+    if labels[labels.len() - 1].len() == 0 {
+        labels.pop();
+        trailing = true;
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for l in labels.iter() {
+        if starts_with(lower(l), "xn--") {
+            let body = cps_of(slice_from(l, 4));
+            match punycode_decode(body) {
+                Some(d) => parts.push(cps_str(d)),
+                None => parts.push(l.clone()),
+            }
+        } else {
+            parts.push(l.clone());
+        }
+    }
+    let mut out = join(parts, ".");
+    if trailing {
+        out.push_str(".");
+    }
+    out
+}
+
+// ------------------------------------------------------------ furl
+
+#[derive(Clone)]
+struct Furl {
+    username: Option[String],
+    password: Option[String],
+    host: Option[String],
+    port_: Option[i64],
+    scheme: Option[String],
+    path: Path,
+    query: Query,
+    fragment: Fragment,
+}
+
+fn opt_lower(v: ref Option[String]) -> Option[String] {
+    match v {
+        Some(s) => Some(s.to_lowercase()),
+        None => None,
+    }
+}
+
+fn jopt_str(v: ref JValue) -> Option[String] {
+    match v {
+        JValue.Str(s) => Some(s.clone()),
+        JValue.Int(i) => Some(f"{i}"),
+        _ => None,
+    }
+}
+
+// A call's keyword arguments, absent unless given.
+struct Kw {
+    pairs: Vec[(String, JValue)],
+}
+
+impl Kw {
+    fn get(ref self, name: Str) -> Option[JValue] {
+        for (k, v) in self.pairs.iter() {
+            if k == name {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn of(v: ref JValue) -> Kw {
+        match v {
+            JValue.Obj(m) => Kw { pairs: m.clone() },
+            _ => Kw { pairs: Vec.new() },
+        }
+    }
+}
+
+impl Furl {
+    fn blank() -> Furl {
+        Furl { username: None, password: None, host: None, port_: None, scheme: None, path: Path.new(), query: Query.new(), fragment: Fragment.new() }
+    }
+
+    // furl(url, **kwargs): load the URL, then set() the rest.
+    fn new(url: Str, kw: ref Kw) -> Result[Furl, PyErr] {
+        let mut f = Furl.blank();
+        f.load(url)?;
+        f.set(kw)?;
+        Ok(f)
+    }
+
+    fn port(ref self) -> Option[i64] {
+        match self.port_ {
+            Some(p) => Some(p),
+            None => default_port(self.scheme),
+        }
+    }
+
+    // The port is shown unless it is the scheme's default.
+    fn port_suffix(ref self) -> String {
+        match self.port() {
+            Some(p) => {
+                if default_port(self.scheme) == Some(p) { String.new() } else { f":{p}" }
+            }
+            None => String.new(),
+        }
+    }
+
+    fn netloc(ref self) -> Result[Option[String], PyErr] {
+        let mut userpass = quote(self.username.clone().unwrap_or(String.new()), "");
+        if let Some(p) = self.password {
+            userpass.push_str(f":{quote(p, "")}");
+        }
+        if userpass.len() > 0 or self.username.is_some() {
+            userpass.push_str("@");
+        }
+        let mut netloc = idna_encode(self.host)?;
+        let ps = self.port_suffix();
+        if ps.len() > 0 {
+            netloc = Some(f"{netloc.clone().unwrap_or(String.new())}{ps}");
+        }
+        let has = match netloc {
+            Some(ref n) => n.len() > 0,
+            None => false,
+        };
+        if userpass.len() > 0 or has {
+            netloc = Some(f"{userpass}{netloc.clone().unwrap_or(String.new())}");
+        }
+        Ok(netloc)
+    }
+
+    fn origin(ref self) -> Result[String, PyErr] {
+        let scheme = self.scheme.clone().unwrap_or(String.new());
+        let host = idna_encode(self.host)?.unwrap_or(String.new());
+        Ok(f"{scheme}://{host}{self.port_suffix()}")
+    }
+
+    // What the URL path's _force_absolute needs: whether the netloc is
+    // non-empty, or the error working it out raises.
+    fn fc(ref self) -> Force {
+        match self.netloc() {
+            Ok(n) => Force { url: true, netloc: n.unwrap_or(String.new()).len() > 0, err: None },
+            Err(e) => Force { url: true, netloc: false, err: Some(e) },
+        }
+    }
+
+    fn set_scheme(mut ref self, v: ref Option[String]) {
+        self.scheme = opt_lower(v);
+    }
+
+    fn set_host(mut ref self, v: ref Option[String]) -> Result[(), PyErr] {
+        check_split(v)?;
+        let h = match v {
+            Some(h) => h.clone(),
+            None => {
+                self.host = None;
+                return Ok(());
+            }
+        };
+        let b = to_bytes(h);
+        let ipv6 = b.len() > 0 and b[0] == b'[' and has_byte(h, b':') and b[b.len() - 1] == b']';
+        if not ipv6 and not is_valid_host(h) {
+            return Err(value_error(f"Invalid host '{h}'. Host strings must have at least one non-period character, can't contain any of '{INVALID_HOST_CHARS}', and can't have adjacent periods."));
+        }
+        let mut low = h.to_lowercase();
+        if starts_with(low, "xn--") {
+            low = idna_decode(low);
+        }
+        self.host = Some(low);
+        Ok(())
+    }
+
+    fn set_port(mut ref self, v: ref JValue) -> Result[(), PyErr] {
+        match v {
+            JValue.Null => {
+                self.port_ = default_port(self.scheme);
+                Ok(())
+            }
+            _ => {
+                let s = jopt_str(v).unwrap_or(String.new());
+                if is_valid_port(s) {
+                    self.port_ = Some(parse_port(s));
+                    Ok(())
+                } else {
+                    Err(value_error(f"Invalid port '{s}'."))
+                }
+            }
+        }
+    }
+
+    fn set_netloc(mut ref self, v: ref Option[String]) -> Result[(), PyErr] {
+        check_split(v)?;
+        let mut username: Option[String] = None;
+        let mut password: Option[String] = None;
+        let mut host: Option[String] = None;
+        let mut port = JValue.Null;
+        match v {
+            None => {}
+            Some(n0) => {
+                let mut netloc = n0.clone();
+                if netloc.len() > 0 and has_byte(netloc, b'@') {
+                    let (up, _, rest) = partition(netloc, b'@');
+                    netloc = rest;
+                    if has_byte(up, b':') {
+                        let (u, _, p) = partition(up, b':');
+                        username = Some(u);
+                        password = Some(p);
+                    } else {
+                        username = Some(up);
+                    }
+                }
+                if netloc.len() > 0 and has_byte(netloc, b':') {
+                    if has_byte(netloc, b']') {
+                        let colonpos = rfind_byte(netloc, b':');
+                        let bracketpos = rfind_byte(netloc, b']');
+                        if colonpos > bracketpos and colonpos != bracketpos + 1 {
+                            return Err(value_error(f"Invalid netloc '{netloc}'."));
+                        } else if colonpos > bracketpos and colonpos == bracketpos + 1 {
+                            let (h, _, p) = rpartition(netloc, b':');
+                            host = Some(h);
+                            port = JValue.Str(p);
+                        } else {
+                            host = Some(netloc);
+                        }
+                    } else {
+                        let (h, _, p) = rpartition(netloc, b':');
+                        host = Some(h);
+                        port = JValue.Str(p);
+                    }
+                } else {
+                    host = Some(netloc);
+                }
+            }
+        }
+        self.set_port(port)?;
+        self.set_host(host)?;
+        self.username = match username {
+            Some(u) => Some(unquote(u)),
+            None => None,
+        };
+        self.password = match password {
+            Some(p) => Some(unquote(p)),
+            None => None,
+        };
+        Ok(())
+    }
+
+    fn set_origin(mut ref self, v: ref Option[String]) -> Result[(), PyErr] {
+        let origin = match v {
+            Some(o) => o.clone(),
+            None => {
+                self.scheme = None;
+                return self.set_netloc(None);
+            }
+        };
+        let mut host_port = origin.clone();
+        let at = find_str(origin, "://");
+        if at >= 0 {
+            self.set_scheme(Some(slice(origin, 0, at)));
+            host_port = slice_from(origin, at + 3);
+        }
+        if has_byte(host_port, b':') {
+            let (h, _, p) = partition(host_port, b':');
+            self.set_host(Some(h))?;
+            self.set_port(JValue.Str(p))?;
+        } else {
+            self.set_host(Some(host_port))?;
+        }
+        Ok(())
+    }
+
+    fn load(mut ref self, url: Str) -> Result[(), PyErr] {
+        self.username = None;
+        self.password = None;
+        self.host = None;
+        self.port_ = None;
+        self.scheme = None;
+        let t = furl_urlsplit(url)?;
+        self.set_netloc(t.netloc)?;
+        self.set_scheme(t.scheme);
+        if self.port().is_none() {
+            self.port_ = default_port(self.scheme);
+        }
+        let fc = self.fc();
+        self.path.load_str(t.path, fc)?;
+        self.query.load_str(t.query);
+        self.fragment.load(JValue.Str(t.fragment))?;
+        Ok(())
+    }
+
+    fn tostr(ref self, delim: Str, plus: bool, dq: ref DontQuote) -> Result[String, PyErr] {
+        let eq = self.query.encode(delim, plus, dq);
+        let nl = self.netloc()?;
+        let path = self.path.str(self.fc())?;
+        let scheme = self.scheme.clone().unwrap_or(String.new());
+        let mut url = urlunsplit(scheme, nl.clone().unwrap_or(String.new()), path, eq, self.fragment.str());
+        if self.scheme == Some(String.new()) {
+            url = f":{url}";
+        }
+        if nl == Some(String.new()) {
+            if self.scheme.is_none() {
+                url = f"//{url}";
+            } else if furl_strip_scheme(url).len() == 0 {
+                url.push_str("//");
+            }
+        }
+        Ok(url)
+    }
+
+    fn url(ref self) -> Result[String, PyErr] {
+        self.tostr("&", true, DontQuote.Chars(String.new()))
+    }
+
+    // set(): the parts are assigned in a fixed order; if one fails, the
+    // URL as it was is loaded back and the error raised.
+    fn set(mut ref self, kw: ref Kw) -> Result[(), PyErr] {
+        let original = self.url()?;
+        match self.set_parts(kw) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.load(original)?;
+                Err(e)
+            }
+        }
+    }
+
+    fn set_parts(mut ref self, kw: ref Kw) -> Result[(), PyErr] {
+        if let Some(v) = kw.get("username") {
+            self.username = jopt_str(v);
+        }
+        if let Some(v) = kw.get("password") {
+            self.password = jopt_str(v);
+        }
+        if let Some(v) = kw.get("netloc") {
+            self.set_netloc(jopt_str(v))?;
+        }
+        if let Some(v) = kw.get("origin") {
+            self.set_origin(jopt_str(v))?;
+        }
+        if let Some(v) = kw.get("scheme") {
+            self.set_scheme(jopt_str(v));
+        }
+        if let Some(v) = kw.get("host") {
+            self.set_host(jopt_str(v))?;
+        }
+        if let Some(v) = kw.get("port") {
+            self.set_port(v)?;
+        }
+        if let Some(v) = kw.get("path") {
+            let fc = self.fc();
+            self.path.load(v, fc)?;
+        }
+        if let Some(v) = kw.get("query") {
+            self.query.load(v);
+        }
+        if let Some(v) = kw.get("args") {
+            self.query.load(v);
+        }
+        if let Some(v) = kw.get("query_params") {
+            self.query.load(v);
+        }
+        if let Some(v) = kw.get("fragment") {
+            self.fragment.load(v)?;
+        }
+        if let Some(v) = kw.get("fragment_path") {
+            self.fragment.path.load(v, never())?;
+        }
+        if let Some(v) = kw.get("fragment_args") {
+            self.fragment.query.load(v);
+        }
+        if let Some(JValue.Bool(b)) = kw.get("fragment_separator") {
+            self.fragment.sep = b;
+        }
+        Ok(())
+    }
+
+    fn add(mut ref self, kw: ref Kw) -> Result[(), PyErr] {
+        if let Some(v) = kw.get("path") {
+            let fc = self.fc();
+            self.path.add(v, fc)?;
+        }
+        if let Some(v) = kw.get("args") {
+            self.query.add(v);
+        }
+        if let Some(v) = kw.get("query_params") {
+            self.query.add(v);
+        }
+        let fp = kw.get("fragment_path");
+        let fa = kw.get("fragment_args");
+        if fp.is_some() or fa.is_some() {
+            self.fragment.add(fp, fa)?;
+        }
+        Ok(())
+    }
+
+    fn remove(mut ref self, kw: ref Kw) -> Result[(), PyErr] {
+        if kw_true(kw, "scheme") {
+            self.scheme = None;
+        }
+        if kw_true(kw, "username") {
+            self.username = None;
+        }
+        if kw_true(kw, "password") {
+            self.password = None;
+        }
+        if kw_true(kw, "host") {
+            self.set_host(None)?;
+        }
+        if kw_true(kw, "port") {
+            self.set_port(JValue.Null)?;
+        }
+        if kw_true(kw, "netloc") {
+            self.set_netloc(None)?;
+        }
+        if kw_true(kw, "origin") {
+            self.set_origin(None)?;
+        }
+        if let Some(v) = kw.get("path") {
+            let fc = self.fc();
+            self.path.remove(v, fc)?;
+        }
+        if let Some(v) = kw.get("args") {
+            self.query.remove(v)?;
+        }
+        if let Some(v) = kw.get("query") {
+            self.query.remove(v)?;
+        }
+        if let Some(v) = kw.get("query_params") {
+            self.query.remove(v)?;
+        }
+        if let Some(v) = kw.get("fragment") {
+            self.fragment.remove(Some(v), None, None)?;
+        }
+        if let Some(v) = kw.get("fragment_path") {
+            self.fragment.path.remove(v, never())?;
+        }
+        if let Some(v) = kw.get("fragment_args") {
+            self.fragment.query.remove(v)?;
+        }
+        Ok(())
+    }
+
+    fn join(mut ref self, url: Str) -> Result[(), PyErr] {
+        let joined = furl_urljoin(self.url()?, url)?;
+        self.load(joined)
+    }
+
+    // copy(): furl(self), a new furl from str(self).
+    fn copy(ref self) -> Result[Furl, PyErr] {
+        Furl.new(self.url()?, Kw { pairs: Vec.new() })
+    }
+
+    fn dict_lines(ref self) -> Result[Vec[String], PyErr] {
+        let mut out: Vec[String] = Vec.new();
+        out.push(f"  url: {py_repr(self.url()?)}");
+        out.push(f"  scheme: {opt_repr_s(self.scheme)}");
+        out.push(f"  username: {opt_repr_s(self.username)}");
+        out.push(f"  password: {opt_repr_s(self.password)}");
+        out.push(f"  host: {opt_repr_s(self.host)}");
+        out.push(f"  host_encoded: {opt_repr_s(idna_encode(self.host)?)}");
+        out.push(f"  port: {opt_int(self.port())}");
+        out.push(f"  netloc: {opt_repr_s(self.netloc()?)}");
+        out.push(f"  origin: {py_repr(self.origin()?)}");
+        self.path.dict_lines("path.", self.fc(), mut out)?;
+        out.push(f"  query.encoded: {py_repr(self.query.str())}");
+        out.push(f"  query.params: {self.query.params.items_repr()}");
+        self.fragment.dict_lines(mut out);
+        Ok(out)
+    }
+}
+
+fn kw_true(kw: ref Kw, name: Str) -> bool {
+    match kw.get(name) {
+        Some(v) => is_true(v),
+        None => false,
+    }
+}
+
+fn opt_int(v: Option[i64]) -> String {
+    match v {
+        Some(i) => f"{i}",
+        None => "None".to_string(),
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn err_line(name: Str, e: ref PyErr) -> String {
+    f"  {name}: error {e.kind}: {e.msg}"
+}
+
+fn show_url(name: Str, f: ref Furl) {
+    match f.url() {
+        Ok(u) => println(f"  {name}: {py_repr(u)}"),
+        Err(e) => println(err_line(name, e)),
+    }
+}
+
+fn show_value(name: Str, r: ref Result[String, PyErr]) {
+    match r {
+        Ok(s) => println(f"  {name}: {s}"),
+        Err(e) => println(err_line(name, e)),
+    }
+}
+
+fn dq_of(v: ref Option[JValue]) -> DontQuote {
+    match v {
+        Some(JValue.Bool(b)) => if *b { DontQuote.All } else { DontQuote.None_ },
+        Some(JValue.Str(s)) => DontQuote.Chars(s.clone()),
+        _ => DontQuote.Chars(String.new()),
+    }
+}
+
+fn kw_str(kw: ref Kw, name: Str, dflt: Str) -> String {
+    match kw.get(name) {
+        Some(v) => jstr(v).unwrap_or(dflt.to_string()),
+        None => dflt.to_string(),
+    }
+}
+
+fn kw_bool(kw: ref Kw, name: Str, dflt: bool) -> bool {
+    match kw.get(name) {
+        Some(JValue.Bool(b)) => b,
+        _ => dflt,
+    }
+}
+
+fn tostr_kw(f: ref Furl, kw: ref Kw) -> Result[String, PyErr] {
+    let s = f.tostr(kw_str(kw, "query_delimiter", "&"), kw_bool(kw, "query_quote_plus", true), dq_of(kw.get("query_dont_quote")))?;
+    Ok(py_repr(s))
+}
+
+// Query.encode(); the old spelling `delimeter` wins when given.
+fn encode_kw(f: ref Furl, kw: ref Kw) -> String {
+    let mut delim = kw_str(kw, "delimiter", "&");
+    if kw.get("delimeter").is_some() {
+        delim = kw_str(kw, "delimeter", "&");
+    }
+    py_repr(f.query.encode(delim, kw_bool(kw, "quote_plus", true), dq_of(kw.get("dont_quote"))))
+}
+
+// The repr of one attribute, as the oracle's get() prints it.
+fn get_repr(f: ref Furl, name: Str) -> Result[String, PyErr] {
+    if name == "url" {
+        return Ok(py_repr(f.url()?));
+    }
+    if name == "path" {
+        return Ok(py_repr(f.path.str(f.fc())?));
+    }
+    if name == "query" {
+        return Ok(py_repr(f.query.str()));
+    }
+    if name == "fragment" {
+        return Ok(py_repr(f.fragment.str()));
+    }
+    if name == "args" {
+        return Ok(f.query.params.items_repr());
+    }
+    if name == "scheme" {
+        return Ok(opt_repr_s(f.scheme));
+    }
+    if name == "host" {
+        return Ok(opt_repr_s(f.host));
+    }
+    if name == "port" {
+        return Ok(opt_int(f.port()));
+    }
+    if name == "netloc" {
+        return Ok(opt_repr_s(f.netloc()?));
+    }
+    if name == "origin" {
+        return Ok(py_repr(f.origin()?));
+    }
+    if name == "path.isabsolute" {
+        return Ok(abs_repr(f.path.isabs(f.fc())?));
+    }
+    if name == "path.segments" {
+        return Ok(strs_repr(f.path.segs));
+    }
+    if name == "path.isdir" {
+        return Ok(py_bool(f.path.isdir()));
+    }
+    if name == "path.isfile" {
+        return Ok(py_bool(not f.path.isdir()));
+    }
+    if name == "fragment.path" {
+        return Ok(f"Path('{f.fragment.path.str(never())?}')");
+    }
+    if name == "fragment.query" {
+        return Ok(f"Query('{f.fragment.query.str()}')");
+    }
+    Ok("?".to_string())
+}
+
+fn arg(op: ref Vec[JValue], i: i64) -> JValue {
+    if i < op.len() { op[i].clone() } else { JValue.Null }
+}
+
+// f.args[k] = v: a list is all of k's values, anything else the one.
+fn args_set(f: mut ref Furl, k: Str, v: ref JValue) {
+    let mut vals: Vec[Pv] = Vec.new();
+    if is_list(v) {
+        for x in jlist(v).iter() {
+            vals.push(pv_of(x));
+        }
+    } else {
+        vals.push(pv_of(v));
+    }
+    f.query.params.setlist(k, vals);
+}
+
+fn set_attr(f: mut ref Furl, name: Str, v: ref JValue) -> Result[(), PyErr] {
+    if name == "scheme" {
+        f.set_scheme(jopt_str(v));
+    } else if name == "host" {
+        f.set_host(jopt_str(v))?;
+    } else if name == "port" {
+        f.set_port(v)?;
+    } else if name == "netloc" {
+        f.set_netloc(jopt_str(v))?;
+    } else if name == "origin" {
+        f.set_origin(jopt_str(v))?;
+    } else if name == "username" {
+        f.username = jopt_str(v);
+    } else if name == "password" {
+        f.password = jopt_str(v);
+    } else if name == "path" {
+        let fc = f.fc();
+        f.path.load(v, fc)?;
+    } else if name == "query" or name == "args" {
+        f.query.load(v);
+    } else if name == "fragment" {
+        f.fragment.load(v)?;
+    } else if name == "url" {
+        f.load(jstr(v).unwrap_or(String.new()))?;
+    }
+    Ok(())
+}
+
+// One op that changes f in place.
+fn apply(f: mut ref Furl, op: ref Vec[JValue]) -> Result[(), PyErr] {
+    let name = jstr(op[0]).unwrap_or(String.new());
+    let a1 = arg(op, 1);
+    let a2 = arg(op, 2);
+    let kw = Kw.of(a1);
+    if name == "add" {
+        return f.add(kw);
+    }
+    if name == "set" {
+        return f.set(kw);
+    }
+    if name == "remove" {
+        return f.remove(kw);
+    }
+    if name == "join" {
+        for i in 1..op.len() {
+            f.join(jstr(op[i]).unwrap_or(String.new()))?;
+        }
+        return Ok(());
+    }
+    if name == "load" {
+        return f.load(jstr(a1).unwrap_or(String.new()));
+    }
+    if name == "attr" {
+        return set_attr(mut f, jstr(a1).unwrap_or(String.new()), a2);
+    }
+    let fc = f.fc();
+    if name == "path.add" {
+        return f.path.add(a1, fc);
+    }
+    if name == "path.set" {
+        return f.path.load(a1, fc);
+    }
+    if name == "path.remove" {
+        return f.path.remove(a1, fc);
+    }
+    if name == "path.normalize" {
+        return f.path.normalize(fc);
+    }
+    if name == "path.isabsolute" {
+        return f.path.set_isabsolute(is_true(a1), fc);
+    }
+    if name == "query.add" {
+        f.query.add(a1);
+    } else if name == "query.set" {
+        f.query.set(a1);
+    } else if name == "query.remove" {
+        return f.query.remove(a1);
+    } else if name == "query.load" {
+        f.query.load(a1);
+    } else if name == "query.params" {
+        f.query.set_params(a1);
+    } else if name == "args.set" {
+        args_set(mut f, jstr(a1).unwrap_or(String.new()), a2);
+    } else if name == "args.add" {
+        f.query.params.add(jstr(a1).unwrap_or(String.new()), a2);
+    } else if name == "args.del" {
+        let k = jstr(a1).unwrap_or(String.new());
+        if not f.query.params.has(k) {
+            return Err(py_err("KeyError", py_repr(k)));
+        }
+        f.query.params.pop_all(k);
+    } else if name == "fragment.add" {
+        return f.fragment.add(kw.get("path"), kw.get("args"));
+    } else if name == "fragment.set" {
+        return f.fragment.set(kw.get("path"), kw.get("args"), kw.get("separator"));
+    } else if name == "fragment.remove" {
+        return f.fragment.remove(kw.get("fragment"), kw.get("path"), kw.get("args"));
+    } else if name == "fragment.load" {
+        return f.fragment.load(a1);
+    } else if name == "fragment.path.add" {
+        return f.fragment.path.add(a1, never());
+    } else if name == "fragment.path.remove" {
+        return f.fragment.path.remove(a1, never());
+    } else if name == "fragment.path.isabsolute" {
+        return f.fragment.path.set_isabsolute(is_true(a1), never());
+    } else if name == "fragment.query.add" {
+        f.fragment.query.add(a1);
+    } else if name == "fragment.query.remove" {
+        return f.fragment.query.remove(a1);
+    }
+    Ok(())
+}
+
+// f / path: a copy with the path added.
+fn div(f: ref Furl, path: ref JValue) -> Result[Furl, PyErr] {
+    let mut g = f.copy()?;
+    let fc = g.fc();
+    g.path.add(path, fc)?;
+    Ok(g)
+}
+
+fn new_furl(spec: ref JValue) -> Result[Furl, PyErr] {
+    match spec {
+        JValue.Str(s) => Furl.new(s, Kw { pairs: Vec.new() }),
+        _ => {
+            let kw = Kw.of(spec);
+            let url = kw_str(kw, "url", "");
+            Furl.new(url, kw)
+        }
+    }
+}
+
+fn run_job(job: ref Vec[JValue]) {
+    let mut f = match new_furl(job[0]) {
+        Ok(f) => f,
+        Err(e) => {
+            println(err_line("new", e));
+            return;
+        }
+    };
+    show_url("new", f);
+    for i in 1..job.len() {
+        let op = jlist(job[i]);
+        let name = jstr(op[0]).unwrap_or(String.new());
+        let a1 = arg(op, 1);
+        if name == "tostr" {
+            show_value(name, tostr_kw(f, Kw.of(a1)));
+        } else if name == "query.encode" {
+            println(f"  {name}: {encode_kw(f, Kw.of(a1))}");
+        } else if name == "args.get" {
+            let k = jstr(a1).unwrap_or(String.new());
+            match f.query.params.get(k) {
+                Some(v) => println(f"  {name}: {pv_repr(v)}"),
+                None => println(err_line(name, py_err("KeyError", py_repr(k)))),
+            }
+        } else if name == "get" {
+            let what = jstr(a1).unwrap_or(String.new());
+            show_value(what, get_repr(f, what));
+        } else if name == "dict" {
+            match f.dict_lines() {
+                Ok(lines) => {
+                    for l in lines.iter() {
+                        println(l);
+                    }
+                }
+                Err(e) => println(err_line(name, e)),
+            }
+        } else if name == "div" {
+            match div(f, a1) {
+                Ok(g) => {
+                    f = g;
+                    show_url(name, f);
+                }
+                Err(e) => println(err_line(name, e)),
+            }
+        } else if name == "copy" {
+            match f.copy() {
+                Ok(g) => {
+                    f = g;
+                    show_url(name, f);
+                }
+                Err(e) => println(err_line(name, e)),
+            }
+        } else {
+            match apply(mut f, op) {
+                Ok(()) => show_url(name, f),
+                Err(e) => println(err_line(name, e)),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_lines(path: Str) -> Vec[String] {
+    let text = match fs.read_bytes(path.to_string()) {
+        Ok(b) => from_bytes(b),
+        Err(_) => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for ln in split_on(text, b'\n').into_iter() {
+        if ln.len() > 0 and first_byte(ln) != b'#' {
+            out.push(ln);
+        }
+    }
+    out
+}
+
+fn tracking(key: Str) -> bool {
+    starts_with(key, "utm_") or key == "fbclid" or key == "gclid"
+}
+
+fn canon_one(link: Str) -> Result[String, PyErr] {
+    let mut f = Furl.new(link, Kw { pairs: Vec.new() })?;
+    let mut keys: Vec[String] = Vec.new();
+    for it in f.query.params.items.iter() {
+        if not keys.contains(it.k) {
+            keys.push(it.k.clone());
+        }
+    }
+    for k in keys.iter() {
+        if tracking(k) {
+            f.query.params.pop_all(k);
+        }
+    }
+    f.fragment.load(JValue.Str(String.new()))?;
+    let fc = f.fc();
+    f.path.normalize(fc)?;
+    f.url()
+}
+
+// A crawler's link canonicalizer: drop tracking parameters and the
+// fragment, resolve dot segments, then count the distinct pages.
+fn canon(path: Str) {
+    let links = read_lines(path);
+    let mut seen: Vec[String] = Vec.new();
+    for link in links.iter() {
+        match canon_one(link) {
+            Ok(url) => {
+                let new = not seen.contains(url);
+                if new {
+                    seen.push(url.clone());
+                }
+                let mark = if new { "+" } else { "=" };
+                println(f"  {mark} {url}");
+            }
+            Err(e) => println(err_line(link, e)),
+        }
+    }
+    println(f"  {links.len()} links, {seen.len()} pages");
+}
+
+fn show_opt(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => "None".to_string(),
+    }
+}
+
+// Follow each recorded chain of Location headers from its start.
+fn redirects(path: Str) {
+    for line in read_lines(path).iter() {
+        let hops = split_on(line, b'\t');
+        let mut f = Furl.new(hops[0], Kw { pairs: Vec.new() }).unwrap();
+        println(f"  start {f.url().unwrap()}");
+        for i in 1..hops.len() {
+            match f.join(hops[i]) {
+                Ok(()) => println(f"  -> {f.url().unwrap()}"),
+                Err(e) => {
+                    println(f"  -> {hops[i]}: error {e.kind}: {e.msg}");
+                    break;
+                }
+            }
+        }
+        println(f"  host {show_opt(f.host)}, port {opt_int(f.port())}, origin {f.origin().unwrap()}");
+    }
+}
+
+// Build an API client's request URLs from a base, a resource path and
+// the parameters of each call.
+fn api(path: Str) {
+    for line in read_lines(path).iter() {
+        let cols = split_on(line, b'\t');
+        let mut f = Furl.new(cols[0], Kw { pairs: Vec.new() }).unwrap();
+        let fc = f.fc();
+        f.path.add(JValue.Str(cols[1].clone()), fc).unwrap();
+        let params = json_loads(to_bytes(cols[2])).unwrap();
+        f.query.params.update(query_items(params), true);
+        let mut page = f.copy().unwrap();
+        page.query.params.setlist("page", [Pv.Int(2)]);
+        println(f"  {f.tostr("&", true, DontQuote.Chars("/,".to_string())).unwrap()}");
+        println(f"  {page.tostr(";", true, DontQuote.Chars(String.new())).unwrap()}");
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < b.len() {
+        out.push(hex_val(b[k]) * 16 + hex_val(b[k + 1]));
+        k += 2;
+    }
+    out
+}
+
+fn dirname_of(path: ref String) -> String {
+    let b = to_bytes(path);
+    let mut cut = 0;
+    for k in 0..b.len() {
+        if b[k] == b'/' {
+            cut = k;
+        }
+    }
+    byte_str(b, 0, cut)
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), b'\n').into_iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, b' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for line in split_on(jobs_text(), b'\n').into_iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        let job = from_bytes(hex_bytes(line));
+        if starts_with(job, "#") {
+            println(job);
+            continue;
+        }
+        println(f"> {job}");
+        if starts_with(job, "!") {
+            let (prog, _, a) = partition(slice_from(job, 1), b' ');
+            if prog == "canon" {
+                canon(a);
+            } else if prog == "redirects" {
+                redirects(a);
+            } else if prog == "api" {
+                api(a);
+            }
+            continue;
+        }
+        match json_loads(to_bytes(job)) {
+            Ok(v) => run_job(jlist(v)),
+            Err(_) => println("  bad job"),
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.jsonl.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("232070617273696e673a20657665727920636f6d706f6e656e742c207468656e20617364696374\n5b22687474703a2f2f757365723a70617373407777772e70756d70732e636f6d3a393030302f706174682f746f2f66696c652e68746d6c3f613d3126623d322366726167222c205b2264696374225d5d\n5b2268747470733a2f2f7777772e676f6f676c652e636f6d2f7365617263683f713d6675726c2b707974686f6e26686c3d656e222c205b2264696374225d5d\n5b22687474703a2f2f7757772e50754d70532e636f6d3a39393939222c205b2264696374225d5d\n5b22485454503a2f2f4578616d706c652e434f4d3a38302f496e6465782e48544d4c222c205b2264696374225d5d\n5b2268747470733a2f2f6578616d706c652e636f6d3a3434332f222c205b2264696374225d5d\n5b226674703a2f2f6674702e6578616d706c652e6f72673a32312f7075622f524541444d45222c205b2264696374225d5d\n5b22756e6b6e6f776e3a2f2f70756d702e636f6d3a3939222c205b2264696374225d5d\n5b22756e646566696e65643a2f2f7777772e70756d70732e636f6d3a393030302f222c205b2264696374225d5d\n5b22222c205b2264696374225d5d\n5b222f222c205b2264696374225d5d\n5b222f2f222c205b2264696374225d5d\n5b222f2f2f222c205b2264696374225d5d\n5b222f2f2f2f70617468222c205b2264696374225d5d\n5b222f2f7375702e747874222c205b2264696374225d5d\n5b223a222c205b2264696374225d5d\n5b223a2f2f222c205b2264696374225d5d\n5b22612f622f632f222c205b2264696374225d5d\n5b222f68692f222c205b2264696374225d5d\n5b227375703a222c205b2264696374225d5d\n5b227375703a2f2f222c205b2264696374225d5d\n5b226d61696c746f3a222c205b2264696374225d5d\n5b226d61696c746f3a73757040737072702e7275222c205b2264696374225d5d\n5b226d61696c746f3a7370726f6f703a73707261707340737072702e7275222c205b2264696374225d5d\n5b226d61696c746f3a2f2f73757040737072702e7275222c205b2264696374225d5d\n5b2274656c3a2b312d3535352d3535352d31323334222c205b2264696374225d5d\n5b2275726e3a7372702e636f6d2f6665727265743f7175657279222c205b2264696374225d5d\n5b22736368656d653a70617468222c205b2264696374225d5d\n5b226e6f6e653a2f2f69676e6f7265642f6c6f6c3f737570222c205b2264696374225d5d\n5b222b696e76616c696424736368656d653a2f2f6c6f6c737570222c205b2264696374225d5d\n5b2231687474703a2f2f6469676974732e66697273742f222c205b2264696374225d5d\n");
+    s.push_str("5b22615f623a77656972642d736368656d65222c205b2264696374225d5d\n5b2268747470733a2f2f7777772e676f6f676c652e636f6d3f3f3f3f222c205b2264696374225d5d\n5b222f6170692f746573743f75726c3d687474703a2f2f612e636f6d222c205b2264696374225d5d\n5b22687474703a2f2f626c6173742e6f66662f3f612b623d632b642674776f2532307461703d6361742532306e6170253234253231222c205b2264696374225d5d\n5b22687474703a2f2f70756d70732e636f6d2f73702532306163652f646972222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f61253246622f63253346643f783d25323626793d253344236625323367222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f7261772073706163652f616e64253230657363617065222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f3f666c616726656d7074793d263d6e6f76616c7565263d3d26613d3d62222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f3f613d3126613d3226613d332662222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f3f713d63616625433325413926723d25453225383225414326733d255a5a222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f6361662543332541392f6e612543332541467665222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2fc3bc6ec3af636f64652fe8b7afe5be843fd0bad0bbd18ed1873dd0b7d0bdd0b0d187d0b5d0bdd0b8d0b523d184d180d0b0d0b3d0bcd0b5d0bdd182222c205b2264696374225d5d\n5b22687474703a2f2f7370726f702e7275232f6d7270222c205b2264696374225d5d\n5b22687474703a2f2f7370726f702e7275236d7270222c205b2264696374225d5d\n5b22687474703a2f2f737065702e72752f236a61222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f23612f623f633d64222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f23612f623f6e6f64617461222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f233f783d31222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f236b3d7626773d7a222c205b2264696374225d5d\n5b22687474703a2f2f65782e636f6d2f232f70617468253346776974683f713d31222c205b2264696374225d5d\n5b22687474703a2f2f3139322e3136382e312e313031222c205b2264696374225d5d\n5b22687474703a2f2f312e322e332e342e352e362f222c205b2264696374225d5d\n5b22687474703a2f2f5b323030313a6462383a383561333a3864333a313331393a386132653a3337303a373334385d2f222c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f5b323030313a4442383a3a315d3a383038302f78222c205b2264696374225d5d\n5b22687474703a2f2f5b3a3a315d2f222c205b2264696374225d5d\n5b22687474703a2f2f5b76312e66655d2f667574757265222c205b2264696374225d5d\n5b22687474703a2f2f7573657240686f73742e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f757365723a40686f73742e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f3a7061737340686f73742e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f40686f73742e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f757325323065723a70253430737340686f73742e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f686f73742e636f6d2e3a383038302f222c205b2264696374225d5d\n5b22687474703a2f2f62c3bc636865722e64652f73747261c39f65222c205b2264696374225d5d\n5b22687474703a2f2f786e2d2d62636865722d6b76612e64652f222c205b2264696374225d5d\n5b22687474703a2f2f7777772e786e2d2d62636865722d6b76612e64652f222c205b2264696374225d5d\n5b22687474703a2f2f584e2d2d42434845522d4b56412e44452f222c205b2264696374225d5d\n5b22687474703a2f2f7777772e6578616d706c652e636f6d2f612f2e2f622f2e2e2f632f2f642f222c205b2264696374225d5d\n5b222020687474703a2f2f6c656164696e672e73706163652f222c205b2264696374225d5d\n5b22687474703a2f2f7461625c74616e645c6e6e65776c696e652e636f6d2f705c74615c6e7468222c205b2264696374225d5d\n5b227773733a2f2f736c72702e636f6d2f222c205b2264696374225d5d\n5b2272656469733a2f2f63616368652e6c6f63616c3a363337392f30222c205b2264696374225d5d\n5b226769743a2f2f6769746875622e636f6d2f6772756e732f6675726c2e676974222c205b2264696374225d5d\n5b2266696c653a2f2f2f6574632f686f737473222c205b2264696374225d5d\n5b2266696c653a2f2f6c6f63616c686f73742f6574632f686f737473222c205b2264696374225d5d\n232070617273696e67206572726f7273\n5b22687474703a2f2f7777772e70756d70732e636f6d3a696e76616c69642f222c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a2f222c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a302f222c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a36353533362f222c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a36353533352f222c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d3a30303038302f222c205b2264696374225d5d\n5b22687474703a2f2f5b303a303a303a303a303a303a303a312f222c205b2264696374225d5d\n5b22687474703a2f2f303a303a303a303a303a303a303a315d2f222c205b2264696374225d5d\n5b22687474703a2f2f5b303a303a303a303a303a303a303a313a313a313a313a313a313a313a313a393939393939393939393939395d2f222c205b2264696374225d5d\n5b22687474703a2f2f5b312e322e332e345d2f222c205b2264696374225d5d\n5b22687474703a2f2f5b767a2e785d2f222c205b2264696374225d5d\n5b22687474703a2f2f5b3a3a315d782f222c205b2264696374225d5d\n5b22687474703a2f2f785b3a3a315d2f222c205b2264696374225d5d\n5b22687474703a2f2f612e2e622f222c205b2264696374225d5d\n5b22687474703a2f2f2e612f222c205b2264696374225d5d\n5b22687474703a2f2f6120622f222c205b2264696374225d5d\n5b22687474703a2f2f6261642a686f73742f222c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a383038303a393039302f222c205b2264696374225d5d\n5b22687474703a2f2f6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e636f6d2f222c205b2264696374225d5d\n5b22687474703a2f2f616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e636f6d2f222c205b2264696374225d5d\n232074686520636f6e7374727563746f722773206b6579776f726420617267756d656e7473\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c202261726773223a207b2261223a202231222c202262223a205b2232222c202233225d7d7d2c205b2264696374225d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f78222c202270617468223a2022792f7a222c2022667261676d656e74223a2022663f673d68227d2c205b2264696374225d5d\n5b7b22736368656d65223a20226874747073222c2022686f7374223a20224150492e4578616d706c652e636f6d222c2022706f7274223a20383434332c202270617468223a205b227631222c20227573657273222c2022225d2c20227175657279223a20226c696d69743d3130266f66667365743d3230227d2c205b2264696374225d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c20226e65746c6f63223a2022753a7040622e636f6d3a3831222c2022686f7374223a2022632e636f6d227d2c205b2264696374225d5d\n");
+    s.push_str("5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c20226f726967696e223a202268747470733a2f2f642e636f6d3a343434227d2c205b2264696374225d5d\n5b7b226f726967696e223a2022652e636f6d227d2c205b2264696374225d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c2022667261676d656e745f70617468223a2022702f71222c2022667261676d656e745f61726773223a207b2278223a202279227d2c2022667261676d656e745f736570617261746f72223a2066616c73657d2c205b2264696374225d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c2022757365726e616d65223a2022616c20696365222c202270617373776f7264223a202273333a63724074227d2c205b2264696374225d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c2022706f7274223a20226e6f7065227d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c2022686f7374223a202262616420686f7374227d5d\n5b7b2275726c223a2022687474703a2f2f612e636f6d2f222c202271756572795f706172616d73223a205b5b226b222c202276225d2c205b226b222c206e756c6c5d2c205b226e222c20355d5d7d2c205b2264696374225d5d\n2320616464\n5b22687474703a2f2f612e636f6d2f222c205b22616464222c207b2270617468223a202262227d5d2c205b22616464222c207b2270617468223a2022632f642f227d5d2c205b22616464222c207b2270617468223a205b2265222c2022662067225d7d5d2c205b22616464222c207b2270617468223a20222f68227d5d2c205b22616464222c207b2270617468223a2022227d5d5d\n5b22687474703a2f2f612e636f6d222c205b22616464222c207b2270617468223a202262227d5d2c205b22616464222c207b2270617468223a20222f227d5d2c205b22616464222c207b2270617468223a205b22222c202263225d7d5d2c205b2264696374225d5d\n5b222f222c205b22616464222c207b2270617468223a202278227d5d2c205b22616464222c207b2270617468223a205b22222c202279225d7d5d5d\n5b22222c205b22616464222c207b2270617468223a202272656c227d5d2c205b22616464222c207b2270617468223a20226d6f72652f227d5d2c205b22616464222c207b2270617468223a20222f616273227d5d5d\n5b22612f62222c205b22616464222c207b2270617468223a205b2263222c2022225d7d5d2c205b22616464222c207b2270617468223a205b22222c202264225d7d5d5d\n5b22687474703a2f2f612e636f6d2f3f783d31222c205b22616464222c207b2261726773223a207b2278223a202232222c202279223a206e756c6c7d7d5d2c205b22616464222c207b2271756572795f706172616d73223a205b5b227a222c2022225d2c205b2278222c205b2233222c202234225d5d5d7d5d2c205b22616464222c207b2261726773223a2022773d35267726763d2532302b227d5d2c205b22616464222c207b2261726773223a207b2265223a205b5d7d7d5d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f222c205b22616464222c207b2261726773223a207b2261223a20317d2c202271756572795f706172616d73223a207b2262223a20327d7d5d5d\n5b22687474703a2f2f612e636f6d2f2366726167222c205b22616464222c207b22667261676d656e745f70617468223a20226d6f7265227d5d2c205b22616464222c207b22667261676d656e745f61726773223a207b226b223a202276227d7d5d2c205b22616464222c207b22667261676d656e745f70617468223a205b22222c202278225d7d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f702f222c205b22616464222c207b2270617468223a20226125324662227d5d2c205b22616464222c207b2270617468223a202263206425323065227d5d2c205b22616464222c207b2270617468223a2022e282ac227d5d2c205b2264696374225d5d\n2320736574\n5b22687474703a2f2f612e636f6d2f783f793d31237a222c205b22736574222c207b22736368656d65223a20226874747073227d5d2c205b22736574222c207b22686f7374223a2022422e636f6d227d5d2c205b22736574222c207b22706f7274223a20383038307d5d2c205b22736574222c207b22706f7274223a206e756c6c7d5d2c205b22736574222c207b2270617468223a20222f6e65772f70617468227d5d2c205b22736574222c207b227175657279223a2022713d3126713d32227d5d2c205b22736574222c207b2261726773223a207b2272223a202233227d7d5d2c205b22736574222c207b2271756572795f706172616d73223a205b5b2273222c202234225d5d7d5d2c205b22736574222c207b22667261676d656e74223a2022746f70227d5d2c205b22736574222c207b22667261676d656e745f70617468223a2022662f70222c2022667261676d656e745f61726773223a207b226661223a202231227d7d5d2c205b22736574222c207b22667261676d656e745f736570617261746f72223a2066616c73657d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f78222c205b22736574222c207b226e65746c6f63223a2022757365723a707740632e636f6d3a3939227d5d2c205b22736574222c207b22757365726e616d65223a206e756c6c7d5d2c205b22736574222c207b2270617373776f7264223a20226e65773a7077227d5d2c205b22736574222c207b22757365726e616d65223a2022227d5d2c205b22736574222c207b226e65746c6f63223a206e756c6c7d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f783f6b3d76222c205b22736574222c207b226f726967696e223a20226674703a2f2f66696c65732e6f7267227d5d2c205b22736574222c207b226f726967696e223a202266696c65732e6f72673a32313231227d5d2c205b22736574222c207b226f726967696e223a206e756c6c7d5d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f783f6b3d762366222c205b22736574222c207b2270617468223a20222f79222c2022706f7274223a2022626164227d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f78222c205b22736574222c207b22686f7374223a20225b3a3a315d227d5d2c205b22736574222c207b22686f7374223a20225b3a3a31227d5d2c205b22736574222c207b22686f7374223a2022612e2e62227d5d2c205b22736574222c207b22686f7374223a2022786e2d2d62636865722d6b76612e6465227d5d2c205b22736574222c207b22686f7374223a20224dc39c4e4348454e2e6465227d5d2c205b22736574222c207b22686f7374223a206e756c6c7d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d3a38312f222c205b22736574222c207b22736368656d65223a206e756c6c7d5d2c205b22736574222c207b22736368656d65223a2022227d5d2c205b22736574222c207b22736368656d65223a20224854545053227d5d2c205b22736574222c207b22706f7274223a203434337d5d2c205b22736574222c207b22706f7274223a202230343433227d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22736574222c207b22706f7274223a20307d5d2c205b22736574222c207b22706f7274223a2037303030307d5d2c205b22736574222c207b22706f7274223a202d317d5d2c205b22736574222c207b22706f7274223a2022382030227d5d5d\n5b22687474703a2f2f612e636f6d2f783f79237a222c205b22736574222c207b2270617468223a206e756c6c7d5d2c205b22736574222c207b227175657279223a206e756c6c7d5d2c205b22736574222c207b22667261676d656e74223a206e756c6c7d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f78222c205b22736574222c207b2270617468223a205b22222c2022612062222c2022632f64222c2022225d7d5d2c205b2264696374225d5d\n5b226d61696c746f3a222c205b22736574222c207b2270617468223a20226a6f65406578616d706c652e636f6d227d5d2c205b22736574222c207b2261726773223a207b227375626a656374223a20224869207468657265227d7d5d2c205b2264696374225d5d\n232072656d6f7665\n5b22687474703a2f2f753a7040612e636f6d3a38312f612f622f633f783d3126793d3226783d3323662f673f683d69222c205b2272656d6f7665222c207b2261726773223a205b2278225d7d5d2c205b2272656d6f7665222c207b227175657279223a205b2279225d7d5d2c205b2272656d6f7665222c207b22706f7274223a20747275657d5d2c205b2272656d6f7665222c207b22757365726e616d65223a20747275657d5d2c205b2272656d6f7665222c207b2270617373776f7264223a20747275657d5d2c205b2272656d6f7665222c207b2270617468223a202263227d5d2c205b2272656d6f7665222c207b22667261676d656e745f70617468223a202267227d5d2c205b2272656d6f7665222c207b22667261676d656e745f61726773223a205b2268225d7d5d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f612f622f632f3f6b3d31266b3d32266b3d33266a3d31222c205b2272656d6f7665222c207b2261726773223a205b5b226b222c202232225d5d7d5d2c205b2272656d6f7665222c207b2271756572795f706172616d73223a207b226b223a202233227d7d5d2c205b2272656d6f7665222c207b2261726773223a20226a227d5d2c205b2272656d6f7665222c207b2261726773223a205b5b226b222c202239225d5d7d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f612f622f63222c205b2272656d6f7665222c207b2270617468223a2022622f63227d5d2c205b22706174682e736574222c20222f612f622f63225d2c205b2272656d6f7665222c207b2270617468223a20222f622f63227d5d2c205b22706174682e736574222c20222f612f622f632f225d2c205b2272656d6f7665222c207b2270617468223a2022632f227d5d2c205b22706174682e736574222c20222f612f622f632f225d2c205b2272656d6f7665222c207b2270617468223a202263227d5d2c205b22706174682e736574222c20222f612f62225d2c205b2272656d6f7665222c207b2270617468223a2022782f792f7a2f77227d5d2c205b2272656d6f7665222c207b2270617468223a20747275657d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22706174682e72656d6f7665222c2022225d2c205b22706174682e736574222c202278225d2c205b22706174682e72656d6f7665222c202278225d2c205b22706174682e736574222c20222f78225d2c205b22706174682e72656d6f7665222c20222f78225d2c205b22706174682e736574222c2022225d2c205b22706174682e72656d6f7665222c20222f225d5d\n5b22687474703a2f2f753a7040612e636f6d3a38312f703f713d312366222c205b2272656d6f7665222c207b226e65746c6f63223a20747275657d5d2c205b2264696374225d5d\n5b22687474703a2f2f753a7040612e636f6d3a38312f703f713d312366222c205b2272656d6f7665222c207b226f726967696e223a20747275657d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f703f713d312366222c205b2272656d6f7665222c207b22736368656d65223a20747275657d5d2c205b2272656d6f7665222c207b22686f7374223a20747275657d5d2c205b2272656d6f7665222c207b22667261676d656e74223a20747275657d5d2c205b2272656d6f7665222c207b227175657279223a20747275657d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f3f6126623d31222c205b2272656d6f7665222c207b2261726773223a205b5b2261222c206e756c6c5d5d7d5d2c205b2272656d6f7665222c207b2261726773223a207b2262223a202231227d7d5d2c205b2272656d6f7665222c207b2261726773223a205b226d697373696e67225d7d5d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f23782f793f613d3126623d32222c205b2272656d6f7665222c207b22667261676d656e74223a202269676e6f726564227d5d2c205b22667261676d656e742e72656d6f7665222c207b2261726773223a205b2261225d2c202270617468223a202279227d5d2c205b22667261676d656e742e72656d6f7665222c207b22667261676d656e74223a20747275657d5d2c205b2264696374225d5d\n23206a6f696e\n5b22687474703a2f2f7777772e70756d70732e636f6d2f612f622f63222c205b226a6f696e222c202264225d2c205b226a6f696e222c20222e2e2f65225d2c205b226a6f696e222c20222f662f67225d2c205b226a6f696e222c20223f713d31225d2c205b226a6f696e222c20222366726167225d2c205b226a6f696e222c20222f2f6f746865722e6f72672f78225d2c205b226a6f696e222c2022682f2e2f692f2e2e2f6a225d2c205b226a6f696e222c202268747470733a2f2f7365637572652e6f72673a383434332f732f225d2c205b226a6f696e222c20222e2e222c20222e2e2f2e2e225d2c205b2264696374225d5d\n5b22756e6b6e6f776e3a2f2f70756d702e636f6d2f612f62222c205b226a6f696e222c202263225d2c205b226a6f696e222c20222f64225d2c205b226a6f696e222c20226f746865723a2f2f782e636f6d2f79225d2c205b226a6f696e222c20227a225d5d\n5b226d61696c746f3a6140622e636f6d222c205b226a6f696e222c20226340642e636f6d225d5d\n5b22222c205b226a6f696e222c2022687474703a2f2f612e636f6d2f78225d2c205b226a6f696e222c202279225d5d\n5b22687474703a2f2f612e636f6d2f222c205b226a6f696e222c2022687474703a2f2f5b3a3a31225d5d\n5b22687474703a2f2f612e636f6d2f622f633f712366222c205b226a6f696e222c2022225d2c205b226a6f696e222c20223f225d2c205b226a6f696e222c202223225d2c205b226a6f696e222c20222e225d2c205b2264696374225d5d\n5b2272656469733a2f2f63616368653a363337392f31222c205b226a6f696e222c202232225d2c205b2264696374225d5d\n23206469766973696f6e20616e6420636f70696573\n5b22687474703a2f2f612e636f6d2f782f222c205b22646976222c202279225d2c205b22646976222c20227a2f225d2c205b22646976222c205b2277222c202276225d5d2c205b22646976222c20222f616273225d5d\n5b22687474703a2f2f612e636f6d2f7823703f713d31222c205b22667261676d656e742e736574222c207b22736570617261746f72223a2066616c73657d5d2c205b22636f7079225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f7823703f713d31222c205b22667261676d656e742e736574222c207b22736570617261746f72223a2066616c73657d5d2c205b22646976222c202279225d5d\n");
+    s.push_str("23206174747269627574652061737369676e6d656e74\n5b22687474703a2f2f612e636f6d2f703f713d312366222c205b2261747472222c2022736368656d65222c2022465450225d2c205b2261747472222c2022686f7374222c2022422e4f7267225d2c205b2261747472222c2022706f7274222c20323132315d2c205b2261747472222c2022706f7274222c202278225d2c205b2261747472222c2022757365726e616d65222c20226d65225d2c205b2261747472222c202270617373776f7264222c2022702f77225d2c205b2261747472222c202270617468222c20222f6e20652f77225d2c205b2261747472222c20227175657279222c2022613d62225d2c205b2261747472222c202261726773222c207b2263223a202264227d5d2c205b2261747472222c2022667261676d656e74222c20226e65773f667261673d31225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f70222c205b2261747472222c20226e65746c6f63222c2022782e6f72673a38303830225d2c205b2261747472222c20226e65746c6f63222c20225b3a3a315d3a39225d2c205b2261747472222c20226e65746c6f63222c20225b3a3a315d39225d2c205b2261747472222c20226e65746c6f63222c20225b3a3a315d3a225d2c205b2261747472222c20226e65746c6f63222c202261406240632e636f6d225d2c205b2261747472222c20226f726967696e222c202268747470733a2f2f5b3a3a325d3a343434225d2c205b2261747472222c202275726c222c202277733a2f2f6e65772e75726c2f78225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f70222c205b2261747472222c2022686f7374222c2022612e636f6d3a3830225d2c205b2261747472222c2022686f7374222c2022615c22622e636f6d225d2c205b2261747472222c2022686f7374222c20226f6b2d686f73742e636f6d2e225d2c205b2261747472222c2022686f7374222c2022225d2c205b2261747472222c2022686f7374222c20222e225d5d\n23207061746873\n5b22687474703a2f2f612e636f6d2f70222c205b22706174682e69736162736f6c757465222c2066616c73655d5d\n5b22687474703a2f2f612e636f6d222c205b22706174682e69736162736f6c757465222c2066616c73655d2c205b22676574222c2022706174682e69736162736f6c757465225d2c205b22706174682e616464222c202278225d2c205b22676574222c2022706174682e69736162736f6c757465225d5d\n5b22612f62222c205b22706174682e69736162736f6c757465222c20747275655d2c205b22676574222c2022706174682e69736162736f6c757465225d2c205b22706174682e69736162736f6c757465222c2066616c73655d2c205b22676574222c202270617468225d2c205b22676574222c2022706174682e7365676d656e7473225d2c205b22676574222c2022706174682e6973646972225d2c205b22676574222c2022706174682e697366696c65225d5d\n");
+    s.push_str("5b22222c205b22676574222c2022706174682e69736162736f6c757465225d2c205b22676574222c2022706174682e6973646972225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22676574222c2022706174682e7365676d656e7473225d2c205b22676574222c2022706174682e6973646972225d2c205b22676574222c2022706174682e69736162736f6c757465225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f2f612f2e2f622f2e2e2f632f2f227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f612f622f2e2e227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a2022612f2e2e2f2e2e227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f2e2e2f78227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222e2e2f782f2e2e2f2e2e2f79227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f2e227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222e227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a2022612f622f2e2e2f227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f612f2f622f2f2f63227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n");
+    s.push_str("5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f2532452532452f78227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f612f622f632f2e2f2e2e2f2e2e2f67227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b7b2275726c223a2022687474703a2f2f682e636f6d2f222c202270617468223a20222f782f792f2e2e2f2e2e2f2e2f2e2e2f7a2f227d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b2272656c2f2e2f612f2e2e2f62222c205b22706174682e6e6f726d616c697a65225d2c205b22706174682e736574222c2022782f2e2e225d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d2c205b22706174682e736574222c2022782f2e2e2f225d2c205b22706174682e6e6f726d616c697a65225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n5b22687474703a2f2f612e636f6d2f61253230622f63253235642f6525324666222c205b22676574222c2022706174682e7365676d656e7473225d2c205b22706174682e616464222c2022672068225d2c205b22706174682e616464222c205b22692f6a222c20226b3f6c222c20226d236e222c20226f2570225d5d2c205b22676574222c2022706174682e7365676d656e7473225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22706174682e736574222c205b2261222c2022222c202262225d5d2c205b22676574222c2022706174682e7365676d656e7473225d2c205b22706174682e736574222c205b22225d5d2c205b22676574222c2022706174682e7365676d656e7473225d2c205b22706174682e616464222c202278225d2c205b22676574222c2022706174682e7365676d656e7473225d5d\n232071756572696573\n5b22687474703a2f2f612e636f6d2f3f613d31222c205b2271756572792e736574222c207b2261223a202232222c202262223a202233227d5d2c205b2271756572792e736574222c205b5b2261222c202234225d2c205b2261222c202235225d2c205b2263222c202236225d5d5d2c205b2271756572792e736574222c207b2261223a205b2237222c202238222c202239225d7d5d2c205b2271756572792e736574222c207b2261223a205b5d7d5d2c205b2271756572792e736574222c205b5b2263222c202278225d2c205b2263222c202279225d2c205b2263222c20227a225d5d5d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f3f6b3d31266b3d32266a3d31222c205b2271756572792e736574222c205b5b226b222c202261225d2c205b226a222c202262225d2c205b226b222c202263225d2c205b226b222c202264225d5d5d2c205b2271756572792e736574222c205b5b226b222c205b5d5d2c205b226b222c202265225d5d5d2c205b2271756572792e736574222c205b5b226a222c202266225d2c205b226a222c205b5d5d5d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b2271756572792e6c6f6164222c2022613d3126623d32225d2c205b2271756572792e6c6f6164222c207b2263223a202233227d5d2c205b2271756572792e6c6f6164222c205b5b2264222c202234225d2c205b2264222c205b5d5d5d5d2c205b2271756572792e6c6f6164222c2022225d2c205b2271756572792e706172616d73222c2022653d3526653d36225d2c205b2271756572792e706172616d73222c205b5b2266222c205b2237222c202238225d5d5d5d2c205b2271756572792e616464222c2022673d39225d2c205b2271756572792e616464222c205b5b2268222c2031305d5d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f3f613d3126623d3226613d33222c205b2271756572792e72656d6f7665222c202261225d2c205b2271756572792e72656d6f7665222c20747275655d2c205b2271756572792e616464222c2022783d3126783d32225d2c205b2271756572792e72656d6f7665222c205b5b2278222c202231225d5d5d2c205b2271756572792e72656d6f7665222c207b2278223a202232227d5d5d\n5b22687474703a2f2f612e636f6d2f3f612b623d632b642665253230663d672532306826693d6a2532426b266c3d253344266d3d253236266e3d253233266f3d253346222c205b2271756572792e656e636f6465222c207b7d5d2c205b2271756572792e656e636f6465222c207b2264656c696d69746572223a20223b227d5d2c205b2271756572792e656e636f6465222c207b2271756f74655f706c7573223a2066616c73657d5d2c205b2271756572792e656e636f6465222c207b22646f6e745f71756f7465223a20223d26233f227d5d2c205b2271756572792e656e636f6465222c207b22646f6e745f71756f7465223a20747275657d5d2c205b2271756572792e656e636f6465222c207b22646f6e745f71756f7465223a2066616c73657d5d2c205b2271756572792e656e636f6465222c207b2264656c696d65746572223a20227c227d5d2c205b22676574222c202261726773225d5d\n5b22687474703a2f2f612e636f6d2f3f3d61263d3d62263d263d3d262661222c205b2271756572792e656e636f6465222c207b7d5d2c205b22676574222c202261726773225d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f3f75726c3d687474703a2f2f622e636f6d2f783f793d3126706174683d2f612f62266d61696c3d6140622e636f6d266c6973743d312c322c3326737461723d2a222c205b2271756572792e656e636f6465222c207b7d5d2c205b2271756572792e656e636f6465222c207b22646f6e745f71756f7465223a20222f3a3f402c227d5d2c205b22746f737472222c207b2271756572795f646f6e745f71756f7465223a20747275657d5d2c205b22746f737472222c207b2271756572795f71756f74655f706c7573223a2066616c73657d5d2c205b22746f737472222c207b2271756572795f64656c696d69746572223a20223b222c202271756572795f646f6e745f71756f7465223a20222f227d5d5d\n5b22687474703a2f2f612e636f6d2f222c205b22617267732e736574222c202261222c202231225d2c205b22617267732e736574222c202262222c205b2232222c202233225d5d2c205b22617267732e616464222c202261222c202234225d2c205b22617267732e736574222c202261222c205b2235222c202236222c202237225d5d2c205b22617267732e736574222c202261222c205b2238225d5d2c205b22617267732e676574222c202261225d2c205b22617267732e676574222c202262225d2c205b22617267732e676574222c20227a7a225d2c205b22617267732e64656c222c202262225d2c205b22617267732e64656c222c202262225d2c205b22617267732e736574222c202261222c205b5d5d2c205b22617267732e736574222c20226e222c206e756c6c5d2c205b22617267732e736574222c202269222c2034325d2c205b22617267732e736574222c202274222c20747275655d2c205b22617267732e616464222c202275222c205b2270222c202271225d5d2c205b22617267732e616464222c202275222c205b5d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f3f713d25453225393825383326723d254630253946253930253844266261643d2543332673706163653d612532306226706c75733d612b62222c205b22676574222c202261726773225d2c205b2271756572792e656e636f6465222c207b7d5d2c205b2271756572792e656e636f6465222c207b2271756f74655f706c7573223a2066616c73657d5d5d\n5b22687474703a2f2f612e636f6d2f222c205b2271756572792e616464222c207b226b223a2022636166c3a9222c2022e282ac223a2022e282ac75726f222c202265223a2022613d622663227d5d2c205b22676574222c20227175657279225d5d\n2320667261676d656e7473\n5b22687474703a2f2f612e636f6d2f23706174682f746f3f6b3d76266b323d7632222c205b22676574222c2022667261676d656e74225d2c205b22676574222c2022667261676d656e742e70617468225d2c205b22676574222c2022667261676d656e742e7175657279225d2c205b22667261676d656e742e736574222c207b22736570617261746f72223a2066616c73657d5d2c205b22676574222c2022667261676d656e74225d2c205b22667261676d656e742e736574222c207b2270617468223a2022222c2022736570617261746f72223a20747275657d5d2c205b22676574222c2022667261676d656e74225d2c205b22667261676d656e742e736574222c207b2270617468223a202270222c202261726773223a2022227d5d2c205b22676574222c2022667261676d656e74225d2c205b2264696374225d5d\n");
+    s.push_str("5b22687474703a2f2f612e636f6d2f222c205b22667261676d656e742e6c6f6164222c2022212f686173682f62616e673f783d31225d2c205b22667261676d656e742e736574222c207b22736570617261746f72223a2066616c73657d5d2c205b22667261676d656e742e706174682e616464222c20226d6f7265225d2c205b22667261676d656e742e71756572792e616464222c207b2279223a202232227d5d2c205b22667261676d656e742e706174682e69736162736f6c757465222c20747275655d2c205b22667261676d656e742e706174682e72656d6f7665222c20226d6f7265225d2c205b22667261676d656e742e71756572792e72656d6f7665222c205b2278225d5d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22667261676d656e742e616464222c207b2270617468223a2022613f62227d5d2c205b22676574222c2022667261676d656e74225d2c205b22667261676d656e742e616464222c207b2261726773223a207b2263223a202264227d7d5d2c205b22676574222c2022667261676d656e74225d2c205b22667261676d656e742e736574222c207b22736570617261746f72223a2066616c73657d5d2c205b22676574222c2022667261676d656e74225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f23613d623f63222c205b22676574222c2022667261676d656e742e70617468225d2c205b22676574222c2022667261676d656e742e7175657279225d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f23613f62222c205b22676574222c2022667261676d656e742e70617468225d2c205b22676574222c2022667261676d656e742e7175657279225d2c205b22667261676d656e742e706174682e69736162736f6c757465222c20747275655d2c205b2264696374225d5d\n5b22687474703a2f2f612e636f6d2f222c205b22667261676d656e742e736574222c207b2270617468223a205b22222c2022782079222c20227a225d2c202261726773223a205b5b2273222c2022742075225d5d7d5d2c205b2264696374225d5d\n23206e65746c6f632c206f726967696e20616e6420706f727473\n5b22687474703a2f2f612e636f6d2f222c205b22676574222c20226e65746c6f63225d2c205b22676574222c20226f726967696e225d2c205b22676574222c2022706f7274225d2c205b2261747472222c2022736368656d65222c2022756e6b6e6f776e736368656d65225d2c205b22676574222c2022706f7274225d2c205b22676574222c20226f726967696e225d2c205b2261747472222c2022736368656d65222c206e756c6c5d2c205b22676574222c20226f726967696e225d2c205b22676574222c20226e65746c6f63225d5d\n");
+    s.push_str("5b2268747470733a2f2f612e636f6d3a383434332f222c205b2261747472222c2022736368656d65222c202268747470225d2c205b22676574222c2022706f7274225d2c205b2261747472222c2022706f7274222c206e756c6c5d2c205b22676574222c2022706f7274225d2c205b2261747472222c2022736368656d65222c20226874747073225d2c205b22676574222c2022706f7274225d2c205b22676574222c20226e65746c6f63225d5d\n5b22687474703a2f2f612e636f6d222c205b2272656d6f7665222c207b22686f7374223a20747275657d5d2c205b22676574222c20226e65746c6f63225d2c205b22676574222c20226f726967696e225d2c205b2261747472222c2022706f7274222c20383038305d2c205b22676574222c20226e65746c6f63225d2c205b2264696374225d5d\n5b222f2f612e636f6d3a383038302f78222c205b22676574222c2022706f7274225d2c205b22676574222c20226f726967696e225d2c205b2261747472222c2022736368656d65222c202268747470225d2c205b2264696374225d5d\n5b22687474703a2f2f787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878782e636f6d2f222c205b22676574222c2022686f7374225d2c205b22676574222c20226e65746c6f63225d2c205b22676574222c20226f726967696e225d2c205b22736574222c207b2270617468223a20222f70227d5d2c205b2261747472222c2022686f7374222c202273686f72742e636f6d225d2c205b2264696374225d5d\n5b22687474703a2f2f62c3bc636865722e6578616d706c652f222c205b22676574222c2022686f7374225d2c205b22676574222c20226e65746c6f63225d2c205b22676574222c20226f726967696e225d2c205b2261747472222c2022686f7374222c2022c389434f4c452e6672225d2c205b22676574222c2022686f7374225d2c205b22676574222c202275726c225d5d\n2163616e6f6e20646174612f6c696e6b732e747874\n2172656469726563747320646174612f7265646972656374732e747376\n2161706920646174612f6170692e747376\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("links.txt 23206c696e6b73206120637261776c20666f756e64206f6e206f6e6520736974650a68747470733a2f2f53686f702e4578616d706c652e636f6d2f70726f64756374732f73686f65733f75746d5f736f757263653d6e6577732675746d5f6d656469756d3d656d61696c2673697a653d34320a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f73686f65733f73697a653d34320a68747470733a2f2f73686f702e6578616d706c652e636f6d3a3434332f70726f64756374732f2e2f73686f65733f73697a653d343223726576696577730a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f686174732f2e2e2f73686f65733f73697a653d3432266662636c69643d4977415230780a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f73686f65733f73697a653d34330a687474703a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f73686f65733f73697a653d34320a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f73686f65732f3f73697a653d34320a68747470733a2f2f73686f702e6578616d706c652e636f6d2f7365617263683f713d7265642b73686f65732667636c69643d61626331323326706167653d320a68747470733a2f2f73686f702e6578616d706c652e636f6d2f7365617263683f706167653d3226713d72656425323073686f65730a68747470733a2f2f73686f702e6578616d706c652e636f6d2f61253230622f630a68747470733a2f2f73686f702e6578616d706c652e636f6d2f6120622f630a68747470733a2f2f73686f702e6578616d706c652e636f6d3a383434332f61646d696e2f0a68747470733a2f2f73686f702e6578616d706c652e636f6d3a2f62726f6b656e0a68747470733a2f2f757365723a7365637265744073686f702e6578616d706c652e636f6d2f6163636f756e740a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f2f73686f65730a68747470733a2f2f73686f702e6578616d706c652e636f6d2f70726f64756374732f73686f65733f75746d5f63616d706169676e3d66616c6c23746f700a68747470733a2f2f73686f702e6578616d706c652e636f6d2f3f0a68747470733a2f2f73686f702e6578616d706c652e636f6d0a\nredirects.tsv 232073746172742055524c2c207468656e2065616368204c6f636174696f6e2068656164657220696e207475726e0a687474703a2f2f6578616d706c652e636f6d2f6f6c64092f6e65770968747470733a2f2f6578616d706c652e636f6d2f6e6577092e2e2f66696e616c3f783d3123746f700a68747470733a2f2f612e6578616d706c652f646f63732f76312f6775696465092e2e2f76322f677569646509696e74726f092f2f63646e2e6578616d706c652f7374617469632f6775696465093f6c616e673d656e0a687474703a2f2f73686f7274656e65722e6578616d706c652f6162630968747470733a2f2f7461726765742e6578616d706c653a383434332f6c616e64696e673f7265663d61626309687474703a2f2f7461726765742e6578616d706c653a38302f6c616e64696e670a687474703a2f2f6c6f6f702e6578616d706c652f6109620963092f610a687474703a2f2f6261642e6578616d706c652f737461727409687474703a2f2f5b62726f6b656e2f0a\n");
+    s.push_str("api.tsv 2320626173652055524c2c207265736f7572636520706174682c20706172616d65746572730a68747470733a2f2f6170692e6769746875622e636f6d097265706f732f6772756e732f6675726c2f697373756573097b227374617465223a20226f70656e222c20226c6162656c73223a20226275672c68656c702077616e746564222c20227065725f70616765223a2035307d0a68747470733a2f2f6170692e6578616d706c652e636f6d2f76322f092f736561726368097b2271223a2022636166c3a9202620626172222c20226669656c6473223a202269642c6e616d65222c202274616773223a205b2261222c202262225d7d0a68747470733a2f2f6d6170732e6578616d706c652e636f6d2f6170693f6b65793d4b0967656f636f64652f6a736f6e097b2261646472657373223a20223136303020416d7068697468656174726520506b77792c204d6f756e7461696e2056696577222c20226b6579223a20224e4557227d0a687474703a2f2f6c6f63616c686f73743a383038302f626173652f096974656d732f097b2266696c746572223a202270726963653e3130222c2022736f7274223a20222d64617465222c2022656d707479223a2022227d0a\n");
+    s
+}
