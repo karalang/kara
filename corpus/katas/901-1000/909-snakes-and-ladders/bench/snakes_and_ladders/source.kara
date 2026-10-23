@@ -1,0 +1,74 @@
+// LeetCode #909: Snakes and Ladders -- bench program.
+//
+// The ★ arm (a breadth-first search over the squares) on one 20 x 20
+// board, LeetCode's largest, built once. Each round changes one square,
+// to a snake or ladder to a random square or to none, solves the board
+// and folds the answer into a checksum.
+
+fn cell(board: Vec[Vec[i64]], square: i64) -> i64 {
+    let n = board.len();
+    let row = (square - 1) / n;
+    let col = if row % 2 == 0 { (square - 1) % n } else { n - 1 - (square - 1) % n };
+    board[n - 1 - row][col]
+}
+
+fn snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let mut moves: Vec[i64] = Vec.filled(last + 1, -1);
+    let mut queue: Vec[i64] = vec![1];
+    moves[1] = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let s = queue[head];
+        head += 1;
+        if s == last {
+            return moves[s];
+        }
+        for roll in 1..7 {
+            if s + roll > last {
+                break;
+            }
+            let here = cell(board, s + roll);
+            let next = if here == -1 { s + roll } else { here };
+            if moves[next] == -1 {
+                moves[next] = moves[s] + 1;
+                queue.push(next);
+            }
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 20;
+    let last = n * n;
+    let rounds = 100000;
+    let mut seed = 909;
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        board.push(Vec.filled(n, -1));
+    }
+    let mut stuck = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        let s = 2 + next_random(mut seed) % (last - 2);
+        let row = (s - 1) / n;
+        let col = if row % 2 == 0 { (s - 1) % n } else { n - 1 - (s - 1) % n };
+        board[n - 1 - row][col] = if next_random(mut seed) % 2 == 0 { -1 } else { 1 + next_random(mut seed) % last };
+        let got = snakes_and_ladders(board);
+        if got == -1 {
+            stuck += 1;
+        } else {
+            total += got;
+        }
+        check = (check * 31 + got + 2) % 1000000007;
+    }
+    println(f"{rounds} rounds on a 20 x 20 board: {stuck} with the end out of reach, the rest summing to {total}, checksum {check}");
+}

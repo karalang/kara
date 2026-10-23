@@ -1,0 +1,440 @@
+// LeetCode #909: Snakes and Ladders -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given an n x n integer matrix board where the
+// cells are labeled from 1 to n^2 in a Boustrophedon style starting from
+// the bottom left of the board (board[n - 1][0]) and alternating direction
+// each row. You start on square 1. In each move, starting from square
+// curr: choose a destination square next with a label in the range
+// [curr + 1, min(curr + 6, n^2)]; if next has a snake or ladder, you must
+// move to the destination of that snake or ladder, otherwise you move to
+// next. The game ends when you reach square n^2. A board square on row r
+// and column c has a snake or ladder if board[r][c] != -1, and its
+// destination is board[r][c]. Squares 1 and n^2 have none. You only take
+// a snake or ladder at most once per move: if its destination is the
+// start of another snake or ladder, you do not follow the subsequent one.
+// Return the least number of moves required to reach square n^2, or -1 if
+// it is not possible.
+
+// ---- the ★ arm: a breadth-first search over the squares -------------------
+fn star_cell(board: Vec[Vec[i64]], square: i64) -> i64 {
+    let n = board.len();
+    let row = (square - 1) / n;
+    let col = if row % 2 == 0 { (square - 1) % n } else { n - 1 - (square - 1) % n };
+    board[n - 1 - row][col]
+}
+
+fn star_snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let mut moves: Vec[i64] = Vec.filled(last + 1, -1);
+    let mut queue: Vec[i64] = vec![1];
+    moves[1] = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let s = queue[head];
+        head += 1;
+        if s == last {
+            return moves[s];
+        }
+        for roll in 1..7 {
+            if s + roll > last {
+                break;
+            }
+            let here = star_cell(board, s + roll);
+            let next = if here == -1 { s + roll } else { here };
+            if moves[next] == -1 {
+                moves[next] = moves[s] + 1;
+                queue.push(next);
+            }
+        }
+    }
+    -1
+}
+
+// ---- the flat arm: the board flattened first ------------------------------
+fn flat_snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let mut goes: Vec[i64] = Vec.filled(last + 1, 0);
+    let mut square = 1;
+    for r in 0..n {
+        let row = n - 1 - r;
+        for k in 0..n {
+            let col = if r % 2 == 0 { k } else { n - 1 - k };
+            let v = board[row][col];
+            goes[square] = if v == -1 { square } else { v };
+            square += 1;
+        }
+    }
+    let mut seen: Vec[bool] = Vec.filled(last + 1, false);
+    let mut queue: Vec[(i64, i64)] = vec![(1, 0)];
+    seen[1] = true;
+    let mut head = 0;
+    while head < queue.len() {
+        let (s, d) = queue[head];
+        head += 1;
+        if s == last {
+            return d;
+        }
+        for t in s + 1..(s + 6).min(last) + 1 {
+            let next = goes[t];
+            if not seen[next] {
+                seen[next] = true;
+                queue.push((next, d + 1));
+            }
+        }
+    }
+    -1
+}
+
+// ---- the rounds arm: relaxing every square in rounds ----------------------
+fn rounds_landing(board: Vec[Vec[i64]], square: i64) -> i64 {
+    let n = board.len();
+    let row = (square - 1) / n;
+    let col = if row % 2 == 0 { (square - 1) % n } else { n - 1 - (square - 1) % n };
+    let v = board[n - 1 - row][col];
+    if v == -1 { square } else { v }
+}
+
+fn rounds_snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let unknown = last + 1;
+    let mut best: Vec[i64] = Vec.filled(last + 1, unknown);
+    best[1] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for s in 1..last {
+            if best[s] == unknown {
+                continue;
+            }
+            for t in s + 1..(s + 6).min(last) + 1 {
+                let next = rounds_landing(board, t);
+                if best[s] + 1 < best[next] {
+                    best[next] = best[s] + 1;
+                    changed = true;
+                }
+            }
+        }
+    }
+    if best[last] == unknown { -1 } else { best[last] }
+}
+
+// ---- the layers arm: the reachable squares, one move at a time ------------
+fn layers_snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let mut goes: Vec[i64] = Vec.filled(last + 1, 0);
+    for s in 1..last + 1 {
+        let row = (s - 1) / n;
+        let col = if row % 2 == 0 { (s - 1) % n } else { n - 1 - (s - 1) % n };
+        let v = board[n - 1 - row][col];
+        goes[s] = if v == -1 { s } else { v };
+    }
+    let mut ever: Vec[bool] = Vec.filled(last + 1, false);
+    let mut now: Vec[bool] = Vec.filled(last + 1, false);
+    now[1] = true;
+    ever[1] = true;
+    let mut d = 0;
+    loop {
+        if now[last] {
+            return d;
+        }
+        let mut next: Vec[bool] = Vec.filled(last + 1, false);
+        let mut any = false;
+        for s in 1..last {
+            if now[s] {
+                for t in s + 1..(s + 6).min(last) + 1 {
+                    let g = goes[t];
+                    if not ever[g] {
+                        ever[g] = true;
+                        next[g] = true;
+                        any = true;
+                    }
+                }
+            }
+        }
+        if not any {
+            return -1;
+        }
+        now = next;
+        d += 1;
+    }
+}
+
+// ---- the recursive arm: a depth-first search that lowers the moves --------
+fn recursive_explore(goes: Vec[i64], best: mut ref Vec[i64], s: i64, d: i64) {
+    if d >= best[s] {
+        return;
+    }
+    best[s] = d;
+    let last = goes.len() - 1;
+    for t in s + 1..(s + 6).min(last) + 1 {
+        recursive_explore(goes, mut best, goes[t], d + 1);
+    }
+}
+
+fn recursive_snakes_and_ladders(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    let mut goes: Vec[i64] = Vec.filled(last + 1, 0);
+    for s in 1..last + 1 {
+        let row = (s - 1) / n;
+        let col = if row % 2 == 0 { (s - 1) % n } else { n - 1 - (s - 1) % n };
+        let v = board[n - 1 - row][col];
+        goes[s] = if v == -1 { s } else { v };
+    }
+    let unknown = last + 1;
+    let mut best: Vec[i64] = Vec.filled(last + 1, unknown);
+    recursive_explore(goes, mut best, 1, 0);
+    if best[last] == unknown { -1 } else { best[last] }
+}
+
+fn arm(x: i64, board: Vec[Vec[i64]]) -> i64 {
+    match x {
+        0 => star_snakes_and_ladders(board),
+        1 => flat_snakes_and_ladders(board),
+        2 => rounds_snakes_and_ladders(board),
+        3 => layers_snakes_and_ladders(board),
+        _ => recursive_snakes_and_ladders(board),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every game played that never ends a move on a square it has already
+// ended one on (such a game is never the shortest), stopping a game once
+// it is as long as the shortest found, and the fewest moves kept
+fn play(board: Vec[Vec[i64]], at_row: Vec[i64], at_col: Vec[i64], on: mut ref Vec[bool], curr: i64, moves: i64, best: mut ref i64) {
+    let last = at_row.len() - 1;
+    if curr == last {
+        if *best == -1 or moves < *best {
+            *best = moves;
+        }
+        return;
+    }
+    if *best != -1 and moves >= *best {
+        return;
+    }
+    for next in curr + 1..(curr + 6).min(last) + 1 {
+        let v = board[at_row[next]][at_col[next]];
+        let dest = if v != -1 { v } else { next };
+        if not on[dest] {
+            on[dest] = true;
+            play(board, at_row, at_col, mut on, dest, moves + 1, mut best);
+            on[dest] = false;
+        }
+    }
+}
+
+fn literal(board: Vec[Vec[i64]]) -> i64 {
+    let n = board.len();
+    let last = n * n;
+    // the labels 1 to n^2 written from board[n - 1][0], alternating
+    // direction each row
+    let mut at_row: Vec[i64] = Vec.filled(last + 1, 0);
+    let mut at_col: Vec[i64] = Vec.filled(last + 1, 0);
+    let mut label = 1;
+    let mut left_to_right = true;
+    let mut r = n - 1;
+    while r >= 0 {
+        for k in 0..n {
+            at_row[label] = r;
+            at_col[label] = if left_to_right { k } else { n - 1 - k };
+            label += 1;
+        }
+        left_to_right = not left_to_right;
+        r -= 1;
+    }
+    let mut on: Vec[bool] = Vec.filled(last + 1, false);
+    on[1] = true;
+    let mut best = -1;
+    play(board, at_row, at_col, mut on, 1, 0, mut best);
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The board holding goes[s] at square s, and back.
+fn place(n: i64, goes: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        board.push(Vec.filled(n, -1));
+    }
+    for s in 1..n * n + 1 {
+        let row = (s - 1) / n;
+        let col = if row % 2 == 0 { (s - 1) % n } else { n - 1 - (s - 1) % n };
+        board[n - 1 - row][col] = goes[s];
+    }
+    board
+}
+
+fn goes_of(board: Vec[Vec[i64]]) -> Vec[i64] {
+    let n = board.len();
+    let mut goes: Vec[i64] = Vec.filled(n * n + 1, -1);
+    for s in 1..n * n + 1 {
+        let row = (s - 1) / n;
+        let col = if row % 2 == 0 { (s - 1) % n } else { n - 1 - (s - 1) % n };
+        goes[s] = board[n - 1 - row][col];
+    }
+    goes
+}
+
+// Each square but the first and last holds a snake or ladder with chance
+// 1 in `rare`, to any square, or only snakes to a lower square when `down`.
+fn random_board(seed: mut ref i64, n: i64, rare: i64, down: bool) -> Vec[Vec[i64]] {
+    let last = n * n;
+    let mut goes: Vec[i64] = Vec.filled(last + 1, -1);
+    for s in 2..last {
+        if next_random(mut seed) % rare == 0 {
+            goes[s] = if down { 1 + next_random(mut seed) % (s - 1) } else { 1 + next_random(mut seed) % last };
+        }
+    }
+    place(n, goes)
+}
+
+// A board that makes the player crawl: each square but the first and last
+// holds, with chance 7 in 8, a snake 5 squares down (to square 1 from
+// below 7), so a roll of 6 gains one square.
+fn crawl_board(seed: mut ref i64, n: i64) -> Vec[Vec[i64]] {
+    let last = n * n;
+    let mut goes: Vec[i64] = Vec.filled(last + 1, -1);
+    for s in 2..last {
+        if next_random(mut seed) % 8 != 0 {
+            goes[s] = (s - 5).max(1);
+        }
+    }
+    place(n, goes)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one board over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, board: Vec[Vec[i64]], small: bool) {
+    let n = board.len();
+    let last = n * n;
+    let want = if small { literal(board) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, board));
+    }
+    let goes = goes_of(board);
+    // P2: the empty board of the same side
+    let empty = place(n, Vec.filled(last + 1, -1));
+    // P3: some empty squares given a jump to themselves
+    let mut selfish = goes.clone();
+    for s in 2..last {
+        if selfish[s] == -1 and next_random(mut seed) % 3 == 0 {
+            selfish[s] = s;
+        }
+    }
+    // P4: a ladder to the last square put on a random empty square, if any
+    let mut ladder = goes.clone();
+    let mut spot = 2 + next_random(mut seed) % (last - 1);
+    let mut tries = 0;
+    while tries < last and (spot >= last or ladder[spot] != -1) {
+        spot = if spot >= last { 2 } else { spot + 1 };
+        tries += 1;
+    }
+    if spot < last and ladder[spot] == -1 {
+        ladder[spot] = last;
+    }
+    // P5: the ladders alone and the snakes alone
+    let mut ups = goes.clone();
+    let mut downs = goes.clone();
+    for s in 1..last + 1 {
+        if goes[s] != -1 and goes[s] < s {
+            ups[s] = -1;
+        }
+        if goes[s] != -1 and goes[s] > s {
+            downs[s] = -1;
+        }
+    }
+    let plain = (last - 1 + 5) / 6;
+    let selfish = place(n, selfish);
+    let ladder = place(n, ladder);
+    let ups = place(n, ups);
+    let downs = place(n, downs);
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's fewest moves
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: -1 or 1 to n^2 - 1 moves, and the empty board in ceil((n^2 - 1) / 6)
+        check(mut t, 2, (got == -1 or (got >= 1 and got <= last - 1)) and arm(x, empty) == plain);
+        // P3: the same answer with jumps from squares to themselves added
+        check(mut t, 3, arm(x, selfish) == got);
+        // P4: no worse with a ladder to the end added
+        let laddered = arm(x, ladder);
+        check(mut t, 4, got == -1 or (laddered != -1 and laddered <= got));
+        // P5: the ladders alone reach the end in at most the empty board's
+        // moves, the snakes alone in at least as many or never
+        let up = arm(x, ups);
+        let down = arm(x, downs);
+        check(mut t, 5, up != -1 and up <= plain and (down == -1 or down >= plain));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 909;
+    let mut boards = 0;
+    let mut squares = 0;
+    let mut stuck = 0;
+    let mut longest = 0;
+    // sides 2 to 4 against the statement, then sides 5 to 12; snakes and
+    // ladders on every square, on 1 in 3 or on 1 in 12, snakes alone on
+    // every square, or a board that makes the player crawl
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 + next_random(mut seed) % 3 } else { 5 + next_random(mut seed) % 8 };
+        let rare = if c % 4 == 0 or c % 4 == 3 { 1 } else if c % 4 == 1 { 3 } else { 12 };
+        let board = if c % 8 == 7 { crawl_board(mut seed, n) } else { random_board(mut seed, n, rare, c % 4 == 3) };
+        boards += 1;
+        squares += n * n;
+        let moves = star_snakes_and_ladders(board);
+        if moves == -1 {
+            stuck += 1;
+        }
+        longest = longest.max(moves);
+        properties(mut t, mut seed, board, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{boards} boards, {squares} squares, {stuck} with the end out of reach, at most {longest} moves, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
