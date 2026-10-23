@@ -153,27 +153,37 @@ fn drops_only_handle(body: &Body, tys: &TyInterner, p: &Place) -> bool {
 /// of or ends `d`. Until then the retain's object outlives its source's
 /// drop either way, so a `Drop` body, or a `weak` upgrade, sees no
 /// difference when the pair goes.
+///
+/// Moving `d` into the value the body returns (`_0 = Split { move d, .. }`)
+/// is not a release: the caller gets the count, after every drop in the
+/// body. The return place is then held to the same rule as `d`, so a drop
+/// or a move out of it in between still keeps the retain.
 fn statement_releases(s: &StatementKind, d: Local) -> bool {
-    let moves = |o: &Operand| matches!(o, Operand::Move(p) if p.local == d);
+    let held = |l: Local| l == d || l == Local::RETURN_PLACE;
+    let moves = |o: &Operand| matches!(o, Operand::Move(p) if held(p.local));
     match s {
         StatementKind::Assign(dest, rv) => {
+            let into_return = dest.local == Local::RETURN_PLACE && dest.projection.is_empty();
             dest.local == d
                 || match rv {
-                    Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => moves(o),
+                    Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => {
+                        moves(o) && !into_return
+                    }
                     Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {
                         moves(a) || moves(b)
                     }
-                    Rvalue::Aggregate(_, ops) => ops.iter().any(moves),
+                    Rvalue::Aggregate(_, ops) => !into_return && ops.iter().any(moves),
                     _ => false,
                 }
         }
-        StatementKind::StorageDead(x) => *x == d,
-        StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) => p.local == d,
+        StatementKind::StorageDead(x) => held(*x),
+        StatementKind::SetDiscriminant(p, _) | StatementKind::FreeBox(p) => held(p.local),
         _ => false,
     }
 }
 
 fn terminator_releases(t: &TerminatorKind, d: Local) -> bool {
+    let held = |l: Local| l == d || l == Local::RETURN_PLACE;
     match t {
         TerminatorKind::Call {
             args, destination, ..
@@ -181,9 +191,9 @@ fn terminator_releases(t: &TerminatorKind, d: Local) -> bool {
             destination.local == d
                 || args
                     .iter()
-                    .any(|o| matches!(o, Operand::Move(p) if p.local == d))
+                    .any(|o| matches!(o, Operand::Move(p) if held(p.local)))
         }
-        TerminatorKind::Drop { place, .. } => place.local == d,
+        TerminatorKind::Drop { place, .. } => held(place.local),
         _ => false,
     }
 }
@@ -306,6 +316,27 @@ fn main() {\n    let a = N { v: 2, next: None };\n    let b = N { v: 3, next: So
     fn mir_rc_pairs_list_walk_moves_its_binding() {
         assert_eq!(retains(WALK, "sum"), 0);
         assert_eq!(run_source(WALK).unwrap(), ("5\n5\n".into(), Some(0)));
+    }
+
+    /// A handle read again after a `match` on a tuple of handles, then
+    /// moved into the returned value, gives its count to the caller: the
+    /// retains that build the result go (kata 558's `intersect`), the
+    /// tuple's stay, and the `Drop` bodies still run once each, in order.
+    #[test]
+    fn mir_rc_pairs_moves_a_handle_into_the_returned_value() {
+        let src = "shared enum T { L(i64), N(T, T) }\n\
+shared struct H { id: i64 }\n\
+impl Drop for H { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+fn two(n: i64) -> T {\n    let x = T.L(n);\n    let y = T.L(n + 1);\n    \
+match (x, y) {\n        (T.L(p), T.L(q)) => {\n            if p == q {\n                return T.L(p);\n            }\n        }\n        _ => {}\n    }\n    T.N(x, y)\n}\n\
+fn keep(a: H) -> Option[H] {\n    let h = H { id: a.id + 1 };\n    match (h, a) {\n        _ => {}\n    }\n    Some(h)\n}\n\
+fn main() {\n    match two(3) {\n        T.N(T.L(a), T.L(b)) => println(f\"{a} {b}\"),\n        _ => println(\"?\"),\n    }\n    \
+let a = H { id: 1 };\n    match keep(a) {\n        Some(h) => println(f\"k{h.id}\"),\n        None => {}\n    }\n    println(\"end\");\n}\n";
+        assert_eq!(retains(src, "two"), 2);
+        assert_eq!(
+            run_source(src).unwrap(),
+            ("3 4\nk2\nd2\nend\nd1\n".into(), Some(0))
+        );
     }
 
     /// A source used after the retain keeps it.
