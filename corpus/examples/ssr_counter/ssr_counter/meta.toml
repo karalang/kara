@@ -1,10 +1,11 @@
 source = "examples/ssr_counter/ssr_counter.kara"
 dedup_of = []
-expect = "stdout"
+expect = "error"
 exit = 0
-tags = ["closure", "post-m1:provider", "post-m1:wasm"]
+tags = ["closure", "post-m1:provider", "post-m1:wasm", "archived:wasm-exports"]
 class = "a"
 expected_from = "legacy-run"
+note = "M3: `karac check` refuses its `pub fn` WASM export (WASM component and browser bindings are archived with the legacy backend), so the entry expects that refusal; legacy.out keeps what it printed"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
