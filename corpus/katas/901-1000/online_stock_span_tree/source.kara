@@ -1,0 +1,158 @@
+// LeetCode #901: Online Stock Span -- a segment tree of maxima.
+//
+// Write each price into a segment tree over the days that keeps the
+// largest price in every range. The span ends at the last earlier day
+// with a price above the new one, found by going down the tree to the
+// rightmost leaf before today whose range holds such a price. The tree
+// doubles when the days outgrow it. O(log n) a call.
+
+struct StockSpanner {
+    size: i64,
+    max: Vec[i64],
+    days: i64,
+}
+
+impl StockSpanner {
+    fn new() -> StockSpanner {
+        StockSpanner { size: 1, max: Vec.filled(2, 0), days: 0 }
+    }
+
+    // the last day before `before` in the range of `node`, which covers
+    // days `lo` to `hi`, with a price above `price`, or -1
+    fn last_above(ref self, node: i64, lo: i64, hi: i64, before: i64, price: i64) -> i64 {
+        if lo >= before or self.max[node] <= price {
+            return -1;
+        }
+        if lo == hi {
+            return lo;
+        }
+        let mid = (lo + hi) / 2;
+        let right = self.last_above(2 * node + 1, mid + 1, hi, before, price);
+        if right != -1 {
+            return right;
+        }
+        self.last_above(2 * node, lo, mid, before, price)
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        if self.days == self.size {
+            let mut bigger: Vec[i64] = Vec.filled(4 * self.size, 0);
+            for d in 0..self.days {
+                bigger[2 * self.size + d] = self.max[self.size + d];
+            }
+            self.size *= 2;
+            let mut v = self.size - 1;
+            while v >= 1 {
+                bigger[v] = bigger[2 * v].max(bigger[2 * v + 1]);
+                v -= 1;
+            }
+            self.max = bigger;
+        }
+        let today = self.days;
+        let above = self.last_above(1, 0, self.size - 1, today, price);
+        let mut v = self.size + today;
+        self.max[v] = price;
+        while v > 1 {
+            v /= 2;
+            self.max[v] = self.max[2 * v].max(self.max[2 * v + 1]);
+        }
+        self.days += 1;
+        today - above
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = StockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn join(v: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s
+}
+
+fn show(prices: Vec[i64]) {
+    println(f"next({join(prices)}) -> {join(spans(prices))}");
+}
+
+// `len` prices: random from 1 to 10^5, from 1 to 5, or rising or falling
+// by a random step with a random dip or bump
+fn random_prices(seed: mut ref i64, len: i64, kind: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = 50000;
+    for _ in 0..len {
+        if kind == 0 {
+            p = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+        } else if kind == 1 {
+            p = 1 + next_random(mut seed) % 5;
+        } else {
+            let step = next_random(mut seed) % 20 - 4;
+            p = if kind == 2 { p + step } else { p - step };
+            p = p.max(1).min(100000);
+        }
+        out.push(p);
+    }
+    out
+}
+
+fn checksum(got: Vec[i64], check: i64) -> i64 {
+    let mut c = check;
+    for x in got.iter() {
+        c = (c * 1000003 + *x) % 1000000007;
+    }
+    c
+}
+
+fn total(got: Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in got.iter() {
+        t += *x;
+    }
+    t
+}
+
+fn main() {
+    show(vec![100, 80, 60, 70, 60, 75, 85]);
+    show(vec![7]);
+    show(vec![5, 5, 5, 5]);
+    show(vec![1, 2, 3, 4, 5, 6]);
+    show(vec![6, 5, 4, 3, 2, 1]);
+    show(vec![3, 1, 2, 1, 3, 4]);
+    show(vec![31, 41, 48, 59, 79]);
+    show(vec![100000, 1, 100000, 1, 100000]);
+    // random cases of up to 1000 prices, a quarter of each kind
+    let mut seed = 901;
+    let mut check = 0;
+    let mut calls = 0;
+    let mut span_sum = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 1000;
+        let got = spans(random_prices(mut seed, len, c % 4));
+        span_sum += total(got);
+        check = checksum(got, check);
+        calls += len;
+    }
+    println(f"300 cases, {calls} calls, spans summing to {span_sum}: checksum {check}");
+    // LeetCode's largest: 10^4 random prices, and 10^4 prices rising
+    let big = spans(random_prices(mut seed, 10000, 0));
+    println(f"10000 random prices: spans summing to {total(big)}, checksum {checksum(big, 0)}");
+    let rising = spans(random_prices(mut seed, 10000, 2));
+    println(f"10000 rising prices: spans summing to {total(rising)}, checksum {checksum(rising, 0)}");
+}

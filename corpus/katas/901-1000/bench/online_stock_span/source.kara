@@ -1,0 +1,58 @@
+// LeetCode #901: Online Stock Span -- bench program.
+//
+// The ★ arm (a stack of prices and their spans) over 1,000,000 prices
+// built once, a random walk between 1 and 10^5 taking steps of -50 to 50.
+// Each round gives every price to a fresh spanner, folds the spans into a
+// checksum and changes one price.
+
+struct StockSpanner {
+    prices: Vec[i64],
+    spans: Vec[i64],
+}
+
+impl StockSpanner {
+    fn new() -> StockSpanner {
+        StockSpanner { prices: Vec.new(), spans: Vec.new() }
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        let mut span = 1;
+        while self.prices.len() > 0 and self.prices[self.prices.len() - 1] <= price {
+            span += self.spans[self.spans.len() - 1];
+            self.prices.pop();
+            self.spans.pop();
+        }
+        self.prices.push(price);
+        self.spans.push(span);
+        span
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let days = 1000000;
+    let rounds = 50;
+    let mut seed = 901;
+    let mut prices: Vec[i64] = Vec.new();
+    let mut p = 50000;
+    for _ in 0..days {
+        p = (p + next_random(mut seed) % 101 - 50).max(1).min(100000);
+        prices.push(p);
+    }
+    let mut check = 0;
+    let mut total = 0;
+    for round in 0..rounds {
+        let mut s = StockSpanner.new();
+        for d in 0..days {
+            let span = s.next(prices[d]);
+            total += span;
+            check = (check * 31 + span) % 1000000007;
+        }
+        prices[round * 7919 % days] = 1 + next_random(mut seed) % 100000;
+    }
+    println(f"{rounds} rounds over {days} prices: spans summing to {total}, checksum {check}");
+}

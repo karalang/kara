@@ -1,0 +1,396 @@
+// LeetCode #901: Online Stock Span -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: design an algorithm that collects daily price quotes for
+// some stock and returns the span of that stock's price for the current
+// day. The span of the stock's price in one day is the maximum number of
+// consecutive days (starting from that day and going backward) for which
+// the stock price was less than or equal to the price of that day.
+
+// ---- the ★ arm: a stack of prices and their spans -------------------------
+struct StarStockSpanner {
+    prices: Vec[i64],
+    spans: Vec[i64],
+}
+
+impl StarStockSpanner {
+    fn new() -> StarStockSpanner {
+        StarStockSpanner { prices: Vec.new(), spans: Vec.new() }
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        let mut span = 1;
+        while self.prices.len() > 0 and self.prices[self.prices.len() - 1] <= price {
+            span += self.spans[self.spans.len() - 1];
+            self.prices.pop();
+            self.spans.pop();
+        }
+        self.prices.push(price);
+        self.spans.push(span);
+        span
+    }
+}
+
+// ---- the back arm: every day read back ------------------------------------
+struct BackStockSpanner {
+    prices: Vec[i64],
+}
+
+impl BackStockSpanner {
+    fn new() -> BackStockSpanner {
+        BackStockSpanner { prices: Vec.new() }
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        self.prices.push(price);
+        let today = self.prices.len() - 1;
+        let mut day = today;
+        while day > 0 and self.prices[day - 1] <= price {
+            day -= 1;
+        }
+        today - day + 1
+    }
+}
+
+// ---- the jump arm: jumping back by spans ----------------------------------
+struct JumpStockSpanner {
+    prices: Vec[i64],
+    spans: Vec[i64],
+}
+
+impl JumpStockSpanner {
+    fn new() -> JumpStockSpanner {
+        JumpStockSpanner { prices: Vec.new(), spans: Vec.new() }
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        let today = self.prices.len();
+        let mut day = today - 1;
+        while day >= 0 and self.prices[day] <= price {
+            day -= self.spans[day];
+        }
+        self.prices.push(price);
+        self.spans.push(today - day);
+        today - day
+    }
+}
+
+// ---- the indices arm: a stack of days -------------------------------------
+struct IndicesStockSpanner {
+    prices: Vec[i64],
+    days: Vec[i64],
+}
+
+impl IndicesStockSpanner {
+    fn new() -> IndicesStockSpanner {
+        IndicesStockSpanner { prices: Vec.new(), days: Vec.new() }
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        let today = self.prices.len();
+        self.prices.push(price);
+        while let Some(top) = self.days.last() {
+            if self.prices[top] > price {
+                break;
+            }
+            self.days.pop();
+        }
+        let span = match self.days.last() {
+            Some(top) => today - top,
+            None => today + 1,
+        };
+        self.days.push(today);
+        span
+    }
+}
+
+// ---- the tree arm: a segment tree of maxima -------------------------------
+struct TreeStockSpanner {
+    size: i64,
+    max: Vec[i64],
+    days: i64,
+}
+
+impl TreeStockSpanner {
+    fn new() -> TreeStockSpanner {
+        TreeStockSpanner { size: 1, max: Vec.filled(2, 0), days: 0 }
+    }
+
+    // the last day before `before` in the range of `node`, which covers
+    // days `lo` to `hi`, with a price above `price`, or -1
+    fn last_above(ref self, node: i64, lo: i64, hi: i64, before: i64, price: i64) -> i64 {
+        if lo >= before or self.max[node] <= price {
+            return -1;
+        }
+        if lo == hi {
+            return lo;
+        }
+        let mid = (lo + hi) / 2;
+        let right = self.last_above(2 * node + 1, mid + 1, hi, before, price);
+        if right != -1 {
+            return right;
+        }
+        self.last_above(2 * node, lo, mid, before, price)
+    }
+
+    fn next(mut ref self, price: i64) -> i64 {
+        if self.days == self.size {
+            let mut bigger: Vec[i64] = Vec.filled(4 * self.size, 0);
+            for d in 0..self.days {
+                bigger[2 * self.size + d] = self.max[self.size + d];
+            }
+            self.size *= 2;
+            let mut v = self.size - 1;
+            while v >= 1 {
+                bigger[v] = bigger[2 * v].max(bigger[2 * v + 1]);
+                v -= 1;
+            }
+            self.max = bigger;
+        }
+        let today = self.days;
+        let above = self.last_above(1, 0, self.size - 1, today, price);
+        let mut v = self.size + today;
+        self.max[v] = price;
+        while v > 1 {
+            v /= 2;
+            self.max[v] = self.max[2 * v].max(self.max[2 * v + 1]);
+        }
+        self.days += 1;
+        today - above
+    }
+}
+
+fn star_spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = StarStockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn back_spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = BackStockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn jump_spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = JumpStockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn indices_spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = IndicesStockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn tree_spans(prices: Vec[i64]) -> Vec[i64] {
+    let mut s = TreeStockSpanner.new();
+    let mut out: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        out.push(s.next(*p));
+    }
+    out
+}
+
+fn arm(x: i64, prices: Vec[i64]) -> Vec[i64] {
+    match x {
+        0 => star_spans(prices),
+        1 => back_spans(prices),
+        2 => jump_spans(prices),
+        3 => indices_spans(prices),
+        _ => tree_spans(prices),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// for each day, the most consecutive days ending that day, counted back,
+// over which no price is above that day's: every count tried, each window
+// read through
+fn literal(prices: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for day in 0..prices.len() {
+        let mut best = 0;
+        for k in 1..day + 2 {
+            let mut all = true;
+            for d in day - k + 1..day + 1 {
+                if prices[d] > prices[day] {
+                    all = false;
+                }
+            }
+            if all {
+                best = k;
+            }
+        }
+        out.push(best);
+    }
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` prices: random from 1 to `top`, from 1 to 5, or rising or falling
+// by a random step with a random dip or bump
+fn random_prices(seed: mut ref i64, len: i64, kind: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut p = top / 2 + 1;
+    for _ in 0..len {
+        if kind == 0 {
+            p = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        } else if kind == 1 {
+            p = 1 + next_random(mut seed) % 5.min(top);
+        } else {
+            let step = next_random(mut seed) % 20 - 4;
+            p = if kind == 2 { p + step } else { p - step };
+            p = p.max(1).min(top);
+        }
+        out.push(p);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, prices: Vec[i64], small: bool) {
+    let n = prices.len();
+    let want = if small { literal(prices) } else { Vec.new() };
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, prices));
+    }
+    let mut lowest = prices[0];
+    let mut highest = prices[0];
+    for p in prices.iter() {
+        lowest = lowest.min(*p);
+        highest = highest.max(*p);
+    }
+    // P3: every price p written 3p + 7
+    let mut moved: Vec[i64] = Vec.new();
+    for p in prices.iter() {
+        moved.push(3 * *p + 7);
+    }
+    // P4: a prefix, and a price above all the others after it
+    let cut = next_random(mut seed) % n + 1;
+    let mut prefix: Vec[i64] = Vec.new();
+    for i in 0..cut {
+        prefix.push(prices[i]);
+    }
+    let mut topped = prefix.clone();
+    topped.push(highest + 1);
+    // P5: a price above all the others put in front, and one at or below
+    // all of them
+    let mut above = prices.clone();
+    above.insert(0, highest + 1);
+    let mut below = prices.clone();
+    below.insert(0, lowest - next_random(mut seed) % 2);
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's spans
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: from 1 to the days so far; the day just before the span's
+        // first day priced above, and yesterday at or below exactly when
+        // the span is more than 1
+        let mut ok = got.len() == n;
+        if ok {
+            for i in 0..n {
+                let s = got[i];
+                ok = ok and s >= 1 and s <= i + 1;
+                if ok and s <= i {
+                    ok = prices[i - s] > prices[i];
+                }
+                if ok and i > 0 {
+                    ok = (prices[i - 1] <= prices[i]) == (s > 1);
+                }
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: the same spans for the prices moved and stretched
+        check(mut t, 3, arm(x, moved) == got);
+        // P4: a prefix's spans are the first ones, and a price above them
+        // all spans every day
+        let pre = arm(x, prefix);
+        let mut same = pre.len() == cut;
+        for i in 0..cut {
+            same = same and pre[i] == got[i];
+        }
+        let top = arm(x, topped);
+        check(mut t, 4, same and top.len() == cut + 1 and top[cut] == cut + 1);
+        // P5: a higher price in front changes no span; a price at or below
+        // all in front adds one day to the spans that reach the first day
+        let mut want_above: Vec[i64] = vec![1];
+        let mut want_below: Vec[i64] = vec![1];
+        for i in 0..got.len() {
+            want_above.push(got[i]);
+            want_below.push(if got[i] == i + 1 { got[i] + 1 } else { got[i] });
+        }
+        check(mut t, 5, arm(x, above) == want_above and arm(x, below) == want_below);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 901;
+    let mut cases = 0;
+    let mut calls = 0;
+    // up to 8 prices from 1 to 4 against the statement; then up to 400 of
+    // the four kinds up to 10^5
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 400 };
+        let prices = if small { random_prices(mut seed, len, c % 2, 4) } else { random_prices(mut seed, len, c % 4, 100000) };
+        cases += 1;
+        calls += len;
+        properties(mut t, mut seed, prices, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {calls} calls, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
