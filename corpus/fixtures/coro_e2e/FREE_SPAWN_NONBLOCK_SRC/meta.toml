@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "driven through driver.toml (one connection that sends nothing, as its test does); expected.out is what its test asserts. Uses the free `spawn` that core removed (§11.1, E0520), so v2 refuses it until a `karac fix` migration exists (ADR-4 plan step 4)"
 bucket = "b-fix-incomplete:E0520"
-classified_with = "292a4ca2f"
+classified_with = "b221fb02e"
 model_rev = "aafbe785"
 model_src = "1c0c1d03"

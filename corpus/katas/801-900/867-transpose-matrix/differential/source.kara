@@ -1,0 +1,291 @@
+// LeetCode #867: Transpose Matrix -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: the transpose of a matrix is the matrix flipped over its
+// main diagonal, switching the matrix's row and column indices.
+// ---- the ★ arm: one column at a time --------------------------------------
+fn star_transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cols {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..rows {
+            row.push(matrix[r][c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- the filled arm: every entry written to its place ---------------------
+fn filled_transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..cols {
+        out.push(Vec.filled(rows, 0));
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            out[c][r] = matrix[r][c];
+        }
+    }
+    out
+}
+
+// ---- the flat arm: through one flat array ---------------------------------
+fn flat_transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut flat: Vec[i64] = Vec.new();
+    for row in matrix.iter() {
+        flat.extend(row.clone());
+    }
+    let mut turned: Vec[i64] = Vec.filled(rows * cols, 0);
+    for i in 0..rows * cols {
+        let r = i / cols;
+        let c = i % cols;
+        turned[c * rows + r] = flat[i];
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cols {
+        out.push(turned[c * rows..(c + 1) * rows].to_vec());
+    }
+    out
+}
+
+// ---- the iter arm: with iterators -----------------------------------------
+fn iter_transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let cols = matrix[0].len();
+    (0..cols).map(|c| matrix.iter().map(|row| row[c]).collect()).collect()
+}
+
+// ---- the blocks arm: in square tiles --------------------------------------
+fn blocks_transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let tile = 8;
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..cols {
+        out.push(Vec.filled(rows, 0));
+    }
+    let mut top = 0;
+    while top < rows {
+        let bottom = (top + tile).min(rows);
+        let mut left = 0;
+        while left < cols {
+            let right = (left + tile).min(cols);
+            for r in top..bottom {
+                for c in left..right {
+                    out[c][r] = matrix[r][c];
+                }
+            }
+            left = right;
+        }
+        top = bottom;
+    }
+    out
+}
+
+fn arm(a: i64, m: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    match a {
+        0 => star_transpose(m),
+        1 => filled_transpose(m),
+        2 => flat_transpose(m),
+        3 => iter_transpose(m),
+        _ => blocks_transpose(m),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// The matrix flipped over its main diagonal, switching the row and column
+// indices: every entry at (row r, column c) is placed at (row c, column r),
+// and the rows are read back out in order of their indices.
+fn literal_transpose(m: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut placed: Map[(i64, i64), i64] = Map.new();
+    let mut new_rows = 0;
+    let mut new_cols = 0;
+    for r in 0..m.len() {
+        for c in 0..m[r].len() {
+            placed.insert((c, r), m[r][c]);
+            new_rows = new_rows.max(c + 1);
+            new_cols = new_cols.max(r + 1);
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..new_rows {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..new_cols {
+            row.push(placed.get((i, j)) ?? 0);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % 2000000001 - 1000000000
+}
+
+fn random_matrix(seed: mut ref i64, rows: i64, cols: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(random_value(mut seed));
+        }
+        m.push(row);
+    }
+    m
+}
+
+// the rows in reverse order
+fn rows_reversed(m: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut r = m.len();
+    while r > 0 {
+        r -= 1;
+        out.push(m[r].clone());
+    }
+    out
+}
+
+// every row reversed
+fn each_reversed(m: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in m.iter() {
+        let mut copy = row.clone();
+        copy.reverse();
+        out.push(copy);
+    }
+    out
+}
+
+// columns from..to of every row
+fn columns(m: Vec[Vec[i64]], from: i64, to: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in m.iter() {
+        out.push(row[from..to].to_vec());
+    }
+    out
+}
+
+// the rows of a, then the rows of b
+fn stacked(a: Vec[Vec[i64]], b: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in a.iter() {
+        out.push(row.clone());
+    }
+    for row in b.iter() {
+        out.push(row.clone());
+    }
+    out
+}
+
+// every row with one more entry, taken in order from `extra`
+fn widened(m: Vec[Vec[i64]], extra: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m.len() {
+        let mut row = m[r].clone();
+        row.push(extra[r]);
+        out.push(row);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one matrix, each over the five arms; returns the
+// number of entries
+fn properties(t: mut ref Tally, seed: mut ref i64, m: Vec[Vec[i64]]) -> i64 {
+    let rows = m.len();
+    let cols = m[0].len();
+    let want = literal_transpose(m);
+    let extra = random_matrix(mut seed, 1, cols)[0].clone();
+    let k = next_random(mut seed) % (cols + 1);
+    for a in 0..5 {
+        let got = arm(a, m);
+        // P1: the statement's answer
+        check(mut t, 1, got == want);
+        // P2: transposed twice, the matrix again
+        check(mut t, 2, arm(a, got) == m);
+        // P3: cols rows of rows entries each
+        let mut shaped = got.len() == cols;
+        for row in got.iter() {
+            if row.len() != rows {
+                shaped = false;
+            }
+        }
+        check(mut t, 3, shaped);
+        // P4: a row added below the matrix is a column added on the right
+        // of its transpose
+        check(mut t, 4, arm(a, stacked(m, [extra.clone()])) == widened(got, extra));
+        // P5: the rows in reverse order reverse every row of the transpose
+        check(mut t, 5, arm(a, rows_reversed(m)) == each_reversed(got));
+        // P6: the matrix split between two columns transposes to the two
+        // transposes one above the other (an empty side skipped)
+        let joined = if k == 0 or k == cols {
+            got.clone()
+        } else {
+            stacked(arm(a, columns(m, 0, k)), arm(a, columns(m, k, cols)))
+        };
+        check(mut t, 6, joined == got);
+    }
+    rows * cols
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut matrices = 0;
+    let mut entries = 0;
+    let mut seed = 867;
+    // every shape up to 8 by 8, three times
+    for _ in 0..3 {
+        for rows in 1..9 {
+            for cols in 1..9 {
+                matrices += 1;
+                entries += properties(mut t, mut seed, random_matrix(mut seed, rows, cols));
+            }
+        }
+    }
+    // random matrices of up to 30 by 30
+    for _ in 0..600 {
+        let rows = 1 + next_random(mut seed) % 30;
+        let cols = 1 + next_random(mut seed) % 30;
+        matrices += 1;
+        entries += properties(mut t, mut seed, random_matrix(mut seed, rows, cols));
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{matrices} matrices of {entries} entries, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

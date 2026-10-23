@@ -1,0 +1,112 @@
+// LeetCode #867: Transpose Matrix -- through one flat array.
+//
+// The matrix is laid out row after row in one array, entry (r, c) at
+// r * cols + c; the transpose's entry (c, r) sits at c * rows + r of a
+// second array, filled from the first, and that array is cut back into
+// cols rows of rows entries each. O(rows * cols).
+
+fn transpose(matrix: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut flat: Vec[i64] = Vec.new();
+    for row in matrix.iter() {
+        flat.extend(row.clone());
+    }
+    let mut turned: Vec[i64] = Vec.filled(rows * cols, 0);
+    for i in 0..rows * cols {
+        let r = i / cols;
+        let c = i % cols;
+        turned[c * rows + r] = flat[i];
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..cols {
+        out.push(turned[c * rows..(c + 1) * rows].to_vec());
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from -10^9 to 10^9, LeetCode's range
+fn random_value(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % 2000000001 - 1000000000
+}
+
+fn random_matrix(seed: mut ref i64, rows: i64, cols: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            row.push(random_value(mut seed));
+        }
+        m.push(row);
+    }
+    m
+}
+
+fn show_matrix(m: Vec[Vec[i64]]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for row in m.iter() {
+        let mut items: Vec[String] = Vec.new();
+        for v in row.iter() {
+            items.push(f"{*v}");
+        }
+        parts.push(f"[{items.join(",")}]");
+    }
+    f"[{parts.join(",")}]"
+}
+
+// the shape and a checksum of every entry with its place
+fn summary(m: Vec[Vec[i64]]) -> String {
+    let mut check = 0;
+    for row in m.iter() {
+        for v in row.iter() {
+            check = (check * 31 + *v % 1000000007 + 1000000007) % 1000000007;
+        }
+        check = (check * 31 + 7) % 1000000007;
+    }
+    f"{m.len()} x {m[0].len()}, checksum {check}"
+}
+
+fn show(m: Vec[Vec[i64]]) {
+    println(f"matrix = {show_matrix(m)} -> {show_matrix(transpose(m))}");
+}
+
+fn main() {
+    show([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+    show([[1, 2, 3], [4, 5, 6]]);
+    show([[5]]);
+    show([[1, 2, 3, 4]]);
+    show([[1], [2], [3], [4]]);
+    show([[-1000000000, 1000000000], [0, -7]]);
+    show([[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]);
+    let mut seed = 867;
+    // LeetCode's largest: 10^5 entries, in four shapes
+    for (rows, cols) in [(100000, 1), (1, 100000), (1000, 100), (316, 316)] {
+        let m = random_matrix(mut seed, rows, cols);
+        println(f"{summary(m)} -> {summary(transpose(m))}");
+    }
+    // random matrices of 1 to 20 rows and columns
+    let mut entries = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let rows = 1 + next_random(mut seed) % 20;
+        let cols = 1 + next_random(mut seed) % 20;
+        let t = transpose(random_matrix(mut seed, rows, cols));
+        entries += t.len() * t[0].len();
+        for row in t.iter() {
+            for v in row.iter() {
+                check = (check * 31 + *v % 1000000007 + 1000000007) % 1000000007;
+            }
+            check = (check * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"1000 random matrices: {entries} entries, checksum {check}");
+}
