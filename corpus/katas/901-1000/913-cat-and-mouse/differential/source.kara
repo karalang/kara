@@ -1,0 +1,657 @@
+// LeetCode #913: Cat and Mouse -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: a game on an undirected graph is played by two players,
+// Mouse and Cat, who alternate turns. The mouse starts at node 1 and goes
+// first, the cat starts at node 2 and goes second, and there is a hole at
+// node 0. During each player's turn, they must travel along one edge of
+// the graph that meets where they are. The cat is not allowed to travel
+// to the hole. The game ends in three ways: if ever the cat occupies the
+// same node as the mouse, the cat wins; if ever the mouse reaches the
+// hole, the mouse wins; if ever a position is repeated (the players are
+// in the same positions as on a previous turn, and it is the same
+// player's turn to move), the game is a draw. Given that both players
+// play optimally, return 1 if the mouse wins, 2 if the cat wins, or 0 if
+// the game is a draw.
+
+// ---- the ★ arm: retrograde analysis with a queue --------------------------
+fn star_cat_mouse_game(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    // position (m, c, t) at (m * n + c) * 2 + t: t is 0 for the mouse to
+    // move, 1 for the cat; 1 a mouse win, 2 a cat win, 0 not yet known
+    let mut result: Vec[i64] = Vec.filled(n * n * 2, 0);
+    let mut left: Vec[i64] = Vec.filled(n * n * 2, 0);
+    for m in 0..n {
+        for c in 1..n {
+            left[(m * n + c) * 2] = graph[m].len();
+            let mut moves = 0;
+            for d in graph[c].iter() {
+                if *d != 0 {
+                    moves += 1;
+                }
+            }
+            left[(m * n + c) * 2 + 1] = moves;
+        }
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    for c in 1..n {
+        for t in 0..2 {
+            result[c * 2 + t] = 1;
+            queue.push(c * 2 + t);
+            result[(c * n + c) * 2 + t] = 2;
+            queue.push((c * n + c) * 2 + t);
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let s = queue[head];
+        head += 1;
+        let t = s % 2;
+        let c = s / 2 % n;
+        let m = s / 2 / n;
+        let won = result[s];
+        if t == 1 {
+            // the mouse moved here, from a neighbour of m
+            for pm in graph[m].iter() {
+                let p = (*pm * n + c) * 2;
+                if result[p] == 0 {
+                    if won == 1 {
+                        result[p] = 1;
+                        queue.push(p);
+                    } else {
+                        left[p] -= 1;
+                        if left[p] == 0 {
+                            result[p] = 2;
+                            queue.push(p);
+                        }
+                    }
+                }
+            }
+        } else {
+            // the cat moved here, from a neighbour of c other than the hole
+            for pc in graph[c].iter() {
+                if *pc != 0 {
+                    let p = (m * n + *pc) * 2 + 1;
+                    if result[p] == 0 {
+                        if won == 2 {
+                            result[p] = 2;
+                            queue.push(p);
+                        } else {
+                            left[p] -= 1;
+                            if left[p] == 0 {
+                                result[p] = 1;
+                                queue.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result[(n + 2) * 2]
+}
+
+// ---- the rounds arm: the positions swept until nothing changes ------------
+fn rounds_cat_mouse_game(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    // mouse[m][c] for the mouse to move, cat[m][c] for the cat: 1 a mouse
+    // win, 2 a cat win, 0 not yet known
+    let mut mouse: Vec[Vec[i64]] = Vec.new();
+    let mut cat: Vec[Vec[i64]] = Vec.new();
+    for m in 0..n {
+        let mut row: Vec[i64] = Vec.filled(n, 0);
+        for c in 1..n {
+            if m == 0 {
+                row[c] = 1;
+            } else if m == c {
+                row[c] = 2;
+            }
+        }
+        mouse.push(row.clone());
+        cat.push(row);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for m in 1..n {
+            for c in 1..n {
+                if mouse[m][c] == 0 {
+                    let mut all_lost = true;
+                    let mut won = false;
+                    for next in graph[m].iter() {
+                        let r = cat[*next][c];
+                        if r == 1 {
+                            won = true;
+                        }
+                        if r != 2 {
+                            all_lost = false;
+                        }
+                    }
+                    if won {
+                        mouse[m][c] = 1;
+                        changed = true;
+                    } else if all_lost {
+                        mouse[m][c] = 2;
+                        changed = true;
+                    }
+                }
+                if cat[m][c] == 0 {
+                    let mut all_lost = true;
+                    let mut won = false;
+                    for next in graph[c].iter() {
+                        if *next != 0 {
+                            let r = mouse[m][*next];
+                            if r == 2 {
+                                won = true;
+                            }
+                            if r != 1 {
+                                all_lost = false;
+                            }
+                        }
+                    }
+                    if won {
+                        cat[m][c] = 2;
+                        changed = true;
+                    } else if all_lost {
+                        cat[m][c] = 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    mouse[1][2]
+}
+
+// ---- the attractors arm: each player's winning region grown on its own ----
+fn attractors_attract(graph: Vec[Vec[i64]], goal: Vec[bool], player: i64) -> Vec[bool] {
+    let n = graph.len();
+    let mut inside = goal.clone();
+    let mut left: Vec[i64] = Vec.filled(n * n * 2, 0);
+    for m in 0..n {
+        for c in 1..n {
+            left[(m * n + c) * 2] = graph[m].len();
+            for d in graph[c].iter() {
+                if *d != 0 {
+                    left[(m * n + c) * 2 + 1] += 1;
+                }
+            }
+        }
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    for s in 0..n * n * 2 {
+        if goal[s] {
+            stack.push(s);
+        }
+    }
+    while let Some(s) = stack.pop() {
+        let t = s % 2;
+        let c = s / 2 % n;
+        let m = s / 2 / n;
+        // the positions one move earlier, with the other player to move
+        let mut before: Vec[i64] = Vec.new();
+        if t == 1 {
+            for pm in graph[m].iter() {
+                before.push((*pm * n + c) * 2);
+            }
+        } else {
+            for pc in graph[c].iter() {
+                if *pc != 0 {
+                    before.push((m * n + *pc) * 2 + 1);
+                }
+            }
+        }
+        for p in before.iter() {
+            let p = *p;
+            let pm = p / 2 / n;
+            let pc = p / 2 % n;
+            // a finished game goes nowhere
+            if not inside[p] and pm != 0 and pm != pc {
+                if p % 2 == player {
+                    inside[p] = true;
+                    stack.push(p);
+                } else {
+                    left[p] -= 1;
+                    if left[p] == 0 {
+                        inside[p] = true;
+                        stack.push(p);
+                    }
+                }
+            }
+        }
+    }
+    inside
+}
+
+fn attractors_cat_mouse_game(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let mut holed: Vec[bool] = Vec.filled(n * n * 2, false);
+    let mut caught: Vec[bool] = Vec.filled(n * n * 2, false);
+    for c in 1..n {
+        for t in 0..2 {
+            holed[c * 2 + t] = true;
+            caught[(c * n + c) * 2 + t] = true;
+        }
+    }
+    let start = (n + 2) * 2;
+    if attractors_attract(graph, holed, 0)[start] {
+        1
+    } else if attractors_attract(graph, caught, 1)[start] {
+        2
+    } else {
+        0
+    }
+}
+
+// ---- the recursive arm: retrograde analysis by recursion ------------------
+fn recursive_spread(graph: Vec[Vec[i64]], result: mut ref Vec[i64], left: mut ref Vec[i64], s: i64) {
+    let n = graph.len();
+    let t = s % 2;
+    let c = s / 2 % n;
+    let m = s / 2 / n;
+    let won = result[s];
+    if t == 1 {
+        // the mouse moved here, from a neighbour of m
+        for pm in graph[m].iter() {
+            let p = (*pm * n + c) * 2;
+            if result[p] == 0 {
+                if won == 1 {
+                    result[p] = 1;
+                    recursive_spread(graph, mut result, mut left, p);
+                } else {
+                    left[p] -= 1;
+                    if left[p] == 0 {
+                        result[p] = 2;
+                        recursive_spread(graph, mut result, mut left, p);
+                    }
+                }
+            }
+        }
+    } else {
+        // the cat moved here, from a neighbour of c other than the hole
+        for pc in graph[c].iter() {
+            if *pc != 0 {
+                let p = (m * n + *pc) * 2 + 1;
+                if result[p] == 0 {
+                    if won == 2 {
+                        result[p] = 2;
+                        recursive_spread(graph, mut result, mut left, p);
+                    } else {
+                        left[p] -= 1;
+                        if left[p] == 0 {
+                            result[p] = 1;
+                            recursive_spread(graph, mut result, mut left, p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn recursive_cat_mouse_game(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let mut result: Vec[i64] = Vec.filled(n * n * 2, 0);
+    let mut left: Vec[i64] = Vec.filled(n * n * 2, 0);
+    for m in 0..n {
+        for c in 1..n {
+            left[(m * n + c) * 2] = graph[m].len();
+            for d in graph[c].iter() {
+                if *d != 0 {
+                    left[(m * n + c) * 2 + 1] += 1;
+                }
+            }
+        }
+    }
+    for c in 1..n {
+        for t in 0..2 {
+            result[c * 2 + t] = 1;
+            result[(c * n + c) * 2 + t] = 2;
+        }
+    }
+    for c in 1..n {
+        for t in 0..2 {
+            recursive_spread(graph, mut result, mut left, c * 2 + t);
+            recursive_spread(graph, mut result, mut left, (c * n + c) * 2 + t);
+        }
+    }
+    result[(n + 2) * 2]
+}
+
+// ---- the bitsets arm: the outcomes as bitsets of mouse positions ----------
+fn bitsets_cat_mouse_game(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let mut near: Vec[i64] = Vec.filled(n, 0);
+    for v in 0..n {
+        for u in graph[v].iter() {
+            near[v] = near[v] | (1 << *u);
+        }
+    }
+    let every = (1 << n) - 1;
+    // [c]: the mouse positions won by the mouse (or the cat), with the
+    // mouse (or the cat) to move
+    let mut mouse_won_mouse: Vec[i64] = Vec.filled(n, 1);
+    let mut mouse_won_cat: Vec[i64] = Vec.filled(n, 1);
+    let mut cat_won_mouse: Vec[i64] = Vec.filled(n, 0);
+    let mut cat_won_cat: Vec[i64] = Vec.filled(n, 0);
+    for c in 1..n {
+        cat_won_mouse[c] = 1 << c;
+        cat_won_cat[c] = 1 << c;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for c in 1..n {
+            for m in 1..n {
+                let bit = 1 << m;
+                if m != c and (mouse_won_mouse[c] & bit) == 0 and (cat_won_mouse[c] & bit) == 0 {
+                    if (near[m] & mouse_won_cat[c]) != 0 {
+                        mouse_won_mouse[c] = mouse_won_mouse[c] | bit;
+                        changed = true;
+                    } else if (near[m] & cat_won_cat[c]) == near[m] {
+                        cat_won_mouse[c] = cat_won_mouse[c] | bit;
+                        changed = true;
+                    }
+                }
+            }
+            let mut some = 0;
+            let mut all = every;
+            for d in graph[c].iter() {
+                if *d != 0 {
+                    some = some | cat_won_mouse[*d];
+                    all = all & mouse_won_mouse[*d];
+                }
+            }
+            // the cat on the mouse stays the cat's win
+            let cat_won = cat_won_cat[c] | some;
+            let mouse_won = mouse_won_cat[c] | (all & ~(1 << c));
+            if cat_won != cat_won_cat[c] or mouse_won != mouse_won_cat[c] {
+                cat_won_cat[c] = cat_won;
+                mouse_won_cat[c] = mouse_won;
+                changed = true;
+            }
+        }
+    }
+    if (mouse_won_mouse[2] & 2) != 0 {
+        1
+    } else if (cat_won_mouse[2] & 2) != 0 {
+        2
+    } else {
+        0
+    }
+}
+
+fn arm(x: i64, graph: Vec[Vec[i64]]) -> i64 {
+    if x == 0 {
+        star_cat_mouse_game(graph)
+    } else if x == 1 {
+        rounds_cat_mouse_game(graph)
+    } else if x == 2 {
+        attractors_cat_mouse_game(graph)
+    } else if x == 3 {
+        recursive_cat_mouse_game(graph)
+    } else {
+        bitsets_cat_mouse_game(graph)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// The game played out from the mouse at m and the cat at c with player t
+// to move (0 the mouse, 1 the cat), each player playing for its best
+// outcome: the mouse prefers its win, then a draw; the cat its win, then
+// a draw. `on` holds the positions earlier in this game, so returning to
+// one is the draw the statement names.
+fn play(graph: Vec[Vec[i64]], on: mut ref Vec[bool], m: i64, c: i64, t: i64) -> i64 {
+    if m == c {
+        return 2;
+    }
+    if m == 0 {
+        return 1;
+    }
+    let n = graph.len();
+    let s = (m * n + c) * 2 + t;
+    if on[s] {
+        return 0;
+    }
+    on[s] = true;
+    let mut best = 0;
+    if t == 0 {
+        best = 2;
+        for x in graph[m].iter() {
+            let r = play(graph, mut on, *x, c, 1);
+            if r == 1 {
+                best = 1;
+                break;
+            }
+            if r == 0 {
+                best = 0;
+            }
+        }
+    } else {
+        best = 1;
+        for x in graph[c].iter() {
+            if *x != 0 {
+                let r = play(graph, mut on, m, *x, 0);
+                if r == 2 {
+                    best = 2;
+                    break;
+                }
+                if r == 0 {
+                    best = 0;
+                }
+            }
+        }
+    }
+    on[s] = false;
+    best
+}
+
+fn literal(graph: Vec[Vec[i64]]) -> i64 {
+    let n = graph.len();
+    let mut on: Vec[bool] = Vec.filled(n * n * 2, false);
+    play(graph, mut on, 1, 2, 0)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as in the harness: each edge with chance `per` in 1000 (a quarter of
+// that at the hole), mended so that both players can always move
+fn random_graph(seed: mut ref i64, n: i64, per: i64) -> Vec[Vec[i64]] {
+    let mut adj: Vec[bool] = Vec.filled(n * n, false);
+    for u in 0..n {
+        for v in u + 1..n {
+            let chance = if u == 0 { per / 4 } else { per };
+            if next_random(mut seed) % 1000 < chance {
+                adj[u * n + v] = true;
+                adj[v * n + u] = true;
+            }
+        }
+    }
+    for v in 1..n {
+        let mut alone = true;
+        for u in 1..n {
+            if adj[v * n + u] {
+                alone = false;
+            }
+        }
+        if alone {
+            let mut u = 1 + next_random(mut seed) % (n - 2);
+            if u >= v {
+                u += 1;
+            }
+            adj[u * n + v] = true;
+            adj[v * n + u] = true;
+        }
+    }
+    let mut hole_alone = true;
+    for u in 1..n {
+        if adj[u] {
+            hole_alone = false;
+        }
+    }
+    if hole_alone {
+        let u = 1 + next_random(mut seed) % (n - 1);
+        adj[u] = true;
+        adj[u * n] = true;
+    }
+    let mut graph: Vec[Vec[i64]] = Vec.new();
+    for v in 0..n {
+        let mut near: Vec[i64] = Vec.new();
+        for u in 0..n {
+            if adj[v * n + u] {
+                near.push(u);
+            }
+        }
+        graph.push(near);
+    }
+    graph
+}
+
+// how good an outcome is for the mouse: a cat win, a draw, a mouse win
+fn rank(r: i64) -> i64 {
+    if r == 2 {
+        0
+    } else if r == 0 {
+        1
+    } else {
+        2
+    }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one graph over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, graph: Vec[Vec[i64]], small: bool) {
+    let n = graph.len();
+    let want = if small { literal(graph) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, graph));
+    }
+    // P2: the nodes but the hole and the two starts renamed at random, and
+    // every list of neighbours reversed
+    let mut name: Vec[i64] = Vec.new();
+    for v in 0..n {
+        name.push(v);
+    }
+    for i in 3..n {
+        let j = i + next_random(mut seed) % (n - i);
+        let keep = name[i];
+        name[i] = name[j];
+        name[j] = keep;
+    }
+    let mut renamed: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    for v in 0..n {
+        let mut near: Vec[i64] = Vec.new();
+        let mut k = graph[v].len();
+        while k > 0 {
+            k -= 1;
+            near.push(name[graph[v][k]]);
+        }
+        renamed[name[v]] = near;
+    }
+    // P3: a separate component of two nodes joined to each other
+    let mut wider = graph.clone();
+    wider.push(vec![n + 1]);
+    wider.push(vec![n]);
+    // P4: an edge to the hole added from a node not yet next to it
+    let mut more = graph.clone();
+    let mut away: Vec[i64] = Vec.new();
+    for v in 1..n {
+        if not graph[0].contains(v) {
+            away.push(v);
+        }
+    }
+    if away.len() > 0 {
+        let v = away[next_random(mut seed) % away.len()];
+        more[0].push(v);
+        more[v].push(0);
+    }
+    // P5: an edge to the hole taken away, when the hole keeps another
+    let mut fewer = graph.clone();
+    if graph[0].len() > 1 {
+        let v = graph[0][next_random(mut seed) % graph[0].len()];
+        let mut hole: Vec[i64] = Vec.new();
+        for u in graph[0].iter() {
+            if *u != v {
+                hole.push(*u);
+            }
+        }
+        let mut near: Vec[i64] = Vec.new();
+        for u in graph[v].iter() {
+            if *u != 0 {
+                near.push(*u);
+            }
+        }
+        fewer[0] = hole;
+        fewer[v] = near;
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the outcome of the game played out as the statement says
+        if small {
+            check(mut t, 1, got == want);
+        }
+        check(mut t, 2, arm(x, renamed) == got);
+        check(mut t, 3, arm(x, wider) == got);
+        // P4: no worse for the mouse, P5: no better
+        check(mut t, 4, rank(arm(x, more)) >= rank(got));
+        check(mut t, 5, rank(arm(x, fewer)) <= rank(got));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 913;
+    let mut graphs = 0;
+    let mut nodes = 0;
+    let mut outcomes: Vec[i64] = vec![0, 0, 0];
+    // 3 to 6 nodes at any density against the statement; then 7 to 12,
+    // sparse to dense (the harness has graphs of up to 50)
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 3 + next_random(mut seed) % 4 } else { 7 + next_random(mut seed) % 6 };
+        let per = if small { next_random(mut seed) % 1000 } else if c % 4 == 0 { 20 } else if c % 4 == 1 { 60 } else if c % 4 == 2 { 150 } else { 400 };
+        let graph = random_graph(mut seed, n, per);
+        graphs += 1;
+        nodes += n;
+        outcomes[star_cat_mouse_game(graph)] += 1;
+        properties(mut t, mut seed, graph, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{graphs} graphs, {nodes} nodes, {outcomes[0]} draws, {outcomes[1]} mouse wins, {outcomes[2]} cat wins, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

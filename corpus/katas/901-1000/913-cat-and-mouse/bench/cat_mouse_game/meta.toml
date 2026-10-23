@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/913-cat-and-mouse/bench/cat_mouse_game.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "915511e7b"
+extracted_src = "9f41b60a"
+model_rev = "aafbe785"
+model_src = "9f41b60a"
