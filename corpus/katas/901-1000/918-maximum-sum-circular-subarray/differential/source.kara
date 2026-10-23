@@ -1,0 +1,342 @@
+// LeetCode #918: Maximum Sum Circular Subarray -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: given a circular integer array nums of length n, return
+// the maximum possible sum of a non-empty subarray of nums. A circular
+// array means the end of the array connects to the beginning: the next
+// element of nums[i] is nums[(i + 1) % n] and the previous element of
+// nums[i] is nums[(i - 1 + n) % n]. A subarray may only include each
+// element of the fixed buffer nums at most once.
+
+// ---- the ★ arm: Kadane for the largest and the smallest sum ---------------
+fn star_max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut best_here = 0;
+    let mut best = nums[0];
+    let mut worst_here = 0;
+    let mut worst = nums[0];
+    for x in nums.iter() {
+        let v = *x;
+        total += v;
+        best_here = v.max(best_here + v);
+        best = best.max(best_here);
+        worst_here = v.min(worst_here + v);
+        worst = worst.min(worst_here);
+    }
+    if best < 0 {
+        best
+    } else {
+        best.max(total - worst)
+    }
+}
+
+// ---- the deque arm: prefix sums over the array twice, with a deque of smallest starts 
+fn deque_max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut p: Vec[i64] = Vec.filled(2 * n + 1, 0);
+    for k in 0..2 * n {
+        p[k + 1] = p[k] + nums[k % n];
+    }
+    let mut starts: VecDeque[i64] = VecDeque.new();
+    starts.push_back(0);
+    let mut best = nums[0];
+    for j in 1..2 * n + 1 {
+        while j - *starts.front().unwrap() > n {
+            starts.pop_front();
+        }
+        best = best.max(p[j] - p[*starts.front().unwrap()]);
+        while not starts.is_empty() and p[*starts.back().unwrap()] >= p[j] {
+            starts.pop_back();
+        }
+        starts.push_back(j);
+    }
+    best
+}
+
+// ---- the suffix arm: a front part joined to the best back part ------------
+fn suffix_max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    // best_back[j]: the largest sum of nums[k..n] over k >= j (0 when
+    // k = n, the empty back part)
+    let mut best_back: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut back = 0;
+    let mut j = n;
+    while j > 0 {
+        j -= 1;
+        back += nums[j];
+        best_back[j] = back.max(best_back[j + 1]);
+    }
+    let mut best = nums[0];
+    let mut here = 0;
+    for v in nums.iter() {
+        here = (*v).max(here + *v);
+        best = best.max(here);
+    }
+    // the front part nums[0..i], i >= 1, joined to a back part after it
+    let mut front = 0;
+    for i in 1..n + 1 {
+        front += nums[i - 1];
+        best = best.max(front + best_back[i]);
+    }
+    best
+}
+
+// ---- the halves arm: divide and conquer -----------------------------------
+struct HalvesStretch {
+    total: i64,
+    max_prefix: i64,
+    max_suffix: i64,
+    max_sub: i64,
+    min_prefix: i64,
+    min_suffix: i64,
+    min_sub: i64,
+}
+
+fn halves_single(v: i64) -> HalvesStretch {
+    HalvesStretch {
+        total: v,
+        max_prefix: v,
+        max_suffix: v,
+        max_sub: v,
+        min_prefix: v,
+        min_suffix: v,
+        min_sub: v,
+    }
+}
+
+fn halves_join(a: HalvesStretch, b: HalvesStretch) -> HalvesStretch {
+    HalvesStretch {
+        total: a.total + b.total,
+        max_prefix: a.max_prefix.max(a.total + b.max_prefix),
+        max_suffix: b.max_suffix.max(b.total + a.max_suffix),
+        max_sub: a.max_sub.max(b.max_sub).max(a.max_suffix + b.max_prefix),
+        min_prefix: a.min_prefix.min(a.total + b.min_prefix),
+        min_suffix: b.min_suffix.min(b.total + a.min_suffix),
+        min_sub: a.min_sub.min(b.min_sub).min(a.min_suffix + b.min_prefix),
+    }
+}
+
+fn halves_summary(nums: Vec[i64], lo: i64, hi: i64) -> HalvesStretch {
+    if hi - lo == 1 {
+        return halves_single(nums[lo]);
+    }
+    let mid = lo + (hi - lo) / 2;
+    halves_join(halves_summary(nums, lo, mid), halves_summary(nums, mid, hi))
+}
+
+fn halves_max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let s = halves_summary(nums, 0, nums.len());
+    if s.min_sub == s.total {
+        // leaving out the smallest subarray leaves at best 0, and if
+        // anything is left at all it holds a value of at least 0, which
+        // max_sub has already counted
+        s.max_sub
+    } else {
+        s.max_sub.max(s.total - s.min_sub)
+    }
+}
+
+// ---- the sparse arm: range minimum queries on prefix sums -----------------
+fn sparse_max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let m = 2 * n + 1;
+    let mut p: Vec[i64] = Vec.filled(m, 0);
+    for k in 0..2 * n {
+        p[k + 1] = p[k] + nums[k % n];
+    }
+    // table[k][i]: the smallest of p[i .. i + 2^k]
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    table.push(p.clone());
+    let mut width = 1;
+    while 2 * width <= m {
+        let top = table.len() - 1;
+        let mut level: Vec[i64] = Vec.new();
+        for i in 0..m - 2 * width + 1 {
+            level.push(table[top][i].min(table[top][i + width]));
+        }
+        table.push(level);
+        width *= 2;
+    }
+    let mut best = nums[0];
+    for j in 1..m {
+        let lo = if j > n { j - n } else { 0 };
+        let len = j - lo;
+        let mut k = 0;
+        while (1 << (k + 1)) <= len {
+            k += 1;
+        }
+        let least = table[k][lo].min(table[k][j - (1 << k)]);
+        best = best.max(p[j] - least);
+    }
+    best
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> i64 {
+    if x == 0 {
+        star_max_subarray_sum_circular(nums)
+    } else if x == 1 {
+        deque_max_subarray_sum_circular(nums)
+    } else if x == 2 {
+        suffix_max_subarray_sum_circular(nums)
+    } else if x == 3 {
+        halves_max_subarray_sum_circular(nums)
+    } else {
+        sparse_max_subarray_sum_circular(nums)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every circular subarray: a start and a length from 1 to n, each element
+// taken at most once, its values read as nums[(start + t) % n]
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = nums[0];
+    for start in 0..n {
+        for len in 1..n + 1 {
+            let mut sum = 0;
+            for t in 0..len {
+                sum += nums[(start + t) % n];
+            }
+            best = best.max(sum);
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn rotated(nums: Vec[i64], r: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    for t in 0..n {
+        out.push(nums[(r + t) % n]);
+    }
+    out
+}
+
+fn reversed(nums: Vec[i64]) -> Vec[i64] {
+    let mut out = nums.clone();
+    out.reverse();
+    out
+}
+
+fn scaled(nums: Vec[i64], k: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        out.push(*v * k);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one array over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], small: bool) {
+    let mut want = 0;
+    if small {
+        want = literal(nums);
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums));
+    }
+    let r = next_random(mut seed) % nums.len();
+    let turned = rotated(nums, r);
+    let back = reversed(nums);
+    let k = 2 + next_random(mut seed) % 3;
+    let bigger = scaled(nums, k);
+    let mut largest = nums[0];
+    let mut total = 0;
+    let mut positives = 0;
+    for v in nums.iter() {
+        largest = largest.max(*v);
+        total += *v;
+        positives += (*v).max(0);
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the largest sum over every circular subarray
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the same answer for the array rotated
+        check(mut t, 2, arm(x, turned) == got);
+        // P3: the same answer for the array reversed
+        check(mut t, 3, arm(x, back) == got);
+        // P4: every value times k, the answer times k
+        check(mut t, 4, arm(x, bigger) == got * k);
+        // P5: at least the largest value and the total, at most the
+        // largest value or the sum of the positive values
+        check(mut t, 5, got >= largest and got >= total and got <= largest.max(positives));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 918;
+    let mut arrays = 0;
+    let mut values = 0;
+    let mut sum = 0;
+    // 1 to 8 values from -5 to 5 (one array in four all negative), checked
+    // against the statement; then 1 to 1000 values from -30000 to 30000,
+    // leaning negative or positive
+    for c in 0..3200 {
+        let small = c < 3000;
+        let mut nums: Vec[i64] = Vec.new();
+        if small {
+            let n = 1 + next_random(mut seed) % 8;
+            for _ in 0..n {
+                let v = next_random(mut seed) % 11 - 5;
+                nums.push(if c % 4 == 0 { -1 - (v + 5) / 2 } else { v });
+            }
+        } else {
+            let n = 1 + next_random(mut seed) % 1000;
+            let lean = (c % 7 - 3) * 5000;
+            for _ in 0..n {
+                let v = (next_random(mut seed) * 2 + next_random(mut seed) % 2) % 60001 - 30000 + lean;
+                nums.push(v.max(-30000).min(30000));
+            }
+        }
+        arrays += 1;
+        values += nums.len();
+        sum += star_max_subarray_sum_circular(nums);
+        properties(mut t, mut seed, nums, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{arrays} arrays, {values} values, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,62 @@
+// LeetCode #918: Maximum Sum Circular Subarray -- bench: Kadane for the
+// largest and the smallest sum.
+//
+// A circular subarray either sits inside the array, or wraps around the
+// end, and then what it leaves out is a subarray in the middle. So the
+// best is the larger of the largest subarray sum and the total less the
+// smallest subarray sum, both found by one Kadane pass. When every value
+// is negative the smallest subarray is the whole array, which would
+// leave nothing, so the answer is then the largest sum alone. O(n).
+
+fn max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut best_here = 0;
+    let mut best = nums[0];
+    let mut worst_here = 0;
+    let mut worst = nums[0];
+    for x in nums.iter() {
+        let v = *x;
+        total += v;
+        best_here = v.max(best_here + v);
+        best = best.max(best_here);
+        worst_here = v.min(worst_here + v);
+        worst = worst.min(worst_here);
+    }
+    if best < 0 {
+        best
+    } else {
+        best.max(total - worst)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn value(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 2 + next_random(mut seed) % 2) % 60001 - 30000
+}
+
+fn main() {
+    let rounds = 4000;
+    let n = 30000;
+    let mut seed = 918;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(value(mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        // one value rewritten at random, then put back
+        let i = next_random(mut seed) % n;
+        let old = nums[i];
+        nums[i] = value(mut seed);
+        let r = max_subarray_sum_circular(nums);
+        total += r;
+        check = (check * 1000003 + r) % 1000000007;
+        nums[i] = old;
+    }
+    println(f"{rounds} rounds over {n} values: answers summing to {total}, checksum {check}");
+}

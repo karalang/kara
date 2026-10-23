@@ -1,0 +1,97 @@
+// LeetCode #918: Maximum Sum Circular Subarray -- Kadane for the largest
+// and the smallest sum.
+//
+// A circular subarray either sits inside the array, or wraps around the
+// end, and then what it leaves out is a subarray in the middle. So the
+// best is the larger of the largest subarray sum and the total less the
+// smallest subarray sum, both found by one Kadane pass. When every value
+// is negative the smallest subarray is the whole array, which would
+// leave nothing, so the answer is then the largest sum alone. O(n).
+
+fn max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    let mut best_here = 0;
+    let mut best = nums[0];
+    let mut worst_here = 0;
+    let mut worst = nums[0];
+    for x in nums.iter() {
+        let v = *x;
+        total += v;
+        best_here = v.max(best_here + v);
+        best = best.max(best_here);
+        worst_here = v.min(worst_here + v);
+        worst = worst.min(worst_here);
+    }
+    if best < 0 {
+        best
+    } else {
+        best.max(total - worst)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    println(f"[{s}]: {max_subarray_sum_circular(nums)}");
+}
+
+// `n` values from -30000 to 30000, leaning by `lean` (0 even, negative
+// to more negative values, positive to more positive)
+fn random_values(seed: mut ref i64, n: i64, lean: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let v = (next_random(mut seed) * 2 + next_random(mut seed) % 2) % 60001 - 30000 + lean;
+        nums.push(v.max(-30000).min(30000));
+    }
+    nums
+}
+
+fn main() {
+    show(vec![1, -2, 3, -2]);
+    show(vec![5, -3, 5]);
+    show(vec![-3, -2, -3]);
+    show(vec![3, -1, 2, -1]);
+    show(vec![3, -2, 2, -3]);
+    show(vec![-2, -3, -1]);
+    show(vec![1]);
+    show(vec![-5]);
+    show(vec![0, 0, 0]);
+    show(vec![2, -1, 2]);
+    show(vec![-1, 5, -1, -1, 5, -1]);
+    // random arrays of 1 to 1000 values
+    let mut seed = 918;
+    let mut total = 0;
+    let mut check = 0;
+    for c in 0..500 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let lean = (c % 7 - 3) * 5000;
+        let r = max_subarray_sum_circular(random_values(mut seed, n, lean));
+        total += r;
+        check = (check * 1000003 + r + 1000000000) % 1000000007;
+    }
+    println(f"500 arrays: answers summing to {total}, checksum {check}");
+    // LeetCode's largest: 30000 values
+    let low: Vec[i64] = Vec.filled(30000, -30000);
+    println(f"30000 values of -30000: {max_subarray_sum_circular(low)}");
+    let high: Vec[i64] = Vec.filled(30000, 30000);
+    println(f"30000 values of 30000: {max_subarray_sum_circular(high)}");
+    println(f"30000 random values: {max_subarray_sum_circular(random_values(mut seed, 30000, 0))}");
+    // a valley in the middle, so the best wraps around
+    let mut valley: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        valley.push(if i >= 10000 and i < 20000 { -30000 + i % 7 } else { 30000 - i % 11 });
+    }
+    println(f"30000 values with a valley: {max_subarray_sum_circular(valley)}");
+}

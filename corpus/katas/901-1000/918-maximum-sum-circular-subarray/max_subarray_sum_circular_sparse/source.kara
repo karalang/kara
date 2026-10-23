@@ -1,0 +1,109 @@
+// LeetCode #918: Maximum Sum Circular Subarray -- range minimum queries
+// on prefix sums.
+//
+// As with the doubled array: a circular subarray ending at j of the
+// doubled prefix sums p is p[j] - p[i] for some j - n <= i < j, so the
+// best ending at j needs the smallest p over that window. A sparse table
+// holds the minimum of every run of 2^k prefix sums, and two runs that
+// cover the window answer each query in O(1). O(n log n) to build.
+
+fn max_subarray_sum_circular(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let m = 2 * n + 1;
+    let mut p: Vec[i64] = Vec.filled(m, 0);
+    for k in 0..2 * n {
+        p[k + 1] = p[k] + nums[k % n];
+    }
+    // table[k][i]: the smallest of p[i .. i + 2^k]
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    table.push(p.clone());
+    let mut width = 1;
+    while 2 * width <= m {
+        let top = table.len() - 1;
+        let mut level: Vec[i64] = Vec.new();
+        for i in 0..m - 2 * width + 1 {
+            level.push(table[top][i].min(table[top][i + width]));
+        }
+        table.push(level);
+        width *= 2;
+    }
+    let mut best = nums[0];
+    for j in 1..m {
+        let lo = if j > n { j - n } else { 0 };
+        let len = j - lo;
+        let mut k = 0;
+        while (1 << (k + 1)) <= len {
+            k += 1;
+        }
+        let least = table[k][lo].min(table[k][j - (1 << k)]);
+        best = best.max(p[j] - least);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    println(f"[{s}]: {max_subarray_sum_circular(nums)}");
+}
+
+// `n` values from -30000 to 30000, leaning by `lean` (0 even, negative
+// to more negative values, positive to more positive)
+fn random_values(seed: mut ref i64, n: i64, lean: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let v = (next_random(mut seed) * 2 + next_random(mut seed) % 2) % 60001 - 30000 + lean;
+        nums.push(v.max(-30000).min(30000));
+    }
+    nums
+}
+
+fn main() {
+    show(vec![1, -2, 3, -2]);
+    show(vec![5, -3, 5]);
+    show(vec![-3, -2, -3]);
+    show(vec![3, -1, 2, -1]);
+    show(vec![3, -2, 2, -3]);
+    show(vec![-2, -3, -1]);
+    show(vec![1]);
+    show(vec![-5]);
+    show(vec![0, 0, 0]);
+    show(vec![2, -1, 2]);
+    show(vec![-1, 5, -1, -1, 5, -1]);
+    // random arrays of 1 to 1000 values
+    let mut seed = 918;
+    let mut total = 0;
+    let mut check = 0;
+    for c in 0..500 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let lean = (c % 7 - 3) * 5000;
+        let r = max_subarray_sum_circular(random_values(mut seed, n, lean));
+        total += r;
+        check = (check * 1000003 + r + 1000000000) % 1000000007;
+    }
+    println(f"500 arrays: answers summing to {total}, checksum {check}");
+    // LeetCode's largest: 30000 values
+    let low: Vec[i64] = Vec.filled(30000, -30000);
+    println(f"30000 values of -30000: {max_subarray_sum_circular(low)}");
+    let high: Vec[i64] = Vec.filled(30000, 30000);
+    println(f"30000 values of 30000: {max_subarray_sum_circular(high)}");
+    println(f"30000 random values: {max_subarray_sum_circular(random_values(mut seed, 30000, 0))}");
+    // a valley in the middle, so the best wraps around
+    let mut valley: Vec[i64] = Vec.new();
+    for i in 0..30000 {
+        valley.push(if i >= 10000 and i < 20000 { -30000 + i % 7 } else { 30000 - i % 11 });
+    }
+    println(f"30000 values with a valley: {max_subarray_sum_circular(valley)}");
+}
