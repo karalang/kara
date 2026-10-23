@@ -6,8 +6,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9323 / 9484 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7633 / 7762 = 98.3%.
-- Every classified non-deferred program (context): 15647 / 16856 = 92.8%.
-- Bench variants (outside the gate): 213 / 866 = 24.6%; timeouts 593.
+- Every classified non-deferred program (context): 15648 / 16856 = 92.8%.
+- Bench variants (outside the gate): 214 / 866 = 24.7%; timeouts 593.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5289 / 5411 = 97.7%; failing mir-gap 47, check-refuses 41, e-not-refused 28, e-differs 4, b-fix-incomplete 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
@@ -62,7 +62,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3692): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3693): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -3747,6 +3747,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `katas/801-900/888-fair-candy-swap/fair_candy_swap_ordered`
 - `katas/801-900/888-fair-candy-swap/fair_candy_swap_search`
 - `katas/801-900/888-fair-candy-swap/fair_candy_swap_sorted`
+- `katas/801-900/889-construct-binary-tree-from-preorder-and-postorder-traversal/bench/construct_from_pre_post`
 - `katas/801-900/889-construct-binary-tree-from-preorder-and-postorder-traversal/construct_from_pre_post`
 - `katas/801-900/889-construct-binary-tree-from-preorder-and-postorder-traversal/construct_from_pre_post_cursors`
 - `katas/801-900/889-construct-binary-tree-from-preorder-and-postorder-traversal/construct_from_pre_post_reverse`
