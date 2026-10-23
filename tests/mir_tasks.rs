@@ -918,6 +918,66 @@ fn main() {
     );
 }
 
+/// Core semantics §11.7 and §7.7: a branch's `errdefer` runs when the
+/// branch leaves early with the function's error (`return Err`, `?`), after
+/// a `defer` declared later (one LIFO), and not when the branch ends with
+/// its own value or returns an `Ok` (B-2026-10-22-11; both MIR lanes
+/// refused it by name before).
+#[test]
+fn mir_tasks_par_branch_errdefer_runs_on_an_early_error() {
+    let src = r#"
+fn run(stop: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { println("a errdefer"); }
+            if stop { return Err("a stopped"); }
+            1
+        },
+        { 2 }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
+fn run_q(fail: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer(e) { println(f"q errdefer {e}"); }
+            defer { println("q defer"); }
+            let v: Result[i64, String] = if fail { Err("bad") } else { Ok(5) };
+            v?
+        },
+        { 3 }
+    };
+    let (x, y) = r;
+    Ok(x * y)
+}
+fn run_ok_return(early: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { println("never"); }
+            if early { return Ok(100); }
+            7
+        },
+        { 1 }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
+fn main() {
+    println(f"{run(false)}");
+    println(f"{run(true)}");
+    println(f"{run_q(false)}");
+    println(f"{run_q(true)}");
+    println(f"{run_ok_return(false)}");
+    println(f"{run_ok_return(true)}");
+}
+"#;
+    assert_eq!(
+        stdout_on_both("par-errdefer", src),
+        "Ok(3)\na errdefer\nErr(a stopped)\nq defer\nOk(15)\nq defer\nq errdefer bad\nErr(bad)\nOk(8)\nOk(100)\n"
+    );
+}
+
 /// Core semantics §11.7: `break` and `continue` cannot leave a `par`
 /// branch, labeled or not, while one aimed at a loop inside the branch is
 /// fine (`mir_tasks_par_branch_return_ends_the_branch`'s `looped`).

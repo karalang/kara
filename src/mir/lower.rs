@@ -3326,13 +3326,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `errdefer(e) { .. }` on the error exit: `e` borrows the `Err`
     /// payload of the value being returned, for the body only.
     fn errdefer_bound(&mut self, body: &'a Block, name: &str, node: NodeId) -> R<()> {
-        let ret = self.b.local_ty(Local::RETURN_PLACE);
+        let (value, ret) = self.fn_value_place();
         let err = self.error_variant(ret);
         let et = err.and_then(|vi| self.tys().tcx().field_ty(ret, Some(vi), 0));
         let (Some(vi), Some(et)) = (err, et) else {
             return self.unsupported(body.span, "an `errdefer` binding outside a `Result`");
         };
-        let payload = Place::local(Local::RETURN_PLACE)
+        let payload = value
             .project(ProjElem::Downcast(VariantIdx(vi)))
             .field(0, et);
         self.push_scope();
@@ -3877,10 +3877,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             StmtKind::ErrDefer { binding, body } => {
-                if self.par_exit.is_some() {
-                    return self
-                        .unsupported(s.span, "an `errdefer` in a `par` branch that returns");
-                }
                 let bound = binding.as_deref().map(|n| (n, s.id));
                 self.schedule(ScopeEntry::ErrDefer(body, bound));
                 Ok(())
@@ -9570,8 +9566,29 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── exits ───────────────────────────────────────────────────────
 
+    /// Where the function's value is as this body returns it, and its
+    /// type: the return place, or in a `par` branch's task the payload of
+    /// the task's exit variant (core semantics §11.7).
+    fn fn_value_place(&self) -> (Place, Ty) {
+        match self.par_exit {
+            Some((t, xv)) => (
+                Place::local(Local::RETURN_PLACE)
+                    .project(ProjElem::Downcast(VariantIdx(xv)))
+                    .field(0, t),
+                t,
+            ),
+            None => (
+                Place::local(Local::RETURN_PLACE),
+                self.b.local_ty(Local::RETURN_PLACE),
+            ),
+        }
+    }
+
     /// The return place holds the value: run every scope's exit sequence,
     /// with the `errdefer` bodies when the value is an error, and return.
+    /// In a `par` branch's task that is when the branch leaves early with
+    /// the function's error; a branch that ends with its own value runs
+    /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
         for clause in self.ensures {
             self.contract_check(&clause.body)?;
@@ -9581,15 +9598,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             .iter()
             .flatten()
             .any(|e| matches!(e, ScopeEntry::ErrDefer(..)));
-        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        let (value, ret_ty) = self.fn_value_place();
         let err_variant = self.error_variant(ret_ty);
         match (has_errdefer, err_variant) {
             (true, Some(err)) => {
                 let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
-                let d = self.temp(isize_t);
-                self.assign(d, Rvalue::Discriminant(Place::local(Local::RETURN_PLACE)));
                 let err_bb = self.b.new_block();
                 let ok_bb = self.b.new_block();
+                if let Some((_, xv)) = self.par_exit {
+                    // Only the exit variant holds the function's value.
+                    let d = self.temp(isize_t);
+                    self.assign(d, Rvalue::Discriminant(Place::local(Local::RETURN_PLACE)));
+                    let exit_bb = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(d)),
+                            targets: SwitchTargets {
+                                values: vec![(xv as u128, exit_bb)],
+                                otherwise: ok_bb,
+                            },
+                        },
+                        exit_bb,
+                    );
+                }
+                let d = self.temp(isize_t);
+                self.assign(d, Rvalue::Discriminant(value));
                 self.goto_with(
                     TerminatorKind::SwitchInt {
                         discr: Operand::Copy(Place::local(d)),
