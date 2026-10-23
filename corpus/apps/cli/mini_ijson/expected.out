@@ -1,0 +1,1173 @@
+> version
+  3.3.0 python python
+> basic =[1, -2, 3.50, 1e5, 1E-2, -0, -0.0, 0e0, +7, true, false, null, "s", [], {}]
+  ('start_array', None)
+  ('number', 1)
+  ('number', -2)
+  ('number', Decimal('3.50'))
+  ('number', Decimal('1E+5'))
+  ('number', Decimal('0.01'))
+  ('number', 0)
+  ('number', Decimal('-0.0'))
+  ('number', Decimal('0'))
+  ('number', 7)
+  ('boolean', True)
+  ('boolean', False)
+  ('null', None)
+  ('string', 's')
+  ('start_array', None)
+  ('end_array', None)
+  ('start_map', None)
+  ('end_map', None)
+  ('end_array', None)
+> basic =[1, -2, 3.50, 1e5, 1E-2, -0, -0.0, 0e0, +7] float=1
+  ('start_array', None)
+  ('number', 1)
+  ('number', -2)
+  ('number', 3.5)
+  ('number', 100000.0)
+  ('number', 0.01)
+  ('number', 0)
+  ('number', -0.0)
+  ('number', 0.0)
+  ('number', 7)
+  ('end_array', None)
+> basic =[+007, -.5, 1.e3, 12345678901234567890123, 0.000001, 123e-9]
+  ('start_array', None)
+  ('number', 7)
+  ('number', Decimal('-0.5'))
+  ('number', Decimal('1E+3'))
+  ('number', 12345678901234567890123)
+  ('number', Decimal('0.000001'))
+  ('number', Decimal('1.23E-7'))
+  ('end_array', None)
+> basic =[1e400, 1e-400]
+  ('start_array', None)
+  ('number', Decimal('1E+400'))
+  ('number', Decimal('1E-400'))
+  ('end_array', None)
+> basic =[1e400] float=1
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1e400' at 1
+> basic =[1e-400, 2.5E+2] float=1
+  ('start_array', None)
+  ('number', 0.0)
+  ('number', 250.0)
+  ('end_array', None)
+> basic ={"a": {"b": [1, {"c": null}]}, "d": "x"}
+  ('start_map', None)
+  ('map_key', 'a')
+  ('start_map', None)
+  ('map_key', 'b')
+  ('start_array', None)
+  ('number', 1)
+  ('start_map', None)
+  ('map_key', 'c')
+  ('null', None)
+  ('end_map', None)
+  ('end_array', None)
+  ('end_map', None)
+  ('map_key', 'd')
+  ('string', 'x')
+  ('end_map', None)
+> basic =  "just a string"  
+  ('string', 'just a string')
+> basic =42
+  ('number', 42)
+> basic =4.20
+  ('number', Decimal('4.20'))
+> basic =["\u00e9\u00E9", "\ud83d\ude00", "a\"b", "a\\b", "\/", "\b\f\n\r\t"]
+  ('start_array', None)
+  ('string', 'éé')
+  ('string', '😀')
+  ('string', 'a"b')
+  ('string', 'a\\b')
+  ('string', '/')
+  ('string', '\x08\x0c\n\r\t')
+  ('end_array', None)
+> basic =["café", "東京", "😀", "nb sp", "ls x"]
+  ('start_array', None)
+  ('string', 'café')
+  ('string', '東京')
+  ('string', '😀')
+  ('string', 'nb\xa0sp')
+  ('string', 'ls\u2028x')
+  ('end_array', None)
+> basic =
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =   
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[1, 2,
+  ('start_array', None)
+  ('number', 1)
+  ('number', 2)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[1 2]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '2' at 3
+> basic ={"a" 1}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1' at 5
+> basic ={"a":1,}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '}' at 7
+> basic ={1:2}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1' at 1
+> basic =[01]
+  error ijson.common.JSONError: Invalid JSON number: 01
+> basic =[-01]
+  error ijson.common.JSONError: Invalid JSON number: -01
+> basic =[00]
+  error ijson.common.JSONError: Invalid JSON number: 00
+> basic =[-00]
+  error ijson.common.JSONError: Invalid JSON number: -00
+> basic =[1.]
+  error ijson.common.JSONError: Invalid JSON number: 1.
+> basic =[.5]
+  error ijson.common.JSONError: Invalid JSON number: .5
+> basic =[-]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '-' at 1
+> basic =[+]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '+' at 1
+> basic =[e5]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'e5' at 1
+> basic =[1e]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1e' at 1
+> basic =[1.5.5]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1.5.5' at 1
+> basic =[tru]
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[t]
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[nul
+  ('start_array', None)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[fals
+  ('start_array', None)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[True]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'T' at 1
+> basic =[nan]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'nan' at 1
+> basic =[inf]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'inf' at 1
+> basic =[0x1F]
+  error ijson.common.JSONError: Invalid JSON number: 0x1
+> basic =[1x]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1x' at 1
+> basic =[1]]
+  error ijson.common.JSONError: Additional data found
+> basic =]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol ']' at 0
+> basic ={"a":}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '}' at 5
+> basic ={"a":1
+  ('start_map', None)
+  ('map_key', 'a')
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[[[]]
+  ('start_array', None)
+  ('start_array', None)
+  ('start_array', None)
+  ('end_array', None)
+  ('end_array', None)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =@
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '@' at 0
+> basic =[1]x
+  ('start_array', None)
+  ('number', 1)
+  ('end_array', None)
+  error ijson.common.JSONError: Additional data found
+> basic =1 2
+  ('number', 1)
+  error ijson.common.JSONError: Additional data found
+> basic =[1,,2]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol ',' at 3
+> basic ={"a",1}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol ',' at 4
+> basic ={"a":1 "b":2}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '"b"' at 7
+> basic =[1] [2]
+  error ijson.common.JSONError: Additional data found
+> basic ="unterminated
+  error ijson.common.IncompleteJSONError: Incomplete string lexeme
+> basic =["ok", "nope
+  ('start_array', None)
+  ('string', 'ok')
+  error ijson.common.IncompleteJSONError: Incomplete string lexeme
+> basic =[-0.e1]
+  ('start_array', None)
+  ('number', Decimal('-0E+1'))
+  ('end_array', None)
+> basic =[0.]
+  error ijson.common.JSONError: Invalid JSON number: 0.
+> basic =[1e+]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1e+' at 1
+> basic =[1e5.5]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1e5.5' at 1
+> basic =[--1]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '--1' at 1
+> basic =[+-1]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '+-1' at 1
+> basic =[1-2]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '1-2' at 1
+> basic =[1_000]
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '_' at 2
+> basic =1 2 multi=1
+  ('number', 1)
+  ('number', 2)
+> basic =[1]x multi=1
+  ('start_array', None)
+  ('number', 1)
+  ('end_array', None)
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'x' at 3
+> basic =[1] [2] {} 3 "s" null multi=1
+  ('start_array', None)
+  ('number', 1)
+  ('end_array', None)
+  ('start_array', None)
+  ('number', 2)
+  ('end_array', None)
+  ('start_map', None)
+  ('end_map', None)
+  ('number', 3)
+  ('string', 's')
+  ('null', None)
+> basic =[1] [2 multi=1
+  ('start_array', None)
+  ('number', 1)
+  ('end_array', None)
+  ('start_array', None)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic = multi=1
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic =[1] comments=1
+  error ValueError: Comments are not supported by the python backend
+> basic =["a\x"]
+  error json.decoder.JSONDecodeError: Invalid \escape: line 1 column 3 (char 2)
+> basic =["ab\u12"]
+  error json.decoder.JSONDecodeError: Invalid \uXXXX escape: line 1 column 5 (char 4)
+> basic =["\u12zz"]
+  error json.decoder.JSONDecodeError: Invalid \uXXXX escape: line 1 column 3 (char 2)
+> basic =["\uD83D\uZZZZ"]
+  error json.decoder.JSONDecodeError: Invalid \uXXXX escape: line 1 column 9 (char 8)
+> basic =["\"]
+  ('start_array', None)
+  error ijson.common.IncompleteJSONError: Incomplete string lexeme
+> basic =["a\\"]
+  ('start_array', None)
+  ('string', 'a\\')
+  ('end_array', None)
+> basic =["a\\\"b"]
+  ('start_array', None)
+  ('string', 'a\\"b')
+  ('end_array', None)
+> basic =[1, "x\q"]
+  error json.decoder.JSONDecodeError: Invalid \escape: line 1 column 3 (char 2)
+> basic =["\u0041\u004"]
+  error json.decoder.JSONDecodeError: Invalid \uXXXX escape: line 1 column 9 (char 8)
+> basic =["\ud83d\ude00\u0021"]
+  ('start_array', None)
+  ('string', '😀!')
+  ('end_array', None)
+> basic data/odd/control.json
+  error json.decoder.JSONDecodeError: Invalid control character at: line 1 column 5 (char 4)
+> basic data/odd/newline.json
+  error json.decoder.JSONDecodeError: Invalid control character at: line 1 column 5 (char 4)
+> basic data/odd/spaces.json
+  ('start_array', None)
+  ('number', 1)
+  ('number', 2)
+  ('number', 3)
+  ('number', 4)
+  ('end_array', None)
+> basic data/odd/bom.json
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol '\ufeff' at 0
+> basic data/odd/latin1.json
+  error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xe9 in position 13: invalid continuation byte
+> basic data/odd/latin1.json buf=5
+  ('start_map', None)
+  ('map_key', 'name')
+  error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xe9 in position 3: invalid continuation byte
+> basic data/odd/latin1.json buf=13
+  ('start_map', None)
+  ('map_key', 'name')
+  error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xe9 in position 0: invalid continuation byte
+> basic data/odd/cut_char.json
+  ('start_map', None)
+  ('map_key', 'ok')
+  ('boolean', True)
+  ('end_map', None)
+> basic data/odd/empty.json
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic data/odd/blank.json
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> basic data/odd/two_docs.json
+  error ijson.common.JSONError: Additional data found
+> basic data/odd/two_docs.json multi=1
+  ('start_map', None)
+  ('map_key', 'a')
+  ('number', 1)
+  ('end_map', None)
+  ('start_map', None)
+  ('map_key', 'a')
+  ('number', 2)
+  ('end_map', None)
+  ('start_array', None)
+  ('number', 3)
+  ('end_array', None)
+  ('string', 'four')
+> basic data/odd/deep.json take=3
+  ('start_array', None)
+  ('start_array', None)
+  ('start_array', None)
+  (stopped after 3)
+> basic data/missing.json
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.json'
+> basic =[10, 20, 30, 40, 50, 60, oops, 80] buf=1
+  ('start_array', None)
+  ('number', 10)
+  ('number', 20)
+  ('number', 30)
+  ('number', 40)
+  ('number', 50)
+  ('number', 60)
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'oops' at 25
+> basic =[10, 20, 30, 40, 50, 60, oops, 80] buf=3
+  ('start_array', None)
+  ('number', 10)
+  ('number', 20)
+  ('number', 30)
+  ('number', 40)
+  ('number', 50)
+  ('number', 60)
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'oops' at 25
+> basic =[10, 20, 30, 40, 50, 60, oops, 80] buf=8
+  ('start_array', None)
+  ('number', 10)
+  ('number', 20)
+  ('number', 30)
+  ('number', 40)
+  ('number', 50)
+  ('number', 60)
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'oops' at 25
+> basic =[10, 20, 30, 40, 50, 60, oops, 80] buf=64
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'oops' at 25
+> basic =[1, 2, "a long string that crosses several chunks", 3] buf=4
+  ('start_array', None)
+  ('number', 1)
+  ('number', 2)
+  ('string', 'a long string that crosses several chunks')
+  ('number', 3)
+  ('end_array', None)
+> basic =[123456, 7, "\u00e9\"x", true] buf=2
+  ('start_array', None)
+  ('number', 123456)
+  ('number', 7)
+  ('string', 'é"x')
+  ('boolean', True)
+  ('end_array', None)
+> basic =["ééé", "😀"] buf=1
+  ('start_array', None)
+  ('string', 'ééé')
+  ('string', '😀')
+  ('end_array', None)
+> parse ={"a": {"b": [1, {"c": null}]}, "d": "x"}
+  ('', 'start_map', None)
+  ('', 'map_key', 'a')
+  ('a', 'start_map', None)
+  ('a', 'map_key', 'b')
+  ('a.b', 'start_array', None)
+  ('a.b.item', 'number', 1)
+  ('a.b.item', 'start_map', None)
+  ('a.b.item', 'map_key', 'c')
+  ('a.b.item.c', 'null', None)
+  ('a.b.item', 'end_map', None)
+  ('a.b', 'end_array', None)
+  ('a', 'end_map', None)
+  ('', 'map_key', 'd')
+  ('d', 'string', 'x')
+  ('', 'end_map', None)
+> parse ={"a.b": {"c": 1}, "a": {"b": {"c": 2}}}
+  ('', 'start_map', None)
+  ('', 'map_key', 'a.b')
+  ('a.b', 'start_map', None)
+  ('a.b', 'map_key', 'c')
+  ('a.b.c', 'number', 1)
+  ('a.b', 'end_map', None)
+  ('', 'map_key', 'a')
+  ('a', 'start_map', None)
+  ('a', 'map_key', 'b')
+  ('a.b', 'start_map', None)
+  ('a.b', 'map_key', 'c')
+  ('a.b.c', 'number', 2)
+  ('a.b', 'end_map', None)
+  ('a', 'end_map', None)
+  ('', 'end_map', None)
+> parse =[[1, [2]], {"k": [3]}]
+  ('', 'start_array', None)
+  ('item', 'start_array', None)
+  ('item.item', 'number', 1)
+  ('item.item', 'start_array', None)
+  ('item.item.item', 'number', 2)
+  ('item.item', 'end_array', None)
+  ('item', 'end_array', None)
+  ('item', 'start_map', None)
+  ('item', 'map_key', 'k')
+  ('item.k', 'start_array', None)
+  ('item.k.item', 'number', 3)
+  ('item.k', 'end_array', None)
+  ('item', 'end_map', None)
+  ('', 'end_array', None)
+> parse ={"": {"": 1}, "item": [2]}
+  ('', 'start_map', None)
+  ('', 'map_key', '')
+  ('', 'start_map', None)
+  ('', 'map_key', '')
+  ('.', 'number', 1)
+  ('', 'end_map', None)
+  ('', 'map_key', 'item')
+  ('item', 'start_array', None)
+  ('item.item', 'number', 2)
+  ('item', 'end_array', None)
+  ('', 'end_map', None)
+> parse =[1] {"a": 2} multi=1
+  ('', 'start_array', None)
+  ('item', 'number', 1)
+  ('', 'end_array', None)
+  ('', 'start_map', None)
+  ('', 'map_key', 'a')
+  ('a', 'number', 2)
+  ('', 'end_map', None)
+> parse data/shop/catalog.json take=24
+  ('', 'start_map', None)
+  ('', 'map_key', 'sku-1001')
+  ('sku-1001', 'start_map', None)
+  ('sku-1001', 'map_key', 'name')
+  ('sku-1001.name', 'string', 'Hex key set')
+  ('sku-1001', 'map_key', 'price')
+  ('sku-1001.price', 'number', Decimal('12.50'))
+  ('sku-1001', 'map_key', 'stock')
+  ('sku-1001.stock', 'number', 11)
+  ('sku-1001', 'map_key', 'tags')
+  ('sku-1001.tags', 'start_array', None)
+  ('sku-1001.tags.item', 'string', 'tools')
+  ('sku-1001.tags', 'end_array', None)
+  ('sku-1001', 'map_key', 'dims')
+  ('sku-1001.dims', 'start_map', None)
+  ('sku-1001.dims', 'map_key', 'w')
+  ('sku-1001.dims.w', 'number', 76)
+  ('sku-1001.dims', 'map_key', 'h')
+  ('sku-1001.dims.h', 'number', 23)
+  ('sku-1001.dims', 'end_map', None)
+  ('sku-1001', 'end_map', None)
+  ('', 'map_key', 'sku-1002')
+  ('sku-1002', 'start_map', None)
+  ('sku-1002', 'map_key', 'name')
+  (stopped after 24)
+> parse data/shop/orders.json take=40 buf=16
+  ('', 'start_map', None)
+  ('', 'map_key', 'export')
+  ('export', 'start_map', None)
+  ('export', 'map_key', 'source')
+  ('export.source', 'string', 'shop-eu')
+  ('export', 'map_key', 'generated')
+  ('export.generated', 'string', '2024-04-01T06:00:00Z')
+  ('export', 'map_key', 'schema')
+  ('export.schema', 'number', 3)
+  ('export', 'map_key', 'batch')
+  ('export.batch', 'number', 18446744073709551617)
+  ('export', 'end_map', None)
+  ('', 'map_key', 'orders')
+  ('orders', 'start_array', None)
+  ('orders.item', 'start_map', None)
+  ('orders.item', 'map_key', 'id')
+  ('orders.item.id', 'number', 5000)
+  ('orders.item', 'map_key', 'customer')
+  ('orders.item.customer', 'string', '東京ストア')
+  ('orders.item', 'map_key', 'status')
+  ('orders.item.status', 'string', 'paid')
+  ('orders.item', 'map_key', 'placed')
+  ('orders.item.placed', 'string', '2024-03-01T20:18:00Z')
+  ('orders.item', 'map_key', 'lines')
+  ('orders.item.lines', 'start_array', None)
+  ('orders.item.lines.item', 'start_map', None)
+  ('orders.item.lines.item', 'map_key', 'sku')
+  ('orders.item.lines.item.sku', 'string', 'sku-1005')
+  ('orders.item.lines.item', 'map_key', 'name')
+  ('orders.item.lines.item.name', 'string', 'Tape measure 5 m')
+  ('orders.item.lines.item', 'map_key', 'qty')
+  ('orders.item.lines.item.qty', 'number', 3)
+  ('orders.item.lines.item', 'map_key', 'price')
+  ('orders.item.lines.item.price', 'number', Decimal('9.99'))
+  ('orders.item.lines.item', 'end_map', None)
+  ('orders.item.lines.item', 'start_map', None)
+  ('orders.item.lines.item', 'map_key', 'sku')
+  ('orders.item.lines.item.sku', 'string', 'sku-1003')
+  ('orders.item.lines.item', 'map_key', 'name')
+  ('orders.item.lines.item.name', 'string', 'Wood glue')
+  (stopped after 40)
+> parse data/shop/orders.json take=40 float=1
+  ('', 'start_map', None)
+  ('', 'map_key', 'export')
+  ('export', 'start_map', None)
+  ('export', 'map_key', 'source')
+  ('export.source', 'string', 'shop-eu')
+  ('export', 'map_key', 'generated')
+  ('export.generated', 'string', '2024-04-01T06:00:00Z')
+  ('export', 'map_key', 'schema')
+  ('export.schema', 'number', 3)
+  ('export', 'map_key', 'batch')
+  ('export.batch', 'number', 18446744073709551617)
+  ('export', 'end_map', None)
+  ('', 'map_key', 'orders')
+  ('orders', 'start_array', None)
+  ('orders.item', 'start_map', None)
+  ('orders.item', 'map_key', 'id')
+  ('orders.item.id', 'number', 5000)
+  ('orders.item', 'map_key', 'customer')
+  ('orders.item.customer', 'string', '東京ストア')
+  ('orders.item', 'map_key', 'status')
+  ('orders.item.status', 'string', 'paid')
+  ('orders.item', 'map_key', 'placed')
+  ('orders.item.placed', 'string', '2024-03-01T20:18:00Z')
+  ('orders.item', 'map_key', 'lines')
+  ('orders.item.lines', 'start_array', None)
+  ('orders.item.lines.item', 'start_map', None)
+  ('orders.item.lines.item', 'map_key', 'sku')
+  ('orders.item.lines.item.sku', 'string', 'sku-1005')
+  ('orders.item.lines.item', 'map_key', 'name')
+  ('orders.item.lines.item.name', 'string', 'Tape measure 5 m')
+  ('orders.item.lines.item', 'map_key', 'qty')
+  ('orders.item.lines.item.qty', 'number', 3)
+  ('orders.item.lines.item', 'map_key', 'price')
+  ('orders.item.lines.item.price', 'number', 9.99)
+  ('orders.item.lines.item', 'end_map', None)
+  ('orders.item.lines.item', 'start_map', None)
+  ('orders.item.lines.item', 'map_key', 'sku')
+  ('orders.item.lines.item.sku', 'string', 'sku-1003')
+  ('orders.item.lines.item', 'map_key', 'name')
+  ('orders.item.lines.item.name', 'string', 'Wood glue')
+  (stopped after 40)
+> items data/shop/orders.json orders.item.customer
+  '東京ストア'
+  'Nordwind GmbH'
+  "O'Brien & Sons"
+  "O'Brien & Sons"
+  "O'Brien & Sons"
+  'Zoë Martin'
+  'Café Olé'
+  'Acme Tools'
+  'Acme Tools'
+  '東京ストア'
+  'Nordwind GmbH'
+  '東京ストア'
+  'Café Olé'
+  "O'Brien & Sons"
+  'Café Olé'
+  'Nordwind GmbH'
+  'Łukasz Nowak'
+  'Café Olé'
+  '東京ストア'
+  'Zoë Martin'
+  'Zoë Martin'
+  'Łukasz Nowak'
+  'Nordwind GmbH'
+  "O'Brien & Sons"
+  'Acme Tools'
+  'Nordwind GmbH'
+  'Łukasz Nowak'
+  'Acme Tools'
+  'Nordwind GmbH'
+  'Zoë Martin'
+> items data/shop/orders.json orders.item.lines.item take=12
+  {'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 3, 'price': Decimal('9.99')}
+  {'sku': 'sku-1003', 'name': 'Wood glue', 'qty': 2, 'price': Decimal('4.95')}
+  {'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')}
+  {'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')}
+  {'sku': 'sku-1007', 'name': 'Sandpaper pack', 'qty': 3, 'price': Decimal('3.05')}
+  {'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 1, 'price': Decimal('12.50')}
+  {'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 3, 'price': Decimal('9.99')}
+  {'sku': 'sku-1003', 'name': 'Wood glue', 'qty': 4, 'price': Decimal('4.95')}
+  {'sku': 'sku-1006', 'name': 'Router bits', 'qty': 1, 'price': Decimal('34.10')}
+  {'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 2, 'price': Decimal('9.99')}
+  {'sku': 'sku-1002', 'name': 'Cordless drill', 'qty': 1, 'price': Decimal('89.00')}
+  {'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 1, 'price': Decimal('12.50')}
+  (stopped after 12)
+> items data/shop/orders.json orders.item take=2
+  {'id': 5000, 'customer': '東京ストア', 'status': 'paid', 'placed': '2024-03-01T20:18:00Z', 'lines': [{'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 3, 'price': Decimal('9.99')}, {'sku': 'sku-1003', 'name': 'Wood glue', 'qty': 2, 'price': Decimal('4.95')}], 'total': Decimal('39.87'), 'gift': False, 'coupon': None, 'note': 'Rechnung bitte per E-Mail'}
+  {'id': 5001, 'customer': 'Nordwind GmbH', 'status': 'paid', 'placed': '2024-03-02T07:16:00Z', 'lines': [{'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')}, {'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')}], 'total': Decimal('75.00'), 'gift': True, 'coupon': None, 'note': 'Leave at the back door'}
+  (stopped after 2)
+> items data/shop/orders.json orders.item take=2 map=od
+  OrderedDict({'id': 5000, 'customer': '東京ストア', 'status': 'paid', 'placed': '2024-03-01T20:18:00Z', 'lines': [OrderedDict({'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 3, 'price': Decimal('9.99')}), OrderedDict({'sku': 'sku-1003', 'name': 'Wood glue', 'qty': 2, 'price': Decimal('4.95')})], 'total': Decimal('39.87'), 'gift': False, 'coupon': None, 'note': 'Rechnung bitte per E-Mail'})
+  OrderedDict({'id': 5001, 'customer': 'Nordwind GmbH', 'status': 'paid', 'placed': '2024-03-02T07:16:00Z', 'lines': [OrderedDict({'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')}), OrderedDict({'sku': 'sku-1001', 'name': 'Hex key set', 'qty': 3, 'price': Decimal('12.50')})], 'total': Decimal('75.00'), 'gift': True, 'coupon': None, 'note': 'Leave at the back door'})
+  (stopped after 2)
+> items data/shop/orders.json export
+  {'source': 'shop-eu', 'generated': '2024-04-01T06:00:00Z', 'schema': 3, 'batch': 18446744073709551617}
+> items data/shop/orders.json summary
+  {'count': 30, 'currency': 'EUR', 'checksum': 'été 📦'}
+> items data/shop/orders.json summary.checksum
+  'été 📦'
+> items data/shop/orders.json nothing.here
+> items data/shop/orders.json orders.item.discount
+  Decimal('0.15')
+  Decimal('0.15')
+  Decimal('0.15')
+  Decimal('0.15')
+  Decimal('0.15')
+  Decimal('0.15')
+> items data/shop/orders.json orders.item.weight_kg float=1
+  0.12
+  0.12
+  0.12
+> items data/shop/catalog.json 
+  {'sku-1001': {'name': 'Hex key set', 'price': Decimal('12.50'), 'stock': 11, 'tags': ['tools'], 'dims': {'w': 76, 'h': 23}}, 'sku-1002': {'name': 'Cordless drill', 'price': Decimal('89.00'), 'stock': 8, 'tags': ['power', 'glue'], 'dims': {'w': 35, 'h': 15}}, 'sku-1003': {'name': 'Wood glue', 'price': Decimal('4.95'), 'stock': 143, 'tags': ['glue', 'safety', 'measure'], 'dims': {'w': 50, 'h': 17}}, 'sku-1004': {'name': 'Safety goggles', 'price': Decimal('7.20'), 'stock': 130, 'tags': ['safety'], 'dims': {'w': 21, 'h': 8}}, 'sku-1005': {'name': 'Tape measure 5 m', 'price': Decimal('9.99'), 'stock': 128, 'tags': ['measure', 'wood'], 'dims': {'w': 62, 'h': 27}}, 'sku-1006': {'name': 'Router bits', 'price': Decimal('34.10'), 'stock': 82, 'tags': ['wood', 'abrasive', 'clamps'], 'dims': {'w': 70, 'h': 25}}, 'sku-1007': {'name': 'Sandpaper pack', 'price': Decimal('3.05'), 'stock': 75, 'tags': ['abrasive'], 'dims': {'w': 81, 'h': 14}}, 'sku-1008': {'name': 'Clamp 300 mm', 'price': Decimal('15.75'), 'stock': 177, 'tags': ['clamps', 'tools'], 'dims': {'w': 95, 'h': 29}}}
+> items data/shop/catalog.json  map=od
+  OrderedDict({'sku-1001': OrderedDict({'name': 'Hex key set', 'price': Decimal('12.50'), 'stock': 11, 'tags': ['tools'], 'dims': OrderedDict({'w': 76, 'h': 23})}), 'sku-1002': OrderedDict({'name': 'Cordless drill', 'price': Decimal('89.00'), 'stock': 8, 'tags': ['power', 'glue'], 'dims': OrderedDict({'w': 35, 'h': 15})}), 'sku-1003': OrderedDict({'name': 'Wood glue', 'price': Decimal('4.95'), 'stock': 143, 'tags': ['glue', 'safety', 'measure'], 'dims': OrderedDict({'w': 50, 'h': 17})}), 'sku-1004': OrderedDict({'name': 'Safety goggles', 'price': Decimal('7.20'), 'stock': 130, 'tags': ['safety'], 'dims': OrderedDict({'w': 21, 'h': 8})}), 'sku-1005': OrderedDict({'name': 'Tape measure 5 m', 'price': Decimal('9.99'), 'stock': 128, 'tags': ['measure', 'wood'], 'dims': OrderedDict({'w': 62, 'h': 27})}), 'sku-1006': OrderedDict({'name': 'Router bits', 'price': Decimal('34.10'), 'stock': 82, 'tags': ['wood', 'abrasive', 'clamps'], 'dims': OrderedDict({'w': 70, 'h': 25})}), 'sku-1007': OrderedDict({'name': 'Sandpaper pack', 'price': Decimal('3.05'), 'stock': 75, 'tags': ['abrasive'], 'dims': OrderedDict({'w': 81, 'h': 14})}), 'sku-1008': OrderedDict({'name': 'Clamp 300 mm', 'price': Decimal('15.75'), 'stock': 177, 'tags': ['clamps', 'tools'], 'dims': OrderedDict({'w': 95, 'h': 29})})})
+> items data/shop/catalog.json sku-1004.tags.item
+  'safety'
+> items data/shop/catalog.json sku-1004.dims
+  {'w': 21, 'h': 8}
+> items data/shop/sensors.json item.v
+  Decimal('21.5')
+  Decimal('21.5')
+  Decimal('-0.0')
+  Decimal('0.001')
+  Decimal('6.02214076E+23')
+  Decimal('1E-400')
+  Decimal('123456789.123456789')
+  Decimal('0.1')
+  3
+  -17
+  Decimal('1E+308')
+  Decimal('4.9E-324')
+> items data/shop/sensors.json item.v float=1
+  21.5
+  21.5
+  -0.0
+  0.001
+  6.02214076e+23
+  0.0
+  123456789.12345679
+  0.1
+  3
+  -17
+  1e+308
+  5e-324
+> items data/shop/events.jsonl  multi=1 take=3
+  {'ts': '2024-03-04T10:00:31Z', 'type': 'click', 'user': 103, 'ms': Decimal('127.25')}
+  {'ts': '2024-03-04T10:02:46Z', 'type': 'click', 'user': 114, 'ms': Decimal('374.5')}
+  {'ts': '2024-03-04T10:04:55Z', 'type': 'click', 'user': 105, 'ms': Decimal('430.0')}
+  (stopped after 3)
+> items data/shop/events.jsonl  take=3
+  error ijson.common.JSONError: Additional data found
+> items data/shop/events.jsonl type multi=1 take=6
+  'click'
+  'click'
+  'click'
+  'view'
+  'click'
+  'search'
+  (stopped after 6)
+> items data/shop/events_bad.jsonl  multi=1 buf=256
+  {'ts': '2024-03-04T10:00:31Z', 'type': 'click', 'user': 103, 'ms': Decimal('127.25')}
+  {'ts': '2024-03-04T10:02:46Z', 'type': 'click', 'user': 114, 'ms': Decimal('374.5')}
+  {'ts': '2024-03-04T10:04:55Z', 'type': 'click', 'user': 105, 'ms': Decimal('430.0')}
+  {'ts': '2024-03-04T10:06:43Z', 'type': 'view', 'user': 104, 'ms': Decimal('137.125')}
+  {'ts': '2024-03-04T10:08:22Z', 'type': 'click', 'user': 106, 'ms': Decimal('43.5')}
+  {'ts': '2024-03-04T10:10:05Z', 'type': 'search', 'user': 114, 'ms': Decimal('96.625'), 'q': 'drill'}
+  {'ts': '2024-03-04T10:12:23Z', 'type': 'checkout', 'user': 106, 'ms': Decimal('154.5')}
+  {'ts': '2024-03-04T10:14:48Z', 'type': 'click', 'user': 115, 'ms': Decimal('185.375')}
+  {'ts': '2024-03-04T10:16:33Z', 'type': 'search', 'user': 118, 'ms': Decimal('17.125'), 'q': 'Schraube'}
+  {'ts': '2024-03-04T10:18:07Z', 'type': 'search', 'user': 109, 'ms': Decimal('61.375'), 'q': 'drill'}
+  {'ts': '2024-03-04T10:20:11Z', 'type': 'click', 'user': 108, 'ms': Decimal('240.375')}
+  {'ts': '2024-03-04T10:22:44Z', 'type': 'view', 'user': 116, 'ms': Decimal('470.875')}
+  {'ts': '2024-03-04T10:24:19Z', 'type': 'view', 'user': 100, 'ms': Decimal('228.0')}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'out' at 1217
+> items data/shop/events_bad.jsonl  multi=1 buf=64
+  {'ts': '2024-03-04T10:00:31Z', 'type': 'click', 'user': 103, 'ms': Decimal('127.25')}
+  {'ts': '2024-03-04T10:02:46Z', 'type': 'click', 'user': 114, 'ms': Decimal('374.5')}
+  {'ts': '2024-03-04T10:04:55Z', 'type': 'click', 'user': 105, 'ms': Decimal('430.0')}
+  {'ts': '2024-03-04T10:06:43Z', 'type': 'view', 'user': 104, 'ms': Decimal('137.125')}
+  {'ts': '2024-03-04T10:08:22Z', 'type': 'click', 'user': 106, 'ms': Decimal('43.5')}
+  {'ts': '2024-03-04T10:10:05Z', 'type': 'search', 'user': 114, 'ms': Decimal('96.625'), 'q': 'drill'}
+  {'ts': '2024-03-04T10:12:23Z', 'type': 'checkout', 'user': 106, 'ms': Decimal('154.5')}
+  {'ts': '2024-03-04T10:14:48Z', 'type': 'click', 'user': 115, 'ms': Decimal('185.375')}
+  {'ts': '2024-03-04T10:16:33Z', 'type': 'search', 'user': 118, 'ms': Decimal('17.125'), 'q': 'Schraube'}
+  {'ts': '2024-03-04T10:18:07Z', 'type': 'search', 'user': 109, 'ms': Decimal('61.375'), 'q': 'drill'}
+  {'ts': '2024-03-04T10:20:11Z', 'type': 'click', 'user': 108, 'ms': Decimal('240.375')}
+  {'ts': '2024-03-04T10:22:44Z', 'type': 'view', 'user': 116, 'ms': Decimal('470.875')}
+  {'ts': '2024-03-04T10:24:19Z', 'type': 'view', 'user': 100, 'ms': Decimal('228.0')}
+  {'ts': '2024-03-04T10:26:27Z', 'type': 'search', 'user': 102, 'ms': Decimal('181.125'), 'q': 'клей'}
+  {'ts': '2024-03-04T10:28:24Z', 'type': 'click', 'user': 113, 'ms': Decimal('343.25')}
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'out' at 1217
+> items data/odd/two_docs.json  multi=1
+  {'a': 1}
+  {'a': 2}
+  [3]
+  'four'
+> items data/odd/two_docs.json a multi=1
+  1
+  2
+> items ={"a": 1, "b": 2, "a": {"x": [1, 2]}, "c": {}} 
+  {'a': {'x': [1, 2]}, 'b': 2, 'c': {}}
+> items ={"a": 1, "b": 2, "a": {"x": [1, 2]}, "c": {}}  map=od
+  OrderedDict({'a': OrderedDict({'x': [1, 2]}), 'b': 2, 'c': OrderedDict()})
+> items =[[], [[]], {}, [{}], {"a": []}] item
+  []
+  [[]]
+  {}
+  [{}]
+  {'a': []}
+> items =[1, [2, 3], {"a": 4}] item.item
+  2
+  3
+> items ={"a": [1, 2, 3, "x", 4]} a.item buf=3
+  1
+  2
+  3
+  'x'
+  4
+> items data/odd/deep.json item.item.item.item.item.item.item.item.item.item
+  [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[7]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+> count data/shop/orders.json orders.item
+  30
+> count data/shop/orders.json orders.item.lines.item buf=1
+  62
+> count data/shop/orders.json orders.item.lines.item buf=7
+  62
+> count data/shop/catalog.json sku-1002.tags.item
+  2
+> kvitems data/shop/catalog.json  take=3
+  ('sku-1001', {'name': 'Hex key set', 'price': Decimal('12.50'), 'stock': 11, 'tags': ['tools'], 'dims': {'w': 76, 'h': 23}})
+  ('sku-1002', {'name': 'Cordless drill', 'price': Decimal('89.00'), 'stock': 8, 'tags': ['power', 'glue'], 'dims': {'w': 35, 'h': 15}})
+  ('sku-1003', {'name': 'Wood glue', 'price': Decimal('4.95'), 'stock': 143, 'tags': ['glue', 'safety', 'measure'], 'dims': {'w': 50, 'h': 17}})
+  (stopped after 3)
+> kvitems data/shop/catalog.json sku-1001
+  ('name', 'Hex key set')
+  ('price', Decimal('12.50'))
+  ('stock', 11)
+  ('tags', ['tools'])
+  ('dims', {'w': 76, 'h': 23})
+> kvitems data/shop/catalog.json sku-1001.dims map=od
+  ('w', 76)
+  ('h', 23)
+> kvitems data/shop/orders.json export
+  ('source', 'shop-eu')
+  ('generated', '2024-04-01T06:00:00Z')
+  ('schema', 3)
+  ('batch', 18446744073709551617)
+> kvitems data/shop/orders.json orders.item take=11
+  ('id', 5000)
+  ('customer', '東京ストア')
+  ('status', 'paid')
+  ('placed', '2024-03-01T20:18:00Z')
+  ('lines', [{'sku': 'sku-1005', 'name': 'Tape measure 5 m', 'qty': 3, 'price': Decimal('9.99')}, {'sku': 'sku-1003', 'name': 'Wood glue', 'qty': 2, 'price': Decimal('4.95')}])
+  ('total', Decimal('39.87'))
+  ('gift', False)
+  ('coupon', None)
+  ('note', 'Rechnung bitte per E-Mail')
+  ('id', 5001)
+  ('customer', 'Nordwind GmbH')
+  (stopped after 11)
+> kvitems ={"a": [1, {"b": 2}], "c": {"d": {"e": 3}}, "f": null} 
+  ('a', [1, {'b': 2}])
+  ('c', {'d': {'e': 3}})
+  ('f', None)
+> kvitems =[{"x": 1}, 5, {"y": [2]}, [], {"z": {}}] item
+  ('x', 1)
+  ('y', [2])
+  ('z', {})
+> kvitems ={"a": 1} a
+> kvitems ={"a": {"k": 1, "k": 2}} a
+  ('k', 1)
+  ('k', 2)
+> kvitems ={"a": {"b": 1} a
+  ('b', 1)
+  error ijson.common.IncompleteJSONError: Incomplete JSON content
+> push items =[{"name": "café"}, {"name": "naïve"}, 3] item cuts=4,15,16,30
+  send 4 bytes
+  send 11 bytes
+  send 1 bytes
+  send 14 bytes
+    {'name': 'café'}
+  send 12 bytes
+    {'name': 'naïve'}
+    3
+  close
+> push basic_parse =[1, 2, 3]  cuts=2,2,5
+  send 2 bytes
+    ('start_array', None)
+  send 0 bytes
+    ('number', 1)
+    error ijson.common.IncompleteJSONError: Incomplete JSON content
+> push basic_parse ={"ok": true}  cuts=6
+  send 6 bytes
+    ('start_map', None)
+    ('map_key', 'ok')
+  send 6 bytes
+    ('boolean', True)
+    ('end_map', None)
+  close
+> push parse ={"a": [1, 2], "b": {"c": "é"}}  cuts=1,8,24,26
+  send 1 bytes
+    ('', 'start_map', None)
+  send 7 bytes
+    ('', 'map_key', 'a')
+    ('a', 'start_array', None)
+  send 16 bytes
+    ('a.item', 'number', 1)
+    ('a.item', 'number', 2)
+    ('a', 'end_array', None)
+    ('', 'map_key', 'b')
+    ('b', 'start_map', None)
+    ('b', 'map_key', 'c')
+  send 2 bytes
+  send 5 bytes
+    ('b.c', 'string', 'é')
+    ('b', 'end_map', None)
+    ('', 'end_map', None)
+  close
+> push kvitems ={"a": 1, "b": [2, 3], "c": {"d": 4}}  cuts=10,20
+  send 10 bytes
+  send 10 bytes
+    ('a', 1)
+  send 16 bytes
+    ('b', [2, 3])
+    ('c', {'d': 4})
+  close
+> push items data/odd/cut_char.json  cuts=
+  send 15 bytes
+    {'ok': True}
+  close
+    error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+> push items =[1, 2 item cuts=3
+  send 3 bytes
+    1
+  send 2 bytes
+  close
+    2
+    error ijson.common.IncompleteJSONError: Incomplete JSON content
+> push basic_parse =[1, oops]  cuts=3
+  send 3 bytes
+    ('start_array', None)
+    ('number', 1)
+  send 6 bytes
+    error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'oops' at 4
+> push basic_parse x:5b312c203235ff5d  cuts=6
+  send 6 bytes
+    ('start_array', None)
+    ('number', 1)
+  send 2 bytes
+    ('number', 25)
+    error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> basic x:5b312c203235ff5d
+  error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xff in position 6: invalid start byte
+> basic x:5b312c203235ff5d buf=6
+  ('start_array', None)
+  ('number', 1)
+  error ijson.common.IncompleteJSONError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> push items data/shop/events.jsonl type cuts=100,200,300 multi=1 take=8
+  send 100 bytes
+    'click'
+  send 100 bytes
+    'click'
+    'click'
+  send 100 bytes
+    'view'
+  send 1599 bytes
+    'click'
+    'search'
+    'checkout'
+    'click'
+  close
+> dump ={"a": [1, 2.5, "x"], "b": {"c": null}}
+  #: name, value
+  --------------
+  0: start_map, None
+  1: map_key, a
+  2: start_array, None
+  3: number, 1
+  4: number, 2.5
+  5: string, x
+  6: end_array, None
+  7: map_key, b
+  8: start_map, None
+  9: map_key, c
+  10: null, None
+  11: end_map, None
+  12: end_map, None
+> dump ={"a": [1, 2.5, "x"], "b": {"c": null}} method=parse
+  #: path, name, value
+  --------------------
+  0: , start_map, None
+  1: , map_key, a
+  2: a, start_array, None
+  3: a.item, number, 1
+  4: a.item, number, 2.5
+  5: a.item, string, x
+  6: a, end_array, None
+  7: , map_key, b
+  8: b, start_map, None
+  9: b, map_key, c
+  10: b.c, null, None
+  11: b, end_map, None
+  12: , end_map, None
+> dump ={"a": [1, 2.5, "x"], "b": {"c": null}} method=items prefix=a.item
+  #: value
+  --------
+  0: 1
+  1: 2.5
+  2: x
+> dump ={"a": [1, 2.5, "x"], "b": {"c": null}} method=kvitems prefix=b
+  #: key, value
+  -------------
+  0: c, None
+> dump ={"a": [1, 2.5, "x"], "b": {"c": true}} method=items
+  #: value
+  --------
+  0: {'a': [1, Decimal('2.5'), 'x'], 'b': {'c': True}}
+> dump data/odd/two_docs.json method=items multi=1
+  #: value
+  --------
+  0: {'a': 1}
+  1: {'a': 2}
+  2: [3]
+  3: four
+> dump data/odd/two_docs.json method=kvitems
+  #: key, value
+  -------------
+  error ijson.common.JSONError: Additional data found
+> dump data/shop/sensors.json method=items prefix=item
+  #: value
+  --------
+  0: {'id': 's0', 'v': Decimal('21.5')}
+  1: {'id': 's1', 'v': Decimal('21.5')}
+  2: {'id': 's2', 'v': Decimal('-0.0')}
+  3: {'id': 's3', 'v': Decimal('0.001')}
+  4: {'id': 's4', 'v': Decimal('6.02214076E+23')}
+  5: {'id': 's5', 'v': Decimal('1E-400')}
+  6: {'id': 's6', 'v': Decimal('123456789.123456789')}
+  7: {'id': 's7', 'v': Decimal('0.1')}
+  8: {'id': 's8', 'v': 3}
+  9: {'id': 's9', 'v': -17}
+  10: {'id': 's10', 'v': Decimal('1E+308')}
+  11: {'id': 's11', 'v': Decimal('4.9E-324')}
+> report data/shop/orders.json data/out/report.txt
+  wrote data/out/report.txt (7 customers, 2 notes)
+> cat data/out/report.txt
+  data/out/report.txt (11 lines)
+  | customer         orders    revenue   refunded open
+  | Acme Tools            4     646.18          0    0
+  | Zoë Martin            4     468.85     208.07    1
+  | Café Olé              4     389.39      14.85    1
+  | Nordwind GmbH         6     219.05          0    2
+  | Łukasz Nowak          3     114.10      47.25    0
+  | O'Brien & Sons        5      88.56      49.77    0
+  | 東京ストア                 4      56.70      29.70    1
+  | all                  30    1982.83
+  | order 5007: total 25.10, lines add up to 25.00
+  | order 5019: total 208.07, lines add up to 207.97
+> latency data/shop/events.jsonl data/out/latency.csv
+  wrote data/out/latency.csv (4 types)
+> cat data/out/latency.csv
+  data/out/latency.csv (5 lines)
+  | type,count,mean_ms,max_ms
+  | checkout,4,82.219,154.5
+  | click,9,232.958,430.0
+  | search,6,125.333,352.0
+  | view,5,253.625,470.875
+> latency data/shop/events_bad.jsonl data/out/latency_bad.csv
+  error ijson.backends.python.UnexpectedSymbol: Unexpected symbol 'out' at 1217
+  read 14 events; nothing written
+> cat data/out/latency_bad.csv
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/out/latency_bad.csv'
+> schema data/shop/catalog.json
+  (root)                       start_map    1
+  sku-1001                     start_map    1
+  sku-1001.dims                start_map    1
+  sku-1001.dims.h              number       1
+  sku-1001.dims.w              number       1
+  sku-1001.name                string       1
+  sku-1001.price               number       1
+  sku-1001.stock               number       1
+  sku-1001.tags                start_array  1
+  sku-1001.tags.item           string       1
+  sku-1002                     start_map    1
+  sku-1002.dims                start_map    1
+  sku-1002.dims.h              number       1
+  sku-1002.dims.w              number       1
+  sku-1002.name                string       1
+  sku-1002.price               number       1
+  sku-1002.stock               number       1
+  sku-1002.tags                start_array  1
+  sku-1002.tags.item           string       2
+  sku-1003                     start_map    1
+  sku-1003.dims                start_map    1
+  sku-1003.dims.h              number       1
+  sku-1003.dims.w              number       1
+  sku-1003.name                string       1
+  sku-1003.price               number       1
+  sku-1003.stock               number       1
+  sku-1003.tags                start_array  1
+  sku-1003.tags.item           string       3
+  sku-1004                     start_map    1
+  sku-1004.dims                start_map    1
+  sku-1004.dims.h              number       1
+  sku-1004.dims.w              number       1
+  sku-1004.name                string       1
+  sku-1004.price               number       1
+  sku-1004.stock               number       1
+  sku-1004.tags                start_array  1
+  sku-1004.tags.item           string       1
+  sku-1005                     start_map    1
+  sku-1005.dims                start_map    1
+  sku-1005.dims.h              number       1
+  sku-1005.dims.w              number       1
+  sku-1005.name                string       1
+  sku-1005.price               number       1
+  sku-1005.stock               number       1
+  sku-1005.tags                start_array  1
+  sku-1005.tags.item           string       2
+  sku-1006                     start_map    1
+  sku-1006.dims                start_map    1
+  sku-1006.dims.h              number       1
+  sku-1006.dims.w              number       1
+  sku-1006.name                string       1
+  sku-1006.price               number       1
+  sku-1006.stock               number       1
+  sku-1006.tags                start_array  1
+  sku-1006.tags.item           string       3
+  sku-1007                     start_map    1
+  sku-1007.dims                start_map    1
+  sku-1007.dims.h              number       1
+  sku-1007.dims.w              number       1
+  sku-1007.name                string       1
+  sku-1007.price               number       1
+  sku-1007.stock               number       1
+  sku-1007.tags                start_array  1
+  sku-1007.tags.item           string       1
+  sku-1008                     start_map    1
+  sku-1008.dims                start_map    1
+  sku-1008.dims.h              number       1
+  sku-1008.dims.w              number       1
+  sku-1008.name                string       1
+  sku-1008.price               number       1
+  sku-1008.stock               number       1
+  sku-1008.tags                start_array  1
+  sku-1008.tags.item           string       2
+> schema data/shop/orders.json
+  (root)                       start_map    1
+  export                       start_map    1
+  export.batch                 number       1
+  export.generated             string       1
+  export.schema                number       1
+  export.source                string       1
+  orders                       start_array  1
+  orders.item                  start_map    30
+  orders.item.coupon           null         25
+  orders.item.coupon           string       5
+  orders.item.customer         string       30
+  orders.item.discount         number       6
+  orders.item.gift             boolean      30
+  orders.item.id               number       30
+  orders.item.lines            start_array  30
+  orders.item.lines.item       start_map    62
+  orders.item.lines.item.name  string       62
+  orders.item.lines.item.price number       62
+  orders.item.lines.item.qty   number       62
+  orders.item.lines.item.sku   string       62
+  orders.item.note             string       30
+  orders.item.placed           string       30
+  orders.item.status           string       30
+  orders.item.total            number       30
+  orders.item.weight_kg        number       3
+  summary                      start_map    1
+  summary.checksum             string       1
+  summary.count                number       1
+  summary.currency             string       1
+> extract data/shop/orders.json orders.item.lines.item data/out/lines.jsonl
+  wrote data/out/lines.jsonl (62 lines)
+> cat data/out/lines.jsonl
+  data/out/lines.jsonl (62 lines)
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 3, "price": 9.99}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 2, "price": 4.95}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 3, "price": 12.5}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 3, "price": 12.5}
+  | {"sku": "sku-1007", "name": "Sandpaper pack", "qty": 3, "price": 3.05}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 1, "price": 12.5}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 3, "price": 9.99}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 4, "price": 4.95}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 1, "price": 34.1}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 2, "price": 9.99}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 1, "price": 89.0}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 1, "price": 12.5}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 1, "price": 7.2}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 4, "price": 9.99}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 2, "price": 12.5}
+  | {"sku": "sku-1008", "name": "Clamp 300 mm", "qty": 4, "price": 15.75}
+  | {"sku": "sku-1007", "name": "Sandpaper pack", "qty": 4, "price": 3.05}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 2, "price": 89.0}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 2, "price": 34.1}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 4, "price": 7.2}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 3, "price": 7.2}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 3, "price": 4.95}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 3, "price": 4.95}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 3, "price": 12.5}
+  | {"sku": "sku-1008", "name": "Clamp 300 mm", "qty": 1, "price": 15.75}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 3, "price": 89.0}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 1, "price": 9.99}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 3, "price": 4.95}
+  | {"sku": "sku-1007", "name": "Sandpaper pack", "qty": 3, "price": 3.05}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 1, "price": 9.99}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 4, "price": 12.5}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 3, "price": 9.99}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 3, "price": 34.1}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 1, "price": 34.1}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 2, "price": 4.95}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 3, "price": 7.2}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 2, "price": 34.1}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 2, "price": 4.95}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 1, "price": 4.95}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 4, "price": 4.95}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 3, "price": 9.99}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 2, "price": 89.0}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 3, "price": 9.99}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 3, "price": 89.0}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 4, "price": 7.2}
+  | {"sku": "sku-1008", "name": "Clamp 300 mm", "qty": 3, "price": 15.75}
+  | {"sku": "sku-1007", "name": "Sandpaper pack", "qty": 1, "price": 3.05}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 1, "price": 12.5}
+  | {"sku": "sku-1007", "name": "Sandpaper pack", "qty": 2, "price": 3.05}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 3, "price": 12.5}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 2, "price": 4.95}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 2, "price": 89.0}
+  | {"sku": "sku-1005", "name": "Tape measure 5 m", "qty": 4, "price": 9.99}
+  | {"sku": "sku-1008", "name": "Clamp 300 mm", "qty": 2, "price": 15.75}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 1, "price": 34.1}
+  | {"sku": "sku-1001", "name": "Hex key set", "qty": 2, "price": 12.5}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 2, "price": 7.2}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 2, "price": 89.0}
+  | {"sku": "sku-1004", "name": "Safety goggles", "qty": 4, "price": 7.2}
+  | {"sku": "sku-1006", "name": "Router bits", "qty": 4, "price": 34.1}
+  | {"sku": "sku-1002", "name": "Cordless drill", "qty": 4, "price": 89.0}
+  | {"sku": "sku-1003", "name": "Wood glue", "qty": 1, "price": 4.95}
+> extract data/shop/sensors.json item data/out/sensors.jsonl
+  wrote data/out/sensors.jsonl (12 lines)
+> cat data/out/sensors.jsonl
+  data/out/sensors.jsonl (12 lines)
+  | {"id": "s0", "v": 21.5}
+  | {"id": "s1", "v": 21.5}
+  | {"id": "s2", "v": -0.0}
+  | {"id": "s3", "v": 0.001}
+  | {"id": "s4", "v": 6.02214076e+23}
+  | {"id": "s5", "v": 0.0}
+  | {"id": "s6", "v": 123456789.12345679}
+  | {"id": "s7", "v": 0.1}
+  | {"id": "s8", "v": 3}
+  | {"id": "s9", "v": -17}
+  | {"id": "s10", "v": 1e+308}
+  | {"id": "s11", "v": 5e-324}
+> extract data/shop/orders.json summary data/out/summary.jsonl
+  wrote data/out/summary.jsonl (1 lines)
+> cat data/out/summary.jsonl
+  data/out/summary.jsonl (1 lines)
+  | {"count": 30, "currency": "EUR", "checksum": "\u00e9t\u00e9 \ud83d\udce6"}
+184 jobs, 80 ended in an error

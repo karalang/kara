@@ -1,0 +1,2298 @@
+// mini_ijson: a port of ijson 3.3.0 (BSD-3-Clause; Ivan Sagalaev and
+// Rodrigo Tobar), the iterative JSON parser that ETL jobs, log shippers and
+// API clients use to walk a JSON document too large to load: it reads the
+// input a chunk at a time and hands out parse events, prefixed events,
+// the objects found under a prefix, or the key-value pairs of an object.
+// This is the library's pure Python backend, the one every installation
+// has.
+//
+// It replays data/jobs.tsv (see mk.py) over a shop's order export, its
+// catalog, a JSON-lines event log and some damaged files: every event of
+// the four interfaces, the number and string rules with their exact
+// errors, how the chunk size decides which events come out before an
+// error, the push interface a network reader drives, and the library's
+// dump tool. Then four programs: a revenue report in exact decimals, a
+// latency summary of the event log, a schema survey and a JSON-lines
+// extractor.
+//
+// The library is a chain of Python coroutines: a UTF-8 decoder feeds a
+// lexer, which feeds a parser, which feeds the prefix tracker and the
+// object builders. Each coroutine is a state machine here that keeps the
+// place where the Python one waits for its next value, so a lexeme split
+// across two chunks, a character split across two reads, and the events
+// a failing chunk takes with it all come out as they do in Python.
+
+// ------------------------------------------------------------ text helpers
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+fn atoi(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut out = String.new();
+    out.push(ds[(n / 16) % 16]);
+    out.push(ds[n % 16]);
+    out
+}
+
+fn hexn(n: i64, width: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    let mut digits: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        digits.push(ds[m % 16]);
+        m = m / 16;
+    }
+    while digits.len() < width {
+        digits.push('0');
+    }
+    let mut out = String.new();
+    let mut i = digits.len() - 1;
+    while i >= 0 {
+        out.push(digits[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let mut k = s.chars().count();
+    while k < n {
+        out.push(' ');
+        k += 1;
+    }
+    out
+}
+
+fn zpad(n: i64, w: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    let mut k = s.len();
+    while k < w {
+        out.push('0');
+        k += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+// Whether str.isprintable() holds, for the characters the code pages here
+
+// Whether str.isprintable() holds: the controls, the C1 range, the spaces
+// other than U+0020, the line and paragraph separators, the format
+// characters and the private use area are not printable.
+fn printable(n: i64) -> bool {
+    if n < 32 or (n >= 127 and n <= 160) or n == 173 or n == 0x1680 {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    if n == 0x3000 or n == 0xFEFF or (n >= 0xFFF9 and n <= 0xFFFB) {
+        return false;
+    }
+    not (n >= 0xE000 and n <= 0xF8FF)
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(n) {
+            if n < 256 {
+                out.push_str("\\x");
+                out.push_str(hex2(n));
+            } else if n < 0x10000 {
+                out.push_str("\\u");
+                out.push_str(hexn(n, 4));
+            } else {
+                out.push_str("\\U");
+                out.push_str(hexn(n, 8));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = from;
+    while i < to {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn chars_str(cs: ref Vec[char], from: i64, to: i64) -> String {
+    let mut out = String.new();
+    let mut i = from;
+    while i < to {
+        out.push(cs[i]);
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ exceptions
+
+// A Python exception: the class as the job output names it and str(e).
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn json_error(msg: own String) -> Exc {
+    exc("ijson.common.JSONError", msg)
+}
+
+fn incomplete(msg: own String) -> Exc {
+    exc("ijson.common.IncompleteJSONError", msg)
+}
+
+fn unexpected(sym: ref String, pos: i64) -> Exc {
+    exc("ijson.backends.python.UnexpectedSymbol", f"Unexpected symbol {str_repr(sym)} at {pos}")
+}
+
+fn not_found(path: ref String) -> Exc {
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error {e.cls}: {e.msg}"
+}
+
+// ------------------------------------------------------------ values
+
+// A Python value the parser can produce. Int keeps the digits, so the
+// arbitrary-size integers JSON allows print as Python prints them; Dec is
+// a decimal.Decimal as sign, coefficient digits and exponent; Map keeps
+// its keys in insertion order, as dict does.
+#[derive(Clone)]
+enum Val {
+    Non,
+    Bool(bool),
+    Int(String),
+    Dec(bool, String, i64),
+    Float(f64),
+    Str(String),
+    List(Vec[Val]),
+    Map(Vec[String], Vec[Val]),
+}
+
+// The event names.
+const EV_NULL: i64 = 0;
+const EV_BOOLEAN: i64 = 1;
+const EV_NUMBER: i64 = 2;
+const EV_STRING: i64 = 3;
+const EV_MAP_KEY: i64 = 4;
+const EV_START_MAP: i64 = 5;
+const EV_END_MAP: i64 = 6;
+const EV_START_ARRAY: i64 = 7;
+const EV_END_ARRAY: i64 = 8;
+
+fn ev_name(k: i64) -> String {
+    let s = if k == EV_NULL {
+        "null"
+    } else if k == EV_BOOLEAN {
+        "boolean"
+    } else if k == EV_NUMBER {
+        "number"
+    } else if k == EV_STRING {
+        "string"
+    } else if k == EV_MAP_KEY {
+        "map_key"
+    } else if k == EV_START_MAP {
+        "start_map"
+    } else if k == EV_END_MAP {
+        "end_map"
+    } else if k == EV_START_ARRAY {
+        "start_array"
+    } else {
+        "end_array"
+    };
+    s.to_string()
+}
+
+// What one of the four interfaces hands out.
+#[derive(Clone)]
+enum Out {
+    Basic(i64, Val),
+    Parsed(String, i64, Val),
+    Item(Val),
+    Pair(String, Val),
+}
+
+// Decimal.__str__: the to-scientific-string rules of the decimal spec.
+fn sci_string(neg: bool, digits: ref String, exp: i64) -> String {
+    let mut out = String.new();
+    if neg {
+        out.push('-');
+    }
+    let n = digits.len();
+    let adjusted = exp + n - 1;
+    if exp <= 0 and adjusted >= -6 {
+        if exp == 0 {
+            out.push_str(digits);
+        } else if n + exp > 0 {
+            out.push_str(digits.substring(0, n + exp));
+            out.push('.');
+            out.push_str(digits.substring(n + exp, n));
+        } else {
+            out.push_str("0.");
+            let mut k = n + exp;
+            while k < 0 {
+                out.push('0');
+                k += 1;
+            }
+            out.push_str(digits);
+        }
+        return out;
+    }
+    out.push_str(digits.substring(0, 1));
+    if n > 1 {
+        out.push('.');
+        out.push_str(digits.substring(1, n));
+    }
+    out.push('E');
+    if adjusted >= 0 {
+        out.push('+');
+    }
+    out.push_str(f"{adjusted}");
+    out
+}
+
+#[allow(mutual_recursion_note)]
+fn dict_repr(keys: ref Vec[String], vals: ref Vec[Val], od: bool) -> String {
+    let mut out = String.new();
+    if od {
+        if keys.len() == 0 {
+            return "OrderedDict()".to_string();
+        }
+        out.push_str("OrderedDict(");
+    }
+    out.push('{');
+    let mut i = 0;
+    while i < keys.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(str_repr(keys[i]));
+        out.push_str(": ");
+        out.push_str(repr(vals[i], od));
+        i += 1;
+    }
+    out.push('}');
+    if od {
+        out.push(')');
+    }
+    out
+}
+
+// repr() of a value; od says the maps are OrderedDicts (map_type=OrderedDict).
+fn repr(v: ref Val, od: bool) -> String {
+    match v {
+        Val.Non => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(s) => s.clone(),
+        Val.Dec(neg, d, e) => f"Decimal('{sci_string(*neg, d, *e)}')",
+        Val.Float(x) => f"{x}",
+        Val.Str(s) => str_repr(s),
+        Val.List(xs) => {
+            let mut out = String.new();
+            out.push('[');
+            let mut i = 0;
+            while i < xs.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr(xs[i], od));
+                i += 1;
+            }
+            out.push(']');
+            out
+        }
+        Val.Map(ks, vs) => dict_repr(ks, vs, od),
+    }
+}
+
+// str() of a value.
+fn val_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        Val.Dec(neg, d, e) => sci_string(*neg, d, *e),
+        _ => repr(v, false),
+    }
+}
+
+fn out_repr(o: ref Out, od: bool) -> String {
+    match o {
+        Out.Basic(k, v) => f"({str_repr(ev_name(*k))}, {repr(v, od)})",
+        Out.Parsed(p, k, v) => f"({str_repr(p)}, {str_repr(ev_name(*k))}, {repr(v, od)})",
+        Out.Item(v) => repr(v, od),
+        Out.Pair(k, v) => f"({str_repr(k)}, {repr(v, od)})",
+    }
+}
+
+// The value at key k of a map, if it is one.
+fn get(v: ref Val, k: Str) -> Option[Val] {
+    match v {
+        Val.Map(ks, vs) => {
+            let mut i = 0;
+            while i < ks.len() {
+                if ks[i] == k {
+                    return Some(vs[i].clone());
+                }
+                i += 1;
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn get_str(v: ref Val, k: Str) -> String {
+    match get(v, k) {
+        Some(Val.Str(s)) => s,
+        _ => String.new(),
+    }
+}
+
+// ------------------------------------------------------------ json.dumps
+
+fn json_string(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n < 32 or (n > 126 and n < 0x10000) {
+            out.push_str("\\u");
+            out.push_str(hexn(n, 4));
+        } else if n >= 0x10000 {
+            let m = n - 0x10000;
+            out.push_str("\\u");
+            out.push_str(hexn(0xD800 + m / 1024, 4));
+            out.push_str("\\u");
+            out.push_str(hexn(0xDC00 + m % 1024, 4));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+// json.dumps(v) with its defaults (ensure_ascii, ", " and ": ").
+fn dumps(v: ref Val) -> String {
+    match v {
+        Val.Non => "null".to_string(),
+        Val.Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Val.Int(s) => s.clone(),
+        Val.Dec(neg, d, e) => sci_string(*neg, d, *e),
+        Val.Float(x) => f"{x}",
+        Val.Str(s) => json_string(s),
+        Val.List(xs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in xs {
+                parts.push(dumps(x));
+            }
+            f"[{join_strs(parts, ", ")}]"
+        }
+        Val.Map(ks, vs) => {
+            let mut parts: Vec[String] = Vec.new();
+            let mut i = 0;
+            while i < ks.len() {
+                parts.push(f"{json_string(ks[i])}: {dumps(vs[i])}");
+                i += 1;
+            }
+            f"{{{join_strs(parts, ", ")}}}"
+        }
+    }
+}
+
+// ------------------------------------------------------------ ObjectBuilder
+
+// One container the builder has open, and the key it went in under.
+struct Frame {
+    is_map: bool,
+    keys: Vec[String],
+    vals: Vec[Val],
+    attach: String,
+}
+
+// common.ObjectBuilder. Python puts a container into its parent when it
+// opens; here it goes in when it closes, under the key that was current
+// when it opened, which gives the same object.
+struct Builder {
+    stack: Vec[Frame],
+    key: String,
+    value: Val,
+}
+
+fn builder_new() -> Builder {
+    Builder { stack: Vec.new(), key: String.new(), value: Val.Non }
+}
+
+fn map_set(f: mut ref Frame, k: ref String, v: own Val) {
+    let mut i = 0;
+    while i < f.keys.len() {
+        if f.keys[i] == *k {
+            f.vals[i] = v;
+            return;
+        }
+        i += 1;
+    }
+    f.keys.push(k.clone());
+    f.vals.push(v);
+}
+
+fn put(b: mut ref Builder, v: own Val, k: ref String) {
+    let n = b.stack.len();
+    if n == 0 {
+        b.value = v;
+    } else if b.stack[n - 1].is_map {
+        map_set(mut b.stack[n - 1], k, v);
+    } else {
+        b.stack[n - 1].vals.push(v);
+    }
+}
+
+fn builder_event(b: mut ref Builder, kind: i64, v: ref Val) {
+    if kind == EV_MAP_KEY {
+        b.key = match v {
+            Val.Str(s) => s.clone(),
+            _ => String.new(),
+        };
+    } else if kind == EV_START_MAP or kind == EV_START_ARRAY {
+        b.stack.push(Frame { is_map: kind == EV_START_MAP, keys: Vec.new(), vals: Vec.new(), attach: b.key.clone() });
+    } else if kind == EV_END_MAP or kind == EV_END_ARRAY {
+        match b.stack.pop() {
+            Some(f) => {
+                let at = f.attach.clone();
+                let done = if f.is_map { Val.Map(f.keys, f.vals) } else { Val.List(f.vals) };
+                put(mut b, done, at);
+            }
+            None => {}
+        }
+    } else {
+        let k = b.key.clone();
+        put(mut b, v.clone(), k);
+    }
+}
+
+// ------------------------------------------------------------ UTF-8
+
+fn is_cont(x: u8) -> bool {
+    x >= 0x80 and x <= 0xBF
+}
+
+fn decode_error(b: ref Vec[u8], from: i64, to: i64, why: Str) -> Exc {
+    if to - from == 1 {
+        exc("UnicodeDecodeError", f"'utf-8' codec can't decode byte 0x{hex2(b[from] as i64)} in position {from}: {why}")
+    } else {
+        exc("UnicodeDecodeError", f"'utf-8' codec can't decode bytes in position {from}-{to - 1}: {why}")
+    }
+}
+
+// The incremental UTF-8 decoder's decode(b, final): the text and how many
+// bytes it used. A sequence cut off at the end waits for the next call
+// unless final; any other bad byte is an error with CPython's message.
+fn decode_utf8(b: ref Vec[u8], is_final: bool) -> Result[(String, i64), Exc] {
+    let mut out = String.new();
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let x = b[i] as i64;
+        if x < 0x80 {
+            out.push(chr(x));
+            i += 1;
+            continue;
+        }
+        let need = if x >= 0xC2 and x <= 0xDF { 1 } else if x >= 0xE0 and x <= 0xEF { 2 } else if x >= 0xF0 and x <= 0xF4 { 3 } else { 0 };
+        if need == 0 {
+            return Err(decode_error(b, i, i + 1, "invalid start byte"));
+        }
+        let mut good = 0;
+        let mut k = 1;
+        while k <= need and i + k < n {
+            let y = b[i + k];
+            let ok = if k == 1 and x == 0xE0 {
+                y >= 0xA0 and y <= 0xBF
+            } else if k == 1 and x == 0xED {
+                y >= 0x80 and y <= 0x9F
+            } else if k == 1 and x == 0xF0 {
+                y >= 0x90 and y <= 0xBF
+            } else if k == 1 and x == 0xF4 {
+                y >= 0x80 and y <= 0x8F
+            } else {
+                is_cont(y)
+            };
+            if not ok {
+                break;
+            }
+            good += 1;
+            k += 1;
+        }
+        if good == need {
+            let mut cp = if need == 1 { x - 0xC0 } else if need == 2 { x - 0xE0 } else { x - 0xF0 };
+            let mut j = 1;
+            while j <= need {
+                cp = cp * 64 + (b[i + j] as i64 - 0x80);
+                j += 1;
+            }
+            out.push(chr(cp));
+            i += need + 1;
+            continue;
+        }
+        if i + 1 + good >= n {
+            if not is_final {
+                return Ok((out, i));
+            }
+            return Err(decode_error(b, i, n, "unexpected end of data"));
+        }
+        return Err(decode_error(b, i, i + 1 + good, "invalid continuation byte"));
+    }
+    Ok((out, n))
+}
+
+// ------------------------------------------------------------ scanstring
+
+// json.decoder.JSONDecodeError for a position in the string lexeme.
+fn decode_json_error(msg: Str, doc: ref Vec[char], pos: i64) -> Exc {
+    let mut line = 1;
+    let mut last_nl = -1;
+    let mut i = 0;
+    while i < pos {
+        if doc[i] == '\n' {
+            line += 1;
+            last_nl = i;
+        }
+        i += 1;
+    }
+    exc("json.decoder.JSONDecodeError", f"{msg}: line {line} column {pos - last_nl} (char {pos})")
+}
+
+fn hex4(s: ref Vec[char], at: i64) -> i64 {
+    let mut v = 0;
+    let mut i = at;
+    while i < at + 4 {
+        let d = hex_val(s[i]);
+        if d < 0 {
+            return -1;
+        }
+        v = v * 16 + d;
+        i += 1;
+    }
+    v
+}
+
+// scanstring(symbol, 1)[0], as CPython's C scanner does it with strict
+// on. A lone surrogate, which a str can hold and a String cannot, comes
+// out as U+FFFD; no input here has one.
+fn parse_string(sym: ref String) -> Result[String, Exc] {
+    let s: Vec[char] = sym.chars().collect();
+    let len = s.len();
+    let begin = 0;
+    let mut end = 1;
+    let mut out = String.new();
+    loop {
+        let mut next = end;
+        let mut c = ' ';
+        let mut found = false;
+        while next < len {
+            c = s[next];
+            if c == '"' or c == '\\' {
+                found = true;
+                break;
+            }
+            if (c as i64) <= 0x1f {
+                return Err(decode_json_error("Invalid control character at", s, next));
+            }
+            out.push(c);
+            next += 1;
+        }
+        if not found {
+            return Err(decode_json_error("Unterminated string starting at", s, begin));
+        }
+        next += 1;
+        if c == '"' {
+            break;
+        }
+        if next == len {
+            return Err(decode_json_error("Unterminated string starting at", s, begin));
+        }
+        let e = s[next];
+        if e != 'u' {
+            end = next + 1;
+            if e == '"' or e == '\\' or e == '/' {
+                out.push(e);
+            } else if e == 'b' {
+                out.push(chr(8));
+            } else if e == 'f' {
+                out.push(chr(12));
+            } else if e == 'n' {
+                out.push('\n');
+            } else if e == 'r' {
+                out.push('\r');
+            } else if e == 't' {
+                out.push('\t');
+            } else {
+                return Err(decode_json_error("Invalid \\escape", s, end - 2));
+            }
+            continue;
+        }
+        next += 1;
+        end = next + 4;
+        if end >= len {
+            return Err(decode_json_error("Invalid \\uXXXX escape", s, next - 1));
+        }
+        let mut cp = hex4(s, next);
+        if cp < 0 {
+            return Err(decode_json_error("Invalid \\uXXXX escape", s, end - 5));
+        }
+        if cp >= 0xD800 and cp <= 0xDBFF and end + 6 < len and s[end] == '\\' and s[end + 1] == 'u' {
+            end += 6;
+            let c2 = hex4(s, end - 4);
+            if c2 < 0 {
+                return Err(decode_json_error("Invalid \\uXXXX escape", s, end - 5));
+            }
+            if c2 >= 0xDC00 and c2 <= 0xDFFF {
+                cp = 0x10000 + (cp - 0xD800) * 1024 + (c2 - 0xDC00);
+            } else {
+                end -= 6;
+            }
+        }
+        if cp >= 0xD800 and cp <= 0xDFFF {
+            out.push(chr(0xFFFD));
+        } else {
+            out.push(chr(cp));
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ numbers
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn has_char(cs: ref Vec[char], x: char) -> bool {
+    for c in cs {
+        if *c == x {
+            return true;
+        }
+    }
+    false
+}
+
+// int(symbol), for a lexeme with no '.', 'e' or 'E': a sign and digits.
+fn py_int(cs: ref Vec[char]) -> Option[Val] {
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return None;
+    }
+    let mut digits = String.new();
+    while i < cs.len() {
+        if not is_digit(cs[i]) {
+            return None;
+        }
+        if not (digits.len() == 0 and cs[i] == '0') {
+            digits.push(cs[i]);
+        }
+        i += 1;
+    }
+    // CPython refuses to convert more than 4300 digits.
+    if digits.len() > 4300 {
+        return None;
+    }
+    if digits.len() == 0 {
+        return Some(Val.Int("0".to_string()));
+    }
+    Some(Val.Int(if neg { f"-{digits}" } else { digits }))
+}
+
+// The parts of a decimal literal: sign, integer digits, fraction digits,
+// exponent; None unless the whole lexeme is one.
+fn literal(cs: ref Vec[char]) -> Option[(bool, String, String, i64)] {
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let mut ip = String.new();
+    while i < cs.len() and is_digit(cs[i]) {
+        ip.push(cs[i]);
+        i += 1;
+    }
+    let mut fp = String.new();
+    if i < cs.len() and cs[i] == '.' {
+        i += 1;
+        while i < cs.len() and is_digit(cs[i]) {
+            fp.push(cs[i]);
+            i += 1;
+        }
+    }
+    if ip.len() == 0 and fp.len() == 0 {
+        return None;
+    }
+    let mut ex = 0;
+    if i < cs.len() and (cs[i] == 'e' or cs[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+            eneg = cs[i] == '-';
+            i += 1;
+        }
+        let mut digits = 0;
+        while i < cs.len() and is_digit(cs[i]) {
+            if ex < 100000000000 {
+                ex = ex * 10 + (cs[i] as i64 - 48);
+            }
+            digits += 1;
+            i += 1;
+        }
+        if digits == 0 {
+            return None;
+        }
+        if eneg {
+            ex = -ex;
+        }
+    }
+    if i != cs.len() {
+        return None;
+    }
+    Some((neg, ip, fp, ex))
+}
+
+// decimal.Decimal(symbol).
+fn py_decimal(cs: ref Vec[char]) -> Option[Val] {
+    match literal(cs) {
+        Some((neg, ip, fp, ex)) => {
+            let mut digits = String.new();
+            for c in f"{ip}{fp}".chars() {
+                if not (digits.len() == 0 and c == '0') {
+                    digits.push(c);
+                }
+            }
+            if digits.len() == 0 {
+                digits.push('0');
+            }
+            Some(Val.Dec(neg, digits, ex - fp.len()))
+        }
+        None => None,
+    }
+}
+
+// float(symbol).
+fn py_float(cs: ref Vec[char]) -> Option[Val] {
+    match literal(cs) {
+        Some((neg, ip, fp, ex)) => {
+            let sign = if neg { "-" } else { "" };
+            let i2 = if ip.len() == 0 { "0".to_string() } else { ip };
+            let f2 = if fp.len() == 0 { "0".to_string() } else { fp };
+            match f64.parse(f"{sign}{i2}.{f2}e{ex}") {
+                Ok(x) => Some(Val.Float(x)),
+                Err(_) => None,
+            }
+        }
+        None => None,
+    }
+}
+
+fn starts(word: Str, sym: ref String) -> bool {
+    let w: Vec[char] = word.chars().collect();
+    let cs: Vec[char] = sym.chars().collect();
+    if cs.len() > w.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] != w[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// The number branch of parse_value, with its leading-zero and fraction
+// checks and the bare except around the conversion.
+fn to_number(sym: ref String, pos: i64, use_float: bool) -> Result[Val, Exc] {
+    let cs: Vec[char] = sym.chars().collect();
+    let n = cs.len();
+    if (n > 1 and cs[0] == '0' and cs[1] != 'e' and cs[1] != 'E' and cs[1] != '.') or (n > 2 and cs[0] == '-' and cs[1] == '0' and cs[2] != 'e' and cs[2] != 'E' and cs[2] != '.') {
+        return Err(json_error(f"Invalid JSON number: {sym}"));
+    }
+    if cs[0] == '.' or cs[n - 1] == '.' {
+        return Err(json_error(f"Invalid JSON number: {sym}"));
+    }
+    let plain = not (has_char(cs, '.') or has_char(cs, 'e') or has_char(cs, 'E'));
+    let got = if plain {
+        py_int(cs)
+    } else if use_float {
+        // float overflow raises inside the try, so it ends as below.
+        match py_float(cs) {
+            Some(Val.Float(x)) => if x > 1.7976931348623157e308 or x < -1.7976931348623157e308 { None } else { Some(Val.Float(x)) },
+            other => other,
+        }
+    } else {
+        py_decimal(cs)
+    };
+    match got {
+        Some(v) => Ok(v),
+        None => {
+            if starts("true", sym) or starts("false", sym) or starts("null", sym) {
+                Err(incomplete("Incomplete JSON content".to_string()))
+            } else {
+                Err(unexpected(sym, pos))
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the pipeline
+
+// \s in a str pattern: the characters str.isspace() accepts.
+fn is_space(c: char) -> bool {
+    let n = c as i64;
+    if n == 32 or (n >= 9 and n <= 13) or (n >= 0x1C and n <= 0x1F) or n == 0x85 or n == 0xA0 {
+        return true;
+    }
+    n == 0x1680 or (n >= 0x2000 and n <= 0x200A) or n == 0x2028 or n == 0x2029 or n == 0x202F or n == 0x205F or n == 0x3000
+}
+
+// [a-z0-9eE\.\+-], the run LEXEME_RE matches.
+fn is_word(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or is_digit(c) or c == 'E' or c == '.' or c == '+' or c == '-'
+}
+
+fn is_unary(sym: ref String) -> bool {
+    sym == "[" or sym == "]" or sym == "{" or sym == "}" or sym == ","
+}
+
+// Where each coroutine of the chain waits.
+const L_FIRST: i64 = 0;
+const L_STRING: i64 = 1;
+const L_WORD: i64 = 2;
+const L_MORE: i64 = 3;
+const L_DONE: i64 = 4;
+
+const P_VALUE: i64 = 0;
+const P_ARRAY_ELEMENT_END: i64 = 1;
+const P_OBJECT_KEY: i64 = 2;
+const P_OBJECT_END: i64 = 3;
+
+const MODE_BASIC: i64 = 0;
+const MODE_PARSE: i64 = 1;
+const MODE_ITEMS: i64 = 2;
+const MODE_KVITEMS: i64 = 3;
+
+// One coroutine chain: utf8_encoder -> Lexer -> parse_value, then
+// parse_basecoro and items_basecoro or kvitems_basecoro as the mode asks.
+// What reaches the sink goes to queue.
+struct Pipe {
+    mode: i64,
+    prefix: String,
+    multi: bool,
+    use_float: bool,
+    queue: Vec[Out],
+    // utf8_encoder
+    pending: Vec[u8],
+    alive: bool,
+    // Lexer
+    buf: Vec[char],
+    pos: i64,
+    discarded: i64,
+    data_nonempty: bool,
+    lwait: i64,
+    lstart: i64,
+    // parse_value: the state stack, and which yield it waits at (0 the
+    // top of the loop, 1 after '[', 2 after '{', 3 after a key).
+    stack: Vec[i64],
+    stage: i64,
+    // parse_basecoro
+    path: Vec[String],
+    // items_basecoro and kvitems_basecoro
+    building: bool,
+    depth: i64,
+    bld: Builder,
+    kstate: i64,
+    kkey: String,
+}
+
+fn pipe_new(mode: i64, prefix: ref String, multi: bool, use_float: bool) -> Pipe {
+    Pipe {
+        mode: mode,
+        prefix: prefix.clone(),
+        multi: multi,
+        use_float: use_float,
+        queue: Vec.new(),
+        pending: Vec.new(),
+        alive: true,
+        buf: Vec.new(),
+        pos: 0,
+        discarded: 0,
+        data_nonempty: false,
+        lwait: L_FIRST,
+        lstart: 0,
+        stack: vec![P_VALUE],
+        stage: 0,
+        path: Vec.new(),
+        building: false,
+        depth: 0,
+        bld: builder_new(),
+        kstate: 0,
+        kkey: String.new(),
+    }
+}
+
+fn str_of(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn join_path(path: ref Vec[String], upto: i64) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < upto {
+        if i > 0 {
+            out.push('.');
+        }
+        out.push_str(path[i]);
+        i += 1;
+    }
+    out
+}
+
+fn items_feed(p: mut ref Pipe, cur: ref String, kind: i64, v: ref Val) {
+    if p.building {
+        if kind == EV_START_MAP or kind == EV_START_ARRAY {
+            p.depth += 1;
+        } else if kind == EV_END_MAP or kind == EV_END_ARRAY {
+            p.depth -= 1;
+        }
+        if p.depth == 0 {
+            // Python's builder put the container in place when it opened;
+            // this one closes it now, which leaves the same value.
+            builder_event(mut p.bld, kind, v);
+            p.building = false;
+            p.queue.push(Out.Item(p.bld.value.clone()));
+        } else {
+            builder_event(mut p.bld, kind, v);
+        }
+        return;
+    }
+    if *cur == p.prefix {
+        if kind == EV_START_MAP or kind == EV_START_ARRAY {
+            p.building = true;
+            p.depth = 1;
+            p.bld = builder_new();
+            builder_event(mut p.bld, kind, v);
+        } else {
+            p.queue.push(Out.Item(v.clone()));
+        }
+    }
+}
+
+// The `while path == prefix and event == 'map_key'` test of kvitems.
+fn kv_start(p: mut ref Pipe, cur: ref String, kind: i64, v: ref Val) {
+    if *cur == p.prefix and kind == EV_MAP_KEY {
+        p.kkey = str_of(v);
+        p.bld = builder_new();
+        p.depth = 0;
+        p.kstate = 1;
+    } else {
+        p.kstate = 0;
+    }
+}
+
+fn kv_feed(p: mut ref Pipe, cur: ref String, kind: i64, v: ref Val) {
+    if p.kstate == 0 {
+        kv_start(mut p, cur, kind, v);
+        return;
+    }
+    if kind == EV_START_MAP {
+        p.depth += 1;
+    } else if kind == EV_END_MAP and p.kstate == 2 {
+        p.depth -= 1;
+    }
+    if (kind != EV_MAP_KEY or p.depth != 0) and (kind != EV_END_MAP or p.depth != -1) {
+        builder_event(mut p.bld, kind, v);
+        p.kstate = 2;
+    } else {
+        p.queue.push(Out.Pair(p.kkey.clone(), p.bld.value.clone()));
+        kv_start(mut p, cur, kind, v);
+    }
+}
+
+// parse_basecoro, then the mode's sink.
+fn emit(p: mut ref Pipe, kind: i64, v: own Val) {
+    if p.mode == MODE_BASIC {
+        p.queue.push(Out.Basic(kind, v));
+        return;
+    }
+    let n = p.path.len();
+    let prefix = if kind == EV_MAP_KEY {
+        let pre = join_path(p.path, n - 1);
+        p.path[n - 1] = str_of(v);
+        pre
+    } else if kind == EV_START_MAP {
+        let pre = join_path(p.path, n);
+        p.path.push(String.new());
+        pre
+    } else if kind == EV_START_ARRAY {
+        let pre = join_path(p.path, n);
+        p.path.push("item".to_string());
+        pre
+    } else if kind == EV_END_MAP or kind == EV_END_ARRAY {
+        p.path.pop();
+        join_path(p.path, n - 1)
+    } else {
+        join_path(p.path, n)
+    };
+    if p.mode == MODE_PARSE {
+        p.queue.push(Out.Parsed(prefix, kind, v));
+    } else if p.mode == MODE_ITEMS {
+        items_feed(mut p, prefix, kind, v);
+    } else {
+        kv_feed(mut p, prefix, kind, v);
+    }
+}
+
+fn pop_state(p: mut ref Pipe) {
+    p.stack.pop();
+}
+
+fn set_top(p: mut ref Pipe, s: i64) {
+    let n = p.stack.len();
+    p.stack[n - 1] = s;
+}
+
+// One lexeme at the top of parse_value's loop.
+fn parse_symbol(p: mut ref Pipe, pos: i64, sym: ref String) -> Result[(), Exc] {
+    if p.stack.len() == 0 {
+        if p.multi {
+            p.stack.push(P_VALUE);
+        } else {
+            return Err(json_error("Additional data found".to_string()));
+        }
+    }
+    let state = p.stack[p.stack.len() - 1];
+    let cs: Vec[char] = sym.chars().collect();
+    let first = cs[0];
+    if state == P_VALUE {
+        if sym == "null" {
+            emit(mut p, EV_NULL, Val.Non);
+            pop_state(mut p);
+        } else if sym == "true" {
+            emit(mut p, EV_BOOLEAN, Val.Bool(true));
+            pop_state(mut p);
+        } else if sym == "false" {
+            emit(mut p, EV_BOOLEAN, Val.Bool(false));
+            pop_state(mut p);
+        } else if first == '"' {
+            let s = parse_string(sym)?;
+            emit(mut p, EV_STRING, Val.Str(s));
+            pop_state(mut p);
+        } else if sym == "[" {
+            emit(mut p, EV_START_ARRAY, Val.Non);
+            p.stage = 1;
+        } else if sym == "{" {
+            emit(mut p, EV_START_MAP, Val.Non);
+            p.stage = 2;
+        } else {
+            let v = to_number(sym, pos, p.use_float)?;
+            emit(mut p, EV_NUMBER, v);
+            pop_state(mut p);
+        }
+    } else if state == P_OBJECT_KEY {
+        if first != '"' {
+            return Err(unexpected(sym, pos));
+        }
+        let s = parse_string(sym)?;
+        emit(mut p, EV_MAP_KEY, Val.Str(s));
+        p.stage = 3;
+    } else if state == P_OBJECT_END {
+        if sym == "," {
+            set_top(mut p, P_OBJECT_KEY);
+        } else if sym != "}" {
+            return Err(unexpected(sym, pos));
+        } else {
+            emit(mut p, EV_END_MAP, Val.Non);
+            pop_state(mut p);
+            pop_state(mut p);
+        }
+    } else {
+        if sym == "," {
+            set_top(mut p, P_ARRAY_ELEMENT_END);
+            p.stack.push(P_VALUE);
+        } else if sym != "]" {
+            return Err(unexpected(sym, pos));
+        } else {
+            emit(mut p, EV_END_ARRAY, Val.Non);
+            pop_state(mut p);
+            pop_state(mut p);
+        }
+    }
+    Ok(())
+}
+
+// parse_value receives (pos, symbol), or EOF.
+fn parser_send(p: mut ref Pipe, pos: i64, sym: ref String, eof: bool) -> Result[(), Exc] {
+    let stage = p.stage;
+    p.stage = 0;
+    if stage == 1 {
+        if eof {
+            return Err(incomplete("Incomplete JSON content".to_string()));
+        }
+        if sym == "]" {
+            emit(mut p, EV_END_ARRAY, Val.Non);
+            pop_state(mut p);
+            return Ok(());
+        }
+        p.stack.push(P_ARRAY_ELEMENT_END);
+        p.stack.push(P_VALUE);
+        return parse_symbol(mut p, pos, sym);
+    }
+    if stage == 2 {
+        if eof {
+            return Err(incomplete("Incomplete JSON content".to_string()));
+        }
+        if sym == "}" {
+            emit(mut p, EV_END_MAP, Val.Non);
+            pop_state(mut p);
+            return Ok(());
+        }
+        p.stack.push(P_OBJECT_KEY);
+        return parse_symbol(mut p, pos, sym);
+    }
+    if stage == 3 {
+        if eof {
+            return Err(incomplete("Incomplete JSON content".to_string()));
+        }
+        if sym != ":" {
+            return Err(unexpected(sym, pos));
+        }
+        set_top(mut p, P_OBJECT_END);
+        p.stack.push(P_VALUE);
+        return Ok(());
+    }
+    if eof {
+        if p.stack.len() > 0 {
+            return Err(incomplete("Incomplete JSON content".to_string()));
+        }
+        return Ok(());
+    }
+    parse_symbol(mut p, pos, sym)
+}
+
+// LEXEME_RE.search(buf, from): where the lexeme starts and ends, or -1.
+fn search(buf: ref Vec[char], from: i64) -> (i64, i64) {
+    let mut i = from;
+    while i < buf.len() and is_space(buf[i]) {
+        i += 1;
+    }
+    if i >= buf.len() {
+        return (-1, -1);
+    }
+    if not is_word(buf[i]) {
+        return (i, i + 1);
+    }
+    let mut j = i;
+    while j < buf.len() and is_word(buf[j]) {
+        j += 1;
+    }
+    (i, j)
+}
+
+// Looks for the closing quote of the string lexeme at p.pos, from
+// p.lstart: its index, or -1 when the buffer ends first.
+fn string_end(p: mut ref Pipe) -> i64 {
+    loop {
+        let mut end = p.lstart;
+        while end < p.buf.len() and p.buf[end] != '"' {
+            end += 1;
+        }
+        if end >= p.buf.len() {
+            return -1;
+        }
+        let mut escpos = end - 1;
+        while p.buf[escpos] == '\\' {
+            escpos -= 1;
+        }
+        if (end - escpos) % 2 == 0 {
+            p.lstart = end + 1;
+        } else {
+            return end;
+        }
+    }
+}
+
+// The Lexer's loop, from the top, until it waits for data or ends.
+fn lexer_run(p: mut ref Pipe) -> Result[(), Exc] {
+    loop {
+        let (ms, me) = search(p.buf, p.pos);
+        if ms >= 0 {
+            if p.buf[ms] == '"' {
+                p.pos = ms;
+                p.lstart = ms + 1;
+                let end = string_end(mut p);
+                if end < 0 {
+                    p.lwait = L_STRING;
+                    return Ok(());
+                }
+                lexer_string_done(mut p, end)?;
+            } else {
+                if me == p.buf.len() {
+                    let lex = chars_str(p.buf, ms, me);
+                    if not is_unary(lex) {
+                        p.lwait = L_WORD;
+                        return Ok(());
+                    }
+                }
+                let lex = chars_str(p.buf, ms, me);
+                let at = p.discarded + ms;
+                p.pos = me;
+                parser_send(mut p, at, lex, false)?;
+            }
+        } else {
+            if p.data_nonempty {
+                p.lwait = L_MORE;
+                return Ok(());
+            }
+            p.lwait = L_DONE;
+            parser_send(mut p, -1, String.new(), true)?;
+            return Ok(());
+        }
+    }
+}
+
+fn lexer_string_done(p: mut ref Pipe, end: i64) -> Result[(), Exc] {
+    let lex = chars_str(p.buf, p.pos, end + 1);
+    let at = p.discarded + p.pos;
+    p.pos = end + 1;
+    parser_send(mut p, at, lex, false)
+}
+
+// The Lexer receives data where it waits; closing is a GeneratorExit
+// there, which it treats as no more data.
+fn lexer_send(p: mut ref Pipe, data: ref String) -> Result[(), Exc] {
+    let cs: Vec[char] = data.chars().collect();
+    let wait = p.lwait;
+    if wait == L_DONE {
+        return Ok(());
+    }
+    p.data_nonempty = cs.len() > 0;
+    if wait == L_FIRST {
+        p.buf = cs;
+        p.pos = 0;
+        p.discarded = 0;
+        return lexer_run(mut p);
+    }
+    if wait == L_STRING {
+        if cs.len() == 0 {
+            p.lwait = L_DONE;
+            return Err(incomplete("Incomplete string lexeme".to_string()));
+        }
+        for c in cs {
+            p.buf.push(c);
+        }
+        let end = string_end(mut p);
+        if end < 0 {
+            return Ok(());
+        }
+        lexer_string_done(mut p, end)?;
+        return lexer_run(mut p);
+    }
+    if wait == L_WORD {
+        for c in cs {
+            p.buf.push(c);
+        }
+        let (ms, me) = search(p.buf, p.pos);
+        let lex = chars_str(p.buf, ms, me);
+        if p.data_nonempty and not is_unary(lex) and me == p.buf.len() {
+            return Ok(());
+        }
+        let at = p.discarded + ms;
+        p.pos = me;
+        parser_send(mut p, at, lex, false)?;
+        return lexer_run(mut p);
+    }
+    // Waiting for more data with the buffer used up.
+    if not p.data_nonempty {
+        p.lwait = L_DONE;
+        parser_send(mut p, -1, String.new(), true)?;
+        return Ok(());
+    }
+    p.discarded += p.buf.len();
+    p.buf = cs;
+    p.pos = 0;
+    lexer_run(mut p)
+}
+
+fn lexer_close(p: mut ref Pipe) -> Result[(), Exc] {
+    lexer_send(mut p, String.new())
+}
+
+fn decode_failed(p: mut ref Pipe, e: ref Exc) -> Exc {
+    p.alive = false;
+    // utf8_encoder closes the lexer first, ignoring what that raises.
+    let _ = lexer_close(mut p);
+    p.lwait = L_DONE;
+    incomplete(e.msg.clone())
+}
+
+// coro.send(bdata) on the chain: Ok(true) where Python raises
+// StopIteration.
+fn pipe_send(p: mut ref Pipe, bdata: ref Vec[u8]) -> Result[bool, Exc] {
+    if not p.alive {
+        return Ok(true);
+    }
+    let mut data = p.pending.clone();
+    for x in bdata {
+        data.push(*x);
+    }
+    match decode_utf8(data, false) {
+        Err(e) => Err(decode_failed(mut p, e)),
+        Ok((text, used)) => {
+            p.pending = sub(data, used, data.len());
+            if text.len() > 0 {
+                match lexer_send(mut p, text) {
+                    Ok(_) => Ok(false),
+                    Err(e) => {
+                        p.alive = false;
+                        Err(e)
+                    }
+                }
+            } else if bdata.len() == 0 {
+                p.alive = false;
+                lexer_close(mut p)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+
+// coro.close() on the chain: the decoder's final decode, then the lexer's
+// close.
+fn pipe_close(p: mut ref Pipe) -> Result[(), Exc] {
+    if not p.alive {
+        return Ok(());
+    }
+    p.alive = false;
+    let data = p.pending.clone();
+    match decode_utf8(data, true) {
+        Err(e) => Err(decode_failed(mut p, e)),
+        Ok(_) => lexer_close(mut p),
+    }
+}
+
+// coros2gen over file_source: the events come out a chunk at a time, and
+// those of a chunk that raises are lost with it.
+struct Gen {
+    p: Pipe,
+    data: Vec[u8],
+    at: i64,
+    buf_size: i64,
+    qi: i64,
+    done: bool,
+    comments: bool,
+}
+
+fn gen_next(g: mut ref Gen) -> Result[Option[Out], Exc] {
+    if g.comments {
+        g.comments = false;
+        g.done = true;
+        return Err(exc("ValueError", "Comments are not supported by the python backend".to_string()));
+    }
+    loop {
+        if g.qi < g.p.queue.len() {
+            let o = g.p.queue[g.qi].clone();
+            g.qi += 1;
+            return Ok(Some(o));
+        }
+        if g.done {
+            return Ok(None);
+        }
+        g.p.queue = Vec.new();
+        g.qi = 0;
+        let end = if g.at + g.buf_size < g.data.len() { g.at + g.buf_size } else { g.data.len() };
+        let chunk = sub(g.data, g.at, end);
+        g.at = end;
+        match pipe_send(mut g.p, chunk) {
+            Err(e) => {
+                g.done = true;
+                g.p.queue = Vec.new();
+                return Err(e);
+            }
+            Ok(fin) => {
+                if fin {
+                    g.done = true;
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ decimals
+
+// A Decimal as coefficient and exponent, for the report's arithmetic; the
+// amounts in it are small enough for i64.
+fn dec_of(v: ref Val) -> (i64, i64) {
+    match v {
+        Val.Dec(neg, d, e) => (if *neg { -atoi(d) } else { atoi(d) }, *e),
+        Val.Int(s) => (atoi(s), 0),
+        _ => (0, 0),
+    }
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p = 1;
+    let mut k = 0;
+    while k < n {
+        p = p * 10;
+        k += 1;
+    }
+    p
+}
+
+fn dadd(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    let (c1, e1) = a;
+    let (c2, e2) = b;
+    if e1 <= e2 {
+        (c1 + c2 * pow10(e2 - e1), e1)
+    } else {
+        (c1 * pow10(e1 - e2) + c2, e2)
+    }
+}
+
+fn dsub(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    let (c2, e2) = b;
+    dadd(a, (-c2, e2))
+}
+
+fn dmul(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    let (c1, e1) = a;
+    let (c2, e2) = b;
+    (c1 * c2, e1 + e2)
+}
+
+// -1, 0 or 1 as a is less than, equal to or greater than b.
+fn dcmp(a: (i64, i64), b: (i64, i64)) -> i64 {
+    let (d, _) = dsub(a, b);
+    if d < 0 {
+        -1
+    } else if d > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+// .quantize(Decimal("0.01")) under the default ROUND_HALF_EVEN.
+fn quantize2(a: (i64, i64)) -> (i64, i64) {
+    let (c, e) = a;
+    if e >= -2 {
+        return (c * pow10(e + 2), -2);
+    }
+    let div = pow10(-2 - e);
+    let neg = c < 0;
+    let m = if neg { -c } else { c };
+    let mut q = m / div;
+    let r = m % div;
+    if r * 2 > div or (r * 2 == div and q % 2 == 1) {
+        q += 1;
+    }
+    (if neg { -q } else { q }, -2)
+}
+
+fn dstr(a: (i64, i64)) -> String {
+    let (c, e) = a;
+    let m = if c < 0 { -c } else { c };
+    sci_string(c < 0, f"{m}", e)
+}
+
+// ------------------------------------------------------------ the jobs
+
+struct Opts {
+    buf: i64,
+    multi: bool,
+    float: bool,
+    od: bool,
+    take: i64,
+    comments: bool,
+    cuts: String,
+    method: String,
+    prefix: String,
+    has_prefix: bool,
+}
+
+fn is_option(key: ref String) -> bool {
+    key == "buf" or key == "multi" or key == "float" or key == "map" or key == "take" or key == "comments" or key == "cuts" or key == "method" or key == "prefix"
+}
+
+// The key=value options of a job, and the other fields in order.
+fn options(parts: ref Vec[String]) -> (Opts, Vec[String]) {
+    let mut o = Opts {
+        buf: 65536,
+        multi: false,
+        float: false,
+        od: false,
+        take: -1,
+        comments: false,
+        cuts: String.new(),
+        method: "basic_parse".to_string(),
+        prefix: String.new(),
+        has_prefix: false,
+    };
+    let mut rest: Vec[String] = Vec.new();
+    let mut i = 1;
+    while i < parts.len() {
+        let p = parts[i].clone();
+        let mut key = String.new();
+        let mut val = String.new();
+        let mut seen = false;
+        for c in p.chars() {
+            if seen {
+                val.push(c);
+            } else if c == '=' {
+                seen = true;
+            } else {
+                key.push(c);
+            }
+        }
+        if seen and is_option(key) {
+            if key == "buf" {
+                o.buf = atoi(val);
+            } else if key == "multi" {
+                o.multi = val == "1";
+            } else if key == "float" {
+                o.float = val == "1";
+            } else if key == "map" {
+                o.od = val == "od";
+            } else if key == "take" {
+                o.take = atoi(val);
+            } else if key == "comments" {
+                o.comments = val == "1";
+            } else if key == "cuts" {
+                o.cuts = val;
+            } else if key == "method" {
+                o.method = val;
+            } else {
+                o.prefix = val;
+                o.has_prefix = true;
+            }
+        } else {
+            rest.push(p);
+        }
+        i += 1;
+    }
+    (o, rest)
+}
+
+// =text is inline UTF-8 text, x:hex inline bytes, anything else a path.
+fn source(spec: ref String) -> Result[Vec[u8], Exc] {
+    if spec.starts_with("=") {
+        let mut out: Vec[u8] = Vec.new();
+        for b in spec.substring(1, spec.len()).bytes() {
+            out.push(b);
+        }
+        return Ok(out);
+    }
+    if spec.starts_with("x:") {
+        return Ok(hex_bytes(spec.substring(2, spec.len())));
+    }
+    match fs.read_bytes(spec.clone()) {
+        Ok(b) => Ok(b),
+        Err(_) => Err(not_found(spec)),
+    }
+}
+
+fn gen_of(data: own Vec[u8], mode: i64, prefix: ref String, multi: bool, use_float: bool, buf: i64) -> Gen {
+    Gen {
+        p: pipe_new(mode, prefix, multi, use_float),
+        data: data,
+        at: 0,
+        buf_size: buf,
+        qi: 0,
+        done: false,
+        comments: false,
+    }
+}
+
+fn show(g: mut ref Gen, o: ref Opts) -> Result[(), Exc] {
+    let mut n = 0;
+    loop {
+        match gen_next(mut g)? {
+            None => return Ok(()),
+            Some(ev) => {
+                if n == o.take {
+                    println(f"  (stopped after {o.take})");
+                    return Ok(());
+                }
+                println(f"  {out_repr(ev, o.od)}");
+                n += 1;
+            }
+        }
+    }
+}
+
+fn mode_of(cmd: ref String) -> i64 {
+    if cmd == "basic" or cmd == "basic_parse" {
+        MODE_BASIC
+    } else if cmd == "parse" {
+        MODE_PARSE
+    } else if cmd == "kvitems" {
+        MODE_KVITEMS
+    } else {
+        MODE_ITEMS
+    }
+}
+
+fn gen_job(cmd: ref String, src: ref String, prefix: ref String, o: ref Opts) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut g = gen_of(data, mode_of(cmd), prefix, o.multi, o.float, o.buf);
+    g.comments = o.comments;
+    if cmd == "count" {
+        let mut n = 0;
+        loop {
+            match gen_next(mut g)? {
+                None => break,
+                Some(_) => n += 1,
+            }
+        }
+        println(f"  {n}");
+        return Ok(());
+    }
+    show(mut g, o)
+}
+
+// The push interface: *_coro(sink, ...) driven by send() and close(), with
+// the sink's events printed after each call.
+fn push(method: ref String, src: ref String, prefix: ref String, o: ref Opts) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut bounds: Vec[i64] = vec![0];
+    for c in split_on(o.cuts, ',') {
+        if c.len() > 0 {
+            bounds.push(atoi(c));
+        }
+    }
+    bounds.push(data.len());
+    let mut p = pipe_new(mode_of(method), prefix, o.multi, o.float);
+    let mut shown = 0;
+    let mut i = 0;
+    while i + 1 < bounds.len() {
+        let chunk = sub(data, bounds[i], bounds[i + 1]);
+        println(f"  send {chunk.len()} bytes");
+        let r = pipe_send(mut p, chunk);
+        flush(mut p, mut shown, o);
+        match r {
+            Ok(true) => println("    finished"),
+            Ok(false) => {}
+            Err(e) => {
+                println(f"    {err_line(e)}");
+                return Ok(());
+            }
+        }
+        i += 1;
+    }
+    println("  close");
+    let r = pipe_close(mut p);
+    flush(mut p, mut shown, o);
+    if let Err(e) = r {
+        println(f"    {err_line(e)}");
+    }
+    Ok(())
+}
+
+fn flush(p: mut ref Pipe, shown: mut ref i64, o: ref Opts) {
+    for ev in p.queue {
+        if *shown == o.take {
+            break;
+        }
+        println(f"    {out_repr(ev, o.od)}");
+        *shown += 1;
+    }
+    p.queue = Vec.new();
+}
+
+// python -m ijson.dump, reading the file as its standard input.
+fn dump(src: ref String, o: ref Opts) -> Result[(), Exc] {
+    let method = o.method.clone();
+    let header = if method == "parse" {
+        "#: path, name, value"
+    } else if method == "kvitems" {
+        "#: key, value"
+    } else if method == "items" {
+        "#: value"
+    } else {
+        "#: name, value"
+    };
+    let data = source(src)?;
+    println(f"  {header}");
+    let mut rule = String.new();
+    let mut k = 0;
+    while k < header.len() {
+        rule.push('-');
+        k += 1;
+    }
+    println(f"  {rule}");
+    let mut g = gen_of(data, mode_of(method), o.prefix, o.multi, false, 65536);
+    let mut i = 0;
+    loop {
+        match gen_next(mut g) {
+            Err(e) => {
+                println(f"  {err_line(e)}");
+                return Ok(());
+            }
+            Ok(None) => return Ok(()),
+            Ok(Some(ev)) => {
+                let line = match ev {
+                    Out.Basic(kind, v) => f"{ev_name(kind)}, {val_str(v)}",
+                    Out.Parsed(pre, kind, v) => f"{pre}, {ev_name(kind)}, {val_str(v)}",
+                    Out.Item(v) => val_str(v),
+                    Out.Pair(key, v) => f"{key}, {val_str(v)}",
+                };
+                println(f"  {i}: {line}");
+                i += 1;
+            }
+        }
+    }
+}
+
+fn write_text(path: ref String, text: ref String) -> Result[(), Exc] {
+    match fs.write(path.clone(), text.clone()) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(not_found(path)),
+    }
+}
+
+// One customer's line of the report.
+#[derive(Clone)]
+struct Account {
+    name: String,
+    orders: i64,
+    revenue: (i64, i64),
+    refunded: (i64, i64),
+    open: i64,
+}
+
+// A revenue report streamed from the order export: each order is built
+// from the events under orders.item, its lines checked against its total,
+// and its discount applied in exact decimals.
+fn report(src: ref String, dest: ref String) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut g = gen_of(data, MODE_ITEMS, "orders.item".to_string(), false, false, 512);
+    let mut accts: Vec[Account] = Vec.new();
+    let mut notes: Vec[String] = Vec.new();
+    loop {
+        let o = match gen_next(mut g)? {
+            Some(Out.Item(v)) => v,
+            Some(_) => continue,
+            None => break,
+        };
+        let mut lines_total = (0, 0);
+        match get(o, "lines") {
+            Some(Val.List(ls)) => {
+                for ln in ls {
+                    let price = dec_of(get(ln, "price").unwrap_or(Val.Non));
+                    let qty = dec_of(get(ln, "qty").unwrap_or(Val.Non));
+                    lines_total = dadd(lines_total, dmul(price, qty));
+                }
+            }
+            _ => {}
+        }
+        let total = dec_of(get(o, "total").unwrap_or(Val.Non));
+        let id = repr(get(o, "id").unwrap_or(Val.Non), false);
+        if dcmp(lines_total, total) != 0 {
+            notes.push(f"order {id}: total {dstr(total)}, lines add up to {dstr(lines_total)}");
+        }
+        let mut net = total;
+        match get(o, "discount") {
+            Some(d) => {
+                net = quantize2(dmul(net, dsub((1, 0), dec_of(d))));
+            }
+            None => {}
+        }
+        let name = get_str(o, "customer");
+        let status = get_str(o, "status");
+        let mut at = -1;
+        let mut k = 0;
+        while k < accts.len() {
+            if accts[k].name == name {
+                at = k;
+            }
+            k += 1;
+        }
+        if at < 0 {
+            accts.push(Account { name: name.clone(), orders: 0, revenue: (0, 0), refunded: (0, 0), open: 0 });
+            at = accts.len() - 1;
+        }
+        accts[at].orders += 1;
+        if status == "paid" or status == "shipped" {
+            accts[at].revenue = dadd(accts[at].revenue, net);
+        } else if status == "refunded" {
+            accts[at].refunded = dadd(accts[at].refunded, net);
+        } else {
+            accts[at].open += 1;
+        }
+    }
+    // sorted(key=(-revenue, name)), a selection sort keeping the first of
+    // equal keys as sorted() keeps them.
+    let mut rows: Vec[Account] = Vec.new();
+    let mut used: Vec[bool] = Vec.new();
+    for _ in accts {
+        used.push(false);
+    }
+    while rows.len() < accts.len() {
+        let mut best = -1;
+        let mut k = 0;
+        while k < accts.len() {
+            if not used[k] {
+                if best < 0 {
+                    best = k;
+                } else {
+                    let c = dcmp(accts[k].revenue, accts[best].revenue);
+                    if c > 0 or (c == 0 and accts[k].name < accts[best].name) {
+                        best = k;
+                    }
+                }
+            }
+            k += 1;
+        }
+        used[best] = true;
+        rows.push(accts[best].clone());
+    }
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"{pad_right("customer", 16)} {pad_left("orders", 6)} {pad_left("revenue", 10)} {pad_left("refunded", 10)} {pad_left("open", 4)}");
+    let mut grand = (0, 0);
+    let mut count = 0;
+    for a in rows {
+        lines.push(f"{pad_right(a.name, 16)} {pad_left(f"{a.orders}", 6)} {pad_left(dstr(a.revenue), 10)} {pad_left(dstr(a.refunded), 10)} {pad_left(f"{a.open}", 4)}");
+        grand = dadd(grand, a.revenue);
+        count += a.orders;
+    }
+    lines.push(f"{pad_right("all", 16)} {pad_left(f"{count}", 6)} {pad_left(dstr(grand), 10)}");
+    for n in notes {
+        lines.push(n.clone());
+    }
+    write_text(dest, f"{join_strs(lines, "\n")}\n")?;
+    println(f"  wrote {dest} ({accts.len()} customers, {notes.len()} notes)");
+    Ok(())
+}
+
+fn float_of(v: ref Val) -> f64 {
+    match v {
+        Val.Float(x) => *x,
+        Val.Int(s) => atoi(s) as f64,
+        _ => 0.0,
+    }
+}
+
+// A latency summary of the JSON-lines event log, one value a line read
+// with multiple_values; a bad line stops the run and nothing is written.
+fn latency(src: ref String, dest: ref String) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut g = gen_of(data, MODE_ITEMS, String.new(), true, true, 128);
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut totals: Vec[f64] = Vec.new();
+    let mut tops: Vec[f64] = Vec.new();
+    loop {
+        let ev = match gen_next(mut g) {
+            Err(e) => {
+                println(f"  {err_line(e)}");
+                let mut n = 0;
+                for c in counts {
+                    n += c;
+                }
+                println(f"  read {n} events; nothing written");
+                return Ok(());
+            }
+            Ok(None) => break,
+            Ok(Some(Out.Item(v))) => v,
+            Ok(Some(_)) => continue,
+        };
+        let kind = get_str(ev, "type");
+        let ms = float_of(get(ev, "ms").unwrap_or(Val.Non));
+        let mut at = -1;
+        let mut k = 0;
+        while k < names.len() {
+            if names[k] == kind {
+                at = k;
+            }
+            k += 1;
+        }
+        if at < 0 {
+            names.push(kind);
+            counts.push(0);
+            totals.push(0.0);
+            tops.push(0.0);
+            at = names.len() - 1;
+        }
+        counts[at] += 1;
+        totals[at] = totals[at] + ms;
+        if ms > tops[at] {
+            tops[at] = ms;
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < names.len() {
+        let mut j = order.len();
+        while j > 0 and names[order[j - 1]] > names[k] {
+            j -= 1;
+        }
+        order.insert(j, k);
+        k += 1;
+    }
+    let mut lines: Vec[String] = vec!["type,count,mean_ms,max_ms".to_string()];
+    for i in order {
+        let mean = totals[i] / (counts[i] as f64);
+        lines.push(f"{names[i]},{counts[i]},{mean:.3},{tops[i]}");
+    }
+    write_text(dest, f"{join_strs(lines, "\n")}\n")?;
+    println(f"  wrote {dest} ({names.len()} types)");
+    Ok(())
+}
+
+fn tuple_less(a1: ref String, a2: ref String, b1: ref String, b2: ref String) -> bool {
+    *a1 < *b1 or (*a1 == *b1 and *a2 < *b2)
+}
+
+// Every prefix and the events seen there, as a schema survey of a file
+// nobody documented.
+fn schema(src: ref String) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut g = gen_of(data, MODE_PARSE, String.new(), false, false, 65536);
+    let mut pres: Vec[String] = Vec.new();
+    let mut evs: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    loop {
+        let (prefix, kind) = match gen_next(mut g)? {
+            Some(Out.Parsed(p, k, _)) => (p, k),
+            Some(_) => continue,
+            None => break,
+        };
+        if kind == EV_MAP_KEY or kind == EV_END_MAP or kind == EV_END_ARRAY {
+            continue;
+        }
+        let name = ev_name(kind);
+        let mut at = -1;
+        let mut k = 0;
+        while k < pres.len() {
+            if pres[k] == prefix and evs[k] == name {
+                at = k;
+            }
+            k += 1;
+        }
+        if at < 0 {
+            pres.push(prefix);
+            evs.push(name);
+            counts.push(1);
+        } else {
+            counts[at] += 1;
+        }
+    }
+    let mut order: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < pres.len() {
+        let mut j = order.len();
+        while j > 0 and tuple_less(pres[k], evs[k], pres[order[j - 1]], evs[order[j - 1]]) {
+            j -= 1;
+        }
+        order.insert(j, k);
+        k += 1;
+    }
+    for i in order {
+        let shown = if pres[i].len() == 0 { "(root)".to_string() } else { pres[i].clone() };
+        println(f"  {pad_right(shown, 28)} {pad_right(evs[i], 12)} {counts[i]}");
+    }
+    Ok(())
+}
+
+// The objects under a prefix, with use_float, as JSON lines.
+fn extract(src: ref String, prefix: ref String, dest: ref String) -> Result[(), Exc] {
+    let data = source(src)?;
+    let mut g = gen_of(data, MODE_ITEMS, prefix, false, true, 65536);
+    let mut text = String.new();
+    let mut n = 0;
+    loop {
+        match gen_next(mut g)? {
+            Some(Out.Item(v)) => {
+                text.push_str(dumps(v));
+                text.push('\n');
+                n += 1;
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    write_text(dest, text)?;
+    println(f"  wrote {dest} ({n} lines)");
+    Ok(())
+}
+
+fn cat(path: ref String) {
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(s) => s,
+        Err(_) => {
+            println(f"  {err_line(not_found(path))}");
+            return;
+        }
+    };
+    // open() in text mode reads with universal newlines.
+    let mut norm = String.new();
+    let mut after_cr = false;
+    for c in text.chars() {
+        if c == '\r' {
+            norm.push('\n');
+            after_cr = true;
+        } else {
+            if not (c == '\n' and after_cr) {
+                norm.push(c);
+            }
+            after_cr = false;
+        }
+    }
+    let mut lines = split_on(norm, '\n');
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    println(f"  {path} ({lines.len()} lines)");
+    for ln in lines {
+        println(f"  | {ln}");
+    }
+}
+
+fn run(parts: ref Vec[String]) -> Result[(), Exc] {
+    let cmd = parts[0].clone();
+    let (o, rest) = options(parts);
+    if cmd == "version" {
+        println("  3.3.0 python python");
+    } else if cmd == "basic" or cmd == "parse" {
+        gen_job(cmd, rest[0], String.new(), o)?;
+    } else if cmd == "items" or cmd == "kvitems" or cmd == "count" {
+        gen_job(cmd, rest[0], rest[1], o)?;
+    } else if cmd == "push" {
+        push(rest[0], rest[1], rest[2], o)?;
+    } else if cmd == "dump" {
+        dump(rest[0], o)?;
+    } else if cmd == "report" {
+        report(rest[0], rest[1])?;
+    } else if cmd == "latency" {
+        latency(rest[0], rest[1])?;
+    } else if cmd == "schema" {
+        schema(rest[0])?;
+    } else if cmd == "extract" {
+        extract(rest[0], rest[1], rest[2])?;
+    } else if cmd == "cat" {
+        cat(rest[0]);
+    }
+    Ok(())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut cut = 0;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' {
+            cut = i;
+        }
+        i += 1;
+    }
+    chars_str(cs, 0, cut)
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    let _ = fs.remove_dir_all("data/out".to_string());
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut n = 0;
+    let mut nerr = 0;
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let parts = split_on(hex_string(line), '\t');
+        println(f"> {join_strs(parts, " ")}");
+        if let Err(e) = run(parts) {
+            println(f"  {err_line(e)}");
+            nerr += 1;
+        }
+        n += 1;
+    }
+    println(f"{n} jobs, {nerr} ended in an error");
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("76657273696f6e\n6261736963093d5b312c202d322c20332e35302c203165352c2031452d322c202d302c202d302e302c203065302c202b372c20747275652c2066616c73652c206e756c6c2c202273222c205b5d2c207b7d5d\n6261736963093d5b312c202d322c20332e35302c203165352c2031452d322c202d302c202d302e302c203065302c202b375d09666c6f61743d31\n6261736963093d5b2b3030372c202d2e352c20312e65332c2031323334353637383930313233343536373839303132332c20302e3030303030312c20313233652d395d\n6261736963093d5b31653430302c2031652d3430305d\n6261736963093d5b31653430305d09666c6f61743d31\n6261736963093d5b31652d3430302c20322e35452b325d09666c6f61743d31\n6261736963093d7b2261223a207b2262223a205b312c207b2263223a206e756c6c7d5d7d2c202264223a202278227d\n6261736963093d2020226a757374206120737472696e67222020\n6261736963093d3432\n6261736963093d342e3230\n6261736963093d5b225c75303065395c7530304539222c20225c75643833645c7564653030222c2022615c2262222c2022615c5c62222c20225c2f222c20225c625c665c6e5c725c74225d\n6261736963093d5b22636166c3a9222c2022e69db1e4baac222c2022f09f9880222c20226e62c2a07370222c20226c73e280a878225d\n6261736963093d\n6261736963093d202020\n6261736963093d5b312c20322c\n6261736963093d5b3120325d\n6261736963093d7b22612220317d\n6261736963093d7b2261223a312c7d\n6261736963093d7b313a327d\n6261736963093d5b30315d\n6261736963093d5b2d30315d\n6261736963093d5b30305d\n6261736963093d5b2d30305d\n6261736963093d5b312e5d\n6261736963093d5b2e355d\n6261736963093d5b2d5d\n6261736963093d5b2b5d\n6261736963093d5b65355d\n6261736963093d5b31655d\n6261736963093d5b312e352e355d\n6261736963093d5b7472755d\n6261736963093d5b745d\n6261736963093d5b6e756c\n6261736963093d5b66616c73\n6261736963093d5b547275655d\n6261736963093d5b6e616e5d\n6261736963093d5b696e665d\n6261736963093d5b307831465d\n6261736963093d5b31785d\n6261736963093d5b315d5d\n6261736963093d5d\n6261736963093d7b2261223a7d\n6261736963093d7b2261223a31\n6261736963093d5b5b5b5d5d\n6261736963093d40\n6261736963093d5b315d78\n6261736963093d312032\n6261736963093d5b312c2c325d\n6261736963093d7b2261222c317d\n6261736963093d7b2261223a31202262223a327d\n");
+    s.push_str("6261736963093d5b315d205b325d\n6261736963093d22756e7465726d696e61746564\n6261736963093d5b226f6b222c20226e6f7065\n6261736963093d5b2d302e65315d\n6261736963093d5b302e5d\n6261736963093d5b31652b5d\n6261736963093d5b3165352e355d\n6261736963093d5b2d2d315d\n6261736963093d5b2b2d315d\n6261736963093d5b312d325d\n6261736963093d5b315f3030305d\n6261736963093d312032096d756c74693d31\n6261736963093d5b315d78096d756c74693d31\n6261736963093d5b315d205b325d207b7d203320227322206e756c6c096d756c74693d31\n6261736963093d5b315d205b32096d756c74693d31\n6261736963093d096d756c74693d31\n6261736963093d5b315d09636f6d6d656e74733d31\n6261736963093d5b22615c78225d\n6261736963093d5b2261625c753132225d\n6261736963093d5b225c7531327a7a225d\n6261736963093d5b225c75443833445c755a5a5a5a225d\n6261736963093d5b225c225d\n6261736963093d5b22615c5c225d\n6261736963093d5b22615c5c5c2262225d\n6261736963093d5b312c2022785c71225d\n6261736963093d5b225c75303034315c75303034225d\n6261736963093d5b225c75643833645c75646530305c7530303231225d\n626173696309646174612f6f64642f636f6e74726f6c2e6a736f6e\n626173696309646174612f6f64642f6e65776c696e652e6a736f6e\n626173696309646174612f6f64642f7370616365732e6a736f6e\n626173696309646174612f6f64642f626f6d2e6a736f6e\n626173696309646174612f6f64642f6c6174696e312e6a736f6e\n626173696309646174612f6f64642f6c6174696e312e6a736f6e096275663d35\n626173696309646174612f6f64642f6c6174696e312e6a736f6e096275663d3133\n626173696309646174612f6f64642f6375745f636861722e6a736f6e\n626173696309646174612f6f64642f656d7074792e6a736f6e\n626173696309646174612f6f64642f626c616e6b2e6a736f6e\n626173696309646174612f6f64642f74776f5f646f63732e6a736f6e\n626173696309646174612f6f64642f74776f5f646f63732e6a736f6e096d756c74693d31\n626173696309646174612f6f64642f646565702e6a736f6e0974616b653d33\n626173696309646174612f6d697373696e672e6a736f6e\n6261736963093d5b31302c2032302c2033302c2034302c2035302c2036302c206f6f70732c2038305d096275663d31\n6261736963093d5b31302c2032302c2033302c2034302c2035302c2036302c206f6f70732c2038305d096275663d33\n6261736963093d5b31302c2032302c2033302c2034302c2035302c2036302c206f6f70732c2038305d096275663d38\n");
+    s.push_str("6261736963093d5b31302c2032302c2033302c2034302c2035302c2036302c206f6f70732c2038305d096275663d3634\n6261736963093d5b312c20322c202261206c6f6e6720737472696e6720746861742063726f73736573207365766572616c206368756e6b73222c20335d096275663d34\n6261736963093d5b3132333435362c20372c20225c75303065395c2278222c20747275655d096275663d32\n6261736963093d5b22c3a9c3a9c3a9222c2022f09f9880225d096275663d31\n7061727365093d7b2261223a207b2262223a205b312c207b2263223a206e756c6c7d5d7d2c202264223a202278227d\n7061727365093d7b22612e62223a207b2263223a20317d2c202261223a207b2262223a207b2263223a20327d7d7d\n7061727365093d5b5b312c205b325d5d2c207b226b223a205b335d7d5d\n7061727365093d7b22223a207b22223a20317d2c20226974656d223a205b325d7d\n7061727365093d5b315d207b2261223a20327d096d756c74693d31\n706172736509646174612f73686f702f636174616c6f672e6a736f6e0974616b653d3234\n706172736509646174612f73686f702f6f72646572732e6a736f6e0974616b653d3430096275663d3136\n706172736509646174612f73686f702f6f72646572732e6a736f6e0974616b653d343009666c6f61743d31\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e637573746f6d6572\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e6c696e65732e6974656d0974616b653d3132\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d0974616b653d32\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d0974616b653d32096d61703d6f64\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096578706f7274\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e0973756d6d617279\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e0973756d6d6172792e636865636b73756d\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096e6f7468696e672e68657265\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e646973636f756e74\n6974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e7765696768745f6b6709666c6f61743d31\n6974656d7309646174612f73686f702f636174616c6f672e6a736f6e09\n");
+    s.push_str("6974656d7309646174612f73686f702f636174616c6f672e6a736f6e09096d61703d6f64\n6974656d7309646174612f73686f702f636174616c6f672e6a736f6e09736b752d313030342e746167732e6974656d\n6974656d7309646174612f73686f702f636174616c6f672e6a736f6e09736b752d313030342e64696d73\n6974656d7309646174612f73686f702f73656e736f72732e6a736f6e096974656d2e76\n6974656d7309646174612f73686f702f73656e736f72732e6a736f6e096974656d2e7609666c6f61743d31\n6974656d7309646174612f73686f702f6576656e74732e6a736f6e6c09096d756c74693d310974616b653d33\n6974656d7309646174612f73686f702f6576656e74732e6a736f6e6c090974616b653d33\n6974656d7309646174612f73686f702f6576656e74732e6a736f6e6c0974797065096d756c74693d310974616b653d36\n6974656d7309646174612f73686f702f6576656e74735f6261642e6a736f6e6c09096d756c74693d31096275663d323536\n6974656d7309646174612f73686f702f6576656e74735f6261642e6a736f6e6c09096d756c74693d31096275663d3634\n6974656d7309646174612f6f64642f74776f5f646f63732e6a736f6e09096d756c74693d31\n6974656d7309646174612f6f64642f74776f5f646f63732e6a736f6e0961096d756c74693d31\n6974656d73093d7b2261223a20312c202262223a20322c202261223a207b2278223a205b312c20325d7d2c202263223a207b7d7d09\n6974656d73093d7b2261223a20312c202262223a20322c202261223a207b2278223a205b312c20325d7d2c202263223a207b7d7d09096d61703d6f64\n6974656d73093d5b5b5d2c205b5b5d5d2c207b7d2c205b7b7d5d2c207b2261223a205b5d7d5d096974656d\n6974656d73093d5b312c205b322c20335d2c207b2261223a20347d5d096974656d2e6974656d\n6974656d73093d7b2261223a205b312c20322c20332c202278222c20345d7d09612e6974656d096275663d33\n6974656d7309646174612f6f64642f646565702e6a736f6e096974656d2e6974656d2e6974656d2e6974656d2e6974656d2e6974656d2e6974656d2e6974656d2e6974656d2e6974656d\n636f756e7409646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d\n636f756e7409646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e6c696e65732e6974656d096275663d31\n636f756e7409646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e6c696e65732e6974656d096275663d37\n636f756e7409646174612f73686f702f636174616c6f672e6a736f6e09736b752d313030322e746167732e6974656d\n");
+    s.push_str("6b766974656d7309646174612f73686f702f636174616c6f672e6a736f6e090974616b653d33\n6b766974656d7309646174612f73686f702f636174616c6f672e6a736f6e09736b752d31303031\n6b766974656d7309646174612f73686f702f636174616c6f672e6a736f6e09736b752d313030312e64696d73096d61703d6f64\n6b766974656d7309646174612f73686f702f6f72646572732e6a736f6e096578706f7274\n6b766974656d7309646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d0974616b653d3131\n6b766974656d73093d7b2261223a205b312c207b2262223a20327d5d2c202263223a207b2264223a207b2265223a20337d7d2c202266223a206e756c6c7d09\n6b766974656d73093d5b7b2278223a20317d2c20352c207b2279223a205b325d7d2c205b5d2c207b227a223a207b7d7d5d096974656d\n6b766974656d73093d7b2261223a20317d0961\n6b766974656d73093d7b2261223a207b226b223a20312c20226b223a20327d7d0961\n6b766974656d73093d7b2261223a207b2262223a20317d0961\n70757368096974656d73093d5b7b226e616d65223a2022636166c3a9227d2c207b226e616d65223a20226e61c3af7665227d2c20335d096974656d09637574733d342c31352c31362c3330\n707573680962617369635f7061727365093d5b312c20322c20335d0909637574733d322c322c35\n707573680962617369635f7061727365093d7b226f6b223a20747275657d0909637574733d36\n70757368097061727365093d7b2261223a205b312c20325d2c202262223a207b2263223a2022c3a9227d7d0909637574733d312c382c32342c3236\n70757368096b766974656d73093d7b2261223a20312c202262223a205b322c20335d2c202263223a207b2264223a20347d7d0909637574733d31302c3230\n70757368096974656d7309646174612f6f64642f6375745f636861722e6a736f6e0909637574733d\n70757368096974656d73093d5b312c2032096974656d09637574733d33\n707573680962617369635f7061727365093d5b312c206f6f70735d0909637574733d33\n707573680962617369635f706172736509783a356233313263323033323335666635640909637574733d36\n626173696309783a35623331326332303332333566663564\n626173696309783a35623331326332303332333566663564096275663d36\n70757368096974656d7309646174612f73686f702f6576656e74732e6a736f6e6c097479706509637574733d3130302c3230302c333030096d756c74693d310974616b653d38\n64756d70093d7b2261223a205b312c20322e352c202278225d2c202262223a207b2263223a206e756c6c7d7d\n");
+    s.push_str("64756d70093d7b2261223a205b312c20322e352c202278225d2c202262223a207b2263223a206e756c6c7d7d096d6574686f643d7061727365\n64756d70093d7b2261223a205b312c20322e352c202278225d2c202262223a207b2263223a206e756c6c7d7d096d6574686f643d6974656d73097072656669783d612e6974656d\n64756d70093d7b2261223a205b312c20322e352c202278225d2c202262223a207b2263223a206e756c6c7d7d096d6574686f643d6b766974656d73097072656669783d62\n64756d70093d7b2261223a205b312c20322e352c202278225d2c202262223a207b2263223a20747275657d7d096d6574686f643d6974656d73\n64756d7009646174612f6f64642f74776f5f646f63732e6a736f6e096d6574686f643d6974656d73096d756c74693d31\n64756d7009646174612f6f64642f74776f5f646f63732e6a736f6e096d6574686f643d6b766974656d73\n64756d7009646174612f73686f702f73656e736f72732e6a736f6e096d6574686f643d6974656d73097072656669783d6974656d\n7265706f727409646174612f73686f702f6f72646572732e6a736f6e09646174612f6f75742f7265706f72742e747874\n63617409646174612f6f75742f7265706f72742e747874\n6c6174656e637909646174612f73686f702f6576656e74732e6a736f6e6c09646174612f6f75742f6c6174656e63792e637376\n63617409646174612f6f75742f6c6174656e63792e637376\n6c6174656e637909646174612f73686f702f6576656e74735f6261642e6a736f6e6c09646174612f6f75742f6c6174656e63795f6261642e637376\n63617409646174612f6f75742f6c6174656e63795f6261642e637376\n736368656d6109646174612f73686f702f636174616c6f672e6a736f6e\n736368656d6109646174612f73686f702f6f72646572732e6a736f6e\n6578747261637409646174612f73686f702f6f72646572732e6a736f6e096f72646572732e6974656d2e6c696e65732e6974656d09646174612f6f75742f6c696e65732e6a736f6e6c\n63617409646174612f6f75742f6c696e65732e6a736f6e6c\n6578747261637409646174612f73686f702f73656e736f72732e6a736f6e096974656d09646174612f6f75742f73656e736f72732e6a736f6e6c\n63617409646174612f6f75742f73656e736f72732e6a736f6e6c\n6578747261637409646174612f73686f702f6f72646572732e6a736f6e0973756d6d61727909646174612f6f75742f73756d6d6172792e6a736f6e6c\n63617409646174612f6f75742f73756d6d6172792e6a736f6e6c\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("shop/orders.json 7b0a2020226578706f7274223a207b22736f75726365223a202273686f702d6575222c202267656e657261746564223a2022323032342d30342d30315430363a30303a30305a222c2022736368656d61223a20332c20226261746368223a2031383434363734343037333730393535313631377d2c0a2020226f7264657273223a205b0a202020207b0a202020202020226964223a20353030302c0a20202020202022637573746f6d6572223a2022e69db1e4baace382b9e38388e382a2222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30315432303a31383a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20332c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20322c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2033392e38372c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a2022526563686e756e672062697474652070657220452d4d61696c220a202020207d2c0a202020207b0a202020202020226964223a20353030312c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30325430373a31363a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20332c20227072696365223a2031322e35307d2c0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20332c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2037352e30302c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20224c6561766520617420746865206261636b20646f6f72220a202020207d2c0a202020207b0a202020202020226964223a20353030322c0a20202020202022637573746f6d6572223a20224f27427269656e202620536f6e73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30335430323a32303a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303037222c20226e616d65223a202253616e647061706572207061636b222c2022717479223a20332c20227072696365223a20332e30357d0a2020202020205d2c0a20202020202022746f74616c223a20392e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a2022535052494e473234222c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353030332c0a20202020202022637573746f6d6572223a20224f27427269656e202620536f6e73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30345432303a34323a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20312c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2031322e35302c0a20202020202022646973636f756e74223a20302e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a2022220a202020207d2c0a202020207b0a202020202020226964223a20353030342c0a20202020202022637573746f6d6572223a20224f27427269656e202620536f6e73222c0a20202020202022737461747573223a2022726566756e646564222c0a20202020202022706c61636564223a2022323032342d30332d30355430373a35353a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20332c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20342c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2034392e37372c0a202020202020227765696768745f6b67223a20312e32652d312c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353030352c0a20202020202022637573746f6d6572223a20225a6fc3ab204d617274696e222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30365431323a30343a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20312c20227072696365223a2033342e31307d2c0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20322c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20312c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203134332e30382c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20224c696e65206f6e655c6e4c696e652074776f220a202020207d2c0a202020207b0a202020202020226964223a20353030362c0a20202020202022637573746f6d6572223a2022436166c3a9204f6cc3a9222c0a20202020202022737461747573223a202270656e64696e67222c0a20202020202022706c61636564223a2022323032342d30332d30375430323a34333a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20312c20227072696365223a2031322e35307d2c0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20312c20227072696365223a20372e32307d2c0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20342c20227072696365223a20392e39397d0a2020202020205d2c0a20202020202022746f74616c223a2035392e36362c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a2022526563686e756e672062697474652070657220452d4d61696c220a202020207d2c0a202020207b0a202020202020226964223a20353030372c0a20202020202022637573746f6d6572223a202241636d6520546f6f6c73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30385432303a31393a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20322c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2032352e31302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225061746820433a5c5c73686f705c5c696e220a202020207d2c0a202020207b0a202020202020226964223a20353030382c0a20202020202022637573746f6d6572223a202241636d6520546f6f6c73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d30395430333a32313a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303038222c20226e616d65223a2022436c616d7020333030206d6d222c2022717479223a20342c20227072696365223a2031352e37357d2c0a20202020202020207b22736b75223a2022736b752d31303037222c20226e616d65223a202253616e647061706572207061636b222c2022717479223a20342c20227072696365223a20332e30357d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20322c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203235332e32302c0a20202020202022646973636f756e74223a20302e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a2022535052494e473234222c0a202020202020226e6f7465223a2022526563686e756e672062697474652070657220452d4d61696c220a202020207d2c0a202020207b0a202020202020226964223a20353030392c0a20202020202022637573746f6d6572223a2022e69db1e4baace382b9e38388e382a2222c0a20202020202022737461747573223a202270656e64696e67222c0a20202020202022706c61636564223a2022323032342d30332d31305431343a30383a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20322c20227072696365223a2033342e31307d0a2020202020205d2c0a20202020202022746f74616c223a2036382e32302c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225461625c747365706172617465645c746e6f7465220a202020207d2c0a202020207b0a202020202020226964223a20353031302c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31315430313a33333a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20342c20227072696365223a20372e32307d2c0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20332c20227072696365223a20372e32307d0a2020202020205d2c0a20202020202022746f74616c223a2035302e34302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a2022220a202020207d2c0a202020207b0a202020202020226964223a20353031312c0a20202020202022637573746f6d6572223a2022e69db1e4baace382b9e38388e382a2222c0a20202020202022737461747573223a2022726566756e646564222c0a20202020202022706c61636564223a2022323032342d30332d31325431343a33333a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20332c20227072696365223a20342e39357d2c0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20332c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2032392e37302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20224c6561766520617420746865206261636b20646f6f72220a202020207d2c0a202020207b0a202020202020226964223a20353031322c0a20202020202022637573746f6d6572223a2022436166c3a9204f6cc3a9222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31335430393a33343a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20332c20227072696365223a2031322e35307d2c0a20202020202020207b22736b75223a2022736b752d31303038222c20226e616d65223a2022436c616d7020333030206d6d222c2022717479223a20312c20227072696365223a2031352e37357d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20332c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203332302e32352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225461625c747365706172617465645c746e6f7465220a202020207d2c0a202020207b0a202020202020226964223a20353031332c0a20202020202022637573746f6d6572223a20224f27427269656e202620536f6e73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31345431313a31333a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20312c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20332c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2032342e38342c0a20202020202022646973636f756e74223a20302e31352c0a202020202020227765696768745f6b67223a20312e32652d312c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225061746820433a5c5c73686f705c5c696e220a202020207d2c0a202020207b0a202020202020226964223a20353031342c0a20202020202022637573746f6d6572223a2022436166c3a9204f6cc3a9222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31355430393a34323a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303037222c20226e616d65223a202253616e647061706572207061636b222c2022717479223a20332c20227072696365223a20332e30357d2c0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20312c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20342c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2036392e31342c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a2022535052494e473234222c0a202020202020226e6f7465223a20225061746820433a5c5c73686f705c5c696e220a202020207d2c0a202020207b0a202020202020226964223a20353031352c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202270656e64696e67222c0a20202020202022706c61636564223a2022323032342d30332d31365431323a32383a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20332c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20332c20227072696365223a2033342e31307d2c0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20312c20227072696365223a2033342e31307d0a2020202020205d2c0a20202020202022746f74616c223a203136362e33372c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225461625c747365706172617465645c746e6f7465220a202020207d2c0a202020207b0a202020202020226964223a20353031362c0a20202020202022637573746f6d6572223a2022c581756b61737a204e6f77616b222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31375432323a35303a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20322c20227072696365223a20342e39357d2c0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20332c20227072696365223a20372e32307d2c0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20322c20227072696365223a2033342e31307d0a2020202020205d2c0a20202020202022746f74616c223a2039392e37302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202266726167696c6520f09f93a62068616e646c6520776974682063617265220a202020207d2c0a202020207b0a202020202020226964223a20353031372c0a20202020202022637573746f6d6572223a2022436166c3a9204f6cc3a9222c0a20202020202022737461747573223a2022726566756e646564222c0a20202020202022706c61636564223a2022323032342d30332d31385431363a35343a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20322c20227072696365223a20342e39357d2c0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20312c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2031342e38352c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353031382c0a20202020202022637573746f6d6572223a2022e69db1e4baace382b9e38388e382a2222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d31395432333a32343a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20342c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a2031392e38302c0a20202020202022646973636f756e74223a20302e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225461625c747365706172617465645c746e6f7465220a202020207d2c0a202020207b0a202020202020226964223a20353031392c0a20202020202022637573746f6d6572223a20225a6fc3ab204d617274696e222c0a20202020202022737461747573223a2022726566756e646564222c0a20202020202022706c61636564223a2022323032342d30332d32305432333a30363a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20332c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20322c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203230382e30372c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353032302c0a20202020202022637573746f6d6572223a20225a6fc3ab204d617274696e222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32315430313a35393a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20332c20227072696365223a20392e39397d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20332c20227072696365223a2038392e30307d2c0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20342c20227072696365223a20372e32307d0a2020202020205d2c0a20202020202022746f74616c223a203332352e37372c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a2022535052494e473234222c0a202020202020226e6f7465223a2022220a202020207d2c0a202020207b0a202020202020226964223a20353032312c0a20202020202022637573746f6d6572223a2022c581756b61737a204e6f77616b222c0a20202020202022737461747573223a2022726566756e646564222c0a20202020202022706c61636564223a2022323032342d30332d32325432303a30383a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303038222c20226e616d65223a2022436c616d7020333030206d6d222c2022717479223a20332c20227072696365223a2031352e37357d0a2020202020205d2c0a20202020202022746f74616c223a2034372e32352c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a2022220a202020207d2c0a202020207b0a202020202020226964223a20353032322c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32335430353a33323a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303037222c20226e616d65223a202253616e647061706572207061636b222c2022717479223a20312c20227072696365223a20332e30357d0a2020202020205d2c0a20202020202022746f74616c223a20332e30352c0a202020202020227765696768745f6b67223a20312e32652d312c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225061746820433a5c5c73686f705c5c696e220a202020207d2c0a202020207b0a202020202020226964223a20353032332c0a20202020202022637573746f6d6572223a20224f27427269656e202620536f6e73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32345430383a30373a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20312c20227072696365223a2031322e35307d2c0a20202020202020207b22736b75223a2022736b752d31303037222c20226e616d65223a202253616e647061706572207061636b222c2022717479223a20322c20227072696365223a20332e30357d2c0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20332c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2035362e31302c0a20202020202022646973636f756e74223a20302e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353032342c0a20202020202022637573746f6d6572223a202241636d6520546f6f6c73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32355432303a33303a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20322c20227072696365223a20342e39357d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20322c20227072696365223a2038392e30307d2c0a20202020202020207b22736b75223a2022736b752d31303035222c20226e616d65223a202254617065206d6561737572652035206d222c2022717479223a20342c20227072696365223a20392e39397d0a2020202020205d2c0a20202020202022746f74616c223a203232372e38362c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202253617973205c22757267656e745c22220a202020207d2c0a202020207b0a202020202020226964223a20353032352c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202273686970706564222c0a20202020202022706c61636564223a2022323032342d30332d32365430323a34373a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303038222c20226e616d65223a2022436c616d7020333030206d6d222c2022717479223a20322c20227072696365223a2031352e37357d2c0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20312c20227072696365223a2033342e31307d2c0a20202020202020207b22736b75223a2022736b752d31303031222c20226e616d65223a2022486578206b657920736574222c2022717479223a20322c20227072696365223a2031322e35307d0a2020202020205d2c0a20202020202022746f74616c223a2039302e36302c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a202266726167696c6520f09f93a62068616e646c6520776974682063617265220a202020207d2c0a202020207b0a202020202020226964223a20353032362c0a20202020202022637573746f6d6572223a2022c581756b61737a204e6f77616b222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32375430363a31313a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20322c20227072696365223a20372e32307d0a2020202020205d2c0a20202020202022746f74616c223a2031342e34302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a2022535052494e473234222c0a202020202020226e6f7465223a2022220a202020207d2c0a202020207b0a202020202020226964223a20353032372c0a20202020202022637573746f6d6572223a202241636d6520546f6f6c73222c0a20202020202022737461747573223a202270616964222c0a20202020202022706c61636564223a2022323032342d30332d32385430393a32373a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20322c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203137382e30302c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20225461625c747365706172617465645c746e6f7465220a202020207d2c0a202020207b0a202020202020226964223a20353032382c0a20202020202022637573746f6d6572223a20224e6f726477696e6420476d6248222c0a20202020202022737461747573223a202270656e64696e67222c0a20202020202022706c61636564223a2022323032342d30332d30315432313a32313a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303034222c20226e616d65223a202253616665747920676f67676c6573222c2022717479223a20342c20227072696365223a20372e32307d2c0a20202020202020207b22736b75223a2022736b752d31303036222c20226e616d65223a2022526f757465722062697473222c2022717479223a20342c20227072696365223a2033342e31307d2c0a20202020202020207b22736b75223a2022736b752d31303032222c20226e616d65223a2022436f72646c657373206472696c6c222c2022717479223a20342c20227072696365223a2038392e30307d0a2020202020205d2c0a20202020202022746f74616c223a203532312e32302c0a20202020202022646973636f756e74223a20302e31352c0a2020202020202267696674223a2066616c73652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20224c6561766520617420746865206261636b20646f6f72220a202020207d2c0a202020207b0a202020202020226964223a20353032392c0a20202020202022637573746f6d6572223a20225a6fc3ab204d617274696e222c0a20202020202022737461747573223a202270656e64696e67222c0a20202020202022706c61636564223a2022323032342d30332d30325432313a30343a30305a222c0a202020202020226c696e6573223a205b0a20202020202020207b22736b75223a2022736b752d31303033222c20226e616d65223a2022576f6f6420676c7565222c2022717479223a20312c20227072696365223a20342e39357d0a2020202020205d2c0a20202020202022746f74616c223a20342e39352c0a2020202020202267696674223a20747275652c0a20202020202022636f75706f6e223a206e756c6c2c0a202020202020226e6f7465223a20224c696e65206f6e655c6e4c696e652074776f220a202020207d0a20205d2c0a20202273756d6d617279223a207b22636f756e74223a2033302c202263757272656e6379223a2022455552222c2022636865636b73756d223a20225c7530306539745c7530306539205c75643833645c7564636536227d0a7d0a\n");
+    s.push_str("shop/catalog.json 7b0a202022736b752d31303031223a207b226e616d65223a2022486578206b657920736574222c20227072696365223a2031322e35302c202273746f636b223a2031312c202274616773223a205b22746f6f6c73225d2c202264696d73223a207b2277223a2037362c202268223a2032337d7d2c0a202022736b752d31303032223a207b226e616d65223a2022436f72646c657373206472696c6c222c20227072696365223a2038392e30302c202273746f636b223a20382c202274616773223a205b22706f776572222c2022676c7565225d2c202264696d73223a207b2277223a2033352c202268223a2031357d7d2c0a202022736b752d31303033223a207b226e616d65223a2022576f6f6420676c7565222c20227072696365223a20342e39352c202273746f636b223a203134332c202274616773223a205b22676c7565222c2022736166657479222c20226d656173757265225d2c202264696d73223a207b2277223a2035302c202268223a2031377d7d2c0a202022736b752d31303034223a207b226e616d65223a202253616665747920676f67676c6573222c20227072696365223a20372e32302c202273746f636b223a203133302c202274616773223a205b22736166657479225d2c202264696d73223a207b2277223a2032312c202268223a20387d7d2c0a202022736b752d31303035223a207b226e616d65223a202254617065206d6561737572652035206d222c20227072696365223a20392e39392c202273746f636b223a203132382c202274616773223a205b226d656173757265222c2022776f6f64225d2c202264696d73223a207b2277223a2036322c202268223a2032377d7d2c0a202022736b752d31303036223a207b226e616d65223a2022526f757465722062697473222c20227072696365223a2033342e31302c202273746f636b223a2038322c202274616773223a205b22776f6f64222c20226162726173697665222c2022636c616d7073225d2c202264696d73223a207b2277223a2037302c202268223a2032357d7d2c0a202022736b752d31303037223a207b226e616d65223a202253616e647061706572207061636b222c20227072696365223a20332e30352c202273746f636b223a2037352c202274616773223a205b226162726173697665225d2c202264696d73223a207b2277223a2038312c202268223a2031347d7d2c0a202022736b752d31303038223a207b226e616d65223a2022436c616d7020333030206d6d222c20227072696365223a2031352e37352c202273746f636b223a203137372c202274616773223a205b22636c616d7073222c2022746f6f6c73225d2c202264696d73223a207b2277223a2039352c202268223a2032397d7d0a7d0a\n");
+    s.push_str("shop/events.jsonl 7b227473223a2022323032342d30332d30345431303a30303a33315a222c202274797065223a2022636c69636b222c202275736572223a203130332c20226d73223a203132372e32357d0a7b227473223a2022323032342d30332d30345431303a30323a34365a222c202274797065223a2022636c69636b222c202275736572223a203131342c20226d73223a203337342e357d0a7b227473223a2022323032342d30332d30345431303a30343a35355a222c202274797065223a2022636c69636b222c202275736572223a203130352c20226d73223a203433302e307d0a7b227473223a2022323032342d30332d30345431303a30363a34335a222c202274797065223a202276696577222c202275736572223a203130342c20226d73223a203133372e3132357d0a7b227473223a2022323032342d30332d30345431303a30383a32325a222c202274797065223a2022636c69636b222c202275736572223a203130362c20226d73223a2034332e357d0a7b227473223a2022323032342d30332d30345431303a31303a30355a222c202274797065223a2022736561726368222c202275736572223a203131342c20226d73223a2039362e3632352c202271223a20226472696c6c227d0a7b227473223a2022323032342d30332d30345431303a31323a32335a222c202274797065223a2022636865636b6f7574222c202275736572223a203130362c20226d73223a203135342e357d0a7b227473223a2022323032342d30332d30345431303a31343a34385a222c202274797065223a2022636c69636b222c202275736572223a203131352c20226d73223a203138352e3337357d0a7b227473223a2022323032342d30332d30345431303a31363a33335a222c202274797065223a2022736561726368222c202275736572223a203131382c20226d73223a2031372e3132352c202271223a20225363687261756265227d0a7b227473223a2022323032342d30332d30345431303a31383a30375a222c202274797065223a2022736561726368222c202275736572223a203130392c20226d73223a2036312e3337352c202271223a20226472696c6c227d0a7b227473223a2022323032342d30332d30345431303a32303a31315a222c202274797065223a2022636c69636b222c202275736572223a203130382c20226d73223a203234302e3337357d0a7b227473223a2022323032342d30332d30345431303a32323a34345a222c202274797065223a202276696577222c202275736572223a203131362c20226d73223a203437302e3837357d0a7b227473223a2022323032342d30332d30345431303a32343a31395a222c202274797065223a202276696577222c202275736572223a203130302c20226d73223a203232382e307d0a7b227473223a2022323032342d30332d30345431303a32363a32375a222c202274797065223a2022736561726368222c202275736572223a203130322c20226d73223a203138312e3132352c202271223a2022d0bad0bbd0b5d0b9227d0a7b227473223a2022323032342d30332d30345431303a32383a32345a222c202274797065223a2022636c69636b222c202275736572223a203131332c20226d73223a203334332e32357d0a7b227473223a2022323032342d30332d30345431303a33303a34345a222c202274797065223a2022636865636b6f7574222c202275736572223a203130392c20226d73223a203131372e32357d0a7b227473223a2022323032342d30332d30345431303a33323a34305a222c202274797065223a2022736561726368222c202275736572223a203131352c20226d73223a203335322e302c202271223a20225363687261756265227d0a7b227473223a2022323032342d30332d30345431303a33343a34375a222c202274797065223a2022636865636b6f7574222c202275736572223a203131322c20226d73223a20372e307d0a7b227473223a2022323032342d30332d30345431303a33363a31305a222c202274797065223a202276696577222c202275736572223a203131342c20226d73223a203233352e307d0a7b227473223a2022323032342d30332d30345431303a33383a33365a222c202274797065223a2022636c69636b222c202275736572223a203130352c20226d73223a2037372e3837357d0a7b227473223a2022323032342d30332d30345431303a34303a32325a222c202274797065223a202276696577222c202275736572223a203131332c20226d73223a203139372e3132357d0a7b227473223a2022323032342d30332d30345431303a34323a35365a222c202274797065223a2022636865636b6f7574222c202275736572223a203130392c20226d73223a2035302e3132357d0a7b227473223a2022323032342d30332d30345431303a34343a35385a222c202274797065223a2022636c69636b222c202275736572223a203131382c20226d73223a203237342e357d0a7b227473223a2022323032342d30332d30345431303a34363a33325a222c202274797065223a2022736561726368222c202275736572223a203131302c20226d73223a2034332e37352c202271223a20226472696c6c227d0a\n");
+    s.push_str("shop/events_bad.jsonl 7b227473223a2022323032342d30332d30345431303a30303a33315a222c202274797065223a2022636c69636b222c202275736572223a203130332c20226d73223a203132372e32357d0a7b227473223a2022323032342d30332d30345431303a30323a34365a222c202274797065223a2022636c69636b222c202275736572223a203131342c20226d73223a203337342e357d0a7b227473223a2022323032342d30332d30345431303a30343a35355a222c202274797065223a2022636c69636b222c202275736572223a203130352c20226d73223a203433302e307d0a7b227473223a2022323032342d30332d30345431303a30363a34335a222c202274797065223a202276696577222c202275736572223a203130342c20226d73223a203133372e3132357d0a7b227473223a2022323032342d30332d30345431303a30383a32325a222c202274797065223a2022636c69636b222c202275736572223a203130362c20226d73223a2034332e357d0a7b227473223a2022323032342d30332d30345431303a31303a30355a222c202274797065223a2022736561726368222c202275736572223a203131342c20226d73223a2039362e3632352c202271223a20226472696c6c227d0a7b227473223a2022323032342d30332d30345431303a31323a32335a222c202274797065223a2022636865636b6f7574222c202275736572223a203130362c20226d73223a203135342e357d0a7b227473223a2022323032342d30332d30345431303a31343a34385a222c202274797065223a2022636c69636b222c202275736572223a203131352c20226d73223a203138352e3337357d0a7b227473223a2022323032342d30332d30345431303a31363a33335a222c202274797065223a2022736561726368222c202275736572223a203131382c20226d73223a2031372e3132352c202271223a20225363687261756265227d0a7b227473223a2022323032342d30332d30345431303a31383a30375a222c202274797065223a2022736561726368222c202275736572223a203130392c20226d73223a2036312e3337352c202271223a20226472696c6c227d0a7b227473223a2022323032342d30332d30345431303a32303a31315a222c202274797065223a2022636c69636b222c202275736572223a203130382c20226d73223a203234302e3337357d0a7b227473223a2022323032342d30332d30345431303a32323a34345a222c202274797065223a202276696577222c202275736572223a203131362c20226d73223a203437302e3837357d0a7b227473223a2022323032342d30332d30345431303a32343a31395a222c202274797065223a202276696577222c202275736572223a203130302c20226d73223a203232382e307d0a7b227473223a2022323032342d30332d30345431303a32363a32375a222c202274797065223a2022736561726368222c202275736572223a203130322c20226d73223a203138312e3132352c202271223a2022d0bad0bbd0b5d0b9227d0a7b227473223a2022323032342d30332d30345431303a32383a32345a222c202274797065223a2022636c69636b222c202275736572223a203131332c20226d73223a203334332e32357d0a7b227473223a2022323032342d30332d30345431303a33303a34345a222c206f7574222c202275736572223a203130392c20226d73223a203131372e32357d0a7b227473223a2022323032342d30332d30345431303a33323a34305a222c202274797065223a2022736561726368222c202275736572223a203131352c20226d73223a203335322e302c202271223a20225363687261756265227d0a7b227473223a2022323032342d30332d30345431303a33343a34375a222c202274797065223a2022636865636b6f7574222c202275736572223a203131322c20226d73223a20372e307d0a7b227473223a2022323032342d30332d30345431303a33363a31305a222c202274797065223a202276696577222c202275736572223a203131342c20226d73223a203233352e307d0a7b227473223a2022323032342d30332d30345431303a33383a33365a222c202274797065223a2022636c69636b222c202275736572223a203130352c20226d73223a2037372e3837357d0a7b227473223a2022323032342d30332d30345431303a34303a32325a222c202274797065223a202276696577222c202275736572223a203131332c20226d73223a203139372e3132357d0a7b227473223a2022323032342d30332d30345431303a34323a35365a222c202274797065223a2022636865636b6f7574222c202275736572223a203130392c20226d73223a2035302e3132357d0a7b227473223a2022323032342d30332d30345431303a34343a35385a222c202274797065223a2022636c69636b222c202275736572223a203131382c20226d73223a203237342e357d0a7b227473223a2022323032342d30332d30345431303a34363a33325a222c202274797065223a2022736561726368222c202275736572223a203131302c20226d73223a2034332e37352c202271223a20226472696c6c227d0a\n");
+    s.push_str("shop/sensors.json 5b0a20207b226964223a20227330222c202276223a2032312e357d2c0a20207b226964223a20227331222c202276223a20322e313565317d2c0a20207b226964223a20227332222c202276223a202d302e307d2c0a20207b226964223a20227333222c202276223a2031452d337d2c0a20207b226964223a20227334222c202276223a20362e30323231343037366532337d2c0a20207b226964223a20227335222c202276223a2031652d3430307d2c0a20207b226964223a20227336222c202276223a203132333435363738392e3132333435363738397d2c0a20207b226964223a20227337222c202276223a20302e317d2c0a20207b226964223a20227338222c202276223a20337d2c0a20207b226964223a20227339222c202276223a202d31377d2c0a20207b226964223a2022733130222c202276223a2031653330387d2c0a20207b226964223a2022733131222c202276223a20342e39652d3332347d0a5d0a\nodd/bom.json efbbbf7b226f6b223a20747275657d0a\nodd/latin1.json 7b226e616d65223a2022436166e9222c202263697479223a20224bf66c6e227d0a\nodd/cut_char.json 7b226f6b223a20747275657d0ae282\nodd/control.json 7b226e6f7465223a20227461620968657265227d0a\nodd/newline.json 5b226f6e650a74776f225d0a\nodd/spaces.json 5b312cc2a0322ce38080332ce280a820345d0d0a\nodd/deep.json 5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b375d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d0a\nodd/empty.json \nodd/blank.json 200a090a\nodd/two_docs.json 7b2261223a20317d0a7b2261223a20327d0a5b335d0a22666f7572220a\n");
+    s
+}
