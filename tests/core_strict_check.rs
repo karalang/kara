@@ -12057,3 +12057,47 @@ fn a_provider_need_be_cross_task_only_when_a_task_shares_it() {
         expect,
     );
 }
+
+/// core §5.4 / §5.5: a function declared to return a reference returns a
+/// borrow of something its caller lent, so a call that hands back an owned
+/// value is a temporary dropped at the return; and a `let` cannot keep a
+/// reference to an owned call result, since there is no temporary lifetime
+/// extension (B-2026-10-22-29).
+#[test]
+fn a_reference_to_a_returned_temporary_is_refused() {
+    let dangling = "returned borrow does not originate from a `ref` parameter";
+    rejected(
+        "ref-return-call",
+        "fn make() -> String { String.from(\"temp\") }\nfn bad() -> ref String { make() }\nfn main() { println(bad()); }\n",
+        dangling,
+    );
+    rejected(
+        "ref-return-ctor",
+        "fn bad(s: ref String) -> ref String { String.from(\"temp\") }\nfn main() { let x = String.from(\"a\"); println(bad(x)); }\n",
+        dangling,
+    );
+    rejected(
+        "ref-return-early",
+        "fn bad(s: ref String, n: i64) -> ref String { if n > 0 { return String.from(\"t\"); } s }\nfn main() { let x = String.from(\"a\"); println(bad(x, 1)); }\n",
+        dangling,
+    );
+    rejected(
+        "ref-let-call",
+        "fn make() -> String { String.from(\"temp\") }\nfn main() { let r: ref String = make(); println(r); }\n",
+        "a reference to a temporary outlives its statement (core-semantics.md §5.5)",
+    );
+    accepted_and_runs(
+        "ref-return-lent",
+        "struct P { name: String }\n\
+         impl P { fn name(ref self) -> ref String { ref self.name } }\n\
+         fn first(v: ref Vec[String]) -> ref String { ref v[0] }\n\
+         fn pick(a: ref String, b: ref String, n: i64) -> ref String { if n > 0 { a } else { b } }\n\
+         fn echo(s: ref String) -> ref String { s }\n\
+         fn via(s: ref String) -> ref String { echo(s) }\n\
+         fn get(v: ref Vec[String]) -> ref String { v.get(0).unwrap() }\n\
+         fn main() {\n    let v = [String.from(\"a\")];\n    let b = String.from(\"b\");\n    \
+         let p = P { name: String.from(\"n\") };\n    println(first(v));\n    println(pick(v[0], b, 0));\n    \
+         println(p.name());\n    println(via(b));\n    println(get(v));\n}\n",
+        "a\nb\nn\nb\na\n",
+    );
+}

@@ -166,6 +166,10 @@ impl<'a> super::OwnershipChecker<'a> {
                 // (`ref` param / `ref self` / a `StringSlice` param / ref-local
                 // / slice-local). A view sliced from an owned local dangles.
                 classify_string_slice_return(e, &ref_params, &ref_locals, &slice_locals)
+            } else if super::core_rules() && self.core_owned_call(e) {
+                // B-2026-10-22-29: a call that hands back an owned value is a
+                // temporary, dropped at the return (core §5.4, §5.5).
+                Some(BorrowReturnShape::DanglingSource)
             } else if matches!(&e.kind, ExprKind::Call { .. }) {
                 self.classify_borrow_return_call(e, &ref_params, &ref_locals)
             } else if matches!(&e.kind, ExprKind::StructLiteral { .. }) {
@@ -486,6 +490,9 @@ impl<'a> super::OwnershipChecker<'a> {
         ref_params: &HashSet<String>,
         ref_locals: &HashSet<String>,
     ) -> Option<BorrowReturnShape> {
+        if self.core_owned_call(e) {
+            return Some(BorrowReturnShape::DanglingSource);
+        }
         match &e.kind {
             ExprKind::MethodCall {
                 object,
@@ -559,6 +566,17 @@ impl<'a> super::OwnershipChecker<'a> {
             return self.core_return_shape(e, ref_params, ref_locals);
         }
         Some(BorrowReturnShape::DanglingSource)
+    }
+
+    /// Is `e` a call whose recorded result holds no reference: an owned
+    /// value, which is a temporary where a borrow is returned (B-2026-10-22-29)?
+    fn core_owned_call(&self, e: &Expr) -> bool {
+        matches!(e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. })
+            && self
+                .typecheck_result
+                .expr_types
+                .get(&SpanKey::from_span(&e.span))
+                .is_some_and(|t| !matches!(t, Type::Error) && !type_holds_ref(t))
     }
 
     fn ref_returning_fn_names(&self) -> HashSet<String> {

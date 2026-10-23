@@ -8618,7 +8618,19 @@ impl<'a> super::TypeChecker<'a> {
                 self.core_reject_ref_pattern_into_temp(pattern, value);
                 // v2 core §5.5: a `let` that keeps a reference to a temporary.
                 if self.cli_lint_overrides.strict_core && self.core_is_view(&expected_ty) {
-                    if let Some(temp) = self.core_view_temp_origin(value) {
+                    // An owned call result lent to the binding is the
+                    // temporary itself: there is no lifetime extension
+                    // (§5.5, B-2026-10-22-29).
+                    let owned_call = matches!(
+                        value.kind,
+                        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+                    ) && self.core_node_is_view(value) == Some(false);
+                    let temp = if owned_call {
+                        Some(value.span)
+                    } else {
+                        self.core_view_temp_origin(value)
+                    };
+                    if let Some(temp) = temp {
                         let message = "a reference to a temporary outlives its statement \
                              (core-semantics.md §5.5): the value this `let` keeps \
                              borrows from a temporary that is dropped at the `;`. Bind \

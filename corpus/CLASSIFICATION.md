@@ -6,9 +6,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9425 / 9586 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7705 / 7834 = 98.4%.
-- Every classified non-deferred program (context): 15756 / 16975 = 92.8%.
+- Every classified non-deferred program (context): 15760 / 16975 = 92.8%.
 - Bench variants (outside the gate): 220 / 883 = 24.9%; timeouts 604.
-- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5289 / 5411 = 97.7%; failing mir-gap 47, check-refuses 41, e-not-refused 28, e-differs 4, b-fix-incomplete 2.
+- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5293 / 5411 = 97.8%; failing mir-gap 47, check-refuses 41, e-not-refused 24, e-differs 4, b-fix-incomplete 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
