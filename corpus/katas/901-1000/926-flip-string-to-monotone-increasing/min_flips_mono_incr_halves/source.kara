@@ -1,0 +1,97 @@
+// LeetCode #926: Flip String to Monotone Increasing -- divide and
+// conquer.
+//
+// For a stretch, keep its 0s, its 1s and its fewest flips. Two stretches
+// side by side are made monotone either by making the left one monotone
+// and the right one all 1s, or the left one all 0s and the right one
+// monotone. Split the string in halves down to single characters.
+// O(n), O(log n) deep.
+
+struct Stretch {
+    zeros: i64,
+    ones: i64,
+    best: i64,
+}
+
+fn solve(b: Vec[u8], lo: i64, hi: i64) -> Stretch {
+    if hi - lo == 1 {
+        if b[lo] == b'1' {
+            return Stretch { zeros: 0, ones: 1, best: 0 };
+        }
+        return Stretch { zeros: 1, ones: 0, best: 0 };
+    }
+    let mid = (lo + hi) / 2;
+    let left = solve(b, lo, mid);
+    let right = solve(b, mid, hi);
+    Stretch {
+        zeros: left.zeros + right.zeros,
+        ones: left.ones + right.ones,
+        best: (left.best + right.zeros).min(left.ones + right.best),
+    }
+}
+
+fn min_flips_mono_incr(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    solve(b, 0, b.len()).best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    println(f"\"{s}\": {min_flips_mono_incr(s)}");
+}
+
+// n characters, each a 1 with probability lean in 100
+fn random_string(seed: mut ref i64, n: i64, lean: i64) -> String {
+    let mut b: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        b.push(if next_random(mut seed) % 100 < lean { b'1' } else { b'0' });
+    }
+    String.from_utf8(b).unwrap()
+}
+
+fn main() {
+    // LeetCode's three examples
+    show("00110");
+    show("010110");
+    show("00011000");
+    // single characters; already monotone; one pair out of order; all the
+    // 1s first; alternating
+    show("0");
+    show("1");
+    show("0011");
+    show("10");
+    show("11100");
+    show("1010101");
+    show("0101010");
+    // 300 random strings of 1 to 2000 characters, leaning from 0 to 1
+    let mut seed = 926;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        let lean = r % 101;
+        let s = random_string(mut seed, n, lean);
+        let a = min_flips_mono_incr(s);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random strings: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 100000 characters: 1s then 0s, alternating, and
+    // random
+    let mut back: Vec[u8] = Vec.new();
+    let mut alt: Vec[u8] = Vec.new();
+    for i in 0..100000 {
+        back.push(if i < 50000 { b'1' } else { b'0' });
+        alt.push(if i % 2 == 0 { b'0' } else { b'1' });
+    }
+    let r = random_string(mut seed, 100000, 50);
+    let x = min_flips_mono_incr(String.from_utf8(back).unwrap());
+    let y = min_flips_mono_incr(String.from_utf8(alt).unwrap());
+    println(f"100000 characters: 1s then 0s {x}, alternating {y}, random {min_flips_mono_incr(r)}");
+}

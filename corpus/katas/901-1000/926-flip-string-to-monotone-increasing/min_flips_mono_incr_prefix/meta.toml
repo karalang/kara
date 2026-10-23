@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/926-flip-string-to-monotone-increasing/min_flips_mono_incr_prefix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "a4c0ab460"
+extracted_src = "c5fbd50b"
+model_rev = "aafbe785"
+model_src = "c5fbd50b"

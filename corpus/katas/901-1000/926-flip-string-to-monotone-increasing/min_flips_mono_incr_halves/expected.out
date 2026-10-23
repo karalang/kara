@@ -1,0 +1,12 @@
+"00110": 1
+"010110": 2
+"00011000": 2
+"0": 0
+"1": 0
+"0011": 0
+"10": 1
+"11100": 2
+"1010101": 3
+"0101010": 3
+300 random strings: answers summing to 74085, checksum 271378683
+100000 characters: 1s then 0s 50000, alternating 49999, random 49482

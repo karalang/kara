@@ -1,0 +1,262 @@
+// LeetCode #926: Flip String to Monotone Increasing -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: a binary string is monotone increasing if it consists of
+// some number of 0's (possibly none), followed by some number of 1's (also
+// possibly none). You are given a binary string s. You can flip s[i]
+// changing it from 0 to 1 or from 1 to 0. Return the minimum number of
+// flips to make s monotone increasing.
+
+// ---- the ★ arm: one pass --------------------------------------------------
+fn star_min_flips_mono_incr(s: String) -> i64 {
+    let mut flips = 0;
+    let mut ones = 0;
+    for c in s.bytes() {
+        if c == b'1' {
+            ones += 1;
+        } else {
+            flips = (flips + 1).min(ones);
+        }
+    }
+    flips
+}
+
+// ---- the prefix arm: prefix counts ----------------------------------------
+fn prefix_min_flips_mono_incr(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut ones_before: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        ones_before[i + 1] = ones_before[i] + if b[i] == b'1' { 1 } else { 0 };
+    }
+    let mut best = n;
+    for k in 0..n + 1 {
+        // the 0s from k on: the characters from k on, less their 1s
+        let zeros_after = (n - k) - (ones_before[n] - ones_before[k]);
+        best = best.min(ones_before[k] + zeros_after);
+    }
+    best
+}
+
+// ---- the states arm: two states -------------------------------------------
+fn states_min_flips_mono_incr(s: String) -> i64 {
+    let mut zeros_end = 0;
+    let mut ones_end = 0;
+    for c in s.bytes() {
+        let is_one = c == b'1';
+        let next_ones = zeros_end.min(ones_end) + if is_one { 0 } else { 1 };
+        zeros_end = zeros_end + if is_one { 1 } else { 0 };
+        ones_end = next_ones;
+    }
+    zeros_end.min(ones_end)
+}
+
+// ---- the split arm: the split moved along ---------------------------------
+fn split_min_flips_mono_incr(s: String) -> i64 {
+    let mut cost = 0;
+    for c in s.bytes() {
+        if c == b'0' {
+            cost += 1;
+        }
+    }
+    let mut best = cost;
+    for c in s.bytes() {
+        if c == b'0' {
+            cost -= 1;
+        } else {
+            cost += 1;
+        }
+        best = best.min(cost);
+    }
+    best
+}
+
+// ---- the halves arm: divide and conquer -----------------------------------
+struct HalvesStretch {
+    zeros: i64,
+    ones: i64,
+    best: i64,
+}
+
+fn halves_solve(b: Vec[u8], lo: i64, hi: i64) -> HalvesStretch {
+    if hi - lo == 1 {
+        if b[lo] == b'1' {
+            return HalvesStretch { zeros: 0, ones: 1, best: 0 };
+        }
+        return HalvesStretch { zeros: 1, ones: 0, best: 0 };
+    }
+    let mid = (lo + hi) / 2;
+    let left = halves_solve(b, lo, mid);
+    let right = halves_solve(b, mid, hi);
+    HalvesStretch {
+        zeros: left.zeros + right.zeros,
+        ones: left.ones + right.ones,
+        best: (left.best + right.zeros).min(left.ones + right.best),
+    }
+}
+
+fn halves_min_flips_mono_incr(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    halves_solve(b, 0, b.len()).best
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, s: String) -> i64 {
+    if x == 0 {
+        star_min_flips_mono_incr(s)
+    } else if x == 1 {
+        prefix_min_flips_mono_incr(s)
+    } else if x == 2 {
+        states_min_flips_mono_incr(s)
+    } else if x == 3 {
+        split_min_flips_mono_incr(s)
+    } else {
+        halves_min_flips_mono_incr(s)
+    }
+}
+
+// The statement read literally: try every binary string of the same
+// length, keep those that are some 0s followed by some 1s, and take the
+// fewest characters that differ from s.
+fn literal(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut best = n + 1;
+    for mask in 0..(1 << n) {
+        let mut monotone = true;
+        let mut flips = 0;
+        for i in 0..n {
+            let bit = (mask >> i) & 1;
+            if i > 0 and bit == 0 and (mask >> (i - 1)) & 1 == 1 {
+                monotone = false;
+            }
+            let have = if b[i] == b'1' { 1 } else { 0 };
+            if bit != have {
+                flips += 1;
+            }
+        }
+        if monotone {
+            best = best.min(flips);
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n characters, each a 1 with probability lean in 100
+fn random_string(seed: mut ref i64, n: i64, lean: i64) -> String {
+    let mut b: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        b.push(if next_random(mut seed) % 100 < lean { b'1' } else { b'0' });
+    }
+    String.from_utf8(b).unwrap()
+}
+
+fn count_of(s: String, c: u8) -> i64 {
+    let mut k = 0;
+    for d in s.bytes() {
+        if d == c {
+            k += 1;
+        }
+    }
+    k
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, small: bool) {
+    let zeros = count_of(s, b'0');
+    let ones = count_of(s, b'1');
+    // reversed, with every character flipped
+    let mut turned: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        turned.push(if c == b'1' { b'0' } else { b'1' });
+    }
+    turned.reverse();
+    let turned_s = String.from_utf8(turned).unwrap();
+    // a 0 in front or a 1 behind, by turns
+    let padded = if next_random(mut seed) % 2 == 0 { "0" + s } else { s + "1" };
+    // a second string after it
+    let other_n = 1 + next_random(mut seed) % 12;
+    let other_lean = next_random(mut seed) % 101;
+    let other = random_string(mut seed, other_n, other_lean);
+    let joined = s + other;
+    let truth = if small { literal(s) } else { -1 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, s));
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small strings
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: at least 0 and at most all the 0s or all the 1s
+        check(mut t, 2, a >= 0 and a <= zeros.min(ones));
+        // P3: the same answer reversed with every character flipped
+        check(mut t, 3, arm(x, turned_s) == a);
+        // P4: the same answer with a 0 in front or a 1 behind
+        check(mut t, 4, arm(x, padded) == a);
+        // P5: s followed by t is s made monotone and t all 1s, or s all 0s
+        // and t made monotone, whichever is fewer
+        let b = arm(x, other);
+        check(mut t, 5, arm(x, joined) == (a + count_of(other, b'0')).min(ones + b));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 926;
+    let mut cases = 0;
+    let mut characters = 0;
+    let mut sum = 0;
+    // 1 to 10 characters against the statement, then 1 to 2000; each
+    // leaning toward 0 or 1 by a random amount
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 2000 };
+        let lean = next_random(mut seed) % 101;
+        let s = random_string(mut seed, n, lean);
+        cases += 1;
+        characters += n;
+        sum += arm(0, s);
+        properties(mut t, mut seed, s, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} strings, {characters} characters, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
