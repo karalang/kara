@@ -3903,9 +3903,11 @@ fn parse_opts(fields: ref Vec[String], from: i64) -> Opts {
     o
 }
 
+// A carriage return prints as \r, so the output has one kind of line end.
 fn show(html: ref String) {
     for line in split_on(html, '\n') {
-        println(f"  | {line}");
+        let shown = line.replace("\r", "\\r");
+        println(f"  | {shown}");
     }
 }
 

@@ -433,63 +433,63 @@
   |   <a href=" one&quot;><p>block in link</p></a> <p class=x>odd slash</p> <img alt=x/ src=a.png> <foo bar=baz/ > <x-y z=1 w=2>custom</x-y> <!--x bogus--> <!-- 3--> <script>
 > minify crlf
   900 -> 721 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > minify crlf remove_comments
   900 -> 695 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > minify crlf remove_empty_space
   900 -> 708 chars
-  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head><body class="post  layout-wide"><header><nav><ul><li><a href=/ class=home>Home</a><li><a href="/archive/?year=2024&month=05">Archive</a><li><a href=/about/ title='About "us"'>About</a></ul></nav></header><article id=post-42 data-tags='["html", "build"]'>
 > minify crlf remove_all_empty_space
   900 -> 708 chars
-  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head><body class="post  layout-wide"><header><nav><ul><li><a href=/ class=home>Home</a><li><a href="/archive/?year=2024&month=05">Archive</a><li><a href=/about/ title='About "us"'>About</a></ul></nav></header><article id=post-42 data-tags='["html", "build"]'>
 > minify crlf remove_comments remove_empty_space reduce_boolean_attributes
   900 -> 682 chars
-  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head><body class="post  layout-wide"><header><nav><ul><li><a href=/ class=home>Home</a><li><a href="/archive/?year=2024&month=05">Archive</a><li><a href=/about/ title='About "us"'>About</a></ul></nav></header><article id=post-42 data-tags='["html", "build"]'>
 > minify crlf keep_quotes
   900 -> 761 chars
-  | <!DOCTYPE html><html lang="en"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel="stylesheet" href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang="en"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel="stylesheet" href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href="/" class="home">Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href="/about/" title="About &#34;us&#34;">About</a> </ul> </nav> </header> <article id="post-42" data-tags="[&#34;html&#34;, &#34;build&#34;]"> 
 > minify crlf reduce_empty_attributes=0
   900 -> 721 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > minify crlf charrefs=0
   900 -> 725 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&amp;theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&amp;theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > minify crlf keep_pre pre_attr=pre
   900 -> 721 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > minify crlf pre_tags=code,td pre_attr=data-raw
   900 -> 721 chars
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 # snippets
 > snippet <p>  a   b  </p>
@@ -864,9 +864,9 @@
 > cli -H --remove-all-empty-space pages/table.html out/table.min.html
   | <html lang=en> <body> <table class=data> <caption>Quarterly results</caption> <colgroup><col span=2><col class=num> <thead> <tr><th>Region<th>Quarter<th>Revenue <tbody> <tr><td>North<td>Q1<td>1,200 <tr><td>South<td>Q1<td>950 <tr><td lang=fr>Ouest<td>Q1<td>1&#x202f;020 <tfoot> <tr><td colspan=2>Total<td>3,170 </table> <dl> <dt>HTML<dd>HyperText Markup Language <dt>CSS<dd lang=fr>Feuilles de style </dl> <ruby>漢<rp>(<rt>kan<rp>)</rp>字<rp>(<rt>ji<rp>)</ruby> <ol reversed=reversed start=3> <li>third<li>second <li>first <ul><li>nested a<li>nested b</ul> </ol> <p lang=de>Ein <span>Absatz</span> mit <q lang=en>quote</q>. <div>after the paragraph</div> </body> </html> 
 > cli -s pages/crlf.html out/crlf.min.html
-  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>
-  |       body  { margin: 0;   font-family: system-ui; }
-  |       pre   { background: #f6f8fa; }
+  | <!DOCTYPE html><html lang=en> <head><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1"><title>Shipping a minifier &amp; other stories</title><link rel=stylesheet href="/static/site.css?v=3&theme=dark"><!-- analytics go here --><!--[if lt IE 9]><script src="/static/html5shiv.js"></script><![endif]--><style>\r
+  |       body  { margin: 0;   font-family: system-ui; }\r
+  |       pre   { background: #f6f8fa; }\r
   |     </style></head> <body class="post  layout-wide"> <header> <nav> <ul> <li><a href=/ class=home>Home</a> <li><a href="/archive/?year=2024&month=05">Archive</a> <li><a href=/about/ title='About "us"'>About</a> </ul> </nav> </header> <article id=post-42 data-tags='["html", "build"]'> 
 > cli pages/broken.html out/broken.min.html
   | <div class=wrap> <p>An <a href=/x>open <b>bold</p> and more</a> text </div></div> </span>stray close <p>a < b and c > d, AT&T, &unknown; &#xZZ; &#; &amp <div title="unterminated>oops</div>
