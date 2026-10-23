@@ -1,0 +1,119 @@
+// LeetCode #911: Online Election -- only the changes of leader kept.
+//
+// Count the votes in order as the ★ arm does, but record a (time, leader)
+// pair only when the lead changes hands. Between two changes the leader
+// stays the same, so a query at time t wants the last change at or before
+// t, found by binary search over the changes, often far fewer than the
+// votes. O(n) to build, O(log c) a query for c changes.
+
+struct TopVotedCandidate {
+    change_times: Vec[i64],
+    change_leaders: Vec[i64],
+}
+
+impl TopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> TopVotedCandidate {
+        let n = persons.len();
+        let mut count: Vec[i64] = Vec.filled(n, 0);
+        let mut change_times: Vec[i64] = Vec.new();
+        let mut change_leaders: Vec[i64] = Vec.new();
+        let mut leader = -1;
+        for i in 0..n {
+            let p = persons[i];
+            count[p] += 1;
+            if leader == -1 or count[p] >= count[leader] {
+                if p != leader {
+                    change_times.push(times[i]);
+                    change_leaders.push(p);
+                }
+                leader = p;
+            }
+        }
+        TopVotedCandidate { change_times, change_leaders }
+    }
+
+    fn q(ref self, t: i64) -> i64 {
+        // the first change after t, then the one before it
+        let mut lo = 0;
+        let mut hi = self.change_times.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.change_times[mid] <= t {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.change_leaders[lo - 1]
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn join(v: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s
+}
+
+fn show(persons: Vec[i64], times: Vec[i64], queries: Vec[i64]) {
+    let mut e = TopVotedCandidate.new(persons, times);
+    let mut answers: Vec[i64] = Vec.new();
+    for t in queries.iter() {
+        answers.push(e.q(*t));
+    }
+    println(f"persons = [{join(persons)}], times = [{join(times)}]: q({join(queries)}) -> {join(answers)}");
+}
+
+// A random election of `n` votes among the first `among` people, with
+// gaps between votes up to `gap`, and `asked` queries from the first vote
+// to `gap` past the last; the answers folded into a checksum.
+fn election(seed: mut ref i64, n: i64, among: i64, gap: i64, asked: i64) -> i64 {
+    let mut persons: Vec[i64] = Vec.new();
+    let mut times: Vec[i64] = Vec.new();
+    let mut t = next_random(mut seed) % (gap + 1);
+    for _ in 0..n {
+        persons.push(next_random(mut seed) % among);
+        times.push(t);
+        t += 1 + next_random(mut seed) % gap;
+    }
+    let mut e = TopVotedCandidate.new(persons, times);
+    let mut check = 0;
+    for _ in 0..asked {
+        let ask = times[0] + next_random(mut seed) % (t - times[0]);
+        check = (check * 1000003 + e.q(ask)) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    show(vec![0, 1, 1, 0, 0, 1, 0], vec![0, 5, 10, 15, 20, 25, 30], vec![3, 12, 25, 15, 24, 8]);
+    show(vec![0], vec![7], vec![7, 1000000000]);
+    show(vec![0, 1], vec![1, 2], vec![1, 2, 3]);
+    show(vec![2, 2, 1, 1, 0, 0, 1], vec![0, 1, 2, 3, 4, 5, 6], vec![0, 1, 2, 3, 4, 5, 6]);
+    show(vec![3, 1, 2, 0], vec![10, 20, 30, 1000000000], vec![15, 25, 35, 999999999, 1000000000]);
+    // random elections of up to 500 votes among 2, 10 or every person,
+    // with gaps up to 3, 1000 or 10^6
+    let mut seed = 911;
+    let mut check = 0;
+    for c in 0..300 {
+        let n = 1 + next_random(mut seed) % 500;
+        let among = if c % 3 == 0 { 2.min(n) } else if c % 3 == 1 { 10.min(n) } else { n };
+        let gap = if c % 4 == 0 { 3 } else if c % 4 == 1 { 1000 } else { 1000000 };
+        check = (check * 31 + election(mut seed, n, among, gap, 30)) % 1000000007;
+    }
+    println(f"300 elections: checksum {check}");
+    // LeetCode's largest: 5000 votes up to time 10^9 and 10^4 queries
+    println(f"5000 votes among 5000, 10000 queries: checksum {election(mut seed, 5000, 5000, 199999, 10000)}");
+    println(f"5000 votes among 3, 10000 queries: checksum {election(mut seed, 5000, 3, 199999, 10000)}");
+}

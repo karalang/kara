@@ -1,0 +1,416 @@
+// LeetCode #911: Online Election -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given two integer arrays persons and times. In
+// an election, the ith vote was cast for persons[i] at time times[i]. For
+// each query at a time t, find the person that was leading the election
+// at time t. Votes cast at time t will count towards our query. In the
+// case of a tie, the most recent vote (among tied candidates) wins.
+
+// ---- the ★ arm: the leader after every vote -------------------------------
+struct StarTopVotedCandidate {
+    times: Vec[i64],
+    leaders: Vec[i64],
+}
+
+impl StarTopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> StarTopVotedCandidate {
+        let n = persons.len();
+        let mut count: Vec[i64] = Vec.filled(n, 0);
+        let mut leaders: Vec[i64] = Vec.new();
+        let mut leader = persons[0];
+        for i in 0..n {
+            let p = persons[i];
+            count[p] += 1;
+            if count[p] >= count[leader] {
+                leader = p;
+            }
+            leaders.push(leader);
+        }
+        StarTopVotedCandidate { times: times.clone(), leaders }
+    }
+
+    fn q(ref self, t: i64) -> i64 {
+        // the last vote at or before t: times[lo] <= t < times[hi]
+        let mut lo = 0;
+        let mut hi = self.times.len();
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.times[mid] <= t {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        self.leaders[lo]
+    }
+}
+
+// ---- the changes arm: only the changes of leader kept ---------------------
+struct ChangesTopVotedCandidate {
+    change_times: Vec[i64],
+    change_leaders: Vec[i64],
+}
+
+impl ChangesTopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> ChangesTopVotedCandidate {
+        let n = persons.len();
+        let mut count: Vec[i64] = Vec.filled(n, 0);
+        let mut change_times: Vec[i64] = Vec.new();
+        let mut change_leaders: Vec[i64] = Vec.new();
+        let mut leader = -1;
+        for i in 0..n {
+            let p = persons[i];
+            count[p] += 1;
+            if leader == -1 or count[p] >= count[leader] {
+                if p != leader {
+                    change_times.push(times[i]);
+                    change_leaders.push(p);
+                }
+                leader = p;
+            }
+        }
+        ChangesTopVotedCandidate { change_times, change_leaders }
+    }
+
+    fn q(ref self, t: i64) -> i64 {
+        // the first change after t, then the one before it
+        let mut lo = 0;
+        let mut hi = self.change_times.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.change_times[mid] <= t {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.change_leaders[lo - 1]
+    }
+}
+
+// ---- the map arm: a sorted map from time to leader ------------------------
+struct MapTopVotedCandidate {
+    leader_at: SortedMap[i64, i64],
+    first: i64,
+}
+
+impl MapTopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> MapTopVotedCandidate {
+        let n = persons.len();
+        let mut count: Vec[i64] = Vec.filled(n, 0);
+        let mut leader_at: SortedMap[i64, i64] = SortedMap.new();
+        let mut leader = persons[0];
+        for i in 0..n {
+            let p = persons[i];
+            count[p] += 1;
+            if count[p] >= count[leader] {
+                leader = p;
+            }
+            let _ = leader_at.insert(times[i], leader);
+        }
+        MapTopVotedCandidate { leader_at, first: times[0] }
+    }
+
+    fn q(ref self, t: i64) -> i64 {
+        match self.leader_at.range_inclusive(self.first, t).next_back() {
+            Some((_, leader)) => *leader,
+            None => -1,
+        }
+    }
+}
+
+// ---- the lazy arm: the votes counted as the queries need ------------------
+struct LazyTopVotedCandidate {
+    persons: Vec[i64],
+    times: Vec[i64],
+    count: Vec[i64],
+    leaders: Vec[i64],
+}
+
+impl LazyTopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> LazyTopVotedCandidate {
+        let n = persons.len();
+        LazyTopVotedCandidate { persons: persons.clone(), times: times.clone(), count: Vec.filled(n, 0), leaders: Vec.new() }
+    }
+
+    fn q(mut ref self, t: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.times.len();
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.times[mid] <= t {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        while self.leaders.len() <= lo {
+            let i = self.leaders.len();
+            let p = self.persons[i];
+            self.count[p] += 1;
+            let leader = if i == 0 { p } else { self.leaders[i - 1] };
+            self.leaders.push(if self.count[p] >= self.count[leader] { p } else { leader });
+        }
+        self.leaders[lo]
+    }
+}
+
+// ---- the gallop arm: galloping back from the latest vote ------------------
+struct GallopTopVotedCandidate {
+    times: Vec[i64],
+    leaders: Vec[i64],
+}
+
+impl GallopTopVotedCandidate {
+    fn new(persons: Vec[i64], times: Vec[i64]) -> GallopTopVotedCandidate {
+        let n = persons.len();
+        let mut count: Vec[i64] = Vec.filled(n, 0);
+        let mut leaders: Vec[i64] = Vec.new();
+        let mut best = 0;
+        for i in 0..n {
+            let p = persons[i];
+            count[p] += 1;
+            if count[p] >= best {
+                best = count[p];
+                leaders.push(p);
+            } else {
+                leaders.push(leaders[i - 1]);
+            }
+        }
+        GallopTopVotedCandidate { times: times.clone(), leaders }
+    }
+
+    fn q(ref self, t: i64) -> i64 {
+        let last = self.times.len() - 1;
+        if self.times[last] <= t {
+            return self.leaders[last];
+        }
+        // times[low] <= t < times[high], with high - low doubling
+        let mut high = last;
+        let mut step = 1;
+        let mut low = high - step;
+        while low > 0 and self.times[low] > t {
+            high = low;
+            step *= 2;
+            low = if high - step > 0 { high - step } else { 0 };
+        }
+        while high - low > 1 {
+            let mid = (low + high) / 2;
+            if self.times[mid] <= t {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        self.leaders[low]
+    }
+}
+
+fn arm(x: i64, persons: Vec[i64], times: Vec[i64], queries: Vec[i64]) -> Vec[i64] {
+    let mut answers: Vec[i64] = Vec.new();
+    if x == 0 {
+        let e = StarTopVotedCandidate.new(persons, times);
+        for t in queries.iter() {
+            answers.push(e.q(*t));
+        }
+    } else if x == 1 {
+        let e = ChangesTopVotedCandidate.new(persons, times);
+        for t in queries.iter() {
+            answers.push(e.q(*t));
+        }
+    } else if x == 2 {
+        let e = MapTopVotedCandidate.new(persons, times);
+        for t in queries.iter() {
+            answers.push(e.q(*t));
+        }
+    } else if x == 3 {
+        let mut e = LazyTopVotedCandidate.new(persons, times);
+        for t in queries.iter() {
+            answers.push(e.q(*t));
+        }
+    } else {
+        let e = GallopTopVotedCandidate.new(persons, times);
+        for t in queries.iter() {
+            answers.push(e.q(*t));
+        }
+    }
+    answers
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the votes cast at or before t counted, and of the people with the most,
+// the one whose latest such vote is the most recent
+fn literal(persons: Vec[i64], times: Vec[i64], t: i64) -> i64 {
+    let n = persons.len();
+    let mut count: Vec[i64] = Vec.filled(n, 0);
+    let mut latest: Vec[i64] = Vec.filled(n, -1);
+    for i in 0..n {
+        if times[i] <= t {
+            count[persons[i]] += 1;
+            latest[persons[i]] = times[i];
+        }
+    }
+    let mut leader = -1;
+    for p in 0..n {
+        if count[p] > 0 and (leader == -1 or count[p] > count[leader] or (count[p] == count[leader] and latest[p] > latest[leader])) {
+            leader = p;
+        }
+    }
+    leader
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one election and its queries over the five arms (P1 only
+// when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, persons: Vec[i64], times: Vec[i64], queries: Vec[i64], small: bool) {
+    let n = persons.len();
+    let m = queries.len();
+    let mut want: Vec[i64] = Vec.new();
+    if small {
+        for j in 0..m {
+            want.push(literal(persons, times, queries[j]));
+        }
+    }
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, persons, times, queries));
+    }
+    // P2: each query moved back to the last vote at or before it
+    let mut snapped: Vec[i64] = Vec.new();
+    for j in 0..m {
+        let mut s = times[0];
+        for i in 0..n {
+            if times[i] <= queries[j] {
+                s = times[i];
+            }
+        }
+        snapped.push(s);
+    }
+    // P3: every time moved later by the same amount
+    let shift = next_random(mut seed) % 1000;
+    let mut later: Vec[i64] = Vec.new();
+    for i in 0..n {
+        later.push(times[i] + shift);
+    }
+    let mut later_queries: Vec[i64] = Vec.new();
+    for j in 0..m {
+        later_queries.push(queries[j] + shift);
+    }
+    // P4: the people renamed, p to (p + r) % n
+    let r = next_random(mut seed) % n;
+    let mut renamed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        renamed.push((persons[i] + r) % n);
+    }
+    // P5: one more vote, for the final leader, after every query
+    let leader = literal(persons, times, times[n - 1]);
+    let mut asked_last = times[n - 1];
+    for j in 0..m {
+        asked_last = asked_last.max(queries[j]);
+    }
+    let mut more_persons = persons.clone();
+    more_persons.push(leader);
+    let mut more_times = times.clone();
+    more_times.push(asked_last + 1);
+    let mut more_queries = queries.clone();
+    more_queries.push(asked_last + 1);
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's leader at every query
+        if small {
+            check(mut t, 1, got == want);
+        }
+        check(mut t, 2, arm(x, persons, times, snapped) == got);
+        check(mut t, 3, arm(x, persons, later, later_queries) == got);
+        let mut ok = true;
+        let moved = arm(x, renamed, times, queries);
+        for j in 0..m {
+            if moved[j] != (got[j] + r) % n {
+                ok = false;
+            }
+        }
+        check(mut t, 4, ok);
+        let more = arm(x, more_persons, more_times, more_queries);
+        let mut same = more[m] == leader;
+        for j in 0..m {
+            if more[j] != got[j] {
+                same = false;
+            }
+        }
+        check(mut t, 5, same);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 911;
+    let mut elections = 0;
+    let mut votes = 0;
+    let mut asked = 0;
+    // up to 8 votes among up to 3 people with gaps up to 3 against the
+    // statement; then up to 300 votes among 2, 10 or every person, with
+    // gaps up to 3, 1000 or 10^6
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 300 };
+        let among = if small { 1 + next_random(mut seed) % 3.min(n) } else if c % 3 == 0 { 2.min(n) } else if c % 3 == 1 { 10.min(n) } else { n };
+        let gap = if small or c % 3 == 0 { 3 } else if c % 3 == 1 { 1000 } else { 1000000 };
+        let m = if small { 6 } else { 20 };
+        let mut persons: Vec[i64] = Vec.new();
+        let mut times: Vec[i64] = Vec.new();
+        let mut at = next_random(mut seed) % (gap + 1);
+        for _ in 0..n {
+            persons.push(next_random(mut seed) % among);
+            times.push(at);
+            at += 1 + next_random(mut seed) % gap;
+        }
+        let mut queries: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            queries.push(times[0] + next_random(mut seed) % (at - times[0]));
+        }
+        elections += 1;
+        votes += n;
+        asked += m;
+        properties(mut t, mut seed, persons, times, queries, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{elections} elections, {votes} votes, {asked} queries, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
