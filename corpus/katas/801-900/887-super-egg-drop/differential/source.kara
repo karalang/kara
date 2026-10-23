@@ -1,0 +1,282 @@
+// LeetCode #887: Super Egg Drop -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: k identical eggs and a building of n floors, 1 to n.
+// There is a floor f, 0 <= f <= n, such that an egg dropped above f
+// breaks and one dropped at or below f does not. Each move drops an
+// unbroken egg from any floor; a broken egg cannot be used again, an
+// unbroken one can. Return the minimum number of moves that determines f
+// with certainty.
+
+// ---- the ★ arm: the floors a number of moves can cover --------------------
+fn star_super_egg_drop(k: i64, n: i64) -> i64 {
+    let mut floors: Vec[i64] = Vec.filled(k + 1, 0);
+    let mut moves = 0;
+    while floors[k] < n {
+        moves += 1;
+        let mut eggs = k;
+        while eggs >= 1 {
+            floors[eggs] = floors[eggs - 1] + floors[eggs] + 1;
+            eggs -= 1;
+        }
+    }
+    moves
+}
+
+// ---- the search arm: the recursion, the best floor by binary search -------
+fn search_super_egg_drop(k: i64, n: i64) -> i64 {
+    // prev[f] is moves(e - 1, f), cur[f] is moves(e, f)
+    let mut prev: Vec[i64] = Vec.new();
+    for f in 0..n + 1 {
+        prev.push(f);
+    }
+    for _ in 2..k + 1 {
+        let mut cur: Vec[i64] = Vec.filled(n + 1, 0);
+        for f in 1..n + 1 {
+            let mut lo = 1;
+            let mut hi = f;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if prev[mid - 1] < cur[f - mid] {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            let mut best = 1 + prev[lo - 1].max(cur[f - lo]);
+            if lo > 1 {
+                best = best.min(1 + prev[lo - 2].max(cur[f - lo + 1]));
+            }
+            cur[f] = best;
+        }
+        prev = cur;
+    }
+    prev[n]
+}
+
+// ---- the pointer arm: the recursion, the best floor only moving up --------
+fn pointer_super_egg_drop(k: i64, n: i64) -> i64 {
+    let mut prev: Vec[i64] = Vec.new();
+    for f in 0..n + 1 {
+        prev.push(f);
+    }
+    for _ in 2..k + 1 {
+        let mut cur: Vec[i64] = Vec.filled(n + 1, 0);
+        let mut x = 1;
+        for f in 1..n + 1 {
+            while x < f and prev[x].max(cur[f - x - 1]) <= prev[x - 1].max(cur[f - x]) {
+                x += 1;
+            }
+            cur[f] = 1 + prev[x - 1].max(cur[f - x]);
+        }
+        prev = cur;
+    }
+    prev[n]
+}
+
+// ---- the binomial arm: the floors as a sum of binomials -------------------
+fn binomial_covered(m: i64, k: i64, n: i64) -> i64 {
+    let mut total = 0;
+    let mut term = 1;
+    for i in 1..k + 1 {
+        term = term * (m - i + 1) / i;
+        total += term;
+        if total >= n or term == 0 {
+            return total;
+        }
+    }
+    total
+}
+
+fn binomial_super_egg_drop(k: i64, n: i64) -> i64 {
+    let mut m = 1;
+    while binomial_covered(m, k, n) < n {
+        m += 1;
+    }
+    m
+}
+
+// ---- the bisect arm: a binary search on the moves -------------------------
+fn bisect_reach(m: i64, k: i64, n: i64) -> i64 {
+    let mut floors: Vec[i64] = Vec.filled(k + 1, 0);
+    for _ in 0..m {
+        let mut eggs = k;
+        while eggs >= 1 {
+            floors[eggs] = (floors[eggs - 1] + floors[eggs] + 1).min(n);
+            eggs -= 1;
+        }
+    }
+    floors[k]
+}
+
+fn bisect_super_egg_drop(k: i64, n: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if bisect_reach(mid, k, n) >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn arm(x: i64, k: i64, n: i64) -> i64 {
+    match x {
+        0 => star_super_egg_drop(k, n),
+        1 => search_super_egg_drop(k, n),
+        2 => pointer_super_egg_drop(k, n),
+        3 => binomial_super_egg_drop(k, n),
+        _ => bisect_super_egg_drop(k, n),
+    }
+}
+
+// no floors need no moves; LeetCode's n is at least 1, so the arms are not
+// asked about none
+fn moves(x: i64, k: i64, n: i64) -> i64 {
+    if n == 0 { 0 } else { arm(x, k, n) }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the game played out: with e eggs and f floors still in doubt, a drop
+// from each floor x in turn, the egg breaking (e - 1 eggs, the x - 1
+// floors below) or not (e eggs, the f - x floors above), the worse of the
+// two counted, and the best drop taken; one egg can only climb a floor at
+// a time, and no floors in doubt need no drop
+fn literal(k: i64, n: i64) -> i64 {
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for e in 0..k + 1 {
+        let mut row: Vec[i64] = Vec.new();
+        for f in 0..n + 1 {
+            if e == 1 {
+                row.push(f);
+            } else if e == 0 or f == 0 {
+                row.push(0);
+            } else {
+                let mut best = f;
+                for x in 1..f + 1 {
+                    let worst = table[e - 1][x - 1].max(row[f - x]);
+                    best = best.min(1 + worst);
+                }
+                row.push(best);
+            }
+        }
+        table.push(row);
+    }
+    table[k][n]
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the floors m moves and e eggs can tell apart, capped at `cap`
+fn floors(m: i64, e: i64, cap: i64) -> i64 {
+    let mut row: Vec[i64] = Vec.filled(e + 1, 0);
+    for _ in 0..m {
+        let mut i = e;
+        while i >= 1 {
+            row[i] = (row[i - 1] + row[i] + 1).min(cap);
+            i -= 1;
+        }
+    }
+    row[e]
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's moves.
+fn properties(t: mut ref Tally, k: i64, n: i64, small: bool) -> i64 {
+    let want = if small { literal(k, n) } else { 0 };
+    // the moves of a binary search: the least m with 2^m - 1 >= n
+    let mut halving = 0;
+    while (1 << halving) - 1 < n {
+        halving += 1;
+    }
+    // two eggs: the least m with m (m + 1) / 2 >= n
+    let mut pair = 0;
+    while pair * (pair + 1) / 2 < n {
+        pair += 1;
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, k, n));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: no fewer moves than a binary search, no more than one a
+        // floor, and one a floor with one egg
+        check(mut t, 2, got >= halving and got <= n and (k > 1 or got == n));
+        // P3: an egg more never needs more moves, a floor more never fewer
+        check(mut t, 3, arm(x, k + 1, n) <= got and arm(x, k, n + 1) >= got);
+        // P4: two eggs need the least m with m (m + 1) / 2 floors; eggs
+        // enough for a binary search need its moves
+        check(mut t, 4, (k != 2 or got == pair) and (k < halving or got == halving));
+        // P5: the first drop from the floor above all that one egg fewer
+        // settles in got - 1 moves leaves both outcomes settled in got - 1
+        // moves
+        if k >= 2 {
+            let drop = (floors(got - 1, k - 1, n) + 1).min(n);
+            let worst = moves(x, k - 1, drop - 1).max(moves(x, k, n - drop));
+            check(mut t, 5, worst <= got - 1);
+        }
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 887;
+    // up to 4 eggs and 40 floors against the statement; then up to 12
+    // eggs and 2,000 floors
+    for c in 0..3040 {
+        let small = c < 3000;
+        let k = if small { next_random(mut seed) % 4 + 1 } else { next_random(mut seed) % 12 + 1 };
+        let n = if small { next_random(mut seed) % 40 + 1 } else { next_random(mut seed) % 2000 + 1 };
+        cases += 1;
+        total += properties(mut t, k, n, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {total} moves in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

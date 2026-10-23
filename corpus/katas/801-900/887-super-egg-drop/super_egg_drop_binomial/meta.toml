@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/887-super-egg-drop/super_egg_drop_binomial.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "4a3101f05"
+extracted_src = "9b7b219b"
+model_rev = "aafbe785"
+model_src = "9b7b219b"

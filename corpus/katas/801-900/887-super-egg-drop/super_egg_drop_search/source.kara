@@ -1,0 +1,84 @@
+// LeetCode #887: Super Egg Drop -- the game's recursion, the best floor
+// found by binary search.
+//
+// With e eggs and f floors, a drop from floor x leaves e - 1 eggs and the
+// x - 1 floors below if the egg breaks, or e eggs and the f - x floors
+// above if not, and the worst of the two decides: moves(e, f) = 1 +
+// min over x of max(moves(e - 1, x - 1), moves(e, f - x)). The first term
+// rises with x and the second falls, so the best x is where they cross,
+// found by binary search. A table over eggs and floors. O(k * n log n).
+
+fn super_egg_drop(k: i64, n: i64) -> i64 {
+    // prev[f] is moves(e - 1, f), cur[f] is moves(e, f)
+    let mut prev: Vec[i64] = Vec.new();
+    for f in 0..n + 1 {
+        prev.push(f);
+    }
+    for _ in 2..k + 1 {
+        let mut cur: Vec[i64] = Vec.filled(n + 1, 0);
+        for f in 1..n + 1 {
+            let mut lo = 1;
+            let mut hi = f;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if prev[mid - 1] < cur[f - mid] {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            let mut best = 1 + prev[lo - 1].max(cur[f - lo]);
+            if lo > 1 {
+                best = best.min(1 + prev[lo - 2].max(cur[f - lo + 1]));
+            }
+            cur[f] = best;
+        }
+        prev = cur;
+    }
+    prev[n]
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn show(k: i64, n: i64) {
+    println(f"k = {k}, n = {n} -> {super_egg_drop(k, n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(1, 2);
+    show(2, 6);
+    show(3, 14);
+    show(1, 1);
+    show(1, 10000);
+    show(2, 10000);
+    show(3, 10000);
+    show(100, 10000);
+    show(14, 10000);
+    show(13, 8191);
+    show(13, 8192);
+    // small cases
+    let mut seed = 887;
+    let mut total = 0;
+    for _ in 0..3000 {
+        let k = next_random(mut seed) % 5 + 1;
+        let n = next_random(mut seed) % 80 + 1;
+        total += super_egg_drop(k, n);
+    }
+    println(f"3000 cases of up to 5 eggs and 80 floors: {total} moves");
+    // LeetCode's sizes, with up to 12 eggs
+    total = 0;
+    let mut check = 0;
+    for _ in 0..20 {
+        let k = next_random(mut seed) % 12 + 1;
+        let n = next_random(mut seed) % 10000 + 1;
+        let moves = super_egg_drop(k, n);
+        total += moves;
+        check = (check * 131 + moves) % 1000000007;
+    }
+    println(f"20 cases of up to 12 eggs and 10000 floors: {total} moves, checksum {check}");
+}

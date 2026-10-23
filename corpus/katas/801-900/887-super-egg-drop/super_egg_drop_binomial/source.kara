@@ -1,0 +1,74 @@
+// LeetCode #887: Super Egg Drop -- the floors as a sum of binomials.
+//
+// The floors m moves and k eggs can tell apart, floors(m, k) =
+// floors(m - 1, k - 1) + floors(m - 1, k) + 1, solve to C(m, 1) + C(m, 2) +
+// ... + C(m, k): one term for each number of eggs that may break. Trying
+// m = 1, 2, ... and summing the binomials, each from the one before as
+// C(m, i) = C(m, i - 1) * (m - i + 1) / i, gives the least m reaching n.
+// The sum stops once it reaches n, so nothing overflows. O(k * answer).
+
+fn covered(m: i64, k: i64, n: i64) -> i64 {
+    let mut total = 0;
+    let mut term = 1;
+    for i in 1..k + 1 {
+        term = term * (m - i + 1) / i;
+        total += term;
+        if total >= n or term == 0 {
+            return total;
+        }
+    }
+    total
+}
+
+fn super_egg_drop(k: i64, n: i64) -> i64 {
+    let mut m = 1;
+    while covered(m, k, n) < n {
+        m += 1;
+    }
+    m
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn show(k: i64, n: i64) {
+    println(f"k = {k}, n = {n} -> {super_egg_drop(k, n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(1, 2);
+    show(2, 6);
+    show(3, 14);
+    show(1, 1);
+    show(1, 10000);
+    show(2, 10000);
+    show(3, 10000);
+    show(100, 10000);
+    show(14, 10000);
+    show(13, 8191);
+    show(13, 8192);
+    // small cases
+    let mut seed = 887;
+    let mut total = 0;
+    for _ in 0..3000 {
+        let k = next_random(mut seed) % 5 + 1;
+        let n = next_random(mut seed) % 80 + 1;
+        total += super_egg_drop(k, n);
+    }
+    println(f"3000 cases of up to 5 eggs and 80 floors: {total} moves");
+    // LeetCode's sizes, with up to 12 eggs
+    total = 0;
+    let mut check = 0;
+    for _ in 0..20 {
+        let k = next_random(mut seed) % 12 + 1;
+        let n = next_random(mut seed) % 10000 + 1;
+        let moves = super_egg_drop(k, n);
+        total += moves;
+        check = (check * 131 + moves) % 1000000007;
+    }
+    println(f"20 cases of up to 12 eggs and 10000 floors: {total} moves, checksum {check}");
+}
