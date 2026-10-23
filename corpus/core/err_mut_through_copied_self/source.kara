@@ -1,0 +1,19 @@
+struct Bag { xs: Vec[i64] }
+
+impl Bag {
+    fn arrange(mut ref self) { self.xs.reverse(); }
+
+    // `let mut b = self` is legal: `b` is a `ref Bag` (§1.1). The errors are
+    // the `mut ref self` call through it (§5.9) and the move of `b.xs` out of
+    // a place behind a `ref` (§3.7). Fix: `fn inner(own self)`.
+    fn inner(self) -> Vec[i64] {
+        let mut b = self;
+        b.arrange();
+        b.xs
+    }
+}
+
+fn main() {
+    let bag = Bag { xs: [1, 2, 3] };
+    println(bag.inner().len());
+}

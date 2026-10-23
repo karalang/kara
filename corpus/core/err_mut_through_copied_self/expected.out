@@ -1,0 +1,1 @@
+error: `b.arrange()` needs `mut ref self` but `b` is a `ref Bag` (§5.9), and `b.xs` moves a Vec out of a place behind a `ref` (§3.7); take `own self`

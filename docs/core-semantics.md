@@ -206,7 +206,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 
 **4.5 Argument evaluation.** Arguments are evaluated left to right, after the callee expression and the receiver (§8).
 
-**4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. A `let` whose pattern is a single identifier, such as `let s = h.name;`, is not destructuring: its initializer is a move (§3.1), so on a `shared` or borrowed place it is the §3.7 error, fixed by `.clone()` or `let s = ref h.name;` (§5.1). (Clarified 2026-10-19, B-2026-10-19-62.) The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
+**4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. A `let` whose pattern is a single identifier, such as `let s = h.name;`, is not destructuring: its initializer is a move (§3.1), so on a `shared` or borrowed place it is the §3.7 error, fixed by `.clone()` or `let s = ref h.name;` (§5.1). (Clarified 2026-10-19, B-2026-10-19-62.) A single identifier initialized from a binding that is itself a reference moves nothing: `let m = r;` with `r` a bare parameter or receiver copies the reference (§1.1), so `m` is a `ref` too, and `let mut b = self;` is a `ref Self` whose mutating calls and part moves are the errors (§5.9, §3.7). (Clarified 2026-10-23, B-2026-10-22-33.) The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
 - **A `ref` or view scrutinee:** a binding of a non-`Copy` part is a `ref` into it, and moving it is an error (§3.7). A binding of a `Copy` part copies it, so `match shape { Circle { radius } => radius * radius, … }` on a borrowed `shape` needs no `*`.
 - **A `mut ref` scrutinee** (a `mut ref` parameter or local, or a place reached through one and through no `ref`): a binding of a non-`Copy` part is a `mut ref` into it, so the arm may write through it (`match v { V.Table(m) => { m.insert("z", 99); } … }` on `v: mut ref V`), and moving it is an error (§3.7). While such a binding is live, §5.6 applies to the scrutinee. A binding of a `Copy` part copies it; to write the part, bind it `mut ref n` (`V.Num(mut ref n) => n += 1`). A place reached through a `ref` anywhere on its path is a `ref` scrutinee (§5.9). (Clarified 2026-10-22.)
@@ -223,7 +223,7 @@ Pins: `drop_callee_owns`, `drop_callee_returns`.
 - **A pattern over a type with a `Drop` body** may bind the whole value, but may not move a part out (§3.7).
 - **`for x in e`** consumes `e` when its type is an `Iterator`: `for x in c.into_iter()` moves `c` and each item. Otherwise it borrows `e` through `Iterable`, and `x` is the iterator's item, `ref T` for the standard collections.
 
-Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_pattern_binds_nothing`.
+Pins: `ok_match_binding_modes`, `drop_match_scrutinee`, `drop_underscore`, `ok_pattern_binds_nothing`, `ok_let_copies_a_ref`, `err_mut_through_copied_self`.
 
 **4.7 An impl's modes may be weaker than its trait's.** An impl method may declare any parameter, the receiver included, with the same mode as the trait method or a weaker one, in the order `own` → `mut ref` → borrowed (and `mut Slice[T]` → `Slice[T]`). It may never declare a stronger one.
 - A call whose impl is known where it is checked (a concrete type, including an operator on one) uses the impl's modes.

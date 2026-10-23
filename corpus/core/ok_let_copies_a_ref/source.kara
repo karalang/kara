@@ -1,0 +1,32 @@
+struct R { name: String }
+struct H { pe: (R, i64) }
+
+// A bare parameter is a `ref` binding; `let m = r` copies the reference (§1.1).
+fn g(r: R) -> i64 {
+    let m = r;
+    m.name.len() + r.name.len()
+}
+
+// A tuple parameter is a `ref` scrutinee, so `r` binds `ref` (§4.6).
+fn h(p: (R, i64)) -> i64 {
+    let (r, k) = p;
+    let m = r;
+    m.name.len() + k
+}
+
+// A place reached through a `ref` is a `ref` scrutinee too (§4.6).
+fn hh(h: H) -> i64 {
+    let (r, k) = h.pe;
+    let m = r;
+    m.name.len() + k
+}
+
+fn main() {
+    let r = R { name: "abc".to_string() };
+    println(g(r));
+    let p = (R { name: "de".to_string() }, 10);
+    println(h(p));
+    let x = H { pe: (R { name: "fghi".to_string() }, 100) };
+    println(hh(x));
+    println(r.name);
+}
