@@ -7,7 +7,6 @@ use crate::ast::EffectVerbKind;
 use crate::ast::{Function, Item, Program};
 use crate::concurrency::ConcurrencyAnalysis;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectErrorKind};
-use crate::interpreter::{DbgOutputMode, ErrorTraceFrame, Interpreter, TestOutcome};
 use crate::manifest;
 use crate::module::{
     self, BuildTreeError, BuildTreeOk, BuildTreeOpts, Cycle, ModuleId, ModuleParseErrors,
@@ -20,7 +19,7 @@ use crate::resolver::{ResolveError, ResolveErrorKind, Resolver};
 use crate::scaffold::{self, ScaffoldOpts, Template};
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
-use crate::walker::{self, EntryKind, WalkResult, WalkerOpts};
+use crate::walker::{self, WalkerOpts};
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::PathBuf;
@@ -50,7 +49,6 @@ use maintenance_cmds::*;
 use pkg_cmds::*;
 use query_cmd::*;
 use run_check_cmds::*;
-use test_cmd::*;
 
 pub use args::parse_args;
 use help::print_help;
@@ -168,9 +166,6 @@ pub enum Command {
         /// the internal `karac_jit_runner` plus a temp `.ll` path under the JIT
         /// (B-2026-07-29-18).
         program_args: Vec<String>,
-        /// `--legacy` (or `KARAC_LEGACY=1`): run on the legacy pipeline
-        /// rather than v2, until M3 deletes it (B-2026-10-22-12).
-        legacy: bool,
     },
     RunExample {
         name: String,
@@ -178,8 +173,6 @@ pub enum Command {
         sequential: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
-        /// See [`Command::Run::legacy`].
-        legacy: bool,
     },
     Check {
         file: String,
@@ -347,9 +340,6 @@ pub enum Command {
         out_path: Option<String>,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
-        /// `--legacy` (without `--mir`): build through the legacy pipeline
-        /// rather than v2, until M3 deletes it (B-2026-10-22-14).
-        legacy: bool,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -432,8 +422,6 @@ pub enum Command {
         /// This variant did not carry them (B-2026-08-18-19), so a project
         /// build silently ignored every lint flag the invocation named.
         lint_overrides: crate::lints::CliLintOverrides,
-        /// `--legacy`: see `Build.legacy`.
-        legacy: bool,
     },
     Query {
         kind: QueryKind,
@@ -491,9 +479,6 @@ pub enum Command {
         /// equivalent of `KARAC_TEST_JIT=0`. No-op on a non-`llvm` build
         /// (the interpreter is the only executor there).
         interp: bool,
-        /// `--legacy` (or `KARAC_LEGACY=1`): the legacy runner rather than
-        /// v2's (B-2026-10-22-13), until M3 deletes it.
-        legacy: bool,
     },
     /// Launch the interactive REPL over the tree-walk interpreter. P0
     /// delivery item per `roadmap.md § Interactive Development`. See
@@ -512,9 +497,6 @@ pub enum Command {
         /// ergonomic equivalent of `KARAC_REPL_JIT=0`; the interpreter is
         /// retained as a dev/debug backend. No-op on a non-`llvm` build.
         interp: bool,
-        /// `--legacy`: the legacy REPL, until M3 deletes it
-        /// (B-2026-10-22-45). Without it, cells run on v2.
-        legacy: bool,
     },
     /// Walk the project, parse every module, render one HTML page per
     /// documented item under `dist/doc/`. v1 MVP — no cross-references,
@@ -805,9 +787,7 @@ pub fn execute(cmd: Command) {
             timeout,
             interp,
             program_args,
-            legacy,
         } => run_v2::cmd_run_either(
-            legacy,
             &file,
             output,
             sequential,
@@ -823,8 +803,7 @@ pub fn execute(cmd: Command) {
             output,
             sequential,
             lint_overrides,
-            legacy,
-        } => cmd_run_example(&name, output, sequential, lint_overrides, legacy),
+        } => cmd_run_example(&name, output, sequential, lint_overrides),
         Command::Check {
             file,
             output,
@@ -862,51 +841,27 @@ pub fn execute(cmd: Command) {
             crate_type,
             out_path,
             lint_overrides,
-            legacy,
-        } => {
-            if !run_v2::legacy_requested(legacy) {
-                return build_v2::cmd_build_v2_file(
-                    &file,
-                    build_v2::BuildArgs {
-                        output,
-                        offline,
-                        no_proxy,
-                        concurrency_report,
-                        simd_report,
-                        enable_hot_swap,
-                        target: target.as_deref(),
-                        bindings,
-                        target_cpu: target_cpu.as_deref(),
-                        target_features: target_features.as_deref(),
-                        wasm_threads,
-                        monomorphization_budget: monomorphization_budget.is_enabled(),
-                        release,
-                        crate_type,
-                        out_path: out_path.as_deref(),
-                        lint_overrides,
-                    },
-                );
-            }
-            cmd_build(
-                &file,
+        } => build_v2::cmd_build_v2_file(
+            &file,
+            build_v2::BuildArgs {
                 output,
+                offline,
+                no_proxy,
                 concurrency_report,
                 simd_report,
-                offline,
                 enable_hot_swap,
-                no_proxy,
-                target.as_deref(),
+                target: target.as_deref(),
                 bindings,
-                target_cpu.as_deref(),
-                target_features.as_deref(),
+                target_cpu: target_cpu.as_deref(),
+                target_features: target_features.as_deref(),
                 wasm_threads,
-                monomorphization_budget,
+                monomorphization_budget: monomorphization_budget.is_enabled(),
                 release,
                 crate_type,
-                out_path.as_deref(),
+                out_path: out_path.as_deref(),
                 lint_overrides,
-            )
-        }
+            },
+        ),
         Command::CheckProject {
             output,
             concurrency_report,
@@ -938,44 +893,24 @@ pub fn execute(cmd: Command) {
             crate_type,
             out_path,
             lint_overrides,
-            legacy,
-        } => {
-            if !run_v2::legacy_requested(legacy) {
-                return build_v2::cmd_build_v2_project(build_v2::BuildArgs {
-                    output,
-                    offline,
-                    no_proxy,
-                    concurrency_report: false,
-                    simd_report: false,
-                    enable_hot_swap,
-                    target: target.as_deref(),
-                    bindings,
-                    target_cpu: target_cpu.as_deref(),
-                    target_features: target_features.as_deref(),
-                    wasm_threads,
-                    monomorphization_budget: false,
-                    release,
-                    crate_type,
-                    out_path: out_path.as_deref(),
-                    lint_overrides,
-                });
-            }
-            cmd_build_project(
-                output,
-                offline,
-                enable_hot_swap,
-                no_proxy,
-                target.as_deref(),
-                bindings,
-                target_cpu.as_deref(),
-                target_features.as_deref(),
-                wasm_threads,
-                release,
-                crate_type,
-                out_path.as_deref(),
-                lint_overrides,
-            )
-        }
+        } => build_v2::cmd_build_v2_project(build_v2::BuildArgs {
+            output,
+            offline,
+            no_proxy,
+            concurrency_report: false,
+            simd_report: false,
+            enable_hot_swap,
+            target: target.as_deref(),
+            bindings,
+            target_cpu: target_cpu.as_deref(),
+            target_features: target_features.as_deref(),
+            wasm_threads,
+            monomorphization_budget: false,
+            release,
+            crate_type,
+            out_path: out_path.as_deref(),
+            lint_overrides,
+        }),
         Command::Query {
             kind,
             file,
@@ -993,27 +928,10 @@ pub fn execute(cmd: Command) {
             filter,
             all,
             interp,
-            legacy,
-        } => {
-            if run_v2::legacy_requested(legacy) {
-                cmd_test(filter, all, interp)
-            } else {
-                test_v2::cmd_test_v2(filter, all, interp)
-            }
-        }
-        Command::Repl {
-            auto_clone,
-            interp,
-            legacy,
-        } => {
-            let v2 = !run_v2::legacy_requested(legacy);
-            if v2 && auto_clone {
-                // The rewrite answers the legacy checker's cross-cell
-                // use-after-move errors.
-                eprintln!(
-                    "error: --auto-clone needs the legacy REPL for now: \
-                     run `karac repl --legacy --auto-clone`"
-                );
+        } => test_v2::cmd_test_v2(filter, all, interp),
+        Command::Repl { auto_clone, interp } => {
+            if auto_clone {
+                eprintln!("error: --auto-clone is not supported by the REPL");
                 process::exit(1);
             }
             // `--interp` is what v2 does already: cells run on the MIR
@@ -1021,7 +939,7 @@ pub fn execute(cmd: Command) {
             crate::repl::run_with_options(crate::repl::ReplOptions {
                 auto_clone,
                 interp,
-                v2,
+                v2: true,
             })
         }
         Command::Doc => cmd_doc(),
@@ -1453,13 +1371,6 @@ impl Pipeline {
 
     fn with_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
         self.lint_overrides = overrides;
-        self
-    }
-
-    /// Mark this run as interpreter-bound (`karac run --interp`), so
-    /// codegen-deferral diagnostics stay quiet — see `codegen_bound`.
-    fn interpreter_bound(mut self) -> Self {
-        self.codegen_bound = false;
         self
     }
 
@@ -2576,43 +2487,6 @@ fn diagnostic_snippet(
     ))
 }
 
-/// Render a codegen failure the way every front-end diagnostic renders:
-/// `<file>:<line>:<col>` and a caret under the offending expression.
-///
-/// B-2026-09-01-8. Codegen's channel carried no position at all, so its ~248
-/// messages printed as a bare sentence while `typecheck` / `resolve` / the
-/// lints all pointed at the source. Now [`crate::codegen::CodegenError`]
-/// carries the span the walk was on, and this puts it on screen.
-///
-/// The `error: codegen failed: ` prefix is DELIBERATELY unchanged — it is what
-/// distinguishes a backend bail from a front-end rejection, and the test suite
-/// asserts on that phrase in over a hundred places. The position and the caret
-/// are added around it, not in place of it.
-///
-/// A span-less error (module verification, target-machine setup, a linker
-/// invocation — failures with no source position to point at) renders exactly
-/// as it did before, rather than inventing a location.
-#[cfg(feature = "llvm")]
-pub(crate) fn render_codegen_error(
-    e: &crate::codegen::CodegenError,
-    filename: &str,
-    source: Option<&str>,
-) -> String {
-    match e.span {
-        Some(span) => with_snippet(
-            format!(
-                "error: codegen failed: {filename}:{}:{}: {}",
-                span.line, span.column, e.message
-            ),
-            source,
-            span.line,
-            span.column,
-            span.length,
-        ),
-        None => format!("error: codegen failed: {}", e.message),
-    }
-}
-
 /// `header` plus its source snippet, when one can be rendered.
 fn with_snippet(
     header: String,
@@ -2655,65 +2529,6 @@ fn render_lint_block_text(
         span.column,
         span.length,
     )
-}
-
-/// `cfg(llvm)`: the only caller is `cmd_build`'s codegen path. The
-/// non-llvm fallback delegates to `cmd_check`, which renders warnings
-/// through `render_text_diagnostics` itself — so this is genuinely dead
-/// there, and CI's default-feature `cargo clippy --all --all-targets -D
-/// warnings` said so (B-2026-08-18-23). The `--features llvm` leg is
-/// green either way, which is exactly why it is easy to miss locally.
-#[cfg(feature = "llvm")]
-/// The WARNING-severity subset of [`render_text_diagnostics`], for the build
-/// path (B-2026-08-18-1).
-///
-/// `karac build` rendered no warning at all on a successful build: it calls
-/// `print_text_diagnostics` only when `has_fatal_errors()`, so on the path that
-/// actually produces a binary the whole diagnostic stream was dropped. A
-/// build-only workflow therefore never saw `deprecated`, `must_use`, or any
-/// other lint the compiler had already computed — measured on `#[deprecated]`,
-/// which `karac check` reports and `karac build` did not.
-///
-/// Filtered out of the SHARED renderer rather than re-derived, so `check` and
-/// `build` cannot drift in wording, span, or lint label — the same reason
-/// B-2026-08-05-17 fixed the effect-gate version of this class with one shared
-/// classifier. The filter reads the severity word each block already opens
-/// with, which is safe because every block in that function is built with its
-/// severity first (`error[`, `warning[`, `note[`, or the `{severity}[`
-/// interpolation the lint helpers use); `build_warnings_are_the_warning_blocks`
-/// pins that invariant.
-///
-/// `note[…]` is deliberately NOT included. Those are advisory hints (FFI lint
-/// notes, the wasm-tools note) rather than findings about the program's
-/// correctness, and printing them on every build is noise this row did not ask
-/// for. Extending to them is a separate decision.
-/// The JSON twin of [`render_text_warning_diagnostics`]: the warning-severity
-/// entries of the same `collect_diagnostics` the check path emits
-/// (B-2026-08-18-1).
-///
-/// Filtered out of the shared collector for the same reason the text version
-/// is — one producer, so a warning cannot say one thing under `karac check
-/// --output=json` and another under `karac build --output=json`.
-fn collect_warning_diagnostics_json(pipeline: &Pipeline) -> Vec<String> {
-    diag_json::collect_diagnostics(pipeline)
-        .entries
-        .into_iter()
-        .filter(|entry| entry.contains("\"severity\":\"warning\""))
-        .collect()
-}
-
-/// `cfg(llvm)`: the only caller is `cmd_build`'s codegen path. The
-/// non-llvm fallback delegates to `cmd_check`, which renders warnings
-/// through `render_text_diagnostics` itself — so this is genuinely dead
-/// there, and CI's default-feature `cargo clippy --all --all-targets -D
-/// warnings` said so (B-2026-08-18-23). The `--features llvm` leg is
-/// green either way, which is exactly why it is easy to miss locally.
-#[cfg(feature = "llvm")]
-fn render_text_warning_diagnostics(pipeline: &Pipeline) -> Vec<String> {
-    render_text_diagnostics(pipeline)
-        .into_iter()
-        .filter(|block| block.starts_with("warning["))
-        .collect()
 }
 
 /// The rendered blocks for `TypeCheckResult::warnings` — the channel every

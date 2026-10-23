@@ -283,7 +283,7 @@ fn apply_cpu(
     manifest_field: impl Fn(fn(&manifest::Manifest) -> Option<String>) -> Option<String>,
 ) {
     if a.target_cpu == Some("help") || a.target_features == Some("help") {
-        crate::codegen::print_target_cpu_listing();
+        crate::backend::driver::print_target_cpu_listing();
         process::exit(0);
     }
     let (baseline_cpu, baseline_features) =

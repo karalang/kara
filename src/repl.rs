@@ -33,37 +33,16 @@
 //!   display all ship as separate items in the Interactive Development
 //!   chapter of `roadmap.md`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
-use crate::interpreter::Value;
-
 mod display;
-#[cfg(feature = "llvm")]
-mod jit_runner_client;
 mod util;
 
-/// Slice c-repl.B.B: split a runner-captured stdout byte slice into
-/// the `Vec<String>` shape `WrapperOutcome` expects. The interpreter
-/// populates `captured_output` one line at a time, retaining each
-/// line's trailing `\n` (`write_stdout` pushes `format!("{s}\n")`),
-/// because the sole consumer reconstructs the raw stream with
-/// `stdout.join("")`. The JIT runner returns raw bytes from a
-/// tempfile, so we must split while KEEPING the newline on each line —
-/// `split_inclusive` does exactly that and round-trips through
-/// `join("")` for every case (`"7\n8\n"` → `["7\n", "8\n"]`,
-/// `"hi"` (no trailing newline) → `["hi"]`, `"7\n8"` → `["7\n", "8"]`).
-/// A plain `split('\n')` strips the newline and breaks the `join("")`
-/// contract — two `println`s collapse to `"78"` instead of `"7\n8\n"`.
-#[cfg(feature = "llvm")]
-fn bytes_to_stdout_lines(bytes: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(bytes);
-    text.split_inclusive('\n').map(|s| s.to_string()).collect()
-}
-pub use display::{render_display, render_text_plain, DisplayBundle};
+pub use display::DisplayBundle;
 use util::*;
 
 /// A v2 statement cell as a run of statements: a cell may end in an
@@ -186,40 +165,13 @@ pub fn run() {
     run_with_options(ReplOptions::default());
 }
 
-/// Slice c-repl.B.B: produce the `(JIT)` banner tag when JIT mode is
-/// on, `None` otherwise. Reads the session's `jit_enabled` snapshot
-/// taken at construction so the banner can't disagree with the
-/// dispatch path the session will actually take.
-#[cfg(feature = "llvm")]
-fn jit_banner_tag(session: &Session) -> Option<String> {
-    if session.jit_enabled() {
-        Some("JIT".to_string())
-    } else {
-        None
-    }
-}
-
-#[cfg(not(feature = "llvm"))]
-fn jit_banner_tag(_session: &Session) -> Option<String> {
-    None
-}
-
 /// Surface for the binary entry point: launch the REPL with caller-supplied
 /// options. Used by `karac repl` flag wiring (`--auto-clone`).
 pub fn run_with_options(opts: ReplOptions) {
     let mut session = Session::with_options(opts);
-    // Slice c-repl.B.B: surface JIT mode in the banner so users know
-    // KARAC_REPL_JIT=1 actually took effect — silent activation is a
-    // worse failure mode than a missing flag because the cells run
-    // either way and the divergence only shows up on side-effect
-    // semantics.
-    let jit_tag = jit_banner_tag(&session);
     let mut tags: Vec<&str> = Vec::new();
     if opts.auto_clone {
         tags.push("auto-clone on");
-    }
-    if let Some(tag) = jit_tag.as_deref() {
-        tags.push(tag);
     }
     let banner = if tags.is_empty() {
         "Kāra REPL  (type :help for commands, :quit to exit)".to_string()
@@ -441,17 +393,12 @@ fn render_export_nodes(nodes: &[ExportNode], indent: usize) -> String {
 }
 
 /// Record of a persistent `let` binding that was pruned from the
-/// session because its originating `:provide` scope closed. Drives the
-/// notebook-aware tail on subsequent `undefined name '...'` resolver
-/// errors so the user sees *why* the binding vanished, not just that
-/// it's gone (design.md § Cross-Cell Providers diagnostic shape).
+/// session because its originating `:provide` scope closed. The
+/// notebook-aware tail it used to drive on a later `undefined name`
+/// error rendered through the legacy cell path, which M3 removed.
 #[derive(Debug, Clone)]
 struct PrunedProviderLet {
     binding_name: String,
-    declared_in_cell: usize,
-    pruned_by_resource: String,
-    scope_opened_cell: usize,
-    pruned_at_cell: usize,
 }
 
 /// Event log entry recording one `:provide` / `:end-provide` meta-command
@@ -585,25 +532,6 @@ pub struct Session {
     /// note onto the cell's `notes` channel — never silent (design.md §
     /// Interactive Evaluation Model > Ownership Across Cells).
     auto_clone: bool,
-    /// Cached `Value`s from prior cells' top-level `let` bindings,
-    /// keyed by binding name. Drives the value-snapshot persistent-let
-    /// model: cell N's `let x = expensive();` records the bound value
-    /// here; cell N+1's source-replay re-emits the same `let x =
-    /// expensive();` slice into the synthetic main, but the
-    /// interpreter consults `let_value_overrides` and uses this cached
-    /// value instead of re-running `expensive()`. The source-replay
-    /// form is what the parser / resolver / typechecker see (so `x`
-    /// resolves and has a recorded type); only the interpreter's
-    /// runtime evaluation of the RHS is short-circuited. The override
-    /// is installed at the *last* top-level binder of each name (span
-    /// keyed — `install_let_snapshot_overrides`), so when a name has
-    /// been shadowed across cells the earlier binders re-run their
-    /// recorded RHS in order and only the final binding
-    /// short-circuits. Pattern lets (`let (a, b) = …`, `let-else`)
-    /// stay on the source-replay path; this map only holds entries
-    /// for simple `PatternKind::Binding` lets, matching the
-    /// interpreter hook's classification.
-    let_snapshots: HashMap<String, Value>,
     /// In-memory `[dependencies]` table built up via the `:dep` meta-command.
     /// Each entry is `name → normalized TOML value` (e.g. `"\"1.2\""` for a
     /// bare semver, `"{ git = \"...\" }"` for an inline-table form). v1
@@ -670,76 +598,9 @@ pub struct Session {
     /// `cell_history` on diagnostic-side failure.
     cell_effect_history: Vec<CellEffectSnapshot>,
 
-    /// Slice c-repl.B.B: persistent `karac_jit_runner --repl-mode`
-    /// subprocess client, lazily spawned on the first cell when JIT
-    /// mode is on (`KARAC_REPL_JIT=1` at session construction).
-    /// Re-spawned after a cell-induced `exit(1)` terminates the
-    /// runner. `None` either when JIT mode is off or after a death
-    /// + before the next cell.
-    #[cfg(feature = "llvm")]
-    jit_client: Option<jit_runner_client::ReplRunnerClient>,
-    /// Slice c-repl.B.B: snapshot of `KARAC_REPL_JIT=1` at session
-    /// construction. Env var is read once so a mid-session flip can't
-    /// half-route cells.
-    #[cfg(feature = "llvm")]
-    jit_enabled: bool,
     /// [`ReplOptions::v2`]: cells are checked and run by
     /// `crate::cli::repl_v2`.
     v2: bool,
-    /// Slice c-repl.B.B: monotonic cell id for the JIT subprocess
-    /// protocol framing. The runner echoes the id back on `result`
-    /// lines so framing-integrity drift surfaces as a `RunnerDied`
-    /// classification at the client. Each cell's synthesized
-    /// `fn main()` is registered in LLVM under `cell_main_<id>`
-    /// (slice c-repl.B.4) so multiple cells coexist in the runner's
-    /// JITDylib without symbol collisions.
-    #[cfg(feature = "llvm")]
-    jit_next_cell_id: u64,
-    /// Slice c-repl.B.4: names of free functions already installed
-    /// in the JIT runner's JITDylib by a prior successful cell. The
-    /// next cell's codegen emits these as `declare`-only (no body)
-    /// so the JIT linker resolves calls to them against the prior
-    /// definition — cutting per-cell codegen + jitlink cost. Cleared
-    /// when the runner subprocess dies (a fresh runner has an empty
-    /// JITDylib) and on `:reset` (which drops the runner so the
-    /// snapshot globals don't outlive the persistent-let slate that
-    /// gave them meaning).
-    #[cfg(feature = "llvm")]
-    jit_installed_fns: std::collections::HashSet<String>,
-    /// Slice c-repl.B.5.1: top-level `let <name> = <expr>` bindings
-    /// whose bound value has been stashed into a cell-spanning LLVM
-    /// global by a prior successful cell. Each entry maps the binding
-    /// name to the primitive kind the snapshot global was emitted at.
-    /// The next cell that sees a re-emitted `let <name> = …` (via
-    /// `persistent_lets` replay in the synthetic source) skips the
-    /// original RHS and binds to a load from the global instead —
-    /// closing the interpreter-vs-JIT semantic gap where a
-    /// side-effecting RHS would otherwise re-execute on every cell.
-    /// Cleared on runner death (the fresh runner's JITDylib has no
-    /// globals) and on `:reset`. Only primitive types (i64, f64,
-    /// bool, char) qualify in B.5.1; richer types deferred.
-    #[cfg(feature = "llvm")]
-    jit_snapshotted_lets: std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
-    /// B-2026-08-30-7: for each binding recorded above whose kind answers
-    /// [`crate::codegen::SnapshotPrimKind::needs_value_type`], the `TypeExpr`
-    /// the DECLARING cell classified it at.
-    ///
-    /// Keyed on the PREDICATE rather than on a variant list, because the list
-    /// has grown twice since this map arrived — `ByValue` first, then the
-    /// `String`-component containers, then `InlineEnvelope` — and each time
-    /// the consumers were already correct while a variant-naming comment was
-    /// not.
-    ///
-    /// Kept in the session rather than re-derived per cell on purpose. The
-    /// replayed `let`'s RHS is still in the synthetic source and still
-    /// typechecks, so the type is nominally recomputable — but the global
-    /// was sized by the declaring cell, and a later cell that computed a
-    /// different type for the same name would load it at the wrong width
-    /// and read adjacent bytes. Carrying the declaring cell's answer makes
-    /// that impossible by construction. Cleared wherever
-    /// `jit_snapshotted_lets` is: the two describe the same globals.
-    #[cfg(feature = "llvm")]
-    jit_snapshot_value_types: std::collections::HashMap<String, crate::ast::TypeExpr>,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -812,44 +673,14 @@ impl Session {
             persistent_let_origin: Vec::new(),
             cell_byte_ranges: Vec::new(),
             auto_clone: false,
-            let_snapshots: HashMap::new(),
             pending_deps: BTreeMap::new(),
             provider_stack: Vec::new(),
             provider_history: Vec::new(),
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
             cell_effect_history: Vec::new(),
-            #[cfg(feature = "llvm")]
-            jit_client: None,
-            #[cfg(feature = "llvm")]
-            // LLJIT Slice 5 (JIT-default flip): under `--features llvm` the
-            // JIT is now the DEFAULT repl backend. The interpreter is the
-            // retained dev/debug backend, reachable via `--interp` (applied in
-            // `with_options`) or the `KARAC_REPL_JIT=0` escape hatch — so the
-            // bare `new()` default is JIT-on unless that env opt-out fires.
-            // (Slice 1 had this as opt-in `== Ok("1")`; the sign-off to flip
-            // landed this session — see docs/spikes/lljit-productionization.md
-            // § Slice 5.) Tests pin the interpreter via
-            // `set_jit_enabled_for_tests(false)`.
-            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() != Ok("0"),
-            v2: false,
-            #[cfg(feature = "llvm")]
-            jit_next_cell_id: 0,
-            #[cfg(feature = "llvm")]
-            jit_installed_fns: std::collections::HashSet::new(),
-            #[cfg(feature = "llvm")]
-            jit_snapshotted_lets: std::collections::HashMap::new(),
-            #[cfg(feature = "llvm")]
-            jit_snapshot_value_types: std::collections::HashMap::new(),
+            v2: true,
         }
-    }
-
-    /// Inspector for the value-snapshot store. Returns the map of
-    /// persistent-let binding names to their cached `Value`s. Used by
-    /// integration tests that verify side-effecting RHS expressions
-    /// only run once across cells.
-    pub fn let_snapshots(&self) -> &HashMap<String, Value> {
-        &self.let_snapshots
     }
 
     /// Dispatch a Jupyter-style `%magic` line. The kernel binary
@@ -878,11 +709,8 @@ impl Session {
     /// `%provide` / `%end-provide` forward to the same `add_provider` /
     /// `end_provider` handlers the REPL meta-commands use — `:provide`
     /// and `%provide` are wire-compatible, returning the same `Ok` /
-    /// `Err` string shapes. `%show` is the rich-display surface
-    /// (line 761 in the phase-5 tracker); it evaluates the given
-    /// expression against the current session state and renders it via
-    /// [`render_display`] into a [`DisplayBundle`] that the Jupyter
-    /// kernel broadcasts as `display_data`. `%rc` (line 785) lists
+    /// `Err` string shapes. `%show`, the rich-display surface, is not
+    /// supported on v2 yet. `%rc` (line 785) lists
     /// every RC-fallback decision the ownership pass made for the
     /// current session source with the trigger label, Rc/Arc bit,
     /// consume + reuse spans, and (when available) type name.
@@ -1079,112 +907,14 @@ impl Session {
         }
     }
 
-    /// `%show <expr>` — rich-display the given expression. Evaluates
-    /// the expression against the current session state (items +
-    /// persistent lets, value-snapshot semantics for any binding the
-    /// user has previously assigned), captures the resulting [`Value`],
-    /// and renders it via [`render_display`] into a [`DisplayBundle`].
-    /// The bundle always carries `text/plain` (pretty-printed for
-    /// nested data); `text/html` is additionally present when the
-    /// value is `Vec[Struct]` / `Slice[Struct]`. The kernel broadcasts
-    /// the bundle through `display_data` (slice 3 of line 761).
-    ///
-    /// Side-effect-free: `%show` does NOT mutate `cell_history`,
-    /// `persistent_lets`, or `let_snapshots`. The synthetic main is
-    /// built locally for this call only. RHS expressions that *would*
-    /// be effectful at the language level still run (the interpreter
-    /// has no sandbox), but the binding `__k_show` introduced here
-    /// never leaks out.
+    /// `%show <expr>` — rich-display the given expression. It rendered the
+    /// legacy interpreter's values, which went with that pipeline at M3, and
+    /// the v2 REPL does not carry values across cells yet.
     fn magic_show(&self, rest: &str) -> MagicOutput {
         if rest.is_empty() {
             return MagicOutput::error("usage: %show <expression>");
         }
-        if self.v2 {
-            // The rich display renders the legacy interpreter's values.
-            return MagicOutput::error(
-                "`%show` needs the legacy REPL for now: start it with `karac repl --legacy`",
-            );
-        }
-        match self.eval_expr_for_display(rest) {
-            Ok(value) => {
-                let bundle = render_display(&value);
-                let text = bundle.get("text/plain").unwrap_or("").to_string();
-                MagicOutput::ok_rich(text, bundle)
-            }
-            Err(msg) => MagicOutput::error(msg),
-        }
-    }
-
-    /// Build a one-off synthetic main that binds `__k_show = <expr>;`,
-    /// run the pipeline, and return the captured runtime [`Value`].
-    /// Persistent-let snapshots replay through `let_value_overrides`
-    /// so side-effecting RHS expressions don't re-fire just because
-    /// the user asked to inspect another expression. None of the
-    /// session's mutable state is touched on success or failure.
-    fn eval_expr_for_display(&self, expr: &str) -> Result<Value, String> {
-        let expr_trimmed = expr.trim();
-        if expr_trimmed.is_empty() {
-            return Err("empty expression".to_string());
-        }
-        let mut src = String::new();
-        src.push_str(&strip_main(&self.items_source));
-        if !src.is_empty() && !src.ends_with('\n') {
-            src.push('\n');
-        }
-        src.push_str("fn main() {\n");
-        for prior_let in &self.persistent_lets {
-            src.push_str(prior_let);
-            if !prior_let.ends_with('\n') {
-                src.push('\n');
-            }
-        }
-        src.push_str("let __k_show = ");
-        src.push_str(expr_trimmed);
-        src.push_str(";\n}\n");
-
-        let mut parsed = crate::parse(&src);
-        if !parsed.errors.is_empty() {
-            return Err(format!("parse error: {}", parsed.errors[0].message));
-        }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return Err(format!("resolve error: {}", resolved.errors[0].message));
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return Err(format!("type error: {}", typed.errors[0].message));
-        }
-        let owned = crate::ownershipcheck(&parsed.program, &typed);
-        if !owned.errors.is_empty() {
-            return Err(format!("ownership error: {}", owned.errors[0].message));
-        }
-        crate::lower(&mut parsed.program, &typed);
-
-        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
-        // Replay value snapshots for every persistent-let binding so
-        // side-effecting RHS expressions short-circuit, exactly as the
-        // statement-cell pipeline does. The synthetic main here was
-        // built from the same `persistent_lets` strings, so the parser
-        // sees the bindings and the interpreter consults the override
-        // map at the matching `let` binder span (`__k_show` has no
-        // snapshot, so the appended binding always evaluates fresh).
-        self.install_let_snapshot_overrides(&parsed.program, &mut interp);
-        // Watch our synthetic `__k_show` binding so the interpreter
-        // captures its post-eval Value into `captured_let_values`. We
-        // do NOT watch the persistent-let names — we don't intend to
-        // write back into `self.let_snapshots` (the session is
-        // immutable through this path).
-        let mut watch = std::collections::HashSet::new();
-        watch.insert("__k_show".to_string());
-        interp.let_snapshot_watch = watch;
-        interp.run();
-
-        match interp.captured_let_values.remove("__k_show") {
-            Some(v) => Ok(v),
-            None => {
-                Err("expression did not yield a value (did it panic or never bind?)".to_string())
-            }
-        }
+        MagicOutput::error("`%show` is not supported yet")
     }
 
     /// `%timeline` — render the per-cell effect set with cross-cell
@@ -1232,7 +962,7 @@ impl Session {
     /// frontends that render rich content. Empty surface (no RC
     /// fallbacks) emits a friendly hint on `text/plain` only.
     /// Read-only against session state — `cell_history`,
-    /// `persistent_lets`, and `let_snapshots` are untouched. Surfaces
+    /// and `persistent_lets` are untouched. Surfaces
     /// a friendly hint on parse / resolve / typecheck failure rather
     /// than running the ownership pass against a known-broken AST.
     fn magic_rc(&self, rest: &str) -> MagicOutput {
@@ -1419,20 +1149,8 @@ impl Session {
     pub fn with_options(opts: ReplOptions) -> Self {
         let mut s = Self::new();
         s.auto_clone = opts.auto_clone;
-        // `--interp` (Slice 5) forces the interpreter over the now-default
-        // JIT. It's a hard override of the env-derived default set in `new()`
-        // — an explicit CLI flag beats the ambient `KARAC_REPL_JIT` env.
-        #[cfg(feature = "llvm")]
-        if opts.interp {
-            s.jit_enabled = false;
-        }
-        #[cfg(not(feature = "llvm"))]
         let _ = opts.interp;
         s.v2 = opts.v2;
-        #[cfg(feature = "llvm")]
-        if opts.v2 {
-            s.jit_enabled = false;
-        }
         s
     }
 
@@ -1444,24 +1162,6 @@ impl Session {
     /// Inspector for the `--auto-clone` flag. Used by integration tests.
     pub fn auto_clone(&self) -> bool {
         self.auto_clone
-    }
-
-    /// Slice c-repl.B.B test hook: flip the JIT-dispatch mode without
-    /// relying on the `KARAC_REPL_JIT=1` env var read at construction.
-    /// `Session::new` reads the env once; tests want explicit control
-    /// without poking shared process state (which Rust 2024 made
-    /// `unsafe`). Production callers should set the env var instead.
-    #[cfg(feature = "llvm")]
-    pub fn set_jit_enabled_for_tests(&mut self, enabled: bool) {
-        self.jit_enabled = enabled;
-    }
-
-    /// Slice c-repl.B.B inspector: reports whether JIT-dispatch mode
-    /// is active for this session. Used by integration tests to
-    /// confirm the env-var read and by future status meta-commands.
-    #[cfg(feature = "llvm")]
-    pub fn jit_enabled(&self) -> bool {
-        self.jit_enabled
     }
 
     /// Inspector for the accumulated `let`-statement replay buffer. Used by
@@ -1766,1060 +1466,15 @@ impl Session {
         }
     }
 
-    /// Run a wrapper cell, optionally capturing the interpreter's stdout
-    /// output. The returned `WrapperOutcome` carries either captured
-    /// stdout lines (`Ok` shape) or diagnostic strings (`Err` shape), plus
-    /// any auto-clone perf notes emitted along the way (always surfaced —
-    /// `--auto-clone` is never silent).
+    /// Run a wrapper cell on v2, optionally capturing its stdout. The
+    /// returned `WrapperOutcome` carries either captured stdout lines (`Ok`
+    /// shape) or diagnostic strings (`Err` shape).
     fn run_with_wrapper_inner(
         &mut self,
         cell_src: &str,
         capture: bool,
     ) -> Result<WrapperOutcome, WrapperOutcome> {
-        // Shadow handling: same-scope re-`let` is legal Kāra shadowing, so
-        // a re-bound name's earlier replay slices stay in `persistent_lets`
-        // (dropping them orphaned later slices that reference the earlier
-        // binding — B-2026-07-02-33). Only the stale value snapshot is
-        // cleared, so the current cell's own `let` evaluates fresh.
-        self.clear_rebound_let_snapshots(cell_src);
-        if self.v2 {
-            return self.run_cell_v2(&terminated(cell_src), capture);
-        }
-
-        // Auto-clone iteration loop: when `auto_clone` is on, cross-cell
-        // UAM errors found by the ownership pass drive a source rewrite of
-        // the consuming cell's stored slice. The rewritten slice replaces
-        // the entry in `persistent_lets` AND in `cell_history` (so `:save`
-        // exports the clone'd form). After each successful rewrite the
-        // pipeline restarts from synthetic-source assembly. The cap is
-        // generous — `persistent_lets.len() + 8` covers every realistic
-        // multi-binding consume cell while still bounding pathological
-        // input. With the flag off this loop runs at most once and falls
-        // through the existing rendering paths unchanged.
-        let max_iters = self.persistent_lets.len() + 8;
-        let mut notes: Vec<String> = Vec::new();
-        for _ in 0..=max_iters {
-            let synthetic = self.build_synthetic_cell(cell_src, None);
-            let mut parsed = crate::parse(&synthetic);
-            if !parsed.errors.is_empty() {
-                return Err(WrapperOutcome::errors(
-                    parsed
-                        .errors
-                        .iter()
-                        .map(|e| format!("parse error: {}", e.message))
-                        .collect(),
-                    notes,
-                ));
-            }
-            let resolved = crate::resolve(&parsed.program);
-            if !resolved.errors.is_empty() {
-                return Err(WrapperOutcome::errors(
-                    self.render_resolve_errors_repl(&resolved.errors),
-                    notes,
-                ));
-            }
-            let typed = crate::typecheck(&parsed.program, &resolved);
-            if !typed.errors.is_empty() {
-                return Err(WrapperOutcome::errors(
-                    typed
-                        .errors
-                        .iter()
-                        .map(|e| format!("type error: {}", e.message))
-                        .collect(),
-                    notes,
-                ));
-            }
-
-            // Round-trip the program through the ownership checker so cross-
-            // cell `UseAfterMove` errors fire in REPL context, with the
-            // *presentation* enriched by `render_ownership_errors_repl`.
-            //
-            // B-2026-08-29-64 — this comment used to claim "strictness is
-            // identical to the .kara surface". It is not, and the difference is
-            // deliberate on both sides. This gate rejects on ANY entry in
-            // `owned.errors`; the .kara surface filters through
-            // `kind_blocks_production`, which makes `UseAfterMove` ADVISORY
-            // there (warning, `All checks passed`, exit 0, working binary — the
-            // defensive copy carries it). So a cell the REPL refuses is a
-            // program `karac build` accepts. The REPL is the stricter surface:
-            // it keeps a moved-from binding from becoming readable-by-accident
-            // mid-session, rolls the failing cell out of history, and offers
-            // `--auto-clone` as the opt-in escape. Pinned by
-            // `cross_cell_uam_strictness_unchanged` in tests/repl.rs; design.md
-            // § REPL now documents the divergence rather than denying it.
-            // Rendering happens via `render_ownership_errors_repl`, which
-            // appends a notebook-aware tail to UAM errors whose consume site
-            // and use site land in different cells.
-            let owned = crate::ownershipcheck(&parsed.program, &typed);
-            if !owned.errors.is_empty() {
-                if self.auto_clone {
-                    // Try to rewrite consume sites for the cross-cell UAM
-                    // arms. `apply_auto_clone_rewrites` mutates
-                    // `persistent_lets` / `cell_history` in place and
-                    // returns the perf-note lines for the insertions it
-                    // performed. If at least one rewrite happened, restart
-                    // the compile pipeline; otherwise fall through to the
-                    // baseline rendering path. The rewrites can't restore
-                    // a binding the user has already moved within the
-                    // same cell — same-cell UAM still surfaces, matching
-                    // the slice's "cross-cell only" rule.
-                    let new_notes = self.apply_auto_clone_rewrites(&owned.errors);
-                    if !new_notes.is_empty() {
-                        notes.extend(new_notes);
-                        continue;
-                    }
-                }
-                return Err(WrapperOutcome::errors(
-                    self.render_ownership_errors_repl(&owned.errors),
-                    notes,
-                ));
-            }
-
-            crate::lower(&mut parsed.program, &typed);
-
-            // Slice c-repl.B.B: when `KARAC_REPL_JIT=1` was set at
-            // session construction, route the cell through the
-            // persistent `karac_jit_runner --repl-mode` subprocess
-            // (slice B.A) instead of the in-process tree-walk
-            // interpreter. The branch returns directly with a
-            // WrapperOutcome so the interpreter-specific snapshot
-            // replay / watch-name setup below is skipped.
-            //
-            // Slice c-repl.B.5.1: the JIT branch now implements
-            // value-snapshot semantics for primitive-typed lets — see
-            // `run_cell_via_jit` for the capture/replay handoff via
-            // codegen-emitted LLVM globals in the runner's JITDylib.
-            #[cfg(feature = "llvm")]
-            if self.jit_enabled {
-                return Ok(self.run_cell_via_jit(&parsed.program, &typed, capture, notes));
-            }
-
-            let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
-            if capture {
-                interp.captured_output = Some(Vec::new());
-            }
-            // Value-snapshot replay: install pre-loaded values for every
-            // persistent-let binding that has a cached value in the
-            // session snapshot, keyed by the binder pattern's span (the
-            // LAST top-level binder of each name — earlier shadows
-            // re-run their recorded RHS in order). That's what makes a
-            // prior `let log = read_file(…);` stop re-reading the file
-            // on subsequent cells. Names from the current cell are NOT
-            // overridden (their snapshots were cleared in
-            // `clear_rebound_let_snapshots`, so their RHS runs normally
-            // and seeds the snapshot for the *next* cell).
-            self.install_let_snapshot_overrides(&parsed.program, &mut interp);
-            // Watch every top-level `let` binding in the just-built
-            // synthetic source (both replayed persistent_lets and the
-            // current cell's body). For overridden names the captured
-            // value matches the override; for fresh names this is
-            // what seeds the snapshot for future cells.
-            let mut watch_names: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for prior_let in &self.persistent_lets {
-                for n in parse_let_binding_names(prior_let) {
-                    watch_names.insert(n);
-                }
-            }
-            for entry in scan_top_level_lets(cell_src) {
-                for n in entry.names {
-                    watch_names.insert(n);
-                }
-            }
-            interp.let_snapshot_watch = watch_names;
-            interp.run();
-            let captured = std::mem::take(&mut interp.captured_let_values);
-            for (name, val) in captured {
-                self.let_snapshots.insert(name, val);
-            }
-            return Ok(WrapperOutcome {
-                stdout: interp.captured_output.take().unwrap_or_default(),
-                errors: Vec::new(),
-                notes,
-            });
-        }
-        // The loop bound is a defensive cap — every realistic auto-clone
-        // sequence converges in `persistent_lets.len() + 1` iterations
-        // (one rewrite per consume site, plus a final clean compile).
-        // Reaching this branch indicates a pathological repeat-rewrite
-        // scenario; surface as a regular ownership error so the user
-        // isn't left with a silent failure.
-        Err(WrapperOutcome::errors(
-            vec!["ownership error: --auto-clone exceeded its rewrite budget; aborting".to_string()],
-            notes,
-        ))
-    }
-
-    /// Apply auto-clone rewrites for the cross-cell `UseAfterMove` arms
-    /// in `errors`. Returns one `perf[auto-clone-in-repl]` note per
-    /// successful insertion (always non-empty when at least one rewrite
-    /// was applied; the caller restarts the compile when the slice is
-    /// non-empty). The rewrite locates the consume-site span in the
-    /// synthetic source we just built, identifies which `persistent_lets`
-    /// slot owns the corresponding bytes, and splices `.clone()` after
-    /// the consumed identifier. The matching `cell_history[M-1]` entry
-    /// is rewritten in lockstep so `:save` exports the clone'd form.
-    fn apply_auto_clone_rewrites(
-        &mut self,
-        errors: &[crate::ownership::OwnershipError],
-    ) -> Vec<String> {
-        let mut notes: Vec<String> = Vec::new();
-        // Collect rewrite intents first so we don't mutate persistent_lets
-        // while iterating over its indices. Each intent records the
-        // persistent_lets slot, the local byte offset of the identifier
-        // end, the binding name, and the consuming cell index.
-        struct Intent {
-            slot: usize,
-            local_end: usize,
-            binding: String,
-            consume_cell: usize,
-            use_cell: usize,
-        }
-        let mut intents: Vec<Intent> = Vec::new();
-        for err in errors {
-            if err.kind != crate::ownership::OwnershipErrorKind::UseAfterMove {
-                continue;
-            }
-            let Some(cs) = err.consume_span.as_ref() else {
-                continue;
-            };
-            let consume_cell = match self.cell_for_span(cs) {
-                Some(c) => c,
-                None => continue,
-            };
-            let use_cell = match self.cell_for_span(&err.span) {
-                Some(c) => c,
-                None => continue,
-            };
-            // Same-cell UAM is out of scope for auto-clone — the existing
-            // diagnostic still fires for it.
-            if consume_cell == use_cell {
-                continue;
-            }
-            // Locate the persistent_lets slot whose byte range contains
-            // the consume span. Falls through silently if the consume
-            // site is in the current cell body (use_cell == current and
-            // consume_cell < use_cell means the consume sits in a
-            // replayed `let`; that's the case the inheritance caveat
-            // from slice 5 narrows us to).
-            let Some(slot) = self.persistent_let_slot_for_offset(cs.offset) else {
-                continue;
-            };
-            let slot_range = match self.cell_byte_ranges.iter().find_map(|(_, r)| {
-                if r.start <= cs.offset && cs.offset < r.end {
-                    Some(r.clone())
-                } else {
-                    None
-                }
-            }) {
-                Some(r) => r,
-                None => continue,
-            };
-            let local_end = cs
-                .offset
-                .saturating_sub(slot_range.start)
-                .saturating_add(cs.length);
-            // Guard: `local_end` must fall inside the persistent_lets
-            // slice (the trailing `\n` we appended in build_synthetic_cell
-            // sits past the stored slice's end, so subtract that off).
-            let stored_len = self.persistent_lets[slot].len();
-            if local_end > stored_len {
-                continue;
-            }
-            // Extract the binding name from the consume span bytes — it's
-            // a bare identifier, so we can read it straight off
-            // persistent_lets[slot].
-            let local_start = cs.offset.saturating_sub(slot_range.start);
-            if local_start >= stored_len {
-                continue;
-            }
-            let binding = self.persistent_lets[slot][local_start..local_end].to_string();
-            intents.push(Intent {
-                slot,
-                local_end,
-                binding,
-                consume_cell,
-                use_cell,
-            });
-        }
-        if intents.is_empty() {
-            return notes;
-        }
-        // Apply intents grouped by slot, descending by local_end so
-        // earlier rewrites inside the same slot don't shift later
-        // offsets. Multiple rewrites in one slot is rare (one consumed
-        // binding per `let` in v1 source-replay) but the descending
-        // sort is cheap insurance.
-        intents.sort_by(|a, b| {
-            a.slot
-                .cmp(&b.slot)
-                .then_with(|| b.local_end.cmp(&a.local_end))
-        });
-        // Track which (slot, local_end) we already rewrote so duplicate
-        // diagnostics on the same site don't double-insert.
-        let mut applied: std::collections::HashSet<(usize, usize)> =
-            std::collections::HashSet::new();
-        for intent in &intents {
-            if !applied.insert((intent.slot, intent.local_end)) {
-                continue;
-            }
-            // Splice `.clone()` into the persistent_lets entry.
-            let entry = &mut self.persistent_lets[intent.slot];
-            entry.insert_str(intent.local_end, ".clone()");
-            // Re-emit the rewritten slice into the matching
-            // cell_history entry. Because cell_history records the cell
-            // verbatim (a multi-line block possibly containing many
-            // statements), we rewrite by recomposing: rebuild the
-            // history string from the persistent_lets slots that share
-            // this consume_cell origin, joined onto whatever non-`let`
-            // remainder the original cell carried. v1 simplification:
-            // overwrite the cell_history entry by replacing the bare
-            // `<binding>` token's *first* occurrence inside the
-            // statement that targeted this consume — same effect as the
-            // local splice when the original cell was the `let _t =
-            // consume(s);` shape the slice's caveat narrows us to.
-            let cell_idx0 = intent.consume_cell.saturating_sub(1);
-            if let Some(cell_src) = self.cell_history.get_mut(cell_idx0) {
-                rewrite_cell_history_consume(cell_src, &intent.binding);
-            }
-            notes.push(format!(
-                "perf[auto-clone-in-repl]: inserted `.clone()` on `{}` at consume site (cell {}, used in cell {}); cross-cell binding kept alive — disable with `karac repl` (no `--auto-clone`) to surface the underlying use-after-move diagnostic instead",
-                intent.binding, intent.consume_cell, intent.use_cell,
-            ));
-        }
-        notes
-    }
-
-    /// Locate the index in `persistent_lets` whose backing byte range
-    /// (inside the most recently built synthetic source) contains
-    /// `offset`. Returns `None` when the offset falls outside every
-    /// stored slot — including when it lands inside the current cell's
-    /// body block (the trailing `cell_byte_ranges` entry tagged with the
-    /// current 1-based cell index, which is *not* a persistent_lets slot
-    /// yet). Callers use this to decide whether the consume-site rewrite
-    /// targets a replayed `let` or the freshly-submitted cell body. The
-    /// slot index found is returned in `persistent_lets` order — the
-    /// same order ranges are emitted in `build_synthetic_cell`.
-    fn persistent_let_slot_for_offset(&self, offset: usize) -> Option<usize> {
-        // The first `persistent_lets.len()` entries in `cell_byte_ranges`
-        // map onto the persistent_lets slots in order (skipping any
-        // entries whose origin was the sentinel 0 — which `capture_new_lets`
-        // never produces in practice but the legacy fallback in
-        // `build_synthetic_cell` still defends). The trailing entry is
-        // the current cell's body block; never a persistent_lets slot.
-        // We mirror that iteration order here.
-        let n = self.persistent_lets.len();
-        for (i, range) in self.cell_byte_ranges.iter().take(n).enumerate() {
-            if range.1.start <= offset && offset < range.1.end {
-                return Some(i);
-            }
-        }
-        None
-    }
-
-    /// Render resolver errors with REPL-aware enrichment for the
-    /// "binding declared inside a now-closed `:provide` scope" case.
-    /// When the resolver reports `undefined name 'X'` and `X` matches
-    /// Slice c-repl.B.B: run the just-typechecked program through the
-    /// persistent `karac_jit_runner --repl-mode` subprocess. Lazily
-    /// spawns the runner on the first cell; re-spawns after a cell-
-    /// induced exit (`emit_panic`'s `exit(101)`, runtime panics)
-    /// terminates it. Each cell increments `jit_next_cell_id` so the
-    /// runner's echoed `result <id>` line cross-checks framing
-    /// integrity.
-    ///
-    /// Slice c-repl.B.5.1: implements value-snapshot semantics for
-    /// primitive-typed lets via codegen-emitted LLVM globals as a
-    /// cross-cell side channel. Cell N's top-level `let x = expr` of
-    /// i64/f64/bool/char type writes its bound value into
-    /// `@__karac_repl_snapshot_x` (External linkage, lives in the
-    /// runner's JITDylib past the cell's tracker scope); subsequent
-    /// cells' codegen skips the original RHS and binds `x` to a load
-    /// from the same global. Closes the interpreter-vs-JIT semantic
-    /// gap for the canonical `let log = read_file(…)` pattern.
-    /// Non-primitive types (String, Vec, Map, structs) still fall
-    /// through to the re-evaluating path; see slice c-repl.B.5
-    /// follow-ons for those.
-    #[cfg(feature = "llvm")]
-    fn run_cell_via_jit(
-        &mut self,
-        program: &crate::ast::Program,
-        typed: &crate::typechecker::TypeCheckResult,
-        capture: bool,
-        notes: Vec<String>,
-    ) -> WrapperOutcome {
-        use jit_runner_client::{CellResult, ReplRunnerClient};
-
-        self.jit_next_cell_id += 1;
-        let cell_id = self.jit_next_cell_id;
-        let main_symbol = format!("cell_main_{cell_id}");
-
-        // Slice c-repl.B.5.1: classify this cell's top-level lets into
-        // replay (prior cell stashed a primitive value into a
-        // snapshot global — codegen loads from the global instead of
-        // re-evaluating) and capture (new binding with a primitive
-        // type — codegen stores the bound value into a fresh global
-        // so future cells can replay it). The classification reads
-        // the synthesized program directly so the binding's pattern
-        // span lines up with the typechecker's recorded inferred
-        // type.
-        let (snapshot_replay, snapshot_capture, snapshot_value_types) =
-            self.compute_snapshot_sets_for_cell(program, typed);
-
-        // B-2026-08-30-7: a binding this cell declares that the classification
-        // above left on the pass-through path will be rebuilt from its
-        // initializer in every later cell. Say so once, here, rather than let
-        // the divergence from `--interp` be silent.
-        let mut notes = notes;
-        notes.extend(self.passthrough_divergence_notes(program, typed));
-
-        // Slice c-repl.B.4: prior cells' fn bodies live in the
-        // runner's JITDylib. Emit them as `declare`-only in this
-        // cell's IR so codegen + jitlink skip the body for them;
-        // the JIT linker resolves call sites against the
-        // already-installed definitions.
-        let ir = match crate::codegen::compile_to_ir_for_repl_cell_with_snapshots(
-            program,
-            &self.jit_installed_fns,
-            &main_symbol,
-            &snapshot_capture,
-            &snapshot_replay,
-            &snapshot_value_types,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                return WrapperOutcome::errors(vec![format!("JIT codegen failed: {e}")], notes);
-            }
-        };
-
-        if self.jit_client.is_none() {
-            match ReplRunnerClient::spawn() {
-                Ok(c) => self.jit_client = Some(c),
-                Err(e) => {
-                    return WrapperOutcome::errors(
-                        vec![format!("JIT runner spawn failed: {e}")],
-                        notes,
-                    );
-                }
-            }
-        }
-        let client = self
-            .jit_client
-            .as_mut()
-            .expect("jit_client just initialized");
-
-        let result = client.run_cell(cell_id, &ir);
-
-        match result {
-            CellResult::Completed {
-                exit,
-                stdout,
-                stderr,
-            } => {
-                let mut errors: Vec<String> = Vec::new();
-                if exit != 0 {
-                    errors.push(format!("cell exited with code {exit}"));
-                    let stderr_str = String::from_utf8_lossy(&stderr);
-                    for line in stderr_str.lines() {
-                        if !line.is_empty() {
-                            errors.push(line.to_string());
-                        }
-                    }
-                } else {
-                    // Slice c-repl.B.4: cell ran clean — every fn the
-                    // codegen path emitted with a body (i.e., every
-                    // program fn NOT already in jit_installed_fns) is
-                    // now live in the runner's JITDylib. Add their
-                    // names so the next cell emits them as
-                    // declare-only. Done only on `exit == 0` — a
-                    // failed cell may have aborted mid-init and we
-                    // don't want a half-installed symbol to shadow
-                    // a future cell's correct definition.
-                    //
-                    // EXCLUDES `main`: each cell's synthesized
-                    // `fn main` is registered in LLVM under
-                    // `cell_main_<id>` via `main_symbol_override`, so
-                    // the AST name "main" maps to a different LLVM
-                    // symbol every cell. If we added "main" to the
-                    // installed set, cell N+1's codegen would see
-                    // its OWN `fn main()` matched against declare-
-                    // only and skip the body emission — installing
-                    // a body-less `cell_main_<N+1>` that crashes on
-                    // call.
-                    for item in &program.items {
-                        if let crate::ast::Item::Function(f) = item {
-                            if f.generic_params.is_some() {
-                                continue;
-                            }
-                            if f.name == "main" {
-                                continue;
-                            }
-                            if !self.jit_installed_fns.contains(&f.name) {
-                                self.jit_installed_fns.insert(f.name.clone());
-                            }
-                        }
-                        // Slice c-repl.B.4 (impl-method extension): impl
-                        // method bodies install under the LLVM symbol
-                        // `Type.method` (see `make_impl_method_function`).
-                        // Record them under that same qualified key so the
-                        // next cell emits them declare-only — otherwise a
-                        // later cell that re-walks the impl (e.g. a
-                        // `with_provider`-wrapped cell that re-runs the
-                        // provider's impl) re-emits the body and trips a
-                        // duplicate-symbol install error. Mirrors the
-                        // codegen-side skip in `compile_program`.
-                        if let crate::ast::Item::ImplBlock(imp) = item {
-                            if let Some(type_name) =
-                                crate::codegen::impl_target_name_for_repl(&imp.target_type)
-                            {
-                                for impl_item in &imp.items {
-                                    if let crate::ast::ImplItem::Method(m) = impl_item {
-                                        if m.generic_params.is_some() {
-                                            continue;
-                                        }
-                                        let qualified = format!("{}.{}", type_name, m.name);
-                                        self.jit_installed_fns.insert(qualified);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Slice c-repl.B.5.1: every let in `snapshot_capture`
-                    // has been materialized into a live global in the
-                    // runner's JITDylib by this cell's main. Record the
-                    // names + their primitive kinds so subsequent cells
-                    // know to take the replay path. Skipped on cell
-                    // failure (same reasoning as `jit_installed_fns`:
-                    // a half-initialized symbol shouldn't shadow a
-                    // future correct emission).
-                    for (name, kind) in &snapshot_capture {
-                        self.jit_snapshotted_lets.insert(name.clone(), *kind);
-                        // B-2026-08-30-7: remember the type the global was
-                        // SIZED at, so every later cell replays it at that
-                        // width rather than at whatever it re-infers.
-                        if let Some(te) = snapshot_value_types.get(name) {
-                            self.jit_snapshot_value_types
-                                .insert(name.clone(), te.clone());
-                        }
-                    }
-                }
-                let stdout_lines = if capture {
-                    // Kernel / test path: hand the captured bytes back so the
-                    // caller can render them (`evaluate_cell_captured`).
-                    bytes_to_stdout_lines(&stdout)
-                } else {
-                    // Interactive path: the runner captured the cell's stdout
-                    // over a pipe (`Stdio::piped()`), so — unlike the tree-walk
-                    // interpreter, which writes straight to the process stdout —
-                    // nothing has reached the terminal yet. Flush the captured
-                    // bytes (and any non-fatal stderr the clean cell produced)
-                    // to the real streams now, else an interactive `println`
-                    // cell is silent under the JIT-default REPL. The capture=true
-                    // tests never exercised this path, so the drop went unseen
-                    // until the Slice-5 JIT-default flip made it the default.
-                    use std::io::Write;
-                    let mut out = std::io::stdout();
-                    let _ = out.write_all(&stdout);
-                    let _ = out.flush();
-                    if !stderr.is_empty() {
-                        let mut err = std::io::stderr();
-                        let _ = err.write_all(&stderr);
-                        let _ = err.flush();
-                    }
-                    Vec::new()
-                };
-                WrapperOutcome {
-                    stdout: stdout_lines,
-                    errors,
-                    notes,
-                }
-            }
-            CellResult::RunnerDied {
-                partial_stdout,
-                runner_stderr,
-                wait_status,
-            } => {
-                // Drop the dead client; the next cell re-spawns.
-                self.jit_client = None;
-                // Slice c-repl.B.4: the fresh runner will spawn with
-                // an empty JITDylib, so every fn must be re-emitted
-                // with its body on the next cell. Clear the installed
-                // set to reflect that.
-                self.jit_installed_fns.clear();
-                // Slice c-repl.B.5.1: snapshot globals lived in the
-                // dead runner's JITDylib — they're gone too. Clear so
-                // subsequent cells re-take the capture path for every
-                // persistent let, not a replay path that would
-                // resolve to an unmapped symbol.
-                self.jit_snapshotted_lets.clear();
-                self.jit_snapshot_value_types.clear();
-                let exit_code = wait_status.and_then(|s| s.code());
-                let mut errors = vec![format!(
-                    "JIT runner subprocess died mid-cell (exit code {:?}); \
-                     the cell's code likely tripped emit_panic's exit(101). \
-                     A fresh runner will spawn on the next cell.",
-                    exit_code
-                )];
-                let runner_stderr_text = String::from_utf8_lossy(&runner_stderr);
-                for line in runner_stderr_text.lines() {
-                    if !line.is_empty() {
-                        errors.push(format!("runner stderr: {line}"));
-                    }
-                }
-                let stdout_lines = if capture {
-                    bytes_to_stdout_lines(&partial_stdout)
-                } else {
-                    // Interactive path: forward the cell's salvaged output to
-                    // the terminal (the `Completed` arm's forward wouldn't run
-                    // for a dead runner). The runner's atexit salvage
-                    // (B-2026-07-09-4) frames the faulting cell's captured
-                    // stdout plus its stderr — the `panic at …` message
-                    // emit_panic prints is on the latter — so a fault is no
-                    // longer silent. When we DID salvage output, the panic text
-                    // is self-explanatory, so suppress the verbose internal
-                    // "runner died / will respawn" note; show it only on a
-                    // genuine silent death (no salvaged bytes at all).
-                    use std::io::Write;
-                    let mut out = std::io::stdout();
-                    let _ = out.write_all(&partial_stdout);
-                    let _ = out.flush();
-                    let mut err = std::io::stderr();
-                    let _ = err.write_all(&runner_stderr);
-                    if partial_stdout.is_empty() && runner_stderr.is_empty() {
-                        for line in &errors {
-                            let _ = writeln!(err, "{line}");
-                        }
-                    }
-                    let _ = err.flush();
-                    Vec::new()
-                };
-                WrapperOutcome {
-                    stdout: stdout_lines,
-                    errors,
-                    notes,
-                }
-            }
-        }
-    }
-
-    /// B-2026-08-30-7: report, at the cell that DECLARES it, a top-level
-    /// `let` the JIT lane has no cross-cell snapshot for.
-    ///
-    /// Such a binding takes the B.5.3d PASS-THROUGH: no global is emitted, so
-    /// every later cell rebuilds it by RE-RUNNING the original initializer.
-    /// phase-7-codegen.md called that "correct (re-evaluating) semantics",
-    /// which holds only for an immutable binding whose RHS is pure. Otherwise
-    /// it diverges from `--interp` twice over, silently:
-    ///
-    ///   * a mutation is REVERTED, including one made in the declaring cell —
-    ///     the loss happens when the NEXT cell re-evaluates the RHS, not when
-    ///     this one fails to write a global (which is what separates this from
-    ///     B-2026-08-30-1, where the global exists and goes stale);
-    ///   * a side-effecting initializer RE-EXECUTES, which is the exact thing
-    ///     the snapshot tier was built to prevent (B.5.1's own example:
-    ///     `let log = read_file("big.json")` should not reread the file).
-    ///
-    /// `--interp` has neither problem: its `let_snapshots` cache is keyed by
-    /// name and holds a `Value`, with no type tier at all.
-    ///
-    /// WHY THE DECLARING CELL and not the cell that loses the value: it is the
-    /// actionable moment — the user learns the binding will not persist before
-    /// building on it — and it fires exactly once with no dedup state, because
-    /// from the next cell onward the name is in `persistent_lets` and this
-    /// walk skips it.
-    ///
-    /// WHY NOT WARN ON EVERY pass-through binding: most are immutable with a
-    /// constructor-shaped initializer (`let p = Point { x: 1 };`), where
-    /// re-running the RHS is observationally identical and there is nothing to
-    /// report. Warning there would bury the real cases. The two conditions
-    /// below are what make harm possible: `let mut` is Kāra's prerequisite for
-    /// mutating at all, so an immutable binding cannot hit the first failure;
-    /// and a direct call to a session-defined free function is the shape the
-    /// second one takes. A constructor (`Vec.new()`, a struct literal) is a
-    /// `MethodCall` / `StructLiteral`, not a `Call` through an identifier, so
-    /// it does not trip the second condition.
-    #[cfg(feature = "llvm")]
-    fn passthrough_divergence_notes(
-        &self,
-        program: &crate::ast::Program,
-        typed: &crate::typechecker::TypeCheckResult,
-    ) -> Vec<String> {
-        use crate::ast::{Expr, ExprKind, Item, PatternKind, StmtKind};
-        use crate::resolver::SpanKey;
-
-        let Some(main_fn) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        }) else {
-            return Vec::new();
-        };
-
-        // Names an earlier cell declared. The synthetic main is
-        // `<persistent_lets replay>\n<cell body>` and `persistent_lets` does
-        // not absorb this cell until after it runs, so a binding missing here
-        // is one the CURRENT cell introduces.
-        let prior: std::collections::HashSet<String> = self
-            .persistent_lets
-            .iter()
-            .flat_map(|l| parse_let_binding_names(l))
-            .collect();
-
-        let user_fns: std::collections::HashSet<&str> = program
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Function(f) => Some(f.name.as_str()),
-                _ => None,
-            })
-            .collect();
-
-        fn calls_session_fn(value: &Expr, user_fns: &std::collections::HashSet<&str>) -> bool {
-            match &value.kind {
-                ExprKind::Call { callee, .. } => {
-                    matches!(&callee.kind, ExprKind::Identifier(n) if user_fns.contains(n.as_str()))
-                }
-                _ => false,
-            }
-        }
-
-        let drop_types = Self::drop_impl_type_names(program);
-        let user_declared = Self::user_declared_type_names(program);
-        let by_value = crate::repl::util::ByValueCtx {
-            structs: &typed.struct_info,
-            enums: &typed.enum_info,
-            drop_types: &drop_types,
-            user_declared: &user_declared,
-        };
-        let mut notes = Vec::new();
-        for stmt in &main_fn.body.stmts {
-            let StmtKind::Let {
-                is_mut,
-                pattern,
-                ty,
-                value,
-            } = &stmt.kind
-            else {
-                continue;
-            };
-            let PatternKind::Binding(name) = &pattern.kind else {
-                continue;
-            };
-            if prior.contains(name.as_str()) {
-                continue;
-            }
-            let Some(t) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
-                continue;
-            };
-            if snapshot_kind_for_type(t, &by_value).is_some() {
-                continue;
-            }
-            if !*is_mut && !calls_session_fn(value, &user_fns) {
-                continue;
-            }
-            let shown = ty
-                .as_ref()
-                .map(|t| format!(" ({})", crate::formatter::render_type_expr(t)))
-                .unwrap_or_default();
-            notes.push(format!(
-                "warning[repl-jit-no-snapshot]: `{name}`{shown} is rebuilt from its \
-                 initializer in every later cell — the JIT REPL has no cross-cell \
-                 snapshot for this type, so a mutation will not survive the cell \
-                 boundary and a side-effecting initializer runs again each time. \
-                 `karac repl --interp` carries this binding correctly (B-2026-08-30-7)."
-            ));
-        }
-        notes
-    }
-
-    /// B-2026-08-30-7: names carrying a user `impl Drop` in this cell's
-    /// program.
-    ///
-    /// Scanned from the AST rather than read from a table because there is
-    /// no table: `TypeCheckResult` exposes `struct_info` / `enum_info` (the
-    /// shapes) but not the impl blocks. The REPL's synthetic program
-    /// carries every item the session has accumulated, so one pass over
-    /// `program.items` sees every `impl Drop` the user has written.
-    #[cfg(feature = "llvm")]
-    fn drop_impl_type_names(program: &crate::ast::Program) -> std::collections::HashSet<String> {
-        use crate::ast::{Item, TypeKind};
-        let mut out = std::collections::HashSet::new();
-        for item in &program.items {
-            let Item::ImplBlock(ib) = item else { continue };
-            if ib.trait_name.as_ref().and_then(|t| t.segments.last()) != Some(&"Drop".to_string()) {
-                continue;
-            }
-            if let TypeKind::Path(tp) = &ib.target_type.kind {
-                if let Some(name) = tp.segments.last() {
-                    out.insert(name.clone());
-                }
-            }
-        }
-        out
-    }
-
-    /// B-2026-08-30-7: `struct` / `enum` names the user declared in this
-    /// session, which is the whitelist a named type must be on to reach
-    /// the by-value snapshot tier. See [`util::ByValueCtx::user_declared`]
-    /// for why provenance is read from the session's own source rather
-    /// than from a type-table flag.
-    #[cfg(feature = "llvm")]
-    fn user_declared_type_names(
-        program: &crate::ast::Program,
-    ) -> std::collections::HashSet<String> {
-        use crate::ast::Item;
-        let mut out = std::collections::HashSet::new();
-        for item in &program.items {
-            match item {
-                Item::StructDef(sd) if !sd.stdlib_origin => {
-                    out.insert(sd.name.clone());
-                }
-                Item::EnumDef(ed) if !ed.stdlib_origin => {
-                    out.insert(ed.name.clone());
-                }
-                _ => {}
-            }
-        }
-        out
-    }
-
-    /// Slice c-repl.B.5.1: classify every top-level `let` in this
-    /// cell's synthetic `fn main` into one of three bins:
-    ///
-    ///   - **Replay**: binding name already lives in
-    ///     `jit_snapshotted_lets` (a prior cell stashed a primitive
-    ///     value into the cell-spanning global). Codegen will skip
-    ///     the original RHS and emit a load from the global.
-    ///
-    ///   - **Capture**: binding name is NOT in `jit_snapshotted_lets`
-    ///     AND the inferred type is one of the supported primitives
-    ///     (i64 / f64 / bool / char) AND the pattern is a single
-    ///     `PatternKind::Binding` (destructuring deferred). Codegen
-    ///     will emit the let normally and stash the bound value into
-    ///     a fresh global so future cells can replay it.
-    ///
-    ///   - **Pass-through** (neither map populated): everything
-    ///     else — destructuring lets, non-primitive types, wildcards,
-    ///     `let mut` rebinding chains, etc. The original RHS still
-    ///     runs every cell as in pre-B.5.1 behavior. Closing those
-    ///     gaps is the work of B.5.2 (String) and beyond.
-    ///
-    /// The classification reads the typechecker's `expr_types` table
-    /// keyed by the let's value expression span. Type extraction
-    /// goes through `snapshot_kind_for_type` which intentionally
-    /// only accepts the explicit primitive forms (so an `i32` or
-    /// `u64` doesn't quietly get stashed at the wrong storage width).
-    #[cfg(feature = "llvm")]
-    fn compute_snapshot_sets_for_cell(
-        &self,
-        program: &crate::ast::Program,
-        typed: &crate::typechecker::TypeCheckResult,
-    ) -> (
-        std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
-        std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
-        std::collections::HashMap<String, crate::ast::TypeExpr>,
-    ) {
-        use crate::ast::{Item, PatternKind, StmtKind};
-        use crate::resolver::SpanKey;
-        let mut replay = std::collections::HashMap::new();
-        let mut capture = std::collections::HashMap::new();
-        // B-2026-08-30-7: the `TypeExpr` behind each `ByValue` name. Seeded
-        // from the session for a REPLAYED binding (so the load is sized by
-        // the cell that defined the global, never by a later cell's
-        // re-inference) and filled from this cell's inference for a new one.
-        let mut value_types: std::collections::HashMap<String, crate::ast::TypeExpr> =
-            std::collections::HashMap::new();
-        let Some(main_fn) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        }) else {
-            return (replay, capture, value_types);
-        };
-        let drop_types = Self::drop_impl_type_names(program);
-        let user_declared = Self::user_declared_type_names(program);
-        let by_value = crate::repl::util::ByValueCtx {
-            structs: &typed.struct_info,
-            enums: &typed.enum_info,
-            drop_types: &drop_types,
-            user_declared: &user_declared,
-        };
-        // Same-scope shadowing is legal, and a re-bound name's earlier
-        // binders stay in the replay (B-2026-07-02-33) — so a name can
-        // have SEVERAL top-level binders here. Only the LAST one may
-        // take the replay or capture path: routing an earlier binder
-        // through the snapshot global would load the final value (or a
-        // differently-typed one — `let x = "s";` replaying an i64
-        // global) at the wrong point in the sequence. Earlier binders
-        // pass through and re-run their RHS in order, mirroring the
-        // interpreter path's last-binder-only override placement.
-        let mut last_binder_idx: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
-        for (idx, stmt) in main_fn.body.stmts.iter().enumerate() {
-            if let StmtKind::Let { pattern, .. } = &stmt.kind {
-                if let PatternKind::Binding(name) = &pattern.kind {
-                    last_binder_idx.insert(name.as_str(), idx);
-                }
-            }
-        }
-        for (idx, stmt) in main_fn.body.stmts.iter().enumerate() {
-            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
-                continue;
-            };
-            let PatternKind::Binding(name) = &pattern.kind else {
-                continue;
-            };
-            if last_binder_idx.get(name.as_str()) != Some(&idx) {
-                continue;
-            }
-            // Replay path wins for the RHS: if this binding already has
-            // a global installed in the runner, the `let` loads from the
-            // global rather than re-running the original initializer. (A
-            // CURRENT-cell `let` that re-binds a snapshotted name cannot
-            // land here: the shadow clear in
-            // `clear_rebound_let_snapshots` dropped the name from
-            // `jit_snapshotted_lets` before this cell compiled.)
-            //
-            // The name goes into `capture` TOO, so the global is written
-            // back at end of cell. Replay used to be exclusive — `continue`
-            // here, no capture — which meant the global was written exactly
-            // ONCE, by the cell that declared the binding, and every later
-            // cell loaded a value that could no longer change
-            // (B-2026-08-30-1). A mutation in any cell after the declaring
-            // one was therefore lost: `let mut n = 0;` then `n = 5;` in the
-            // next cell read back 0. Worse for the two by-value heap kinds
-            // — a later-cell `s = s + f"b"` / `v.push(…)` frees or reallocs
-            // the buffer the global still points at, so subsequent cells
-            // read FREED memory rather than merely stale memory.
-            //
-            // Map/Set hid the gap: their globals hold a handle POINTER, so
-            // an in-place `m.insert(…)` is visible through the stale global
-            // and those two shapes were correct by aliasing while the seven
-            // by-value shapes (i64/f64/bool/char/String/Vec) were not.
-            //
-            // Capture is idempotent for an unmutated replayed binding: the
-            // slot still holds exactly what the load produced, so the
-            // write-back stores the same bytes.
-            if let Some(kind) = self.jit_snapshotted_lets.get(name) {
-                replay.insert(name.clone(), *kind);
-                capture.insert(name.clone(), *kind);
-                if let Some(te) = self.jit_snapshot_value_types.get(name) {
-                    value_types.insert(name.clone(), te.clone());
-                }
-                continue;
-            }
-            let Some(ty) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
-                continue;
-            };
-            if let Some(kind) = snapshot_kind_for_type(ty, &by_value) {
-                // `let mut` String / Vec / Map / Set bindings used to be
-                // EXCLUDED here (slices c-repl.B.5.2 / B.5.3 / b / c). The
-                // reasoning was an alias hazard: capture transfers buffer
-                // ownership to the snapshot global by zeroing the slot's
-                // `cap`, so a same-cell `s.push_str(…)` after the capture
-                // would read cap=0, realloc into a fresh buffer, and leave
-                // the global pointing at the pre-push one.
-                //
-                // That hazard was a consequence of WHERE the capture was
-                // emitted — at the `let`, with the rest of the cell still
-                // to run. It now fires at END OF CELL
-                // (`emit_pending_snapshot_captures`), after every
-                // statement and before scope cleanup, so there is no live
-                // use left to invalidate and the captured value is the
-                // cell's final state.
-                //
-                // The exclusion was also the bug (B-2026-07-29-20): with no
-                // capture, cell N+1 re-evaluated the RHS, so `let mut v =
-                // Vec.new(); v.push(7)` read back EMPTY. Dropping it is
-                // what makes the container tier work at all.
-                if kind.needs_value_type() {
-                    value_types.insert(
-                        name.clone(),
-                        crate::typechecker::TypeChecker::type_to_type_expr(ty),
-                    );
-                }
-                capture.insert(name.clone(), kind);
-            }
-        }
-        (replay, capture, value_types)
-    }
-
-    /// an entry in `pruned_provider_lets`, append a notebook-aware
-    /// tail naming the provider scope that closed and the cell where
-    /// `X` was originally declared (design.md § Cross-Cell Providers
-    /// diagnostic shape). Other resolver errors use the existing
-    /// `resolve error: <message>` rendering verbatim — strictness is
-    /// identical to `.kara` files; only presentation differs.
-    fn render_resolve_errors_repl(&self, errors: &[crate::resolver::ResolveError]) -> Vec<String> {
-        let mut rendered: Vec<String> = Vec::with_capacity(errors.len());
-        for err in errors {
-            let mut line = format!("resolve error: {}", err.message);
-            if let Some(name) = extract_undefined_name(&err.message) {
-                if let Some(pruned) = self
-                    .pruned_provider_lets
-                    .iter()
-                    .find(|p| p.binding_name == name)
-                {
-                    line.push_str(&format!(
-                        "\n  note: `{}` was declared inside `:provide {}` (cell {}) and went out of scope when `:end-provide {}` ran in cell {}",
-                        pruned.binding_name,
-                        pruned.pruned_by_resource,
-                        pruned.declared_in_cell,
-                        pruned.pruned_by_resource,
-                        pruned.pruned_at_cell,
-                    ));
-                    line.push_str(&format!(
-                        "\n  hint: extract `{}` to a cell BEFORE `:provide {}` (cell {}), or delay `:end-provide {}` until you no longer need the binding in later cells",
-                        pruned.binding_name,
-                        pruned.pruned_by_resource,
-                        pruned.scope_opened_cell,
-                        pruned.pruned_by_resource,
-                    ));
-                }
-            }
-            rendered.push(line);
-        }
-        rendered
-    }
-
-    /// Render ownership errors with REPL-aware enrichment for
-    /// `UseAfterMove` diagnostics. When the consume site and the use site
-    /// resolve to different cells (via `cell_for_span` over the just-built
-    /// `cell_byte_ranges`), append a notebook-aware tail naming the
-    /// consuming cell and pointing the user at `.clone()` at the consume
-    /// site. Same-cell UAM and every non-UAM kind use the existing
-    /// rendering verbatim — strictness is identical to `.kara` files; only
-    /// presentation differs in REPL context.
-    fn render_ownership_errors_repl(
-        &self,
-        errors: &[crate::ownership::OwnershipError],
-    ) -> Vec<String> {
-        let mut rendered: Vec<String> = Vec::with_capacity(errors.len());
-        for err in errors {
-            let mut line = format!("ownership error: {}", err.message);
-            if let Some(s) = err.suggestion.as_deref() {
-                line.push_str("\n  help: ");
-                line.push_str(s);
-            }
-            // Notebook-aware tail: only fires for UseAfterMove with a
-            // consume-site span that resolves to a different cell than
-            // the use-site span. Same-cell UAM and any kind without a
-            // recorded `consume_span` fall through unchanged.
-            if err.kind == crate::ownership::OwnershipErrorKind::UseAfterMove {
-                if let Some(consume_span) = err.consume_span.as_ref() {
-                    let consume_cell = self.cell_for_span(consume_span);
-                    let use_cell = self.cell_for_span(&err.span);
-                    if let (Some(c), Some(u)) = (consume_cell, use_cell) {
-                        if c != u {
-                            line.push_str(&format!(
-                                "\n  note: consumed by cell {c} (`{}`); add `.clone()` at the consume site to keep the original binding usable in later cells",
-                                cell_preview(self.cell_history.get(c.saturating_sub(1)).map(String::as_str).unwrap_or("")),
-                            ));
-                        }
-                    }
-                }
-            }
-            rendered.push(line);
-        }
-        rendered
+        self.run_cell_v2(&terminated(cell_src), capture)
     }
 
     /// Test helper: evaluate a cell and return any captured output and
@@ -2914,67 +1569,6 @@ impl Session {
                     notes: out.notes,
                     effect_footer: String::new(),
                 }
-            }
-        }
-    }
-
-    /// Synthesize the source text fed to the parser for a non-pure-item cell:
-    /// `<items_source>\nfn main() { <persistent_lets>\n<cell_body> }`.
-    /// Using `main` (not `__cell_N`) ensures `Interpreter::run` finds the
-    /// entry point automatically. If the user already declared `main` in
-    /// `items_source`, the new one shadows it (Cell Scope re-declaration
-    /// rule from design.md). The persistent-let replay block sits at the
-    /// top of the wrapper body so each cell sees the same flat scope as
-    /// design.md § Cell Scope describes.
-    ///
-    /// Side effect: rebuilds `Session.cell_byte_ranges` so it reflects the
-    /// just-assembled source. Each replayed `let` slice is tagged with
-    /// the cell index that originally introduced it (from
-    /// `persistent_let_origin`); the trailing `cell_src` block is tagged
-    /// with the *current* cell's 1-based index (the one being submitted).
-    /// Install value-snapshot overrides into `interp`, keyed by the
-    /// binder pattern span of the **last** top-level `let` of each
-    /// snapshotted name in `program`'s `fn main` body.
-    ///
-    /// Span keying (vs the former name keying) is what makes legal
-    /// same-scope shadowing replay correctly (B-2026-07-02-33): when a
-    /// name has several replayed binders (`let x = 1; … let x = 99;`),
-    /// only the final binder short-circuits to the cached value;
-    /// earlier binders re-run their recorded RHS in submission order,
-    /// so anything replayed between two binders (a pattern let, a
-    /// `let-else` — forms that have no snapshot of their own) reads
-    /// the historically-correct intermediate value instead of the
-    /// latest one. Two structural guarantees keep the current cell's
-    /// own `let`s live: `clear_rebound_let_snapshots` makes
-    /// snapshot-bearing names disjoint from the cell's top-level
-    /// binder names (so the last snapshotted binder is always a
-    /// replayed slot), and a *nested* `let` of a snapshotted name
-    /// inside the cell body never matches a top-level binder span.
-    fn install_let_snapshot_overrides(
-        &self,
-        program: &crate::ast::Program,
-        interp: &mut crate::interpreter::Interpreter,
-    ) {
-        use crate::ast::{Item, PatternKind, StmtKind};
-        let Some(main_fn) = program.items.iter().find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        }) else {
-            return;
-        };
-        let mut last_binder: HashMap<&str, &crate::token::Span> = HashMap::new();
-        for stmt in &main_fn.body.stmts {
-            if let StmtKind::Let { pattern, .. } = &stmt.kind {
-                if let PatternKind::Binding(name) = &pattern.kind {
-                    last_binder.insert(name.as_str(), &pattern.span);
-                }
-            }
-        }
-        for (name, span) in last_binder {
-            if let Some(v) = self.let_snapshots.get(name) {
-                interp
-                    .let_value_overrides
-                    .insert(crate::resolver::SpanKey::from_span(span), v.clone());
             }
         }
     }
@@ -3254,10 +1848,7 @@ impl Session {
         // the wrap still map back to the current cell via
         // `cell_for_span`. Persistent-let replay continues to sit OUTSIDE
         // every wrap — bindings declared while a scope was open keep
-        // replaying after `:end-provide` until slice 4's pruning lands;
-        // for those bindings the `let_snapshots` cache short-circuits
-        // RHS re-evaluation so the replay doesn't actually re-touch the
-        // closed-scope resource at runtime.
+        // replaying after `:end-provide` until slice 4's pruning lands.
         let cell_idx = self.cell_history.len();
         if self.v2 {
             // The output before this line is the replay's (v2 replays every
@@ -3338,65 +1929,6 @@ impl Session {
         }
     }
 
-    /// Clear stale per-name snapshot state for every name the new cell's
-    /// top-level `let`s re-bind. Same-scope shadowing is legal Kāra
-    /// (`let x = 1; let x = "s";` — the later binding shadows to end of
-    /// scope), so the source-replay slices themselves are KEPT: this
-    /// method's predecessor (`prune_shadowed_lets`) dropped the earlier
-    /// binder's slice from `persistent_lets`, which orphaned any later
-    /// slice — or the current cell itself (`let x = x + 1;`) — whose RHS
-    /// still referenced the earlier binding, failing every subsequent
-    /// cell with `resolve error: undefined name` (B-2026-07-02-33).
-    /// Keeping every binder and replaying them in submission order is
-    /// exactly the program `:save` exports, so the two surfaces agree.
-    fn clear_rebound_let_snapshots(&mut self, cell_src: &str) {
-        let mut new_names = std::collections::HashSet::new();
-        for entry in scan_top_level_lets(cell_src) {
-            new_names.extend(entry.names);
-        }
-        if new_names.is_empty() {
-            return;
-        }
-        // Drop snapshot entries for any name the new cell is about to
-        // re-bind. Without this, a `let x = 5;` (i64) followed by `let
-        // x = "hello";` (String) would re-use the stale i64 snapshot.
-        // Clearing keeps the snapshot-bearing names DISJOINT from the
-        // current cell's binder names during this cell's run, which is
-        // what lets `install_let_snapshot_overrides` place each
-        // override at the last top-level binder of its name without
-        // ever short-circuiting the current cell's own `let`. The
-        // earlier binders of the re-bound name simply re-run their
-        // recorded RHS during this cell (in submission order, before
-        // the new binding shadows them) and the post-run capture
-        // re-seeds the snapshot from the new binding's value.
-        for name in &new_names {
-            self.let_snapshots.remove(name);
-        }
-        // Slice c-repl.B.5.1 follow-up: under JIT mode the snapshot
-        // value lives in the runner's JITDylib as
-        // `@__karac_repl_snapshot_<name>`. Cross-cell shadow without
-        // a JIT-side clear would route the new cell through the
-        // REPLAY classification (name still in `jit_snapshotted_lets`)
-        // → codegen emits a load from the stale global → wrong value.
-        // Per-cell global isolation (the B.4 W2 finding's documented
-        // path) would let us drop just the one global; until then,
-        // the cleanest correct fix is to drop the whole runner on
-        // shadow — next cell starts with an empty JITDylib so the
-        // new RHS evaluates fresh. Trade-off: cached fn definitions
-        // also re-emit, but shadows are explicit user actions and
-        // not the steady-state pattern.
-        #[cfg(feature = "llvm")]
-        if new_names
-            .iter()
-            .any(|n| self.jit_snapshotted_lets.contains_key(n))
-        {
-            self.jit_installed_fns.clear();
-            self.jit_snapshotted_lets.clear();
-            self.jit_snapshot_value_types.clear();
-            self.jit_client = None;
-        }
-    }
-
     /// Drop every persistent `let` binding accumulated so far. Items
     /// (`fn` / `struct` / etc.) and cell history are left intact. Also
     /// clears the value-snapshot cache so a subsequent re-bind starts
@@ -3408,24 +1940,7 @@ impl Session {
         self.v2_values = Some(Vec::new());
         self.persistent_let_origin.clear();
         self.persistent_let_provider_scope.clear();
-        self.let_snapshots.clear();
         self.pruned_provider_lets.clear();
-        // Slice c-repl.B.B: under JIT mode the persistent-let bindings
-        // live as snapshot globals inside the runner's JITDylib, and
-        // their cached primitive kinds live in `jit_snapshotted_lets`.
-        // Clearing only the source-replay slate leaves the runner with
-        // stale globals — the next cell whose binding name collides
-        // with a prior one would take the replay path and load the
-        // dead value. Drop the whole runner so the next cell respawns
-        // with a fresh, empty JITDylib; `jit_installed_fns` clears in
-        // step so fn bodies re-emit instead of going declare-only.
-        #[cfg(feature = "llvm")]
-        {
-            self.jit_installed_fns.clear();
-            self.jit_snapshotted_lets.clear();
-            self.jit_snapshot_value_types.clear();
-            self.jit_client = None;
-        }
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
@@ -3899,10 +2414,7 @@ impl Session {
 
         // Prune persistent_lets whose capture-time scope equals the
         // just-closed-scope's pre-pop stack. Each pruned binding seeds
-        // a `pruned_provider_lets` entry so the diagnostic-rendering
-        // layer can attach the notebook-aware tail on a future
-        // "undefined name 'X'" error.
-        let pruned_at_cell = self.cell_history.len() + 1;
+        // a `pruned_provider_lets` entry.
         let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
         let mut kept_origin: Vec<usize> = Vec::with_capacity(self.persistent_let_origin.len());
         let mut kept_scope: Vec<Vec<String>> =
@@ -3910,15 +2422,9 @@ impl Session {
         for (i, scope) in self.persistent_let_provider_scope.iter().enumerate() {
             if scope == &active_at_close {
                 let let_src = &self.persistent_lets[i];
-                let declared_in_cell = *self.persistent_let_origin.get(i).unwrap_or(&0);
                 for binding in parse_let_binding_names(let_src) {
-                    self.let_snapshots.remove(&binding);
                     self.pruned_provider_lets.push(PrunedProviderLet {
                         binding_name: binding,
-                        declared_in_cell,
-                        pruned_by_resource: frame.resource.clone(),
-                        scope_opened_cell: frame.opened_cell,
-                        pruned_at_cell,
                     });
                 }
             } else {
@@ -3941,13 +2447,11 @@ impl Session {
 
     /// Eagerly evaluate the construction expression for `:provide R =
     /// expr` so a panicking constructor leaves the scope un-opened.
-    /// Runs the full parse → resolve → typecheck → ownership →
-    /// interpreter pipeline against a synthetic program built from the
+    /// Runs the v2 REPL's cell pipeline against a synthetic program built from the
     /// current session view, with the expression wrapped in any
     /// already-active provider scopes (so nested `:provide` forms that
     /// depend on outer providers validate correctly). Returns
-    /// `Err(message)` on any pipeline failure or interpreter-recorded
-    /// runtime error; `Ok(())` indicates a clean construction. This
+    /// `Err(message)` on any pipeline failure or runtime error; `Ok(())` indicates a clean construction. This
     /// method intentionally does NOT mutate session state — no
     /// `persistent_lets` capture, no `cell_byte_ranges` update — so
     /// the construction check is a pure validation step.
@@ -3975,54 +2479,14 @@ impl Session {
         }
         synth.push_str("}\n");
 
-        if self.v2 {
-            return crate::cli::repl_v2::run_cell(&synth)
-                .map(|_| ())
-                .map_err(|f| {
-                    format!(
-                        "error: in `:provide {resource}` construction: {}",
-                        f.errors.join("\n")
-                    )
-                });
-        }
-        let mut parsed = crate::parse(&synth);
-        if !parsed.errors.is_empty() {
-            return Err(format!(
-                "error: parse error in `:provide {resource}` construction: {}",
-                parsed.errors[0].message
-            ));
-        }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return Err(format!(
-                "error: resolve error in `:provide {resource}` construction: {}",
-                resolved.errors[0].message
-            ));
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return Err(format!(
-                "error: type error in `:provide {resource}` construction: {}",
-                typed.errors[0].message
-            ));
-        }
-        let owned = crate::ownershipcheck(&parsed.program, &typed);
-        if !owned.errors.is_empty() {
-            return Err(format!(
-                "error: ownership error in `:provide {resource}` construction: {}",
-                owned.errors[0].message
-            ));
-        }
-        crate::lower(&mut parsed.program, &typed);
-        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
-        interp.run();
-        if let Some(err) = interp.runtime_errors.first() {
-            return Err(format!(
-                "error: panic in `:provide {resource}` construction: {}",
-                err.message
-            ));
-        }
-        Ok(())
+        crate::cli::repl_v2::run_cell(&synth)
+            .map(|_| ())
+            .map_err(|f| {
+                format!(
+                    "error: in `:provide {resource}` construction: {}",
+                    f.errors.join("\n")
+                )
+            })
     }
 
     /// Wrap a cell-body source fragment in the active provider scopes,
@@ -4043,30 +2507,5 @@ impl Session {
             );
         }
         wrapped
-    }
-}
-
-#[cfg(all(test, feature = "llvm"))]
-mod jit_stdout_tests {
-    use super::bytes_to_stdout_lines;
-
-    /// The JIT runner returns raw stdout bytes; the sole consumer
-    /// rebuilds the stream with `stdout.join("")`, so each line must
-    /// retain its trailing `\n` to match the interpreter's
-    /// `captured_output` convention. Joining the split result must
-    /// reproduce the original bytes verbatim for every shape.
-    fn round_trips(raw: &str) {
-        let joined = bytes_to_stdout_lines(raw.as_bytes()).join("");
-        assert_eq!(joined, raw, "round-trip must reproduce raw stdout");
-    }
-
-    #[test]
-    fn bytes_to_stdout_lines_round_trips_all_shapes() {
-        round_trips("7\n8\n"); // two newline-terminated lines → "7\n8\n", not "78"
-        round_trips("hi"); // no trailing newline (bare `print`) preserved
-        round_trips("7\n8"); // trailing line without newline preserved
-        round_trips(""); // empty output
-        round_trips("\n"); // lone blank line
-        round_trips("a\n\nb\n"); // interior blank line retained
     }
 }

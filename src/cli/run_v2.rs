@@ -1,20 +1,12 @@
 //! `karac run` on v2 (M3 item 1, B-2026-10-22-12): the program is checked as
 //! `karac check` checks it, built to MIR and run on the mir-llvm JIT, or on the
-//! MIR interpreter under `--interp`. `--legacy` (or `KARAC_LEGACY=1`) keeps the
-//! legacy pipeline reachable until M3 deletes it.
+//! MIR interpreter under `--interp`.
 
 use super::*;
 
-/// `--legacy`, or `KARAC_LEGACY=1` for a harness that cannot add a flag to
-/// every command it spawns.
-pub(super) fn legacy_requested(flag: bool) -> bool {
-    flag || std::env::var("KARAC_LEGACY").as_deref() == Ok("1")
-}
-
-/// `karac run` on v2, or on the legacy pipeline when it was asked for.
+/// `karac run`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_run_either(
-    legacy: bool,
     filename: &str,
     output: OutputMode,
     sequential: bool,
@@ -25,19 +17,6 @@ pub(super) fn cmd_run_either(
     interp: bool,
     program_args: &[String],
 ) {
-    if legacy_requested(legacy) {
-        return cmd_run(
-            filename,
-            output,
-            sequential,
-            manifest_override,
-            no_manifest,
-            lint_overrides,
-            timeout,
-            interp,
-            program_args,
-        );
-    }
     cmd_run_v2(
         filename,
         output,
@@ -68,9 +47,9 @@ fn cmd_run_v2(
     // branch that waits on a later one would never finish.
     if sequential {
         emit_build_error(
-            "--sequential runs `par` branches one after another, which only the legacy \
-             pipeline does; on v2 each branch is a task (core-semantics.md §11.7). \
-             Use `karac run --legacy --sequential` until M3 deletes it",
+            "--sequential is not supported: each `par` branch is a task of its own \
+             (core-semantics.md §11.7), so running them one after another is a \
+             different program",
             output,
         );
         process::exit(1);
@@ -189,7 +168,7 @@ fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Am
 
 /// The package `filename` belongs to, as one source, when it has other
 /// modules (project mode, B-2026-10-22-14); `None` for a lone file. `cmd`
-/// names the command a refusal sends to `--legacy`.
+/// names the command, for the refusal.
 pub(super) fn package_source(
     filename: &str,
     no_manifest: bool,
@@ -218,7 +197,7 @@ pub(super) fn combine(
 /// The package cannot be combined into one source: a compile error naming
 /// why, exit 1.
 fn refused_project(e: &str, output: OutputMode, cmd: &str) -> ! {
-    let e = format!("error[project]: {e}; `karac {cmd} --legacy` takes it");
+    let e = format!("error[project]: `karac {cmd}`: {e}");
     match output {
         OutputMode::Text => eprintln!("{e}"),
         _ => emit_build_error(&e, output),
@@ -246,7 +225,7 @@ fn run_on_jit(
     let ir = crate::mir::lower::build_source(source)
         .and_then(|l| {
             crate::mir::lower::compiled_check(&l)?;
-            crate::codegen::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
+            crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
                 .map_err(|e| format!("llvm: {e}"))
         })
         .unwrap_or_else(|e| refused(&e, output));

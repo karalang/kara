@@ -85,7 +85,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 let _ = crate::target::set_active_target(name);
             }
             #[cfg(feature = "llvm")]
-            crate::codegen::print_target_cpu_listing();
+            crate::backend::driver::print_target_cpu_listing();
             process::exit(0);
         }
         // Hidden plumbing for the corpus runner's `mir-interp` backend
@@ -297,7 +297,6 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut timeout: Option<std::time::Duration> = None;
     let mut interp = false;
-    let mut legacy = false;
     let mut i = file_idx;
     let mut program_args: Vec<String> = Vec::new();
     while i < args.len() {
@@ -319,9 +318,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
             // executor (Slice 6c JIT-default flip). Ergonomic `KARAC_RUN_JIT=0`.
             interp = true;
         } else if arg == "--legacy" {
-            // The legacy pipeline (JIT, or its tree-walk interpreter under
-            // `--interp`) until M3 deletes it (B-2026-10-22-12).
-            legacy = true;
+            legacy_removed();
         } else if let Some(rest) = arg.strip_prefix("--timeout=") {
             timeout = Some(parse_timeout_arg(rest));
         } else if arg == "--timeout" {
@@ -389,7 +386,6 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         lint_overrides,
         timeout,
         interp,
-        legacy,
         program_args,
     }
 }
@@ -727,8 +723,6 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut crate_type = crate::cli::NativeCrateType::Bin;
     let mut out_path: Option<String> = None;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
-    let mut mir = false;
-    let mut legacy = false;
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -754,10 +748,8 @@ fn parse_build_command(args: &[String]) -> Command {
         } else if arg == "--mir" {
             // The redesign's pipeline, which is now the default: kept so a
             // script that asks for it explicitly still works.
-            mir = true;
         } else if arg == "--legacy" {
-            // The legacy pipeline, until M3 deletes it (B-2026-10-22-14).
-            legacy = true;
+            legacy_removed();
         } else if let Some(rest) = arg.strip_prefix("--target=") {
             // `--target=<triple>` selects the active target for
             // `[target.<triple>.*]` overlay merge (tracker line 882).
@@ -935,7 +927,6 @@ fn parse_build_command(args: &[String]) -> Command {
             crate_type,
             out_path,
             lint_overrides,
-            legacy: legacy && !mir,
         },
         None => {
             // Project-mode monomorphization budget would need the merged
@@ -968,7 +959,6 @@ fn parse_build_command(args: &[String]) -> Command {
                 crate_type,
                 out_path,
                 lint_overrides,
-                legacy: legacy && !mir,
             }
         }
     }
@@ -1500,7 +1490,6 @@ fn parse_run_example_command(args: &[String]) -> Command {
     let mut name: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut sequential = false;
-    let mut legacy = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -1518,7 +1507,7 @@ fn parse_run_example_command(args: &[String]) -> Command {
         } else if arg == "--sequential" {
             sequential = true;
         } else if arg == "--legacy" {
-            legacy = true;
+            legacy_removed();
         } else if let Some(rest) = arg.strip_prefix("--output=") {
             eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
             process::exit(1);
@@ -1542,7 +1531,6 @@ fn parse_run_example_command(args: &[String]) -> Command {
         output,
         sequential,
         lint_overrides,
-        legacy,
     }
 }
 
@@ -1550,12 +1538,10 @@ fn parse_test_command(args: &[String]) -> Command {
     let mut filter: Option<String> = None;
     let mut all = false;
     let mut interp = false;
-    let mut legacy = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--all" => all = true,
-            // The legacy runner, until M3 deletes it (B-2026-10-22-13).
-            "--legacy" => legacy = true,
+            "--legacy" => legacy_removed(),
             // `--interp`: force the interpreter over the default JIT executor
             // (LLJIT Slice 5). Parsed on every build for CLI uniformity; only
             // consulted under `--features llvm` (see `cmd_test`).
@@ -1577,19 +1563,16 @@ fn parse_test_command(args: &[String]) -> Command {
         filter,
         all,
         interp,
-        legacy,
     }
 }
 
 fn parse_repl_command(args: &[String]) -> Command {
     let mut auto_clone = false;
     let mut interp = false;
-    let mut legacy = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--auto-clone" => auto_clone = true,
-            // The legacy REPL, until M3 deletes it (B-2026-10-22-45).
-            "--legacy" => legacy = true,
+            "--legacy" => legacy_removed(),
             // `--interp`: force the interpreter over the default JIT backend
             // (LLJIT Slice 5). Parsed on every build; a no-op without `llvm`.
             "--interp" => interp = true,
@@ -1603,11 +1586,7 @@ fn parse_repl_command(args: &[String]) -> Command {
             }
         }
     }
-    Command::Repl {
-        auto_clone,
-        interp,
-        legacy,
-    }
+    Command::Repl { auto_clone, interp }
 }
 
 fn parse_init_command(args: &[String]) -> Command {
@@ -2489,4 +2468,13 @@ mod tests {
         assert!(matches!(classify_explain_name("E02A0"), T::Class(_)));
         assert!(matches!(classify_explain_name("e0200"), T::Concept(_)));
     }
+}
+
+/// `--legacy` named the pipeline M3 deleted (B-2026-10-22-12, -13, -14, -45).
+fn legacy_removed() -> ! {
+    eprintln!(
+        "error: --legacy is gone: the legacy pipeline was removed at M3, and every command \
+         runs on v2"
+    );
+    process::exit(2);
 }

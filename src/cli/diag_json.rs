@@ -2558,66 +2558,6 @@ pub(super) fn mutual_recursion_groups_json(pipeline: &Pipeline) -> String {
     }
 }
 
-/// Render a `crate::unsafe_lint::LintDiagnostic` in rustc-style format:
-/// the primary line plus optional `= note:` and `= help:` continuation
-/// lines. The `note:` carries the conceptual explanation (e.g. the two
-/// distinct roles of `unsafe`); the `help:` carries the actionable
-/// suggestion (wrap in `unsafe { ... }` and add a `// Safety:` comment).
-pub(super) fn render_unsafe_lint_diag(diag: &crate::unsafe_lint::LintDiagnostic, filename: &str) {
-    eprintln!(
-        "{}[{}]: {}:{}:{}: {}",
-        if diag.level == crate::unsafe_lint::LintLevel::Error {
-            "error"
-        } else {
-            "warning"
-        },
-        diag.lint_name,
-        filename,
-        diag.span.line,
-        diag.span.column,
-        diag.message
-    );
-    if let Some(note) = &diag.note {
-        eprintln!("   = note: {note}");
-    }
-    if let Some(help) = &diag.help {
-        eprintln!("   = help: {help}");
-    }
-}
-
-/// Render a `crate::must_use_lint::LintDiagnostic` in the same
-/// rustc-style three-piece shape (primary / `= note:` / `= help:`) as
-/// `render_unsafe_lint_diag`. Kept parallel rather than unified because
-/// each lint module currently owns its own `LintDiagnostic` struct (the
-/// pre-existing pattern across `unsafe_lint`, `logical_lint`,
-/// `ffi_lint`); a future lint-registry refactor (`docs/implementation_
-/// checklist/phase-5-diagnostics.md` § "Lint level attributes") would
-/// unify these.
-pub(super) fn render_must_use_lint_diag(
-    diag: &crate::must_use_lint::LintDiagnostic,
-    filename: &str,
-) {
-    eprintln!(
-        "{}[{}]: {}:{}:{}: {}",
-        if diag.level == crate::must_use_lint::LintLevel::Error {
-            "error"
-        } else {
-            "warning"
-        },
-        diag.lint_name,
-        filename,
-        diag.span.line,
-        diag.span.column,
-        diag.message
-    );
-    if let Some(note) = &diag.note {
-        eprintln!("   = note: {note}");
-    }
-    if let Some(help) = &diag.help {
-        eprintln!("   = help: {help}");
-    }
-}
-
 /// Render the `#[target(...)]`-stripped items of a SINGLE-target check as a
 /// note (B-2026-08-05-29).
 ///

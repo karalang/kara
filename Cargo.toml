@@ -167,37 +167,6 @@ name = "karac_jit_runner"
 path = "src/bin/karac_jit_runner.rs"
 required-features = ["llvm"]
 
-# Drop-soundness fuzzer (ownership-model-mechanization spike, Slice 1). Drives
-# the AOT codegen path (`compile_to_object` + `link_executable_with_sanitizer`),
-# so it requires the `llvm` feature. Generates well-typed heap-core Kāra
-# programs, links each under ASan+LSan, and lets the sanitizer judge — measures
-# a drop-bug rate and emits a shrunk, bucketed repro corpus. See
-# `src/bin/drop_fuzz.rs` and `scripts/drop-fuzz.sh`.
-[[bin]]
-name = "drop_fuzz"
-path = "src/bin/drop_fuzz.rs"
-required-features = ["llvm"]
-
-# Pre-optimization LLVM IR dump for a single `.kara` file — the investigation
-# harness for codegen bugs. Runs the FULL front-end chain including
-# `lowering::lower_program`; skipping lowering leaves codegen's span-keyed side
-# tables (`pattern_binding_types`, …) empty and produces IR the compiler never
-# actually emits (see bug-ledger B-2026-07-25-1's retraction note).
-#   cargo run --features llvm --example dump_ir -- path/to/file.kara
-[[example]]
-name = "dump_ir"
-path = "examples/dump_ir.rs"
-required-features = ["llvm"]
-
-# Same gating, same reason: the ASAN build harness imports `karac::codegen`,
-# which only exists under `llvm`. Without this entry a plain `cargo test` /
-# `cargo clippy --all-targets` tries to compile it featureless and fails
-# (landed unregistered in 6d51e132; broke both no-feature gates).
-[[example]]
-name = "asan_build"
-path = "examples/asan_build.rs"
-required-features = ["llvm"]
-
 # Front-end-only phase benchmark (name-interning spike,
 # docs/spikes/name-interning.md): per-phase wall time + allocation counts.
 # No llvm gate — it exercises parse..ownership only.
@@ -211,16 +180,6 @@ path = "examples/dump_reduce_shader.rs"
 [[example]]
 name = "nvptx_probe"
 path = "examples/nvptx_probe.rs"
-required-features = ["llvm"]
-
-[[example]]
-name = "nvptx_body_probe"
-path = "examples/nvptx_body_probe.rs"
-required-features = ["llvm"]
-
-[[example]]
-name = "nvptx_kernel_spike"
-path = "examples/nvptx_kernel_spike.rs"
 required-features = ["llvm"]
 
 [[example]]
@@ -268,17 +227,6 @@ karac-runtime = { path = "runtime", version = "0.1.0", optional = true }
 libc = { version = "0.2", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
-# Arrow IPC interchange (phase-11 Arrow IPC slice 1) — backs the
-# interpreter's `Column.to_arrow_ipc` / `Column.from_arrow_ipc` dispatch
-# (`src/interpreter/arrow_ipc.rs`), the reference implementation. Minimal
-# sub-crates (not the `arrow` umbrella): the columnar core (arrow-array +
-# arrow-schema, pulling arrow-buffer / arrow-data) plus the IPC reader/writer
-# (arrow-ipc, pulling flatbuffers) — dropping the compute crates. Compiler-side
-# (interpreter) dep in the same class as `regex` / `serde_json`; codegen builds
-# get the same behavior through the runtime's own `arrow` feature (slice 2).
-arrow-array = "55"
-arrow-schema = "55"
-arrow-ipc = "55"
 # Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
 # semver-constraint vocabulary. `VersionReq` parses Cargo-style comparators
 # (bare `1.2` → `^1.2.0` → `>=1.2.0, <2.0.0`; `=1.2.3`; `>=1.0, <1.5`; etc.)
@@ -305,24 +253,12 @@ pulldown-cmark = { version = "0.13.3", default-features = false, features = ["ht
 # `preserve_order` feature gives insertion-order Object iteration per
 # locked design choice (ii).
 serde_json = { version = "1", features = ["preserve_order"] }
-# Phase-10 embedded-WIT componentization (`--bindings component`,
-# src/componentize.rs): the `wasi_snapshot_preview1` **command** adapter
-# bytes that `wasm-tools component new --adapt` needs to lift karac's
-# wasm32-wasip1 C-ABI core modules into WASI 0.2 components. Vendored as
-# a crate (wasmtime's own release artifact, pinned via Cargo.lock) rather
-# than a downloaded blob so builds are reproducible and offline; the bytes
-# are written to a temp file at componentize time (`KARAC_WASI_ADAPTER`
-# overrides with an on-disk adapter). The componentization *transform*
-# stays in the external `wasm-tools` binary per design.md § Component
-# Model emission — this dep is pure data, no Component Model machinery.
-wasi-preview1-component-adapter-provider = "45.0.1"
 
 # Native-only deps. The browser playground (tracker line 703) builds
 # `karac` for `wasm32-unknown-unknown`; `ureq` (sync HTTP client) and
 # `rustyline` (libc TTY line editor) have no wasm32 surface. Both are
-# only reached on native paths anyway — `ureq` from
-# `src/interpreter/helpers.rs`'s `Http` resource backend (cfg-gated
-# off on wasm32), `rustyline` from `src/repl.rs` (the entire module is
+# only reached on native paths anyway — `ureq` from the registry
+# proxy and the MIR interpreter, `rustyline` from `src/repl.rs` (the entire module is
 # cfg-gated off on wasm32).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"

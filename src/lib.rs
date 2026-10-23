@@ -8,21 +8,17 @@ pub mod call_graph;
 pub mod catalog;
 pub mod cfg;
 pub mod chained_receiver_lint;
-pub mod cheader;
 // CLI / REPL / multi-file driver surfaces are native-only — they reach
 // `std::fs`, `std::process`, `rustyline`, and `ureq`, none of which have
 // a wasm32 surface. The browser playground (tracker line 703) consumes
-// only the in-process check pipeline + `Interpreter`, so excluding these
+// only the in-process check pipeline + the MIR interpreter, so excluding these
 // modules from the wasm32 build is a strict subset of what the playground
 // needs — see `pub fn run_playground` at the bottom of this file.
 pub mod backend;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod closure_escape;
-#[cfg(feature = "llvm")]
-pub mod codegen;
 pub mod codegen_queries;
-pub mod componentize;
 pub mod comptime;
 pub mod concurrency;
 pub mod concurrency_report;
@@ -46,8 +42,6 @@ pub mod diagnostic_class;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc;
 pub mod dominator;
-#[cfg(feature = "llvm")]
-pub mod drop_differential;
 pub mod edit_distance;
 pub mod effect_graph;
 pub mod effect_render;
@@ -76,7 +70,6 @@ pub mod inline_hints;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod install_spec;
 pub mod intern;
-pub mod interpreter;
 pub mod iter_local;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod karac_toolchain;
@@ -147,8 +140,6 @@ pub mod simd_report;
 pub mod span_visitor;
 pub mod specialization_queries;
 pub mod target;
-pub mod test_jit_dispatch;
-pub mod test_main_synth;
 pub mod token;
 pub mod ty;
 pub mod typechecker;
@@ -156,9 +147,6 @@ pub mod typed_hir;
 pub mod unsafe_lint;
 pub mod use_classifier;
 pub mod walker;
-pub mod wasm_exports;
-pub mod wasm_glue;
-pub mod wit;
 
 use crate::ast::Program;
 use crate::concurrency::{ConcurrencyAnalysis, ConcurrencyChecker};
@@ -735,251 +723,6 @@ pub fn raii_across_yield_check(
     raii_check::check_raii_across_yield(program, types)
 }
 
-/// Run a closure on a freshly spawned thread with a 16 MB stack and
-/// return its result. The tree-walk interpreter's `eval_expr_inner` and
-/// `eval_call` are huge match-on-AST functions; debug builds give them
-/// large frames, and each Kāra function call traverses ~8 Rust frames,
-/// so a `fib(10)` (Kāra depth 10) overflows the default 2 MB cargo-test
-/// thread stack on Windows. Lifting the interpreter onto a fat-stack
-/// scoped thread keeps the fix local to the entry points without
-/// instrumenting every recursion site with `stacker::maybe_grow`. Panics
-/// inside the closure propagate back to the caller via `resume_unwind`
-/// so test assertions and runtime panics still surface normally.
-#[cfg(not(target_arch = "wasm32"))]
-fn run_on_interp_thread<R, F>(f: F) -> R
-where
-    R: Send,
-    F: FnOnce() -> R + Send,
-{
-    std::thread::scope(|scope| {
-        let handle = std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn_scoped(scope, f)
-            .expect("failed to spawn interpreter thread");
-        match handle.join() {
-            Ok(v) => v,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    })
-}
-
-/// wasm32 (the browser playground): thread spawning is unsupported —
-/// `std::thread::Builder::spawn_scoped` returns `Err(Unsupported)` and
-/// the `.expect` above turned EVERY playground `run` into a wasm trap.
-/// Run inline on the caller's stack instead; the browser main thread's
-/// stack is what the playground gets, and the fat-stack workaround only
-/// matters for the Windows cargo-test default (see above).
-#[cfg(target_arch = "wasm32")]
-fn run_on_interp_thread<R, F>(f: F) -> R
-where
-    R: Send,
-    F: FnOnce() -> R + Send,
-{
-    f()
-}
-
-/// Run a program through all phases and execute it via the interpreter.
-/// Returns captured output lines (for testing).
-pub fn run_program(source: &str) -> Vec<String> {
-    let (output, _trace, _truncated) = run_program_with_trace(source);
-    output
-}
-
-/// Run a program and return (output_lines, error_trace, trace_truncated).
-pub fn run_program_with_trace(
-    source: &str,
-) -> (Vec<String>, Vec<interpreter::ErrorTraceFrame>, bool) {
-    let (output, _errors, trace, truncated) = run_program_full(source);
-    (output, trace, truncated)
-}
-
-/// Run a program and return (output_lines, drop_trace). The drop trace
-/// records the order in which `CleanupAction::Drop` slots fire — both
-/// NLL early-drops (mid-block, after a binding's last use) and scope-exit
-/// drops drained from the unified cleanup stack. Used by sub-step 3
-/// (live-range-end placement) tests since the interpreter has no
-/// observable user-`impl Drop` dispatch yet.
-pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
-    run_on_interp_thread(|| {
-        let mut parsed = parse(source);
-        assert!(
-            parsed.errors.is_empty(),
-            "Parse errors: {:?}",
-            parsed.errors
-        );
-        desugar_program(&mut parsed.program);
-        let resolved = resolve(&parsed.program);
-        assert!(
-            resolved.errors.is_empty(),
-            "Resolve errors: {:?}",
-            resolved.errors
-        );
-        let typed = typecheck(&parsed.program, &resolved);
-        lower(&mut parsed.program, &typed);
-        comptime_eval(&mut parsed.program, &typed);
-        // B-2026-09-08-10 — the interpreter needs the ownership pass's
-        // RC-fallback promotions to tell a MOVED field from one a promoted base
-        // RETAINS. Only the promotion spans are taken; this lane's diagnostics
-        // are unchanged because the result's errors and notes are not consulted.
-        let ow = ownershipcheck(&parsed.program, &typed);
-        let mut interp =
-            interpreter::Interpreter::new(&parsed.program, &typed).with_rc_promotions(&ow);
-        interp.captured_output = Some(Vec::new());
-        interp.run();
-        let output = interp.captured_output.take().unwrap_or_default();
-        let drops = std::mem::take(&mut interp.drop_trace);
-        (output, drops)
-    })
-}
-
-/// Run a program with `dbg()` output capture enabled. Returns
-/// `(stdout_lines, dbg_lines)`. The interpreter is configured with
-/// `source_text` set so `dbg()` can slice expression text from the
-/// source. `mode` selects terminal-format vs JSON-format dbg lines —
-/// see [`interpreter::DbgOutputMode`]. Each dbg line includes the
-/// trailing `\n`. Used by `tests/interpreter.rs` to assert exact dbg
-/// formatting.
-pub fn run_program_with_dbg(
-    source: &str,
-    mode: interpreter::DbgOutputMode,
-) -> (Vec<String>, Vec<String>) {
-    run_on_interp_thread(|| {
-        let mut parsed = parse(source);
-        assert!(
-            parsed.errors.is_empty(),
-            "Parse errors: {:?}",
-            parsed.errors
-        );
-        desugar_program(&mut parsed.program);
-        let resolved = resolve(&parsed.program);
-        assert!(
-            resolved.errors.is_empty(),
-            "Resolve errors: {:?}",
-            resolved.errors
-        );
-        let typed = typecheck(&parsed.program, &resolved);
-        lower(&mut parsed.program, &typed);
-        comptime_eval(&mut parsed.program, &typed);
-        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-        interp.captured_output = Some(Vec::new());
-        interp.captured_dbg = Some(Vec::new());
-        interp.set_source_text(source);
-        interp.set_source_filename("test.kara");
-        interp.set_dbg_output_mode(mode);
-        interp.run();
-        let stdout = interp.captured_output.take().unwrap_or_default();
-        let dbg = interp.captured_dbg.take().unwrap_or_default();
-        (stdout, dbg)
-    })
-}
-
-/// Run a program and return output, runtime errors, error trace, and truncation flag.
-/// Used by tests that need to assert on user-triggered runtime errors (division by
-/// zero, integer overflow, unwrap of None, index out of bounds, etc.) without
-/// catching a Rust panic.
-pub fn run_program_full(
-    source: &str,
-) -> (
-    Vec<String>,
-    Vec<interpreter::RuntimeError>,
-    Vec<interpreter::ErrorTraceFrame>,
-    bool,
-) {
-    run_on_interp_thread(|| {
-        let mut parsed = parse(source);
-        assert!(
-            parsed.errors.is_empty(),
-            "Parse errors: {:?}",
-            parsed.errors
-        );
-        desugar_program(&mut parsed.program);
-        // Splice gated stdlib modules (`import std.secret.{Secret};` etc.) into
-        // the program before resolve, matching the CLI single-file pipeline
-        // (`cli.rs`). A no-op for programs with no gated import. Without this,
-        // the lib interpreter entry diverges from `karac run` — a gated import
-        // binds to nothing and the first use errors.
-        crate::prelude::expand_gated_stdlib_imports(&mut parsed.program);
-        let resolved = resolve(&parsed.program);
-        assert!(
-            resolved.errors.is_empty(),
-            "Resolve errors: {:?}",
-            resolved.errors
-        );
-        // Type-check but don't abort on errors — the tree-walk interpreter
-        // is dynamically typed and handles generics, partial types, etc.
-        let typed = typecheck(&parsed.program, &resolved);
-        // Operator lowering: rewrite Binary/Unary into trait-method calls.
-        lower(&mut parsed.program, &typed);
-        // Comptime fold: evaluate `comptime { ... }` blocks at compile time
-        // and splice their constant results in before interpretation.
-        comptime_eval(&mut parsed.program, &typed);
-        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-        interp.captured_output = Some(Vec::new());
-        interp.run();
-        let trace = interp.error_trace().to_vec();
-        let truncated = interp.error_trace_truncated();
-        let errors = std::mem::take(&mut interp.runtime_errors);
-        let output = interp.captured_output.take().unwrap_or_default();
-        (output, errors, trace, truncated)
-    })
-}
-
-/// [`run_program_full`], with the TYPECHECK diagnostics asserted empty first
-/// (B-2026-09-15-36).
-///
-/// `run_program_full` deliberately does not abort on type errors — the
-/// tree-walk interpreter is dynamically typed and runs partially-typed
-/// programs on purpose, and `tests/typechecker.rs` depends on that. The
-/// consequence is that a FIXTURE whose program does not compile still runs,
-/// still reports `interp_errs == []` (that `Vec` carries RUNTIME errors only),
-/// and still passes whenever its expected output happens to match.
-///
-/// That is not a hypothetical shape. The pinned-agreed-silence cell — a
-/// program whose expected output is just a trailing marker like `"end\n"` —
-/// is a common idiom in the codegen suite, and its entire value is going RED
-/// when a gate moves. A cell that does not typecheck is INERT: it can never go
-/// red, it pins nothing, and nothing in the test output distinguishes it from
-/// a working one. The case that exposed this was caught only because its
-/// expected output was long enough for the mismatch to be loud.
-///
-/// So fixtures call this instead. It re-runs the analysis half of the pipeline
-/// (parse → desugar → gated-import splice → resolve → typecheck) and asserts
-/// before delegating. The double analysis is deliberate: keeping
-/// `run_program_full` byte-for-byte preserves the callers that legitimately
-/// feed it ill-typed programs, and the cost is a second parse of a
-/// fixture-sized source.
-pub fn run_program_full_checked(
-    source: &str,
-) -> (
-    Vec<String>,
-    Vec<interpreter::RuntimeError>,
-    Vec<interpreter::ErrorTraceFrame>,
-    bool,
-) {
-    let mut parsed = parse(source);
-    assert!(
-        parsed.errors.is_empty(),
-        "Parse errors: {:?}",
-        parsed.errors
-    );
-    desugar_program(&mut parsed.program);
-    crate::prelude::expand_gated_stdlib_imports(&mut parsed.program);
-    let resolved = resolve(&parsed.program);
-    assert!(
-        resolved.errors.is_empty(),
-        "Resolve errors: {:?}",
-        resolved.errors
-    );
-    let typed = typecheck(&parsed.program, &resolved);
-    assert!(
-        typed.errors.is_empty(),
-        "Typecheck errors in a codegen fixture — the program does not compile, \
-         so this cell pins nothing (B-2026-09-15-36): {:?}",
-        typed.errors
-    );
-    run_program_full(source)
-}
-
 // ── Browser playground entry point ──────────────────────────────────
 //
 // Tracker line 703 — `play.kara-lang.org`. Single source string in,
@@ -1106,20 +849,47 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
         };
     };
 
-    let pre_interp_diag_count = diagnostics.len();
-    let (stdout, runtime_errors) = run_on_interp_thread(|| {
-        let mut interp = interpreter::Interpreter::new(&program, &typed);
-        interp.captured_output = Some(Vec::new());
-        interp.run();
-        let errors = std::mem::take(&mut interp.runtime_errors);
-        let output = interp.captured_output.take().unwrap_or_default();
-        (output, errors)
-    });
-    for e in &runtime_errors {
-        push_diag(&mut diagnostics, "runtime", e.message.clone(), &e.span);
+    // The program runs on the MIR interpreter, as `karac run --interp` runs
+    // it. MIR refuses a program its checks reject, so a program that already
+    // has diagnostics does not run.
+    let _ = (&program, &typed);
+    let pre_run_diag_count = diagnostics.len();
+    let mut stdout = Vec::new();
+    let mut runtime_ok = true;
+    if pre_run_diag_count == 0 {
+        let none = crate::token::Span::default();
+        match crate::mir::lower::run_source(source) {
+            Ok(r) => {
+                stdout = r.output.lines().map(str::to_string).collect();
+                match &r.outcome {
+                    crate::mir::interp::Outcome::Returned(_) => {}
+                    crate::mir::interp::Outcome::Exited(code) => {
+                        runtime_ok = false;
+                        push_diag(
+                            &mut diagnostics,
+                            "runtime",
+                            format!("{}exited with code {code}", r.stderr),
+                            &none,
+                        );
+                    }
+                    crate::mir::interp::Outcome::Aborted(_) => {
+                        runtime_ok = false;
+                        push_diag(&mut diagnostics, "runtime", r.stderr.clone(), &none);
+                    }
+                    crate::mir::interp::Outcome::Error(e) => {
+                        runtime_ok = false;
+                        push_diag(&mut diagnostics, "runtime", e.clone(), &none);
+                    }
+                }
+            }
+            Err(e) => {
+                runtime_ok = false;
+                push_diag(&mut diagnostics, "build", e, &none);
+            }
+        }
     }
 
-    let ok = pre_interp_diag_count == 0 && runtime_errors.is_empty();
+    let ok = pre_run_diag_count == 0 && runtime_ok;
     PlaygroundResult {
         stdout,
         diagnostics,

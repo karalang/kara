@@ -816,6 +816,9 @@ fn test_batch_main(prefix: &str) -> ExitCode {
 /// redirect still in place, leaving the marker in `err_path` for the
 /// parent. A setup failure (bad IR / missing `main`) writes a diagnostic
 /// to `err_path` and returns 2 without running anything.
+/// The symbol a `--test-batch` client emits each test's `main` under.
+const TEST_MAIN_SYMBOL: &str = "__karac_test_entry";
+
 fn run_one_test(engine: &LLJITEngine, ir: &str, out_path: &str, err_path: &str) -> i32 {
     let tracker = match engine.add_ir_module_with_tracker(ir) {
         Ok(t) => t,
@@ -830,7 +833,7 @@ fn run_one_test(engine: &LLJITEngine, ir: &str, out_path: &str, err_path: &str) 
     //
     // The per-test `main` is emitted under `TEST_MAIN_SYMBOL` (not `main`,
     // which would collide with the process's C `_main`).
-    let entry = karac::test_jit_dispatch::TEST_MAIN_SYMBOL;
+    let entry = TEST_MAIN_SYMBOL;
     let addr = match engine.lookup_address(entry) {
         Ok(a) => a,
         Err(e) => {

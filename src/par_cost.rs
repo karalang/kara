@@ -1223,29 +1223,6 @@ pub(crate) fn is_lowered_primitive_op_call(callee: &Expr) -> bool {
     )
 }
 
-/// Extract the canonical shape of a recognized reduction loop. Returns
-/// `Some(LoopShape)` when the loop matches one of v1's supported shapes
-/// (for-range with `lo == 0`, or while with an explicit `k = k + 1`
-/// induction step preceded by `let mut k: T = 0;`), `None` otherwise.
-/// Decouples the shape-parsing complexity from the lowering caller so
-/// future shapes (non-zero `lo`, larger step constants, while_let,
-/// loop with break, etc.) extend by adding match arms here without
-/// changing the lowering body.
-/// Every remaining caller is in `src/codegen/`, which is
-/// `#[cfg(feature = "llvm")]` — the query side moved to
-/// [`extract_loop_shape_explained`] (B-2026-08-15-4), because it has to
-/// EXPLAIN a decline rather than just react to one. So without that feature
-/// this wrapper is genuinely dead, exactly like `LoopShape::loop_var` below;
-/// hence the same narrow cfg'd allow rather than a blanket one.
-#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
-pub(crate) fn extract_loop_shape(
-    parent_body: &Block,
-    stmt_index: usize,
-    expr: &Expr,
-) -> Option<LoopShape> {
-    extract_loop_shape_explained(parent_body, stmt_index, expr).ok()
-}
-
 /// Why [`extract_loop_shape_explained`] could not recover a counted shape.
 ///
 /// Every variant is one `return Err` site in that function, and that is the

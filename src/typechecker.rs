@@ -105,7 +105,7 @@ pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, U
 /// it now skips that snapshot for exactly the names this list does not contain.
 /// One list rather than two so the two surfaces cannot drift apart into a
 /// run-vs-build divergence — the failure that reverted this fix twice.
-pub(crate) use expr_method_call::{SLICE_BUILTIN_METHODS, SLICE_MUTATING_METHODS};
+pub(crate) use expr_method_call::SLICE_MUTATING_METHODS;
 #[cfg(test)]
 use inference::substitute_type_params;
 use types::type_is_fully_concrete;

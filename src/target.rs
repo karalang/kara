@@ -806,7 +806,7 @@ mod f16_capability_tests {
                 "unknown-linux-gnu"
             }
         );
-        let from_codegen = crate::codegen::driver::default_cpu_and_features(&host_triple);
+        let from_codegen = crate::backend::driver::default_cpu_and_features(&host_triple);
         let from_target = baseline_cpu_and_features();
         assert_eq!(
             from_target, from_codegen,

@@ -168,8 +168,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
             continue;
         }
         let at = fault.and_then(|f| f.at.clone());
-        let outcome = crate::interpreter::TestOutcome {
-            passed: false,
+        let outcome = TestOutcome {
             message: Some(message),
             span: at.as_ref().map(|(_, line, column)| crate::token::Span {
                 line: *line,
@@ -426,7 +425,7 @@ impl Runner {
         if self.jit {
             self.ir = crate::mir::lower::build_source(&self.source).and_then(|l| {
                 crate::mir::lower::compiled_check(&l)?;
-                crate::codegen::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
+                crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
                     .map_err(|e| format!("llvm: {e}"))
             })?;
             return Ok(());
