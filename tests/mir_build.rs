@@ -706,6 +706,42 @@ fn mir_string_tests_agree_on_both_backends() {
     }
 }
 
+/// A pushed Vec grows in line (B-2026-10-15-56): an empty one takes a
+/// first block of 8 elements up to 256 bytes each, 4 up to 1 KiB and 1
+/// beyond (B-2026-10-14-69), a full one doubles, and a heap literal grows
+/// from its length. The pushes are conditional so the presize pass leaves
+/// them alone; the capacities are the compiled backend's own.
+#[test]
+fn mir_vec_push_grows_in_line() {
+    const SRC: &str = r#"struct Big { a: Array[i64, 200] }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut caps: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 1000 {
+        if i >= 0 { v.push(i * 3); }
+        if v.len() == 1 or v.len() == 9 or v.len() == 1000 { caps.push(v.capacity()); }
+        i += 1;
+    }
+    let mut b: Vec[Big] = Vec.new();
+    let mut k = 0;
+    while k < 3 { if k >= 0 { b.push(Big { a: [k; 200] }); } k += 1; }
+    let mut w: Vec[i64] = vec![1, 2, 3];
+    let mut j = 0;
+    while j < 10 { w.push(j); j += 1; }
+    let mut sum = 0;
+    for x in v { sum += x; }
+    println(f"{sum} {caps} {b[2].a[199]} {b.capacity()} {w} {w.capacity()}");
+}
+"#;
+    let want = "1498500 [8, 16, 1024] 2 4 [1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9] 24\n";
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

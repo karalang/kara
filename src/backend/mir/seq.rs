@@ -103,7 +103,70 @@ impl<'ctx> Cx<'ctx, '_> {
         size: u64,
     ) -> R<()> {
         let ptr = self.load_ptr(v)?;
-        self.reserve_header(v, ptr, len, cap, self.i64(1), self.i64(size))
+        if size == 0 {
+            return self.reserve_header(v, ptr, len, cap, self.i64(1), self.i64(size));
+        }
+        // A full buffer doubles, and an empty Vec takes its first block,
+        // straight through `karac_realloc_or_panic`; only a borrowed
+        // literal (no capacity, some length) goes to `karac_mir_vec_reserve`.
+        // That wrapper's checks cost some 40 instructions a growth, most of
+        // a short Vec's build (kata 679, B-2026-10-15-56). `cap * size` is
+        // at most `KARAC_MAX_ALLOC_BYTES`, so doubling it cannot wrap, and
+        // `karac_realloc_or_panic` panics past that ceiling as the wrapper
+        // did.
+        let f = self.cur_fn()?;
+        let (zero, double, first, literal, done) = (
+            self.llcx.append_basic_block(f, "grow.zero"),
+            self.llcx.append_basic_block(f, "grow.double"),
+            self.llcx.append_basic_block(f, "grow.first"),
+            self.llcx.append_basic_block(f, "grow.literal"),
+            self.llcx.append_basic_block(f, "grow.done"),
+        );
+        let none = self.is_zero(cap)?;
+        self.builder
+            .build_conditional_branch(none, zero, double)
+            .map_err(e)?;
+        self.builder.position_at_end(zero);
+        let empty = self.is_zero(len)?;
+        self.builder
+            .build_conditional_branch(empty, first, literal)
+            .map_err(e)?;
+        let realloc = self.extern_fn(
+            "karac_realloc_or_panic",
+            self.ptr_ty()
+                .fn_type(&[self.ptr_ty().into(), self.llcx.i64_type().into()], false),
+        );
+        let grow_to = |cx: &mut Self, from: PointerValue<'ctx>, n: IntValue<'ctx>| -> R<()> {
+            let bytes = cx
+                .builder
+                .build_int_nuw_mul(n, cx.i64(size), "")
+                .map_err(e)?;
+            let p = cx
+                .builder
+                .build_call(realloc, &[from.into(), bytes.into()], "buf")
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic();
+            cx.store(v, p)?;
+            cx.store(cx.offset(v, 16)?, n.into())?;
+            cx.builder.build_unconditional_branch(done).map_err(e)?;
+            Ok(())
+        };
+        self.builder.position_at_end(double);
+        let twice = self
+            .builder
+            .build_int_nuw_mul(cap, self.i64(2), "")
+            .map_err(e)?;
+        grow_to(self, ptr, twice)?;
+        self.builder.position_at_end(first);
+        let null = self.ptr_ty().const_null();
+        let n = self.i64(min_first_cap(size));
+        grow_to(self, null, n)?;
+        self.builder.position_at_end(literal);
+        self.reserve_header(v, ptr, len, cap, self.i64(1), self.i64(size))?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        Ok(())
     }
 
     /// `karac_mir_vec_reserve` on a copy of the header at `v`, with the
@@ -2469,5 +2532,15 @@ impl<'ctx> Cx<'ctx, '_> {
         let d = self.place_ptr(dest)?;
         self.store(d, v)?;
         Ok(Some(()))
+    }
+}
+
+/// runtime/src/mir.rs's `min_first_cap`: the elements of `size` bytes a
+/// Vec's first block holds.
+fn min_first_cap(size: u64) -> u64 {
+    match size {
+        0..=256 => 8,
+        257..=1024 => 4,
+        _ => 1,
     }
 }
