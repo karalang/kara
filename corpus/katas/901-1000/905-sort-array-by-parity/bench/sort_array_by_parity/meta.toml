@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/905-sort-array-by-parity/bench/sort_array_by_parity.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "339d048da"
+extracted_src = "88bebab2"
+model_rev = "aafbe785"
+model_src = "88bebab2"

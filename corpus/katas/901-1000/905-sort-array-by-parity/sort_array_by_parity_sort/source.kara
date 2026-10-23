@@ -1,0 +1,136 @@
+// LeetCode #905: Sort Array By Parity -- a sort keyed on the parity.
+//
+// Each number's key is its remainder mod 2, 0 for even and 1 for odd, so
+// sorting by the key puts every even number first. O(n log n).
+
+fn sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    let mut out = nums;
+    out.sort_by_key(|x| x % 2);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether `out` holds the numbers of `nums` with every even one first.
+fn fits(nums: Vec[i64], out: Vec[i64]) -> bool {
+    if out.len() != nums.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < out.len() and out[k] % 2 == 0 {
+        k += 1;
+    }
+    while k < out.len() and out[k] % 2 == 1 {
+        k += 1;
+    }
+    if k != out.len() {
+        return false;
+    }
+    let mut a = nums.clone();
+    let mut b = out.clone();
+    a.sort();
+    b.sort();
+    a == b
+}
+
+fn listed(xs: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..xs.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{xs[i]}");
+    }
+    s
+}
+
+fn show(nums: Vec[i64]) {
+    let out = sort_array_by_parity(nums.clone());
+    let mut evens: Vec[i64] = Vec.new();
+    let mut odds: Vec[i64] = Vec.new();
+    for x in out.iter() {
+        if *x % 2 == 0 {
+            evens.push(*x);
+        } else {
+            odds.push(*x);
+        }
+    }
+    evens.sort();
+    odds.sort();
+    let verdict = if fits(nums, out) { "fits" } else { "DOES NOT FIT" };
+    println(f"nums = [{listed(nums)}] -> evens [{listed(evens)}] then odds [{listed(odds)}], {verdict}");
+}
+
+// `len` numbers below 5001, each even with chance `even` in 100
+fn random_nums(seed: mut ref i64, len: i64, even: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        let half = next_random(mut seed) % 2501;
+        let x = if next_random(mut seed) % 100 < even { 2 * half } else { (2 * half + 1).min(4999) };
+        out.push(x);
+    }
+    out
+}
+
+// how many evens lead `out`, and a checksum of the numbers on each side
+// that does not depend on their order
+fn summary(out: Vec[i64]) -> (i64, i64) {
+    let mut lead = 0;
+    while lead < out.len() and out[lead] % 2 == 0 {
+        lead += 1;
+    }
+    let mut check = lead;
+    for k in 0..out.len() {
+        let side = if k < lead { 1 } else { 2 };
+        check = (check + side * (out[k] + 1) * (out[k] + 7)) % 1000000007;
+    }
+    (lead, check)
+}
+
+fn main() {
+    show(vec![3, 1, 2, 4]);
+    show(vec![0]);
+    show(vec![1]);
+    show(vec![2, 4, 6]);
+    show(vec![1, 3, 5]);
+    show(vec![1, 2]);
+    show(vec![2, 1]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    show(vec![5000, 4999, 0, 1, 2, 3, 3, 2]);
+    // random cases of up to 5000 numbers, from no even number to all
+    let mut seed = 905;
+    let mut fit = 0;
+    let mut lead = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 5000;
+        let nums = random_nums(mut seed, len, (c * 37) % 101);
+        let out = sort_array_by_parity(nums.clone());
+        if fits(nums, out) {
+            fit += 1;
+        }
+        let (l, s) = summary(out);
+        lead += l;
+        check = (check * 1000003 + s) % 1000000007;
+    }
+    println(f"300 cases: {fit} fit, {lead} evens first in all, checksum {check}");
+    // LeetCode's largest: 5000 numbers, half even, and 5000 with one even
+    // number at the end
+    let big = random_nums(mut seed, 5000, 50);
+    let out = sort_array_by_parity(big.clone());
+    let (l, s) = summary(out);
+    println(f"5000 numbers: fits {fits(big, out)}, evens first {l}, checksum {s}");
+    let mut odd: Vec[i64] = Vec.new();
+    for k in 0..4999 {
+        odd.push(2 * k % 5000 + 1);
+    }
+    odd.push(5000);
+    let out2 = sort_array_by_parity(odd.clone());
+    let (l2, s2) = summary(out2);
+    println(f"4999 odd numbers then 5000: fits {fits(odd, out2)}, evens first {l2}, checksum {s2}");
+}

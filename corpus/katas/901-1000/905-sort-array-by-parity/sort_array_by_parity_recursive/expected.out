@@ -1,0 +1,12 @@
+nums = [3,1,2,4] -> evens [2,4] then odds [1,3], fits
+nums = [0] -> evens [0] then odds [], fits
+nums = [1] -> evens [] then odds [1], fits
+nums = [2,4,6] -> evens [2,4,6] then odds [], fits
+nums = [1,3,5] -> evens [] then odds [1,3,5], fits
+nums = [1,2] -> evens [2] then odds [1], fits
+nums = [2,1] -> evens [2] then odds [1], fits
+nums = [1,2,3,4,5,6,7,8] -> evens [2,4,6,8] then odds [1,3,5,7], fits
+nums = [5000,4999,0,1,2,3,3,2] -> evens [0,2,2,5000] then odds [1,3,3,4999], fits
+300 cases: 300 fit, 370495 evens first in all, checksum 390728393
+5000 numbers: fits true, evens first 2474, checksum 691785582
+4999 odd numbers then 5000: fits true, evens first 1, checksum 508379427

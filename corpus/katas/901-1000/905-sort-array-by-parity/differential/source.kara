@@ -1,0 +1,310 @@
+// LeetCode #905: Sort Array By Parity -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: given an integer array nums, move all the even integers
+// at the beginning of the array followed by all the odd integers. Return
+// any array that satisfies this condition.
+
+// ---- the ★ arm: two pointers from both ends -------------------------------
+fn star_sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    let mut out = nums;
+    let mut i = 0;
+    let mut j = out.len() - 1;
+    while i < j {
+        if out[i] % 2 == 0 {
+            i += 1;
+        } else if out[j] % 2 == 1 {
+            j -= 1;
+        } else {
+            out.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+    }
+    out
+}
+
+// ---- the stable arm: evens, then odds, into a new array -------------------
+fn stable_sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        if *x % 2 == 0 {
+            out.push(*x);
+        }
+    }
+    for x in nums.iter() {
+        if *x % 2 == 1 {
+            out.push(*x);
+        }
+    }
+    out
+}
+
+// ---- the lomuto arm: one pointer for the next even place ------------------
+fn lomuto_sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    let mut out = nums;
+    let mut next = 0;
+    for k in 0..out.len() {
+        if out[k] % 2 == 0 {
+            out.swap(next, k);
+            next += 1;
+        }
+    }
+    out
+}
+
+// ---- the sort arm: a sort keyed on the parity -----------------------------
+fn sort_sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    let mut out = nums;
+    out.sort_by_key(|x| x % 2);
+    out
+}
+
+// ---- the recursive arm: divide and conquer --------------------------------
+fn recursive_evens_first(nums: Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    if hi - lo == 1 {
+        return vec![nums[lo]];
+    }
+    let mid = (lo + hi) / 2;
+    let left = recursive_evens_first(nums, lo, mid);
+    let right = recursive_evens_first(nums, mid, hi);
+    let mut a = 0;
+    while a < left.len() and left[a] % 2 == 0 {
+        a += 1;
+    }
+    let mut b = 0;
+    while b < right.len() and right[b] % 2 == 0 {
+        b += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..a {
+        out.push(left[k]);
+    }
+    for k in 0..b {
+        out.push(right[k]);
+    }
+    for k in a..left.len() {
+        out.push(left[k]);
+    }
+    for k in b..right.len() {
+        out.push(right[k]);
+    }
+    out
+}
+
+fn recursive_sort_array_by_parity(nums: own Vec[i64]) -> Vec[i64] {
+    recursive_evens_first(nums, 0, nums.len())
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> Vec[i64] {
+    match x {
+        0 => star_sort_array_by_parity(nums.clone()),
+        1 => stable_sort_array_by_parity(nums.clone()),
+        2 => lomuto_sort_array_by_parity(nums.clone()),
+        3 => sort_sort_array_by_parity(nums.clone()),
+        _ => recursive_sort_array_by_parity(nums.clone()),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every pair of places checked for an odd number before an even one, and
+// every number counted in the answer and in nums
+fn literal(nums: Vec[i64], out: Vec[i64]) -> bool {
+    if out.len() != nums.len() {
+        return false;
+    }
+    let n = out.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            if out[i] % 2 == 1 and out[j] % 2 == 0 {
+                return false;
+            }
+        }
+    }
+    for i in 0..n {
+        let mut in_out = 0;
+        let mut in_nums = 0;
+        for j in 0..n {
+            if out[j] == out[i] {
+                in_out += 1;
+            }
+            if nums[j] == out[i] {
+                in_nums += 1;
+            }
+        }
+        if in_out != in_nums {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` numbers up to `top`, each even with chance `even` in 100
+fn random_nums(seed: mut ref i64, len: i64, even: i64, top: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        let x = if next_random(mut seed) % 100 < even {
+            2 * (next_random(mut seed) % (top / 2 + 1))
+        } else {
+            2 * (next_random(mut seed) % ((top + 1) / 2)) + 1
+        };
+        out.push(x);
+    }
+    out
+}
+
+// the even numbers of `out` sorted, a -1, and the odd ones sorted
+fn canon(out: Vec[i64]) -> Vec[i64] {
+    let mut evens: Vec[i64] = Vec.new();
+    let mut odds: Vec[i64] = Vec.new();
+    for x in out.iter() {
+        if *x % 2 == 0 {
+            evens.push(*x);
+        } else {
+            odds.push(*x);
+        }
+    }
+    evens.sort();
+    odds.sort();
+    evens.push(-1);
+    for x in odds.iter() {
+        evens.push(*x);
+    }
+    evens
+}
+
+// how many even numbers lead `out`
+fn lead(out: Vec[i64]) -> i64 {
+    let mut k = 0;
+    while k < out.len() and out[k] % 2 == 0 {
+        k += 1;
+    }
+    k
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, nums: Vec[i64], small: bool) {
+    let n = nums.len();
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    let mut canons: Vec[Vec[i64]] = Vec.new();
+    let mut leads: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        let out = arm(x, nums);
+        canons.push(canon(out.clone()));
+        leads.push(lead(out.clone()));
+        answers.push(out);
+    }
+    // P2: how many numbers are even
+    let mut evens = 0;
+    for x in nums.iter() {
+        if *x % 2 == 0 {
+            evens += 1;
+        }
+    }
+    // P3: the numbers sorted
+    let mut sorted = nums.clone();
+    sorted.sort();
+    // P4: the numbers in reverse order
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(nums[n - 1 - i]);
+    }
+    // P5: every number one more, which swaps even and odd
+    let mut plus: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        plus.push(*x + 1);
+    }
+    for x in 0..5 {
+        let out = answers[x].clone();
+        // P1: the statement allows the answer
+        if small {
+            check(mut t, 1, literal(nums, out));
+        }
+        // P2: n numbers, the first `evens` of them even and the rest odd
+        let mut ok = out.len() == n;
+        if ok {
+            for k in 0..n {
+                if (out[k] % 2 == 0) != (k < evens) {
+                    ok = false;
+                }
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: the same numbers
+        let mut s = out.clone();
+        s.sort();
+        check(mut t, 3, s == sorted);
+        // P4: as many evens in front, and the same numbers on each side,
+        // for the reversed row
+        let back = arm(x, reversed);
+        check(mut t, 4, lead(back.clone()) == leads[x] and canon(back) == canons[x]);
+        // P5: for every number one more, the numbers in front are as many
+        // as this answer has behind, the evens are its odds one more and
+        // the odds its evens one more
+        let mut swapped: Vec[i64] = Vec.new();
+        for v in out.iter() {
+            swapped.push(*v + 1);
+        }
+        let up = arm(x, plus);
+        check(mut t, 5, lead(up.clone()) == n - leads[x] and canon(up) == canon(swapped));
+        // P6: the arm agrees with at least two of the other four on how
+        // many evens lead and which numbers are on each side
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and leads[y] == leads[x] and canons[y] == canons[x] {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 905;
+    let mut cases = 0;
+    let mut numbers = 0;
+    // up to 12 numbers against the statement; then up to 500; numbers up
+    // to 3, 10 or 5000, from no even number to all
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 500 };
+        let top = if c % 3 == 0 { 3 } else if c % 3 == 1 { 10 } else { 5000 };
+        let nums = random_nums(mut seed, len, (c * 37) % 101, top);
+        cases += 1;
+        numbers += len;
+        properties(mut t, nums, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {numbers} numbers, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
