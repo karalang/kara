@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 611 |
 | leak | 606 |
 | double-free | 428 |
-| missing-feature | 343 |
+| missing-feature | 344 |
 | codegen-gap | 291 |
 | false-positive | 286 |
 | other | 199 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 3043 |
-| interp | 1052 |
+| interp | 1053 |
 | typecheck | 576 |
 | ownership | 133 |
 | other | 127 |
-| cli | 92 |
+| cli | 93 |
 | runtime | 88 |
 | parser | 77 |
 | autopar | 59 |
@@ -185,11 +185,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-40 | 2026-10-22 | typecheck | medium | Likely v2 check gaps among the legacy test programs: arithmetic on a generic `T: Add`/`Sub`/`Div` parameter ("type 'ref T' does not implement trait Add"), `StringSlice + x`, `Iterator.cycle` / `windows` / `rev` on a mapped iterator, `collect` into a non-Vec target in return or tail position (E0238), and `collect::<String>()` from an iterator of `String` ("String implements FromIterator[char], not FromIterator[String]") | — |
 | B-2026-10-22-43 | 2026-10-22 | typecheck | low | E0517 prints a MIR temporary instead of the source place: `let g = v[0];` over a `Vec[Fn(i64) -> i64]` reports "move of (*_7) through a shared reference"; a user-facing message must name the source place (`v[0]`) | — |
 | B-2026-10-22-44 | 2026-10-22 | cli+codegen | medium | A v2 `karac test` failure from `assert_eq`/`assert_ne` carries no `left`/`right`: the MIR assertion aborts with "assertion failed: left != right" and reports neither operand, so the `test_fail` event has only `message` and `location`, where the legacy runner gives `"left":"4","right":"5"` (design §14 runner output; deferred.md's `test_fail` row makes both fields part of the event) | — |
-| B-2026-10-22-45 | 2026-10-22 | cli | medium | `karac repl` runs on the legacy interpreter only. M3 item 3: the REPL on v2 (each entry checked as `karac check` checks a program and run on MIR), with the old path behind `--legacy` until legacy is deleted (M3 item 11) | — |
 | B-2026-10-22-46 | 2026-10-22 | typecheck | medium | `karac check` accepts a bare enum variant used to BUILD a value (`enum E { A(String), B } fn main() { let p = B; ... }`), and v2 runs it as `E.B`; design.md:1310 says a variant is built with its qualified name, and only a pattern may leave the enum name out | — |
 | B-2026-10-23-3 | 2026-10-23 | interp+codegen | medium | A method call whose receiver is a `const` of a primitive type (`const TOL0: f64 = 2.2e-16; TOL0.sqrt()`, also `.abs()` on an f64 or i64 const) passes `karac check` and runs under `karac run --interp`, but v2 lowers it as an associated call on the type: `__mir-run` stops at "call of unknown function f64.sqrt" and `__mir-llvm-run`, `__mir-llvm-asan` and `build --mir` refuse with "native `f64.sqrt` is not lowered yet"; copying the const into a local first (`let t = TOL0; t.sqrt()`) works | — |
 | B-2026-10-23-4 | 2026-10-23 | interp+codegen | low | Float Display breaks an exact tie between two equally short decimals away from zero, where Python's repr keeps the even last digit: -75455689800034.625 prints -75455689800034.63 on every v2 backend and in `--interp`, Python prints -75455689800034.62; library/core-types.md § Printing says only "the shortest digits that read back", so which of the two is unspecified | — |
 | B-2026-10-23-5 | 2026-10-23 | typecheck | low | `to_vec()` on a `Vec[T]` receiver is refused ("no method 'to_vec' on type 'Vec'") though library/collections.md says a Vec finds every Slice method, to_vec among them | — |
+| B-2026-10-23-6 | 2026-10-23 | cli+interp | medium | The v2 REPL carries no values across cells: a later cell replays every earlier statement cell, so their side effects run again (a `read_line()` waits for input again, a file is written again, a clock is read again) and a slow cell slows every cell after it; `%show` and `--auto-clone` / `%set auto-clone` are legacy-only, and `:provide` does not check that the provider implements the resource's trait | — |
 
 ### Relocated
 
@@ -4421,6 +4421,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-22-38 | interp+runtime | medium | MIR interpreter/runtime gaps from the legacy test programs: `std.runtime` `list_tasks` / `list_par_blocks` / `has_debug_metadata`, a char radix out o… | 2fb75e3ce0 |
 | B-2026-10-22-41 | other | low | The drop model (corpus/tools/drop-model) binds the parts of a `mut ref` scrutinee as `ref`, so it refuses `fn add(v: mut ref V) { match v { Table(m)… | 3700e5f187 |
 | B-2026-10-22-42 | interp+codegen | low | `let _ = W;` with a bare unit-variant name lowers to nothing on both MIR backends, so a variant whose enum has a `Drop` body is never built and never… | 5f0b82c0d7 |
+| B-2026-10-22-45 | cli | medium | `karac repl` runs on the legacy interpreter only | 5a5bfe8fa5 |
 | B-2026-10-22-47 | interp+codegen | medium | std.encoding has no `percent_encode`/`percent_decode`, so the legacy `Url.encode`/`Url.decode` have no v2 target | 9e6815d7fb |
 | B-2026-10-22-48 | typecheck | low | `karac check` accepts `VecDeque`'s `push_front` / `push_back` / `pop_front` / `pop_back` on a `Vec`, which collections.md does not give `Vec`, so the… | db323d955b |
 | B-2026-10-23-1 | interp | medium | `SortedMap.ceiling` / `floor` / `min` / `max` / `range` on `karac __mir-run` copy and order every key on each call, so each query is O(n log n) where… | 35709d0045 |
