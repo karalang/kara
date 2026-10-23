@@ -1,0 +1,288 @@
+// LeetCode #923: 3Sum With Multiplicity -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an integer array arr, and an integer target,
+// return the number of tuples i, j, k such that i < j < k and
+// arr[i] + arr[j] + arr[k] == target. As the answer can be very large,
+// return it modulo 10^9 + 7.
+
+// ---- the ★ arm: counting the values ---------------------------------------
+fn star_three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut count: Array[i64, 101] = [0; 101];
+    for v in arr.iter() {
+        count[*v] += 1;
+    }
+    let mut total = 0;
+    for x in 0..101 {
+        if 3 * x > target {
+            break;
+        }
+        for y in x..101 {
+            let z = target - x - y;
+            if z < y {
+                break;
+            }
+            if z > 100 {
+                continue;
+            }
+            let ways = if x == y and y == z {
+                count[x] * (count[x] - 1) * (count[x] - 2) / 6
+            } else if x == y {
+                count[x] * (count[x] - 1) / 2 * count[z]
+            } else if y == z {
+                count[x] * count[y] * (count[y] - 1) / 2
+            } else {
+                count[x] * count[y] * count[z]
+            };
+            total = (total + ways) % modulus;
+        }
+    }
+    total
+}
+
+// ---- the pointers arm: sorted, two pointers over the runs -----------------
+fn pointers_three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut a = arr.clone();
+    a.sort();
+    let n = a.len();
+    let mut total = 0;
+    for i in 0..n {
+        let want = target - a[i];
+        let mut j = i + 1;
+        let mut k = n - 1;
+        while j < k {
+            let s = a[j] + a[k];
+            if s < want {
+                j += 1;
+            } else if s > want {
+                k -= 1;
+            } else if a[j] != a[k] {
+                let mut left = 1;
+                while j + 1 < k and a[j + 1] == a[j] {
+                    left += 1;
+                    j += 1;
+                }
+                let mut right = 1;
+                while k - 1 > j and a[k - 1] == a[k] {
+                    right += 1;
+                    k -= 1;
+                }
+                total = (total + left * right) % modulus;
+                j += 1;
+                k -= 1;
+            } else {
+                let m = k - j + 1;
+                total = (total + m * (m - 1) / 2) % modulus;
+                break;
+            }
+        }
+    }
+    total
+}
+
+// ---- the pairs arm: the pair sums behind each value -----------------------
+fn pairs_three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut pair_sums: Vec[i64] = Vec.filled(201, 0);
+    let mut total = 0;
+    for k in 0..arr.len() {
+        let need = target - arr[k];
+        if need >= 0 and need <= 200 {
+            total = (total + pair_sums[need]) % modulus;
+        }
+        for i in 0..k {
+            pair_sums[arr[i] + arr[k]] += 1;
+        }
+    }
+    total
+}
+
+// ---- the choose arm: choosing up to three values --------------------------
+fn choose_three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut one: Vec[i64] = Vec.filled(target + 1, 0);
+    let mut two: Vec[i64] = Vec.filled(target + 1, 0);
+    let mut three: Vec[i64] = Vec.filled(target + 1, 0);
+    for v in arr.iter() {
+        let mut s = target;
+        while s >= *v {
+            three[s] = (three[s] + two[s - *v]) % modulus;
+            two[s] = (two[s] + one[s - *v]) % modulus;
+            s -= 1;
+        }
+        if *v <= target {
+            one[*v] += 1;
+        }
+    }
+    three[target]
+}
+
+// ---- the between arm: the values between counted --------------------------
+fn between_three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let n = arr.len();
+    let mut total = 0;
+    for i in 0..n {
+        let mut between: Array[i64, 101] = [0; 101];
+        for j in i + 1..n {
+            let middle = target - arr[i] - arr[j];
+            if middle >= 0 and middle <= 100 {
+                total = (total + between[middle]) % modulus;
+            }
+            between[arr[j]] += 1;
+        }
+    }
+    total
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, arr: Vec[i64], target: i64) -> i64 {
+    if x == 0 {
+        star_three_sum_multi(arr, target)
+    } else if x == 1 {
+        pointers_three_sum_multi(arr, target)
+    } else if x == 2 {
+        pairs_three_sum_multi(arr, target)
+    } else if x == 3 {
+        choose_three_sum_multi(arr, target)
+    } else {
+        between_three_sum_multi(arr, target)
+    }
+}
+
+// The statement read literally: every i < j < k with
+// arr[i] + arr[j] + arr[k] == target, counted modulo 10^9 + 7.
+fn literal(arr: Vec[i64], target: i64) -> i64 {
+    let n = arr.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                if arr[i] + arr[j] + arr[k] == target {
+                    count = (count + 1) % 1000000007;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: Vec[i64], target: i64, small: bool, round: i64) {
+    let modulus = 1000000007;
+    let n = arr.len();
+    // the array shuffled
+    let mut shuffled = arr.clone();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+        i -= 1;
+    }
+    // every value v turned into 100 - v
+    let mut mirrored: Vec[i64] = Vec.new();
+    for v in arr.iter() {
+        mirrored.push(100 - *v);
+    }
+    // one more value x at the end, and the pairs it completes
+    let x = next_random(mut seed) % 101;
+    let mut longer = arr.clone();
+    longer.push(x);
+    let mut completed = 0;
+    for p in 0..n {
+        for q in p + 1..n {
+            if arr[p] + arr[q] + x == target {
+                completed += 1;
+            }
+        }
+    }
+    // n copies of the first value, for three times it or for the target
+    let v = arr[0];
+    let copies: Vec[i64] = Vec.filled(n, v);
+    let copies_target = if round % 2 == 0 { 3 * v } else { target };
+    let copies_want = if copies_target == 3 * v { n * (n - 1) * (n - 2) / 6 % modulus } else { 0 };
+    let truth = if small { literal(arr, target) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for y in 0..5 {
+        got.push(arm(y, arr, target));
+    }
+    for y in 0..5 {
+        let a = got[y];
+        // P1: the statement's count, on the small cases
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: the same answer for the array shuffled
+        check(mut t, 2, arm(y, shuffled, target) == a);
+        // P3: the same answer with every v turned into 100 - v and the
+        // target into 300 - target
+        check(mut t, 3, arm(y, mirrored, 300 - target) == a);
+        // P4: one more value x adds the pairs that x completes
+        check(mut t, 4, arm(y, longer, target) == (a + completed) % modulus);
+        // P5: n copies of one value v give C(n, 3) for 3v and 0 otherwise
+        check(mut t, 5, arm(y, copies, copies_target) == copies_want);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for z in 0..5 {
+            if z != y and got[z] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 923;
+    let mut cases = 0;
+    let mut values = 0;
+    let mut sum = 0;
+    // 3 to 12 values against the statement, then 3 to 200; values below
+    // 6, 11 or 101 by turns, and a target the values can reach
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 3 + next_random(mut seed) % 10 } else { 3 + next_random(mut seed) % 198 };
+        let top = if c % 3 == 0 { 6 } else if c % 3 == 1 { 11 } else { 101 };
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            arr.push(next_random(mut seed) % top);
+        }
+        let target = next_random(mut seed) % (3 * (top - 1) + 1);
+        cases += 1;
+        values += n;
+        sum += arm(0, arr, target);
+        properties(mut t, mut seed, arr, target, small, c);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} arrays, {values} values, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

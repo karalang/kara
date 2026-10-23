@@ -1,0 +1,75 @@
+// LeetCode #923: 3Sum With Multiplicity -- bench: counting the values.
+//
+// The values lie between 0 and 100, so count how often each occurs. A
+// triple of indices is a multiset of three values x <= y <= z with
+// z = target - x - y; for each such x and y the number of index triples
+// is a product of binomial coefficients: c(x) * c(y) * c(z) when all
+// three differ, C(c(x), 2) * c(z) when x = y < z, c(x) * C(c(y), 2) when
+// x < y = z, and C(c(x), 3) when all three are equal. As y grows z
+// falls, so the walk over y stops once z < y. O(n + 101^2).
+
+fn three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut count: Array[i64, 101] = [0; 101];
+    for v in arr.iter() {
+        count[*v] += 1;
+    }
+    let mut total = 0;
+    for x in 0..101 {
+        if 3 * x > target {
+            break;
+        }
+        for y in x..101 {
+            let z = target - x - y;
+            if z < y {
+                break;
+            }
+            if z > 100 {
+                continue;
+            }
+            let ways = if x == y and y == z {
+                count[x] * (count[x] - 1) * (count[x] - 2) / 6
+            } else if x == y {
+                count[x] * (count[x] - 1) / 2 * count[z]
+            } else if y == z {
+                count[x] * count[y] * (count[y] - 1) / 2
+            } else {
+                count[x] * count[y] * count[z]
+            };
+            total = (total + ways) % modulus;
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 500;
+    let count = 100;
+    let n = 3000;
+    let mut seed = 923;
+    // count arrays of n values from 0 to 100, built once
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            arr.push(next_random(mut seed) % 101);
+        }
+        arrays.push(arr);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round asks every array for a different target up to 300
+        for i in 0..count {
+            let a = three_sum_multi(arrays[i], (r * 7 + i) % 301);
+            total += a;
+            check = (check * 1000003 + a) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} arrays of {n}: answers summing to {total}, checksum {check}");
+}

@@ -1,0 +1,105 @@
+// LeetCode #923: 3Sum With Multiplicity -- sorted, with two pointers.
+//
+// Sort a copy. For each first index i, two pointers j and k close in on
+// the rest from both ends looking for arr[j] + arr[k] = target - arr[i].
+// On a hit with arr[j] != arr[k], the runs of equal values at each end
+// pair off, left run times right run; with arr[j] == arr[k], every pair
+// in between counts, m * (m - 1) / 2 of them. O(n^2) after the sort.
+
+fn three_sum_multi(arr: Vec[i64], target: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut a = arr.clone();
+    a.sort();
+    let n = a.len();
+    let mut total = 0;
+    for i in 0..n {
+        let want = target - a[i];
+        let mut j = i + 1;
+        let mut k = n - 1;
+        while j < k {
+            let s = a[j] + a[k];
+            if s < want {
+                j += 1;
+            } else if s > want {
+                k -= 1;
+            } else if a[j] != a[k] {
+                let mut left = 1;
+                while j + 1 < k and a[j + 1] == a[j] {
+                    left += 1;
+                    j += 1;
+                }
+                let mut right = 1;
+                while k - 1 > j and a[k - 1] == a[k] {
+                    right += 1;
+                    k -= 1;
+                }
+                total = (total + left * right) % modulus;
+                j += 1;
+                k -= 1;
+            } else {
+                let m = k - j + 1;
+                total = (total + m * (m - 1) / 2) % modulus;
+                break;
+            }
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64], target: i64) {
+    let mut text = String.from("[");
+    for i in 0..arr.len() {
+        if i > 0 {
+            text = text + ",";
+        }
+        text = text + f"{arr[i]}";
+    }
+    println(f"{text}], target {target}: {three_sum_multi(arr, target)}");
+}
+
+fn main() {
+    // LeetCode's three examples
+    show(vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 8);
+    show(vec![1, 1, 2, 2, 2, 2], 5);
+    show(vec![2, 1, 3], 6);
+    // no triple; all zeros; the largest values; a target no triple reaches
+    show(vec![1, 2, 3], 7);
+    show(vec![0, 0, 0, 0], 0);
+    show(vec![100, 100, 100, 100, 100], 300);
+    show(vec![0, 100, 50, 50, 25, 75], 150);
+    show(vec![3, 3, 3], 10);
+    // 200 random arrays of 3 to 300 values
+    let mut seed = 923;
+    let mut sum = 0;
+    let mut check = 0;
+    for r in 0..200 {
+        let n = 3 + next_random(mut seed) % 298;
+        let top = if r % 2 == 0 { 101 } else { 11 };
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            arr.push(next_random(mut seed) % top);
+        }
+        let target = next_random(mut seed) % (3 * (top - 1) + 1);
+        let a = three_sum_multi(arr, target);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"200 random arrays: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest: 3000 values, all 1 and all 0..100, and few values
+    let mut ones: Vec[i64] = Vec.new();
+    let mut spread: Vec[i64] = Vec.new();
+    let mut few: Vec[i64] = Vec.new();
+    for i in 0..3000 {
+        ones.push(1);
+        spread.push(next_random(mut seed) % 101);
+        few.push(i % 3);
+    }
+    println(f"3000 values: all 1 for 3 gives {three_sum_multi(ones, 3)}, random for 150 gives {three_sum_multi(spread, 150)}, 0, 1 and 2 for 3 gives {three_sum_multi(few, 3)}");
+}
