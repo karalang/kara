@@ -874,6 +874,64 @@ fn main() {
     }
 }
 
+/// B-2026-10-13-18: a long sort of input with no runs to exploit (between a
+/// quarter and four fifths of sampled neighbours in order) partitions, with
+/// no tie gate, as legacy's unstructured arm does. The comparator must see
+/// the same calls in the same order on each backend, so a counting
+/// comparator and one that is not an order print the same here.
+#[test]
+fn mir_unstructured_sort_partitions_on_both_backends() {
+    const SRC: &str = r#"fn make(n: i64, seed: i64, m: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s = seed;
+    let mut i = 0;
+    while i < n {
+        s = (s * 1103515245 + 12345) & 2147483647;
+        v.push(((s / 65536) % m, i));
+        i += 1;
+    }
+    v
+}
+fn sum(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut h = 0;
+    for (k, x) in v.iter() {
+        h = (h * 31 + k * 1000 + x) % 1000000007;
+    }
+    h
+}
+fn main() {
+    for m in [1000000, 50] {
+        let n = 20000;
+        let mut a = make(n, 1, m);
+        let mut calls = 0;
+        a.sort_by(|x, y| {
+            calls += 1;
+            if calls % 50000 == 0 { println(f"call {calls} {x.1} {y.1}"); }
+            x.0.cmp(y.0)
+        });
+        let mut b = make(n, 2, m);
+        b.sort_by_key(|x| 0 - x.0);
+        let mut c = make(n, 3, m);
+        let mut odd = 0;
+        c.sort_by(|x, y| {
+            odd += 1;
+            if (x.1 * 7 + y.1) % 5 < 2 { Ordering.Less } else { Ordering.Greater }
+        });
+        println(f"{m} {sum(a)} {calls} {sum(b)} {sum(c)} {odd}");
+    }
+}
+"#;
+    let want = karac::mir::lower::run_source(SRC)
+        .expect("MIR interpreter")
+        .output;
+    assert!(want.contains("call 50000 "), "{want}");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

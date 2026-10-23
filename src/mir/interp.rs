@@ -921,6 +921,12 @@ pub const PART_MIN: usize = 4096;
 pub const PART_PROBE: usize = 256;
 /// Partition when at least `PART_PROBE / PART_PROBE_GATE` of them tie.
 pub const PART_PROBE_GATE: usize = 128;
+/// Or partition when between `PART_ORD_LO` and `PART_ORD_HI` percent of
+/// the sampled elements are in order with the next one: input with no runs
+/// to exploit, where a merge's every step waits on the comparison before
+/// it and a partition's do not (legacy's `ORD_BAND_LO` / `ORD_BAND_HI`).
+pub const PART_ORD_LO: usize = 25;
+pub const PART_ORD_HI: usize = 80;
 /// A partitioned range this short is merge sorted.
 pub const PART_SPAN: usize = 64;
 /// Partition levels before every range is merge sorted.
@@ -3235,29 +3241,33 @@ impl<'a> Interp<'a> {
             return self.merge_order(n, cmp);
         }
         let (stride, mid) = (n / PART_PROBE, n / 2);
-        let mut ties = 0;
+        let (mut ties, mut ord) = (0, 0);
         for k in 0..PART_PROBE {
             ties += usize::from(cmp(self, k * stride, mid)?.is_eq());
+            ord += usize::from(!cmp(self, k * stride, k * stride + 1)?.is_gt());
         }
-        if ties * PART_PROBE_GATE < PART_PROBE {
+        let gated = ties * PART_PROBE_GATE >= PART_PROBE;
+        let spread = (PART_ORD_LO * PART_PROBE..=PART_ORD_HI * PART_PROBE).contains(&(ord * 100));
+        if !gated && !spread {
             return self.merge_order(n, cmp);
         }
         let mut order: Vec<usize> = (0..n).collect();
-        self.partition(&mut order, 0, n, 0, cmp)?;
+        self.partition(&mut order, 0, n, 0, gated, cmp)?;
         Ok(order)
     }
 
     /// Partitions `order[lo..hi]` around its middle element: each element
     /// compared once with it, then the less, tied and greater ones in
     /// their order, and the same on the less and then the greater part. A
-    /// short or deep range, or one whose ties are fewer than one in
-    /// [`PART_GATE`], is merge sorted.
+    /// short or deep range, or (when `gated`) one whose ties are fewer than
+    /// one in [`PART_GATE`], is merge sorted.
     fn partition(
         &mut self,
         order: &mut [usize],
         lo: usize,
         hi: usize,
         depth: usize,
+        gated: bool,
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<()> {
         let len = hi - lo;
@@ -3269,7 +3279,7 @@ impl<'a> Interp<'a> {
             }
             let lt = sides.iter().filter(|o| o.is_lt()).count();
             let eq = sides.iter().filter(|o| o.is_eq()).count();
-            if eq * PART_GATE >= len {
+            if !gated || eq * PART_GATE >= len {
                 if eq == len {
                     return Ok(());
                 }
@@ -3280,10 +3290,10 @@ impl<'a> Interp<'a> {
                 let gt = len - lt - eq;
                 order[lo..hi].copy_from_slice(&runs.concat());
                 if lt > 1 {
-                    self.partition(order, lo, lo + lt, depth + 1, cmp)?;
+                    self.partition(order, lo, lo + lt, depth + 1, gated, cmp)?;
                 }
                 if gt > 1 {
-                    self.partition(order, hi - gt, hi, depth + 1, cmp)?;
+                    self.partition(order, hi - gt, hi, depth + 1, gated, cmp)?;
                 }
                 return Ok(());
             }
