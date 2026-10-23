@@ -10269,6 +10269,8 @@ impl<'a> Interp<'a> {
                         &mut self.frames.last_mut().expect("frame").locals[p.local.index()],
                         v,
                     );
+                } else if let Some((at, t)) = self.native_target(body, p) {
+                    self.native_store(at, t, v)?;
                 } else {
                     let (addr, ty) = self
                         .resolve(body, p, Mode::Write)?
@@ -10447,6 +10449,10 @@ impl<'a> Interp<'a> {
 
     fn operand_slow(&mut self, body: &Body, o: &Operand) -> R<(Value, Ty)> {
         match o {
+            Operand::Copy(p) | Operand::Move(p) if self.native_target(body, p).is_some() => {
+                let (at, t) = self.native_target(body, p).expect("checked");
+                Ok((self.native_load(at, t)?, t))
+            }
             Operand::Copy(p) | Operand::Move(p) => {
                 let is_move = matches!(o, Operand::Move(_));
                 // A copied tuple of scalars goes into a reused buffer.
@@ -10577,9 +10583,16 @@ impl<'a> Interp<'a> {
                 self.erase(x, from)
             }
             // A raw pointer is the address the reference held.
-            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr, o, _) => {
+            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr | CastKind::IntToPtr, o, _) => {
                 Ok(self.operand(body, o)?.0)
             }
+            Rvalue::Cast(CastKind::PtrToInt, o, _) => match self.operand(body, o)?.0 {
+                Value::Int(at) => Ok(Value::Int(at)),
+                _ => err(
+                    "the address of a value the interpreter holds is not known here; \
+                     `karac build` gives it one",
+                ),
+            },
             Rvalue::Cast(CastKind::Downgrade, o, _) => {
                 // A new weak handle to the value a `ref shared T`,
                 // `ref weak T` or `ref Option[shared T]` reaches; `None`
@@ -10758,6 +10771,9 @@ impl<'a> Interp<'a> {
     }
 
     fn binop(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
+        if op == BinOp::Offset {
+            return Ok((self.ptr_offset(x, y, ty)?, false));
+        }
         if let (Value::Int(a), Value::Int(b)) = (&x, &y) {
             let (a, b) = (*a, *b);
             // Both are plain: nothing to drop.
@@ -10766,6 +10782,114 @@ impl<'a> Interp<'a> {
             return self.int_binop(op, a, b, ty);
         }
         self.binop_slow(op, x, y, ty)
+    }
+
+    /// `p.offset(n)` for the raw pointer `p` of type `ty`: a native
+    /// address moves by `n` pointees, and a pointer into a value the
+    /// interpreter holds moves along the sequence it points into.
+    fn ptr_offset(&self, p: Value, n: Value, ty: Ty) -> R<Value> {
+        let Value::Int(n) = n else {
+            return err(format!("Offset by {n:?}"));
+        };
+        match p {
+            Value::Int(at) => {
+                let TyKind::RawPtr { pointee, .. } = self.tys.kind(ty) else {
+                    return err("Offset of a non-pointer");
+                };
+                let Some(l) = super::layout::layout(self.tys, pointee) else {
+                    return err("Offset of a pointer to a type with no layout");
+                };
+                Ok(Value::Int(at.wrapping_add(n * i128::from(l.size))))
+            }
+            Value::Ref(mut a) => {
+                if n != 0 {
+                    let Some(i) = a.path.pop() else {
+                        return err("Offset of a pointer to a value that is in no sequence");
+                    };
+                    match u64::try_from(i as i128 + n) {
+                        Ok(j) => a.path.push(j),
+                        Err(_) => return err("Offset before the start of a sequence"),
+                    }
+                }
+                Ok(Value::Ref(a))
+            }
+            other => err(format!("Offset of {other:?}")),
+        }
+    }
+
+    /// The native address and pointee of `*p`, when the raw pointer `p` holds
+    /// an address C gave (`malloc`'s), rather than one into a value the
+    /// interpreter holds.
+    fn native_target(&self, body: &Body, p: &Place) -> Option<(u64, Ty)> {
+        let [ProjElem::Deref] = p.projection.as_slice() else {
+            return None;
+        };
+        let TyKind::RawPtr { pointee, .. } = self.tys.kind(body.local(p.local).ty) else {
+            return None;
+        };
+        match self.frames.last()?.locals[p.local.index()] {
+            Value::Int(at) => Some((at as u64, pointee)),
+            _ => None,
+        }
+    }
+
+    /// The scalar of type `t` at the native address `at`.
+    fn native_load(&self, at: u64, t: Ty) -> R<Value> {
+        let size = self.native_size(at, t)?;
+        let mut bytes = [0u8; 8];
+        // SAFETY: a read through a raw pointer is the program's `unsafe`
+        // contract: `at` is an address C gave, of a `t` it points at.
+        unsafe { std::ptr::copy_nonoverlapping(at as *const u8, bytes.as_mut_ptr(), size) };
+        let w = u64::from_le_bytes(bytes);
+        Ok(match self.tys.kind(t) {
+            TyKind::Int(it) => Value::Int(from_c_word(w, it)),
+            TyKind::Bool => Value::Bool(w != 0),
+            TyKind::Char => match char::from_u32(w as u32) {
+                Some(c) => Value::Char(c),
+                None => return err(format!("{w:#x} read as a char")),
+            },
+            TyKind::Float(super::ty::FloatTy::F32) => {
+                Value::Float(f64::from(f32::from_bits(w as u32)))
+            }
+            _ => Value::Float(f64::from_bits(w)),
+        })
+    }
+
+    /// Stores the scalar `v` of type `t` at the native address `at`.
+    fn native_store(&self, at: u64, t: Ty, v: Value) -> R<()> {
+        let size = self.native_size(at, t)?;
+        let w: u64 = match (self.tys.kind(t), v) {
+            (_, Value::Int(i)) => i as u64,
+            (_, Value::Bool(b)) => u64::from(b),
+            (_, Value::Char(c)) => u64::from(c),
+            (TyKind::Float(super::ty::FloatTy::F32), Value::Float(f)) => {
+                u64::from((f as f32).to_bits())
+            }
+            (_, Value::Float(f)) => f.to_bits(),
+            (_, other) => return err(format!("{other:?} stored at a native address")),
+        };
+        // SAFETY: as for `native_load`.
+        unsafe { std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), at as *mut u8, size) };
+        Ok(())
+    }
+
+    /// The bytes a `t` at the native address `at` takes: a scalar's, as
+    /// that is all a native address is read and written as.
+    fn native_size(&self, at: u64, t: Ty) -> R<usize> {
+        if at == 0 {
+            return err("a read or write through a null pointer");
+        }
+        match self.tys.kind(t) {
+            TyKind::Int(it) => Ok(it.bits() as usize / 8),
+            TyKind::Bool => Ok(1),
+            TyKind::Char => Ok(4),
+            TyKind::Float(super::ty::FloatTy::F32) => Ok(4),
+            TyKind::Float(super::ty::FloatTy::F64) => Ok(8),
+            _ => err(format!(
+                "a `{}` at a native address: only scalars are read and written there",
+                self.tys.display(t)
+            )),
+        }
     }
 
     fn int_binop(&self, op: BinOp, a: i128, b: i128, ty: Ty) -> R<(Value, bool)> {
@@ -10812,6 +10936,16 @@ impl<'a> Interp<'a> {
                 false,
             )),
             (Value::Char(a), Value::Char(b)) if op.is_comparison() => Ok((cmp(a.cmp(&b)), false)),
+            // Raw pointers: one into a value the interpreter holds is never
+            // a native address, and never null.
+            (Value::Ref(a), Value::Ref(b)) if matches!(op, Eq | Ne) => {
+                Ok((Value::Bool((a == b) == (op == Eq)), false))
+            }
+            (Value::Ref(_), Value::Int(_)) | (Value::Int(_), Value::Ref(_))
+                if matches!(op, Eq | Ne) =>
+            {
+                Ok((Value::Bool(op == Ne), false))
+            }
             (Value::Float(a), Value::Float(b)) => Ok((
                 match op {
                     Add | Sub | Mul | Div | Rem => {

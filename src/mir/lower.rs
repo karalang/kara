@@ -13240,6 +13240,112 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// The `ptr` module's address operations (design.md § Raw Pointer
+    /// Construction): `ptr.null()` is address 0 and `ptr.dangling()` the
+    /// pointee's alignment, `ptr.is_null(p)` compares with address 0, and
+    /// `ptr.addr(p)` / `ptr.from_exposed(a)` cross between a pointer and
+    /// its `usize` address.
+    fn ptr_fn(&mut self, f: &str, args: &'a [CallArg], dest: Place) -> R<bool> {
+        let tcx = self.tys().tcx();
+        let usize_t = tcx.intern(HK::UInt(UIntSize::Usize));
+        match (f, args) {
+            ("null" | "null_mut" | "dangling" | "dangling_mut", []) => {
+                let pt = self.place_type(&dest);
+                let HK::RawPtr { pointee, .. } = tcx.kind(pt) else {
+                    return Ok(false);
+                };
+                let a = self.temp(usize_t);
+                let rv = if f.starts_with("null") {
+                    Rvalue::Use(Operand::Const(Const {
+                        ty: usize_t,
+                        kind: ConstKind::Scalar(0),
+                    }))
+                } else {
+                    Rvalue::NullaryOp(NullOp::AlignOf, pointee)
+                };
+                self.assign(a, rv);
+                let op = Operand::Move(Place::local(a));
+                self.assign(dest, Rvalue::Cast(CastKind::IntToPtr, op, pt));
+            }
+            ("is_null", [p]) => {
+                let pt = self.expr_ty(&p.value)?;
+                let op = self.expr_operand(&p.value)?;
+                self.ptr_is_null(op, pt, dest);
+            }
+            ("addr" | "expose" | "expose_mut", [p]) => {
+                let op = self.expr_operand(&p.value)?;
+                let t = self.place_type(&dest);
+                self.assign(dest, Rvalue::Cast(CastKind::PtrToInt, op, t));
+            }
+            ("from_exposed" | "from_exposed_mut", [a])
+            | ("with_addr" | "with_addr_mut", [_, a]) => {
+                let op = self.operand_at(&a.value, usize_t)?;
+                let t = self.place_type(&dest);
+                self.assign(dest, Rvalue::Cast(CastKind::IntToPtr, op, t));
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Whether the raw pointer `p` (of type `pt`) is address 0.
+    fn ptr_is_null(&mut self, p: Operand, pt: Ty, dest: Place) {
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let zero = Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(0),
+        });
+        let null = self.temp(pt);
+        self.assign(null, Rvalue::Cast(CastKind::IntToPtr, zero, pt));
+        self.assign(
+            dest,
+            Rvalue::BinaryOp(BinOp::Eq, p, Operand::Move(Place::local(null))),
+        );
+    }
+
+    /// The inherent methods of a raw pointer (design.md § raw pointers):
+    /// `p.read()` is `*p`, `p.write(v)` is `*p = v`, `p.offset(n)` (or
+    /// `p.add(n)`) the pointer `n` pointees on, and `p.is_null()`.
+    fn raw_ptr_method(
+        &mut self,
+        object: &'a Expr,
+        method: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let tcx = self.tys().tcx();
+        let raw = |t: Option<&Ty>| t.is_some_and(|&t| matches!(tcx.kind(t), HK::RawPtr { .. }));
+        if !raw(self.lcx.node_types.get(&object.id)) {
+            return Ok(false);
+        }
+        let ot = self.expr_ty(object)?;
+        match (method, args) {
+            ("read" | "read_unaligned" | "read_volatile", []) => {
+                let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
+                let t = self.place_type(&pp);
+                let op = self.use_place(pp, t);
+                self.assign(dest, Rvalue::Use(op));
+            }
+            ("write" | "write_unaligned" | "write_volatile", [v]) => {
+                let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
+                self.expr_into(&v.value, pp)?;
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+            }
+            ("offset" | "add", [n]) => {
+                let p = self.expr_operand(object)?;
+                let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                let n = self.operand_at(&n.value, i64_t)?;
+                self.assign(dest, Rvalue::BinaryOp(BinOp::Offset, p, n));
+            }
+            ("is_null", []) => {
+                let p = self.expr_operand(object)?;
+                self.ptr_is_null(p, ot, dest);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// `volatile_read(p)` is `*p`, and `volatile_write(p, v)` is `*p = v`.
     fn volatile_call(&mut self, name: &str, args: &'a [CallArg], dest: Place) -> R<bool> {
         match (name, args) {
@@ -13879,6 +13985,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let p = self.expr_place(&a.value, method == "mut")?;
                 return self.raw_ptr_to(e, p, method == "mut", dest);
             }
+        }
+        // `ptr.null()`, `ptr.is_null(p)`, `ptr.addr(p)`, ...
+        if let ExprKind::Identifier(m) = &object.kind {
+            if m == "ptr"
+                && !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_)))
+                && self.ptr_fn(method, args, dest.clone())?
+            {
+                return Ok(());
+            }
+        }
+        if self.raw_ptr_method(object, method, args, dest.clone())? {
+            return Ok(());
         }
         // `a.as_ptr()` / `a.as_mut_ptr()` of an array: a raw pointer to its
         // first element.

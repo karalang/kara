@@ -332,6 +332,9 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+    /// `p.offset(n)`: the raw pointer `n` values of its pointee past `p`
+    /// (`n` an `i64`, negative going back), of `p`'s type.
+    Offset,
 }
 
 impl BinOp {
@@ -353,6 +356,7 @@ impl BinOp {
             BinOp::Le => "Le",
             BinOp::Gt => "Gt",
             BinOp::Ge => "Ge",
+            BinOp::Offset => "Offset",
         }
     }
 
@@ -411,6 +415,10 @@ pub enum CastKind {
     RefToPtr,
     /// A raw pointer as another raw pointer (`p as *const u8`).
     PtrToPtr,
+    /// A raw pointer's address (`ptr.addr(p)`), a `usize`.
+    PtrToInt,
+    /// An address as a raw pointer (`ptr.null()`, `ptr.from_exposed(a)`).
+    IntToPtr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

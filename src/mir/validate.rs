@@ -309,7 +309,7 @@ impl<'a> Validator<'a> {
                 if let (Some(x), Some(y)) = (ta, tb) {
                     let shift = matches!(
                         rv,
-                        Rvalue::BinaryOp(BinOp::Shl | BinOp::Shr, ..)
+                        Rvalue::BinaryOp(BinOp::Shl | BinOp::Shr | BinOp::Offset, ..)
                             | Rvalue::CheckedBinaryOp(BinOp::Shl | BinOp::Shr, ..)
                     );
                     if x != y && !shift {
@@ -355,6 +355,8 @@ impl<'a> Validator<'a> {
                             | (CastKind::RefToPtr, TyKind::Ref(_), TyKind::RawPtr { mutable: false, .. })
                             | (CastKind::RefToPtr, TyKind::MutRef(_), TyKind::RawPtr { .. })
                             | (CastKind::PtrToPtr, TyKind::RawPtr { .. }, TyKind::RawPtr { .. })
+                            | (CastKind::PtrToInt, TyKind::RawPtr { .. }, TyKind::Int(_))
+                            | (CastKind::IntToPtr, TyKind::Int(_), TyKind::RawPtr { .. })
                             // A closure's signature is not in its MIR type, so
                             // the interpreter checks it at the call.
                             | (

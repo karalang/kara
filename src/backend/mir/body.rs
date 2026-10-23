@@ -531,6 +531,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             Rvalue::BinaryOp(op, a, b) => {
                 let at = self.operand_type(a)?;
+                if let TyKind::RawPtr { pointee, .. } = self.tys.kind(at) {
+                    return self.ptr_binop(dst, *op, pointee, a, b);
+                }
                 if let Some((et, n)) = self.vector_of(at) {
                     // Lane by lane; a comparison's lanes are bools.
                     let (dt, _) = self
@@ -816,7 +819,47 @@ impl<'ctx> Cx<'ctx, '_> {
             BinOp::Le => cmp(IntPredicate::SLE, IntPredicate::ULE)?,
             BinOp::Gt => cmp(IntPredicate::SGT, IntPredicate::UGT)?,
             BinOp::Ge => cmp(IntPredicate::SGE, IntPredicate::UGE)?,
+            BinOp::Offset => return Err("MIR to LLVM: Offset on an integer".to_string()),
         })
+    }
+
+    /// `p.offset(n)` and a comparison of raw pointers, each pointer read as
+    /// the 64-bit address it is stored as.
+    fn ptr_binop(
+        &mut self,
+        dst: PointerValue<'ctx>,
+        op: BinOp,
+        pointee: Ty,
+        a: &Operand,
+        b: &Operand,
+    ) -> R<()> {
+        let pa = self.operand_ptr(a)?;
+        let x = self.load_i64(pa)?;
+        let v: BasicValueEnum = match op {
+            BinOp::Offset => {
+                let n = self.operand_scalar(b)?.into_int_value();
+                let size = self.i64(self.layout(pointee)?.size);
+                let bd = &self.builder;
+                let by = bd.build_int_mul(n, size, "").map_err(e)?;
+                bd.build_int_add(x, by, "").map_err(e)?.into()
+            }
+            BinOp::Eq | BinOp::Ne => {
+                let pb = self.operand_ptr(b)?;
+                let y = self.load_i64(pb)?;
+                let bd = &self.builder;
+                let pred = if op == BinOp::Eq {
+                    IntPredicate::EQ
+                } else {
+                    IntPredicate::NE
+                };
+                let c = bd.build_int_compare(pred, x, y, "").map_err(e)?;
+                bd.build_int_z_extend(c, self.llcx.i8_type(), "")
+                    .map_err(e)?
+                    .into()
+            }
+            _ => return Err(format!("MIR to LLVM: {} on raw pointers", op.name())),
+        };
+        self.store(dst, v)
     }
 
     /// `x op y` and whether it overflowed `ty`.
@@ -987,6 +1030,25 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         match kind {
             CastKind::RefToPtr | CastKind::PtrToPtr => return self.store_operand(dst, a),
+            // A raw pointer is stored as its 64-bit address.
+            CastKind::PtrToInt => {
+                let pa = self.operand_ptr(a)?;
+                let x = self.load_i64(pa)?;
+                let tt = self.llvm_ty(to)?.into_int_type();
+                let v = self
+                    .builder
+                    .build_int_cast_sign_flag(x, tt, false, "")
+                    .map_err(e)?;
+                return self.store(dst, v.into());
+            }
+            CastKind::IntToPtr => {
+                let x = self.operand_scalar(a)?.into_int_value();
+                let v = self
+                    .builder
+                    .build_int_cast_sign_flag(x, self.llcx.i64_type(), false, "")
+                    .map_err(e)?;
+                return self.store(dst, v.into());
+            }
             CastKind::Downgrade => {
                 // A new weak handle to what a `ref shared T`, `ref weak T`
                 // or `ref Option[shared T]` reaches: one more weak count;

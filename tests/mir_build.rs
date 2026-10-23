@@ -7326,6 +7326,59 @@ fn main() {
     }
 }
 
+/// B-2026-10-22-36: a raw pointer's own methods (`read`, `write`,
+/// `offset`/`add`, `is_null`) and the `ptr` module's `null`, `dangling`,
+/// `is_null` and `addr`, through memory C gave (`malloc`'s) and through a
+/// pointer into a value the program holds.
+#[test]
+fn mir_raw_pointer_methods_and_the_ptr_module() {
+    let src = r#"unsafe extern "C" { fn malloc(n: usize) -> *mut i64; fn free(p: *mut i64); }
+fn main() {
+    let p: *mut i64 = unsafe { malloc(24) };
+    unsafe { p.write(10); }
+    unsafe { p.add(1).write(20); }
+    let q: *mut i64 = unsafe { p.offset(2) };
+    unsafe { q.write(30); }
+    let back = unsafe { q.offset(-1) };
+    println(unsafe { p.read() + back.read() + q.read() });
+    println(ptr.addr(q as *const i64) - ptr.addr(p as *const i64));
+    println(p.is_null());
+    unsafe { free(p); }
+    let s = c"ABCD";
+    let mut c = s.as_ptr();
+    let mut sum = 0;
+    for _ in 0..4 {
+        sum = sum + (unsafe { c.read() } as i64);
+        c = unsafe { c.offset(1) };
+    }
+    println(sum);
+    let mut x = 5;
+    let w = ptr.mut(x);
+    unsafe { w.write(w.read() * 3); }
+    println(x);
+    let n: *const u8 = ptr.null();
+    let d: *const u8 = ptr.dangling();
+    let t: *mut i32 = ptr.null_mut();
+    println(f"{n.is_null()} {ptr.is_null(n)} {d.is_null()} {t.is_null()} {w.is_null()}");
+}
+"#;
+    let want = "60\n16\nfalse\n266\n15\ntrue true false true false\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    // `ptr.null()` and `ptr.dangling()` compared at every level: LLVM folds
+    // comparisons of a constant address.
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "-O{opt}");
+        }
+    }
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
 /// B-2026-10-20-31: a variant the checker typed at the `ref` parameter it is
 /// lent to (a bare `None` arm of an `if` or `match` passed straight to a
 /// call) is built as the value its destination holds, not as a borrow of a

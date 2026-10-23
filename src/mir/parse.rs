@@ -1151,6 +1151,8 @@ impl Parser {
                     "Upgrade" => CastKind::Upgrade,
                     "RefToPtr" => CastKind::RefToPtr,
                     "PtrToPtr" => CastKind::PtrToPtr,
+                    "PtrToInt" => CastKind::PtrToInt,
+                    "IntToPtr" => CastKind::IntToPtr,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;
@@ -1322,6 +1324,7 @@ fn bin_op(s: &str) -> Option<BinOp> {
         "Le" => BinOp::Le,
         "Gt" => BinOp::Gt,
         "Ge" => BinOp::Ge,
+        "Offset" => BinOp::Offset,
         _ => return None,
     })
 }
