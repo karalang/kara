@@ -1525,6 +1525,7 @@ impl Pipeline {
                 .with_external_pub_refs(in_package)
                 .with_target_tombstones(target_tombstones)
                 .with_user_operator_impls(self.strict_core)
+                .with_lone_file(self.strict_core && !in_package)
                 .resolve(),
         );
     }

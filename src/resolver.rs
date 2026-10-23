@@ -1249,6 +1249,11 @@ pub struct Resolver<'a> {
     /// trait (design.md § Operator traits); the frozen legacy pipeline
     /// keeps refusing it.
     pub(crate) user_operator_impls: bool,
+    /// B-2026-10-22-30 — a v2 pipeline resolving one file that belongs to
+    /// no package: the file is the whole program beside the library, so an
+    /// import of a module outside `std` names nothing and is refused rather
+    /// than trusted.
+    pub(crate) lone_file: bool,
     /// `(offset, length)` of the identifier currently in CALL position — the
     /// one place a builtin function name is legal. Keyed on the exact span
     /// rather than a bool because a callee can be an `Index` wrapper carrying
@@ -1361,6 +1366,7 @@ impl<'a> Resolver<'a> {
             is_stdlib_source: false,
             is_test_file: false,
             user_operator_impls: false,
+            lone_file: false,
             call_callee_span: None,
             target_tombstones: FxHashMap::default(),
             wildcard_ambiguities: FxHashMap::default(),
@@ -1435,6 +1441,12 @@ impl<'a> Resolver<'a> {
     /// See [`Self::user_operator_impls`].
     pub fn with_user_operator_impls(mut self, on: bool) -> Self {
         self.user_operator_impls = on;
+        self
+    }
+
+    /// See [`Self::lone_file`].
+    pub fn with_lone_file(mut self, on: bool) -> Self {
+        self.lone_file = on;
         self
     }
 

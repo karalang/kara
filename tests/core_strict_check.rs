@@ -11858,3 +11858,57 @@ fn deque_methods_on_a_vec_name_the_vec_spelling() {
 ",
     );
 }
+
+/// A file checked on its own that belongs to no package is the whole program
+/// beside the library, so an import of a module outside `std` names nothing
+/// (B-2026-10-22-30). `karac check` and `karac run` refuse it; the same import
+/// in a package resolves to the sibling module, checked by file or by package.
+#[test]
+fn an_import_from_no_module_is_refused_outside_a_package() {
+    rejected(
+        "lone-file-import",
+        "import nosuch.{run};\nfn main() { run(); }\n",
+        "unknown module `nosuch`: this file belongs to no package, so the only modules it can import are the library's (`std.*`)",
+    );
+    let (dir, path) = fixture(
+        "lone-file-import-run",
+        "import nosuch.{run};\nfn main() { run(); }\n",
+    );
+    let out = karac().arg("run").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "run must refuse: {err}");
+    assert!(err.contains("unknown module `nosuch`"), "run: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let (dir, _) = fixture("lone-file-import-package", "");
+    std::fs::write(
+        dir.join("kara.toml"),
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/main.kara"),
+        "import util.{run};\nfn main() { run(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/util.kara"),
+        "pub fn run() with writes(Stdout) { println(\"hi\"); }\n",
+    )
+    .unwrap();
+    for args in [&["check"][..], &["check", "src/main.kara"][..]] {
+        let out = karac().args(args).current_dir(&dir).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?} must pass in a package: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = karac()
+        .args(["run", "src/main.kara"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}

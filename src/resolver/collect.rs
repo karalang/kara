@@ -1888,6 +1888,41 @@ impl<'a> super::Resolver<'a> {
         });
     }
 
+    /// B-2026-10-22-30: a file checked on its own that belongs to no package
+    /// is the whole program beside the library, so a module outside `std`
+    /// cannot exist. Without this the import bound a name nothing defines,
+    /// check passed, and both MIR backends stopped on the call.
+    fn report_lone_file_user_import(&mut self, imp: &ImportDecl) {
+        if !self.lone_file || imp.path.first().map(String::as_str) == Some("std") {
+            return;
+        }
+        // A bare `import m;` names the module `m` itself.
+        let module: Vec<String> = if imp.path.is_empty() {
+            imp.items
+                .first()
+                .map(|it| vec![it.name.clone()])
+                .unwrap_or_default()
+        } else {
+            imp.path.clone()
+        };
+        if module.is_empty() {
+            return;
+        }
+        self.errors.push(ResolveError {
+            message: format!(
+                "unknown module `{}`: this file belongs to no package, so the only modules \
+                 it can import are the library's (`std.*`); a program of several files is a \
+                 package, with a `kara.toml` beside its `src/`",
+                module.join(".")
+            ),
+            span: imp.span,
+            kind: ResolveErrorKind::UnknownModule,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     fn collect_import(&mut self, imp: &ImportDecl) {
         let Some(tree) = self.tree else {
             // Single-file mode — cross-module validation is skipped (the file
@@ -1905,6 +1940,7 @@ impl<'a> super::Resolver<'a> {
             // `UnknownModule`), then still bind the names below so downstream
             // passes don't cascade `UndefinedName` (B-2026-07-18-25).
             self.report_bogus_single_file_std_import(imp);
+            self.report_lone_file_user_import(imp);
             if imp.is_wildcard {
                 // No tree, so there is nothing to enumerate — the names this
                 // wildcard would have bound stay unbound. Record that so the
