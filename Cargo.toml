@@ -126,7 +126,14 @@ dyn-llvm-pref = ["llvm-sys?/prefer-dynamic", "inkwell?/llvm18-1-prefer-dynamic"]
 # resolve for `karac run` on regex programs — AOT gets them from the separate
 # `libkarac_runtime_regex.a`, but the JIT links the runtime dep at build time
 # with a fixed feature set, so regex has to be on here for run==build parity.
-llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc", "karac-runtime/regex"]
+# `karac-runtime/unicode` for the same reason: `karac run` on v2 JITs a program
+# calling `String.normalize(form)` and must resolve `karac_unicode_normalize_mir`
+# (the comment at runtime/src/lib.rs's unicode keep-list predates this: only
+# legacy `karac run --legacy` still routes such programs to its interpreter).
+# `icu_normalizer` is already in karac's graph (the interpreter normalizes
+# through it), so this adds the tables to the runner (+141 KiB, measured) and
+# no new crate; AOT binaries still get them only from the opt-in archive.
+llvm = ["inkwell", "dep:llvm-sys", "dep:karac-runtime", "dep:libc", "karac-runtime/regex", "karac-runtime/unicode"]
 # Release-distribution leg (release-pipeline step 2): statically link the
 # LLVM component libraries into the karac/karac_jit_runner binaries so a
 # downloaded artifact runs without libLLVM.so installed on the user's
