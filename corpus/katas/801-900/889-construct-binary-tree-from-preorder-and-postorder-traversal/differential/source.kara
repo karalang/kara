@@ -1,0 +1,450 @@
+// LeetCode #889: Construct Binary Tree from Preorder and Postorder
+// Traversal -- differential test of the five arms against the statement
+// read literally, with six properties.
+//
+// The statement: given `preorder`, the preorder traversal of a binary
+// tree of distinct values, and `postorder`, the postorder traversal of
+// the same tree, reconstruct and return the tree. If there are several
+// answers, any of them is accepted; the arms all put a lone child on the
+// left.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// the cursors arm's two positions
+struct Cursors {
+    pre: i64,
+    post: i64,
+}
+
+// ---- the ★ arm: recursion with a table of postorder positions -------------
+fn star_construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut at: Vec[i64] = Vec.filled(preorder.len() + 1, 0);
+    for i in 0..postorder.len() {
+        at[postorder[i]] = i;
+    }
+    star_build(preorder, at, 0, preorder.len() - 1, 0)
+}
+
+// the subtree whose preorder is preorder[lo..=hi] and whose postorder
+// starts at post_lo
+fn star_build(preorder: Vec[i64], at: Vec[i64], lo: i64, hi: i64, post_lo: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let node = TreeNode { val: preorder[lo], left: None, right: None };
+    if lo < hi {
+        let size = at[preorder[lo + 1]] - post_lo + 1;
+        node.left = star_build(preorder, at, lo + 1, lo + size, post_lo);
+        node.right = star_build(preorder, at, lo + size + 1, hi, post_lo + size);
+    }
+    Some(node)
+}
+
+// ---- the stack arm: one pass with a stack ---------------------------------
+fn stack_construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut root: Option[TreeNode] = None;
+    let mut j = 0;
+    for i in 0..preorder.len() {
+        let node = TreeNode { val: preorder[i], left: None, right: None };
+        while stack.len() > 0 and stack[stack.len() - 1].val == postorder[j] {
+            let _ = stack.pop();
+            j += 1;
+        }
+        if stack.len() == 0 {
+            root = Some(node);
+        } else {
+            let top = stack[stack.len() - 1];
+            if top.left.is_none() {
+                top.left = Some(node);
+            } else {
+                top.right = Some(node);
+            }
+        }
+        stack.push(node);
+    }
+    root
+}
+
+// ---- the cursors arm: recursion with two cursors --------------------------
+fn cursors_construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut at = Cursors { pre: 0, post: 0 };
+    Some(cursors_grow(preorder, postorder, mut at))
+}
+
+fn cursors_grow(preorder: Vec[i64], postorder: Vec[i64], at: mut ref Cursors) -> TreeNode {
+    let node = TreeNode { val: preorder[at.pre], left: None, right: None };
+    at.pre += 1;
+    if node.val != postorder[at.post] {
+        node.left = Some(cursors_grow(preorder, postorder, mut at));
+    }
+    if node.val != postorder[at.post] {
+        node.right = Some(cursors_grow(preorder, postorder, mut at));
+    }
+    at.post += 1;
+    node
+}
+
+// ---- the slices arm: recursion on copied slices ---------------------------
+fn slices_construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let n = preorder.len();
+    if n == 0 {
+        return None;
+    }
+    let node = TreeNode { val: preorder[0], left: None, right: None };
+    if n == 1 {
+        return Some(node);
+    }
+    let mut size = 1;
+    while postorder[size - 1] != preorder[1] {
+        size += 1;
+    }
+    let mut left_pre: Vec[i64] = Vec.new();
+    let mut left_post: Vec[i64] = Vec.new();
+    for i in 0..size {
+        left_pre.push(preorder[1 + i]);
+        left_post.push(postorder[i]);
+    }
+    let mut right_pre: Vec[i64] = Vec.new();
+    let mut right_post: Vec[i64] = Vec.new();
+    for i in size + 1..n {
+        right_pre.push(preorder[i]);
+        right_post.push(postorder[i - 1]);
+    }
+    node.left = slices_construct_from_pre_post(left_pre, left_post);
+    node.right = slices_construct_from_pre_post(right_pre, right_post);
+    Some(node)
+}
+
+// ---- the reverse arm: recursion from the right ----------------------------
+fn reverse_construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut at: Vec[i64] = Vec.filled(preorder.len() + 1, 0);
+    for i in 0..preorder.len() {
+        at[preorder[i]] = i;
+    }
+    reverse_build(postorder, at, 0, postorder.len() - 1, 0)
+}
+
+// the subtree whose postorder is postorder[lo..=hi] and whose preorder
+// starts at pre_lo
+fn reverse_build(postorder: Vec[i64], at: Vec[i64], lo: i64, hi: i64, pre_lo: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let node = TreeNode { val: postorder[hi], left: None, right: None };
+    if lo < hi {
+        // the last child's subtree spans pre_lo + 1 + left .. in the preorder
+        let left = at[postorder[hi - 1]] - pre_lo - 1;
+        if left == 0 {
+            node.left = reverse_build(postorder, at, lo, hi - 1, pre_lo + 1);
+        } else {
+            node.left = reverse_build(postorder, at, lo, lo + left - 1, pre_lo + 1);
+            node.right = reverse_build(postorder, at, lo + left, hi - 1, pre_lo + 1 + left);
+        }
+    }
+    Some(node)
+}
+
+fn arm(x: i64, preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    match x {
+        0 => star_construct_from_pre_post(preorder, postorder),
+        1 => stack_construct_from_pre_post(preorder, postorder),
+        2 => cursors_construct_from_pre_post(preorder, postorder),
+        3 => slices_construct_from_pre_post(preorder, postorder),
+        _ => reverse_construct_from_pre_post(preorder, postorder),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every binary tree whose preorder is preorder[lo..=hi]: the root first,
+// then each way of cutting the rest into a left part and a right part
+fn trees(preorder: Vec[i64], lo: i64, hi: i64) -> Vec[Option[TreeNode]] {
+    let mut out: Vec[Option[TreeNode]] = Vec.new();
+    if lo > hi {
+        out.push(None);
+        return out;
+    }
+    for cut in lo + 1..hi + 2 {
+        let lefts = trees(preorder, lo + 1, cut - 1);
+        let rights = trees(preorder, cut, hi);
+        for a in 0..lefts.len() {
+            for b in 0..rights.len() {
+                out.push(Some(TreeNode { val: preorder[lo], left: lefts[a], right: rights[b] }));
+            }
+        }
+    }
+    out
+}
+
+// the trees with this preorder whose postorder is this one, a lone child
+// always on the left, as the arms place it
+fn literal(preorder: Vec[i64], postorder: Vec[i64]) -> Vec[String] {
+    let mut found: Vec[String] = Vec.new();
+    let all = trees(preorder, 0, preorder.len() - 1);
+    for t in 0..all.len() {
+        let mut pre: Vec[i64] = Vec.new();
+        let mut post: Vec[i64] = Vec.new();
+        walk(all[t], mut pre, mut post);
+        if post == postorder and lone_left(all[t]) {
+            found.push(to_level_order(all[t]));
+        }
+    }
+    found
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(", ")}]"
+}
+
+fn walk(node: Option[TreeNode], pre: mut ref Vec[i64], post: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        pre.push(n.val);
+        walk(n.left, mut pre, mut post);
+        walk(n.right, mut pre, mut post);
+        post.push(n.val);
+    }
+}
+
+// no node with a right child and no left one
+fn lone_left(node: Option[TreeNode]) -> bool {
+    match node {
+        None => true,
+        Some(n) => not (n.left.is_none() and n.right.is_some()) and lone_left(n.left) and lone_left(n.right),
+    }
+}
+
+// a copy of the tree with every value v replaced by label[v], and turned
+// left for right when `mirror`
+fn copy(node: Option[TreeNode], label: Vec[i64], mirror: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let l = copy(n.left, label, mirror);
+            let r = copy(n.right, label, mirror);
+            if mirror {
+                Some(TreeNode { val: label[n.val], left: r, right: l })
+            } else {
+                Some(TreeNode { val: label[n.val], left: l, right: r })
+            }
+        }
+    }
+}
+
+// as in the arms' harness
+fn random_tree(seed: mut ref i64, n: i64, full: bool) -> TreeNode {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = [TreeNode { val: vals[0], left: None, right: None }];
+    if full {
+        let mut leaves: Vec[TreeNode] = [nodes[0]];
+        while nodes.len() + 2 <= n {
+            let k = next_random(mut seed) % leaves.len();
+            let leaf = leaves[k];
+            leaves.swap_remove(k);
+            let a = TreeNode { val: vals[nodes.len()], left: None, right: None };
+            let b = TreeNode { val: vals[nodes.len() + 1], left: None, right: None };
+            leaf.left = Some(a);
+            leaf.right = Some(b);
+            nodes.push(a);
+            nodes.push(b);
+            leaves.push(a);
+            leaves.push(b);
+        }
+    } else {
+        for k in 1..n {
+            let node = TreeNode { val: vals[k], left: None, right: None };
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+            nodes.push(node);
+        }
+    }
+    nodes[0]
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one tree over the five arms (P1 only when `small`).
+// Returns the number of nodes in the ★ arm's tree.
+fn properties(t: mut ref Tally, seed: mut ref i64, tree: TreeNode, n: i64, full: bool, small: bool) -> i64 {
+    let mut pre: Vec[i64] = Vec.new();
+    let mut post: Vec[i64] = Vec.new();
+    walk(Some(tree), mut pre, mut post);
+    let want = if small { literal(pre, post) } else { Vec.new() };
+    let given = to_level_order(Some(tree));
+    // the values relabelled by a random permutation
+    let mut label: Vec[i64] = Vec.new();
+    for v in 0..n + 1 {
+        label.push(v);
+    }
+    for i in 2..n + 1 {
+        let j = 1 + next_random(mut seed) % i;
+        label.swap(i, j);
+    }
+    let mut pre_moved: Vec[i64] = Vec.new();
+    let mut post_moved: Vec[i64] = Vec.new();
+    for i in 0..n {
+        pre_moved.push(label[pre[i]]);
+        post_moved.push(label[post[i]]);
+    }
+    let mut same: Vec[i64] = Vec.new();
+    for v in 0..n + 1 {
+        same.push(v);
+    }
+    let mirrored = copy(Some(tree), same, true);
+    let mut pre_mirror: Vec[i64] = Vec.new();
+    let mut post_mirror: Vec[i64] = Vec.new();
+    walk(mirrored, mut pre_mirror, mut post_mirror);
+    let mut answers: Vec[String] = Vec.new();
+    let mut nodes = 0;
+    for x in 0..5 {
+        let got = arm(x, pre, post);
+        let text = to_level_order(got);
+        answers.push(text);
+        let mut back_pre: Vec[i64] = Vec.new();
+        let mut back_post: Vec[i64] = Vec.new();
+        walk(got, mut back_pre, mut back_post);
+        if x == 0 {
+            nodes = back_pre.len();
+        }
+        let text = answers[x].clone();
+        // P1: the one tree the statement allows with a lone child on the
+        // left
+        if small {
+            check(mut t, 1, want.len() == 1 and want[0] == text);
+        }
+        // P2: the tree's traversals are the ones given
+        check(mut t, 2, back_pre == pre and back_post == post);
+        // P3: a lone child always on the left, and a full tree rebuilt as
+        // it was
+        check(mut t, 3, lone_left(got) and (not full or text == given));
+        // P4: the values relabelled give the same tree relabelled
+        check(mut t, 4, to_level_order(arm(x, pre_moved, post_moved)) == to_level_order(copy(got, label, false)));
+        // P5: the left subtree is what the arm builds from the left part
+        // of the traversals alone, its values renumbered 1 up; and a full
+        // tree's mirror image is rebuilt as that mirror image
+        let mut part_ok = true;
+        if n > 1 {
+            let mut size = 1;
+            while post[size - 1] != pre[1] {
+                size += 1;
+            }
+            let mut rank: Vec[i64] = Vec.filled(n + 1, 0);
+            let mut sorted: Vec[i64] = Vec.new();
+            for i in 0..size {
+                sorted.push(post[i]);
+            }
+            sorted.sort();
+            for i in 0..size {
+                rank[sorted[i]] = i + 1;
+            }
+            let mut part_pre: Vec[i64] = Vec.new();
+            let mut part_post: Vec[i64] = Vec.new();
+            for i in 0..size {
+                part_pre.push(rank[pre[1 + i]]);
+                part_post.push(rank[post[i]]);
+            }
+            let left = match got {
+                Some(g) => g.left,
+                None => None,
+            };
+            part_ok = to_level_order(arm(x, part_pre, part_post)) == to_level_order(copy(left, rank, false));
+        }
+        let mirror_ok = not full or to_level_order(arm(x, pre_mirror, post_mirror)) == to_level_order(mirrored);
+        check(mut t, 5, part_ok and mirror_ok);
+    }
+    for x in 0..5 {
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == answers[x] {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    nodes
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 889;
+    // up to 8 nodes against the statement; then up to 30, LeetCode's
+    // largest; every third tree full
+    for c in 0..3200 {
+        let small = c < 3000;
+        let full = c % 3 == 0;
+        let most = if small { 8 } else { 30 };
+        let n = if full { 2 * (next_random(mut seed) % ((most + 1) / 2)) + 1 } else { 1 + next_random(mut seed) % most };
+        let tree = random_tree(mut seed, n, full);
+        cases += 1;
+        total += properties(mut t, mut seed, tree, n, full, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} trees, {total} nodes in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

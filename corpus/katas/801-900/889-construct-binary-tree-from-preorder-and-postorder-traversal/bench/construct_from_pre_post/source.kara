@@ -1,0 +1,134 @@
+// LeetCode #889 bench: the ★ arm (recursion with a table of postorder
+// positions) on 4000 random trees of 1,000 nodes, half of them full.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut at: Vec[i64] = Vec.filled(preorder.len() + 1, 0);
+    for i in 0..postorder.len() {
+        at[postorder[i]] = i;
+    }
+    build(preorder, at, 0, preorder.len() - 1, 0)
+}
+
+// the subtree whose preorder is preorder[lo..=hi] and whose postorder
+// starts at post_lo
+fn build(preorder: Vec[i64], at: Vec[i64], lo: i64, hi: i64, post_lo: i64) -> Option[TreeNode] {
+    if lo > hi {
+        return None;
+    }
+    let node = TreeNode { val: preorder[lo], left: None, right: None };
+    if lo < hi {
+        let size = at[preorder[lo + 1]] - post_lo + 1;
+        node.left = build(preorder, at, lo + 1, lo + size, post_lo);
+        node.right = build(preorder, at, lo + size + 1, hi, post_lo + size);
+    }
+    Some(node)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn walk(node: Option[TreeNode], pre: mut ref Vec[i64], post: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        pre.push(n.val);
+        walk(n.left, mut pre, mut post);
+        walk(n.right, mut pre, mut post);
+        post.push(n.val);
+    }
+}
+
+// A random tree of n nodes holding the values 1 to n in a random order:
+// each new node hangs from a random node with a free side. With `full`,
+// every node gets two children or none: a leaf is picked at random and
+// given two new children, until there are n nodes (n odd).
+fn random_tree(seed: mut ref i64, n: i64, full: bool) -> TreeNode {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = [TreeNode { val: vals[0], left: None, right: None }];
+    if full {
+        let mut leaves: Vec[TreeNode] = [nodes[0]];
+        while nodes.len() + 2 <= n {
+            let k = next_random(mut seed) % leaves.len();
+            let leaf = leaves[k];
+            leaves.swap_remove(k);
+            let a = TreeNode { val: vals[nodes.len()], left: None, right: None };
+            let b = TreeNode { val: vals[nodes.len() + 1], left: None, right: None };
+            leaf.left = Some(a);
+            leaf.right = Some(b);
+            nodes.push(a);
+            nodes.push(b);
+            leaves.push(a);
+            leaves.push(b);
+        }
+    } else {
+        for k in 1..n {
+            let node = TreeNode { val: vals[k], left: None, right: None };
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+            nodes.push(node);
+        }
+    }
+    nodes[0]
+}
+
+fn main() {
+    let mut seed = 889;
+    let mut nodes = 0;
+    let mut check = 0;
+    for c in 0..4000 {
+        let full = c % 2 == 0;
+        let n = if full { 999 } else { 1000 };
+        let tree = random_tree(mut seed, n, full);
+        let mut pre: Vec[i64] = Vec.new();
+        let mut post: Vec[i64] = Vec.new();
+        walk(Some(tree), mut pre, mut post);
+        let root = construct_from_pre_post(pre, post);
+        // the rebuilt tree in level order, 0 for a missing child
+        let mut queue: VecDeque[TreeNode] = VecDeque.new();
+        if let Some(r) = root {
+            check = (check * 131 + r.val) % 1000000007;
+            queue.push_back(r);
+        }
+        while let Some(node) = queue.pop_front() {
+            nodes += 1;
+            match node.left {
+                Some(l) => {
+                    check = (check * 131 + l.val) % 1000000007;
+                    queue.push_back(l);
+                }
+                None => check = check * 131 % 1000000007,
+            }
+            match node.right {
+                Some(r) => {
+                    check = (check * 131 + r.val) % 1000000007;
+                    queue.push_back(r);
+                }
+                None => check = check * 131 % 1000000007,
+            }
+        }
+    }
+    println(f"4000 trees of up to 1000 nodes: {nodes} nodes rebuilt, checksum {check}");
+}

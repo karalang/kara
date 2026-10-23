@@ -1,0 +1,7 @@
+preorder = [1, 2, 4, 5, 3, 6, 7], postorder = [4, 5, 2, 6, 7, 3, 1] -> [1, 2, 3, 4, 5, 6, 7]
+preorder = [1], postorder = [1] -> [1]
+preorder = [1, 2], postorder = [2, 1] -> [1, 2]
+preorder = [1, 2, 3], postorder = [3, 2, 1] -> [1, 2, null, 3]
+preorder = [1, 2, 3], postorder = [2, 3, 1] -> [1, 2, 3]
+preorder = [3, 1, 2, 4], postorder = [2, 1, 4, 3] -> [3, 1, 4, 2]
+preorder = [1, 2, 3, 4, 5], postorder = [3, 4, 2, 5, 1] -> [1, 2, 5, 3, 4]

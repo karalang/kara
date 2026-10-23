@@ -1,0 +1,161 @@
+// LeetCode #889: Construct Binary Tree from Preorder and Postorder
+// Traversal -- recursion with two cursors.
+//
+// One cursor walks the preorder and one the postorder. A call makes a node
+// of the next preorder value; while that node is not the next postorder
+// value its subtree is still open, so it takes a left child and then, if
+// still open, a right child, each built by the same call. When the node
+// is the next postorder value its subtree is complete, and the postorder
+// cursor moves past it. A lone child lands on the left. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+struct Cursors {
+    pre: i64,
+    post: i64,
+}
+
+fn construct_from_pre_post(preorder: Vec[i64], postorder: Vec[i64]) -> Option[TreeNode] {
+    let mut at = Cursors { pre: 0, post: 0 };
+    Some(grow(preorder, postorder, mut at))
+}
+
+fn grow(preorder: Vec[i64], postorder: Vec[i64], at: mut ref Cursors) -> TreeNode {
+    let node = TreeNode { val: preorder[at.pre], left: None, right: None };
+    at.pre += 1;
+    if node.val != postorder[at.post] {
+        node.left = Some(grow(preorder, postorder, mut at));
+    }
+    if node.val != postorder[at.post] {
+        node.right = Some(grow(preorder, postorder, mut at));
+    }
+    at.post += 1;
+    node
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level order of a tree, "null" for a missing child, with the
+// trailing nulls dropped.
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(", ")}]"
+}
+
+fn walk(node: Option[TreeNode], pre: mut ref Vec[i64], post: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        pre.push(n.val);
+        walk(n.left, mut pre, mut post);
+        walk(n.right, mut pre, mut post);
+        post.push(n.val);
+    }
+}
+
+// A random tree of n nodes holding the values 1 to n in a random order:
+// each new node hangs from a random node with a free side. With `full`,
+// every node gets two children or none: a leaf is picked at random and
+// given two new children, until there are n nodes (n odd).
+fn random_tree(seed: mut ref i64, n: i64, full: bool) -> TreeNode {
+    let mut vals: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        vals.push(v);
+    }
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+    }
+    let mut nodes: Vec[TreeNode] = [TreeNode { val: vals[0], left: None, right: None }];
+    if full {
+        let mut leaves: Vec[TreeNode] = [nodes[0]];
+        while nodes.len() + 2 <= n {
+            let k = next_random(mut seed) % leaves.len();
+            let leaf = leaves[k];
+            leaves.swap_remove(k);
+            let a = TreeNode { val: vals[nodes.len()], left: None, right: None };
+            let b = TreeNode { val: vals[nodes.len() + 1], left: None, right: None };
+            leaf.left = Some(a);
+            leaf.right = Some(b);
+            nodes.push(a);
+            nodes.push(b);
+            leaves.push(a);
+            leaves.push(b);
+        }
+    } else {
+        for k in 1..n {
+            let node = TreeNode { val: vals[k], left: None, right: None };
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+            nodes.push(node);
+        }
+    }
+    nodes[0]
+}
+
+fn show(preorder: Vec[i64], postorder: Vec[i64]) {
+    println(f"preorder = {preorder}, postorder = {postorder} -> {to_level_order(construct_from_pre_post(preorder, postorder))}");
+}
+
+fn main() {
+    show([1, 2, 4, 5, 3, 6, 7], [4, 5, 2, 6, 7, 3, 1]);
+    show([1], [1]);
+    show([1, 2], [2, 1]);
+    show([1, 2, 3], [3, 2, 1]);
+    show([1, 2, 3], [2, 3, 1]);
+    show([3, 1, 2, 4], [2, 1, 4, 3]);
+    show([1, 2, 3, 4, 5], [3, 4, 2, 5, 1]);
+    // random trees of up to 30 nodes, LeetCode's largest; every third one
+    // full, which the traversals fix exactly
+    let mut seed = 889;
+    let mut same = 0;
+    let mut check = 0;
+    for c in 0..3000 {
+        let full = c % 3 == 0;
+        let n = if full { 2 * (next_random(mut seed) % 15) + 1 } else { 1 + next_random(mut seed) % 30 };
+        let tree = random_tree(mut seed, n, full);
+        let mut pre: Vec[i64] = Vec.new();
+        let mut post: Vec[i64] = Vec.new();
+        walk(Some(tree), mut pre, mut post);
+        let text = to_level_order(construct_from_pre_post(pre, post));
+        if text == to_level_order(Some(tree)) {
+            same += 1;
+        }
+        for b in text.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"3000 trees of up to 30 nodes: {same} rebuilt as they were, checksum {check}");
+}
