@@ -1,0 +1,749 @@
+// mini_flashtext — a port of the flashtext library (Vikash Singh, MIT): the
+// trie-based keyword extractor and replacer that, for a large keyword set, is
+// much faster than a regex alternation. It is a staple of NLP preprocessing —
+// tagging documents, swapping synonyms/clean names, redaction — and the same
+// longest-match-with-word-boundaries scan drives entity dictionaries and
+// find/replace over big corpora.
+//
+// The job stream (one command per line) drives a single keyword processor:
+//
+//     case <0|1>          start a fresh processor (1 = case-sensitive)
+//     nwb <chars>         set the non-word-boundary set to exactly these chars
+//     add <kw>[|<clean>]  add a keyword (clean name defaults to the keyword)
+//     addlist <a,b,c>     add several keywords (clean name = keyword)
+//     rm <kw>             remove a keyword             -> True/False
+//     has <word>          membership test              -> True/False
+//     get <word>          clean name for an exact term -> name or None
+//     len                 number of distinct terms     -> count
+//     extract <text>      keywords found, in text order (joined by " | ")
+//     span <text>         the same with clean:start:end spans
+//     replace <text>      text with keywords swapped for their clean names
+//
+// The trie is the library's nested dict reproduced as an arena of parallel Vecs
+// (per node: child byte keys, child node ids, an is-keyword flag, a clean name).
+// Every lookup is by key — the algorithm never iterates the children — so the
+// output is deterministic and backend-independent. All input is ASCII, so the
+// trie, the word-boundary set and case folding are byte-level; the whole port is
+// integer/string only.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let neg = n < 0;
+    let mut v = if neg { -n } else { n };
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45);
+    }
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn ascii_lower(bs: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let n = bs.len();
+    let mut i = 0;
+    while i < n {
+        let b = bs[i];
+        if b >= 65 and b <= 90 {
+            out.push(b + 32);
+        } else {
+            out.push(b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// default non-word-boundary set: digits, letters and underscore.
+fn default_nwb() -> Vec[bool] {
+    let mut t: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < 256 {
+        let wc = (i >= 48 and i <= 57) or (i >= 65 and i <= 90) or (i >= 97 and i <= 122) or i == 95;
+        t.push(wc);
+        i = i + 1;
+    }
+    t
+}
+
+struct Trie {
+    ck: Vec[Vec[u8]],     // child byte keys per node
+    cn: Vec[Vec[i64]],    // child node ids per node
+    kw: Vec[bool],        // is-keyword per node
+    clean: Vec[String],   // clean name per node
+    cs: bool,             // case sensitive
+    nwb: Vec[bool],       // non-word-boundary membership (256)
+    terms: i64,
+}
+
+fn new_trie(cs: bool) -> Trie {
+    let mut ck: Vec[Vec[u8]] = Vec.new();
+    let mut cn: Vec[Vec[i64]] = Vec.new();
+    let mut kw: Vec[bool] = Vec.new();
+    let mut clean: Vec[String] = Vec.new();
+    ck.push(Vec.new());
+    cn.push(Vec.new());
+    kw.push(false);
+    clean.push("");
+    Trie { ck: ck, cn: cn, kw: kw, clean: clean, cs: cs, nwb: default_nwb(), terms: 0 }
+}
+
+impl Trie {
+    fn child(ref self, node: i64, b: u8) -> i64 {
+        let keys = ref self.ck[node];
+        let n = keys.len();
+        let mut i = 0;
+        while i < n {
+            if keys[i] == b {
+                return self.cn[node][i];
+            }
+            i = i + 1;
+        }
+        -1
+    }
+
+    fn newnode(mut ref self) -> i64 {
+        self.ck.push(Vec.new());
+        self.cn.push(Vec.new());
+        self.kw.push(false);
+        self.clean.push("");
+        self.ck.len() as i64 - 1
+    }
+
+    fn keybytes(ref self, s: String) -> Vec[u8] {
+        let raw = str_bytes(s);
+        if self.cs {
+            raw
+        } else {
+            ascii_lower(raw)
+        }
+    }
+
+    fn add(mut ref self, keyword: String, clean_in: String) -> bool {
+        if keyword.len() == 0 {
+            return false;
+        }
+        let clean = if clean_in.len() == 0 { keyword.clone() } else { clean_in.clone() };
+        let kb = self.keybytes(keyword);
+        let n = kb.len();
+        let mut cur = 0;
+        let mut i = 0;
+        while i < n {
+            let b = kb[i];
+            let mut ch = self.child(cur, b);
+            if ch == -1 {
+                ch = self.newnode();
+                self.ck[cur].push(b);
+                self.cn[cur].push(ch);
+            }
+            cur = ch;
+            i = i + 1;
+        }
+        let mut status = false;
+        if not self.kw[cur] {
+            status = true;
+            self.terms = self.terms + 1;
+        }
+        self.kw[cur] = true;
+        self.clean[cur] = clean;
+        status
+    }
+
+    fn pop(mut ref self, node: i64, key: i64) {
+        if key == -1 {
+            self.kw[node] = false;
+            self.clean[node] = "";
+        } else {
+            let keys = self.ck[node].clone();
+            let n = keys.len();
+            let mut i = 0;
+            let mut done = false;
+            while i < n and not done {
+                if keys[i] as i64 == key {
+                    let mut nk: Vec[u8] = Vec.new();
+                    let mut nn: Vec[i64] = Vec.new();
+                    let mut j = 0;
+                    while j < n {
+                        if j != i {
+                            nk.push(keys[j]);
+                            nn.push(self.cn[node][j]);
+                        }
+                        j = j + 1;
+                    }
+                    self.ck[node] = nk;
+                    self.cn[node] = nn;
+                    done = true;
+                } else {
+                    i = i + 1;
+                }
+            }
+        }
+    }
+
+    fn remove(mut ref self, keyword: String) -> bool {
+        if keyword.len() == 0 {
+            return false;
+        }
+        let kb = self.keybytes(keyword);
+        let n = kb.len();
+        let mut cur = 0;
+        let mut path_key: Vec[i64] = Vec.new();
+        let mut path_node: Vec[i64] = Vec.new();
+        let mut ok = true;
+        let mut i = 0;
+        while i < n and ok {
+            let b = kb[i];
+            let ch = self.child(cur, b);
+            if ch != -1 {
+                path_key.push(b as i64);
+                path_node.push(cur);
+                cur = ch;
+            } else {
+                ok = false;
+            }
+            i = i + 1;
+        }
+        if ok and self.kw[cur] {
+            path_key.push(-1);
+            path_node.push(cur);
+            // iterate reversed
+            let m = path_key.len();
+            let mut idx = m;
+            let mut brk = false;
+            while idx > 0 and not brk {
+                idx = idx - 1;
+                let node = path_node[idx];
+                let key = path_key[idx];
+                let nkeys = self.ck[node].len() as i64 + (if self.kw[node] { 1 } else { 0 });
+                if nkeys == 1 {
+                    self.pop(node, key);
+                } else {
+                    self.pop(node, key);
+                    brk = true;
+                }
+            }
+            self.terms = self.terms - 1;
+            return true;
+        }
+        false
+    }
+
+    // node id if `word` is present as a complete keyword, else -1.
+    fn lookup(ref self, word: String) -> i64 {
+        if word.len() == 0 {
+            return -1;
+        }
+        let wb = self.keybytes(word);
+        let n = wb.len();
+        let mut cur = 0;
+        let mut covered = 0;
+        let mut i = 0;
+        let mut stop = false;
+        while i < n and not stop {
+            let ch = self.child(cur, wb[i]);
+            if ch != -1 {
+                cur = ch;
+                covered = covered + 1;
+                i = i + 1;
+            } else {
+                stop = true;
+            }
+        }
+        if self.kw[cur] and covered == n {
+            cur
+        } else {
+            -1
+        }
+    }
+
+    // fills parallel out-vecs with (clean, start, end) in text order.
+    fn extract_core(ref self, sentence: String, cleans: mut ref Vec[String],
+                    starts: mut ref Vec[i64], ends: mut ref Vec[i64]) {
+        if sentence.len() == 0 {
+            return;
+        }
+        let orig = str_bytes(sentence.clone());
+        let s = if self.cs { orig.clone() } else { ascii_lower(orig) };
+        let n = s.len();
+        let mut cur = 0;
+        let mut start = 0;
+        let mut endpos = 0;
+        let mut reset = false;
+        let mut idx = 0;
+        while idx < n {
+            let ch = s[idx];
+            if not self.nwb[ch as i64] {
+                let kw_here = self.kw[cur];
+                let child_here = self.child(cur, ch);
+                if kw_here or child_here != -1 {
+                    let mut has_longest = false;
+                    let mut longest = String.new();
+                    let mut is_longer = false;
+                    if kw_here {
+                        longest = self.clean[cur].clone();
+                        has_longest = true;
+                        endpos = idx;
+                    }
+                    if child_here != -1 {
+                        let mut cont = child_here;
+                        let mut idy = idx + 1;
+                        let mut broke = false;
+                        while idy < n and not broke {
+                            let inner = s[idy];
+                            if (not self.nwb[inner as i64]) and self.kw[cont] {
+                                longest = self.clean[cont].clone();
+                                has_longest = true;
+                                endpos = idy;
+                                is_longer = true;
+                            }
+                            let nxt = self.child(cont, inner);
+                            if nxt != -1 {
+                                cont = nxt;
+                                idy = idy + 1;
+                            } else {
+                                broke = true;
+                            }
+                        }
+                        if not broke {
+                            if self.kw[cont] {
+                                longest = self.clean[cont].clone();
+                                has_longest = true;
+                                endpos = idy;
+                                is_longer = true;
+                            }
+                        }
+                        if is_longer {
+                            idx = endpos;
+                        }
+                    }
+                    cur = 0;
+                    if has_longest {
+                        cleans.push(longest);
+                        starts.push(start);
+                        ends.push(idx);
+                    }
+                    reset = true;
+                } else {
+                    cur = 0;
+                    reset = true;
+                }
+            } else {
+                let ch2 = self.child(cur, ch);
+                if ch2 != -1 {
+                    cur = ch2;
+                } else {
+                    cur = 0;
+                    reset = true;
+                    let mut idy = idx + 1;
+                    let mut stop = false;
+                    while idy < n and not stop {
+                        if not self.nwb[s[idy] as i64] {
+                            stop = true;
+                        } else {
+                            idy = idy + 1;
+                        }
+                    }
+                    idx = idy;
+                }
+            }
+            if idx + 1 >= n {
+                if self.kw[cur] {
+                    cleans.push(self.clean[cur].clone());
+                    starts.push(start);
+                    ends.push(n as i64);
+                }
+            }
+            idx = idx + 1;
+            if reset {
+                reset = false;
+                start = idx;
+            }
+        }
+    }
+
+    fn extract_join(ref self, sentence: String) -> String {
+        let mut cleans: Vec[String] = Vec.new();
+        let mut starts: Vec[i64] = Vec.new();
+        let mut ends: Vec[i64] = Vec.new();
+        self.extract_core(sentence, mut cleans, mut starts, mut ends);
+        let mut out = String.new();
+        let mut i = 0;
+        while i < cleans.len() {
+            if i > 0 {
+                out.push_str(" | ");
+            }
+            out.push_str(cleans[i].clone());
+            i = i + 1;
+        }
+        out
+    }
+
+    fn span_join(ref self, sentence: String) -> String {
+        let mut cleans: Vec[String] = Vec.new();
+        let mut starts: Vec[i64] = Vec.new();
+        let mut ends: Vec[i64] = Vec.new();
+        self.extract_core(sentence, mut cleans, mut starts, mut ends);
+        let mut out = String.new();
+        let mut i = 0;
+        while i < cleans.len() {
+            if i > 0 {
+                out.push_str(" | ");
+            }
+            out.push_str(cleans[i].clone());
+            out.push_str(":");
+            out.push_str(itoa(starts[i]));
+            out.push_str(":");
+            out.push_str(itoa(ends[i]));
+            i = i + 1;
+        }
+        out
+    }
+
+    fn replace(ref self, sentence: String) -> String {
+        if sentence.len() == 0 {
+            return sentence.clone();
+        }
+        let orig = str_bytes(sentence.clone());
+        let s = if self.cs { orig.clone() } else { ascii_lower(orig) };
+        let n = s.len();
+        let mut new_buf: Vec[u8] = Vec.new();
+        let mut curword: Vec[u8] = Vec.new();
+        let mut white: Vec[u8] = Vec.new();
+        let mut endpos = 0;
+        let mut cur = 0;
+        let mut idx = 0;
+        while idx < n {
+            let ch = s[idx];
+            curword.push(orig[idx]);
+            if not self.nwb[ch as i64] {
+                white = Vec.new();
+                white.push(ch);
+                let kw_here = self.kw[cur];
+                let child_here = self.child(cur, ch);
+                if kw_here or child_here != -1 {
+                    let mut has_longest = false;
+                    let mut longest = String.new();
+                    let mut is_longer = false;
+                    if kw_here {
+                        longest = self.clean[cur].clone();
+                        has_longest = true;
+                        endpos = idx;
+                    }
+                    if child_here != -1 {
+                        let mut cont = child_here;
+                        let mut wcont = curword.clone();
+                        let mut idy = idx + 1;
+                        let mut broke = false;
+                        while idy < n and not broke {
+                            let inner = s[idy];
+                            wcont.push(orig[idy]);
+                            if (not self.nwb[inner as i64]) and self.kw[cont] {
+                                white = Vec.new();
+                                white.push(inner);
+                                longest = self.clean[cont].clone();
+                                has_longest = true;
+                                endpos = idy;
+                                is_longer = true;
+                            }
+                            let nxt = self.child(cont, inner);
+                            if nxt != -1 {
+                                cont = nxt;
+                                idy = idy + 1;
+                            } else {
+                                broke = true;
+                            }
+                        }
+                        if not broke {
+                            if self.kw[cont] {
+                                white = Vec.new();
+                                longest = self.clean[cont].clone();
+                                has_longest = true;
+                                endpos = idy;
+                                is_longer = true;
+                            }
+                        }
+                        if is_longer {
+                            idx = endpos;
+                            curword = wcont;
+                        }
+                    }
+                    cur = 0;
+                    if has_longest {
+                        for cb in longest.bytes() {
+                            new_buf.push(cb);
+                        }
+                        let mut wi = 0;
+                        while wi < white.len() {
+                            new_buf.push(white[wi]);
+                            wi = wi + 1;
+                        }
+                        curword = Vec.new();
+                        white = Vec.new();
+                    } else {
+                        let mut wi = 0;
+                        while wi < curword.len() {
+                            new_buf.push(curword[wi]);
+                            wi = wi + 1;
+                        }
+                        curword = Vec.new();
+                        white = Vec.new();
+                    }
+                } else {
+                    cur = 0;
+                    let mut wi = 0;
+                    while wi < curword.len() {
+                        new_buf.push(curword[wi]);
+                        wi = wi + 1;
+                    }
+                    curword = Vec.new();
+                    white = Vec.new();
+                }
+            } else {
+                let ch2 = self.child(cur, ch);
+                if ch2 != -1 {
+                    cur = ch2;
+                } else {
+                    cur = 0;
+                    let mut idy = idx + 1;
+                    let mut stop = false;
+                    while idy < n and not stop {
+                        curword.push(orig[idy]);
+                        if not self.nwb[s[idy] as i64] {
+                            stop = true;
+                        } else {
+                            idy = idy + 1;
+                        }
+                    }
+                    idx = idy;
+                    let mut wi = 0;
+                    while wi < curword.len() {
+                        new_buf.push(curword[wi]);
+                        wi = wi + 1;
+                    }
+                    curword = Vec.new();
+                    white = Vec.new();
+                }
+            }
+            if idx + 1 >= n {
+                if self.kw[cur] {
+                    for cb in self.clean[cur].clone().bytes() {
+                        new_buf.push(cb);
+                    }
+                } else {
+                    let mut wi = 0;
+                    while wi < curword.len() {
+                        new_buf.push(curword[wi]);
+                        wi = wi + 1;
+                    }
+                }
+            }
+            idx = idx + 1;
+        }
+        String.from_utf8(new_buf).unwrap_or("")
+    }
+}
+
+fn first_space(s: String) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        if b[i] == 32 {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn find_byte(s: String, target: u8) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        if b[i] == target {
+            return i as i64;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn run_command(t: mut ref Trie, line: String) -> String {
+    let sp = first_space(line.clone());
+    let mut op = line.clone();
+    let mut arg = String.new();
+    if sp != -1 {
+        op = line.substring(0, sp);
+        arg = line.substring(sp + 1, line.len() as i64);
+    }
+    let mut out = line.clone();
+    out.push_str(" => ");
+    if op == "case" {
+        *t = new_trie(arg == "1");
+        out.push_str("ok");
+    } else if op == "nwb" {
+        let mut tbl: Vec[bool] = Vec.new();
+        let mut i = 0;
+        while i < 256 {
+            tbl.push(false);
+            i = i + 1;
+        }
+        let ab = str_bytes(arg.clone());
+        let mut j = 0;
+        while j < ab.len() {
+            tbl[ab[j] as i64] = true;
+            j = j + 1;
+        }
+        t.nwb = tbl;
+        out.push_str("ok");
+    } else if op == "add" {
+        let bar = find_byte(arg.clone(), 124); // '|'
+        let mut kw = arg.clone();
+        let mut clean = String.new();
+        if bar != -1 {
+            kw = arg.substring(0, bar);
+            clean = arg.substring(bar + 1, arg.len() as i64);
+        }
+        let st = t.add(kw, clean);
+        out.push_str(if st { "True" } else { "False" });
+    } else if op == "addlist" {
+        // split arg on ','
+        let ab = str_bytes(arg.clone());
+        let an = ab.len();
+        let mut ls = 0;
+        let mut i = 0;
+        while i <= an {
+            if i == an or ab[i] == 44 {
+                if i > ls {
+                    let kw = arg.substring(ls as i64, i as i64);
+                    t.add(kw, "");
+                }
+                ls = i + 1;
+            }
+            i = i + 1;
+        }
+        out.push_str("ok");
+    } else if op == "rm" {
+        let st = t.remove(arg);
+        out.push_str(if st { "True" } else { "False" });
+    } else if op == "has" {
+        out.push_str(if t.lookup(arg) != -1 { "True" } else { "False" });
+    } else if op == "get" {
+        let node = t.lookup(arg);
+        if node != -1 {
+            out.push_str(t.clean[node].clone());
+        } else {
+            out.push_str("None");
+        }
+    } else if op == "len" {
+        out.push_str(itoa(t.terms));
+    } else if op == "extract" {
+        out.push_str(t.extract_join(arg));
+    } else if op == "span" {
+        out.push_str(t.span_join(arg));
+    } else if op == "replace" {
+        out.push_str(t.replace(arg));
+    } else {
+        out.push_str("?");
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut t = new_trie(false);
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls as i64, i as i64);
+                out.push_str(run_command(mut t, line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("case 0\n");
+    s.push_str("add Big Apple|New York\n");
+    s.push_str("add Bay Area\n");
+    s.push_str("len\n");
+    s.push_str("has Big Apple\n");
+    s.push_str("has big apple\n");
+    s.push_str("has Big\n");
+    s.push_str("get Big Apple\n");
+    s.push_str("get nope\n");
+    s.push_str("extract I love Big Apple and Bay Area.\n");
+    s.push_str("extract i love big apple and bay area.\n");
+    s.push_str("replace I love Big Apple and bay area.\n");
+    s.push_str("span I love Big Apple and Bay Area.\n");
+    s.push_str("case 0\n");
+    s.push_str("add Big|B\n");
+    s.push_str("add Big Apple|BA\n");
+    s.push_str("extract Big and Big Apple here\n");
+    s.push_str("replace Big and Big Apple here\n");
+    s.push_str("case 1\n");
+    s.push_str("add Java|java-lang\n");
+    s.push_str("add java|coffee\n");
+    s.push_str("extract I code Java and java daily\n");
+    s.push_str("replace I code Java and java daily\n");
+    s.push_str("len\n");
+    s.push_str("case 0\n");
+    s.push_str("addlist python,golang,rust\n");
+    s.push_str("len\n");
+    s.push_str("extract i use python, golang and RUST today\n");
+    s.push_str("rm golang\n");
+    s.push_str("rm golang\n");
+    s.push_str("len\n");
+    s.push_str("extract golang and rust\n");
+    s.push_str("case 0\n");
+    s.push_str("add c++|cpp\n");
+    s.push_str("nwb +\n");
+    s.push_str("add c++|cpp\n");
+    s.push_str("extract i love c++ a lot\n");
+    s.push_str("case 0\n");
+    s.push_str("add new-york|NYC\n");
+    s.push_str("extract go to new-york now\n");
+    s.push_str("replace go to new-york now\n");
+    s.push_str("case 0\n");
+    s.push_str("add end\n");
+    s.push_str("extract this is the end\n");
+    s.push_str("replace this is the end\n");
+    s.push_str("extract endless summer\n");
+    s
+}
