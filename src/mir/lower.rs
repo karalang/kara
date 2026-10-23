@@ -4058,21 +4058,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let range = (start.as_deref(), end.as_deref(), *inclusive);
                 return self.range_assign(target, object, range, value);
             }
-            if !matches!(index.kind, ExprKind::Range { .. }) {
-                let ot = self.expr_ty(object)?;
-                let (k, base) = self.strip_ty_full(ot);
-                if let HK::Intrinsic {
-                    kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
-                    args,
-                } = k
-                {
-                    let targs = self.tys().tcx().list(args);
-                    return self.index_set(target, object, index, value, base, &targs);
-                }
-                // A user type's `impl IndexSet` (B-2026-10-14-47).
-                if let Some((d, inst_args)) = self.user_impl_method(base, "IndexSet", "index_set") {
-                    return self.user_index_set(target, object, index, value, base, d, inst_args);
-                }
+            if self.slices(object, index) {
+                return self.unsupported(target.span, "an assignment through a range value");
+            }
+            let ot = self.expr_ty(object)?;
+            let (k, base) = self.strip_ty_full(ot);
+            if let HK::Intrinsic {
+                kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
+                args,
+            } = k
+            {
+                let targs = self.tys().tcx().list(args);
+                return self.index_set(target, object, index, value, base, &targs);
+            }
+            // A user type's `impl IndexSet` (B-2026-10-14-47).
+            if let Some((d, inst_args)) = self.user_impl_method(base, "IndexSet", "index_set") {
+                return self.user_index_set(target, object, index, value, base, d, inst_args);
             }
         }
         // Left to right: the target's own subexpressions, then the value,
@@ -4447,6 +4448,34 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── places ──────────────────────────────────────────────────────
 
+    /// Whether `object[index]` slices (`v[a..b]`, or a sequence indexed by
+    /// a range value: `let r = 1..3; v[r]`) rather than naming one element
+    /// (a map keyed by ranges looks its key up). The checker's types are
+    /// read here, where a `Vec` is still the library's type.
+    fn slices(&self, object: &Expr, index: &Expr) -> bool {
+        if matches!(index.kind, ExprKind::Range { .. }) {
+            return true;
+        }
+        let tcx = self.tys().tcx();
+        let named = |t: Ty, names: &[&str]| match tcx.kind(t) {
+            HK::Adt { def, .. } => names.contains(&self.lcx.def_name(def).as_str()),
+            _ => false,
+        };
+        let range = self
+            .lcx
+            .node_types
+            .get(&index.id)
+            .is_some_and(|&t| named(t, &["Range", "RangeInclusive", "RangeFrom"]));
+        range
+            && self.lcx.node_types.get(&object.id).is_some_and(|&t| {
+                let mut t = t;
+                while let HK::Ref(inner) | HK::MutRef(inner) = tcx.kind(t) {
+                    t = inner;
+                }
+                self.seq_of(t).is_some() || named(t, &["Vec"])
+            })
+    }
+
     /// Is `e` a place expression (it names memory rather than computing a
     /// value)?
     fn is_place(&self, e: &Expr) -> bool {
@@ -4457,12 +4486,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ => false,
             },
             ExprKind::SelfValue => true,
+            // `F.value` with an uppercase local `F`.
+            ExprKind::Path { .. } => matches!(self.lcx.res.get(&e.id), Some(Res::LocalPath(_))),
             // A field of a temporary is a place too: the temporary's.
             ExprKind::FieldAccess { .. } => {
                 self.int_limit_of(e).is_none() && self.builtin_fn_def(e).is_none()
             }
             // `v[a..b]` makes a slice value; `v[i]` names an element.
-            ExprKind::Index { index, .. } => !matches!(index.kind, ExprKind::Range { .. }),
+            ExprKind::Index { object, index } => !self.slices(object, index),
             ExprKind::TupleIndex { .. } => true,
             ExprKind::Unary {
                 op: UnaryOp::Deref, ..
@@ -4543,9 +4574,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.pre_index(object)?;
                 // An index already read (a place prepared before it is
                 // named) is not read again.
-                if !matches!(index.kind, ExprKind::Range { .. })
-                    && !self.pre_indices.contains_key(&index.id)
-                {
+                if !self.slices(object, index) && !self.pre_indices.contains_key(&index.id) {
                     let idx = match self.index_operand(object, index)? {
                         // Read now: the value may assign the variable.
                         Operand::Copy(p) => {
@@ -4629,6 +4658,29 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(&Res::Def(d)) if self.lcx.statics.contains_key(&d) => Ok(self.static_place(d)),
                 _ => self.temp_place(e),
             },
+            // `F.value.x` with an uppercase local `F`, which the parser
+            // reads as a path: the local, then each field in turn.
+            ExprKind::Path { segments, .. } => {
+                let Some(&Res::LocalPath(sym)) = self.lcx.res.get(&e.id) else {
+                    return self.temp_place(e);
+                };
+                let mut p = match (self.locals.get(&sym), self.captured.get(&sym)) {
+                    (Some(&l), _) => Place::local(l),
+                    (None, Some(p)) => p.clone(),
+                    (None, None) => {
+                        let name = &segments[0];
+                        return self.unsupported(e.span, &format!("the capture of `{name}`"));
+                    }
+                };
+                for field in &segments[1..] {
+                    let (base, bt) = self.strip_refs(p);
+                    let Some((idx, ft)) = self.field_of(bt, None, field) else {
+                        return self.unsupported(e.span, &format!("the field `{field}`"));
+                    };
+                    p = base.field(idx, ft);
+                }
+                Ok(p)
+            }
             // Inside a closure `self` is one of its captures.
             ExprKind::SelfValue => match self.self_local {
                 Some(l) => Ok(Place::local(l)),
@@ -4670,9 +4722,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
             // `v[a..b]` is a value (a slice, or a new `String`).
-            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }) => {
-                self.temp_place(e)
-            }
+            ExprKind::Index { object, index } if self.slices(object, index) => self.temp_place(e),
             ExprKind::Index { object, index } => {
                 // The base's own indices are read before this one: `v[p(1)][p(0)]`
                 // reads `p(1)` first (core semantics §8.1; B-2026-10-19-53).
@@ -5582,7 +5632,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(op));
                 Ok(())
             }
-            ExprKind::Path { .. } => self.path_value(e, dest),
+            ExprKind::Path { .. } if !self.is_place(e) => self.path_value(e, dest),
             ExprKind::Index { object, index } if !self.is_place(e) => {
                 let ExprKind::Range {
                     start,
@@ -5590,7 +5640,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     inclusive,
                 } = &index.kind
                 else {
-                    unreachable!("a non-place index is a range")
+                    // `let r = 1..3; v[r]`: the bounds are the value's.
+                    let t = self.expr_ty(e)?;
+                    let s = self.slice_view_by(object, index, t)?;
+                    self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
+                    return Ok(());
                 };
                 let ot = self.expr_ty(object)?;
                 if matches!(self.strip_ty(ot), HK::Str | HK::StaticStr) {
@@ -6345,6 +6399,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args,
             } => (self.tys().tcx().list(args)[0], true),
             HK::Array { elem, .. } => (elem, false),
+            // `let q: VecDeque[i64] = [1, 2]`: the prefix literal's
+            // collection, each item added in order.
+            HK::Intrinsic { .. } => return self.prefix_literal(e, es, dest),
             _ => return self.unsupported(e.span, "this collection literal"),
         };
         let mut ops = Vec::new();
@@ -10271,6 +10328,32 @@ impl<'l, 'a> Bx<'l, 'a> {
                 );
                 Ok(())
             }
+            // `-1.5 =>`: `==` against the constant at the scrutinee's
+            // width, so `-0.0` matches `0.0` and a NaN matches nothing.
+            PatternKind::Literal(LiteralPattern::Float(f, _)) => {
+                let super::ty::TyKind::Float(ft) = self.tys().kind(t) else {
+                    return self.unsupported(pat.span, "this literal pattern");
+                };
+                let bool_t = self.tys().bool();
+                let eq = self.temp(bool_t);
+                let c = Operand::Const(Const {
+                    ty: t,
+                    kind: ConstKind::Float(ft.round(*f).to_bits()),
+                });
+                self.assign(
+                    eq,
+                    Rvalue::BinaryOp(BinOp::Eq, Operand::Copy(place.clone()), c),
+                );
+                let ok = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Move(Place::local(eq)),
+                        targets: SwitchTargets::if_else(ok, fail),
+                    },
+                    ok,
+                );
+                Ok(())
+            }
             PatternKind::Literal(lit) => {
                 let v = match lit {
                     // An arm's value is the scrutinee's bits, at its width
@@ -12815,6 +12898,72 @@ impl<'l, 'a> Bx<'l, 'a> {
         let method = if mutable { "slice_mut" } else { "slice" };
         self.call_native(
             &format!("{name}.{method}"),
+            vec![Operand::Move(Place::local(r)), lo, hi],
+            Place::local(s),
+        );
+        Ok(s)
+    }
+
+    /// `coll[r]` for a range value `r` (`let r = 1..3; v[r]`): the view
+    /// `slice_view` makes for the range written out, its bounds read from
+    /// `r`'s fields after `coll` is named.
+    fn slice_view_by(&mut self, coll: &'a Expr, rng: &'a Expr, slice_t: Ty) -> R<Local> {
+        let p = self.expr_place(coll, false)?;
+        let (p, ct) = self.strip_refs(p);
+        let rp = if self.is_place(rng) {
+            self.expr_place(rng, false)?
+        } else {
+            let t = self.expr_ty(rng)?;
+            Place::local(self.temp_of(rng, t)?)
+        };
+        let (rp, rt) = self.strip_refs(rp);
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let inclusive = self
+            .tys()
+            .tcx()
+            .adt_of(rt)
+            .is_some_and(|(a, _)| a.name == "RangeInclusive");
+        let bound = |bx: &mut Self, name: &str| {
+            let (i, ft) = bx.field_of(rt, None, name)?;
+            Some(bx.cast_index(Operand::Copy(rp.field(i, ft)), usize_t))
+        };
+        let lo = bound(self, "start").unwrap_or(Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(0),
+        }));
+        let hi = bound(self, "end");
+        let name = self.tys().display(ct);
+        let hi = match hi {
+            // `a..=b` ends after `b`.
+            Some(o) if inclusive => {
+                let h = self.temp(usize_t);
+                let one = Operand::Const(Const {
+                    ty: usize_t,
+                    kind: ConstKind::Scalar(1),
+                });
+                self.assign(h, Rvalue::BinaryOp(BinOp::Add, o, one));
+                Operand::Copy(Place::local(h))
+            }
+            Some(o) => o,
+            None => {
+                let shared = self.tys().tcx().reference(ct, false);
+                let r = self.temp(shared);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, p.clone()));
+                let n = self.temp(usize_t);
+                self.call_native(
+                    &format!("{name}.len"),
+                    vec![Operand::Move(Place::local(r))],
+                    Place::local(n),
+                );
+                Operand::Copy(Place::local(n))
+            }
+        };
+        let s = self.temp(slice_t);
+        let rt = self.tys().tcx().reference(ct, false);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        self.call_native(
+            &format!("{name}.slice"),
             vec![Operand::Move(Place::local(r)), lo, hi],
             Place::local(s),
         );

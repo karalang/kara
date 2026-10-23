@@ -195,7 +195,7 @@ impl HirDefs for ProgramHirDefs<'_> {
             Res::Def(d) => Some(Callee::Def(*d)),
             Res::Builtin(s) => Some(Callee::Builtin(s.clone())),
             Res::Local(_) => Some(Callee::Value),
-            Res::Generic(_) | Res::SelfTy | Res::Err => None,
+            Res::LocalPath(_) | Res::Generic(_) | Res::SelfTy | Res::Err => None,
         }
     }
 

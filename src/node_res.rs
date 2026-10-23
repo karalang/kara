@@ -28,6 +28,10 @@ pub enum Res {
     /// [`ResolveResult::binding_nodes`] gives the pattern that binds it, when
     /// there is one.
     Local(SymbolId),
+    /// A path whose first segment is a local and whose rest are its fields:
+    /// `F.value` with an uppercase local `F`, which the parser reads as a
+    /// path rather than a field access.
+    LocalPath(SymbolId),
     /// A generic type or const parameter.
     Generic(SymbolId),
     /// `Self` inside an impl or trait.
@@ -72,7 +76,7 @@ fn res_of(
             return if r.rest.is_empty() {
                 Res::Local(r.symbol)
             } else {
-                Res::Err
+                Res::LocalPath(r.symbol)
             };
         }
         SymbolKind::TypeParam | SymbolKind::ConstParam => return Res::Generic(r.symbol),

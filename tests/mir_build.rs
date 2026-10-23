@@ -8010,3 +8010,74 @@ fn mir_nil_coalesce_borrows_a_named_fallback() {
         }
     }
 }
+
+/// Float literal patterns, at the scrutinee's width and inside a variant
+/// (B-2026-10-22-36).
+#[test]
+fn mir_float_literal_patterns() {
+    let src = "fn fl(p: Option[f64]) -> String { match p { Some(1.5) => \"f\", _ => \"o\" } }\n\
+               fn main() {\n    let f: f64 = 0.0 - 1.5;\n    match f { -1.5 => println(\"neg\"), _ => println(\"no\") }\n    \
+               let z: f64 = 0.0 - 0.0;\n    match z { 0.0 => println(\"zero\"), _ => println(\"no\") }\n    \
+               let h: f32 = 0.1f32;\n    match h { 0.1 => println(\"f32\"), _ => println(\"no\") }\n    \
+               println(f\"{fl(Some(1.5))} {fl(Some(2.5))} {fl(None)}\");\n}\n";
+    let want = "neg\nzero\nf32\nf o o\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A list literal typed `VecDeque`, alone and nested in a `Vec` and an
+/// array (B-2026-10-22-36).
+#[test]
+fn mir_vecdeque_typed_list_literals() {
+    let src = "fn main() {\n    let mut q: VecDeque[i64] = [1, 2, 3];\n    q.push_front(0);\n    \
+               let v: Vec[VecDeque[i64]] = [[4], [5, 6]];\n    let a: Array[VecDeque[i64], 1] = [[7]];\n    \
+               println(f\"{q.len()} {q.front().unwrap()} {v[1].len()} {a[0].len()}\");\n}\n";
+    let want = "4 0 2 1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// Indexing by a range value slices like the range written out; a map's
+/// index is still a key (B-2026-10-22-36).
+#[test]
+fn mir_index_by_a_let_bound_range() {
+    let src = "fn main() {\n    let v = [10, 20, 30, 40];\n    let r = 1..3;\n    let s = v[r];\n    \
+               let ri = 1..=3;\n    let t = v[ri];\n    let rf = 2..;\n    let u = v[rf];\n    \
+               println(f\"{s.len()} {s[0]} {t.len()} {t[2]} {u.len()} {u[0]} {r.start}\");\n    \
+               let mut m: Map[i64, i64] = Map.new();\n    m.insert(1, 5);\n    let k = 1;\n    println(f\"{m[k]}\");\n}\n";
+    let want = "2 20 3 40 2 30 1\n5\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// `F.value` with an uppercase local `F`, which the parser reads as a path:
+/// the local's field, nested fields too (B-2026-10-22-36).
+#[test]
+fn mir_uppercase_local_field_paths() {
+    let src = "struct In { x: i64 }\nstruct Foo { value: i64, inner: In }\n\
+               fn main() {\n    let F = Foo { value: 5, inner: In { x: 7 } };\n    \
+               let a: i64 = F.value;\n    let b = F.inner.x;\n    println(f\"{a} {b} {F.value + F.inner.x}\");\n}\n";
+    let want = "5 7 12\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
