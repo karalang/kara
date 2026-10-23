@@ -42,12 +42,12 @@ impl Drop for Scratch {
 fn build_and_run(src: &str, opt: u8) -> Option<String> {
     let lowered = karac::mir::lower::build_source(src).expect("MIR");
     karac::mir::lower::compiled_check(&lowered).expect("checks");
-    let ir = karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
+    let ir = karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
     let dir = Scratch::new();
     let obj = dir.path().join("main.o");
     let exe = dir.path().join("main");
-    karac::codegen::mir_aot::compile_object(&ir, &obj, opt).expect("object");
-    common::link_or_skip(karac::codegen::link_executable(
+    karac::backend::mir_aot::compile_object(&ir, &obj, opt).expect("object");
+    common::link_or_skip(karac::backend::driver::link_executable(
         &obj.to_string_lossy(),
         &exe.to_string_lossy(),
     ))?;

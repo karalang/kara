@@ -1,5 +1,7 @@
-//! Fail-closed gate on the baked stdlib modules that `codegen::lower_stdlib_source`
-//! compiles (B-2026-08-25-13).
+//! Fail-closed gate on the baked stdlib modules that the legacy
+//! `codegen::lower_stdlib_source` compiled (B-2026-08-25-13). The legacy
+//! backend went at M3; the gate stays, because each module must still
+//! type-check clean as a user program would see it.
 //!
 //! `lower_stdlib_source` type-checks each baked module and uses only the side
 //! tables, discarding `.errors`. That let `runtime/stdlib/cli.kara` ship four
@@ -27,12 +29,8 @@
 //! difference, and the two `gate_rejects_*` tests keep the gate honest: a check
 //! that only ever asserts an empty list is worth nothing if it cannot fail.
 
-/// The modules `codegen::lower_stdlib_source` lowers, as
+/// The modules the legacy `codegen::lower_stdlib_source` lowered, as
 /// [`karac::prelude::STDLIB_SOURCES`] keys.
-///
-/// Kept honest by `lowered_module_list_matches_codegen`, which re-derives the
-/// set from `src/codegen.rs` itself — a 10th lowered module added without a line
-/// here fails that test rather than silently escaping the gate.
 const LOWERED_MODULES: &[&str] = &[
     "tracing.kara",
     "ordering.kara",
@@ -188,42 +186,5 @@ fn errors_are_meaningful_only_with_the_self_copy_excluded() {
             .iter()
             .map(|e| &e.message)
             .collect::<Vec<_>>()
-    );
-}
-
-/// Keep [`LOWERED_MODULES`] tied to what `codegen.rs` actually lowers, so the
-/// gate cannot be outgrown by a new `lower_stdlib_source` call.
-#[test]
-fn lowered_module_list_matches_codegen() {
-    let codegen_src = include_str!("../src/codegen.rs");
-    // Match the call name, then skip whatever whitespace separates it from its
-    // first argument: `lower_stdlib_source("mem", ..)` and the rustfmt-wrapped
-    // `lower_stdlib_source(\n    "priority_queue",\n    ..)` are the same call.
-    // Anchoring on `lower_stdlib_source("` instead misses every wrapped call —
-    // which is exactly how `priority_queue` escaped this gate from the day the
-    // gate landed (B-2026-08-25-13) until B-2026-08-25-32, with this very test
-    // reporting green throughout because the omission was SYMMETRIC: the module
-    // was missing from the scan AND from the list, so the two agreed. A guard
-    // that derives both sides of a comparison through the same blind spot
-    // cannot see it.
-    let mut found: Vec<String> = codegen_src
-        .match_indices("lower_stdlib_source(")
-        .filter_map(|(i, pat)| {
-            let rest = codegen_src[i + pat.len()..].trim_start();
-            let rest = rest.strip_prefix('"')?;
-            rest.find('"').map(|end| format!("{}.kara", &rest[..end]))
-        })
-        .collect();
-    found.sort();
-    found.dedup();
-
-    let mut expected: Vec<String> = LOWERED_MODULES.iter().map(|m| m.to_string()).collect();
-    expected.sort();
-
-    assert_eq!(
-        found, expected,
-        "the set of modules `lower_stdlib_source` compiles has changed. Add the \
-         new module to LOWERED_MODULES so it is gated too — every module lowered \
-         here has its typecheck errors discarded (B-2026-08-25-13)."
     );
 }

@@ -112,13 +112,13 @@ fn interp(releases: usize) -> (String, Option<String>) {
 /// `None` when the runtime archive does not link.
 fn compiled(releases: usize) -> Option<(String, String, bool)> {
     let l = lowered(releases);
-    let ir = karac::codegen::mir::compile_mir_ir(&l.program, &l.tys).expect("IR");
+    let ir = karac::backend::mir::compile_mir_ir(&l.program, &l.tys).expect("IR");
     let dir =
         std::env::temp_dir().join(format!("karac-mir-mutex-{releases}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (obj, exe) = (dir.join("main.o"), dir.join("main"));
-    karac::codegen::mir_aot::compile_object(&ir, &obj, 0).expect("object");
-    common::link_or_skip(karac::codegen::link_executable(
+    karac::backend::mir_aot::compile_object(&ir, &obj, 0).expect("object");
+    common::link_or_skip(karac::backend::driver::link_executable(
         &obj.to_string_lossy(),
         &exe.to_string_lossy(),
     ))?;

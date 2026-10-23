@@ -855,7 +855,9 @@ pub enum TypeErrorKind {
     /// WebSocket.
     DeferredToM4a,
     /// B-2026-10-22-21 — a feature that goes to the archive with the legacy
-    /// backend (M3) and returns on v2 on demand: GPU compute (`gpu.*`).
+    /// backend (M3) and returns on v2 on demand: GPU compute (`gpu.*`), the
+    /// exported C ABI (`pub extern "C" fn`) and WASM exports (a `pub fn`
+    /// tagged `#[target(wasm_browser)]` / `#[target(wasm_wasi)]`).
     ArchivedWithLegacy,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
@@ -3772,6 +3774,9 @@ impl<'a> TypeChecker<'a> {
         // channel-send escape check fires from
         // `stdlib_io::infer_channel_method`'s Sender.send arm.
         self.check_scope_local_escape();
+        if self.cli_lint_overrides.strict_core {
+            self.check_archived_exports();
+        }
         // Lint-level slice 4b follow-up — synthesize `unknown_lint`
         // warnings for every override naming a lint not in the
         // central registry. Runs as a pre-pass so the per-item

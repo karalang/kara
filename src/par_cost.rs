@@ -1690,7 +1690,8 @@ mod tests {
                 continue;
             };
             if matches!(e.kind, ExprKind::While { .. }) {
-                return extract_loop_shape(&f.body, i, e).expect("counted loop shape recognized");
+                return extract_loop_shape_explained(&f.body, i, e)
+                    .unwrap_or_else(|_| panic!("counted loop shape recognized"));
             }
         }
         panic!("no while loop found in {name}");

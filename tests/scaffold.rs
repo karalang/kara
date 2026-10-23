@@ -507,11 +507,10 @@ fn backend_main_test_kara_parses_and_typechecks() {
     );
 }
 
-/// End-to-end build pin — codegen + link the scaffolded backend. Soft-
-/// skips when the runtime archive isn't built (same `runtime_path`
-/// pattern `tests/http_server.rs` uses); otherwise compiles
-/// `src/main.kara` to a binary and asserts the binary exists +
-/// `karac::parse` reads it back as a real ELF/Mach-O. Catches stdlib-
+/// End-to-end build pin — `karac build` the scaffolded backend. Soft-
+/// skips when the runtime archive isn't built; otherwise builds
+/// `src/main.kara` to a binary and asserts the binary exists and is a
+/// non-empty executable. Catches stdlib-
 /// surface regressions that pass typecheck (which is what
 /// `backend_main_kara_typechecks_cleanly` covers) but fail codegen.
 #[cfg(feature = "llvm")]
@@ -537,44 +536,25 @@ fn backend_main_kara_codegens_to_executable() {
     let scratch = ScratchDir::new("backend-codegen");
     scaffold_project(scratch.root(), "my_api", backend_opts()).unwrap();
 
-    // Compile to object + link, using the same compile-and-link helper
-    // shape that `tests/http_server.rs` uses.
-    let src = fs::read_to_string(scratch.root().join("src/main.kara")).unwrap();
-    let mut parsed = karac::parse(&src);
-    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
-    karac::prepare_for_resolve(&mut parsed.program);
-    let resolved = karac::resolve(&parsed.program);
-    assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
-    let typed = karac::typecheck(&parsed.program, &resolved);
-    assert!(typed.errors.is_empty(), "typecheck: {:?}", typed.errors);
-    karac::lower(&mut parsed.program, &typed);
-
+    // Build through the CLI, the way a user builds the scaffold.
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let obj = std::env::temp_dir().join(format!("karac_scaffold_backend_{pid}_{nanos}.o"));
     let exe = std::env::temp_dir().join(format!("karac_scaffold_backend_{pid}_{nanos}"));
-
-    let runtime_for_link = if rt_path.exists() {
-        rt_path
-    } else {
-        workspace_root.join("target/debug/libkarac_runtime.a")
-    };
-    std::env::set_var("KARAC_RUNTIME", &runtime_for_link);
-
-    karac::codegen::compile_to_object_with_options(
-        &parsed.program,
-        obj.to_str().unwrap(),
-        None,
-        None,
-        None,
-        None,
-    )
-    .expect("codegen to object");
-    karac::codegen::link_executable(obj.to_str().unwrap(), exe.to_str().unwrap())
-        .expect("link executable");
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("build")
+        .arg(scratch.root().join("src/main.kara"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("spawn karac build");
+    assert!(
+        out.status.success(),
+        "karac build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     assert!(exe.exists(), "backend executable should exist at {exe:?}");
     // Sanity-check it's a real file by reading the first 4 bytes (Mach-O
@@ -582,7 +562,7 @@ fn backend_main_kara_codegens_to_executable() {
     let head = fs::read(&exe).expect("read executable");
     assert!(head.len() > 64, "backend executable should not be empty");
     // Confirm it's executable on the host platform — `chmod +x` happens
-    // inside `link_executable` for us. We don't run the binary (it'd
+    // inside the link for us. We don't run the binary (it'd
     // bind a port and hang); the codegen+link success is what we
     // wanted to pin.
     let metadata = fs::metadata(&exe).expect("stat executable");
@@ -598,8 +578,6 @@ fn backend_main_kara_codegens_to_executable() {
     }
 
     // Cleanup — the ScratchDir Drop handles the project dir; the
-    // object + binary live in /tmp.
-    let _ = fs::remove_file(&obj);
+    // binary lives in /tmp.
     let _ = fs::remove_file(&exe);
-    Command::new("true").status().ok(); // silence unused-import warning
 }

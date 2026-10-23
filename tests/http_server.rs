@@ -83,47 +83,31 @@ mod http_server_tests {
         unsafe { RUNTIME_PATH.clone() }
     }
 
-    /// Compile a Kāra source string to an executable at `exe_path`,
-    /// returning Err with a diagnostic on failure. Mirrors the build
-    /// path in `tests/parallax_lite.rs::compile_and_time` minus the
-    /// concurrency-analysis hookup (the smoke source has no auto-par
-    /// surface).
+    /// Build a Kāra source string to an executable at `exe_path` with
+    /// `karac build`, returning Err with its diagnostics on failure.
     fn compile_and_link(src: &str, exe_path: &Path) -> Result<(), String> {
-        use karac::codegen::{compile_to_object_with_options, link_executable};
-        let mut parsed = karac::parse(src);
-        if !parsed.errors.is_empty() {
-            return Err(format!("parse errors: {:?}", parsed.errors));
-        }
-        karac::prepare_for_resolve(&mut parsed.program);
-        let resolved = karac::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return Err(format!("resolve errors: {:?}", resolved.errors));
-        }
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return Err(format!("typecheck errors: {:?}", typed.errors));
-        }
-        karac::lower(&mut parsed.program, &typed);
-        let _effects = karac::effectcheck(&parsed.program);
-        let ownership = karac::ownershipcheck(&parsed.program, &typed);
-        super::common::assert_check_clean(&resolved, &typed, src);
-        // Effects are the THIRD phase of the same gate, and were simply
-        // absent — a test could pin behaviour for a program `karac build`
-        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
-        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
-        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
-        super::common::assert_ownership_clean(&ownership, src);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let obj = format!("/tmp/karac_http_smoke_{pid}_{nanos}.o");
-        compile_to_object_with_options(&parsed.program, &obj, Some(&ownership), None, None, None)
-            .map_err(|e| format!("codegen failed: {e}"))?;
-        link_executable(&obj, exe_path.to_str().unwrap())
-            .map_err(|e| format!("link failed: {e}"))?;
-        let _ = std::fs::remove_file(&obj);
+        let file = std::env::temp_dir().join(format!("karac_http_smoke_{pid}_{nanos}.kara"));
+        std::fs::write(&file, src).map_err(|e| format!("write source: {e}"))?;
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .arg("build")
+            .arg(&file)
+            .arg("-o")
+            .arg(exe_path)
+            .output()
+            .map_err(|e| format!("spawn karac build: {e}"))?;
+        let _ = std::fs::remove_file(&file);
+        if !out.status.success() {
+            return Err(format!(
+                "karac build failed:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
         Ok(())
     }
 

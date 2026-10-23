@@ -67,8 +67,8 @@ fn run_ir(ir: &str) -> Option<(i32, String)> {
     let dir = Scratch::new();
     let obj = dir.path().join("main.o");
     let exe = dir.path().join("main");
-    karac::codegen::mir_asan::compile_asan_object(ir, &obj).expect("instrument");
-    common::link_or_skip(karac::codegen::link_executable_with_sanitizer(
+    karac::backend::mir_asan::compile_asan_object(ir, &obj).expect("instrument");
+    common::link_or_skip(karac::backend::driver::link_executable_with_sanitizer(
         &obj.to_string_lossy(),
         &exe.to_string_lossy(),
         &["-fsanitize=address"],

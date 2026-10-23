@@ -49,15 +49,15 @@ const WANT: &str = "169 31 Some(1000) true false\nSome(3) Some(2) 3\n2 true Some
 fn ir(src: &str) -> String {
     let lowered = karac::mir::lower::build_source(src).expect("MIR");
     karac::mir::lower::compiled_check(&lowered).expect("checks");
-    karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR")
+    karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR")
 }
 
 fn compiled(ir: &str) -> Option<String> {
     let dir = std::env::temp_dir().join(format!("karac-mir-map-hash-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (obj, exe) = (dir.join("main.o"), dir.join("main"));
-    karac::codegen::mir_aot::compile_object(ir, &obj, 2).expect("object");
-    common::link_or_skip(karac::codegen::link_executable(
+    karac::backend::mir_aot::compile_object(ir, &obj, 2).expect("object");
+    common::link_or_skip(karac::backend::driver::link_executable(
         &obj.to_string_lossy(),
         &exe.to_string_lossy(),
     ))?;

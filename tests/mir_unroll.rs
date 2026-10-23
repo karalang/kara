@@ -7,7 +7,7 @@
 fn ir(src: &str) -> String {
     let lowered = karac::mir::lower::build_source(src).expect("MIR");
     karac::mir::lower::compiled_check(&lowered).expect("checks");
-    karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR")
+    karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR")
 }
 
 #[test]

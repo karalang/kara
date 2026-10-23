@@ -3434,6 +3434,59 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-10-22-21: the export surfaces that went to the archive with
+    /// the legacy backend at M3 are refused by name, so a program that uses
+    /// one gets a diagnostic rather than a build that silently exports
+    /// nothing. Two shapes: a `pub extern "C" fn` (the exported C ABI) and a
+    /// `pub fn` positively tagged for a WASM target (a WASM module export,
+    /// design.md § Entry point discovery). `main` is the entry point, not an
+    /// export, and the library is exempt.
+    pub(super) fn check_archived_exports(&mut self) {
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut refusals = Vec::new();
+        for item in &self.program.items {
+            let Item::Function(f) = item else { continue };
+            if !f.is_pub || f.span.offset >= library {
+                continue;
+            }
+            if matches!(f.abi.as_deref(), Some("C") | Some("C-unwind")) {
+                refusals.push((
+                    format!(
+                        "`pub extern \"C\" fn {}` is not available: the exported C ABI goes to \
+                         the archive with the legacy backend at M3 and returns on v2 on demand",
+                        f.name
+                    ),
+                    f.span,
+                ));
+                continue;
+            }
+            if f.name == "main" {
+                continue;
+            }
+            let wasm = crate::target::target_spec_of(&f.attributes).filter(|t| {
+                !t.negated
+                    && t.names
+                        .iter()
+                        .any(|n| n == "wasm_browser" || n == "wasm_wasi")
+            });
+            if wasm.is_some() {
+                refusals.push((
+                    format!(
+                        "`pub fn {}` is a WASM export, which is not available: WASM component \
+                         and browser bindings go to the archive with the legacy backend at M3 \
+                         and return on v2 on demand. Drop `pub` to keep it a target-gated \
+                         function",
+                        f.name
+                    ),
+                    f.span,
+                ));
+            }
+        }
+        for (message, span) in refusals {
+            self.type_error(message, span, TypeErrorKind::ArchivedWithLegacy);
+        }
+    }
+
     fn check_effect_resource_bounds(&mut self, r: &crate::ast::EffectResourceDecl) {
         // The default provider (§14.7) is typed like any expression, so a
         // call that falls back to it can be lowered.

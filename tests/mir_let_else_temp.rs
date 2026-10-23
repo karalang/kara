@@ -32,12 +32,12 @@ fn let_else_temporaries_drop_before_the_else_block() {
     assert_eq!(interp.output, WANT);
     let lowered = karac::mir::lower::build_source(SRC).expect("MIR");
     karac::mir::lower::compiled_check(&lowered).expect("checks");
-    let ir = karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
+    let ir = karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
     let dir = std::env::temp_dir().join(format!("karac-mir-let-else-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (obj, exe) = (dir.join("main.o"), dir.join("main"));
-    karac::codegen::mir_aot::compile_object(&ir, &obj, 2).expect("object");
-    let linked = common::link_or_skip(karac::codegen::link_executable(
+    karac::backend::mir_aot::compile_object(&ir, &obj, 2).expect("object");
+    let linked = common::link_or_skip(karac::backend::driver::link_executable(
         &obj.to_string_lossy(),
         &exe.to_string_lossy(),
     ));
