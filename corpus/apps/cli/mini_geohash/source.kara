@@ -1,0 +1,1200 @@
+// mini_geohash — python-geohash 0.9.2 (Hiroaki Kawai), the geohash codec
+// ("ezs42" is the 4.9 x 4.9 km cell around 42.6 N, 5.6 W) plus the two
+// Japanese grid codecs that ship beside it. It ports geohash's encode,
+// decode, decode_exactly, bbox, neighbors, expand, encode_uint64,
+// decode_uint64 and expand_uint64 (the library's pure-Python path, which is
+// what runs when its optional Rust extension is absent), jpgrid (JIS X 0410
+// mesh codes at every level, Uni5 and Uni2 included) and jpiarea (DoCoMo's
+// Open iArea codes), each with the library's exceptions and its
+// latitude-90.0 warning.
+//
+// geohash.encode turns latitude/90 into an integer through float.hex(): the
+// result is floor((1 + f) * 2^(L-1)) for the cell bit length L, exact for any
+// double. floor_scaled() gets the same integer without big ints by writing f
+// as m / 2^k (doubling until it is integral) and shifting m. decode builds the
+// float back with float.fromhex(), which is (i - 2^(l-1)) / 2^(l-1) correctly
+// rounded; an i64 -> f64 conversion rounds the same way and the division by a
+// power of two is exact. Python's & and >> on negative ints (neighbors steps
+// one cell west of column 0) are i64 two's-complement & and arithmetic >>.
+// The uint64 forms need 65-bit sums, so they run in i128. Boundaries: geohash
+// precision 0..24 and codes up to 24 characters (so every cell integer fits
+// in i64), no subnormal latitude/90 or longitude/180 (the library asserts on
+// those), and jpgrid / jpiarea inputs inside the two-digit domain the formats
+// are defined on. jobs_text() holds data/jobs.tsv.
+
+const BASE32: Str = "0123456789bcdefghjkmnpqrstuvwxyz";
+const ADJ90: f64 = 89.99999999999999;
+
+struct Cell {
+    lat: i64,
+    lon: i64,
+    lat_len: i64,
+    lon_len: i64,
+    bad: i64,
+}
+
+// ----------------------------------------------------------- small helpers
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_i128(s: String) -> i128 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v: i128 = 0;
+    while i < b.len() {
+        v = v * 10 + ((b[i] - b'0') as i128);
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn to_i64(s: String) -> i64 {
+    to_i128(s) as i64
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn bytes_str(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+// The decimal value of s[i..j], s being ASCII digits (Python's int(s[i:j])).
+fn dig(s: String, i: i64, j: i64) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut v = 0;
+    let mut k = i;
+    while k < j and k < b.len() {
+        v = v * 10 + (b[k] - b'0') as i64;
+        k += 1;
+    }
+    v
+}
+
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// Python's % on ints: the remainder takes the divisor's sign.
+fn floormod(a: i64, b: i64) -> i64 {
+    a - floordiv(a, b) * b
+}
+
+fn floormod16(a: i128) -> i128 {
+    let m = a % 16;
+    if m < 0 { m + 16 } else { m }
+}
+
+fn pow2f(n: i64) -> f64 {
+    let mut r = 1.0;
+    let mut i = 0;
+    while i < n {
+        r = r * 2.0;
+        i += 1;
+    }
+    r
+}
+
+fn quote(s: String) -> String {
+    f"'{s}'"
+}
+
+fn str_list(v: Vec[String]) -> String {
+    let mut out = String.new();
+    out.push_str("[");
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(quote(v[i].clone()));
+        i += 1;
+    }
+    out.push_str("]");
+    out
+}
+
+fn digits_of(v: Vec[i64]) -> String {
+    let mut out = String.new();
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        out.push_str(f"{v[i]}");
+        i -= 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------- geohash
+
+// floor((1 + f) * 2^(L-1)) for f in [-1, 1): what the library reads off
+// float.hex(f) and then shifts to L bits.
+fn floor_scaled(f: f64, l: i64) -> i64 {
+    let half: i64 = 1 << (l - 1);
+    if f == 0.0 {
+        return half;
+    }
+    let neg = f < 0.0;
+    let mut x = if neg { -f } else { f };
+    let mut k = 0;
+    while x != x.floor() {
+        x = x * 2.0;
+        k += 1;
+    }
+    let m = x as i64;
+    let s = l - 1 - k;
+    if s >= 0 {
+        let t = m << s;
+        if neg { half - t } else { half + t }
+    } else {
+        let sh = -s;
+        if neg {
+            let c = if sh >= 60 { 1 } else { (m + (1 << sh) - 1) >> sh };
+            half - c
+        } else {
+            let q = if sh >= 60 { 0 } else { m >> sh };
+            half + q
+        }
+    }
+}
+
+fn encode_i2c(lat: i64, lon: i64, lat_len: i64, lon_len: i64) -> String {
+    let precision = (lat_len + lon_len) / 5;
+    let mut a = lat;
+    let mut b = lon;
+    if lat_len < lon_len {
+        a = lon;
+        b = lat;
+    }
+    let boost = [0, 1, 4, 5, 16, 17, 20, 21];
+    let tab = BASE32.to_string().bytes().to_vec();
+    let mut rev: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < precision {
+        rev.push(tab[(boost[a & 7] + (boost[b & 3] << 1)) & 31]);
+        let t = a >> 3;
+        a = b >> 2;
+        b = t;
+        i += 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut j = rev.len() - 1;
+    while j >= 0 {
+        out.push(rev[j]);
+        j -= 1;
+    }
+    bytes_str(out)
+}
+
+fn gh_encode(lat_in: f64, lon_in: f64, precision: i64) -> String {
+    let mut lat = lat_in;
+    let mut lon = lon_in;
+    let mut warn = "";
+    if lat >= 90.0 {
+        if lat == 90.0 {
+            warn = " [UserWarning]";
+            lat = ADJ90;
+        } else {
+            return "Exception: invalid latitude.".to_string();
+        }
+    } else if lat < -90.0 {
+        return "Exception: invalid latitude.".to_string();
+    }
+    while lon < -180.0 {
+        lon += 360.0;
+    }
+    while lon >= 180.0 {
+        lon -= 360.0;
+    }
+    let xp = precision + 1;
+    let lat_len = xp * 5 / 2;
+    let mut lon_len = lat_len;
+    if xp % 2 == 1 {
+        lon_len += 1;
+    }
+    let ai = floor_scaled(lat / 90.0, lat_len);
+    let oi = floor_scaled(lon / 180.0, lon_len);
+    let code = encode_i2c(ai, oi, lat_len, lon_len);
+    let cut = code.substring(0, precision);
+    f"{quote(cut)}{warn}"
+}
+
+fn decode_c2i(code: String) -> Cell {
+    let tab = BASE32.to_string().bytes().to_vec();
+    let mut lat = 0;
+    let mut lon = 0;
+    let mut bits = 0;
+    let mut lat_len = 0;
+    let mut lon_len = 0;
+    for c in code.bytes().to_vec() {
+        let mut t = -1;
+        let mut k = 0;
+        while k < 32 {
+            if tab[k] == c {
+                t = k;
+            }
+            k += 1;
+        }
+        if t < 0 {
+            return Cell { lat: 0, lon: 0, lat_len: 0, lon_len: 0, bad: c as i64 };
+        }
+        if bits % 2 == 0 {
+            lon = lon << 3;
+            lat = lat << 2;
+            lon += (t >> 2) & 4;
+            lat += (t >> 2) & 2;
+            lon += (t >> 1) & 2;
+            lat += (t >> 1) & 1;
+            lon += t & 1;
+            lon_len += 3;
+            lat_len += 2;
+        } else {
+            lon = lon << 2;
+            lat = lat << 3;
+            lat += (t >> 2) & 4;
+            lon += (t >> 2) & 2;
+            lat += (t >> 1) & 2;
+            lon += (t >> 1) & 1;
+            lat += t & 1;
+            lon_len += 2;
+            lat_len += 3;
+        }
+        bits += 5;
+    }
+    Cell { lat: lat, lon: lon, lat_len: lat_len, lon_len: lon_len, bad: -1 }
+}
+
+fn key_error(c: i64) -> String {
+    let ch = bytes_str([c as u8]);
+    f"KeyError: '{ch}'"
+}
+
+// float.fromhex of the library's "0x0.<hex>p1" spelling: (i - half) / half.
+fn int_to_float(i: i64, l: i64) -> f64 {
+    if l == 0 {
+        return -1.0;
+    }
+    let half: i64 = 1 << (l - 1);
+    ((i - half) as f64) / pow2f(l - 1)
+}
+
+fn gh_decode(code: String, delta: bool) -> String {
+    let c = decode_c2i(code);
+    if c.bad >= 0 {
+        return key_error(c.bad);
+    }
+    let lat_d = 90.0 / pow2f(c.lat_len);
+    let lon_d = 180.0 / pow2f(c.lon_len);
+    let lat = int_to_float(c.lat, c.lat_len) * 90.0 + lat_d;
+    let lon = int_to_float(c.lon, c.lon_len) * 180.0 + lon_d;
+    if delta {
+        f"({lat}, {lon}, {lat_d}, {lon_d})"
+    } else {
+        f"({lat}, {lon})"
+    }
+}
+
+fn gh_bbox(code: String) -> String {
+    let c = decode_c2i(code);
+    if c.bad >= 0 {
+        return key_error(c.bad);
+    }
+    let lat_d = 180.0 / pow2f(c.lat_len);
+    let lon_d = 360.0 / pow2f(c.lon_len);
+    let s = int_to_float(c.lat, c.lat_len) * 90.0;
+    let w = int_to_float(c.lon, c.lon_len) * 180.0;
+    f"{{'s': {s}, 'w': {w}, 'n': {s + lat_d}, 'e': {w + lon_d}}}"
+}
+
+fn gh_neighbors(code: String, expand: bool) -> String {
+    let c = decode_c2i(code.clone());
+    if c.bad >= 0 {
+        return key_error(c.bad);
+    }
+    let lat = c.lat;
+    let lon = c.lon;
+    let mut ret: Vec[String] = Vec.new();
+    for tlon in [lon - 1, lon + 1] {
+        let s = encode_i2c(lat, tlon, c.lat_len, c.lon_len);
+        if s.len() > 0 {
+            ret.push(s);
+        }
+    }
+    let up = lat + 1;
+    if (up >> c.lat_len) == 0 {
+        for tlon in [lon - 1, lon, lon + 1] {
+            ret.push(encode_i2c(up, tlon, c.lat_len, c.lon_len));
+        }
+    }
+    let down = lat - 1;
+    if down >= 0 {
+        for tlon in [lon - 1, lon, lon + 1] {
+            ret.push(encode_i2c(down, tlon, c.lat_len, c.lon_len));
+        }
+    }
+    if expand {
+        ret.push(code.clone());
+    }
+    str_list(ret)
+}
+
+// ----------------------------------------------------------- uint64 forms
+
+fn interleave(lat32: i128, lon32: i128) -> i128 {
+    let boost: Vec[i128] = [0, 1, 4, 5, 16, 17, 20, 21, 64, 65, 68, 69, 80, 81, 84, 85];
+    let mut intr: i128 = 0;
+    let mut i = 0;
+    while i < 8 {
+        let sh = 28 - i * 4;
+        let lo = floormod16(lon32 >> sh) as i64;
+        let la = floormod16(lat32 >> sh) as i64;
+        intr = (intr << 8) + (boost[lo] << 1) + boost[la];
+        i += 1;
+    }
+    intr
+}
+
+// (lat, lon) as two 32-bit integers; the library's table maps a nibble
+// b3 b2 b1 b0 to lon bits (b3, b1) and lat bits (b2, b0).
+fn deinterleave(u: i128) -> (i128, i128) {
+    let mut lat: i128 = 0;
+    let mut lon: i128 = 0;
+    let mut i = 0;
+    while i < 16 {
+        let p = floormod16(u >> (60 - i * 4));
+        lon = (lon << 2) + ((p >> 3) & 1) * 2 + ((p >> 1) & 1);
+        lat = (lat << 2) + ((p >> 2) & 1) * 2 + (p & 1);
+        i += 1;
+    }
+    (lat, lon)
+}
+
+fn gh_encode_u64(lat_in: f64, lon_in: f64) -> String {
+    let mut lat = lat_in;
+    let mut lon = lon_in;
+    let mut warn = "";
+    if lat >= 90.0 {
+        if lat == 90.0 {
+            warn = " [UserWarning]";
+            lat = ADJ90;
+        } else {
+            return "ValueError: Latitude must be in the range of (-90.0, 90.0)".to_string();
+        }
+    } else if lat < -90.0 {
+        return "ValueError: Latitude must be in the range of (-90.0, 90.0)".to_string();
+    }
+    while lon < -180.0 {
+        lon += 360.0;
+    }
+    while lon >= 180.0 {
+        lon -= 360.0;
+    }
+    let a = (((lat + 90.0) / 180.0) * 4294967296.0) as i64;
+    let o = (((lon + 180.0) / 360.0) * 4294967296.0) as i64;
+    let v = interleave(a as i128, o as i128);
+    f"{v}{warn}"
+}
+
+fn gh_decode_u64(u: i128) -> String {
+    let (lat, lon) = deinterleave(u);
+    let la = 180.0 * (lat as f64) / 4294967296.0 - 90.0;
+    let lo = 360.0 * (lon as f64) / 4294967296.0 - 180.0;
+    f"({la}, {lo})"
+}
+
+fn add_range(ra: mut ref Vec[i128], rb: mut ref Vec[i128], lat: i128, lon: i128, width: i128) {
+    let x = interleave(lat, lon);
+    ra.push(x);
+    rb.push(x + width);
+}
+
+fn gh_expand_u64(u_in: i128, p: i64) -> String {
+    let m64: i128 = 18446744073709551615;
+    let u = u_in & (m64 << (64 - p));
+    let (lat, lon) = deinterleave(u);
+    let lat_grid: i128 = (1 as i128) << (32 - p / 2);
+    let lon_grid: i128 = lat_grid >> (p % 2);
+    if p <= 2 {
+        return "[]".to_string();
+    }
+    let one: i128 = 1;
+    let s2 = one << (64 - p + 2);
+    let s1 = one << (64 - p + 1);
+    let s0 = one << (64 - p);
+    let top: i128 = 4294967295;
+    let even = p % 2 == 0;
+    let mut ra: Vec[i128] = Vec.new();
+    let mut rb: Vec[i128] = Vec.new();
+    if (lat & lat_grid) != 0 {
+        if (lon & lon_grid) != 0 {
+            add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s2);
+            if even {
+                add_range(mut ra, mut rb, lat - lat_grid, lon + lon_grid, s1);
+                if lat + lat_grid < top {
+                    add_range(mut ra, mut rb, lat + lat_grid, lon - lon_grid, s0);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon, s0);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon + lon_grid, s0);
+                }
+            } else {
+                if lat + lat_grid < top {
+                    add_range(mut ra, mut rb, lat + lat_grid, lon - lon_grid, s1);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon + lon_grid, s0);
+                }
+                add_range(mut ra, mut rb, lat, lon + lon_grid, s0);
+                add_range(mut ra, mut rb, lat - lat_grid, lon + lon_grid, s0);
+            }
+        } else {
+            add_range(mut ra, mut rb, lat - lat_grid, lon, s2);
+            if even {
+                add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s1);
+                if lat + lat_grid < top {
+                    add_range(mut ra, mut rb, lat + lat_grid, lon - lon_grid, s0);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon, s0);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon + lon_grid, s0);
+                }
+            } else {
+                if lat + lat_grid < top {
+                    add_range(mut ra, mut rb, lat + lat_grid, lon, s1);
+                    add_range(mut ra, mut rb, lat + lat_grid, lon - lon_grid, s0);
+                }
+                add_range(mut ra, mut rb, lat, lon - lon_grid, s0);
+                add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s0);
+            }
+        }
+    } else {
+        if (lon & lon_grid) != 0 {
+            add_range(mut ra, mut rb, lat, lon - lon_grid, s2);
+            if even {
+                add_range(mut ra, mut rb, lat, lon + lon_grid, s1);
+                if lat > 0 {
+                    add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s0);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon, s0);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon + lon_grid, s0);
+                }
+            } else {
+                if lat > 0 {
+                    add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s1);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon + lon_grid, s0);
+                }
+                add_range(mut ra, mut rb, lat, lon + lon_grid, s0);
+                add_range(mut ra, mut rb, lat + lat_grid, lon + lon_grid, s0);
+            }
+        } else {
+            add_range(mut ra, mut rb, lat, lon, s2);
+            if even {
+                add_range(mut ra, mut rb, lat, lon - lon_grid, s1);
+                if lat > 0 {
+                    add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s0);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon, s0);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon + lon_grid, s0);
+                }
+            } else {
+                if lat > 0 {
+                    add_range(mut ra, mut rb, lat - lat_grid, lon, s1);
+                    add_range(mut ra, mut rb, lat - lat_grid, lon - lon_grid, s0);
+                }
+                add_range(mut ra, mut rb, lat, lon - lon_grid, s0);
+                add_range(mut ra, mut rb, lat + lat_grid, lon - lon_grid, s0);
+            }
+        }
+    }
+    // ranges.sort(): tuples compare by start, then by end.
+    let mut i = 1;
+    while i < ra.len() {
+        let mut j = i;
+        while j > 0 and (ra[j - 1] > ra[j] or (ra[j - 1] == ra[j] and rb[j - 1] > rb[j])) {
+            let ta = ra[j];
+            ra[j] = ra[j - 1];
+            ra[j - 1] = ta;
+            let tb = rb[j];
+            rb[j] = rb[j - 1];
+            rb[j - 1] = tb;
+            j -= 1;
+        }
+        i += 1;
+    }
+    // Merge ranges that touch, then drop the bounds at 0 and 2^64.
+    let mut sa: Vec[i128] = Vec.new();
+    let mut sb: Vec[i128] = Vec.new();
+    let mut pa = ra[0];
+    let mut pb = rb[0];
+    let mut k = 1;
+    while k < ra.len() {
+        if pb != ra[k] {
+            sa.push(pa);
+            sb.push(pb);
+            pa = ra[k];
+            pb = rb[k];
+        } else {
+            pb = rb[k];
+        }
+        k += 1;
+    }
+    sa.push(pa);
+    sb.push(pb);
+    let mut out = String.new();
+    out.push_str("[");
+    let mut n = 0;
+    while n < sa.len() {
+        if n > 0 {
+            out.push_str(", ");
+        }
+        let a = if sa[n] == 0 { "None".to_string() } else { f"{sa[n]}" };
+        let b = if sb[n] == m64 + 1 { "None".to_string() } else { f"{sb[n]}" };
+        out.push_str(f"({a}, {b})");
+        n += 1;
+    }
+    out.push_str("]");
+    out
+}
+
+// ----------------------------------------------------------- jpgrid
+
+fn jp_encode_i2c(lat_in: i64, lon_in: i64, base_in: i64) -> String {
+    let mut lat = lat_in;
+    let mut lon = lon_in;
+    let mut base1 = base_in;
+    let mut t: Vec[i64] = Vec.new();
+    while base1 > 80 {
+        t.push(1 + (lat & 1) * 2 + (lon & 1));
+        lat = lat >> 1;
+        lon = lon >> 1;
+        base1 = base1 >> 1;
+    }
+    if base1 == 80 {
+        t.push(floormod(lon, 10));
+        t.push(floormod(lat, 10));
+        lat = lat / 10;
+        lon = lon / 10;
+        base1 = base1 / 10;
+    } else if base1 == 16 {
+        t.push(1 + (lat & 1) * 2 + (lon & 1));
+        lat = lat >> 1;
+        lon = lon >> 1;
+        base1 = base1 >> 1;
+    } else if base1 == 40 {
+        t.push(5);
+        t.push(floormod(lon, 5) * 2);
+        t.push(floormod(lat, 5) * 2);
+        lat = lat / 5;
+        lon = lon / 5;
+        base1 = base1 / 5;
+    }
+    if base1 == 8 {
+        t.push(floormod(lon, 8));
+        t.push(floormod(lat, 8));
+        lat = lat >> 3;
+        lon = lon >> 3;
+    }
+    t.push(lon);
+    t.push(lat);
+    digits_of(t)
+}
+
+fn jp_encode(lat: f64, lon: f64, base1: i64) -> String {
+    let b = base1 as f64;
+    quote(jp_encode_i2c((lat * b * 1.5) as i64, (lon * b - 100.0 * b) as i64, base1))
+}
+
+fn jp_decode_c2i(code: String) -> (i64, i64, i64) {
+    let mut base1 = 1;
+    let mut lat = 0;
+    let mut lon = 0;
+    let n = code.len();
+    if n > 0 {
+        lat = dig(code.clone(), 0, 2);
+        lon = dig(code.clone(), 2, 4);
+    }
+    if n > 4 {
+        lat = (lat << 3) + dig(code.clone(), 4, 5);
+        lon = (lon << 3) + dig(code.clone(), 5, 6);
+        base1 = base1 << 3;
+    }
+    if n > 6 {
+        if n == 7 {
+            let i = dig(code.clone(), 6, 7) - 1;
+            lat = (lat << 1) + i / 2;
+            lon = (lon << 1) + floormod(i, 2);
+            base1 = base1 << 1;
+        } else {
+            lat = lat * 10 + dig(code.clone(), 6, 7);
+            lon = lon * 10 + dig(code.clone(), 7, 8);
+            base1 = base1 * 10;
+        }
+    }
+    if n > 8 {
+        if code.substring(8, n) == "5" {
+            lat = lat >> 1;
+            lon = lon >> 1;
+            base1 = base1 >> 1;
+        } else {
+            let mut k = 8;
+            while k < n {
+                let i = dig(code.clone(), k, k + 1) - 1;
+                lat = (lat << 1) + i / 2;
+                lon = (lon << 1) + floormod(i, 2);
+                base1 = base1 << 1;
+                k += 1;
+            }
+        }
+    }
+    (lat, lon, base1)
+}
+
+fn jp_decode_sw(code: String, delta: bool) -> String {
+    let (lat, lon, base1) = jp_decode_c2i(code);
+    let b = base1 as f64;
+    let la = (lat as f64) / (b * 1.5);
+    let lo = (lon as f64) / b + 100.0;
+    if delta {
+        f"({la}, {lo}, {1.0 / (b * 1.5)}, {1.0 / b})"
+    } else {
+        f"({la}, {lo})"
+    }
+}
+
+fn jp_decode(code: String) -> String {
+    let (lat, lon, base1) = jp_decode_c2i(code);
+    let b = (base1 << 1) as f64;
+    let la = (((lat << 1) + 1) as f64) / (b * 1.5);
+    let lo = (((lon << 1) + 1) as f64) / b + 100.0;
+    f"({la}, {lo})"
+}
+
+// The library labels decode_sw's (lat, lon, dlat, dlon) as w, s, n-s, e-w.
+fn jp_bbox(code: String) -> String {
+    let (lat, lon, base1) = jp_decode_c2i(code);
+    let b = base1 as f64;
+    let a = (lat as f64) / (b * 1.5);
+    let s = (lon as f64) / b + 100.0;
+    let c = 1.0 / (b * 1.5);
+    let d = 1.0 / b;
+    f"{{'w': {a}, 's': {s}, 'n': {s + d}, 'e': {a + c}}}"
+}
+
+fn dir_lat(i: i64) -> i64 {
+    if i < 2 { 0 } else if i < 5 { 1 } else { -1 }
+}
+
+fn dir_lon(i: i64) -> i64 {
+    let v = [-1, 1, -1, 0, 1, -1, 0, 1];
+    v[i]
+}
+
+fn jp_neighbors(code: String, expand: bool) -> String {
+    let (lat, lon, base1) = jp_decode_c2i(code.clone());
+    let mut ret: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        let tlat = lat + dir_lat(i);
+        let tlon = lon + dir_lon(i);
+        if tlat >= 0 and tlat <= 90 * base1 and tlon >= 0 and tlon <= 100 * base1 {
+            ret.push(jp_encode_i2c(tlat, tlon, base1));
+        }
+        i += 1;
+    }
+    if expand {
+        ret.push(code.clone());
+    }
+    str_list(ret)
+}
+
+// ----------------------------------------------------------- jpiarea
+
+fn ia_encode_i2c(lat_in: i64, lon_in: i64, basebits: i64) -> String {
+    let mut lat = lat_in;
+    let mut lon = lon_in;
+    let mut t: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < basebits - 3 {
+        t.push((lat & 1) * 2 + (lon & 1));
+        lat = lat >> 1;
+        lon = lon >> 1;
+        i += 1;
+    }
+    if basebits >= 3 {
+        t.push(lon & 7);
+        t.push(lat & 7);
+        lat = lat >> 3;
+        lon = lon >> 3;
+    }
+    t.push(lon);
+    t.push(lat);
+    digits_of(t)
+}
+
+fn ia_encode(lat: f64, lon: f64) -> String {
+    if lat < 7.0 or lon < 100.0 {
+        return "Exception: Unsupported location".to_string();
+    }
+    quote(ia_encode_i2c((lat * 256.0 * 1.5) as i64, ((lon - 100.0) * 256.0) as i64, 8))
+}
+
+fn ia_decode_c2i(code: String) -> (i64, i64, i64) {
+    let mut lat = 0;
+    let mut lon = 0;
+    let mut base = 1;
+    let mut basebits = 0;
+    let n = code.len();
+    if n > 6 {
+        let mut k = 6;
+        while k < n {
+            let d = dig(code.clone(), k, k + 1);
+            lat = (lat << 1) + d / 2;
+            lon = (lon << 1) + floormod(d, 2);
+            base = base << 1;
+            basebits += 1;
+            k += 1;
+        }
+    }
+    if n > 4 {
+        lat = dig(code.clone(), 4, 5) * base + lat;
+        lon = dig(code.clone(), 5, 6) * base + lon;
+        base = base << 3;
+        basebits += 3;
+    }
+    lat = dig(code.clone(), 0, 2) * base + lat;
+    lon = dig(code.clone(), 2, 4) * base + lon;
+    (lat, lon, basebits)
+}
+
+fn ia_decode_sw(code: String, delta: bool) -> String {
+    let (lat, lon, bb) = ia_decode_c2i(code);
+    let p = (1 << bb) as f64;
+    let la = (lat as f64) / (1.5 * p);
+    let lo = (lon as f64) / p + 100.0;
+    if delta {
+        f"({la}, {lo}, {1.0 / (1.5 * p)}, {1.0 / p})"
+    } else {
+        f"({la}, {lo})"
+    }
+}
+
+fn ia_decode(code: String) -> String {
+    let (lat, lon, bb) = ia_decode_c2i(code);
+    let la = (((lat << 1) + 1) as f64) / ((3 << bb) as f64);
+    let lo = 100.0 + (((lon << 1) + 1) as f64) / ((2 << bb) as f64);
+    f"({la}, {lo})"
+}
+
+fn ia_bbox(code: String) -> String {
+    let (lat, lon, bb) = ia_decode_c2i(code);
+    let p = (1 << bb) as f64;
+    let a = (lat as f64) / (1.5 * p);
+    let s = (lon as f64) / p + 100.0;
+    let c = 1.0 / (1.5 * p);
+    let d = 1.0 / p;
+    f"{{'w': {a}, 's': {s}, 'n': {s + d}, 'e': {a + c}}}"
+}
+
+fn ia_neighbors(code: String, expand: bool) -> String {
+    let (lat, lon, bb) = ia_decode_c2i(code.clone());
+    let mut ret: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        let tlat = lat + dir_lat(i);
+        let tlon = lon + dir_lon(i);
+        if tlat >= 0 and tlat <= (90 << bb) and tlon >= 0 and tlon <= (100 << bb) {
+            ret.push(ia_encode_i2c(tlat, tlon, bb));
+        }
+        i += 1;
+    }
+    if expand {
+        ret.push(code.clone());
+    }
+    str_list(ret)
+}
+
+// ----------------------------------------------------------- driver
+
+fn arg(f: Vec[String], i: i64) -> String {
+    if i < f.len() { f[i].clone() } else { "".to_string() }
+}
+
+fn run_job(f: Vec[String]) -> String {
+    let op = f[0].clone();
+    let a1 = arg(f.clone(), 1);
+    let a2 = arg(f.clone(), 2);
+    let a3 = arg(f.clone(), 3);
+    if op == "enc" {
+        gh_encode(to_f64(a1), to_f64(a2), to_i64(a3))
+    } else if op == "dec" {
+        gh_decode(a1, false)
+    } else if op == "decx" {
+        gh_decode(a1, true)
+    } else if op == "bbox" {
+        gh_bbox(a1)
+    } else if op == "nb" {
+        gh_neighbors(a1, false)
+    } else if op == "exp" {
+        gh_neighbors(a1, true)
+    } else if op == "u64" {
+        gh_encode_u64(to_f64(a1), to_f64(a2))
+    } else if op == "du64" {
+        gh_decode_u64(to_i128(a1))
+    } else if op == "eu64" {
+        gh_expand_u64(to_i128(a1), to_i64(a2))
+    } else if op == "jpenc" {
+        jp_encode(to_f64(a1), to_f64(a2), to_i64(a3))
+    } else if op == "jpdec" {
+        jp_decode(a1)
+    } else if op == "jpsw" {
+        jp_decode_sw(a1, false)
+    } else if op == "jpswd" {
+        jp_decode_sw(a1, true)
+    } else if op == "jpbbox" {
+        jp_bbox(a1)
+    } else if op == "jpnb" {
+        jp_neighbors(a1, false)
+    } else if op == "jpexp" {
+        jp_neighbors(a1, true)
+    } else if op == "iaenc" {
+        ia_encode(to_f64(a1), to_f64(a2))
+    } else if op == "iadec" {
+        ia_decode(a1)
+    } else if op == "iasw" {
+        ia_decode_sw(a1, false)
+    } else if op == "iaswd" {
+        ia_decode_sw(a1, true)
+    } else if op == "iabbox" {
+        ia_bbox(a1)
+    } else if op == "ianb" {
+        ia_neighbors(a1, false)
+    } else if op == "iaexp" {
+        ia_neighbors(a1, true)
+    } else {
+        f"unknown op {op}"
+    }
+}
+
+fn join_args(f: Vec[String]) -> String {
+    let mut out = String.new();
+    let mut i = 1;
+    while i < f.len() {
+        if i > 1 {
+            out.push_str(", ");
+        }
+        out.push_str(f[i]);
+        i += 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            out.push_str(f"{f[0]}({join_args(f.clone())}) => {run_job(f)}\n");
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("enc\t42.6\t-5.6\t5\n");
+    s.push_str("enc\t57.64911\t10.40744\t11\n");
+    s.push_str("enc\t35.6812\t139.7671\t12\n");
+    s.push_str("enc\t0.0\t0.0\t12\n");
+    s.push_str("enc\t-0.0\t-0.0\t7\n");
+    s.push_str("enc\t-90.0\t-180.0\t10\n");
+    s.push_str("enc\t89.99999999999999\t179.99999999999997\t20\n");
+    s.push_str("enc\t51.5007\t-0.1246\t9\n");
+    s.push_str("enc\t-33.8568\t151.2153\t8\n");
+    s.push_str("enc\t40.6892\t-74.0445\t6\n");
+    s.push_str("enc\t-54.8\t-68.3\t10\n");
+    s.push_str("enc\t35.6812\t139.7671\t0\n");
+    s.push_str("enc\t35.6812\t139.7671\t1\n");
+    s.push_str("enc\t35.6812\t139.7671\t24\n");
+    s.push_str("enc\t12.5\t180.0\t6\n");
+    s.push_str("enc\t12.5\t540.0\t6\n");
+    s.push_str("enc\t12.5\t-900.5\t6\n");
+    s.push_str("enc\t-12.5\t-180.0\t6\n");
+    s.push_str("enc\t1e-300\t1e-300\t10\n");
+    s.push_str("enc\t-1e-300\t-1e-300\t10\n");
+    s.push_str("enc\t1e-17\t-1e-17\t16\n");
+    s.push_str("enc\t90.0\t0.0\t12\n");
+    s.push_str("enc\t90.0\t139.7671\t6\n");
+    s.push_str("enc\t90.5\t0.0\t5\n");
+    s.push_str("enc\t-90.1\t10.0\t5\n");
+    s.push_str("enc\t-90.0\t359.9\t8\n");
+    s.push_str("dec\tezs42\n");
+    s.push_str("decx\tezs42\n");
+    s.push_str("bbox\tezs42\n");
+    s.push_str("nb\tezs42\n");
+    s.push_str("exp\tezs42\n");
+    s.push_str("dec\tu4pruydqqvj\n");
+    s.push_str("decx\tu4pruydqqvj\n");
+    s.push_str("bbox\tu4pruydqqvj\n");
+    s.push_str("nb\tu4pruydqqvj\n");
+    s.push_str("exp\tu4pruydqqvj\n");
+    s.push_str("dec\txn76urx613z2\n");
+    s.push_str("decx\txn76urx613z2\n");
+    s.push_str("bbox\txn76urx613z2\n");
+    s.push_str("nb\txn76urx613z2\n");
+    s.push_str("exp\txn76urx613z2\n");
+    s.push_str("dec\tr3gx2ux9ggh1\n");
+    s.push_str("decx\tr3gx2ux9ggh1\n");
+    s.push_str("bbox\tr3gx2ux9ggh1\n");
+    s.push_str("nb\tr3gx2ux9ggh1\n");
+    s.push_str("exp\tr3gx2ux9ggh1\n");
+    s.push_str("dec\t0\n");
+    s.push_str("decx\t0\n");
+    s.push_str("bbox\t0\n");
+    s.push_str("nb\t0\n");
+    s.push_str("exp\t0\n");
+    s.push_str("dec\tz\n");
+    s.push_str("decx\tz\n");
+    s.push_str("bbox\tz\n");
+    s.push_str("nb\tz\n");
+    s.push_str("exp\tz\n");
+    s.push_str("dec\t\n");
+    s.push_str("decx\t\n");
+    s.push_str("bbox\t\n");
+    s.push_str("nb\t\n");
+    s.push_str("exp\t\n");
+    s.push_str("dec\tzzzzzzzzzzzz\n");
+    s.push_str("decx\tzzzzzzzzzzzz\n");
+    s.push_str("bbox\tzzzzzzzzzzzz\n");
+    s.push_str("nb\tzzzzzzzzzzzz\n");
+    s.push_str("exp\tzzzzzzzzzzzz\n");
+    s.push_str("dec\t000000\n");
+    s.push_str("decx\t000000\n");
+    s.push_str("bbox\t000000\n");
+    s.push_str("nb\t000000\n");
+    s.push_str("exp\t000000\n");
+    s.push_str("dec\tgcpuvpk\n");
+    s.push_str("decx\tgcpuvpk\n");
+    s.push_str("bbox\tgcpuvpk\n");
+    s.push_str("nb\tgcpuvpk\n");
+    s.push_str("exp\tgcpuvpk\n");
+    s.push_str("dec\ts00000000000000000000\n");
+    s.push_str("decx\ts00000000000000000000\n");
+    s.push_str("bbox\ts00000000000000000000\n");
+    s.push_str("nb\ts00000000000000000000\n");
+    s.push_str("exp\ts00000000000000000000\n");
+    s.push_str("dec\tbcdz\n");
+    s.push_str("decx\tbcdz\n");
+    s.push_str("bbox\tbcdz\n");
+    s.push_str("nb\tbcdz\n");
+    s.push_str("exp\tbcdz\n");
+    s.push_str("dec\tpbpbpbpbpbpbpbpbpbpbpbpb\n");
+    s.push_str("decx\tpbpbpbpbpbpbpbpbpbpbpbpb\n");
+    s.push_str("bbox\tpbpbpbpbpbpbpbpbpbpbpbpb\n");
+    s.push_str("nb\tpbpbpbpbpbpbpbpbpbpbpbpb\n");
+    s.push_str("exp\tpbpbpbpbpbpbpbpbpbpbpbpb\n");
+    s.push_str("dec\tezs4a\n");
+    s.push_str("bbox\tezs4a\n");
+    s.push_str("exp\tezs4a\n");
+    s.push_str("dec\tEzs42\n");
+    s.push_str("bbox\tEzs42\n");
+    s.push_str("exp\tEzs42\n");
+    s.push_str("dec\til\n");
+    s.push_str("bbox\til\n");
+    s.push_str("exp\til\n");
+    s.push_str("u64\t-90.0\t-180.0\n");
+    s.push_str("u64\t0.0\t0.0\n");
+    s.push_str("u64\t45.0\t135.0\n");
+    s.push_str("u64\t35.6812\t139.7671\n");
+    s.push_str("u64\t-33.8568\t151.2153\n");
+    s.push_str("u64\t89.99999999999999\t179.99999999999997\n");
+    s.push_str("u64\t90.0\t0.0\n");
+    s.push_str("u64\t91.0\t0.0\n");
+    s.push_str("u64\t-91.0\t0.0\n");
+    s.push_str("u64\t10.0\t900.25\n");
+    s.push_str("du64\t0\n");
+    s.push_str("du64\t576460752303423488\n");
+    s.push_str("du64\t8646911284551352320\n");
+    s.push_str("du64\t13835058055282163712\n");
+    s.push_str("du64\t17870283321406128128\n");
+    s.push_str("du64\t18446744073709551615\n");
+    s.push_str("du64\t16411633622130538401\n");
+    s.push_str("du64\t1311768467463790320\n");
+    s.push_str("eu64\t13835058055282163712\t1\n");
+    s.push_str("eu64\t13835058055282163712\t2\n");
+    s.push_str("eu64\t13835058055282163712\t3\n");
+    s.push_str("eu64\t13835058055282163712\t4\n");
+    s.push_str("eu64\t16411633622130538401\t5\n");
+    s.push_str("eu64\t16411633622130538401\t10\n");
+    s.push_str("eu64\t16411633622130538401\t25\n");
+    s.push_str("eu64\t16411633622130538401\t26\n");
+    s.push_str("eu64\t1311768467463790320\t50\n");
+    s.push_str("eu64\t1311768467463790320\t51\n");
+    s.push_str("eu64\t0\t20\n");
+    s.push_str("eu64\t0\t21\n");
+    s.push_str("eu64\t18446744073709551615\t20\n");
+    s.push_str("eu64\t18446744073709551615\t21\n");
+    s.push_str("eu64\t6148914691236517205\t63\n");
+    s.push_str("eu64\t12297829382473034410\t64\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t1\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t8\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t80\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t160\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t320\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t640\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t16\n");
+    s.push_str("jpenc\t35.6812\t139.7671\t40\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t1\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t8\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t80\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t160\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t320\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t640\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t16\n");
+    s.push_str("jpenc\t34.7025\t135.4959\t40\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t1\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t8\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t80\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t160\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t320\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t640\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t16\n");
+    s.push_str("jpenc\t43.0686\t141.3508\t40\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t1\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t8\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t80\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t160\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t320\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t640\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t16\n");
+    s.push_str("jpenc\t26.2124\t127.6809\t40\n");
+    s.push_str("jpdec\t5339\n");
+    s.push_str("jpsw\t5339\n");
+    s.push_str("jpswd\t5339\n");
+    s.push_str("jpbbox\t5339\n");
+    s.push_str("jpnb\t5339\n");
+    s.push_str("jpexp\t5339\n");
+    s.push_str("jpdec\t533946\n");
+    s.push_str("jpsw\t533946\n");
+    s.push_str("jpswd\t533946\n");
+    s.push_str("jpbbox\t533946\n");
+    s.push_str("jpnb\t533946\n");
+    s.push_str("jpexp\t533946\n");
+    s.push_str("jpdec\t53394611\n");
+    s.push_str("jpsw\t53394611\n");
+    s.push_str("jpswd\t53394611\n");
+    s.push_str("jpbbox\t53394611\n");
+    s.push_str("jpnb\t53394611\n");
+    s.push_str("jpexp\t53394611\n");
+    s.push_str("jpdec\t533946113\n");
+    s.push_str("jpsw\t533946113\n");
+    s.push_str("jpswd\t533946113\n");
+    s.push_str("jpbbox\t533946113\n");
+    s.push_str("jpnb\t533946113\n");
+    s.push_str("jpexp\t533946113\n");
+    s.push_str("jpdec\t5339461132\n");
+    s.push_str("jpsw\t5339461132\n");
+    s.push_str("jpswd\t5339461132\n");
+    s.push_str("jpbbox\t5339461132\n");
+    s.push_str("jpnb\t5339461132\n");
+    s.push_str("jpexp\t5339461132\n");
+    s.push_str("jpdec\t53394611323\n");
+    s.push_str("jpsw\t53394611323\n");
+    s.push_str("jpswd\t53394611323\n");
+    s.push_str("jpbbox\t53394611323\n");
+    s.push_str("jpnb\t53394611323\n");
+    s.push_str("jpexp\t53394611323\n");
+    s.push_str("jpdec\t5339461\n");
+    s.push_str("jpsw\t5339461\n");
+    s.push_str("jpswd\t5339461\n");
+    s.push_str("jpbbox\t5339461\n");
+    s.push_str("jpnb\t5339461\n");
+    s.push_str("jpexp\t5339461\n");
+    s.push_str("jpdec\t533946005\n");
+    s.push_str("jpsw\t533946005\n");
+    s.push_str("jpswd\t533946005\n");
+    s.push_str("jpbbox\t533946005\n");
+    s.push_str("jpnb\t533946005\n");
+    s.push_str("jpexp\t533946005\n");
+    s.push_str("jpdec\t6441428811\n");
+    s.push_str("jpsw\t6441428811\n");
+    s.push_str("jpswd\t6441428811\n");
+    s.push_str("jpbbox\t6441428811\n");
+    s.push_str("jpnb\t6441428811\n");
+    s.push_str("jpexp\t6441428811\n");
+    s.push_str("jpdec\t3927253\n");
+    s.push_str("jpsw\t3927253\n");
+    s.push_str("jpswd\t3927253\n");
+    s.push_str("jpbbox\t3927253\n");
+    s.push_str("jpnb\t3927253\n");
+    s.push_str("jpexp\t3927253\n");
+    s.push_str("jpdec\t523503485\n");
+    s.push_str("jpsw\t523503485\n");
+    s.push_str("jpswd\t523503485\n");
+    s.push_str("jpbbox\t523503485\n");
+    s.push_str("jpnb\t523503485\n");
+    s.push_str("jpexp\t523503485\n");
+    s.push_str("iaenc\t35.6812\t139.7671\n");
+    s.push_str("iaenc\t34.7025\t135.4959\n");
+    s.push_str("iaenc\t43.0686\t141.3508\n");
+    s.push_str("iaenc\t26.2124\t127.6809\n");
+    s.push_str("iaenc\t6.5\t140.0\n");
+    s.push_str("iaenc\t35.0\t99.5\n");
+    s.push_str("iaenc\t7.0\t100.0\n");
+    s.push_str("iadec\t5339\n");
+    s.push_str("iasw\t5339\n");
+    s.push_str("iaswd\t5339\n");
+    s.push_str("iabbox\t5339\n");
+    s.push_str("ianb\t5339\n");
+    s.push_str("iaexp\t5339\n");
+    s.push_str("iadec\t533946\n");
+    s.push_str("iasw\t533946\n");
+    s.push_str("iaswd\t533946\n");
+    s.push_str("iabbox\t533946\n");
+    s.push_str("ianb\t533946\n");
+    s.push_str("iaexp\t533946\n");
+    s.push_str("iadec\t533946003\n");
+    s.push_str("iasw\t533946003\n");
+    s.push_str("iaswd\t533946003\n");
+    s.push_str("iabbox\t533946003\n");
+    s.push_str("ianb\t533946003\n");
+    s.push_str("iaexp\t533946003\n");
+    s.push_str("iadec\t53394600302\n");
+    s.push_str("iasw\t53394600302\n");
+    s.push_str("iaswd\t53394600302\n");
+    s.push_str("iabbox\t53394600302\n");
+    s.push_str("ianb\t53394600302\n");
+    s.push_str("iaexp\t53394600302\n");
+    s.push_str("iadec\t52350313312\n");
+    s.push_str("iasw\t52350313312\n");
+    s.push_str("iaswd\t52350313312\n");
+    s.push_str("iabbox\t52350313312\n");
+    s.push_str("ianb\t52350313312\n");
+    s.push_str("iaexp\t52350313312\n");
+    s.push_str("iadec\t6441\n");
+    s.push_str("iasw\t6441\n");
+    s.push_str("iaswd\t6441\n");
+    s.push_str("iabbox\t6441\n");
+    s.push_str("ianb\t6441\n");
+    s.push_str("iaexp\t6441\n");
+    s
+}
