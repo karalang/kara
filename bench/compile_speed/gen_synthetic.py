@@ -277,7 +277,8 @@ def emit():
         r.append("")
 
         # generic-struct use
-        k.append(f"fn pack{i}(r1: Rec{i}, r2: Rec{i}) -> i64 {{")
+        # D5: bare params borrow, so a param moved into a struct is `own`.
+        k.append(f"fn pack{i}(r1: own Rec{i}, r2: own Rec{i}) -> i64 {{")
         k.append("    let p = Pair { x: r1, y: r2 };")
         k.append(f"    (p.x.score() + p.y.shifted({c9})) % 999983")
         k.append("}")

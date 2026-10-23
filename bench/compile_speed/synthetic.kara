@@ -109,7 +109,7 @@ fn apply0(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack0(r1: Rec0, r2: Rec0) -> i64 {
+fn pack0(r1: own Rec0, r2: own Rec0) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(995)) % 999983
 }
@@ -215,7 +215,7 @@ fn apply1(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack1(r1: Rec1, r2: Rec1) -> i64 {
+fn pack1(r1: own Rec1, r2: own Rec1) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(239)) % 999983
 }
@@ -321,7 +321,7 @@ fn apply2(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack2(r1: Rec2, r2: Rec2) -> i64 {
+fn pack2(r1: own Rec2, r2: own Rec2) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(696)) % 999983
 }
@@ -431,7 +431,7 @@ fn apply3(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack3(r1: Rec3, r2: Rec3) -> i64 {
+fn pack3(r1: own Rec3, r2: own Rec3) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(234)) % 999983
 }
@@ -537,7 +537,7 @@ fn apply4(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack4(r1: Rec4, r2: Rec4) -> i64 {
+fn pack4(r1: own Rec4, r2: own Rec4) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(71)) % 999983
 }
@@ -643,7 +643,7 @@ fn apply5(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack5(r1: Rec5, r2: Rec5) -> i64 {
+fn pack5(r1: own Rec5, r2: own Rec5) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(6)) % 999983
 }
@@ -753,7 +753,7 @@ fn apply6(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack6(r1: Rec6, r2: Rec6) -> i64 {
+fn pack6(r1: own Rec6, r2: own Rec6) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(880)) % 999983
 }
@@ -859,7 +859,7 @@ fn apply7(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack7(r1: Rec7, r2: Rec7) -> i64 {
+fn pack7(r1: own Rec7, r2: own Rec7) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(315)) % 999983
 }
@@ -965,7 +965,7 @@ fn apply8(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack8(r1: Rec8, r2: Rec8) -> i64 {
+fn pack8(r1: own Rec8, r2: own Rec8) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(538)) % 999983
 }
@@ -1075,7 +1075,7 @@ fn apply9(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack9(r1: Rec9, r2: Rec9) -> i64 {
+fn pack9(r1: own Rec9, r2: own Rec9) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(47)) % 999983
 }
@@ -1181,7 +1181,7 @@ fn apply10(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack10(r1: Rec10, r2: Rec10) -> i64 {
+fn pack10(r1: own Rec10, r2: own Rec10) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(53)) % 999983
 }
@@ -1287,7 +1287,7 @@ fn apply11(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack11(r1: Rec11, r2: Rec11) -> i64 {
+fn pack11(r1: own Rec11, r2: own Rec11) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(794)) % 999983
 }
@@ -1397,7 +1397,7 @@ fn apply12(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack12(r1: Rec12, r2: Rec12) -> i64 {
+fn pack12(r1: own Rec12, r2: own Rec12) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(180)) % 999983
 }
@@ -1503,7 +1503,7 @@ fn apply13(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack13(r1: Rec13, r2: Rec13) -> i64 {
+fn pack13(r1: own Rec13, r2: own Rec13) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(911)) % 999983
 }
@@ -1609,7 +1609,7 @@ fn apply14(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack14(r1: Rec14, r2: Rec14) -> i64 {
+fn pack14(r1: own Rec14, r2: own Rec14) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(258)) % 999983
 }
@@ -1719,7 +1719,7 @@ fn apply15(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack15(r1: Rec15, r2: Rec15) -> i64 {
+fn pack15(r1: own Rec15, r2: own Rec15) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(680)) % 999983
 }
@@ -1825,7 +1825,7 @@ fn apply16(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack16(r1: Rec16, r2: Rec16) -> i64 {
+fn pack16(r1: own Rec16, r2: own Rec16) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(695)) % 999983
 }
@@ -1931,7 +1931,7 @@ fn apply17(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack17(r1: Rec17, r2: Rec17) -> i64 {
+fn pack17(r1: own Rec17, r2: own Rec17) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(129)) % 999983
 }
@@ -2041,7 +2041,7 @@ fn apply18(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack18(r1: Rec18, r2: Rec18) -> i64 {
+fn pack18(r1: own Rec18, r2: own Rec18) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(285)) % 999983
 }
@@ -2147,7 +2147,7 @@ fn apply19(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack19(r1: Rec19, r2: Rec19) -> i64 {
+fn pack19(r1: own Rec19, r2: own Rec19) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(798)) % 999983
 }
@@ -2253,7 +2253,7 @@ fn apply20(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack20(r1: Rec20, r2: Rec20) -> i64 {
+fn pack20(r1: own Rec20, r2: own Rec20) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(116)) % 999983
 }
@@ -2363,7 +2363,7 @@ fn apply21(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack21(r1: Rec21, r2: Rec21) -> i64 {
+fn pack21(r1: own Rec21, r2: own Rec21) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(215)) % 999983
 }
@@ -2469,7 +2469,7 @@ fn apply22(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack22(r1: Rec22, r2: Rec22) -> i64 {
+fn pack22(r1: own Rec22, r2: own Rec22) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(941)) % 999983
 }
@@ -2575,7 +2575,7 @@ fn apply23(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack23(r1: Rec23, r2: Rec23) -> i64 {
+fn pack23(r1: own Rec23, r2: own Rec23) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(594)) % 999983
 }
@@ -2685,7 +2685,7 @@ fn apply24(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack24(r1: Rec24, r2: Rec24) -> i64 {
+fn pack24(r1: own Rec24, r2: own Rec24) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(335)) % 999983
 }
@@ -2791,7 +2791,7 @@ fn apply25(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack25(r1: Rec25, r2: Rec25) -> i64 {
+fn pack25(r1: own Rec25, r2: own Rec25) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(838)) % 999983
 }
@@ -2897,7 +2897,7 @@ fn apply26(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack26(r1: Rec26, r2: Rec26) -> i64 {
+fn pack26(r1: own Rec26, r2: own Rec26) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(122)) % 999983
 }
@@ -3007,7 +3007,7 @@ fn apply27(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack27(r1: Rec27, r2: Rec27) -> i64 {
+fn pack27(r1: own Rec27, r2: own Rec27) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(525)) % 999983
 }
@@ -3113,7 +3113,7 @@ fn apply28(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack28(r1: Rec28, r2: Rec28) -> i64 {
+fn pack28(r1: own Rec28, r2: own Rec28) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(84)) % 999983
 }
@@ -3219,7 +3219,7 @@ fn apply29(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack29(r1: Rec29, r2: Rec29) -> i64 {
+fn pack29(r1: own Rec29, r2: own Rec29) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(378)) % 999983
 }
@@ -3329,7 +3329,7 @@ fn apply30(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack30(r1: Rec30, r2: Rec30) -> i64 {
+fn pack30(r1: own Rec30, r2: own Rec30) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(854)) % 999983
 }
@@ -3435,7 +3435,7 @@ fn apply31(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack31(r1: Rec31, r2: Rec31) -> i64 {
+fn pack31(r1: own Rec31, r2: own Rec31) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(734)) % 999983
 }
@@ -3541,7 +3541,7 @@ fn apply32(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack32(r1: Rec32, r2: Rec32) -> i64 {
+fn pack32(r1: own Rec32, r2: own Rec32) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(495)) % 999983
 }
@@ -3651,7 +3651,7 @@ fn apply33(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack33(r1: Rec33, r2: Rec33) -> i64 {
+fn pack33(r1: own Rec33, r2: own Rec33) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(17)) % 999983
 }
@@ -3757,7 +3757,7 @@ fn apply34(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack34(r1: Rec34, r2: Rec34) -> i64 {
+fn pack34(r1: own Rec34, r2: own Rec34) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(897)) % 999983
 }
@@ -3863,7 +3863,7 @@ fn apply35(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack35(r1: Rec35, r2: Rec35) -> i64 {
+fn pack35(r1: own Rec35, r2: own Rec35) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(628)) % 999983
 }
@@ -3973,7 +3973,7 @@ fn apply36(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack36(r1: Rec36, r2: Rec36) -> i64 {
+fn pack36(r1: own Rec36, r2: own Rec36) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(460)) % 999983
 }
@@ -4079,7 +4079,7 @@ fn apply37(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack37(r1: Rec37, r2: Rec37) -> i64 {
+fn pack37(r1: own Rec37, r2: own Rec37) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(733)) % 999983
 }
@@ -4185,7 +4185,7 @@ fn apply38(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack38(r1: Rec38, r2: Rec38) -> i64 {
+fn pack38(r1: own Rec38, r2: own Rec38) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(146)) % 999983
 }
@@ -4295,7 +4295,7 @@ fn apply39(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack39(r1: Rec39, r2: Rec39) -> i64 {
+fn pack39(r1: own Rec39, r2: own Rec39) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(892)) % 999983
 }
@@ -4401,7 +4401,7 @@ fn apply40(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack40(r1: Rec40, r2: Rec40) -> i64 {
+fn pack40(r1: own Rec40, r2: own Rec40) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(762)) % 999983
 }
@@ -4507,7 +4507,7 @@ fn apply41(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack41(r1: Rec41, r2: Rec41) -> i64 {
+fn pack41(r1: own Rec41, r2: own Rec41) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(565)) % 999983
 }
@@ -4617,7 +4617,7 @@ fn apply42(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack42(r1: Rec42, r2: Rec42) -> i64 {
+fn pack42(r1: own Rec42, r2: own Rec42) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(630)) % 999983
 }
@@ -4723,7 +4723,7 @@ fn apply43(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack43(r1: Rec43, r2: Rec43) -> i64 {
+fn pack43(r1: own Rec43, r2: own Rec43) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(521)) % 999983
 }
@@ -4829,7 +4829,7 @@ fn apply44(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack44(r1: Rec44, r2: Rec44) -> i64 {
+fn pack44(r1: own Rec44, r2: own Rec44) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(388)) % 999983
 }
@@ -4939,7 +4939,7 @@ fn apply45(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack45(r1: Rec45, r2: Rec45) -> i64 {
+fn pack45(r1: own Rec45, r2: own Rec45) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(593)) % 999983
 }
@@ -5045,7 +5045,7 @@ fn apply46(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack46(r1: Rec46, r2: Rec46) -> i64 {
+fn pack46(r1: own Rec46, r2: own Rec46) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(860)) % 999983
 }
@@ -5151,7 +5151,7 @@ fn apply47(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack47(r1: Rec47, r2: Rec47) -> i64 {
+fn pack47(r1: own Rec47, r2: own Rec47) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(439)) % 999983
 }
@@ -5261,7 +5261,7 @@ fn apply48(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack48(r1: Rec48, r2: Rec48) -> i64 {
+fn pack48(r1: own Rec48, r2: own Rec48) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(204)) % 999983
 }
@@ -5367,7 +5367,7 @@ fn apply49(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack49(r1: Rec49, r2: Rec49) -> i64 {
+fn pack49(r1: own Rec49, r2: own Rec49) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(442)) % 999983
 }
@@ -5473,7 +5473,7 @@ fn apply50(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack50(r1: Rec50, r2: Rec50) -> i64 {
+fn pack50(r1: own Rec50, r2: own Rec50) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(597)) % 999983
 }
@@ -5583,7 +5583,7 @@ fn apply51(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack51(r1: Rec51, r2: Rec51) -> i64 {
+fn pack51(r1: own Rec51, r2: own Rec51) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(896)) % 999983
 }
@@ -5689,7 +5689,7 @@ fn apply52(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack52(r1: Rec52, r2: Rec52) -> i64 {
+fn pack52(r1: own Rec52, r2: own Rec52) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(822)) % 999983
 }
@@ -5795,7 +5795,7 @@ fn apply53(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack53(r1: Rec53, r2: Rec53) -> i64 {
+fn pack53(r1: own Rec53, r2: own Rec53) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(640)) % 999983
 }
@@ -5905,7 +5905,7 @@ fn apply54(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack54(r1: Rec54, r2: Rec54) -> i64 {
+fn pack54(r1: own Rec54, r2: own Rec54) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(905)) % 999983
 }
@@ -6011,7 +6011,7 @@ fn apply55(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack55(r1: Rec55, r2: Rec55) -> i64 {
+fn pack55(r1: own Rec55, r2: own Rec55) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(518)) % 999983
 }
@@ -6117,7 +6117,7 @@ fn apply56(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack56(r1: Rec56, r2: Rec56) -> i64 {
+fn pack56(r1: own Rec56, r2: own Rec56) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(865)) % 999983
 }
@@ -6227,7 +6227,7 @@ fn apply57(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack57(r1: Rec57, r2: Rec57) -> i64 {
+fn pack57(r1: own Rec57, r2: own Rec57) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(174)) % 999983
 }
@@ -6333,7 +6333,7 @@ fn apply58(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack58(r1: Rec58, r2: Rec58) -> i64 {
+fn pack58(r1: own Rec58, r2: own Rec58) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(292)) % 999983
 }
@@ -6439,7 +6439,7 @@ fn apply59(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack59(r1: Rec59, r2: Rec59) -> i64 {
+fn pack59(r1: own Rec59, r2: own Rec59) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(990)) % 999983
 }
@@ -6549,7 +6549,7 @@ fn apply60(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack60(r1: Rec60, r2: Rec60) -> i64 {
+fn pack60(r1: own Rec60, r2: own Rec60) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(206)) % 999983
 }
@@ -6655,7 +6655,7 @@ fn apply61(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack61(r1: Rec61, r2: Rec61) -> i64 {
+fn pack61(r1: own Rec61, r2: own Rec61) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(174)) % 999983
 }
@@ -6761,7 +6761,7 @@ fn apply62(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack62(r1: Rec62, r2: Rec62) -> i64 {
+fn pack62(r1: own Rec62, r2: own Rec62) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(772)) % 999983
 }
@@ -6871,7 +6871,7 @@ fn apply63(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack63(r1: Rec63, r2: Rec63) -> i64 {
+fn pack63(r1: own Rec63, r2: own Rec63) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(126)) % 999983
 }
@@ -6977,7 +6977,7 @@ fn apply64(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack64(r1: Rec64, r2: Rec64) -> i64 {
+fn pack64(r1: own Rec64, r2: own Rec64) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(208)) % 999983
 }
@@ -7083,7 +7083,7 @@ fn apply65(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack65(r1: Rec65, r2: Rec65) -> i64 {
+fn pack65(r1: own Rec65, r2: own Rec65) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(40)) % 999983
 }
@@ -7193,7 +7193,7 @@ fn apply66(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack66(r1: Rec66, r2: Rec66) -> i64 {
+fn pack66(r1: own Rec66, r2: own Rec66) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(147)) % 999983
 }
@@ -7299,7 +7299,7 @@ fn apply67(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack67(r1: Rec67, r2: Rec67) -> i64 {
+fn pack67(r1: own Rec67, r2: own Rec67) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(393)) % 999983
 }
@@ -7405,7 +7405,7 @@ fn apply68(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack68(r1: Rec68, r2: Rec68) -> i64 {
+fn pack68(r1: own Rec68, r2: own Rec68) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(872)) % 999983
 }
@@ -7515,7 +7515,7 @@ fn apply69(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack69(r1: Rec69, r2: Rec69) -> i64 {
+fn pack69(r1: own Rec69, r2: own Rec69) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(28)) % 999983
 }
@@ -7621,7 +7621,7 @@ fn apply70(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack70(r1: Rec70, r2: Rec70) -> i64 {
+fn pack70(r1: own Rec70, r2: own Rec70) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(336)) % 999983
 }
@@ -7727,7 +7727,7 @@ fn apply71(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack71(r1: Rec71, r2: Rec71) -> i64 {
+fn pack71(r1: own Rec71, r2: own Rec71) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(138)) % 999983
 }
@@ -7837,7 +7837,7 @@ fn apply72(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack72(r1: Rec72, r2: Rec72) -> i64 {
+fn pack72(r1: own Rec72, r2: own Rec72) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(406)) % 999983
 }
@@ -7943,7 +7943,7 @@ fn apply73(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack73(r1: Rec73, r2: Rec73) -> i64 {
+fn pack73(r1: own Rec73, r2: own Rec73) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(626)) % 999983
 }
@@ -8049,7 +8049,7 @@ fn apply74(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack74(r1: Rec74, r2: Rec74) -> i64 {
+fn pack74(r1: own Rec74, r2: own Rec74) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(682)) % 999983
 }
@@ -8159,7 +8159,7 @@ fn apply75(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack75(r1: Rec75, r2: Rec75) -> i64 {
+fn pack75(r1: own Rec75, r2: own Rec75) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(591)) % 999983
 }
@@ -8265,7 +8265,7 @@ fn apply76(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack76(r1: Rec76, r2: Rec76) -> i64 {
+fn pack76(r1: own Rec76, r2: own Rec76) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(525)) % 999983
 }
@@ -8371,7 +8371,7 @@ fn apply77(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack77(r1: Rec77, r2: Rec77) -> i64 {
+fn pack77(r1: own Rec77, r2: own Rec77) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(703)) % 999983
 }
@@ -8481,7 +8481,7 @@ fn apply78(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack78(r1: Rec78, r2: Rec78) -> i64 {
+fn pack78(r1: own Rec78, r2: own Rec78) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(358)) % 999983
 }
@@ -8587,7 +8587,7 @@ fn apply79(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack79(r1: Rec79, r2: Rec79) -> i64 {
+fn pack79(r1: own Rec79, r2: own Rec79) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(793)) % 999983
 }
@@ -8693,7 +8693,7 @@ fn apply80(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack80(r1: Rec80, r2: Rec80) -> i64 {
+fn pack80(r1: own Rec80, r2: own Rec80) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(218)) % 999983
 }
@@ -8803,7 +8803,7 @@ fn apply81(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack81(r1: Rec81, r2: Rec81) -> i64 {
+fn pack81(r1: own Rec81, r2: own Rec81) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(129)) % 999983
 }
@@ -8909,7 +8909,7 @@ fn apply82(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack82(r1: Rec82, r2: Rec82) -> i64 {
+fn pack82(r1: own Rec82, r2: own Rec82) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(76)) % 999983
 }
@@ -9015,7 +9015,7 @@ fn apply83(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack83(r1: Rec83, r2: Rec83) -> i64 {
+fn pack83(r1: own Rec83, r2: own Rec83) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(764)) % 999983
 }
@@ -9125,7 +9125,7 @@ fn apply84(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack84(r1: Rec84, r2: Rec84) -> i64 {
+fn pack84(r1: own Rec84, r2: own Rec84) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(110)) % 999983
 }
@@ -9231,7 +9231,7 @@ fn apply85(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack85(r1: Rec85, r2: Rec85) -> i64 {
+fn pack85(r1: own Rec85, r2: own Rec85) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(673)) % 999983
 }
@@ -9337,7 +9337,7 @@ fn apply86(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack86(r1: Rec86, r2: Rec86) -> i64 {
+fn pack86(r1: own Rec86, r2: own Rec86) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(760)) % 999983
 }
@@ -9447,7 +9447,7 @@ fn apply87(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack87(r1: Rec87, r2: Rec87) -> i64 {
+fn pack87(r1: own Rec87, r2: own Rec87) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(202)) % 999983
 }
@@ -9553,7 +9553,7 @@ fn apply88(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack88(r1: Rec88, r2: Rec88) -> i64 {
+fn pack88(r1: own Rec88, r2: own Rec88) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(114)) % 999983
 }
@@ -9659,7 +9659,7 @@ fn apply89(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack89(r1: Rec89, r2: Rec89) -> i64 {
+fn pack89(r1: own Rec89, r2: own Rec89) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(414)) % 999983
 }
@@ -9769,7 +9769,7 @@ fn apply90(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack90(r1: Rec90, r2: Rec90) -> i64 {
+fn pack90(r1: own Rec90, r2: own Rec90) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(168)) % 999983
 }
@@ -9875,7 +9875,7 @@ fn apply91(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack91(r1: Rec91, r2: Rec91) -> i64 {
+fn pack91(r1: own Rec91, r2: own Rec91) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(38)) % 999983
 }
@@ -9981,7 +9981,7 @@ fn apply92(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack92(r1: Rec92, r2: Rec92) -> i64 {
+fn pack92(r1: own Rec92, r2: own Rec92) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(355)) % 999983
 }
@@ -10091,7 +10091,7 @@ fn apply93(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack93(r1: Rec93, r2: Rec93) -> i64 {
+fn pack93(r1: own Rec93, r2: own Rec93) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(633)) % 999983
 }
@@ -10197,7 +10197,7 @@ fn apply94(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack94(r1: Rec94, r2: Rec94) -> i64 {
+fn pack94(r1: own Rec94, r2: own Rec94) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(797)) % 999983
 }
@@ -10303,7 +10303,7 @@ fn apply95(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack95(r1: Rec95, r2: Rec95) -> i64 {
+fn pack95(r1: own Rec95, r2: own Rec95) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(738)) % 999983
 }
@@ -10413,7 +10413,7 @@ fn apply96(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack96(r1: Rec96, r2: Rec96) -> i64 {
+fn pack96(r1: own Rec96, r2: own Rec96) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(318)) % 999983
 }
@@ -10519,7 +10519,7 @@ fn apply97(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack97(r1: Rec97, r2: Rec97) -> i64 {
+fn pack97(r1: own Rec97, r2: own Rec97) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(79)) % 999983
 }
@@ -10625,7 +10625,7 @@ fn apply98(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack98(r1: Rec98, r2: Rec98) -> i64 {
+fn pack98(r1: own Rec98, r2: own Rec98) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(181)) % 999983
 }
@@ -10735,7 +10735,7 @@ fn apply99(x: i64) -> i64 {
     (f(x) + f(x + 3)) % 99991
 }
 
-fn pack99(r1: Rec99, r2: Rec99) -> i64 {
+fn pack99(r1: own Rec99, r2: own Rec99) -> i64 {
     let p = Pair { x: r1, y: r2 };
     (p.x.score() + p.y.shifted(879)) % 999983
 }
