@@ -23,7 +23,7 @@ const PROVIDER_READY: &str = "karac-test: provider ready";
 const PACKAGE: &str = "<package>";
 
 pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
-    let TestFront { mf, tree, tests } = test_front(filter.as_deref());
+    let TestFront { mf, tree, tests } = test_front(filter.as_deref(), true);
     let jit =
         cfg!(feature = "llvm") && !interp && std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0");
 

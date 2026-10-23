@@ -94,7 +94,12 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// invisible to later selects, so it prints "(no rows)"), and codegen rejects
 /// the structural `==` on its reference-typed `Value` enum, a gap its own
 /// diagnostic documents. Neither is a reason to re-pin it here.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
+    "elevator_project",
+    "typecheck: the legacy `karac build` refuses `ref self.stops` (only `ref v[i]` in v1), \
+     and v2 requires the `ref` on a returned place (B-2026-10-22-28); the package builds \
+     once `karac build` on a package runs on v2 (B-2026-10-22-14).",
+)];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[

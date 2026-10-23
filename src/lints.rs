@@ -429,6 +429,13 @@ pub struct CliLintOverrides {
     /// build` fallback). `Pipeline::strict_core` leaves the v2 core rules
     /// off for it, so `build` keeps tolerating what legacy accepts.
     pub legacy_core: bool,
+    /// A legacy tree check run in front of a v2 command (`karac run` and
+    /// `karac test` on a package): `ref` takes any named place, as the v2
+    /// core does (core-semantics §5.1), and not only `ref v[i]`, the legacy
+    /// backends' limit. Nothing else of the strict core is turned on, so the
+    /// check adds no refusal the v2 pipeline behind it would not make
+    /// (B-2026-10-22-28: a returned place writes its `ref`).
+    pub core_places: bool,
 }
 
 /// The lints that report a v2 core rule (`docs/core-semantics.md` §3.7: a

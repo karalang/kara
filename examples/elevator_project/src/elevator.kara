@@ -67,7 +67,7 @@ impl[S: Scheduler] Elevator[S] {
     }
 
     pub fn pending(ref self) -> ref Vec[i64] {
-        self.stops
+        ref self.stops
     }
 
     // GAP-1 (from v53): Vec has no remove_by_value.

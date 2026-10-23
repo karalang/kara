@@ -1417,7 +1417,7 @@ pub(super) fn cmd_build_project(
             && resolve_errors.is_empty()
             && type_errors.is_empty()
         {
-            if let Err(f) = run_multi_file_late_phases(&tree, &mf.name) {
+            if let Err(f) = run_multi_file_late_phases(&tree, &mf.name, false) {
                 codegen_status = BuildCodegenStatus::Failed {
                     phase: f.phase,
                     message: f.message,
@@ -1805,9 +1805,12 @@ pub(super) struct MultiFileLateFailure {
 /// The caller has already verified parse / cycles / resolve / typecheck
 /// PER MODULE; this re-runs resolve and typecheck on the flattened unit because
 /// the flattening is what makes cross-module effects visible at all.
+/// `core_places`: a v2 command runs behind this check
+/// ([`crate::lints::CliLintOverrides::core_places`]).
 pub(super) fn run_multi_file_late_phases(
     tree: &ProgramTree,
     package_name: &str,
+    core_places: bool,
 ) -> Result<Pipeline, MultiFileLateFailure> {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -1923,7 +1926,10 @@ pub(super) fn run_multi_file_late_phases(
         comptime_errors: None,
         profile: crate::manifest::CompileProfile::Default,
         profile_config: crate::manifest::ProfileConfig::default(),
-        lint_overrides: crate::lints::CliLintOverrides::default(),
+        lint_overrides: crate::lints::CliLintOverrides {
+            core_places,
+            ..Default::default()
+        },
         // Project mode already fails a build on any ownership error, use after
         // move included, so it needs no strict mode for C1.
         strict_core: false,
@@ -1977,6 +1983,10 @@ pub(super) fn run_multi_file_late_phases(
             diags: collect_pipeline_diags(&pipeline, "effect", Some(&span_table)),
         });
     }
+    // In front of a v2 command the ownership rules are the core's, as on the
+    // combined source the command then runs (B-2026-10-22-28: a returned
+    // place is lent, and a bare one is the error).
+    pipeline.strict_core = core_places;
     pipeline.ownershipcheck();
     if pipeline
         .ownership
@@ -2060,7 +2070,7 @@ pub(super) fn run_multi_file_codegen(
     crate_type: NativeCrateType,
     out_path: Option<&str>,
 ) -> BuildCodegenStatus {
-    let pipeline = match run_multi_file_late_phases(tree, &mf.name) {
+    let pipeline = match run_multi_file_late_phases(tree, &mf.name, false) {
         Ok(p) => p,
         Err(f) => {
             return BuildCodegenStatus::Failed {
@@ -3219,6 +3229,12 @@ pub(super) fn package_check_on(
     lint_overrides: &crate::lints::CliLintOverrides,
     platform: walker::Platform,
 ) -> Result<PackageCheck, String> {
+    // Every caller is `karac check` or the gate in front of `karac run`,
+    // both v2 commands, so `ref` takes any named place (B-2026-10-22-28).
+    let lint_overrides = &crate::lints::CliLintOverrides {
+        core_places: true,
+        ..lint_overrides.clone()
+    };
     let walk_opts = WalkerOpts {
         target: platform,
         ..WalkerOpts::default()
@@ -3265,7 +3281,7 @@ pub(super) fn package_check_on(
         let package_name = crate::manifest::load_from_cwd(root)
             .map(|(_, m)| m.name)
             .unwrap_or_else(|_| "package".to_string());
-        run_multi_file_late_phases(&tree, &package_name).err()
+        run_multi_file_late_phases(&tree, &package_name, lint_overrides.core_places).err()
     } else {
         None
     };

@@ -4076,6 +4076,7 @@ impl<'a> super::TypeChecker<'a> {
                 // borrows any place.
                 // B-2026-10-14-26 — the MIR pipeline's check takes it too.
                 let core_place = (self.cli_lint_overrides.strict_core
+                    || self.cli_lint_overrides.core_places
                     || self.library_methods_from_source)
                     && is_named_place_projection(operand);
                 if !matches!(operand.kind, ExprKind::Index { .. }) && !core_place {

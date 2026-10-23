@@ -407,7 +407,9 @@ pub(super) struct TestFront {
     pub tests: Vec<DiscoveredTest>,
 }
 
-pub(super) fn test_front(filter: Option<&str>) -> TestFront {
+/// `core_places`: the tests run on v2, so the tree check takes `ref` on any
+/// named place ([`crate::lints::CliLintOverrides::core_places`]).
+pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -553,6 +555,7 @@ pub(super) fn test_front(filter: Option<&str>) -> TestFront {
     // global opt-in.
     let mut module_lint_overrides = crate::lints::CliLintOverrides::default();
     module_lint_overrides.apply_manifest_lints(&mf.lints);
+    module_lint_overrides.core_places = core_places;
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
             typecheck_modules(&tree, &module_lint_overrides).errors
@@ -605,7 +608,7 @@ pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
     // executor, so the flag is accepted (for CLI uniformity) but unused.
     #[cfg(not(feature = "llvm"))]
     let _ = interp;
-    let TestFront { mf, tree, tests } = test_front(filter.as_deref());
+    let TestFront { mf, tree, tests } = test_front(filter.as_deref(), false);
 
     let run_started = std::time::Instant::now();
     emit_test_event("run_start", &format!("\"total_tests\":{}", tests.len()));
