@@ -16438,9 +16438,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => None,
         };
+        let kind = if matches!(self.tys().tcx().kind(dt), HK::MutRef(_)) {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Shared
+        };
         match fallback_value {
+            // A named place is borrowed where it is, never moved into the
+            // temporary (B-2026-10-23-2): `m.get(k) ?? empty` leaves `empty`.
+            Some(_) if is_place_expr(right) && self.is_place(right) => {
+                self.push_scope();
+                let p = self.expr_place(right, kind == BorrowKind::Mut)?;
+                self.assign(dest, Rvalue::Ref(kind, p));
+                self.pop_scope()?;
+            }
             Some(inner) => {
-                let mutable = matches!(self.tys().tcx().kind(dt), HK::MutRef(_));
                 let l = self.temp(inner);
                 self.push_scope();
                 self.expr_into(right, Place::local(l))?;
@@ -16449,11 +16461,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let at = self.let_scope.unwrap_or(self.scopes.len() - 1);
                     self.scopes[at].push(ScopeEntry::Drop(Place::local(l)));
                 }
-                let kind = if mutable {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Shared
-                };
                 self.assign(dest, Rvalue::Ref(kind, Place::local(l)));
             }
             None => {

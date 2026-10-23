@@ -7990,3 +7990,23 @@ fn mir_let_underscore_of_a_unit_variant_drops_it() {
         }
     }
 }
+
+/// `opt ?? place` with `opt: Option[ref T]` borrows the named place where it
+/// is rather than moving it into the result's temporary, so the place stays
+/// usable, inside a loop too (B-2026-10-23-2).
+#[test]
+fn mir_nil_coalesce_borrows_a_named_fallback() {
+    let src = "fn main() {\n    let mut m: Map[i64, Vec[i64]] = Map.new();\n    m.insert(1, [3, 4]);\n    \
+               let empty: Vec[i64] = Vec.new();\n    for k in 0..3 {\n        let line = m.get(k) ?? empty;\n        \
+               println(f\"{k} {line.len()}\");\n    }\n    let a = m.get(0) ?? empty;\n    \
+               println(f\"{a.len()} {empty.len()}\");\n    let s: Option[ref String] = None;\n    \
+               let name = \"x\";\n    let t = s ?? name;\n    println(f\"{t} {name}\");\n}\n";
+    let want = "0 0\n1 2\n2 0\n0 0\nx x\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
