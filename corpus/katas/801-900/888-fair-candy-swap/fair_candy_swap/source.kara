@@ -1,0 +1,132 @@
+// LeetCode #888: Fair Candy Swap -- a set of Bob's boxes.
+//
+// Swapping Alice's box x for Bob's box y evens the totals exactly when y
+// - x is half the difference, d = (Bob's total - Alice's total) / 2. So
+// put Bob's boxes in a set and look up x + d for each of Alice's. LeetCode
+// accepts any such swap; this one returns the swap with Alice's smallest
+// box, so that every arm prints the same. O(n + m).
+
+fn fair_candy_swap(alice_sizes: Vec[i64], bob_sizes: Vec[i64]) -> Vec[i64] {
+    let mut alice_total = 0;
+    for i in 0..alice_sizes.len() {
+        alice_total += alice_sizes[i];
+    }
+    let mut bob_total = 0;
+    let mut bob: Set[i64] = Set.new();
+    for j in 0..bob_sizes.len() {
+        bob_total += bob_sizes[j];
+        bob.insert(bob_sizes[j]);
+    }
+    let d = (bob_total - alice_total) / 2;
+    let mut best = -1;
+    for i in 0..alice_sizes.len() {
+        let x = alice_sizes[i];
+        if bob.contains(x + d) and (best < 0 or x < best) {
+            best = x;
+        }
+    }
+    [best, best + d]
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn show(alice_sizes: Vec[i64], bob_sizes: Vec[i64]) {
+    let swap = fair_candy_swap(alice_sizes, bob_sizes);
+    println(f"alice = {alice_sizes}, bob = {bob_sizes} -> [{swap[0]}, {swap[1]}]");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn below(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit
+}
+
+// Alice's n boxes and Bob's m, of 1 to `most` candies, with a swap that
+// evens the totals: Alice's box i for Bob's box j, Bob's box j's size
+// drawn, then his other boxes and Alice's other boxes nudged until the
+// totals differ by twice the gap; drawn again whenever that cannot be
+// done or the totals come out equal
+// (a box each can never be evened by a swap, so Bob then has two)
+fn case_boxes(seed: mut ref i64, n: i64, m_drawn: i64, most: i64) -> Vec[Vec[i64]] {
+    let m = if n + m_drawn < 3 { 2 } else { m_drawn };
+    loop {
+        let mut alice: Vec[i64] = Vec.new();
+        let mut alice_total = 0;
+        for _ in 0..n {
+            let x = 1 + below(mut seed, most);
+            alice.push(x);
+            alice_total += x;
+        }
+        let mut bob: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            bob.push(1 + below(mut seed, most));
+        }
+        let i = below(mut seed, n);
+        let j = below(mut seed, m);
+        let y = 1 + below(mut seed, most);
+        bob[j] = y;
+        // Bob's total must be Alice's + 2 (y - x)
+        let mut bob_total = 0;
+        for k in 0..m {
+            bob_total += bob[k];
+        }
+        let mut short = alice_total + 2 * (y - alice[i]) - bob_total;
+        for k in 0..m {
+            if k != j and short != 0 {
+                let step = short.max(1 - bob[k]).min(most - bob[k]);
+                bob[k] += step;
+                short -= step;
+            }
+        }
+        for k in 0..n {
+            if k != i and short != 0 {
+                let step = (0 - short).max(1 - alice[k]).min(most - alice[k]);
+                alice[k] += step;
+                short += step;
+            }
+        }
+        if short == 0 and y != alice[i] {
+            return [alice, bob];
+        }
+    }
+}
+
+fn main() {
+    show([1, 1], [2, 2]);
+    show([1, 2], [2, 3]);
+    show([2], [1, 3]);
+    show([1, 2, 5], [2, 4]);
+    show([6, 2], [9, 5]);
+    show([100000, 3], [99999, 2]);
+    show([3, 3, 3, 9], [3, 3, 3, 1, 4, 6]);
+    // small cases
+    let mut seed = 888;
+    let mut gives = 0;
+    let mut takes = 0;
+    for _ in 0..3000 {
+        let n = 1 + next_random(mut seed) % 6;
+        let m = 1 + next_random(mut seed) % 6;
+        let boxes = case_boxes(mut seed, n, m, 12);
+        let swap = fair_candy_swap(boxes[0], boxes[1]);
+        gives += swap[0];
+        takes += swap[1];
+    }
+    println(f"3000 cases of up to 6 boxes of up to 12 candies: Alice gives {gives} candies, Bob {takes}");
+    // LeetCode's sizes
+    gives = 0;
+    takes = 0;
+    let mut check = 0;
+    for _ in 0..30 {
+        let n = 1 + below(mut seed, 10000);
+        let m = 1 + below(mut seed, 10000);
+        let boxes = case_boxes(mut seed, n, m, 100000);
+        let swap = fair_candy_swap(boxes[0], boxes[1]);
+        gives += swap[0];
+        takes += swap[1];
+        check = (check * 131 + swap[0] * 7 + swap[1]) % 1000000007;
+    }
+    println(f"30 cases of up to 10^4 boxes of up to 10^5 candies: Alice gives {gives} candies, Bob {takes}, checksum {check}");
+}
