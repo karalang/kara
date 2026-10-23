@@ -1,0 +1,237 @@
+// mini_polyline — a port of the polyline library (Frederick Jansen / Bruno M.
+// Custódio, MIT): Google's Encoded Polyline Algorithm Format, the compact ASCII
+// encoding of a sequence of latitude/longitude points used by the Google Maps
+// Directions API, Mapbox, OSRM and most routing engines to ship a route's
+// geometry in a URL or a small payload.
+//
+// Each input line is a list of integer coordinates already scaled by 1e5
+// (latitude and longitude times 100000), as space-separated `lat,lng` pairs.
+// Keeping coordinates as integers is what lets the port be pure integer
+// arithmetic: the library's _py2_round(coord * 1e5) merely recovers the integer,
+// so the encoded string is defined entirely by the integer deltas. The job
+// encodes the coordinates and decodes the result back, printing:
+//
+//     enc <the polyline string>
+//     dec <lat,lng ... of the decoded coordinates>   (equals the input)
+//
+// The algorithm is delta coding + zigzag + a base-32 varint with a 0x20
+// continuation bit and a +63 printable-ASCII offset. Kāra has no bitwise
+// operators, so: x<<1 is x*2, x>>5 is x/32, x & 0x1f is x%32, 0x20|y (y<32) is
+// 32+y, and two's-complement ~x is -x-1.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let neg = n < 0;
+    let mut v = if neg { -n } else { n };
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45); // '-'
+    }
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+// collect every signed integer in the byte buffer, in order (',' and ' '
+// both just terminate a number), giving a flat [lat0, lng0, lat1, lng1, ...]
+fn parse_ints(b: ref Vec[u8]) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    let n = b.len();
+    let mut i = 0;
+    let mut cur = 0;
+    let mut neg = false;
+    let mut has = false;
+    while i < n {
+        let c = b[i] as i64;
+        if c == 45 {
+            neg = true;
+            has = true;
+        } else if c >= 48 and c <= 57 {
+            cur = cur * 10 + (c - 48);
+            has = true;
+        } else {
+            if has {
+                nums.push(if neg { -cur } else { cur });
+            }
+            cur = 0;
+            neg = false;
+            has = false;
+        }
+        i = i + 1;
+    }
+    if has {
+        nums.push(if neg { -cur } else { cur });
+    }
+    nums
+}
+
+// encode one signed delta: zigzag, then base-32 varint, MSB chunks first with
+// the 0x20 continuation bit, each chunk offset by 63 into printable ASCII
+fn enc_value(out: mut ref Vec[u8], delta: i64) {
+    let mut coord = delta * 2; // coord << 1
+    if coord < 0 {
+        coord = -coord - 1; // ~coord
+    }
+    while coord >= 32 {
+        out.push(((coord % 32) + 32 + 63) as u8); // (0x20 | (coord & 0x1f)) + 63
+        coord = coord / 32; // coord >>= 5
+    }
+    out.push((coord + 63) as u8);
+}
+
+fn encode(nums: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut prev_lat = 0;
+    let mut prev_lng = 0;
+    let mut i = 0;
+    while i + 1 < nums.len() {
+        let lat = nums[i];
+        let lng = nums[i + 1];
+        enc_value(mut out, lat - prev_lat);
+        enc_value(mut out, lng - prev_lng);
+        prev_lat = lat;
+        prev_lng = lng;
+        i = i + 2;
+    }
+    out
+}
+
+// read one varint starting at `index`; returns [decoded_value, next_index]
+fn trans(s: ref Vec[u8], index: i64) -> Vec[i64] {
+    let mut result = 0;
+    let mut shift = 0;
+    let mut byte = 32;
+    let mut idx = index;
+    let mut first = true;
+    while first or byte >= 32 {
+        first = false;
+        byte = (s[idx] as i64) - 63;
+        idx = idx + 1;
+        result = result + (byte % 32) * pow2(shift); // (byte & 0x1f) << shift
+        shift = shift + 5;
+    }
+    let half = result / 2; // result >> 1
+    let comp = result % 2; // result & 1
+    let mut res: Vec[i64] = Vec.new();
+    if comp != 0 {
+        res.push(-half - 1); // ~(result >> 1)
+    } else {
+        res.push(half);
+    }
+    res.push(idx);
+    res
+}
+
+fn decode(s: ref Vec[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut idx = 0;
+    let mut lat = 0;
+    let mut lng = 0;
+    let n = s.len();
+    while idx < n {
+        let r1 = trans(s, idx);
+        lat = lat + r1[0];
+        idx = r1[1];
+        let r2 = trans(s, idx);
+        lng = lng + r2[0];
+        idx = r2[1];
+        out.push(lat);
+        out.push(lng);
+    }
+    out
+}
+
+fn run_job(line: String) -> String {
+    let b = str_bytes(line);
+    let nums = parse_ints(b);
+    let enc = encode(nums);
+    let dec = decode(enc);
+
+    let mut out = String.new();
+    out.push_str("enc ");
+    out.push_str(String.from_utf8(enc).unwrap_or(""));
+    out.push_str("\ndec ");
+    let mut j = 0;
+    while j + 1 < dec.len() {
+        if j > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(itoa(dec[j]));
+        out.push_str(",");
+        out.push_str(itoa(dec[j + 1]));
+        j = j + 2;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("0,0\n");
+    s.push_str("0,0 100000,0\n");
+    s.push_str("100000,100000 100000,100000\n");
+    s.push_str("4071280,-7400600\n");
+    s.push_str("-3385230,14937310\n");
+    s.push_str("5150740,-12760\n");
+    s.push_str("0,0 1,0 0,1 -1,0 0,-1\n");
+    s.push_str("1234567,-7654321 1234567,-7654321 1300000,-7600000\n");
+    s.push_str("3850000,-12020000 4070000,-12095000 4325200,-12645300\n");
+    s.push_str("4852000,237000 4855000,235000 4860000,234000 4858000,236000\n");
+    s.push_str("9000000,18000000 -9000000,-18000000\n");
+    s.push_str("500000,500000 500050,500050 500100,499950\n");
+    s
+}
