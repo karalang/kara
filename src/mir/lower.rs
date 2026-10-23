@@ -3831,6 +3831,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let t = self.place_type(&p);
                         (p, t)
                     }
+                    // A place reached through a reference (`h.pe` with `h` a
+                    // bare parameter) is a `ref` scrutinee, as in a `match`
+                    // (core semantics §4.6): its non-`Copy` parts bind `ref`s.
+                    None if self.destructures(pattern)
+                        && self.is_place(value)
+                        && self.is_local_rooted(value)
+                        && self
+                            .expr_place(value, false)?
+                            .projection
+                            .contains(&ProjElem::Deref) =>
+                    {
+                        let mutable = self.binds_mut_ref([pattern]);
+                        let (p, st, by_ref) = self.scrutinee(value, mutable)?;
+                        let mut binds = Vec::new();
+                        self.bind_pattern(pattern, &p, st, by_ref, &mut binds)?;
+                        self.pop_scope()?;
+                        for (l, t) in binds {
+                            self.declare(l, t);
+                        }
+                        return Ok(());
+                    }
                     None => {
                         let t = self.expr_ty(value)?;
                         (Place::local(self.temp_of(value, t)?), t)

@@ -8409,3 +8409,43 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-22-33: a `let` that destructures a place reached through a
+/// reference (`h.pe` with `h` a bare parameter or a `mut ref`) is a `ref`
+/// scrutinee, as in a `match` (core semantics §4.6): its non-`Copy` parts
+/// bind references, so nothing moves out of the borrowed place.
+#[test]
+fn mir_a_let_destructuring_a_place_behind_a_reference_binds_refs() {
+    let src = r#"struct R { name: String }
+struct H { pe: (R, i64) }
+fn hh(h: H) -> i64 {
+    let (r, k) = h.pe;
+    let m = r;
+    m.name.len() + k
+}
+fn hs(h: H) -> i64 {
+    let R { name } = h.pe.0;
+    name.len()
+}
+fn hmut(h: mut ref H) -> i64 {
+    let (r, k) = h.pe;
+    r.name.len() + k
+}
+fn main() {
+    let x = H { pe: (R { name: "fghi".to_string() }, 100) };
+    println(hh(x));
+    println(hs(x));
+    let mut y = H { pe: (R { name: "ab".to_string() }, 1) };
+    println(hmut(mut y));
+    println(x.pe.0.name);
+}
+"#;
+    let want = "104\n4\n3\nfghi\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
