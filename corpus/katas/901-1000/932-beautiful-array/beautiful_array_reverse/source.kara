@@ -1,0 +1,110 @@
+// LeetCode #932: Beautiful Array -- counting in bit-reversed order.
+//
+// The divide and conquer's array lists x - 1 in order of its bits read
+// backwards. With b bits enough for n - 1, count i from 0 to 2^b - 1,
+// reverse i's b bits, and keep the result when it is below n: the values
+// come out in that order directly. O(n log n).
+
+fn reversed(i: i64, bits: i64) -> i64 {
+    let mut r = 0;
+    let mut v = i;
+    for _ in 0..bits {
+        r = (r << 1) | (v & 1);
+        v = v >> 1;
+    }
+    r
+}
+
+fn beautiful_array(n: i64) -> Vec[i64] {
+    let mut bits = 0;
+    while (1 << bits) < n {
+        bits += 1;
+    }
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..(1 << bits) {
+        let y = reversed(i, bits);
+        if y < n {
+            nums.push(y + 1);
+        }
+    }
+    nums
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// a permutation of 1 to n with no nums[k] the average of an earlier and a
+// later value: for each pair i < k, the value that would complete
+// nums[i], nums[k] as a progression must not come after k
+fn beautiful(nums: Vec[i64], n: i64) -> bool {
+    if nums.len() != n {
+        return false;
+    }
+    let mut pos: Vec[i64] = Vec.filled(n + 1, -1);
+    for i in 0..n {
+        let v = nums[i];
+        if v < 1 or v > n or pos[v] >= 0 {
+            return false;
+        }
+        pos[v] = i;
+    }
+    for k in 0..n {
+        for i in 0..k {
+            let v = 2 * nums[k] - nums[i];
+            if v >= 1 and v <= n and pos[v] > k {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ", ";
+        }
+        s = s + f"{nums[i]}";
+    }
+    s
+}
+
+fn show(name: String, n: i64) {
+    let nums = beautiful_array(n);
+    let verdict = if beautiful(nums.clone(), n) { "beautiful" } else { "NOT beautiful" };
+    println(f"{name}: [{listed(nums)}], {verdict}");
+}
+
+fn main() {
+    // LeetCode's two examples (it accepts any beautiful array; its own
+    // answers are [2, 1, 4, 3] and [3, 1, 2, 5, 4])
+    show("example 1 (n = 4)", 4);
+    show("example 2 (n = 5)", 5);
+    // the smallest, and either side of a power of two
+    show("n = 1", 1);
+    show("n = 2", 2);
+    show("n = 3", 3);
+    show("n = 8", 8);
+    show("n = 9", 9);
+    // every n up to 100 checked
+    let mut bad = 0;
+    for n in 1..101 {
+        if not beautiful(beautiful_array(n), n) {
+            bad += 1;
+        }
+    }
+    println(f"n from 1 to 100: {100 - bad} beautiful, {bad} not");
+    // every n up to LeetCode's largest, folded into a checksum
+    let mut elements = 0;
+    let mut check = 0;
+    for n in 1..1001 {
+        for x in beautiful_array(n).iter() {
+            elements += 1;
+            check = (check * 1000003 + *x) % 1000000007;
+        }
+    }
+    println(f"n from 1 to 1000: {elements} elements, checksum {check}");
+    let big = beautiful_array(1000);
+    let verdict = if beautiful(big.clone(), 1000) { "beautiful" } else { "NOT beautiful" };
+    println(f"n = 1000: {verdict}, starting {big[0]}, {big[1]}, {big[2]}, {big[3]} and ending {big[996]}, {big[997]}, {big[998]}, {big[999]}");
+}

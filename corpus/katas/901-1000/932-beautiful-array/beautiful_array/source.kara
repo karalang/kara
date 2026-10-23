@@ -1,0 +1,111 @@
+// LeetCode #932: Beautiful Array -- divide and conquer with a memo.
+//
+// If a is beautiful, so is every 2x - 1 and every 2x over it, and an odd
+// value and an even one never average to a whole number between them.
+// So the odd values 1, 3, 5, ... arranged from a beautiful array of
+// (n + 1) / 2, followed by the even values 2, 4, ... arranged from a
+// beautiful array of n / 2, are beautiful. Build it recursively, keeping
+// each size's array in a Map so it is built once. O(n log n).
+
+fn build(n: i64, memo: mut ref Map[i64, Vec[i64]]) -> Vec[i64] {
+    if let Some(done) = memo.get(n) {
+        return done.clone();
+    }
+    let mut out: Vec[i64] = Vec.new();
+    if n == 1 {
+        out.push(1);
+    } else {
+        for x in build((n + 1) / 2, mut memo).iter() {
+            out.push(2 * *x - 1);
+        }
+        for x in build(n / 2, mut memo).iter() {
+            out.push(2 * *x);
+        }
+    }
+    memo.insert(n, out.clone());
+    out
+}
+
+fn beautiful_array(n: i64) -> Vec[i64] {
+    let mut memo: Map[i64, Vec[i64]] = Map.new();
+    build(n, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// a permutation of 1 to n with no nums[k] the average of an earlier and a
+// later value: for each pair i < k, the value that would complete
+// nums[i], nums[k] as a progression must not come after k
+fn beautiful(nums: Vec[i64], n: i64) -> bool {
+    if nums.len() != n {
+        return false;
+    }
+    let mut pos: Vec[i64] = Vec.filled(n + 1, -1);
+    for i in 0..n {
+        let v = nums[i];
+        if v < 1 or v > n or pos[v] >= 0 {
+            return false;
+        }
+        pos[v] = i;
+    }
+    for k in 0..n {
+        for i in 0..k {
+            let v = 2 * nums[k] - nums[i];
+            if v >= 1 and v <= n and pos[v] > k {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s = s + ", ";
+        }
+        s = s + f"{nums[i]}";
+    }
+    s
+}
+
+fn show(name: String, n: i64) {
+    let nums = beautiful_array(n);
+    let verdict = if beautiful(nums.clone(), n) { "beautiful" } else { "NOT beautiful" };
+    println(f"{name}: [{listed(nums)}], {verdict}");
+}
+
+fn main() {
+    // LeetCode's two examples (it accepts any beautiful array; its own
+    // answers are [2, 1, 4, 3] and [3, 1, 2, 5, 4])
+    show("example 1 (n = 4)", 4);
+    show("example 2 (n = 5)", 5);
+    // the smallest, and either side of a power of two
+    show("n = 1", 1);
+    show("n = 2", 2);
+    show("n = 3", 3);
+    show("n = 8", 8);
+    show("n = 9", 9);
+    // every n up to 100 checked
+    let mut bad = 0;
+    for n in 1..101 {
+        if not beautiful(beautiful_array(n), n) {
+            bad += 1;
+        }
+    }
+    println(f"n from 1 to 100: {100 - bad} beautiful, {bad} not");
+    // every n up to LeetCode's largest, folded into a checksum
+    let mut elements = 0;
+    let mut check = 0;
+    for n in 1..1001 {
+        for x in beautiful_array(n).iter() {
+            elements += 1;
+            check = (check * 1000003 + *x) % 1000000007;
+        }
+    }
+    println(f"n from 1 to 1000: {elements} elements, checksum {check}");
+    let big = beautiful_array(1000);
+    let verdict = if beautiful(big.clone(), 1000) { "beautiful" } else { "NOT beautiful" };
+    println(f"n = 1000: {verdict}, starting {big[0]}, {big[1]}, {big[2]}, {big[3]} and ending {big[996]}, {big[997]}, {big[998]}, {big[999]}");
+}
