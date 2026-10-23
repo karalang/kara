@@ -1,0 +1,142 @@
+// LeetCode #916: Word Subsets -- every word of words2 folded into one
+// need, the largest count of each letter.
+//
+// A word a is universal when, for each letter, it holds at least as many
+// as each word of words2 does: at least the largest count of that letter
+// over words2. So fold words2 into those 26 largest counts once, then
+// keep each word of words1 whose own counts reach all 26. O(total length
+// + 26 * (|words1| + |words2|)).
+
+fn counts(word: String) -> Array[i64, 26] {
+    let mut count: Array[i64, 26] = [0; 26];
+    for b in word.bytes() {
+        count[(b - b'a') as i64] += 1;
+    }
+    count
+}
+
+fn word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut need: Array[i64, 26] = [0; 26];
+    for b in words2.iter() {
+        let count = counts(*b);
+        for c in 0..26 {
+            need[c] = need[c].max(count[c]);
+        }
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let count = counts(*a);
+        let mut all = true;
+        for c in 0..26 {
+            if count[c] < need[c] {
+                all = false;
+            }
+        }
+        if all {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn join(words: Vec[String]) -> String {
+    let mut s = String.new();
+    for i in 0..words.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"\"{words[i]}\"");
+    }
+    s
+}
+
+fn show(words1: Vec[String], words2: Vec[String]) {
+    println(f"words1 = [{join(words1)}], words2 = [{join(words2)}]: [{join(word_subsets(words1, words2))}]");
+}
+
+// A word of 1 to `longest` letters from the first `letters` of the
+// alphabet.
+fn random_word(seed: mut ref i64, longest: i64, letters: i64) -> String {
+    let mut w = String.new();
+    let len = 1 + next_random(mut seed) % longest;
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// `count` distinct random words.
+fn random_words(seed: mut ref i64, count: i64, longest: i64, letters: i64) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    while words.len() < count {
+        let w = random_word(mut seed, longest, letters);
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    words
+}
+
+fn fold(check: i64, words: Vec[String]) -> i64 {
+    let mut h = check;
+    for w in words.iter() {
+        for b in w.bytes() {
+            h = (h * 31 + b as i64) % 1000000007;
+        }
+        h = (h * 31 + 7) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    show(vec!["amazon", "apple", "facebook", "google", "leetcode"], vec!["e", "o"]);
+    show(vec!["amazon", "apple", "facebook", "google", "leetcode"], vec!["l", "e"]);
+    show(vec!["amazon", "apple", "facebook", "google", "leetcode"], vec!["e", "oo"]);
+    show(vec!["amazon", "apple", "facebook", "google", "leetcode"], vec!["lo", "eo"]);
+    show(vec!["a", "b", "ab", "ba", "aab"], vec!["a", "a"]);
+    show(vec!["a", "b", "ab", "ba", "aab"], vec!["aa"]);
+    show(vec!["abc"], vec!["z"]);
+    // random cases: up to 300 words of up to 10 letters from 3, 6 or 26
+    // letters, against up to 5 words of up to 4 letters
+    let mut seed = 916;
+    let mut kept = 0;
+    let mut check = 0;
+    for c in 0..400 {
+        let letters = if c % 3 == 0 { 3 } else if c % 3 == 1 { 6 } else { 26 };
+        let n1 = 1 + next_random(mut seed) % 300;
+        let n2 = 1 + next_random(mut seed) % 5;
+        let words1 = random_words(mut seed, n1, 10, letters);
+        let mut words2: Vec[String] = Vec.new();
+        for _ in 0..n2 {
+            words2.push(random_word(mut seed, 4, letters));
+        }
+        let got = word_subsets(words1, words2);
+        kept += got.len();
+        check = fold(check, got);
+    }
+    println(f"400 cases: {kept} universal words, checksum {check}");
+    // LeetCode's largest: 10^4 words of up to 10 letters on each side
+    let words1 = random_words(mut seed, 10000, 10, 26);
+    let mut words2: Vec[String] = Vec.new();
+    for _ in 0..10000 {
+        words2.push(random_word(mut seed, 1, 26));
+    }
+    let wide = word_subsets(words1, words2);
+    println(f"10000 words against every single letter: {wide.len()} universal");
+    let words1 = random_words(mut seed, 10000, 10, 4);
+    let mut words2: Vec[String] = Vec.new();
+    for _ in 0..10000 {
+        words2.push(random_word(mut seed, 3, 2));
+    }
+    let narrow = word_subsets(words1, words2);
+    println(f"10000 words of 4 letters against 10000 of 2: {narrow.len()} universal, checksum {fold(0, narrow)}");
+}

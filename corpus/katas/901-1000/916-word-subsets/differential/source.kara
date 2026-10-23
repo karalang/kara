@@ -1,0 +1,433 @@
+// LeetCode #916: Word Subsets -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given two string arrays words1 and words2. A
+// string b is a subset of string a if every letter in b occurs in a
+// including multiplicity; for example, "wrr" is a subset of "warrior" but
+// is not a subset of "world". A string a from words1 is universal if for
+// every string b in words2, b is a subset of a. Return an array of all
+// the universal strings in words1 (here, in words1's order).
+
+// ---- the ★ arm: the need folded into the largest count of each letter -----
+fn star_counts(word: String) -> Array[i64, 26] {
+    let mut count: Array[i64, 26] = [0; 26];
+    for b in word.bytes() {
+        count[(b - b'a') as i64] += 1;
+    }
+    count
+}
+
+fn star_word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut need: Array[i64, 26] = [0; 26];
+    for b in words2.iter() {
+        let count = star_counts(*b);
+        for c in 0..26 {
+            need[c] = need[c].max(count[c]);
+        }
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let count = star_counts(*a);
+        let mut all = true;
+        for c in 0..26 {
+            if count[c] < need[c] {
+                all = false;
+            }
+        }
+        if all {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- the sorted arm: the need as one sorted word, matched against each word sorted 
+fn sorted_sorted_letters(word: String) -> Vec[u8] {
+    let mut letters: Vec[u8] = Vec.new();
+    for b in word.bytes() {
+        letters.push(b);
+    }
+    letters.sort();
+    letters
+}
+
+fn sorted_word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut need: Vec[u8] = Vec.new();
+    for b in words2.iter() {
+        let more = sorted_sorted_letters(*b);
+        // the union with multiplicity of two sorted letter lists
+        let mut merged: Vec[u8] = Vec.new();
+        let mut i = 0;
+        let mut j = 0;
+        while i < need.len() or j < more.len() {
+            if j == more.len() or (i < need.len() and need[i] < more[j]) {
+                merged.push(need[i]);
+                i += 1;
+            } else if i == need.len() or more[j] < need[i] {
+                merged.push(more[j]);
+                j += 1;
+            } else {
+                merged.push(need[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+        need = merged;
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let have = sorted_sorted_letters(*a);
+        let mut i = 0;
+        for h in have.iter() {
+            if i < need.len() and need[i] == *h {
+                i += 1;
+            }
+        }
+        if i == need.len() {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- the map arm: the need in a map from letter to count ------------------
+fn map_counts(word: String) -> Map[u8, i64] {
+    let mut count: Map[u8, i64] = Map.new();
+    for b in word.bytes() {
+        let c = count.get(b).unwrap_or(0);
+        count.insert(b, c + 1);
+    }
+    count
+}
+
+fn map_word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut need: Map[u8, i64] = Map.new();
+    for b in words2.iter() {
+        for (letter, c) in map_counts(*b).iter() {
+            let had = need.get(*letter).unwrap_or(0);
+            if *c > had {
+                need.insert(*letter, *c);
+            }
+        }
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let have = map_counts(*a);
+        let mut all = true;
+        for (letter, c) in need.iter() {
+            if have.get(*letter).unwrap_or(0) < *c {
+                all = false;
+            }
+        }
+        if all {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- the decrement arm: the need spent letter by letter -------------------
+fn decrement_word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut need: Vec[i64] = Vec.filled(26, 0);
+    for b in words2.iter() {
+        let mut count: Vec[i64] = Vec.filled(26, 0);
+        for letter in b.bytes() {
+            let c = (letter - b'a') as i64;
+            count[c] += 1;
+            need[c] = need[c].max(count[c]);
+        }
+    }
+    let mut owed_letters = 0;
+    for c in 0..26 {
+        owed_letters += need[c];
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let mut owing = need.clone();
+        let mut left = owed_letters;
+        for letter in a.bytes() {
+            let c = (letter - b'a') as i64;
+            if owing[c] > 0 {
+                left -= 1;
+            }
+            owing[c] -= 1;
+        }
+        if left == 0 {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- the letters arm: the candidates filtered one letter at a time --------
+fn letters_count_of(word: String, letter: u8) -> i64 {
+    let mut n = 0;
+    for b in word.bytes() {
+        if b == letter {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn letters_word_subsets(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut candidates: Vec[i64] = Vec.new();
+    for i in 0..words1.len() {
+        candidates.push(i);
+    }
+    for c in 0..26 {
+        let letter = (97 + c) as u8;
+        let mut need = 0;
+        for b in words2.iter() {
+            need = need.max(letters_count_of(*b, letter));
+        }
+        if need > 0 {
+            let mut kept: Vec[i64] = Vec.new();
+            for i in candidates.iter() {
+                if letters_count_of(words1[*i], letter) >= need {
+                    kept.push(*i);
+                }
+            }
+            candidates = kept;
+        }
+    }
+    let mut universal: Vec[String] = Vec.new();
+    for i in candidates.iter() {
+        universal.push(words1[*i].clone());
+    }
+    universal
+}
+
+fn arm(x: i64, words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    if x == 0 {
+        star_word_subsets(words1, words2)
+    } else if x == 1 {
+        sorted_word_subsets(words1, words2)
+    } else if x == 2 {
+        map_word_subsets(words1, words2)
+    } else if x == 3 {
+        decrement_word_subsets(words1, words2)
+    } else {
+        letters_word_subsets(words1, words2)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// b is a subset of a when every letter of b can be matched to its own
+// letter of a: each letter of b takes the first unused equal letter.
+fn subset(b: String, a: String) -> bool {
+    let have: Vec[u8] = a.bytes().to_vec();
+    let mut used: Vec[bool] = Vec.filled(have.len(), false);
+    for letter in b.bytes() {
+        let mut found = false;
+        for i in 0..have.len() {
+            if not found and not used[i] and have[i] == letter {
+                used[i] = true;
+                found = true;
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+// the words of words1, in order, of which every word of words2 is a subset
+fn literal(words1: Vec[String], words2: Vec[String]) -> Vec[String] {
+    let mut universal: Vec[String] = Vec.new();
+    for a in words1.iter() {
+        let mut all = true;
+        for b in words2.iter() {
+            if not subset(*b, *a) {
+                all = false;
+            }
+        }
+        if all {
+            universal.push(a.clone());
+        }
+    }
+    universal
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, longest: i64, letters: i64) -> String {
+    let mut w = String.new();
+    let len = 1 + next_random(mut seed) % longest;
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+fn random_words(seed: mut ref i64, count: i64, longest: i64, letters: i64) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    while words.len() < count {
+        let w = random_word(mut seed, longest, letters);
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    words
+}
+
+// every letter replaced through `to`, a permutation of the alphabet
+fn renamed(words: Vec[String], to: Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        let mut r = String.new();
+        for b in w.bytes() {
+            r.push((97 + to[(b - b'a') as i64]) as u8 as char);
+        }
+        out.push(r);
+    }
+    out
+}
+
+// the letters of `w` in a random order
+fn shuffled(seed: mut ref i64, w: String) -> String {
+    let mut letters: Vec[u8] = w.bytes().to_vec();
+    let mut i = letters.len();
+    while i > 1 {
+        let j = next_random(mut seed) % i;
+        i -= 1;
+        let keep = letters[i];
+        letters[i] = letters[j];
+        letters[j] = keep;
+    }
+    let mut r = String.new();
+    for b in letters.iter() {
+        r.push(*b as char);
+    }
+    r
+}
+
+// whether `part` is `whole` with some words left out, in the same order
+fn sublist(part: Vec[String], whole: Vec[String]) -> bool {
+    let mut i = 0;
+    for w in whole.iter() {
+        if i < part.len() and part[i] == *w {
+            i += 1;
+        }
+    }
+    i == part.len()
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, words1: Vec[String], words2: Vec[String], letters: i64, small: bool) {
+    let mut want: Vec[String] = Vec.new();
+    if small {
+        want = literal(words1, words2);
+    }
+    let mut answers: Vec[Vec[String]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, words1, words2));
+    }
+    // P2: the alphabet permuted at random in both lists
+    let mut to: Vec[i64] = Vec.new();
+    for c in 0..26 {
+        to.push(c);
+    }
+    for i in 0..25 {
+        let j = i + next_random(mut seed) % (26 - i);
+        let keep = to[i];
+        to[i] = to[j];
+        to[j] = keep;
+    }
+    let words1_renamed = renamed(words1, to);
+    let words2_renamed = renamed(words2, to);
+    // P3: words2 reversed, each word's letters shuffled, and a word that
+    // is a front part of one of them added
+    let mut rearranged: Vec[String] = Vec.new();
+    let mut k = words2.len();
+    while k > 0 {
+        k -= 1;
+        rearranged.push(shuffled(mut seed, words2[k]));
+    }
+    let from = words2[next_random(mut seed) % words2.len()].clone();
+    let cut = 1 + next_random(mut seed) % from.len();
+    rearranged.push(from.substring(0, cut));
+    // P5: one more random word in words2
+    let mut more = words2.clone();
+    more.push(random_word(mut seed, 4, letters));
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the words of words1 of which every word of words2 is a subset
+        if small {
+            check(mut t, 1, got == want);
+        }
+        check(mut t, 2, arm(x, words1_renamed, words2_renamed) == renamed(got, to));
+        check(mut t, 3, arm(x, words1, rearranged) == got);
+        // P4: the answer is universal for itself
+        check(mut t, 4, sublist(got, words1) and arm(x, got, words2) == got);
+        // P5: a further demand keeps only some of the answer
+        check(mut t, 5, sublist(arm(x, words1, more), got));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 916;
+    let mut cases = 0;
+    let mut words = 0;
+    let mut kept = 0;
+    // up to 6 words of up to 5 letters from 3 against up to 3 words of up
+    // to 3 letters, checked against the statement; then up to 200 words
+    // of up to 10 letters from 3, 6 or 26 against up to 5 of up to 4
+    for c in 0..3200 {
+        let small = c < 3000;
+        let letters = if small { 3 } else if c % 3 == 0 { 3 } else if c % 3 == 1 { 6 } else { 26 };
+        let n1 = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 200 };
+        let n2 = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 5 };
+        let words1 = random_words(mut seed, n1, if small { 5 } else { 10 }, letters);
+        let mut words2: Vec[String] = Vec.new();
+        for _ in 0..n2 {
+            words2.push(random_word(mut seed, if small { 3 } else { 4 }, letters));
+        }
+        cases += 1;
+        words += n1 + n2;
+        kept += star_word_subsets(words1, words2).len();
+        properties(mut t, mut seed, words1, words2, letters, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {words} words, {kept} universal, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

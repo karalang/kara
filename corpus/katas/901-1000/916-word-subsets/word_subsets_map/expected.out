@@ -1,0 +1,10 @@
+words1 = ["amazon","apple","facebook","google","leetcode"], words2 = ["e","o"]: ["facebook","google","leetcode"]
+words1 = ["amazon","apple","facebook","google","leetcode"], words2 = ["l","e"]: ["apple","google","leetcode"]
+words1 = ["amazon","apple","facebook","google","leetcode"], words2 = ["e","oo"]: ["facebook","google"]
+words1 = ["amazon","apple","facebook","google","leetcode"], words2 = ["lo","eo"]: ["google","leetcode"]
+words1 = ["a","b","ab","ba","aab"], words2 = ["a","a"]: ["a","ab","ba","aab"]
+words1 = ["a","b","ab","ba","aab"], words2 = ["aa"]: ["aab"]
+words1 = ["abc"], words2 = ["z"]: []
+400 cases: 12011 universal words, checksum 614428426
+10000 words against every single letter: 0 universal
+10000 words of 4 letters against 10000 of 2: 670 universal, checksum 783817650
