@@ -6827,6 +6827,8 @@ This matters for three reasons:
 
 **Maintainership invariant.** Contributors must not put LLVM types into syntax-level, analysis-level or MIR structures. A stage that needs to pass a hint to code generation (a layout decision, a vectorization annotation) does so through plain-data hint records that the LLVM stage consumes.
 
+In the compiler source this stage is `src/backend/` (MIR → LLVM, the AOT and ASan drivers, the LLJIT and its runner). Since M3, when the legacy `src/codegen.rs` was deleted, it is the only module that imports `inkwell` or names an LLVM type, and CI's codegen containment guard enforces that.
+
 #### Observable phases
 
 The streaming diagnostic protocol ([Streaming phase events](#streaming-phase-events)) reports these phases:
