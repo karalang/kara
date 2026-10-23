@@ -1,0 +1,321 @@
+// LeetCode #879: Profitable Schemes -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: a group of n members and a list of crimes; crime i
+// makes profit[i] and needs group[i] members, and a member who takes part
+// in one crime cannot take part in another. A profitable scheme is any
+// subset of the crimes that makes at least min_profit and uses at most n
+// members in total. Return how many schemes there are, modulo 10^9 + 7.
+
+// ---- the ★ arm: a knapsack over members and profit ------------------------
+fn star_profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut ways: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        ways.push(Vec.filled(min_profit + 1, 0));
+    }
+    ways[0][0] = 1;
+    for c in 0..group.len() {
+        let g = group[c];
+        let gain = profit[c];
+        let mut m = n;
+        while m >= g {
+            for p in 0..min_profit + 1 {
+                let q = (p + gain).min(min_profit);
+                ways[m][q] = (ways[m][q] + ways[m - g][p]) % modulus;
+            }
+            m -= 1;
+        }
+    }
+    let mut total = 0;
+    for m in 0..n + 1 {
+        total = (total + ways[m][min_profit]) % modulus;
+    }
+    total
+}
+
+// ---- the table arm: the full table over crimes ----------------------------
+fn table_profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let crimes = group.len();
+    let mut count: Vec[Vec[Vec[i64]]] = Vec.new();
+    // no crimes: only the empty set, which makes profit 0
+    let mut first: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.filled(min_profit + 1, 0);
+        row[0] = 1;
+        first.push(row);
+    }
+    count.push(first);
+    for c in 0..crimes {
+        let mut layer: Vec[Vec[i64]] = Vec.new();
+        for m in 0..n + 1 {
+            let mut row: Vec[i64] = Vec.new();
+            for p in 0..min_profit + 1 {
+                let mut ways = count[c][m][p];
+                if m >= group[c] {
+                    ways = (ways + count[c][m - group[c]][(p - profit[c]).max(0)]) % modulus;
+                }
+                row.push(ways);
+            }
+            layer.push(row);
+        }
+        count.push(layer);
+    }
+    count[crimes][n][min_profit]
+}
+
+// ---- the memo arm: memoized recursion over the crimes ---------------------
+fn memo_profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let mut memo: Map[i64, i64] = Map.new();
+    let stride = n.max(min_profit) + 1;
+    memo_schemes(group, profit, stride, 0, n, min_profit, mut memo)
+}
+
+fn memo_schemes(group: Vec[i64], profit: Vec[i64], stride: i64, c: i64, members: i64, needed: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if c == group.len() {
+        return if needed == 0 { 1 } else { 0 };
+    }
+    let key = (c * stride + members) * stride + needed;
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    let mut ways = memo_schemes(group, profit, stride, c + 1, members, needed, mut memo);
+    if group[c] <= members {
+        ways += memo_schemes(group, profit, stride, c + 1, members - group[c], (needed - profit[c]).max(0), mut memo);
+    }
+    ways %= 1000000007;
+    memo.insert(key, ways);
+    ways
+}
+
+// ---- the complement arm: every set that fits, less the unprofitable ones --
+fn complement_profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut fits: Vec[i64] = Vec.filled(n + 1, 0);
+    fits[0] = 1;
+    let mut poor: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        poor.push(Vec.filled(min_profit, 0));
+    }
+    if min_profit > 0 {
+        poor[0][0] = 1;
+    }
+    for c in 0..group.len() {
+        let g = group[c];
+        let mut m = n;
+        while m >= g {
+            fits[m] = (fits[m] + fits[m - g]) % modulus;
+            let mut p = min_profit - 1;
+            while p >= profit[c] {
+                poor[m][p] = (poor[m][p] + poor[m - g][p - profit[c]]) % modulus;
+                p -= 1;
+            }
+            m -= 1;
+        }
+    }
+    let mut total = 0;
+    for m in 0..n + 1 {
+        total += fits[m];
+        for p in 0..min_profit {
+            total -= poor[m][p];
+        }
+        total %= modulus;
+    }
+    (total % modulus + modulus) % modulus
+}
+
+// ---- the push arm: states pushed forward into a fresh table ---------------
+fn push_profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let width = min_profit + 1;
+    // state m * width + p: m members used, profit p capped at min_profit
+    let mut ways: Vec[i64] = Vec.filled((n + 1) * width, 0);
+    ways[0] = 1;
+    for c in 0..group.len() {
+        let mut next = ways.clone();
+        for m in 0..n + 1 - group[c] {
+            for p in 0..width {
+                let here = ways[m * width + p];
+                if here > 0 {
+                    let to = (m + group[c]) * width + (p + profit[c]).min(min_profit);
+                    next[to] = (next[to] + here) % modulus;
+                }
+            }
+        }
+        ways = next;
+    }
+    let mut total = 0;
+    for m in 0..n + 1 {
+        total = (total + ways[m * width + min_profit]) % modulus;
+    }
+    total
+}
+
+fn arm(x: i64, n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    match x {
+        0 => star_profitable_schemes(n, min_profit, group, profit),
+        1 => table_profitable_schemes(n, min_profit, group, profit),
+        2 => memo_profitable_schemes(n, min_profit, group, profit),
+        3 => complement_profitable_schemes(n, min_profit, group, profit),
+        _ => push_profitable_schemes(n, min_profit, group, profit),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every subset of the crimes, as the bits of a number from 0 to 2^k - 1,
+// with its members and its profit added up; a scheme uses at most n
+// members and makes at least min_profit
+fn literal(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let k = group.len();
+    let mut schemes = 0;
+    let mut subset = 0;
+    while subset < (1 << k) {
+        let mut members = 0;
+        let mut made = 0;
+        for c in 0..k {
+            if (subset >> c) & 1 == 1 {
+                members += group[c];
+                made += profit[c];
+            }
+        }
+        if members <= n and made >= min_profit {
+            schemes += 1;
+        }
+        subset += 1;
+    }
+    schemes % 1000000007
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P5 for one case over the five arms (P1 only when `small`); the
+// counts stay below the modulus, so they can be compared as numbers.
+// Returns the ★ arm's count.
+fn properties(t: mut ref Tally, seed: mut ref i64, n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64], small: bool) -> i64 {
+    let k = group.len();
+    let want = if small { literal(n, min_profit, group, profit) } else { 0 };
+    let mut members = 0;
+    for g in group.iter() {
+        members += *g;
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for c in 0..k {
+        order.push(c);
+    }
+    for i in 0..k {
+        let j = i + next_random(mut seed) % (k - i);
+        order.swap(i, j);
+    }
+    let mut shuffled_group: Vec[i64] = Vec.new();
+    let mut shuffled_profit: Vec[i64] = Vec.new();
+    for c in order.iter() {
+        shuffled_group.push(group[*c]);
+        shuffled_profit.push(profit[*c]);
+    }
+    let mut big_group = group.clone();
+    let mut big_profit = profit.clone();
+    big_group.push(n + 1 + next_random(mut seed) % 5);
+    big_profit.push(next_random(mut seed) % 20);
+    let mut star = 0;
+    for x in 0..5 {
+        let got = arm(x, n, min_profit, group, profit);
+        if x == 0 {
+            star = got;
+        }
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: with no profit needed and room for every crime, every one of
+        // the 2^k subsets is a scheme
+        check(mut t, 2, arm(x, members, 0, group, profit) == (1 << k));
+        // P3: the crimes in another order give the same count
+        check(mut t, 3, arm(x, n, min_profit, shuffled_group, shuffled_profit) == got);
+        // P4: one more member never loses a scheme, and one more unit of
+        // profit needed never adds one
+        check(mut t, 4, arm(x, n + 1, min_profit, group, profit) >= got and arm(x, n, min_profit + 1, group, profit) <= got);
+        // P5: a crime needing more than n members changes nothing
+        check(mut t, 5, arm(x, n, min_profit, big_group, big_profit) == got);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 879;
+    // 1 to 12 crimes against the statement, 13 to 24 against the rest
+    for k in 0..1600 {
+        let small = k < 1500;
+        let crimes = if small { next_random(mut seed) % 12 + 1 } else { next_random(mut seed) % 12 + 13 };
+        let n = next_random(mut seed) % (if small { 15 } else { 40 }) + 1;
+        let min_profit = next_random(mut seed) % (if small { 16 } else { 40 });
+        let mut group: Vec[i64] = Vec.new();
+        let mut profit: Vec[i64] = Vec.new();
+        for _ in 0..crimes {
+            group.push(next_random(mut seed) % 5 + 1);
+            profit.push(next_random(mut seed) % 7);
+        }
+        cases += 1;
+        total += properties(mut t, mut seed, n, min_profit, group, profit, small);
+    }
+    // LeetCode's sizes, too many schemes to count by any other means: each
+    // arm agrees with at least two of the other four
+    for k in 0..4 {
+        let n = 50 + next_random(mut seed) % 51;
+        let min_profit = 50 + next_random(mut seed) % 51;
+        let mut group: Vec[i64] = Vec.new();
+        let mut profit: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            group.push(next_random(mut seed) % (if k % 2 == 0 { 100 } else { 10 }) + 1);
+            profit.push(next_random(mut seed) % (if k % 2 == 0 { 101 } else { 11 }));
+        }
+        let mut answers: Vec[i64] = Vec.new();
+        for x in 0..5 {
+            answers.push(arm(x, n, min_profit, group, profit));
+        }
+        for x in 0..5 {
+            let mut agree = 0;
+            for y in 0..5 {
+                if y != x and answers[y] == answers[x] {
+                    agree += 1;
+                }
+            }
+            // P6: the arms agree
+            check(mut t, 6, agree >= 2);
+        }
+        cases += 1;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, counts sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/879-profitable-schemes/bench/profitable_schemes.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "d869acf81"
+extracted_src = "b44b4f6d"
+model_rev = "aafbe785"
+model_src = "b44b4f6d"

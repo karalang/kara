@@ -1,0 +1,56 @@
+// LeetCode #879 bench: the ★ arm (a knapsack over members and profit) on
+// 600 cases of LeetCode's sizes.
+
+fn profitable_schemes(n: i64, min_profit: i64, group: Vec[i64], profit: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut ways: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        ways.push(Vec.filled(min_profit + 1, 0));
+    }
+    ways[0][0] = 1;
+    for c in 0..group.len() {
+        let g = group[c];
+        let gain = profit[c];
+        let mut m = n;
+        while m >= g {
+            for p in 0..min_profit + 1 {
+                let q = (p + gain).min(min_profit);
+                ways[m][q] = (ways[m][q] + ways[m - g][p]) % modulus;
+            }
+            m -= 1;
+        }
+    }
+    let mut total = 0;
+    for m in 0..n + 1 {
+        total = (total + ways[m][min_profit]) % modulus;
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 879;
+    let mut total = 0;
+    let mut check = 0;
+    for k in 0..600 {
+        // 100 crimes, n and min_profit from 50 to 100; every other case
+        // with small groups and profits, so that more of the crimes fit
+        let n = 50 + next_random(mut seed) % 51;
+        let min_profit = 50 + next_random(mut seed) % 51;
+        let wide = k % 2 == 0;
+        let mut group: Vec[i64] = Vec.new();
+        let mut profit: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            group.push(next_random(mut seed) % (if wide { 100 } else { 10 }) + 1);
+            profit.push(next_random(mut seed) % (if wide { 101 } else { 11 }));
+        }
+        let answer = profitable_schemes(n, min_profit, group, profit);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"600 cases of 100 crimes: counts sum to {total}, checksum {check}");
+}

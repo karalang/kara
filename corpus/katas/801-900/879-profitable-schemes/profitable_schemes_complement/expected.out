@@ -1,0 +1,12 @@
+n = 5, minProfit = 3, group = [2, 2], profit = [2, 3] -> 2
+n = 10, minProfit = 5, group = [2, 3, 5], profit = [6, 7, 8] -> 7
+n = 1, minProfit = 1, group = [2], profit = [5] -> 0
+n = 1, minProfit = 0, group = [2], profit = [5] -> 1
+n = 4, minProfit = 0, group = [1, 2, 1], profit = [0, 0, 0] -> 8
+n = 3, minProfit = 10, group = [1, 1, 1], profit = [3, 3, 3] -> 0
+n = 100, minProfit = 100, group = [1, 1, ... (100 crimes)], profit = [1, 1, ... (100 crimes)] -> 1
+n = 100, minProfit = 0, group = [1, 1, ... (100 crimes)], profit = [1, 1, ... (100 crimes)] -> 976371285
+n = 100, minProfit = 100, group = [1, 1, ... (100 crimes)], profit = [100, 100, ... (100 crimes)] -> 976371284
+n = 100, minProfit = 100, group = [100, 100, ... (100 crimes)], profit = [100, 100, ... (100 crimes)] -> 100
+3000 cases of 1 to 10 crimes: counts sum to 52346 (mod 10^9 + 7)
+8 cases of 100 crimes: counts sum to 948254191 (mod 10^9 + 7), checksum 704029115
