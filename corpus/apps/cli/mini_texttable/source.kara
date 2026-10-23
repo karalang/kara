@@ -1,0 +1,2577 @@
+// mini_texttable: a port of texttable 1.7.2 (MIT, Gerome Fournier), the
+// module that draws ASCII tables for command-line tools, run as the tables
+// an operations team's tools print: a server inventory, a cost report,
+// benchmark runs, a translation status board and a CSV import with bad
+// rows. Every op of data/jobs.tsv is a call on a Texttable. See README.md.
+
+// ------------------------------------------------------------ chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+fn repeat_str(t: ref String, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push_str(t);
+        k += 1;
+    }
+    s
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { chr(c as i64 + 32) } else { c }
+}
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    if is_digit(c) {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        c as i64 - 55
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs = to_chars(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push((hex_val(cs[i]) * 16 + hex_val(cs[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// str.isspace, which str.strip uses: Unicode White_Space plus the four
+// ASCII separators U+001C..U+001F.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+// s.strip() == ""
+fn is_blank(s: ref String) -> bool {
+    s.chars().all(|c| py_space(c))
+}
+
+// str.split(sep) for a one-character separator: always at least one piece.
+fn split_char(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+// ------------------------------------------------------------ repr() and ascii()
+
+fn char_esc(n: i64) -> String {
+    if n < 0x100 {
+        f"\\x{hex_digits(n, 2)}"
+    } else if n < 0x10000 {
+        f"\\u{hex_digits(n, 4)}"
+    } else {
+        f"\\U{hex_digits(n, 8)}"
+    }
+}
+
+fn quote_of(s: ref String) -> char {
+    if s.contains("'") and not s.contains("\"") { '"' } else { '\'' }
+}
+
+// ascii() of a str, or repr() of an ASCII one.
+fn py_ascii(s: ref String) -> String {
+    let q = quote_of(s);
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n < 0x20 or n >= 0x7f {
+            out.push_str(char_esc(n));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ascii() without its quotes: how the output shows any text.
+fn vis(s: ref String) -> String {
+    let cs = to_chars(py_ascii(s));
+    text(cs, 1, cs.len() - 1)
+}
+
+// repr() of bytes.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut sq = false;
+    let mut dq = false;
+    for x in b {
+        if *x == 39 {
+            sq = true;
+        }
+        if *x == 34 {
+            dq = true;
+        }
+    }
+    let q: i64 = if sq and not dq { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(chr(q));
+    for x in b {
+        let n = *x as i64;
+        if n == q or n == 92 {
+            out.push('\\');
+            out.push(chr(n));
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n < 32 or n >= 127 {
+            out.push_str(f"\\x{hex_digits(n, 2)}");
+        } else {
+            out.push(chr(n));
+        }
+    }
+    out.push(chr(q));
+    out
+}
+
+// ------------------------------------------------------------ bytes to str
+
+// bytes.decode('utf-8', 'replace'), and the message that
+// bytes.decode('utf-8') raises with at the first bad sequence.
+fn decode_utf8(b: ref Vec[u8]) -> (String, Option[String]) {
+    let n = b.len();
+    let mut out = String.new();
+    let mut first: Option[String] = None;
+    let mut i = 0;
+    while i < n {
+        let x = b[i] as i64;
+        if x < 0x80 {
+            out.push(chr(x));
+            i += 1;
+            continue;
+        }
+        let (need, lo, hi) = if x >= 0xc2 and x <= 0xdf {
+            (1, 0x80, 0xbf)
+        } else if x == 0xe0 {
+            (2, 0xa0, 0xbf)
+        } else if x == 0xed {
+            (2, 0x80, 0x9f)
+        } else if x >= 0xe1 and x <= 0xef {
+            (2, 0x80, 0xbf)
+        } else if x == 0xf0 {
+            (3, 0x90, 0xbf)
+        } else if x == 0xf4 {
+            (3, 0x80, 0x8f)
+        } else if x >= 0xf1 and x <= 0xf3 {
+            (3, 0x80, 0xbf)
+        } else {
+            (0, 0, 0)
+        };
+        if need == 0 {
+            if first.is_none() {
+                first = Some(f"'utf-8' codec can't decode byte 0x{hex_digits(x, 2)} in position {i}: invalid start byte");
+            }
+            out.push('\u{fffd}');
+            i += 1;
+            continue;
+        }
+        let mut good = need + 1;
+        let mut at_end = false;
+        for k in 1..(need + 1) {
+            if i + k >= n {
+                good = k;
+                at_end = true;
+                break;
+            }
+            let y = b[i + k] as i64;
+            let (l, h) = if k == 1 { (lo, hi) } else { (0x80, 0xbf) };
+            if y < l or y > h {
+                good = k;
+                break;
+            }
+        }
+        if good <= need {
+            if first.is_none() {
+                let reason = if at_end { "unexpected end of data" } else { "invalid continuation byte" };
+                first = Some(if good == 1 {
+                    f"'utf-8' codec can't decode byte 0x{hex_digits(x, 2)} in position {i}: {reason}"
+                } else {
+                    f"'utf-8' codec can't decode bytes in position {i}-{i + good - 1}: {reason}"
+                });
+            }
+            out.push('\u{fffd}');
+            i += good;
+            continue;
+        }
+        let mut cp = if need == 1 { x & 0x1f } else if need == 2 { x & 0x0f } else { x & 0x07 };
+        for k in 1..(need + 1) {
+            cp = cp * 64 + (b[i + k] as i64 & 0x3f);
+        }
+        out.push(chr(cp));
+        i += need + 1;
+    }
+    (out, first)
+}
+
+// ------------------------------------------------------------ floats
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = [1];
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = [1];
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float to decimal
+
+fn big_to_digits(a: ref Vec[u32]) -> Vec[char] {
+    if a.len() == 0 {
+        return ['0'];
+    }
+    let mut x = a.clone();
+    let mut chunks: Vec[u64] = Vec.new();
+    while x.len() > 0 {
+        let mut rem: u64 = 0;
+        let mut i = x.len() - 1;
+        while i >= 0 {
+            let cur = (rem << 32) | (x[i] as u64);
+            x[i] = (cur / 1000000000) as u32;
+            rem = cur % 1000000000;
+            i -= 1;
+        }
+        big_trim(mut x);
+        chunks.push(rem);
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut k = chunks.len() - 1;
+    while k >= 0 {
+        let s = chunks[k].to_string();
+        if k < chunks.len() - 1 {
+            for _ in 0..(9 - s.len()) {
+                out.push('0');
+            }
+        }
+        for c in s.chars() {
+            out.push(c);
+        }
+        k -= 1;
+    }
+    out
+}
+
+// The exact decimal value of a finite, non-negative x: its digits with no
+// leading zeros (none for zero) and the decimal exponent of the first.
+fn exact_digits(x: f64) -> (Vec[char], i64) {
+    let bits = x.to_bits();
+    let biased = ((bits >> 52) & 2047) as i64;
+    let frac = bits & ((1 as u64 << 52) - 1);
+    let m: u64 = if biased == 0 { frac } else { frac | (1 as u64 << 52) };
+    let q = if biased == 0 { -1074 } else { biased - 1075 };
+    if m == 0 {
+        return (Vec.new(), 0);
+    }
+    let mut a: Vec[u32] = Vec.new();
+    big_mul_add(mut a, 1, m);
+    let mut e10 = 0;
+    if q >= 0 {
+        a = big_shl(a, q);
+    } else {
+        // m * 2**q == m * 5**-q * 10**q
+        let mut k = 0;
+        while k < -q {
+            big_mul_add(mut a, 5, 0);
+            k += 1;
+        }
+        e10 = q;
+    }
+    let mut d = big_to_digits(a);
+    while d.len() > 1 and d[d.len() - 1] == '0' {
+        d.pop();
+        e10 += 1;
+    }
+    let n = d.len();
+    (d, e10 + n - 1)
+}
+
+// The exact digits (d, e) rounded half-to-even to keep the digits whose
+// place is at least 10**place: the kept digits (possibly empty when all
+// round away) and the exponent of the first.
+fn round_place(d: ref Vec[char], e: i64, place: i64) -> (Vec[char], i64) {
+    let n = e - place + 1;
+    if n >= d.len() {
+        return (d.clone(), e);
+    }
+    if n < 0 {
+        return (Vec.new(), place);
+    }
+    let mut keep: Vec[char] = Vec.new();
+    for k in 0..n {
+        keep.push(d[k]);
+    }
+    let first = d[n];
+    let mut rest = false;
+    for k in (n + 1)..d.len() {
+        if d[k] != '0' {
+            rest = true;
+        }
+    }
+    let odd = n > 0 and (d[n - 1] as i64 - 48) % 2 == 1;
+    let up = first > '5' or (first == '5' and (rest or odd));
+    if not up {
+        while keep.len() > 0 and keep[keep.len() - 1] == '0' {
+            keep.pop();
+        }
+        if keep.len() == 0 {
+            return (Vec.new(), place);
+        }
+        return (keep, e);
+    }
+    let mut j = keep.len() - 1;
+    while j >= 0 and keep[j] == '9' {
+        keep.pop();
+        j -= 1;
+    }
+    if j < 0 {
+        return (['1'], e + 1);
+    }
+    keep[j] = chr(keep[j] as i64 + 1);
+    (keep, e)
+}
+
+fn digit_vals(d: ref Vec[char]) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in d.iter() {
+        v.push((*c as i64 - 48) as u8);
+    }
+    v
+}
+
+// The shortest digits that read back as x (x finite and non-negative).
+// A rounding that reads back keeps reading back with more digits, so the
+// count is found by bisection.
+fn shortest_digits(x: f64) -> (Vec[char], i64) {
+    let (d, e) = exact_digits(x);
+    if d.len() == 0 {
+        return (['0'], 0);
+    }
+    let mut lo = 1;
+    let mut hi = 17;
+    while lo < hi {
+        let p = (lo + hi) / 2;
+        let (r, re) = round_place(d, e, e - p + 1);
+        if r.len() > 0 and decimal_to_f64(digit_vals(r), re - r.len() + 1, false) == x {
+            hi = p;
+        } else {
+            lo = p + 1;
+        }
+    }
+    round_place(d, e, e - lo + 1)
+}
+
+fn exp_text(e: i64, upper: bool) -> String {
+    let mark = if upper { 'E' } else { 'e' };
+    let sign = if e < 0 { '-' } else { '+' };
+    let a = if e < 0 { -e } else { e };
+    if a < 10 {
+        f"{mark}{sign}0{a}"
+    } else {
+        f"{mark}{sign}{a}"
+    }
+}
+
+fn is_neg(x: f64) -> bool {
+    (x.to_bits() >> 63) == 1
+}
+
+// repr(float).
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    let sign = if is_neg(x) { "-" } else { "" };
+    let a = if is_neg(x) { -x } else { x };
+    if a == f64.INFINITY {
+        return f"{sign}inf";
+    }
+    let (d, e) = shortest_digits(a);
+    let decpt = e + 1;
+    let mut s = sign.to_string();
+    if decpt <= -4 or decpt > 16 {
+        s.push(d[0]);
+        if d.len() > 1 {
+            s.push('.');
+            s.push_str(text(d, 1, d.len()));
+        }
+        s.push_str(exp_text(e, false));
+    } else if decpt <= 0 {
+        s.push_str("0.");
+        s.push_str(repeat('0', -decpt));
+        s.push_str(text(d, 0, d.len()));
+    } else if decpt >= d.len() {
+        s.push_str(text(d, 0, d.len()));
+        s.push_str(repeat('0', decpt - d.len()));
+        s.push_str(".0");
+    } else {
+        s.push_str(text(d, 0, decpt));
+        s.push('.');
+        s.push_str(text(d, decpt, d.len()));
+    }
+    s
+}
+
+// x (finite, non-negative) with `precision` digits after the point, as
+// '%.Nf' writes it: the integer digits and the fraction (with its point).
+fn fixed_text(x: f64, precision: i64, alt: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (Vec.new(), 0) } else { round_place(d, e, -precision) };
+    // the digit at place p (0 when outside r)
+    let mut int_part = String.new();
+    if r.len() == 0 or re < 0 {
+        int_part.push('0');
+    } else {
+        for i in 0..(re + 1) {
+            int_part.push(if i < r.len() { r[i] } else { '0' });
+        }
+    }
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for p in 1..(precision + 1) {
+        let k = re + p;
+        frac.push(if r.len() > 0 and k >= 0 and k < r.len() { r[k] } else { '0' });
+    }
+    (int_part, frac)
+}
+
+// x (finite, non-negative) as '%.Ne' writes it.
+fn sci_text(x: f64, precision: i64, alt: bool, upper: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (['0'], 0) } else { round_place(d, e, e - precision) };
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for k in 1..(precision + 1) {
+        frac.push(if k < r.len() { r[k] } else { '0' });
+    }
+    frac.push_str(exp_text(re, upper));
+    (r[0].to_string(), frac)
+}
+
+// ------------------------------------------------------------ float() and int() of a str
+
+// A float literal's text (digits, a point, an exponent) to the nearest
+// f64.
+fn parse_float_text(t: ref Vec[char], neg: bool) -> f64 {
+    let mut digits: Vec[u8] = Vec.new();
+    let mut exp10: i64 = 0;
+    let mut i = 0;
+    let mut point = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            let d = (c as i64 - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            if point {
+                exp10 -= 1;
+            }
+        } else if c == '.' {
+            point = true;
+        } else if c == 'e' or c == 'E' {
+            let mut j = i + 1;
+            let mut eneg = false;
+            if j < t.len() and (t[j] == '+' or t[j] == '-') {
+                eneg = t[j] == '-';
+                j += 1;
+            }
+            let mut ev = 0;
+            while j < t.len() {
+                ev = ev * 10 + (t[j] as i64 - 48);
+                if ev > 100000 {
+                    ev = 100000;
+                }
+                j += 1;
+            }
+            exp10 += if eneg { -ev } else { ev };
+            break;
+        }
+        i += 1;
+    }
+    decimal_to_f64(digits, exp10, neg)
+}
+
+
+fn strip_space(cs: ref Vec[char]) -> Vec[char] {
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    cs[a..b].to_vec()
+}
+
+// int(s): whitespace, a sign, digits with single underscores between.
+fn py_int_str(s: ref Vec[char]) -> Option[i64] {
+    let t = strip_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if c == '_' {
+            if not prev_digit or i + 1 == t.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if is_digit(c) {
+            v = v * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// float(s): whitespace, a sign, then inf, infinity, nan, or a decimal
+// number with single underscores between digits.
+fn py_float_str(s: ref Vec[char]) -> Option[f64] {
+    let t = strip_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let mut word = String.new();
+    for k in i..t.len() {
+        word.push(ascii_lower(t[k]));
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if word == "inf" or word == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if word == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut body: Vec[char] = Vec.new();
+    let mut seen = false;
+    let mut point = false;
+    let mut exp = false;
+    let mut exp_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            if exp {
+                exp_digit = true;
+            } else {
+                seen = true;
+            }
+        } else if c == '.' and not point and not exp {
+            point = true;
+        } else if (c == 'e' or c == 'E') and seen and not exp {
+            exp = true;
+        } else if (c == '+' or c == '-') and exp and (t[i - 1] == 'e' or t[i - 1] == 'E') {
+        } else if c == '_' and i > 0 and i + 1 < t.len() and is_digit(t[i - 1]) and is_digit(t[i + 1]) {
+            i += 1;
+            continue;
+        } else {
+            return None;
+        }
+        body.push(c);
+        i += 1;
+    }
+    if not seen or (exp and not exp_digit) {
+        return None;
+    }
+    Some(parse_float_text(body, neg))
+}
+
+// '%.*f' % (n, x)
+fn fmt_fixed(x: f64, n: i64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    let sign = if is_neg(x) { "-" } else { "" };
+    let a = if is_neg(x) { -x } else { x };
+    if a == f64.INFINITY {
+        return f"{sign}inf";
+    }
+    let (ip, frac) = fixed_text(a, n, false);
+    f"{sign}{ip}{frac}"
+}
+
+// '%.*e' % (n, x)
+fn fmt_sci(x: f64, n: i64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    let sign = if is_neg(x) { "-" } else { "" };
+    let a = if is_neg(x) { -x } else { x };
+    if a == f64.INFINITY {
+        return f"{sign}inf";
+    }
+    let (lead, rest) = sci_text(a, n, false, false);
+    f"{sign}{lead}{rest}"
+}
+
+// str(int(round(x))) for a finite x: round() ties to even.
+fn round_int_text(x: f64) -> String {
+    let a = if is_neg(x) { -x } else { x };
+    let (ip, _) = fixed_text(a, 0, false);
+    if ip == "0" or not is_neg(x) { ip } else { f"-{ip}" }
+}
+
+// ------------------------------------------------------------ Python values
+
+enum Val {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    // an int too large for i64, as its digits
+    Big(String),
+    Float(f64),
+    Str(String),
+    Bytes(Vec[u8]),
+}
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.clone() }
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "list index out of range")
+}
+
+fn reduce_error() -> Exc {
+    exc("TypeError", "reduce() of empty iterable with no initial value")
+}
+
+// ascii(v)
+fn show(v: ref Val) -> String {
+    match v {
+        Val.Nil => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => n.to_string(),
+        Val.Big(d) => d.clone(),
+        Val.Float(x) => float_repr(*x),
+        Val.Str(s) => py_ascii(s),
+        Val.Bytes(b) => bytes_repr(b),
+    }
+}
+
+fn show_list(vs: ref Vec[Val]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..vs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(show(vs[i]));
+    }
+    out.push(']');
+    out
+}
+
+// str(v) for anything but bytes, which obj2unicode decodes.
+fn py_str(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => show(v),
+    }
+}
+
+fn py_bool(v: ref Val) -> bool {
+    match v {
+        Val.Nil => false,
+        Val.Bool(b) => *b,
+        Val.Int(n) => *n != 0,
+        Val.Big(_) => true,
+        Val.Float(x) => *x != 0.0,
+        Val.Str(s) => not s.is_empty(),
+        Val.Bytes(b) => not b.is_empty(),
+    }
+}
+
+// A str with its decimal digits (any script) as ASCII digits, as float()
+// and int() read it. `ds` holds the runs of digits from width_text().
+fn ascii_digits(s: ref String, ds: ref Vec[(i64, i64)]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for c in s.chars() {
+        let n = c as i64;
+        let mut d = c;
+        if n >= 0x80 {
+            for r in ds.iter() {
+                let (lo, hi) = *r;
+                if n >= lo and n <= hi {
+                    d = chr(48 + n - lo);
+                    break;
+                }
+            }
+        }
+        out.push(d);
+    }
+    out
+}
+
+// float(v), or None where texttable falls back to text (None, or a str or
+// bytes that float() refuses).
+fn to_float(v: ref Val, ds: ref Vec[(i64, i64)]) -> Option[f64] {
+    match v {
+        Val.Nil => None,
+        Val.Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Val.Int(n) => Some(*n as f64),
+        Val.Big(d) => py_float_str(to_chars(d)),
+        Val.Float(x) => Some(*x),
+        Val.Str(s) => py_float_str(ascii_digits(s, ds)),
+        Val.Bytes(b) => {
+            let mut cs: Vec[char] = Vec.new();
+            for x in b {
+                cs.push(chr(*x as i64));
+            }
+            py_float_str(cs)
+        }
+    }
+}
+
+// int(v), as set_cols_width calls it.
+fn to_int(v: ref Val, ds: ref Vec[(i64, i64)]) -> Result[i64, Exc] {
+    match v {
+        Val.Nil => Err(exc("TypeError", "int() argument must be a string, a bytes-like object or a real number, not 'NoneType'")),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Int(n) => Ok(*n),
+        // Not reached by the jobs: widths never hold an int this large.
+        Val.Big(d) => Err(exc("OverflowError", f"int too large: {d}")),
+        Val.Float(x) => {
+            if *x != *x {
+                Err(exc("ValueError", "cannot convert float NaN to integer"))
+            } else if *x == f64.INFINITY or *x == -f64.INFINITY {
+                Err(exc("OverflowError", "cannot convert float infinity to integer"))
+            } else {
+                Ok(*x as i64)
+            }
+        }
+        Val.Str(s) => match py_int_str(ascii_digits(s, ds)) {
+            Some(n) => Ok(n),
+            None => Err(exc("ValueError", f"invalid literal for int() with base 10: {py_ascii(s)}")),
+        },
+        Val.Bytes(b) => {
+            let mut cs: Vec[char] = Vec.new();
+            for x in b {
+                cs.push(chr(*x as i64));
+            }
+            match py_int_str(cs) {
+                Some(n) => Ok(n),
+                None => Err(exc("ValueError", f"invalid literal for int() with base 10: {bytes_repr(b)}")),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ display width
+
+// The fallback uchar_width: 2 for East Asian Wide and Fullwidth, 0 for a
+// combining character, 1 otherwise. The ranges come from width_text().
+struct Uni {
+    wide: Vec[(i64, i64)],
+    zero: Vec[(i64, i64)],
+    digits: Vec[(i64, i64)],
+}
+
+fn load_uni() -> Uni {
+    let mut u = Uni { wide: Vec.new(), zero: Vec.new(), digits: Vec.new() };
+    for line in split_char(width_text(), '\n') {
+        let f = split_char(line, ' ');
+        if f.len() != 3 {
+            continue;
+        }
+        let lo = hex_int(f[1]);
+        let hi = hex_int(f[2]);
+        if f[0] == "w" {
+            u.wide.push((lo, hi));
+        } else if f[0] == "d" {
+            u.digits.push((lo, hi));
+        } else {
+            u.zero.push((lo, hi));
+        }
+    }
+    u
+}
+
+fn hex_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.chars() {
+        v = v * 16 + hex_val(c);
+    }
+    v
+}
+
+fn in_ranges(rs: ref Vec[(i64, i64)], n: i64) -> bool {
+    let mut lo = 0;
+    let mut hi = rs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let (a, b) = rs[mid];
+        if n < a {
+            hi = mid;
+        } else if n > b {
+            lo = mid + 1;
+        } else {
+            return true;
+        }
+    }
+    false
+}
+
+fn uchar_width(u: ref Uni, c: char) -> i64 {
+    let n = c as i64;
+    if in_ranges(u.wide, n) {
+        2
+    } else if in_ranges(u.zero, n) {
+        0
+    } else {
+        1
+    }
+}
+
+// texttable's own len() for a str: the sum of the widths.
+fn disp_len(u: ref Uni, s: ref String) -> i64 {
+    let mut n = 0;
+    for c in s.chars() {
+        n += uchar_width(u, c);
+    }
+    n
+}
+
+// ------------------------------------------------------------ textwrap.wrap(text, width)
+//
+// The defaults only: tabs expand to 8, whitespace becomes spaces, long
+// words break (at a hyphen when one fits), and lines drop their outer
+// whitespace. Widths count code points, as textwrap does.
+
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\u{b}' or c == '\u{c}' or c == '\r'
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+fn is_letter(c: char) -> bool {
+    is_word(c) and not c.is_ascii_digit()
+}
+
+fn is_word_punct(c: char) -> bool {
+    is_word(c) or c == '!' or c == '"' or c == '\'' or c == '&' or c == '.' or c == ',' or c == '?'
+}
+
+fn chunk_blank(v: ref Vec[char]) -> bool {
+    v.iter().all(|c| py_space(*c))
+}
+
+fn munge(t: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut col = 0;
+    for c in t.iter() {
+        if *c == '\t' {
+            let incr = 8 - col % 8;
+            for _ in 0..incr {
+                out.push(' ');
+            }
+            col += incr;
+        } else if *c == '\n' or *c == '\r' {
+            out.push(' ');
+            col = 0;
+        } else if is_ws(*c) {
+            out.push(' ');
+            col += 1;
+        } else {
+            out.push(*c);
+            col += 1;
+        }
+    }
+    out
+}
+
+fn em_dash_at(t: ref Vec[char], i: i64) -> Option[i64] {
+    if i == 0 or not is_word_punct(t[i - 1]) {
+        return None;
+    }
+    let mut k = i;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    if k - i >= 2 and k < t.len() and is_word(t[k]) {
+        Some(k)
+    } else {
+        None
+    }
+}
+
+fn dashes_then_word(t: ref Vec[char], j: i64) -> bool {
+    let mut k = j;
+    while k < t.len() and t[k] == '-' {
+        k += 1;
+    }
+    k - j >= 2 and k < t.len() and is_word(t[k])
+}
+
+// The word alternative of wordsep_re at i: the lazy \S+? grows until one
+// of its three endings matches.
+fn word_end(t: ref Vec[char], i: i64) -> i64 {
+    let n = t.len();
+    let mut j = i + 1;
+    loop {
+        if j < n and t[j] == '-' {
+            let behind = (j >= 2 and is_letter(t[j - 2]) and is_letter(t[j - 1]))
+                or (j >= 3 and is_letter(t[j - 3]) and t[j - 2] == '-' and is_letter(t[j - 1]));
+            let ahead = j + 1 < n and is_letter(t[j + 1])
+                and ((j + 2 < n and is_letter(t[j + 2])) or (j + 3 < n and t[j + 2] == '-' and is_letter(t[j + 3])));
+            if behind and ahead {
+                return j + 1;
+            }
+        }
+        if j == n or is_ws(t[j]) {
+            return j;
+        }
+        if is_word_punct(t[j - 1]) and dashes_then_word(t, j) {
+            return j;
+        }
+        j += 1;
+    }
+}
+
+fn split_chunks(t: ref Vec[char]) -> Vec[Vec[char]] {
+    let n = t.len();
+    let mut chunks: Vec[Vec[char]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let mut end = i;
+        if is_ws(t[i]) {
+            while end < n and is_ws(t[end]) {
+                end += 1;
+            }
+        } else {
+            end = match em_dash_at(t, i) {
+                Some(e) => e,
+                None => word_end(t, i),
+            };
+        }
+        chunks.push(t[i..end].to_vec());
+        i = end;
+    }
+    chunks
+}
+
+fn handle_long_word(rev: mut ref Vec[Vec[char]], cur_line: mut ref Vec[Vec[char]], cur_len: i64, width: i64) {
+    let space_left = if width < 1 { 1 } else { width - cur_len };
+    let mut end = space_left;
+    let last = rev.len() - 1;
+    let chunk = rev[last].clone();
+    if chunk.len() > space_left {
+        let mut hyphen = -1;
+        let mut k = space_left;
+        while k > 0 {
+            k -= 1;
+            if chunk[k] == '-' {
+                hyphen = k;
+                break;
+            }
+        }
+        if hyphen > 0 and chunk[0..hyphen].iter().any(|c| *c != '-') {
+            end = hyphen + 1;
+        }
+    }
+    if end > chunk.len() {
+        end = chunk.len();
+    }
+    cur_line.push(chunk[0..end].to_vec());
+    rev[last] = chunk[end..].to_vec();
+}
+
+fn wrap(s: ref String, width: i64) -> Result[Vec[String], Exc] {
+    if width <= 0 {
+        return Err(exc("ValueError", f"invalid width {width} (must be > 0)"));
+    }
+    let mut rev = split_chunks(munge(to_chars(s)));
+    rev.reverse();
+    let mut lines: Vec[String] = Vec.new();
+    while not rev.is_empty() {
+        let mut cur_line: Vec[Vec[char]] = Vec.new();
+        let mut cur_len = 0;
+        if chunk_blank(rev[rev.len() - 1]) and not lines.is_empty() {
+            rev.pop();
+        }
+        while not rev.is_empty() {
+            let l = rev[rev.len() - 1].len();
+            if cur_len + l <= width {
+                cur_line.push(rev.pop().unwrap());
+                cur_len += l;
+            } else {
+                break;
+            }
+        }
+        if not rev.is_empty() and rev[rev.len() - 1].len() > width {
+            handle_long_word(mut rev, mut cur_line, cur_len, width);
+        }
+        if not cur_line.is_empty() and chunk_blank(cur_line[cur_line.len() - 1]) {
+            cur_line.pop();
+        }
+        if cur_line.is_empty() {
+            continue;
+        }
+        let mut line = String.new();
+        for ch in cur_line.iter() {
+            for c in ch.iter() {
+                line.push(*c);
+            }
+        }
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
+// ------------------------------------------------------------ Texttable
+
+const BORDER: i64 = 1;
+const HEADER: i64 = 2;
+const HLINES: i64 = 4;
+const VLINES: i64 = 8;
+
+// A cell format that cannot read its value as a float raises
+// FallbackToText, and the cell is formatted as text instead.
+enum Fmt {
+    Done(String),
+    Fallback,
+}
+
+struct Table {
+    // 0 when unlimited (texttable stores False)
+    max_width: i64,
+    precision: i64,
+    deco: i64,
+    horiz: String,
+    vert: String,
+    corner: String,
+    head: String,
+    row_size: Option[i64],
+    header: Vec[String],
+    rows: Vec[Vec[String]],
+    // attributes texttable only has once they are set (hasattr)
+    header_align: Option[Vec[String]],
+    align: Option[Vec[String]],
+    valign: Option[Vec[String]],
+    dtype: Option[Vec[String]],
+    width_explicit: Option[Vec[i64]],
+    // what the library writes to sys.stderr
+    stderr: Vec[String],
+    // the decimal digit runs, for float() and int()
+    digits: Vec[(i64, i64)],
+}
+
+fn strs(vs: ref Vec[Val]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for v in vs.iter() {
+        out.push(py_str(v));
+    }
+    out
+}
+
+fn first_char(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(c);
+        break;
+    }
+    out
+}
+
+fn min3(a: i64, b: i64, c: i64) -> i64 {
+    let m = if a < b { a } else { b };
+    if m < c { m } else { c }
+}
+
+impl Table {
+    fn new(max_width: i64, u: ref Uni) -> Table {
+        Table {
+            max_width: if max_width > 0 { max_width } else { 0 },
+            precision: 3,
+            deco: VLINES | HLINES | BORDER | HEADER,
+            horiz: "-".to_string(),
+            vert: "|".to_string(),
+            corner: "+".to_string(),
+            head: "=".to_string(),
+            row_size: None,
+            header: Vec.new(),
+            rows: Vec.new(),
+            header_align: None,
+            align: None,
+            valign: None,
+            dtype: None,
+            width_explicit: None,
+            stderr: Vec.new(),
+            digits: u.digits.clone(),
+        }
+    }
+
+    fn reset(mut ref self) {
+        self.row_size = None;
+        self.header = Vec.new();
+        self.rows = Vec.new();
+    }
+
+    fn check_row_size(mut ref self, n: i64) -> Result[(), Exc] {
+        match self.row_size {
+            Some(r) => {
+                if r == 0 {
+                    self.row_size = Some(n);
+                } else if r != n {
+                    return Err(exc("ArraySizeError", f"array should contain {r} elements"));
+                }
+            }
+            None => {
+                self.row_size = Some(n);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_chars(mut ref self, vs: ref Vec[Val]) -> Result[(), Exc] {
+        if vs.len() != 4 {
+            return Err(exc("ArraySizeError", "array should contain 4 characters"));
+        }
+        self.horiz = first_char(py_str(vs[0]));
+        self.vert = first_char(py_str(vs[1]));
+        self.corner = first_char(py_str(vs[2]));
+        self.head = first_char(py_str(vs[3]));
+        Ok(())
+    }
+
+    fn set_cols_width(mut ref self, vs: ref Vec[Val]) -> Result[(), Exc] {
+        self.check_row_size(vs.len())?;
+        let mut ws: Vec[i64] = Vec.new();
+        for v in vs.iter() {
+            match to_int(v, self.digits) {
+                Ok(n) => ws.push(n),
+                Err(e) => {
+                    if e.kind == "ValueError" {
+                        self.stderr.push("Wrong argument in column width specification".to_string());
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        if ws.is_empty() {
+            return Err(reduce_error());
+        }
+        let mut m = ws[0];
+        for w in ws.iter() {
+            if *w < m {
+                m = *w;
+            }
+        }
+        if m <= 0 {
+            self.stderr.push("Wrong argument in column width specification".to_string());
+            return Err(exc("ValueError", ""));
+        }
+        self.width_explicit = Some(ws);
+        Ok(())
+    }
+
+    fn set_precision(mut ref self, v: ref Val) -> Result[(), Exc] {
+        match v {
+            Val.Int(n) => {
+                if *n >= 0 {
+                    self.precision = *n;
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        Err(exc("ValueError", "width must be an integer greater then 0"))
+    }
+
+    // obj2unicode
+    fn obj2unicode(mut ref self, v: ref Val) -> String {
+        match v {
+            Val.Bytes(b) => {
+                let (s, bad) = decode_utf8(b);
+                if let Some(msg) = bad {
+                    self.stderr.push(f"UnicodeDecodeError exception for string '{bytes_repr(b)}': {msg}");
+                }
+                s
+            }
+            _ => py_str(v),
+        }
+    }
+
+    fn set_header(mut ref self, vs: ref Vec[Val]) -> Result[(), Exc] {
+        self.check_row_size(vs.len())?;
+        let mut h: Vec[String] = Vec.new();
+        for v in vs.iter() {
+            h.push(self.obj2unicode(v));
+        }
+        self.header = h;
+        Ok(())
+    }
+
+    fn fmt_int(ref self, x: ref Val) -> Result[Fmt, Exc] {
+        match x {
+            Val.Int(n) => return Ok(Fmt.Done(n.to_string())),
+            Val.Big(d) => return Ok(Fmt.Done(d.clone())),
+            _ => {}
+        }
+        let f = match to_float(x, self.digits) {
+            Some(f) => f,
+            None => return Ok(Fmt.Fallback),
+        };
+        if f != f {
+            return Err(exc("ValueError", "cannot convert float NaN to integer"));
+        }
+        if f == f64.INFINITY or f == -f64.INFINITY {
+            return Err(exc("OverflowError", "cannot convert float infinity to integer"));
+        }
+        Ok(Fmt.Done(round_int_text(f)))
+    }
+
+    fn fmt_float(ref self, x: ref Val) -> Fmt {
+        match to_float(x, self.digits) {
+            Some(f) => Fmt.Done(fmt_fixed(f, self.precision)),
+            None => Fmt.Fallback,
+        }
+    }
+
+    fn fmt_exp(ref self, x: ref Val) -> Fmt {
+        match to_float(x, self.digits) {
+            Some(f) => Fmt.Done(fmt_sci(f, self.precision)),
+            None => Fmt.Fallback,
+        }
+    }
+
+    fn fmt_bool(ref self, x: ref Val) -> Fmt {
+        Fmt.Done(if py_bool(x) { "True".to_string() } else { "False".to_string() })
+    }
+
+    fn fmt_auto(mut ref self, x: ref Val) -> Result[Fmt, Exc] {
+        let f = match to_float(x, self.digits) {
+            Some(f) => f,
+            None => return Ok(Fmt.Fallback),
+        };
+        let a = if f < 0.0 { -f } else { f };
+        if a > 100000000.0 {
+            Ok(self.fmt_exp(x))
+        } else if f != f {
+            Ok(Fmt.Done(self.obj2unicode(x)))
+        } else if (f as i64) as f64 == f {
+            match x {
+                Val.Bool(_) => Ok(self.fmt_bool(x)),
+                _ => self.fmt_int(x),
+            }
+        } else {
+            Ok(self.fmt_float(x))
+        }
+    }
+
+    // _str
+    fn cell_text(mut ref self, i: i64, x: ref Val) -> Result[String, Exc] {
+        let dtype = match self.dtype {
+            Some(d) => {
+                if i >= d.len() {
+                    return Err(index_error());
+                }
+                d[i].clone()
+            }
+            None => "a".to_string(),
+        };
+        let r = if dtype == "a" {
+            self.fmt_auto(x)?
+        } else if dtype == "i" {
+            self.fmt_int(x)?
+        } else if dtype == "b" {
+            self.fmt_bool(x)
+        } else if dtype == "f" {
+            self.fmt_float(x)
+        } else if dtype == "e" {
+            self.fmt_exp(x)
+        } else if dtype == "t" {
+            Fmt.Done(self.obj2unicode(x))
+        } else {
+            return Err(exc("KeyError", py_ascii(dtype)));
+        };
+        match r {
+            Fmt.Done(s) => Ok(s),
+            Fmt.Fallback => Ok(self.obj2unicode(x)),
+        }
+    }
+
+    fn add_row(mut ref self, vs: ref Vec[Val]) -> Result[(), Exc] {
+        self.check_row_size(vs.len())?;
+        if self.dtype.is_none() {
+            let n = self.row_size.unwrap_or(0);
+            let mut d: Vec[String] = Vec.new();
+            for _ in 0..n {
+                d.push("a".to_string());
+            }
+            self.dtype = Some(d);
+        }
+        let mut cells: Vec[String] = Vec.new();
+        for i in 0..vs.len() {
+            cells.push(self.cell_text(i, vs[i])?);
+        }
+        self.rows.push(cells);
+        Ok(())
+    }
+
+    fn add_rows(mut ref self, rs: ref Vec[Vec[Val]], header: bool) -> Result[(), Exc] {
+        let mut start = 0;
+        if header {
+            if rs.is_empty() {
+                return Err(index_error());
+            }
+            self.set_header(rs[0])?;
+            start = 1;
+        }
+        for k in start..rs.len() {
+            self.add_row(rs[k])?;
+        }
+        Ok(())
+    }
+
+    fn has_vlines(ref self) -> bool {
+        self.deco & VLINES > 0
+    }
+
+    fn has_hlines(ref self) -> bool {
+        self.deco & HLINES > 0
+    }
+
+    fn has_border(ref self) -> bool {
+        self.deco & BORDER > 0
+    }
+
+    fn has_header(ref self) -> bool {
+        self.deco & HEADER > 0
+    }
+
+    fn build_hline(ref self, width: ref Vec[i64], is_header: bool) -> String {
+        let horiz = if is_header { self.head.clone() } else { self.horiz.clone() };
+        let mid = if self.has_vlines() { self.corner.clone() } else { horiz.clone() };
+        let sep = f"{horiz}{mid}{horiz}";
+        let mut l = String.new();
+        for k in 0..width.len() {
+            if k > 0 {
+                l.push_str(sep);
+            }
+            l.push_str(repeat_str(horiz, width[k]));
+        }
+        if self.has_border() {
+            f"{self.corner}{horiz}{l}{horiz}{self.corner}\n"
+        } else {
+            f"{l}\n"
+        }
+    }
+
+    fn len_cell(ref self, u: ref Uni, cell: ref String) -> i64 {
+        let mut maxi = 0;
+        for line in split_char(cell, '\n') {
+            let mut length = 0;
+            let parts = split_char(line, '\t');
+            for i in 0..parts.len() {
+                length += disp_len(u, parts[i]);
+                if i + 1 < parts.len() {
+                    length = (length / 8 + 1) * 8;
+                }
+            }
+            if length > maxi {
+                maxi = length;
+            }
+        }
+        maxi
+    }
+
+    fn compute_cols_width(ref self, u: ref Uni) -> Result[Vec[i64], Exc] {
+        let mut maxi: Vec[i64] = Vec.new();
+        for h in self.header.iter() {
+            maxi.push(self.len_cell(u, h));
+        }
+        for row in self.rows.iter() {
+            for i in 0..row.len() {
+                let w = self.len_cell(u, row[i]);
+                if i < maxi.len() {
+                    if w > maxi[i] {
+                        maxi[i] = w;
+                    }
+                } else {
+                    maxi.push(w);
+                }
+            }
+        }
+        let ncols = maxi.len();
+        let mut content = 0;
+        for m in maxi.iter() {
+            content += *m;
+        }
+        let deco_width = 3 * (ncols - 1) + if self.has_border() { 4 } else { 0 };
+        if self.max_width > 0 and content + deco_width > self.max_width {
+            if self.max_width < ncols + deco_width {
+                return Err(exc("ValueError", "max_width too low to render data"));
+            }
+            let mut available = self.max_width - deco_width;
+            let mut newmaxi: Vec[i64] = Vec.new();
+            for _ in 0..ncols {
+                newmaxi.push(0);
+            }
+            let mut i = 0;
+            while available > 0 {
+                if newmaxi[i] < maxi[i] {
+                    newmaxi[i] += 1;
+                    available -= 1;
+                }
+                i = (i + 1) % ncols;
+            }
+            maxi = newmaxi;
+        }
+        Ok(maxi)
+    }
+
+    fn splitit(ref self, line: ref Vec[String], isheader: bool, width: ref Vec[i64]) -> Result[Vec[Vec[String]], Exc] {
+        let mut wrapped: Vec[Vec[String]] = Vec.new();
+        let n = if line.len() < width.len() { line.len() } else { width.len() };
+        for k in 0..n {
+            let mut array: Vec[String] = Vec.new();
+            for c in split_char(line[k], '\n') {
+                if is_blank(c) {
+                    array.push(String.new());
+                } else {
+                    for piece in wrap(c, width[k])? {
+                        array.push(piece.clone());
+                    }
+                }
+            }
+            wrapped.push(array);
+        }
+        if wrapped.is_empty() {
+            return Err(reduce_error());
+        }
+        let mut most = 0;
+        for cell in wrapped.iter() {
+            if cell.len() > most {
+                most = cell.len();
+            }
+        }
+        let valign = self.valign.clone().unwrap_or(Vec.new());
+        let m = if wrapped.len() < valign.len() { wrapped.len() } else { valign.len() };
+        for k in 0..m {
+            let va = if isheader { "t".to_string() } else { valign[k].clone() };
+            let missing = most - wrapped[k].len();
+            let mut cell: Vec[String] = Vec.new();
+            let (before, after) = if va == "m" {
+                (missing / 2, missing / 2 + missing % 2)
+            } else if va == "b" {
+                (missing, 0)
+            } else {
+                (0, missing)
+            };
+            for _ in 0..before {
+                cell.push(String.new());
+            }
+            for s in wrapped[k].iter() {
+                cell.push(s.clone());
+            }
+            for _ in 0..after {
+                cell.push(String.new());
+            }
+            wrapped[k] = cell;
+        }
+        Ok(wrapped)
+    }
+
+    fn draw_line(ref self, u: ref Uni, line: ref Vec[String], isheader: bool, width: ref Vec[i64]) -> Result[String, Exc] {
+        let cells = self.splitit(line, isheader, width)?;
+        let align = self.align.clone().unwrap_or(Vec.new());
+        let header_align = self.header_align.clone().unwrap_or(Vec.new());
+        let mut out = String.new();
+        let n = min3(cells.len(), width.len(), align.len());
+        for i in 0..cells[0].len() {
+            if self.has_border() {
+                out.push_str(f"{self.vert} ");
+            }
+            let mut length = 0;
+            for k in 0..n {
+                length += 1;
+                if i >= cells[k].len() {
+                    return Err(index_error());
+                }
+                let cell_line = cells[k][i].clone();
+                let fill = width[k] - disp_len(u, cell_line);
+                let al = if isheader {
+                    if length - 1 >= header_align.len() {
+                        return Err(index_error());
+                    }
+                    header_align[length - 1].clone()
+                } else {
+                    align[k].clone()
+                };
+                let pad = if fill > 0 { fill } else { 0 };
+                if al == "r" {
+                    out.push_str(repeat(' ', pad));
+                    out.push_str(cell_line);
+                } else if al == "c" {
+                    out.push_str(repeat(' ', pad / 2));
+                    out.push_str(cell_line);
+                    out.push_str(repeat(' ', pad - pad / 2));
+                } else {
+                    out.push_str(cell_line);
+                    out.push_str(repeat(' ', pad));
+                }
+                if length < cells.len() {
+                    if self.has_vlines() {
+                        out.push_str(f" {self.vert} ");
+                    } else {
+                        out.push_str("   ");
+                    }
+                }
+            }
+            if self.has_border() {
+                out.push_str(f" {self.vert}");
+            }
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    fn check_align(mut ref self) {
+        let n = self.row_size.unwrap_or(0);
+        if self.header_align.is_none() {
+            self.header_align = Some(filled("c", n));
+        }
+        if self.align.is_none() {
+            self.align = Some(filled("l", n));
+        }
+        if self.valign.is_none() {
+            self.valign = Some(filled("t", n));
+        }
+    }
+
+    fn draw(mut ref self, u: ref Uni) -> Result[Option[String], Exc] {
+        if self.header.is_empty() and self.rows.is_empty() {
+            return Ok(None);
+        }
+        let width = match self.width_explicit {
+            Some(w) => w.clone(),
+            None => self.compute_cols_width(u)?,
+        };
+        self.check_align();
+        let mut hline: Option[String] = None;
+        let mut out = String.new();
+        if self.has_border() {
+            let h = self.build_hline(width, false);
+            out.push_str(h);
+            hline = Some(h);
+        }
+        if not self.header.is_empty() {
+            out.push_str(self.draw_line(u, self.header, true, width)?);
+            if self.has_header() {
+                out.push_str(self.build_hline(width, true));
+            }
+        }
+        let mut length = 0;
+        for row in self.rows.iter() {
+            length += 1;
+            out.push_str(self.draw_line(u, row, false, width)?);
+            if self.has_hlines() and length < self.rows.len() {
+                if hline.is_none() {
+                    hline = Some(self.build_hline(width, false));
+                }
+                out.push_str(hline.clone().unwrap());
+            }
+        }
+        if self.has_border() {
+            if hline.is_none() {
+                hline = Some(self.build_hline(width, false));
+            }
+            out.push_str(hline.clone().unwrap());
+        }
+        let _ = out.pop();
+        Ok(Some(out))
+    }
+}
+
+fn filled(s: Str, n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        out.push(s.to_string());
+    }
+    out
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn decode_val(w: ref String) -> Val {
+    if w == "n" {
+        return Val.Nil;
+    }
+    let cs = to_chars(w);
+    let t = cs[0];
+    let rest = text(cs, 2, cs.len());
+    if t == 'b' {
+        Val.Bool(rest == "1")
+    } else if t == 'i' and rest.len() > 18 {
+        Val.Big(rest)
+    } else if t == 'i' {
+        Val.Int(py_int_str(to_chars(rest)).unwrap())
+    } else if t == 'f' {
+        Val.Float(py_float_str(to_chars(rest)).unwrap())
+    } else if t == 'y' {
+        Val.Bytes(hex_bytes(rest))
+    } else {
+        let (s, _) = decode_utf8(hex_bytes(rest));
+        Val.Str(s)
+    }
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push('\n');
+}
+
+fn run_op(t: mut ref Table, f: ref Vec[String], u: ref Uni, out: mut ref String) -> Result[(), Exc] {
+    let name = f[0].clone();
+    let mut vals: Vec[Val] = Vec.new();
+    if name != "rows" {
+        for k in 1..f.len() {
+            vals.push(decode_val(f[k]));
+        }
+    }
+    if name == "new" {
+        let mut shown = "> new".to_string();
+        for v in vals.iter() {
+            shown.push(' ');
+            shown.push_str(show(v));
+        }
+        emit(mut out, shown);
+        let mw = if vals.is_empty() {
+            80
+        } else {
+            match vals[0] {
+                Val.Int(n) => n,
+                _ => 80,
+            }
+        };
+        *t = Table.new(mw, u);
+        return Ok(());
+    }
+    if name == "rows" {
+        let header = py_bool(decode_val(f[1]));
+        let mut rs: Vec[Vec[Val]] = Vec.new();
+        if f.len() > 2 {
+            rs.push(Vec.new());
+            for k in 2..f.len() {
+                if f[k] == "/" {
+                    rs.push(Vec.new());
+                } else {
+                    let last = rs.len() - 1;
+                    rs[last].push(decode_val(f[k]));
+                }
+            }
+        }
+        let mut shown = "[".to_string();
+        for k in 0..rs.len() {
+            if k > 0 {
+                shown.push_str(", ");
+            }
+            shown.push_str(show_list(rs[k]));
+        }
+        shown.push(']');
+        let hname = if header { "True" } else { "False" };
+        emit(mut out, f"> rows header={hname} {shown}");
+        return t.add_rows(rs, header);
+    }
+    if name == "draw" {
+        emit(mut out, "> draw");
+        match t.draw(u)? {
+            None => emit(mut out, "  -> None"),
+            Some(s) => {
+                for line in split_char(s, '\n') {
+                    emit(mut out, f"    {line}");
+                }
+            }
+        }
+        return Ok(());
+    }
+    if name == "reset" {
+        emit(mut out, "> reset");
+        t.reset();
+        return Ok(());
+    }
+    if name == "max_width" or name == "deco" or name == "precision" {
+        emit(mut out, f"> {name} {show(vals[0])}");
+        if name == "precision" {
+            return t.set_precision(vals[0]);
+        }
+        let n = match vals[0] {
+            Val.Int(n) => n,
+            _ => 0,
+        };
+        if name == "deco" {
+            t.deco = n;
+        } else {
+            t.max_width = if n > 0 { n } else { 0 };
+        }
+        return Ok(());
+    }
+    emit(mut out, f"> {name} {show_list(vals)}");
+    if name == "chars" {
+        t.set_chars(vals)
+    } else if name == "width" {
+        t.set_cols_width(vals)
+    } else if name == "header" {
+        t.set_header(vals)
+    } else if name == "row" {
+        t.add_row(vals)
+    } else {
+        t.check_row_size(vals.len())?;
+        let s = strs(vals);
+        if name == "header_align" {
+            t.header_align = Some(s);
+        } else if name == "align" {
+            t.align = Some(s);
+        } else if name == "valign" {
+            t.valign = Some(s);
+        } else {
+            t.dtype = Some(s);
+        }
+        Ok(())
+    }
+}
+
+fn main() {
+    let u = load_uni();
+    let mut out = String.new();
+    let mut t = Table.new(80, u);
+    for line in split_char(jobs_text(), '\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let f = split_char(line, '\t');
+        if f[0] == "job" {
+            emit(mut out, f"== {f[1]}");
+            t = Table.new(80, u);
+            continue;
+        }
+        let r = run_op(mut t, f, u, mut out);
+        for e in t.stderr.iter() {
+            emit(mut out, f"  stderr: {vis(e)}");
+        }
+        t.stderr = Vec.new();
+        if let Err(e) = r {
+            let msg = vis(e.msg);
+            if msg.is_empty() {
+                emit(mut out, f"  error {e.kind}");
+            } else {
+                emit(mut out, f"  error {e.kind}: {msg}");
+            }
+        }
+    }
+    print(out);
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("job\tmodule demo\n");
+    s.push_str("align\ts:6c\ts:72\ts:63\n");
+    s.push_str("valign\ts:74\ts:6d\ts:62\n");
+    s.push_str("rows\tb:1\ts:4e616d65\ts:416765\ts:4e69636b6e616d65\t/\ts:4d720a5861766965720a48756f6e\ti:32\ts:58617627\t/\ts:4d720a42617074697374650a436c656d656e74\ti:1\ts:42616279\t/\ts:4d6d650a4c6f756973650a426f757267656175\ti:28\ts:4c6f750a200a4c6f7565\n");
+    s.push_str("draw\n");
+    s.push_str("new\n");
+    s.push_str("deco\ti:2\n");
+    s.push_str("dtype\ts:74\ts:66\ts:65\ts:69\ts:61\n");
+    s.push_str("align\ts:6c\ts:72\ts:72\ts:72\ts:6c\n");
+    s.push_str("rows\tb:1\ts:74657874\ts:666c6f6174\ts:657870\ts:696e74\ts:6175746f\t/\ts:61626364\ts:3637\ti:654\ti:89\tf:128.001\t/\ts:65666768696a6b\tf:67.5434\tf:0.654\tf:89.6\tf:1.28e+22\t/\ts:6c6d6e\tf:5e-78\tf:5e-78\tf:89.4\tf:1.28e-13\t/\ts:6f707172737475\tf:0.023\tf:5e+78\tf:92.0\ti:12800000000000000000000\n");
+    s.push_str("draw\n");
+    s.push_str("job\tserver inventory\n");
+    s.push_str("header\ts:686f7374\ts:726f6c65\ts:63707573\ts:6d656d20476942\ts:6c6f6164\ts:7570\n");
+    s.push_str("row\ts:7765622d3031\ts:6e67696e78\ti:8\tf:31.25\tf:0.42\tb:1\n");
+    s.push_str("row\ts:7765622d3032\ts:6e67696e78\ti:8\tf:31.25\tf:1.5\tb:1\n");
+    s.push_str("row\ts:64622d3031\ts:706f737467726573207072696d617279\ti:32\tf:251.8\tf:12.0625\tb:1\n");
+    s.push_str("row\ts:64622d3032\ts:706f737467726573207265706c696361\ti:32\tf:251.8\tn\tb:0\n");
+    s.push_str("row\ts:63616368652d3031\ts:7265646973\ti:4\tf:15.6\ts:302e3037\tb:1\n");
+    s.push_str("row\ts:62617463682d3037\ts:6e696768746c79206a6f62730a2873706f7429\ti:64\tf:503.5\tf:63.999\tb:0\n");
+    s.push_str("draw\n");
+    s.push_str("header_align\ts:6c\ts:6c\ts:72\ts:72\ts:72\ts:63\n");
+    s.push_str("align\ts:6c\ts:6c\ts:72\ts:72\ts:72\ts:63\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:3\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:50\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:0\n");
+    s.push_str("deco\ti:0\n");
+    s.push_str("draw\n");
+    s.push_str("job\tauto formatting\n");
+    s.push_str("header\ts:696e707574\ts:6175746f\n");
+    s.push_str("dtype\ts:74\ts:61\n");
+    s.push_str("row\ts:30\ti:0\n");
+    s.push_str("row\ts:31\ti:1\n");
+    s.push_str("row\ts:2d31\ti:-1\n");
+    s.push_str("row\ts:37\ti:7\n");
+    s.push_str("row\ts:313030303030303030\ti:100000000\n");
+    s.push_str("row\ts:313030303030303031\ti:100000001\n");
+    s.push_str("row\ts:313233343536373839\ti:123456789\n");
+    s.push_str("row\ts:2d393837363534333231\ti:-987654321\n");
+    s.push_str("row\ts:39303037313939323534373430393933\ti:9007199254740993\n");
+    s.push_str("row\ts:302e30\tf:0.0\n");
+    s.push_str("row\ts:2d302e30\tf:-0.0\n");
+    s.push_str("row\ts:302e35\tf:0.5\n");
+    s.push_str("row\ts:312e35\tf:1.5\n");
+    s.push_str("row\ts:322e35\tf:2.5\n");
+    s.push_str("row\ts:2d322e35\tf:-2.5\n");
+    s.push_str("row\ts:302e30303035\tf:0.0005\n");
+    s.push_str("row\ts:302e30303034393939\tf:0.0004999\n");
+    s.push_str("row\ts:31322e30\tf:12.0\n");
+    s.push_str("row\ts:3130303030303030302e30\tf:100000000.0\n");
+    s.push_str("row\ts:3130303030303031302e30\tf:100000010.0\n");
+    s.push_str("row\ts:31652d3035\tf:1e-05\n");
+    s.push_str("row\ts:332e3134313539\tf:3.14159\n");
+    s.push_str("row\ts:696e66\tf:inf\n");
+    s.push_str("row\ts:2d696e66\tf:-inf\n");
+    s.push_str("row\ts:6e616e\tf:nan\n");
+    s.push_str("row\ts:54727565\tb:1\n");
+    s.push_str("row\ts:46616c7365\tb:0\n");
+    s.push_str("row\ts:4e6f6e65\tn\n");
+    s.push_str("row\ts:737472202727\ts:\n");
+    s.push_str("row\ts:737472202761626327\ts:616263\n");
+    s.push_str("row\ts:7374722027313227\ts:3132\n");
+    s.push_str("row\ts:73747220272034322027\ts:20343220\n");
+    s.push_str("row\ts:73747220272d3027\ts:2d30\n");
+    s.push_str("row\ts:73747220272b3727\ts:2b37\n");
+    s.push_str("row\ts:7374722027315f30303027\ts:315f303030\n");
+    s.push_str("row\ts:7374722027315f5f3027\ts:315f5f30\n");
+    s.push_str("row\ts:73747220275f3127\ts:5f31\n");
+    s.push_str("row\ts:737472202731322e3527\ts:31322e35\n");
+    s.push_str("row\ts:737472202731653927\ts:316539\n");
+    s.push_str("row\ts:737472202731452d3327\ts:31452d33\n");
+    s.push_str("row\ts:73747220272e3527\ts:2e35\n");
+    s.push_str("row\ts:7374722027352e27\ts:352e\n");
+    s.push_str("row\ts:73747220272e27\ts:2e\n");
+    s.push_str("row\ts:7374722027316527\ts:3165\n");
+    s.push_str("row\ts:7374722027696e6627\ts:696e66\n");
+    s.push_str("row\ts:73747220272d496e66696e69747927\ts:2d496e66696e697479\n");
+    s.push_str("row\ts:73747220276e616e27\ts:6e616e\n");
+    s.push_str("row\ts:73747220274e614e27\ts:4e614e\n");
+    s.push_str("row\ts:73747220273078313027\ts:30783130\n");
+    s.push_str("row\ts:7374722027312c3527\ts:312c35\n");
+    s.push_str("row\ts:73747220275c74335c6e27\ts:09330a\n");
+    s.push_str("row\ts:73747220275c786130375c753230303327\ts:c2a037e28083\n");
+    s.push_str("row\ts:73747220275c75303636315c753036363227\ts:d9a1d9a2\n");
+    s.push_str("row\ts:73747220275c75666631315c75666631322e5c756666313527\ts:efbc91efbc922eefbc95\n");
+    s.push_str("row\ts:73747220272d5c7530363633655c753036363227\ts:2dd9a365d9a2\n");
+    s.push_str("row\ts:6227313227\ty:3132\n");
+    s.push_str("row\ts:6227332e373527\ty:332e3735\n");
+    s.push_str("row\ts:62277827\ty:78\n");
+    s.push_str("row\ts:622727\ty:\n");
+    s.push_str("row\ts:31652b3232\tf:1e+22\n");
+    s.push_str("row\ts:31652b333030\tf:1e+300\n");
+    s.push_str("row\ts:35652d333234\tf:5e-324\n");
+    s.push_str("draw\n");
+    s.push_str("job\tdatatypes\n");
+    s.push_str("deco\ti:10\n");
+    s.push_str("header\ts:76616c7565\ts:61\ts:74\ts:66\ts:65\ts:69\ts:62\n");
+    s.push_str("dtype\ts:74\ts:61\ts:74\ts:66\ts:65\ts:69\ts:62\n");
+    s.push_str("row\ts:30\ti:0\ti:0\ti:0\ti:0\ti:0\ti:0\n");
+    s.push_str("row\ts:33\ti:3\ti:3\ti:3\ti:3\ti:3\ti:3\n");
+    s.push_str("row\ts:2d3132\ti:-12\ti:-12\ti:-12\ti:-12\ti:-12\ti:-12\n");
+    s.push_str("row\ts:322e35\tf:2.5\tf:2.5\tf:2.5\tf:2.5\tf:2.5\tf:2.5\n");
+    s.push_str("row\ts:332e35\tf:3.5\tf:3.5\tf:3.5\tf:3.5\tf:3.5\tf:3.5\n");
+    s.push_str("row\ts:2d302e35\tf:-0.5\tf:-0.5\tf:-0.5\tf:-0.5\tf:-0.5\tf:-0.5\n");
+    s.push_str("row\ts:302e313235\tf:0.125\tf:0.125\tf:0.125\tf:0.125\tf:0.125\tf:0.125\n");
+    s.push_str("row\ts:322e363735\tf:2.675\tf:2.675\tf:2.675\tf:2.675\tf:2.675\tf:2.675\n");
+    s.push_str("row\ts:312e30303035\tf:1.0005\tf:1.0005\tf:1.0005\tf:1.0005\tf:1.0005\tf:1.0005\n");
+    s.push_str("row\ts:3132333435362e373839\tf:123456.789\tf:123456.789\tf:123456.789\tf:123456.789\tf:123456.789\tf:123456.789\n");
+    s.push_str("row\ts:31652b3136\tf:1e+16\tf:1e+16\tf:1e+16\tf:1e+16\tf:1e+16\tf:1e+16\n");
+    s.push_str("row\ts:31652b3230\tf:1e+20\tf:1e+20\tf:1e+20\tf:1e+20\tf:1e+20\tf:1e+20\n");
+    s.push_str("row\ts:312e31383035393136323037313734313133652b3231\tf:1.1805916207174113e+21\tf:1.1805916207174113e+21\tf:1.1805916207174113e+21\tf:1.1805916207174113e+21\tf:1.1805916207174113e+21\tf:1.1805916207174113e+21\n");
+    s.push_str("row\ts:2d312e35652d3037\tf:-1.5e-07\tf:-1.5e-07\tf:-1.5e-07\tf:-1.5e-07\tf:-1.5e-07\tf:-1.5e-07\n");
+    s.push_str("row\ts:54727565\tb:1\tb:1\tb:1\tb:1\tb:1\tb:1\n");
+    s.push_str("row\ts:4e6f6e65\tn\tn\tn\tn\tn\tn\n");
+    s.push_str("row\ts:2727\ts:\ts:\ts:\ts:\ts:\ts:\n");
+    s.push_str("row\ts:273727\ts:37\ts:37\ts:37\ts:37\ts:37\ts:37\n");
+    s.push_str("row\ts:2720322e352027\ts:20322e3520\ts:20322e3520\ts:20322e3520\ts:20322e3520\ts:20322e3520\ts:20322e3520\n");
+    s.push_str("row\ts:277827\ts:78\ts:78\ts:78\ts:78\ts:78\ts:78\n");
+    s.push_str("row\ts:272d3027\ts:2d30\ts:2d30\ts:2d30\ts:2d30\ts:2d30\ts:2d30\n");
+    s.push_str("row\ts:62273827\ty:38\ty:38\ty:38\ty:38\ty:38\ty:38\n");
+    s.push_str("row\ts:622727\ty:\ty:\ty:\ty:\ty:\ty:\n");
+    s.push_str("draw\n");
+    s.push_str("row\ts:696e66\tf:inf\tf:inf\tf:inf\tf:inf\tf:inf\tb:1\n");
+    s.push_str("row\ts:6e616e\tf:nan\tf:nan\tf:nan\tf:nan\tf:nan\tb:1\n");
+    s.push_str("row\ts:73747220696e66\ts:696e66\ts:696e66\ts:696e66\ts:696e66\ts:696e66\ts:78\n");
+    s.push_str("draw\n");
+    s.push_str("job\tprecision\n");
+    s.push_str("dtype\ts:66\ts:65\ts:61\n");
+    s.push_str("header\ts:66\ts:65\ts:6175746f\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.1\tf:0.1\tf:0.1\n");
+    s.push_str("row\tf:1234.5\tf:1234.5\tf:1234.5\n");
+    s.push_str("draw\n");
+    s.push_str("precision\ti:0\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ti:1\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ti:6\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ti:20\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ti:-1\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\tf:1.5\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\tb:1\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ts:32\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\tn\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("precision\ti:2\n");
+    s.push_str("row\tf:0.6666666666666666\tf:0.6666666666666666\tf:0.6666666666666666\n");
+    s.push_str("row\tf:0.5\tf:2.5\tf:1e-09\n");
+    s.push_str("draw\n");
+    s.push_str("job\tcost report\n");
+    s.push_str("deco\ti:11\n");
+    s.push_str("dtype\ts:74\ts:69\ts:66\ts:66\ts:65\n");
+    s.push_str("align\ts:6c\ts:72\ts:72\ts:72\ts:72\n");
+    s.push_str("precision\ti:2\n");
+    s.push_str("header\ts:73657276696365\ts:686f757273\ts:72617465\ts:746f74616c\ts:7368617265\n");
+    s.push_str("row\ts:636f6d70757465\ti:7302\tf:0.0416\tf:303.7632\tf:0.61\n");
+    s.push_str("row\ts:73746f72616765\tf:744.0\tf:0.023\tf:17.112\tf:0.0014\n");
+    s.push_str("row\ts:656772657373\ts:313438382e36\ts:302e3039\tf:133.974\tf:0.011\n");
+    s.push_str("row\ts:737570706f7274\ti:1\ti:100\tf:100.005\tf:0.0083\n");
+    s.push_str("row\ts:63726564697473\ti:-1\ti:250\tf:-250.0\tf:-0.0209\n");
+    s.push_str("draw\n");
+    s.push_str("job\tdecorations\n");
+    s.push_str("header\ts:6964\ts:6e616d65\ts:7374617465\n");
+    s.push_str("row\ti:1\ts:616c706861\ts:6f6b\n");
+    s.push_str("row\ti:2\ts:626574610a62\ts:6661696c6564\n");
+    s.push_str("row\ti:3\ts:67616d6d61\ts:6f6b\n");
+    s.push_str("deco\ti:0\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:1\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:2\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:3\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:4\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:5\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:6\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:7\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:8\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:9\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:10\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:11\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:12\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:13\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:14\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:15\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:-1\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:32\n");
+    s.push_str("draw\n");
+    s.push_str("job\tdrawing characters\n");
+    s.push_str("header\ts:6b\ts:76\n");
+    s.push_str("row\ts:61\ti:1\n");
+    s.push_str("row\ts:62\ti:2\n");
+    s.push_str("chars\ts:2a\ts:23\ts:40\ts:7e\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:2d2d\ts:7c7c\ts:2b2b\ts:3d3d\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ti:1\ti:2\ti:3\ti:4\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:\ts:\ts:\ts:\n");
+    s.push_str("draw\n");
+    s.push_str("chars\tn\tb:1\tf:0.5\ty:78\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:e29480\ts:e29482\ts:e294bc\ts:e29590\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:efbc9d\ts:efbd9c\ts:efbc8b\ts:efbc9d\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:2d\ts:7c\ts:2b\n");
+    s.push_str("draw\n");
+    s.push_str("chars\ts:2d\ts:7c\ts:2b\ts:3d\ts:23\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:3\n");
+    s.push_str("chars\ts:2d\ts:21\ts:2b\ts:3d\n");
+    s.push_str("draw\n");
+    s.push_str("job\talignment\n");
+    s.push_str("header\ts:6c656674\ts:63656e747265\ts:7269676874\ts:6f74686572\n");
+    s.push_str("row\ts:61\ts:62\ts:63\ts:64\n");
+    s.push_str("row\ts:776964652063656c6c\ts:776964652063656c6c21\ts:776964652063656c6c2121\ts:78\n");
+    s.push_str("row\ts:74776f0a6c696e6573\ts:6f6e65\ts:74687265650a6c696e650a63656c6c\ts:\n");
+    s.push_str("draw\n");
+    s.push_str("align\ts:6c\ts:63\ts:72\ts:78\n");
+    s.push_str("valign\ts:74\ts:6d\ts:62\ts:3f\n");
+    s.push_str("draw\n");
+    s.push_str("header_align\ts:72\ts:6c\ts:63\ts:7a\n");
+    s.push_str("valign\ts:62\ts:62\ts:6d\ts:6d\n");
+    s.push_str("draw\n");
+    s.push_str("align\ts:63\ts:63\ts:63\ts:63\n");
+    s.push_str("row\ts:6f6464\ts:6576656e\ts:78\ts:7879\n");
+    s.push_str("draw\n");
+    s.push_str("align\ts:6c\ts:63\n");
+    s.push_str("job\twrapping\n");
+    s.push_str("header\ts:7469636b6574\ts:73756d6d617279\ts:6f776e6572\n");
+    s.push_str("row\ts:4f50532d31343132\ts:526f746174652074686520544c5320636572746966696361746573206f6e2074686520656467652070726f78696573206265666f7265207468657920657870697265206f6e20467269646179\ts:737265\n");
+    s.push_str("row\ts:4f50532d31343230\ts:4469736b206f6e2064622d3032206973203931252066756c6c3b206d6f7665207468652057414c206172636869766520746f206f626a6563742073746f72616765\ts:646261207465616d\n");
+    s.push_str("row\ts:4f50532d31343333\ts:68747470733a2f2f7374617475732e6578616d706c652e636f6d2f696e636964656e74732f323032362d31302d32332d6170692d6c6174656e63792d72656772657373696f6e\ts:6f6e2d63616c6c\n");
+    s.push_str("row\ts:4f50532d31343431\ts:77656c6c2d6b6e6f776e2073656c662d736572766963652072652d70726f766973696f6e696e67\ts:706c6174666f726d\n");
+    s.push_str("max_width\ti:80\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:60\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:45\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:30\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:22\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:12\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:-5\n");
+    s.push_str("draw\n");
+    s.push_str("job\texplicit widths\n");
+    s.push_str("header\ts:6b6579\ts:76616c7565\n");
+    s.push_str("row\ts:6d6f7464\ts:57656c636f6d6520746f20746865206275696c64206661726d2e204a6f6273206f76657220326820617265206b696c6c65642e\n");
+    s.push_str("row\ts:70617468\ts:2f7573722f6c6f63616c2f62696e3a2f7573722f62696e3a2f62696e\n");
+    s.push_str("width\ti:6\ti:20\n");
+    s.push_str("draw\n");
+    s.push_str("width\ts:34\tf:2.7\n");
+    s.push_str("draw\n");
+    s.push_str("width\ti:1\ti:1\n");
+    s.push_str("draw\n");
+    s.push_str("width\ti:0\ti:5\n");
+    s.push_str("width\ti:-2\ti:5\n");
+    s.push_str("width\ts:78\ti:5\n");
+    s.push_str("width\ti:5\ts:203720\n");
+    s.push_str("width\ti:5\ts:372e35\n");
+    s.push_str("width\tn\ti:5\n");
+    s.push_str("width\ti:5\tf:nan\n");
+    s.push_str("width\ti:5\tf:inf\n");
+    s.push_str("width\ti:5\tb:1\n");
+    s.push_str("width\ti:5\n");
+    s.push_str("draw\n");
+    s.push_str("width\ti:3\ti:4\ti:5\n");
+    s.push_str("draw\n");
+    s.push_str("job\ttabs and blank lines\n");
+    s.push_str("header\ts:636f6c0941\ts:42\n");
+    s.push_str("row\ts:610962\ts:78\n");
+    s.push_str("row\ts:313233343536370938\ts:7461620961740973746f7073\n");
+    s.push_str("row\ts:31323334353637380939\ts:09\n");
+    s.push_str("row\ts:70617261206f6e650a0a706172612074776f\ts:200a200a\n");
+    s.push_str("row\ts:747261696c696e670a\ts:0a6c656164696e67\n");
+    s.push_str("row\ts:63720d696e0b63656c6c\ts:66660c78\n");
+    s.push_str("row\ts:c2a0\ts:e3808077696465207370616365\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:22\n");
+    s.push_str("draw\n");
+    s.push_str("job\ttranslations\n");
+    s.push_str("header\ts:6b6579\ts:656e\ts:6a61\ts:7a68\ts:6465\n");
+    s.push_str("row\ts:73617665\ts:53617665\ts:e4bf9de5ad98\ts:e4bf9de5ad98\ts:53706569636865726e\n");
+    s.push_str("row\ts:63616e63656c\ts:43616e63656c\ts:e382ade383a3e383b3e382bbe383ab\ts:e58f96e6b688\ts:41626272656368656e\n");
+    s.push_str("row\ts:6772656574696e67\ts:476f6f64206d6f726e696e67\ts:e3818ae381afe38288e38186e38194e38196e38184e381bee38199\ts:e697a9e4b88ae5a5bd\ts:477574656e204d6f7267656e\n");
+    s.push_str("row\ts:7374617475732e6f6b\ts:e29c85204f4b\ts:e29c8520e6ada3e5b8b8\ts:e29c8520e6ada3e5b8b8\ts:e29c8520496e204f72646e756e67\n");
+    s.push_str("row\ts:616363656e7473\ts:63616665cc81\ts:efbdb6efbe80efbdb6efbe85\ts:e585a8e8a792efbca1efbca2efbca3\ts:53747261c39f65\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:50\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:40\n");
+    s.push_str("draw\n");
+    s.push_str("align\ts:6c\ts:63\ts:72\ts:63\ts:72\n");
+    s.push_str("draw\n");
+    s.push_str("job\tbytes cells\n");
+    s.push_str("header\ty:6e616d65\ts:64617461\n");
+    s.push_str("row\ty:706c61696e\ty:68656c6c6f\n");
+    s.push_str("row\ts:7574662d38\ty:e697a5e69cac\n");
+    s.push_str("row\ts:626164207374617274\ty:ff6162\n");
+    s.push_str("row\ts:62616420636f6e74\ty:6162e69778\n");
+    s.push_str("row\ts:7472756e6361746564\ty:7461696ce697\n");
+    s.push_str("row\ts:6e756d626572\ty:3432\n");
+    s.push_str("row\ts:666c6f6174\ty:20322e3520\n");
+    s.push_str("dtype\ts:74\ts:74\n");
+    s.push_str("row\ts:74657874\ty:37\n");
+    s.push_str("row\ts:6261642074657874\ty:c3\n");
+    s.push_str("draw\n");
+    s.push_str("job\trow sizes\n");
+    s.push_str("draw\n");
+    s.push_str("header\ts:61\ts:62\ts:63\n");
+    s.push_str("row\ti:1\ti:2\n");
+    s.push_str("row\ti:1\ti:2\ti:3\ti:4\n");
+    s.push_str("align\ts:6c\ts:72\n");
+    s.push_str("valign\ts:74\n");
+    s.push_str("dtype\ts:61\ts:61\n");
+    s.push_str("header_align\ts:6c\n");
+    s.push_str("chars\ts:2d\ts:7c\n");
+    s.push_str("row\ti:1\ti:2\ti:3\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("draw\n");
+    s.push_str("header\ts:6f6e6c79\ts:686561646572\n");
+    s.push_str("draw\n");
+    s.push_str("job\tadd_rows\n");
+    s.push_str("rows\tb:1\n");
+    s.push_str("rows\tb:1\ts:6831\ts:6832\t/\ti:1\ti:2\t/\ti:3\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("rows\tb:0\ts:78\ti:1\t/\ts:79\ti:2\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("rows\tb:1\ts:6c6f6e656c79\ts:686561646572\n");
+    s.push_str("draw\n");
+    s.push_str("new\ti:30\n");
+    s.push_str("rows\tb:1\ts:61\ts:62\t/\ti:1\ti:2\t/\ti:3\ti:4\t/\ti:5\ti:6\n");
+    s.push_str("draw\n");
+    s.push_str("job\treset keeps settings\n");
+    s.push_str("header\ts:61\ts:62\ts:63\n");
+    s.push_str("align\ts:72\ts:63\ts:6c\n");
+    s.push_str("valign\ts:62\ts:6d\ts:74\n");
+    s.push_str("dtype\ts:69\ts:66\ts:74\n");
+    s.push_str("row\tf:1.5\ti:2\ts:780a79\n");
+    s.push_str("draw\n");
+    s.push_str("width\ti:5\ti:7\ti:5\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("header\ts:70\ts:71\n");
+    s.push_str("row\tf:2.5\ti:3\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("header\ts:70\ts:71\ts:72\ts:73\n");
+    s.push_str("row\ts:610a62\ti:2\ti:3\ti:4\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("dtype\ts:61\ts:61\ts:61\ts:61\n");
+    s.push_str("header\ts:70\ts:71\ts:72\ts:73\n");
+    s.push_str("row\ts:610a62\ti:2\ti:3\ti:4\n");
+    s.push_str("draw\n");
+    s.push_str("reset\n");
+    s.push_str("width\ti:3\ti:3\n");
+    s.push_str("header\ts:70\ts:71\n");
+    s.push_str("draw\n");
+    s.push_str("header\ts:6f6e65\ts:74776f\ts:7468726565\n");
+    s.push_str("draw\n");
+    s.push_str("job\tbad dtype and align\n");
+    s.push_str("dtype\ts:61\ts:78\n");
+    s.push_str("row\ti:1\ti:2\n");
+    s.push_str("row\ti:3\ts:74\n");
+    s.push_str("dtype\ts:61\ts:74\n");
+    s.push_str("row\ti:4\ti:5\n");
+    s.push_str("draw\n");
+    s.push_str("new\n");
+    s.push_str("header\ts:61\ts:62\n");
+    s.push_str("valign\ts:74\n");
+    s.push_str("row\ts:780a79\ts:7a\n");
+    s.push_str("valign\ts:74\ts:74\n");
+    s.push_str("draw\n");
+    s.push_str("new\n");
+    s.push_str("width\ti:0\n");
+    s.push_str("width\n");
+    s.push_str("header\ts:78\n");
+    s.push_str("draw\n");
+    s.push_str("new\n");
+    s.push_str("header\n");
+    s.push_str("row\ti:1\ti:2\n");
+    s.push_str("draw\n");
+    s.push_str("job\tmax_width too low\n");
+    s.push_str("header\ts:61\ts:62\ts:63\n");
+    s.push_str("row\ts:78787878\ts:79797979\ts:7a7a7a7a\n");
+    s.push_str("max_width\ti:21\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:16\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:15\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:14\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:13\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:12\n");
+    s.push_str("draw\n");
+    s.push_str("deco\ti:0\n");
+    s.push_str("max_width\ti:9\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:8\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:6\n");
+    s.push_str("draw\n");
+    s.push_str("max_width\ti:2\n");
+    s.push_str("draw\n");
+    s.push_str("job\tmax_width constructor\n");
+    s.push_str("new\ti:10\n");
+    s.push_str("header\ts:6e616d65\ts:76616c7565\n");
+    s.push_str("row\ts:78\ti:1\n");
+    s.push_str("draw\n");
+    s.push_str("new\ti:0\n");
+    s.push_str("header\ts:61206c6f6e6720686561646572207468617420776f756c642077726170\ts:76\n");
+    s.push_str("row\ts:78\ti:2\n");
+    s.push_str("draw\n");
+    s.push_str("new\ti:-1\n");
+    s.push_str("header\ts:756e6c696d6974656420746f6f\ts:76\n");
+    s.push_str("draw\n");
+    s.push_str("new\ti:18\n");
+    s.push_str("deco\ti:1\n");
+    s.push_str("row\ts:6162632064656620676869\ts:6a6b6c\n");
+    s.push_str("draw\n");
+    s
+}
+
+fn width_text() -> String {
+    let mut s = String.new();
+    s.push_str("w 1100 115f\nw 231a 231b\nw 2329 232a\nw 23e9 23ec\nw 23f0 23f0\nw 23f3 23f3\nw 25fd 25fe\nw 2614 2615\nw 2648 2653\nw 267f 267f\nw 2693 2693\nw 26a1 26a1\nw 26aa 26ab\nw 26bd 26be\nw 26c4 26c5\nw 26ce 26ce\nw 26d4 26d4\nw 26ea 26ea\nw 26f2 26f3\nw 26f5 26f5\nw 26fa 26fa\nw 26fd 26fd\nw 2705 2705\nw 270a 270b\nw 2728 2728\nw 274c 274c\nw 274e 274e\nw 2753 2755\nw 2757 2757\nw 2795 2797\nw 27b0 27b0\nw 27bf 27bf\nw 2b1b 2b1c\nw 2b50 2b50\nw 2b55 2b55\nw 2e80 2e99\nw 2e9b 2ef3\nw 2f00 2fd5\nw 2ff0 303e\nw 3041 3096\nw 3099 30ff\nw 3105 312f\nw 3131 318e\nw 3190 31e3\nw 31ef 321e\nw 3220 3247\nw 3250 4dbf\nw 4e00 a48c\nw a490 a4c6\nw a960 a97c\nw ac00 d7a3\nw f900 faff\nw fe10 fe19\nw fe30 fe52\nw fe54 fe66\nw fe68 fe6b\nw ff01 ff60\nw ffe0 ffe6\nw 16fe0 16fe4\nw 16ff0 16ff1\nw 17000 187f7\nw 18800 18cd5\nw 18d00 18d08\nw 1aff0 1aff3\nw 1aff5 1affb\nw 1affd 1affe\nw 1b000 1b122\nw 1b132 1b132\nw 1b150 1b152\nw 1b155 1b155\nw 1b164 1b167\nw 1b170 1b2fb\nw 1f004 1f004\nw 1f0cf 1f0cf\nw 1f18e 1f18e\n");
+    s.push_str("w 1f191 1f19a\nw 1f200 1f202\nw 1f210 1f23b\nw 1f240 1f248\nw 1f250 1f251\nw 1f260 1f265\nw 1f300 1f320\nw 1f32d 1f335\nw 1f337 1f37c\nw 1f37e 1f393\nw 1f3a0 1f3ca\nw 1f3cf 1f3d3\nw 1f3e0 1f3f0\nw 1f3f4 1f3f4\nw 1f3f8 1f43e\nw 1f440 1f440\nw 1f442 1f4fc\nw 1f4ff 1f53d\nw 1f54b 1f54e\nw 1f550 1f567\nw 1f57a 1f57a\nw 1f595 1f596\nw 1f5a4 1f5a4\nw 1f5fb 1f64f\nw 1f680 1f6c5\nw 1f6cc 1f6cc\nw 1f6d0 1f6d2\nw 1f6d5 1f6d7\nw 1f6dc 1f6df\nw 1f6eb 1f6ec\nw 1f6f4 1f6fc\nw 1f7e0 1f7eb\nw 1f7f0 1f7f0\nw 1f90c 1f93a\nw 1f93c 1f945\nw 1f947 1f9ff\nw 1fa70 1fa7c\nw 1fa80 1fa88\nw 1fa90 1fabd\nw 1fabf 1fac5\nw 1face 1fadb\nw 1fae0 1fae8\nw 1faf0 1faf8\nw 20000 2fffd\nw 30000 3fffd\nz 300 34e\nz 350 36f\nz 483 487\nz 591 5bd\nz 5bf 5bf\nz 5c1 5c2\nz 5c4 5c5\nz 5c7 5c7\nz 610 61a\nz 64b 65f\nz 670 670\nz 6d6 6dc\nz 6df 6e4\nz 6e7 6e8\nz 6ea 6ed\nz 711 711\nz 730 74a\nz 7eb 7f3\nz 7fd 7fd\nz 816 819\nz 81b 823\nz 825 827\nz 829 82d\nz 859 85b\nz 898 89f\nz 8ca 8e1\nz 8e3 8ff\nz 93c 93c\nz 94d 94d\nz 951 954\n");
+    s.push_str("z 9bc 9bc\nz 9cd 9cd\nz 9fe 9fe\nz a3c a3c\nz a4d a4d\nz abc abc\nz acd acd\nz b3c b3c\nz b4d b4d\nz bcd bcd\nz c3c c3c\nz c4d c4d\nz c55 c56\nz cbc cbc\nz ccd ccd\nz d3b d3c\nz d4d d4d\nz dca dca\nz e38 e3a\nz e48 e4b\nz eb8 eba\nz ec8 ecb\nz f18 f19\nz f35 f35\nz f37 f37\nz f39 f39\nz f71 f72\nz f74 f74\nz f7a f7d\nz f80 f80\nz f82 f84\nz f86 f87\nz fc6 fc6\nz 1037 1037\nz 1039 103a\nz 108d 108d\nz 135d 135f\nz 1714 1715\nz 1734 1734\nz 17d2 17d2\nz 17dd 17dd\nz 18a9 18a9\nz 1939 193b\nz 1a17 1a18\nz 1a60 1a60\nz 1a75 1a7c\nz 1a7f 1a7f\nz 1ab0 1abd\nz 1abf 1ace\nz 1b34 1b34\nz 1b44 1b44\nz 1b6b 1b73\nz 1baa 1bab\nz 1be6 1be6\nz 1bf2 1bf3\nz 1c37 1c37\nz 1cd0 1cd2\nz 1cd4 1ce0\nz 1ce2 1ce8\nz 1ced 1ced\nz 1cf4 1cf4\nz 1cf8 1cf9\nz 1dc0 1dff\nz 20d0 20dc\nz 20e1 20e1\nz 20e5 20f0\nz 2cef 2cf1\nz 2d7f 2d7f\nz 2de0 2dff\nz a66f a66f\nz a674 a67d\nz a69e a69f\nz a6f0 a6f1\nz a806 a806\nz a82c a82c\nz a8c4 a8c4\nz a8e0 a8f1\nz a92b a92d\nz a953 a953\nz a9b3 a9b3\nz a9c0 a9c0\nz aab0 aab0\n");
+    s.push_str("z aab2 aab4\nz aab7 aab8\nz aabe aabf\nz aac1 aac1\nz aaf6 aaf6\nz abed abed\nz fb1e fb1e\nz fe20 fe2f\nz 101fd 101fd\nz 102e0 102e0\nz 10376 1037a\nz 10a0d 10a0d\nz 10a0f 10a0f\nz 10a38 10a3a\nz 10a3f 10a3f\nz 10ae5 10ae6\nz 10d24 10d27\nz 10eab 10eac\nz 10efd 10eff\nz 10f46 10f50\nz 10f82 10f85\nz 11046 11046\nz 11070 11070\nz 1107f 1107f\nz 110b9 110ba\nz 11100 11102\nz 11133 11134\nz 11173 11173\nz 111c0 111c0\nz 111ca 111ca\nz 11235 11236\nz 112e9 112ea\nz 1133b 1133c\nz 1134d 1134d\nz 11366 1136c\nz 11370 11374\nz 11442 11442\nz 11446 11446\nz 1145e 1145e\nz 114c2 114c3\nz 115bf 115c0\nz 1163f 1163f\nz 116b6 116b7\nz 1172b 1172b\nz 11839 1183a\nz 1193d 1193e\nz 11943 11943\nz 119e0 119e0\nz 11a34 11a34\nz 11a47 11a47\nz 11a99 11a99\nz 11c3f 11c3f\nz 11d42 11d42\nz 11d44 11d45\nz 11d97 11d97\nz 11f41 11f42\nz 16af0 16af4\nz 16b30 16b36\nz 1bc9e 1bc9e\nz 1d165 1d169\nz 1d16d 1d172\nz 1d17b 1d182\nz 1d185 1d18b\nz 1d1aa 1d1ad\nz 1d242 1d244\nz 1e000 1e006\nz 1e008 1e018\nz 1e01b 1e021\n");
+    s.push_str("z 1e023 1e024\nz 1e026 1e02a\nz 1e08f 1e08f\nz 1e130 1e136\nz 1e2ae 1e2ae\nz 1e2ec 1e2ef\nz 1e4ec 1e4ef\nz 1e8d0 1e8d6\nz 1e944 1e94a\nd 30 39\nd 660 669\nd 6f0 6f9\nd 7c0 7c9\nd 966 96f\nd 9e6 9ef\nd a66 a6f\nd ae6 aef\nd b66 b6f\nd be6 bef\nd c66 c6f\nd ce6 cef\nd d66 d6f\nd de6 def\nd e50 e59\nd ed0 ed9\nd f20 f29\nd 1040 1049\nd 1090 1099\nd 17e0 17e9\nd 1810 1819\nd 1946 194f\nd 19d0 19d9\nd 1a80 1a89\nd 1a90 1a99\nd 1b50 1b59\nd 1bb0 1bb9\nd 1c40 1c49\nd 1c50 1c59\nd a620 a629\nd a8d0 a8d9\nd a900 a909\nd a9d0 a9d9\nd a9f0 a9f9\nd aa50 aa59\nd abf0 abf9\nd ff10 ff19\nd 104a0 104a9\nd 10d30 10d39\nd 11066 1106f\nd 110f0 110f9\nd 11136 1113f\nd 111d0 111d9\nd 112f0 112f9\nd 11450 11459\nd 114d0 114d9\nd 11650 11659\nd 116c0 116c9\nd 11730 11739\nd 118e0 118e9\nd 11950 11959\nd 11c50 11c59\nd 11d50 11d59\nd 11da0 11da9\nd 11f50 11f59\nd 16a60 16a69\nd 16ac0 16ac9\nd 16b50 16b59\nd 1d7ce 1d7d7\nd 1d7d8 1d7e1\nd 1d7e2 1d7eb\nd 1d7ec 1d7f5\nd 1d7f6 1d7ff\nd 1e140 1e149\nd 1e2f0 1e2f9\n");
+    s.push_str("d 1e4f0 1e4f9\nd 1e950 1e959\nd 1fbf0 1fbf9\n");
+    s
+}
