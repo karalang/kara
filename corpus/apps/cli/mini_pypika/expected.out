@@ -1,0 +1,2620 @@
+
+# The tutorial
+> q = Query.from_('customers').select('id', 'fname', 'lname', 'phone')
+> q
+SELECT "id","fname","lname","phone" FROM "customers"
+> q.get_sql()
+SELECT "id","fname","lname","phone" FROM "customers"
+> customers = Table('customers')
+> Query.from_(customers).select(customers.id, customers.fname, customers.lname, customers.phone)
+SELECT "id","fname","lname","phone" FROM "customers"
+> customers = Table('x_view_customers').as_('customers')
+> Query.from_(customers).select(customers.id, customers.phone)
+SELECT "customers"."id","customers"."phone" FROM "x_view_customers" "customers"
+> views = Schema('views')
+> Query.from_(views.customers).select(customers.id, customers.phone)
+SELECT "customers"."id","customers"."phone" FROM "views"."customers"
+> my_db = Database('my_db')
+> Query.from_(my_db.analytics.customers).select(customers.id, customers.phone)
+SELECT "customers"."id","customers"."phone" FROM "my_db"."analytics"."customers"
+> Query.from_('customers').select('id', 'fname', 'lname', 'phone').orderby('id', order=Order.desc)
+SELECT "id","fname","lname","phone" FROM "customers" ORDER BY "id" DESC
+> Query.from_('account').select(Field('revenue') - Field('cost'))
+SELECT "revenue"-"cost" FROM "account"
+> accounts = Table('accounts')
+> Query.from_(accounts).select(accounts.revenue - accounts.cost)
+SELECT "revenue"-"cost" FROM "accounts"
+> Query.from_(accounts).select((accounts.revenue - accounts.cost).as_('profit'))
+SELECT "revenue"-"cost" "profit" FROM "accounts"
+> table = Table('table')
+> Query.from_(table).select(table.foo + table.bar, table.foo - table.bar, table.foo * table.bar, table.foo / table.bar, (table.foo + table.bar) / table.fiz)
+SELECT "foo"+"bar","foo"-"bar","foo"*"bar","foo"/"bar",("foo"+"bar")/"fiz" FROM "table"
+> customers = Table('customers')
+> q = Query.from_(customers).select(customers.id, customers.fname, customers.lname, customers.phone)
+> q.where(customers.lname == 'Mustermann')
+SELECT "id","fname","lname","phone" FROM "customers" WHERE "lname"='Mustermann'
+> q.where(customers.fname == 'Max').where(customers.lname == 'Mustermann')
+SELECT "id","fname","lname","phone" FROM "customers" WHERE "fname"='Max' AND "lname"='Mustermann'
+> Query.from_(customers).select(customers.id, customers.fname).where(customers.age[18:65] & customers.status.isin(['new', 'active']))
+SELECT "id","fname" FROM "customers" WHERE "age" BETWEEN 18 AND 65 AND "status" IN ('new','active')
+> q.where((customers.age >= 18) & (customers.lname == 'Mustermann'))
+SELECT "id","fname","lname","phone" FROM "customers" WHERE "age">=18 AND "lname"='Mustermann'
+> q.where((customers.age >= 18) | (customers.lname == 'Mustermann'))
+SELECT "id","fname","lname","phone" FROM "customers" WHERE "age">=18 OR "lname"='Mustermann'
+> q.where((customers.age >= 18) ^ customers.is_registered)
+SELECT "id","fname","lname","phone" FROM "customers" WHERE "age">=18 XOR "is_registered"
+> Query.from_(customers).select(customers.id, customers.fname).where(Criterion.all([customers.is_registered, customers.age >= 18, customers.lname == 'Jones']))
+SELECT "id","fname" FROM "customers" WHERE "is_registered" AND "age">=18 AND "lname"='Jones'
+> Query.from_(customers).select(customers.id, customers.fname).where(Criterion.any([customers.is_registered, customers.age >= 18, customers.lname == 'Jones']))
+SELECT "id","fname" FROM "customers" WHERE "is_registered" OR "age">=18 OR "lname"='Jones'
+> Query.from_(customers).where(customers.age >= 18).groupby(customers.id).select(customers.id, fn.Sum(customers.revenue))
+SELECT "id",SUM("revenue") FROM "customers" WHERE "age">=18 GROUP BY "id"
+> payments = Table('payments')
+> Query.from_(payments).where(payments.transacted[date(2015, 1, 1):date(2016, 1, 1)]).groupby(payments.customer_id).having(fn.Sum(payments.total) >= 1000).select(payments.customer_id, fn.Sum(payments.total))
+SELECT "customer_id",SUM("total") FROM "payments" WHERE "transacted" BETWEEN '2015-01-01' AND '2016-01-01' GROUP BY "customer_id" HAVING SUM("total")>=1000
+> history, customers = Tables('history', 'customers')
+> Query.from_(history).join(customers).on(history.customer_id == customers.id).select(history.star).where(customers.id == 5)
+SELECT "history".* FROM "history" JOIN "customers" ON "history"."customer_id"="customers"."id" WHERE "customers"."id"=5
+> Query.from_(history).join(customers).on_field('customer_id', 'group').select(history.star).where(customers.group == 'A')
+SELECT "history".* FROM "history" JOIN "customers" ON "history"."customer_id"="customers"."customer_id" AND "history"."group"="customers"."group" WHERE "customers"."group"='A'
+> Query.from_(history).join(customers).using('customer_id').select(history.star).where(customers.id == 5)
+SELECT "history".* FROM "history" JOIN "customers" USING ("customer_id") WHERE "customers"."id"=5
+> last_purchase_at = Query.from_(history).select(history.purchase_at).where(history.customer_id == customers.customer_id).orderby(history.purchase_at, order=Order.desc).limit(1)
+> Query.from_(customers).select(customers.id, last_purchase_at.as_('last_purchase_at'))
+SELECT "id",(SELECT "history"."purchase_at" FROM "history" WHERE "history"."customer_id"="customers"."customer_id" ORDER BY "history"."purchase_at" DESC LIMIT 1) "last_purchase_at" FROM "customers"
+> provider_a, provider_b = Tables('provider_a', 'provider_b')
+> q = Query.from_(provider_a).select(provider_a.created_time, provider_a.foo, provider_a.bar)
+> r = Query.from_(provider_b).select(provider_b.created_time, provider_b.fiz, provider_b.buz)
+> q + r
+(SELECT "created_time","foo","bar" FROM "provider_a") UNION (SELECT "created_time","fiz","buz" FROM "provider_b")
+> q * r
+(SELECT "created_time","foo","bar" FROM "provider_a") UNION ALL (SELECT "created_time","fiz","buz" FROM "provider_b")
+> q.intersect(r)
+(SELECT "created_time","foo","bar" FROM "provider_a") INTERSECT (SELECT "created_time","fiz","buz" FROM "provider_b")
+> q.minus(r)
+(SELECT "created_time","foo","bar" FROM "provider_a") MINUS (SELECT "created_time","fiz","buz" FROM "provider_b")
+> q - r
+(SELECT "created_time","foo","bar" FROM "provider_a") MINUS (SELECT "created_time","fiz","buz" FROM "provider_b")
+> q.except_of(r)
+(SELECT "created_time","foo","bar" FROM "provider_a") EXCEPT (SELECT "created_time","fiz","buz" FROM "provider_b")
+> fruits = Table('fruits')
+> Query.from_(fruits).select(fruits.id, fruits.name).where(fruits.harvest_date + Interval(months=1) < fn.Now())
+SELECT "id","name" FROM "fruits" WHERE "harvest_date"+INTERVAL '1 MONTH'<NOW()
+> abc = Table('abc')
+> Query.from_(abc).select(abc.foo, abc.bar).where(Tuple(abc.foo, abc.bar) == Tuple(1, 2))
+SELECT "foo","bar" FROM "abc" WHERE ("foo","bar")=(1,2)
+> Query.from_(abc).select(abc.foo, abc.bar).where(Tuple(abc.foo, abc.bar) == (1, 2))
+SELECT "foo","bar" FROM "abc" WHERE ("foo","bar")=(1,2)
+> Query.from_(abc).select(abc.foo, abc.bar).where(Tuple(abc.foo, abc.bar).isin([(1, 1), (2, 2), (3, 3)]))
+SELECT "foo","bar" FROM "abc" WHERE ("foo","bar") IN ((1,1),(2,2),(3,3))
+> Query.from_(customers).select(customers.id, customers.fname, customers.lname).where(customers.lname.like('Mc%'))
+SELECT "id","fname","lname" FROM "customers" WHERE "lname" LIKE 'Mc%'
+> Query.from_(customers).select(customers.id, customers.fname, customers.lname).where(customers.lname.regex('^[abc][a-zA-Z]+&'))
+SELECT "id","fname","lname" FROM "customers" WHERE "lname" REGEX '^[abc][a-zA-Z]+&'
+> Query.from_(customers).select(customers.id, fn.Concat(customers.fname, ' ', customers.lname).as_('full_name'))
+SELECT "id",CONCAT("fname",' ',"lname") "full_name" FROM "customers"
+> DateDiff = CustomFunction('DATE_DIFF', ['interval', 'start_date', 'end_date'])
+> Query.from_(customers).select(customers.id, customers.fname, customers.lname, DateDiff('day', customers.created_date, customers.updated_date))
+SELECT "id","fname","lname",DATE_DIFF('day',"created_date","updated_date") FROM "customers"
+> Query.from_(customers).select(customers.id, Case().when(customers.fname == 'Tom', 'It was Tom').when(customers.fname == 'John', 'It was John').else_('It was someone else.').as_('who_was_it'))
+SELECT "id",CASE WHEN "fname"='Tom' THEN 'It was Tom' WHEN "fname"='John' THEN 'It was John' ELSE 'It was someone else.' END "who_was_it" FROM "customers"
+> sub_query = Query.from_(customers).select('*')
+> Query.with_(sub_query, 'an_alias').from_(AliasedQuery('an_alias')).select('*')
+WITH an_alias AS (SELECT * FROM "customers") SELECT * FROM an_alias
+> Query.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com')
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com')
+> customers.insert(1, 'Jane', 'Doe', 'jane@example.com')
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com')
+> Query.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com').insert(2, 'John', 'Doe', 'john@example.com')
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com'),(2,'John','Doe','john@example.com')
+> Query.into(customers).insert((1, 'Jane', 'Doe', 'jane@example.com'), (2, 'John', 'Doe', 'john@example.com'))
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com'),(2,'John','Doe','john@example.com')
+> MySQLQuery.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com').on_duplicate_key_ignore()
+INSERT INTO `customers` VALUES (1,'Jane','Doe','jane@example.com') ON DUPLICATE KEY IGNORE
+> MySQLQuery.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com').on_duplicate_key_update(customers.email, Values(customers.email))
+INSERT INTO `customers` VALUES (1,'Jane','Doe','jane@example.com') ON DUPLICATE KEY UPDATE `email`=VALUES(`email`)
+> PostgreSQLQuery.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com').on_conflict(customers.email).do_nothing()
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com') ON CONFLICT ("email") DO NOTHING
+> PostgreSQLQuery.into(customers).insert(1, 'Jane', 'Doe', 'jane@example.com').on_conflict(customers.email).do_update(customers.email, 'bob@example.com')
+INSERT INTO "customers" VALUES (1,'Jane','Doe','jane@example.com') ON CONFLICT ("email") DO UPDATE SET "email"='bob@example.com'
+> Query.into(customers).columns('id', 'fname', 'lname').insert(1, 'Jane', 'Doe')
+INSERT INTO "customers" ("id","fname","lname") VALUES (1,'Jane','Doe')
+> customers, customers_backup = Tables('customers', 'customers_backup')
+> Query.into(customers_backup).from_(customers).select('*')
+INSERT INTO "customers_backup" SELECT * FROM "customers"
+> Query.into(customers_backup).columns('id', 'fname', 'lname').from_(customers).select(customers.id, customers.fname, customers.lname)
+INSERT INTO "customers_backup" ("id","fname","lname") SELECT "id","fname","lname" FROM "customers"
+> customers, orders, orders_backup = Tables('customers', 'orders', 'orders_backup')
+> Query.into(orders_backup).columns('id', 'address', 'customer_fname', 'customer_lname').from_(customers).join(orders).on(orders.customer_id == customers.id).select(orders.id, customers.fname, customers.lname)
+INSERT INTO "orders_backup" ("id","address","customer_fname","customer_lname") SELECT "orders"."id","customers"."fname","customers"."lname" FROM "customers" JOIN "orders" ON "orders"."customer_id"="customers"."id"
+> Query.update(customers).set(customers.last_login, '2017-01-01 10:00:00')
+UPDATE "customers" SET "last_login"='2017-01-01 10:00:00'
+> Query.update(customers).set(customers.lname, 'smith').where(customers.id == 10)
+UPDATE "customers" SET "lname"='smith' WHERE "id"=10
+> customers, profiles = Tables('customers', 'profiles')
+> Query.update(customers).join(profiles).on(profiles.customer_id == customers.id).set(customers.lname, profiles.lname)
+UPDATE "customers" JOIN "profiles" ON "profiles"."customer_id"="customers"."id" SET "lname"="profiles"."lname"
+> customers.update().set(customers.lname, 'smith').where(customers.id == 10)
+UPDATE "customers" SET "lname"='smith' WHERE "id"=10
+> customers.update().set(customers.lname, 'smith').limit(2)
+UPDATE "customers" SET "lname"='smith' LIMIT 2
+> Query.into(customers).columns('id', 'fname', 'lname').insert(Parameter(':1'), Parameter(':2'), Parameter(':3'))
+INSERT INTO "customers" ("id","fname","lname") VALUES (:1,:2,:3)
+> t = Table('abc')
+> Query.from_(t.for_(SYSTEM_TIME.as_of('2020-01-01'))).select('*')
+SELECT * FROM "abc" FOR SYSTEM_TIME AS OF '2020-01-01'
+> Query.from_(t.for_(SYSTEM_TIME.between('2020-01-01', '2020-02-01'))).select('*')
+SELECT * FROM "abc" FOR SYSTEM_TIME BETWEEN '2020-01-01' AND '2020-02-01'
+> Query.from_(t.for_(SYSTEM_TIME.from_to('2020-01-01', '2020-02-01'))).select('*')
+SELECT * FROM "abc" FOR SYSTEM_TIME FROM '2020-01-01' TO '2020-02-01'
+> Query.from_(t.for_(SYSTEM_TIME.all_())).select('*')
+SELECT * FROM "abc" FOR SYSTEM_TIME ALL
+> Query.from_(t.for_(t.valid_period.between('2020-01-01', '2020-02-01'))).select('*')
+SELECT * FROM "abc" FOR "valid_period" BETWEEN '2020-01-01' AND '2020-02-01'
+> t0 = Table('abc').for_(SYSTEM_TIME.as_of('2020-01-01'))
+> t1 = Table('efg').for_(SYSTEM_TIME.as_of('2020-01-01'))
+> Query.from_(t0).join(t1).on(t0.foo == t1.bar).select('*')
+SELECT * FROM "abc" FOR SYSTEM_TIME AS OF '2020-01-01' JOIN "efg" FOR SYSTEM_TIME AS OF '2020-01-01' ON "abc"."foo"="efg"."bar"
+> Query.update(t.for_portion(SYSTEM_TIME.from_to('2020-01-01', '2020-02-01'))).set('foo', 'bar')
+UPDATE "abc" FOR PORTION OF SYSTEM_TIME FROM '2020-01-01' TO '2020-02-01' SET "foo"='bar'
+> Query.from_(t.for_portion(t.valid_period.from_to('2020-01-01', '2020-02-01'))).delete()
+DELETE FROM "abc" FOR PORTION OF "valid_period" FROM '2020-01-01' TO '2020-02-01'
+> t.for_(SYSTEM_TIME.all_()).for_(SYSTEM_TIME.all_())
+error AttributeError: 'Query' object already has attribute for_
+> t.for_portion(SYSTEM_TIME.all_()).for_(SYSTEM_TIME.all_())
+error AttributeError: 'Query' object already has attribute for_portion
+> Query.create_table('person').columns(Column('id', 'INT', nullable=False), Column('first_name', 'VARCHAR(100)', nullable=False), Column('last_name', 'VARCHAR(100)', nullable=False), Column('phone_number', 'VARCHAR(20)', nullable=True), Column('status', 'VARCHAR(20)', nullable=False, default=ValueWrapper('NEW')), Column('date_of_birth', 'DATETIME')).unique('last_name', 'first_name').primary_key('id')
+CREATE TABLE "person" ("id" INT NOT NULL,"first_name" VARCHAR(100) NOT NULL,"last_name" VARCHAR(100) NOT NULL,"phone_number" VARCHAR(20) NULL,"status" VARCHAR(20) NOT NULL DEFAULT 'NEW',"date_of_birth" DATETIME,UNIQUE ("last_name","first_name"),PRIMARY KEY ("id"))
+> Query.create_table('names').as_select(Query.from_('person').select('last_name', 'first_name'))
+CREATE TABLE "names" AS (SELECT "last_name","first_name" FROM "person")
+
+# Values, quoting and get_sql options
+> t = Table('t')
+> f = Field('x')
+> f == 1
+"x"=1
+> f == -7
+"x"=-7
+> f == 2.5
+"x"=2.5
+> f == 0.1
+"x"=0.1
+> f == 100.0
+"x"=100.0
+> f == 'abc'
+"x"='abc'
+> f == "O'Brien"
+"x"='O''Brien'
+> f == ''
+"x"=''
+> f == True
+"x"=true
+> f == False
+"x"=false
+> f == None
+"x"=NULL
+> f == date(2024, 2, 29)
+"x"='2024-02-29'
+> f == [1, 2, 3]
+"x"=[1,2,3]
+> f == (1, 'a')
+"x"=(1,'a')
+> f == []
+"x"=[]
+> f == Order.asc
+"x"='ASC'
+> f == DatePart.year
+"x"='YEAR'
+> f != 3
+"x"<>3
+> f > 3
+"x">3
+> f >= 3
+"x">=3
+> f < 3
+"x"<3
+> f <= 3
+"x"<=3
+> 3 < f
+"x">3
+> 3 == f
+"x"=3
+> 'a' != f
+"x"<>'a'
+> f.eq(1)
+"x"=1
+> f.ne(1)
+"x"<>1
+> f.gt(1)
+"x">1
+> f.gte(1)
+"x">=1
+> f.lt(1)
+"x"<1
+> f.lte(1)
+"x"<=1
+> ValueWrapper('x')
+'x'
+> ValueWrapper('x', alias='y')
+'x' "y"
+> ValueWrapper(3.75)
+3.75
+> ValueWrapper(True)
+true
+> ValueWrapper(None)
+null
+> ValueWrapper(date(1999, 12, 31))
+'1999-12-31'
+> NullValue()
+NULL
+> NULL
+NULL
+> NULL.as_('nothing')
+NULL "nothing"
+> t.x
+"x"
+> t.x.as_('y')
+"x"
+> t.x.get_sql()
+x
+> t.x.get_sql(with_namespace=True)
+t.x
+> t.x.get_sql(with_namespace=True, quote_char='`')
+`t`.`x`
+> t.x.as_('y').get_sql(with_alias=True)
+x y
+> t.x.as_('y').get_sql(with_alias=True, quote_char='"')
+"x" "y"
+> t.x.as_('y').get_sql(with_alias=True, alias_quote_char="'", as_keyword=True)
+x AS 'y'
+> (t.x == 'it''s').get_sql(quote_char=None, secondary_quote_char='"')
+x="its"
+> (t.x == 'say "hi"').get_sql(secondary_quote_char='"')
+"x"="say ""hi"""
+> (t.x == 'it''s').get_sql()
+"x"='its'
+> t.as_('u').x
+"u"."x"
+> t.as_('u').x.get_sql(quote_char='"')
+"u"."x"
+> Table('t', schema='s').x.get_sql(with_namespace=True, quote_char='"')
+"t"."x"
+> Field('x', table=Table('t', schema='s'))
+"x"
+> Field('x', alias='y', table=t)
+"x"
+> Field('x', alias='y', table=t).get_sql(with_alias=True, with_namespace=True)
+t.x y
+> t['select']
+"select"
+> t.field('from')
+"from"
+> t.star
+*
+> t.star.get_sql(with_namespace=True, quote_char='"')
+"t".*
+> t.as_('u').star
+"u".*
+> t
+"t"
+> t.as_('u')
+"t" "u"
+> Table('t', schema='s')
+"s"."t"
+> Table('t', schema=['db', 'sales'])
+"db"."sales"."t"
+> Table('t', schema=('a', 'b', 'c'), alias='z')
+"a"."b"."c"."t" "z"
+> Table('t', schema=Database('db').sales)
+"db"."sales"."t"
+> Table('t').get_sql()
+t
+> Table('t').as_('u').get_sql(quote_char='`', alias_quote_char="'", as_keyword=True)
+`t` AS 'u'
+> t.alias
+None
+> t.as_('u').alias
+u
+> t.get_table_name()
+t
+> t.as_('u').get_table_name()
+u
+> Table('a') == Table('a')
+True
+> Table('a') == Table('b')
+False
+> Table('a') == Table('a').as_('b')
+False
+> Table('a', schema='s') == Table('a', schema='s')
+True
+> Table('a', schema='s') == Table('a', schema='r')
+False
+> Table('a', schema='s') == Table('a')
+False
+> Table('a') != Table('a')
+False
+> Query.from_('x') == Query.from_('y')
+True
+> Query.from_('x').as_('p') == Query.from_('x')
+False
+> Index('idx')
+"idx"
+> Values(t.x)
+VALUES("x")
+> Values('x')
+VALUES("x")
+
+# Arithmetic
+> t = Table('t')
+> a, b, c = t.a, t.b, t.c
+> a + b
+"a"+"b"
+> a - b
+"a"-"b"
+> a * b
+"a"*"b"
+> a / b
+"a"/"b"
+> a + b + c
+"a"+"b"+"c"
+> a - b - c
+"a"-"b"-"c"
+> a - (b - c)
+"a"-("b"-"c")
+> a - (b + c)
+"a"-("b"+"c")
+> a + (b - c)
+"a"+"b"-"c"
+> (a + b) * c
+("a"+"b")*"c"
+> a * (b + c)
+"a"*("b"+"c")
+> a * (b - c)
+"a"*("b"-"c")
+> (a - b) / c
+("a"-"b")/"c"
+> a / (b * c)
+"a"/("b"*"c")
+> a / b / c
+"a"/"b"/"c"
+> a / (b / c)
+"a"/("b"/"c")
+> a * b * c
+"a"*"b"*"c"
+> a * (b * c)
+"a"*"b"*"c"
+> (a * b) + c
+"a"*"b"+"c"
+> a + b * c
+"a"+"b"*"c"
+> -a
+-"a"
+> -(a + b)
+-"a"+"b"
+> +a
+"a"
+> a * -b
+"a"*-"b"
+> a << 2
+"a"<<2
+> a >> 1
+"a">>1
+> (a + 1) << 2
+("a"+1)<<2
+> a ** 2
+POW("a",2)
+> a % 3
+MOD("a",3)
+> (a + b) ** 2
+POW("a"+"b",2)
+> 1 + a
+1+"a"
+> 10 - a
+10-"a"
+> 2 * (a + 1)
+2*("a"+1)
+> 1.5 / a
+1.5/"a"
+> None + a
+NULL+"a"
+> a + None
+"a"+NULL
+> a + 'x'
+"a"+'x'
+> a + Interval(days=1)
+"a"+INTERVAL '1 DAY'
+> a - Interval(hours=2, minutes=5)
+"a"-INTERVAL '2:5 HOUR_MINUTE'
+> a.lshift(1)
+"a"<<1
+> a.rshift(1)
+"a">>1
+> Bracket(a + b) * c
+("a"+"b")*"c"
+> (a + b).as_('s')
+"a"+"b"
+> (a + b).as_('s').get_sql(with_alias=True)
+a+b s
+> (a + b).get_sql(with_namespace=True, quote_char='`')
+`t`.`a`+`t`.`b`
+> Query.from_(t).select((a + b).as_('s'), (a * 2).as_('d'), -a)
+SELECT "a"+"b" "s","a"*2 "d",-"a" FROM "t"
+> 2 * 3
+6
+> 7 - 10
+-3
+> -(-4)
+4
+
+# Criteria
+> t = Table('t')
+> x, y, z = t.x, t.y, t.z
+> (x == 1) & (y == 2)
+"x"=1 AND "y"=2
+> (x == 1) | (y == 2)
+"x"=1 OR "y"=2
+> (x == 1) ^ (y == 2)
+"x"=1 XOR "y"=2
+> (x == 1) & (y == 2) & (z == 3)
+"x"=1 AND "y"=2 AND "z"=3
+> ((x == 1) | (y == 2)) & (z == 3)
+("x"=1 OR "y"=2) AND "z"=3
+> (x == 1) | ((y == 2) & (z == 3))
+"x"=1 OR ("y"=2 AND "z"=3)
+> ((x == 1) & (y == 2)) | ((x == 3) & (y == 4))
+("x"=1 AND "y"=2) OR ("x"=3 AND "y"=4)
+> ((x == 1) | (y == 2)) | (z == 3)
+"x"=1 OR "y"=2 OR "z"=3
+> ~(x == 1)
+NOT "x"=1
+> ~((x == 1) & (y == 2))
+NOT ("x"=1 AND "y"=2)
+> (x == 1) & ~(y == 2)
+"x"=1 AND NOT "y"=2
+> ~~(x == 1)
+NOT NOT "x"=1
+> ~x
+NOT "x"
+> x & y
+"x" AND "y"
+> x | ~y
+"x" OR NOT "y"
+> (x > 1).negate()
+NOT "x">1
+> x.isnull()
+"x" IS NULL
+> x.notnull()
+NOT "x" IS NULL
+> x.isnotnull()
+"x" IS NOT NULL
+> ~x.isnull()
+NOT "x" IS NULL
+> x.isnull() & y.notnull()
+"x" IS NULL AND NOT "y" IS NULL
+> x.between(1, 10)
+"x" BETWEEN 1 AND 10
+> x[1:10]
+"x" BETWEEN 1 AND 10
+> x['a':'m']
+"x" BETWEEN 'a' AND 'm'
+> x.between(fn.Now(), date(2030, 1, 1))
+"x" BETWEEN NOW() AND '2030-01-01'
+> x.isin([1, 2, 3])
+"x" IN (1,2,3)
+> x.isin((1,))
+"x" IN (1)
+> x.isin(['a', None])
+"x" IN ('a',NULL)
+> x.isin([])
+"x" IN ()
+> x.notin([1, 2])
+"x" NOT IN (1,2)
+> x.isin([1, 2]).negate()
+"x" NOT IN (1,2)
+> x.isin(Tuple(1, 2))
+"x" IN (1,2)
+> x.like('a%')
+"x" LIKE 'a%'
+> x.not_like('a%')
+"x" NOT LIKE 'a%'
+> x.ilike('A%')
+"x" ILIKE 'A%'
+> x.not_ilike('A%')
+"x" NOT ILIKE 'A%'
+> x.rlike('^a')
+"x" RLIKE '^a'
+> x.regex('^a+$')
+"x" REGEX '^a+$'
+> x.regexp('b')
+"x" REGEXP 'b'
+> x.glob('*.txt')
+"x" GLOB '*.txt'
+> x.bin_regex('A')
+"x" REGEX BINARY 'A'
+> x.bitwiseand(4) == 4
+("x" & 4)=4
+> x.bitwiseand(1)
+("x" & 1)
+> x.as_of('2020')
+"x" AS OF '2020'
+> x.all_()
+"x" ALL
+> x.from_to(1, 2)
+"x" FROM 1 TO 2
+> x[5]
+error TypeError: Field' object is not subscriptable
+> (x == 1).as_('flag')
+"x"=1
+> Criterion.all([])
+error TypeError: Criterion.get_sql() got an unexpected keyword argument 'quote_char'
+> Criterion.any([x == 1])
+"x"=1
+> Criterion.all([x == 1, y == 2])
+"x"=1 AND "y"=2
+> Criterion.any([x == 1, y == 2, z == 3])
+"x"=1 OR "y"=2 OR "z"=3
+> Criterion.all([x, y]) | z
+("x" AND "y") OR "z"
+> EmptyCriterion() & (x == 1)
+"x"=1
+> EmptyCriterion() | (x == 1)
+"x"=1
+> (x == 1) & EmptyCriterion()
+error TypeError: Criterion.get_sql() got an unexpected keyword argument 'subcriterion'
+> EmptyCriterion()
+error TypeError: Criterion.get_sql() got an unexpected keyword argument 'quote_char'
+> Not(x == 1)
+NOT "x"=1
+> Not(x)
+NOT "x"
+> x == y
+"x"="y"
+> x != y + 1
+"x"<>"y"+1
+> (x + 1) & (y == 2)
+error TypeError: unsupported operand type(s) for &: 'ArithmeticExpression' and 'BasicCriterion'
+> x.isin([1]) & x.notin([2])
+"x" IN (1) AND "x" NOT IN (2)
+> ((x == 1) & (y == 2)).get_sql(subcriterion=True)
+("x"=1 AND "y"=2)
+> ((x == 1) | (y == 2)).get_sql(subcriterion=True, quote_char='`')
+(`x`=1 OR `y`=2)
+> (x == 'a').get_sql(quote_char='`', secondary_quote_char='"', with_alias=True)
+`x`="a"
+> (x == 1).as_('f').get_sql(with_alias=True)
+"x"=1 f
+> (x == 1).as_('f').get_sql(with_alias=True, alias_quote_char='"')
+"x"=1 "f"
+> x.isnull().as_('n').get_sql(with_alias=True)
+x IS NULL n
+> x.isin([1]).as_('i').get_sql(quote_char='"')
+"x" IN (1) "i"
+> x.between(1, 2).as_('b')
+"x" BETWEEN 1 AND 2 "b"
+> Query.from_(t).select(x == 1, (x == 1).as_('f'), ((x == 1) & (y == 2)).as_('g'), x.isnull().as_('n'))
+SELECT "x"=1,"x"=1 f,"x"=1 AND "y"=2,"x" IS NULL "n" FROM "t"
+> Query.from_(t).select(x).where((x == 1).as_('f'))
+SELECT "x" FROM "t" WHERE "x"=1
+> Query.from_(t).select(x).where(~((x == 1) | (y == 2)))
+SELECT "x" FROM "t" WHERE NOT ("x"=1 OR "y"=2)
+> Query.from_(t).select(x).where(Not((x == 1) | (y == 2)) & (z == 3))
+SELECT "x" FROM "t" WHERE NOT ("x"=1 OR "y"=2) AND "z"=3
+> Query.from_(t).select(x).where(((x == 1) & (y == 2)) == True)
+SELECT "x" FROM "t" WHERE "x"=1 AND "y"=2=true
+> Query.from_(t).select(x).where(EmptyCriterion())
+SELECT "x" FROM "t"
+> Query.from_(t).select(x).where(Criterion.any([]))
+SELECT "x" FROM "t"
+> Query.from_(t).select(x).where(x == 1).where(Criterion.all([]))
+SELECT "x" FROM "t" WHERE "x"=1
+> Query.from_(t).select(x).where(x == 1).having(EmptyCriterion())
+SELECT "x" FROM "t" WHERE "x"=1
+
+# Aggregates and is_aggregate
+> t = Table('t')
+> fn.Sum(t.x).is_aggregate
+True
+> fn.Count('*').is_aggregate
+True
+> t.x.is_aggregate
+False
+> (t.x + 1).is_aggregate
+False
+> (fn.Sum(t.x) + 1).is_aggregate
+True
+> (fn.Sum(t.x) + t.y).is_aggregate
+False
+> (fn.Sum(t.x) / fn.Count('*')).is_aggregate
+True
+> ValueWrapper(1).is_aggregate
+None
+> fn.Coalesce(fn.Sum(t.x), 0).is_aggregate
+True
+> fn.Coalesce(t.x, 0).is_aggregate
+False
+> fn.Now().is_aggregate
+None
+> (fn.Sum(t.x) > 3).is_aggregate
+True
+> (t.x > 3).is_aggregate
+False
+> ((fn.Sum(t.x) > 3) & (fn.Max(t.y) < 9)).is_aggregate
+True
+> an.Rank().is_aggregate
+False
+> an.Sum(t.x).is_aggregate
+False
+> Case().when(t.x == 1, fn.Sum(t.y)).is_aggregate
+True
+> Case().when(fn.Sum(t.x) > 1, 1).else_(t.y).is_aggregate
+False
+> Case().when(fn.Sum(t.x) > 1, 1).else_(0).is_aggregate
+True
+> Tuple(fn.Sum(t.x), 1).is_aggregate
+True
+> (-fn.Sum(t.x)).is_aggregate
+True
+> fn.Sum(t.x).isin([1]).is_aggregate
+True
+> fn.Sum(t.x)[1:2].is_aggregate
+True
+> fn.Sum(t.x).isnull().is_aggregate
+False
+> Interval(days=1).is_aggregate
+None
+> NULL.is_aggregate
+False
+> Parameter('?').is_aggregate
+None
+> (fn.Sum(t.x) + Parameter('?')).is_aggregate
+True
+> EmptyCriterion().is_aggregate
+None
+> Not(fn.Sum(t.x) > 1).is_aggregate
+False
+> Query.from_(t).select(t.x).is_aggregate
+False
+
+# Functions
+> t = Table('t')
+> fn.Count('*')
+COUNT(*)
+> fn.Count(t.id)
+COUNT("id")
+> fn.Count(t.id).distinct()
+COUNT(DISTINCT "id")
+> fn.Count('id')
+COUNT('id')
+> fn.Sum(t.x)
+SUM("x")
+> fn.Sum(t.x).distinct()
+SUM(DISTINCT "x")
+> fn.Sum(t.x, alias='total')
+SUM("x")
+> fn.Avg(t.x)
+AVG("x")
+> fn.Min(t.x)
+MIN("x")
+> fn.Max(t.x)
+MAX("x")
+> fn.Std(t.x)
+STD("x")
+> fn.StdDev(t.x)
+STDDEV("x")
+> fn.Abs(t.x)
+ABS("x")
+> fn.First(t.x)
+FIRST("x")
+> fn.Last(t.x)
+LAST("x")
+> fn.Sqrt(t.x)
+SQRT("x")
+> fn.Floor(t.x)
+FLOOR("x")
+> fn.ApproximatePercentile(t.x, 0.5)
+APPROXIMATE_PERCENTILE("x" USING PARAMETERS percentile=0.5)
+> fn.ApproximatePercentile(t.x, 1)
+APPROXIMATE_PERCENTILE("x" USING PARAMETERS percentile=1.0)
+> fn.Cast(t.x, SqlTypes.VARCHAR(255))
+CAST("x" AS VARCHAR(255))
+> fn.Cast(t.x, SqlTypes.VARCHAR)
+CAST("x" AS VARCHAR)
+> fn.Cast(t.x, SqlTypes.INTEGER)
+CAST("x" AS INTEGER)
+> fn.Cast(t.x, 'numeric(10,2)')
+CAST("x" AS NUMERIC(10,2))
+> fn.Cast(t.x, SqlTypes.LONG_VARCHAR(10))
+CAST("x" AS LONG VARCHAR(10))
+> fn.Signed(t.x)
+CAST("x" AS SIGNED)
+> fn.Unsigned(t.x)
+CAST("x" AS UNSIGNED)
+> fn.Date(t.d)
+DATE("d")
+> fn.DateDiff('day', t.a, t.b)
+DATEDIFF('day',"a","b")
+> fn.TimeDiff(t.a, t.b)
+TIMEDIFF("a","b")
+> fn.DateAdd(DatePart.day, 1, t.d)
+DATE_ADD(DAY,1,"d")
+> fn.DateAdd('week', -2, t.d)
+DATE_ADD(week,-2,"d")
+> fn.ToDate('2024-01-31', 'YYYY-MM-DD')
+TO_DATE('2024-01-31','YYYY-MM-DD')
+> fn.Timestamp(t.d)
+TIMESTAMP("d")
+> fn.TimestampAdd(DatePart.month, 2, t.d)
+TIMESTAMPADD(MONTH,2,"d")
+> fn.TimestampAdd('hour', 1, fn.Now())
+TIMESTAMPADD(hour,1,NOW())
+> fn.Ascii(t.s)
+ASCII("s")
+> fn.NullIf(t.a, 0)
+NULLIF("a",0)
+> fn.Bin(t.n)
+BIN("n")
+> fn.Concat(t.a, '-', t.b, 7)
+CONCAT("a",'-',"b",7)
+> fn.Concat()
+CONCAT()
+> fn.Insert(t.s, 1, 2, 'xy')
+INSERT("s",1,2,'xy')
+> fn.Length(t.s)
+LENGTH("s")
+> fn.Upper(t.s)
+UPPER("s")
+> fn.Lower(t.s)
+LOWER("s")
+> fn.Substring(t.s, 2, 5)
+SUBSTRING("s",2,5)
+> fn.Reverse(t.s)
+REVERSE("s")
+> fn.Trim(t.s)
+TRIM("s")
+> fn.SplitPart(t.s, ',', 2)
+SPLIT_PART("s",',',2)
+> fn.RegexpMatches(t.s, '^a')
+REGEXP_MATCHES("s",'^a',NULL)
+> fn.RegexpMatches(t.s, '^a', 'i')
+REGEXP_MATCHES("s",'^a','i')
+> fn.RegexpLike(t.s, 'x+')
+REGEXP_LIKE("s",'x+',NULL)
+> fn.Replace(t.s, 'a', 'b')
+REPLACE("s",'a','b')
+> fn.Now()
+NOW()
+> fn.UtcTimestamp()
+UTC_TIMESTAMP()
+> fn.CurTimestamp()
+CURRENT_TIMESTAMP
+> fn.CurDate()
+CURRENT_DATE()
+> fn.CurTime()
+CURRENT_TIME()
+> fn.Extract(DatePart.year, t.d)
+EXTRACT(YEAR FROM "d")
+> fn.Extract('dow', t.d)
+EXTRACT(dow FROM "d")
+> fn.Extract(DatePart.microsecond, fn.Now())
+EXTRACT(MICROSECOND FROM NOW())
+> fn.IsNull(t.x)
+ISNULL("x")
+> fn.Coalesce(t.x, t.y, 0)
+COALESCE("x","y",0)
+> fn.Coalesce(t.x)
+COALESCE("x")
+> fn.IfNull(t.x, 'none')
+IFNULL("x",'none')
+> fn.NVL(t.x, 0)
+NVL("x",0)
+> fn.ToChar(t.d, 'YYYY')
+TO_CHAR("d",'YYYY')
+> fn.Coalesce(t.x, 0, schema=Schema('util'))
+"util".COALESCE("x",0)
+> fn.Coalesce(t.x, 0, alias='c', schema=Schema('util', parent=Database('db')))
+"db"."util".COALESCE("x",0)
+> fn.Upper(fn.Trim(t.s))
+UPPER(TRIM("s"))
+> fn.Sum(t.x * t.y)
+SUM("x"*"y")
+> fn.Sum(t.x) / fn.Count('*')
+SUM("x")/COUNT(*)
+> fn.Sum(fn.Coalesce(t.x, 0)) + 1
+SUM(COALESCE("x",0))+1
+> fn.Count(Query.from_(t).select(t.x))
+COUNT((SELECT "x" FROM "t"))
+> fn.Max(t.x).as_('m')
+MAX("x")
+> fn.Sum(t.x).filter(t.y > 0)
+SUM("x") FILTER(WHERE "y">0)
+> fn.Sum(t.x).filter(t.y > 0, t.z == 'a')
+SUM("x") FILTER(WHERE "y">0 AND "z"='a')
+> fn.Count('*').filter(t.ok)
+COUNT(*) FILTER(WHERE "ok")
+> fn.Count(t.id).distinct().filter(t.ok)
+COUNT(DISTINCT "id") FILTER(WHERE "ok")
+> fn.Avg(t.x).filter()
+error TypeError: Criterion.get_sql() got an unexpected keyword argument 'with_namespace'
+> Rollup(t.a, t.b)
+ROLLUP("a","b")
+> Rollup()
+ROLLUP()
+> fn.Sum(t.x) > fn.Avg(t.x) * 2
+SUM("x")>AVG("x")*2
+> fn.Lower(t.s).like('a%')
+LOWER("s") LIKE 'a%'
+> fn.Length(t.s)[1:5]
+LENGTH("s") BETWEEN 1 AND 5
+> fn.Count('*') == 0
+COUNT(*)=0
+> fn.Sum(t.x).get_sql(quote_char='`', with_alias=True)
+SUM(`x`)
+> fn.Sum(t.x).as_('s').get_sql(quote_char='`', with_alias=True)
+SUM(`x`) `s`
+> fn.Sum(t.x).as_('s').get_sql(quote_char='`', with_alias=True, alias_quote_char='"', as_keyword=True)
+SUM(`x`) AS "s"
+> fn.Sum(t.x).get_sql(with_namespace=True)
+SUM(t.x)
+> fn.Concat(t.a, 'it''s').get_sql(secondary_quote_char='"')
+CONCAT(a,'its')
+> fn.Concat(t.a, 'z').get_sql(quote_char='`')
+CONCAT(`a`,'z')
+> DateDiff = CustomFunction('DATE_DIFF', ['interval', 'start_date', 'end_date'])
+> DateDiff('day', t.a, t.b)
+DATE_DIFF('day',"a","b")
+> DateDiff('day', t.a)
+error FunctionException: Function DATE_DIFF require these arguments (interval, start_date, end_date), (day, "a") passed
+> DateDiff('day', t.a, alias='d')
+error FunctionException: Function DATE_DIFF require these arguments (interval, start_date, end_date), (day, "a") passed
+> DateDiff('day', t.a, t.b, alias='d')
+DATE_DIFF('day',"a","b")
+> MyNow = CustomFunction('MY_NOW')
+> MyNow()
+MY_NOW()
+> MyNow(1, 2)
+MY_NOW()
+> MyNow(alias='n')
+MY_NOW()
+> CustomFunction('F', []) ()
+F()
+> CustomFunction('F', [])(1)
+error FunctionException: Function F require these arguments (), (1) passed
+> s = fn.Sum(t.x)
+> s2 = s.filter(t.y > 0)
+> s
+SUM("x")
+> s2
+SUM("x") FILTER(WHERE "y">0)
+> s3 = s.filter(t.z < 0)
+> s3
+SUM("x") FILTER(WHERE "y">0 AND "z"<0)
+> s2
+SUM("x") FILTER(WHERE "y">0 AND "z"<0)
+> d = fn.Count(t.id)
+> d2 = d.distinct()
+> d
+COUNT("id")
+> d2
+COUNT(DISTINCT "id")
+> d2.filter(t.k == 1)
+COUNT(DISTINCT "id") FILTER(WHERE "k"=1)
+
+# Analytic functions
+> t = Table('emp')
+> an.Rank()
+RANK()
+> an.Rank().over(t.dept)
+RANK() OVER(PARTITION BY "dept")
+> an.Rank().over(t.dept).orderby(t.salary)
+RANK() OVER(PARTITION BY "dept" ORDER BY "salary")
+> an.Rank().over(t.dept).orderby(t.salary, order=Order.desc)
+RANK() OVER(PARTITION BY "dept" ORDER BY "salary" DESC)
+> an.Rank().orderby(t.salary, t.id, order=Order.asc)
+RANK() OVER(ORDER BY "salary" ASC,"id" ASC)
+> an.DenseRank().over(t.dept, t.team).orderby(t.salary)
+DENSE_RANK() OVER(PARTITION BY "dept","team" ORDER BY "salary")
+> an.RowNumber().orderby(t.hired)
+ROW_NUMBER() OVER(ORDER BY "hired")
+> an.RowNumber().over()
+ROW_NUMBER() OVER()
+> an.NTile(4).orderby(t.salary)
+NTILE(4) OVER(ORDER BY "salary")
+> an.Median(t.salary).over(t.dept)
+MEDIAN("salary") OVER(PARTITION BY "dept")
+> an.FirstValue(t.salary).over(t.dept).orderby(t.hired)
+FIRST_VALUE("salary") OVER(PARTITION BY "dept" ORDER BY "hired")
+> an.FirstValue(t.salary).ignore_nulls().over(t.dept).orderby(t.hired)
+FIRST_VALUE("salary" IGNORE NULLS) OVER(PARTITION BY "dept" ORDER BY "hired")
+> an.LastValue(t.salary, t.bonus).ignore_nulls()
+LAST_VALUE("salary","bonus" IGNORE NULLS)
+> an.LastValue(t.salary).over(t.dept).orderby(t.hired).rows(an.Preceding(), an.Following())
+LAST_VALUE("salary") OVER(PARTITION BY "dept" ORDER BY "hired" ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+> an.Sum(t.salary).over(t.dept).rows(an.Preceding(2), an.CURRENT_ROW)
+SUM("salary") OVER(PARTITION BY "dept" ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+> an.Sum(t.salary).over(t.dept).orderby(t.hired).rows(an.CURRENT_ROW)
+SUM("salary") OVER(PARTITION BY "dept" ORDER BY "hired" ROWS CURRENT ROW)
+> an.Sum(t.salary).over(t.dept).orderby(t.hired).rows(an.Preceding())
+SUM("salary") OVER(PARTITION BY "dept" ORDER BY "hired" ROWS UNBOUNDED PRECEDING)
+> an.Avg(t.salary).over(t.dept).range(an.Preceding(7), an.Following(7))
+AVG("salary") OVER(PARTITION BY "dept" RANGE BETWEEN 7 PRECEDING AND 7 FOLLOWING)
+> an.Avg(t.salary).orderby(t.hired).range(an.Preceding(0))
+AVG("salary") OVER(ORDER BY "hired" RANGE UNBOUNDED PRECEDING)
+> an.Count(t.id).over(t.dept)
+COUNT("id") OVER(PARTITION BY "dept")
+> an.Max(t.salary).over(t.dept)
+MAX("salary") OVER(PARTITION BY "dept")
+> an.Min(t.salary).over(t.dept).as_('lowest')
+MIN("salary") OVER(PARTITION BY "dept")
+> an.StdDev(t.salary).over(t.dept)
+STDDEV("salary") OVER(PARTITION BY "dept")
+> an.StdDevPop(t.salary).over(t.dept)
+STDDEV_POP("salary") OVER(PARTITION BY "dept")
+> an.StdDevSamp(t.salary).over(t.dept)
+STDDEV_SAMP("salary") OVER(PARTITION BY "dept")
+> an.Variance(t.salary).over(t.dept)
+VARIANCE("salary") OVER(PARTITION BY "dept")
+> an.VarPop(t.salary).over(t.dept)
+VAR_POP("salary") OVER(PARTITION BY "dept")
+> an.VarSamp(t.salary).over(t.dept)
+VAR_SAMP("salary") OVER(PARTITION BY "dept")
+> an.Lag(t.salary, 1, 0).over(t.dept).orderby(t.hired)
+LAG("salary",1,0) OVER(PARTITION BY "dept" ORDER BY "hired")
+> an.Lead(t.salary).orderby(t.hired)
+LEAD("salary") OVER(ORDER BY "hired")
+> an.Lead(t.salary, 2).orderby(t.hired, order=Order.desc)
+LEAD("salary",2) OVER(ORDER BY "hired" DESC)
+> an.Sum(t.salary).rows(an.Preceding(1), an.CURRENT_ROW)
+SUM("salary")
+> an.Sum(t.salary).over(t.dept).rows('UNBOUNDED PRECEDING')
+SUM("salary") OVER(PARTITION BY "dept" ROWS UNBOUNDED PRECEDING)
+> an.Sum(t.salary).over(t.dept).rows(an.Preceding(1)).rows(an.Preceding(2))
+error AttributeError: 
+> an.Rank().over('dept')
+RANK() OVER(PARTITION BY dept)
+> an.Rank().orderby('salary')
+error AttributeError: 'str' object has no attribute 'get_sql'
+> an.Rank().over(t.dept).filter(t.ok)
+RANK() FILTER(WHERE "ok") OVER(PARTITION BY "dept")
+> an.Sum(t.salary).over(t.dept).filter(t.ok)
+SUM("salary") FILTER(WHERE "ok") OVER(PARTITION BY "dept")
+> an.Rank().over(t.dept) > 1
+RANK() OVER(PARTITION BY "dept")>1
+> an.Rank().over(t.dept).get_sql(quote_char='`')
+RANK() OVER(PARTITION BY `dept`)
+> an.Rank().over(t.dept).as_('r').get_sql(with_alias=True, quote_char='`')
+RANK() OVER(PARTITION BY `dept`) `r`
+> w = an.Sum(t.salary).over(t.dept)
+> w2 = w.over(t.team)
+> w
+SUM("salary") OVER(PARTITION BY "dept","team")
+> w2
+SUM("salary") OVER(PARTITION BY "dept","team")
+> w3 = w.orderby(t.hired)
+> w
+SUM("salary") OVER(PARTITION BY "dept","team" ORDER BY "hired")
+> w3
+SUM("salary") OVER(PARTITION BY "dept","team" ORDER BY "hired")
+> Query.from_(t).select(t.name, an.Rank().over(t.dept).orderby(t.salary, order=Order.desc).as_('rk'))
+SELECT "name",RANK() OVER(PARTITION BY "dept" ORDER BY "salary" DESC) "rk" FROM "emp"
+> PostgreSQLQuery.from_(t).select(t.id, an.Sum(t.salary).over(t.dept).orderby(t.hired).rows(an.Preceding(3), an.CURRENT_ROW).as_('running'))
+SELECT "id",SUM("salary") OVER(PARTITION BY "dept" ORDER BY "hired" ROWS BETWEEN 3 PRECEDING AND CURRENT ROW) "running" FROM "emp"
+
+# Case, tuples, arrays, parameters and intervals
+> t = Table('t')
+> Case().when(t.x == 1, 'one')
+CASE WHEN "x"=1 THEN 'one' END
+> Case().when(t.x == 1, 'one').else_('many')
+CASE WHEN "x"=1 THEN 'one' ELSE 'many' END
+> Case().when(t.x == 1, 'one').when(t.x == 2, 'two').else_(None)
+CASE WHEN "x"=1 THEN 'one' WHEN "x"=2 THEN 'two' ELSE NULL END
+> Case().when(t.x > 0, t.x).else_(-t.x)
+CASE WHEN "x">0 THEN "x" ELSE -"x" END
+> Case().when(t.x > 0, 1).else_(0).as_('pos')
+CASE WHEN "x">0 THEN 1 ELSE 0 END
+> Case(alias='c').when(t.flag, True)
+CASE WHEN "flag" THEN true END
+> Case()
+error CaseException: At least one 'when' case is required for a CASE statement.
+> Case().else_(1)
+error CaseException: At least one 'when' case is required for a CASE statement.
+> Case().when(t.x == 1, 'a').get_sql(with_alias=True)
+CASE WHEN "x"=1 THEN 'a' END
+> Case().when(t.x == 1, 'a').as_('k').get_sql(with_alias=True)
+CASE WHEN "x"=1 THEN 'a' END k
+> Case().when(t.x == 1, 'a').when(t.y.isnull(), fn.Now())
+CASE WHEN "x"=1 THEN 'a' WHEN "y" IS NULL THEN NOW() END
+> Case().when((t.x == 1) | (t.y == 2), 'a')
+CASE WHEN "x"=1 OR "y"=2 THEN 'a' END
+> Case().when(t.x == 1, 'a') == 'a'
+CASE WHEN "x"=1 THEN 'a' END='a'
+> Case().when(t.x == 1, 'a').isin(['a', 'b'])
+CASE WHEN "x"=1 THEN 'a' END IN ('a','b')
+> Tuple(1, 2, 'a')
+(1,2,'a')
+> Tuple(t.a, t.b)
+("a","b")
+> Tuple()
+()
+> Tuple(1)
+(1)
+> Tuple(1, 2).as_('p')
+(1,2) "p"
+> Tuple(t.a, t.b) == Tuple(1, 2)
+("a","b")=(1,2)
+> Tuple(t.a, t.b).isin([(1, 2), (3, 4)])
+("a","b") IN ((1,2),(3,4))
+> Tuple(t.a, (t.b, 1), [2, 3])
+("a",("b",1),[2,3])
+> Array(1, 2, 3)
+[1,2,3]
+> Array()
+[]
+> Array('a', t.b)
+['a',"b"]
+> Array(1, 2).as_('arr')
+[1,2] "arr"
+> Bracket(t.a + t.b)
+("a"+"b")
+> Bracket(t.a)
+("a")
+> Bracket(t.a) == 1
+("a")=1
+> (t.a + Bracket(t.b - 1)) * 2
+("a"+("b"-1))*2
+> Parameter(':1')
+:1
+> Parameter(3)
+3
+> QmarkParameter()
+?
+> NumericParameter(1)
+:1
+> NamedParameter('name')
+:name
+> FormatParameter()
+%s
+> PyformatParameter('name')
+%(name)s
+> t.x == QmarkParameter()
+"x"=?
+> t.x == NamedParameter('v')
+"x"=:v
+> Parameter('$1').as_('p')
+$1
+> Query.from_(t).select(t.a).where(t.x == Parameter('%s')).where(t.y.isin([Parameter('%s'), Parameter('%s')]))
+SELECT "a" FROM "t" WHERE "x"=%s AND "y" IN (%s,%s)
+> PostgreSQLQuery.from_(t).select(Array(1, 2), Array(), Tuple(1, 2))
+SELECT ARRAY[1,2],'{}',(1,2) FROM "t"
+> RedshiftQuery.from_(t).select(Array(t.a, t.b), Array())
+SELECT ARRAY["a","b"],'{}' FROM "t"
+> Query.from_(t).select(Array(1, 2), Array())
+SELECT [1,2],[] FROM "t"
+> c = Case().when(t.x == 1, 'one')
+> c2 = c.when(t.x == 2, 'two')
+> c
+CASE WHEN "x"=1 THEN 'one' WHEN "x"=2 THEN 'two' END
+> c2
+CASE WHEN "x"=1 THEN 'one' WHEN "x"=2 THEN 'two' END
+> c3 = c.else_('other')
+> c
+CASE WHEN "x"=1 THEN 'one' WHEN "x"=2 THEN 'two' END
+> c3
+CASE WHEN "x"=1 THEN 'one' WHEN "x"=2 THEN 'two' ELSE 'other' END
+> Interval(days=1)
+INTERVAL '1 DAY'
+> Interval(days=3)
+INTERVAL '3 DAY'
+> Interval(hours=1, minutes=30)
+INTERVAL '1:30 HOUR_MINUTE'
+> Interval(years=1, months=2)
+INTERVAL '1-2 YEAR_MONTH'
+> Interval(years=1, seconds=5)
+INTERVAL '1-0-0 0:0:5 YEAR_SECOND'
+> Interval(days=-3)
+INTERVAL '-3 DAY'
+> Interval(days=-1, hours=6)
+INTERVAL '-1 6 DAY_HOUR'
+> Interval(months=14)
+INTERVAL '14 MONTH'
+> Interval(weeks=2)
+INTERVAL '2 WEEK'
+> Interval(quarters=1)
+INTERVAL '1 QUARTER'
+> Interval(quarters=1, days=3)
+INTERVAL '1 QUARTER'
+> Interval(weeks=1, days=2)
+INTERVAL '1 WEEK'
+> Interval(microseconds=5)
+INTERVAL '5 MICROSECOND'
+> Interval(seconds=1, microseconds=500)
+INTERVAL '1.500 SECOND_MICROSECOND'
+> Interval(minutes=2, seconds=3)
+INTERVAL '2:3 MINUTE_SECOND'
+> Interval(hours=10)
+INTERVAL '10 HOUR'
+> Interval(seconds=0)
+INTERVAL '0 DAY'
+> Interval()
+INTERVAL '0 DAY'
+> Interval(days=1, hours=2, minutes=3, seconds=4)
+INTERVAL '1 2:3:4 DAY_SECOND'
+> Interval(years=2, days=10)
+INTERVAL '2-0-10 YEAR_DAY'
+> Interval(months=1, minutes=1)
+INTERVAL '1-0 0:1 MONTH_MINUTE'
+> Interval(days=100, microseconds=1)
+INTERVAL '100 0:0:0.1 DAY_MICROSECOND'
+> Interval(days=1, dialect=MySQLQuery.from_('x').dialect)
+INTERVAL '1' DAY
+> Interval(hours=1, minutes=10, dialect=OracleQuery.from_('x').dialect)
+INTERVAL '1:10' HOUR_MINUTE
+> Interval(days=20).get_sql()
+INTERVAL '20 DAY'
+> Query.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT "id" FROM "t" WHERE "created"+INTERVAL '2 DAY'<NOW()
+> MySQLQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT `id` FROM `t` WHERE `created`+INTERVAL '2' DAY<NOW()
+> PostgreSQLQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT "id" FROM "t" WHERE "created"+INTERVAL '2 DAY'<NOW()
+> OracleQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT id FROM t WHERE created+INTERVAL '2' DAY<NOW()
+> VerticaQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT "id" FROM "t" WHERE "created"+INTERVAL '2 DAY'<NOW()
+> RedshiftQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT "id" FROM "t" WHERE "created"+INTERVAL '2 DAY'<NOW()
+> MSSQLQuery.from_(t).select(t.id).where(t.created + Interval(days=2) < fn.Now())
+SELECT "id" FROM "t" WHERE "created"+INTERVAL '2 DAY'<NOW()
+
+# Select lists and stars
+> t, u = Tables('t', 'u')
+> Query.from_(t).select(t.star)
+SELECT * FROM "t"
+> Query.from_(t).select('*')
+SELECT * FROM "t"
+> Query.from_(t).select(t.id, t.star)
+SELECT * FROM "t"
+> Query.from_(t).select(t.star, t.id)
+SELECT * FROM "t"
+> Query.from_(t).select('*').select(t.id)
+SELECT * FROM "t"
+> Query.from_(t).select(t.id).select('*')
+SELECT * FROM "t"
+> Query.from_(t).select(t.id, 'name', 3, 'x' == t.y)
+SELECT "id","name",3,"y"='x' FROM "t"
+> Query.from_(t).join(u).on(t.id == u.tid).select(t.star, u.star)
+SELECT "t".*,"u".* FROM "t" JOIN "u" ON "t"."id"="u"."tid"
+> Query.from_(t).join(u).on(t.id == u.tid).select(t.star, u.id, t.name)
+SELECT "t".*,"u"."id" FROM "t" JOIN "u" ON "t"."id"="u"."tid"
+> Query.from_(t).join(u).on(t.id == u.tid).select('*')
+SELECT * FROM "t" JOIN "u" ON "t"."id"="u"."tid"
+> Query.from_(t).join(u).on(t.id == u.tid).select(u.id, t.star, u.name)
+SELECT "u"."id","t".*,"u"."name" FROM "t" JOIN "u" ON "t"."id"="u"."tid"
+> Query.select(1, 2)
+SELECT 1,2
+> Query.select(fn.Now(), 'x' + Field('y'))
+SELECT NOW(),'x'+"y"
+> Query.select('x')
+error QueryException: Cannot select x, no FROM table specified.
+> Query.select(1).orderby('x')
+error IndexError: list index out of range
+> Query.select(1).groupby('x')
+error IndexError: list index out of range
+> Query.select(t.a)
+SELECT "a"
+> Query.select(1, 'a')
+error QueryException: Cannot select a, no FROM table specified.
+> Query.from_(t)
+
+> Query.from_(t).select()
+
+> Query.from_(t).select(t.a).distinct()
+SELECT DISTINCT "a" FROM "t"
+> Query.from_(t).distinct().select(t.a, t.b)
+SELECT DISTINCT "a","b" FROM "t"
+> Query.from_(t).select(t.a.as_('x'), t.b.as_('y'))
+SELECT "a" "x","b" "y" FROM "t"
+> Query.from_(t).select(t.a.as_('x')).orderby(t.a.as_('x'))
+SELECT "a" "x" FROM "t" ORDER BY "x"
+> Query.from_(t).select(t.a.as_('x')).orderby(t.a)
+SELECT "a" "x" FROM "t" ORDER BY "a"
+> Query.from_(t).select(t.a.as_('x')).groupby(t.a.as_('x'))
+SELECT "a" "x" FROM "t" GROUP BY "x"
+> Query.from_(t).select(fn.Sum(t.b).as_('total')).orderby(fn.Sum(t.b).as_('total'), order=Order.desc)
+SELECT SUM("b") "total" FROM "t" ORDER BY "total" DESC
+> Query.from_(t).select(t.a).orderby(t.a, t.b, order=Order.desc)
+SELECT "a" FROM "t" ORDER BY "a" DESC,"b" DESC
+> Query.from_(t).select(t.a).orderby('a').orderby('b', order=Order.asc)
+SELECT "a" FROM "t" ORDER BY "a","b" ASC
+> Query.from_(t).select(t.a).orderby(1)
+SELECT "a" FROM "t" ORDER BY 1
+> Query.from_(t).select(t.a).orderby(fn.Length(t.a))
+SELECT "a" FROM "t" ORDER BY LENGTH("a")
+> Query.from_(t).select(t.a).where(t.a > 1).where(t.b < 2).where(t.c == 3)
+SELECT "a" FROM "t" WHERE "a">1 AND "b"<2 AND "c"=3
+> Query.from_(t).select(t.a).where((t.a > 1) | (t.b < 2)).where(t.c == 3)
+SELECT "a" FROM "t" WHERE ("a">1 OR "b"<2) AND "c"=3
+> Query.from_(t).select(t.a).where(t.c == 3).where((t.a > 1) | (t.b < 2))
+SELECT "a" FROM "t" WHERE "c"=3 AND ("a">1 OR "b"<2)
+> Query.from_(t).select(t.a).where(u.b == 1)
+SELECT "t"."a" FROM "t" WHERE "u"."b"=1
+> Query.from_(t).select(t.a).where(t.a.isin(Query.from_(u).select(u.a)))
+SELECT "a" FROM "t" WHERE "a" IN (SELECT "a" FROM "u")
+> Query.from_(t).select(t.a).where(t.a.notin(Query.from_(u).select(u.a).where(u.ok == True)))
+SELECT "a" FROM "t" WHERE "a" NOT IN (SELECT "a" FROM "u" WHERE "ok"=true)
+> Query.from_(t).select(t.a).where(t.a > Query.from_(u).select(fn.Max(u.a)))
+SELECT "a" FROM "t" WHERE "a">(SELECT MAX("a") FROM "u")
+> Query.from_(t).select(t.a, Query.from_(u).select(fn.Count('*')).where(u.tid == t.id).as_('n'))
+SELECT "a",(SELECT COUNT(*) FROM "u" WHERE "u"."tid"="t"."id") "n" FROM "t"
+> Query.from_(t).select(t.a, Query.from_(u).select(u.b))
+SELECT "a",(SELECT "b" FROM "u") FROM "t"
+> Query.from_(t).select(t.a).limit(10)
+SELECT "a" FROM "t" LIMIT 10
+> Query.from_(t).select(t.a).limit(0)
+SELECT "a" FROM "t" LIMIT 0
+> Query.from_(t).select(t.a).offset(5)
+SELECT "a" FROM "t" OFFSET 5
+> Query.from_(t).select(t.a).offset(0)
+SELECT "a" FROM "t"
+> Query.from_(t).select(t.a).limit(10).offset(20)
+SELECT "a" FROM "t" LIMIT 10 OFFSET 20
+> Query.from_(t).select(t.a)[10:30]
+SELECT "a" FROM "t" LIMIT 30 OFFSET 10
+> Query.from_(t).select(t.a)[:5]
+SELECT "a" FROM "t" LIMIT 5
+> Query.from_(t).select(t.a)[5:]
+SELECT "a" FROM "t" OFFSET 5
+> Query.from_(t).select(t.a).for_update()
+SELECT "a" FROM "t" FOR UPDATE
+> Query.from_(t).select(t.a).limit(1).for_update()
+SELECT "a" FROM "t" LIMIT 1 FOR UPDATE
+> Query.from_(t).select(t.a).force_index('idx_a')
+SELECT "a" FROM "t" FORCE INDEX ("idx_a")
+> Query.from_(t).select(t.a).force_index('idx_a', Index('idx_b')).use_index('idx_c')
+SELECT "a" FROM "t" FORCE INDEX ("idx_a","idx_b") USE INDEX ("idx_c")
+> Query.from_(t).select(t.a).use_index(Index('i1'), 'i2')
+SELECT "a" FROM "t" USE INDEX ("i1","i2")
+> Query.from_(t).from_(u).select(t.a, u.b)
+SELECT "t"."a","u"."b" FROM "t","u"
+> Query.from_(t).from_('v').select('a')
+SELECT "t"."a" FROM "t","v"
+> Query.from_(t).select(t.a).prewhere(t.b > 1)
+SELECT "a" FROM "t" PREWHERE "b">1
+> Query.from_(t).select(t.a).prewhere(t.b > 1).prewhere(t.c < 2).where(t.d == 3)
+SELECT "a" FROM "t" PREWHERE "b">1 AND "c"<2 WHERE "d"=3
+> Query.from_(t).select(t.a).groupby(t.a).with_totals()
+SELECT "a" FROM "t" GROUP BY "a" WITH TOTALS
+> Query.from_(t).select(t.a)['x']
+"x"
+> Query.from_(t).select(t.a).x
+"x"
+> Query.from_(t).select(t.a).as_('sub')
+SELECT "a" FROM "t"
+> Query.from_(t).select(t.a).as_('sub').get_sql(with_alias=True)
+SELECT "a" FROM "t" "sub"
+> Query.from_(t).select(t.a).get_sql(subquery=True)
+(SELECT "a" FROM "t")
+> Query.from_(t).select(t.a).get_sql(subquery=True, with_alias=True)
+(SELECT "a" FROM "t")
+> Query.from_(t).select(t.a).get_sql(quote_char=None)
+SELECT a FROM t
+> Query.from_(t).select(t.a.as_('x')).get_sql(quote_char='`', alias_quote_char="'", as_keyword=True)
+SELECT `a` AS 'x' FROM `t`
+> Query.from_(t).select(t.a).where(t.b == 'q').get_sql(secondary_quote_char='"')
+SELECT "a" FROM "t" WHERE "b"="q"
+> Query.from_(t).select(t.a).get_sql(with_namespace=True)
+SELECT "a" FROM "t"
+> Query.from_(t.as_('x')).select(t.as_('x').a)
+SELECT "x"."a" FROM "t" "x"
+> Query.from_(t, as_keyword=True).select(t.a.as_('b')).where(t.a > 1)
+SELECT "a" AS "b" FROM "t" WHERE "a">1
+> Query.from_(Table('t').as_('x'), as_keyword=True).select(fn.Count('*').as_('n'))
+SELECT COUNT(*) AS "n" FROM "t" AS "x"
+
+# Group by, having and rollup
+> t = Table('sales')
+> Query.from_(t).select(t.region, fn.Sum(t.amount)).groupby(t.region)
+SELECT "region",SUM("amount") FROM "sales" GROUP BY "region"
+> Query.from_(t).select('region').groupby('region')
+SELECT "region" FROM "sales" GROUP BY "region"
+> Query.from_(t).select(t.region).groupby(1)
+SELECT "region" FROM "sales" GROUP BY 1
+> Query.from_(t).select(t.region, t.year).groupby(t.region, 2)
+SELECT "region","year" FROM "sales" GROUP BY "region",2
+> Query.from_(t).select(t.region.as_('r')).groupby(t.region.as_('r'))
+SELECT "region" "r" FROM "sales" GROUP BY "r"
+> Query.from_(t).select(t.region.as_('r')).groupby(t.region.as_('q'))
+SELECT "region" "r" FROM "sales" GROUP BY "region"
+> MSSQLQuery.from_(t).select(t.region.as_('r')).groupby(t.region.as_('r'))
+SELECT "region" "r" FROM "sales" GROUP BY "region"
+> OracleQuery.from_(t).select(t.region.as_('r')).groupby(t.region.as_('r'))
+SELECT region r FROM sales GROUP BY region
+> PostgreSQLQuery.from_(t).select(t.region.as_('r')).groupby(t.region.as_('r'))
+SELECT "region" "r" FROM "sales" GROUP BY "r"
+> MySQLQuery.from_(t).select(t.region.as_('r')).groupby(t.region.as_('r'))
+SELECT `region` `r` FROM `sales` GROUP BY `r`
+> Query.from_(t).select(t.region, fn.Sum(t.amount)).groupby(t.region).having(fn.Sum(t.amount) > 100)
+SELECT "region",SUM("amount") FROM "sales" GROUP BY "region" HAVING SUM("amount")>100
+> Query.from_(t).select(t.region).groupby(t.region).having(fn.Count('*') > 1).having(fn.Max(t.amount) < 9)
+SELECT "region" FROM "sales" GROUP BY "region" HAVING COUNT(*)>1 AND MAX("amount")<9
+> Query.from_(t).select(t.region).having(fn.Count('*') > 1)
+SELECT "region" FROM "sales" HAVING COUNT(*)>1
+> Query.from_(t).select(t.region, fn.Sum(t.amount).as_('s')).groupby(t.region).orderby(fn.Sum(t.amount).as_('s'))
+SELECT "region",SUM("amount") "s" FROM "sales" GROUP BY "region" ORDER BY "s"
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup(t.a, t.b)
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a","b")
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup([t.a, t.b], t.c)
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP(("a","b"),"c")
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup((t.a, t.b))
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP(("a","b"))
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).groupby(t.a).rollup(t.b)
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY "a",ROLLUP("b")
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup(t.a).rollup(t.b)
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a","b")
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup(t.a).groupby(t.b)
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a"),"b"
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup()
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP()
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).groupby(t.a, t.b).rollup(vendor='mysql')
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY "a","b" WITH ROLLUP
+> MySQLQuery.from_(t).select(t.a, fn.Sum(t.c)).rollup(t.a, vendor='mysql')
+SELECT `a`,SUM(`c`) FROM `sales` GROUP BY `a` WITH ROLLUP
+> MySQLQuery.from_(t).select(t.a, fn.Sum(t.c)).rollup(vendor='mysql')
+error RollupException: At least one group is required. Call Query.groupby(term) or passas parameter to rollup.
+> MySQLQuery.from_(t).select(t.a, fn.Sum(t.c)).rollup(t.a, vendor='mysql').rollup(t.b, vendor='mysql')
+error AttributeError: 'Query' object has no attribute 'rollup'
+> MySQLQuery.from_(t).select(t.a, fn.Sum(t.c)).rollup(t.a, vendor='mysql').rollup(t.b)
+error AttributeError: 'Query' object has no attribute 'rollup'
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).groupby(t.a, t.b).with_totals()
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY "a","b" WITH TOTALS
+> Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).groupby(Rollup(t.a, t.b))
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a","b")
+> r1 = Query.from_(t).select(t.a, t.b, fn.Sum(t.c)).rollup(t.a)
+> r2 = r1.rollup(t.b)
+> r1
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a","b")
+> r2
+SELECT "a","b",SUM("c") FROM "sales" GROUP BY ROLLUP("a","b")
+
+# Joins
+> a, b, c = Tables('a', 'b', 'c')
+> Query.from_(a).inner_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).left_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" LEFT JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).left_outer_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" LEFT OUTER JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).right_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" RIGHT JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).right_outer_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" RIGHT OUTER JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).outer_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" FULL OUTER JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).full_outer_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" FULL OUTER JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).hash_join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" HASH JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).join(b, JoinType.inner).on(a.id == b.aid).select('*')
+SELECT * FROM "a" JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).join(b, JoinType.left).on(a.id == b.aid).select('*')
+SELECT * FROM "a" LEFT JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).join(b, JoinType.right).on(a.id == b.aid).select('*')
+SELECT * FROM "a" RIGHT JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).join(b, JoinType.outer).on(a.id == b.aid).select('*')
+SELECT * FROM "a" FULL OUTER JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).join(b, JoinType.cross).on(a.id == b.aid).select('*')
+SELECT * FROM "a" CROSS JOIN "b" ON "a"."id"="b"."aid"
+> Query.from_(a).cross_join(b).cross().select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" CROSS JOIN "b"
+> Query.from_(a).join(b).cross().select('*')
+SELECT * FROM "a" CROSS JOIN "b"
+> Query.from_(a).join(b).on(a.id == b.aid).join(c).on(b.id == c.bid).select(a.x, c.z)
+SELECT "a"."x","c"."z" FROM "a" JOIN "b" ON "a"."id"="b"."aid" JOIN "c" ON "b"."id"="c"."bid"
+> Query.from_(a).join(b).on((a.id == b.aid) & (b.kind == 'x')).select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."aid" AND "b"."kind"='x'
+> Query.from_(a).join(b).on(a.id == b.aid, collate='utf8_general_ci').select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."aid" COLLATE utf8_general_ci
+> Query.from_(a).join(b).on_field('id').select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."id"
+> Query.from_(a).join(b).on_field('id', 'region', 'year').select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."id" AND "a"."region"="b"."region" AND "a"."year"="b"."year"
+> Query.from_(a).join(b).using('id').select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" USING ("id")
+> Query.from_(a).join(b).using('id', 'region').select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" USING ("id","region")
+> Query.from_(a).left_join(b).using('id').where(b.id.isnull()).select(a.star)
+SELECT "a".* FROM "a" LEFT JOIN "b" USING ("id") WHERE "b"."id" IS NULL
+> Query.from_(a).join(b).on(None)
+error JoinException: Parameter 'criterion' is required for a table JOIN but was not supplied.
+> Query.from_(a).join(b).on_field()
+error JoinException: Parameter 'fields' is required for a table JOIN but was not supplied.
+> Query.from_(a).join(b).using()
+error JoinException: Parameter 'fields' is required when joining with a using clause but was not supplied.
+> Query.from_(a).join(b).on(a.id == c.aid)
+error JoinException: Invalid join criterion. One field is required from the joined item and another from the selected table or an existing join.  Found ["c"]
+> Query.from_(a).join(b).on(Field('id') == b.aid)
+
+> Query.from_(a).join(b).on(a.id == b.aid).join(c).on(a.id == c.aid).select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."aid" JOIN "c" ON "a"."id"="c"."aid"
+> Query.from_(a).join(b).on(b.id == b.parent).select(b.x)
+SELECT "b"."x" FROM "a" JOIN "b" ON "b"."id"="b"."parent"
+> Query.from_(a).join(5)
+error ValueError: Cannot join on type '<class 'int'>'
+> Query.from_(a).join('b')
+error ValueError: Cannot join on type '<class 'str'>'
+> Query.from_(a).join(b).on(a.id == b.aid).is_joined(b)
+True
+> Query.from_(a).join(b).on(a.id == b.aid).is_joined(c)
+False
+> Query.from_(a).join(b).on(a.id == b.aid).is_joined(Table('b'))
+True
+> Query.from_(a).join(b.as_('bb')).on(a.id == b.as_('bb').aid).select(a.x)
+SELECT "a"."x" FROM "a" JOIN "b" "bb" ON "a"."id"="bb"."aid"
+> Query.from_(a).select(a.x).join(b).on(a.id == b.aid).select(b.y)
+SELECT "a"."x","b"."y" FROM "a" JOIN "b" ON "a"."id"="b"."aid"
+> Query.update(a).join(b).on(a.id == b.aid).set(a.x, b.y).where(b.z > 1)
+UPDATE "a" JOIN "b" ON "a"."id"="b"."aid" SET "x"="b"."y" WHERE "b"."z">1
+> Query.from_(a).join(b).on(a.id == b.aid).where(a.x == 1).delete()
+DELETE FROM "a" JOIN "b" ON "a"."id"="b"."aid" WHERE "a"."x"=1
+> Query.update(a).join(b).on_field('id')
+error IndexError: list index out of range
+> MySQLQuery.from_(a).join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT `a`.`x`,`b`.`y` FROM `a` JOIN `b` ON `a`.`id`=`b`.`aid`
+> MSSQLQuery.from_(a).join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT "a"."x","b"."y" FROM "a" JOIN "b" ON "a"."id"="b"."aid"
+> OracleQuery.from_(a).join(b).on(a.id == b.aid).select(a.x, b.y)
+SELECT a.x,b.y FROM a JOIN b ON a.id=b.aid
+> sub = Query.from_(b).select(b.aid, fn.Sum(b.v).as_('total')).groupby(b.aid)
+> Query.from_(a).join(sub).on(a.id == sub.aid).select(a.x, sub.total)
+SELECT "a"."x","sq0"."total" FROM "a" JOIN (SELECT "aid",SUM("v") "total" FROM "b" GROUP BY "aid") "sq0" ON "a"."id"="sq0"."aid"
+> sub.alias
+sq0
+> Query.from_(a).join(sub).on(a.id == sub.aid).select(a.x, sub.total)
+SELECT "a"."x","sq0"."total" FROM "a" JOIN (SELECT "aid",SUM("v") "total" FROM "b" GROUP BY "aid") "sq0" ON "a"."id"="sq0"."aid"
+> sub2 = Query.from_(c).select(c.aid)
+> Query.from_(a).join(sub2).on(a.id == sub2.aid).join(Query.from_(c).select(c.k)).cross().select(a.x)
+SELECT "a"."x" FROM "a" JOIN (SELECT "aid" FROM "c") "sq0" ON "a"."id"="sq0"."aid" CROSS JOIN (SELECT "k" FROM "c") "sq1"
+> sub2.alias
+sq0
+> e = Table('employees')
+> Query.from_(e).join(e).on(e.manager_id == e.id).select(e.name)
+SELECT "employees2"."name" FROM "employees" "employees2" JOIN "employees" "employees2" ON "employees2"."manager_id"="employees2"."id"
+> e.alias
+employees2
+> Query.from_(e).select(e.name)
+SELECT "employees2"."name" FROM "employees" "employees2"
+> e = Table('employees')
+> m = Table('employees').as_('m')
+> Query.from_(e).join(m).on(e.manager_id == m.id).select(e.name, m.name.as_('manager'))
+SELECT "employees"."name","m"."name" "manager" FROM "employees" JOIN "employees" "m" ON "employees"."manager_id"="m"."id"
+> m.alias
+m
+> j = Query.from_(a).join(b)
+> q1 = j.on(a.id == b.aid)
+> q2 = j.on(a.k == b.k)
+> q1
+
+> q1 is q2
+True
+> base = Query.from_(a).select(a.x)
+> q3 = base.join(b).on(a.id == b.aid)
+> base
+SELECT "x" FROM "a"
+> q3
+SELECT "a"."x" FROM "a" JOIN "b" ON "a"."id"="b"."aid"
+> aq = AliasedQuery('w')
+> Query.with_(Query.from_(b).select(b.aid), 'w').from_(a).join(aq).on(a.id == aq.aid).select(a.x, aq.aid)
+WITH w AS (SELECT "aid" FROM "b") SELECT "a"."x","w"."aid" FROM "a" JOIN w ON "a"."id"="w"."aid"
+
+# Subqueries, WITH and set operations
+> t, u = Tables('t', 'u')
+> sub = Query.from_(t).select(t.a, t.b).where(t.c > 1)
+> Query.from_(sub).select(sub.a)
+SELECT "sq0"."a" FROM (SELECT "a","b" FROM "t" WHERE "c">1) "sq0"
+> sub.alias
+sq0
+> Query.from_(sub).select(sub.a, sub.star)
+SELECT "sq0".* FROM (SELECT "a","b" FROM "t" WHERE "c">1) "sq0"
+> inner = Query.from_(t).select(t.a)
+> mid = Query.from_(inner).select(inner.a)
+> Query.from_(mid).select(mid.a)
+SELECT "sq1"."a" FROM (SELECT "sq0"."a" FROM (SELECT "a" FROM "t") "sq0") "sq1"
+> inner.alias
+sq0
+> mid.alias
+sq1
+> x = Query.from_(t).select(t.a)
+> y = Query.from_(u).select(u.a)
+> Query.from_(x).from_(y).select(x.a, y.a)
+SELECT "sq0"."a","sq1"."a" FROM (SELECT "a" FROM "t") "sq0",(SELECT "a" FROM "u") "sq1"
+> x.alias
+sq0
+> y.alias
+sq1
+> Query.from_(Query.from_(t).select(t.a).as_('named')).select('*')
+SELECT * FROM (SELECT "a" FROM "t") "named"
+> Query.from_(Query.from_(t).select(t.a).as_('named')).select(Field('a'))
+SELECT "a" FROM (SELECT "a" FROM "t") "named"
+> w = Query.from_(t).select(t.a)
+> Query.with_(w, 'w1').with_(Query.from_(u).select(u.b), 'w2').from_(AliasedQuery('w1')).select('*')
+WITH w1 AS (SELECT "a" FROM "t") ,w2 AS (SELECT "b" FROM "u") SELECT * FROM w1
+> Query.with_(w, 'w1').from_(AliasedQuery('w1')).join(AliasedQuery('w2')).on(AliasedQuery('w1').a == AliasedQuery('w2').a).select('*')
+WITH w1 AS (SELECT "a" FROM "t") SELECT * FROM w1 JOIN w2 ON "w1"."a"="w2"."a"
+> Query.with_(w, 'w1').into(u).from_(AliasedQuery('w1')).select('*')
+WITH w1 AS (SELECT "a" FROM "t") INSERT INTO "u" SELECT * FROM w1
+> Query.with_(w, 'w1').into(u).insert(1)
+WITH w1 AS (SELECT "a" FROM "t") INSERT INTO "u" VALUES (1)
+> Query.with_(w, 'w1').update(u).set(u.a, 1)
+WITH w1 AS (SELECT "a" FROM "t") UPDATE "u" SET "a"=1
+> AliasedQuery('w1').get_sql()
+w1
+> AliasedQuery('w1', Query.from_(t).select(t.a)).get_sql()
+SELECT "a" FROM "t"
+> AliasedQuery('w1') == AliasedQuery('w1')
+True
+> AliasedQuery('w1') == AliasedQuery('w2')
+False
+> q1 = Query.from_(t).select(t.a, t.b)
+> q2 = Query.from_(u).select(u.a, u.b)
+> q3 = Query.from_(u).select(u.c, u.d)
+> q1 + q2
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u")
+> q1.union(q2)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u")
+> q1 * q2
+(SELECT "a","b" FROM "t") UNION ALL (SELECT "a","b" FROM "u")
+> q1.union_all(q2)
+(SELECT "a","b" FROM "t") UNION ALL (SELECT "a","b" FROM "u")
+> q1 + q2 + q3
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") UNION (SELECT "c","d" FROM "u")
+> q1 + q2 * q3
+error TypeError: object of type 'Field' has no len()
+> (q1 + q2).union_all(q3)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") UNION ALL (SELECT "c","d" FROM "u")
+> q1.union(q2).intersect(q3)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") INTERSECT (SELECT "c","d" FROM "u")
+> q1.union(q2).except_of(q3)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") EXCEPT (SELECT "c","d" FROM "u")
+> (q1 + q2) - q3
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") MINUS (SELECT "c","d" FROM "u")
+> q1.union(q2).minus(q3)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") MINUS (SELECT "c","d" FROM "u")
+> q1.union(q2).orderby('a')
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") ORDER BY "a"
+> q1.union(q2).orderby(t.a, order=Order.desc)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") ORDER BY "a" DESC
+> q1.union(q2).orderby(t.b.as_('bb'))
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") ORDER BY "b"
+> q1.union(q2).limit(5)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") LIMIT 5
+> q1.union(q2).limit(5).offset(10)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") LIMIT 5 OFFSET 10
+> q1.union(q2).offset(0)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u")
+> q1.union(Query.from_(u).select(u.a))
+error SetOperationException: Queries must have an equal number of select statements in a set operation.
+
+Main Query:
+(SELECT "a","b" FROM "t")
+
+Set Operations Query:
+(SELECT "a" FROM "u")
+> Query.from_(t).select(t.a.as_('k')).union(Query.from_(u).select(u.a)).orderby(t.a.as_('k'))
+(SELECT "a" "k" FROM "t") UNION (SELECT "a" FROM "u") ORDER BY "k"
+> MySQLQuery.from_(t).select(t.a).union(MySQLQuery.from_(u).select(u.a))
+SELECT `a` FROM `t` UNION SELECT `a` FROM `u`
+> MySQLQuery.from_(t).select(t.a).union(Query.from_(u).select(u.a))
+SELECT `a` FROM `t` UNION SELECT `a` FROM `u`
+> Query.from_(t).select(t.a).union(MySQLQuery.from_(u).select(u.a))
+(SELECT "a" FROM "t") UNION (SELECT "a" FROM "u")
+> ClickHouseQuery.from_(t).select(t.a).union_all(ClickHouseQuery.from_(u).select(u.a))
+SELECT "a" FROM "t" UNION ALL SELECT "a" FROM "u"
+> (q1 + q2).get_sql(subquery=True)
+((SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u"))
+> (q1 + q2).get_sql(quote_char=None)
+(SELECT a,b FROM t) UNION (SELECT a,b FROM u)
+> (q1 + q2).get_sql(with_alias=True)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") ""_table_name""
+> (q1 + q2).as_('both').get_sql(with_alias=True)
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") "both"
+> un = q1 + q2
+> Query.from_(un).select('*')
+SELECT * FROM ((SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u")) "sq0"
+> un.alias
+sq0
+> Query.from_(un).select('*')
+SELECT * FROM ((SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u")) "sq0"
+> Query.from_(t).select(t.a).where(t.a.isin(q1.union(q2)))
+SELECT "a" FROM "t" WHERE "a" IN ((SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u"))
+> u2 = q1.union(q2)
+> u3 = u2.union(q3)
+> u2
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") UNION (SELECT "c","d" FROM "u")
+> u3
+(SELECT "a","b" FROM "t") UNION (SELECT "a","b" FROM "u") UNION (SELECT "c","d" FROM "u")
+
+# Insert, update and delete
+> t, u = Tables('t', 'u')
+> Query.into(t).insert(1, 'a', None, True, 2.5)
+INSERT INTO "t" VALUES (1,'a',NULL,true,2.5)
+> Query.into('t').insert(1)
+INSERT INTO "t" VALUES (1)
+> Query.into(t).insert([1, 'a'], [2, 'b'])
+INSERT INTO "t" VALUES (1,'a'),(2,'b')
+> Query.into(t).insert((1,), (2,))
+INSERT INTO "t" VALUES (1),(2)
+> Query.into(t).insert((1, 'a'))
+INSERT INTO "t" VALUES (1,'a')
+> Query.into(t).insert(1).insert((2,), (3,))
+INSERT INTO "t" VALUES (1),(2),(3)
+> Query.into(t).insert()
+
+> Query.into(t)
+
+> Query.into(t).insert(fn.Now(), t.x, Parameter('?'), 'x' == t.y)
+INSERT INTO "t" VALUES (NOW(),"x",?,"y"='x')
+> Query.into(t).insert([1, 2])
+INSERT INTO "t" VALUES (1,2)
+> Query.into(t).insert(Tuple(1, 2))
+INSERT INTO "t" VALUES ((1,2))
+> Query.into(t).columns('a', 'b').insert(1, 2)
+INSERT INTO "t" ("a","b") VALUES (1,2)
+> Query.into(t).columns(['a', 'b']).insert(1, 2)
+INSERT INTO "t" ("a","b") VALUES (1,2)
+> Query.into(t).columns(('a', 'b')).insert(1, 2)
+INSERT INTO "t" ("a","b") VALUES (1,2)
+> Query.into(t).columns(t.a, u.b).insert(1, 2)
+INSERT INTO "t" ("a","b") VALUES (1,2)
+> Query.into(t).columns('a').columns('b').insert(1, 2)
+INSERT INTO "t" ("a","b") VALUES (1,2)
+> Query.into(t).columns('a').insert(1).columns('b')
+INSERT INTO "t" ("a","b") VALUES (1)
+> Query.into(t).replace(1, 'x')
+REPLACE INTO "t" VALUES (1,'x')
+> Query.into(t).insert(1).replace(2)
+REPLACE INTO "t" VALUES (1),(2)
+> Query.into(t).replace(1).insert(2)
+INSERT INTO "t" VALUES (1),(2)
+> Query.into(t).ignore().insert(1)
+INSERT IGNORE INTO "t" VALUES (1)
+> Query.into(t).ignore().replace(1)
+REPLACE INTO "t" VALUES (1)
+> Query.into(t).into(u)
+error AttributeError: 'Query' object has no attribute 'into'
+> Query.from_(t).insert(1)
+error AttributeError: 'Query' object has no attribute 'insert'
+> Query.from_(t).columns('a')
+error AttributeError: 'Query' object has no attribute 'insert'
+> Query.from_(t).select('a').into(u)
+SELECT "a" INTO "u" FROM "t"
+> Query.from_(t).select(t.a).into(u).where(t.a > 1)
+SELECT "a" INTO "u" FROM "t" WHERE "a">1
+> Query.into(u).from_(t).select(t.a).where(t.a > 1)
+INSERT INTO "u" SELECT "a" FROM "t" WHERE "a">1
+> Query.into(u).columns('a').from_(t).select(t.a)
+INSERT INTO "u" ("a") SELECT "a" FROM "t"
+> Query.into(u).columns('a').insert(1).from_(t).select(t.a)
+INSERT INTO "u" ("a") VALUES (1)
+> Query.into(u).columns('a').from_(t).join(t.as_('t2')).on(t.id == t.as_('t2').pid).select(t.a)
+INSERT INTO "u" ("a") SELECT "t"."a" FROM "t" JOIN "t" "t2" ON "t"."id"="t2"."pid"
+> Query.update(t).set(t.a, 1)
+UPDATE "t" SET "a"=1
+> Query.update('t').set('a', 1).set('b', 'x')
+UPDATE "t" SET "a"=1,"b"='x'
+> Query.update(t).set(t.a, None)
+UPDATE "t" SET "a"=null
+> Query.update(t).set(t.a, t.b + 1)
+UPDATE "t" SET "a"="b"+1
+> Query.update(t).set(t.a, fn.Now())
+UPDATE "t" SET "a"=NOW()
+> Query.update(t).set(t.a, True).set(t.b, 2.25)
+UPDATE "t" SET "a"=true,"b"=2.25
+> Query.update(t).set(t.a, [1, 2])
+UPDATE "t" SET "a"=[1, 2]
+> Query.update(t).set(t.a, Order.desc)
+UPDATE "t" SET "a"='DESC'
+> Query.update(t).set(t.a, date(2024, 5, 1))
+UPDATE "t" SET "a"='2024-05-01'
+> Query.update(t)
+
+> Query.update(t).set(t.a, 1).where(t.id == 5).where(t.b > 2)
+UPDATE "t" SET "a"=1 WHERE "id"=5 AND "b">2
+> Query.update(t).set(t.a, 1).limit(3)
+UPDATE "t" SET "a"=1 LIMIT 3
+> Query.update(t).set(t.a, 1).offset(3)
+UPDATE "t" SET "a"=1
+> Query.update(t).set(t.a, 1).orderby(t.id)
+UPDATE "t" SET "a"=1
+> Query.update(t).from_(u).set(t.a, u.b).where(t.id == u.tid)
+UPDATE "t" SET "a"="u"."b" FROM "u" WHERE "t"."id"="u"."tid"
+> Query.update(t).set(t.a, u.b).where(t.id == u.tid)
+UPDATE "t" SET "a"="u"."b" WHERE "t"."id"="u"."tid"
+> Query.update(t.as_('x')).set(t.as_('x').a, 1)
+UPDATE "t" "x" SET "x"."a"=1
+> Query.update(t).update(u)
+error AttributeError: 'Query' object has no attribute 'update'
+> Query.from_(t).select(t.a).update(u)
+error AttributeError: 'Query' object has no attribute 'update'
+> Query.from_(t).delete()
+DELETE FROM "t"
+> Query.from_(t).delete().where(t.a == 1)
+DELETE FROM "t" WHERE "a"=1
+> Query.from_(t).delete().where(t.a == 1).limit(10)
+DELETE FROM "t" WHERE "a"=1 LIMIT 10
+> Query.from_(t).where(t.a.isin(Query.from_(u).select(u.a))).delete()
+DELETE FROM "t" WHERE "a" IN (SELECT "a" FROM "u")
+> Query.from_(t).delete().delete()
+error AttributeError: 'Query' object has no attribute 'delete'
+> Query.from_(t).select(t.a).delete()
+error AttributeError: 'Query' object has no attribute 'delete'
+> Query.update(t).set(t.a, 1).delete()
+error AttributeError: 'Query' object has no attribute 'delete'
+> Query.from_(t).delete().select(t.a)
+DELETE FROM "t"
+> t.select(t.a, t.b)
+SELECT "a","b" FROM "t"
+> t.select()
+
+> t.update().set(t.a, 1)
+UPDATE "t" SET "a"=1
+> t.insert(1, 2)
+INSERT INTO "t" VALUES (1,2)
+> MySQLQuery.Table('t').select('a')
+SELECT `a` FROM `t`
+> MySQLQuery.Table('t', alias='z').select('a')
+SELECT `z`.`a` FROM `t` `z`
+> MySQLQuery.Table('t').insert(1)
+INSERT INTO `t` VALUES (1)
+> MySQLQuery.Table('t').update().set('a', 1)
+UPDATE `t` SET `a`=1
+> PostgreSQLQuery.Table('t', schema='s').select('a')
+SELECT "a" FROM "s"."t"
+> p, q = MySQLQuery.Tables('p', ('q', 'qq'))
+> p.select(p.a)
+SELECT `a` FROM `p`
+> q.select(q.a)
+SELECT `qq`.`a` FROM `q` `qq`
+> p, q = Tables('p', ('q', 'qq'), schema='s')
+> Query.from_(p).join(q).on(p.id == q.pid).select(p.a, q.b)
+SELECT "p"."a","qq"."b" FROM "s"."p" JOIN "s"."q" "qq" ON "p"."id"="qq"."pid"
+
+# Dialects
+> t, u = Tables('users', 'orgs')
+> Query.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> Query.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> Query.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> Query.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> Query.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> Query.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> Query.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> Query.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> Query.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> Query.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> Query.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> Query.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> MySQLQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT `id`,`name` `n`,COUNT(*) `c` FROM `users` WHERE `id`>5 AND `name`<>'O''Brien' GROUP BY `id`,`n` ORDER BY `n` LIMIT 10 OFFSET 20
+> MySQLQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT `users`.`id`,`orgs`.`name` FROM `users` JOIN `orgs` ON `users`.`org_id`=`orgs`.`id` WHERE `users`.`active`=true
+> MySQLQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT `id` FROM `users`) `sq0`
+> MySQLQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO `users` VALUES (1,'a',true,NULL)
+> MySQLQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE `users` SET `name`='b' WHERE `id`=1
+> MySQLQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM `users` WHERE `id`=1
+> MySQLQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT `id` `i` FROM `users`
+> MySQLQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT `id` FROM `users` `s`
+> MySQLQuery.from_(t).select(t.id).limit(5)
+SELECT `id` FROM `users` LIMIT 5
+> MySQLQuery.from_(t).select(t.id).offset(5)
+SELECT `id` FROM `users` OFFSET 5
+> MySQLQuery.from_(t).select(t.id).for_update()
+SELECT `id` FROM `users` FOR UPDATE
+> MySQLQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT `id` FROM `users`
+> PostgreSQLQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> PostgreSQLQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> PostgreSQLQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> PostgreSQLQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> PostgreSQLQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> PostgreSQLQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> PostgreSQLQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> PostgreSQLQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> PostgreSQLQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> PostgreSQLQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> PostgreSQLQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> PostgreSQLQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","name" ORDER BY "n" OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY
+> MSSQLQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> MSSQLQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> MSSQLQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> MSSQLQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> MSSQLQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> MSSQLQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> MSSQLQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY
+> MSSQLQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5 ROWS
+> MSSQLQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> MSSQLQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> OracleQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT id,name n,COUNT(*) c FROM users WHERE id>5 AND name<>'O''Brien' GROUP BY id,name ORDER BY n LIMIT 10 OFFSET 20
+> OracleQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT users.id,orgs.name FROM users JOIN orgs ON users.org_id=orgs.id WHERE users.active=true
+> OracleQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT id FROM users) sq0
+> OracleQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO users VALUES (1,'a',true,NULL)
+> OracleQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE users SET name='b' WHERE id=1
+> OracleQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM users WHERE id=1
+> OracleQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT id i FROM users
+> OracleQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT id FROM users s
+> OracleQuery.from_(t).select(t.id).limit(5)
+SELECT id FROM users LIMIT 5
+> OracleQuery.from_(t).select(t.id).offset(5)
+SELECT id FROM users OFFSET 5
+> OracleQuery.from_(t).select(t.id).for_update()
+SELECT id FROM users FOR UPDATE
+> OracleQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT id FROM users
+> SnowflakeQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT id,name "n",COUNT(*) "c" FROM users WHERE id>5 AND name<>'O''Brien' GROUP BY id,"n" ORDER BY "n" LIMIT 10 OFFSET 20
+> SnowflakeQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT users.id,orgs.name FROM users JOIN orgs ON users.org_id=orgs.id WHERE users.active=true
+> SnowflakeQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT id FROM users) sq0
+> SnowflakeQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO users VALUES (1,'a',true,NULL)
+> SnowflakeQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE users SET name='b' WHERE id=1
+> SnowflakeQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM users WHERE id=1
+> SnowflakeQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT id "i" FROM users
+> SnowflakeQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT id FROM users s
+> SnowflakeQuery.from_(t).select(t.id).limit(5)
+SELECT id FROM users LIMIT 5
+> SnowflakeQuery.from_(t).select(t.id).offset(5)
+SELECT id FROM users OFFSET 5
+> SnowflakeQuery.from_(t).select(t.id).for_update()
+SELECT id FROM users FOR UPDATE
+> SnowflakeQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT id FROM users
+> SQLLiteQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> SQLLiteQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> SQLLiteQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> SQLLiteQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> SQLLiteQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> SQLLiteQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> SQLLiteQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> SQLLiteQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> SQLLiteQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> SQLLiteQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> SQLLiteQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> SQLLiteQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> ClickHouseQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" AS "n",COUNT(*) AS "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> ClickHouseQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> ClickHouseQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") AS "sq0"
+> ClickHouseQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> ClickHouseQuery.update(t).set(t.name, 'b').where(t.id == 1)
+ALTER TABLE "users" UPDATE "name"='b' WHERE "id"=1
+> ClickHouseQuery.from_(t).delete().where(t.id == 1)
+ALTER TABLE "users" DELETE WHERE "id"=1
+> ClickHouseQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" AS "i" FROM "users"
+> ClickHouseQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" AS "s"
+> ClickHouseQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> ClickHouseQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> ClickHouseQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> ClickHouseQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> RedshiftQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> RedshiftQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> RedshiftQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> RedshiftQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> RedshiftQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> RedshiftQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> RedshiftQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> RedshiftQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> RedshiftQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> RedshiftQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> RedshiftQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> RedshiftQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+> VerticaQuery.from_(t).select(t.id, t.name.as_('n'), fn.Count('*').as_('c')).where((t.id > 5) & (t.name != "O'Brien")).groupby(t.id, t.name.as_('n')).orderby(t.name.as_('n')).limit(10).offset(20)
+SELECT "id","name" "n",COUNT(*) "c" FROM "users" WHERE "id">5 AND "name"<>'O''Brien' GROUP BY "id","n" ORDER BY "n" LIMIT 10 OFFSET 20
+> VerticaQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id, u.name).where(t.active == True)
+SELECT "users"."id","orgs"."name" FROM "users" JOIN "orgs" ON "users"."org_id"="orgs"."id" WHERE "users"."active"=true
+> VerticaQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT "id" FROM "users") "sq0"
+> VerticaQuery.into(t).insert(1, 'a', True, None)
+INSERT INTO "users" VALUES (1,'a',true,NULL)
+> VerticaQuery.update(t).set(t.name, 'b').where(t.id == 1)
+UPDATE "users" SET "name"='b' WHERE "id"=1
+> VerticaQuery.from_(t).delete().where(t.id == 1)
+DELETE FROM "users" WHERE "id"=1
+> VerticaQuery.from_(t).select(t.id.as_('i')).get_sql(with_alias=True)
+SELECT "id" "i" FROM "users"
+> VerticaQuery.from_(t).select(t.id).as_('s').get_sql(with_alias=True)
+SELECT "id" FROM "users" "s"
+> VerticaQuery.from_(t).select(t.id).limit(5)
+SELECT "id" FROM "users" LIMIT 5
+> VerticaQuery.from_(t).select(t.id).offset(5)
+SELECT "id" FROM "users" OFFSET 5
+> VerticaQuery.from_(t).select(t.id).for_update()
+SELECT "id" FROM "users" FOR UPDATE
+> VerticaQuery.from_(t).select(t.id).distinct()
+SELECT DISTINCT "id" FROM "users"
+
+# MySQL
+> MySQLQuery.into(t).insert(1, 'a').on_duplicate_key_update(t.name, 'b')
+INSERT INTO `users` VALUES (1,'a') ON DUPLICATE KEY UPDATE `name`='b'
+> MySQLQuery.into(t).insert(1, 'a').on_duplicate_key_update('name', Values('name'))
+INSERT INTO `users` VALUES (1,'a') ON DUPLICATE KEY UPDATE `name`=VALUES(`name`)
+> MySQLQuery.into(t).insert(1, 'a').on_duplicate_key_update(t.name, Values(t.name)).on_duplicate_key_update(t.n, t.n + 1)
+INSERT INTO `users` VALUES (1,'a') ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`n`=`n`+1
+> MySQLQuery.into(t).insert(1).on_duplicate_key_ignore().on_duplicate_key_update(t.a, 1)
+error QueryException: Can not have two conflict handlers
+> MySQLQuery.into(t).insert(1).on_duplicate_key_update(t.a, 1).on_duplicate_key_ignore()
+error QueryException: Can not have two conflict handlers
+> MySQLQuery.into(t).on_duplicate_key_ignore()
+
+> MySQLQuery.into(t).on_duplicate_key_update(t.a, 1)
+
+> MySQLQuery.from_(t).select(t.id).on_duplicate_key_ignore()
+SELECT `id` FROM `users` ON DUPLICATE KEY IGNORE
+> MySQLQuery.from_(t).select(t.id).modifier('SQL_CALC_FOUND_ROWS')
+SELECT SQL_CALC_FOUND_ROWS `id` FROM `users`
+> MySQLQuery.from_(t).select(t.id).modifier('HIGH_PRIORITY').modifier('SQL_NO_CACHE').distinct()
+SELECT DISTINCT HIGH_PRIORITY SQL_NO_CACHE `id` FROM `users`
+> MySQLQuery.from_(t).select(t.id).for_update(nowait=True)
+SELECT `id` FROM `users` FOR UPDATE NOWAIT
+> MySQLQuery.from_(t).select(t.id).for_update(skip_locked=True)
+SELECT `id` FROM `users` FOR UPDATE SKIP LOCKED
+> MySQLQuery.from_(t).select(t.id).for_update(nowait=True, skip_locked=True)
+SELECT `id` FROM `users` FOR UPDATE NOWAIT
+> MySQLQuery.from_(t).select(t.id).for_update(of=('users',))
+SELECT `id` FROM `users` FOR UPDATE OF `users`
+> MySQLQuery.from_(t).select(t.id).for_update(of=['users'], skip_locked=True)
+SELECT `id` FROM `users` FOR UPDATE OF `users` SKIP LOCKED
+> MySQLQuery.into(t).ignore().insert(1)
+INSERT IGNORE INTO `users` VALUES (1)
+> MySQLQuery.into(t).replace(1, 'a')
+REPLACE INTO `users` VALUES (1,'a')
+> MySQLQuery.from_(t).select(t.id).where(t.name.rlike('^a')).where(t.n.bitwiseand(2) == 2)
+SELECT `id` FROM `users` WHERE `name` RLIKE '^a' AND (`n` & 2)=2
+> MySQLQuery.from_(t).select(t.id).groupby(t.id).rollup(vendor='mysql')
+SELECT `id` FROM `users` GROUP BY `id` WITH ROLLUP
+> m1 = MySQLQuery.from_(t).select(t.id)
+> m2 = m1.modifier('A')
+> m1
+SELECT A `id` FROM `users`
+> m2
+SELECT A `id` FROM `users`
+
+# PostgreSQL
+> PostgreSQLQuery.into(t).insert(1, 'a').returning('id')
+INSERT INTO "users" VALUES (1,'a') RETURNING "id"
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(t.id, t.name)
+INSERT INTO "users" VALUES (1,'a') RETURNING "id","name"
+> PostgreSQLQuery.into(t).insert(1, 'a').returning('*')
+INSERT INTO "users" VALUES (1,'a') RETURNING *
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(t.star)
+INSERT INTO "users" VALUES (1,'a') RETURNING *
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(t.id, '*')
+INSERT INTO "users" VALUES (1,'a') RETURNING *
+> PostgreSQLQuery.into(t).insert(1, 'a').returning('*', t.id)
+INSERT INTO "users" VALUES (1,'a') RETURNING *
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(t.id + 1, fn.Upper(t.name))
+INSERT INTO "users" VALUES (1,'a') RETURNING "id"+1,UPPER("name")
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(fn.Sum(t.id))
+error QueryException: Aggregate functions are not allowed in returning
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(u.id)
+error QueryException: You can't return from other tables
+> PostgreSQLQuery.into(t).insert(1, 'a').returning(5)
+INSERT INTO "users" VALUES (1,'a') RETURNING 5
+> PostgreSQLQuery.update(t).set(t.name, 'x').where(t.id == 1).returning(t.id)
+UPDATE "users" SET "name"='x' WHERE "id"=1 RETURNING "users"."id"
+> PostgreSQLQuery.update(t).set(t.name, 'x').returning('id', 'name')
+UPDATE "users" SET "name"='x' RETURNING "users"."id","users"."name"
+> PostgreSQLQuery.from_(t).delete().where(t.id == 1).returning('id')
+DELETE FROM "users" WHERE "id"=1 RETURNING "id"
+> PostgreSQLQuery.from_(t).select(t.id).returning('id')
+error QueryException: Returning can't be used in this query
+> PostgreSQLQuery.from_(t).select(t.id).returning(t.id)
+error QueryException: Returning can't be used in this query
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_nothing()
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") DO NOTHING
+> PostgreSQLQuery.into(t).insert(1).on_conflict().do_nothing()
+INSERT INTO "users" VALUES (1) ON CONFLICT DO NOTHING
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id', 'org').do_update('name')
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id", "org") DO UPDATE SET "name"=EXCLUDED."name"
+> PostgreSQLQuery.into(t).insert(1).on_conflict(t.id).do_update(t.name, 'z').do_update('n', 2)
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") DO UPDATE SET "name"='z',"n"=2
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_update('name').where(t.active == True)
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") DO UPDATE SET "name"=EXCLUDED."name" WHERE "users"."active"=true
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').where(t.active == True).do_nothing()
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") WHERE "active"=true DO NOTHING
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').where(t.a == 1).where(t.b == 2).do_update('c')
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") WHERE "a"=1 AND "b"=2 DO UPDATE SET "c"=EXCLUDED."c"
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_nothing().where(t.a == 1)
+error QueryException: DO NOTHING doest not support WHERE
+> PostgreSQLQuery.into(t).insert(1).on_conflict().do_update('name')
+error QueryException: Can not have fieldless on conflict do update
+> PostgreSQLQuery.into(t).insert(1).on_conflict().where(t.a == 1)
+error QueryException: Can not have fieldless ON CONFLICT WHERE
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id')
+error QueryException: No handler defined for on conflict
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_nothing().do_update('a')
+error QueryException: Can not have two conflict handlers
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_update('a').do_nothing()
+error QueryException: Can not have two conflict handlers
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_update(5)
+error QueryException: Unsupported update_field
+> PostgreSQLQuery.from_(t).select(t.id).on_conflict('id')
+error QueryException: On conflict only applies to insert query
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').do_update('name').returning('id')
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") DO UPDATE SET "name"=EXCLUDED."name" RETURNING "id"
+> PostgreSQLQuery.into(t).insert(1).on_conflict('id').where(EmptyCriterion()).do_nothing()
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id") DO NOTHING
+> PostgreSQLQuery.from_(t).select(t.id, t.name).distinct_on('name')
+SELECT DISTINCT ON("name") "id","name" FROM "users"
+> PostgreSQLQuery.from_(t).select(t.id, t.name).distinct_on('name', t.id).distinct()
+SELECT DISTINCT ON("name","id") "id","name" FROM "users"
+> PostgreSQLQuery.from_(t).select(t.id).distinct_on(t.name.as_('n'))
+SELECT DISTINCT ON("name" "n") "id" FROM "users"
+> PostgreSQLQuery.from_(t).select(t.id).for_update(nowait=True, of=('users',))
+SELECT "id" FROM "users" FOR UPDATE OF "users" NOWAIT
+> PostgreSQLQuery.from_(t).select(t.id).for_update(skip_locked=True)
+SELECT "id" FROM "users" FOR UPDATE SKIP LOCKED
+> PostgreSQLQuery.from_(t).using(u).where(t.org_id == u.id).delete()
+DELETE FROM "users" USING "orgs" WHERE "users"."org_id"="orgs"."id"
+> PostgreSQLQuery.from_(t).using(u).using(Table('v')).where(t.org_id == u.id).delete()
+DELETE FROM "users" USING "orgs","v" WHERE "users"."org_id"="orgs"."id"
+> PostgreSQLQuery.from_(t).select(t.id).where(t.tags == ['a', 'b'])
+SELECT "id" FROM "users" WHERE "tags"=ARRAY['a','b']
+> PostgreSQLQuery.from_(t).select(t.id).where(t.name.ilike('a%'))
+SELECT "id" FROM "users" WHERE "name" ILIKE 'a%'
+> g1 = PostgreSQLQuery.from_(t).select(t.id, t.name)
+> g2 = g1.distinct_on('name')
+> g1
+SELECT DISTINCT ON("name") "id","name" FROM "users"
+> g2
+SELECT DISTINCT ON("name") "id","name" FROM "users"
+> h1 = PostgreSQLQuery.into(t).insert(1)
+> h2 = h1.on_conflict('id')
+> h3 = h1.on_conflict('org').do_nothing()
+> h3
+INSERT INTO "users" VALUES (1) ON CONFLICT ("id", "org") DO NOTHING
+> d1 = PostgreSQLQuery.from_(t)
+> d2 = d1.using(u)
+> d1.where(t.id == 1).delete()
+DELETE FROM "users" USING "orgs" WHERE "id"=1
+
+# MSSQL, Oracle, Snowflake, SQLite, ClickHouse and Vertica
+> MSSQLQuery.from_(t).select(t.id).top(10)
+SELECT TOP (10) "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).top('5')
+SELECT TOP (5) "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).top(50, percent=True)
+SELECT TOP (50) PERCENT "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).top(5, with_ties=True).orderby(t.id)
+SELECT TOP (5) WITH TIES "id" FROM "users" ORDER BY "id"
+> MSSQLQuery.from_(t).select(t.id).top(5, percent=True, with_ties=True)
+SELECT TOP (5) PERCENT WITH TIES "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).top('abc')
+error QueryException: TOP value must be an integer
+> MSSQLQuery.from_(t).select(t.id).top(150, percent=True)
+error QueryException: TOP value must be between 0 and 100 when `percent` is specified
+> MSSQLQuery.from_(t).select(t.id).top(-1, percent=True)
+error QueryException: TOP value must be between 0 and 100 when `percent` is specified
+> MSSQLQuery.from_(t).select(t.id).top(0)
+SELECT "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).top(2.9)
+SELECT TOP (2) "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).distinct().top(3)
+SELECT DISTINCT TOP (3) "id" FROM "users"
+> MSSQLQuery.from_(t).select(t.id).fetch_next(10)
+SELECT "id" FROM "users" OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY
+> MSSQLQuery.from_(t).select(t.id).orderby(t.id).offset(10).fetch_next(5)
+SELECT "id" FROM "users" ORDER BY "id" OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY
+> MSSQLQuery.from_(t).select(t.id)[3:9]
+SELECT "id" FROM "users" OFFSET 3 ROWS FETCH NEXT 9 ROWS ONLY
+> MSSQLQuery.update(t).set(t.a, 1).limit(2)
+UPDATE "users" SET "a"=1 FETCH NEXT 2 ROWS ONLY
+> OracleQuery.from_(t).select(t.id).limit(5).offset(1)
+SELECT id FROM users LIMIT 5 OFFSET 1
+> OracleQuery.from_(t).select(t.id.as_('i'), fn.Sum(t.n).as_('s')).groupby(t.id.as_('i')).orderby(fn.Sum(t.n).as_('s'))
+SELECT id i,SUM(n) s FROM users GROUP BY id ORDER BY s
+> SnowflakeQuery.from_(t).select(t.id.as_('i')).where(t.id == 1)
+SELECT id "i" FROM users WHERE id=1
+> SnowflakeQuery.from_(Query.from_(t).select(t.id)).select('*')
+SELECT * FROM (SELECT id FROM users) sq0
+> SnowflakeQuery.from_(t).join(u).on(t.org_id == u.id).select(t.id.as_('i'), u.name)
+SELECT users.id "i",orgs.name FROM users JOIN orgs ON users.org_id=orgs.id
+> SnowflakeQuery.create_table(t).columns('a', ('b', 'INT'))
+CREATE TABLE users (a,b INT)
+> SnowflakeQuery.drop_table(t)
+DROP TABLE users
+> SQLLiteQuery.into(t).insert(1, True, False)
+INSERT INTO "users" VALUES (1,true,false)
+> SQLLiteQuery.into(t).insert_or_replace(1, 'a')
+INSERT OR REPLACE INTO "users" VALUES (1,'a')
+> SQLLiteQuery.into(t).insert_or_replace((1, 'a'), (2, 'b'))
+INSERT OR REPLACE INTO "users" VALUES (1,'a'),(2,'b')
+> SQLLiteQuery.into(t).replace(1, 'a')
+REPLACE INTO "users" VALUES (1,'a')
+> SQLLiteQuery.from_(t).select(t.id, True).where(t.active == True)
+SELECT "id",1 FROM "users" WHERE "active"=true
+> SQLLiteQuery.update(t).set(t.active, False)
+UPDATE "users" SET "active"=0
+> SQLLiteQuery.from_(t).select(t.id).where(t.flag.isin([True, False, 3]))
+SELECT "id" FROM "users" WHERE "flag" IN (true,false,3)
+> ClickHouseQuery.from_(t).select(t.id.as_('i')).where(t.id == 1)
+SELECT "id" AS "i" FROM "users" WHERE "id"=1
+> ClickHouseQuery.from_(t.as_('x')).select('*')
+SELECT * FROM "users" AS "x"
+> ClickHouseQuery.from_(t).delete().where(t.id == 1)
+ALTER TABLE "users" DELETE WHERE "id"=1
+> ClickHouseQuery.update(t).set(t.name, 'z').where(t.id == 1)
+ALTER TABLE "users" UPDATE "name"='z' WHERE "id"=1
+> ClickHouseQuery.from_(t).select(t.id).prewhere(t.day == '2024-01-01').where(t.n > 1)
+SELECT "id" FROM "users" PREWHERE "day"='2024-01-01' WHERE "n">1
+> ClickHouseQuery.from_(t).select(t.id, fn.Count('*').as_('n')).groupby(t.id).with_totals()
+SELECT "id",COUNT(*) AS "n" FROM "users" GROUP BY "id" WITH TOTALS
+> VerticaQuery.from_(t).select(t.id).hint('q1')
+SELECT /*+label(q1)*/ "id" FROM "users"
+> VerticaQuery.from_(t).select(t.id).hint('q1').hint('q2')
+SELECT /*+label(q2)*/ "id" FROM "users"
+> VerticaQuery.into(t).insert(1).hint('ins')
+INSERT /*+label(ins)*/ INTO "users" VALUES (1)
+> VerticaQuery.from_(t).hint('empty')
+/*+label(empty)*/
+> VerticaQuery.update(t).set(t.a, 1).hint('upd')
+UPDATE /*+label(upd)*/ "users" SET "a"=1
+> RedshiftQuery.from_(t).select(t.id).where(t.tags == ['a'])
+SELECT "id" FROM "users" WHERE "tags"=ARRAY['a']
+
+# Create and drop
+> Query.create_table('t').columns('a', 'b')
+CREATE TABLE "t" ("a","b")
+> Query.create_table('t').columns(('a', 'INT'), ('b', 'TEXT'))
+CREATE TABLE "t" ("a" INT,"b" TEXT)
+> Query.create_table(Table('t', schema='s')).columns(Column('a', 'INT'))
+CREATE TABLE "s"."t" ("a" INT)
+> Query.create_table('t').temporary().columns('a')
+CREATE TEMPORARY TABLE "t" ("a")
+> Query.create_table('t').unlogged().columns('a')
+CREATE UNLOGGED TABLE "t" ("a")
+> Query.create_table('t').temporary().unlogged().columns('a')
+CREATE TEMPORARY TABLE "t" ("a")
+> Query.create_table('t').if_not_exists().columns('a')
+CREATE TABLE IF NOT EXISTS "t" ("a")
+> Query.create_table('t').columns('a').with_system_versioning()
+CREATE TABLE "t" ("a") WITH SYSTEM VERSIONING
+> Query.create_table('t').columns(Column('id', 'INT'), Column('start', 'DATE'), Column('end', 'DATE')).period_for('valid', 'start', 'end')
+CREATE TABLE "t" ("id" INT,"start" DATE,"end" DATE,PERIOD FOR "valid" ("start","end"))
+> Query.create_table('t').columns('a').period_for('p', Column('s'), Column('e'))
+CREATE TABLE "t" ("a",PERIOD FOR "p" ("s","e"))
+> Query.create_table('t').columns('a', 'b').primary_key('a', 'b')
+CREATE TABLE "t" ("a","b",PRIMARY KEY ("a","b"))
+> Query.create_table('t').columns('a', 'b').primary_key(Column('a'))
+CREATE TABLE "t" ("a","b",PRIMARY KEY ("a"))
+> Query.create_table('t').columns('a').primary_key('a').primary_key('a')
+error AttributeError: 'Query' object already has attribute primary_key
+> Query.create_table('t').columns('a', 'b', 'c').unique('a').unique('b', 'c')
+CREATE TABLE "t" ("a","b","c",UNIQUE ("a"),UNIQUE ("b","c"))
+> Query.create_table('t').columns('a', 'b').foreign_key(['a'], Table('p'), ['id'])
+CREATE TABLE "t" ("a","b",FOREIGN KEY ("a") REFERENCES "p" ("id"))
+> Query.create_table('t').columns('a', 'b').foreign_key(['a', 'b'], Table('p', schema='s'), ['x', 'y'], on_delete=ReferenceOption.cascade, on_update=ReferenceOption.set_null)
+CREATE TABLE "t" ("a","b",FOREIGN KEY ("a","b") REFERENCES "s"."p" ("x","y") ON DELETE CASCADE ON UPDATE SET NULL)
+> Query.create_table('t').columns('a').foreign_key(['a'], Table('p'), ['id'], on_update=ReferenceOption.no_action)
+CREATE TABLE "t" ("a",FOREIGN KEY ("a") REFERENCES "p" ("id") ON UPDATE NO ACTION)
+> Query.create_table('t').columns('a').foreign_key(['a'], Table('p'), ['id'], on_delete=ReferenceOption.restrict).foreign_key(['a'], Table('q'), ['id'])
+error AttributeError: 'Query' object already has attribute foreign_key
+> Query.create_table('t').columns('a').foreign_key(['a'], Table('p'), ['id'], on_delete=ReferenceOption.set_default).unique('a').primary_key('a')
+CREATE TABLE "t" ("a",UNIQUE ("a"),PRIMARY KEY ("a"),FOREIGN KEY ("a") REFERENCES "p" ("id") ON DELETE SET DEFAULT)
+> Query.create_table('t').columns(Column('a', 'INT', nullable=True), Column('b', 'INT', nullable=False))
+CREATE TABLE "t" ("a" INT NULL,"b" INT NOT NULL)
+> Query.create_table('t').columns(Column('a', 'INT', default=0), Column('b', 'TEXT', default='x'))
+CREATE TABLE "t" ("a" INT DEFAULT 0,"b" TEXT DEFAULT 'x')
+> Query.create_table('t').columns(Column('a', 'BOOL', default=True), Column('b', 'TS', default=fn.Now()))
+CREATE TABLE "t" ("a" BOOL DEFAULT true,"b" TS DEFAULT NOW())
+> Query.create_table('t').columns(Column('a', 'REAL', default=1.5), Column('b', None, False))
+CREATE TABLE "t" ("a" REAL DEFAULT 1.5,"b" NOT NULL)
+> Query.create_table('t').columns(Column('a', default=ValueWrapper("it's")))
+CREATE TABLE "t" ("a" DEFAULT 'it''s')
+> Query.create_table('t').columns(Column('a', 'INT', True, 7))
+CREATE TABLE "t" ("a" INT NULL DEFAULT 7)
+> Query.create_table('t').columns(*Columns(('id', 'INT'), 'name', ('z', 'TEXT')))
+CREATE TABLE "t" ("id" INT,"name","z" TEXT)
+> Query.create_table('t')
+
+> Query.create_table('t').if_not_exists()
+
+> Query.create_table('t').as_select(Query.from_('s').select('*'))
+CREATE TABLE "t" AS (SELECT * FROM "s")
+> Query.create_table('t').temporary().as_select(Query.from_('s').select('a').where(Field('a') > 1))
+CREATE TEMPORARY TABLE "t" AS (SELECT "a" FROM "s" WHERE "a">1)
+> Query.create_table('t').columns('a').as_select(Query.from_('s').select('*'))
+error AttributeError: 'Query' object already has attribute columns
+> Query.create_table('t').as_select(Query.from_('s').select('*')).columns('a')
+error AttributeError: 'Query' object already has attribute as_select
+> Query.create_table('t').as_select('SELECT 1')
+error TypeError: Expected 'item' to be instance of QueryBuilder
+> Query.create_table('t').create_table('u')
+error AttributeError: 'Query' object already has attribute create_table
+> MySQLQuery.create_table('t').columns('a', ('b', 'INT')).primary_key('a')
+CREATE TABLE `t` (`a`,`b` INT,PRIMARY KEY (`a`))
+> MySQLQuery.create_table(Table('t', schema='db')).if_not_exists().columns(Column('a', 'INT', default='q'))
+CREATE TABLE IF NOT EXISTS `db`.`t` (`a` INT DEFAULT 'q')
+> PostgreSQLQuery.create_table('t').columns('a')
+CREATE TABLE "t" ("a")
+> VerticaQuery.create_table('t').columns('a')
+CREATE TABLE "t" ("a")
+> VerticaQuery.create_table('t').temporary().columns('a')
+CREATE TEMPORARY TABLE "t" ("a")
+> Column('a')
+"a"
+> Column('a', 'INT')
+"a" INT
+> Column('a', 'INT', nullable=False, default=3)
+"a" INT NOT NULL DEFAULT 3
+> Column('a', 'VARCHAR(2)', True, 'zz')
+"a" VARCHAR(2) NULL DEFAULT 'zz'
+> Column('a').get_sql()
+a
+> Column('a', 'INT').get_sql(quote_char='`')
+`a` INT
+> Query.drop_table('t')
+DROP TABLE "t"
+> Query.drop_table(Table('t', schema='s')).if_exists()
+DROP TABLE IF EXISTS "s"."t"
+> Query.drop_table('t').if_exists().if_exists()
+DROP TABLE IF EXISTS "t"
+> Query.drop_database('db')
+DROP DATABASE "db"
+> Query.drop_database(Database('db')).if_exists()
+DROP DATABASE IF EXISTS "db"
+> Query.drop_user('bob')
+DROP USER "bob"
+> Query.drop_view('v').if_exists()
+DROP VIEW IF EXISTS "v"
+> Query.drop_table('t').drop_table('u')
+error AttributeError: 'DropQuery' object already has attribute drop_target
+> MySQLQuery.drop_table('t')
+DROP TABLE `t`
+> MySQLQuery.drop_user('bob')
+DROP USER "bob"
+> MySQLQuery.drop_database('db')
+DROP DATABASE "db"
+> ClickHouseQuery.drop_table('t')
+DROP TABLE "t"
+> ClickHouseQuery.drop_user('bob')
+DROP USER "bob"
+> PostgreSQLQuery.drop_view('v')
+DROP VIEW "v"
+> SnowflakeQuery.drop_table(Table('t', schema='s'))
+DROP TABLE s.t
+> Query.drop_table('t').get_sql(quote_char='`')
+DROP TABLE `t`
+> c1 = Query.create_table('t').columns('a')
+> c2 = c1.columns('b')
+> c1
+CREATE TABLE "t" ("a","b")
+> c2
+CREATE TABLE "t" ("a","b")
+> c3 = c1.unique('a')
+> c4 = c1.primary_key('b')
+> c3
+CREATE TABLE "t" ("a","b",UNIQUE ("a"))
+> c4
+CREATE TABLE "t" ("a","b",UNIQUE ("a"),PRIMARY KEY ("b"))
+
+# replace_table and immutability
+> t, u, v = Tables('t', 'u', 'v')
+> q = Query.from_(t).join(u).on(t.id == u.tid).select(t.a, u.b, fn.Sum(t.c).as_('s')).where(t.a > 1).groupby(t.a, u.b).having(fn.Sum(t.c) > 2).orderby(t.a)
+> q
+SELECT "t"."a","u"."b",SUM("t"."c") "s" FROM "t" JOIN "u" ON "t"."id"="u"."tid" WHERE "t"."a">1 GROUP BY "t"."a","u"."b" HAVING SUM("t"."c")>2 ORDER BY "t"."a"
+> q.replace_table(t, v)
+SELECT "v"."a","u"."b",SUM("v"."c") "s" FROM "v" JOIN "u" ON "v"."id"="u"."tid" WHERE "v"."a">1 GROUP BY "v"."a","u"."b" HAVING SUM("v"."c")>2 ORDER BY "v"."a"
+> q.replace_table(u, v)
+SELECT "t"."a","v"."b",SUM("t"."c") "s" FROM "t" JOIN "v" ON "t"."id"="v"."tid" WHERE "t"."a">1 GROUP BY "t"."a","v"."b" HAVING SUM("t"."c")>2 ORDER BY "t"."a"
+> q.replace_table(Table('t'), v)
+SELECT "v"."a","u"."b",SUM("v"."c") "s" FROM "v" JOIN "u" ON "v"."id"="u"."tid" WHERE "v"."a">1 GROUP BY "v"."a","u"."b" HAVING SUM("v"."c")>2 ORDER BY "v"."a"
+> q
+SELECT "t"."a","u"."b",SUM("t"."c") "s" FROM "t" JOIN "u" ON "t"."id"="u"."tid" WHERE "t"."a">1 GROUP BY "t"."a","u"."b" HAVING SUM("t"."c")>2 ORDER BY "t"."a"
+> Query.into(t).columns(t.a, t.b).insert(t.a + 1, 2).replace_table(t, v)
+INSERT INTO "v" ("a","b") VALUES ("a"+1,2)
+> Query.update(t).set(t.a, 1).where(t.b == 2).replace_table(t, v)
+UPDATE "v" SET "a"=1 WHERE "b"=2
+> Query.from_(t).select(t.star, Case().when(t.a == 1, t.b).else_(t.c), Tuple(t.a, 1)).where(t.a.isin([1]) & t.b[1:2] & t.c.isnull() & ~(t.d == 1) & (t.e.bitwiseand(1) == 1)).replace_table(t, v)
+SELECT *,CASE WHEN "a"=1 THEN "b" ELSE "c" END,("a",1) FROM "v" WHERE "a" IN (1) AND "b" BETWEEN 1 AND 2 AND "c" IS NULL AND NOT "d"=1 AND ("e" & 1)=1
+> Query.from_(t).select(fn.Coalesce(t.a, 0), t.a + t.b, -t.a).replace_table(t, v)
+SELECT COALESCE("a",0),"a"+"b",-"a" FROM "v"
+> Query.from_(t).join(u).using('id').select(u.a).replace_table(u, v)
+SELECT "v"."a" FROM "t" JOIN "v" USING ("id")
+> Query.from_(t).select(t.star).replace_table(t, v)
+SELECT * FROM "v"
+> (t.a == u.b).replace_table(t, v)
+"a"="b"
+> fn.Sum(t.a).replace_table(t, v)
+SUM("a")
+> t.a.replace_table(t, v)
+"a"
+> t.a.replace_table(u, v)
+"a"
+> ValueWrapper(1).replace_table(t, v)
+1
+> m = Query.from_(t, immutable=False)
+> m.select(t.a)
+SELECT "a" FROM "t"
+> m
+SELECT "a" FROM "t"
+> m.where(t.a > 1)
+SELECT "a" FROM "t" WHERE "a">1
+> m
+SELECT "a" FROM "t" WHERE "a">1
+> m2 = m.limit(3)
+> m
+SELECT "a" FROM "t" WHERE "a">1 LIMIT 3
+> m2 is m
+True
+> i = Query.from_(t)
+> i2 = i.select(t.a)
+> i
+
+> i2 is i
+False
+> i3 = i2.as_('z')
+> i2.alias
+None
+> i3.alias
+z
+> ta = t.as_('ta')
+> t.alias
+None
+> ta.alias
+ta
+> f = t.x
+> g = f.as_('y')
+> f.alias
+None
+> g.alias
+y
+> Query.from_(t).select(t.a).where(Field('b') == 1)
+SELECT "a" FROM "t" WHERE "b"=1
+> Query.from_(t).select(t.a).where(t.b == Field('c'))
+SELECT "a" FROM "t" WHERE "b"="c"
+
+# Programs
+> migrate schema.tsv
+  wrote out/migrate/ansi.sql (11 lines)
+  | CREATE TABLE IF NOT EXISTS "customers" ("id" INTEGER NOT NULL,"email" VARCHAR(255) NOT NULL,"name" VARCHAR(100) NOT NULL,"region" VARCHAR(8) NULL DEFAULT 'EU',"vip" BOOLEAN NOT NULL DEFAULT false,"created_at" TIMESTAMP NOT NULL DEFAULT NOW(),UNIQUE ("email"),PRIMARY KEY ("id"));
+  | CREATE TABLE IF NOT EXISTS "products" ("sku" VARCHAR(32) NOT NULL,"title" VARCHAR(200) NOT NULL,"brand" VARCHAR(80),"price" NUMERIC(10,2) NOT NULL DEFAULT 0,"weight" FLOAT NULL DEFAULT 0.25,"active" BOOLEAN NOT NULL DEFAULT true,UNIQUE ("title","brand"),PRIMARY KEY ("sku"));
+  | CREATE TABLE IF NOT EXISTS "orders" ("id" INTEGER NOT NULL,"customer_id" INTEGER NOT NULL,"status" VARCHAR(16) NOT NULL DEFAULT 'new',"total" NUMERIC(12,2) NULL,"placed_on" DATE NOT NULL DEFAULT CURRENT_DATE(),PRIMARY KEY ("id"),FOREIGN KEY ("customer_id") REFERENCES "customers" ("id") ON DELETE CASCADE);
+  | -- order_items: error AttributeError: 'Query' object already has attribute foreign_key
+  | CREATE TABLE IF NOT EXISTS "order_items" ("order_id" INTEGER NOT NULL,"sku" VARCHAR(32) NOT NULL,"qty" INTEGER NOT NULL DEFAULT 1,"unit_price" NUMERIC(10,2) NOT NULL,PRIMARY KEY ("order_id","sku"),FOREIGN KEY ("order_id") REFERENCES "orders" ("id") ON DELETE CASCADE);
+  | CREATE TABLE IF NOT EXISTS "audit_log" ("id" BIGINT NOT NULL,"actor" VARCHAR(64) NOT NULL DEFAULT 'system',"note" TEXT NULL,PRIMARY KEY ("id"));
+  | DROP TABLE IF EXISTS "audit_log";
+  | DROP TABLE IF EXISTS "order_items";
+  | DROP TABLE IF EXISTS "orders";
+  | DROP TABLE IF EXISTS "products";
+  | DROP TABLE IF EXISTS "customers";
+  wrote out/migrate/mysql.sql (11 lines)
+  | CREATE TABLE IF NOT EXISTS `customers` (`id` INTEGER NOT NULL,`email` VARCHAR(255) NOT NULL,`name` VARCHAR(100) NOT NULL,`region` VARCHAR(8) NULL DEFAULT 'EU',`vip` BOOLEAN NOT NULL DEFAULT false,`created_at` TIMESTAMP NOT NULL DEFAULT NOW(),UNIQUE (`email`),PRIMARY KEY (`id`));
+  | CREATE TABLE IF NOT EXISTS `products` (`sku` VARCHAR(32) NOT NULL,`title` VARCHAR(200) NOT NULL,`brand` VARCHAR(80),`price` NUMERIC(10,2) NOT NULL DEFAULT 0,`weight` FLOAT NULL DEFAULT 0.25,`active` BOOLEAN NOT NULL DEFAULT true,UNIQUE (`title`,`brand`),PRIMARY KEY (`sku`));
+  | CREATE TABLE IF NOT EXISTS `orders` (`id` INTEGER NOT NULL,`customer_id` INTEGER NOT NULL,`status` VARCHAR(16) NOT NULL DEFAULT 'new',`total` NUMERIC(12,2) NULL,`placed_on` DATE NOT NULL DEFAULT CURRENT_DATE(),PRIMARY KEY (`id`),FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE);
+  | -- order_items: error AttributeError: 'Query' object already has attribute foreign_key
+  | CREATE TABLE IF NOT EXISTS `order_items` (`order_id` INTEGER NOT NULL,`sku` VARCHAR(32) NOT NULL,`qty` INTEGER NOT NULL DEFAULT 1,`unit_price` NUMERIC(10,2) NOT NULL,PRIMARY KEY (`order_id`,`sku`),FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE CASCADE);
+  | CREATE TABLE IF NOT EXISTS `audit_log` (`id` BIGINT NOT NULL,`actor` VARCHAR(64) NOT NULL DEFAULT 'system',`note` TEXT NULL,PRIMARY KEY (`id`));
+  | DROP TABLE IF EXISTS `audit_log`;
+  | DROP TABLE IF EXISTS `order_items`;
+  | DROP TABLE IF EXISTS `orders`;
+  | DROP TABLE IF EXISTS `products`;
+  | DROP TABLE IF EXISTS `customers`;
+  wrote out/migrate/snowflake.sql (11 lines)
+  | CREATE TABLE IF NOT EXISTS customers (id INTEGER NOT NULL,email VARCHAR(255) NOT NULL,name VARCHAR(100) NOT NULL,region VARCHAR(8) NULL DEFAULT 'EU',vip BOOLEAN NOT NULL DEFAULT false,created_at TIMESTAMP NOT NULL DEFAULT NOW(),UNIQUE (email),PRIMARY KEY (id));
+  | CREATE TABLE IF NOT EXISTS products (sku VARCHAR(32) NOT NULL,title VARCHAR(200) NOT NULL,brand VARCHAR(80),price NUMERIC(10,2) NOT NULL DEFAULT 0,weight FLOAT NULL DEFAULT 0.25,active BOOLEAN NOT NULL DEFAULT true,UNIQUE (title,brand),PRIMARY KEY (sku));
+  | CREATE TABLE IF NOT EXISTS orders (id INTEGER NOT NULL,customer_id INTEGER NOT NULL,status VARCHAR(16) NOT NULL DEFAULT 'new',total NUMERIC(12,2) NULL,placed_on DATE NOT NULL DEFAULT CURRENT_DATE(),PRIMARY KEY (id),FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE);
+  | -- order_items: error AttributeError: 'Query' object already has attribute foreign_key
+  | CREATE TABLE IF NOT EXISTS order_items (order_id INTEGER NOT NULL,sku VARCHAR(32) NOT NULL,qty INTEGER NOT NULL DEFAULT 1,unit_price NUMERIC(10,2) NOT NULL,PRIMARY KEY (order_id,sku),FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE);
+  | CREATE TABLE IF NOT EXISTS audit_log (id BIGINT NOT NULL,actor VARCHAR(64) NOT NULL DEFAULT 'system',note TEXT NULL,PRIMARY KEY (id));
+  | DROP TABLE IF EXISTS audit_log;
+  | DROP TABLE IF EXISTS order_items;
+  | DROP TABLE IF EXISTS orders;
+  | DROP TABLE IF EXISTS products;
+  | DROP TABLE IF EXISTS customers;
+> report reports.tsv
+  wrote out/reports/ansi.sql (18 lines)
+  | -- paid_orders
+  | SELECT "o"."id","o"."customer_id","o"."total" FROM "orders" "o" WHERE "o"."status"='paid' AND "o"."total">=100 ORDER BY "o"."total" DESC,"o"."id" ASC LIMIT 20;
+  | -- revenue_by_region
+  | SELECT "c"."region",SUM("o"."total") "revenue",COUNT(*) "orders" FROM "orders" "o" JOIN "customers" "c" ON "o"."customer_id"="c"."id" WHERE "o"."status" IN ('paid','shipped') GROUP BY "c"."region" HAVING SUM("o"."total")>1000 ORDER BY "revenue" DESC;
+  | -- top_customers
+  | SELECT "c"."id","c"."name",UPPER("c"."email") "email",MAX("o"."total") "biggest" FROM "customers" "c" LEFT JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."vip"=1 OR "c"."region"='US' GROUP BY "c"."id","c"."name" HAVING COUNT(*)>=3 ORDER BY "biggest" DESC LIMIT 10 OFFSET 5;
+  | -- basket_lines
+  | SELECT "o"."id","p"."title","i"."qty","i"."unit_price" FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" JOIN "products" "p" USING ("sku") WHERE "i"."qty" BETWEEN 2 AND 10 AND "p"."active"=true AND NOT "p"."brand" IS NULL ORDER BY "o"."id" ASC,"p"."title" ASC;
+  | -- stale_carts
+  | SELECT "o"."id","o"."placed_on" FROM "orders" "o" WHERE "o"."status"='new' AND "o"."placed_on"<'2024-01-01' AND "o"."total" IS NULL ORDER BY "o"."placed_on" ASC LIMIT 50 OFFSET 100;
+  | -- brand_search
+  | SELECT "p"."sku",LOWER("p"."title") "title","p"."price" FROM "products" "p" WHERE "p"."title" LIKE '%lamp%' OR "p"."brand" LIKE 'Lux%' ORDER BY "p"."price" ASC;
+  | -- distinct_buyers
+  | SELECT "i"."sku",COUNT(DISTINCT "o"."customer_id") "buyers",AVG("i"."unit_price") "avg_price",MIN("i"."qty") FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" GROUP BY "i"."sku" HAVING COUNT(*)>1 ORDER BY "buyers" DESC LIMIT 3;
+  | -- region_check
+  | SELECT "c"."region","o"."status" FROM "customers" "c" FULL OUTER JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."region"<>'EU' AND "o"."status"<>'void' OFFSET 7;
+  | -- broken_report
+  | SELECT "o"."id" FROM "orders" "o" WHERE "o"."total">0 ORDER BY "o"."missing" ASC;
+  wrote out/reports/mysql.sql (18 lines)
+  | -- paid_orders
+  | SELECT `o`.`id`,`o`.`customer_id`,`o`.`total` FROM `orders` `o` WHERE `o`.`status`='paid' AND `o`.`total`>=100 ORDER BY `o`.`total` DESC,`o`.`id` ASC LIMIT 20;
+  | -- revenue_by_region
+  | SELECT `c`.`region`,SUM(`o`.`total`) `revenue`,COUNT(*) `orders` FROM `orders` `o` JOIN `customers` `c` ON `o`.`customer_id`=`c`.`id` WHERE `o`.`status` IN ('paid','shipped') GROUP BY `c`.`region` HAVING SUM(`o`.`total`)>1000 ORDER BY `revenue` DESC;
+  | -- top_customers
+  | SELECT `c`.`id`,`c`.`name`,UPPER(`c`.`email`) `email`,MAX(`o`.`total`) `biggest` FROM `customers` `c` LEFT JOIN `orders` `o` ON `c`.`id`=`o`.`customer_id` WHERE `c`.`vip`=1 OR `c`.`region`='US' GROUP BY `c`.`id`,`c`.`name` HAVING COUNT(*)>=3 ORDER BY `biggest` DESC LIMIT 10 OFFSET 5;
+  | -- basket_lines
+  | SELECT `o`.`id`,`p`.`title`,`i`.`qty`,`i`.`unit_price` FROM `order_items` `i` JOIN `orders` `o` ON `i`.`order_id`=`o`.`id` JOIN `products` `p` USING (`sku`) WHERE `i`.`qty` BETWEEN 2 AND 10 AND `p`.`active`=true AND NOT `p`.`brand` IS NULL ORDER BY `o`.`id` ASC,`p`.`title` ASC;
+  | -- stale_carts
+  | SELECT `o`.`id`,`o`.`placed_on` FROM `orders` `o` WHERE `o`.`status`='new' AND `o`.`placed_on`<'2024-01-01' AND `o`.`total` IS NULL ORDER BY `o`.`placed_on` ASC LIMIT 50 OFFSET 100;
+  | -- brand_search
+  | SELECT `p`.`sku`,LOWER(`p`.`title`) `title`,`p`.`price` FROM `products` `p` WHERE `p`.`title` LIKE '%lamp%' OR `p`.`brand` LIKE 'Lux%' ORDER BY `p`.`price` ASC;
+  | -- distinct_buyers
+  | SELECT `i`.`sku`,COUNT(DISTINCT `o`.`customer_id`) `buyers`,AVG(`i`.`unit_price`) `avg_price`,MIN(`i`.`qty`) FROM `order_items` `i` JOIN `orders` `o` ON `i`.`order_id`=`o`.`id` GROUP BY `i`.`sku` HAVING COUNT(*)>1 ORDER BY `buyers` DESC LIMIT 3;
+  | -- region_check
+  | SELECT `c`.`region`,`o`.`status` FROM `customers` `c` FULL OUTER JOIN `orders` `o` ON `c`.`id`=`o`.`customer_id` WHERE `c`.`region`<>'EU' AND `o`.`status`<>'void' OFFSET 7;
+  | -- broken_report
+  | SELECT `o`.`id` FROM `orders` `o` WHERE `o`.`total`>0 ORDER BY `o`.`missing` ASC;
+  wrote out/reports/postgres.sql (18 lines)
+  | -- paid_orders
+  | SELECT "o"."id","o"."customer_id","o"."total" FROM "orders" "o" WHERE "o"."status"='paid' AND "o"."total">=100 ORDER BY "o"."total" DESC,"o"."id" ASC LIMIT 20;
+  | -- revenue_by_region
+  | SELECT "c"."region",SUM("o"."total") "revenue",COUNT(*) "orders" FROM "orders" "o" JOIN "customers" "c" ON "o"."customer_id"="c"."id" WHERE "o"."status" IN ('paid','shipped') GROUP BY "c"."region" HAVING SUM("o"."total")>1000 ORDER BY "revenue" DESC;
+  | -- top_customers
+  | SELECT "c"."id","c"."name",UPPER("c"."email") "email",MAX("o"."total") "biggest" FROM "customers" "c" LEFT JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."vip"=1 OR "c"."region"='US' GROUP BY "c"."id","c"."name" HAVING COUNT(*)>=3 ORDER BY "biggest" DESC LIMIT 10 OFFSET 5;
+  | -- basket_lines
+  | SELECT "o"."id","p"."title","i"."qty","i"."unit_price" FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" JOIN "products" "p" USING ("sku") WHERE "i"."qty" BETWEEN 2 AND 10 AND "p"."active"=true AND NOT "p"."brand" IS NULL ORDER BY "o"."id" ASC,"p"."title" ASC;
+  | -- stale_carts
+  | SELECT "o"."id","o"."placed_on" FROM "orders" "o" WHERE "o"."status"='new' AND "o"."placed_on"<'2024-01-01' AND "o"."total" IS NULL ORDER BY "o"."placed_on" ASC LIMIT 50 OFFSET 100;
+  | -- brand_search
+  | SELECT "p"."sku",LOWER("p"."title") "title","p"."price" FROM "products" "p" WHERE "p"."title" LIKE '%lamp%' OR "p"."brand" LIKE 'Lux%' ORDER BY "p"."price" ASC;
+  | -- distinct_buyers
+  | SELECT "i"."sku",COUNT(DISTINCT "o"."customer_id") "buyers",AVG("i"."unit_price") "avg_price",MIN("i"."qty") FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" GROUP BY "i"."sku" HAVING COUNT(*)>1 ORDER BY "buyers" DESC LIMIT 3;
+  | -- region_check
+  | SELECT "c"."region","o"."status" FROM "customers" "c" FULL OUTER JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."region"<>'EU' AND "o"."status"<>'void' OFFSET 7;
+  | -- broken_report
+  | SELECT "o"."id" FROM "orders" "o" WHERE "o"."total">0 ORDER BY "o"."missing" ASC;
+  wrote out/reports/mssql.sql (18 lines)
+  | -- paid_orders
+  | SELECT "o"."id","o"."customer_id","o"."total" FROM "orders" "o" WHERE "o"."status"='paid' AND "o"."total">=100 ORDER BY "o"."total" DESC,"o"."id" ASC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY;
+  | -- revenue_by_region
+  | SELECT "c"."region",SUM("o"."total") "revenue",COUNT(*) "orders" FROM "orders" "o" JOIN "customers" "c" ON "o"."customer_id"="c"."id" WHERE "o"."status" IN ('paid','shipped') GROUP BY "c"."region" HAVING SUM("o"."total")>1000 ORDER BY "revenue" DESC;
+  | -- top_customers
+  | SELECT "c"."id","c"."name",UPPER("c"."email") "email",MAX("o"."total") "biggest" FROM "customers" "c" LEFT JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."vip"=1 OR "c"."region"='US' GROUP BY "c"."id","c"."name" HAVING COUNT(*)>=3 ORDER BY "biggest" DESC OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY;
+  | -- basket_lines
+  | SELECT "o"."id","p"."title","i"."qty","i"."unit_price" FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" JOIN "products" "p" USING ("sku") WHERE "i"."qty" BETWEEN 2 AND 10 AND "p"."active"=true AND NOT "p"."brand" IS NULL ORDER BY "o"."id" ASC,"p"."title" ASC;
+  | -- stale_carts
+  | SELECT "o"."id","o"."placed_on" FROM "orders" "o" WHERE "o"."status"='new' AND "o"."placed_on"<'2024-01-01' AND "o"."total" IS NULL ORDER BY "o"."placed_on" ASC OFFSET 100 ROWS FETCH NEXT 50 ROWS ONLY;
+  | -- brand_search
+  | SELECT "p"."sku",LOWER("p"."title") "title","p"."price" FROM "products" "p" WHERE "p"."title" LIKE '%lamp%' OR "p"."brand" LIKE 'Lux%' ORDER BY "p"."price" ASC;
+  | -- distinct_buyers
+  | SELECT "i"."sku",COUNT(DISTINCT "o"."customer_id") "buyers",AVG("i"."unit_price") "avg_price",MIN("i"."qty") FROM "order_items" "i" JOIN "orders" "o" ON "i"."order_id"="o"."id" GROUP BY "i"."sku" HAVING COUNT(*)>1 ORDER BY "buyers" DESC OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY;
+  | -- region_check
+  | SELECT "c"."region","o"."status" FROM "customers" "c" FULL OUTER JOIN "orders" "o" ON "c"."id"="o"."customer_id" WHERE "c"."region"<>'EU' AND "o"."status"<>'void' OFFSET 7 ROWS;
+  | -- broken_report
+  | SELECT "o"."id" FROM "orders" "o" WHERE "o"."total">0 ORDER BY "o"."missing" ASC;
+  wrote out/reports/oracle.sql (18 lines)
+  | -- paid_orders
+  | SELECT o.id,o.customer_id,o.total FROM orders o WHERE o.status='paid' AND o.total>=100 ORDER BY o.total DESC,o.id ASC LIMIT 20;
+  | -- revenue_by_region
+  | SELECT c.region,SUM(o.total) revenue,COUNT(*) orders FROM orders o JOIN customers c ON o.customer_id=c.id WHERE o.status IN ('paid','shipped') GROUP BY c.region HAVING SUM(o.total)>1000 ORDER BY revenue DESC;
+  | -- top_customers
+  | SELECT c.id,c.name,UPPER(c.email) email,MAX(o.total) biggest FROM customers c LEFT JOIN orders o ON c.id=o.customer_id WHERE c.vip=1 OR c.region='US' GROUP BY c.id,c.name HAVING COUNT(*)>=3 ORDER BY biggest DESC LIMIT 10 OFFSET 5;
+  | -- basket_lines
+  | SELECT o.id,p.title,i.qty,i.unit_price FROM order_items i JOIN orders o ON i.order_id=o.id JOIN products p USING (sku) WHERE i.qty BETWEEN 2 AND 10 AND p.active=true AND NOT p.brand IS NULL ORDER BY o.id ASC,p.title ASC;
+  | -- stale_carts
+  | SELECT o.id,o.placed_on FROM orders o WHERE o.status='new' AND o.placed_on<'2024-01-01' AND o.total IS NULL ORDER BY o.placed_on ASC LIMIT 50 OFFSET 100;
+  | -- brand_search
+  | SELECT p.sku,LOWER(p.title) title,p.price FROM products p WHERE p.title LIKE '%lamp%' OR p.brand LIKE 'Lux%' ORDER BY p.price ASC;
+  | -- distinct_buyers
+  | SELECT i.sku,COUNT(DISTINCT o.customer_id) buyers,AVG(i.unit_price) avg_price,MIN(i.qty) FROM order_items i JOIN orders o ON i.order_id=o.id GROUP BY i.sku HAVING COUNT(*)>1 ORDER BY buyers DESC LIMIT 3;
+  | -- region_check
+  | SELECT c.region,o.status FROM customers c FULL OUTER JOIN orders o ON c.id=o.customer_id WHERE c.region<>'EU' AND o.status<>'void' OFFSET 7;
+  | -- broken_report
+  | SELECT o.id FROM orders o WHERE o.total>0 ORDER BY o.missing ASC;
+> load customers.csv customers id 2
+  wrote out/load/customers.postgres.sql (3 lines)
+  | INSERT INTO "customers" ("id","email","name","region","vip") VALUES (1,'ann@example.com','Ann Lee','EU',true),(2,'bo@example.com','Bo O''Brien','US',false) ON CONFLICT ("id") DO UPDATE SET "email"=EXCLUDED."email","name"=EXCLUDED."name","region"=EXCLUDED."region","vip"=EXCLUDED."vip" RETURNING "id";
+  | INSERT INTO "customers" ("id","email","name","region","vip") VALUES (3,'cy@example.com','Cy Ng',NULL,true),(4,'di@example.com','Di Park','APAC',false) ON CONFLICT ("id") DO UPDATE SET "email"=EXCLUDED."email","name"=EXCLUDED."name","region"=EXCLUDED."region","vip"=EXCLUDED."vip" RETURNING "id";
+  | INSERT INTO "customers" ("id","email","name","region","vip") VALUES (5,'ed@example.com','Ed Ruiz','US',true) ON CONFLICT ("id") DO UPDATE SET "email"=EXCLUDED."email","name"=EXCLUDED."name","region"=EXCLUDED."region","vip"=EXCLUDED."vip" RETURNING "id";
+  wrote out/load/customers.mysql.sql (3 lines)
+  | INSERT INTO `customers` (`id`,`email`,`name`,`region`,`vip`) VALUES (1,'ann@example.com','Ann Lee','EU',true),(2,'bo@example.com','Bo O''Brien','US',false) ON DUPLICATE KEY UPDATE `email`=VALUES(`email`),`name`=VALUES(`name`),`region`=VALUES(`region`),`vip`=VALUES(`vip`);
+  | INSERT INTO `customers` (`id`,`email`,`name`,`region`,`vip`) VALUES (3,'cy@example.com','Cy Ng',NULL,true),(4,'di@example.com','Di Park','APAC',false) ON DUPLICATE KEY UPDATE `email`=VALUES(`email`),`name`=VALUES(`name`),`region`=VALUES(`region`),`vip`=VALUES(`vip`);
+  | INSERT INTO `customers` (`id`,`email`,`name`,`region`,`vip`) VALUES (5,'ed@example.com','Ed Ruiz','US',true) ON DUPLICATE KEY UPDATE `email`=VALUES(`email`),`name`=VALUES(`name`),`region`=VALUES(`region`),`vip`=VALUES(`vip`);
+  wrote out/load/customers.sqlite.sql (3 lines)
+  | INSERT OR REPLACE INTO "customers" ("id","email","name","region","vip") VALUES (1,'ann@example.com','Ann Lee','EU',true),(2,'bo@example.com','Bo O''Brien','US',false);
+  | INSERT OR REPLACE INTO "customers" ("id","email","name","region","vip") VALUES (3,'cy@example.com','Cy Ng',NULL,true),(4,'di@example.com','Di Park','APAC',false);
+  | INSERT OR REPLACE INTO "customers" ("id","email","name","region","vip") VALUES (5,'ed@example.com','Ed Ruiz','US',true);
+> load products.csv products sku 3
+  wrote out/load/products.postgres.sql (2 lines)
+  | INSERT INTO "products" ("sku","title","brand","price","weight","active") VALUES ('L-100','Desk lamp','Luxo',49.9,1.25,true),('L-200','Floor lamp','Luxo',120.0,4.5,true),('C-1','Cable',NULL,3.5,0.05,false) ON CONFLICT ("sku") DO UPDATE SET "title"=EXCLUDED."title","brand"=EXCLUDED."brand","price"=EXCLUDED."price","weight"=EXCLUDED."weight","active"=EXCLUDED."active" RETURNING "sku";
+  | INSERT INTO "products" ("sku","title","brand","price","weight","active") VALUES ('M-7','Monitor arm','Ergo',89,2.0,true) ON CONFLICT ("sku") DO UPDATE SET "title"=EXCLUDED."title","brand"=EXCLUDED."brand","price"=EXCLUDED."price","weight"=EXCLUDED."weight","active"=EXCLUDED."active" RETURNING "sku";
+  wrote out/load/products.mysql.sql (2 lines)
+  | INSERT INTO `products` (`sku`,`title`,`brand`,`price`,`weight`,`active`) VALUES ('L-100','Desk lamp','Luxo',49.9,1.25,true),('L-200','Floor lamp','Luxo',120.0,4.5,true),('C-1','Cable',NULL,3.5,0.05,false) ON DUPLICATE KEY UPDATE `title`=VALUES(`title`),`brand`=VALUES(`brand`),`price`=VALUES(`price`),`weight`=VALUES(`weight`),`active`=VALUES(`active`);
+  | INSERT INTO `products` (`sku`,`title`,`brand`,`price`,`weight`,`active`) VALUES ('M-7','Monitor arm','Ergo',89,2.0,true) ON DUPLICATE KEY UPDATE `title`=VALUES(`title`),`brand`=VALUES(`brand`),`price`=VALUES(`price`),`weight`=VALUES(`weight`),`active`=VALUES(`active`);
+  wrote out/load/products.sqlite.sql (2 lines)
+  | INSERT OR REPLACE INTO "products" ("sku","title","brand","price","weight","active") VALUES ('L-100','Desk lamp','Luxo',49.9,1.25,true),('L-200','Floor lamp','Luxo',120.0,4.5,true),('C-1','Cable',NULL,3.5,0.05,false);
+  | INSERT OR REPLACE INTO "products" ("sku","title","brand","price","weight","active") VALUES ('M-7','Monitor arm','Ergo',89,2.0,true);
