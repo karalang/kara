@@ -831,12 +831,10 @@ fn fix_of(edit: &crate::resolver::TextEdit) -> SourceFix {
 /// interpreter, returning a [`PlaygroundResult`] envelope suitable for
 /// rendering in a browser playground.
 ///
-/// Posture mirrors `run_program_full` for the post-resolve phases (typecheck
-/// / effect / ownership errors are collected but the interpreter still runs —
-/// the tree-walk interpreter is dynamically typed and does not enforce
-/// effects or ownership). Parse and resolve errors are hard stops: the
-/// downstream phases would surface noise rooted in unresolved names, so we
-/// return early with just the parse / resolve diagnostics.
+/// Every phase's diagnostics are collected, and the program runs on the MIR
+/// interpreter only when there are none. Parse and resolve errors are hard
+/// stops: the downstream phases would surface noise rooted in unresolved
+/// names, so we return early with just the parse / resolve diagnostics.
 pub fn run_playground(source: &str) -> PlaygroundResult {
     let (mut diagnostics, artifacts) = run_static_checks(source);
     let Some((program, typed)) = artifacts else {
@@ -860,7 +858,7 @@ pub fn run_playground(source: &str) -> PlaygroundResult {
         let none = crate::token::Span::default();
         match crate::mir::lower::run_source(source) {
             Ok(r) => {
-                stdout = r.output.lines().map(str::to_string).collect();
+                stdout = r.output.split_inclusive('\n').map(str::to_string).collect();
                 match &r.outcome {
                     crate::mir::interp::Outcome::Returned(_) => {}
                     crate::mir::interp::Outcome::Exited(code) => {
@@ -1566,12 +1564,10 @@ mod playground_tests {
     }
 
     #[test]
-    fn run_playground_ok_false_when_typecheck_error_even_if_stdout_present() {
-        // A program with a type error still gets executed (the tree-walk
-        // interpreter is dynamically typed), so stdout is captured — but
-        // `ok` must be false so the playground UI flags the run as not
-        // clean. Specifically pins that the `pre_interp_diag_count`
-        // bookkeeping flows into `ok` correctly.
+    fn run_playground_ok_false_and_no_run_on_a_typecheck_error() {
+        // The MIR interpreter refuses a program its checks reject, so a
+        // program with a type error does not run (the legacy tree-walk
+        // interpreter, dynamically typed, ran it anyway) and `ok` is false.
         let result =
             run_playground("fn main() { let x: i32 = \"not an int\"; println(\"ran anyway\"); }");
         assert!(
@@ -1579,7 +1575,7 @@ mod playground_tests {
             "expected ok=false; diagnostics: {:?}",
             result.diagnostics
         );
-        assert_eq!(result.stdout, vec!["ran anyway\n".to_string()]);
+        assert!(result.stdout.is_empty(), "{:?}", result.stdout);
         assert!(result.diagnostics.iter().any(|d| d.phase == "typecheck"));
     }
 
