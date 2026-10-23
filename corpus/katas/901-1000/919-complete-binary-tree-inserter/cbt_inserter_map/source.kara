@@ -1,0 +1,181 @@
+// LeetCode #919: Complete Binary Tree Inserter -- the nodes in a map by
+// their number.
+//
+// Number the nodes from 1 in level order; node k's parent is node k / 2,
+// and k is a left child when it is even. Keep a map from number to node
+// and the count. insert numbers the new node count + 1, finds its parent
+// in the map, and records it. O(n) to build, O(1) expected an insert.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+struct CBTInserter {
+    root: TreeNode,
+    by_number: Map[i64, TreeNode],
+    count: i64,
+}
+
+fn number_all(node: TreeNode, k: i64, by_number: mut ref Map[i64, TreeNode]) {
+    by_number.insert(k, node);
+    if let Some(l) = node.left {
+        number_all(l, 2 * k, mut by_number);
+    }
+    if let Some(r) = node.right {
+        number_all(r, 2 * k + 1, mut by_number);
+    }
+}
+
+impl CBTInserter {
+    fn new(root: TreeNode) -> CBTInserter {
+        let mut by_number: Map[i64, TreeNode] = Map.new();
+        number_all(root, 1, mut by_number);
+        let count = by_number.len();
+        CBTInserter { root: root, by_number: by_number, count: count }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        self.count += 1;
+        let k = self.count;
+        let parent = self.by_number.get(k / 2).unwrap().clone();
+        let child = TreeNode { val: val, left: None, right: None };
+        if k % 2 == 0 {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+        }
+        self.by_number.insert(k, child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> TreeNode {
+        self.root
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A complete tree holding `vals` in level order.
+fn complete_tree(vals: Vec[i64]) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for v in vals.iter() {
+        nodes.push(TreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    nodes[0].clone()
+}
+
+// The tree's values in level order, and whether it is complete: no node
+// after the first missing child has a child.
+fn level_order(root: TreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+fn show(vals: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..vals.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{vals[i]}");
+    }
+    f"[{s}]"
+}
+
+// Build from `start`, insert each of `inserts`, print what insert returns
+// and the final tree.
+fn run(start: Vec[i64], inserts: Vec[i64]) {
+    let mut c = CBTInserter.new(complete_tree(start));
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let (vals, complete) = level_order(c.get_root());
+    println(f"{show(start)} + {show(inserts)}: parents {show(parents)}, tree {show(vals)}, complete {complete}");
+}
+
+fn fold(check: i64, vals: Vec[i64]) -> i64 {
+    let mut h = check;
+    for v in vals.iter() {
+        h = (h * 1000003 + *v) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    run(vec![1, 2], vec![3, 4]);
+    run(vec![1], vec![2, 3, 4, 5, 6, 7, 8]);
+    run(vec![1, 2, 3], vec![4]);
+    run(vec![1, 2, 3, 4, 5, 6], vec![7, 8]);
+    run(vec![1, 2, 3, 4, 5, 6, 7], vec![8, 9, 10]);
+    run(vec![0, 0, 0], vec![0, 5000]);
+    // random: a complete tree of 1 to 1000 nodes, then up to 1000 inserts
+    let mut seed = 919;
+    let mut sum = 0;
+    let mut check = 0;
+    let mut all_complete = true;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let mut start: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            start.push(next_random(mut seed) % 5001);
+        }
+        let mut c = CBTInserter.new(complete_tree(start));
+        let k = next_random(mut seed) % 1001;
+        for _ in 0..k {
+            let p = c.insert(next_random(mut seed) % 5001);
+            sum += p;
+            check = (check * 1000003 + p) % 1000000007;
+        }
+        let (vals, complete) = level_order(c.get_root());
+        all_complete = all_complete and complete and vals.len() == n + k;
+        check = fold(check, vals);
+    }
+    println(f"200 trees: parents summing to {sum}, checksum {check}, all complete {all_complete}");
+    // LeetCode's largest: 1000 nodes, then 10^4 inserts
+    let mut start: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        start.push(i % 5001);
+    }
+    let mut c = CBTInserter.new(complete_tree(start));
+    let mut sum = 0;
+    for i in 0..10000 {
+        sum += c.insert((7 * i) % 5001);
+    }
+    let (vals, complete) = level_order(c.get_root());
+    println(f"1000 nodes and 10000 inserts: parents summing to {sum}, {vals.len()} nodes, checksum {fold(0, vals)}, complete {complete}");
+}

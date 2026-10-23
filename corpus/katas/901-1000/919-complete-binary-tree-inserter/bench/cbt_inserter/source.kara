@@ -1,0 +1,104 @@
+// LeetCode #919: Complete Binary Tree Inserter -- bench: a queue of the
+// nodes with a free child slot.
+//
+// In a complete tree the next node goes under the first node, in level
+// order, that lacks a child. Walk the tree once in level order and queue
+// every node missing a child; they are exactly the nodes of the last two
+// levels that can still take one, in order. insert takes the front node,
+// gives it a left child or else a right child (and then drops it from
+// the queue), and queues the new node. O(n) to build, O(1) an insert.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+struct CBTInserter {
+    root: TreeNode,
+    open: VecDeque[TreeNode],
+}
+
+impl CBTInserter {
+    fn new(root: TreeNode) -> CBTInserter {
+        let mut open: VecDeque[TreeNode] = VecDeque.new();
+        let mut walk: VecDeque[TreeNode] = VecDeque.new();
+        walk.push_back(root);
+        while let Some(node) = walk.pop_front() {
+            if let Some(l) = node.left {
+                walk.push_back(l);
+            }
+            if let Some(r) = node.right {
+                walk.push_back(r);
+            }
+            if node.left.is_none() or node.right.is_none() {
+                open.push_back(node);
+            }
+        }
+        CBTInserter { root: root, open: open }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        let child = TreeNode { val: val, left: None, right: None };
+        let parent = self.open.front().unwrap().clone();
+        if parent.left.is_none() {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+            self.open.pop_front();
+        }
+        self.open.push_back(child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> TreeNode {
+        self.root
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A complete tree holding `vals` in level order.
+fn complete_tree(vals: Vec[i64]) -> TreeNode {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for v in vals.iter() {
+        nodes.push(TreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    nodes[0].clone()
+}
+
+fn main() {
+    let rounds = 200;
+    let n = 1000;
+    let m = 50000;
+    let mut seed = 919;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        // a fresh tree of n values, then m inserts into it
+        let mut vals: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            vals.push(next_random(mut seed) % 100000);
+        }
+        let mut inserter = CBTInserter.new(complete_tree(vals));
+        let mut parents = 0;
+        for _ in 0..m {
+            parents += inserter.insert(next_random(mut seed) % 100000);
+        }
+        let root = inserter.get_root();
+        total += parents;
+        check = (check * 1000003 + parents + root.val) % 1000000007;
+    }
+    println(f"{rounds} rounds of {m} inserts into trees of {n}: parents summing to {total}, checksum {check}");
+}

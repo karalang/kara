@@ -1,0 +1,8 @@
+[1,2] + [3,4]: parents [1,2], tree [1,2,3,4], complete true
+[1] + [2,3,4,5,6,7,8]: parents [1,1,2,2,3,3,4], tree [1,2,3,4,5,6,7,8], complete true
+[1,2,3] + [4]: parents [2], tree [1,2,3,4], complete true
+[1,2,3,4,5,6] + [7,8]: parents [3,4], tree [1,2,3,4,5,6,7,8], complete true
+[1,2,3,4,5,6,7] + [8,9,10]: parents [4,4,5], tree [1,2,3,4,5,6,7,8,9,10], complete true
+[0,0,0] + [0,5000]: parents [0,0], tree [0,0,0,0,5000], complete true
+200 trees: parents summing to 250912990, checksum 26346786, all complete true
+1000 nodes and 10000 inserts: parents summing to 22503024, 11000 nodes, checksum 276781522, complete true

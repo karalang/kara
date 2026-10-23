@@ -1,0 +1,787 @@
+// LeetCode #919: Complete Binary Tree Inserter -- differential test of
+// the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: a complete binary tree is a binary tree in which every
+// level, except possibly the last, is completely filled, and all nodes
+// are as far left as possible. Design an algorithm to insert a new node
+// into a complete binary tree keeping it complete after the insertion.
+// CBTInserter(root) initializes the structure with the root of the
+// complete binary tree; insert(v) inserts a TreeNode into the tree with
+// value v so that the tree remains complete, and returns the value of
+// the parent of the inserted TreeNode; get_root() returns the root node
+// of the tree.
+
+// ---- the ★ arm: a queue of the nodes with a free child slot ---------------
+shared struct StarTreeNode {
+    val: i64,
+    mut left: Option[StarTreeNode],
+    mut right: Option[StarTreeNode],
+}
+
+struct StarCBTInserter {
+    root: StarTreeNode,
+    open: VecDeque[StarTreeNode],
+}
+
+impl StarCBTInserter {
+    fn new(root: StarTreeNode) -> StarCBTInserter {
+        let mut open: VecDeque[StarTreeNode] = VecDeque.new();
+        let mut walk: VecDeque[StarTreeNode] = VecDeque.new();
+        walk.push_back(root);
+        while let Some(node) = walk.pop_front() {
+            if let Some(l) = node.left {
+                walk.push_back(l);
+            }
+            if let Some(r) = node.right {
+                walk.push_back(r);
+            }
+            if node.left.is_none() or node.right.is_none() {
+                open.push_back(node);
+            }
+        }
+        StarCBTInserter { root: root, open: open }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        let child = StarTreeNode { val: val, left: None, right: None };
+        let parent = self.open.front().unwrap().clone();
+        if parent.left.is_none() {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+            self.open.pop_front();
+        }
+        self.open.push_back(child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> StarTreeNode {
+        self.root
+    }
+}
+
+// ---- the array arm: every node in a vector, in level order ----------------
+shared struct ArrayTreeNode {
+    val: i64,
+    mut left: Option[ArrayTreeNode],
+    mut right: Option[ArrayTreeNode],
+}
+
+struct ArrayCBTInserter {
+    root: ArrayTreeNode,
+    nodes: Vec[ArrayTreeNode],
+}
+
+impl ArrayCBTInserter {
+    fn new(root: ArrayTreeNode) -> ArrayCBTInserter {
+        let mut nodes: Vec[ArrayTreeNode] = Vec.new();
+        nodes.push(root);
+        let mut i = 0;
+        while i < nodes.len() {
+            let node = nodes[i].clone();
+            if let Some(l) = node.left {
+                nodes.push(l);
+            }
+            if let Some(r) = node.right {
+                nodes.push(r);
+            }
+            i += 1;
+        }
+        ArrayCBTInserter { root: root, nodes: nodes }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        let child = ArrayTreeNode { val: val, left: None, right: None };
+        let i = self.nodes.len();
+        let parent = self.nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+        }
+        self.nodes.push(child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> ArrayTreeNode {
+        self.root
+    }
+}
+
+// ---- the bits arm: the path read from the new node's number ---------------
+shared struct BitsTreeNode {
+    val: i64,
+    mut left: Option[BitsTreeNode],
+    mut right: Option[BitsTreeNode],
+}
+
+struct BitsCBTInserter {
+    root: BitsTreeNode,
+    count: i64,
+}
+
+fn bits_size(node: Option[BitsTreeNode]) -> i64 {
+    match node {
+        Some(n) => 1 + bits_size(n.left) + bits_size(n.right),
+        None => 0,
+    }
+}
+
+impl BitsCBTInserter {
+    fn new(root: BitsTreeNode) -> BitsCBTInserter {
+        BitsCBTInserter { root: root, count: bits_size(Some(root)) }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        self.count += 1;
+        let number = self.count;
+        // the highest digit below the leading 1
+        let mut bit = 1;
+        while bit * 2 <= number {
+            bit *= 2;
+        }
+        bit /= 2;
+        let mut node = self.root;
+        while bit > 1 {
+            if number & bit == 0 {
+                node = node.left.unwrap();
+            } else {
+                node = node.right.unwrap();
+            }
+            bit /= 2;
+        }
+        let child = BitsTreeNode { val: val, left: None, right: None };
+        if number & 1 == 0 {
+            node.left = Some(child);
+        } else {
+            node.right = Some(child);
+        }
+        node.val
+    }
+
+    fn get_root(ref self) -> BitsTreeNode {
+        self.root
+    }
+}
+
+// ---- the levels arm: the last full level and the one being filled ---------
+shared struct LevelsTreeNode {
+    val: i64,
+    mut left: Option[LevelsTreeNode],
+    mut right: Option[LevelsTreeNode],
+}
+
+struct LevelsCBTInserter {
+    root: LevelsTreeNode,
+    full: Vec[LevelsTreeNode],
+    filling: Vec[LevelsTreeNode],
+}
+
+impl LevelsCBTInserter {
+    fn new(root: LevelsTreeNode) -> LevelsCBTInserter {
+        let mut full: Vec[LevelsTreeNode] = Vec.new();
+        full.push(root);
+        loop {
+            let mut below: Vec[LevelsTreeNode] = Vec.new();
+            for node in full.iter() {
+                if let Some(l) = node.left {
+                    below.push(l);
+                }
+                if let Some(r) = node.right {
+                    below.push(r);
+                }
+            }
+            if below.len() < 2 * full.len() {
+                return LevelsCBTInserter { root: root, full: full, filling: below };
+            }
+            full = below;
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        if self.filling.len() == 2 * self.full.len() {
+            self.full = self.filling.clone();
+            self.filling = Vec.new();
+        }
+        let k = self.filling.len();
+        let parent = self.full[k / 2].clone();
+        let child = LevelsTreeNode { val: val, left: None, right: None };
+        if k % 2 == 0 {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+        }
+        self.filling.push(child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> LevelsTreeNode {
+        self.root
+    }
+}
+
+// ---- the map arm: the nodes in a map by their number ----------------------
+shared struct MapTreeNode {
+    val: i64,
+    mut left: Option[MapTreeNode],
+    mut right: Option[MapTreeNode],
+}
+
+struct MapCBTInserter {
+    root: MapTreeNode,
+    by_number: Map[i64, MapTreeNode],
+    count: i64,
+}
+
+fn map_number_all(node: MapTreeNode, k: i64, by_number: mut ref Map[i64, MapTreeNode]) {
+    by_number.insert(k, node);
+    if let Some(l) = node.left {
+        map_number_all(l, 2 * k, mut by_number);
+    }
+    if let Some(r) = node.right {
+        map_number_all(r, 2 * k + 1, mut by_number);
+    }
+}
+
+impl MapCBTInserter {
+    fn new(root: MapTreeNode) -> MapCBTInserter {
+        let mut by_number: Map[i64, MapTreeNode] = Map.new();
+        map_number_all(root, 1, mut by_number);
+        let count = by_number.len();
+        MapCBTInserter { root: root, by_number: by_number, count: count }
+    }
+
+    fn insert(mut ref self, val: i64) -> i64 {
+        self.count += 1;
+        let k = self.count;
+        let parent = self.by_number.get(k / 2).unwrap().clone();
+        let child = MapTreeNode { val: val, left: None, right: None };
+        if k % 2 == 0 {
+            parent.left = Some(child);
+        } else {
+            parent.right = Some(child);
+        }
+        self.by_number.insert(k, child);
+        parent.val
+    }
+
+    fn get_root(ref self) -> MapTreeNode {
+        self.root
+    }
+}
+
+struct Run {
+    parents: Vec[i64],
+    first: Vec[i64],
+    tree: Vec[i64],
+    complete: bool,
+}
+
+// the star arm run on `start`, then `inserts`
+fn star_run(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let mut nodes: Vec[StarTreeNode] = Vec.new();
+    for v in start.iter() {
+        nodes.push(StarTreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    let mut c = StarCBTInserter.new(nodes[0].clone());
+    let first = star_level_order(c.get_root());
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let last = star_level_order(c.get_root());
+    Run { parents: parents, first: first.0, tree: last.0, complete: last.1 }
+}
+
+fn star_level_order(root: StarTreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[StarTreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+// the array arm run on `start`, then `inserts`
+fn array_run(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let mut nodes: Vec[ArrayTreeNode] = Vec.new();
+    for v in start.iter() {
+        nodes.push(ArrayTreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    let mut c = ArrayCBTInserter.new(nodes[0].clone());
+    let first = array_level_order(c.get_root());
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let last = array_level_order(c.get_root());
+    Run { parents: parents, first: first.0, tree: last.0, complete: last.1 }
+}
+
+fn array_level_order(root: ArrayTreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[ArrayTreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+// the bits arm run on `start`, then `inserts`
+fn bits_run(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let mut nodes: Vec[BitsTreeNode] = Vec.new();
+    for v in start.iter() {
+        nodes.push(BitsTreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    let mut c = BitsCBTInserter.new(nodes[0].clone());
+    let first = bits_level_order(c.get_root());
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let last = bits_level_order(c.get_root());
+    Run { parents: parents, first: first.0, tree: last.0, complete: last.1 }
+}
+
+fn bits_level_order(root: BitsTreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[BitsTreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+// the levels arm run on `start`, then `inserts`
+fn levels_run(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let mut nodes: Vec[LevelsTreeNode] = Vec.new();
+    for v in start.iter() {
+        nodes.push(LevelsTreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    let mut c = LevelsCBTInserter.new(nodes[0].clone());
+    let first = levels_level_order(c.get_root());
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let last = levels_level_order(c.get_root());
+    Run { parents: parents, first: first.0, tree: last.0, complete: last.1 }
+}
+
+fn levels_level_order(root: LevelsTreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[LevelsTreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+// the map arm run on `start`, then `inserts`
+fn map_run(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let mut nodes: Vec[MapTreeNode] = Vec.new();
+    for v in start.iter() {
+        nodes.push(MapTreeNode { val: *v, left: None, right: None });
+    }
+    for i in 1..nodes.len() {
+        let parent = nodes[(i - 1) / 2].clone();
+        if i % 2 == 1 {
+            parent.left = Some(nodes[i].clone());
+        } else {
+            parent.right = Some(nodes[i].clone());
+        }
+    }
+    let mut c = MapCBTInserter.new(nodes[0].clone());
+    let first = map_level_order(c.get_root());
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(c.insert(*v));
+    }
+    let last = map_level_order(c.get_root());
+    Run { parents: parents, first: first.0, tree: last.0, complete: last.1 }
+}
+
+fn map_level_order(root: MapTreeNode) -> (Vec[i64], bool) {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[Option[MapTreeNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    let mut complete = true;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    complete = false;
+                }
+                vals.push(node.val);
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    (vals, complete)
+}
+
+fn arm(x: i64, start: Vec[i64], inserts: Vec[i64]) -> Run {
+    if x == 0 {
+        star_run(start, inserts)
+    } else if x == 1 {
+        array_run(start, inserts)
+    } else if x == 2 {
+        bits_run(start, inserts)
+    } else if x == 3 {
+        levels_run(start, inserts)
+    } else {
+        map_run(start, inserts)
+    }
+}
+
+fn same(a: Run, b: Run) -> bool {
+    a.parents == b.parents and a.first == b.first and a.tree == b.tree and a.complete == b.complete
+}
+
+// ---- the statement read literally -----------------------------------------
+
+shared struct LitNode {
+    val: i64,
+    mut left: Option[LitNode],
+    mut right: Option[LitNode],
+}
+
+// complete: every level filled except perhaps the last, and the last
+// filled from the left; in level order, no node after the first gap
+fn lit_complete(root: LitNode) -> bool {
+    let mut queue: VecDeque[Option[LitNode]] = VecDeque.new();
+    queue.push_back(Some(root));
+    let mut gap = false;
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                if gap {
+                    return false;
+                }
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => {
+                gap = true;
+            }
+        }
+    }
+    true
+}
+
+fn lit_nodes(node: LitNode, out: mut ref Vec[LitNode]) {
+    out.push(node);
+    if let Some(l) = node.left {
+        lit_nodes(l, mut out);
+    }
+    if let Some(r) = node.right {
+        lit_nodes(r, mut out);
+    }
+}
+
+// insert: try the new node in every free child slot of every node and
+// keep the one place where the tree stays complete; the answer is the
+// value of the node it went under (-1 if no place, or more than one)
+fn lit_insert(root: LitNode, val: i64) -> i64 {
+    let mut all: Vec[LitNode] = Vec.new();
+    lit_nodes(root, mut all);
+    let mut places = 0;
+    let mut answer = -1;
+    let mut at = -1;
+    let mut on_left = false;
+    for i in 0..all.len() {
+        let node = all[i].clone();
+        if node.left.is_none() {
+            node.left = Some(LitNode { val: val, left: None, right: None });
+            if lit_complete(root) {
+                places += 1;
+                answer = node.val;
+                at = i;
+                on_left = true;
+            }
+            node.left = None;
+        }
+        if node.right.is_none() {
+            node.right = Some(LitNode { val: val, left: None, right: None });
+            if lit_complete(root) {
+                places += 1;
+                answer = node.val;
+                at = i;
+                on_left = false;
+            }
+            node.right = None;
+        }
+    }
+    if places != 1 {
+        return -1;
+    }
+    let node = all[at].clone();
+    if on_left {
+        node.left = Some(LitNode { val: val, left: None, right: None });
+    } else {
+        node.right = Some(LitNode { val: val, left: None, right: None });
+    }
+    answer
+}
+
+fn lit_level_order(root: LitNode) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[LitNode] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(node) = queue.pop_front() {
+        vals.push(node.val);
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+    }
+    vals
+}
+
+// The statement on `start`: a complete tree built by inserting the values
+// one at a time into a single node, then `inserts` inserted the same way.
+fn literal(start: Vec[i64], inserts: Vec[i64]) -> Run {
+    let root = LitNode { val: start[0], left: None, right: None };
+    for i in 1..start.len() {
+        lit_insert(root, start[i]);
+    }
+    let first = lit_level_order(root);
+    let mut parents: Vec[i64] = Vec.new();
+    for v in inserts.iter() {
+        parents.push(lit_insert(root, *v));
+    }
+    Run { parents: parents, first: first, tree: lit_level_order(root), complete: lit_complete(root) }
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn joined(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    for v in b.iter() {
+        out.push(*v);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, start: Vec[i64], inserts: Vec[i64], small: bool) {
+    let n = start.len();
+    let k = inserts.len();
+    let all = joined(start, inserts);
+    let mut want = Run { parents: Vec.new(), first: Vec.new(), tree: Vec.new(), complete: true };
+    if small {
+        want = literal(start, inserts);
+    }
+    let mut runs: Vec[Run] = Vec.new();
+    for x in 0..5 {
+        runs.push(arm(x, start, inserts));
+    }
+    // P5: the first m inserts made part of the starting tree
+    let m = next_random(mut seed) % (k + 1);
+    let mut head: Vec[i64] = Vec.new();
+    let mut tail: Vec[i64] = Vec.new();
+    for j in 0..k {
+        if j < m {
+            head.push(inserts[j]);
+        } else {
+            tail.push(inserts[j]);
+        }
+    }
+    let longer = joined(start, head);
+    for x in 0..5 {
+        let got = ref runs[x];
+        // P1: the statement's parents and tree
+        if small {
+            check(mut t, 1, same(got, want));
+        }
+        // P2: get_root before any insert is the tree given, and after them
+        // its level order is the start followed by the inserts
+        check(mut t, 2, got.first == start and got.tree == all);
+        // P3: the tree stays complete and grows by one node an insert
+        check(mut t, 3, got.complete and got.tree.len() == n + k and got.parents.len() == k);
+        // P4: the j-th insert lands under node (n + j - 1) / 2 in level order
+        let mut under = true;
+        for j in 0..k {
+            if got.parents[j] != all[(n + j - 1) / 2] {
+                under = false;
+            }
+        }
+        check(mut t, 4, under);
+        // P5: starting from the tree with the first m inserts already in
+        // gives the same parents for the rest
+        let later = arm(x, longer, tail);
+        let mut rest: Vec[i64] = Vec.new();
+        for j in m..k {
+            rest.push(got.parents[j]);
+        }
+        check(mut t, 5, later.parents == rest and later.tree == all);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and same(runs[y], got) {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 919;
+    let mut cases = 0;
+    let mut nodes = 0;
+    let mut sum = 0;
+    // a tree of 1 to 12 nodes and 0 to 8 inserts of values below 4, checked
+    // against the statement; then 1 to 200 nodes and up to 200 inserts of
+    // values up to 5000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 200 };
+        let k = if small { next_random(mut seed) % 9 } else { next_random(mut seed) % 201 };
+        let top = if small { 4 } else { 5001 };
+        let mut start: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            start.push(next_random(mut seed) % top);
+        }
+        let mut inserts: Vec[i64] = Vec.new();
+        for _ in 0..k {
+            inserts.push(next_random(mut seed) % top);
+        }
+        cases += 1;
+        nodes += n + k;
+        for p in star_run(start, inserts).parents.iter() {
+            sum += *p;
+        }
+        properties(mut t, mut seed, start, inserts, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {nodes} nodes, parents summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
