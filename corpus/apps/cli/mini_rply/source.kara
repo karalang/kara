@@ -1,0 +1,2765 @@
+// mini_rply: a port of rply 0.7.8 (BSD-3; Alex Gaynor and contributors),
+// the LALR(1) parser generator for Python and RPython: LexerGenerator and
+// its lexer stream, ParserGenerator's grammar checks and table builder
+// (LR(0) items, DeRemer-Pennello lookaheads, precedence and conflict
+// resolution) and LRParser. The grammars come from a small line format in
+// data/grammars/, and the programs on top are a calculator, a JSON
+// formatter and SELECT over CSV tables.
+//
+// rply hands each lexer pattern to Python's re and calls match() at the
+// current position. The port compiles the patterns the grammars use into
+// a small backtracking program that tries alternatives in the same order
+// as re, so the first rule that matches and the span it takes are the
+// same.
+
+// ------------------------------------------------------------ regex
+
+const OP_CHAR: i64 = 0;
+const OP_ANY: i64 = 1;
+const OP_CLASS: i64 = 2;
+const OP_SPLIT: i64 = 3;
+const OP_JMP: i64 = 4;
+const OP_MATCH: i64 = 5;
+const OP_WORDB: i64 = 6;
+const OP_NWORDB: i64 = 7;
+
+#[derive(Clone)]
+struct Inst {
+    op: i64,
+    c: char,
+    x: i64,
+    y: i64,
+}
+
+// A character class: inclusive ranges plus \d \w \s and their negations.
+#[derive(Clone)]
+struct CharClass {
+    negated: bool,
+    ranges: Vec[(char, char)],
+    named: Vec[char],
+}
+
+#[derive(Clone)]
+enum Re {
+    Char(char),
+    Any,
+    Class(CharClass),
+    WordB,
+    NotWordB,
+    Seq(Vec[Re]),
+    Alt(Vec[Re]),
+    Repeat(Vec[Re], i64, i64, bool),
+}
+
+struct Pattern {
+    prog: Vec[Inst],
+    classes: Vec[CharClass],
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+fn rp_peek(p: ref ReParser) -> Option[char] {
+    if p.pos < p.cs.len() as i64 { Some(p.cs[p.pos as usize]) } else { None }
+}
+
+fn rp_at(p: ref ReParser, c: char) -> bool {
+    match rp_peek(p) {
+        Some(x) => x == c,
+        None => false,
+    }
+}
+
+fn re_alt(p: mut ref ReParser) -> Re {
+    let mut alts: Vec[Re] = vec![re_seq(mut p)];
+    while rp_at(p, '|') {
+        p.pos += 1;
+        alts.push(re_seq(mut p));
+    }
+    if alts.len() == 1 { alts[0].clone() } else { Re.Alt(alts) }
+}
+
+fn re_seq(p: mut ref ReParser) -> Re {
+    let mut items: Vec[Re] = Vec.new();
+    loop {
+        match rp_peek(p) {
+            None => break,
+            Some(c) => {
+                if c == '|' or c == ')' {
+                    break;
+                }
+            }
+        }
+        let atom = re_atom(mut p);
+        items.push(re_quantified(mut p, atom));
+    }
+    Re.Seq(items)
+}
+
+fn read_int(p: mut ref ReParser) -> i64 {
+    let mut v: i64 = -1;
+    loop {
+        match rp_peek(p) {
+            Some(c) => {
+                if c >= '0' and c <= '9' {
+                    v = (if v < 0 { 0 } else { v }) * 10 + (c as i64 - 48);
+                    p.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    v
+}
+
+fn re_quantified(p: mut ref ReParser, atom: own Re) -> Re {
+    let mut lo: i64 = -1;
+    let mut hi: i64 = -1;
+    if rp_at(p, '*') {
+        lo = 0;
+        p.pos += 1;
+    } else if rp_at(p, '+') {
+        lo = 1;
+        p.pos += 1;
+    } else if rp_at(p, '?') {
+        lo = 0;
+        hi = 1;
+        p.pos += 1;
+    } else if rp_at(p, '{') {
+        let save = p.pos;
+        p.pos += 1;
+        let a = read_int(mut p);
+        if a >= 0 and rp_at(p, '}') {
+            lo = a;
+            hi = a;
+            p.pos += 1;
+        } else if a >= 0 and rp_at(p, ',') {
+            p.pos += 1;
+            let b = read_int(mut p);
+            if rp_at(p, '}') {
+                lo = a;
+                hi = b;
+                p.pos += 1;
+            } else {
+                p.pos = save;
+            }
+        } else {
+            p.pos = save;
+        }
+        if lo < 0 {
+            return atom;
+        }
+    } else {
+        return atom;
+    }
+    let mut greedy = true;
+    if rp_at(p, '?') {
+        greedy = false;
+        p.pos += 1;
+    }
+    Re.Repeat(vec![atom], lo, hi, greedy)
+}
+
+fn escape_char(c: char) -> char {
+    if c == 'n' { '\n' } else if c == 't' { '\t' } else if c == 'r' { '\r' } else if c == 'f' { '\u{c}' } else if c == 'v' { '\u{b}' } else { c }
+}
+
+fn re_atom(p: mut ref ReParser) -> Re {
+    let c = p.cs[p.pos as usize];
+    p.pos += 1;
+    if c == '.' {
+        return Re.Any;
+    }
+    if c == '(' {
+        if rp_at(p, '?') and p.pos + 1 < p.cs.len() as i64 and p.cs[(p.pos + 1) as usize] == ':' {
+            p.pos += 2;
+        }
+        let inner = re_alt(mut p);
+        if rp_at(p, ')') {
+            p.pos += 1;
+        }
+        return inner;
+    }
+    if c == '[' {
+        return Re.Class(re_class(mut p));
+    }
+    if c == '\\' {
+        let e = p.cs[p.pos as usize];
+        p.pos += 1;
+        if e == 'd' or e == 'w' or e == 's' or e == 'D' or e == 'W' or e == 'S' {
+            return Re.Class(CharClass { negated: false, ranges: Vec.new(), named: vec![e] });
+        }
+        if e == 'b' {
+            return Re.WordB;
+        }
+        if e == 'B' {
+            return Re.NotWordB;
+        }
+        return Re.Char(escape_char(e));
+    }
+    Re.Char(c)
+}
+
+fn re_class(p: mut ref ReParser) -> CharClass {
+    let mut cls = CharClass { negated: false, ranges: Vec.new(), named: Vec.new() };
+    if rp_at(p, '^') {
+        cls.negated = true;
+        p.pos += 1;
+    }
+    let mut first = true;
+    loop {
+        let c = p.cs[p.pos as usize];
+        p.pos += 1;
+        if c == ']' and not first {
+            break;
+        }
+        first = false;
+        let mut lo = c;
+        if c == '\\' {
+            let e = p.cs[p.pos as usize];
+            p.pos += 1;
+            if e == 'd' or e == 'w' or e == 's' or e == 'D' or e == 'W' or e == 'S' {
+                cls.named.push(e);
+                continue;
+            }
+            lo = escape_char(e);
+        }
+        if rp_at(p, '-') and p.pos + 1 < p.cs.len() as i64 and p.cs[(p.pos + 1) as usize] != ']' {
+            p.pos += 1;
+            let mut hi = p.cs[p.pos as usize];
+            p.pos += 1;
+            if hi == '\\' {
+                hi = escape_char(p.cs[p.pos as usize]);
+                p.pos += 1;
+            }
+            cls.ranges.push((lo, hi));
+        } else {
+            cls.ranges.push((lo, lo));
+        }
+    }
+    cls
+}
+
+fn is_word(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_'
+}
+
+// str.isspace() over the code points Python's \s takes.
+fn is_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or o == 32 or (o >= 0x1c and o <= 0x1f) or o == 0x85 or o == 0xa0 or o == 0x1680 or (o >= 0x2000 and o <= 0x200a) or o == 0x2028 or o == 0x2029 or o == 0x202f or o == 0x205f or o == 0x3000
+}
+
+fn named_class(n: char, c: char) -> bool {
+    if n == 'd' {
+        c >= '0' and c <= '9'
+    } else if n == 'D' {
+        not (c >= '0' and c <= '9')
+    } else if n == 'w' {
+        is_word(c)
+    } else if n == 'W' {
+        not is_word(c)
+    } else if n == 's' {
+        is_space(c)
+    } else {
+        not is_space(c)
+    }
+}
+
+fn class_matches(cls: ref CharClass, c: char) -> bool {
+    let mut hit = false;
+    for r in cls.ranges.iter() {
+        if c >= r.0 and c <= r.1 {
+            hit = true;
+        }
+    }
+    for n in cls.named.iter() {
+        if named_class(*n, c) {
+            hit = true;
+        }
+    }
+    hit != cls.negated
+}
+
+fn emit(prog: mut ref Vec[Inst], op: i64, c: char, x: i64, y: i64) -> i64 {
+    prog.push(Inst { op, c, x, y });
+    prog.len() as i64 - 1
+}
+
+fn compile_re(re: ref Re, prog: mut ref Vec[Inst], classes: mut ref Vec[CharClass]) {
+    match re {
+        Re.Char(c) => {
+            emit(mut prog, OP_CHAR, *c, 0, 0);
+        }
+        Re.Any => {
+            emit(mut prog, OP_ANY, ' ', 0, 0);
+        }
+        Re.Class(cls) => {
+            classes.push(cls.clone());
+            emit(mut prog, OP_CLASS, ' ', classes.len() as i64 - 1, 0);
+        }
+        Re.WordB => {
+            emit(mut prog, OP_WORDB, ' ', 0, 0);
+        }
+        Re.NotWordB => {
+            emit(mut prog, OP_NWORDB, ' ', 0, 0);
+        }
+        Re.Seq(items) => {
+            for it in items.iter() {
+                compile_re(it, mut prog, mut classes);
+            }
+        }
+        Re.Alt(alts) => {
+            let mut jumps: Vec[i64] = Vec.new();
+            let n = alts.len() as i64;
+            let mut k: i64 = 0;
+            while k < n {
+                if k < n - 1 {
+                    let split = emit(mut prog, OP_SPLIT, ' ', 0, 0);
+                    prog[split as usize].x = prog.len() as i64;
+                    compile_re(alts[k as usize], mut prog, mut classes);
+                    jumps.push(emit(mut prog, OP_JMP, ' ', 0, 0));
+                    prog[split as usize].y = prog.len() as i64;
+                } else {
+                    compile_re(alts[k as usize], mut prog, mut classes);
+                }
+                k += 1;
+            }
+            let end = prog.len() as i64;
+            for j in jumps.iter() {
+                prog[*j as usize].x = end;
+            }
+        }
+        Re.Repeat(inner, lo, hi, greedy) => {
+            let body = inner[0].clone();
+            let mut k: i64 = 0;
+            while k < *lo {
+                compile_re(body, mut prog, mut classes);
+                k += 1;
+            }
+            if *hi < 0 {
+                // body*: L: split(B, E); B: body; jmp L; E:
+                let l = emit(mut prog, OP_SPLIT, ' ', 0, 0);
+                compile_re(body, mut prog, mut classes);
+                emit(mut prog, OP_JMP, ' ', l, 0);
+                let e = prog.len() as i64;
+                set_split(mut prog, l, l + 1, e, *greedy);
+            } else {
+                let mut opt: i64 = *lo;
+                while opt < *hi {
+                    let l = emit(mut prog, OP_SPLIT, ' ', 0, 0);
+                    compile_re(body, mut prog, mut classes);
+                    let e = prog.len() as i64;
+                    set_split(mut prog, l, l + 1, e, *greedy);
+                    opt += 1;
+                }
+            }
+        }
+    }
+}
+
+fn set_split(prog: mut ref Vec[Inst], at: i64, take: i64, skip: i64, greedy: bool) {
+    if greedy {
+        prog[at as usize].x = take;
+        prog[at as usize].y = skip;
+    } else {
+        prog[at as usize].x = skip;
+        prog[at as usize].y = take;
+    }
+}
+
+fn compile_pattern(src: ref String) -> Pattern {
+    let mut p = ReParser { cs: src.chars().collect(), pos: 0 };
+    let re = re_alt(mut p);
+    let mut prog: Vec[Inst] = Vec.new();
+    let mut classes: Vec[CharClass] = Vec.new();
+    compile_re(re, mut prog, mut classes);
+    emit(mut prog, OP_MATCH, ' ', 0, 0);
+    Pattern { prog, classes }
+}
+
+fn word_at(s: ref Vec[char], k: i64) -> bool {
+    k >= 0 and k < s.len() as i64 and is_word(s[k as usize])
+}
+
+// re.match(s, pos): the end of the first match the backtracking order
+// finds, or -1.
+fn match_at(pat: ref Pattern, s: ref Vec[char], start: i64) -> i64 {
+    let n = s.len() as i64;
+    let mut stack: Vec[(i64, i64)] = vec![(0, start)];
+    while stack.len() > 0 {
+        let mut (pc, pos) = stack.pop().unwrap();
+        loop {
+            let inst = pat.prog[pc as usize].clone();
+            let op = inst.op;
+            if op == OP_MATCH {
+                return pos;
+            }
+            if op == OP_CHAR {
+                if pos < n and s[pos as usize] == inst.c {
+                    pc += 1;
+                    pos += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_ANY {
+                if pos < n and s[pos as usize] != '\n' {
+                    pc += 1;
+                    pos += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_CLASS {
+                if pos < n and class_matches(pat.classes[inst.x as usize], s[pos as usize]) {
+                    pc += 1;
+                    pos += 1;
+                    continue;
+                }
+                break;
+            }
+            if op == OP_SPLIT {
+                stack.push((inst.y, pos));
+                pc = inst.x;
+                continue;
+            }
+            if op == OP_JMP {
+                pc = inst.x;
+                continue;
+            }
+            let boundary = word_at(s, pos - 1) != word_at(s, pos);
+            if (op == OP_WORDB) == boundary {
+                pc += 1;
+                continue;
+            }
+            break;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ tokens and the lexer
+
+#[derive(Clone)]
+struct SourcePos {
+    idx: i64,
+    lineno: i64,
+    colno: i64,
+}
+
+#[derive(Clone)]
+struct Token {
+    name: String,
+    value: String,
+    pos: Option[SourcePos],
+}
+
+struct Rule {
+    name: String,
+    pat: Pattern,
+}
+
+struct Lexer {
+    rules: Vec[Rule],
+    ignore: Vec[Rule],
+}
+
+// LexerStream: the column of an error is the column of the last token,
+// because skipping ignored text does not update it.
+struct LexStream {
+    s: Vec[char],
+    idx: i64,
+    lineno: i64,
+    colno: i64,
+}
+
+fn new_stream(text: ref String) -> LexStream {
+    LexStream { s: text.chars().collect(), idx: 0, lineno: 1, colno: 1 }
+}
+
+fn update_pos(st: mut ref LexStream, start: i64, end: i64) -> i64 {
+    st.idx = end;
+    let mut k = start;
+    while k < end {
+        if st.s[k as usize] == '\n' {
+            st.lineno += 1;
+        }
+        k += 1;
+    }
+    let mut last_nl: i64 = -1;
+    k = 0;
+    while k < start {
+        if st.s[k as usize] == '\n' {
+            last_nl = k;
+        }
+        k += 1;
+    }
+    if last_nl < 0 { start + 1 } else { start - last_nl }
+}
+
+fn chars_str(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut k = a;
+    while k < b {
+        out.push(cs[k as usize]);
+        k += 1;
+    }
+    out
+}
+
+// next(): Ok(None) at the end of the text, Err(position) for LexingError.
+fn next_token(lx: ref Lexer, st: mut ref LexStream) -> Result[Option[Token], SourcePos] {
+    loop {
+        if st.idx >= st.s.len() as i64 {
+            return Ok(None);
+        }
+        let mut skipped = false;
+        for r in lx.ignore.iter() {
+            let end = match_at(r.pat, st.s, st.idx);
+            if end >= 0 {
+                let start = st.idx;
+                update_pos(mut st, start, end);
+                skipped = true;
+                break;
+            }
+        }
+        if not skipped {
+            break;
+        }
+    }
+    for r in lx.rules.iter() {
+        let end = match_at(r.pat, st.s, st.idx);
+        if end >= 0 {
+            let lineno = st.lineno;
+            let start = st.idx;
+            st.colno = update_pos(mut st, start, end);
+            let value = chars_str(st.s, start, end);
+            return Ok(Some(Token { name: r.name.clone(), value, pos: Some(SourcePos { idx: start, lineno, colno: st.colno }) }));
+        }
+    }
+    Err(SourcePos { idx: st.idx, lineno: st.lineno, colno: st.colno })
+}
+
+// ------------------------------------------------------------ grammar
+
+#[derive(Clone)]
+struct Production {
+    number: i64,
+    name: String,
+    prod: Vec[String],
+    assoc: String,
+    level: i64,
+    unique_syms: Vec[String],
+    first_item: i64,
+}
+
+// An LR item: the production with "." inserted at lr_index.
+#[derive(Clone)]
+struct Item {
+    name: String,
+    prod: Vec[String],
+    number: i64,
+    lr_index: i64,
+    lr_after: Vec[i64],
+    lr_before: Option[String],
+    next: i64,
+    unique_syms: Vec[String],
+}
+
+struct Grammar {
+    productions: Vec[Production],
+    prod_names: Vec[(String, Vec[i64])],
+    terminals: Vec[(String, Vec[i64])],
+    nonterminals: Vec[(String, Vec[i64])],
+    precedence: Vec[(String, String, i64)],
+    first: Vec[(String, Vec[String])],
+    follow: Vec[(String, Vec[String])],
+    start: String,
+    items: Vec[Item],
+    lr0_added: Vec[i64],
+}
+
+fn find_key(entries: ref Vec[(String, Vec[i64])], key: ref String) -> i64 {
+    let mut k: i64 = 0;
+    for e in entries.iter() {
+        if e.0 == *key {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn find_skey(entries: ref Vec[(String, Vec[String])], key: ref String) -> i64 {
+    let mut k: i64 = 0;
+    for e in entries.iter() {
+        if e.0 == *key {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn is_terminal(g: ref Grammar, s: ref String) -> bool {
+    find_key(g.terminals, s) >= 0
+}
+
+fn is_nonterminal(g: ref Grammar, s: ref String) -> bool {
+    find_key(g.nonterminals, s) >= 0
+}
+
+fn get_prec(g: ref Grammar, term: ref String) -> (String, i64) {
+    for p in g.precedence.iter() {
+        if p.0 == *term {
+            return (p.1.clone(), p.2);
+        }
+    }
+    ("right".to_string(), 0)
+}
+
+fn has_prec(g: ref Grammar, term: ref String) -> bool {
+    for p in g.precedence.iter() {
+        if p.0 == *term {
+            return true;
+        }
+    }
+    false
+}
+
+fn new_grammar(tokens: ref Vec[String]) -> Grammar {
+    let mut terminals: Vec[(String, Vec[i64])] = Vec.new();
+    for t in tokens.iter() {
+        let k = find_key(terminals, t);
+        if k < 0 {
+            terminals.push((t.clone(), Vec.new()));
+        }
+    }
+    if find_key(terminals, "error".to_string()) < 0 {
+        terminals.push(("error".to_string(), Vec.new()));
+    }
+    let placeholder = Production { number: 0, name: String.new(), prod: Vec.new(), assoc: "right".to_string(), level: 0, unique_syms: Vec.new(), first_item: -1 };
+    Grammar {
+        productions: vec![placeholder],
+        prod_names: Vec.new(),
+        terminals,
+        nonterminals: Vec.new(),
+        precedence: Vec.new(),
+        first: Vec.new(),
+        follow: Vec.new(),
+        start: String.new(),
+        items: Vec.new(),
+        lr0_added: Vec.new(),
+    }
+}
+
+fn py_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn add_production(g: mut ref Grammar, name: ref String, syms: ref Vec[String], precedence: ref Option[String]) -> Result[(), String] {
+    if is_terminal(g, name) {
+        return Err(f"ParserGeneratorError: Illegal rule name {py_repr(name)}");
+    }
+    let (assoc, level) = match precedence.clone() {
+        None => {
+            let mut precname = String.new();
+            let mut k = syms.len() as i64 - 1;
+            while k >= 0 {
+                if is_terminal(g, syms[k as usize]) {
+                    precname = syms[k as usize].clone();
+                    break;
+                }
+                k -= 1;
+            }
+            get_prec(g, precname)
+        }
+        Some(p) => {
+            if not has_prec(g, p) {
+                return Err(f"ParserGeneratorError: Precedence {py_repr(p)} doesn't exist");
+            }
+            get_prec(g, p)
+        }
+    };
+    let pnumber = g.productions.len() as i64;
+    if find_key(g.nonterminals, name) < 0 {
+        g.nonterminals.push((name.clone(), Vec.new()));
+    }
+    for t in syms.iter() {
+        let k = find_key(g.terminals, t);
+        if k >= 0 {
+            g.terminals[k as usize].1.push(pnumber);
+        } else {
+            let j = find_key(g.nonterminals, t);
+            if j >= 0 {
+                g.nonterminals[j as usize].1.push(pnumber);
+            } else {
+                g.nonterminals.push((t.clone(), vec![pnumber]));
+            }
+        }
+    }
+    let mut unique: Vec[String] = Vec.new();
+    for s in syms.iter() {
+        if not unique.contains(s) {
+            unique.push(s.clone());
+        }
+    }
+    g.productions.push(Production { number: pnumber, name: name.clone(), prod: syms.clone(), assoc, level, unique_syms: unique, first_item: -1 });
+    let k = find_key(g.prod_names, name);
+    if k >= 0 {
+        g.prod_names[k as usize].1.push(pnumber);
+    } else {
+        g.prod_names.push((name.clone(), vec![pnumber]));
+    }
+    Ok(())
+}
+
+fn set_precedence(g: mut ref Grammar, term: ref String, assoc: ref String, level: i64) -> Result[(), String] {
+    if has_prec(g, term) {
+        return Err(f"ParserGeneratorError: Precedence already specified for {term}");
+    }
+    if *assoc != "left" and *assoc != "right" and *assoc != "nonassoc" {
+        return Err(f"ParserGeneratorError: Precedence must be one of left, right, nonassoc; not {assoc}");
+    }
+    g.precedence.push((term.clone(), assoc.clone(), level));
+    Ok(())
+}
+
+fn set_start(g: mut ref Grammar) {
+    let start = g.productions[1].name.clone();
+    g.productions[0] = Production { number: 0, name: "S'".to_string(), prod: vec![start.clone()], assoc: "right".to_string(), level: 0, unique_syms: vec![start.clone()], first_item: -1 };
+    let k = find_key(g.nonterminals, start);
+    g.nonterminals[k as usize].1.push(0);
+    g.start = start;
+}
+
+fn unused_terminals(g: ref Grammar) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in g.terminals.iter() {
+        if t.1.len() == 0 and t.0 != "error" {
+            out.push(t.0.clone());
+        }
+    }
+    out
+}
+
+fn unused_productions(g: ref Grammar) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in g.nonterminals.iter() {
+        if t.1.len() == 0 {
+            out.push(t.0.clone());
+        }
+    }
+    out
+}
+
+fn prods_of(g: ref Grammar, sym: ref String) -> Vec[i64] {
+    let k = find_key(g.prod_names, sym);
+    if k >= 0 { g.prod_names[k as usize].1.clone() } else { Vec.new() }
+}
+
+fn build_lritems(g: mut ref Grammar) {
+    let mut n: i64 = 0;
+    while n < g.productions.len() as i64 {
+        let p = g.productions[n as usize].clone();
+        let len = p.prod.len() as i64;
+        g.productions[n as usize].first_item = g.items.len() as i64;
+        let mut i: i64 = 0;
+        while i <= len {
+            let mut prod: Vec[String] = Vec.new();
+            let mut k: i64 = 0;
+            while k < len {
+                if k == i {
+                    prod.push(".".to_string());
+                }
+                prod.push(p.prod[k as usize].clone());
+                k += 1;
+            }
+            if i == len {
+                prod.push(".".to_string());
+            }
+            // p.prod[i - 1], where i == 0 reads the last symbol
+            let before = if len == 0 { None } else if i == 0 { Some(p.prod[(len - 1) as usize].clone()) } else { Some(p.prod[(i - 1) as usize].clone()) };
+            let after = if i < len { prods_of(g, p.prod[i as usize]) } else { Vec.new() };
+            let id = g.items.len() as i64;
+            let next = if i < len { id + 1 } else { -1 };
+            g.items.push(Item { name: p.name.clone(), prod, number: n, lr_index: i, lr_after: after, lr_before: before, next, unique_syms: p.unique_syms.clone() });
+            i += 1;
+        }
+        n += 1;
+    }
+    g.lr0_added = Vec.new();
+    for _p in g.productions.iter() {
+        g.lr0_added.push(0);
+    }
+}
+
+fn first_of_seq(g: ref Grammar, beta: ref Vec[String]) -> Result[Vec[String], String] {
+    let mut result: Vec[String] = Vec.new();
+    let mut all_empty = true;
+    for x in beta.iter() {
+        let k = find_skey(g.first, x);
+        if k < 0 {
+            return Err(f"KeyError: {py_repr(x)}");
+        }
+        let mut x_empty = false;
+        for f in g.first[k as usize].1.iter() {
+            if *f == "<empty>" {
+                x_empty = true;
+            } else if not result.contains(f) {
+                result.push(f.clone());
+            }
+        }
+        if not x_empty {
+            all_empty = false;
+            break;
+        }
+    }
+    if all_empty {
+        result.push("<empty>".to_string());
+    }
+    Ok(result)
+}
+
+fn compute_first(g: mut ref Grammar) -> Result[(), String] {
+    let mut terms: Vec[String] = Vec.new();
+    for t in g.terminals.iter() {
+        terms.push(t.0.clone());
+    }
+    for t in terms.iter() {
+        g.first.push((t.clone(), vec![t.clone()]));
+    }
+    g.first.push(("$end".to_string(), vec!["$end".to_string()]));
+    let mut nts: Vec[String] = Vec.new();
+    for n in g.nonterminals.iter() {
+        nts.push(n.0.clone());
+        g.first.push((n.0.clone(), Vec.new()));
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for n in nts.iter() {
+            let k = find_key(g.prod_names, n);
+            if k < 0 {
+                return Err(f"KeyError: {py_repr(n)}");
+            }
+            let ps = g.prod_names[k as usize].1.clone();
+            for pn in ps.iter() {
+                let body = g.productions[*pn as usize].prod.clone();
+                let fs = first_of_seq(g, body)?;
+                let fi = find_skey(g.first, n);
+                for f in fs.iter() {
+                    if not g.first[fi as usize].1.contains(f) {
+                        g.first[fi as usize].1.push(f.clone());
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compute_follow(g: mut ref Grammar) -> Result[(), String] {
+    for n in g.nonterminals.clone().iter() {
+        g.follow.push((n.0.clone(), Vec.new()));
+    }
+    let si = find_skey(g.follow, g.start);
+    g.follow[si as usize].1 = vec!["$end".to_string()];
+    let mut added = true;
+    while added {
+        added = false;
+        let mut pi: i64 = 1;
+        while pi < g.productions.len() as i64 {
+            let p = g.productions[pi as usize].clone();
+            let len = p.prod.len() as i64;
+            let mut i: i64 = 0;
+            while i < len {
+                let b = p.prod[i as usize].clone();
+                if is_nonterminal(g, b) {
+                    let mut rest: Vec[String] = Vec.new();
+                    let mut k = i + 1;
+                    while k < len {
+                        rest.push(p.prod[k as usize].clone());
+                        k += 1;
+                    }
+                    let fst = first_of_seq(g, rest)?;
+                    let bi = find_skey(g.follow, b);
+                    let mut has_empty = false;
+                    for f in fst.iter() {
+                        if *f != "<empty>" and not g.follow[bi as usize].1.contains(f) {
+                            g.follow[bi as usize].1.push(f.clone());
+                            added = true;
+                        }
+                        if *f == "<empty>" {
+                            has_empty = true;
+                        }
+                    }
+                    if has_empty or i == len - 1 {
+                        let ni = find_skey(g.follow, p.name);
+                        let from = g.follow[ni as usize].1.clone();
+                        for f in from.iter() {
+                            if not g.follow[bi as usize].1.contains(f) {
+                                g.follow[bi as usize].1.push(f.clone());
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+            pi += 1;
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ LR(0) states
+
+// Lists of items live in an arena so that, as in rply, a state is the
+// identity of the list lr0_goto cached for a kernel, not its contents.
+struct Tables {
+    lists: Vec[Vec[i64]],
+    goto_cache: Map[String, i64],
+    state_of_list: Vec[i64],
+    states: Vec[i64],
+    add_count: i64,
+}
+
+fn new_list(t: mut ref Tables, items: own Vec[i64]) -> i64 {
+    t.lists.push(items);
+    t.state_of_list.push(-1);
+    t.lists.len() as i64 - 1
+}
+
+fn lr0_closure(g: mut ref Grammar, t: mut ref Tables, kernel: ref Vec[i64]) -> Vec[i64] {
+    t.add_count += 1;
+    let mut j: Vec[i64] = kernel.clone();
+    let mut added = true;
+    while added {
+        added = false;
+        let mut k: i64 = 0;
+        while k < j.len() as i64 {
+            let after = g.items[j[k as usize] as usize].lr_after.clone();
+            for x in after.iter() {
+                if g.lr0_added[*x as usize] == t.add_count {
+                    continue;
+                }
+                j.push(g.productions[*x as usize].first_item);
+                g.lr0_added[*x as usize] = t.add_count;
+                added = true;
+            }
+            k += 1;
+        }
+    }
+    j
+}
+
+fn lr0_goto(g: mut ref Grammar, t: mut ref Tables, list: i64, x: ref String) -> i64 {
+    let mut gs: Vec[i64] = Vec.new();
+    let mut key = f"{x}|";
+    for p in t.lists[list as usize].clone().iter() {
+        let n = g.items[*p as usize].next;
+        if n >= 0 {
+            if let Some(b) = g.items[n as usize].lr_before.clone() {
+                if b == *x {
+                    gs.push(n);
+                    key.push_str(f"{n},");
+                }
+            }
+        }
+    }
+    if let Some(id) = t.goto_cache.get(key.clone()) {
+        if t.lists[id as usize].len() > 0 {
+            return id;
+        }
+    }
+    let id = if gs.len() > 0 {
+        let items = lr0_closure(mut g, mut t, gs);
+        new_list(mut t, items)
+    } else {
+        new_list(mut t, Vec.new())
+    };
+    t.goto_cache.insert(key, id);
+    id
+}
+
+fn state_index(t: ref Tables, list: i64) -> i64 {
+    t.state_of_list[list as usize]
+}
+
+fn lr0_items(g: mut ref Grammar, t: mut ref Tables) {
+    let first = g.productions[0].first_item;
+    let c0 = lr0_closure(mut g, mut t, vec![first]);
+    let l0 = new_list(mut t, c0);
+    t.state_of_list[l0 as usize] = 0;
+    t.states.push(l0);
+    let mut i: i64 = 0;
+    while i < t.states.len() as i64 {
+        let list = t.states[i as usize];
+        i += 1;
+        let mut asyms: Vec[String] = Vec.new();
+        for it in t.lists[list as usize].clone().iter() {
+            for s in g.items[*it as usize].unique_syms.iter() {
+                if not asyms.contains(s) {
+                    asyms.push(s.clone());
+                }
+            }
+        }
+        for x in asyms.iter() {
+            let gl = lr0_goto(mut g, mut t, list, x);
+            if t.lists[gl as usize].len() == 0 {
+                continue;
+            }
+            if t.state_of_list[gl as usize] >= 0 {
+                continue;
+            }
+            t.state_of_list[gl as usize] = t.states.len() as i64;
+            t.states.push(gl);
+        }
+    }
+}
+
+// ------------------------------------------------------------ LALR lookaheads
+
+fn after_dot(it: ref Item) -> Option[String] {
+    if it.lr_index < it.prod.len() as i64 - 1 { Some(it.prod[(it.lr_index + 1) as usize].clone()) } else { None }
+}
+
+fn compute_nullable(g: ref Grammar) -> Vec[String] {
+    let mut nullable: Vec[String] = Vec.new();
+    let mut num: i64 = 0;
+    loop {
+        let mut pi: i64 = 1;
+        while pi < g.productions.len() as i64 {
+            let p = g.productions[pi as usize].clone();
+            if p.prod.len() == 0 {
+                if not nullable.contains(p.name) {
+                    nullable.push(p.name.clone());
+                }
+                pi += 1;
+                continue;
+            }
+            let mut all = true;
+            for s in p.prod.iter() {
+                if not nullable.contains(s) {
+                    all = false;
+                    break;
+                }
+            }
+            if all and not nullable.contains(p.name) {
+                nullable.push(p.name.clone());
+            }
+            pi += 1;
+        }
+        if nullable.len() as i64 == num {
+            break;
+        }
+        num = nullable.len() as i64;
+    }
+    nullable
+}
+
+fn find_trans(trans: ref Vec[(i64, String)], state: i64, sym: ref String) -> i64 {
+    let mut k: i64 = 0;
+    for t in trans.iter() {
+        if t.0 == state and t.1 == *sym {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn nonterminal_transitions(g: ref Grammar, t: ref Tables) -> Vec[(i64, String)] {
+    let mut trans: Vec[(i64, String)] = Vec.new();
+    let mut idx: i64 = 0;
+    for list in t.states.iter() {
+        for it in t.lists[*list as usize].iter() {
+            if let Some(s) = after_dot(g.items[*it as usize]) {
+                if is_nonterminal(g, s) and find_trans(trans, idx, s) < 0 {
+                    trans.push((idx, s));
+                }
+            }
+        }
+        idx += 1;
+    }
+    trans
+}
+
+// The relation sets of digraph(): F maps each transition to a set id in
+// `sets`; members of a strongly connected component share one id, as
+// they share one list in rply.
+struct Digraph {
+    n: Vec[i64],
+    f: Vec[i64],
+    stack: Vec[i64],
+}
+
+const LARGE_VALUE: i64 = 9223372036854775807;
+
+fn traverse(x: i64, d: mut ref Digraph, sets: mut ref Vec[Vec[String]], rel: ref Vec[Vec[i64]], fp: ref Vec[i64], fresh: bool) {
+    d.stack.push(x);
+    let depth = d.stack.len() as i64;
+    d.n[x as usize] = depth;
+    if fresh {
+        let copy = sets[fp[x as usize] as usize].clone();
+        sets.push(copy);
+        d.f[x as usize] = sets.len() as i64 - 1;
+    } else {
+        d.f[x as usize] = fp[x as usize];
+    }
+    for y in rel[x as usize].iter() {
+        if d.n[*y as usize] == 0 {
+            traverse(*y, mut d, mut sets, rel, fp, fresh);
+        }
+        if d.n[*y as usize] < d.n[x as usize] {
+            d.n[x as usize] = d.n[*y as usize];
+        }
+        let fy = d.f[*y as usize];
+        let fx = d.f[x as usize];
+        if fy >= 0 {
+            let from = sets[fy as usize].clone();
+            for a in from.iter() {
+                if not sets[fx as usize].contains(a) {
+                    sets[fx as usize].push(a.clone());
+                }
+            }
+        }
+    }
+    if d.n[x as usize] == depth {
+        let top = d.stack[d.stack.len() - 1];
+        d.n[top as usize] = LARGE_VALUE;
+        d.f[top as usize] = d.f[x as usize];
+        let mut element = d.stack.pop().unwrap();
+        while element != x {
+            let top2 = d.stack[d.stack.len() - 1];
+            d.n[top2 as usize] = LARGE_VALUE;
+            d.f[top2 as usize] = d.f[x as usize];
+            element = d.stack.pop().unwrap();
+        }
+    }
+}
+
+// digraph(X, R, FP). With `fresh`, FP(x) is a new list (dr_relation);
+// without, FP(x) is the set id itself (readsets[x]), so appending to F[x]
+// appends to that read set.
+fn digraph(count: i64, sets: mut ref Vec[Vec[String]], rel: ref Vec[Vec[i64]], fp: ref Vec[i64], fresh: bool) -> Vec[i64] {
+    let mut d = Digraph { n: Vec.new(), f: Vec.new(), stack: Vec.new() };
+    let mut k: i64 = 0;
+    while k < count {
+        d.n.push(0);
+        d.f.push(-1);
+        k += 1;
+    }
+    k = 0;
+    while k < count {
+        if d.n[k as usize] == 0 {
+            traverse(k, mut d, mut sets, rel, fp, fresh);
+        }
+        k += 1;
+    }
+    d.f
+}
+
+struct Lalr {
+    // per item: (state, lookaheads)
+    lookaheads: Vec[Vec[(i64, Vec[String])]],
+}
+
+fn add_lalr_lookaheads(g: mut ref Grammar, t: mut ref Tables) -> Lalr {
+    let nullable = compute_nullable(g);
+    let trans = nonterminal_transitions(g, t);
+    let count = trans.len() as i64;
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    // dr_relation and reads_relation
+    let mut dr: Vec[i64] = Vec.new();
+    let mut reads: Vec[Vec[i64]] = Vec.new();
+    for tr in trans.iter() {
+        let state = tr.0;
+        let gl = lr0_goto(mut g, mut t, t.states[state as usize], tr.1);
+        let j = state_index(t, gl);
+        let mut terms: Vec[String] = Vec.new();
+        let mut rel: Vec[i64] = Vec.new();
+        for it in t.lists[gl as usize].clone().iter() {
+            if let Some(a) = after_dot(g.items[*it as usize]) {
+                if is_terminal(g, a) and not terms.contains(a) {
+                    terms.push(a.clone());
+                }
+                if nullable.contains(a) {
+                    rel.push(find_trans(trans, j, a));
+                }
+            }
+        }
+        if state == 0 and tr.1 == g.productions[0].prod[0] {
+            terms.push("$end".to_string());
+        }
+        sets.push(terms);
+        dr.push(sets.len() as i64 - 1);
+        reads.push(rel);
+    }
+    let readsets = digraph(count, mut sets, reads, dr, true);
+    // compute_lookback_includes
+    let mut lookb_all: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut includes_of: Vec[Vec[i64]] = Vec.new();
+    let mut k: i64 = 0;
+    while k < count {
+        includes_of.push(Vec.new());
+        k += 1;
+    }
+    let mut ti: i64 = 0;
+    for tr in trans.iter() {
+        let state = tr.0;
+        let nsym = tr.1.clone();
+        let mut lookb: Vec[(i64, i64)] = Vec.new();
+        let mut includes: Vec[i64] = Vec.new();
+        for pid in t.lists[t.states[state as usize] as usize].clone().iter() {
+            let p = g.items[*pid as usize].clone();
+            if p.name != nsym {
+                continue;
+            }
+            let plen = p.prod.len() as i64;
+            let mut lr_index = p.lr_index;
+            let mut j = state;
+            while lr_index < plen - 1 {
+                lr_index += 1;
+                let sym = p.prod[lr_index as usize].clone();
+                let tj = find_trans(trans, j, sym);
+                if tj >= 0 {
+                    let mut li = lr_index + 1;
+                    let mut all = true;
+                    while li < plen {
+                        let s = p.prod[li as usize].clone();
+                        if is_terminal(g, s) or not nullable.contains(s) {
+                            all = false;
+                            break;
+                        }
+                        li += 1;
+                    }
+                    if all {
+                        includes.push(tj);
+                    }
+                }
+                let gl = lr0_goto(mut g, mut t, t.states[j as usize], sym);
+                j = state_index(t, gl);
+            }
+            for rid in t.lists[t.states[j as usize] as usize].clone().iter() {
+                let r = g.items[*rid as usize].clone();
+                if r.name != p.name or r.prod.len() != p.prod.len() {
+                    continue;
+                }
+                let mut i: i64 = 0;
+                let mut same = true;
+                while i < r.lr_index {
+                    if r.prod[i as usize] != p.prod[(i + 1) as usize] {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    lookb.push((j, *rid));
+                }
+            }
+        }
+        for inc in includes.iter() {
+            includes_of[*inc as usize].push(ti);
+        }
+        lookb_all.push(lookb);
+        ti += 1;
+    }
+    let followsets = digraph(count, mut sets, includes_of, readsets, false);
+    // add_lookaheads
+    let mut la: Vec[Vec[(i64, Vec[String])]] = Vec.new();
+    for _it in g.items.iter() {
+        la.push(Vec.new());
+    }
+    k = 0;
+    while k < count {
+        let f = sets[followsets[k as usize] as usize].clone();
+        for lb in lookb_all[k as usize].iter() {
+            let state = lb.0;
+            let item = lb.1;
+            let mut slot: i64 = -1;
+            let mut s: i64 = 0;
+            for e in la[item as usize].iter() {
+                if e.0 == state {
+                    slot = s;
+                }
+                s += 1;
+            }
+            if slot < 0 {
+                la[item as usize].push((state, Vec.new()));
+                slot = la[item as usize].len() as i64 - 1;
+            }
+            for a in f.iter() {
+                if not la[item as usize][slot as usize].1.contains(a) {
+                    la[item as usize][slot as usize].1.push(a.clone());
+                }
+            }
+        }
+        k += 1;
+    }
+    Lalr { lookaheads: la }
+}
+
+// ------------------------------------------------------------ LRTable
+
+struct LrTable {
+    action: Vec[Vec[(String, i64)]],
+    goto: Vec[Vec[(String, i64)]],
+    default_reductions: Vec[i64],
+    sr_conflicts: Vec[(String, String)],
+    rr_conflicts: Vec[(String, String)],
+}
+
+fn action_of(acts: ref Vec[(String, i64)], a: ref String) -> Option[i64] {
+    for e in acts.iter() {
+        if e.0 == *a {
+            return Some(e.1);
+        }
+    }
+    None
+}
+
+fn set_action(acts: mut ref Vec[(String, i64)], actp: mut ref Vec[(String, i64)], a: ref String, v: i64, item: i64) {
+    let mut k: i64 = 0;
+    let mut found = false;
+    while k < acts.len() as i64 {
+        if acts[k as usize].0 == *a {
+            acts[k as usize].1 = v;
+            found = true;
+        }
+        k += 1;
+    }
+    if not found {
+        acts.push((a.clone(), v));
+    }
+    found = false;
+    k = 0;
+    while k < actp.len() as i64 {
+        if actp[k as usize].0 == *a {
+            actp[k as usize].1 = item;
+            found = true;
+        }
+        k += 1;
+    }
+    if not found {
+        actp.push((a.clone(), item));
+    }
+}
+
+fn prod_repr(p: ref Production) -> String {
+    f"Production({p.name} -> {join_words(p.prod, " ")})"
+}
+
+fn join_words(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs.iter() {
+        if not first {
+            out.push_str(sep);
+        }
+        first = false;
+        out.push_str(x);
+    }
+    out
+}
+
+fn from_grammar(g: mut ref Grammar) -> Result[LrTable, String] {
+    let mut t = Tables { lists: Vec.new(), goto_cache: Map.new(), state_of_list: Vec.new(), states: Vec.new(), add_count: 0 };
+    lr0_items(mut g, mut t);
+    let lalr = add_lalr_lookaheads(mut g, mut t);
+    let mut action: Vec[Vec[(String, i64)]] = Vec.new();
+    let mut goto: Vec[Vec[(String, i64)]] = Vec.new();
+    let mut sr: Vec[(String, String)] = Vec.new();
+    let mut rr: Vec[(String, String)] = Vec.new();
+    let nstates = t.states.len() as i64;
+    let mut st: i64 = 0;
+    while st < nstates {
+        let list = t.states[st as usize];
+        let mut acts: Vec[(String, i64)] = Vec.new();
+        let mut actp: Vec[(String, i64)] = Vec.new();
+        let mut gotos: Vec[(String, i64)] = Vec.new();
+        for pid in t.lists[list as usize].clone().iter() {
+            let p = g.items[*pid as usize].clone();
+            if p.prod.len() as i64 == p.lr_index + 1 {
+                if p.name == "S'" {
+                    set_action(mut acts, mut actp, "$end".to_string(), 0, *pid);
+                    continue;
+                }
+                let mut laheads: Vec[String] = Vec.new();
+                for e in lalr.lookaheads[*pid as usize].iter() {
+                    if e.0 == st {
+                        laheads = e.1.clone();
+                    }
+                }
+                for a in laheads.iter() {
+                    match action_of(acts, a) {
+                        Some(r) => {
+                            if r > 0 {
+                                let sp = g.productions[g.items[action_item(actp, a) as usize].number as usize].clone();
+                                let slevel = sp.level;
+                                let (rprec, rlevel) = get_prec(g, a);
+                                if slevel < rlevel or (slevel == rlevel and rprec == "left") {
+                                    set_action(mut acts, mut actp, a, -p.number, *pid);
+                                    if slevel == 0 and rlevel == 0 {
+                                        sr.push((py_repr(a), "reduce".to_string()));
+                                    }
+                                } else if not (slevel == rlevel and rprec == "nonassoc") {
+                                    if rlevel == 0 {
+                                        sr.push((py_repr(a), "shift".to_string()));
+                                    }
+                                }
+                            } else if r < 0 {
+                                let oldp = g.productions[(-r) as usize].clone();
+                                let pp = g.productions[p.number as usize].clone();
+                                if oldp.number > pp.number {
+                                    set_action(mut acts, mut actp, a, -p.number, *pid);
+                                    rr.push((prod_repr(pp), prod_repr(oldp)));
+                                } else {
+                                    rr.push((prod_repr(oldp), prod_repr(pp)));
+                                }
+                            } else {
+                                return Err(f"ParserGeneratorError: Unknown conflict in state {st}");
+                            }
+                        }
+                        None => set_action(mut acts, mut actp, a, -p.number, *pid),
+                    }
+                }
+            } else {
+                let a = p.prod[(p.lr_index + 1) as usize].clone();
+                if is_terminal(g, a) {
+                    let gl = lr0_goto(mut g, mut t, list, a);
+                    let j = state_index(t, gl);
+                    if j >= 0 {
+                        match action_of(acts, a) {
+                            Some(r) => {
+                                if r > 0 {
+                                    if r != j {
+                                        return Err(f"ParserGeneratorError: Shift/shift conflict in state {st}");
+                                    }
+                                } else if r < 0 {
+                                    let rp = g.productions[g.items[action_item(actp, a) as usize].number as usize].clone();
+                                    let rprec = rp.assoc.clone();
+                                    let rlevel = rp.level;
+                                    let (_sprec, slevel) = get_prec(g, a);
+                                    if slevel > rlevel or (slevel == rlevel and rprec == "right") {
+                                        set_action(mut acts, mut actp, a, j, *pid);
+                                        if rlevel == 0 {
+                                            sr.push((py_repr(a), "shift".to_string()));
+                                        }
+                                    } else if not (slevel == rlevel and rprec == "nonassoc") {
+                                        if slevel == 0 and rlevel == 0 {
+                                            sr.push((py_repr(a), "reduce".to_string()));
+                                        }
+                                    }
+                                } else {
+                                    return Err(f"ParserGeneratorError: Unknown conflict in state {st}");
+                                }
+                            }
+                            None => set_action(mut acts, mut actp, a, j, *pid),
+                        }
+                    }
+                }
+            }
+        }
+        let mut nkeys: Vec[String] = Vec.new();
+        for pid in t.lists[list as usize].clone().iter() {
+            for s in g.items[*pid as usize].unique_syms.iter() {
+                if is_nonterminal(g, s) and not nkeys.contains(s) {
+                    nkeys.push(s.clone());
+                }
+            }
+        }
+        for n in nkeys.iter() {
+            let gl = lr0_goto(mut g, mut t, list, n);
+            let j = state_index(t, gl);
+            if j >= 0 {
+                gotos.push((n.clone(), j));
+            }
+        }
+        action.push(acts);
+        goto.push(gotos);
+        st += 1;
+    }
+    let mut defaults: Vec[i64] = Vec.new();
+    for acts in action.iter() {
+        let mut vals: Vec[i64] = Vec.new();
+        for e in acts.iter() {
+            if not vals.contains(e.1) {
+                vals.push(e.1);
+            }
+        }
+        if vals.len() == 1 and vals[0] < 0 {
+            defaults.push(vals[0]);
+        } else {
+            defaults.push(0);
+        }
+    }
+    Ok(LrTable { action, goto, default_reductions: defaults, sr_conflicts: sr, rr_conflicts: rr })
+}
+
+fn action_item(actp: ref Vec[(String, i64)], a: ref String) -> i64 {
+    for e in actp.iter() {
+        if e.0 == *a {
+            return e.1;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ LRParser
+
+#[derive(Clone)]
+struct Node {
+    name: String,
+    children: Vec[Sym],
+}
+
+#[derive(Clone)]
+enum Sym {
+    Tok(Token),
+    Tree(Node),
+}
+
+struct LrParser {
+    names: Vec[String],
+    lengths: Vec[i64],
+    table: LrTable,
+    onerror: bool,
+}
+
+fn pos_str(p: ref Option[SourcePos]) -> String {
+    match p {
+        None => "no position".to_string(),
+        Some(sp) => f"{sp.lineno}:{sp.colno} (index {sp.idx})",
+    }
+}
+
+fn goto_of(gotos: ref Vec[(String, i64)], name: ref String) -> i64 {
+    for e in gotos.iter() {
+        if e.0 == *name {
+            return e.1;
+        }
+    }
+    -1
+}
+
+fn reduce(p: ref LrParser, t: i64, symstack: mut ref Vec[Sym], statestack: mut ref Vec[i64]) -> i64 {
+    let k = (-t) as usize;
+    let plen = p.lengths[k];
+    let mut rev: Vec[Sym] = Vec.new();
+    let mut j: i64 = 0;
+    while j < plen {
+        if let Some(s) = symstack.pop() {
+            rev.push(s);
+        }
+        let _ = statestack.pop();
+        j += 1;
+    }
+    let mut children: Vec[Sym] = Vec.new();
+    while let Some(s) = rev.pop() {
+        children.push(s);
+    }
+    symstack.push(Sym.Tree(Node { name: p.names[k].clone(), children }));
+    let top = statestack[statestack.len() - 1];
+    let next = goto_of(p.table.goto[top as usize], p.names[k]);
+    statestack.push(next);
+    next
+}
+
+// parse(): the tree, or the error as the line the oracle prints.
+fn parse(p: ref LrParser, lx: ref Lexer, text: ref String) -> Result[Sym, String] {
+    let mut st = new_stream(text);
+    let mut lookahead: Option[Token] = None;
+    let mut statestack: Vec[i64] = vec![0];
+    let mut symstack: Vec[Sym] = vec![Sym.Tok(Token { name: "$end".to_string(), value: "$end".to_string(), pos: None })];
+    let mut current: i64 = 0;
+    loop {
+        let d = p.table.default_reductions[current as usize];
+        if d != 0 {
+            current = reduce(p, d, mut symstack, mut statestack);
+            continue;
+        }
+        if lookahead.is_none() {
+            match next_token(lx, mut st) {
+                Ok(Some(t)) => lookahead = Some(t),
+                Ok(None) => lookahead = Some(Token { name: "$end".to_string(), value: "$end".to_string(), pos: None }),
+                Err(sp) => return Err(f"LexingError at {pos_str(Some(sp))}"),
+            }
+        }
+        let la = match lookahead.clone() {
+            Some(t) => t,
+            None => return Err("no lookahead".to_string()),
+        };
+        match action_of(p.table.action[current as usize], la.name) {
+            Some(t) => {
+                if t > 0 {
+                    statestack.push(t);
+                    current = t;
+                    symstack.push(Sym.Tok(la));
+                    lookahead = None;
+                } else if t < 0 {
+                    current = reduce(p, t, mut symstack, mut statestack);
+                } else {
+                    return match symstack.pop() {
+                        Some(s) => Ok(s),
+                        None => Err("empty stack".to_string()),
+                    };
+                }
+            }
+            None => {
+                if p.onerror {
+                    return match la.pos {
+                        Some(sp) => Err(f"handler: unexpected {la.name} {py_repr(la.value)} at {sp.lineno}:{sp.colno}"),
+                        None => Err("AttributeError: 'NoneType' object has no attribute 'lineno'".to_string()),
+                    };
+                }
+                return Err(f"ParsingError at {pos_str(la.pos)}");
+            }
+        }
+    }
+}
+
+fn show(x: ref Sym) -> String {
+    match x {
+        Sym.Tok(t) => f"{t.name}={py_repr(t.value)}",
+        Sym.Tree(n) => {
+            let mut out = String.new();
+            out.push('(');
+            out.push_str(n.name);
+            for c in n.children.iter() {
+                out.push(' ');
+                out.push_str(show(c));
+            }
+            out.push(')');
+            out
+        }
+    }
+}
+
+fn nkids(x: ref Sym) -> i64 {
+    match x {
+        Sym.Tok(_) => 0,
+        Sym.Tree(n) => n.children.len() as i64,
+    }
+}
+
+fn kid(x: ref Sym, k: i64) -> Sym {
+    match x {
+        Sym.Tok(t) => Sym.Tok(t.clone()),
+        Sym.Tree(n) => n.children[k as usize].clone(),
+    }
+}
+
+fn sym_name(x: ref Sym) -> String {
+    match x {
+        Sym.Tok(t) => t.name.clone(),
+        Sym.Tree(n) => n.name.clone(),
+    }
+}
+
+fn is_tok(x: ref Sym) -> bool {
+    match x {
+        Sym.Tok(_) => true,
+        Sym.Tree(_) => false,
+    }
+}
+
+fn tok_value(x: ref Sym) -> String {
+    match x {
+        Sym.Tok(t) => t.value.clone(),
+        Sym.Tree(n) => n.name.clone(),
+    }
+}
+
+// ------------------------------------------------------------ the grammar files
+
+struct Spec {
+    tokens: Vec[String],
+    lex: Vec[(String, String)],
+    ignore: Vec[String],
+    prec: Vec[(String, Vec[String])],
+    rules: Vec[(String, Option[String])],
+    onerror: bool,
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split() with no argument: runs of whitespace, no empty fields.
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut inword = false;
+    for c in s.chars() {
+        if is_space(c) {
+            if inword {
+                out.push(cur);
+                cur = String.new();
+                inword = false;
+            }
+        } else {
+            cur.push(c);
+            inword = true;
+        }
+    }
+    if inword {
+        out.push(cur);
+    }
+    out
+}
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn find_sub(s: ref Vec[char], pat: ref Vec[char]) -> i64 {
+    let n = s.len() as i64;
+    let m = pat.len() as i64;
+    let mut i: i64 = 0;
+    while i + m <= n {
+        let mut j: i64 = 0;
+        while j < m and s[(i + j) as usize] == pat[j as usize] {
+            j += 1;
+        }
+        if j == m {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// str.partition(sep): (head, tail, found).
+fn partition(s: ref String, sep: Str) -> (String, String, bool) {
+    let cs = chars_of(s);
+    let pat = chars_of(sep.to_string());
+    let k = find_sub(cs, pat);
+    if k < 0 {
+        return (s.clone(), String.new(), false);
+    }
+    (chars_str(cs, 0, k), chars_str(cs, k + pat.len() as i64, cs.len() as i64), true)
+}
+
+fn read_data(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => String.new(),
+    }
+}
+
+fn load(rel: ref String) -> Spec {
+    let mut g = Spec { tokens: Vec.new(), lex: Vec.new(), ignore: Vec.new(), prec: Vec.new(), rules: Vec.new(), onerror: false };
+    for line in split_on(read_data(rel), '\n') {
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let (word, rest, _) = partition(line, " ");
+        if word == "tokens" {
+            g.tokens = split_ws(rest);
+        } else if word == "lex" {
+            let (name, pattern, _) = partition(rest, " ");
+            g.lex.push((name, pattern));
+        } else if word == "ignore" {
+            g.ignore.push(rest);
+        } else if word == "prec" {
+            let parts = split_ws(rest);
+            let mut terms: Vec[String] = Vec.new();
+            let mut k: i64 = 1;
+            while k < parts.len() as i64 {
+                terms.push(parts[k as usize].clone());
+                k += 1;
+            }
+            g.prec.push((parts[0].clone(), terms));
+        } else if word == "rule" {
+            let (text, prec, _) = partition(rest, " %prec ");
+            let p = if prec.len() == 0 { None } else { Some(prec) };
+            g.rules.push((text, p));
+        } else if word == "onerror" {
+            g.onerror = true;
+        }
+    }
+    g
+}
+
+struct Built {
+    lexer: Lexer,
+    parser: Option[LrParser],
+    warnings: Vec[String],
+    err: Option[String],
+    nprods: i64,
+}
+
+fn build_lexer(g: ref Spec) -> Lexer {
+    let mut rules: Vec[Rule] = Vec.new();
+    for e in g.lex.iter() {
+        rules.push(Rule { name: e.0.clone(), pat: compile_pattern(e.1) });
+    }
+    let mut ignore: Vec[Rule] = Vec.new();
+    for p in g.ignore.iter() {
+        ignore.push(Rule { name: String.new(), pat: compile_pattern(p) });
+    }
+    Lexer { rules, ignore }
+}
+
+fn plural(n: i64) -> Str {
+    if n > 1 { "s" } else { "" }
+}
+
+// ParserGenerator(...), the production() decorators, error() and build().
+fn build_parser(g: ref Spec, warnings: mut ref Vec[String]) -> Result[(LrParser, i64), String] {
+    let mut prods: Vec[(String, Vec[String], Option[String])] = Vec.new();
+    for r in g.rules.iter() {
+        let parts = split_ws(r.0);
+        if parts.len() < 2 {
+            return Err("IndexError: list index out of range".to_string());
+        }
+        if parts[1] != ":" {
+            return Err("ParserGeneratorError: Expecting :".to_string());
+        }
+        let mut rest: Vec[String] = Vec.new();
+        let mut k: i64 = 2;
+        while k < parts.len() as i64 {
+            rest.push(parts[k as usize].clone());
+            k += 1;
+        }
+        let body = join_words(rest, " ");
+        for alt in split_on(body, '|') {
+            prods.push((parts[0].clone(), split_ws(alt), r.1.clone()));
+        }
+    }
+    let mut gr = new_grammar(g.tokens);
+    let mut level: i64 = 1;
+    for p in g.prec.iter() {
+        for term in p.1.iter() {
+            set_precedence(mut gr, term, p.0, level)?;
+        }
+        level += 1;
+    }
+    for p in prods.iter() {
+        add_production(mut gr, p.0, p.1, p.2)?;
+    }
+    set_start(mut gr);
+    for t in unused_terminals(gr).iter() {
+        warnings.push(f"Token {py_repr(t)} is unused");
+    }
+    for t in unused_productions(gr).iter() {
+        warnings.push(f"Production {py_repr(t)} is not reachable");
+    }
+    build_lritems(mut gr);
+    compute_first(mut gr)?;
+    compute_follow(mut gr)?;
+    let table = from_grammar(mut gr)?;
+    let nsr = table.sr_conflicts.len() as i64;
+    if nsr > 0 {
+        warnings.push(f"{nsr} shift/reduce conflict{plural(nsr)}");
+    }
+    let nrr = table.rr_conflicts.len() as i64;
+    if nrr > 0 {
+        warnings.push(f"{nrr} reduce/reduce conflict{plural(nrr)}");
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut lengths: Vec[i64] = Vec.new();
+    for p in gr.productions.iter() {
+        names.push(p.name.clone());
+        lengths.push(p.prod.len() as i64);
+    }
+    let n = gr.productions.len() as i64;
+    Ok((LrParser { names, lengths, table, onerror: g.onerror }, n))
+}
+
+fn build(rel: ref String) -> Built {
+    let g = load(rel);
+    let mut warnings: Vec[String] = Vec.new();
+    let lexer = build_lexer(g);
+    match build_parser(g, mut warnings) {
+        Ok(r) => Built { lexer, parser: Some(r.0), warnings, err: None, nprods: r.1 },
+        Err(e) => Built { lexer, parser: None, warnings, err: Some(e), nprods: 0 },
+    }
+}
+
+fn pair_less(a: ref (String, String), b: ref (String, String)) -> bool {
+    a.0 < b.0 or (a.0 == b.0 and a.1 < b.1)
+}
+
+fn sort_pairs(xs: ref Vec[(String, String)]) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for x in xs.iter() {
+        let mut k = out.len() as i64;
+        out.push(x.clone());
+        while k > 0 and pair_less(out[k as usize], out[(k - 1) as usize]) {
+            let tmp = out[k as usize].clone();
+            out[k as usize] = out[(k - 1) as usize].clone();
+            out[(k - 1) as usize] = tmp;
+            k -= 1;
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ jobs
+
+fn job_build(rel: ref String) {
+    let b = build(rel);
+    for m in b.warnings.iter() {
+        println(f"  warning: {m}");
+    }
+    if let Some(e) = b.err {
+        println(f"  error {e}");
+        return;
+    }
+    if let Some(p) = b.parser {
+        let mut defaults: i64 = 0;
+        for d in p.table.default_reductions.iter() {
+            if *d != 0 {
+                defaults += 1;
+            }
+        }
+        println(f"  productions {b.nprods}, states {p.table.action.len()}, default reductions {defaults}");
+        for e in sort_pairs(p.table.sr_conflicts).iter() {
+            println(f"  shift/reduce on {e.0}, resolved as {e.1}");
+        }
+        for e in sort_pairs(p.table.rr_conflicts).iter() {
+            println(f"  reduce/reduce: {e.0} over {e.1}");
+        }
+    }
+}
+
+fn job_tokens(grel: ref String, irel: ref String) {
+    let b = build(grel);
+    let mut st = new_stream(read_data(irel));
+    loop {
+        match next_token(b.lexer, mut st) {
+            Ok(None) => break,
+            Ok(Some(t)) => println(f"  {t.name}={py_repr(t.value)} at {pos_str(t.pos)}"),
+            Err(sp) => {
+                println(f"  LexingError at {pos_str(Some(sp))}");
+                break;
+            }
+        }
+    }
+}
+
+fn job_parse(grel: ref String, irel: ref String) {
+    let b = build(grel);
+    if let Some(e) = b.err {
+        println(f"  error {e}");
+        return;
+    }
+    if let Some(p) = b.parser {
+        match parse(p, b.lexer, read_data(irel)) {
+            Ok(tree) => println(f"  {show(tree)}"),
+            Err(e) => println(f"  {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ !calc
+
+// Python's // and %: they round toward negative infinity.
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if a % b != 0 and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn pymod(a: i64, b: i64) -> i64 {
+    let r = a % b;
+    if r != 0 and ((r < 0) != (b < 0)) { r + b } else { r }
+}
+
+fn ev(n: ref Sym, env: ref Map[String, i64]) -> Result[i64, String] {
+    if is_tok(n) {
+        let v = tok_value(n);
+        if sym_name(n) == "NUMBER" {
+            return Ok(parse_int(v));
+        }
+        return match env.get(v) {
+            Some(x) => Ok(*x),
+            None => Err(f"unknown variable {v}"),
+        };
+    }
+    let len = nkids(n);
+    if len == 1 {
+        return ev(kid(n, 0), env);
+    }
+    if len == 2 {
+        return Ok(-ev(kid(n, 1), env)?);
+    }
+    let c0 = kid(n, 0);
+    if is_tok(c0) and sym_name(c0) == "LPAREN" {
+        return ev(kid(n, 1), env);
+    }
+    if is_tok(c0) and sym_name(c0) == "IDENT" {
+        let mut args: Vec[i64] = Vec.new();
+        let mut a = kid(n, 2);
+        while nkids(a) == 3 {
+            args.insert(0, ev(kid(a, 2), env)?);
+            a = kid(a, 0);
+        }
+        args.insert(0, ev(kid(a, 0), env)?);
+        let f = tok_value(c0);
+        if f == "max" {
+            let mut m = args[0];
+            for x in args.iter() {
+                if *x > m {
+                    m = *x;
+                }
+            }
+            return Ok(m);
+        }
+        if f == "min" {
+            let mut m = args[0];
+            for x in args.iter() {
+                if *x < m {
+                    m = *x;
+                }
+            }
+            return Ok(m);
+        }
+        if f == "abs" and args.len() == 1 {
+            return Ok(if args[0] < 0 { -args[0] } else { args[0] });
+        }
+        return Err(f"unknown function {f}/{args.len()}");
+    }
+    let a = ev(c0, env)?;
+    let op = sym_name(kid(n, 1));
+    let b = ev(kid(n, 2), env)?;
+    if op == "PLUS" {
+        return Ok(a + b);
+    }
+    if op == "MINUS" {
+        return Ok(a - b);
+    }
+    if op == "TIMES" {
+        return Ok(a * b);
+    }
+    if op == "DIV" {
+        if b == 0 {
+            return Err("division by zero".to_string());
+        }
+        return Ok(floordiv(a, b));
+    }
+    if op == "MOD" {
+        if b == 0 {
+            return Err("modulo by zero".to_string());
+        }
+        return Ok(pymod(a, b));
+    }
+    if op == "POW" {
+        if b < 0 {
+            return Err("negative exponent".to_string());
+        }
+        let mut r: i64 = 1;
+        let mut k: i64 = 0;
+        while k < b {
+            r *= a;
+            k += 1;
+        }
+        return Ok(r);
+    }
+    if op == "EQ" {
+        return Ok(if a == b { 1 } else { 0 });
+    }
+    if op == "LT" {
+        return Ok(if a < b { 1 } else { 0 });
+    }
+    Ok(if a > b { 1 } else { 0 })
+}
+
+fn parse_int(s: ref String) -> i64 {
+    let mut neg = false;
+    let mut v: i64 = 0;
+    for c in s.chars() {
+        if c == '-' {
+            neg = true;
+        } else {
+            v = v * 10 + (c as i64 - 48);
+        }
+    }
+    if neg { -v } else { v }
+}
+
+fn prog_calc(grel: ref String, irel: ref String) {
+    let b = build(grel);
+    let p = match b.parser {
+        Some(p) => p,
+        None => return,
+    };
+    let mut env: Map[String, i64] = Map.new();
+    for line in split_on(read_data(irel), '\n') {
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        println(f"  > {line}");
+        let tree = match parse(p, b.lexer, line) {
+            Ok(t) => t,
+            Err(e) => {
+                println(f"    {e}");
+                continue;
+            }
+        };
+        if nkids(tree) == 3 {
+            let name = tok_value(kid(tree, 0));
+            match ev(kid(tree, 2), env) {
+                Ok(v) => {
+                    env.insert(name.clone(), v);
+                    println(f"    {name} := {v}");
+                }
+                Err(e) => println(f"    error: {e}"),
+            }
+        } else {
+            match ev(kid(tree, 0), env) {
+                Ok(v) => println(f"    = {v}"),
+                Err(e) => println(f"    error: {e}"),
+            }
+        }
+    }
+    let mut keys: Vec[String] = Vec.new();
+    for e in env.iter() {
+        keys.push(e.0.clone());
+    }
+    keys.sort();
+    let mut parts: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        let v = match env.get(k) {
+            Some(x) => *x,
+            None => 0,
+        };
+        parts.push(f"{k}={v}");
+    }
+    println(f"  variables: {join_words(parts, ", ")}");
+}
+
+// ------------------------------------------------------------ !json
+
+enum JVal {
+    Scalar(String),
+    Object(Vec[(String, JVal)]),
+    Array(Vec[JVal]),
+}
+
+// members / elements are left-recursive: collect them back to front.
+fn flatten(n: ref Sym) -> Vec[Sym] {
+    let mut stack: Vec[Sym] = Vec.new();
+    let mut m = n.clone();
+    while nkids(m) == 3 {
+        stack.push(kid(m, 2));
+        m = kid(m, 0);
+    }
+    stack.push(kid(m, 0));
+    let mut out: Vec[Sym] = Vec.new();
+    while let Some(s) = stack.pop() {
+        out.push(s);
+    }
+    out
+}
+
+fn to_value(n: ref Sym) -> JVal {
+    let c = kid(n, 0);
+    if is_tok(c) {
+        return JVal.Scalar(tok_value(c));
+    }
+    if sym_name(c) == "object" {
+        let mut pairs: Vec[(String, JVal)] = Vec.new();
+        if nkids(c) == 3 {
+            for p in flatten(kid(c, 1)).iter() {
+                pairs.push((tok_value(kid(p, 0)), to_value(kid(p, 2))));
+            }
+        }
+        return JVal.Object(pairs);
+    }
+    let mut items: Vec[JVal] = Vec.new();
+    if nkids(c) == 3 {
+        for v in flatten(kid(c, 1)).iter() {
+            items.push(to_value(v));
+        }
+    }
+    JVal.Array(items)
+}
+
+fn indent(n: i64) -> String {
+    let mut s = String.new();
+    let mut k: i64 = 0;
+    while k < n {
+        s.push_str("  ");
+        k += 1;
+    }
+    s
+}
+
+fn pretty(v: ref JVal, ind: i64) -> String {
+    match v {
+        JVal.Scalar(s) => s.clone(),
+        JVal.Object(pairs) => {
+            if pairs.len() == 0 {
+                return "{}".to_string();
+            }
+            let pad = indent(ind + 1);
+            let mut parts: Vec[String] = Vec.new();
+            for p in pairs.iter() {
+                parts.push(f"{pad}{p.0}: {pretty(p.1, ind + 1)}");
+            }
+            f"{{\n{join_words(parts, ",\n")}\n{indent(ind)}}}"
+        }
+        JVal.Array(items) => {
+            if items.len() == 0 {
+                return "[]".to_string();
+            }
+            let pad = indent(ind + 1);
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(f"{pad}{pretty(x, ind + 1)}");
+            }
+            f"[\n{join_words(parts, ",\n")}\n{indent(ind)}]"
+        }
+    }
+}
+
+struct JsonStats {
+    depth: i64,
+    scalars: i64,
+    objects: i64,
+    arrays: i64,
+}
+
+fn stats(v: ref JVal, depth: i64, acc: mut ref JsonStats) {
+    if depth > acc.depth {
+        acc.depth = depth;
+    }
+    match v {
+        JVal.Scalar(_) => acc.scalars += 1,
+        JVal.Object(pairs) => {
+            acc.objects += 1;
+            for p in pairs.iter() {
+                stats(p.1, depth + 1, mut acc);
+            }
+        }
+        JVal.Array(items) => {
+            acc.arrays += 1;
+            for x in items.iter() {
+                stats(x, depth + 1, mut acc);
+            }
+        }
+    }
+}
+
+fn prog_json(grel: ref String, files: ref Vec[String]) {
+    let b = build(grel);
+    let p = match b.parser {
+        Some(p) => p,
+        None => return,
+    };
+    for rel in files.iter() {
+        let tree = match parse(p, b.lexer, read_data(rel)) {
+            Ok(t) => t,
+            Err(e) => {
+                println(f"  {rel}: {e}");
+                continue;
+            }
+        };
+        let v = to_value(tree);
+        let mut acc = JsonStats { depth: 0, scalars: 0, objects: 0, arrays: 0 };
+        stats(v, 1, mut acc);
+        println(f"  {rel}: {acc.objects} objects, {acc.arrays} arrays, {acc.scalars} scalars, depth {acc.depth}");
+        for line in split_on(pretty(v, 0), '\n') {
+            println(f"    | {line}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ !query
+
+struct Table {
+    header: Vec[String],
+    rows: Vec[Vec[String]],
+}
+
+fn load_table(name: ref String) -> Result[Table, String] {
+    let text = match fs.read_to_string(f"data/tables/{name}.csv") {
+        Ok(s) => s,
+        Err(_) => return Err(f"no table {name}"),
+    };
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for r in split_on(text, '\n') {
+        if r.len() > 0 {
+            rows.push(split_on(r, ','));
+        }
+    }
+    let header = rows[0].clone();
+    let mut body: Vec[Vec[String]] = Vec.new();
+    let mut k: i64 = 1;
+    while k < rows.len() as i64 {
+        body.push(rows[k as usize].clone());
+        k += 1;
+    }
+    Ok(Table { header, rows: body })
+}
+
+fn is_int(s: ref String) -> bool {
+    let t = if s.starts_with("-") { chars_str(chars_of(s), 1, chars_of(s).len() as i64) } else { s.clone() };
+    if t.len() == 0 {
+        return false;
+    }
+    for c in t.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn col_index(header: ref Vec[String], name: ref String) -> i64 {
+    let mut k: i64 = 0;
+    while k < header.len() as i64 {
+        if header[k as usize] == *name {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn operand(o: ref Sym, header: ref Vec[String], row: ref Vec[String]) -> Result[String, String] {
+    let t = kid(o, 0);
+    let v = tok_value(t);
+    let name = sym_name(t);
+    if name == "IDENT" {
+        let k = col_index(header, v);
+        if k < 0 {
+            return Err(f"no column {v}");
+        }
+        return Ok(row[k as usize].clone());
+    }
+    if name == "STRING" {
+        let cs = chars_of(v);
+        return Ok(chars_str(cs, 1, cs.len() as i64 - 1));
+    }
+    Ok(v)
+}
+
+fn compare(a: ref String, op: ref String, b: ref String) -> bool {
+    if is_int(a) and is_int(b) {
+        let x = parse_int(a);
+        let y = parse_int(b);
+        if *op == "=" {
+            return x == y;
+        }
+        if *op == "<>" {
+            return x != y;
+        }
+        if *op == "<" {
+            return x < y;
+        }
+        if *op == ">" {
+            return x > y;
+        }
+        if *op == "<=" {
+            return x <= y;
+        }
+        return x >= y;
+    }
+    if *op == "=" {
+        return *a == *b;
+    }
+    if *op == "<>" {
+        return *a != *b;
+    }
+    if *op == "<" {
+        return *a < *b;
+    }
+    if *op == ">" {
+        return *a > *b;
+    }
+    if *op == "<=" {
+        return *a <= *b;
+    }
+    *a >= *b
+}
+
+fn holds(c: ref Sym, header: ref Vec[String], row: ref Vec[String]) -> Result[bool, String] {
+    let n = nkids(c);
+    if n == 2 {
+        return Ok(not holds(kid(c, 1), header, row)?);
+    }
+    let c0 = kid(c, 0);
+    if is_tok(c0) {
+        return holds(kid(c, 1), header, row);
+    }
+    let op = kid(c, 1);
+    let opname = sym_name(op);
+    if opname == "OR" {
+        if holds(c0, header, row)? {
+            return Ok(true);
+        }
+        return holds(kid(c, 2), header, row);
+    }
+    if opname == "AND" {
+        if not holds(c0, header, row)? {
+            return Ok(false);
+        }
+        return holds(kid(c, 2), header, row);
+    }
+    let a = operand(c0, header, row)?;
+    let b = operand(kid(c, 2), header, row)?;
+    Ok(compare(a, tok_value(op), b))
+}
+
+// sort_key(): (0, int) for an integer, (1, text) otherwise.
+fn key_less(a: ref String, b: ref String) -> bool {
+    let ia = is_int(a);
+    let ib = is_int(b);
+    if ia and ib {
+        return parse_int(a) < parse_int(b);
+    }
+    if ia != ib {
+        return ia;
+    }
+    *a < *b
+}
+
+fn str_width(s: ref String) -> i64 {
+    chars_of(s).len() as i64
+}
+
+fn rstrip(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut e = cs.len() as i64;
+    while e > 0 and is_space(cs[(e - 1) as usize]) {
+        e -= 1;
+    }
+    chars_str(cs, 0, e)
+}
+
+fn run_query(tree: ref Sym) -> Result[Vec[String], String] {
+    let cols = kid(tree, 1);
+    let tname = tok_value(kid(tree, 3));
+    let wh = kid(tree, 4);
+    let order = kid(tree, 5);
+    let limit = kid(tree, 6);
+    let t = load_table(tname)?;
+    let header = t.header.clone();
+    let mut rows = t.rows.clone();
+    let mut names: Vec[String] = Vec.new();
+    if is_tok(kid(cols, 0)) {
+        names = header.clone();
+    } else {
+        for s in flatten(kid(cols, 0)).iter() {
+            names.push(tok_value(s));
+        }
+    }
+    for n in names.iter() {
+        if col_index(header, n) < 0 {
+            return Err(f"no column {n}");
+        }
+    }
+    if nkids(wh) > 0 {
+        let cond = kid(wh, 1);
+        let mut kept: Vec[Vec[String]] = Vec.new();
+        for r in rows.iter() {
+            if holds(cond, header, r)? {
+                kept.push(r.clone());
+            }
+        }
+        rows = kept;
+    }
+    if nkids(order) > 0 {
+        let col = tok_value(kid(order, 2));
+        let k = col_index(header, col);
+        if k < 0 {
+            return Err(f"no column {col}");
+        }
+        let dir = kid(order, 3);
+        let desc = nkids(dir) > 0 and sym_name(kid(dir, 0)) == "DESC";
+        // A stable insertion sort; reverse=True keeps equal rows in order.
+        let mut sorted: Vec[Vec[String]] = Vec.new();
+        for r in rows.iter() {
+            let mut j = sorted.len() as i64;
+            sorted.push(r.clone());
+            while j > 0 {
+                let cur = sorted[j as usize][k as usize].clone();
+                let prev = sorted[(j - 1) as usize][k as usize].clone();
+                let before = if desc { key_less(prev, cur) } else { key_less(cur, prev) };
+                if not before {
+                    break;
+                }
+                let tmp = sorted[j as usize].clone();
+                sorted[j as usize] = sorted[(j - 1) as usize].clone();
+                sorted[(j - 1) as usize] = tmp;
+                j -= 1;
+            }
+        }
+        rows = sorted;
+    }
+    if nkids(limit) > 0 {
+        let n = parse_int(tok_value(kid(limit, 1)));
+        let len = rows.len() as i64;
+        let mut stop = if n < 0 { len + n } else { n };
+        if stop < 0 {
+            stop = 0;
+        }
+        let mut cut: Vec[Vec[String]] = Vec.new();
+        let mut j: i64 = 0;
+        while j < stop and j < len {
+            cut.push(rows[j as usize].clone());
+            j += 1;
+        }
+        rows = cut;
+    }
+    let mut idx: Vec[i64] = Vec.new();
+    for n in names.iter() {
+        idx.push(col_index(header, n));
+    }
+    let mut out: Vec[Vec[String]] = vec![names.clone()];
+    for r in rows.iter() {
+        let mut line: Vec[String] = Vec.new();
+        for i in idx.iter() {
+            line.push(r[*i as usize].clone());
+        }
+        out.push(line);
+    }
+    let mut widths: Vec[i64] = Vec.new();
+    let mut c: i64 = 0;
+    while c < names.len() as i64 {
+        let mut w: i64 = 0;
+        for r in out.iter() {
+            let x = str_width(r[c as usize]);
+            if x > w {
+                w = x;
+            }
+        }
+        widths.push(w);
+        c += 1;
+    }
+    let mut lines: Vec[String] = Vec.new();
+    let mut j: i64 = 0;
+    for r in out.iter() {
+        let mut cells: Vec[String] = Vec.new();
+        let mut c2: i64 = 0;
+        while c2 < r.len() as i64 {
+            let mut cell = r[c2 as usize].clone();
+            let mut pad = widths[c2 as usize] - str_width(cell);
+            while pad > 0 {
+                cell.push(' ');
+                pad -= 1;
+            }
+            cells.push(cell);
+            c2 += 1;
+        }
+        lines.push(rstrip(join_words(cells, "  ")));
+        if j == 0 {
+            let mut dashes: Vec[String] = Vec.new();
+            for w in widths.iter() {
+                let mut d = String.new();
+                let mut q: i64 = 0;
+                while q < *w {
+                    d.push('-');
+                    q += 1;
+                }
+                dashes.push(d);
+            }
+            lines.push(join_words(dashes, "  "));
+        }
+        j += 1;
+    }
+    let nrows = rows.len();
+    let s = if nrows == 1 { "" } else { "s" };
+    lines.push(f"({nrows} row{s})");
+    Ok(lines)
+}
+
+fn prog_query(grel: ref String, irel: ref String) {
+    let b = build(grel);
+    let p = match b.parser {
+        Some(p) => p,
+        None => return,
+    };
+    for line in split_on(read_data(irel), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        println(f"  > {line}");
+        let tree = match parse(p, b.lexer, line) {
+            Ok(t) => t,
+            Err(e) => {
+                println(f"    {e}");
+                continue;
+            }
+        };
+        match run_query(tree) {
+            Ok(lines) => {
+                for l in lines.iter() {
+                    println(f"    {l}");
+                }
+            }
+            Err(e) => println(f"    error: {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn hex_digit(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut k: i64 = 0;
+    while k + 1 < cs.len() {
+        out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+        k += 2;
+    }
+    out
+}
+
+fn hex_string(s: ref String) -> String {
+    String.from_utf8(hex_bytes(s)).unwrap_or(String.new())
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs = chars_of(path);
+    let mut cut: i64 = -1;
+    let mut k: i64 = 0;
+    while k < cs.len() as i64 {
+        if cs[k as usize] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    if cut < 0 { String.new() } else { chars_str(cs, 0, cut) }
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let line = hex_string(hex);
+        if line.starts_with("#") {
+            println(line);
+            continue;
+        }
+        println(f"> {line}");
+        let parts = split_on(line, ' ');
+        let cmd = parts[0].clone();
+        let mut args: Vec[String] = Vec.new();
+        let mut k: i64 = 1;
+        while k < parts.len() {
+            args.push(parts[k].clone());
+            k += 1;
+        }
+        if cmd == "build" {
+            job_build(args[0]);
+        } else if cmd == "tokens" {
+            job_tokens(args[0], args[1]);
+        } else if cmd == "parse" {
+            job_parse(args[0], args[1]);
+        } else if cmd == "!calc" {
+            prog_calc(args[0], args[1]);
+        } else if cmd == "!json" {
+            let mut files: Vec[String] = Vec.new();
+            let mut j: i64 = 1;
+            while j < args.len() {
+                files.push(args[j].clone());
+                j += 1;
+            }
+            prog_json(args[0], files);
+        } else if cmd == "!query" {
+            prog_query(args[0], args[1]);
+        } else {
+            println(f"unknown job {line}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("23206275696c64696e672074686520706172736572733a207374617465732c2064656661756c7420726564756374696f6e732c20636f6e666c69637473\n6275696c64206772616d6d6172732f63616c632e6772616d6d6172\n6275696c64206772616d6d6172732f6a736f6e2e6772616d6d6172\n6275696c64206772616d6d6172732f71756572792e6772616d6d6172\n6275696c64206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d6172\n6275696c64206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d6172\n6275696c64206772616d6d6172732f616d626967756f75732e6772616d6d6172\n6275696c64206772616d6d6172732f7265647563655f7265647563652e6772616d6d6172\n6275696c64206772616d6d6172732f756e757365642e6772616d6d6172\n6275696c64206772616d6d6172732f657073696c6f6e2e6772616d6d6172\n6275696c64206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d6172\n6275696c64206772616d6d6172732f65715f6f726465722e6772616d6d6172\n6275696c64206772616d6d6172732f756e6c657865642e6772616d6d6172\n6275696c64206772616d6d6172732f68616e646c65722e6772616d6d6172\n6275696c64206772616d6d6172732f6c696e65732e6772616d6d6172\n6275696c64206772616d6d6172732f72696768745f6c6973742e6772616d6d6172\n23206d697374616b65732050617273657247656e657261746f722072656675736573\n6275696c64206772616d6d6172732f6261645f6e616d652e6772616d6d6172\n6275696c64206772616d6d6172732f6261645f707265632e6772616d6d6172\n6275696c64206772616d6d6172732f6475705f707265632e6772616d6d6172\n6275696c64206772616d6d6172732f6261645f6173736f632e6772616d6d6172\n6275696c64206772616d6d6172732f6e6f5f636f6c6f6e2e6772616d6d6172\n6275696c64206772616d6d6172732f626172655f72756c652e6772616d6d6172\n6275696c64206772616d6d6172732f756e646566696e65642e6772616d6d6172\n2320746865206c657865723a20746f6b656e732c20706f736974696f6e7320616e64204c6578696e674572726f72\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61726974682e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f6d756c74696c696e652e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f626164636861722e747874\n");
+    s.push_str("746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f62616463686172322e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636f6d6d656e742e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f656d7074792e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f7370616365732e747874\n746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f756e69636f64652e747874\n746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e\n746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747275656c792e6a736f6e\n746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f73696e676c655f71756f7465732e6a736f6e\n746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6c656164696e675f7a65726f2e6a736f6e\n746f6b656e73206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264322e747874\n746f6b656e73206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264332e747874\n746f6b656e73206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f65712e747874\n746f6b656e73206772616d6d6172732f71756572792e6772616d6d617220696e707574732f717565726965732f73616d706c652e73716c\n746f6b656e73206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f63726c662e747874\n232070617273652074726565733a20707265636564656e636520616e64206173736f636961746976697479\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61726974682e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f706172656e2e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6e65672e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f706f772e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6d697865642e747874\n");
+    s.push_str("7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f63616c6c2e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61737369676e2e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636d702e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636f6d6d656e742e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6e65776c696e652e747874\n23207061727365206572726f7273\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636d705f636861696e2e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f747261696c696e672e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f74776f5f6f70732e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f756e636c6f7365642e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f65787472612e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f626164636861722e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f62616463686172322e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f656d7074792e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f7370616365732e747874\n7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61737369676e5f6261642e747874\n232074686520636f6e666c696374206772616d6d61727320617420776f726b\n7061727365206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d617220696e707574732f64616e676c696e672e747874\n7061727365206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d617220696e707574732f64616e676c696e67322e747874\n7061727365206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d617220696e707574732f64616e676c696e672e747874\n7061727365206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d617220696e707574732f64616e676c696e67322e747874\n");
+    s.push_str("7061727365206772616d6d6172732f616d626967756f75732e6772616d6d617220696e707574732f616d626967756f75732e747874\n7061727365206772616d6d6172732f7265647563655f7265647563652e6772616d6d617220696e707574732f7272312e747874\n7061727365206772616d6d6172732f7265647563655f7265647563652e6772616d6d617220696e707574732f7272322e747874\n7061727365206772616d6d6172732f756e757365642e6772616d6d617220696e707574732f756e757365642e747874\n7061727365206772616d6d6172732f657073696c6f6e2e6772616d6d617220696e707574732f657073696c6f6e2e747874\n7061727365206772616d6d6172732f657073696c6f6e2e6772616d6d617220696e707574732f657073696c6f6e5f656d7074792e747874\n7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264312e747874\n7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264322e747874\n7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264332e747874\n7061727365206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f65712e747874\n7061727365206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f6571322e747874\n7061727365206772616d6d6172732f756e6c657865642e6772616d6d617220696e707574732f756e6c657865642e747874\n7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572312e747874\n7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572322e747874\n7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572332e747874\n7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f6c696e65732e747874\n7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f6c696e65735f6e6f656f6c2e747874\n7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f63726c662e747874\n7061727365206772616d6d6172732f72696768745f6c6973742e6772616d6d617220696e707574732f72696768742e747874\n7061727365206772616d6d6172732f72696768745f6c6973742e6772616d6d617220696e707574732f72696768745f6261642e747874\n");
+    s.push_str("23204a534f4e20646f63756d656e7473\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6e65737465642e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f7363616c61722e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747261696c696e675f636f6d6d612e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f73696e676c655f71756f7465732e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747275656c792e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f756e7465726d696e617465642e6a736f6e\n7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6c656164696e675f7a65726f2e6a736f6e\n232070726f6772616d733a20612063616c63756c61746f722073657373696f6e2c2061204a534f4e20666f726d61747465722c2053454c454354206f76657220435356\n2163616c63206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f73657373696f6e2e747874\n216a736f6e206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e20696e707574732f6a736f6e2f6e65737465642e6a736f6e20696e707574732f6a736f6e2f7363616c61722e6a736f6e20696e707574732f6a736f6e2f747261696c696e675f636f6d6d612e6a736f6e\n217175657279206772616d6d6172732f71756572792e6772616d6d617220696e707574732f717565726965732f7265706f72742e73716c\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("grammars/calc.grammar 23205468652063616c63756c61746f722066726f6d2072706c79277320524541444d452c2067726f776e3a207661726961626c65732c2063616c6c732c20636f6d70617269736f6e732e0a746f6b656e73204e554d424552204944454e5420504c5553204d494e55532054494d455320444956204d4f4420504f57204c504152454e2052504152454e20434f4d4d412041535349474e204551204c542047540a6c6578204e554d424552205c642b0a6c6578204944454e54205b412d5a612d7a5f5d5b412d5a612d7a302d395f5d2a0a6c657820504f57205c2a5c2a0a6c657820504c5553205c2b0a6c6578204d494e5553202d0a6c65782054494d4553205c2a0a6c657820444956202f0a6c6578204d4f4420250a6c6578204c504152454e205c280a6c65782052504152454e205c290a6c657820434f4d4d41202c0a6c6578204551203d3d0a6c65782041535349474e203d0a6c6578204c54203c0a6c6578204754203e0a69676e6f7265205b205c745d2b0a69676e6f7265205c235b5e5c6e5d2a0a70726563206e6f6e6173736f63204551204c542047540a70726563206c65667420504c5553204d494e55530a70726563206c6566742054494d455320444956204d4f440a7072656320726967687420554d494e55530a7072656320726967687420504f570a72756c652073746d74203a204944454e542041535349474e2065787072207c20657870720a72756c652065787072203a206578707220504c55532065787072207c2065787072204d494e55532065787072207c20657870722054494d45532065787072207c2065787072204449562065787072207c2065787072204d4f4420657870720a72756c652065787072203a206578707220504f5720657870720a72756c652065787072203a20657870722045512065787072207c2065787072204c542065787072207c206578707220475420657870720a72756c652065787072203a204d494e5553206578707220257072656320554d494e55530a72756c652065787072203a204c504152454e20657870722052504152454e0a72756c652065787072203a204944454e54204c504152454e20617267732052504152454e0a72756c652065787072203a204e554d424552207c204944454e540a72756c652061726773203a2065787072207c206172677320434f4d4d4120657870720a\ngrammars/json.grammar 23204a534f4e2c20746865207761792072706c7927732075736572732077726974652069742e0a746f6b656e7320535452494e47204e554d42455220545255452046414c5345204e554c4c204c425241434520524252414345204c425241434b45542052425241434b455420434f4c4f4e20434f4d4d410a6c657820535452494e472022283f3a5b5e225c5c5d7c5c5c2e292a220a6c6578204e554d424552202d3f283f3a307c5b312d395d5c642a29283f3a5c2e5c642b293f283f3a5b65455d5b2b2d5d3f5c642b293f0a6c6578205452554520747275655c620a6c65782046414c53452066616c73655c620a6c6578204e554c4c206e756c6c5c620a6c6578204c4252414345205c7b0a6c657820524252414345205c7d0a6c6578204c425241434b4554205c5b0a6c65782052425241434b4554205c5d0a6c657820434f4c4f4e203a0a6c657820434f4d4d41202c0a69676e6f7265205c732b0a72756c652076616c7565203a206f626a656374207c206172726179207c20535452494e47207c204e554d424552207c2054525545207c2046414c5345207c204e554c4c0a72756c65206f626a656374203a204c425241434520524252414345207c204c4252414345206d656d62657273205242524143450a72756c65206d656d62657273203a2070616972207c206d656d6265727320434f4d4d4120706169720a72756c652070616972203a20535452494e4720434f4c4f4e2076616c75650a72756c65206172726179203a204c425241434b45542052425241434b4554207c204c425241434b455420656c656d656e74732052425241434b45540a72756c6520656c656d656e7473203a2076616c7565207c20656c656d656e747320434f4d4d412076616c75650a\n");
+    s.push_str("grammars/query.grammar 2320412053454c4543542073746174656d656e74206f76657220435356207461626c65732e0a746f6b656e732053454c4543542046524f4d20574845524520414e44204f52204e4f54204f52444552204259204153432044455343204c494d4954205354415220434f4d4d41204c504152454e2052504152454e20434d50204e554d42455220535452494e47204944454e540a6c65782053454c4543542053454c4543545c620a6c65782046524f4d2046524f4d5c620a6c65782057484552452057484552455c620a6c657820414e4420414e445c620a6c6578204f52204f525c620a6c6578204e4f54204e4f545c620a6c6578204f52444552204f524445525c620a6c65782042592042595c620a6c657820415343204153435c620a6c6578204445534320444553435c620a6c6578204c494d4954204c494d49545c620a6c65782053544152205c2a0a6c657820434f4d4d41202c0a6c6578204c504152454e205c280a6c65782052504152454e205c290a6c657820434d50203c3d7c3e3d7c3c3e7c3c7c3e7c3d0a6c6578204e554d424552202d3f5c642b0a6c657820535452494e4720275b5e275d2a270a6c6578204944454e54205b612d7a5f5d5b612d7a302d395f5d2a0a69676e6f7265205c732b0a70726563206c656674204f520a70726563206c65667420414e440a70726563207269676874204e4f540a72756c65207175657279203a2053454c45435420636f6c732046524f4d204944454e54207768657265206f72646572206c696d69740a72756c6520636f6c73203a2053544152207c20636f6c6c6973740a72756c6520636f6c6c697374203a204944454e54207c20636f6c6c69737420434f4d4d41204944454e540a72756c65207768657265203a207c20574845524520636f6e640a72756c6520636f6e64203a20636f6e64204f5220636f6e64207c20636f6e6420414e4420636f6e64207c204e4f5420636f6e64207c204c504152454e20636f6e642052504152454e207c206f706572616e6420434d50206f706572616e640a72756c65206f706572616e64203a204944454e54207c204e554d424552207c20535452494e470a72756c65206f72646572203a207c204f52444552204259204944454e54206469720a72756c6520646972203a207c20415343207c20444553430a72756c65206c696d6974203a207c204c494d4954204e554d4245520a\ngrammars/dangling_else.grammar 746f6b656e73204946205448454e20454c53452049440a6c65782049462069665c620a6c6578205448454e207468656e5c620a6c657820454c534520656c73655c620a6c6578204944205b612d7a5d2b0a69676e6f7265205c732b0a72756c652073746d74203a204946204944205448454e2073746d74207c204946204944205448454e2073746d7420454c53452073746d74207c2049440a\n");
+    s.push_str("grammars/dangling_else_prec.grammar 746f6b656e73204946205448454e20454c53452049440a6c65782049462069665c620a6c6578205448454e207468656e5c620a6c657820454c534520656c73655c620a6c6578204944205b612d7a5d2b0a69676e6f7265205c732b0a70726563206e6f6e6173736f63205448454e0a70726563206e6f6e6173736f6320454c53450a72756c652073746d74203a204946204944205448454e2073746d74207c204946204944205448454e2073746d7420454c53452073746d74207c2049440a\ngrammars/ambiguous.grammar 746f6b656e73204e554d42455220504c55532054494d45530a6c6578204e554d424552205c642b0a6c657820504c5553205c2b0a6c65782054494d4553205c2a0a69676e6f7265205c732b0a72756c652065787072203a206578707220504c55532065787072207c20657870722054494d45532065787072207c204e554d4245520a\ngrammars/reduce_reduce.grammar 746f6b656e7320494420434f4d4d4120434f4c4f4e0a6c6578204944205b612d7a5d2b0a6c657820434f4d4d41202c0a6c657820434f4c4f4e203a0a69676e6f7265205c732b0a72756c65206465636c203a206e616d657320434f4c4f4e204944207c206c6162656c7320434f4c4f4e0a72756c65206e616d6573203a204944207c206e616d657320434f4d4d412049440a72756c65206c6162656c73203a204944207c206c6162656c7320434f4d4d412049440a\ngrammars/unused.grammar 746f6b656e73204e554d42455220504c5553204d494e55532053454d490a6c6578204e554d424552205c642b0a6c657820504c5553205c2b0a6c6578204d494e5553202d0a69676e6f7265205c732b0a72756c652073756d203a2073756d20504c5553204e554d424552207c204e554d4245520a72756c6520646966666572656e6365203a2073756d204d494e5553204e554d4245520a\ngrammars/bad_name.grammar 746f6b656e73204e554d42455220504c55530a6c6578204e554d424552205c642b0a72756c65204e554d424552203a204e554d42455220504c5553204e554d4245520a\ngrammars/bad_prec.grammar 746f6b656e73204e554d424552204d494e55530a6c6578204e554d424552205c642b0a70726563206c656674204d494e55530a72756c652065787072203a204d494e55532065787072202570726563204e45470a72756c652065787072203a204e554d4245520a\ngrammars/dup_prec.grammar 746f6b656e73204e554d42455220504c55530a70726563206c65667420504c55530a7072656320726967687420504c55530a72756c652065787072203a206578707220504c55532065787072207c204e554d4245520a\n");
+    s.push_str("grammars/bad_assoc.grammar 746f6b656e73204e554d42455220504c55530a70726563206d6964646c6520504c55530a72756c652065787072203a206578707220504c55532065787072207c204e554d4245520a\ngrammars/no_colon.grammar 746f6b656e73204e554d4245520a72756c652065787072202d3e204e554d4245520a\ngrammars/bare_rule.grammar 746f6b656e73204e554d4245520a72756c6520657870720a\ngrammars/undefined.grammar 746f6b656e73204e554d42455220504c55530a72756c652065787072203a206578707220504c5553207465726d207c207465726d0a\ngrammars/epsilon.grammar 746f6b656e7320574f52442053454d490a6c657820574f5244205b612d7a5d2b0a6c65782053454d49203b0a69676e6f7265205c732b0a72756c6520646f63203a2073746d74730a72756c652073746d7473203a207c2073746d74732073746d740a72756c652073746d74203a20776f7264732053454d490a72756c6520776f726473203a207c20776f72647320574f52440a\ngrammars/keyword_prefix.grammar 232053454c454354206973206164646564206265666f7265204944454e5420616e6420686173206e6f205c622c20736f206974206d617463686573207468652073746172740a23206f662053454c45435445442e0a746f6b656e732053454c454354204944454e540a6c65782053454c4543542053454c4543540a6c6578204944454e54205b412d5a5d2b0a69676e6f7265205c732b0a72756c65207175657279203a2053454c454354204944454e540a\ngrammars/eq_order.grammar 232041535349474e206973206164646564206265666f72652045512c20736f203d3d206c657865732061732074776f2041535349474e20746f6b656e732e0a746f6b656e732049442041535349474e2045510a6c6578204944205b612d7a5d2b0a6c65782041535349474e203d0a6c6578204551203d3d0a69676e6f7265205c732b0a72756c652074657374203a204944204551204944207c2049442041535349474e2049440a\ngrammars/unlexed.grammar 2320434f4d4d454e54206973206c6578656420627574206973206e6f74206f6e65206f662074686520706172736572277320746f6b656e732e0a746f6b656e73204e554d42455220504c55530a6c6578204e554d424552205c642b0a6c657820504c5553205c2b0a6c657820434f4d4d454e54205c235b5e5c6e5d2a0a69676e6f7265205b205c745c6e5d2b0a72756c652065787072203a206578707220504c5553204e554d424552207c204e554d4245520a\ngrammars/handler.grammar 746f6b656e73204e554d42455220504c5553204c504152454e2052504152454e0a6c6578204e554d424552205c642b0a6c657820504c5553205c2b0a6c6578204c504152454e205c280a6c65782052504152454e205c290a69676e6f7265205c732b0a6f6e6572726f720a72756c652065787072203a206578707220504c5553207465726d207c207465726d0a72756c65207465726d203a204e554d424552207c204c504152454e20657870722052504152454e0a\n");
+    s.push_str("grammars/lines.grammar 23204e65776c696e65732061726520746f6b656e733b206f6e6c7920737061636573206172652069676e6f7265642e0a746f6b656e7320574f5244204e45574c494e450a6c657820574f5244205b612d7a5d2b0a6c6578204e45574c494e45205c6e0a69676e6f7265205b205c745d2b0a72756c6520646f63203a206c696e65207c20646f63206c696e650a72756c65206c696e65203a20776f726473204e45574c494e45207c204e45574c494e450a72756c6520776f726473203a20574f5244207c20776f72647320574f52440a\ngrammars/right_list.grammar 746f6b656e73204954454d20434f4d4d410a6c6578204954454d205b612d7a302d395d2b0a6c657820434f4d4d41202c0a69676e6f7265205c732b0a72756c65206c697374203a204954454d207c204954454d20434f4d4d41206c6973740a\ninputs/calc/arith.txt 31202b2032202a2033\ninputs/calc/paren.txt 2831202b203229202a2033\ninputs/calc/neg.txt 2d32202a2a2032\ninputs/calc/pow.txt 32202a2a2033202a2a2032\ninputs/calc/mixed.txt 3130202d2034202d203320252032202f2031\ninputs/calc/call.txt 6d617828312c2032202b20332c202d3429\ninputs/calc/assign.txt 746f74616c203d207072696365202a20717479\ninputs/calc/cmp_chain.txt 31203c2032203c2033\ninputs/calc/cmp.txt 31202b2031203d3d2032\ninputs/calc/trailing.txt 31202b\ninputs/calc/two_ops.txt 31202b202a2032\ninputs/calc/unclosed.txt 2831202b2032\ninputs/calc/extra.txt 2831202b20322929\ninputs/calc/badchar.txt 31202b203220402033\ninputs/calc/badchar2.txt 31202b0a20202040\ninputs/calc/comment.txt 31202b20322023207468726565\ninputs/calc/empty.txt \ninputs/calc/spaces.txt 202020\ninputs/calc/newline.txt 31202b0a32\ninputs/calc/assign_bad.txt 31203d2032\ninputs/json/config.json 7b0a2020226e616d65223a20226f72646572732d73657276696365222c0a202022706f7274223a20383038302c0a2020226465627567223a2066616c73652c0a202022726174696f223a20302e37352c0a20202274616773223a205b22617069222c2022696e7465726e616c222c20227632225d2c0a2020226462223a207b22686f7374223a202264622e696e7465726e616c222c2022706f6f6c223a207b226d696e223a20322c20226d6178223a2031367d2c20227265706c696361223a206e756c6c7d2c0a2020226c696d697473223a205b5d2c0a202022656d707479223a207b7d2c0a20202265736361706573223a20227461625c7468657265205c2271756f7465645c22205c7530306539222c0a202022626967223a202d312e35652d330a7d0a\n");
+    s.push_str("inputs/json/trailing_comma.json 7b2261223a20312c202262223a205b312c20322c5d2c207d0a\ninputs/json/single_quotes.json 7b2761273a20317d0a\ninputs/json/truely.json 5b747275652c20747275656973685d0a\ninputs/json/nested.json 5b5b5b5b5b5b2264656570225d5d5d5d5d2c207b226b223a205b7b2278223a207b7d7d5d7d5d0a\ninputs/json/unterminated.json 7b2261223a205b312c20320a\ninputs/json/scalar.json 34320a\ninputs/json/leading_zero.json 5b302c2030315d0a\ninputs/queries/report.sql 53454c454354202a2046524f4d2070656f706c650a53454c454354206e616d652c20636974792046524f4d2070656f706c6520574845524520616765203e3d2033300a53454c454354206e616d652c206167652046524f4d2070656f706c652057484552452063697479203d20274f736c6f27204f522063697479203d20274c696d6127204f524445522042592061676520444553430a53454c454354206e616d652046524f4d2070656f706c65205748455245204e4f542063697479203d20274f736c6f2720414e4420616765203c203430204f52444552204259206e616d650a53454c454354206e616d652046524f4d2070656f706c65205748455245204e4f54202863697479203d20274f736c6f2720414e4420616765203c20343029204f52444552204259206e616d65204c494d495420330a53454c4543542069642c20746f74616c2046524f4d206f726465727320574845524520746f74616c203e20313030204f5244455220425920746f74616c204c494d495420320a53454c4543542069642c20637573746f6d65722046524f4d206f726465727320574845524520737461747573203c3e20277061696427204f5244455220425920637573746f6d6572204153430a53454c454354206e616d652046524f4d2070656f706c6520574845524520616765203e20333020414e442063697479203d20274f736c6f27204f52206e616d65203d2027416e6e270a53454c454354206e616d652046524f4d2070656f706c6520574845524520616765203e20333020414e44202863697479203d20274f736c6f27204f52206e616d65203d2027416e6e27290a53454c454354206e69636b6e616d652046524f4d2070656f706c650a53454c454354206e616d652046524f4d20706574730a53454c454354206e616d652c2046524f4d2070656f706c650a53454c454354206e616d652046524f4d2070656f706c6520574845524520616765203e20333020414e440a53454c454354206e616d652046524f4d2070656f706c65204c494d49542032204f52444552204259206e616d650a53454c454354206e616d652046524f4d2070656f706c652057484552452063697479203d20224f736c6f220a73656c656374206e616d652066726f6d2070656f706c650a53454c454354206e616d652046524f4d2070656f706c6520574845524520616765203e203235204f5244455220425920636974792044455343204c494d495420300a53454c4543542073656c65637465642046524f4d2070656f706c650a\n");
+    s.push_str("tables/people.csv 6e616d652c6167652c636974790a416e6e2c33342c4f736c6f0a426f2c32382c4c696d610a4361692c34312c4f736c6f0a4465652c32352c50756e650a456c692c33302c4c696d610a4661792c35322c4b7969760a4775732c33302c4f736c6f0a\ntables/orders.csv 69642c637573746f6d65722c746f74616c2c7374617475730a313030312c416e6e2c3235302c706169640a313030322c426f2c37352c70656e64696e670a313030332c4361692c3132302c706169640a313030342c416e6e2c39392c726566756e6465640a313030352c456c692c3331302c70656e64696e670a313030362c4661792c3130312c706169640a\ninputs/calc/session.txt 2320612063616c63756c61746f722073657373696f6e0a7072696365203d2031320a717479203d20330a746f74616c203d207072696365202a207174790a746f74616c202d2032202a2a20330a646973636f756e74203d20746f74616c202f20370a746f74616c202520370a2d746f74616c202f20370a2d746f74616c202520370a6d61782870726963652c207174792c20343029202d206d696e2870726963652c20717479290a616273282d3529202b206162732835290a32202a2a203130202a2a20310a7072696365203e207174790a7072696365203d3d20717479202a20340a6d697373696e67202b20310a746f74616c202f2028717479202d2033290a32202a2a202d310a6d617828290a61766728312c2032290a2870726963650a7072696365202a202a207174790a717479203d20717479202b20310a7174790a31203c2032203c20330a\ninputs/dangling.txt 69662061207468656e2069662062207468656e206320656c73652064\ninputs/dangling2.txt 69662061207468656e206220656c73652069662063207468656e206420656c73652065\ninputs/ambiguous.txt 31202b2032202a2033202b2034\ninputs/rr1.txt 612c20623a20696e74\ninputs/rr2.txt 612c20623a\ninputs/unused.txt 31202b2032202b2033\ninputs/epsilon.txt 6120623b203b20633b\ninputs/epsilon_empty.txt \ninputs/keyword1.txt 53454c454354204e414d45\ninputs/keyword2.txt 53454c4543544544\ninputs/keyword3.txt 53454c4543542053454c4543544544\ninputs/eq.txt 61203d3d2062\ninputs/eq2.txt 61203d2062\ninputs/unlexed.txt 31202b203220232073756d0a2b2033\ninputs/handler1.txt 31202b202832202b2033\ninputs/handler2.txt 31202b2029\ninputs/handler3.txt 2831202b203229202b2033\ninputs/lines.txt 6f6e652074776f0a0a74687265650a666f75722066697665207369780a\n");
+    s.push_str("inputs/lines_noeol.txt 6f6e650a74776f\ninputs/crlf.txt 6f6e650d0a74776f0d0a\ninputs/right.txt 612c20622c20632c2064\ninputs/right_bad.txt 612c20622c\ninputs/multiline.txt 78203d2031202b0a202032202a0a0a202020202833202d2079290a\ninputs/unicode.txt 636166c3a9203d2031\ninputs/queries/sample.sql 53454c454354206e616d652c206167652046524f4d2070656f706c650a202057484552452063697479203d20274f736c6f2720414e4420616765203e3d2033300a4f52444552204259206167652044455343204c494d495420320a\njobs.txt 23206275696c64696e672074686520706172736572733a207374617465732c2064656661756c7420726564756374696f6e732c20636f6e666c696374730a6275696c64206772616d6d6172732f63616c632e6772616d6d61720a6275696c64206772616d6d6172732f6a736f6e2e6772616d6d61720a6275696c64206772616d6d6172732f71756572792e6772616d6d61720a6275696c64206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d61720a6275696c64206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d61720a6275696c64206772616d6d6172732f616d626967756f75732e6772616d6d61720a6275696c64206772616d6d6172732f7265647563655f7265647563652e6772616d6d61720a6275696c64206772616d6d6172732f756e757365642e6772616d6d61720a6275696c64206772616d6d6172732f657073696c6f6e2e6772616d6d61720a6275696c64206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d61720a6275696c64206772616d6d6172732f65715f6f726465722e6772616d6d61720a6275696c64206772616d6d6172732f756e6c657865642e6772616d6d61720a6275696c64206772616d6d6172732f68616e646c65722e6772616d6d61720a6275696c64206772616d6d6172732f6c696e65732e6772616d6d61720a6275696c64206772616d6d6172732f72696768745f6c6973742e6772616d6d61720a23206d697374616b65732050617273657247656e657261746f7220726566757365730a6275696c64206772616d6d6172732f6261645f6e616d652e6772616d6d61720a6275696c64206772616d6d6172732f6261645f707265632e6772616d6d61720a6275696c64206772616d6d6172732f6475705f707265632e6772616d6d61720a6275696c64206772616d6d6172732f6261645f6173736f632e6772616d6d61720a6275696c64206772616d6d6172732f6e6f5f636f6c6f6e2e6772616d6d61720a6275696c64206772616d6d6172732f626172655f72756c652e6772616d6d61720a6275696c64206772616d6d6172732f756e646566696e65642e6772616d6d61720a2320746865206c657865723a20746f6b656e732c20706f736974696f6e7320616e64204c6578696e674572726f720a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61726974682e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f6d756c74696c696e652e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f626164636861722e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f62616463686172322e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636f6d6d656e742e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f656d7074792e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f7370616365732e7478740a746f6b656e73206772616d6d6172732f63616c632e6772616d6d617220696e707574732f756e69636f64652e7478740a746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e0a746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747275656c792e6a736f6e0a746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f73696e676c655f71756f7465732e6a736f6e0a746f6b656e73206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6c656164696e675f7a65726f2e6a736f6e0a746f6b656e73206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264322e7478740a746f6b656e73206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264332e7478740a746f6b656e73206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f65712e7478740a746f6b656e73206772616d6d6172732f71756572792e6772616d6d617220696e707574732f717565726965732f73616d706c652e73716c0a746f6b656e73206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f63726c662e7478740a232070617273652074726565733a20707265636564656e636520616e64206173736f6369617469766974790a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61726974682e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f706172656e2e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6e65672e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f706f772e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6d697865642e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f63616c6c2e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61737369676e2e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636d702e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636f6d6d656e742e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f6e65776c696e652e7478740a23207061727365206572726f72730a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f636d705f636861696e2e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f747261696c696e672e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f74776f5f6f70732e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f756e636c6f7365642e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f65787472612e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f626164636861722e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f62616463686172322e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f656d7074792e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f7370616365732e7478740a7061727365206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f61737369676e5f6261642e7478740a232074686520636f6e666c696374206772616d6d61727320617420776f726b0a7061727365206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d617220696e707574732f64616e676c696e672e7478740a7061727365206772616d6d6172732f64616e676c696e675f656c73652e6772616d6d617220696e707574732f64616e676c696e67322e7478740a7061727365206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d617220696e707574732f64616e676c696e672e7478740a7061727365206772616d6d6172732f64616e676c696e675f656c73655f707265632e6772616d6d617220696e707574732f64616e676c696e67322e7478740a7061727365206772616d6d6172732f616d626967756f75732e6772616d6d617220696e707574732f616d626967756f75732e7478740a7061727365206772616d6d6172732f7265647563655f7265647563652e6772616d6d617220696e707574732f7272312e7478740a7061727365206772616d6d6172732f7265647563655f7265647563652e6772616d6d617220696e707574732f7272322e7478740a7061727365206772616d6d6172732f756e757365642e6772616d6d617220696e707574732f756e757365642e7478740a7061727365206772616d6d6172732f657073696c6f6e2e6772616d6d617220696e707574732f657073696c6f6e2e7478740a7061727365206772616d6d6172732f657073696c6f6e2e6772616d6d617220696e707574732f657073696c6f6e5f656d7074792e7478740a7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264312e7478740a7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264322e7478740a7061727365206772616d6d6172732f6b6579776f72645f7072656669782e6772616d6d617220696e707574732f6b6579776f7264332e7478740a7061727365206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f65712e7478740a7061727365206772616d6d6172732f65715f6f726465722e6772616d6d617220696e707574732f6571322e7478740a7061727365206772616d6d6172732f756e6c657865642e6772616d6d617220696e707574732f756e6c657865642e7478740a7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572312e7478740a7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572322e7478740a7061727365206772616d6d6172732f68616e646c65722e6772616d6d617220696e707574732f68616e646c6572332e7478740a7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f6c696e65732e7478740a7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f6c696e65735f6e6f656f6c2e7478740a7061727365206772616d6d6172732f6c696e65732e6772616d6d617220696e707574732f63726c662e7478740a7061727365206772616d6d6172732f72696768745f6c6973742e6772616d6d617220696e707574732f72696768742e7478740a7061727365206772616d6d6172732f72696768745f6c6973742e6772616d6d617220696e707574732f72696768745f6261642e7478740a23204a534f4e20646f63756d656e74730a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6e65737465642e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f7363616c61722e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747261696c696e675f636f6d6d612e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f73696e676c655f71756f7465732e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f747275656c792e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f756e7465726d696e617465642e6a736f6e0a7061727365206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f6c656164696e675f7a65726f2e6a736f6e0a232070726f6772616d733a20612063616c63756c61746f722073657373696f6e2c2061204a534f4e20666f726d61747465722c2053454c454354206f766572204353560a2163616c63206772616d6d6172732f63616c632e6772616d6d617220696e707574732f63616c632f73657373696f6e2e7478740a216a736f6e206772616d6d6172732f6a736f6e2e6772616d6d617220696e707574732f6a736f6e2f636f6e6669672e6a736f6e20696e707574732f6a736f6e2f6e65737465642e6a736f6e20696e707574732f6a736f6e2f7363616c61722e6a736f6e20696e707574732f6a736f6e2f747261696c696e675f636f6d6d612e6a736f6e0a217175657279206772616d6d6172732f71756572792e6772616d6d617220696e707574732f717565726965732f7265706f72742e73716c0a\n");
+    s
+}

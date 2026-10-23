@@ -1,0 +1,506 @@
+# building the parsers: states, default reductions, conflicts
+> build grammars/calc.grammar
+  productions 19, states 37, default reductions 3
+> build grammars/json.grammar
+  productions 17, states 26, default reductions 16
+> build grammars/query.grammar
+  productions 23, states 39, default reductions 15
+> build grammars/dangling_else.grammar
+  warning: 1 shift/reduce conflict
+  productions 4, states 9, default reductions 2
+  shift/reduce on 'ELSE', resolved as shift
+> build grammars/dangling_else_prec.grammar
+  productions 4, states 9, default reductions 2
+> build grammars/ambiguous.grammar
+  warning: 4 shift/reduce conflicts
+  productions 4, states 7, default reductions 1
+  shift/reduce on 'PLUS', resolved as shift
+  shift/reduce on 'PLUS', resolved as shift
+  shift/reduce on 'TIMES', resolved as shift
+  shift/reduce on 'TIMES', resolved as shift
+> build grammars/reduce_reduce.grammar
+  warning: 2 reduce/reduce conflicts
+  productions 7, states 12, default reductions 5
+  reduce/reduce: Production(names -> ID) over Production(labels -> ID)
+  reduce/reduce: Production(names -> ID) over Production(labels -> ID)
+> build grammars/unused.grammar
+  warning: Token 'SEMI' is unused
+  warning: Production 'difference' is not reachable
+  productions 4, states 5, default reductions 2
+> build grammars/epsilon.grammar
+  productions 7, states 7, default reductions 4
+> build grammars/keyword_prefix.grammar
+  productions 2, states 4, default reductions 1
+> build grammars/eq_order.grammar
+  productions 3, states 7, default reductions 2
+> build grammars/unlexed.grammar
+  productions 3, states 5, default reductions 2
+> build grammars/handler.grammar
+  productions 5, states 9, default reductions 4
+> build grammars/lines.grammar
+  productions 7, states 9, default reductions 6
+> build grammars/right_list.grammar
+  productions 3, states 5, default reductions 1
+# mistakes ParserGenerator refuses
+> build grammars/bad_name.grammar
+  error ParserGeneratorError: Illegal rule name 'NUMBER'
+> build grammars/bad_prec.grammar
+  error ParserGeneratorError: Precedence 'NEG' doesn't exist
+> build grammars/dup_prec.grammar
+  error ParserGeneratorError: Precedence already specified for PLUS
+> build grammars/bad_assoc.grammar
+  error ParserGeneratorError: Precedence must be one of left, right, nonassoc; not middle
+> build grammars/no_colon.grammar
+  error ParserGeneratorError: Expecting :
+> build grammars/bare_rule.grammar
+  error IndexError: list index out of range
+> build grammars/undefined.grammar
+  warning: Token 'NUMBER' is unused
+  error KeyError: 'term'
+# the lexer: tokens, positions and LexingError
+> tokens grammars/calc.grammar inputs/calc/arith.txt
+  NUMBER='1' at 1:1 (index 0)
+  PLUS='+' at 1:3 (index 2)
+  NUMBER='2' at 1:5 (index 4)
+  TIMES='*' at 1:7 (index 6)
+  NUMBER='3' at 1:9 (index 8)
+> tokens grammars/calc.grammar inputs/multiline.txt
+  IDENT='x' at 1:1 (index 0)
+  ASSIGN='=' at 1:3 (index 2)
+  NUMBER='1' at 1:5 (index 4)
+  PLUS='+' at 1:7 (index 6)
+  LexingError at 1:7 (index 7)
+> tokens grammars/calc.grammar inputs/calc/badchar.txt
+  NUMBER='1' at 1:1 (index 0)
+  PLUS='+' at 1:3 (index 2)
+  NUMBER='2' at 1:5 (index 4)
+  LexingError at 1:5 (index 6)
+> tokens grammars/calc.grammar inputs/calc/badchar2.txt
+  NUMBER='1' at 1:1 (index 0)
+  PLUS='+' at 1:3 (index 2)
+  LexingError at 1:3 (index 3)
+> tokens grammars/calc.grammar inputs/calc/comment.txt
+  NUMBER='1' at 1:1 (index 0)
+  PLUS='+' at 1:3 (index 2)
+  NUMBER='2' at 1:5 (index 4)
+> tokens grammars/calc.grammar inputs/calc/empty.txt
+> tokens grammars/calc.grammar inputs/calc/spaces.txt
+> tokens grammars/calc.grammar inputs/unicode.txt
+  IDENT='caf' at 1:1 (index 0)
+  LexingError at 1:1 (index 3)
+> tokens grammars/json.grammar inputs/json/config.json
+  LBRACE='{' at 1:1 (index 0)
+  STRING='"name"' at 2:3 (index 4)
+  COLON=':' at 2:9 (index 10)
+  STRING='"orders-service"' at 2:11 (index 12)
+  COMMA=',' at 2:27 (index 28)
+  STRING='"port"' at 3:3 (index 32)
+  COLON=':' at 3:9 (index 38)
+  NUMBER='8080' at 3:11 (index 40)
+  COMMA=',' at 3:15 (index 44)
+  STRING='"debug"' at 4:3 (index 48)
+  COLON=':' at 4:10 (index 55)
+  FALSE='false' at 4:12 (index 57)
+  COMMA=',' at 4:17 (index 62)
+  STRING='"ratio"' at 5:3 (index 66)
+  COLON=':' at 5:10 (index 73)
+  NUMBER='0.75' at 5:12 (index 75)
+  COMMA=',' at 5:16 (index 79)
+  STRING='"tags"' at 6:3 (index 83)
+  COLON=':' at 6:9 (index 89)
+  LBRACKET='[' at 6:11 (index 91)
+  STRING='"api"' at 6:12 (index 92)
+  COMMA=',' at 6:17 (index 97)
+  STRING='"internal"' at 6:19 (index 99)
+  COMMA=',' at 6:29 (index 109)
+  STRING='"v2"' at 6:31 (index 111)
+  RBRACKET=']' at 6:35 (index 115)
+  COMMA=',' at 6:36 (index 116)
+  STRING='"db"' at 7:3 (index 120)
+  COLON=':' at 7:7 (index 124)
+  LBRACE='{' at 7:9 (index 126)
+  STRING='"host"' at 7:10 (index 127)
+  COLON=':' at 7:16 (index 133)
+  STRING='"db.internal"' at 7:18 (index 135)
+  COMMA=',' at 7:31 (index 148)
+  STRING='"pool"' at 7:33 (index 150)
+  COLON=':' at 7:39 (index 156)
+  LBRACE='{' at 7:41 (index 158)
+  STRING='"min"' at 7:42 (index 159)
+  COLON=':' at 7:47 (index 164)
+  NUMBER='2' at 7:49 (index 166)
+  COMMA=',' at 7:50 (index 167)
+  STRING='"max"' at 7:52 (index 169)
+  COLON=':' at 7:57 (index 174)
+  NUMBER='16' at 7:59 (index 176)
+  RBRACE='}' at 7:61 (index 178)
+  COMMA=',' at 7:62 (index 179)
+  STRING='"replica"' at 7:64 (index 181)
+  COLON=':' at 7:73 (index 190)
+  NULL='null' at 7:75 (index 192)
+  RBRACE='}' at 7:79 (index 196)
+  COMMA=',' at 7:80 (index 197)
+  STRING='"limits"' at 8:3 (index 201)
+  COLON=':' at 8:11 (index 209)
+  LBRACKET='[' at 8:13 (index 211)
+  RBRACKET=']' at 8:14 (index 212)
+  COMMA=',' at 8:15 (index 213)
+  STRING='"empty"' at 9:3 (index 217)
+  COLON=':' at 9:10 (index 224)
+  LBRACE='{' at 9:12 (index 226)
+  RBRACE='}' at 9:13 (index 227)
+  COMMA=',' at 9:14 (index 228)
+  STRING='"escapes"' at 10:3 (index 232)
+  COLON=':' at 10:12 (index 241)
+  STRING='"tab\\there \\"quoted\\" \\u00e9"' at 10:14 (index 243)
+  COMMA=',' at 10:43 (index 272)
+  STRING='"big"' at 11:3 (index 276)
+  COLON=':' at 11:8 (index 281)
+  NUMBER='-1.5e-3' at 11:10 (index 283)
+  RBRACE='}' at 12:1 (index 291)
+> tokens grammars/json.grammar inputs/json/truely.json
+  LBRACKET='[' at 1:1 (index 0)
+  TRUE='true' at 1:2 (index 1)
+  COMMA=',' at 1:6 (index 5)
+  LexingError at 1:6 (index 7)
+> tokens grammars/json.grammar inputs/json/single_quotes.json
+  LBRACE='{' at 1:1 (index 0)
+  LexingError at 1:1 (index 1)
+> tokens grammars/json.grammar inputs/json/leading_zero.json
+  LBRACKET='[' at 1:1 (index 0)
+  NUMBER='0' at 1:2 (index 1)
+  COMMA=',' at 1:3 (index 2)
+  NUMBER='0' at 1:5 (index 4)
+  NUMBER='1' at 1:6 (index 5)
+  RBRACKET=']' at 1:7 (index 6)
+> tokens grammars/keyword_prefix.grammar inputs/keyword2.txt
+  SELECT='SELECT' at 1:1 (index 0)
+  IDENT='ED' at 1:7 (index 6)
+> tokens grammars/keyword_prefix.grammar inputs/keyword3.txt
+  SELECT='SELECT' at 1:1 (index 0)
+  SELECT='SELECT' at 1:8 (index 7)
+  IDENT='ED' at 1:14 (index 13)
+> tokens grammars/eq_order.grammar inputs/eq.txt
+  ID='a' at 1:1 (index 0)
+  ASSIGN='=' at 1:3 (index 2)
+  ASSIGN='=' at 1:4 (index 3)
+  ID='b' at 1:6 (index 5)
+> tokens grammars/query.grammar inputs/queries/sample.sql
+  SELECT='SELECT' at 1:1 (index 0)
+  IDENT='name' at 1:8 (index 7)
+  COMMA=',' at 1:12 (index 11)
+  IDENT='age' at 1:14 (index 13)
+  FROM='FROM' at 1:18 (index 17)
+  IDENT='people' at 1:23 (index 22)
+  WHERE='WHERE' at 2:3 (index 31)
+  IDENT='city' at 2:9 (index 37)
+  CMP='=' at 2:14 (index 42)
+  STRING="'Oslo'" at 2:16 (index 44)
+  AND='AND' at 2:23 (index 51)
+  IDENT='age' at 2:27 (index 55)
+  CMP='>=' at 2:31 (index 59)
+  NUMBER='30' at 2:34 (index 62)
+  ORDER='ORDER' at 3:1 (index 65)
+  BY='BY' at 3:7 (index 71)
+  IDENT='age' at 3:10 (index 74)
+  DESC='DESC' at 3:14 (index 78)
+  LIMIT='LIMIT' at 3:19 (index 83)
+  NUMBER='2' at 3:25 (index 89)
+> tokens grammars/lines.grammar inputs/crlf.txt
+  WORD='one' at 1:1 (index 0)
+  LexingError at 1:1 (index 3)
+# parse trees: precedence and associativity
+> parse grammars/calc.grammar inputs/calc/arith.txt
+  (stmt (expr (expr NUMBER='1') PLUS='+' (expr (expr NUMBER='2') TIMES='*' (expr NUMBER='3'))))
+> parse grammars/calc.grammar inputs/calc/paren.txt
+  (stmt (expr (expr LPAREN='(' (expr (expr NUMBER='1') PLUS='+' (expr NUMBER='2')) RPAREN=')') TIMES='*' (expr NUMBER='3')))
+> parse grammars/calc.grammar inputs/calc/neg.txt
+  (stmt (expr MINUS='-' (expr (expr NUMBER='2') POW='**' (expr NUMBER='2'))))
+> parse grammars/calc.grammar inputs/calc/pow.txt
+  (stmt (expr (expr NUMBER='2') POW='**' (expr (expr NUMBER='3') POW='**' (expr NUMBER='2'))))
+> parse grammars/calc.grammar inputs/calc/mixed.txt
+  (stmt (expr (expr (expr NUMBER='10') MINUS='-' (expr NUMBER='4')) MINUS='-' (expr (expr (expr NUMBER='3') MOD='%' (expr NUMBER='2')) DIV='/' (expr NUMBER='1'))))
+> parse grammars/calc.grammar inputs/calc/call.txt
+  (stmt (expr IDENT='max' LPAREN='(' (args (args (args (expr NUMBER='1')) COMMA=',' (expr (expr NUMBER='2') PLUS='+' (expr NUMBER='3'))) COMMA=',' (expr MINUS='-' (expr NUMBER='4'))) RPAREN=')'))
+> parse grammars/calc.grammar inputs/calc/assign.txt
+  (stmt IDENT='total' ASSIGN='=' (expr (expr IDENT='price') TIMES='*' (expr IDENT='qty')))
+> parse grammars/calc.grammar inputs/calc/cmp.txt
+  (stmt (expr (expr (expr NUMBER='1') PLUS='+' (expr NUMBER='1')) EQ='==' (expr NUMBER='2')))
+> parse grammars/calc.grammar inputs/calc/comment.txt
+  (stmt (expr (expr NUMBER='1') PLUS='+' (expr NUMBER='2')))
+> parse grammars/calc.grammar inputs/calc/newline.txt
+  LexingError at 1:3 (index 3)
+# parse errors
+> parse grammars/calc.grammar inputs/calc/cmp_chain.txt
+  (stmt (expr (expr (expr NUMBER='1') LT='<' (expr NUMBER='2')) LT='<' (expr NUMBER='3')))
+> parse grammars/calc.grammar inputs/calc/trailing.txt
+  ParsingError at no position
+> parse grammars/calc.grammar inputs/calc/two_ops.txt
+  ParsingError at 1:5 (index 4)
+> parse grammars/calc.grammar inputs/calc/unclosed.txt
+  ParsingError at no position
+> parse grammars/calc.grammar inputs/calc/extra.txt
+  ParsingError at 1:8 (index 7)
+> parse grammars/calc.grammar inputs/calc/badchar.txt
+  LexingError at 1:5 (index 6)
+> parse grammars/calc.grammar inputs/calc/badchar2.txt
+  LexingError at 1:3 (index 3)
+> parse grammars/calc.grammar inputs/calc/empty.txt
+  ParsingError at no position
+> parse grammars/calc.grammar inputs/calc/spaces.txt
+  ParsingError at no position
+> parse grammars/calc.grammar inputs/calc/assign_bad.txt
+  ParsingError at 1:3 (index 2)
+# the conflict grammars at work
+> parse grammars/dangling_else.grammar inputs/dangling.txt
+  (stmt IF='if' ID='a' THEN='then' (stmt IF='if' ID='b' THEN='then' (stmt ID='c') ELSE='else' (stmt ID='d')))
+> parse grammars/dangling_else.grammar inputs/dangling2.txt
+  (stmt IF='if' ID='a' THEN='then' (stmt ID='b') ELSE='else' (stmt IF='if' ID='c' THEN='then' (stmt ID='d') ELSE='else' (stmt ID='e')))
+> parse grammars/dangling_else_prec.grammar inputs/dangling.txt
+  (stmt IF='if' ID='a' THEN='then' (stmt IF='if' ID='b' THEN='then' (stmt ID='c') ELSE='else' (stmt ID='d')))
+> parse grammars/dangling_else_prec.grammar inputs/dangling2.txt
+  (stmt IF='if' ID='a' THEN='then' (stmt ID='b') ELSE='else' (stmt IF='if' ID='c' THEN='then' (stmt ID='d') ELSE='else' (stmt ID='e')))
+> parse grammars/ambiguous.grammar inputs/ambiguous.txt
+  (expr (expr NUMBER='1') PLUS='+' (expr (expr NUMBER='2') TIMES='*' (expr (expr NUMBER='3') PLUS='+' (expr NUMBER='4'))))
+> parse grammars/reduce_reduce.grammar inputs/rr1.txt
+  (decl (names (names ID='a') COMMA=',' ID='b') COLON=':' ID='int')
+> parse grammars/reduce_reduce.grammar inputs/rr2.txt
+  ParsingError at no position
+> parse grammars/unused.grammar inputs/unused.txt
+  (sum (sum (sum NUMBER='1') PLUS='+' NUMBER='2') PLUS='+' NUMBER='3')
+> parse grammars/epsilon.grammar inputs/epsilon.txt
+  (doc (stmts (stmts (stmts (stmts) (stmt (words (words (words) WORD='a') WORD='b') SEMI=';')) (stmt (words) SEMI=';')) (stmt (words (words) WORD='c') SEMI=';')))
+> parse grammars/epsilon.grammar inputs/epsilon_empty.txt
+  (doc (stmts))
+> parse grammars/keyword_prefix.grammar inputs/keyword1.txt
+  (query SELECT='SELECT' IDENT='NAME')
+> parse grammars/keyword_prefix.grammar inputs/keyword2.txt
+  (query SELECT='SELECT' IDENT='ED')
+> parse grammars/keyword_prefix.grammar inputs/keyword3.txt
+  ParsingError at 1:8 (index 7)
+> parse grammars/eq_order.grammar inputs/eq.txt
+  ParsingError at 1:4 (index 3)
+> parse grammars/eq_order.grammar inputs/eq2.txt
+  (test ID='a' ASSIGN='=' ID='b')
+> parse grammars/unlexed.grammar inputs/unlexed.txt
+  ParsingError at 1:7 (index 6)
+> parse grammars/handler.grammar inputs/handler1.txt
+  AttributeError: 'NoneType' object has no attribute 'lineno'
+> parse grammars/handler.grammar inputs/handler2.txt
+  handler: unexpected RPAREN ')' at 1:5
+> parse grammars/handler.grammar inputs/handler3.txt
+  (expr (expr (term LPAREN='(' (expr (expr (term NUMBER='1')) PLUS='+' (term NUMBER='2')) RPAREN=')')) PLUS='+' (term NUMBER='3'))
+> parse grammars/lines.grammar inputs/lines.txt
+  (doc (doc (doc (doc (line (words (words WORD='one') WORD='two') NEWLINE='\n')) (line NEWLINE='\n')) (line (words WORD='three') NEWLINE='\n')) (line (words (words (words WORD='four') WORD='five') WORD='six') NEWLINE='\n'))
+> parse grammars/lines.grammar inputs/lines_noeol.txt
+  ParsingError at no position
+> parse grammars/lines.grammar inputs/crlf.txt
+  LexingError at 1:1 (index 3)
+> parse grammars/right_list.grammar inputs/right.txt
+  (list ITEM='a' COMMA=',' (list ITEM='b' COMMA=',' (list ITEM='c' COMMA=',' (list ITEM='d'))))
+> parse grammars/right_list.grammar inputs/right_bad.txt
+  ParsingError at no position
+# JSON documents
+> parse grammars/json.grammar inputs/json/config.json
+  (value (object LBRACE='{' (members (members (members (members (members (members (members (members (members (members (pair STRING='"name"' COLON=':' (value STRING='"orders-service"'))) COMMA=',' (pair STRING='"port"' COLON=':' (value NUMBER='8080'))) COMMA=',' (pair STRING='"debug"' COLON=':' (value FALSE='false'))) COMMA=',' (pair STRING='"ratio"' COLON=':' (value NUMBER='0.75'))) COMMA=',' (pair STRING='"tags"' COLON=':' (value (array LBRACKET='[' (elements (elements (elements (value STRING='"api"')) COMMA=',' (value STRING='"internal"')) COMMA=',' (value STRING='"v2"')) RBRACKET=']')))) COMMA=',' (pair STRING='"db"' COLON=':' (value (object LBRACE='{' (members (members (members (pair STRING='"host"' COLON=':' (value STRING='"db.internal"'))) COMMA=',' (pair STRING='"pool"' COLON=':' (value (object LBRACE='{' (members (members (pair STRING='"min"' COLON=':' (value NUMBER='2'))) COMMA=',' (pair STRING='"max"' COLON=':' (value NUMBER='16'))) RBRACE='}')))) COMMA=',' (pair STRING='"replica"' COLON=':' (value NULL='null'))) RBRACE='}')))) COMMA=',' (pair STRING='"limits"' COLON=':' (value (array LBRACKET='[' RBRACKET=']')))) COMMA=',' (pair STRING='"empty"' COLON=':' (value (object LBRACE='{' RBRACE='}')))) COMMA=',' (pair STRING='"escapes"' COLON=':' (value STRING='"tab\\there \\"quoted\\" \\u00e9"'))) COMMA=',' (pair STRING='"big"' COLON=':' (value NUMBER='-1.5e-3'))) RBRACE='}'))
+> parse grammars/json.grammar inputs/json/nested.json
+  (value (array LBRACKET='[' (elements (elements (value (array LBRACKET='[' (elements (value (array LBRACKET='[' (elements (value (array LBRACKET='[' (elements (value (array LBRACKET='[' (elements (value (array LBRACKET='[' (elements (value STRING='"deep"')) RBRACKET=']'))) RBRACKET=']'))) RBRACKET=']'))) RBRACKET=']'))) RBRACKET=']'))) COMMA=',' (value (object LBRACE='{' (members (pair STRING='"k"' COLON=':' (value (array LBRACKET='[' (elements (value (object LBRACE='{' (members (pair STRING='"x"' COLON=':' (value (object LBRACE='{' RBRACE='}')))) RBRACE='}'))) RBRACKET=']')))) RBRACE='}'))) RBRACKET=']'))
+> parse grammars/json.grammar inputs/json/scalar.json
+  (value NUMBER='42')
+> parse grammars/json.grammar inputs/json/trailing_comma.json
+  ParsingError at 1:21 (index 20)
+> parse grammars/json.grammar inputs/json/single_quotes.json
+  LexingError at 1:1 (index 1)
+> parse grammars/json.grammar inputs/json/truely.json
+  LexingError at 1:6 (index 7)
+> parse grammars/json.grammar inputs/json/unterminated.json
+  ParsingError at no position
+> parse grammars/json.grammar inputs/json/leading_zero.json
+  ParsingError at 1:6 (index 5)
+# programs: a calculator session, a JSON formatter, SELECT over CSV
+> !calc grammars/calc.grammar inputs/calc/session.txt
+  > price = 12
+    price := 12
+  > qty = 3
+    qty := 3
+  > total = price * qty
+    total := 36
+  > total - 2 ** 3
+    = 28
+  > discount = total / 7
+    discount := 5
+  > total % 7
+    = 1
+  > -total / 7
+    = -6
+  > -total % 7
+    = 6
+  > max(price, qty, 40) - min(price, qty)
+    = 37
+  > abs(-5) + abs(5)
+    = 10
+  > 2 ** 10 ** 1
+    = 1024
+  > price > qty
+    = 1
+  > price == qty * 4
+    = 1
+  > missing + 1
+    error: unknown variable missing
+  > total / (qty - 3)
+    error: division by zero
+  > 2 ** -1
+    error: negative exponent
+  > max()
+    ParsingError at 1:5 (index 4)
+  > avg(1, 2)
+    error: unknown function avg/2
+  > (price
+    ParsingError at no position
+  > price * * qty
+    ParsingError at 1:9 (index 8)
+  > qty = qty + 1
+    qty := 4
+  > qty
+    = 4
+  > 1 < 2 < 3
+    = 1
+  variables: discount=5, price=12, qty=4, total=36
+> !json grammars/json.grammar inputs/json/config.json inputs/json/nested.json inputs/json/scalar.json inputs/json/trailing_comma.json
+  inputs/json/config.json: 4 objects, 2 arrays, 13 scalars, depth 4
+    | {
+    |   "name": "orders-service",
+    |   "port": 8080,
+    |   "debug": false,
+    |   "ratio": 0.75,
+    |   "tags": [
+    |     "api",
+    |     "internal",
+    |     "v2"
+    |   ],
+    |   "db": {
+    |     "host": "db.internal",
+    |     "pool": {
+    |       "min": 2,
+    |       "max": 16
+    |     },
+    |     "replica": null
+    |   },
+    |   "limits": [],
+    |   "empty": {},
+    |   "escapes": "tab\there \"quoted\" \u00e9",
+    |   "big": -1.5e-3
+    | }
+  inputs/json/nested.json: 3 objects, 7 arrays, 1 scalars, depth 7
+    | [
+    |   [
+    |     [
+    |       [
+    |         [
+    |           [
+    |             "deep"
+    |           ]
+    |         ]
+    |       ]
+    |     ]
+    |   ],
+    |   {
+    |     "k": [
+    |       {
+    |         "x": {}
+    |       }
+    |     ]
+    |   }
+    | ]
+  inputs/json/scalar.json: 0 objects, 0 arrays, 1 scalars, depth 1
+    | 42
+  inputs/json/trailing_comma.json: ParsingError at 1:21 (index 20)
+> !query grammars/query.grammar inputs/queries/report.sql
+  > SELECT * FROM people
+    name  age  city
+    ----  ---  ----
+    Ann   34   Oslo
+    Bo    28   Lima
+    Cai   41   Oslo
+    Dee   25   Pune
+    Eli   30   Lima
+    Fay   52   Kyiv
+    Gus   30   Oslo
+    (7 rows)
+  > SELECT name, city FROM people WHERE age >= 30
+    name  city
+    ----  ----
+    Ann   Oslo
+    Cai   Oslo
+    Eli   Lima
+    Fay   Kyiv
+    Gus   Oslo
+    (5 rows)
+  > SELECT name, age FROM people WHERE city = 'Oslo' OR city = 'Lima' ORDER BY age DESC
+    name  age
+    ----  ---
+    Cai   41
+    Ann   34
+    Eli   30
+    Gus   30
+    Bo    28
+    (5 rows)
+  > SELECT name FROM people WHERE NOT city = 'Oslo' AND age < 40 ORDER BY name
+    name
+    ----
+    Bo
+    Dee
+    Eli
+    (3 rows)
+  > SELECT name FROM people WHERE NOT (city = 'Oslo' AND age < 40) ORDER BY name LIMIT 3
+    name
+    ----
+    Bo
+    Cai
+    Dee
+    (3 rows)
+  > SELECT id, total FROM orders WHERE total > 100 ORDER BY total LIMIT 2
+    id    total
+    ----  -----
+    1006  101
+    1003  120
+    (2 rows)
+  > SELECT id, customer FROM orders WHERE status <> 'paid' ORDER BY customer ASC
+    id    customer
+    ----  --------
+    1004  Ann
+    1002  Bo
+    1005  Eli
+    (3 rows)
+  > SELECT name FROM people WHERE age > 30 AND city = 'Oslo' OR name = 'Ann'
+    name
+    ----
+    Ann
+    Cai
+    (2 rows)
+  > SELECT name FROM people WHERE age > 30 AND (city = 'Oslo' OR name = 'Ann')
+    name
+    ----
+    Ann
+    Cai
+    (2 rows)
+  > SELECT nickname FROM people
+    error: no column nickname
+  > SELECT name FROM pets
+    error: no table pets
+  > SELECT name, FROM people
+    ParsingError at 1:14 (index 13)
+  > SELECT name FROM people WHERE age > 30 AND
+    ParsingError at no position
+  > SELECT name FROM people LIMIT 2 ORDER BY name
+    ParsingError at 1:33 (index 32)
+  > SELECT name FROM people WHERE city = "Oslo"
+    LexingError at 1:36 (index 37)
+  > select name from people
+    ParsingError at 1:1 (index 0)
+  > SELECT name FROM people WHERE age > 25 ORDER BY city DESC LIMIT 0
+    name
+    ----
+    (0 rows)
+  > SELECT selected FROM people
+    error: no column selected
