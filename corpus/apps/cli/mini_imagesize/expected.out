@@ -1,0 +1,380 @@
+# PNG: the IHDR size, and the pHYs density getDPI reads
+> images/photo.png
+  get: (1920, 1080)
+  getDPI: (72, 72)
+> images/logo.png
+  get: (512, 512)
+  getDPI: (-1, -1)
+> images/scan_aspect.png
+  get: (2480, 3508)
+  getDPI: (1, 1)
+> images/retina.png
+  get: (750, 1334)
+  getDPI: (144, 144)
+> images/screen96.png
+  get: (1366, 768)
+  getDPI: (96, 96)
+> images/print300.png
+  get: (3300, 2550)
+  getDPI: (300, 300)
+> images/icon16.png
+  get: (16, 16)
+  getDPI: (-1, -1)
+> images/phys_first.png
+  get: (9, 1883789683)
+  getDPI: error ValueError: Invalid PNG file
+> images/no_idat.png
+  get: (64, 48)
+  getDPI: error ValueError: Invalid PNG file
+> images/short20.png
+  get: (13, 1229472850)
+  getDPI: (-1, -1)
+> images/short12.png
+  get: (-1, -1)
+  getDPI: (-1, -1)
+> images/not_ihdr.png
+  get: (4, 1130840649)
+  getDPI: (-1, -1)
+# GIF: the logical screen size
+> images/anim.gif
+  get: (480, 270)
+  getDPI: (-1, -1)
+> images/old.gif
+  get: (320, 200)
+  getDPI: (-1, -1)
+> images/pixel.gif
+  get: (1, 1)
+  getDPI: (-1, -1)
+> images/wide.gif
+  get: (-25536, 300)
+  getDPI: (-1, -1)
+> images/short9.gif
+  get: (-1, -1)
+  getDPI: (-1, -1)
+# JPEG: the SOFn frame size, and the JFIF density getDPI reads
+> images/jfif72.jpg
+  get: (640, 480)
+  getDPI: (72, 72)
+> images/jfif_cm.jpg
+  get: (2480, 3508)
+  getDPI: (300, 300)
+> images/jfif_aspect.jpg
+  get: (800, 600)
+  getDPI: (1, 1)
+> images/jfif_unit3.jpg
+  get: (100, 100)
+  getDPI: (-1, -1)
+> images/camera.jpg
+  get: (4032, 3024)
+  getDPI: (-1, -1)
+> images/progressive.jpg
+  get: (1024, 768)
+  getDPI: (96, 96)
+> images/dht_first.jpg
+  get: (1200, 800)
+  getDPI: (-1, -1)
+> images/fill_bytes.jpg
+  get: (2000, 1500)
+  getDPI: (300, 300)
+> images/lossless.jpg
+  get: (512, 512)
+  getDPI: (-1, -1)
+> images/arith.jpg
+  get: (333, 222)
+  getDPI: (-1, -1)
+> images/cut_after_app0.jpg
+  get: error ValueError: Invalid JPEG file
+  getDPI: (72, 72)
+> images/cut_in_sof.jpg
+  get: error ValueError: Invalid JPEG file
+  getDPI: (72, 72)
+> images/cut_in_app0.jpg
+  get: error ValueError: Invalid JPEG file
+  getDPI: error ValueError: Invalid JPEG file
+> images/cut_in_exif.jpg
+  get: error ValueError: Invalid JPEG file
+  getDPI: error TypeError: ord() expected a character, but string of length 0 found
+> images/soi_only.jpg
+  get: error ValueError: Invalid JPEG file
+  getDPI: error TypeError: ord() expected a character, but string of length 0 found
+# JPEG 2000: the ihdr box, and the resd box getDPI reads
+> images/plain.jp2
+  get: (1024, 768)
+  getDPI: (-1, -1)
+> images/resd.jp2
+  get: (800, 600)
+  getDPI: error ValueError: Invalid JPEG2000 file
+> images/resc_only.jp2
+  get: (800, 600)
+  getDPI: (-1, -1)
+> images/resd_cut.jp2
+  get: (640, 480)
+  getDPI: (25, 300)
+> images/resd_cut_units.jp2
+  get: (640, 480)
+  getDPI: (0, 2999994)
+> images/short.jp2
+  get: error ValueError: Invalid JPEG2000 file
+  getDPI: (-1, -1)
+# TIFF: the first IFD's ImageWidth and ImageLength
+> images/big_endian.tif
+  get: (1600, 1200)
+  getDPI: (-1, -1)
+> images/big_endian_long.tif
+  get: (70000, 50000)
+  getDPI: (-1, -1)
+> images/big_endian_rational.tif
+  get: error ValueError: Invalid TIFF file: width column data type should be SHORT/LONG.
+  getDPI: (-1, -1)
+> images/big_endian_bad_height.tif
+  get: error ValueError: Invalid TIFF file: height column data type should be SHORT/LONG.
+  getDPI: (-1, -1)
+> images/big_endian_no_height.tif
+  get: error ValueError: Invalid TIFF file: width and/or height IDS entries are missing.
+  getDPI: (-1, -1)
+> images/big_endian_cut.tif
+  get: error error: unpack requires a buffer of 12 bytes
+  getDPI: (-1, -1)
+> images/big_endian_far_ifd.tif
+  get: error error: unpack requires a buffer of 2 bytes
+  getDPI: (-1, -1)
+> images/little_endian.tif
+  get: (3000, 2000)
+  getDPI: (-1, -1)
+> images/little_endian_junk.tif
+  get: (65836, 200)
+  getDPI: (-1, -1)
+> images/camera_raw.dng
+  get: (256, 171)
+  getDPI: (-1, -1)
+> images/little_endian_empty.tif
+  get: error ValueError: Invalid TIFF file: width and/or height IDS entries are missing.
+  getDPI: (-1, -1)
+> images/big.tif
+  get: (100000, 80000)
+  getDPI: (-1, -1)
+> images/big_no_width.tif
+  get: error ValueError: Invalid BigTIFF file: width and/or height IDS entries are missing.
+  getDPI: (-1, -1)
+> images/big_bad_bytesize.tif
+  get: error UnboundLocalError: cannot access local variable 'offset' where it is not associated with a value
+  getDPI: (-1, -1)
+> images/big_short.tif
+  get: error error: unpack requires a buffer of 8 bytes
+  getDPI: (-1, -1)
+# SVG: the width and height attributes in the first 1024 bytes
+> images/icon.svg
+  get: (24.0, 24.0)
+  getDPI: (-1, -1)
+> images/a4.svg
+  get: (793.7007874015748, 1122.51968503937)
+  getDPI: (-1, -1)
+> images/letter.svg
+  get: (816.0, 1056.0)
+  getDPI: (-1, -1)
+> images/card.svg
+  get: (377.9527559055118, 245.66929133858267)
+  getDPI: (-1, -1)
+> images/type.svg
+  get: (1152.0, 576.0)
+  getDPI: (-1, -1)
+> images/pixels.svg
+  get: (300.0, 150.75)
+  getDPI: (-1, -1)
+> images/stroke_first.svg
+  get: (48.0, 32.0)
+  getDPI: (-1, -1)
+> images/percent.svg
+  get: error ValueError: unknown length value: 100%
+  getDPI: (-1, -1)
+> images/em.svg
+  get: error ValueError: unknown unit type: em
+  getDPI: (-1, -1)
+> images/empty_width.svg
+  get: error TypeError: float() argument must be a string or a real number, not 'NoneType'
+  getDPI: (-1, -1)
+> images/unit_only.svg
+  get: error TypeError: float() argument must be a string or a real number, not 'NoneType'
+  getDPI: (-1, -1)
+> images/viewbox_only.svg
+  get: (10.0, 10.0)
+  getDPI: (-1, -1)
+> images/single_quotes.svg
+  get: (10.0, 10.0)
+  getDPI: (-1, -1)
+> images/exponent.svg
+  get: error ValueError: unknown length value: 1e3
+  getDPI: (-1, -1)
+> images/trailing_dot.svg
+  get: error ValueError: unknown length value: 12.
+  getDPI: (-1, -1)
+> images/upper_unit.svg
+  get: error ValueError: unknown length value: 10PX
+  getDPI: (-1, -1)
+> images/late_width.svg
+  get: error ValueError: Invalid SVG file
+  getDPI: (-1, -1)
+> images/split_utf8.svg
+  get: error ValueError: Invalid SVG file
+  getDPI: (-1, -1)
+> images/nl_in_value.svg
+  get: (12.0, 30.0)
+  getDPI: (-1, -1)
+> images/leading_space.svg
+  get: (-1, -1)
+  getDPI: (-1, -1)
+> images/utf8_title.svg
+  get: (64.0, 64.0)
+  getDPI: (-1, -1)
+# Netpbm: the first two numbers of the header
+> images/ascii.pbm
+  get: (8, 4)
+  getDPI: (-1, -1)
+> images/binary.pbm
+  get: (16, 2)
+  getDPI: (-1, -1)
+> images/gray.pgm
+  get: (640, 480)
+  getDPI: (-1, -1)
+> images/ascii.pgm
+  get: (3, 2)
+  getDPI: (-1, -1)
+> images/color.ppm
+  get: (1280, 720)
+  getDPI: (-1, -1)
+> images/ascii.ppm
+  get: (2, 1)
+  getDPI: (-1, -1)
+> images/comment_after.pgm
+  get: (640, 480)
+  getDPI: (-1, -1)
+> images/eof_after_width.ppm
+  get: (640, 0)
+  getDPI: (-1, -1)
+> images/letters.ppm
+  get: error ValueError: Invalid character found on Netpbm file
+  getDPI: (-1, -1)
+> images/only_p.pnm
+  get: error ValueError: Invalid Netpbm file
+  getDPI: (-1, -1)
+> images/pam.pam
+  get: (-1, -1)
+  getDPI: (-1, -1)
+# WebP: the VP8, VP8L and VP8X headers
+> images/lossy.webp
+  get: (1024, 683)
+  getDPI: (-1, -1)
+> images/lossy_scaled.webp
+  get: (16684, 32968)
+  getDPI: (-1, -1)
+> images/lossless.webp
+  get: (400, 301)
+  getDPI: (-1, -1)
+> images/lossless_big.webp
+  get: (16384, 9)
+  getDPI: (-1, -1)
+> images/extended.webp
+  get: (1919, 1079)
+  getDPI: (-1, -1)
+> images/anim.webp
+  get: error ValueError: Unsupported WebP file
+  getDPI: (-1, -1)
+> images/short_vp8l.webp
+  get: error IndexError: index out of range
+  getDPI: (-1, -1)
+> images/short_vp8.webp
+  get: error error: unpack requires a buffer of 4 bytes
+  getDPI: (-1, -1)
+> images/short_vp8x.webp
+  get: error error: unpack requires a buffer of 4 bytes
+  getDPI: (-1, -1)
+# formats imagesize does not know
+> images/image.bmp
+  get: (-1, -1)
+  getDPI: (-1, -1)
+> images/favicon.ico
+  get: (-1, -1)
+  getDPI: (-1, -1)
+> images/empty.png
+  get: (-1, -1)
+  getDPI: (-1, -1)
+> images/readme.txt
+  get: (-1, -1)
+  getDPI: (-1, -1)
+# a file that is not there
+> images/missing.png
+  get: error FileNotFoundError: [Errno 2] No such file or directory: 'images/missing.png'
+  getDPI: error FileNotFoundError: [Errno 2] No such file or directory: 'images/missing.png'
+> !gallery gallery.tsv
+  <img src="images/photo.png" width="960" height="540" alt="Sunset over the bay">
+  <img src="images/logo.png" width="128" height="128" alt="Company logo">
+  <img src="images/retina.png" width="375" height="667" alt="App screenshot (2x)">
+  <img src="images/camera.jpg" width="403" height="302" alt="Street market">
+  <img src="images/progressive.jpg" width="1024" height="768" alt="Product shot">
+  <img src="images/a4.svg" width="793" height="1122" alt="Floor plan">
+  <img src="images/icon.svg" width="48" height="48" alt="Menu icon">
+  <img src="images/card.svg" width="124" height="81" alt="Business card">
+  <img src="images/lossless.webp" width="300" height="225" alt="Chart">
+  <img src="images/extended.webp" width="959" height="539" alt="Hero banner">
+  <img src="images/big_endian.tif" width="320" height="240" alt="Archive scan">
+  <img src="images/color.ppm" width="1280" height="720" alt="Raw frame">
+  <!-- percent.svg: error ValueError: unknown length value: 100% -->
+  <!-- readme.txt: unknown size -->
+> !thumbs thumbs.txt
+  photo.png: 1920x1080 -> 320x180
+    print: 67.73 x 38.10 cm at 72x72 dpi
+  logo.png: 512x512 -> 240x240
+    dpi: (-1, -1)
+  scan_aspect.png: 2480x3508 -> 170x240
+    print: 6299.20 x 8910.32 cm at 1x1 dpi
+  retina.png: 750x1334 -> 135x240
+    print: 13.22 x 23.53 cm at 144x144 dpi
+  print300.png: 3300x2550 -> 311x240
+    print: 27.94 x 21.59 cm at 300x300 dpi
+  jfif72.jpg: 640x480 -> 320x240
+    print: 22.57 x 16.93 cm at 72x72 dpi
+  jfif_cm.jpg: 2480x3508 -> 170x240
+    print: 20.99 x 29.70 cm at 300x300 dpi
+  camera.jpg: 4032x3024 -> 320x240
+    dpi: (-1, -1)
+  fill_bytes.jpg: 2000x1500 -> 320x240
+    print: 16.93 x 12.70 cm at 300x300 dpi
+  plain.jp2: 1024x768 -> 320x240
+    dpi: (-1, -1)
+  resd_cut.jp2: 640x480 -> 320x240
+    print: 65.02 x 4.06 cm at 25x300 dpi
+  big_endian_long.tif: 70000x50000 -> 320x229
+    dpi: (-1, -1)
+  little_endian.tif: 3000x2000 -> 320x213
+    dpi: (-1, -1)
+  big.tif: 100000x80000 -> 300x240
+    dpi: (-1, -1)
+  lossy.webp: 1024x683 -> 320x213
+    dpi: (-1, -1)
+  lossless_big.webp: 16384x9 -> 320x1
+    dpi: (-1, -1)
+  anim.gif: 480x270 -> 320x180
+    dpi: (-1, -1)
+  wide.gif: no size (-25536, 300)
+  pixel.gif: 1x1 -> 1x1
+    dpi: (-1, -1)
+  letter.svg: 816.0x1056.0 -> 185x240
+    dpi: (-1, -1)
+  pixels.svg: 300.0x150.75 -> 300x151
+    dpi: (-1, -1)
+  binary.pbm: 16x2 -> 16x2
+    dpi: (-1, -1)
+  eof_after_width.ppm: no size (640, 0)
+  favicon.ico: no size (-1, -1)
+> !audit page.html
+  images/photo.png: ok 1920x1080
+  images/camera.jpg: no width/height attributes, actual 4032x3024
+  images/progressive.jpg: mismatch, declared 1024x700, actual 1024x768
+  images/logo.png: ok 512x512
+  images/lossless.webp: no width/height attributes, actual 400x301
+  images/a4.svg: ok 794x1123
+  images/icon.svg: ok 24x24
+  images/missing.png: error FileNotFoundError: [Errno 2] No such file or directory: 'images/missing.png'
+  images/cut_in_sof.jpg: error ValueError: Invalid JPEG file
+  images/readme.txt: not an image imagesize knows
+  images/old.gif: ok 320x200

@@ -1,0 +1,1000 @@
+// mini_imagesize: a port of imagesize 1.4.1 (MIT; Yoshiki Shibukawa), the
+// pure-Python library that reads an image's width and height, and its
+// DPI, from the first bytes of the file without decoding it: PNG, GIF,
+// JPEG, JPEG 2000, TIFF and BigTIFF, SVG, Netpbm and WebP.
+//
+// The library reads the file through a Python file object, seeking and
+// reading as it walks markers, chunks, boxes and IFDs. The port reads the
+// whole file and keeps the same cursor over it (`Cursor`), with Python's
+// rules: a read past the end returns fewer bytes, or none, and leaves the
+// position where it was; a seek past the end is allowed. The errors are
+// the library's own, and the ones it lets through from `struct`, `ord`
+// and `float`, with Python's messages.
+
+struct PyErr {
+    cls: String,
+    msg: String,
+}
+
+fn py_err(cls: Str, msg: own String) -> PyErr {
+    PyErr { cls: cls.to_string(), msg }
+}
+
+fn value_err(msg: Str) -> PyErr {
+    py_err("ValueError", msg.to_string())
+}
+
+// struct.error, whose class prints as `error`.
+fn struct_err(n: i64) -> PyErr {
+    py_err("error", f"unpack requires a buffer of {n} bytes")
+}
+
+// ------------------------------------------------------------ the file
+
+struct Cursor {
+    data: Vec[u8],
+    pos: i64,
+}
+
+fn open_file(path: ref String) -> Result[Cursor, PyErr] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => Ok(Cursor { data: b, pos: 0 }),
+        Err(_) => Err(py_err("FileNotFoundError", f"[Errno 2] No such file or directory: '{path}'")),
+    }
+}
+
+fn read(f: mut ref Cursor, n: i64) -> Vec[u8] {
+    let end = f.data.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    while out.len() as i64 < n and f.pos < end {
+        out.push(f.data[f.pos as usize]);
+        f.pos += 1;
+    }
+    out
+}
+
+fn readline(f: mut ref Cursor) -> Vec[u8] {
+    let end = f.data.len() as i64;
+    let mut out: Vec[u8] = Vec.new();
+    while f.pos < end {
+        let b = f.data[f.pos as usize];
+        out.push(b);
+        f.pos += 1;
+        if b == 10 {
+            break;
+        }
+    }
+    out
+}
+
+fn seek(f: mut ref Cursor, p: i64) {
+    f.pos = p;
+}
+
+// A relative seek. Every one the library makes lands at or after the
+// start: each follows a read of at least as many bytes as it goes back.
+fn seek_rel(f: mut ref Cursor, d: i64) {
+    f.pos = f.pos + d;
+}
+
+// ------------------------------------------------------------ bytes
+
+fn sl(b: ref Vec[u8], a: i64, e: i64) -> Vec[u8] {
+    let n = b.len() as i64;
+    let lo = if a > n { n } else { a };
+    let hi = if e > n { n } else { e };
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = lo;
+    while k < hi {
+        out.push(b[k as usize]);
+        k += 1;
+    }
+    out
+}
+
+fn is(b: ref Vec[u8], s: Str) -> bool {
+    let want: Vec[u8] = s.bytes().to_vec();
+    if want.len() != b.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < want.len() {
+        if want[k] != b[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn starts(b: ref Vec[u8], s: Str) -> bool {
+    let want: Vec[u8] = s.bytes().to_vec();
+    is(sl(b, 0, want.len() as i64), s)
+}
+
+fn byte(b: ref Vec[u8], k: i64) -> i64 {
+    b[k as usize] as i64
+}
+
+fn be(b: ref Vec[u8], at: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    let mut k = 0;
+    while k < n {
+        v = v * 256 + byte(b, at + k);
+        k += 1;
+    }
+    v
+}
+
+fn le(b: ref Vec[u8], at: i64, n: i64) -> i64 {
+    let mut v: i64 = 0;
+    let mut k = n - 1;
+    while k >= 0 {
+        v = v * 256 + byte(b, at + k);
+        k -= 1;
+    }
+    v
+}
+
+// `struct.unpack` wants exactly the bytes its format names.
+fn need(b: ref Vec[u8], n: i64) -> Result[(), PyErr] {
+    if b.len() as i64 != n {
+        return Err(struct_err(n));
+    }
+    Ok(())
+}
+
+fn is_space(c: i64) -> bool {
+    c == 32 or (c >= 9 and c <= 13)
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+// ------------------------------------------------------------ sizes
+
+enum Size {
+    I(i64, i64),
+    F(f64, f64),
+}
+
+fn size_repr(s: ref Size) -> String {
+    match s {
+        Size.I(w, h) => f"({w}, {h})",
+        Size.F(w, h) => f"({w}, {h})",
+    }
+}
+
+fn pair_repr(p: (i64, i64)) -> String {
+    f"({p.0}, {p.1})"
+}
+
+// ------------------------------------------------------------ the library
+
+fn convert_to_dpi(density: i64, unit: i64) -> i64 {
+    let d = density as f64;
+    if unit == -3 {
+        (d * 0.0000254 + 0.5) as i64
+    } else if unit == -2 {
+        (d * 0.000254 + 0.5) as i64
+    } else if unit == -1 {
+        (d * 0.00254 + 0.5) as i64
+    } else if unit == 0 {
+        (d * 0.0254 + 0.5) as i64
+    } else if unit == 1 {
+        (d * 0.254 + 0.5) as i64
+    } else if unit == 2 {
+        (d * 2.54 + 0.5) as i64
+    } else if unit == 3 {
+        (d * 25.4 + 0.5) as i64
+    } else if unit == 4 {
+        density * 254
+    } else if unit == 5 {
+        density * 2540
+    } else if unit == 6 {
+        density * 25400
+    } else {
+        density
+    }
+}
+
+// _convertToPx: re.match(r"(\d+(?:\.\d+)?)?([a-z]*)$", value).
+fn convert_to_px(value: ref Vec[u8]) -> Result[f64, PyErr] {
+    let text = String.from_utf8(value.clone()).unwrap_or(String.new());
+    let n = value.len() as i64;
+    let mut i: i64 = 0;
+    while i < n and is_digit(byte(value, i)) {
+        i += 1;
+    }
+    if i > 0 and i + 1 < n and byte(value, i) == 46 and is_digit(byte(value, i + 1)) {
+        i += 1;
+        while i < n and is_digit(byte(value, i)) {
+            i += 1;
+        }
+    }
+    let mut j = i;
+    while j < n and byte(value, j) >= 97 and byte(value, j) <= 122 {
+        j += 1;
+    }
+    if j != n {
+        return Err(py_err("ValueError", f"unknown length value: {text}"));
+    }
+    let unit = String.from_utf8(sl(value, i, j)).unwrap_or(String.new());
+    let known = unit == "" or unit == "cm" or unit == "mm" or unit == "in" or unit == "pc" or unit == "pt" or unit == "px";
+    if not known {
+        return Err(py_err("ValueError", f"unknown unit type: {unit}"));
+    }
+    if i == 0 {
+        return Err(py_err("TypeError", "float() argument must be a string or a real number, not 'NoneType'".to_string()));
+    }
+    let length = String.from_utf8(sl(value, 0, i)).unwrap_or(String.new());
+    let x = f64.parse(length).unwrap_or(0.0);
+    if unit == "cm" {
+        Ok(x * 96.0 / 2.54)
+    } else if unit == "mm" {
+        Ok(x * 96.0 / 2.54 / 10.0)
+    } else if unit == "in" {
+        Ok(x * 96.0)
+    } else if unit == "pc" or unit == "pt" {
+        // `pt` divides by 6 as well, as the library does.
+        Ok(x * 96.0 / 6.0)
+    } else {
+        Ok(x)
+    }
+}
+
+// re.search(r'[^-]name="(.*?)"', data).group(1): the first `name="` with a
+// character before it that is not `-`, up to the next `"` on that line.
+fn svg_attr(data: ref Vec[u8], name: Str) -> Option[Vec[u8]] {
+    let pat: Vec[u8] = name.bytes().to_vec();
+    let n = data.len() as i64;
+    let p = pat.len() as i64;
+    let mut i: i64 = 1;
+    while i + p + 2 <= n {
+        if byte(data, i - 1) != 45 and is(sl(data, i, i + p), name) and byte(data, i + p) == 61 and byte(data, i + p + 1) == 34 {
+            let start = i + p + 2;
+            let mut k = start;
+            while k < n {
+                let c = byte(data, k);
+                if c == 34 {
+                    return Some(sl(data, start, k));
+                }
+                if c == 10 {
+                    break;
+                }
+                k += 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+// The loop get() walks the JPEG markers with, to the first SOFn frame
+// (DHT, JPG and DAC sit in that range and are skipped). Any short read is
+// "Invalid JPEG file".
+fn jpeg_size(f: mut ref Cursor) -> Option[(i64, i64)] {
+    seek(mut f, 0);
+    let mut size: i64 = 2;
+    let mut ftype: i64 = 0;
+    while not (ftype >= 0xc0 and ftype <= 0xcf) or ftype == 0xc4 or ftype == 0xc8 or ftype == 0xcc {
+        seek_rel(mut f, size);
+        let mut b = read(mut f, 1);
+        if b.len() == 0 {
+            return None;
+        }
+        while b[0] == 0xff {
+            b = read(mut f, 1);
+            if b.len() == 0 {
+                return None;
+            }
+        }
+        ftype = b[0] as i64;
+        let l = read(mut f, 2);
+        if l.len() != 2 {
+            return None;
+        }
+        size = be(l, 0, 2) - 2;
+    }
+    seek_rel(mut f, 1);
+    let d = read(mut f, 4);
+    if d.len() != 4 {
+        return None;
+    }
+    Some((be(d, 2, 2), be(d, 0, 2)))
+}
+
+// A TIFF or BigTIFF IFD: the ImageWidth (256) and ImageLength (257) tags.
+fn tiff_ifd(f: mut ref Cursor, big: bool, little: bool, missing: Str) -> Result[Size, PyErr] {
+    let cnt_n: i64 = if big { 8 } else { 2 };
+    let entry_n: i64 = if big { 20 } else { 12 };
+    let c = read(mut f, cnt_n);
+    need(c, cnt_n)?;
+    let ifdsize = if little { le(c, 0, cnt_n) } else { be(c, 0, cnt_n) };
+    let mut width: i64 = -1;
+    let mut height: i64 = -1;
+    let mut i: i64 = 0;
+    while i < ifdsize {
+        let e = read(mut f, entry_n);
+        need(e, entry_n)?;
+        let field_n: i64 = if big { 8 } else { 4 };
+        let data_at: i64 = if big { 12 } else { 8 };
+        let tag = if little { le(e, 0, 2) } else { be(e, 0, 2) };
+        let datatype = if little { le(e, 2, 2) } else { be(e, 2, 2) };
+        let data = if little { le(e, data_at, field_n) } else { be(e, data_at, field_n) };
+        if tag == 256 {
+            if little {
+                width = data;
+            } else if datatype == 3 {
+                width = data / 65536;
+            } else if datatype == 4 {
+                width = data;
+            } else {
+                return Err(value_err("Invalid TIFF file: width column data type should be SHORT/LONG."));
+            }
+        } else if tag == 257 {
+            if little {
+                height = data;
+            } else if datatype == 3 {
+                height = data / 65536;
+            } else if datatype == 4 {
+                height = data;
+            } else {
+                return Err(value_err("Invalid TIFF file: height column data type should be SHORT/LONG."));
+            }
+        }
+        if width != -1 and height != -1 {
+            break;
+        }
+        i += 1;
+    }
+    if width == -1 or height == -1 {
+        return Err(value_err(missing));
+    }
+    Ok(Size.I(width, height))
+}
+
+fn netpbm_size(f: mut ref Cursor) -> Result[Size, PyErr] {
+    seek(mut f, 2);
+    let mut sizes: Vec[i64] = Vec.new();
+    loop {
+        let c = read(mut f, 1);
+        if c.len() == 1 and is_space(byte(c, 0)) {
+            continue;
+        }
+        if c.len() == 0 {
+            return Err(value_err("Invalid Netpbm file"));
+        }
+        if c[0] == 35 {
+            let _ = readline(mut f);
+            continue;
+        }
+        if not is_digit(byte(c, 0)) {
+            return Err(value_err("Invalid character found on Netpbm file"));
+        }
+        let mut v = byte(c, 0) - 48;
+        let mut next = read(mut f, 1);
+        while next.len() == 1 and is_digit(byte(next, 0)) {
+            v = v * 10 + byte(next, 0) - 48;
+            next = read(mut f, 1);
+        }
+        sizes.push(v);
+        if sizes.len() == 2 {
+            break;
+        }
+        seek_rel(mut f, -1);
+    }
+    Ok(Size.I(sizes[0], sizes[1]))
+}
+
+fn webp_size(head: ref Vec[u8]) -> Result[Size, PyErr] {
+    let kind = sl(head, 12, 16);
+    if is(kind, "VP8 ") {
+        let s = sl(head, 26, 30);
+        need(s, 4)?;
+        Ok(Size.I(le(s, 0, 2), le(s, 2, 2)))
+    } else if is(kind, "VP8X") {
+        let mut w = sl(head, 24, 27);
+        w.push(0);
+        need(w, 4)?;
+        let mut h = sl(head, 27, 30);
+        h.push(0);
+        need(h, 4)?;
+        Ok(Size.I(le(w, 0, 3), le(h, 0, 3)))
+    } else if is(kind, "VP8L") {
+        let b = sl(head, 21, 25);
+        if b.len() < 4 {
+            return Err(py_err("IndexError", "index out of range".to_string()));
+        }
+        let w = (((byte(b, 1) & 63) << 8) | byte(b, 0)) + 1;
+        let h = (((byte(b, 3) & 15) << 10) | (byte(b, 2) << 2) | ((byte(b, 1) & 192) >> 6)) + 1;
+        Ok(Size.I(w, h))
+    } else {
+        Err(value_err("Unsupported WebP file"))
+    }
+}
+
+fn is_png(head: ref Vec[u8]) -> bool {
+    head.len() >= 8 and be(head, 0, 4) == 0x89504e47 and be(head, 4, 4) == 0x0d0a1a0a
+}
+
+fn is_gif(head: ref Vec[u8]) -> bool {
+    head.len() >= 10 and (starts(head, "GIF87a") or starts(head, "GIF89a"))
+}
+
+fn is_jp2(head: ref Vec[u8]) -> bool {
+    head.len() >= 12 and be(head, 0, 4) == 12 and is(sl(head, 4, 8), "jP  ") and be(head, 8, 4) == 0x0d0a870a
+}
+
+fn signed16(v: i64) -> i64 {
+    if v >= 32768 { v - 65536 } else { v }
+}
+
+// imagesize.get
+fn get(path: ref String) -> Result[Size, PyErr] {
+    let mut f = open_file(path)?;
+    let head = read(mut f, 31);
+    let size = head.len() as i64;
+    if is_gif(head) {
+        return Ok(Size.I(signed16(le(head, 6, 2)), signed16(le(head, 8, 2))));
+    }
+    if size >= 24 and is_png(head) and is(sl(head, 12, 16), "IHDR") {
+        return Ok(Size.I(be(head, 16, 4), be(head, 20, 4)));
+    }
+    if size >= 16 and is_png(head) {
+        return Ok(Size.I(be(head, 8, 4), be(head, 12, 4)));
+    }
+    if size >= 2 and byte(head, 0) == 0xff and byte(head, 1) == 0xd8 {
+        return match jpeg_size(mut f) {
+            Some((w, h)) => Ok(Size.I(w, h)),
+            None => Err(value_err("Invalid JPEG file")),
+        };
+    }
+    if is_jp2(head) {
+        seek(mut f, 48);
+        let d = read(mut f, 8);
+        if d.len() != 8 {
+            return Err(value_err("Invalid JPEG2000 file"));
+        }
+        return Ok(Size.I(be(d, 4, 4), be(d, 0, 4)));
+    }
+    if size >= 8 and starts(head, "MM") and be(head, 2, 2) == 42 {
+        seek(mut f, be(head, 4, 4));
+        return tiff_ifd(mut f, false, false, "Invalid TIFF file: width and/or height IDS entries are missing.");
+    }
+    if size >= 8 and starts(head, "II") and le(head, 2, 2) == 42 {
+        seek(mut f, le(head, 4, 4));
+        return tiff_ifd(mut f, false, true, "Invalid TIFF file: width and/or height IDS entries are missing.");
+    }
+    if size >= 8 and starts(head, "II") and le(head, 2, 2) == 43 {
+        if le(head, 4, 4) != 8 {
+            // The library's message formats `offset` before assigning it.
+            return Err(py_err("UnboundLocalError", "cannot access local variable 'offset' where it is not associated with a value".to_string()));
+        }
+        let o = sl(head, 8, 16);
+        need(o, 8)?;
+        seek(mut f, le(o, 0, 8));
+        return tiff_ifd(mut f, true, true, "Invalid BigTIFF file: width and/or height IDS entries are missing.");
+    }
+    if size >= 5 and (starts(head, "<?xml") or starts(head, "<svg")) {
+        seek(mut f, 0);
+        let data = read(mut f, 1024);
+        if String.from_utf8(data.clone()).is_err() {
+            return Err(value_err("Invalid SVG file"));
+        }
+        let w = match svg_attr(data, "width") {
+            Some(v) => v,
+            None => return Err(value_err("Invalid SVG file")),
+        };
+        let h = match svg_attr(data, "height") {
+            Some(v) => v,
+            None => return Err(value_err("Invalid SVG file")),
+        };
+        let wp = convert_to_px(w)?;
+        let hp = convert_to_px(h)?;
+        return Ok(Size.F(wp, hp));
+    }
+    // head[1:2] in b"123456" is true for an empty slice too
+    if size >= 1 and byte(head, 0) == 80 and (size == 1 or (byte(head, 1) >= 49 and byte(head, 1) <= 54)) {
+        return netpbm_size(mut f);
+    }
+    if starts(head, "RIFF") and is(sl(head, 8, 12), "WEBP") {
+        return webp_size(head);
+    }
+    Ok(Size.I(-1, -1))
+}
+
+fn png_dpi(f: mut ref Cursor, head: ref Vec[u8]) -> Result[(i64, i64), PyErr] {
+    let mut offset: i64 = 8;
+    let mut chunk = sl(head, 8, head.len() as i64);
+    loop {
+        let kind = sl(chunk, 4, 8);
+        if is(kind, "pHYs") {
+            let body = sl(chunk, 8, chunk.len() as i64);
+            if body.len() != 9 {
+                return Err(value_err("Invalid PNG file"));
+            }
+            let x = be(body, 0, 4);
+            let y = be(body, 4, 4);
+            if byte(body, 8) != 0 {
+                return Ok((convert_to_dpi(x, 0), convert_to_dpi(y, 0)));
+            }
+            return Ok((x, y));
+        } else if is(kind, "IDAT") {
+            return Ok((-1, -1));
+        }
+        let n = sl(chunk, 0, 4);
+        if n.len() != 4 {
+            return Err(value_err("Invalid PNG file"));
+        }
+        offset += be(n, 0, 4) + 12;
+        seek(mut f, offset);
+        chunk = read(mut f, 17);
+    }
+}
+
+fn ord_err() -> PyErr {
+    py_err("TypeError", "ord() expected a character, but string of length 0 found".to_string())
+}
+
+// getDPI's own JPEG loop: it stops at the first marker from 0xc0 to 0xcf,
+// or reads the JFIF density at the APP0 segment. Only struct.error becomes
+// "Invalid JPEG file"; the TypeError from ord(b"") gets out as it is.
+fn jpeg_dpi(f: mut ref Cursor) -> Result[(i64, i64), PyErr] {
+    seek(mut f, 0);
+    let mut size: i64 = 2;
+    let mut ftype: i64 = 0;
+    while not (ftype >= 0xc0 and ftype <= 0xcf) {
+        if ftype == 0xe0 {
+            seek_rel(mut f, 7);
+            let d = read(mut f, 5);
+            if d.len() != 5 {
+                return Err(value_err("Invalid JPEG file"));
+            }
+            let unit = byte(d, 0);
+            let x = be(d, 1, 2);
+            let y = be(d, 3, 2);
+            if unit == 1 or unit == 0 {
+                return Ok((x, y));
+            } else if unit == 2 {
+                return Ok((convert_to_dpi(x, 2), convert_to_dpi(y, 2)));
+            }
+            return Ok((-1, -1));
+        }
+        seek_rel(mut f, size);
+        let mut b = read(mut f, 1);
+        if b.len() == 0 {
+            return Err(ord_err());
+        }
+        while b[0] == 0xff {
+            b = read(mut f, 1);
+            if b.len() == 0 {
+                return Err(ord_err());
+            }
+        }
+        ftype = b[0] as i64;
+        let l = read(mut f, 2);
+        if l.len() != 2 {
+            return Err(value_err("Invalid JPEG file"));
+        }
+        size = be(l, 0, 2) - 2;
+    }
+    Ok((-1, -1))
+}
+
+fn jp2_dpi(f: mut ref Cursor) -> Result[(i64, i64), PyErr] {
+    seek(mut f, 32);
+    let hs = read(mut f, 4);
+    need(hs, 4)?;
+    let mut header_size = be(hs, 0, 4) - 8;
+    seek_rel(mut f, 4);
+    let bad = value_err("Invalid JPEG2000 file");
+    let mut found = false;
+    while header_size > 0 {
+        let bh = read(mut f, 8);
+        if is(sl(bh, 4, 8), "res ") {
+            found = true;
+            header_size -= 8;
+            break;
+        }
+        let n = sl(bh, 0, 4);
+        if n.len() != 4 {
+            return Err(bad);
+        }
+        let box_size = be(n, 0, 4);
+        seek_rel(mut f, box_size - 8);
+        header_size -= box_size;
+    }
+    if found {
+        while header_size > 0 {
+            let bh = read(mut f, 8);
+            if is(sl(bh, 4, 8), "resd") {
+                // read(10) unpacked as ">HHBB": six bytes, or struct.error
+                let d = read(mut f, 10);
+                if d.len() != 6 {
+                    return Err(bad);
+                }
+                let y_density = be(d, 0, 2);
+                let x_density = be(d, 2, 2);
+                let y_unit = byte(d, 4);
+                let x_unit = byte(d, 5);
+                return Ok((convert_to_dpi(x_density, x_unit), convert_to_dpi(y_density, y_unit)));
+            }
+            let n = sl(bh, 0, 4);
+            if n.len() != 4 {
+                return Err(bad);
+            }
+            let box_size = be(n, 0, 4);
+            seek_rel(mut f, box_size - 8);
+            header_size -= box_size;
+        }
+    }
+    Ok((-1, -1))
+}
+
+// imagesize.getDPI
+fn get_dpi(path: ref String) -> Result[(i64, i64), PyErr] {
+    let mut f = open_file(path)?;
+    let head = read(mut f, 24);
+    let size = head.len() as i64;
+    if is_gif(head) {
+        return Ok((-1, -1));
+    }
+    if size >= 24 and is_png(head) {
+        return png_dpi(mut f, head);
+    }
+    if size >= 2 and byte(head, 0) == 0xff and byte(head, 1) == 0xd8 {
+        return jpeg_dpi(mut f);
+    }
+    if is_jp2(head) {
+        return jp2_dpi(mut f);
+    }
+    Ok((-1, -1))
+}
+
+// ------------------------------------------------------------ programs
+
+fn err_text(e: ref PyErr) -> String {
+    f"error {e.cls}: {e.msg}"
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn lines_of(path: ref String) -> Vec[String] {
+    let text = fs.read_to_string(f"data/{path}").unwrap_or(String.new());
+    let mut out = split_on(text, '\n');
+    if out.len() > 0 and out[out.len() - 1].len() == 0 {
+        let _ = out.pop();
+    }
+    out
+}
+
+// Python's round() on a float: halves go to the even neighbour.
+fn py_round(x: f64) -> i64 {
+    let fl = x.floor();
+    let diff = x - fl;
+    if diff > 0.5 {
+        fl as i64 + 1
+    } else if diff < 0.5 {
+        fl as i64
+    } else if (fl as i64) % 2 == 0 {
+        fl as i64
+    } else {
+        fl as i64 + 1
+    }
+}
+
+fn gallery(path: ref String) {
+    for line in lines_of(path) {
+        let f = split_on(line, '\t');
+        let name = f[0].clone();
+        let size = match get(f"images/{name}") {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"  <!-- {name}: {err_text(e)} -->");
+                continue;
+            }
+        };
+        let s = i64.parse(f[1].clone()).unwrap_or(0);
+        let (tw, th) = match size {
+            Size.I(w, h) => {
+                if w == -1 or h == -1 {
+                    println(f"  <!-- {name}: unknown size -->");
+                    continue;
+                }
+                (((w * s) as f64 / 100.0) as i64, ((h * s) as f64 / 100.0) as i64)
+            }
+            Size.F(w, h) => ((w * (s as f64) / 100.0) as i64, (h * (s as f64) / 100.0) as i64),
+        };
+        println(f"  <img src=\"images/{name}\" width=\"{tw}\" height=\"{th}\" alt=\"{f[2]}\">");
+    }
+}
+
+fn thumbs(path: ref String) {
+    for name in lines_of(path) {
+        let size = match get(f"images/{name}") {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"  {name}: {err_text(e)}");
+                continue;
+            }
+        };
+        let (w, h, ints) = match size {
+            Size.I(w, h) => (w as f64, h as f64, true),
+            Size.F(w, h) => (w, h, false),
+        };
+        if w <= 0.0 or h <= 0.0 {
+            println(f"  {name}: no size {size_repr(size)}");
+            continue;
+        }
+        let mut s = 320.0 / w;
+        if 240.0 / h < s {
+            s = 240.0 / h;
+        }
+        if 1.0 < s {
+            s = 1.0;
+        }
+        let mut tw = py_round(w * s);
+        if tw < 1 {
+            tw = 1;
+        }
+        let mut th = py_round(h * s);
+        if th < 1 {
+            th = 1;
+        }
+        let shown = match size {
+            Size.I(a, b) => f"{a}x{b}",
+            Size.F(a, b) => f"{a}x{b}",
+        };
+        println(f"  {name}: {shown} -> {tw}x{th}");
+        match get_dpi(f"images/{name}") {
+            Err(e) => println(f"    dpi: {err_text(e)}"),
+            Ok(d) => {
+                if d.0 > 0 and d.1 > 0 and ints {
+                    let pw = (w as i64) * 254 / d.0;
+                    let ph = (h as i64) * 254 / d.1;
+                    let pwc = pw % 100;
+                    let phc = ph % 100;
+                    let pws = if pwc < 10 { f"0{pwc}" } else { f"{pwc}" };
+                    let phs = if phc < 10 { f"0{phc}" } else { f"{phc}" };
+                    println(f"    print: {pw / 100}.{pws} x {ph / 100}.{phs} cm at {d.0}x{d.1} dpi");
+                } else {
+                    println(f"    dpi: {pair_repr(d)}");
+                }
+            }
+        }
+    }
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() or c == '_'
+}
+
+// re.findall(r"""(\w+)=("[^"]*"|'[^']*')""", body), later keys winning.
+fn img_attrs(body: ref Vec[char]) -> Map[String, String] {
+    let mut out: Map[String, String] = Map.new();
+    let n = body.len();
+    let mut i = 0;
+    while i < n {
+        if not is_word(body[i]) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < n and is_word(body[j]) {
+            j += 1;
+        }
+        if j + 1 < n and body[j] == '=' and (body[j + 1] == '"' or body[j + 1] == '\'') {
+            let q = body[j + 1];
+            let mut k = j + 2;
+            while k < n and body[k] != q {
+                k += 1;
+            }
+            if k < n {
+                let key: String = body[i..j].iter().collect();
+                let val: String = body[j + 2..k].iter().collect();
+                out.insert(key, val);
+                i = k + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn size_round(s: ref Size) -> (i64, i64) {
+    match s {
+        Size.I(w, h) => (w, h),
+        Size.F(w, h) => (py_round(w), py_round(h)),
+    }
+}
+
+fn audit(path: ref String) {
+    let page: Vec[char] = fs.read_to_string(f"data/{path}").unwrap_or(String.new()).chars().collect();
+    let n = page.len();
+    let mut i = 0;
+    while i + 4 <= n {
+        // <img\b([^>]*)>
+        let starts_img = page[i] == '<' and page[i + 1] == 'i' and page[i + 2] == 'm' and page[i + 3] == 'g';
+        if not starts_img or (i + 4 < n and is_word(page[i + 4])) {
+            i += 1;
+            continue;
+        }
+        let mut k = i + 4;
+        while k < n and page[k] != '>' {
+            k += 1;
+        }
+        if k >= n {
+            i += 1;
+            continue;
+        }
+        let body: Vec[char] = page[i + 4..k].to_vec();
+        i = k + 1;
+        let attrs = img_attrs(body);
+        let src = match attrs.get("src") {
+            Some(s) => s.clone(),
+            None => String.new(),
+        };
+        let size = match get(src) {
+            Ok(s) => s,
+            Err(e) => {
+                println(f"  {src}: {err_text(e)}");
+                continue;
+            }
+        };
+        if let Size.I(-1, _) = size {
+            println(f"  {src}: not an image imagesize knows");
+            continue;
+        }
+        if let Size.I(_, -1) = size {
+            println(f"  {src}: not an image imagesize knows");
+            continue;
+        }
+        let (aw, ah) = size_round(size);
+        let (dws, dhs) = match (attrs.get("width"), attrs.get("height")) {
+            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            _ => {
+                println(f"  {src}: no width/height attributes, actual {aw}x{ah}");
+                continue;
+            }
+        };
+        let dw = i64.parse(dws).unwrap_or(0);
+        let dh = i64.parse(dhs).unwrap_or(0);
+        if dw == aw and dh == ah {
+            println(f"  {src}: ok {aw}x{ah}");
+        } else {
+            println(f"  {src}: mismatch, declared {dw}x{dh}, actual {aw}x{ah}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn hex_digit(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        0
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        out.push((hex_digit(cs[k]) * 16 + hex_digit(cs[k + 1])) as u8);
+        k += 2;
+    }
+    out
+}
+
+fn dirname_of(p: ref String) -> String {
+    let cs: Vec[char] = p.chars().collect();
+    let mut cut = 0;
+    let mut k = 0;
+    while k < cs.len() {
+        if cs[k] == '/' {
+            cut = k;
+        }
+        k += 1;
+    }
+    cs[0..cut].iter().collect()
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let job = String.from_utf8(hex_bytes(line)).unwrap_or(String.new());
+        if job.starts_with("#") {
+            println(job);
+            continue;
+        }
+        println(f"> {job}");
+        if job.starts_with("!") {
+            let f = split_on(job, ' ');
+            if f[0] == "!gallery" {
+                gallery(f[1]);
+            } else if f[0] == "!thumbs" {
+                thumbs(f[1]);
+            } else {
+                audit(f[1]);
+            }
+            continue;
+        }
+        match get(job) {
+            Ok(s) => println(f"  get: {size_repr(s)}"),
+            Err(e) => println(f"  get: {err_text(e)}"),
+        }
+        match get_dpi(job) {
+            Ok(d) => println(f"  getDPI: {pair_repr(d)}"),
+            Err(e) => println(f"  getDPI: {err_text(e)}"),
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.txt.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("2320504e473a2074686520494844522073697a652c20616e642074686520704859732064656e7369747920676574445049207265616473\n696d616765732f70686f746f2e706e67\n696d616765732f6c6f676f2e706e67\n696d616765732f7363616e5f6173706563742e706e67\n696d616765732f726574696e612e706e67\n696d616765732f73637265656e39362e706e67\n696d616765732f7072696e743330302e706e67\n696d616765732f69636f6e31362e706e67\n696d616765732f706879735f66697273742e706e67\n696d616765732f6e6f5f696461742e706e67\n696d616765732f73686f727432302e706e67\n696d616765732f73686f727431322e706e67\n696d616765732f6e6f745f696864722e706e67\n23204749463a20746865206c6f676963616c2073637265656e2073697a65\n696d616765732f616e696d2e676966\n696d616765732f6f6c642e676966\n696d616765732f706978656c2e676966\n696d616765732f776964652e676966\n696d616765732f73686f7274392e676966\n23204a5045473a2074686520534f466e206672616d652073697a652c20616e6420746865204a4649462064656e7369747920676574445049207265616473\n696d616765732f6a66696637322e6a7067\n696d616765732f6a6669665f636d2e6a7067\n696d616765732f6a6669665f6173706563742e6a7067\n696d616765732f6a6669665f756e6974332e6a7067\n696d616765732f63616d6572612e6a7067\n696d616765732f70726f67726573736976652e6a7067\n696d616765732f6468745f66697273742e6a7067\n696d616765732f66696c6c5f62797465732e6a7067\n696d616765732f6c6f73736c6573732e6a7067\n696d616765732f61726974682e6a7067\n696d616765732f6375745f61667465725f617070302e6a7067\n696d616765732f6375745f696e5f736f662e6a7067\n696d616765732f6375745f696e5f617070302e6a7067\n696d616765732f6375745f696e5f657869662e6a7067\n696d616765732f736f695f6f6e6c792e6a7067\n23204a50454720323030303a20746865206968647220626f782c20616e6420746865207265736420626f7820676574445049207265616473\n696d616765732f706c61696e2e6a7032\n696d616765732f726573642e6a7032\n696d616765732f726573635f6f6e6c792e6a7032\n696d616765732f726573645f6375742e6a7032\n696d616765732f726573645f6375745f756e6974732e6a7032\n696d616765732f73686f72742e6a7032\n2320544946463a2074686520666972737420494644277320496d616765576964746820616e6420496d6167654c656e677468\n");
+    s.push_str("696d616765732f6269675f656e6469616e2e746966\n696d616765732f6269675f656e6469616e5f6c6f6e672e746966\n696d616765732f6269675f656e6469616e5f726174696f6e616c2e746966\n696d616765732f6269675f656e6469616e5f6261645f6865696768742e746966\n696d616765732f6269675f656e6469616e5f6e6f5f6865696768742e746966\n696d616765732f6269675f656e6469616e5f6375742e746966\n696d616765732f6269675f656e6469616e5f6661725f6966642e746966\n696d616765732f6c6974746c655f656e6469616e2e746966\n696d616765732f6c6974746c655f656e6469616e5f6a756e6b2e746966\n696d616765732f63616d6572615f7261772e646e67\n696d616765732f6c6974746c655f656e6469616e5f656d7074792e746966\n696d616765732f6269672e746966\n696d616765732f6269675f6e6f5f77696474682e746966\n696d616765732f6269675f6261645f6279746573697a652e746966\n696d616765732f6269675f73686f72742e746966\n23205356473a2074686520776964746820616e6420686569676874206174747269627574657320696e207468652066697273742031303234206279746573\n696d616765732f69636f6e2e737667\n696d616765732f61342e737667\n696d616765732f6c65747465722e737667\n696d616765732f636172642e737667\n696d616765732f747970652e737667\n696d616765732f706978656c732e737667\n696d616765732f7374726f6b655f66697273742e737667\n696d616765732f70657263656e742e737667\n696d616765732f656d2e737667\n696d616765732f656d7074795f77696474682e737667\n696d616765732f756e69745f6f6e6c792e737667\n696d616765732f76696577626f785f6f6e6c792e737667\n696d616765732f73696e676c655f71756f7465732e737667\n696d616765732f6578706f6e656e742e737667\n696d616765732f747261696c696e675f646f742e737667\n696d616765732f75707065725f756e69742e737667\n696d616765732f6c6174655f77696474682e737667\n696d616765732f73706c69745f757466382e737667\n696d616765732f6e6c5f696e5f76616c75652e737667\n696d616765732f6c656164696e675f73706163652e737667\n696d616765732f757466385f7469746c652e737667\n23204e657470626d3a207468652066697273742074776f206e756d62657273206f662074686520686561646572\n696d616765732f61736369692e70626d\n696d616765732f62696e6172792e70626d\n696d616765732f677261792e70676d\n696d616765732f61736369692e70676d\n");
+    s.push_str("696d616765732f636f6c6f722e70706d\n696d616765732f61736369692e70706d\n696d616765732f636f6d6d656e745f61667465722e70676d\n696d616765732f656f665f61667465725f77696474682e70706d\n696d616765732f6c6574746572732e70706d\n696d616765732f6f6e6c795f702e706e6d\n696d616765732f70616d2e70616d\n2320576562503a20746865205650382c205650384c20616e6420565038582068656164657273\n696d616765732f6c6f7373792e77656270\n696d616765732f6c6f7373795f7363616c65642e77656270\n696d616765732f6c6f73736c6573732e77656270\n696d616765732f6c6f73736c6573735f6269672e77656270\n696d616765732f657874656e6465642e77656270\n696d616765732f616e696d2e77656270\n696d616765732f73686f72745f7670386c2e77656270\n696d616765732f73686f72745f7670382e77656270\n696d616765732f73686f72745f767038782e77656270\n2320666f726d61747320696d61676573697a6520646f6573206e6f74206b6e6f77\n696d616765732f696d6167652e626d70\n696d616765732f66617669636f6e2e69636f\n696d616765732f656d7074792e706e67\n696d616765732f726561646d652e747874\n2320612066696c652074686174206973206e6f74207468657265\n696d616765732f6d697373696e672e706e67\n2167616c6c6572792067616c6c6572792e747376\n217468756d6273207468756d62732e747874\n21617564697420706167652e68746d6c\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("images/photo.png 89504e470d0a1a0a0000000d494844520000078000000438080200000067b15614000000017352474200aece1ce9000000097048597300000b1300000b1301009a9c180000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/logo.png 89504e470d0a1a0a0000000d4948445200000200000002000806000000f478d4fa0000000467414d410000b18f0bfc61050000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/scan_aspect.png 89504e470d0a1a0a0000000d49484452000009b000000db40802000000a1de6e5a00000009704859730000000100000001004f25c4d60000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/retina.png 89504e470d0a1a0a0000000d49484452000002ee00000536080200000045b5a4510000001374455874536f667477617265004b617261206d6b2e70796bacca6b0000001d74455874436f6d6d656e740074776f2074657874206368756e6b732066697273743cfa244f0000000970485973000016250000162501495224f00000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/screen96.png 89504e470d0a1a0a0000000d4948445200000556000003000802000000405cab95000000097048597300000ec400000ec301da6a98dc0000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/print300.png 89504e470d0a1a0a0000000d4948445200000ce4000009f60802000000d6a96b5e000000097048597300002e2300002e230178a53f760000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/icon16.png 89504e470d0a1a0a0000000d4948445200000010000000100803000000282d0f5300000006504c5445000000ffffffa5d99fdd0000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/phys_first.png 89504e470d0a1a0a000000097048597300000b1300000b1301009a9c180000000d494844520000000a0000000a0802000000025058ea0000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/no_idat.png 89504e470d0a1a0a0000000d49484452000000400000003008020000002e29eb480000000f744558745469746c65006375742073686f727435ae7048\nimages/short20.png 89504e470d0a1a0a0000000d4948445200000320\nimages/short12.png 89504e470d0a1a0a0000000d\n");
+    s.push_str("images/not_ihdr.png 89504e470d0a1a0a0000000443674249500020022bd5b37f0000000d4948445200000039000000390802000000037a14d20000000e4944415478da636840020cc81c009c1a0c0121ea3d320000000049454e44ae426082\nimages/anim.gif 474946383961e0010e01f700000000000000000000000000000000000000000000000000002c00000000e0010e010002024401003b\nimages/old.gif 4749463837614001c800f700000000000000000000000000000000000000000000000000002c000000004001c8000002024401003b\nimages/pixel.gif 47494638396101000100f700000000000000000000000000000000000000000000000000002c00000000010001000002024401003b\nimages/wide.gif 474946383961409c2c01f700000000000000000000000000000000000000000000000000002c00000000409c2c010002024401003b\nimages/short9.gif 474946383961100010\nimages/jfif72.jpg ffd8ffe000104a46494600010201004800480000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc000110801e0028003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f00123456789affd9\nimages/jfif_cm.jpg ffd8ffe000104a46494600010202007600760000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080db409b003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f00123456789affd9\nimages/jfif_aspect.jpg ffd8ffe000104a46494600010200000100010000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080258032003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f00123456789affd9\nimages/jfif_unit3.jpg ffd8ffe000104a46494600010203012c012c0000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080064006403012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f00123456789affd9\n");
+    s.push_str("images/camera.jpg ffd8ffe100464578696600004d4d002a00000008000101120003000000010001000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc00011080bd00fc003012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffda000c03010002110311003f00123456789affd9\nimages/progressive.jpg ffd8ffe000104a46494600010201006000600000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc20011080300040003012200021101031101ffda000c03010002110311003f00123456789affd9\nimages/dht_first.jpg ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc0001108032004b003012200021101031101ffda000c03010002110311003f00123456789affd9\nimages/fill_bytes.jpg ffd8ffe000104a46494600010201012c012c0000ffffffffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffffffc100110805dc07d003012200021101031101ffda000c03010002110311003f00123456789affd9\nimages/lossless.jpg ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc800094a504720657874ffc30011080200020003012200021101031101ffda000c03010002110311003f00123456789affd9\nimages/arith.jpg ffd8ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffcc00040011ffc900110800de014d03012200021101031101ffda000c03010002110311003f00123456789affd9\nimages/cut_after_app0.jpg ffd8ffe000104a46494600010201004800480000\nimages/cut_in_sof.jpg ffd8ffe000104a46494600010201004800480000ffdb0043000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40ffc000110801e0\n");
+    s.push_str("images/cut_in_app0.jpg ffd8ffe000104a46494600\nimages/cut_in_exif.jpg ffd8ffe100464578696600004d4d002a00000008000101120003000000010001\nimages/soi_only.jpg ffd8\nimages/plain.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000002d6a703268000000166968647200000300000004000003070700000000000f636f6c7201000000000010000000206a703263ff4fff510000000000000000000000000000000000000000\nimages/resd.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000476a703268000000166968647200000258000003200003070700000000000f636f6c72010000000000100000001a726573200000001272657364012c0001012c00010000000000206a703263ff4fff510000000000000000000000000000000000000000\nimages/resc_only.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000476a703268000000166968647200000258000003200003070700000000000f636f6c72010000000000100000001a72657320000000127265736300480001004800010000000000206a703263ff4fff510000000000000000000000000000000000000000\nimages/resd_cut.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000476a7032680000001669686472000001e0000002800003070700000000000f636f6c72010000000000100000001a726573200000001272657364007600010203\nimages/resd_cut_units.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000476a7032680000001669686472000001e0000002800003070700000000000f636f6c72010000000000100000001a7265732000000012726573642e2300010401\nimages/short.jp2 0000000c6a5020200d0a870a00000014667479706a703220000000006a7032200000001e6a70326800000016696864720000000a\nimages/big_endian.tif 4d4d002a00000008000500fe00040000000100000000010000030000000106400000010100030000000104b0000001020003000000010008000001030003000000010001000000000000\nimages/big_endian_long.tif 4d4d002a00000008000201000004000000010001117001010004000000010000c35000000000\nimages/big_endian_rational.tif 4d4d002a00000008000201000005000000010000001a01010004000000010000000a00000000\nimages/big_endian_bad_height.tif 4d4d002a00000008000201000004000000010000000a01010001000000010a00000000000000\n");
+    s.push_str("images/big_endian_no_height.tif 4d4d002a00000008000201000003000000010280000001060003000000010002000000000000\nimages/big_endian_cut.tif 4d4d002a00000008000300fe000400000001000000000100000300000001\nimages/big_endian_far_ifd.tif 4d4d002a00000fa000000000000000000000000000000000\nimages/little_endian.tif 49492a000800000003000001030001000000b80b00000101030001000000d007000015010300010000000300000000000000\nimages/little_endian_junk.tif 49492a0008000000020000010300010000002c0101000101040001000000c800000000000000\nimages/camera_raw.dng 49492a001000000000000000000000000400fe00040001000000010000000001040001000000000100000101040001000000ab0000000f01020006000000c800000000000000\nimages/little_endian_empty.tif 49492a0008000000000000000000\nimages/big.tif 49492b000800000010000000000000000200000000000000000110000100000000000000a08601000000000001011000010000000000000080380100000000000000000000000000\nimages/big_no_width.tif 49492b00080000001000000000000000010000000000000001010400010000000000000050000000000000000000000000000000\nimages/big_bad_bytesize.tif 49492b0004000000100000000000000002000000000000000001040001000000000000000a000000000000000101040001000000000000000a000000000000000000000000000000\nimages/big_short.tif 49492b00080000001000\nimages/icon.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22323422206865696768743d223234222076696577426f783d22302030203234203234223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/a4.svg 3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223231306d6d22206865696768743d223239376d6d223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/letter.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22382e35696e22206865696768743d223131696e223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\n");
+    s.push_str("images/card.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223130636d22206865696768743d22362e35636d223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/type.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223732707422206865696768743d2233367063223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/pixels.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22333030707822206865696768743d223135302e37357078223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/stroke_first.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f73766722207374726f6b652d77696474683d22322220646174612d6865696768743d2231222077696474683d22343822206865696768743d223332223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/percent.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223130302522206865696768743d2231303025223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/em.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223130656d22206865696768743d2235656d223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/empty_width.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d2222206865696768743d223130223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/unit_only.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22707822206865696768743d223130223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/viewbox_only.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222076696577426f783d2230203020313030203530223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\n");
+    s.push_str("images/single_quotes.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d27323427206865696768743d273234273e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/exponent.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d2231653322206865696768743d2235223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/trailing_dot.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d2231322e22206865696768743d2235223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/upper_unit.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d223130505822206865696768743d2235223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/late_width.svg 3c3f786d6c2076657273696f6e3d22312e30223f3e0a3c212d2d207878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878202d2d3e0a3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22343022206865696768743d223330223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\n");
+    s.push_str("images/split_utf8.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22343022206865696768743d223330223e3c212d2d20797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979e28094202d2d3e3c2f7376673e0a\n");
+    s.push_str("images/nl_in_value.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22340a3022206865696768743d223330222077696474683d223132223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/leading_space.svg 20203c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22343022206865696768743d223330223e3c726563742077696474683d22313022206865696768743d223130222f3e3c2f7376673e0a\nimages/utf8_title.svg 3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f737667222077696474683d22363422206865696768743d223634223e3c7469746c653e436166c3a920e28094206c6f676f3c2f7469746c653e3c2f7376673e0a\nimages/ascii.pbm 50310a232043524541544f523a2047494d5020504e4d2046696c7465720a3820340a3020312030203120302031203020310a3020312030203120302031203020310a3020312030203120302031203020310a3020312030203120302031203020310a\nimages/binary.pbm 50340a313620320aaa55aa55\nimages/gray.pgm 50352036343020343830203235350a8080808080808080808080808080808080808080808080808080808080808080\nimages/ascii.pgm 50320a093309320a31350a3020372031350a3135203720300a\nimages/color.ppm 50360a23206d616465206279206d6b2e70790a23207365636f6e6420636f6d6d656e740a313238300a23206265747765656e0a3732300a3235350a000000000000000000000000\nimages/ascii.ppm 50330d0a3220310d0a3235350d0a323535203020302020302032353520300d0a\nimages/comment_after.pgm 503220363430232077696474680a343830203235350a\nimages/eof_after_width.ppm 50360a363430\nimages/letters.ppm 5036206162632031320a\nimages/only_p.pnm 50\nimages/pam.pam 50370a574944544820340a48454947485420320a444550544820330a4d415856414c203235350a5455504c54595045205247420a454e444844520a\nimages/lossy.webp 52494646200000005745425056503820140000005002009d012a0004ab0200000000000000000000\nimages/lossy_scaled.webp 52494646200000005745425056503820140000005002009d012a2c41c88000000000000000000000\nimages/lossless.webp 5249464617000000574542505650384c0b0000002f8f014b10000000000000\nimages/lossless_big.webp 5249464617000000574542505650384c0b0000002fff3f0210000000000000\n");
+    s.push_str("images/extended.webp 524946462000000057454250565038580a000000100000007f0700370400414c5048020000000000\nimages/anim.webp 524946461200000057454250414e494d06000000000000000000\nimages/short_vp8l.webp 5249464617000000574542505650384c0b0000002f0940\nimages/short_vp8.webp 52494646200000005745425056503820140000005002009d012a0a\nimages/short_vp8x.webp 524946462000000057454250565038580a0000001000000009\nimages/image.bmp 424d460000000000000036000000280000000200000002000000010018000000000000000000000000000000000000000000000000000000000000000000\nimages/favicon.ico 00000100010010100000010020000000000000000000000000000000000000000000\nimages/empty.png \nimages/readme.txt 4e6f7420616e20696d61676520617420616c6c2e0a\ngallery.tsv 70686f746f2e706e670935300953756e736574206f76657220746865206261790a6c6f676f2e706e6709323509436f6d70616e79206c6f676f0a726574696e612e706e67093530094170702073637265656e73686f7420283278290a63616d6572612e6a706709313009537472656574206d61726b65740a70726f67726573736976652e6a7067093130300950726f647563742073686f740a61342e7376670931303009466c6f6f7220706c616e0a69636f6e2e73766709323030094d656e752069636f6e0a636172642e73766709333309427573696e65737320636172640a6c6f73736c6573732e776562700937350943686172740a657874656e6465642e77656270093530094865726f2062616e6e65720a6269675f656e6469616e2e7469660932300941726368697665207363616e0a636f6c6f722e70706d0931303009526177206672616d650a70657263656e742e7376670931303009526573706f6e73697665206172740a726561646d652e74787409313030094e6f7465730a\nthumbs.txt 70686f746f2e706e670a6c6f676f2e706e670a7363616e5f6173706563742e706e670a726574696e612e706e670a7072696e743330302e706e670a6a66696637322e6a70670a6a6669665f636d2e6a70670a63616d6572612e6a70670a66696c6c5f62797465732e6a70670a706c61696e2e6a70320a726573645f6375742e6a70320a6269675f656e6469616e5f6c6f6e672e7469660a6c6974746c655f656e6469616e2e7469660a6269672e7469660a6c6f7373792e776562700a6c6f73736c6573735f6269672e776562700a616e696d2e6769660a776964652e6769660a706978656c2e6769660a6c65747465722e7376670a706978656c732e7376670a62696e6172792e70626d0a656f665f61667465725f77696474682e70706d0a66617669636f6e2e69636f0a\n");
+    s.push_str("page.html 3c21646f63747970652068746d6c3e0a3c68746d6c3e3c686561643e3c7469746c653e537072696e6720636174616c6f6775653c2f7469746c653e3c2f686561643e0a3c626f64793e0a3c68313e537072696e6720636174616c6f6775653c2f68313e0a3c696d67207372633d22696d616765732f70686f746f2e706e67222077696474683d223139323022206865696768743d22313038302220616c743d2253756e736574223e0a3c703e4f7572206e65772072616e67652c2070686f746f67726170686564206f6e206c6f636174696f6e2e3c2f703e0a3c696d67207372633d22696d616765732f63616d6572612e6a70672220616c743d224d61726b6574223e0a3c696d67207372633d22696d616765732f70726f67726573736976652e6a7067222077696474683d223130323422206865696768743d223730302220616c743d2250726f64756374223e0a3c696d6720616c743d224c6f676f22207372633d22696d616765732f6c6f676f2e706e6722206865696768743d22353132222077696474683d22353132223e0a3c696d67207372633d22696d616765732f6c6f73736c6573732e77656270222077696474683d22343030223e0a3c696d67207372633d22696d616765732f61342e737667222077696474683d2237393422206865696768743d22313132332220616c743d22506c616e223e0a3c696d67207372633d22696d616765732f69636f6e2e737667222077696474683d22323422206865696768743d223234223e0a3c696d67207372633d22696d616765732f6d697373696e672e706e67222077696474683d22313022206865696768743d223130223e0a3c696d67207372633d22696d616765732f6375745f696e5f736f662e6a7067222077696474683d2236343022206865696768743d22343830223e0a3c696d67207372633d22696d616765732f726561646d652e747874222077696474683d223122206865696768743d2231223e0a3c696d67207372633d27696d616765732f6f6c642e676966272077696474683d2733323027206865696768743d27323030273e0a3c2f626f64793e3c2f68746d6c3e0a\n");
+    s
+}
