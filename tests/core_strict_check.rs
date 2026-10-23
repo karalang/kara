@@ -12178,3 +12178,35 @@ fn a_bare_variant_does_not_build_a_value() {
         "1 2 3\n",
     );
 }
+
+/// The total-order 16-bit float wrappers print as the float they hold, as
+/// `F64` and `F32` do (B-2026-10-22-32).
+#[test]
+fn f16_and_bf16_print_as_their_float() {
+    accepted_and_runs(
+        "f16-bf16-display",
+        "fn main() {\n    let a = F16.from(2.5);\n    let b = Bf16.from(3.25);\n    \
+         println(a);\n    println(f\"{b} {F64.from(1.5)}\");\n}\n",
+        "2.5\n3.25 1.5\n",
+    );
+}
+
+/// `sum`, `product`, `max` and `min` are iterator methods: a `Vec` reaches
+/// them through `.iter()`, which `karac fix` writes; and `f64.from` widens an
+/// `f32` (B-2026-10-22-34).
+#[test]
+fn collection_terminals_go_through_iter_and_f64_from_widens() {
+    rejected_then_fixed_by(
+        "vec-direct-max",
+        "fn main() {\n    let xs: Vec[i64] = [1, 5, 3];\n    \
+         println(f\"{xs.max().unwrap()} {xs.sum()}\");\n}\n",
+        "write `.iter().max()`",
+        "xs.iter().max().unwrap()} {xs.iter().sum()}",
+    );
+    accepted_and_runs(
+        "f64-from-f32",
+        "fn main() {\n    let x: f32 = 1.5;\n    let y: f64 = f64.from(x);\n    \
+         let z: f64 = x.into();\n    println(f\"{y} {z}\");\n}\n",
+        "1.5 1.5\n",
+    );
+}

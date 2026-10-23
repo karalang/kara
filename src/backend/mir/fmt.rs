@@ -466,7 +466,11 @@ impl<'ctx> Cx<'ctx, '_> {
             return self.fmt_call(q, ft);
         }
         if !adt.is_enum {
-            if matches!(adt.name.as_str(), "F64" | "F32") && adt.variants[0].fields.len() == 1 {
+            // The total-order float wrappers show as the float they hold
+            // (B-2026-10-22-32 for the 16-bit ones).
+            if matches!(adt.name.as_str(), "F64" | "F32" | "F16" | "Bf16")
+                && adt.variants[0].fields.len() == 1
+            {
                 let ft = adt.variants[0].fields[0].1;
                 return self.fmt_call(p, ft);
             }

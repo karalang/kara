@@ -234,6 +234,27 @@ impl<'a> super::TypeChecker<'a> {
                 // expression aliases.
                 self.direct_iter_terminals
                     .insert(SpanKey::from_span(&object.span));
+                // v2 core: these are the iterator's methods, and a `Vec` or
+                // `VecDeque` has none of them (docs/library/collections.md);
+                // `.iter()` reaches them (B-2026-10-22-34).
+                if self.cli_lint_overrides.strict_core {
+                    self.type_error_with_fix_it(
+                        format!(
+                            "no method '{method}' on a collection: `{method}` is an iterator \
+                             method, so write `.iter().{method}()` (docs/library/iterators.md)"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        FixIt {
+                            span: Span {
+                                offset: object.span.offset + object.span.length,
+                                length: 0,
+                                ..object.span
+                            },
+                            replacement: ".iter()".to_string(),
+                        },
+                    );
+                }
                 return Some(self.infer_iterator_method(&item_ty, method, args, span, false));
             }
         }

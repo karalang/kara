@@ -1471,6 +1471,11 @@ impl<'a> Interp<'a> {
                 // The total-order wrapper around its one float field.
                 Ok(Value::Agg(args))
             }
+            // `impl From[f32] for f64`: widening holds the value exactly
+            // (B-2026-10-22-34).
+            ("f64", "from") if matches!(args.as_slice(), [Value::Float(_)]) => {
+                Ok(args.into_iter().next().expect("one argument"))
+            }
             ("f64" | "f32", "total_cmp") if args.len() == 2 => {
                 // The total order the `F64` / `F32` wrappers compare by.
                 let mut x = [0f64; 2];
@@ -9614,8 +9619,9 @@ impl<'a> Interp<'a> {
         if fs.is_empty() {
             return Ok(name);
         }
-        if k.is_none() && matches!(name.as_str(), "F64" | "F32") && fs.len() == 1 {
-            // The total-order float wrappers show as the float they hold.
+        if k.is_none() && matches!(name.as_str(), "F64" | "F32" | "F16" | "Bf16") && fs.len() == 1 {
+            // The total-order float wrappers show as the float they hold
+            // (B-2026-10-22-32 for the 16-bit ones).
             if let Some(t) = self.tys.field_ty(ty, None, 0) {
                 return self.display_typed(&fs[0], t);
             }

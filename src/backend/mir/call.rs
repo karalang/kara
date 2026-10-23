@@ -703,6 +703,22 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.rt("exit", &[code.into()])
             }
+            // `impl From[f32] for f64`: an `fpext` (B-2026-10-22-34).
+            ("f64", "from")
+                if args.len() == 1
+                    && matches!(
+                        self.tys.kind(self.operand_type(&args[0])?),
+                        TyKind::Float(_)
+                    ) =>
+            {
+                let v = self.operand_scalar(&args[0])?.into_float_value();
+                let v = self
+                    .builder
+                    .build_float_cast(v, self.llcx.f64_type(), "")
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, v.into())
+            }
             ("F64" | "F32" | "F16" | "Bf16", "from") if args.len() == 1 => {
                 // The total-order wrapper around its one float field.
                 // A literal argument can reach it at another float width
