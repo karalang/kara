@@ -1,0 +1,70 @@
+// LeetCode #908: Smallest Range I -- the largest and smallest values.
+//
+// Only the two ends matter: raise the smallest value by k and lower the
+// largest by k, and everything else can meet them or sit between. If they
+// can cross, every value can be moved to one point and the score is 0;
+// otherwise it is the gap left, max - min - 2k. One pass for both. O(n).
+
+fn smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut lo = nums[0];
+    let mut hi = nums[0];
+    for i in 1..nums.len() {
+        lo = lo.min(nums[i]);
+        hi = hi.max(nums[i]);
+    }
+    (hi - lo - 2 * k).max(0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut listed = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{nums[i]}");
+    }
+    println(f"nums = [{listed}], k = {k} -> {smallest_range_i(nums, k)}");
+}
+
+fn main() {
+    show(vec![1], 0);
+    show(vec![0, 10], 2);
+    show(vec![1, 3, 6], 3);
+    show(vec![7, 7, 7], 0);
+    show(vec![0, 10000], 0);
+    show(vec![0, 10000], 10000);
+    show(vec![2, 9, 4, 13, 5], 2);
+    show(vec![2, 9, 4, 13, 5], 5);
+    // random cases of up to 2000 numbers below 10, 1000 or 10001, with k
+    // up to 10000
+    let mut seed = 908;
+    let mut sum = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 2000;
+        let top = if c % 3 == 0 { 10 } else if c % 3 == 1 { 1000 } else { 10001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            nums.push(next_random(mut seed) % top);
+        }
+        let k = next_random(mut seed) % (top / 2 + 1);
+        let got = smallest_range_i(nums, k);
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"300 cases: scores summing to {sum}, checksum {check}");
+    // LeetCode's largest: 10^4 numbers up to 10^4, with k = 0 and k = 2500
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        big.push(next_random(mut seed) % 10001);
+    }
+    println(f"10000 numbers, k = 0 -> {smallest_range_i(big, 0)}");
+    println(f"10000 numbers, k = 2500 -> {smallest_range_i(big, 2500)}");
+}

@@ -1,0 +1,242 @@
+// LeetCode #908: Smallest Range I -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given an integer array nums and an integer k. In
+// one operation, you can choose any index i and change nums[i] to
+// nums[i] + x where x is an integer from the range [-k, k]; you can apply
+// this operation at most once for each index i. The score of nums is the
+// difference between the maximum and minimum elements. Return the minimum
+// score of nums after applying the operation at most once for each index.
+
+// ---- the ★ arm: the largest and smallest values ---------------------------
+fn star_smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut lo = nums[0];
+    let mut hi = nums[0];
+    for i in 1..nums.len() {
+        lo = lo.min(nums[i]);
+        hi = hi.max(nums[i]);
+    }
+    (hi - lo - 2 * k).max(0)
+}
+
+// ---- the sort arm: the ends of the sorted values --------------------------
+fn sort_smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let gap = sorted[sorted.len() - 1] - sorted[0];
+    if gap > 2 * k { gap - 2 * k } else { 0 }
+}
+
+// ---- the intervals arm: where the reachable intervals meet ----------------
+fn intervals_smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut highest_left = nums[0] - k;
+    let mut lowest_right = nums[0] + k;
+    for v in nums.iter() {
+        highest_left = highest_left.max(*v - k);
+        lowest_right = lowest_right.min(*v + k);
+    }
+    if highest_left <= lowest_right { 0 } else { highest_left - lowest_right }
+}
+
+// ---- the search arm: a binary search on the score -------------------------
+fn search_possible(nums: Vec[i64], k: i64, s: i64) -> bool {
+    let mut highest_left = nums[0] - k;
+    let mut lowest_right = nums[0] + k;
+    for i in 1..nums.len() {
+        highest_left = highest_left.max(nums[i] - k);
+        lowest_right = lowest_right.min(nums[i] + k);
+    }
+    highest_left - lowest_right <= s
+}
+
+fn search_smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut least = nums[0];
+    let mut most = nums[0];
+    for v in nums.iter() {
+        least = least.min(*v);
+        most = most.max(*v);
+    }
+    // the score max - min, taking every x = 0, is always possible
+    let mut lo = 0;
+    let mut hi = most - least;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if search_possible(nums, k, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- the toward arm: every value moved towards the middle -----------------
+fn toward_smallest_range_i(nums: Vec[i64], k: i64) -> i64 {
+    let mut lo = nums[0];
+    let mut hi = nums[0];
+    for v in nums.iter() {
+        lo = lo.min(*v);
+        hi = hi.max(*v);
+    }
+    let middle = (lo + hi) / 2;
+    let mut new_lo = middle;
+    let mut new_hi = middle;
+    for v in nums.iter() {
+        let moved = if *v < middle { (*v + k).min(middle) } else { (*v - k).max(middle) };
+        new_lo = new_lo.min(moved);
+        new_hi = new_hi.max(moved);
+    }
+    new_hi - new_lo
+}
+
+fn arm(x: i64, nums: Vec[i64], k: i64) -> i64 {
+    match x {
+        0 => star_smallest_range_i(nums, k),
+        1 => sort_smallest_range_i(nums, k),
+        2 => intervals_smallest_range_i(nums, k),
+        3 => search_smallest_range_i(nums, k),
+        _ => toward_smallest_range_i(nums, k),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every way to apply the operation to every index tried (x = 0 is the same
+// as leaving an index alone), each result scored, and the least score kept
+fn literal(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let choices = 2 * k + 1;
+    let mut ways = 1;
+    for _ in 0..n {
+        ways *= choices;
+    }
+    let mut best = -1;
+    for w in 0..ways {
+        let mut rest = w;
+        let mut lo = 0;
+        let mut hi = 0;
+        for i in 0..n {
+            let changed = nums[i] + rest % choices - k;
+            rest /= choices;
+            if i == 0 or changed < lo {
+                lo = changed;
+            }
+            if i == 0 or changed > hi {
+                hi = changed;
+            }
+        }
+        if best < 0 or hi - lo < best {
+            best = hi - lo;
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], k: i64, small: bool) {
+    let n = nums.len();
+    let want = if small { literal(nums, k) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums, k));
+    }
+    // P2: the score with every x = 0
+    let mut lo = nums[0];
+    let mut hi = nums[0];
+    for v in nums.iter() {
+        lo = lo.min(*v);
+        hi = hi.max(*v);
+    }
+    // P3: every value moved by the same amount
+    let shift = next_random(mut seed) % 1000;
+    let mut shifted: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        shifted.push(*v + shift);
+    }
+    // P4: the values reversed
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(nums[n - 1 - i]);
+    }
+    // P5: every value and k doubled
+    let mut doubled: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        doubled.push(*v * 2);
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's least score
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: at least 0 and at least the gap less 2k, at most the gap
+        check(mut t, 2, got >= 0 and got >= hi - lo - 2 * k and got <= hi - lo);
+        // P3: the same score for the values all moved
+        check(mut t, 3, arm(x, shifted, k) == got);
+        // P4: the same score for the values reversed
+        check(mut t, 4, arm(x, reversed, k) == got);
+        // P5: twice the score for the values and k doubled
+        check(mut t, 5, arm(x, doubled, 2 * k) == 2 * got);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 908;
+    let mut cases = 0;
+    let mut numbers = 0;
+    // up to 4 numbers below 12 with k up to 2 against the statement; then
+    // up to 500 numbers below 10, 1000 or 10001 with k up to half of that
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 500 };
+        let top = if small { 12 } else if c % 3 == 0 { 10 } else if c % 3 == 1 { 1000 } else { 10001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            nums.push(next_random(mut seed) % top);
+        }
+        let k = if small { next_random(mut seed) % 3 } else { next_random(mut seed) % (top / 2 + 1) };
+        cases += 1;
+        numbers += len;
+        properties(mut t, mut seed, nums, k, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {numbers} numbers, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
