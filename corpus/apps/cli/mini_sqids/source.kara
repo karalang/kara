@@ -1,0 +1,1101 @@
+// mini_sqids — sqids 0.5.2 (sqids/sqids.py), the successor to Hashids: it
+// turns lists of non-negative integers into short, URL-safe, reversible ids
+// ("86Rf07" for [1, 2, 3]) for public-facing database keys, with a profanity
+// blocklist so no id spells a rude word. It ports the Sqids constructor (its
+// alphabet / min_length checks and the blocklist filtering), encode with the
+// offset-rotated, shuffled alphabet, separators, min_length padding and the
+// blocklist re-generation loop, and decode, with the library's exact
+// ValueError messages.
+//
+// The alphabet is ASCII by the library's own rule, so it is a byte vector.
+// The library keeps the filtered blocklist in sets; here they are vectors,
+// which is the same thing for "does any word match", the only question asked
+// of them. The library's default constructor uses a pre-filtered copy of
+// DEFAULT_BLOCKLIST; filtering the default list at construction gives the
+// same three sets (checked during development). blocklist_text() is that
+// default list and jobs_text() holds data/jobs.tsv.
+
+struct Sqids {
+    alphabet: Vec[u8],
+    min_length: i64,
+    exact: Vec[String],
+    ends: Vec[String],
+    anywhere: Vec[String],
+}
+
+const MAXSIZE: i64 = 9223372036854775807;
+
+// ----------------------------------------------------------- small helpers
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_i64(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn bytes_str(b: Vec[u8]) -> String {
+    String.from_utf8(b).unwrap_or("?".to_string())
+}
+
+fn lower_bytes(b: Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c >= b'A' and c <= b'Z' {
+            out.push(c + 32);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn has_byte(v: Vec[u8], c: u8) -> bool {
+    let mut i = 0;
+    let mut found = false;
+    while i < v.len() {
+        if v[i] == c {
+            found = true;
+            i = v.len();
+        }
+        i += 1;
+    }
+    found
+}
+
+fn index_of(v: Vec[u8], c: u8) -> i64 {
+    let mut i = 0;
+    let mut at = -1;
+    while i < v.len() {
+        if v[i] == c {
+            at = i;
+            i = v.len();
+        }
+        i += 1;
+    }
+    at
+}
+
+fn has_str(v: Vec[String], s: String) -> bool {
+    let mut found = false;
+    for w in v {
+        if w == s {
+            found = true;
+        }
+    }
+    found
+}
+
+fn add_unique(v: mut ref Vec[String], s: own String) {
+    if not has_str(v, s) {
+        v.push(s);
+    }
+}
+
+// alphabet[start:end] followed by alphabet[0:start] — Python's
+// a[offset:] + a[:offset].
+fn rotate(a: Vec[u8], offset: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = offset;
+    while i < a.len() {
+        out.push(a[i]);
+        i += 1;
+    }
+    i = 0;
+    while i < offset {
+        out.push(a[i]);
+        i += 1;
+    }
+    out
+}
+
+fn reversed(a: Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        out.push(a[i]);
+        i -= 1;
+    }
+    out
+}
+
+fn tail(a: Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 1;
+    while i < a.len() {
+        out.push(a[i]);
+        i += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ the algorithm
+
+fn shuffle(alphabet: Vec[u8]) -> Vec[u8] {
+    let mut chars = alphabet.clone();
+    let n = chars.len();
+    let mut i = 0;
+    let mut j = n - 1;
+    while j > 0 {
+        let r = (i * j + chars[i] as i64 + chars[j] as i64) % n;
+        let t = chars[i];
+        chars[i] = chars[r];
+        chars[r] = t;
+        i += 1;
+        j -= 1;
+    }
+    chars
+}
+
+fn to_id(num: i64, alphabet: Vec[u8]) -> Vec[u8] {
+    let n = alphabet.len();
+    let mut digits: Vec[u8] = Vec.new();
+    let mut result = num;
+    let mut going = true;
+    while going {
+        digits.push(alphabet[result % n]);
+        result = result / n;
+        if result == 0 {
+            going = false;
+        }
+    }
+    reversed(digits)
+}
+
+fn to_number(id: Vec[u8], alphabet: Vec[u8]) -> i64 {
+    let n = alphabet.len();
+    let mut v = 0;
+    for c in id {
+        v = v * n + index_of(alphabet.clone(), c);
+    }
+    v
+}
+
+fn new_sqids(alphabet: String, min_length: i64, blocklist: Vec[String]) -> Result[Sqids, String] {
+    let a = alphabet.bytes().to_vec();
+    for c in a.clone() {
+        if c > 127 {
+            return Err("ValueError: Alphabet cannot contain multibyte characters".to_string());
+        }
+    }
+    if a.len() < 3 {
+        return Err("ValueError: Alphabet length must be at least 3".to_string());
+    }
+    let mut i = 0;
+    while i < a.len() {
+        let mut j = i + 1;
+        while j < a.len() {
+            if a[i] == a[j] {
+                return Err("ValueError: Alphabet must contain unique characters".to_string());
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    if min_length < 0 or min_length > 255 {
+        return Err("ValueError: Minimum length has to be between 0 and 255".to_string());
+    }
+    let alphabet_lower = lower_bytes(a.clone());
+    let mut exact: Vec[String] = Vec.new();
+    let mut ends: Vec[String] = Vec.new();
+    let mut anywhere: Vec[String] = Vec.new();
+    for word in blocklist {
+        let wb = word.bytes().to_vec();
+        if wb.len() >= 3 {
+            let wl = lower_bytes(wb.clone());
+            let mut subset = true;
+            let mut digit = false;
+            for c in wl.clone() {
+                if not has_byte(alphabet_lower.clone(), c) {
+                    subset = false;
+                }
+                if c >= b'0' and c <= b'9' {
+                    digit = true;
+                }
+            }
+            if subset {
+                if wb.len() == 3 {
+                    add_unique(mut exact, bytes_str(wl));
+                } else if digit {
+                    add_unique(mut ends, bytes_str(wl));
+                } else {
+                    add_unique(mut anywhere, bytes_str(wl));
+                }
+            }
+        }
+    }
+    Ok(Sqids { alphabet: shuffle(a), min_length: min_length, exact: exact, ends: ends, anywhere: anywhere })
+}
+
+fn is_blocked_id(sq: Sqids, id: String) -> bool {
+    let lid = bytes_str(lower_bytes(id.bytes().to_vec()));
+    if lid.len() == 3 {
+        return has_str(sq.exact.clone(), lid);
+    }
+    let mut blocked = false;
+    for w in sq.ends.clone() {
+        if lid.starts_with(w.clone()) or lid.ends_with(w.clone()) {
+            blocked = true;
+        }
+    }
+    for w in sq.anywhere.clone() {
+        if lid.contains(w.clone()) {
+            blocked = true;
+        }
+    }
+    blocked
+}
+
+fn encode_numbers(sq: Sqids, numbers: Vec[i64], increment: i64) -> Result[String, String] {
+    let n = sq.alphabet.len();
+    if increment > n {
+        return Err("ValueError: Reached max attempts to re-generate the ID".to_string());
+    }
+    let mut offset = 0;
+    let mut k = 0;
+    while k < numbers.len() {
+        offset += sq.alphabet[numbers[k] % n] as i64 + k;
+        k += 1;
+    }
+    offset = (offset + numbers.len()) % n;
+    offset = (offset + increment) % n;
+    let rotated = rotate(sq.alphabet.clone(), offset);
+    let prefix = rotated[0];
+    let mut alphabet = reversed(rotated);
+    let mut ret: Vec[u8] = Vec.new();
+    ret.push(prefix);
+    let mut i = 0;
+    while i < numbers.len() {
+        for c in to_id(numbers[i], tail(alphabet.clone())) {
+            ret.push(c);
+        }
+        if i < numbers.len() - 1 {
+            ret.push(alphabet[0]);
+            alphabet = shuffle(alphabet);
+        }
+        i += 1;
+    }
+    if sq.min_length > ret.len() {
+        ret.push(alphabet[0]);
+        while sq.min_length - ret.len() > 0 {
+            alphabet = shuffle(alphabet);
+            let mut take = sq.min_length - ret.len();
+            if alphabet.len() < take {
+                take = alphabet.len();
+            }
+            let mut t = 0;
+            while t < take {
+                ret.push(alphabet[t]);
+                t += 1;
+            }
+        }
+    }
+    let id = bytes_str(ret);
+    if id.len() >= 3 and is_blocked_id(sq, id) {
+        return encode_numbers(sq, numbers, increment + 1);
+    }
+    Ok(id)
+}
+
+fn encode(sq: Sqids, numbers: Vec[i64]) -> Result[String, String] {
+    if numbers.len() == 0 {
+        return Ok(String.new());
+    }
+    for v in numbers.clone() {
+        if v < 0 or v > MAXSIZE {
+            return Err(f"ValueError: Encoding supports numbers between 0 and {MAXSIZE}");
+        }
+    }
+    encode_numbers(sq, numbers, 0)
+}
+
+fn decode(sq: Sqids, id_s: String) -> Vec[i64] {
+    let mut ret: Vec[i64] = Vec.new();
+    let mut id = id_s.bytes().to_vec();
+    if id.len() == 0 {
+        return ret;
+    }
+    for c in id.clone() {
+        if not has_byte(sq.alphabet.clone(), c) {
+            return ret;
+        }
+    }
+    let offset = index_of(sq.alphabet.clone(), id[0]);
+    let mut alphabet = reversed(rotate(sq.alphabet.clone(), offset));
+    id = tail(id);
+    while id.len() > 0 {
+        let separator = alphabet[0];
+        let at = index_of(id.clone(), separator);
+        let mut chunk: Vec[u8] = Vec.new();
+        let mut rest: Vec[u8] = Vec.new();
+        let mut i = 0;
+        while i < id.len() {
+            if at < 0 or i < at {
+                chunk.push(id[i]);
+            } else if i > at {
+                rest.push(id[i]);
+            }
+            i += 1;
+        }
+        if chunk.len() == 0 {
+            return ret;
+        }
+        ret.push(to_number(chunk, tail(alphabet.clone())));
+        if at >= 0 {
+            alphabet = shuffle(alphabet);
+        }
+        id = rest;
+    }
+    ret
+}
+
+// --------------------------------------------------------------- the jobs
+
+fn join_nums(v: Vec[i64]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{v[i]}");
+        i += 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    let mut defaults: Vec[String] = Vec.new();
+    for w in split_on(blocklist_text(), b'\n') {
+        if w.len() > 0 {
+            defaults.push(w.clone());
+        }
+    }
+    let default_alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string();
+    let mut cur = Sqids { alphabet: Vec.new(), min_length: 0, exact: Vec.new(), ends: Vec.new(), anywhere: Vec.new() };
+    let mut have = false;
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            if f[0] == "new" {
+                let alphabet = if f[1] == "-" { default_alphabet.clone() } else { f[1].clone() };
+                let mut blocklist: Vec[String] = Vec.new();
+                if f[3] == "-" {
+                    blocklist = defaults.clone();
+                } else if f[3].len() > 0 {
+                    blocklist = split_on(f[3].clone(), b',');
+                }
+                let res = match new_sqids(alphabet, to_i64(f[2].clone()), blocklist) {
+                    Ok(sq) => {
+                        cur = sq;
+                        have = true;
+                        "ok".to_string()
+                    }
+                    Err(e) => {
+                        have = false;
+                        e
+                    }
+                };
+                out.push_str(f"new({f[1]}, {f[2]}, {f[3]}) => {res}\n");
+            } else if f[0] == "enc" {
+                let mut nums: Vec[i64] = Vec.new();
+                if f[1].len() > 0 {
+                    for x in split_on(f[1].clone(), b',') {
+                        nums.push(to_i64(x));
+                    }
+                }
+                let res = if not have {
+                    "no Sqids".to_string()
+                } else {
+                    match encode(cur, nums) {
+                        Ok(id) => f"[{id}]",
+                        Err(e) => e,
+                    }
+                };
+                out.push_str(f"encode({join_nums(nums)}) => {res}\n");
+            } else if f[0] == "dec" {
+                let res = if have { join_nums(decode(cur, f[1].clone())) } else { "no Sqids".to_string() };
+                out.push_str(f"decode({f[1]}) => [{res}]\n");
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv and data/blocklist.txt, as mk.py writes them.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\t-\t0\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("dec\t86Rf07\n");
+    s.push_str("enc\t0\n");
+    s.push_str("enc\t1\n");
+    s.push_str("enc\t0,0,0,0,0\n");
+    s.push_str("enc\t0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20\n");
+    s.push_str("enc\t9223372036854775807\n");
+    s.push_str("enc\t9223372036854775807,0,9223372036854775807\n");
+    s.push_str("dec\tAqkYhRmbHpEX\n");
+    s.push_str("dec\tCuaMqvAPlJnDSJr9lqFQvLPnBC\n");
+    s.push_str("enc\t1000000,2000000\n");
+    s.push_str("enc\t100,200,300\n");
+    s.push_str("enc\t4572721\n");
+    s.push_str("dec\taho1e\n");
+    s.push_str("dec\tJExTR\n");
+    s.push_str("enc\t\n");
+    s.push_str("dec\t\n");
+    s.push_str("dec\t*\n");
+    s.push_str("dec\t86Rf0-7\n");
+    s.push_str("enc\t-1\n");
+    s.push_str("enc\t1,-5,2\n");
+    s.push_str("new\t-\t6\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("new\t-\t10\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("enc\t0\n");
+    s.push_str("dec\t86Rf07xd4z\n");
+    s.push_str("new\t-\t62\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("enc\t0\n");
+    s.push_str("new\t-\t100\t-\n");
+    s.push_str("enc\t7\n");
+    s.push_str("new\t-\t255\t-\n");
+    s.push_str("enc\t42\n");
+    s.push_str("new\t0123456789abcdef\t0\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("enc\t255,4096,65535\n");
+    s.push_str("new\tabc\t0\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("enc\t100\n");
+    s.push_str("new\tABCDEFGHIJKLMNOPQRSTUVWXYZ\t0\t-\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("new\tABCDEFGHIJKLMNOPQRSTUVWXYZ\t0\tsxnzkl\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("dec\tIBSHOZ\n");
+    s.push_str("new\tabcdefghijklmnopqrstuvwxyz\t8\t-\n");
+    s.push_str("enc\t31,41,59,26,53\n");
+    s.push_str("new\t-\t0\t\n");
+    s.push_str("enc\t4572721\n");
+    s.push_str("enc\t0\n");
+    s.push_str("new\t-\t0\tArUO\n");
+    s.push_str("enc\t4572721\n");
+    s.push_str("dec\tArUO\n");
+    s.push_str("enc\t100000\n");
+    s.push_str("dec\tQyG4\n");
+    s.push_str("new\t-\t0\tJSwXFaosAN,OCjV9JK64o,rBHf,79SM,7tE6\n");
+    s.push_str("enc\t1000000,2000000\n");
+    s.push_str("dec\t1aYeB7bRUt\n");
+    s.push_str("new\t-\t0\t86Rf07,se8ojk,ARsz1p,Q8AI49,5sQRZO\n");
+    s.push_str("dec\t86Rf07\n");
+    s.push_str("dec\tse8ojk\n");
+    s.push_str("dec\tARsz1p\n");
+    s.push_str("enc\t1,2,3\n");
+    s.push_str("new\t-\t0\tpnd\n");
+    s.push_str("enc\t1000\n");
+    s.push_str("new\t-\t0\tbM,ab,x\n");
+    s.push_str("enc\t0\n");
+    s.push_str("new\tabc\t0\tab!,abc!,xyz\n");
+    s.push_str("enc\t5\n");
+    s.push_str("new\tabc\t3\tcab,abc,bca\n");
+    s.push_str("enc\t0\n");
+    s.push_str("new\tab\t0\t-\n");
+    s.push_str("new\taabcdef\t0\t-\n");
+    s.push_str("new\tabcdéfg\t0\t-\n");
+    s.push_str("new\t-\t256\t-\n");
+    s.push_str("new\t-\t-1\t-\n");
+    s
+}
+
+fn blocklist_text() -> String {
+    let mut s = String.new();
+    s.push_str("0rgasm\n");
+    s.push_str("1d10t\n");
+    s.push_str("1d1ot\n");
+    s.push_str("1di0t\n");
+    s.push_str("1diot\n");
+    s.push_str("1eccacu10\n");
+    s.push_str("1eccacu1o\n");
+    s.push_str("1eccacul0\n");
+    s.push_str("1eccaculo\n");
+    s.push_str("1mbec11e\n");
+    s.push_str("1mbec1le\n");
+    s.push_str("1mbeci1e\n");
+    s.push_str("1mbecile\n");
+    s.push_str("a11upat0\n");
+    s.push_str("a11upato\n");
+    s.push_str("a1lupat0\n");
+    s.push_str("a1lupato\n");
+    s.push_str("aand\n");
+    s.push_str("ah01e\n");
+    s.push_str("ah0le\n");
+    s.push_str("aho1e\n");
+    s.push_str("ahole\n");
+    s.push_str("al1upat0\n");
+    s.push_str("al1upato\n");
+    s.push_str("allupat0\n");
+    s.push_str("allupato\n");
+    s.push_str("ana1\n");
+    s.push_str("ana1e\n");
+    s.push_str("anal\n");
+    s.push_str("anale\n");
+    s.push_str("anus\n");
+    s.push_str("arrapat0\n");
+    s.push_str("arrapato\n");
+    s.push_str("arsch\n");
+    s.push_str("arse\n");
+    s.push_str("ass\n");
+    s.push_str("b00b\n");
+    s.push_str("b00be\n");
+    s.push_str("b01ata\n");
+    s.push_str("b0ceta\n");
+    s.push_str("b0iata\n");
+    s.push_str("b0ob\n");
+    s.push_str("b0obe\n");
+    s.push_str("b0sta\n");
+    s.push_str("b1tch\n");
+    s.push_str("b1te\n");
+    s.push_str("b1tte\n");
+    s.push_str("ba1atkar\n");
+    s.push_str("balatkar\n");
+    s.push_str("bastard0\n");
+    s.push_str("bastardo\n");
+    s.push_str("batt0na\n");
+    s.push_str("battona\n");
+    s.push_str("bitch\n");
+    s.push_str("bite\n");
+    s.push_str("bitte\n");
+    s.push_str("bo0b\n");
+    s.push_str("bo0be\n");
+    s.push_str("bo1ata\n");
+    s.push_str("boceta\n");
+    s.push_str("boiata\n");
+    s.push_str("boob\n");
+    s.push_str("boobe\n");
+    s.push_str("bosta\n");
+    s.push_str("bran1age\n");
+    s.push_str("bran1er\n");
+    s.push_str("bran1ette\n");
+    s.push_str("bran1eur\n");
+    s.push_str("bran1euse\n");
+    s.push_str("branlage\n");
+    s.push_str("branler\n");
+    s.push_str("branlette\n");
+    s.push_str("branleur\n");
+    s.push_str("branleuse\n");
+    s.push_str("c0ck\n");
+    s.push_str("c0g110ne\n");
+    s.push_str("c0g11one\n");
+    s.push_str("c0g1i0ne\n");
+    s.push_str("c0g1ione\n");
+    s.push_str("c0gl10ne\n");
+    s.push_str("c0gl1one\n");
+    s.push_str("c0gli0ne\n");
+    s.push_str("c0glione\n");
+    s.push_str("c0na\n");
+    s.push_str("c0nnard\n");
+    s.push_str("c0nnasse\n");
+    s.push_str("c0nne\n");
+    s.push_str("c0u111es\n");
+    s.push_str("c0u11les\n");
+    s.push_str("c0u1l1es\n");
+    s.push_str("c0u1lles\n");
+    s.push_str("c0ui11es\n");
+    s.push_str("c0ui1les\n");
+    s.push_str("c0uil1es\n");
+    s.push_str("c0uilles\n");
+    s.push_str("c11t\n");
+    s.push_str("c11t0\n");
+    s.push_str("c11to\n");
+    s.push_str("c1it\n");
+    s.push_str("c1it0\n");
+    s.push_str("c1ito\n");
+    s.push_str("cabr0n\n");
+    s.push_str("cabra0\n");
+    s.push_str("cabrao\n");
+    s.push_str("cabron\n");
+    s.push_str("caca\n");
+    s.push_str("cacca\n");
+    s.push_str("cacete\n");
+    s.push_str("cagante\n");
+    s.push_str("cagar\n");
+    s.push_str("cagare\n");
+    s.push_str("cagna\n");
+    s.push_str("cara1h0\n");
+    s.push_str("cara1ho\n");
+    s.push_str("caracu10\n");
+    s.push_str("caracu1o\n");
+    s.push_str("caracul0\n");
+    s.push_str("caraculo\n");
+    s.push_str("caralh0\n");
+    s.push_str("caralho\n");
+    s.push_str("cazz0\n");
+    s.push_str("cazz1mma\n");
+    s.push_str("cazzata\n");
+    s.push_str("cazzimma\n");
+    s.push_str("cazzo\n");
+    s.push_str("ch00t1a\n");
+    s.push_str("ch00t1ya\n");
+    s.push_str("ch00tia\n");
+    s.push_str("ch00tiya\n");
+    s.push_str("ch0d\n");
+    s.push_str("ch0ot1a\n");
+    s.push_str("ch0ot1ya\n");
+    s.push_str("ch0otia\n");
+    s.push_str("ch0otiya\n");
+    s.push_str("ch1asse\n");
+    s.push_str("ch1avata\n");
+    s.push_str("ch1er\n");
+    s.push_str("ch1ng0\n");
+    s.push_str("ch1ngadaz0s\n");
+    s.push_str("ch1ngadazos\n");
+    s.push_str("ch1ngader1ta\n");
+    s.push_str("ch1ngaderita\n");
+    s.push_str("ch1ngar\n");
+    s.push_str("ch1ngo\n");
+    s.push_str("ch1ngues\n");
+    s.push_str("ch1nk\n");
+    s.push_str("chatte\n");
+    s.push_str("chiasse\n");
+    s.push_str("chiavata\n");
+    s.push_str("chier\n");
+    s.push_str("ching0\n");
+    s.push_str("chingadaz0s\n");
+    s.push_str("chingadazos\n");
+    s.push_str("chingader1ta\n");
+    s.push_str("chingaderita\n");
+    s.push_str("chingar\n");
+    s.push_str("chingo\n");
+    s.push_str("chingues\n");
+    s.push_str("chink\n");
+    s.push_str("cho0t1a\n");
+    s.push_str("cho0t1ya\n");
+    s.push_str("cho0tia\n");
+    s.push_str("cho0tiya\n");
+    s.push_str("chod\n");
+    s.push_str("choot1a\n");
+    s.push_str("choot1ya\n");
+    s.push_str("chootia\n");
+    s.push_str("chootiya\n");
+    s.push_str("cl1t\n");
+    s.push_str("cl1t0\n");
+    s.push_str("cl1to\n");
+    s.push_str("clit\n");
+    s.push_str("clit0\n");
+    s.push_str("clito\n");
+    s.push_str("cock\n");
+    s.push_str("cog110ne\n");
+    s.push_str("cog11one\n");
+    s.push_str("cog1i0ne\n");
+    s.push_str("cog1ione\n");
+    s.push_str("cogl10ne\n");
+    s.push_str("cogl1one\n");
+    s.push_str("cogli0ne\n");
+    s.push_str("coglione\n");
+    s.push_str("cona\n");
+    s.push_str("connard\n");
+    s.push_str("connasse\n");
+    s.push_str("conne\n");
+    s.push_str("cou111es\n");
+    s.push_str("cou11les\n");
+    s.push_str("cou1l1es\n");
+    s.push_str("cou1lles\n");
+    s.push_str("coui11es\n");
+    s.push_str("coui1les\n");
+    s.push_str("couil1es\n");
+    s.push_str("couilles\n");
+    s.push_str("cracker\n");
+    s.push_str("crap\n");
+    s.push_str("cu10\n");
+    s.push_str("cu1att0ne\n");
+    s.push_str("cu1attone\n");
+    s.push_str("cu1er0\n");
+    s.push_str("cu1ero\n");
+    s.push_str("cu1o\n");
+    s.push_str("cul0\n");
+    s.push_str("culatt0ne\n");
+    s.push_str("culattone\n");
+    s.push_str("culer0\n");
+    s.push_str("culero\n");
+    s.push_str("culo\n");
+    s.push_str("cum\n");
+    s.push_str("cunt\n");
+    s.push_str("d11d0\n");
+    s.push_str("d11do\n");
+    s.push_str("d1ck\n");
+    s.push_str("d1ld0\n");
+    s.push_str("d1ldo\n");
+    s.push_str("damn\n");
+    s.push_str("de1ch\n");
+    s.push_str("deich\n");
+    s.push_str("depp\n");
+    s.push_str("di1d0\n");
+    s.push_str("di1do\n");
+    s.push_str("dick\n");
+    s.push_str("dild0\n");
+    s.push_str("dildo\n");
+    s.push_str("dyke\n");
+    s.push_str("encu1e\n");
+    s.push_str("encule\n");
+    s.push_str("enema\n");
+    s.push_str("enf01re\n");
+    s.push_str("enf0ire\n");
+    s.push_str("enfo1re\n");
+    s.push_str("enfoire\n");
+    s.push_str("estup1d0\n");
+    s.push_str("estup1do\n");
+    s.push_str("estupid0\n");
+    s.push_str("estupido\n");
+    s.push_str("etr0n\n");
+    s.push_str("etron\n");
+    s.push_str("f0da\n");
+    s.push_str("f0der\n");
+    s.push_str("f0ttere\n");
+    s.push_str("f0tters1\n");
+    s.push_str("f0ttersi\n");
+    s.push_str("f0tze\n");
+    s.push_str("f0utre\n");
+    s.push_str("f1ca\n");
+    s.push_str("f1cker\n");
+    s.push_str("f1ga\n");
+    s.push_str("fag\n");
+    s.push_str("fica\n");
+    s.push_str("ficker\n");
+    s.push_str("figa\n");
+    s.push_str("foda\n");
+    s.push_str("foder\n");
+    s.push_str("fottere\n");
+    s.push_str("fotters1\n");
+    s.push_str("fottersi\n");
+    s.push_str("fotze\n");
+    s.push_str("foutre\n");
+    s.push_str("fr0c10\n");
+    s.push_str("fr0c1o\n");
+    s.push_str("fr0ci0\n");
+    s.push_str("fr0cio\n");
+    s.push_str("fr0sc10\n");
+    s.push_str("fr0sc1o\n");
+    s.push_str("fr0sci0\n");
+    s.push_str("fr0scio\n");
+    s.push_str("froc10\n");
+    s.push_str("froc1o\n");
+    s.push_str("froci0\n");
+    s.push_str("frocio\n");
+    s.push_str("frosc10\n");
+    s.push_str("frosc1o\n");
+    s.push_str("frosci0\n");
+    s.push_str("froscio\n");
+    s.push_str("fuck\n");
+    s.push_str("g00\n");
+    s.push_str("g0o\n");
+    s.push_str("g0u1ne\n");
+    s.push_str("g0uine\n");
+    s.push_str("gandu\n");
+    s.push_str("go0\n");
+    s.push_str("goo\n");
+    s.push_str("gou1ne\n");
+    s.push_str("gouine\n");
+    s.push_str("gr0gnasse\n");
+    s.push_str("grognasse\n");
+    s.push_str("haram1\n");
+    s.push_str("harami\n");
+    s.push_str("haramzade\n");
+    s.push_str("hund1n\n");
+    s.push_str("hundin\n");
+    s.push_str("id10t\n");
+    s.push_str("id1ot\n");
+    s.push_str("idi0t\n");
+    s.push_str("idiot\n");
+    s.push_str("imbec11e\n");
+    s.push_str("imbec1le\n");
+    s.push_str("imbeci1e\n");
+    s.push_str("imbecile\n");
+    s.push_str("j1zz\n");
+    s.push_str("jerk\n");
+    s.push_str("jizz\n");
+    s.push_str("k1ke\n");
+    s.push_str("kam1ne\n");
+    s.push_str("kamine\n");
+    s.push_str("kike\n");
+    s.push_str("leccacu10\n");
+    s.push_str("leccacu1o\n");
+    s.push_str("leccacul0\n");
+    s.push_str("leccaculo\n");
+    s.push_str("m1erda\n");
+    s.push_str("m1gn0tta\n");
+    s.push_str("m1gnotta\n");
+    s.push_str("m1nch1a\n");
+    s.push_str("m1nchia\n");
+    s.push_str("m1st\n");
+    s.push_str("mam0n\n");
+    s.push_str("mamahuev0\n");
+    s.push_str("mamahuevo\n");
+    s.push_str("mamon\n");
+    s.push_str("masturbat10n\n");
+    s.push_str("masturbat1on\n");
+    s.push_str("masturbate\n");
+    s.push_str("masturbati0n\n");
+    s.push_str("masturbation\n");
+    s.push_str("merd0s0\n");
+    s.push_str("merd0so\n");
+    s.push_str("merda\n");
+    s.push_str("merde\n");
+    s.push_str("merdos0\n");
+    s.push_str("merdoso\n");
+    s.push_str("mierda\n");
+    s.push_str("mign0tta\n");
+    s.push_str("mignotta\n");
+    s.push_str("minch1a\n");
+    s.push_str("minchia\n");
+    s.push_str("mist\n");
+    s.push_str("musch1\n");
+    s.push_str("muschi\n");
+    s.push_str("n1gger\n");
+    s.push_str("neger\n");
+    s.push_str("negr0\n");
+    s.push_str("negre\n");
+    s.push_str("negro\n");
+    s.push_str("nerch1a\n");
+    s.push_str("nerchia\n");
+    s.push_str("nigger\n");
+    s.push_str("orgasm\n");
+    s.push_str("p00p\n");
+    s.push_str("p011a\n");
+    s.push_str("p01la\n");
+    s.push_str("p0l1a\n");
+    s.push_str("p0lla\n");
+    s.push_str("p0mp1n0\n");
+    s.push_str("p0mp1no\n");
+    s.push_str("p0mpin0\n");
+    s.push_str("p0mpino\n");
+    s.push_str("p0op\n");
+    s.push_str("p0rca\n");
+    s.push_str("p0rn\n");
+    s.push_str("p0rra\n");
+    s.push_str("p0uff1asse\n");
+    s.push_str("p0uffiasse\n");
+    s.push_str("p1p1\n");
+    s.push_str("p1pi\n");
+    s.push_str("p1r1a\n");
+    s.push_str("p1rla\n");
+    s.push_str("p1sc10\n");
+    s.push_str("p1sc1o\n");
+    s.push_str("p1sci0\n");
+    s.push_str("p1scio\n");
+    s.push_str("p1sser\n");
+    s.push_str("pa11e\n");
+    s.push_str("pa1le\n");
+    s.push_str("pal1e\n");
+    s.push_str("palle\n");
+    s.push_str("pane1e1r0\n");
+    s.push_str("pane1e1ro\n");
+    s.push_str("pane1eir0\n");
+    s.push_str("pane1eiro\n");
+    s.push_str("panele1r0\n");
+    s.push_str("panele1ro\n");
+    s.push_str("paneleir0\n");
+    s.push_str("paneleiro\n");
+    s.push_str("patakha\n");
+    s.push_str("pec0r1na\n");
+    s.push_str("pec0rina\n");
+    s.push_str("pecor1na\n");
+    s.push_str("pecorina\n");
+    s.push_str("pen1s\n");
+    s.push_str("pendej0\n");
+    s.push_str("pendejo\n");
+    s.push_str("penis\n");
+    s.push_str("pip1\n");
+    s.push_str("pipi\n");
+    s.push_str("pir1a\n");
+    s.push_str("pirla\n");
+    s.push_str("pisc10\n");
+    s.push_str("pisc1o\n");
+    s.push_str("pisci0\n");
+    s.push_str("piscio\n");
+    s.push_str("pisser\n");
+    s.push_str("po0p\n");
+    s.push_str("po11a\n");
+    s.push_str("po1la\n");
+    s.push_str("pol1a\n");
+    s.push_str("polla\n");
+    s.push_str("pomp1n0\n");
+    s.push_str("pomp1no\n");
+    s.push_str("pompin0\n");
+    s.push_str("pompino\n");
+    s.push_str("poop\n");
+    s.push_str("porca\n");
+    s.push_str("porn\n");
+    s.push_str("porra\n");
+    s.push_str("pouff1asse\n");
+    s.push_str("pouffiasse\n");
+    s.push_str("pr1ck\n");
+    s.push_str("prick\n");
+    s.push_str("pussy\n");
+    s.push_str("put1za\n");
+    s.push_str("puta\n");
+    s.push_str("puta1n\n");
+    s.push_str("putain\n");
+    s.push_str("pute\n");
+    s.push_str("putiza\n");
+    s.push_str("puttana\n");
+    s.push_str("queca\n");
+    s.push_str("r0mp1ba11e\n");
+    s.push_str("r0mp1ba1le\n");
+    s.push_str("r0mp1bal1e\n");
+    s.push_str("r0mp1balle\n");
+    s.push_str("r0mpiba11e\n");
+    s.push_str("r0mpiba1le\n");
+    s.push_str("r0mpibal1e\n");
+    s.push_str("r0mpiballe\n");
+    s.push_str("rand1\n");
+    s.push_str("randi\n");
+    s.push_str("rape\n");
+    s.push_str("recch10ne\n");
+    s.push_str("recch1one\n");
+    s.push_str("recchi0ne\n");
+    s.push_str("recchione\n");
+    s.push_str("retard\n");
+    s.push_str("romp1ba11e\n");
+    s.push_str("romp1ba1le\n");
+    s.push_str("romp1bal1e\n");
+    s.push_str("romp1balle\n");
+    s.push_str("rompiba11e\n");
+    s.push_str("rompiba1le\n");
+    s.push_str("rompibal1e\n");
+    s.push_str("rompiballe\n");
+    s.push_str("ruff1an0\n");
+    s.push_str("ruff1ano\n");
+    s.push_str("ruffian0\n");
+    s.push_str("ruffiano\n");
+    s.push_str("s1ut\n");
+    s.push_str("sa10pe\n");
+    s.push_str("sa1aud\n");
+    s.push_str("sa1ope\n");
+    s.push_str("sacanagem\n");
+    s.push_str("sal0pe\n");
+    s.push_str("salaud\n");
+    s.push_str("salope\n");
+    s.push_str("saugnapf\n");
+    s.push_str("sb0rr0ne\n");
+    s.push_str("sb0rra\n");
+    s.push_str("sb0rrone\n");
+    s.push_str("sbattere\n");
+    s.push_str("sbatters1\n");
+    s.push_str("sbattersi\n");
+    s.push_str("sborr0ne\n");
+    s.push_str("sborra\n");
+    s.push_str("sborrone\n");
+    s.push_str("sc0pare\n");
+    s.push_str("sc0pata\n");
+    s.push_str("sch1ampe\n");
+    s.push_str("sche1se\n");
+    s.push_str("sche1sse\n");
+    s.push_str("scheise\n");
+    s.push_str("scheisse\n");
+    s.push_str("schlampe\n");
+    s.push_str("schwachs1nn1g\n");
+    s.push_str("schwachs1nnig\n");
+    s.push_str("schwachsinn1g\n");
+    s.push_str("schwachsinnig\n");
+    s.push_str("schwanz\n");
+    s.push_str("scopare\n");
+    s.push_str("scopata\n");
+    s.push_str("sexy\n");
+    s.push_str("sh1t\n");
+    s.push_str("shit\n");
+    s.push_str("slut\n");
+    s.push_str("sp0mp1nare\n");
+    s.push_str("sp0mpinare\n");
+    s.push_str("spomp1nare\n");
+    s.push_str("spompinare\n");
+    s.push_str("str0nz0\n");
+    s.push_str("str0nza\n");
+    s.push_str("str0nzo\n");
+    s.push_str("stronz0\n");
+    s.push_str("stronza\n");
+    s.push_str("stronzo\n");
+    s.push_str("stup1d\n");
+    s.push_str("stupid\n");
+    s.push_str("succh1am1\n");
+    s.push_str("succh1ami\n");
+    s.push_str("succhiam1\n");
+    s.push_str("succhiami\n");
+    s.push_str("sucker\n");
+    s.push_str("t0pa\n");
+    s.push_str("tapette\n");
+    s.push_str("test1c1e\n");
+    s.push_str("test1cle\n");
+    s.push_str("testic1e\n");
+    s.push_str("testicle\n");
+    s.push_str("tette\n");
+    s.push_str("topa\n");
+    s.push_str("tr01a\n");
+    s.push_str("tr0ia\n");
+    s.push_str("tr0mbare\n");
+    s.push_str("tr1ng1er\n");
+    s.push_str("tr1ngler\n");
+    s.push_str("tring1er\n");
+    s.push_str("tringler\n");
+    s.push_str("tro1a\n");
+    s.push_str("troia\n");
+    s.push_str("trombare\n");
+    s.push_str("turd\n");
+    s.push_str("twat\n");
+    s.push_str("vaffancu10\n");
+    s.push_str("vaffancu1o\n");
+    s.push_str("vaffancul0\n");
+    s.push_str("vaffanculo\n");
+    s.push_str("vag1na\n");
+    s.push_str("vagina\n");
+    s.push_str("verdammt\n");
+    s.push_str("verga\n");
+    s.push_str("w1chsen\n");
+    s.push_str("wank\n");
+    s.push_str("wichsen\n");
+    s.push_str("x0ch0ta\n");
+    s.push_str("x0chota\n");
+    s.push_str("xana\n");
+    s.push_str("xoch0ta\n");
+    s.push_str("xochota\n");
+    s.push_str("z0cc01a\n");
+    s.push_str("z0cc0la\n");
+    s.push_str("z0cco1a\n");
+    s.push_str("z0ccola\n");
+    s.push_str("z1z1\n");
+    s.push_str("z1zi\n");
+    s.push_str("ziz1\n");
+    s.push_str("zizi\n");
+    s.push_str("zocc01a\n");
+    s.push_str("zocc0la\n");
+    s.push_str("zocco1a\n");
+    s.push_str("zoccola\n");
+    s
+}
