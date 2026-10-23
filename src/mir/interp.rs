@@ -7308,7 +7308,12 @@ impl<'a> Interp<'a> {
         }
         let reserving = method != "try_with_capacity";
         let grown = if reserving {
-            want.max(cap * 2).max(if size == 1 { 8 } else { 4 })
+            // runtime/src/mir.rs's `min_first_cap`.
+            want.max(cap * 2).max(match size {
+                0..=256 => 8,
+                257..=1024 => 4,
+                _ => 1,
+            })
         } else {
             want
         };

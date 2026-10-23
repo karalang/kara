@@ -431,6 +431,20 @@ pub unsafe extern "C" fn karac_mir_string_from(out: *mut RawVec, ptr: *const u8,
     unsafe { string_of(out, bytes(ptr, len)) };
 }
 
+/// The fewest elements of `size` bytes a vector's first block holds: 8, as
+/// legacy's in-line push growth gives, so a short `Vec` built by `push`
+/// allocates once where a start of 4 allocated twice (kata 638's six-element
+/// memo keys, 2.0x legacy, B-2026-10-14-69); 4 for elements up to 1 KiB
+/// and 1 beyond, as Rust's `Vec` does, so a first block stays small. The
+/// MIR interpreter's `try_*` twins use the same rule.
+pub(crate) fn min_first_cap(size: usize) -> usize {
+    match size {
+        0..=256 => 8,
+        257..=1024 => 4,
+        _ => 1,
+    }
+}
+
 /// Makes room for `more` elements of `size` bytes in the vector at `v`.
 ///
 /// # Safety
@@ -448,11 +462,7 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: 
         }
         return;
     }
-    // At least 8 bytes' worth of elements up front, as Rust's own `Vec`
-    // does for bytes, so a short `String` grows once rather than twice.
-    let cap = want
-        .max(v.cap.saturating_mul(2))
-        .max(if size == 1 { 8 } else { 4 });
+    let cap = want.max(v.cap.saturating_mul(2)).max(min_first_cap(size));
     let old = if v.cap == 0 && v.len > 0 {
         // A borrowed literal: copy it out before growing.
         let p = karac_realloc_or_panic(std::ptr::null_mut(), cap * size);
@@ -505,9 +515,7 @@ pub unsafe extern "C" fn karac_mir_vec_try_reserve(v: *mut RawVec, more: u64, si
         return -1;
     }
     // The growth `karac_mir_vec_reserve` picks, unless only `want` fits.
-    let grown = want
-        .max(v.cap.saturating_mul(2))
-        .max(if size == 1 { 8 } else { 4 });
+    let grown = want.max(v.cap.saturating_mul(2)).max(min_first_cap(size));
     let cap = if capacity_bytes(grown, size).is_some() {
         grown
     } else {
