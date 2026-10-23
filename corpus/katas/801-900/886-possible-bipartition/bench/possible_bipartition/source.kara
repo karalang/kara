@@ -1,0 +1,73 @@
+// LeetCode #886 bench: the ★ arm (two colours by breadth-first search) on
+// 4000 groups of LeetCode's sizes.
+
+fn possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for e in 0..dislikes.len() {
+        adj[dislikes[e][0]].push(dislikes[e][1]);
+        adj[dislikes[e][1]].push(dislikes[e][0]);
+    }
+    let mut colour: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for start in 1..n + 1 {
+        if colour[start] >= 0 {
+            continue;
+        }
+        colour[start] = 0;
+        queue.push_back(start);
+        while let Some(u) = queue.pop_front() {
+            for k in 0..adj[u].len() {
+                let v = adj[u][k];
+                if colour[v] < 0 {
+                    colour[v] = 1 - colour[u];
+                    queue.push_back(v);
+                } else if colour[v] == colour[u] {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 886;
+    let mut yes = 0;
+    let mut check = 0;
+    for _ in 0..4000 {
+        // n people, each disliking the people five distinct offsets on,
+        // every offset below n / 2 so that no pair repeats: 5n pairs, up
+        // to 10^4; the offsets odd, but one of them even half the time
+        let n = 1000 + next_random(mut seed) % 1001;
+        let spoil = next_random(mut seed) % 2 == 0;
+        let mut offsets: Vec[i64] = Vec.new();
+        while offsets.len() < 5 {
+            let mut d = 1 + next_random(mut seed) % (n / 2 - 1);
+            if d % 2 == 0 and not (spoil and offsets.len() == 0) {
+                d -= 1;
+            }
+            if not offsets.contains(d) {
+                offsets.push(d);
+            }
+        }
+        let mut dislikes: Vec[Vec[i64]] = Vec.new();
+        for a in 0..n {
+            for k in 0..5 {
+                dislikes.push([a + 1, (a + offsets[k]) % n + 1]);
+            }
+        }
+        let ok = possible_bipartition(n, dislikes);
+        let bit = if ok { 1 } else { 0 };
+        yes += bit;
+        check = (check * 3 + bit + 1) % 1000000007;
+    }
+    println(f"4000 groups of up to 2000 people: {yes} can be split, checksum {check}");
+}

@@ -1,0 +1,395 @@
+// LeetCode #886: Possible Bipartition -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: split a set of n people, labelled 1 to n, into two
+// groups of any size. Each person may dislike some other people, and they
+// should not go into the same group. Given n and the pairs dislikes[i] =
+// [a, b], person a disliking person b, return true if it is possible to
+// split everyone into two groups in this way.
+
+// ---- the ★ arm: two colours by breadth-first search -----------------------
+fn star_possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for e in 0..dislikes.len() {
+        adj[dislikes[e][0]].push(dislikes[e][1]);
+        adj[dislikes[e][1]].push(dislikes[e][0]);
+    }
+    let mut colour: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for start in 1..n + 1 {
+        if colour[start] >= 0 {
+            continue;
+        }
+        colour[start] = 0;
+        queue.push_back(start);
+        while let Some(u) = queue.pop_front() {
+            for k in 0..adj[u].len() {
+                let v = adj[u][k];
+                if colour[v] < 0 {
+                    colour[v] = 1 - colour[u];
+                    queue.push_back(v);
+                } else if colour[v] == colour[u] {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- the recursive arm: two colours by recursion --------------------------
+fn recursive_paint(u: i64, c: i64, adj: Vec[Vec[i64]], colour: mut ref Vec[i64]) -> bool {
+    colour[u] = c;
+    for k in 0..adj[u].len() {
+        let v = adj[u][k];
+        if colour[v] == c {
+            return false;
+        }
+        if colour[v] < 0 and not recursive_paint(v, 1 - c, adj, mut colour) {
+            return false;
+        }
+    }
+    true
+}
+
+fn recursive_possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for e in 0..dislikes.len() {
+        adj[dislikes[e][0]].push(dislikes[e][1]);
+        adj[dislikes[e][1]].push(dislikes[e][0]);
+    }
+    let mut colour: Vec[i64] = Vec.filled(n + 1, -1);
+    for u in 1..n + 1 {
+        if colour[u] < 0 and not recursive_paint(u, 0, adj, mut colour) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the enemies arm: union-find over each person's dislikes --------------
+fn enemies_find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut at = x;
+    while parent[at] != root {
+        let next = parent[at];
+        parent[at] = root;
+        at = next;
+    }
+    root
+}
+
+fn enemies_possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for e in 0..dislikes.len() {
+        adj[dislikes[e][0]].push(dislikes[e][1]);
+        adj[dislikes[e][1]].push(dislikes[e][0]);
+    }
+    let mut parent: Vec[i64] = Vec.new();
+    for x in 0..n + 1 {
+        parent.push(x);
+    }
+    for u in 1..n + 1 {
+        for k in 1..adj[u].len() {
+            let a = enemies_find(mut parent, adj[u][0]);
+            let b = enemies_find(mut parent, adj[u][k]);
+            parent[a] = b;
+        }
+    }
+    for u in 1..n + 1 {
+        for k in 0..adj[u].len() {
+            if enemies_find(mut parent, u) == enemies_find(mut parent, adj[u][k]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- the parity arm: union-find with parity -------------------------------
+fn parity_root(parent: mut ref Vec[i64], parity: mut ref Vec[i64], x: i64) -> i64 {
+    let p = parent[x];
+    if p == x {
+        return x;
+    }
+    let r = parity_root(mut parent, mut parity, p);
+    parity[x] = (parity[x] + parity[p]) % 2;
+    parent[x] = r;
+    r
+}
+
+fn parity_possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut parent: Vec[i64] = Vec.new();
+    for x in 0..n + 1 {
+        parent.push(x);
+    }
+    let mut parity: Vec[i64] = Vec.filled(n + 1, 0);
+    for e in 0..dislikes.len() {
+        let a = dislikes[e][0];
+        let b = dislikes[e][1];
+        let ra = parity_root(mut parent, mut parity, a);
+        let rb = parity_root(mut parent, mut parity, b);
+        if ra == rb {
+            if parity[a] == parity[b] {
+                return false;
+            }
+        } else {
+            parent[ra] = rb;
+            parity[ra] = (parity[a] + parity[b] + 1) % 2;
+        }
+    }
+    true
+}
+
+// ---- the doubled arm: union-find over two copies of everyone --------------
+fn doubled_leader(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        parent[r] = parent[parent[r]];
+        r = parent[r];
+    }
+    r
+}
+
+fn doubled_join(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let mut ra = doubled_leader(mut parent, a);
+    let mut rb = doubled_leader(mut parent, b);
+    if ra == rb {
+        return;
+    }
+    if size[ra] < size[rb] {
+        let t = ra;
+        ra = rb;
+        rb = t;
+    }
+    parent[rb] = ra;
+    size[ra] += size[rb];
+}
+
+fn doubled_possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut parent: Vec[i64] = Vec.new();
+    for x in 0..2 * n + 1 {
+        parent.push(x);
+    }
+    let mut size: Vec[i64] = Vec.filled(2 * n + 1, 1);
+    for e in 0..dislikes.len() {
+        let a = dislikes[e][0];
+        let b = dislikes[e][1];
+        doubled_join(mut parent, mut size, a, b + n);
+        doubled_join(mut parent, mut size, b, a + n);
+    }
+    for x in 1..n + 1 {
+        if doubled_leader(mut parent, x) == doubled_leader(mut parent, x + n) {
+            return false;
+        }
+    }
+    true
+}
+
+fn arm(x: i64, n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    match x {
+        0 => star_possible_bipartition(n, dislikes),
+        1 => recursive_possible_bipartition(n, dislikes),
+        2 => enemies_possible_bipartition(n, dislikes),
+        3 => parity_possible_bipartition(n, dislikes),
+        _ => doubled_possible_bipartition(n, dislikes),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every way of splitting the n people into two groups, as the bits of a
+// number below 2^n (people in the same group as person 1 or not), tried
+// until one puts every pair of people who dislike each other apart
+fn literal(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    for split in 0..1 << n {
+        let mut apart = true;
+        for e in 0..dislikes.len() {
+            let a = (split >> (dislikes[e][0] - 1)) & 1;
+            let b = (split >> (dislikes[e][1] - 1)) & 1;
+            if a == b {
+                apart = false;
+            }
+        }
+        if apart {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn split_graph(seed: mut ref i64, n: i64, m: i64, extra: i64) -> Vec[Vec[i64]] {
+    let mut side: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        side.push(next_random(mut seed) % 2);
+    }
+    let mut used: Set[i64] = Set.new();
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    for k in 0..m + extra {
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        let key = a.min(b) * (n + 1) + a.max(b);
+        if a != b and not used.contains(key) and (k >= m or side[a] != side[b]) {
+            used.insert(key);
+            pairs.push([a.min(b), a.max(b)]);
+        }
+    }
+    pairs
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one group over the five arms (P1 only when `small`; P2
+// only when the dislikes were all drawn across two sides). Returns 1 when
+// the ★ arm finds a split.
+fn properties(t: mut ref Tally, seed: mut ref i64, n: i64, dislikes: Vec[Vec[i64]], across: bool, small: bool) -> i64 {
+    let want = if small { literal(n, dislikes) } else { false };
+    // the people relabelled, the pairs in another order and each written
+    // either way round
+    let mut label: Vec[i64] = Vec.new();
+    for x in 0..n + 1 {
+        label.push(x);
+    }
+    for i in 1..n + 1 {
+        let j = i + next_random(mut seed) % (n + 1 - i);
+        label.swap(i, j);
+    }
+    let mut moved: Vec[Vec[i64]] = Vec.new();
+    for e in 0..dislikes.len() {
+        let a = label[dislikes[e][0]];
+        let b = label[dislikes[e][1]];
+        if next_random(mut seed) % 2 == 0 {
+            moved.push([a, b]);
+        } else {
+            moved.push([b, a]);
+        }
+    }
+    for i in 0..moved.len() {
+        let j = i + next_random(mut seed) % (moved.len() - i);
+        moved.swap(i, j);
+    }
+    // one pair fewer, and one more pair of two people not yet paired
+    let mut fewer: Vec[Vec[i64]] = Vec.new();
+    let drop = if dislikes.len() > 0 { next_random(mut seed) % dislikes.len() } else { -1 };
+    for e in 0..dislikes.len() {
+        if e != drop {
+            fewer.push(dislikes[e].clone());
+        }
+    }
+    let mut more = dislikes.clone();
+    if n >= 2 {
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        let mut fresh = a != b;
+        for e in 0..dislikes.len() {
+            if dislikes[e][0] == a.min(b) and dislikes[e][1] == a.max(b) {
+                fresh = false;
+            }
+        }
+        if fresh {
+            more.push([a.min(b), a.max(b)]);
+        }
+    }
+    // a copy of the group beside it, people n + 1 to 2n; and the group
+    // with three new people who all dislike one another
+    let mut twice = dislikes.clone();
+    for e in 0..dislikes.len() {
+        twice.push([dislikes[e][0] + n, dislikes[e][1] + n]);
+    }
+    let mut triangle = dislikes.clone();
+    triangle.push([n + 1, n + 2]);
+    triangle.push([n + 2, n + 3]);
+    triangle.push([n + 1, n + 3]);
+    let mut answers: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, n, dislikes));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: dislikes all drawn across two sides can always be split
+        if across {
+            check(mut t, 2, got);
+        }
+        // P3: the people relabelled and the pairs reordered
+        check(mut t, 3, arm(x, n, moved) == got);
+        // P4: a pair fewer never stops a split, a pair more never makes one
+        let with_fewer = arm(x, n, fewer);
+        let with_more = arm(x, n, more);
+        check(mut t, 4, (with_fewer or not got) and (got or not with_more));
+        // P5: a copy beside it changes nothing; three people who all
+        // dislike one another rule out any split
+        check(mut t, 5, arm(x, 2 * n, twice) == got and not arm(x, n + 3, triangle));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    if answers[0] { 1 } else { 0 }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut yes = 0;
+    let mut seed = 886;
+    // up to 10 people against the statement; then up to 500 people and
+    // 2,000 pairs
+    for c in 0..3100 {
+        let small = c < 3000;
+        let n = if small { next_random(mut seed) % 10 + 1 } else { 100 + next_random(mut seed) % 401 };
+        let extra = if small { next_random(mut seed) % 6 } else { next_random(mut seed) % 3 };
+        let m = if small { next_random(mut seed) % 18 } else { 2000 - extra };
+        let dislikes = split_graph(mut seed, n, m, extra);
+        cases += 1;
+        yes += properties(mut t, mut seed, n, dislikes, extra == 0, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {yes} can be split, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

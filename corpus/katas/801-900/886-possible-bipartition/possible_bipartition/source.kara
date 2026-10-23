@@ -1,0 +1,139 @@
+// LeetCode #886: Possible Bipartition -- two colours by breadth-first
+// search.
+//
+// Two people who dislike each other must be in different groups, so the
+// split exists exactly when the graph of dislikes can be coloured with two
+// colours, no dislike joining two people of one colour. A breadth-first
+// search from each person not yet coloured gives the first one colour and
+// every neighbour the other; a neighbour already holding the same colour
+// as the person it is reached from means no split exists. O(n + E).
+
+fn possible_bipartition(n: i64, dislikes: Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        adj.push(Vec.new());
+    }
+    for e in 0..dislikes.len() {
+        adj[dislikes[e][0]].push(dislikes[e][1]);
+        adj[dislikes[e][1]].push(dislikes[e][0]);
+    }
+    let mut colour: Vec[i64] = Vec.filled(n + 1, -1);
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    for start in 1..n + 1 {
+        if colour[start] >= 0 {
+            continue;
+        }
+        colour[start] = 0;
+        queue.push_back(start);
+        while let Some(u) = queue.pop_front() {
+            for k in 0..adj[u].len() {
+                let v = adj[u][k];
+                if colour[v] < 0 {
+                    colour[v] = 1 - colour[u];
+                    queue.push_back(v);
+                } else if colour[v] == colour[u] {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn text(dislikes: Vec[Vec[i64]]) -> String {
+    if dislikes.len() > 5 {
+        return f"[[{dislikes[0][0]}, {dislikes[0][1]}], ... ({dislikes.len()} pairs)]";
+    }
+    let mut out = "[";
+    for i in 0..dislikes.len() {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + f"[{dislikes[i][0]}, {dislikes[i][1]}]";
+    }
+    out + "]"
+}
+
+fn show(n: i64, dislikes: Vec[Vec[i64]]) {
+    println(f"n = {n}, dislikes = {text(dislikes)} -> {possible_bipartition(n, dislikes)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to m distinct pairs a < b of n people, each across two random sides,
+// then up to `extra` more pairs of any two people, which may join a side
+fn split_graph(seed: mut ref i64, n: i64, m: i64, extra: i64) -> Vec[Vec[i64]] {
+    let mut side: Vec[i64] = Vec.new();
+    for _ in 0..n + 1 {
+        side.push(next_random(mut seed) % 2);
+    }
+    let mut used: Set[i64] = Set.new();
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    for k in 0..m + extra {
+        let a = next_random(mut seed) % n + 1;
+        let b = next_random(mut seed) % n + 1;
+        let key = a.min(b) * (n + 1) + a.max(b);
+        if a != b and not used.contains(key) and (k >= m or side[a] != side[b]) {
+            used.insert(key);
+            pairs.push([a.min(b), a.max(b)]);
+        }
+    }
+    pairs
+}
+
+fn line(n: i64, closed: bool) -> Vec[Vec[i64]] {
+    let mut pairs: Vec[Vec[i64]] = Vec.new();
+    for a in 1..n {
+        pairs.push([a, a + 1]);
+    }
+    if closed {
+        pairs.push([1, n]);
+    }
+    pairs
+}
+
+fn main() {
+    show(4, [[1, 2], [1, 3], [2, 4]]);
+    show(3, [[1, 2], [1, 3], [2, 3]]);
+    show(5, [[1, 2], [2, 3], [3, 4], [4, 5], [1, 5]]);
+    show(1, []);
+    show(2, [[1, 2]]);
+    show(2000, []);
+    show(2000, line(2000, false));
+    show(2000, line(2000, true));
+    show(1999, line(1999, true));
+    let mut star: Vec[Vec[i64]] = Vec.new();
+    for b in 2..2001 {
+        star.push([1, b]);
+    }
+    show(2000, star);
+    // small cases
+    let mut seed = 886;
+    let mut yes = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 8 + 1;
+        let m = next_random(mut seed) % 14;
+        let extra = next_random(mut seed) % 6;
+        if possible_bipartition(n, split_graph(mut seed, n, m, extra)) {
+            yes += 1;
+        }
+    }
+    println(f"3000 groups of up to 8 people: {yes} can be split");
+    // LeetCode's sizes: up to 2000 people and 10^4 dislikes
+    yes = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let n = 1000 + next_random(mut seed) % 1001;
+        let extra = next_random(mut seed) % 3;
+        let ok = possible_bipartition(n, split_graph(mut seed, n, 10000 - extra, extra));
+        let bit = if ok { 1 } else { 0 };
+        yes += bit;
+        check = (check * 2 + bit) % 1000000007;
+    }
+    println(f"100 groups of up to 2000 people: {yes} can be split, checksum {check}");
+}
