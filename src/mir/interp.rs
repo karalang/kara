@@ -1114,8 +1114,8 @@ struct NativeCopy {
 }
 
 /// The value of type `it` that C returned in the integer register `r`: its
-/// low bits, sign-extended for a signed type.
-#[cfg(all(unix, not(target_arch = "wasm32")))]
+/// low bits, sign-extended for a signed type. Pure, so not cfg-gated:
+/// `native_load` (raw pointer reads) uses it on every target.
 fn from_c_word(r: u64, it: IntTy) -> i128 {
     let bits = it.bits().min(64);
     let shift = 64 - bits;
