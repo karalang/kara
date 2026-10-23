@@ -1,0 +1,2377 @@
+// mini_geographiclib — geographiclib 2.1 (Charles Karney), the geodesic
+// library behind pyproj's Geod, geopy's distance and most GIS code that needs
+// distances, azimuths and areas on the ellipsoid accurate to a few
+// nanometres. It ports Geodesic (the constructor with its error checks,
+// Inverse, Direct, ArcDirect, the four GeodesicLine constructors), the
+// GeodesicLine calls (Position, ArcPosition, SetDistance, SetArc), PolygonArea
+// (AddPoint, AddEdge, Compute, TestPoint, TestEdge, Clear, for polygons and
+// polylines) and the running-sum Accumulator, every one with any output mask
+// and on any ellipsoid, oblate, spherical or prolate.
+//
+// The series and the Newton iteration are transcribed in the library's
+// evaluation order so every float rounds the same way. Four primitives come
+// from CPython rather than libm and are ported too: math.hypot (CPython's own
+// scaled sum with a Dekker product, not the C library's hypot),
+// math.remainder (CPython's fmod-based m_remainder), math.radians and
+// math.degrees (a multiply by pi/180 and 180/pi), and round() (half to even).
+// Python's max(a, b) and min(a, b) keep a unless b is strictly beyond it,
+// which decides what a NaN does. jobs_text() holds data/jobs.tsv.
+//
+// Compiler gaps, worked around:
+// - B-2026-10-23-3: a method call on a `const` (`TOL0.sqrt()`) runs under
+//   --interp but v2 lowers it as a call of `f64.sqrt` and fails, so tiny()
+//   and tol2() copy the const into a local first.
+// - B-2026-10-23-4: Display breaks an exact tie between two equally short
+//   decimals away from zero, Python's repr toward the even digit, so fmt()
+//   checks the exact expansion and keeps the even candidate.
+
+const PI_F: f64 = 3.141592653589793;
+const DBL_MIN: f64 = 2.2250738585072014e-308;
+const TOL0: f64 = 2.220446049250313e-16;
+const GEOD_ORDER: i64 = 6;
+const MAXIT1: i64 = 20;
+const MAXIT2: i64 = 83;
+
+const CAP_C1: i64 = 1;
+const CAP_C1P: i64 = 2;
+const CAP_C2: i64 = 4;
+const CAP_C3: i64 = 8;
+const CAP_C4: i64 = 16;
+const OUT_MASK: i64 = 65408;
+const EMPTY: i64 = 0;
+const LATITUDE: i64 = 128;
+const LONGITUDE: i64 = 264;
+const AZIMUTH: i64 = 512;
+const DISTANCE: i64 = 1025;
+const STANDARD: i64 = 1929;
+const DISTANCE_IN: i64 = 2051;
+const REDUCEDLENGTH: i64 = 4101;
+const GEODESICSCALE: i64 = 8197;
+const AREA: i64 = 16400;
+const LONG_UNROLL: i64 = 32768;
+const ALL: i64 = 32671;
+
+// B-2026-10-23-3: a method call on a const fails on v2, so the const is
+// copied into a local first.
+fn tiny() -> f64 {
+    let m = DBL_MIN;
+    m.sqrt()
+}
+
+fn tol1() -> f64 {
+    200.0 * TOL0
+}
+
+fn tol2() -> f64 {
+    let t = TOL0;
+    t.sqrt()
+}
+
+fn xthresh() -> f64 {
+    1000.0 * tol2()
+}
+
+fn has(m: i64, bits: i64) -> bool {
+    (m & bits) != 0
+}
+
+// ----------------------------------------------------------- CPython math
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn finite(x: f64) -> bool {
+    x == x and x.abs() != f64.INFINITY
+}
+
+fn sq(x: f64) -> f64 {
+    x * x
+}
+
+fn radians(x: f64) -> f64 {
+    x * (PI_F / 180.0)
+}
+
+fn degrees(x: f64) -> f64 {
+    x * (180.0 / PI_F)
+}
+
+// Python's max(a, b) / min(a, b): the first argument wins unless the second
+// is strictly beyond it.
+fn pmax(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
+
+fn pmin(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+// round() to nearest, ties to even.
+fn py_round(x: f64) -> i64 {
+    let f = x.floor();
+    let d = x - f;
+    let fi = f as i64;
+    if d > 0.5 {
+        fi + 1
+    } else if d < 0.5 {
+        fi
+    } else if fi % 2 == 0 {
+        fi
+    } else {
+        fi + 1
+    }
+}
+
+fn floor_mod(q: i64, m: i64) -> i64 {
+    let r = q % m;
+    if r < 0 { r + m } else { r }
+}
+
+// Dekker's exact product: z + zz == x * y.
+fn two_prod(x: f64, y: f64) -> (f64, f64) {
+    let mut t = x * 134217729.0;
+    let xh = t - (t - x);
+    let xl = x - xh;
+    t = y * 134217729.0;
+    let yh = t - (t - y);
+    let yl = y - yh;
+    let p = xh * yh;
+    let q = xh * yl + xl * yh;
+    let z = p + q;
+    let zz = p - z + q + xl * yl;
+    (z, zz)
+}
+
+// The exponent e of m = f * 2^e with 0.5 <= f < 1 (m > 0, finite).
+fn frexp_e(m: f64) -> i64 {
+    let mut e = 0;
+    let mut x = m;
+    while x >= 1.0 {
+        x *= 0.5;
+        e += 1;
+    }
+    while x < 0.5 {
+        x *= 2.0;
+        e -= 1;
+    }
+    e
+}
+
+fn pow2(n: i64) -> f64 {
+    let mut r = 1.0;
+    let mut i = 0;
+    if n >= 0 {
+        while i < n {
+            r *= 2.0;
+            i += 1;
+        }
+    } else {
+        while i < -n {
+            r *= 0.5;
+            i += 1;
+        }
+    }
+    r
+}
+
+// CPython's vector_norm for two coordinates.
+fn vector_norm2(a: f64, b: f64, mx: f64, nan: bool) -> f64 {
+    if mx == f64.INFINITY {
+        return mx;
+    }
+    if nan {
+        return f64.NAN;
+    }
+    if mx == 0.0 {
+        return mx;
+    }
+    let e = frexp_e(mx);
+    if e < -1023 {
+        return DBL_MIN * vector_norm2(a / DBL_MIN, b / DBL_MIN, mx / DBL_MIN, nan);
+    }
+    let scale = pow2(-e);
+    let mut csum = 1.0;
+    let mut f1 = 0.0;
+    let mut f2 = 0.0;
+    let mut k = 0;
+    while k < 2 {
+        let x = if k == 0 { a * scale } else { b * scale };
+        let (hi, lo) = two_prod(x, x);
+        let s = csum + hi;
+        let y = (csum - s) + hi;
+        csum = s;
+        f1 += lo;
+        f2 += y;
+        k += 1;
+    }
+    let mut h = (csum - 1.0 + (f1 + f2)).sqrt();
+    let (hi, lo) = two_prod(-h, h);
+    let s = csum + hi;
+    let y = (csum - s) + hi;
+    csum = s;
+    f1 += lo;
+    f2 += y;
+    let x = csum - 1.0 + (f1 + f2);
+    h += x / (2.0 * h);
+    h / scale
+}
+
+fn hypot(x: f64, y: f64) -> f64 {
+    let ax = x.abs();
+    let ay = y.abs();
+    let nan = ax != ax or ay != ay;
+    let mut mx = 0.0;
+    if ax > mx {
+        mx = ax;
+    }
+    if ay > mx {
+        mx = ay;
+    }
+    vector_norm2(ax, ay, mx, nan)
+}
+
+// CPython's math.remainder (m_remainder).
+fn py_remainder(x: f64, y: f64) -> f64 {
+    if finite(x) and finite(y) {
+        if y == 0.0 {
+            return f64.NAN;
+        }
+        let ax = x.abs();
+        let ay = y.abs();
+        let m = ax % ay;
+        let c = ay - m;
+        let r = if m < c {
+            m
+        } else if m > c {
+            -c
+        } else {
+            m - 2.0 * ((0.5 * (ax - m)) % ay)
+        };
+        return 1.0.copysign(x) * r;
+    }
+    if is_nan(x) {
+        return x;
+    }
+    if is_nan(y) {
+        return y;
+    }
+    if x.abs() == f64.INFINITY {
+        return f64.NAN;
+    }
+    x
+}
+
+// ----------------------------------------------------------- Math (geomath)
+
+fn cbrt(x: f64) -> f64 {
+    x.abs().pow(1.0 / 3.0).copysign(x)
+}
+
+fn norm(x: f64, y: f64) -> (f64, f64) {
+    let r = hypot(x, y);
+    (x / r, y / r)
+}
+
+fn err_sum(u: f64, v: f64) -> (f64, f64) {
+    let s = u + v;
+    let mut up = s - v;
+    let mut vpp = s - up;
+    up -= u;
+    vpp -= v;
+    let t = if s == 0.0 { s } else { 0.0 - (up + vpp) };
+    (s, t)
+}
+
+fn polyval(n0: i64, p: ref Vec[f64], s0: i64, x: f64) -> f64 {
+    let mut n = n0;
+    let mut s = s0;
+    let mut y = if n < 0 { 0.0 } else { p[s] };
+    while n > 0 {
+        n -= 1;
+        s += 1;
+        y = y * x + p[s];
+    }
+    y
+}
+
+fn ang_round(x: f64) -> f64 {
+    let z = 1.0 / 16.0;
+    let mut y = x.abs();
+    if y < z {
+        y = z - (z - y);
+    }
+    y.copysign(x)
+}
+
+fn remainder(x: f64, y: f64) -> f64 {
+    if finite(x) { py_remainder(x, y) } else { f64.NAN }
+}
+
+fn ang_normalize(x: f64) -> f64 {
+    let y = remainder(x, 360.0);
+    if y.abs() == 180.0 { 180.0.copysign(x) } else { y }
+}
+
+fn lat_fix(x: f64) -> f64 {
+    if x.abs() > 90.0 { f64.NAN } else { x }
+}
+
+fn ang_diff(x: f64, y: f64) -> (f64, f64) {
+    let (d0, t0) = err_sum(remainder(-x, 360.0), remainder(y, 360.0));
+    let (d1, t) = err_sum(remainder(d0, 360.0), t0);
+    let mut d = d1;
+    if d == 0.0 or d.abs() == 180.0 {
+        d = d.copysign(if t == 0.0 { y - x } else { -t });
+    }
+    (d, t)
+}
+
+fn quadrant(q0: i64, s0: f64, c0: f64, x: f64) -> (f64, f64) {
+    let q = floor_mod(q0, 4);
+    let mut s = s0;
+    let mut c = c0;
+    if q == 1 {
+        s = c0;
+        c = -s0;
+    } else if q == 2 {
+        s = -s0;
+        c = -c0;
+    } else if q == 3 {
+        s = -c0;
+        c = s0;
+    }
+    c = c + 0.0;
+    if s == 0.0 {
+        s = s.copysign(x);
+    }
+    (s, c)
+}
+
+fn sincosd(x: f64) -> (f64, f64) {
+    let mut r = if finite(x) { x % 360.0 } else { f64.NAN };
+    let q = if is_nan(r) { 0 } else { py_round(r / 90.0) };
+    r -= 90.0 * (q as f64);
+    r = radians(r);
+    quadrant(q, r.sin(), r.cos(), x)
+}
+
+fn sincosde(x: f64, t: f64) -> (f64, f64) {
+    let q = if finite(x) { py_round(x / 90.0) } else { 0 };
+    let mut r = x - 90.0 * (q as f64);
+    r = radians(ang_round(r + t));
+    quadrant(q, r.sin(), r.cos(), x)
+}
+
+fn atan2d(y0: f64, x0: f64) -> f64 {
+    let mut x = x0;
+    let mut y = y0;
+    let mut q = 0;
+    if y.abs() > x.abs() {
+        q = 2;
+        let t = x;
+        x = y;
+        y = t;
+    }
+    if x < 0.0 {
+        q += 1;
+        x = -x;
+    }
+    let mut ang = degrees(y.atan2(x));
+    if q == 1 {
+        ang = 180.0.copysign(y) - ang;
+    } else if q == 2 {
+        ang = 90.0 - ang;
+    } else if q == 3 {
+        ang = -90.0 + ang;
+    }
+    ang
+}
+
+// ----------------------------------------------------------- series
+
+fn floats(v: Vec[i64]) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for x in v {
+        out.push(x as f64);
+    }
+    out
+}
+
+fn sin_cos_series(sinp: bool, sinx: f64, cosx: f64, c: ref Vec[f64]) -> f64 {
+    let mut k = c.len();
+    let mut n = if sinp { k - 1 } else { k };
+    let ar = 2.0 * (cosx - sinx) * (cosx + sinx);
+    let mut y1 = 0.0;
+    let mut y0 = 0.0;
+    if (n & 1) != 0 {
+        k -= 1;
+        y0 = c[k];
+    }
+    n = n / 2;
+    while n > 0 {
+        n -= 1;
+        k -= 1;
+        y1 = ar * y0 - y1 + c[k];
+        k -= 1;
+        y0 = ar * y1 - y0 + c[k];
+    }
+    if sinp { 2.0 * sinx * cosx * y0 } else { cosx * (y0 - y1) }
+}
+
+fn astroid(x: f64, y: f64) -> f64 {
+    let p = sq(x);
+    let q = sq(y);
+    let mut r = (p + q - 1.0) / 6.0;
+    if not (q == 0.0 and r <= 0.0) {
+        let s = p * q / 4.0;
+        let r2 = sq(r);
+        let r3 = r * r2;
+        let disc = s * (s + 2.0 * r3);
+        let mut u = r;
+        if disc >= 0.0 {
+            let mut t3 = s + r3;
+            t3 += if t3 < 0.0 { -disc.sqrt() } else { disc.sqrt() };
+            let t = cbrt(t3);
+            u += t + (if t != 0.0 { r2 / t } else { 0.0 });
+        } else {
+            let ang = (-disc).sqrt().atan2(-(s + r3));
+            u += 2.0 * r * (ang / 3.0).cos();
+        }
+        let v = (sq(u) + q).sqrt();
+        let uv = if u < 0.0 { q / (v - u) } else { u + v };
+        let w = (uv - q) / (2.0 * v);
+        r = uv / ((uv + sq(w)).sqrt() + w);
+        return r;
+    }
+    0.0
+}
+
+fn a1m1f(eps: f64) -> f64 {
+    let coeff = floats([1, 4, 64, 0, 256]);
+    let m = GEOD_ORDER / 2;
+    let t = polyval(m, coeff, 0, sq(eps)) / coeff[m + 1];
+    (t + eps) / (1.0 - eps)
+}
+
+// The C1, C1' and C2 coefficient sets, filled into c[1..6] (c[0] unused).
+fn c_series(eps: f64, coeff: ref Vec[f64]) -> Vec[f64] {
+    let mut c: Vec[f64] = Vec.new();
+    c.push(0.0);
+    let eps2 = sq(eps);
+    let mut d = eps;
+    let mut o = 0;
+    let mut l = 1;
+    while l <= GEOD_ORDER {
+        let m = (GEOD_ORDER - l) / 2;
+        c.push(d * polyval(m, coeff, o, eps2) / coeff[o + m + 1]);
+        o += m + 2;
+        d *= eps;
+        l += 1;
+    }
+    c
+}
+
+fn c1f(eps: f64) -> Vec[f64] {
+    let coeff = floats([-1, 6, -16, 32, -9, 64, -128, 2048, 9, -16, 768, 3, -5, 512, -7, 1280, -7, 2048]);
+    c_series(eps, coeff)
+}
+
+fn c1pf(eps: f64) -> Vec[f64] {
+    let coeff = floats([205, -432, 768, 1536, 4005, -4736, 3840, 12288, -225, 116, 384, -7173, 2695, 7680, 3467, 7680, 38081, 61440]);
+    c_series(eps, coeff)
+}
+
+fn a2m1f(eps: f64) -> f64 {
+    let coeff = floats([-11, -28, -192, 0, 256]);
+    let m = GEOD_ORDER / 2;
+    let t = polyval(m, coeff, 0, sq(eps)) / coeff[m + 1];
+    (t - eps) / (1.0 + eps)
+}
+
+fn c2f(eps: f64) -> Vec[f64] {
+    let coeff = floats([1, 2, 16, 32, 35, 64, 384, 2048, 15, 80, 768, 7, 35, 512, 63, 1280, 77, 2048]);
+    c_series(eps, coeff)
+}
+
+// ----------------------------------------------------------- Geodesic
+
+struct Geod {
+    a: f64,
+    f: f64,
+    f1: f64,
+    e2: f64,
+    ep2: f64,
+    n: f64,
+    b: f64,
+    c2: f64,
+    etol2: f64,
+    a3x: Vec[f64],
+    c3x: Vec[f64],
+    c4x: Vec[f64],
+}
+
+const ERR_ZERO: Str = "ZeroDivisionError: float division by zero";
+const ERR_DOMAIN: Str = "ValueError: math domain error";
+
+fn new_geod(a: f64, f: f64) -> Result[Geod, String] {
+    let f1 = 1.0 - f;
+    let e2 = f * (2.0 - f);
+    if sq(f1) == 0.0 {
+        return Err(ERR_ZERO.to_string());
+    }
+    let ep2 = e2 / sq(f1);
+    if 2.0 - f == 0.0 {
+        return Err(ERR_ZERO.to_string());
+    }
+    let n = f / (2.0 - f);
+    let b = a * f1;
+    let mut ratio = 1.0;
+    if e2 != 0.0 {
+        if e2 > 0.0 {
+            if e2.sqrt() >= 1.0 {
+                return Err(ERR_DOMAIN.to_string());
+            }
+            ratio = e2.sqrt().atanh();
+        } else {
+            ratio = (-e2).sqrt().atan();
+        }
+        ratio = ratio / e2.abs().sqrt();
+    }
+    let c2 = (sq(a) + sq(b) * ratio) / 2.0;
+    let arg = pmax(0.001, f.abs()) * pmin(1.0, 1.0 - f / 2.0) / 2.0;
+    if arg < 0.0 {
+        return Err(ERR_DOMAIN.to_string());
+    }
+    if arg.sqrt() == 0.0 {
+        return Err(ERR_ZERO.to_string());
+    }
+    let etol2 = 0.1 * tol2() / arg.sqrt();
+    if not (finite(a) and a > 0.0) {
+        return Err("ValueError: Equatorial radius is not positive".to_string());
+    }
+    if not (finite(b) and b > 0.0) {
+        return Err("ValueError: Polar semi-axis is not positive".to_string());
+    }
+    // A3x
+    let ca3 = floats([-3, 128, -2, -3, 64, -1, -3, -1, 16, 3, -1, -2, 8, 1, -1, 2, 1, 1]);
+    let mut a3x: Vec[f64] = Vec.new();
+    let mut o = 0;
+    let mut j = GEOD_ORDER - 1;
+    while j >= 0 {
+        let m = if GEOD_ORDER - j - 1 < j { GEOD_ORDER - j - 1 } else { j };
+        a3x.push(polyval(m, ca3, o, n) / ca3[o + m + 1]);
+        o += m + 2;
+        j -= 1;
+    }
+    // C3x
+    let cc3 = floats([3, 128, 2, 5, 128, -1, 3, 3, 64, -1, 0, 1, 8, -1, 1, 4, 5, 256, 1, 3, 128, -3, -2, 3, 64, 1, -3, 2, 32, 7, 512, -10, 9, 384, 5, -9, 5, 192, 7, 512, -14, 7, 512, 21, 2560]);
+    let mut c3x: Vec[f64] = Vec.new();
+    o = 0;
+    let mut l = 1;
+    while l < GEOD_ORDER {
+        j = GEOD_ORDER - 1;
+        while j >= l {
+            let m = if GEOD_ORDER - j - 1 < j { GEOD_ORDER - j - 1 } else { j };
+            c3x.push(polyval(m, cc3, o, n) / cc3[o + m + 1]);
+            o += m + 2;
+            j -= 1;
+        }
+        l += 1;
+    }
+    // C4x
+    let cc4 = floats([97, 15015, 1088, 156, 45045, -224, -4784, 1573, 45045, -10656, 14144, -4576, -858, 45045, 64, 624, -4576, 6864, -3003, 15015, 100, 208, 572, 3432, -12012, 30030, 45045, 1, 9009, -2944, 468, 135135, 5792, 1040, -1287, 135135, 5952, -11648, 9152, -2574, 135135, -64, -624, 4576, -6864, 3003, 135135, 8, 10725, 1856, -936, 225225, -8448, 4992, -1144, 225225, -1440, 4160, -4576, 1716, 225225, -136, 63063, 1024, -208, 105105, 3584, -3328, 1144, 315315, -128, 135135, -2560, 832, 405405, 128, 99099]);
+    let mut c4x: Vec[f64] = Vec.new();
+    o = 0;
+    l = 0;
+    while l < GEOD_ORDER {
+        j = GEOD_ORDER - 1;
+        while j >= l {
+            let m = GEOD_ORDER - j - 1;
+            c4x.push(polyval(m, cc4, o, n) / cc4[o + m + 1]);
+            o += m + 2;
+            j -= 1;
+        }
+        l += 1;
+    }
+    Ok(Geod { a: a, f: f, f1: f1, e2: e2, ep2: ep2, n: n, b: b, c2: c2, etol2: etol2, a3x: a3x, c3x: c3x, c4x: c4x })
+}
+
+fn a3f(g: ref Geod, eps: f64) -> f64 {
+    polyval(GEOD_ORDER - 1, g.a3x, 0, eps)
+}
+
+fn c3f(g: ref Geod, eps: f64) -> Vec[f64] {
+    let mut c: Vec[f64] = Vec.new();
+    c.push(0.0);
+    let mut mult = 1.0;
+    let mut o = 0;
+    let mut l = 1;
+    while l < GEOD_ORDER {
+        let m = GEOD_ORDER - l - 1;
+        mult *= eps;
+        c.push(mult * polyval(m, g.c3x, o, eps));
+        o += m + 1;
+        l += 1;
+    }
+    c
+}
+
+fn c4f(g: ref Geod, eps: f64) -> Vec[f64] {
+    let mut c: Vec[f64] = Vec.new();
+    let mut mult = 1.0;
+    let mut o = 0;
+    let mut l = 0;
+    while l < GEOD_ORDER {
+        let m = GEOD_ORDER - l - 1;
+        c.push(mult * polyval(m, g.c4x, o, eps));
+        o += m + 1;
+        mult *= eps;
+        l += 1;
+    }
+    c
+}
+
+struct Lengths {
+    s12b: f64,
+    m12b: f64,
+    m0: f64,
+    mm12: f64,
+    mm21: f64,
+}
+
+fn lengths(g: ref Geod, eps: f64, sig12: f64, ssig1: f64, csig1: f64, dn1: f64, ssig2: f64, csig2: f64, dn2: f64, cbet1: f64, cbet2: f64, outmask0: i64) -> Lengths {
+    let outmask = outmask0 & OUT_MASK;
+    let mut s12b = f64.NAN;
+    let mut m12b = f64.NAN;
+    let mut m0 = f64.NAN;
+    let mut m0x = f64.NAN;
+    let mut j12 = f64.NAN;
+    let mut mm12 = f64.NAN;
+    let mut mm21 = f64.NAN;
+    let mut a1 = 0.0;
+    let mut a2 = 0.0;
+    let mut c1a: Vec[f64] = Vec.new();
+    let mut c2a: Vec[f64] = Vec.new();
+    let rl_gs = REDUCEDLENGTH | GEODESICSCALE;
+    if has(outmask, DISTANCE | rl_gs) {
+        a1 = a1m1f(eps);
+        c1a = c1f(eps);
+        if has(outmask, rl_gs) {
+            a2 = a2m1f(eps);
+            c2a = c2f(eps);
+            m0x = a1 - a2;
+            a2 = 1.0 + a2;
+        }
+        a1 = 1.0 + a1;
+    }
+    if has(outmask, DISTANCE) {
+        let b1 = sin_cos_series(true, ssig2, csig2, c1a) - sin_cos_series(true, ssig1, csig1, c1a);
+        s12b = a1 * (sig12 + b1);
+        if has(outmask, rl_gs) {
+            let b2 = sin_cos_series(true, ssig2, csig2, c2a) - sin_cos_series(true, ssig1, csig1, c2a);
+            j12 = m0x * sig12 + (a1 * b1 - a2 * b2);
+        }
+    } else if has(outmask, rl_gs) {
+        let mut l = 1;
+        while l < GEOD_ORDER {
+            c2a[l] = a1 * c1a[l] - a2 * c2a[l];
+            l += 1;
+        }
+        j12 = m0x * sig12 + (sin_cos_series(true, ssig2, csig2, c2a) - sin_cos_series(true, ssig1, csig1, c2a));
+    }
+    if has(outmask, REDUCEDLENGTH) {
+        m0 = m0x;
+        m12b = dn2 * (csig1 * ssig2) - dn1 * (ssig1 * csig2) - csig1 * csig2 * j12;
+    }
+    if has(outmask, GEODESICSCALE) {
+        let csig12 = csig1 * csig2 + ssig1 * ssig2;
+        let t = g.ep2 * (cbet1 - cbet2) * (cbet1 + cbet2) / (dn1 + dn2);
+        mm12 = csig12 + (t * ssig2 - csig2 * j12) * ssig1 / dn1;
+        mm21 = csig12 - (t * ssig1 - csig1 * j12) * ssig2 / dn2;
+    }
+    Lengths { s12b: s12b, m12b: m12b, m0: m0, mm12: mm12, mm21: mm21 }
+}
+
+struct Start {
+    sig12: f64,
+    salp1: f64,
+    calp1: f64,
+    salp2: f64,
+    calp2: f64,
+    dnm: f64,
+}
+
+fn inverse_start(g: ref Geod, sbet1: f64, cbet1: f64, dn1: f64, sbet2: f64, cbet2: f64, dn2: f64, lam12: f64, slam12: f64, clam12: f64) -> Start {
+    let mut sig12 = -1.0;
+    let mut salp2 = f64.NAN;
+    let mut calp2 = f64.NAN;
+    let mut dnm = f64.NAN;
+    let sbet12 = sbet2 * cbet1 - cbet2 * sbet1;
+    let cbet12 = cbet2 * cbet1 + sbet2 * sbet1;
+    let mut sbet12a = sbet2 * cbet1;
+    sbet12a += cbet2 * sbet1;
+    let shortline = cbet12 >= 0.0 and sbet12 < 0.5 and cbet2 * lam12 < 0.5;
+    let mut somg12 = slam12;
+    let mut comg12 = clam12;
+    if shortline {
+        let mut sbetm2 = sq(sbet1 + sbet2);
+        sbetm2 /= sbetm2 + sq(cbet1 + cbet2);
+        dnm = (1.0 + g.ep2 * sbetm2).sqrt();
+        let omg12 = lam12 / (g.f1 * dnm);
+        somg12 = omg12.sin();
+        comg12 = omg12.cos();
+    }
+    let mut salp1 = cbet2 * somg12;
+    let mut calp1 = if comg12 >= 0.0 {
+        sbet12 + cbet2 * sbet1 * sq(somg12) / (1.0 + comg12)
+    } else {
+        sbet12a - cbet2 * sbet1 * sq(somg12) / (1.0 - comg12)
+    };
+    let ssig12 = hypot(salp1, calp1);
+    let csig12 = sbet1 * sbet2 + cbet1 * cbet2 * comg12;
+    if shortline and ssig12 < g.etol2 {
+        salp2 = cbet1 * somg12;
+        calp2 = sbet12 - cbet1 * sbet2 * (if comg12 >= 0.0 { sq(somg12) / (1.0 + comg12) } else { 1.0 - comg12 });
+        let (s2, c2) = norm(salp2, calp2);
+        salp2 = s2;
+        calp2 = c2;
+        sig12 = ssig12.atan2(csig12);
+    } else if g.n.abs() >= 0.1 or csig12 >= 0.0 or ssig12 >= 6.0 * g.n.abs() * PI_F * sq(cbet1) {
+        // zeroth order spherical approximation is OK
+    } else {
+        let lam12x = (-slam12).atan2(-clam12);
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut lamscale = 0.0;
+        if g.f >= 0.0 {
+            let k2 = sq(sbet1) * g.ep2;
+            let eps = k2 / (2.0 * (1.0 + (1.0 + k2).sqrt()) + k2);
+            lamscale = g.f * cbet1 * a3f(g, eps) * PI_F;
+            let betscale = lamscale * cbet1;
+            x = lam12x / lamscale;
+            y = sbet12a / betscale;
+        } else {
+            let cbet12a = cbet2 * cbet1 - sbet2 * sbet1;
+            let bet12a = sbet12a.atan2(cbet12a);
+            let ln = lengths(g, g.n, PI_F + bet12a, sbet1, -cbet1, dn1, sbet2, cbet2, dn2, cbet1, cbet2, REDUCEDLENGTH);
+            x = -1.0 + ln.m12b / (cbet1 * cbet2 * ln.m0 * PI_F);
+            let betscale = if x < -0.01 { sbet12a / x } else { -g.f * sq(cbet1) * PI_F };
+            lamscale = betscale / cbet1;
+            y = lam12x / lamscale;
+        }
+        if y > -tol1() and x > -1.0 - xthresh() {
+            if g.f >= 0.0 {
+                salp1 = pmin(1.0, -x);
+                calp1 = -(1.0 - sq(salp1)).sqrt();
+            } else {
+                calp1 = pmax(if x > -tol1() { 0.0 } else { -1.0 }, x);
+                salp1 = (1.0 - sq(calp1)).sqrt();
+            }
+        } else {
+            let k = astroid(x, y);
+            let omg12a = lamscale * (if g.f >= 0.0 { -x * k / (1.0 + k) } else { -y * (1.0 + k) / k });
+            somg12 = omg12a.sin();
+            comg12 = -omg12a.cos();
+            salp1 = cbet2 * somg12;
+            calp1 = sbet12a - cbet2 * sbet1 * sq(somg12) / (1.0 - comg12);
+        }
+    }
+    if not (salp1 <= 0.0) {
+        let (s1, c1) = norm(salp1, calp1);
+        salp1 = s1;
+        calp1 = c1;
+    } else {
+        salp1 = 1.0;
+        calp1 = 0.0;
+    }
+    Start { sig12: sig12, salp1: salp1, calp1: calp1, salp2: salp2, calp2: calp2, dnm: dnm }
+}
+
+struct Lam {
+    lam12: f64,
+    salp2: f64,
+    calp2: f64,
+    sig12: f64,
+    ssig1: f64,
+    csig1: f64,
+    ssig2: f64,
+    csig2: f64,
+    eps: f64,
+    domg12: f64,
+    dlam12: f64,
+}
+
+fn lambda12(g: ref Geod, sbet1: f64, cbet1: f64, dn1: f64, sbet2: f64, cbet2: f64, dn2: f64, salp1: f64, calp1_in: f64, slam120: f64, clam120: f64, diffp: bool) -> Lam {
+    let mut calp1 = calp1_in;
+    if sbet1 == 0.0 and calp1 == 0.0 {
+        calp1 = -tiny();
+    }
+    let salp0 = salp1 * cbet1;
+    let calp0 = hypot(calp1, salp1 * sbet1);
+    let somg1 = salp0 * sbet1;
+    let comg1 = calp1 * cbet1;
+    let (ssig1, csig1) = norm(sbet1, comg1);
+    let salp2 = if cbet2 != cbet1 { salp0 / cbet2 } else { salp1 };
+    let calp2 = if cbet2 != cbet1 or sbet2.abs() != -sbet1 {
+        (sq(calp1 * cbet1) + (if cbet1 < -sbet1 { (cbet2 - cbet1) * (cbet1 + cbet2) } else { (sbet1 - sbet2) * (sbet1 + sbet2) })).sqrt() / cbet2
+    } else {
+        calp1.abs()
+    };
+    let somg2 = salp0 * sbet2;
+    let comg2 = calp2 * cbet2;
+    let (ssig2, csig2) = norm(sbet2, comg2);
+    let sig12 = (pmax(0.0, csig1 * ssig2 - ssig1 * csig2) + 0.0).atan2(csig1 * csig2 + ssig1 * ssig2);
+    let somg12 = pmax(0.0, comg1 * somg2 - somg1 * comg2) + 0.0;
+    let comg12 = comg1 * comg2 + somg1 * somg2;
+    let eta = (somg12 * clam120 - comg12 * slam120).atan2(comg12 * clam120 + somg12 * slam120);
+    let k2 = sq(calp0) * g.ep2;
+    let eps = k2 / (2.0 * (1.0 + (1.0 + k2).sqrt()) + k2);
+    let c3a = c3f(g, eps);
+    let b312 = sin_cos_series(true, ssig2, csig2, c3a) - sin_cos_series(true, ssig1, csig1, c3a);
+    let domg12 = -g.f * a3f(g, eps) * salp0 * (sig12 + b312);
+    let lam12 = eta + domg12;
+    let mut dlam12 = f64.NAN;
+    if diffp {
+        if calp2 == 0.0 {
+            dlam12 = -2.0 * g.f1 * dn1 / sbet1;
+        } else {
+            let ln = lengths(g, eps, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2, cbet1, cbet2, REDUCEDLENGTH);
+            dlam12 = ln.m12b;
+            dlam12 *= g.f1 / (calp2 * cbet2);
+        }
+    }
+    Lam { lam12: lam12, salp2: salp2, calp2: calp2, sig12: sig12, ssig1: ssig1, csig1: csig1, ssig2: ssig2, csig2: csig2, eps: eps, domg12: domg12, dlam12: dlam12 }
+}
+
+struct Inv {
+    a12: f64,
+    s12: f64,
+    salp1: f64,
+    calp1: f64,
+    salp2: f64,
+    calp2: f64,
+    m12: f64,
+    mm12: f64,
+    mm21: f64,
+    ss12: f64,
+}
+
+fn gen_inverse(g: ref Geod, lat1_in: f64, lon1: f64, lat2_in: f64, lon2: f64, outmask0: i64) -> Inv {
+    let mut a12 = f64.NAN;
+    let mut s12 = f64.NAN;
+    let mut m12 = f64.NAN;
+    let mut mm12 = f64.NAN;
+    let mut mm21 = f64.NAN;
+    let mut ss12 = f64.NAN;
+    let outmask = outmask0 & OUT_MASK;
+    let (lon12a, lon12sa) = ang_diff(lon1, lon2);
+    let mut lonsign = 1.0.copysign(lon12a);
+    let lon12 = lonsign * lon12a;
+    let mut lon12s = lonsign * lon12sa;
+    let lam12 = radians(lon12);
+    let (slam12, clam12) = sincosde(lon12, lon12s);
+    lon12s = (180.0 - lon12) - lon12s;
+
+    let mut lat1 = ang_round(lat_fix(lat1_in));
+    let mut lat2 = ang_round(lat_fix(lat2_in));
+    let swapp = if lat1.abs() < lat2.abs() or is_nan(lat2) { -1.0 } else { 1.0 };
+    if swapp < 0.0 {
+        lonsign *= -1.0;
+        let t = lat1;
+        lat1 = lat2;
+        lat2 = t;
+    }
+    let latsign = 1.0.copysign(-lat1);
+    lat1 *= latsign;
+    lat2 *= latsign;
+
+    let (sb1, cb1) = sincosd(lat1);
+    let (sbet1, cb1n) = norm(sb1 * g.f1, cb1);
+    let cbet1 = pmax(tiny(), cb1n);
+    let (sb2, cb2) = sincosd(lat2);
+    let (sb2n, cb2n) = norm(sb2 * g.f1, cb2);
+    let mut sbet2 = sb2n;
+    let mut cbet2 = pmax(tiny(), cb2n);
+
+    if cbet1 < -sbet1 {
+        if cbet2 == cbet1 {
+            sbet2 = sbet1.copysign(sbet2);
+        }
+    } else {
+        if sbet2.abs() == -sbet1 {
+            cbet2 = cbet1;
+        }
+    }
+    let dn1 = (1.0 + g.ep2 * sq(sbet1)).sqrt();
+    let dn2 = (1.0 + g.ep2 * sq(sbet2)).sqrt();
+
+    let mut meridian = lat1 == -90.0 or slam12 == 0.0;
+    let mut calp1 = 0.0;
+    let mut salp1 = 0.0;
+    let mut calp2 = 0.0;
+    let mut salp2 = 0.0;
+    let mut sig12 = 0.0;
+    let mut s12x = f64.NAN;
+    let mut m12x = f64.NAN;
+
+    if meridian {
+        calp1 = clam12;
+        salp1 = slam12;
+        calp2 = 1.0;
+        salp2 = 0.0;
+        let ssig1 = sbet1;
+        let csig1 = calp1 * cbet1;
+        let ssig2 = sbet2;
+        let csig2 = calp2 * cbet2;
+        sig12 = (pmax(0.0, csig1 * ssig2 - ssig1 * csig2) + 0.0).atan2(csig1 * csig2 + ssig1 * ssig2);
+        let ln = lengths(g, g.n, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2, cbet1, cbet2, outmask | DISTANCE | REDUCEDLENGTH);
+        s12x = ln.s12b;
+        m12x = ln.m12b;
+        mm12 = ln.mm12;
+        mm21 = ln.mm21;
+        if sig12 < tol2() or m12x >= 0.0 {
+            if sig12 < 3.0 * tiny() or (sig12 < TOL0 and (s12x < 0.0 or m12x < 0.0)) {
+                sig12 = 0.0;
+                m12x = 0.0;
+                s12x = 0.0;
+            }
+            m12x *= g.b;
+            s12x *= g.b;
+            a12 = degrees(sig12);
+        } else {
+            meridian = false;
+        }
+    }
+
+    let mut somg12 = 2.0;
+    let mut comg12 = 0.0;
+    let mut omg12 = 0.0;
+    if not meridian and sbet1 == 0.0 and (g.f <= 0.0 or lon12s >= g.f * 180.0) {
+        calp1 = 0.0;
+        calp2 = 0.0;
+        salp1 = 1.0;
+        salp2 = 1.0;
+        s12x = g.a * lam12;
+        sig12 = lam12 / g.f1;
+        omg12 = sig12;
+        m12x = g.b * sig12.sin();
+        if has(outmask, GEODESICSCALE) {
+            mm12 = sig12.cos();
+            mm21 = mm12;
+        }
+        a12 = lon12 / g.f1;
+    } else if not meridian {
+        let st = inverse_start(g, sbet1, cbet1, dn1, sbet2, cbet2, dn2, lam12, slam12, clam12);
+        sig12 = st.sig12;
+        salp1 = st.salp1;
+        calp1 = st.calp1;
+        salp2 = st.salp2;
+        calp2 = st.calp2;
+        let dnm = st.dnm;
+        if sig12 >= 0.0 {
+            s12x = sig12 * g.b * dnm;
+            m12x = sq(dnm) * g.b * (sig12 / dnm).sin();
+            if has(outmask, GEODESICSCALE) {
+                mm12 = (sig12 / dnm).cos();
+                mm21 = mm12;
+            }
+            a12 = degrees(sig12);
+            omg12 = lam12 / (g.f1 * dnm);
+        } else {
+            let mut numit = 0;
+            let mut tripn = false;
+            let mut tripb = false;
+            let mut salp1a = tiny();
+            let mut calp1a = 1.0;
+            let mut salp1b = tiny();
+            let mut calp1b = -1.0;
+            let mut ssig1 = 0.0;
+            let mut csig1 = 0.0;
+            let mut ssig2 = 0.0;
+            let mut csig2 = 0.0;
+            let mut eps = 0.0;
+            let mut domg12 = 0.0;
+            loop {
+                let lm = lambda12(g, sbet1, cbet1, dn1, sbet2, cbet2, dn2, salp1, calp1, slam12, clam12, numit < MAXIT1);
+                let v = lm.lam12;
+                salp2 = lm.salp2;
+                calp2 = lm.calp2;
+                sig12 = lm.sig12;
+                ssig1 = lm.ssig1;
+                csig1 = lm.csig1;
+                ssig2 = lm.ssig2;
+                csig2 = lm.csig2;
+                eps = lm.eps;
+                domg12 = lm.domg12;
+                let dv = lm.dlam12;
+                let lim = if tripn { 8.0 } else { 1.0 };
+                if tripb or not (v.abs() >= lim * TOL0) or numit == MAXIT2 {
+                    break;
+                }
+                if v > 0.0 and (numit > MAXIT1 or calp1 / salp1 > calp1b / salp1b) {
+                    salp1b = salp1;
+                    calp1b = calp1;
+                } else if v < 0.0 and (numit > MAXIT1 or calp1 / salp1 < calp1a / salp1a) {
+                    salp1a = salp1;
+                    calp1a = calp1;
+                }
+                numit += 1;
+                let mut newton = false;
+                if numit < MAXIT1 and dv > 0.0 {
+                    let dalp1 = -v / dv;
+                    if dalp1.abs() < PI_F {
+                        let sdalp1 = dalp1.sin();
+                        let cdalp1 = dalp1.cos();
+                        let nsalp1 = salp1 * cdalp1 + calp1 * sdalp1;
+                        if nsalp1 > 0.0 {
+                            calp1 = calp1 * cdalp1 - salp1 * sdalp1;
+                            salp1 = nsalp1;
+                            let (s1, c1) = norm(salp1, calp1);
+                            salp1 = s1;
+                            calp1 = c1;
+                            tripn = v.abs() <= 16.0 * TOL0;
+                            newton = true;
+                        }
+                    }
+                }
+                if not newton {
+                    salp1 = (salp1a + salp1b) / 2.0;
+                    calp1 = (calp1a + calp1b) / 2.0;
+                    let (s1, c1) = norm(salp1, calp1);
+                    salp1 = s1;
+                    calp1 = c1;
+                    tripn = false;
+                    tripb = (salp1a - salp1).abs() + (calp1a - calp1) < TOL0 or (salp1 - salp1b).abs() + (calp1 - calp1b) < TOL0;
+                }
+            }
+            let lengthmask = outmask | (if has(outmask, REDUCEDLENGTH | GEODESICSCALE) { DISTANCE } else { EMPTY });
+            let ln = lengths(g, eps, sig12, ssig1, csig1, dn1, ssig2, csig2, dn2, cbet1, cbet2, lengthmask);
+            s12x = ln.s12b;
+            m12x = ln.m12b;
+            mm12 = ln.mm12;
+            mm21 = ln.mm21;
+            m12x *= g.b;
+            s12x *= g.b;
+            a12 = degrees(sig12);
+            if has(outmask, AREA) {
+                let sdomg12 = domg12.sin();
+                let cdomg12 = domg12.cos();
+                somg12 = slam12 * cdomg12 - clam12 * sdomg12;
+                comg12 = clam12 * cdomg12 + slam12 * sdomg12;
+            }
+        }
+    }
+
+    if has(outmask, DISTANCE) {
+        s12 = 0.0 + s12x;
+    }
+    if has(outmask, REDUCEDLENGTH) {
+        m12 = 0.0 + m12x;
+    }
+    if has(outmask, AREA) {
+        let salp0 = salp1 * cbet1;
+        let calp0 = hypot(calp1, salp1 * sbet1);
+        if calp0 != 0.0 and salp0 != 0.0 {
+            let k2 = sq(calp0) * g.ep2;
+            let eps = k2 / (2.0 * (1.0 + (1.0 + k2).sqrt()) + k2);
+            let a4 = sq(g.a) * calp0 * salp0 * g.e2;
+            let (ssig1, csig1) = norm(sbet1, calp1 * cbet1);
+            let (ssig2, csig2) = norm(sbet2, calp2 * cbet2);
+            let c4a = c4f(g, eps);
+            let b41 = sin_cos_series(false, ssig1, csig1, c4a);
+            let b42 = sin_cos_series(false, ssig2, csig2, c4a);
+            ss12 = a4 * (b42 - b41);
+        } else {
+            ss12 = 0.0;
+        }
+        if not meridian and somg12 == 2.0 {
+            somg12 = omg12.sin();
+            comg12 = omg12.cos();
+        }
+        let mut alp12 = 0.0;
+        if not meridian and comg12 > -0.7071 and sbet2 - sbet1 < 1.75 {
+            let domg12 = 1.0 + comg12;
+            let dbet1 = 1.0 + cbet1;
+            let dbet2 = 1.0 + cbet2;
+            alp12 = 2.0 * (somg12 * (sbet1 * dbet2 + sbet2 * dbet1)).atan2(domg12 * (sbet1 * sbet2 + dbet1 * dbet2));
+        } else {
+            let mut salp12 = salp2 * calp1 - calp2 * salp1;
+            let mut calp12 = calp2 * calp1 + salp2 * salp1;
+            if salp12 == 0.0 and calp12 < 0.0 {
+                salp12 = tiny() * calp1;
+                calp12 = -1.0;
+            }
+            alp12 = salp12.atan2(calp12);
+        }
+        ss12 += g.c2 * alp12;
+        ss12 *= swapp * lonsign * latsign;
+        ss12 += 0.0;
+    }
+    if swapp < 0.0 {
+        let t = salp1;
+        salp1 = salp2;
+        salp2 = t;
+        let u = calp1;
+        calp1 = calp2;
+        calp2 = u;
+        if has(outmask, GEODESICSCALE) {
+            let w = mm12;
+            mm12 = mm21;
+            mm21 = w;
+        }
+    }
+    salp1 *= swapp * lonsign;
+    calp1 *= swapp * latsign;
+    salp2 *= swapp * lonsign;
+    calp2 *= swapp * latsign;
+    Inv { a12: a12, s12: s12, salp1: salp1, calp1: calp1, salp2: salp2, calp2: calp2, m12: m12, mm12: mm12, mm21: mm21, ss12: ss12 }
+}
+
+// ----------------------------------------------------------- output
+
+// Python's repr: the shortest digits that read back, like Kara's Display,
+// but when two candidates are equally short and the value lies exactly
+// halfway between them Python keeps the one with the even last digit, where
+// Kara's rendering takes the one farther from zero (B-2026-10-23-4). The
+// exact expansion shows the tie: one more digit, a 5, then only zeros. Only
+// plain decimals are checked; none of the outputs ties in exponent form.
+fn fmt(x: f64) -> String {
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    let s = f"{x}";
+    let sb = s.bytes().to_vec();
+    let mut sdot = -1;
+    let mut i = 0;
+    while i < sb.len() {
+        if sb[i] == b'e' {
+            return s;
+        }
+        if sb[i] == b'.' {
+            sdot = i;
+        }
+        i += 1;
+    }
+    if sdot < 0 {
+        return s;
+    }
+    let k = sb.len() - sdot - 1;
+    let ub = f"{x:.60}".bytes().to_vec();
+    let mut udot = 0;
+    while ub[udot] != b'.' {
+        udot += 1;
+    }
+    let cut = udot + k + 1;
+    if cut >= ub.len() or ub[cut] != b'5' {
+        return s;
+    }
+    let mut j = cut + 1;
+    while j < ub.len() {
+        if ub[j] != b'0' {
+            return s;
+        }
+        j += 1;
+    }
+    if (ub[cut - 1] - b'0') % 2 != 0 {
+        return s;
+    }
+    let mut lo: Vec[u8] = Vec.new();
+    let mut m = 0;
+    while m < cut {
+        lo.push(ub[m]);
+        m += 1;
+    }
+    String.from_utf8(lo).unwrap_or(s.clone())
+}
+
+fn kv(out: mut ref Vec[String], k: Str, x: f64) {
+    out.push(f"'{k}': {fmt(x)}");
+}
+
+fn dict(items: Vec[String]) -> String {
+    let mut s = String.new();
+    s.push_str("{");
+    let mut i = 0;
+    while i < items.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(items[i]);
+        i += 1;
+    }
+    s.push_str("}");
+    s
+}
+
+fn tuple3(n: i64, p: f64, a: f64) -> String {
+    f"({n}, {fmt(p)}, {fmt(a)})"
+}
+
+fn inverse(g: ref Geod, lat1: f64, lon1: f64, lat2: f64, lon2_in: f64, outmask0: i64) -> String {
+    let r = gen_inverse(g, lat1, lon1, lat2, lon2_in, outmask0);
+    let outmask = outmask0 & OUT_MASK;
+    let mut lon2 = 0.0;
+    if has(outmask, LONG_UNROLL) {
+        let (lon12, e) = ang_diff(lon1, lon2_in);
+        lon2 = (lon1 + lon12) + e;
+    } else {
+        lon2 = ang_normalize(lon2_in);
+    }
+    let mut d: Vec[String] = Vec.new();
+    kv(mut d, "lat1", lat_fix(lat1));
+    kv(mut d, "lon1", if has(outmask, LONG_UNROLL) { lon1 } else { ang_normalize(lon1) });
+    kv(mut d, "lat2", lat_fix(lat2));
+    kv(mut d, "lon2", lon2);
+    kv(mut d, "a12", r.a12);
+    if has(outmask, DISTANCE) {
+        kv(mut d, "s12", r.s12);
+    }
+    if has(outmask, AZIMUTH) {
+        kv(mut d, "azi1", atan2d(r.salp1, r.calp1));
+        kv(mut d, "azi2", atan2d(r.salp2, r.calp2));
+    }
+    if has(outmask, REDUCEDLENGTH) {
+        kv(mut d, "m12", r.m12);
+    }
+    if has(outmask, GEODESICSCALE) {
+        kv(mut d, "M12", r.mm12);
+        kv(mut d, "M21", r.mm21);
+    }
+    if has(outmask, AREA) {
+        kv(mut d, "S12", r.ss12);
+    }
+    dict(d)
+}
+
+// ----------------------------------------------------------- GeodesicLine
+
+struct Line {
+    a: f64,
+    f: f64,
+    b: f64,
+    c2: f64,
+    f1: f64,
+    caps: i64,
+    lat1: f64,
+    lon1: f64,
+    azi1: f64,
+    salp1: f64,
+    calp1: f64,
+    dn1: f64,
+    salp0: f64,
+    calp0: f64,
+    ssig1: f64,
+    somg1: f64,
+    csig1: f64,
+    comg1: f64,
+    k2: f64,
+    a1m1: f64,
+    c1a: Vec[f64],
+    b11: f64,
+    stau1: f64,
+    ctau1: f64,
+    c1pa: Vec[f64],
+    a2m1: f64,
+    c2a: Vec[f64],
+    b21: f64,
+    c3a: Vec[f64],
+    a3c: f64,
+    b31: f64,
+    c4a: Vec[f64],
+    a4: f64,
+    b41: f64,
+    s13: f64,
+    a13: f64,
+}
+
+struct Pos {
+    a12: f64,
+    lat2: f64,
+    lon2: f64,
+    azi2: f64,
+    s12: f64,
+    m12: f64,
+    mm12: f64,
+    mm21: f64,
+    ss12: f64,
+}
+
+fn new_line(g: ref Geod, lat1: f64, lon1: f64, azi1_in: f64, caps0: i64, salp1_in: f64, calp1_in: f64) -> Line {
+    let caps = caps0 | LATITUDE | AZIMUTH | LONG_UNROLL;
+    let lat1f = lat_fix(lat1);
+    let mut azi1 = azi1_in;
+    let mut salp1 = salp1_in;
+    let mut calp1 = calp1_in;
+    if is_nan(salp1_in) or is_nan(calp1_in) {
+        azi1 = ang_normalize(azi1_in);
+        let (s, c) = sincosd(ang_round(azi1_in));
+        salp1 = s;
+        calp1 = c;
+    }
+    let (sb1, cb1) = sincosd(ang_round(lat1f));
+    let (sbet1, cb1n) = norm(sb1 * g.f1, cb1);
+    let cbet1 = pmax(tiny(), cb1n);
+    let dn1 = (1.0 + g.ep2 * sq(sbet1)).sqrt();
+    let salp0 = salp1 * cbet1;
+    let calp0 = hypot(calp1, salp1 * sbet1);
+    let somg1 = salp0 * sbet1;
+    let comg1 = if sbet1 != 0.0 or calp1 != 0.0 { cbet1 * calp1 } else { 1.0 };
+    let (ssig1, csig1) = norm(sbet1, comg1);
+    let k2 = sq(calp0) * g.ep2;
+    let eps = k2 / (2.0 * (1.0 + (1.0 + k2).sqrt()) + k2);
+    let mut ln = Line {
+        a: g.a, f: g.f, b: g.b, c2: g.c2, f1: g.f1, caps: caps, lat1: lat1f, lon1: lon1,
+        azi1: azi1, salp1: salp1, calp1: calp1, dn1: dn1, salp0: salp0, calp0: calp0,
+        ssig1: ssig1, somg1: somg1, csig1: csig1, comg1: comg1, k2: k2,
+        a1m1: 0.0, c1a: Vec.new(), b11: 0.0, stau1: 0.0, ctau1: 0.0, c1pa: Vec.new(),
+        a2m1: 0.0, c2a: Vec.new(), b21: 0.0, c3a: Vec.new(), a3c: 0.0, b31: 0.0,
+        c4a: Vec.new(), a4: 0.0, b41: 0.0, s13: f64.NAN, a13: f64.NAN,
+    };
+    if has(caps, CAP_C1) {
+        ln.a1m1 = a1m1f(eps);
+        ln.c1a = c1f(eps);
+        ln.b11 = sin_cos_series(true, ssig1, csig1, ln.c1a);
+        let s = ln.b11.sin();
+        let c = ln.b11.cos();
+        ln.stau1 = ssig1 * c + csig1 * s;
+        ln.ctau1 = csig1 * c - ssig1 * s;
+    }
+    if has(caps, CAP_C1P) {
+        ln.c1pa = c1pf(eps);
+    }
+    if has(caps, CAP_C2) {
+        ln.a2m1 = a2m1f(eps);
+        ln.c2a = c2f(eps);
+        ln.b21 = sin_cos_series(true, ssig1, csig1, ln.c2a);
+    }
+    if has(caps, CAP_C3) {
+        ln.c3a = c3f(g, eps);
+        ln.a3c = -g.f * salp0 * a3f(g, eps);
+        ln.b31 = sin_cos_series(true, ssig1, csig1, ln.c3a);
+    }
+    if has(caps, CAP_C4) {
+        ln.c4a = c4f(g, eps);
+        ln.a4 = sq(g.a) * calp0 * salp0 * g.e2;
+        ln.b41 = sin_cos_series(false, ssig1, csig1, ln.c4a);
+    }
+    ln
+}
+
+impl Line {
+    fn gen_position(ref self, arcmode: bool, s12_a12: f64, outmask0: i64) -> Pos {
+        let mut r = Pos { a12: f64.NAN, lat2: f64.NAN, lon2: f64.NAN, azi2: f64.NAN, s12: f64.NAN, m12: f64.NAN, mm12: f64.NAN, mm21: f64.NAN, ss12: f64.NAN };
+        let outmask = outmask0 & self.caps & OUT_MASK;
+        if not (arcmode or has(self.caps, OUT_MASK & DISTANCE_IN)) {
+            return r;
+        }
+        let mut b12 = 0.0;
+        let mut ab1 = 0.0;
+        let mut sig12 = 0.0;
+        let mut ssig12 = 0.0;
+        let mut csig12 = 0.0;
+        if arcmode {
+            sig12 = radians(s12_a12);
+            let (s, c) = sincosd(s12_a12);
+            ssig12 = s;
+            csig12 = c;
+        } else {
+            let mut tau12 = s12_a12 / (self.b * (1.0 + self.a1m1));
+            if not finite(tau12) {
+                tau12 = f64.NAN;
+            }
+            let s = tau12.sin();
+            let c = tau12.cos();
+            b12 = -sin_cos_series(true, self.stau1 * c + self.ctau1 * s, self.ctau1 * c - self.stau1 * s, self.c1pa);
+            sig12 = tau12 - (b12 - self.b11);
+            ssig12 = sig12.sin();
+            csig12 = sig12.cos();
+            if self.f.abs() > 0.01 {
+                let ssig2 = self.ssig1 * csig12 + self.csig1 * ssig12;
+                let csig2 = self.csig1 * csig12 - self.ssig1 * ssig12;
+                b12 = sin_cos_series(true, ssig2, csig2, self.c1a);
+                let serr = (1.0 + self.a1m1) * (sig12 + (b12 - self.b11)) - s12_a12 / self.b;
+                sig12 = sig12 - serr / (1.0 + self.k2 * sq(ssig2)).sqrt();
+                ssig12 = sig12.sin();
+                csig12 = sig12.cos();
+            }
+        }
+        let ssig2 = self.ssig1 * csig12 + self.csig1 * ssig12;
+        let mut csig2 = self.csig1 * csig12 - self.ssig1 * ssig12;
+        let dn2 = (1.0 + self.k2 * sq(ssig2)).sqrt();
+        if has(outmask, DISTANCE | REDUCEDLENGTH | GEODESICSCALE) {
+            if arcmode or self.f.abs() > 0.01 {
+                b12 = sin_cos_series(true, ssig2, csig2, self.c1a);
+            }
+            ab1 = (1.0 + self.a1m1) * (b12 - self.b11);
+        }
+        let sbet2 = self.calp0 * ssig2;
+        let mut cbet2 = hypot(self.salp0, self.calp0 * csig2);
+        if cbet2 == 0.0 {
+            cbet2 = tiny();
+            csig2 = tiny();
+        }
+        let salp2 = self.salp0;
+        let calp2 = self.calp0 * csig2;
+        if has(outmask, DISTANCE) {
+            r.s12 = if arcmode { self.b * ((1.0 + self.a1m1) * sig12 + ab1) } else { s12_a12 };
+        }
+        if has(outmask, LONGITUDE) {
+            let somg2 = self.salp0 * ssig2;
+            let comg2 = csig2;
+            let e = 1.0.copysign(self.salp0);
+            let omg12 = if has(outmask, LONG_UNROLL) {
+                e * (sig12 - (ssig2.atan2(csig2) - self.ssig1.atan2(self.csig1)) + ((e * somg2).atan2(comg2) - (e * self.somg1).atan2(self.comg1)))
+            } else {
+                (somg2 * self.comg1 - comg2 * self.somg1).atan2(comg2 * self.comg1 + somg2 * self.somg1)
+            };
+            let lam12 = omg12 + self.a3c * (sig12 + (sin_cos_series(true, ssig2, csig2, self.c3a) - self.b31));
+            let lon12 = degrees(lam12);
+            r.lon2 = if has(outmask, LONG_UNROLL) { self.lon1 + lon12 } else { ang_normalize(ang_normalize(self.lon1) + ang_normalize(lon12)) };
+        }
+        if has(outmask, LATITUDE) {
+            r.lat2 = atan2d(sbet2, self.f1 * cbet2);
+        }
+        if has(outmask, AZIMUTH) {
+            r.azi2 = atan2d(salp2, calp2);
+        }
+        if has(outmask, REDUCEDLENGTH | GEODESICSCALE) {
+            let b22 = sin_cos_series(true, ssig2, csig2, self.c2a);
+            let ab2 = (1.0 + self.a2m1) * (b22 - self.b21);
+            let j12 = (self.a1m1 - self.a2m1) * sig12 + (ab1 - ab2);
+            if has(outmask, REDUCEDLENGTH) {
+                r.m12 = self.b * ((dn2 * (self.csig1 * ssig2) - self.dn1 * (self.ssig1 * csig2)) - self.csig1 * csig2 * j12);
+            }
+            if has(outmask, GEODESICSCALE) {
+                let t = self.k2 * (ssig2 - self.ssig1) * (ssig2 + self.ssig1) / (self.dn1 + dn2);
+                r.mm12 = csig12 + (t * ssig2 - csig2 * j12) * self.ssig1 / self.dn1;
+                r.mm21 = csig12 - (t * self.ssig1 - self.csig1 * j12) * ssig2 / dn2;
+            }
+        }
+        if has(outmask, AREA) {
+            let b42 = sin_cos_series(false, ssig2, csig2, self.c4a);
+            let mut salp12 = 0.0;
+            let mut calp12 = 0.0;
+            if self.calp0 == 0.0 or self.salp0 == 0.0 {
+                salp12 = salp2 * self.calp1 - calp2 * self.salp1;
+                calp12 = calp2 * self.calp1 + salp2 * self.salp1;
+            } else {
+                salp12 = self.calp0 * self.salp0 * (if csig12 <= 0.0 { self.csig1 * (1.0 - csig12) + ssig12 * self.ssig1 } else { ssig12 * (self.csig1 * ssig12 / (1.0 + csig12) + self.ssig1) });
+                calp12 = sq(self.salp0) + sq(self.calp0) * self.csig1 * csig2;
+            }
+            r.ss12 = self.c2 * salp12.atan2(calp12) + self.a4 * (b42 - self.b41);
+        }
+        r.a12 = if arcmode { s12_a12 } else { degrees(sig12) };
+        r
+    }
+
+    fn set_distance(mut ref self, s13: f64) {
+        self.s13 = s13;
+        let p = self.gen_position(false, s13, 0);
+        self.a13 = p.a12;
+    }
+
+    fn set_arc(mut ref self, a13: f64) {
+        self.a13 = a13;
+        let p = self.gen_position(true, a13, DISTANCE);
+        self.s13 = p.s12;
+    }
+
+    fn position(ref self, arcmode: bool, x: f64, outmask0: i64) -> String {
+        let mut d: Vec[String] = Vec.new();
+        kv(mut d, "lat1", self.lat1);
+        kv(mut d, "lon1", if has(outmask0, LONG_UNROLL) { self.lon1 } else { ang_normalize(self.lon1) });
+        kv(mut d, "azi1", self.azi1);
+        kv(mut d, if arcmode { "a12" } else { "s12" }, x);
+        let p = self.gen_position(arcmode, x, outmask0);
+        let outmask = outmask0 & OUT_MASK;
+        if arcmode {
+            if has(outmask, DISTANCE) {
+                kv(mut d, "s12", p.s12);
+            }
+        } else {
+            kv(mut d, "a12", p.a12);
+        }
+        pos_tail(mut d, p, outmask);
+        dict(d)
+    }
+
+    fn attrs(ref self) -> String {
+        let mut d: Vec[String] = Vec.new();
+        kv(mut d, "lat1", self.lat1);
+        kv(mut d, "lon1", self.lon1);
+        kv(mut d, "azi1", self.azi1);
+        kv(mut d, "salp1", self.salp1);
+        kv(mut d, "calp1", self.calp1);
+        kv(mut d, "a13", self.a13);
+        kv(mut d, "s13", self.s13);
+        d.push(f"'caps': {self.caps}");
+        dict(d)
+    }
+}
+
+fn pos_tail(d: mut ref Vec[String], p: ref Pos, outmask: i64) {
+    if has(outmask, LATITUDE) {
+        kv(mut d, "lat2", p.lat2);
+    }
+    if has(outmask, LONGITUDE) {
+        kv(mut d, "lon2", p.lon2);
+    }
+    if has(outmask, AZIMUTH) {
+        kv(mut d, "azi2", p.azi2);
+    }
+    if has(outmask, REDUCEDLENGTH) {
+        kv(mut d, "m12", p.m12);
+    }
+    if has(outmask, GEODESICSCALE) {
+        kv(mut d, "M12", p.mm12);
+        kv(mut d, "M21", p.mm21);
+    }
+    if has(outmask, AREA) {
+        kv(mut d, "S12", p.ss12);
+    }
+}
+
+fn gen_direct(g: ref Geod, lat1: f64, lon1: f64, azi1: f64, arcmode: bool, s12_a12: f64, outmask0: i64) -> Pos {
+    let mut outmask = outmask0;
+    if not arcmode {
+        outmask = outmask | DISTANCE_IN;
+    }
+    let ln = new_line(g, lat1, lon1, azi1, outmask, f64.NAN, f64.NAN);
+    ln.gen_position(arcmode, s12_a12, outmask)
+}
+
+fn direct(g: ref Geod, arcmode: bool, lat1: f64, lon1: f64, azi1: f64, x: f64, outmask0: i64) -> String {
+    let p = gen_direct(g, lat1, lon1, azi1, arcmode, x, outmask0);
+    let outmask = outmask0 & OUT_MASK;
+    let mut d: Vec[String] = Vec.new();
+    kv(mut d, "lat1", lat_fix(lat1));
+    kv(mut d, "lon1", if has(outmask, LONG_UNROLL) { lon1 } else { ang_normalize(lon1) });
+    kv(mut d, "azi1", ang_normalize(azi1));
+    if arcmode {
+        kv(mut d, "a12", x);
+        if has(outmask, DISTANCE) {
+            kv(mut d, "s12", p.s12);
+        }
+    } else {
+        // the s12 that _GenDirect returns: nan unless DISTANCE is asked for
+        kv(mut d, "s12", p.s12);
+        kv(mut d, "a12", p.a12);
+    }
+    pos_tail(mut d, p, outmask);
+    dict(d)
+}
+
+fn make_line(g: ref Geod, kind: String, p: Vec[f64], caps0: i64) -> Line {
+    if kind == "Line" {
+        return new_line(g, p[0], p[1], p[2], caps0, f64.NAN, f64.NAN);
+    }
+    if kind == "InverseLine" {
+        let r = gen_inverse(g, p[0], p[1], p[2], p[3], 0);
+        let azi1 = atan2d(r.salp1, r.calp1);
+        let mut caps = caps0;
+        if has(caps, OUT_MASK & DISTANCE_IN) {
+            caps = caps | DISTANCE;
+        }
+        let mut ln = new_line(g, p[0], p[1], azi1, caps, r.salp1, r.calp1);
+        ln.set_arc(r.a12);
+        return ln;
+    }
+    let arcmode = kind == "ArcDirectLine";
+    let mut caps = caps0;
+    if not arcmode {
+        caps = caps | DISTANCE_IN;
+    }
+    let mut ln = new_line(g, p[0], p[1], p[2], caps, f64.NAN, f64.NAN);
+    if arcmode {
+        ln.set_arc(p[3]);
+    } else {
+        ln.set_distance(p[3]);
+    }
+    ln
+}
+
+// ----------------------------------------------------------- Accumulator
+
+struct Acc {
+    s: f64,
+    t: f64,
+}
+
+impl Acc {
+    fn add(mut ref self, y0: f64) {
+        let (y, u) = err_sum(y0, self.t);
+        let (s, t) = err_sum(y, self.s);
+        self.s = s;
+        self.t = t;
+        if self.s == 0.0 {
+            self.s = u;
+        } else {
+            self.t += u;
+        }
+    }
+
+    fn sum(ref self, y: f64) -> f64 {
+        if y == 0.0 {
+            return self.s;
+        }
+        let mut b = Acc { s: self.s, t: self.t };
+        b.add(y);
+        b.s
+    }
+
+    fn negate(mut ref self) {
+        self.s *= -1.0;
+        self.t *= -1.0;
+    }
+
+    fn remainder(mut ref self, y: f64) {
+        self.s = remainder(self.s, y);
+        self.add(0.0);
+    }
+}
+
+// ----------------------------------------------------------- PolygonArea
+
+fn transit(lon1_in: f64, lon2_in: f64) -> i64 {
+    let (lon12, _t) = ang_diff(lon1_in, lon2_in);
+    let lon1 = ang_normalize(lon1_in);
+    let lon2 = ang_normalize(lon2_in);
+    if lon12 > 0.0 and ((lon1 < 0.0 and 0.0 <= lon2) or (lon1 > 0.0 and lon2 == 0.0)) {
+        1
+    } else if lon12 < 0.0 and lon2 < 0.0 and 0.0 <= lon1 {
+        -1
+    } else {
+        0
+    }
+}
+
+fn transit_direct(lon1_in: f64, lon2_in: f64) -> i64 {
+    let lon1 = remainder(lon1_in, 720.0);
+    let lon2 = remainder(lon2_in, 720.0);
+    let a = if 0.0 <= lon2 and lon2 < 360.0 { 0 } else { 1 };
+    let b = if 0.0 <= lon1 and lon1 < 360.0 { 0 } else { 1 };
+    a - b
+}
+
+fn area_reduce_a(area: mut ref Acc, area0: f64, crossings: i64, reverse: bool, sign: bool) -> f64 {
+    area.remainder(area0);
+    if (crossings & 1) != 0 {
+        let k = if area.sum(0.0) < 0.0 { 1.0 } else { -1.0 };
+        area.add(k * area0 / 2.0);
+    }
+    if not reverse {
+        area.negate();
+    }
+    if sign {
+        if area.sum(0.0) > area0 / 2.0 {
+            area.add(-area0);
+        } else if area.sum(0.0) <= -area0 / 2.0 {
+            area.add(area0);
+        }
+    } else {
+        if area.sum(0.0) >= area0 {
+            area.add(-area0);
+        } else if area.sum(0.0) < 0.0 {
+            area.add(area0);
+        }
+    }
+    0.0 + area.sum(0.0)
+}
+
+fn area_reduce_b(area0_in: f64, area0: f64, crossings: i64, reverse: bool, sign: bool) -> f64 {
+    let mut area = remainder(area0_in, area0);
+    if (crossings & 1) != 0 {
+        let k = if area < 0.0 { 1.0 } else { -1.0 };
+        area += k * area0 / 2.0;
+    }
+    if not reverse {
+        area *= -1.0;
+    }
+    if sign {
+        if area > area0 / 2.0 {
+            area -= area0;
+        } else if area <= -area0 / 2.0 {
+            area += area0;
+        }
+    } else {
+        if area >= area0 {
+            area -= area0;
+        } else if area < 0.0 {
+            area += area0;
+        }
+    }
+    0.0 + area
+}
+
+struct Poly {
+    polyline: bool,
+    area0: f64,
+    mask: i64,
+    areasum: Acc,
+    perimetersum: Acc,
+    num: i64,
+    lat1: f64,
+    lon1: f64,
+    crossings: i64,
+    lat0: f64,
+    lon0: f64,
+}
+
+fn new_poly(g: ref Geod, polyline: bool) -> Poly {
+    let mask = LATITUDE | LONGITUDE | DISTANCE | (if polyline { EMPTY } else { AREA | LONG_UNROLL });
+    Poly {
+        polyline: polyline, area0: 4.0 * PI_F * g.c2, mask: mask,
+        areasum: Acc { s: 0.0, t: 0.0 }, perimetersum: Acc { s: 0.0, t: 0.0 },
+        num: 0, lat1: f64.NAN, lon1: f64.NAN, crossings: 0, lat0: f64.NAN, lon0: f64.NAN,
+    }
+}
+
+impl Poly {
+    fn clear(mut ref self) {
+        self.num = 0;
+        self.crossings = 0;
+        self.areasum = Acc { s: 0.0, t: 0.0 };
+        self.perimetersum = Acc { s: 0.0, t: 0.0 };
+        self.lat0 = f64.NAN;
+        self.lon0 = f64.NAN;
+        self.lat1 = f64.NAN;
+        self.lon1 = f64.NAN;
+    }
+
+    fn add_point(mut ref self, g: ref Geod, lat: f64, lon: f64) {
+        if self.num == 0 {
+            self.lat0 = lat;
+            self.lat1 = lat;
+            self.lon0 = lon;
+            self.lon1 = lon;
+        } else {
+            let r = gen_inverse(g, self.lat1, self.lon1, lat, lon, self.mask);
+            self.perimetersum.add(r.s12);
+            if not self.polyline {
+                self.areasum.add(r.ss12);
+                self.crossings += transit(self.lon1, lon);
+            }
+            self.lat1 = lat;
+            self.lon1 = lon;
+        }
+        self.num += 1;
+    }
+
+    fn add_edge(mut ref self, g: ref Geod, azi: f64, s: f64) {
+        if self.num != 0 {
+            let p = gen_direct(g, self.lat1, self.lon1, azi, false, s, self.mask);
+            self.perimetersum.add(s);
+            if not self.polyline {
+                self.areasum.add(p.ss12);
+                self.crossings += transit_direct(self.lon1, p.lon2);
+            }
+            self.lat1 = p.lat2;
+            self.lon1 = p.lon2;
+            self.num += 1;
+        }
+    }
+
+    fn compute(ref self, g: ref Geod, reverse: bool, sign: bool) -> String {
+        if self.num < 2 {
+            return tuple3(self.num, 0.0, if self.polyline { f64.NAN } else { 0.0 });
+        }
+        if self.polyline {
+            return tuple3(self.num, self.perimetersum.sum(0.0), f64.NAN);
+        }
+        let r = gen_inverse(g, self.lat1, self.lon1, self.lat0, self.lon0, self.mask);
+        let perimeter = self.perimetersum.sum(r.s12);
+        let mut tempsum = Acc { s: self.areasum.s, t: self.areasum.t };
+        tempsum.add(r.ss12);
+        let crossings = self.crossings + transit(self.lon1, self.lon0);
+        let area = area_reduce_a(mut tempsum, self.area0, crossings, reverse, sign);
+        tuple3(self.num, perimeter, area)
+    }
+
+    fn test_point(ref self, g: ref Geod, lat: f64, lon: f64, reverse: bool, sign: bool) -> String {
+        if self.num == 0 {
+            return tuple3(1, 0.0, if self.polyline { f64.NAN } else { 0.0 });
+        }
+        let mut perimeter = self.perimetersum.sum(0.0);
+        let mut tempsum = if self.polyline { 0.0 } else { self.areasum.sum(0.0) };
+        let mut crossings = self.crossings;
+        let num = self.num + 1;
+        let last = if self.polyline { 0 } else { 1 };
+        let mut i = 0;
+        while i <= last {
+            let r = if i == 0 {
+                gen_inverse(g, self.lat1, self.lon1, lat, lon, self.mask)
+            } else {
+                gen_inverse(g, lat, lon, self.lat0, self.lon0, self.mask)
+            };
+            perimeter += r.s12;
+            if not self.polyline {
+                tempsum += r.ss12;
+                crossings += if i == 0 { transit(self.lon1, lon) } else { transit(lon, self.lon0) };
+            }
+            i += 1;
+        }
+        if self.polyline {
+            return tuple3(num, perimeter, f64.NAN);
+        }
+        tuple3(num, perimeter, area_reduce_b(tempsum, self.area0, crossings, reverse, sign))
+    }
+
+    fn test_edge(ref self, g: ref Geod, azi: f64, s: f64, reverse: bool, sign: bool) -> String {
+        if self.num == 0 {
+            return tuple3(0, f64.NAN, f64.NAN);
+        }
+        let num = self.num + 1;
+        let mut perimeter = self.perimetersum.sum(0.0) + s;
+        if self.polyline {
+            return tuple3(num, perimeter, f64.NAN);
+        }
+        let mut tempsum = self.areasum.sum(0.0);
+        let mut crossings = self.crossings;
+        let p = gen_direct(g, self.lat1, self.lon1, azi, false, s, self.mask);
+        tempsum += p.ss12;
+        crossings += transit_direct(self.lon1, p.lon2);
+        let r = gen_inverse(g, p.lat2, p.lon2, self.lat0, self.lon0, self.mask);
+        perimeter += r.s12;
+        tempsum += r.ss12;
+        crossings += transit(p.lon2, self.lon0);
+        tuple3(num, perimeter, area_reduce_b(tempsum, self.area0, crossings, reverse, sign))
+    }
+}
+
+// ----------------------------------------------------------- jobs
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_f64(s: String) -> f64 {
+    if s == "nan" {
+        return f64.NAN;
+    }
+    if s == "inf" {
+        return f64.INFINITY;
+    }
+    if s == "-inf" {
+        return -f64.INFINITY;
+    }
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn mask_of(s: String) -> i64 {
+    let mut m = 0;
+    for name in split_on(s, b'|') {
+        m = m | (if name == "EMPTY" {
+            EMPTY
+        } else if name == "LATITUDE" {
+            LATITUDE
+        } else if name == "LONGITUDE" {
+            LONGITUDE
+        } else if name == "AZIMUTH" {
+            AZIMUTH
+        } else if name == "DISTANCE" {
+            DISTANCE
+        } else if name == "STANDARD" {
+            STANDARD
+        } else if name == "DISTANCE_IN" {
+            DISTANCE_IN
+        } else if name == "REDUCEDLENGTH" {
+            REDUCEDLENGTH
+        } else if name == "GEODESICSCALE" {
+            GEODESICSCALE
+        } else if name == "AREA" {
+            AREA
+        } else if name == "ALL" {
+            ALL
+        } else if name == "LONG_UNROLL" {
+            LONG_UNROLL
+        } else {
+            0
+        });
+    }
+    m
+}
+
+fn geod_of(s: String) -> Geod {
+    let p = split_on(s, b',');
+    match new_geod(to_f64(p[0].clone()), to_f64(p[1].clone())) {
+        Ok(g) => g,
+        Err(_) => new_geod(6378137.0, 0.0).unwrap(),
+    }
+}
+
+fn join_from(f: ref Vec[String], from: i64, upto: i64, sep: Str) -> String {
+    let mut out = String.new();
+    let mut i = from;
+    while i < upto {
+        if i > from {
+            out.push_str(sep);
+        }
+        out.push_str(f[i]);
+        i += 1;
+    }
+    out
+}
+
+fn run_line(f: ref Vec[String], out: mut ref String) {
+    let g = geod_of(f[1].clone());
+    let mut p: Vec[f64] = Vec.new();
+    let mut i = 3;
+    while i < 7 {
+        p.push(if f[i] == "-" { 0.0 } else { to_f64(f[i].clone()) });
+        i += 1;
+    }
+    let mut ln = make_line(g, f[2].clone(), p, mask_of(f[7].clone()));
+    for op in split_on(f[8].clone(), b';') {
+        let a = split_on(op, b':');
+        if a[0] == "attrs" {
+            out.push_str(f"  attrs => {ln.attrs()}\n");
+        } else if a[0] == "pos" {
+            out.push_str(f"  Position({a[1]}, {a[2]}) => {ln.position(false, to_f64(a[1].clone()), mask_of(a[2].clone()))}\n");
+        } else if a[0] == "half" {
+            out.push_str(f"  Position(0.5 * s13, {a[1]}) => {ln.position(false, 0.5 * ln.s13, mask_of(a[1].clone()))}\n");
+        } else if a[0] == "arcpos" {
+            out.push_str(f"  ArcPosition({a[1]}, {a[2]}) => {ln.position(true, to_f64(a[1].clone()), mask_of(a[2].clone()))}\n");
+        } else if a[0] == "setd" {
+            ln.set_distance(to_f64(a[1].clone()));
+            out.push_str(f"  SetDistance({a[1]})\n");
+        } else if a[0] == "seta" {
+            ln.set_arc(to_f64(a[1].clone()));
+            out.push_str(f"  SetArc({a[1]})\n");
+        }
+    }
+}
+
+fn run_poly(f: ref Vec[String], out: mut ref String) {
+    let g = geod_of(f[1].clone());
+    let mut p = new_poly(g, f[2] == "True");
+    for op in split_on(f[3].clone(), b';') {
+        let a = split_on(op, b':');
+        if a[0] == "pt" {
+            p.add_point(g, to_f64(a[1].clone()), to_f64(a[2].clone()));
+            out.push_str(f"  AddPoint({a[1]}, {a[2]})\n");
+        } else if a[0] == "edge" {
+            p.add_edge(g, to_f64(a[1].clone()), to_f64(a[2].clone()));
+            out.push_str(f"  AddEdge({a[1]}, {a[2]})\n");
+        } else if a[0] == "compute" {
+            out.push_str(f"  Compute({a[1]}, {a[2]}) => {p.compute(g, a[1] == "True", a[2] == "True")}\n");
+        } else if a[0] == "testpt" {
+            let res = p.test_point(g, to_f64(a[1].clone()), to_f64(a[2].clone()), a[3] == "True", a[4] == "True");
+            out.push_str(f"  TestPoint({join_from(a, 1, a.len(), ", ")}) => {res}\n");
+        } else if a[0] == "testedge" {
+            let res = p.test_edge(g, to_f64(a[1].clone()), to_f64(a[2].clone()), a[3] == "True", a[4] == "True");
+            out.push_str(f"  TestEdge({join_from(a, 1, a.len(), ", ")}) => {res}\n");
+        } else if a[0] == "clear" {
+            p.clear();
+            out.push_str("  Clear()\n");
+        } else if a[0] == "num" {
+            out.push_str(f"  num => ({p.num}, {fmt(p.lat1)}, {fmt(p.lon1)})\n");
+        }
+    }
+}
+
+fn run_acc(f: ref Vec[String], out: mut ref String) {
+    let mut acc = Acc { s: to_f64(f[1].clone()), t: 0.0 };
+    for op in split_on(f[2].clone(), b';') {
+        let a = split_on(op, b':');
+        if a[0] == "add" {
+            acc.add(to_f64(a[1].clone()));
+            out.push_str(f"  Add({a[1]})\n");
+        } else if a[0] == "sum" {
+            out.push_str(f"  Sum({a[1]}) => {fmt(acc.sum(to_f64(a[1].clone())))}\n");
+        } else if a[0] == "neg" {
+            acc.negate();
+            out.push_str("  Negate()\n");
+        } else if a[0] == "rem" {
+            acc.remainder(to_f64(a[1].clone()));
+            out.push_str(f"  Remainder({a[1]})\n");
+        } else if a[0] == "set" {
+            acc = Acc { s: to_f64(a[1].clone()), t: 0.0 };
+            out.push_str(f"  Set({a[1]})\n");
+        }
+    }
+}
+
+fn run_job(f: ref Vec[String]) -> String {
+    let op = f[0].clone();
+    if op == "geod" {
+        return match new_geod(to_f64(f[1].clone()), to_f64(f[2].clone())) {
+            Ok(g) => {
+                let mut d: Vec[String] = Vec.new();
+                kv(mut d, "a", g.a);
+                kv(mut d, "f", g.f);
+                kv(mut d, "area0", new_poly(g, false).area0);
+                dict(d)
+            }
+            Err(e) => e,
+        };
+    }
+    let g = geod_of(f[1].clone());
+    let x0 = to_f64(f[2].clone());
+    let x1 = to_f64(f[3].clone());
+    let x2 = to_f64(f[4].clone());
+    let x3 = to_f64(f[5].clone());
+    let m = mask_of(f[6].clone());
+    if op == "inv" {
+        inverse(g, x0, x1, x2, x3, m)
+    } else if op == "dir" {
+        direct(g, false, x0, x1, x2, x3, m)
+    } else if op == "arc" {
+        direct(g, true, x0, x1, x2, x3, m)
+    } else {
+        f"unknown op {op}"
+    }
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            if f[0] == "line" or f[0] == "poly" or f[0] == "acc" {
+                out.push_str(f"{f[0]}({join_from(f, 1, f.len() - 1, ", ")}):\n");
+                if f[0] == "line" {
+                    run_line(f, mut out);
+                } else if f[0] == "poly" {
+                    run_poly(f, mut out);
+                } else {
+                    run_acc(f, mut out);
+                }
+            } else {
+                out.push_str(f"{f[0]}({join_from(f, 1, f.len(), ", ")}) => {run_job(f)}\n");
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("geod\t6378137.0\t0.0033528106647474805\n");
+    s.push_str("geod\t6371000.0\t0.0\n");
+    s.push_str("geod\t6400000.0\t-0.006666666666666667\n");
+    s.push_str("geod\t6378137.0\t0.02\n");
+    s.push_str("geod\t89.8\t-1.83\n");
+    s.push_str("geod\t1000000.0\t-3.0\n");
+    s.push_str("geod\t6400000.0\t0.1\n");
+    s.push_str("geod\t6378137.0\t0.003352810681182319\n");
+    s.push_str("geod\t6400000.0\t0.99\n");
+    s.push_str("geod\t-1.0\t0.0\n");
+    s.push_str("geod\t0.0\t0.0\n");
+    s.push_str("geod\tnan\t0.0\n");
+    s.push_str("geod\tinf\t0.0\n");
+    s.push_str("geod\t6400000.0\t1.5\n");
+    s.push_str("geod\t6400000.0\t1.0\n");
+    s.push_str("geod\t6400000.0\t2.0\n");
+    s.push_str("geod\t6400000.0\t3.0\n");
+    s.push_str("geod\t6400000.0\tnan\n");
+    s.push_str("geod\t6400000.0\t-inf\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t35.60777\t-139.44815\t-11.17491\t-69.95921\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t35.60777\t-139.44815\t111.09874842956033\t8935244.56048183\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t35.60777\t-139.44815\t111.09874842956033\t80.50729714281974\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t55.52454\t106.05087\t77.03196\t197.18234\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t55.52454\t106.05087\t22.0200598809828\t4105086.171392441\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t55.52454\t106.05087\t22.0200598809828\t36.89274069044589\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-21.97856\t142.59065\t41.84138\t98.56635\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-21.97856\t142.59065\t-32.44456876433189\t8394328.894657671\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-21.97856\t142.59065\t-32.44456876433189\t75.62930491011522\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-66.99028\t112.2363\t-12.70631\t285.90344\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-66.99028\t112.2363\t173.73491240878403\t11150344.231208025\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-66.99028\t112.2363\t173.73491240878403\t100.27863418115575\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-17.42761\t173.34268\t-15.84784\t5.93557\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-17.42761\t173.34268\t-159.03355766119293\t16076603.163118068\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-17.42761\t173.34268\t-159.03355766119293\t144.64010881028625\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t32.84994\t48.28919\t-56.28556\t202.29132\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t32.84994\t48.28919\t150.492927788122\t16727068.943816446\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t32.84994\t48.28919\t150.492927788122\t150.5657999854666\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t6.96833\t52.74123\t-7.39675\t206.17291\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t6.96833\t52.74123\t92.58158538631771\t17102477.249695837\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t6.96833\t52.74123\t92.58158538631771\t154.14736623911355\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-50.56724\t-16.30485\t-33.56571\t-94.97412\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-50.56724\t-16.30485\t-105.43967990759016\t6455670.511866869\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-50.56724\t-16.30485\t-105.43967990759016\t58.083719495371255\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-58.93002\t-8.90775\t-8.91104\t133.13503\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-58.93002\t-8.90775\t140.96539790250068\t11756066.021986462\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-58.93002\t-8.90775\t140.96539790250068\t105.75569124140688\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-68.82867\t-74.28391\t-50.63005\t-8.36685\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-68.82867\t-74.28391\t93.77434776311487\t3956936.926063544\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-68.82867\t-74.28391\t93.77434776311487\t35.572254987389286\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-10.62672\t-32.0898\t5.883\t-134.31681\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-10.62672\t-32.0898\t-86.42671328674776\t11470869.386456301\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-10.62672\t-32.0898\t-86.42671328674776\t103.38739563450406\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-21.76221\t166.90563\t48.72884\t213.97627\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-21.76221\t166.90563\t29.31942120693643\t9098627.398655491\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-21.76221\t166.90563\t29.31942120693643\t81.96347671612196\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-19.79938\t-174.47484\t-11.99349\t-154.35109\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-19.79938\t-174.47484\t71.16727578017154\t2319004.860116939\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-19.79938\t-174.47484\t71.16727578017154\t20.896611684802387\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-11.95887\t-116.94513\t4.57352\t7.16501\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-11.95887\t-116.94513\t92.71261983045255\t13834722.580140138\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-11.95887\t-116.94513\t92.71261983045255\t124.68868416108977\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-87.85331\t85.66836\t66.48646\t16.09921\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-87.85331\t85.66836\t-65.12031304024275\t17286615.314714465\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-87.85331\t85.66836\t-65.12031304024275\t155.58592449699137\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t1.74708\t128.32011\t-11.16617\t11.87109\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t1.74708\t128.32011\t-101.58484363117385\t12942901.124134742\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t1.74708\t128.32011\t-101.58484363117385\t116.65051248430186\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-25.72959\t-144.90758\t-57.70581\t-269.17879\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-25.72959\t-144.90758\t-153.6474686931172\t9413446.745245311\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-25.72959\t-144.90758\t-153.6474686931172\t84.6645338384043\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.22777\t122.32875\t-7.57291\t130.37946\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.22777\t122.32875\t14.285113402275739\t3812686.035106021\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.22777\t122.32875\t14.285113402275739\t34.34330804743883\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t11.01307\t138.25278\t6.62726\t247.05981\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t11.01307\t138.25278\t79.43682622782374\t11911190.819018409\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t11.01307\t138.25278\t79.43682622782374\t107.34166995411458\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-29.47124\t95.14681\t-27.46601\t-69.15955\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-29.47124\t95.14681\t-163.77913044168838\t13487015.838114548\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-29.47124\t95.14681\t-163.77913044168838\t121.29402671574228\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t40.6\t-73.8\t49.01666667\t2.55\tSTANDARD\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t0.07476\t0.0\t-0.07476\t180.0\tSTANDARD\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t0.1\t0.0\t-0.1\t180.0\tSTANDARD\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t36.493349428792\t0.0\t36.49334942879201\t8e-07\tSTANDARD\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t88.202499451857\t0.0\t-88.202499451857\t179.98102203299285\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t89.262080389218\t0.0\t-89.262080389218\t179.99220798277537\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t89.333123580033\t0.0\t-89.333123580033\t179.99295812360148\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t56.320923501171\t0.0\t-56.320923501171\t179.6647476717729\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t52.784459512564\t0.0\t-52.78445951256399\t179.6344074649438\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t48.522876735459\t0.0\t-48.522876735458986\t179.59972045622308\tALL\n");
+    s.push_str("inv\t89.8,-1.83\t0.0\t0.0\t-10.0\t160.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t1.0\tnan\tSTANDARD\n");
+    s.push_str("inv\t6400000.0,0.0\t1.0\t2.0\t3.0\t4.0\tAREA\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t539.0\t0.0\t181.0\tSTANDARD\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t539.0\t0.0\t181.0\tSTANDARD|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t0.0\t179.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t0.0\t179.5\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t0.0\t180.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t1.0\t180.0\tALL\n");
+    s.push_str("inv\t6400000.0,0.0\t0.0\t0.0\t0.0\t179.0\tALL\n");
+    s.push_str("inv\t6400000.0,0.0\t0.0\t0.0\t0.0\t180.0\tALL\n");
+    s.push_str("inv\t6400000.0,0.0\t0.0\t0.0\t1.0\t180.0\tALL\n");
+    s.push_str("inv\t6400000.0,-0.0033333333333333335\t0.0\t0.0\t0.0\t179.0\tALL\n");
+    s.push_str("inv\t6400000.0,-0.0033333333333333335\t0.0\t0.0\t0.0\t180.0\tALL\n");
+    s.push_str("inv\t6400000.0,-0.0033333333333333335\t0.0\t0.0\t0.5\t180.0\tALL\n");
+    s.push_str("inv\t6400000.0,-0.0033333333333333335\t0.0\t0.0\t1.0\t180.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\tnan\t0.0\t0.0\t90.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\tnan\t0.0\t90.0\t9.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t5.0\t1e-14\t10.0\t180.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t54.1589\t15.3872\t54.1591\t15.3877\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.31666666666667\t174.81666666666666\t40.96666666666667\t-5.5\tSTANDARD\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t27.2\t0.0\t-27.1\t179.5\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t0.0\t90.0\tGEODESICSCALE\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t1e-06\t1e-06\tGEODESICSCALE\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t20.001\t0.0\t20.001\t0.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t90.0\t0.0\t90.0\t180.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t37.757540000000006\t-122.47018\t37.75754\t-122.470177\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\tnan\t90.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.003352810681182319\t0.0\t0.0\t60.0832522871723\t89.8492185074635\tAREA\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t45.0\t0.0\t-45.0\t179.572719\tALL\n");
+    s.push_str("inv\t1000000.0,-3.0\t30.0\t0.0\t30.0\t180.0\tALL\n");
+    s.push_str("inv\t1000000.0,-3.0\t30.61\t0.0\t30.61\t180.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-33.8568\t151.2153\t35.6812\t139.7671\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t-0.0\t-0.0\t0.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t90.0\t0.0\t-90.0\t0.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-90.0\t45.0\t-90.0\t-135.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t10.0\t720.0\t-10.0\t-540.5\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t91.0\t0.0\t10.0\t10.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t0.0\t0.0\t1e-300\t0.0\tALL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t1e-20\t0.0\t-1e-20\t180.0\tALL\n");
+    s.push_str("inv\t6371000.0,0.0\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t-33.8568\t151.2153\t35.6812\t139.7671\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t-41.32\t174.81\t40.96\t-5.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t0.0\t-0.0\t-0.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t90.0\t0.0\t-90.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t-90.0\t45.0\t-90.0\t-135.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t10.0\t720.0\t-10.0\t-540.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t91.0\t0.0\t10.0\t10.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t0.0\t0.0\t1e-300\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6371000.0,0.0\t1e-20\t0.0\t-1e-20\t180.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t-33.8568\t151.2153\t35.6812\t139.7671\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t-41.32\t174.81\t40.96\t-5.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t0.0\t-0.0\t-0.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t90.0\t0.0\t-90.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t-90.0\t45.0\t-90.0\t-135.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t10.0\t720.0\t-10.0\t-540.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t91.0\t0.0\t10.0\t10.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t0.0\t0.0\t1e-300\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,-0.006666666666666667\t1e-20\t0.0\t-1e-20\t180.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t-33.8568\t151.2153\t35.6812\t139.7671\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t-41.32\t174.81\t40.96\t-5.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t0.0\t-0.0\t-0.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t90.0\t0.0\t-90.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t-90.0\t45.0\t-90.0\t-135.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t10.0\t720.0\t-10.0\t-540.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t91.0\t0.0\t10.0\t10.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t0.0\t0.0\t1e-300\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.02\t1e-20\t0.0\t-1e-20\t180.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t-33.8568\t151.2153\t35.6812\t139.7671\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t-41.32\t174.81\t40.96\t-5.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t0.0\t-0.0\t-0.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t90.0\t0.0\t-90.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t-90.0\t45.0\t-90.0\t-135.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t10.0\t720.0\t-10.0\t-540.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t91.0\t0.0\t10.0\t10.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t0.0\t0.0\t1e-300\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t1000000.0,-3.0\t1e-20\t0.0\t-1e-20\t180.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t51.4778\t-0.0015\t40.71435\t-74.00597\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t-33.8568\t151.2153\t35.6812\t139.7671\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t40.63972222\t-73.77888889\t1.35917\t103.98944\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t-41.32\t174.81\t40.96\t-5.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t64.1466\t-21.9426\t-77.8463\t166.6683\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t0.0\t-0.0\t-0.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t90.0\t0.0\t-90.0\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t-90.0\t45.0\t-90.0\t-135.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t10.0\t720.0\t-10.0\t-540.5\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t89.99999999\t0.0\t-89.99999999\t179.99999\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t91.0\t0.0\t10.0\t10.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t0.0\t0.0\t1e-300\t0.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6400000.0,0.99\t1e-20\t0.0\t-1e-20\t180.0\tALL|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tEMPTY\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tEMPTY\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tEMPTY\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tLATITUDE\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tLATITUDE\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tLATITUDE\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tLONGITUDE\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tLONGITUDE\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tLONGITUDE\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tAZIMUTH\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tAZIMUTH\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tAZIMUTH\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tDISTANCE\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tDISTANCE\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tDISTANCE\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tREDUCEDLENGTH\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tREDUCEDLENGTH\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tREDUCEDLENGTH\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tAREA|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tAREA|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tAREA|LONG_UNROLL\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tDISTANCE_IN\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tDISTANCE_IN\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tDISTANCE_IN\n");
+    s.push_str("inv\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t40.96\t-5.5\tLATITUDE|AZIMUTH|REDUCEDLENGTH\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t19959679.0\tLATITUDE|AZIMUTH|REDUCEDLENGTH\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t-41.32\t174.81\t161.0\t179.6\tLATITUDE|AZIMUTH|REDUCEDLENGTH\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t40.63972222\t-73.77888889\t53.5\t5850000.0\tSTANDARD\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.01777745589997\t30.0\t0.0\t10000000.0\tSTANDARD\n");
+    s.push_str("dir\t6400000.0,-0.006666666666666667\t1.0\t2.0\t3.0\t4.0\tAREA\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t40.0\t-75.0\t-10.0\t20000000.0\tSTANDARD|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t40.0\t-75.0\t-10.0\t20000000.0\tSTANDARD\n");
+    s.push_str("dir\t6400000.0,0.1\t1.0\t2.0\t10.0\t5000000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t45.0\t0.0\t-3e-18\t10000000.0\tSTANDARD|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t90.0\t10.0\t180.0\t-1000000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\tinf\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\tnan\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\t0.0\tinf\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\t0.0\tnan\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\tinf\t90.0\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\tnan\t90.0\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\tinf\t0.0\t90.0\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\tnan\t0.0\t90.0\t1000.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\t0.0\tALL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t-90.0\t30.0\t0.0\t1000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.0033528106647474805\t10.0\t20.0\t30.0\t-40000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6371000.0,0.0\t10.0\t20.0\t30.0\t10000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.02\t10.0\t20.0\t30.0\t10000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6378137.0,0.02\t-60.0\t170.0\t-170.0\t30000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t1000000.0,-3.0\t30.0\t0.0\t45.0\t5000000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t6400000.0,0.99\t30.0\t0.0\t45.0\t100000.0\tALL|LONG_UNROLL\n");
+    s.push_str("dir\t89.8,-1.83\t0.0\t0.0\t120.0\t300.0\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\t180.0\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t0.0\t0.0\t0.0\t360.0\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t45.0\t45.0\t45.0\t-720.5\tALL|LONG_UNROLL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\tnan\tALL\n");
+    s.push_str("arc\t6378137.0,0.0033528106647474805\t0.0\t0.0\t90.0\tinf\tALL\n");
+    s.push_str("arc\t6371000.0,0.0\t30.0\t60.0\t-30.0\t90.0\tALL\n");
+    s.push_str("arc\t6400000.0,-0.006666666666666667\t30.0\t60.0\t-30.0\t90.0\tALL\n");
+    s.push_str("arc\t6378137.0,0.02\t30.0\t60.0\t-30.0\t90.0\tALL\n");
+    s.push_str("arc\t1000000.0,-3.0\t30.0\t0.0\t45.0\t90.0\tALL|LONG_UNROLL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tLine\t40.0\t-75.0\t-10.0\t-\tSTANDARD|DISTANCE_IN\tattrs;pos:2e7:STANDARD|LONG_UNROLL;pos:2e7:STANDARD;arcpos:100:STANDARD\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tInverseLine\t45.0\t0.0\t80.0\t-3e-18\tSTANDARD|DISTANCE_IN\tattrs;pos:1e7:STANDARD|LONG_UNROLL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tInverseLine\t30.0\t-1e-18\t-31.0\t180.0\tALL\tattrs;pos:1e7:ALL|LONG_UNROLL;pos:2e7:ALL|LONG_UNROLL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tInverseLine\t-5.0\t-2e-15\t-10.0\t180.0\tSTANDARD|DISTANCE_IN\tattrs;pos:2e7:STANDARD|LONG_UNROLL;half:STANDARD|LONG_UNROLL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tDirectLine\t1.0\t2.0\t45.0\t10000000.0\tSTANDARD|DISTANCE_IN\tattrs;half:STANDARD|LONG_UNROLL;arcpos:-50:ALL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tLine\t1.0\t2.0\t90.0\t-\tLATITUDE\tattrs;pos:1000:EMPTY;pos:1000:ALL;arcpos:10:ALL;setd:5000;attrs;seta:5;attrs\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tArcDirectLine\t10.0\t20.0\t30.0\t100.0\tALL\tattrs;arcpos:50:ALL;seta:-30;attrs;setd:3e6;attrs;half:ALL\n");
+    s.push_str("line\t6378137.0,0.02\tLine\t10.0\t20.0\t30.0\t-\tALL\tattrs;pos:5e6:ALL;pos:-1e7:ALL|LONG_UNROLL;arcpos:200:ALL;setd:4e7;attrs\n");
+    s.push_str("line\t6400000.0,-0.006666666666666667\tDirectLine\t-20.0\t170.0\t100.0\t30000000.0\tALL|DISTANCE_IN\tattrs;half:ALL;pos:0:ALL;pos:-1:ALL\n");
+    s.push_str("line\t6371000.0,0.0\tInverseLine\t0.0\t0.0\t0.0\t90.0\tALL\tattrs;pos:1e6:ALL;arcpos:45:ALL|LONG_UNROLL\n");
+    s.push_str("line\t1000000.0,-3.0\tInverseLine\t30.0\t0.0\t30.0\t180.0\tALL\tattrs;half:ALL;arcpos:90:ALL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tLine\t90.0\t0.0\t180.0\t-\tALL\tattrs;pos:1e6:ALL;pos:2e7:ALL|LONG_UNROLL\n");
+    s.push_str("line\t6378137.0,0.0033528106647474805\tInverseLine\t20.001\t0.0\t20.001\t0.0\tALL\tattrs;pos:10:ALL\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:89.0:0.0;pt:89.0:90.0;pt:89.0:180.0;pt:89.0:270.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:-89.0:0.0;pt:-89.0:90.0;pt:-89.0:180.0;pt:-89.0:270.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:0.0:-1.0;pt:-1.0:0.0;pt:0.0:1.0;pt:1.0:0.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:90.0:0.0;pt:0.0:0.0;pt:0.0:90.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tTrue\tpt:90.0:0.0;pt:0.0:0.0;pt:0.0:90.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:89.0:0.1;pt:89.0:90.1;pt:89.0:-179.9;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:9.0:-1e-14;pt:9.0:180.0;pt:9.0:0.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:9.0:1e-14;pt:9.0:0.0;pt:9.0:180.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:9.0:1e-14;pt:9.0:180.0;pt:9.0:0.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:9.0:-1e-14;pt:9.0:0.0;pt:9.0:180.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:66.562222222:0.0;pt:66.562222222:180.0;pt:66.562222222:360.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:66.562222222:-0.0;pt:66.562222222:-180.0;pt:66.562222222:-360.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:89.0:-360.0;pt:89.0:-240.0;pt:89.0:-120.0;pt:89.0:0.0;pt:89.0:120.0;pt:89.0:240.0;compute:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:2.0:1.0;pt:1.0:2.0;testpt:3:3:False:True;testpt:3:3:False:False;testpt:3:3:True:True;testpt:3:3:True:False;testedge:45:157000:False:True;testedge:45:157000:True:False;pt:3.0:3.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tcompute:False:True;testpt:1:1:False:True;testedge:90:1000:False:True;pt:1.0:1.0;compute:False:True;num\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tTrue\tcompute:False:True;testpt:1:1:False:True;testedge:90:1000:False:True;pt:1.0:1.0;compute:False:True;testedge:90:1000:False:True;testpt:2:2:False:True;num\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:45.0:60.0;pt:45.0:180.0;pt:45.0:-60.0;pt:45.0:60.0;pt:45.0:180.0;pt:45.0:-60.0;pt:45.0:60.0;pt:45.0:180.0;pt:45.0:-60.0;pt:45.0:60.0;pt:45.0:180.0;testpt:45:-60:False:True;testpt:45:-60:False:False;testpt:45:-60:True:True;testpt:45:-60:True:False;testedge:39.2144607176828184218:8420705.40957178156285:False:True;testedge:39.2144607176828184218:8420705.40957178156285:True:False;pt:45.0:-60.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:0.0:0.0;edge:90:1000;edge:0:1000;edge:-90:1000;compute:False:True;num\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tTrue\tedge:90:1000;pt:10.0:20.0;edge:90:1e6;edge:180:1e6;testedge:0:5e5:False:True;compute:False:True;num\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:10.0:20.0;edge:720:1e6;edge:-90:2e6;pt:-10.0:-170.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False;clear;num;pt:0.0:0.0;pt:0.0:120.0;pt:0.0:-120.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:50.0:-1.5;pt:51.0:-1.5;pt:51.0:0.5;pt:50.0:0.5;compute:False:True;compute:False:False;compute:True:True;compute:True:False;testpt:50.5:-2.0:False:True\n");
+    s.push_str("poly\t6378137.0,0.0033528106647474805\tFalse\tpt:nan:0.0;pt:10.0:10.0;pt:20.0:0.0;compute:False:True\n");
+    s.push_str("poly\t6371000.0,0.0\tFalse\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False;testedge:45:1e6:False:True\n");
+    s.push_str("poly\t6371000.0,0.0\tTrue\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;testpt:-10:10:False:True\n");
+    s.push_str("poly\t6400000.0,-0.006666666666666667\tFalse\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False;testedge:45:1e6:False:True\n");
+    s.push_str("poly\t6400000.0,-0.006666666666666667\tTrue\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;testpt:-10:10:False:True\n");
+    s.push_str("poly\t6378137.0,0.02\tFalse\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;compute:False:False;compute:True:True;compute:True:False;testedge:45:1e6:False:True\n");
+    s.push_str("poly\t6378137.0,0.02\tTrue\tpt:0.0:0.0;pt:0.0:90.0;pt:90.0:0.0;compute:False:True;testpt:-10:10:False:True\n");
+    s.push_str("acc\t0.0\tadd:1e16;add:1.0;add:1.0;sum:0.0;add:-1e16;sum:0.0;sum:0.5\n");
+    s.push_str("acc\t0.1\tadd:0.2;add:0.3;sum:0.0;neg;sum:0.0;add:0.6;sum:0.0\n");
+    s.push_str("acc\t1e20\tadd:3.0;rem:7.0;sum:0.0;set:2.5;sum:1.0;add:-2.5;sum:0.0\n");
+    s.push_str("acc\t-5.5\trem:360.0;add:725.25;rem:360.0;sum:0.0;neg;sum:-0.0\n");
+    s.push_str("acc\tnan\tadd:1.0;sum:0.0;set:inf;add:-inf;sum:0.0\n");
+    s
+}
