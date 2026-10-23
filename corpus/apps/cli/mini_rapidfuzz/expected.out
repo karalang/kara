@@ -1,0 +1,2520 @@
+# fuzz: the ten scorers on the pairs their documentation uses
+> ["fuzz", "all", "this is a test", "this is a test!"]
+  ratio: 96.55172413793103
+  partial_ratio: 100
+  token_sort_ratio: 96.55172413793103
+  token_set_ratio: 96.55172413793103
+  token_ratio: 96.55172413793103
+  partial_token_sort_ratio: 92.85714285714286
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 96.55172413793103
+  QRatio: 96.55172413793103
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear"]
+  ratio: 90.9090909090909
+  partial_ratio: 93.02325581395348
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "fuzzy was a bear", "fuzzy fuzzy was a bear"]
+  ratio: 84.21052631578947
+  partial_ratio: 100
+  token_sort_ratio: 84.21052631578947
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 89.65517241379311
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 84.21052631578947
+> ["fuzz", "all", "this is a test", "this is a test"]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "New York Mets", "New York Meats"]
+  ratio: 96.2962962962963
+  partial_ratio: 92.3076923076923
+  token_sort_ratio: 96.2962962962963
+  token_set_ratio: 96.29629629629629
+  token_ratio: 96.2962962962963
+  partial_token_sort_ratio: 92.3076923076923
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 96.2962962962963
+  QRatio: 96.2962962962963
+> ["fuzz", "all", "New York Mets vs Atlanta Braves", "Atlanta Braves vs New York Mets"]
+  ratio: 45.16129032258065
+  partial_ratio: 62.22222222222222
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 45.16129032258065
+> ["fuzz", "all", "YANKEES", "NEW YORK YANKEES"]
+  ratio: 60.86956521739131
+  partial_ratio: 100
+  token_sort_ratio: 60.86956521739131
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 60.86956521739131
+> ["fuzz", "all", "NEW YORK METS", "NEW YORK MEATS"]
+  ratio: 96.2962962962963
+  partial_ratio: 92.3076923076923
+  token_sort_ratio: 96.2962962962963
+  token_set_ratio: 96.29629629629629
+  token_ratio: 96.2962962962963
+  partial_token_sort_ratio: 92.3076923076923
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 96.2962962962963
+  QRatio: 96.2962962962963
+> ["fuzz", "all", "new york mets - atlanta braves", "atlanta braves new york mets"]
+  ratio: 48.275862068965516
+  partial_ratio: 66.66666666666667
+  token_sort_ratio: 96.55172413793103
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 48.275862068965516
+> ["fuzz", "all", "purple elephant", "elephant"]
+  ratio: 69.56521739130434
+  partial_ratio: 100
+  token_sort_ratio: 69.56521739130434
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 69.56521739130434
+> ["fuzz", "all", "Dallas Cowboys", "cowboys"]
+  ratio: 57.14285714285714
+  partial_ratio: 92.3076923076923
+  token_sort_ratio: 57.14285714285714
+  token_set_ratio: 57.142857142857146
+  token_ratio: 57.142857142857146
+  partial_token_sort_ratio: 85.71428571428572
+  partial_token_set_ratio: 85.71428571428572
+  partial_token_ratio: 85.71428571428572
+  WRatio: 83.07692307692308
+  QRatio: 57.14285714285714
+> ["fuzz", "all", "apple inc", "apple incorporated"]
+  ratio: 66.66666666666667
+  partial_ratio: 100
+  token_sort_ratio: 66.66666666666667
+  token_set_ratio: 71.42857142857143
+  token_ratio: 71.42857142857143
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 66.66666666666667
+> ["fuzz", "all", "Microsoft Corporation", "Microsoft Corp."]
+  ratio: 77.77777777777779
+  partial_ratio: 96.55172413793103
+  token_sort_ratio: 77.77777777777779
+  token_set_ratio: 77.77777777777777
+  token_ratio: 77.77777777777779
+  partial_token_sort_ratio: 81.4814814814815
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 77.77777777777779
+  QRatio: 77.77777777777779
+> ["fuzz", "all", "Pfizer Inc.", "Pfizer"]
+  ratio: 70.58823529411764
+  partial_ratio: 100
+  token_sort_ratio: 70.58823529411764
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 70.58823529411764
+> ["fuzz", "all", "the quick brown fox", "the fast brown dog"]
+  ratio: 64.86486486486487
+  partial_ratio: 66.66666666666667
+  token_sort_ratio: 64.86486486486487
+  token_set_ratio: 66.66666666666666
+  token_ratio: 66.66666666666666
+  partial_token_sort_ratio: 61.111111111111114
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 64.86486486486487
+  QRatio: 64.86486486486487
+> ["fuzz", "all", "Main Street", "Main St"]
+  ratio: 77.77777777777779
+  partial_ratio: 100
+  token_sort_ratio: 77.77777777777779
+  token_set_ratio: 77.77777777777777
+  token_ratio: 77.77777777777779
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 77.77777777777779
+> ["fuzz", "all", "123 Main Street, Springfield", "123 Main St Springfield"]
+  ratio: 90.19607843137256
+  partial_ratio: 78.26086956521739
+  token_sort_ratio: 90.19607843137256
+  token_set_ratio: 93.02325581395348
+  token_ratio: 93.02325581395348
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.19607843137256
+  QRatio: 90.19607843137256
+> ["fuzz", "all", "Café Rouge", "Cafe Rouge"]
+  ratio: 90.0
+  partial_ratio: 90.0
+  token_sort_ratio: 90.0
+  token_set_ratio: 90.0
+  token_ratio: 90.0
+  partial_token_sort_ratio: 90.0
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 90.0
+> ["fuzz", "all", "Zürich Hauptbahnhof", "Zurich HB"]
+  ratio: 50.0
+  partial_ratio: 82.35294117647058
+  token_sort_ratio: 50.0
+  token_set_ratio: 50.0
+  token_ratio: 50.0
+  partial_token_sort_ratio: 75.0
+  partial_token_set_ratio: 75.0
+  partial_token_ratio: 75.0
+  WRatio: 74.11764705882352
+  QRatio: 50.0
+> ["fuzz", "all", "João Silva", "Joao da Silva"]
+  ratio: 78.26086956521739
+  partial_ratio: 75.0
+  token_sort_ratio: 78.26086956521739
+  token_set_ratio: 78.26086956521739
+  token_ratio: 78.26086956521739
+  partial_token_sort_ratio: 90.0
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 78.26086956521739
+  QRatio: 78.26086956521739
+> ["fuzz", "all", "ab", "ba"]
+  ratio: 50.0
+  partial_ratio: 66.66666666666667
+  token_sort_ratio: 50.0
+  token_set_ratio: 50.0
+  token_ratio: 50.0
+  partial_token_sort_ratio: 66.66666666666667
+  partial_token_set_ratio: 66.66666666666667
+  partial_token_ratio: 66.66666666666667
+  WRatio: 50.0
+  QRatio: 50.0
+> ["fuzz", "all", "abc", "abcabc"]
+  ratio: 66.66666666666667
+  partial_ratio: 100
+  token_sort_ratio: 66.66666666666667
+  token_set_ratio: 66.66666666666666
+  token_ratio: 66.66666666666667
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 66.66666666666667
+> ["fuzz", "all", "aaaa", "aa"]
+  ratio: 66.66666666666667
+  partial_ratio: 100
+  token_sort_ratio: 66.66666666666667
+  token_set_ratio: 66.66666666666666
+  token_ratio: 66.66666666666667
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 66.66666666666667
+> ["fuzz", "all", "a b c d", "d c b a"]
+  ratio: 42.85714285714286
+  partial_ratio: 54.54545454545454
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 42.85714285714286
+> ["fuzz", "all", "hello world", "world hello world"]
+  ratio: 78.57142857142857
+  partial_ratio: 100
+  token_sort_ratio: 78.57142857142857
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 78.57142857142857
+> ["fuzz", "all", "algorithm", "logarithm"]
+  ratio: 77.77777777777779
+  partial_ratio: 82.35294117647058
+  token_sort_ratio: 77.77777777777779
+  token_set_ratio: 77.77777777777777
+  token_ratio: 77.77777777777779
+  partial_token_sort_ratio: 82.35294117647058
+  partial_token_set_ratio: 82.35294117647058
+  partial_token_ratio: 82.35294117647058
+  WRatio: 77.77777777777779
+  QRatio: 77.77777777777779
+# fuzz: default_process strips punctuation and case first
+> ["fuzz", "all", "New York Mets!", "new york mets"]
+  ratio: 74.07407407407408
+  partial_ratio: 76.92307692307692
+  token_sort_ratio: 74.07407407407408
+  token_set_ratio: 74.07407407407408
+  token_ratio: 74.07407407407408
+  partial_token_sort_ratio: 76.92307692307692
+  partial_token_set_ratio: 76.92307692307692
+  partial_token_ratio: 76.92307692307692
+  WRatio: 74.07407407407408
+  QRatio: 74.07407407407408
+> ["fuzz", "all", "New York Mets!", "new york mets", {"processor": "default"}]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "HELLO, WORLD", "hello world"]
+  ratio: 8.695652173913048
+  partial_ratio: 11.764705882352944
+  token_sort_ratio: 8.695652173913048
+  token_set_ratio: 8.695652173913047
+  token_ratio: 8.695652173913048
+  partial_token_sort_ratio: 11.764705882352944
+  partial_token_set_ratio: 11.764705882352944
+  partial_token_ratio: 11.764705882352944
+  WRatio: 8.695652173913048
+  QRatio: 8.695652173913048
+> ["fuzz", "all", "HELLO, WORLD", "hello world", {"processor": "default"}]
+  ratio: 95.65217391304348
+  partial_ratio: 90.9090909090909
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.65217391304348
+  QRatio: 95.65217391304348
+> ["fuzz", "all", "O'Reilly Media", "OReilly media"]
+  ratio: 88.88888888888889
+  partial_ratio: 88.0
+  token_sort_ratio: 51.85185185185186
+  token_set_ratio: 51.851851851851855
+  token_ratio: 51.85185185185186
+  partial_token_sort_ratio: 66.66666666666667
+  partial_token_set_ratio: 66.66666666666667
+  partial_token_ratio: 66.66666666666667
+  WRatio: 88.88888888888889
+  QRatio: 88.88888888888889
+> ["fuzz", "all", "O'Reilly Media", "OReilly media", {"processor": "default"}]
+  ratio: 96.2962962962963
+  partial_ratio: 96.0
+  token_sort_ratio: 96.2962962962963
+  token_set_ratio: 96.29629629629629
+  token_ratio: 96.2962962962963
+  partial_token_sort_ratio: 92.3076923076923
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 96.2962962962963
+  QRatio: 96.2962962962963
+> ["fuzz", "all", "e-mail", "email"]
+  ratio: 90.9090909090909
+  partial_ratio: 88.88888888888889
+  token_sort_ratio: 90.9090909090909
+  token_set_ratio: 90.9090909090909
+  token_ratio: 90.9090909090909
+  partial_token_sort_ratio: 88.88888888888889
+  partial_token_set_ratio: 88.88888888888889
+  partial_token_ratio: 88.88888888888889
+  WRatio: 90.9090909090909
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "e-mail", "email", {"processor": "default"}]
+  ratio: 90.9090909090909
+  partial_ratio: 88.88888888888889
+  token_sort_ratio: 90.9090909090909
+  token_set_ratio: 90.9090909090909
+  token_ratio: 90.9090909090909
+  partial_token_sort_ratio: 88.88888888888889
+  partial_token_set_ratio: 88.88888888888889
+  partial_token_ratio: 88.88888888888889
+  WRatio: 90.9090909090909
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "(555) 123-4567", "555.123.4567"]
+  ratio: 76.92307692307692
+  partial_ratio: 75.0
+  token_sort_ratio: 76.92307692307692
+  token_set_ratio: 76.92307692307692
+  token_ratio: 76.92307692307692
+  partial_token_sort_ratio: 75.0
+  partial_token_set_ratio: 75.0
+  partial_token_ratio: 75.0
+  WRatio: 76.92307692307692
+  QRatio: 76.92307692307692
+> ["fuzz", "all", "(555) 123-4567", "555.123.4567", {"processor": "default"}]
+  ratio: 96.0
+  partial_ratio: 91.66666666666666
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 96.0
+  QRatio: 96.0
+> ["fuzz", "all", "Ünïcödé Strasse", "ünïcödé strasse"]
+  ratio: 86.66666666666667
+  partial_ratio: 89.65517241379311
+  token_sort_ratio: 86.66666666666667
+  token_set_ratio: 86.66666666666667
+  token_ratio: 86.66666666666667
+  partial_token_sort_ratio: 89.65517241379311
+  partial_token_set_ratio: 89.65517241379311
+  partial_token_ratio: 89.65517241379311
+  WRatio: 86.66666666666667
+  QRatio: 86.66666666666667
+> ["fuzz", "all", "Ünïcödé Strasse", "ünïcödé strasse", {"processor": "default"}]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "  padded  ", "padded"]
+  ratio: 75.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 75.0
+> ["fuzz", "all", "  padded  ", "padded", {"processor": "default"}]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "snake_case_name", "snake case name"]
+  ratio: 86.66666666666667
+  partial_ratio: 86.66666666666667
+  token_sort_ratio: 53.333333333333336
+  token_set_ratio: 53.333333333333336
+  token_ratio: 53.333333333333336
+  partial_token_sort_ratio: 66.66666666666667
+  partial_token_set_ratio: 66.66666666666667
+  partial_token_ratio: 66.66666666666667
+  WRatio: 86.66666666666667
+  QRatio: 86.66666666666667
+> ["fuzz", "all", "snake_case_name", "snake case name", {"processor": "default"}]
+  ratio: 86.66666666666667
+  partial_ratio: 86.66666666666667
+  token_sort_ratio: 53.333333333333336
+  token_set_ratio: 53.333333333333336
+  token_ratio: 53.333333333333336
+  partial_token_sort_ratio: 66.66666666666667
+  partial_token_set_ratio: 66.66666666666667
+  partial_token_ratio: 66.66666666666667
+  WRatio: 86.66666666666667
+  QRatio: 86.66666666666667
+> ["fuzz", "all", "Straße", "STRASSE"]
+  ratio: 15.384615384615385
+  partial_ratio: 28.57142857142857
+  token_sort_ratio: 15.384615384615385
+  token_set_ratio: 15.384615384615387
+  token_ratio: 15.384615384615387
+  partial_token_sort_ratio: 28.57142857142857
+  partial_token_set_ratio: 28.57142857142857
+  partial_token_ratio: 28.57142857142857
+  WRatio: 15.384615384615385
+  QRatio: 15.384615384615385
+> ["fuzz", "all", "Straße", "STRASSE", {"processor": "default"}]
+  ratio: 76.92307692307692
+  partial_ratio: 80.0
+  token_sort_ratio: 76.92307692307692
+  token_set_ratio: 76.92307692307692
+  token_ratio: 76.92307692307692
+  partial_token_sort_ratio: 80.0
+  partial_token_set_ratio: 80.0
+  partial_token_ratio: 80.0
+  WRatio: 76.92307692307692
+  QRatio: 76.92307692307692
+# fuzz: score_cutoff turns a lower score into 0
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 0}]
+  ratio: 90.9090909090909
+  partial_ratio: 93.02325581395348
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 50}]
+  ratio: 90.9090909090909
+  partial_ratio: 93.02325581395348
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 85}]
+  ratio: 90.9090909090909
+  partial_ratio: 93.02325581395348
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 90}]
+  ratio: 90.9090909090909
+  partial_ratio: 93.02325581395348
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 95.0
+  QRatio: 90.9090909090909
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 95.5}]
+  ratio: 0
+  partial_ratio: 0
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 99.99}]
+  ratio: 0
+  partial_ratio: 0
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 100}]
+  ratio: 0
+  partial_ratio: 0
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "fuzzy wuzzy was a bear", "wuzzy fuzzy was a bear", {"score_cutoff": 101}]
+  ratio: 0
+  partial_ratio: 0
+  token_sort_ratio: 0
+  token_set_ratio: 0
+  token_ratio: 0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "Dallas Cowboys", "cowboys", {"score_cutoff": 60, "processor": "default"}]
+  ratio: 66.66666666666667
+  partial_ratio: 100
+  token_sort_ratio: 66.66666666666667
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 66.66666666666667
+> ["fuzz", "all", "purple elephant", "elephant", {"score_cutoff": 60}]
+  ratio: 69.56521739130434
+  partial_ratio: 100
+  token_sort_ratio: 69.56521739130434
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 69.56521739130434
+> ["fuzz", "all", "Dallas Cowboys", "cowboys", {"score_cutoff": 80.5, "processor": "default"}]
+  ratio: 0
+  partial_ratio: 100
+  token_sort_ratio: 0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 0
+> ["fuzz", "all", "purple elephant", "elephant", {"score_cutoff": 80.5}]
+  ratio: 0
+  partial_ratio: 100
+  token_sort_ratio: 0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 0
+> ["fuzz", "all", "Dallas Cowboys", "cowboys", {"score_cutoff": 100, "processor": "default"}]
+  ratio: 0
+  partial_ratio: 100
+  token_sort_ratio: 0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "purple elephant", "elephant", {"score_cutoff": 100}]
+  ratio: 0
+  partial_ratio: 100
+  token_sort_ratio: 0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 0
+  QRatio: 0
+# fuzz: empty, blank and one-character strings
+> ["fuzz", "all", "", ""]
+  ratio: 100.0
+  partial_ratio: 100.0
+  token_sort_ratio: 100.0
+  token_set_ratio: 0
+  token_ratio: 100.0
+  partial_token_sort_ratio: 100.0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 100.0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "", "a"]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0
+  token_ratio: 0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "a", ""]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0
+  token_ratio: 0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", " ", " "]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 0
+  token_ratio: 100.0
+  partial_token_sort_ratio: 100.0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 100.0
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "   ", "a"]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0
+  token_ratio: 0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0.0
+  QRatio: 0.0
+> ["fuzz", "all", "a", "a"]
+  ratio: 100.0
+  partial_ratio: 100
+  token_sort_ratio: 100.0
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 100.0
+  QRatio: 100.0
+> ["fuzz", "all", "a", "b"]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0.0
+  token_ratio: 0.0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0.0
+  QRatio: 0.0
+> ["fuzz", "all", "a", "ab"]
+  ratio: 66.66666666666667
+  partial_ratio: 100
+  token_sort_ratio: 66.66666666666667
+  token_set_ratio: 66.66666666666666
+  token_ratio: 66.66666666666667
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 66.66666666666667
+> ["fuzz", "all", "!!!", "???"]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0.0
+  token_ratio: 0.0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0.0
+  QRatio: 0.0
+> ["fuzz", "all", "x", "xxxxxxxxxxxxxxxxxxxx"]
+  ratio: 9.523809523809524
+  partial_ratio: 100
+  token_sort_ratio: 9.523809523809524
+  token_set_ratio: 9.523809523809518
+  token_ratio: 9.523809523809524
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 60.0
+  QRatio: 9.523809523809524
+> ["fuzz", "all", "ab", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxab"]
+  ratio: 9.523809523809524
+  partial_ratio: 100
+  token_sort_ratio: 9.523809523809524
+  token_set_ratio: 9.523809523809518
+  token_ratio: 9.523809523809524
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 60.0
+  QRatio: 9.523809523809524
+> ["fuzz", "all", "the the the", "the"]
+  ratio: 42.85714285714286
+  partial_ratio: 100
+  token_sort_ratio: 42.85714285714286
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 42.85714285714286
+> ["fuzz", "all", "one two", "two one two one"]
+  ratio: 63.63636363636363
+  partial_ratio: 100
+  token_sort_ratio: 63.63636363636363
+  token_set_ratio: 100
+  token_ratio: 100
+  partial_token_sort_ratio: 100
+  partial_token_set_ratio: 100
+  partial_token_ratio: 100
+  WRatio: 90.0
+  QRatio: 63.63636363636363
+> ["fuzz", "all", "!!!", "???", {"processor": "default"}]
+  ratio: 100.0
+  partial_ratio: 100.0
+  token_sort_ratio: 100.0
+  token_set_ratio: 0
+  token_ratio: 100.0
+  partial_token_sort_ratio: 100.0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 100.0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "...", "abc", {"processor": "default"}]
+  ratio: 0.0
+  partial_ratio: 0
+  token_sort_ratio: 0.0
+  token_set_ratio: 0
+  token_ratio: 0
+  partial_token_sort_ratio: 0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 0
+  WRatio: 0
+  QRatio: 0
+> ["fuzz", "all", "  ", "  ", {"processor": "default"}]
+  ratio: 100.0
+  partial_ratio: 100.0
+  token_sort_ratio: 100.0
+  token_set_ratio: 0
+  token_ratio: 100.0
+  partial_token_sort_ratio: 100.0
+  partial_token_set_ratio: 0
+  partial_token_ratio: 100.0
+  WRatio: 0
+  QRatio: 0
+# partial_ratio_alignment: where the shorter string sits in the longer
+> ["align", "a certain string", "cetain"]
+  alignment: ScoreAlignment(score=83.33333333333334, src_start=2, src_end=8, dest_start=0, dest_end=6)
+> ["align", "cetain", "a certain string"]
+  alignment: ScoreAlignment(score=83.33333333333334, src_start=0, src_end=6, dest_start=2, dest_end=8)
+> ["align", "purple elephant", "elephant"]
+  alignment: ScoreAlignment(score=100, src_start=7, src_end=15, dest_start=0, dest_end=8)
+> ["align", "elephant", "purple elephant"]
+  alignment: ScoreAlignment(score=100, src_start=0, src_end=8, dest_start=7, dest_end=15)
+> ["align", "abcd", "xxabcdxx"]
+  alignment: ScoreAlignment(score=100, src_start=0, src_end=4, dest_start=2, dest_end=6)
+> ["align", "ab", "ba"]
+  alignment: ScoreAlignment(score=66.66666666666667, src_start=0, src_end=2, dest_start=0, dest_end=1)
+> ["align", "abc", "cba"]
+  alignment: ScoreAlignment(score=50.0, src_start=0, src_end=3, dest_start=0, dest_end=1)
+> ["align", "hello", "world"]
+  alignment: ScoreAlignment(score=33.333333333333336, src_start=4, src_end=5, dest_start=0, dest_end=5)
+> ["align", "", ""]
+  alignment: ScoreAlignment(score=100.0, src_start=0, src_end=0, dest_start=0, dest_end=0)
+> ["align", "", "abc"]
+  alignment: ScoreAlignment(score=0, src_start=0, src_end=0, dest_start=0, dest_end=0)
+> ["align", "abc", "abc"]
+  alignment: ScoreAlignment(score=100, src_start=0, src_end=3, dest_start=0, dest_end=3)
+> ["align", "this is a test", "is a"]
+  alignment: ScoreAlignment(score=100, src_start=5, src_end=9, dest_start=0, dest_end=4)
+> ["align", "ERROR: connection refused", "connection refused by host 10.0.0.1"]
+  alignment: ScoreAlignment(score=83.72093023255813, src_start=0, src_end=25, dest_start=0, dest_end=18)
+> ["align", "bcd", "abcde"]
+  alignment: ScoreAlignment(score=100, src_start=0, src_end=3, dest_start=1, dest_end=4)
+> ["align", "xyz", "abc"]
+  alignment: ScoreAlignment(score=0, src_start=0, src_end=3, dest_start=0, dest_end=3)
+> ["align", "Dallas Cowboys", "cowboys", {"processor": "default"}]
+  alignment: ScoreAlignment(score=100, src_start=7, src_end=14, dest_start=0, dest_end=7)
+> ["align", "abcd", "xxabcexx", {"score_cutoff": 80}]
+  alignment: None
+> ["align", "abcd", "xxabcexx", {"score_cutoff": 70}]
+  alignment: ScoreAlignment(score=75.0, src_start=0, src_end=4, dest_start=1, dest_end=5)
+> ["align", "abcd", "xxabcexx", {"score_cutoff": 75}]
+  alignment: ScoreAlignment(score=75.0, src_start=0, src_end=4, dest_start=1, dest_end=5)
+# utils.default_process
+> ["process", "Hello, World!"]
+  default_process: 'hello  world'
+> ["process", "  Lots   of   spaces  "]
+  default_process: 'lots   of   spaces'
+> ["process", "C++ / C# / F#"]
+  default_process: 'c     c    f'
+> ["process", "snake_case_stays"]
+  default_process: 'snake_case_stays'
+> ["process", "Ünïcödé — dashes – and “quotes”"]
+  default_process: 'ünïcödé   dashes   and  quotes'
+> ["process", "über straße"]
+  default_process: 'über straße'
+> ["process", "tab\tand\nnewline"]
+  default_process: 'tab and newline'
+> ["process", "!!!"]
+  default_process: ''
+> ["process", ""]
+  default_process: ''
+> ["process", "MiXeD 123 CaSe"]
+  default_process: 'mixed 123 case'
+> ["process", "e.g. i.e. etc."]
+  default_process: 'e g  i e  etc'
+> ["process", "naïve café résumé"]
+  default_process: 'naïve café résumé'
+> ["process", "Ελληνικά ΚΕΙΜΕΝΟ"]
+  default_process: 'ελληνικά κειμενο'
+> ["process", "Привет, МИР"]
+  default_process: 'привет  мир'
+> ["process", "日本語のテキスト"]
+  default_process: '日本語のテキスト'
+> ["process", "x²+y³=z½"]
+  default_process: 'x² y³ z½'
+> ["process", "price: $9.99 (€8.50)"]
+  default_process: 'price   9 99   8 50'
+# distance metrics: distance, similarity and both normalized
+> ["metric", "Levenshtein", "kitten", "sitting"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "lewenstein", "levenshtein"]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0.8181818181818181
+> ["metric", "Levenshtein", "ca", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Levenshtein", "abcdef", "badcfe"]
+  distance: 4
+  similarity: 2
+  normalized_distance: 0.6666666666666666
+  normalized_similarity: 0.33333333333333337
+> ["metric", "Levenshtein", "martha", "marhta"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "Levenshtein", "dixon", "dicksonx"]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Levenshtein", "jellyfish", "smellyfish"]
+  distance: 2
+  similarity: 8
+  normalized_distance: 0.2
+  normalized_similarity: 0.8
+> ["metric", "Levenshtein", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1.0
+> ["metric", "Levenshtein", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Levenshtein", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Levenshtein", "prefix_match", "prefix_other"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "Levenshtein", "other_suffix", "match_suffix"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "Levenshtein", "CRATE", "TRACE"]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "Levenshtein", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Levenshtein", "ab", "b"]
+  distance: 1
+  similarity: 1
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Levenshtein", "DwAyNE", "DuANE"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "Levenshtein", "Straße", "Strasse"]
+  distance: 2
+  similarity: 5
+  normalized_distance: 0.2857142857142857
+  normalized_similarity: 0.7142857142857143
+> ["metric", "Indel", "kitten", "sitting"]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Indel", "lewenstein", "levenshtein"]
+  distance: 3
+  similarity: 18
+  normalized_distance: 0.14285714285714285
+  normalized_similarity: 0.8571428571428572
+> ["metric", "Indel", "ca", "abc"]
+  distance: 3
+  similarity: 2
+  normalized_distance: 0.6
+  normalized_similarity: 0.4
+> ["metric", "Indel", "abcdef", "badcfe"]
+  distance: 6
+  similarity: 6
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Indel", "martha", "marhta"]
+  distance: 2
+  similarity: 10
+  normalized_distance: 0.16666666666666666
+  normalized_similarity: 0.8333333333333334
+> ["metric", "Indel", "dixon", "dicksonx"]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Indel", "jellyfish", "smellyfish"]
+  distance: 3
+  similarity: 16
+  normalized_distance: 0.15789473684210525
+  normalized_similarity: 0.8421052631578947
+> ["metric", "Indel", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1.0
+> ["metric", "Indel", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Indel", "abc", "abc"]
+  distance: 0
+  similarity: 6
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Indel", "prefix_match", "prefix_other"]
+  distance: 6
+  similarity: 18
+  normalized_distance: 0.25
+  normalized_similarity: 0.75
+> ["metric", "Indel", "other_suffix", "match_suffix"]
+  distance: 6
+  similarity: 18
+  normalized_distance: 0.25
+  normalized_similarity: 0.75
+> ["metric", "Indel", "CRATE", "TRACE"]
+  distance: 4
+  similarity: 6
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "Indel", "a", "b"]
+  distance: 2
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Indel", "ab", "b"]
+  distance: 1
+  similarity: 2
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "Indel", "DwAyNE", "DuANE"]
+  distance: 3
+  similarity: 8
+  normalized_distance: 0.2727272727272727
+  normalized_similarity: 0.7272727272727273
+> ["metric", "Indel", "Straße", "Strasse"]
+  distance: 3
+  similarity: 10
+  normalized_distance: 0.23076923076923078
+  normalized_similarity: 0.7692307692307692
+> ["metric", "LCSseq", "kitten", "sitting"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "LCSseq", "lewenstein", "levenshtein"]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0.8181818181818181
+> ["metric", "LCSseq", "ca", "abc"]
+  distance: 2
+  similarity: 1
+  normalized_distance: 0.6666666666666666
+  normalized_similarity: 0.33333333333333337
+> ["metric", "LCSseq", "abcdef", "badcfe"]
+  distance: 3
+  similarity: 3
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "LCSseq", "martha", "marhta"]
+  distance: 1
+  similarity: 5
+  normalized_distance: 0.16666666666666666
+  normalized_similarity: 0.8333333333333334
+> ["metric", "LCSseq", "dixon", "dicksonx"]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "LCSseq", "jellyfish", "smellyfish"]
+  distance: 2
+  similarity: 8
+  normalized_distance: 0.2
+  normalized_similarity: 0.8
+> ["metric", "LCSseq", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1.0
+> ["metric", "LCSseq", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "LCSseq", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "LCSseq", "prefix_match", "prefix_other"]
+  distance: 3
+  similarity: 9
+  normalized_distance: 0.25
+  normalized_similarity: 0.75
+> ["metric", "LCSseq", "other_suffix", "match_suffix"]
+  distance: 3
+  similarity: 9
+  normalized_distance: 0.25
+  normalized_similarity: 0.75
+> ["metric", "LCSseq", "CRATE", "TRACE"]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "LCSseq", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "LCSseq", "ab", "b"]
+  distance: 1
+  similarity: 1
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "LCSseq", "DwAyNE", "DuANE"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "LCSseq", "Straße", "Strasse"]
+  distance: 2
+  similarity: 5
+  normalized_distance: 0.2857142857142857
+  normalized_similarity: 0.7142857142857143
+> ["metric", "Hamming", "kitten", "sitting"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Hamming", "lewenstein", "levenshtein"]
+  distance: 6
+  similarity: 5
+  normalized_distance: 0.5454545454545454
+  normalized_similarity: 0.4545454545454546
+> ["metric", "Hamming", "ca", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Hamming", "abcdef", "badcfe"]
+  distance: 6
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Hamming", "martha", "marhta"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "Hamming", "dixon", "dicksonx"]
+  distance: 6
+  similarity: 2
+  normalized_distance: 0.75
+  normalized_similarity: 0.25
+> ["metric", "Hamming", "jellyfish", "smellyfish"]
+  distance: 9
+  similarity: 1
+  normalized_distance: 0.9
+  normalized_similarity: 0.09999999999999998
+> ["metric", "Hamming", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1
+> ["metric", "Hamming", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Hamming", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Hamming", "prefix_match", "prefix_other"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "Hamming", "other_suffix", "match_suffix"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "Hamming", "CRATE", "TRACE"]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "Hamming", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Hamming", "ab", "b"]
+  distance: 2
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Hamming", "DwAyNE", "DuANE"]
+  distance: 4
+  similarity: 2
+  normalized_distance: 0.6666666666666666
+  normalized_similarity: 0.33333333333333337
+> ["metric", "Hamming", "Straße", "Strasse"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Jaro", "kitten", "sitting"]
+  distance: 0.25396825396825395
+  similarity: 0.746031746031746
+  normalized_distance: 0.25396825396825395
+  normalized_similarity: 0.746031746031746
+> ["metric", "Jaro", "lewenstein", "levenshtein"]
+  distance: 0.09393939393939388
+  similarity: 0.9060606060606061
+  normalized_distance: 0.09393939393939388
+  normalized_similarity: 0.9060606060606061
+> ["metric", "Jaro", "ca", "abc"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "Jaro", "abcdef", "badcfe"]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "Jaro", "martha", "marhta"]
+  distance: 0.05555555555555547
+  similarity: 0.9444444444444445
+  normalized_distance: 0.05555555555555547
+  normalized_similarity: 0.9444444444444445
+> ["metric", "Jaro", "dixon", "dicksonx"]
+  distance: 0.2333333333333334
+  similarity: 0.7666666666666666
+  normalized_distance: 0.2333333333333334
+  normalized_similarity: 0.7666666666666666
+> ["metric", "Jaro", "jellyfish", "smellyfish"]
+  distance: 0.10370370370370363
+  similarity: 0.8962962962962964
+  normalized_distance: 0.10370370370370363
+  normalized_similarity: 0.8962962962962964
+> ["metric", "Jaro", "", ""]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Jaro", "", "abc"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "Jaro", "abc", "abc"]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Jaro", "prefix_match", "prefix_other"]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "Jaro", "other_suffix", "match_suffix"]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "Jaro", "CRATE", "TRACE"]
+  distance: 0.2666666666666666
+  similarity: 0.7333333333333334
+  normalized_distance: 0.2666666666666666
+  normalized_similarity: 0.7333333333333334
+> ["metric", "Jaro", "a", "b"]
+  distance: 1.0
+  similarity: 0.0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Jaro", "ab", "b"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "Jaro", "DwAyNE", "DuANE"]
+  distance: 0.1777777777777777
+  similarity: 0.8222222222222223
+  normalized_distance: 0.1777777777777777
+  normalized_similarity: 0.8222222222222223
+> ["metric", "Jaro", "Straße", "Strasse"]
+  distance: 0.1507936507936508
+  similarity: 0.8492063492063492
+  normalized_distance: 0.1507936507936508
+  normalized_similarity: 0.8492063492063492
+> ["metric", "JaroWinkler", "kitten", "sitting"]
+  distance: 0.25396825396825395
+  similarity: 0.746031746031746
+  normalized_distance: 0.25396825396825395
+  normalized_similarity: 0.746031746031746
+> ["metric", "JaroWinkler", "lewenstein", "levenshtein"]
+  distance: 0.07515151515151508
+  similarity: 0.9248484848484849
+  normalized_distance: 0.07515151515151508
+  normalized_similarity: 0.9248484848484849
+> ["metric", "JaroWinkler", "ca", "abc"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "abcdef", "badcfe"]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "JaroWinkler", "martha", "marhta"]
+  distance: 0.03888888888888886
+  similarity: 0.9611111111111111
+  normalized_distance: 0.03888888888888886
+  normalized_similarity: 0.9611111111111111
+> ["metric", "JaroWinkler", "dixon", "dicksonx"]
+  distance: 0.18666666666666676
+  similarity: 0.8133333333333332
+  normalized_distance: 0.18666666666666676
+  normalized_similarity: 0.8133333333333332
+> ["metric", "JaroWinkler", "jellyfish", "smellyfish"]
+  distance: 0.10370370370370363
+  similarity: 0.8962962962962964
+  normalized_distance: 0.10370370370370363
+  normalized_similarity: 0.8962962962962964
+> ["metric", "JaroWinkler", "", ""]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "JaroWinkler", "", "abc"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "abc", "abc"]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other"]
+  distance: 0.09999999999999998
+  similarity: 0.9
+  normalized_distance: 0.09999999999999998
+  normalized_similarity: 0.9
+> ["metric", "JaroWinkler", "other_suffix", "match_suffix"]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "JaroWinkler", "CRATE", "TRACE"]
+  distance: 0.2666666666666666
+  similarity: 0.7333333333333334
+  normalized_distance: 0.2666666666666666
+  normalized_similarity: 0.7333333333333334
+> ["metric", "JaroWinkler", "a", "b"]
+  distance: 1.0
+  similarity: 0.0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "JaroWinkler", "ab", "b"]
+  distance: 1.0
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "DwAyNE", "DuANE"]
+  distance: 0.15999999999999992
+  similarity: 0.8400000000000001
+  normalized_distance: 0.15999999999999992
+  normalized_similarity: 0.8400000000000001
+> ["metric", "JaroWinkler", "Straße", "Strasse"]
+  distance: 0.09047619047619049
+  similarity: 0.9095238095238095
+  normalized_distance: 0.09047619047619049
+  normalized_similarity: 0.9095238095238095
+> ["metric", "OSA", "kitten", "sitting"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "OSA", "lewenstein", "levenshtein"]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0.8181818181818181
+> ["metric", "OSA", "ca", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "OSA", "abcdef", "badcfe"]
+  distance: 3
+  similarity: 3
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "OSA", "martha", "marhta"]
+  distance: 1
+  similarity: 5
+  normalized_distance: 0.16666666666666666
+  normalized_similarity: 0.8333333333333334
+> ["metric", "OSA", "dixon", "dicksonx"]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "OSA", "jellyfish", "smellyfish"]
+  distance: 2
+  similarity: 8
+  normalized_distance: 0.2
+  normalized_similarity: 0.8
+> ["metric", "OSA", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1.0
+> ["metric", "OSA", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "OSA", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "OSA", "prefix_match", "prefix_other"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "OSA", "other_suffix", "match_suffix"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "OSA", "CRATE", "TRACE"]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "OSA", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "OSA", "ab", "b"]
+  distance: 1
+  similarity: 1
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "OSA", "DwAyNE", "DuANE"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "OSA", "Straße", "Strasse"]
+  distance: 2
+  similarity: 5
+  normalized_distance: 0.2857142857142857
+  normalized_similarity: 0.7142857142857143
+> ["metric", "DamerauLevenshtein", "kitten", "sitting"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "DamerauLevenshtein", "lewenstein", "levenshtein"]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0.8181818181818181
+> ["metric", "DamerauLevenshtein", "ca", "abc"]
+  distance: 2
+  similarity: 1
+  normalized_distance: 0.6666666666666666
+  normalized_similarity: 0.33333333333333337
+> ["metric", "DamerauLevenshtein", "abcdef", "badcfe"]
+  distance: 3
+  similarity: 3
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "DamerauLevenshtein", "martha", "marhta"]
+  distance: 1
+  similarity: 5
+  normalized_distance: 0.16666666666666666
+  normalized_similarity: 0.8333333333333334
+> ["metric", "DamerauLevenshtein", "dixon", "dicksonx"]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "DamerauLevenshtein", "jellyfish", "smellyfish"]
+  distance: 2
+  similarity: 8
+  normalized_distance: 0.2
+  normalized_similarity: 0.8
+> ["metric", "DamerauLevenshtein", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1.0
+> ["metric", "DamerauLevenshtein", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "DamerauLevenshtein", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "DamerauLevenshtein", "prefix_match", "prefix_other"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "DamerauLevenshtein", "other_suffix", "match_suffix"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.4166666666666667
+  normalized_similarity: 0.5833333333333333
+> ["metric", "DamerauLevenshtein", "CRATE", "TRACE"]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "DamerauLevenshtein", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "DamerauLevenshtein", "ab", "b"]
+  distance: 1
+  similarity: 1
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "DamerauLevenshtein", "DwAyNE", "DuANE"]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "DamerauLevenshtein", "Straße", "Strasse"]
+  distance: 2
+  similarity: 5
+  normalized_distance: 0.2857142857142857
+  normalized_similarity: 0.7142857142857143
+> ["metric", "Prefix", "kitten", "sitting"]
+  distance: 7
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "lewenstein", "levenshtein"]
+  distance: 9
+  similarity: 2
+  normalized_distance: 0.8181818181818181
+  normalized_similarity: 0.18181818181818182
+> ["metric", "Prefix", "ca", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "abcdef", "badcfe"]
+  distance: 6
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "martha", "marhta"]
+  distance: 3
+  similarity: 3
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Prefix", "dixon", "dicksonx"]
+  distance: 6
+  similarity: 2
+  normalized_distance: 0.75
+  normalized_similarity: 0.25
+> ["metric", "Prefix", "jellyfish", "smellyfish"]
+  distance: 10
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Prefix", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Prefix", "prefix_match", "prefix_other"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.41666666666666663
+  normalized_similarity: 0.5833333333333334
+> ["metric", "Prefix", "other_suffix", "match_suffix"]
+  distance: 12
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "CRATE", "TRACE"]
+  distance: 5
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "ab", "b"]
+  distance: 2
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Prefix", "DwAyNE", "DuANE"]
+  distance: 5
+  similarity: 1
+  normalized_distance: 0.8333333333333334
+  normalized_similarity: 0.16666666666666666
+> ["metric", "Prefix", "Straße", "Strasse"]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.4285714285714286
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Postfix", "kitten", "sitting"]
+  distance: 7
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "lewenstein", "levenshtein"]
+  distance: 7
+  similarity: 4
+  normalized_distance: 0.6363636363636364
+  normalized_similarity: 0.36363636363636365
+> ["metric", "Postfix", "ca", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "abcdef", "badcfe"]
+  distance: 6
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "martha", "marhta"]
+  distance: 5
+  similarity: 1
+  normalized_distance: 0.8333333333333334
+  normalized_similarity: 0.16666666666666666
+> ["metric", "Postfix", "dixon", "dicksonx"]
+  distance: 8
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "jellyfish", "smellyfish"]
+  distance: 2
+  similarity: 8
+  normalized_distance: 0.19999999999999996
+  normalized_similarity: 0.8
+> ["metric", "Postfix", "", ""]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Postfix", "", "abc"]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "abc", "abc"]
+  distance: 0
+  similarity: 3
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Postfix", "prefix_match", "prefix_other"]
+  distance: 12
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "other_suffix", "match_suffix"]
+  distance: 5
+  similarity: 7
+  normalized_distance: 0.41666666666666663
+  normalized_similarity: 0.5833333333333334
+> ["metric", "Postfix", "CRATE", "TRACE"]
+  distance: 4
+  similarity: 1
+  normalized_distance: 0.8
+  normalized_similarity: 0.2
+> ["metric", "Postfix", "a", "b"]
+  distance: 1
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "ab", "b"]
+  distance: 1
+  similarity: 1
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Postfix", "DwAyNE", "DuANE"]
+  distance: 4
+  similarity: 2
+  normalized_distance: 0.6666666666666667
+  normalized_similarity: 0.3333333333333333
+> ["metric", "Postfix", "Straße", "Strasse"]
+  distance: 6
+  similarity: 1
+  normalized_distance: 0.8571428571428572
+  normalized_similarity: 0.14285714285714285
+# distance metrics: options
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [1, 1, 1]}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [1, 1, 1]}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [1, 1, 2]}]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [1, 1, 2]}]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [2, 1, 1]}]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [2, 1, 1]}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [1, 2, 1]}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [1, 2, 1]}]
+  distance: 4
+  similarity: 4
+  normalized_distance: 0.5
+  normalized_similarity: 0.5
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [1, 1, 3]}]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [1, 1, 3]}]
+  distance: 5
+  similarity: 8
+  normalized_distance: 0.38461538461538464
+  normalized_similarity: 0.6153846153846154
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [3, 5, 7]}]
+  distance: 17
+  similarity: 28
+  normalized_distance: 0.37777777777777777
+  normalized_similarity: 0.6222222222222222
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [3, 5, 7]}]
+  distance: 19
+  similarity: 28
+  normalized_distance: 0.40425531914893614
+  normalized_similarity: 0.5957446808510638
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [0, 1, 1]}]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.3333333333333333
+  normalized_similarity: 0.6666666666666667
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": [0, 1, 1]}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": null}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "sitting", "kitten", {"weights": null}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"weights": [1, 0, 1]}]
+  distance: error ValueError: range() arg 3 must not be zero
+  similarity: error ValueError: range() arg 3 must not be zero
+  normalized_distance: error ValueError: range() arg 3 must not be zero
+  normalized_similarity: error ValueError: range() arg 3 must not be zero
+> ["metric", "Levenshtein", "", "abc", {"weights": [2, 3, 4]}]
+  distance: 6
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Levenshtein", "abc", "", {"weights": [2, 3, 4]}]
+  distance: 9
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 0}]
+  distance: 1
+  similarity: 4
+  normalized_distance: 1
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 1}]
+  distance: 2
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 2}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 3}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 0.5}]
+  distance: 1.5
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Levenshtein", "kitten", "sitting", {"score_cutoff": 0.6}]
+  distance: 1.6
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0
+> ["metric", "Jaro", "martha", "marhta", {"score_cutoff": 0}]
+  distance: 1.0
+  similarity: 0.9444444444444445
+  normalized_distance: 1.0
+  normalized_similarity: 0.9444444444444445
+> ["metric", "JaroWinkler", "martha", "marhta", {"score_cutoff": 0}]
+  distance: 1.0
+  similarity: 0.9611111111111111
+  normalized_distance: 1.0
+  normalized_similarity: 0.9611111111111111
+> ["metric", "Jaro", "martha", "marhta", {"score_cutoff": 0.5}]
+  distance: 0.05555555555555547
+  similarity: 0.9444444444444445
+  normalized_distance: 0.05555555555555547
+  normalized_similarity: 0.9444444444444445
+> ["metric", "JaroWinkler", "martha", "marhta", {"score_cutoff": 0.5}]
+  distance: 0.03888888888888886
+  similarity: 0.9611111111111111
+  normalized_distance: 0.03888888888888886
+  normalized_similarity: 0.9611111111111111
+> ["metric", "Jaro", "martha", "marhta", {"score_cutoff": 0.9}]
+  distance: 0.05555555555555547
+  similarity: 0.9444444444444445
+  normalized_distance: 0.05555555555555547
+  normalized_similarity: 0.9444444444444445
+> ["metric", "JaroWinkler", "martha", "marhta", {"score_cutoff": 0.9}]
+  distance: 0.03888888888888886
+  similarity: 0.9611111111111111
+  normalized_distance: 0.03888888888888886
+  normalized_similarity: 0.9611111111111111
+> ["metric", "Jaro", "martha", "marhta", {"score_cutoff": 1}]
+  distance: 0.05555555555555547
+  similarity: 0
+  normalized_distance: 0.05555555555555547
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "martha", "marhta", {"score_cutoff": 1}]
+  distance: 0.03888888888888886
+  similarity: 0
+  normalized_distance: 0.03888888888888886
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": 0.0}]
+  distance: 0.16666666666666663
+  similarity: 0.8333333333333334
+  normalized_distance: 0.16666666666666663
+  normalized_similarity: 0.8333333333333334
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": 0.1}]
+  distance: 0.09999999999999998
+  similarity: 0.9
+  normalized_distance: 0.09999999999999998
+  normalized_similarity: 0.9
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": 0.25}]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": 1.0}]
+  distance: 0.0
+  similarity: 1.0
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": 1.5}]
+  distance: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  similarity: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  normalized_distance: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  normalized_similarity: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+> ["metric", "JaroWinkler", "prefix_match", "prefix_other", {"prefix_weight": -0.1}]
+  distance: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  similarity: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  normalized_distance: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+  normalized_similarity: error ValueError: prefix_weight has to be in the range 0.0 - 1.0
+> ["metric", "JaroWinkler", "dwayne", "duane", {"prefix_weight": 0.25, "score_cutoff": 0.95}]
+  distance: 0.1333333333333333
+  similarity: 0
+  normalized_distance: 0.1333333333333333
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "dwayne", "duane", {"prefix_weight": 0.1, "score_cutoff": 0.99}]
+  distance: 0.15999999999999992
+  similarity: 0
+  normalized_distance: 0.15999999999999992
+  normalized_similarity: 0
+> ["metric", "JaroWinkler", "dwayne", "duane", {"prefix_weight": 0.3, "score_cutoff": 0.9}]
+  distance: 0.12444444444444436
+  similarity: 0
+  normalized_distance: 0.12444444444444436
+  normalized_similarity: 0
+> ["metric", "Hamming", "karolin", "kathrin", {"pad": false}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.42857142857142855
+  normalized_similarity: 0.5714285714285714
+> ["metric", "Hamming", "abc", "abcde", {"pad": false}]
+  distance: error ValueError: Sequences are not the same length.
+  similarity: error ValueError: Sequences are not the same length.
+  normalized_distance: error ValueError: Sequences are not the same length.
+  normalized_similarity: error ValueError: Sequences are not the same length.
+> ["metric", "Hamming", "abc", "abcde", {"pad": true}]
+  distance: 2
+  similarity: 3
+  normalized_distance: 0.4
+  normalized_similarity: 0.6
+> ["metric", "Hamming", "", "", {"pad": false}]
+  distance: 0
+  similarity: 0
+  normalized_distance: 0
+  normalized_similarity: 1
+> ["metric", "Indel", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 22
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Indel", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 3
+  similarity: 18
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0
+> ["metric", "OSA", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 11
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "OSA", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0
+> ["metric", "DamerauLevenshtein", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 11
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "DamerauLevenshtein", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0
+> ["metric", "Prefix", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 11
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Prefix", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 3
+  similarity: 0
+  normalized_distance: 1.0
+  normalized_similarity: 0.0
+> ["metric", "Postfix", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 11
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "Postfix", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 3
+  similarity: 4
+  normalized_distance: 0.6363636363636364
+  normalized_similarity: 0.0
+> ["metric", "LCSseq", "Hello World", "hello world", {"processor": "default"}]
+  distance: 0
+  similarity: 11
+  normalized_distance: 0.0
+  normalized_similarity: 1.0
+> ["metric", "LCSseq", "Hello World", "hello world", {"score_cutoff": 2}]
+  distance: 2
+  similarity: 9
+  normalized_distance: 0.18181818181818182
+  normalized_similarity: 0
+# editops and opcodes
+> ["ops", "Levenshtein", "qabxcd", "abycdf"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=3, dest_pos=2), Editop(tag='insert', src_pos=6, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='replace', src_start=3, src_end=4, dest_start=2, dest_end=3), Opcode(tag='equal', src_start=4, src_end=6, dest_start=3, dest_end=5), Opcode(tag='insert', src_start=6, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'abycdf'
+  opcodes.apply: 'abycdf'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=2, dest_pos=3), Editop(tag='delete', src_pos=5, dest_pos=6)], src_len=6, dest_len=6)
+  inverse.apply: 'qabxcd'
+  as_editops: True
+> ["ops", "Levenshtein", "kitten", "sitting"]
+  editops: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='insert', src_pos=6, dest_pos=6)], src_len=6, dest_len=7)
+  opcodes: Opcodes([Opcode(tag='replace', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='equal', src_start=1, src_end=4, dest_start=1, dest_end=4), Opcode(tag='replace', src_start=4, src_end=5, dest_start=4, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6), Opcode(tag='insert', src_start=6, src_end=6, dest_start=6, dest_end=7)], src_len=6, dest_len=7)
+  editops.apply: 'sitting'
+  opcodes.apply: 'sitting'
+  matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='delete', src_pos=6, dest_pos=6)], src_len=7, dest_len=6)
+  inverse.apply: 'kitten'
+  as_editops: True
+> ["ops", "Levenshtein", "Levenshtein", "Lenvinsten"]
+  editops: Editops([Editop(tag='insert', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=4), Editop(tag='delete', src_pos=6, dest_pos=7), Editop(tag='delete', src_pos=9, dest_pos=9)], src_len=11, dest_len=10)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=2, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=2, src_end=2, dest_start=2, dest_end=3), Opcode(tag='equal', src_start=2, src_end=3, dest_start=3, dest_end=4), Opcode(tag='replace', src_start=3, src_end=4, dest_start=4, dest_end=5), Opcode(tag='equal', src_start=4, src_end=6, dest_start=5, dest_end=7), Opcode(tag='delete', src_start=6, src_end=7, dest_start=7, dest_end=7), Opcode(tag='equal', src_start=7, src_end=9, dest_start=7, dest_end=9), Opcode(tag='delete', src_start=9, src_end=10, dest_start=9, dest_end=9), Opcode(tag='equal', src_start=10, src_end=11, dest_start=9, dest_end=10)], src_len=11, dest_len=10)
+  editops.apply: 'Lenvinsten'
+  opcodes.apply: 'Lenvinsten'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=4, dest_pos=3), Editop(tag='insert', src_pos=7, dest_pos=6), Editop(tag='insert', src_pos=9, dest_pos=9)], src_len=10, dest_len=11)
+  inverse.apply: 'Levenshtein'
+  as_editops: True
+> ["ops", "Levenshtein", "", "abc"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=3)], src_len=0, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  inverse.apply: ''
+  as_editops: True
+> ["ops", "Levenshtein", "abc", ""]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=3, dest_start=0, dest_end=0)], src_len=3, dest_len=0)
+  editops.apply: ''
+  opcodes.apply: ''
+  matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Levenshtein", "abc", "abc"]
+  editops: Editops([], src_len=3, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=3, dest_start=0, dest_end=3)], src_len=3, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  inverse: Editops([], src_len=3, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Levenshtein", "spam", "park"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=3, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3)], src_len=4, dest_len=4)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=3, src_end=3, dest_start=2, dest_end=3), Opcode(tag='replace', src_start=3, src_end=4, dest_start=3, dest_end=4)], src_len=4, dest_len=4)
+  editops.apply: 'park'
+  opcodes.apply: 'park'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=3), Editop(tag='replace', src_pos=3, dest_pos=3)], src_len=4, dest_len=4)
+  inverse.apply: 'spam'
+  as_editops: True
+> ["ops", "Levenshtein", "aaabbb", "ababab"]
+  editops: Editops([Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=4, dest_pos=4)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='replace', src_start=1, src_end=2, dest_start=1, dest_end=2), Opcode(tag='equal', src_start=2, src_end=4, dest_start=2, dest_end=4), Opcode(tag='replace', src_start=4, src_end=5, dest_start=4, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'ababab'
+  opcodes.apply: 'ababab'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=2, b=2, size=2), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=2, b=2, size=2), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=4, dest_pos=4)], src_len=6, dest_len=6)
+  inverse.apply: 'aaabbb'
+  as_editops: True
+> ["ops", "Indel", "qabxcd", "abycdf"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=3, dest_pos=2), Editop(tag='delete', src_pos=3, dest_pos=3), Editop(tag='insert', src_pos=6, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=3, src_end=3, dest_start=2, dest_end=3), Opcode(tag='delete', src_start=3, src_end=4, dest_start=3, dest_end=3), Opcode(tag='equal', src_start=4, src_end=6, dest_start=3, dest_end=5), Opcode(tag='insert', src_start=6, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'abycdf'
+  opcodes.apply: 'abycdf'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=3), Editop(tag='insert', src_pos=3, dest_pos=3), Editop(tag='delete', src_pos=5, dest_pos=6)], src_len=6, dest_len=6)
+  inverse.apply: 'qabxcd'
+  as_editops: True
+> ["ops", "Indel", "kitten", "sitting"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=4, dest_pos=4), Editop(tag='delete', src_pos=4, dest_pos=5), Editop(tag='insert', src_pos=6, dest_pos=6)], src_len=6, dest_len=7)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=1), Opcode(tag='delete', src_start=0, src_end=1, dest_start=1, dest_end=1), Opcode(tag='equal', src_start=1, src_end=4, dest_start=1, dest_end=4), Opcode(tag='insert', src_start=4, src_end=4, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=4, src_end=5, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6), Opcode(tag='insert', src_start=6, src_end=6, dest_start=6, dest_end=7)], src_len=6, dest_len=7)
+  editops.apply: 'sitting'
+  opcodes.apply: 'sitting'
+  matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=4, dest_pos=4), Editop(tag='insert', src_pos=5, dest_pos=4), Editop(tag='delete', src_pos=6, dest_pos=6)], src_len=7, dest_len=6)
+  inverse.apply: 'kitten'
+  as_editops: True
+> ["ops", "Indel", "Levenshtein", "Lenvinsten"]
+  editops: Editops([Editop(tag='insert', src_pos=2, dest_pos=2), Editop(tag='insert', src_pos=3, dest_pos=4), Editop(tag='delete', src_pos=3, dest_pos=5), Editop(tag='delete', src_pos=6, dest_pos=7), Editop(tag='delete', src_pos=9, dest_pos=9)], src_len=11, dest_len=10)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=2, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=2, src_end=2, dest_start=2, dest_end=3), Opcode(tag='equal', src_start=2, src_end=3, dest_start=3, dest_end=4), Opcode(tag='insert', src_start=3, src_end=3, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=3, src_end=4, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=4, src_end=6, dest_start=5, dest_end=7), Opcode(tag='delete', src_start=6, src_end=7, dest_start=7, dest_end=7), Opcode(tag='equal', src_start=7, src_end=9, dest_start=7, dest_end=9), Opcode(tag='delete', src_start=9, src_end=10, dest_start=9, dest_end=9), Opcode(tag='equal', src_start=10, src_end=11, dest_start=9, dest_end=10)], src_len=11, dest_len=10)
+  editops.apply: 'Lenvinsten'
+  opcodes.apply: 'Lenvinsten'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=2, dest_pos=2), Editop(tag='delete', src_pos=4, dest_pos=3), Editop(tag='insert', src_pos=5, dest_pos=3), Editop(tag='insert', src_pos=7, dest_pos=6), Editop(tag='insert', src_pos=9, dest_pos=9)], src_len=10, dest_len=11)
+  inverse.apply: 'Levenshtein'
+  as_editops: True
+> ["ops", "Indel", "", "abc"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=3)], src_len=0, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  inverse.apply: ''
+  as_editops: True
+> ["ops", "Indel", "abc", ""]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=3, dest_start=0, dest_end=0)], src_len=3, dest_len=0)
+  editops.apply: ''
+  opcodes.apply: ''
+  matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Indel", "abc", "abc"]
+  editops: Editops([], src_len=3, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=3, dest_start=0, dest_end=3)], src_len=3, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  inverse: Editops([], src_len=3, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Indel", "spam", "park"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=3, dest_pos=2), Editop(tag='insert', src_pos=3, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=4)], src_len=4, dest_len=4)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=3, src_end=3, dest_start=2, dest_end=4), Opcode(tag='delete', src_start=3, src_end=4, dest_start=4, dest_end=4)], src_len=4, dest_len=4)
+  editops.apply: 'park'
+  opcodes.apply: 'park'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=3), Editop(tag='insert', src_pos=4, dest_pos=3)], src_len=4, dest_len=4)
+  inverse.apply: 'spam'
+  as_editops: True
+> ["ops", "Indel", "aaabbb", "ababab"]
+  editops: Editops([Editop(tag='insert', src_pos=1, dest_pos=1), Editop(tag='insert', src_pos=2, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=5), Editop(tag='delete', src_pos=4, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='insert', src_start=1, src_end=1, dest_start=1, dest_end=2), Opcode(tag='equal', src_start=1, src_end=2, dest_start=2, dest_end=3), Opcode(tag='insert', src_start=2, src_end=2, dest_start=3, dest_end=4), Opcode(tag='equal', src_start=2, src_end=3, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=3, src_end=5, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'ababab'
+  opcodes.apply: 'ababab'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=1, b=2, size=1), MatchingBlock(a=2, b=4, size=1), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=1, b=2, size=1), MatchingBlock(a=2, b=4, size=1), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=1, dest_pos=1), Editop(tag='delete', src_pos=3, dest_pos=2), Editop(tag='insert', src_pos=5, dest_pos=3), Editop(tag='insert', src_pos=5, dest_pos=4)], src_len=6, dest_len=6)
+  inverse.apply: 'aaabbb'
+  as_editops: True
+> ["ops", "LCSseq", "qabxcd", "abycdf"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=3, dest_pos=2), Editop(tag='delete', src_pos=3, dest_pos=3), Editop(tag='insert', src_pos=6, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=3, src_end=3, dest_start=2, dest_end=3), Opcode(tag='delete', src_start=3, src_end=4, dest_start=3, dest_end=3), Opcode(tag='equal', src_start=4, src_end=6, dest_start=3, dest_end=5), Opcode(tag='insert', src_start=6, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'abycdf'
+  opcodes.apply: 'abycdf'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=3, size=2), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=3), Editop(tag='insert', src_pos=3, dest_pos=3), Editop(tag='delete', src_pos=5, dest_pos=6)], src_len=6, dest_len=6)
+  inverse.apply: 'qabxcd'
+  as_editops: True
+> ["ops", "LCSseq", "kitten", "sitting"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=4, dest_pos=4), Editop(tag='delete', src_pos=4, dest_pos=5), Editop(tag='insert', src_pos=6, dest_pos=6)], src_len=6, dest_len=7)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=1), Opcode(tag='delete', src_start=0, src_end=1, dest_start=1, dest_end=1), Opcode(tag='equal', src_start=1, src_end=4, dest_start=1, dest_end=4), Opcode(tag='insert', src_start=4, src_end=4, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=4, src_end=5, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6), Opcode(tag='insert', src_start=6, src_end=6, dest_start=6, dest_end=7)], src_len=6, dest_len=7)
+  editops.apply: 'sitting'
+  opcodes.apply: 'sitting'
+  matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=4, dest_pos=4), Editop(tag='insert', src_pos=5, dest_pos=4), Editop(tag='delete', src_pos=6, dest_pos=6)], src_len=7, dest_len=6)
+  inverse.apply: 'kitten'
+  as_editops: True
+> ["ops", "LCSseq", "Levenshtein", "Lenvinsten"]
+  editops: Editops([Editop(tag='insert', src_pos=2, dest_pos=2), Editop(tag='insert', src_pos=3, dest_pos=4), Editop(tag='delete', src_pos=3, dest_pos=5), Editop(tag='delete', src_pos=6, dest_pos=7), Editop(tag='delete', src_pos=9, dest_pos=9)], src_len=11, dest_len=10)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=2, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=2, src_end=2, dest_start=2, dest_end=3), Opcode(tag='equal', src_start=2, src_end=3, dest_start=3, dest_end=4), Opcode(tag='insert', src_start=3, src_end=3, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=3, src_end=4, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=4, src_end=6, dest_start=5, dest_end=7), Opcode(tag='delete', src_start=6, src_end=7, dest_start=7, dest_end=7), Opcode(tag='equal', src_start=7, src_end=9, dest_start=7, dest_end=9), Opcode(tag='delete', src_start=9, src_end=10, dest_start=9, dest_end=9), Opcode(tag='equal', src_start=10, src_end=11, dest_start=9, dest_end=10)], src_len=11, dest_len=10)
+  editops.apply: 'Lenvinsten'
+  opcodes.apply: 'Lenvinsten'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=2, b=3, size=1), MatchingBlock(a=4, b=5, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=10, b=9, size=1), MatchingBlock(a=11, b=10, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=2, dest_pos=2), Editop(tag='delete', src_pos=4, dest_pos=3), Editop(tag='insert', src_pos=5, dest_pos=3), Editop(tag='insert', src_pos=7, dest_pos=6), Editop(tag='insert', src_pos=9, dest_pos=9)], src_len=10, dest_len=11)
+  inverse.apply: 'Levenshtein'
+  as_editops: True
+> ["ops", "LCSseq", "", "abc"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=3)], src_len=0, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  inverse.apply: ''
+  as_editops: True
+> ["ops", "LCSseq", "abc", ""]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=3, dest_start=0, dest_end=0)], src_len=3, dest_len=0)
+  editops.apply: ''
+  opcodes.apply: ''
+  matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "LCSseq", "abc", "abc"]
+  editops: Editops([], src_len=3, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=3, dest_start=0, dest_end=3)], src_len=3, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  inverse: Editops([], src_len=3, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "LCSseq", "spam", "park"]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=3, dest_pos=2), Editop(tag='insert', src_pos=3, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=4)], src_len=4, dest_len=4)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=1, dest_start=0, dest_end=0), Opcode(tag='equal', src_start=1, src_end=3, dest_start=0, dest_end=2), Opcode(tag='insert', src_start=3, src_end=3, dest_start=2, dest_end=4), Opcode(tag='delete', src_start=3, src_end=4, dest_start=4, dest_end=4)], src_len=4, dest_len=4)
+  editops.apply: 'park'
+  opcodes.apply: 'park'
+  matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=0, size=2), MatchingBlock(a=4, b=4, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=3), Editop(tag='insert', src_pos=4, dest_pos=3)], src_len=4, dest_len=4)
+  inverse.apply: 'spam'
+  as_editops: True
+> ["ops", "LCSseq", "aaabbb", "ababab"]
+  editops: Editops([Editop(tag='insert', src_pos=1, dest_pos=1), Editop(tag='insert', src_pos=2, dest_pos=3), Editop(tag='delete', src_pos=3, dest_pos=5), Editop(tag='delete', src_pos=4, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='insert', src_start=1, src_end=1, dest_start=1, dest_end=2), Opcode(tag='equal', src_start=1, src_end=2, dest_start=2, dest_end=3), Opcode(tag='insert', src_start=2, src_end=2, dest_start=3, dest_end=4), Opcode(tag='equal', src_start=2, src_end=3, dest_start=4, dest_end=5), Opcode(tag='delete', src_start=3, src_end=5, dest_start=5, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'ababab'
+  opcodes.apply: 'ababab'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=1, b=2, size=1), MatchingBlock(a=2, b=4, size=1), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=1, b=2, size=1), MatchingBlock(a=2, b=4, size=1), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=1, dest_pos=1), Editop(tag='delete', src_pos=3, dest_pos=2), Editop(tag='insert', src_pos=5, dest_pos=3), Editop(tag='insert', src_pos=5, dest_pos=4)], src_len=6, dest_len=6)
+  inverse.apply: 'aaabbb'
+  as_editops: True
+> ["ops", "Hamming", "qabxcd", "abycdf"]
+  editops: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='replace', src_pos=5, dest_pos=5)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='replace', src_start=0, src_end=6, dest_start=0, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'abycdf'
+  opcodes.apply: 'abycdf'
+  matching_blocks: [MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='replace', src_pos=5, dest_pos=5)], src_len=6, dest_len=6)
+  inverse.apply: 'qabxcd'
+  as_editops: True
+> ["ops", "Hamming", "kitten", "sitting"]
+  editops: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='insert', src_pos=6, dest_pos=6)], src_len=6, dest_len=7)
+  opcodes: Opcodes([Opcode(tag='replace', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='equal', src_start=1, src_end=4, dest_start=1, dest_end=4), Opcode(tag='replace', src_start=4, src_end=5, dest_start=4, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6), Opcode(tag='insert', src_start=6, src_end=6, dest_start=6, dest_end=7)], src_len=6, dest_len=7)
+  editops.apply: 'sitting'
+  opcodes.apply: 'sitting'
+  matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=1, b=1, size=3), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=7, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='delete', src_pos=6, dest_pos=6)], src_len=7, dest_len=6)
+  inverse.apply: 'kitten'
+  as_editops: True
+> ["ops", "Hamming", "Levenshtein", "Lenvinsten"]
+  editops: Editops([Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='replace', src_pos=5, dest_pos=5), Editop(tag='replace', src_pos=6, dest_pos=6), Editop(tag='replace', src_pos=9, dest_pos=9), Editop(tag='delete', src_pos=10, dest_pos=10)], src_len=11, dest_len=10)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=2, dest_start=0, dest_end=2), Opcode(tag='replace', src_start=2, src_end=7, dest_start=2, dest_end=7), Opcode(tag='equal', src_start=7, src_end=9, dest_start=7, dest_end=9), Opcode(tag='replace', src_start=9, src_end=10, dest_start=9, dest_end=10), Opcode(tag='delete', src_start=10, src_end=11, dest_start=10, dest_end=10)], src_len=11, dest_len=10)
+  editops.apply: 'Lenvinsten'
+  opcodes.apply: 'Lenvinsten'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=11, b=10, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=2), MatchingBlock(a=7, b=7, size=2), MatchingBlock(a=11, b=10, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3), Editop(tag='replace', src_pos=4, dest_pos=4), Editop(tag='replace', src_pos=5, dest_pos=5), Editop(tag='replace', src_pos=6, dest_pos=6), Editop(tag='replace', src_pos=9, dest_pos=9), Editop(tag='insert', src_pos=10, dest_pos=10)], src_len=10, dest_len=11)
+  inverse.apply: 'Levenshtein'
+  as_editops: True
+> ["ops", "Hamming", "", "abc"]
+  editops: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='insert', src_start=0, src_end=0, dest_start=0, dest_end=3)], src_len=0, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=3, size=0)]
+  inverse: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  inverse.apply: ''
+  as_editops: True
+> ["ops", "Hamming", "abc", ""]
+  editops: Editops([Editop(tag='delete', src_pos=0, dest_pos=0), Editop(tag='delete', src_pos=1, dest_pos=0), Editop(tag='delete', src_pos=2, dest_pos=0)], src_len=3, dest_len=0)
+  opcodes: Opcodes([Opcode(tag='delete', src_start=0, src_end=3, dest_start=0, dest_end=0)], src_len=3, dest_len=0)
+  editops.apply: ''
+  opcodes.apply: ''
+  matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=3, b=0, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=0, dest_pos=0), Editop(tag='insert', src_pos=0, dest_pos=1), Editop(tag='insert', src_pos=0, dest_pos=2)], src_len=0, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Hamming", "abc", "abc"]
+  editops: Editops([], src_len=3, dest_len=3)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=3, dest_start=0, dest_end=3)], src_len=3, dest_len=3)
+  editops.apply: 'abc'
+  opcodes.apply: 'abc'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=3), MatchingBlock(a=3, b=3, size=0)]
+  inverse: Editops([], src_len=3, dest_len=3)
+  inverse.apply: 'abc'
+  as_editops: True
+> ["ops", "Hamming", "spam", "park"]
+  editops: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3)], src_len=4, dest_len=4)
+  opcodes: Opcodes([Opcode(tag='replace', src_start=0, src_end=4, dest_start=0, dest_end=4)], src_len=4, dest_len=4)
+  editops.apply: 'park'
+  opcodes.apply: 'park'
+  matching_blocks: [MatchingBlock(a=4, b=4, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=4, b=4, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=0, dest_pos=0), Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=2, dest_pos=2), Editop(tag='replace', src_pos=3, dest_pos=3)], src_len=4, dest_len=4)
+  inverse.apply: 'spam'
+  as_editops: True
+> ["ops", "Hamming", "aaabbb", "ababab"]
+  editops: Editops([Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=4, dest_pos=4)], src_len=6, dest_len=6)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=1, dest_start=0, dest_end=1), Opcode(tag='replace', src_start=1, src_end=2, dest_start=1, dest_end=2), Opcode(tag='equal', src_start=2, src_end=4, dest_start=2, dest_end=4), Opcode(tag='replace', src_start=4, src_end=5, dest_start=4, dest_end=5), Opcode(tag='equal', src_start=5, src_end=6, dest_start=5, dest_end=6)], src_len=6, dest_len=6)
+  editops.apply: 'ababab'
+  opcodes.apply: 'ababab'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=2, b=2, size=2), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=1), MatchingBlock(a=2, b=2, size=2), MatchingBlock(a=5, b=5, size=1), MatchingBlock(a=6, b=6, size=0)]
+  inverse: Editops([Editop(tag='replace', src_pos=1, dest_pos=1), Editop(tag='replace', src_pos=4, dest_pos=4)], src_len=6, dest_len=6)
+  inverse.apply: 'aaabbb'
+  as_editops: True
+> ["ops", "Hamming", "abc", "abcd", {"pad": false}]
+  editops: error ValueError: Sequences are not the same length.
+> ["ops", "Levenshtein", "Main Street", "main st", {"processor": "default"}]
+  editops: Editops([Editop(tag='delete', src_pos=7, dest_pos=7), Editop(tag='delete', src_pos=8, dest_pos=7), Editop(tag='delete', src_pos=9, dest_pos=7), Editop(tag='delete', src_pos=10, dest_pos=7)], src_len=11, dest_len=7)
+  opcodes: Opcodes([Opcode(tag='equal', src_start=0, src_end=7, dest_start=0, dest_end=7), Opcode(tag='delete', src_start=7, src_end=11, dest_start=7, dest_end=7)], src_len=11, dest_len=7)
+  editops.apply: 'main st'
+  opcodes.apply: 'main st'
+  matching_blocks: [MatchingBlock(a=0, b=0, size=7), MatchingBlock(a=11, b=7, size=0)]
+  opcodes.matching_blocks: [MatchingBlock(a=0, b=0, size=7), MatchingBlock(a=11, b=7, size=0)]
+  inverse: Editops([Editop(tag='insert', src_pos=7, dest_pos=7), Editop(tag='insert', src_pos=7, dest_pos=8), Editop(tag='insert', src_pos=7, dest_pos=9), Editop(tag='insert', src_pos=7, dest_pos=10)], src_len=7, dest_len=11)
+  inverse.apply: 'main street'
+  as_editops: True
+# process: extract, extractOne and extract_iter
+> ["extract", "new york jets", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {}]
+  extract: [('New York Jets', 76.92307692307692, 1), ('New York Giants', 64.28571428571428, 2), ('New England Patriots', 37.5, 4), ('Atlanta Falcons', 28.57142857142857, 0), ('Las Vegas Raiders', 26.66666666666667, 5)]
+> ["extract", "new york jets", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"limit": 2}]
+  extract: [('New York Jets', 76.92307692307692, 1), ('New York Giants', 64.28571428571428, 2)]
+> ["extract", "new york jets", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"limit": null}]
+  extract: [('New York Jets', 76.92307692307692, 1), ('New York Giants', 64.28571428571428, 2), ('New England Patriots', 37.5, 4), ('Atlanta Falcons', 28.57142857142857, 0), ('Las Vegas Raiders', 26.66666666666667, 5), ('Dallas Cowboys', 22.22222222222222, 3)]
+> ["extract", "new york jets", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"limit": 1}]
+  extract: [('New York Jets', 76.92307692307692, 1)]
+> ["extract", "new york jets", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"limit": 0}]
+  extract: []
+> ["extractOne", "cowboys", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {}]
+  extractOne: ('Dallas Cowboys', 83.07692307692308, 3)
+> ["extractOne", "cowboys", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"processor": "default"}]
+  extractOne: ('Dallas Cowboys', 90.0, 3)
+> ["extract", "cowboys", ["Atlanta Falcons", "New York Jets", "New York Giants", "Dallas Cowboys", "New England Patriots", "Las Vegas Raiders"], {"processor": "default", "score_cutoff": 50}]
+  extract: [('Dallas Cowboys', 90.0, 3)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {}]
+  extract: [('apple', 88.88888888888889, 0), ('pineapple', 77.14285714285715, 4), ('grapefruit', 67.5, 6), ('grape', 66.66666666666667, 3), ('apricot', 60.00000000000001, 5)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.ratio", "limit": 3}]
+  extract: [('apple', 88.88888888888889, 0), ('grape', 66.66666666666667, 3), ('pineapple', 61.53846153846154, 4)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.partial_ratio", "limit": null}]
+  extract: [('apple', 85.71428571428572, 0), ('grape', 85.71428571428572, 3), ('pineapple', 85.71428571428572, 4), ('grapefruit', 75.0, 6), ('apricot', 66.66666666666667, 5), ('banana', 40.0, 1), ('blackberry', 33.333333333333336, 7), ('cherry', 28.57142857142857, 2)]
+> ["extract", "grape", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.token_set_ratio", "limit": null, "score_cutoff": 50}]
+  extract: [('grape', 100, 3), ('grapefruit', 66.66666666666666, 6), ('apple', 60.0, 0)]
+> ["extract_iter", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.QRatio", "score_cutoff": 60}]
+  extract_iter: [('apple', 88.88888888888889, 0), ('grape', 66.66666666666667, 3), ('pineapple', 61.53846153846154, 4)]
+> ["extract_iter", "apple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.ratio"}]
+  extract_iter: [('apple', 100.0, 0), ('banana', 18.181818181818176, 1), ('cherry', 18.181818181818176, 2), ('grape', 60.0, 3), ('pineapple', 71.42857142857143, 4), ('apricot', 33.333333333333336, 5), ('grapefruit', 40.0, 6), ('blackberry', 26.66666666666667, 7)]
+> ["extractOne", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.distance"}]
+  extractOne: ('apple', 1, 0)
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.distance", "limit": 4}]
+  extract: [('apple', 1, 0), ('grape', 3, 3), ('banana', 5, 1), ('pineapple', 5, 4)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.distance", "score_cutoff": 3, "limit": null}]
+  extract: [('apple', 1, 0), ('grape', 3, 3)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.distance", "limit": 3, "scorer_kwargs": {"weights": [1, 1, 2]}}]
+  extract: [('apple', 1, 0), ('grape', 3, 3), ('pineapple', 5, 4)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.normalized_distance", "limit": 3}]
+  extract: [('apple', 0.2, 0), ('pineapple', 0.5555555555555556, 4), ('grape', 0.6, 3)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.similarity", "limit": 3}]
+  extract: [('apple', 4, 0), ('pineapple', 4, 4), ('grape', 2, 3)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.normalized_similarity", "limit": 3, "score_cutoff": 0.5}]
+  extract: [('apple', 0.8, 0)]
+> ["extract", "grap", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "JaroWinkler.similarity", "limit": 3}]
+  extract: [('grape', 0.96, 3), ('grapefruit', 0.88, 6), ('apricot', 0.6150793650793651, 5)]
+> ["extract", "grap", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "JaroWinkler.similarity", "limit": 3, "scorer_kwargs": {"prefix_weight": 0.25}}]
+  extract: [('grape', 1.0, 3), ('grapefruit', 1.0, 6), ('apricot', 0.6150793650793651, 5)]
+> ["extractOne", "grap", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Jaro.distance"}]
+  extractOne: ('grape', 0.06666666666666676, 3)
+> ["extract", "grap", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Prefix.similarity", "limit": 3}]
+  extract: [('grape', 4, 3), ('grapefruit', 4, 6), ('apple', 0, 0)]
+> ["extract", "berry", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Postfix.distance", "limit": 3}]
+  extract: [('cherry', 2, 2), ('apple', 5, 0), ('grape', 5, 3)]
+> ["extract", "chery", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "OSA.distance", "limit": 2}]
+  extract: [('cherry', 1, 2), ('apple', 5, 0)]
+> ["extract", "bnaana", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "DamerauLevenshtein.distance", "limit": 2}]
+  extract: [('banana', 1, 1), ('grape', 5, 3)]
+> ["extract", "bnaana", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Indel.normalized_distance", "limit": 2}]
+  extract: [('banana', 0.16666666666666666, 1), ('pineapple', 0.7333333333333333, 4)]
+> ["extract", "bnaana", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "LCSseq.similarity", "limit": 2}]
+  extract: [('banana', 5, 1), ('pineapple', 2, 4)]
+> ["extract", "aple", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Hamming.distance", "limit": 3}]
+  extract: [('apple', 3, 0), ('grape', 5, 3), ('apricot', 5, 5)]
+> ["extractOne", "apple", ["Apple", null, "APPLE", "apple"], {}]
+  extractOne: ('apple', 100.0, 3)
+> ["extractOne", "apple", ["Apple", null, "APPLE", "apple"], {"processor": "default"}]
+  extractOne: ('Apple', 100.0, 0)
+> ["extract", "apple", ["Apple", null, "APPLE", "apple"], {"processor": "default"}]
+  extract: [('Apple', 100.0, 0), ('APPLE', 100.0, 2), ('apple', 100.0, 3)]
+> ["extractOne", "zzz", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"score_cutoff": 50}]
+  extractOne: None
+> ["extractOne", "zzz", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "Levenshtein.distance", "score_cutoff": 2}]
+  extractOne: None
+> ["extract", "zzz", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"score_cutoff": 50}]
+  extract: []
+> ["extract", "ny jets", {"NYJ": "New York Jets", "NYG": "New York Giants", "DAL": "Dallas Cowboys"}, {}]
+  extract: [('New York Jets', 60.00000000000001, 'NYJ'), ('New York Giants', 54.0, 'NYG'), ('Dallas Cowboys', 40.0, 'DAL')]
+> ["extractOne", "giants", {"NYJ": "New York Jets", "NYG": "New York Giants", "DAL": "Dallas Cowboys"}, {"processor": "default"}]
+  extractOne: ('New York Giants', 90.0, 'NYG')
+> ["extract", "anything", [], {}]
+  extract: []
+> ["extractOne", "anything", [], {}]
+  extractOne: None
+> ["extract", "", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"limit": 2}]
+  extract: [('apple', 0, 0), ('banana', 0, 1)]
+> ["extract", "", ["apple", "banana", "cherry", "grape", "pineapple", "apricot", "grapefruit", "blackberry"], {"scorer": "fuzz.ratio", "limit": 2}]
+  extract: [('apple', 0.0, 0), ('banana', 0.0, 1)]
+> !dedupe data/vendors.txt
+  Acme Corporation
+    = ACME Corp. (90.0)
+    = Acme Corp (90.0)
+  Globex Inc
+    = Globex, Inc. (95.23809523809523)
+  Initech LLC
+    = Initech (90.0)
+  Umbrella Corporation
+    = Umbrella Corp (90.0)
+  Soylent Green Ltd
+    = Soylent Green Limited (89.47368421052632)
+  Stark Industries
+    = Stark Industries Inc. (95.0)
+  Wayne Enterprises
+    = Wayne Enterprises, Inc (95.0)
+  Wonka Industries
+  Cyberdyne Systems
+    = Cyberdyne Systems Corp (95.0)
+  Hooli
+    = Hooli Inc (90.0)
+  Pied Piper
+    = Pied Piper, Inc. (90.0)
+  Vandelay Industries
+  Vandelay Imports
+  Dunder Mifflin
+    = Dunder-Mifflin Paper Company (90.0)
+  Café Müller GmbH
+  Cafe Muller GmbH
+  Tyrell Corp
+    = Tyrell Corporation (90.0)
+  30 names, 17 vendors
+> !suggest data/commands.txt data/typos.txt
+  comit: did you mean commit (1)?
+  stauts: did you mean status (2)?
+  pul: did you mean pull (1), push (2)?
+  psuh: did you mean push (2)?
+  chekout: did you mean checkout (1)?
+  rebse: did you mean rebase (1), reset (2)?
+  brnach: did you mean branch (2)?
+  statsu: did you mean stash (2), status (2)?
+  mrege: did you mean merge (2)?
+  clne: did you mean clone (1)?
+  cherrypick: did you mean cherry-pick (1)?
+  xyzzy: unknown command
+  stsh: did you mean stash (1), push (2)?
+  lgo: did you mean log (2)?
+  remtoe: did you mean remote (2), restore (2)?
+> !reconcile data/catalog.tsv data/orders.tsv
+  A-501 'iphone 15 pro black 128 gb' -> SKU-1001 Apple iPhone 15 Pro 128GB Black Titanium (85.5)
+  A-502 'galaxy s24 ultra' -> SKU-1003 Samsung Galaxy S24 Ultra 256GB (90.0)
+      also SKU-1006 Bose QuietComfort Ultra Headphones (85.5)
+  A-503 'sony wh1000xm5 headphones' -> SKU-1005 Sony WH-1000XM5 Wireless Headphones (83.33333333333334)
+  A-504 'airpods pro 2' -> SKU-1001 Apple iPhone 15 Pro 128GB Black Titanium (85.5)
+      also SKU-1004 Google Pixel 8 Pro 128GB Obsidian (85.5)
+  A-505 'mx master 3s' -> SKU-1008 Logitech MX Master 3S Mouse (90.0)
+  A-506 'thinkpad x1 carbon' -> SKU-1010 Lenovo ThinkPad X1 Carbon Gen 11 (90.0)
+  A-507 'kindle paperwhite' -> SKU-1012 Kindle Paperwhite 16GB (95.0)
+  A-508 'pixel 8 pro' -> SKU-1004 Google Pixel 8 Pro 128GB Obsidian (90.0)
+      also SKU-1001 Apple iPhone 15 Pro 128GB Black Titanium (85.5)
+  A-509 'bose qc ultra' -> SKU-1003 Samsung Galaxy S24 Ultra 256GB (85.5)
+      also SKU-1006 Bose QuietComfort Ultra Headphones (85.5)
+  A-510 'anker power bank 10000mah' -> SKU-1011 Anker PowerCore 10000 Portable Charger (85.5)
+  A-511 'usb-c cable 2m': no match
+  A-512 'dell xps 13' -> SKU-1009 Dell XPS 13 Laptop 16GB RAM (90.0)
+  11 of 12 orders matched

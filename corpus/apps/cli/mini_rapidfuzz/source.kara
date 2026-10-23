@@ -1,0 +1,2750 @@
+// mini_rapidfuzz: a port of rapidfuzz 3.14.6 (MIT; Max Bachmann, Adam
+// Cohen), the fuzzy string matcher behind record deduplication, "did you
+// mean" suggestions and search over product names. It scores how alike two
+// strings are with the fuzz ratios (ratio, partial_ratio, the token
+// ratios, WRatio, QRatio), measures them with ten edit distances
+// (Levenshtein, Indel, LCSseq, Hamming, Jaro, JaroWinkler, OSA,
+// DamerauLevenshtein, Prefix, Postfix), lists the edits that turn one into
+// the other, and finds the best matches for a query among many choices
+// (process.extract, extractOne, extract_iter).
+//
+// It follows the library's pure-Python implementation, the one
+// RAPIDFUZZ_IMPLEMENTATION=python selects. That one keeps its matrices as
+// Python integers used as bit vectors; the port computes the same cells
+// from the ordinary dynamic programming tables.
+//
+// The run writes its inputs into data/, runs the jobs of jobs_text() and
+// prints each result as oracle.py prints the library's.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+
+// ------------------------------------------------------------ json.loads
+
+// A value as json.loads makes it. An object keeps its pairs as written;
+// a lookup takes the last value for a key and iteration each key once,
+// as the dict Python builds from them does.
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+// The strict decoder of the json module: whitespace is space, tab, CR
+// and LF; strings refuse control characters and unknown escapes; numbers
+// follow `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?`; NaN, Infinity
+// and -Infinity are accepted; nothing may follow the document. atoma
+// turns every failure into one message, so only success matters.
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(ref self) -> i64 {
+        if self.at < self.b.len() {
+            self.b[self.at] as i64
+        } else {
+            -1
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, ()] {
+        let c = self.peek();
+        if c == 123 {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                if self.peek() != 34 {
+                    return Err(());
+                }
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(());
+                }
+                self.ws();
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(());
+                }
+                self.ws();
+            }
+        }
+        if c == 91 {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(());
+                }
+                self.ws();
+            }
+        }
+        if c == 34 {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if let Some(v) = self.number() {
+            return Ok(v);
+        }
+        if self.eat("NaN") {
+            return Ok(JValue.Float(f64.NAN));
+        }
+        if self.eat("Infinity") {
+            return Ok(JValue.Float(f64.INFINITY));
+        }
+        if self.eat("-Infinity") {
+            return Ok(JValue.Float(f64.NEG_INFINITY));
+        }
+        Err(())
+    }
+
+    fn hex4(mut ref self) -> Result[i64, ()] {
+        let mut v = 0;
+        for _ in 0..4 {
+            let c = self.peek();
+            let d = if c >= 48 and c <= 57 {
+                c - 48
+            } else if c >= 97 and c <= 102 {
+                c - 87
+            } else if c >= 65 and c <= 70 {
+                c - 55
+            } else {
+                return Err(());
+            };
+            self.at += 1;
+            v = v * 16 + d;
+        }
+        Ok(v)
+    }
+
+    fn string(mut ref self) -> Result[String, ()] {
+        self.at += 1;
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            let c = self.peek();
+            if c < 0 {
+                return Err(());
+            }
+            self.at += 1;
+            if c == 34 {
+                break;
+            }
+            if c < 32 {
+                return Err(());
+            }
+            if c != 92 {
+                out.push(c as u8);
+                continue;
+            }
+            let e = self.peek();
+            self.at += 1;
+            if e == 34 or e == 92 or e == 47 {
+                out.push(e as u8);
+            } else if e == 98 {
+                out.push(8);
+            } else if e == 102 {
+                out.push(12);
+            } else if e == 110 {
+                out.push(10);
+            } else if e == 114 {
+                out.push(13);
+            } else if e == 116 {
+                out.push(9);
+            } else if e == 117 {
+                let mut cp = self.hex4()?;
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let back = self.at - 2;
+                    let lo = self.hex4()?;
+                    if lo >= 0xDC00 and lo < 0xE000 {
+                        cp = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00);
+                    } else {
+                        self.at = back;
+                    }
+                }
+                push_cp(mut out, cp);
+            } else {
+                return Err(());
+            }
+        }
+        match String.from_utf8(out) {
+            Ok(s) => Ok(s),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn digits(mut ref self) -> i64 {
+        let st = self.at;
+        while self.peek() >= 48 and self.peek() <= 57 {
+            self.at += 1;
+        }
+        self.at - st
+    }
+
+    // NUMBER_RE at the current position, or None with the position kept.
+    fn number(mut ref self) -> Option[JValue] {
+        let st = self.at;
+        if self.peek() == 45 {
+            self.at += 1;
+        }
+        if self.peek() == 48 {
+            self.at += 1;
+        } else if self.digits() == 0 {
+            self.at = st;
+            return None;
+        }
+        let int_end = self.at;
+        let mut is_float = false;
+        if self.peek() == 46 {
+            self.at += 1;
+            if self.digits() == 0 {
+                self.at = int_end;
+            } else {
+                is_float = true;
+            }
+        }
+        let frac_end = self.at;
+        if self.peek() == 101 or self.peek() == 69 {
+            self.at += 1;
+            if self.peek() == 43 or self.peek() == 45 {
+                self.at += 1;
+            }
+            if self.digits() == 0 {
+                self.at = frac_end;
+            } else {
+                is_float = true;
+            }
+        }
+        let t = String.from_utf8(self.b[st..self.at].to_vec()).unwrap_or(String.new());
+        if is_float {
+            return match f64.parse(t) {
+                Ok(f) => Some(JValue.Float(f)),
+                Err(_) => None,
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Some(JValue.Int(i)),
+            Err(_) => None,
+        }
+    }
+}
+
+fn push_cp(out: mut ref Vec[u8], c: i64) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 + c / 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 + c / 4096) as u8);
+        out.push((0x80 + c / 64 % 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    } else {
+        out.push((0xF0 + c / 262144) as u8);
+        out.push((0x80 + c / 4096 % 64) as u8);
+        out.push((0x80 + c / 64 % 64) as u8);
+        out.push((0x80 + c % 64) as u8);
+    }
+}
+
+// json.loads(s) over text that is already str.
+fn json_loads(b: own Vec[u8]) -> Result[JValue, ()] {
+    let mut r = JsonReader { b: b, at: 0 };
+    r.ws();
+    let v = r.value()?;
+    r.ws();
+    if r.at != r.b.len() {
+        return Err(());
+    }
+    Ok(v)
+}
+
+// ------------------------------------------------------------ code points
+
+fn cps_of(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push((c as u32) as i64);
+    }
+    out
+}
+
+fn cps_str(cs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for c in cs.iter() {
+        s.push(char.try_from(*c as u32).unwrap_or('?'));
+    }
+    s
+}
+
+fn sub(cs: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = from;
+    while i < to {
+        v.push(cs[i]);
+        i += 1;
+    }
+    v
+}
+
+// ------------------------------------------------------------ numbers
+
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn value_error(msg: Str) -> PyErr {
+    PyErr { kind: "ValueError".to_string(), msg: msg.to_string() }
+}
+
+// A score as Python holds it. The library returns ints in some paths (0
+// below a cutoff, 100 for a perfect partial match, an edit count) and
+// floats in others, and the two print differently.
+#[derive(Clone)]
+enum Num {
+    I(i64),
+    F(f64),
+}
+
+const BIG: i64 = 9223372036854775807;
+
+fn nf(n: ref Num) -> f64 {
+    match n {
+        Num.I(i) => *i as f64,
+        Num.F(x) => *x,
+    }
+}
+
+fn num_repr(n: ref Num) -> String {
+    match n {
+        Num.I(i) => f"{i}",
+        Num.F(x) => f"{x}",
+    }
+}
+
+// -1, 0 or 1, exactly when both are ints, as Python compares them.
+fn ncmp(a: ref Num, b: ref Num) -> i64 {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return if *x < *y { -1 } else if *x > *y { 1 } else { 0 };
+        }
+    }
+    let x = nf(a);
+    let y = nf(b);
+    if x < y {
+        -1
+    } else if x > y {
+        1
+    } else {
+        0
+    }
+}
+
+fn n_gt(a: ref Num, b: ref Num) -> bool {
+    ncmp(a, b) > 0
+}
+
+fn n_ge(a: ref Num, b: ref Num) -> bool {
+    ncmp(a, b) >= 0
+}
+
+fn n_lt(a: ref Num, b: ref Num) -> bool {
+    ncmp(a, b) < 0
+}
+
+fn n_le(a: ref Num, b: ref Num) -> bool {
+    ncmp(a, b) <= 0
+}
+
+fn n_eq(a: ref Num, b: ref Num) -> bool {
+    ncmp(a, b) == 0
+}
+
+// max(a, b): the first unless the second is greater.
+fn py_max(a: own Num, b: own Num) -> Num {
+    if n_gt(b, a) { b } else { a }
+}
+
+fn n_mul(a: ref Num, b: ref Num) -> Num {
+    if let Num.I(x) = a {
+        if let Num.I(y) = b {
+            return Num.I(*x * *y);
+        }
+    }
+    Num.F(nf(a) * nf(b))
+}
+
+fn n_add1(a: ref Num) -> Num {
+    match a {
+        Num.I(x) => Num.I(*x + 1),
+        Num.F(x) => Num.F(*x + 1.0),
+    }
+}
+
+// `x / 100` and the like: true division is always a float.
+fn n_div(a: ref Num, d: f64) -> Num {
+    Num.F(nf(a) / d)
+}
+
+fn ratio_of(a: i64, b: i64) -> f64 {
+    (a as f64) / (b as f64)
+}
+
+// `dist / maximum if maximum else 0`
+fn norm_or_zero(dist: i64, maximum: i64) -> Num {
+    if maximum != 0 { Num.F(ratio_of(dist, maximum)) } else { Num.I(0) }
+}
+
+// The cutoff tails every scorer ends with.
+fn dist_cut(dist: i64, cut: ref Option[Num]) -> Num {
+    match cut {
+        Some(c) => if n_le(Num.I(dist), c) { Num.I(dist) } else { n_add1(c) },
+        None => Num.I(dist),
+    }
+}
+
+fn sim_cut(sim: i64, cut: ref Option[Num]) -> Num {
+    match cut {
+        Some(c) => if n_ge(Num.I(sim), c) { Num.I(sim) } else { Num.I(0) },
+        None => Num.I(sim),
+    }
+}
+
+fn le_cut(v: own Num, cut: ref Option[Num], worst: own Num) -> Num {
+    match cut {
+        Some(c) => if n_le(v, c) { v } else { worst },
+        None => v,
+    }
+}
+
+fn ge_cut(v: own Num, cut: ref Option[Num], zero: own Num) -> Num {
+    match cut {
+        Some(c) => if n_ge(v, c) { v } else { zero },
+        None => v,
+    }
+}
+
+// ------------------------------------------------------------ sequences
+
+// A string as the code points rapidfuzz compares.
+type Seq = Vec[i64];
+
+fn seq_eq(a: ref Seq, b: ref Seq) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn seq_lt(a: ref Seq, b: ref Seq) -> bool {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+    }
+    a.len() < b.len()
+}
+
+fn seq_has(a: ref Seq, c: i64) -> bool {
+    for x in a.iter() {
+        if *x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn seq_repr(a: ref Seq) -> String {
+    py_repr(cps_str(a))
+}
+
+// The characters str.isspace() accepts.
+fn py_isspace(c: i64) -> bool {
+    (c >= 9 and c <= 13) or (c >= 28 and c <= 32) or c == 0x85 or c == 0xA0 or c == 0x1680
+        or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F
+        or c == 0x205F or c == 0x3000
+}
+
+// `\w` of the `re` module on str: a letter, a digit or `_`.
+fn is_word_cp(c: i64) -> bool {
+    if c == 95 {
+        return true;
+    }
+    let ch = char.try_from(c as u32).unwrap_or(' ');
+    ch.is_alphanumeric()
+}
+
+// utils.default_process: every non-word character becomes a space, then
+// strip() and lower().
+fn default_process(s: ref Seq) -> Seq {
+    let mut t: Seq = Vec.new();
+    for c in s.iter() {
+        t.push(if is_word_cp(*c) { *c } else { 32 });
+    }
+    let mut lo = 0;
+    let mut hi = t.len();
+    while lo < hi and py_isspace(t[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_isspace(t[hi - 1]) {
+        hi -= 1;
+    }
+    cps_of(cps_str(sub(t, lo, hi)).to_lowercase())
+}
+
+// str.split(): runs of whitespace separate, none at either end.
+fn split_seq(s: ref Seq) -> Vec[Seq] {
+    let mut out: Vec[Seq] = Vec.new();
+    let mut cur: Seq = Vec.new();
+    for c in s.iter() {
+        if py_isspace(*c) {
+            if cur.len() > 0 {
+                out.push(cur.clone());
+                cur = Vec.new();
+            }
+        } else {
+            cur.push(*c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn sorted_seqs(v: ref Vec[Seq]) -> Vec[Seq] {
+    let mut out: Vec[Seq] = Vec.new();
+    for x in v.iter() {
+        let mut at = out.len();
+        while at > 0 and seq_lt(x, out[at - 1]) {
+            at -= 1;
+        }
+        out.insert(at, x.clone());
+    }
+    out
+}
+
+fn join_seqs(v: ref Vec[Seq]) -> Seq {
+    let mut out: Seq = Vec.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            out.push(32);
+        }
+        for c in v[i].iter() {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn has_seq(v: ref Vec[Seq], s: ref Seq) -> bool {
+    for x in v.iter() {
+        if seq_eq(x, s) {
+            return true;
+        }
+    }
+    false
+}
+
+// set(tokens): each token once. Only sorted order or lengths are ever
+// read from one, so the order kept here does not matter.
+fn token_set(v: ref Vec[Seq]) -> Vec[Seq] {
+    let mut out: Vec[Seq] = Vec.new();
+    for x in v.iter() {
+        if not has_seq(out, x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn set_and(a: ref Vec[Seq], b: ref Vec[Seq]) -> Vec[Seq] {
+    let mut out: Vec[Seq] = Vec.new();
+    for x in a.iter() {
+        if has_seq(b, x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn set_minus(a: ref Vec[Seq], b: ref Vec[Seq]) -> Vec[Seq] {
+    let mut out: Vec[Seq] = Vec.new();
+    for x in a.iter() {
+        if not has_seq(b, x) {
+            out.push(x.clone());
+        }
+    }
+    out
+}
+
+fn sorted_joined(s: ref Seq) -> Seq {
+    join_seqs(sorted_seqs(split_seq(s)))
+}
+
+fn max_i(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+// ------------------------------------------------------------ edit distances
+
+// The longest common subsequence table: t[i * (n + 1) + j] for a[:i] and
+// b[:j].
+fn lcs_table(a: ref Seq, b: ref Seq) -> Vec[i64] {
+    let w = b.len() + 1;
+    let mut t: Vec[i64] = Vec.new();
+    for _ in 0..(a.len() + 1) * w {
+        t.push(0);
+    }
+    for i in 1..a.len() + 1 {
+        for j in 1..w {
+            t[i * w + j] = if a[i - 1] == b[j - 1] {
+                t[(i - 1) * w + j - 1] + 1
+            } else {
+                max_i(t[(i - 1) * w + j], t[i * w + j - 1])
+            };
+        }
+    }
+    t
+}
+
+fn lcs_len(a: ref Seq, b: ref Seq) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let t = lcs_table(a, b);
+    t[t.len() - 1]
+}
+
+// Levenshtein with unit weights: d[i * (n + 1) + j] for a[:i] and b[:j].
+fn lev_table(a: ref Seq, b: ref Seq) -> Vec[i64] {
+    let w = b.len() + 1;
+    let mut t: Vec[i64] = Vec.new();
+    for i in 0..a.len() + 1 {
+        for j in 0..w {
+            t.push(if i == 0 { j } else if j == 0 { i } else { 0 });
+        }
+    }
+    for i in 1..a.len() + 1 {
+        for j in 1..w {
+            let rep = t[(i - 1) * w + j - 1] + if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            t[i * w + j] = min_i(min_i(t[(i - 1) * w + j] + 1, t[i * w + j - 1] + 1), rep);
+        }
+    }
+    t
+}
+
+fn lev_uniform(a: ref Seq, b: ref Seq) -> i64 {
+    let t = lev_table(a, b);
+    t[t.len() - 1]
+}
+
+// _uniform_generic: the weighted table one column at a time.
+fn lev_generic(a: ref Seq, b: ref Seq, ins: i64, del: i64, rep: i64) -> Result[i64, PyErr] {
+    if del == 0 {
+        return Err(value_error("range() arg 3 must not be zero"));
+    }
+    let n = a.len();
+    let mut cache: Vec[i64] = Vec.new();
+    for i in 0..n + 1 {
+        cache.push(i * del);
+    }
+    for ch2 in b.iter() {
+        let mut temp = cache[0];
+        cache[0] += ins;
+        for i in 0..n {
+            let mut x = temp;
+            if a[i] != *ch2 {
+                x = min_i(min_i(cache[i] + del, cache[i + 1] + ins), temp + rep);
+            }
+            temp = cache[i + 1];
+            cache[i + 1] = x;
+        }
+    }
+    Ok(cache[n])
+}
+
+fn lev_maximum(n1: i64, n2: i64, ins: i64, del: i64, rep: i64) -> i64 {
+    let mut m = n1 * del + n2 * ins;
+    if n1 >= n2 {
+        m = min_i(m, n2 * rep + (n1 - n2) * del);
+    } else {
+        m = min_i(m, n1 * rep + (n2 - n1) * ins);
+    }
+    m
+}
+
+fn osa_distance(a: ref Seq, b: ref Seq) -> i64 {
+    let w = b.len() + 1;
+    let mut t = lev_table(a, b);
+    for i in 1..a.len() + 1 {
+        for j in 1..w {
+            let rep = t[(i - 1) * w + j - 1] + if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let mut v = min_i(min_i(t[(i - 1) * w + j] + 1, t[i * w + j - 1] + 1), rep);
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1] {
+                v = min_i(v, t[(i - 2) * w + j - 2] + 1);
+            }
+            t[i * w + j] = v;
+        }
+    }
+    t[t.len() - 1]
+}
+
+// _damerau_levenshtein_distance_zhao, as written.
+fn dl_distance(s1: ref Seq, s2: ref Seq) -> i64 {
+    let max_val = max_i(s1.len(), s2.len()) + 1;
+    let mut last_row: Vec[(i64, i64)] = Vec.new();
+    let size = s2.len() + 2;
+    let mut fr: Vec[i64] = Vec.new();
+    let mut r1: Vec[i64] = Vec.new();
+    let mut r: Vec[i64] = Vec.new();
+    for k in 0..size {
+        fr.push(max_val);
+        r1.push(max_val);
+        r.push(k);
+    }
+    r[size - 1] = max_val;
+    for i in 1..s1.len() + 1 {
+        let tmp = r;
+        r = r1;
+        r1 = tmp;
+        let mut last_col: i64 = -1;
+        let mut last_i2l1 = r[0];
+        r[0] = i;
+        let mut t = max_val;
+        for j in 1..s2.len() + 1 {
+            let same = s1[i - 1] == s2[j - 1];
+            // R1[j - 2] reads R1[-1], the last cell, when j is 1
+            let back = if j >= 2 { r1[j - 2] } else { r1[size - 1] };
+            let diag = r1[j - 1] + if same { 0 } else { 1 };
+            let left = r[j - 1] + 1;
+            let up = r1[j] + 1;
+            let mut temp = min_i(min_i(diag, left), up);
+            if same {
+                last_col = j;
+                fr[j] = back;
+                t = last_i2l1;
+            } else {
+                let mut k: i64 = -1;
+                for p in last_row.iter() {
+                    if p.0 == s2[j - 1] {
+                        k = p.1;
+                    }
+                }
+                let l = last_col;
+                if j - l == 1 {
+                    temp = min_i(temp, fr[j] + (i - k));
+                } else if i - k == 1 {
+                    temp = min_i(temp, t + (j - l));
+                }
+            }
+            last_i2l1 = r[j];
+            r[j] = temp;
+        }
+        let mut found = false;
+        for p in last_row.iter_mut() {
+            if p.0 == s1[i - 1] {
+                p.1 = i;
+                found = true;
+            }
+        }
+        if not found {
+            last_row.push((s1[i - 1], i));
+        }
+    }
+    r[s2.len()]
+}
+
+fn common_prefix(a: ref Seq, b: ref Seq) -> i64 {
+    let mut n = 0;
+    while n < a.len() and n < b.len() and a[n] == b[n] {
+        n += 1;
+    }
+    n
+}
+
+fn common_suffix(a: ref Seq, b: ref Seq) -> i64 {
+    let mut n = 0;
+    while n < a.len() and n < b.len() and a[a.len() - 1 - n] == b[b.len() - 1 - n] {
+        n += 1;
+    }
+    n
+}
+
+// ------------------------------------------------------------ the metrics
+
+#[derive(Clone)]
+struct Opts {
+    processor: bool,
+    cutoff: Option[Num],
+    ins: i64,
+    del: i64,
+    rep: i64,
+    pad: bool,
+    prefix_weight: f64,
+    limit: Option[i64],
+    scorer: String,
+}
+
+fn opts_new() -> Opts {
+    Opts {
+        processor: false,
+        cutoff: None,
+        ins: 1,
+        del: 1,
+        rep: 1,
+        pad: true,
+        prefix_weight: 0.1,
+        limit: Some(5),
+        scorer: "fuzz.WRatio".to_string(),
+    }
+}
+
+fn lev_dist(a: ref Seq, b: ref Seq, o: ref Opts) -> Result[i64, PyErr] {
+    if o.ins == 1 and o.del == 1 and o.rep == 1 {
+        Ok(lev_uniform(a, b))
+    } else if o.ins == 1 and o.del == 1 and o.rep == 2 {
+        Ok(a.len() + b.len() - 2 * lcs_len(a, b))
+    } else {
+        lev_generic(a, b, o.ins, o.del, o.rep)
+    }
+}
+
+fn levenshtein(f: Str, a: ref Seq, b: ref Seq, o: ref Opts, cut: ref Option[Num]) -> Result[Num, PyErr] {
+    let maximum = lev_maximum(a.len(), b.len(), o.ins, o.del, o.rep);
+    if f == "distance" {
+        return Ok(dist_cut(lev_dist(a, b, o)?, cut));
+    }
+    if f == "similarity" {
+        return Ok(sim_cut(maximum - lev_dist(a, b, o)?, cut));
+    }
+    let nd = norm_or_zero(lev_dist(a, b, o)?, maximum);
+    if f == "normalized_distance" {
+        return Ok(le_cut(nd, cut, Num.I(1)));
+    }
+    Ok(ge_cut(Num.F(1.0 - nf(nd)), cut, Num.I(0)))
+}
+
+fn indel_dist(a: ref Seq, b: ref Seq) -> i64 {
+    a.len() + b.len() - 2 * lcs_len(a, b)
+}
+
+fn indel(f: Str, a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    let maximum = a.len() + b.len();
+    if f == "distance" {
+        return dist_cut(indel_dist(a, b), cut);
+    }
+    if f == "similarity" {
+        return sim_cut(maximum - indel_dist(a, b), cut);
+    }
+    let nd = norm_or_zero(indel_dist(a, b), maximum);
+    if f == "normalized_distance" {
+        return le_cut(nd, cut, Num.I(1));
+    }
+    ge_cut(Num.F(1.0 - nf(nd)), cut, Num.I(0))
+}
+
+fn lcsseq(f: Str, a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    let maximum = max_i(a.len(), b.len());
+    if f == "similarity" {
+        if a.len() == 0 {
+            return Num.I(0);
+        }
+        return sim_cut(lcs_len(a, b), cut);
+    }
+    if f == "distance" {
+        return dist_cut(maximum - lcs_len(a, b), cut);
+    }
+    let nd = if a.len() == 0 and b.len() == 0 {
+        Num.I(0)
+    } else {
+        Num.F(ratio_of(maximum - lcs_len(a, b), maximum))
+    };
+    if f == "normalized_distance" {
+        if a.len() == 0 and b.len() == 0 {
+            return nd;
+        }
+        return le_cut(nd, cut, Num.I(1));
+    }
+    ge_cut(Num.F(1.0 - nf(nd)), cut, Num.I(0))
+}
+
+fn hamming_dist(a: ref Seq, b: ref Seq, pad: bool) -> Result[i64, PyErr] {
+    if not pad and a.len() != b.len() {
+        return Err(value_error("Sequences are not the same length."));
+    }
+    let mut d = max_i(a.len(), b.len());
+    for i in 0..min_i(a.len(), b.len()) {
+        if a[i] == b[i] {
+            d -= 1;
+        }
+    }
+    Ok(d)
+}
+
+fn hamming(f: Str, a: ref Seq, b: ref Seq, o: ref Opts, cut: ref Option[Num]) -> Result[Num, PyErr] {
+    let maximum = max_i(a.len(), b.len());
+    if f == "distance" {
+        return Ok(dist_cut(hamming_dist(a, b, o.pad)?, cut));
+    }
+    if f == "similarity" {
+        return Ok(sim_cut(maximum - hamming_dist(a, b, o.pad)?, cut));
+    }
+    let nd = norm_or_zero(hamming_dist(a, b, o.pad)?, maximum);
+    if f == "normalized_distance" {
+        return Ok(le_cut(nd, cut, Num.F(1.0)));
+    }
+    // `1 - norm_dist`: an int when norm_dist is the int 0
+    let ns = match nd {
+        Num.I(x) => Num.I(1 - x),
+        Num.F(x) => Num.F(1.0 - x),
+    };
+    Ok(ge_cut(ns, cut, Num.F(0.0)))
+}
+
+fn jaro_calc(p: i64, t: i64, common: i64, trans: i64) -> f64 {
+    let tr = trans / 2;
+    let mut sim = 0.0;
+    sim += ratio_of(common, p);
+    sim += ratio_of(common, t);
+    sim += ratio_of(common - tr, common);
+    sim / 3.0
+}
+
+fn jaro_sim(s1: ref Seq, s2: ref Seq, cut0: ref Option[Num]) -> Num {
+    if s1.len() == 0 and s2.len() == 0 {
+        return Num.F(1.0);
+    }
+    let cut = match cut0 {
+        Some(c) => c.clone(),
+        None => Num.I(0),
+    };
+    let p_len = s1.len();
+    let t_len = s2.len();
+    if p_len == 0 or t_len == 0 {
+        return Num.I(0);
+    }
+    if not n_ge(Num.F(jaro_calc(p_len, t_len, min_i(p_len, t_len), 0)), cut) {
+        return Num.I(0);
+    }
+    if p_len == 1 and t_len == 1 {
+        return Num.F(if s1[0] == s2[0] { 1.0 } else { 0.0 });
+    }
+    // _jaro_bounds: the longer string loses what lies past the window
+    let mut a = s1.clone();
+    let mut b = s2.clone();
+    let mut bound = 0;
+    if t_len > p_len {
+        bound = t_len / 2 - 1;
+        if t_len > p_len + bound {
+            b = sub(s2, 0, p_len + bound);
+        }
+    } else {
+        bound = p_len / 2 - 1;
+        if p_len > t_len + bound {
+            a = sub(s1, 0, t_len + bound);
+        }
+    }
+    let mut f1: Vec[bool] = Vec.new();
+    for _ in 0..p_len {
+        f1.push(false);
+    }
+    let mut f2: Vec[bool] = Vec.new();
+    for _ in 0..t_len {
+        f2.push(false);
+    }
+    let mut common = 0;
+    for i in 0..a.len() {
+        let low = max_i(0, i - bound);
+        let hi = min_i(i + bound, t_len - 1);
+        let mut j = low;
+        while j <= hi {
+            if not f2[j] and b[j] == a[i] {
+                f1[i] = true;
+                f2[j] = true;
+                common += 1;
+                break;
+            }
+            j += 1;
+        }
+    }
+    if common == 0 or not n_ge(Num.F(jaro_calc(p_len, t_len, common, 0)), cut) {
+        return Num.I(0);
+    }
+    let mut k = 0;
+    let mut trans = 0;
+    let mut j = 0;
+    for i in 0..p_len {
+        if f1[i] {
+            j = k;
+            while j < t_len {
+                if f2[j] {
+                    k = j + 1;
+                    break;
+                }
+                j += 1;
+            }
+            if a[i] != b[j] {
+                trans += 1;
+            }
+        }
+    }
+    let sim = jaro_calc(p_len, t_len, common, trans);
+    if n_ge(Num.F(sim), cut) { Num.F(sim) } else { Num.I(0) }
+}
+
+// cutoff_distance = None if score_cutoff is None or score_cutoff > 1.0
+// else 1.0 - score_cutoff
+fn flip_cut(cut: ref Option[Num]) -> Option[Num] {
+    match cut {
+        Some(c) => if nf(c) > 1.0 { None } else { Some(Num.F(1.0 - nf(c))) },
+        None => None,
+    }
+}
+
+fn jaro(f: Str, a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    if f == "similarity" or f == "normalized_similarity" {
+        return jaro_sim(a, b, cut);
+    }
+    let dist = Num.F(1.0 - nf(jaro_sim(a, b, flip_cut(cut))));
+    le_cut(dist, cut, Num.F(1.0))
+}
+
+fn jw_sim(s1: ref Seq, s2: ref Seq, pw: f64, cut0: ref Option[Num]) -> Result[Num, PyErr] {
+    let cut = match cut0 {
+        Some(c) => c.clone(),
+        None => Num.I(0),
+    };
+    if pw > 1.0 or pw < 0.0 {
+        return Err(value_error("prefix_weight has to be in the range 0.0 - 1.0"));
+    }
+    let max_prefix = min_i(min_i(s1.len(), s2.len()), 4);
+    let mut prefix = 0;
+    while prefix < max_prefix and s1[prefix] == s2[prefix] {
+        prefix += 1;
+    }
+    let mut jcut = cut.clone();
+    if nf(jcut) > 0.7 {
+        let psim = (prefix as f64) * pw;
+        if psim >= 1.0 {
+            jcut = Num.F(0.7);
+        } else {
+            jcut = py_max(Num.F(0.7), Num.F((psim - nf(jcut)) / (psim - 1.0)));
+        }
+    }
+    let mut sim = jaro_sim(s1, s2, Some(jcut));
+    if nf(sim) > 0.7 {
+        let x = nf(sim);
+        let y = x + (prefix as f64) * pw * (1.0 - x);
+        sim = Num.F(if 1.0 < y { 1.0 } else { y });
+    }
+    Ok(if n_ge(sim, cut) { sim } else { Num.I(0) })
+}
+
+fn jaro_winkler(f: Str, a: ref Seq, b: ref Seq, o: ref Opts, cut: ref Option[Num]) -> Result[Num, PyErr] {
+    if f == "similarity" or f == "normalized_similarity" {
+        return jw_sim(a, b, o.prefix_weight, cut);
+    }
+    let dist = Num.F(1.0 - nf(jw_sim(a, b, o.prefix_weight, flip_cut(cut))?));
+    Ok(le_cut(dist, cut, Num.F(1.0)))
+}
+
+// OSA and DamerauLevenshtein share the shape of the uniform Levenshtein.
+fn by_distance(f: Str, d: i64, maximum: i64, cut: ref Option[Num]) -> Num {
+    if f == "distance" {
+        return dist_cut(d, cut);
+    }
+    if f == "similarity" {
+        return sim_cut(maximum - d, cut);
+    }
+    let nd = norm_or_zero(d, maximum);
+    if f == "normalized_distance" {
+        return le_cut(nd, cut, Num.I(1));
+    }
+    ge_cut(Num.F(1.0 - nf(nd)), cut, Num.I(0))
+}
+
+fn affix(f: Str, sim: i64, maximum: i64, cut: ref Option[Num]) -> Num {
+    if f == "similarity" {
+        return sim_cut(sim, cut);
+    }
+    if f == "distance" {
+        return dist_cut(maximum - sim, cut);
+    }
+    let ns = if maximum != 0 { ratio_of(sim, maximum) } else { 1.0 };
+    if f == "normalized_similarity" {
+        return ge_cut(Num.F(ns), cut, Num.F(0.0));
+    }
+    le_cut(Num.F(1.0 - ns), cut, Num.F(1.0))
+}
+
+fn metric(m: Str, f: Str, a: ref Seq, b: ref Seq, o: ref Opts, cut: ref Option[Num]) -> Result[Num, PyErr] {
+    if m == "Levenshtein" {
+        levenshtein(f, a, b, o, cut)
+    } else if m == "Indel" {
+        Ok(indel(f, a, b, cut))
+    } else if m == "LCSseq" {
+        Ok(lcsseq(f, a, b, cut))
+    } else if m == "Hamming" {
+        hamming(f, a, b, o, cut)
+    } else if m == "Jaro" {
+        Ok(jaro(f, a, b, cut))
+    } else if m == "JaroWinkler" {
+        jaro_winkler(f, a, b, o, cut)
+    } else if m == "OSA" {
+        Ok(by_distance(f, osa_distance(a, b), max_i(a.len(), b.len()), cut))
+    } else if m == "DamerauLevenshtein" {
+        Ok(by_distance(f, dl_distance(a, b), max_i(a.len(), b.len()), cut))
+    } else if m == "Prefix" {
+        Ok(affix(f, common_prefix(a, b), max_i(a.len(), b.len()), cut))
+    } else {
+        Ok(affix(f, common_suffix(a, b), max_i(a.len(), b.len()), cut))
+    }
+}
+
+// ------------------------------------------------------------ fuzz
+
+fn cut_or_zero(cut: ref Option[Num]) -> Num {
+    match cut {
+        Some(c) => c.clone(),
+        None => Num.I(0),
+    }
+}
+
+fn ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    let c = match cut {
+        Some(x) => Some(n_div(x, 100.0)),
+        None => None,
+    };
+    n_mul(indel("normalized_similarity", a, b, c), Num.I(100))
+}
+
+fn norm_distance(dist: i64, lensum: i64, cut: ref Num) -> Num {
+    let score = if lensum != 0 {
+        Num.F(100.0 - ratio_of(100 * dist, lensum))
+    } else {
+        Num.I(100)
+    };
+    if n_ge(score, cut) { score } else { Num.I(0) }
+}
+
+#[derive(Clone)]
+struct Align {
+    score: Num,
+    src_start: i64,
+    src_end: i64,
+    dest_start: i64,
+    dest_end: i64,
+}
+
+fn align_repr(a: ref Align) -> String {
+    f"ScoreAlignment(score={num_repr(a.score)}, src_start={a.src_start}, src_end={a.src_end}, dest_start={a.dest_start}, dest_end={a.dest_end})"
+}
+
+// _indel_block_normalized_similarity of s1 against one window of s2.
+fn block_sim(s1: ref Seq, w: ref Seq, cut: ref Num) -> Num {
+    let nd = norm_or_zero(indel_dist(s1, w), s1.len() + w.len());
+    let ns = Num.F(1.0 - nf(nd));
+    if n_ge(ns, cut) { ns } else { Num.I(0) }
+}
+
+// _partial_ratio_impl, for len(s1) <= len(s2): every window of s2 that
+// ends (or starts) on a character of s1 is scored, the best kept.
+fn partial_impl(s1: ref Seq, s2: ref Seq, cut0: own Num) -> Align {
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let mut cut = cut0;
+    let mut res = Align { score: Num.I(0), src_start: 0, src_end: len1, dest_start: 0, dest_end: len1 };
+    for i in 1..len1 {
+        if not seq_has(s1, s2[i - 1]) {
+            continue;
+        }
+        let ls = block_sim(s1, sub(s2, 0, i), cut);
+        if n_gt(ls, res.score) {
+            cut = ls.clone();
+            res.score = ls;
+            res.dest_start = 0;
+            res.dest_end = i;
+            if n_eq(res.score, Num.I(1)) {
+                res.score = Num.I(100);
+                return res;
+            }
+        }
+    }
+    for i in 0..len2 - len1 {
+        // s2[i + len1 - 1] is s2[-1] when s1 is empty, and the empty set
+        // holds nothing either way
+        if len1 == 0 or not seq_has(s1, s2[i + len1 - 1]) {
+            continue;
+        }
+        let ls = block_sim(s1, sub(s2, i, i + len1), cut);
+        if n_gt(ls, res.score) {
+            cut = ls.clone();
+            res.score = ls;
+            res.dest_start = i;
+            res.dest_end = i + len1;
+            if n_eq(res.score, Num.I(1)) {
+                res.score = Num.I(100);
+                return res;
+            }
+        }
+    }
+    for i in len2 - len1..len2 {
+        if not seq_has(s1, s2[i]) {
+            continue;
+        }
+        let ls = block_sim(s1, sub(s2, i, len2), cut);
+        if n_gt(ls, res.score) {
+            cut = ls.clone();
+            res.score = ls;
+            res.dest_start = i;
+            res.dest_end = len2;
+            if n_eq(res.score, Num.I(1)) {
+                res.score = Num.I(100);
+                return res;
+            }
+        }
+    }
+    res.score = n_mul(res.score, Num.I(100));
+    res
+}
+
+fn partial_ratio_alignment(s1: ref Seq, s2: ref Seq, cut0: ref Option[Num]) -> Option[Align] {
+    let mut cut = cut_or_zero(cut0);
+    if s1.len() == 0 and s2.len() == 0 {
+        return Some(Align { score: Num.F(100.0), src_start: 0, src_end: 0, dest_start: 0, dest_end: 0 });
+    }
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let short_first = len1 <= len2;
+    let mut res = if short_first {
+        partial_impl(s1, s2, n_div(cut, 100.0))
+    } else {
+        partial_impl(s2, s1, n_div(cut, 100.0))
+    };
+    if not n_eq(res.score, Num.I(100)) and len1 == len2 {
+        cut = py_max(cut, res.score.clone());
+        let res2 = partial_impl(s2, s1, n_div(cut, 100.0));
+        if n_gt(res2.score, res.score) {
+            res = Align {
+                score: res2.score.clone(),
+                src_start: res2.dest_start,
+                src_end: res2.dest_end,
+                dest_start: res2.src_start,
+                dest_end: res2.src_end,
+            };
+        }
+    }
+    if n_lt(res.score, cut) {
+        return None;
+    }
+    if short_first {
+        return Some(res);
+    }
+    Some(Align {
+        score: res.score.clone(),
+        src_start: res.dest_start,
+        src_end: res.dest_end,
+        dest_start: res.src_start,
+        dest_end: res.src_end,
+    })
+}
+
+fn partial_ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    match partial_ratio_alignment(a, b, cut) {
+        Some(al) => al.score,
+        None => Num.I(0),
+    }
+}
+
+fn token_sort_ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    ratio(sorted_joined(a), sorted_joined(b), cut)
+}
+
+fn token_set_ratio(a: ref Seq, b: ref Seq, cut0: ref Option[Num]) -> Num {
+    let cut = cut_or_zero(cut0);
+    if n_gt(cut, Num.I(100)) {
+        return Num.I(0);
+    }
+    let ta = token_set(split_seq(a));
+    let tb = token_set(split_seq(b));
+    if ta.len() == 0 or tb.len() == 0 {
+        return Num.I(0);
+    }
+    let inter = set_and(ta, tb);
+    let dab = set_minus(ta, tb);
+    let dba = set_minus(tb, ta);
+    if inter.len() > 0 and (dab.len() == 0 or dba.len() == 0) {
+        return Num.I(100);
+    }
+    let dab_j = join_seqs(sorted_seqs(dab));
+    let dba_j = join_seqs(sorted_seqs(dba));
+    let ab_len = dab_j.len();
+    let ba_len = dba_j.len();
+    let sect_len = join_seqs(inter).len();
+    let nz = if sect_len != 0 { 1 } else { 0 };
+    let sect_ab_len = sect_len + nz + ab_len;
+    let sect_ba_len = sect_len + nz + ba_len;
+    let mut result = Num.F(0.0);
+    let cutoff_distance = (((sect_ab_len + sect_ba_len) as f64) * (1.0 - nf(cut) / 100.0)).ceil() as i64;
+    let dist = indel("distance", dab_j, dba_j, Some(Num.I(cutoff_distance)));
+    if n_le(dist, Num.I(cutoff_distance)) {
+        let d = match dist {
+            Num.I(x) => x,
+            Num.F(x) => x as i64,
+        };
+        result = norm_distance(d, sect_ab_len + sect_ba_len, cut);
+    }
+    if sect_len == 0 {
+        return result;
+    }
+    let ab_ratio = norm_distance(nz + ab_len, sect_len + sect_ab_len, cut);
+    let ba_ratio = norm_distance(nz + ba_len, sect_len + sect_ba_len, cut);
+    py_max(py_max(result, ab_ratio), ba_ratio)
+}
+
+fn token_ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    py_max(token_set_ratio(a, b, cut), token_sort_ratio(a, b, cut))
+}
+
+fn partial_token_sort_ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    partial_ratio(sorted_joined(a), sorted_joined(b), cut)
+}
+
+fn partial_token_set_ratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    if let Some(c) = cut {
+        if n_gt(c, Num.I(100)) {
+            return Num.I(0);
+        }
+    }
+    let ta = token_set(split_seq(a));
+    let tb = token_set(split_seq(b));
+    if ta.len() == 0 or tb.len() == 0 {
+        return Num.I(0);
+    }
+    if set_and(ta, tb).len() > 0 {
+        return Num.I(100);
+    }
+    let dab = join_seqs(sorted_seqs(set_minus(ta, tb)));
+    let dba = join_seqs(sorted_seqs(set_minus(tb, ta)));
+    partial_ratio(dab, dba, cut)
+}
+
+fn partial_token_ratio(a: ref Seq, b: ref Seq, cut0: ref Option[Num]) -> Num {
+    let mut cut = cut_or_zero(cut0);
+    if n_gt(cut, Num.I(100)) {
+        return Num.I(0);
+    }
+    let split_a = split_seq(a);
+    let split_b = split_seq(b);
+    let ta = token_set(split_a);
+    let tb = token_set(split_b);
+    if set_and(ta, tb).len() > 0 {
+        return Num.I(100);
+    }
+    let dab = set_minus(ta, tb);
+    let dba = set_minus(tb, ta);
+    let result = partial_ratio(join_seqs(sorted_seqs(split_a)), join_seqs(sorted_seqs(split_b)), Some(cut.clone()));
+    if split_a.len() == dab.len() and split_b.len() == dba.len() {
+        return result;
+    }
+    cut = py_max(cut, result.clone());
+    let second = partial_ratio(join_seqs(sorted_seqs(dab)), join_seqs(sorted_seqs(dba)), Some(cut));
+    py_max(result, second)
+}
+
+fn wratio(a: ref Seq, b: ref Seq, cut0: ref Option[Num]) -> Num {
+    let unbase = 0.95;
+    if a.len() == 0 or b.len() == 0 {
+        return Num.I(0);
+    }
+    let mut cut = cut_or_zero(cut0);
+    if n_gt(cut, Num.I(100)) {
+        return Num.I(0);
+    }
+    let len1 = a.len();
+    let len2 = b.len();
+    let len_ratio = if len1 > len2 { ratio_of(len1, len2) } else { ratio_of(len2, len1) };
+    let mut end_ratio = ratio(a, b, Some(cut.clone()));
+    if len_ratio < 1.5 {
+        cut = n_div(py_max(cut, end_ratio.clone()), unbase);
+        let t = n_mul(token_ratio(a, b, Some(cut)), Num.F(unbase));
+        return py_max(end_ratio, t);
+    }
+    let partial_scale = if len_ratio <= 8.0 { 0.9 } else { 0.6 };
+    cut = n_div(py_max(cut, end_ratio.clone()), partial_scale);
+    let p = n_mul(partial_ratio(a, b, Some(cut.clone())), Num.F(partial_scale));
+    end_ratio = py_max(end_ratio, p);
+    cut = n_div(py_max(cut, end_ratio.clone()), unbase);
+    let pt = n_mul(n_mul(partial_token_ratio(a, b, Some(cut)), Num.F(unbase)), Num.F(partial_scale));
+    py_max(end_ratio, pt)
+}
+
+fn qratio(a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    if a.len() == 0 or b.len() == 0 {
+        return Num.I(0);
+    }
+    ratio(a, b, cut)
+}
+
+fn fuzz_names() -> Vec[String] {
+    split_on("ratio partial_ratio token_sort_ratio token_set_ratio token_ratio partial_token_sort_ratio partial_token_set_ratio partial_token_ratio WRatio QRatio", b' ')
+}
+
+fn fuzz_score(name: Str, a: ref Seq, b: ref Seq, cut: ref Option[Num]) -> Num {
+    if name == "ratio" {
+        ratio(a, b, cut)
+    } else if name == "partial_ratio" {
+        partial_ratio(a, b, cut)
+    } else if name == "token_sort_ratio" {
+        token_sort_ratio(a, b, cut)
+    } else if name == "token_set_ratio" {
+        token_set_ratio(a, b, cut)
+    } else if name == "token_ratio" {
+        token_ratio(a, b, cut)
+    } else if name == "partial_token_sort_ratio" {
+        partial_token_sort_ratio(a, b, cut)
+    } else if name == "partial_token_set_ratio" {
+        partial_token_set_ratio(a, b, cut)
+    } else if name == "partial_token_ratio" {
+        partial_token_ratio(a, b, cut)
+    } else if name == "WRatio" {
+        wratio(a, b, cut)
+    } else {
+        qratio(a, b, cut)
+    }
+}
+
+// ------------------------------------------------------------ editops
+
+#[derive(Clone)]
+struct Editop {
+    tag: String,
+    src: i64,
+    dest: i64,
+}
+
+#[derive(Clone)]
+struct Editops {
+    ops: Vec[Editop],
+    src_len: i64,
+    dest_len: i64,
+}
+
+#[derive(Clone)]
+struct Opcode {
+    tag: String,
+    ss: i64,
+    se: i64,
+    ds: i64,
+    de: i64,
+}
+
+struct Opcodes {
+    ops: Vec[Opcode],
+    src_len: i64,
+    dest_len: i64,
+}
+
+fn editop(tag: Str, src: i64, dest: i64) -> Editop {
+    Editop { tag: tag.to_string(), src: src, dest: dest }
+}
+
+fn editops_repr(e: ref Editops) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for op in e.ops.iter() {
+        parts.push(f"Editop(tag={py_repr(op.tag)}, src_pos={op.src}, dest_pos={op.dest})");
+    }
+    f"Editops([{join(parts, ", ")}], src_len={e.src_len}, dest_len={e.dest_len})"
+}
+
+fn opcodes_repr(e: ref Opcodes) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for op in e.ops.iter() {
+        parts.push(f"Opcode(tag={py_repr(op.tag)}, src_start={op.ss}, src_end={op.se}, dest_start={op.ds}, dest_end={op.de})");
+    }
+    f"Opcodes([{join(parts, ", ")}], src_len={e.src_len}, dest_len={e.dest_len})"
+}
+
+fn blocks_repr(v: ref Vec[(i64, i64, i64)]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for b in v.iter() {
+        parts.push(f"MatchingBlock(a={b.0}, b={b.1}, size={b.2})");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// The trimmed strings' table, then the walk back from its corner that
+// Levenshtein_py.editops takes over the bit vectors VP and VN: bit col-1
+// of VP[row-1] is set when d[col][row] - d[col-1][row] is 1, of VN when
+// it is -1.
+fn lev_editops(s1: ref Seq, s2: ref Seq) -> Editops {
+    let p = common_prefix(s1, s2);
+    let s = common_suffix(sub(s1, p, s1.len()), sub(s2, p, s2.len()));
+    let a = sub(s1, p, s1.len() - s);
+    let b = sub(s2, p, s2.len() - s);
+    let mut out = Editops { ops: Vec.new(), src_len: s1.len(), dest_len: s2.len() };
+    let w = b.len() + 1;
+    let t = lev_table(a, b);
+    let mut dist = t[t.len() - 1];
+    if dist == 0 {
+        return out;
+    }
+    let mut list: Vec[Editop] = Vec.new();
+    for _ in 0..dist {
+        list.push(editop("", 0, 0));
+    }
+    let mut col = a.len();
+    let mut row = b.len();
+    while row != 0 and col != 0 {
+        if t[col * w + row] - t[(col - 1) * w + row] == 1 {
+            dist -= 1;
+            col -= 1;
+            list[dist] = editop("delete", col + p, row + p);
+        } else {
+            row -= 1;
+            if row != 0 and t[col * w + row] - t[(col - 1) * w + row] == -1 {
+                dist -= 1;
+                list[dist] = editop("insert", col + p, row + p);
+            } else {
+                col -= 1;
+                if a[col] != b[row] {
+                    dist -= 1;
+                    list[dist] = editop("replace", col + p, row + p);
+                }
+            }
+        }
+    }
+    while col != 0 {
+        dist -= 1;
+        col -= 1;
+        list[dist] = editop("delete", col + p, row + p);
+    }
+    while row != 0 {
+        dist -= 1;
+        row -= 1;
+        list[dist] = editop("insert", col + p, row + p);
+    }
+    out.ops = list;
+    out
+}
+
+// LCSseq_py.editops: bit col-1 of the row's S is set when the common
+// subsequence does not grow at that cell, l[col][row] == l[col-1][row].
+fn lcs_editops(s1: ref Seq, s2: ref Seq) -> Editops {
+    let p = common_prefix(s1, s2);
+    let s = common_suffix(sub(s1, p, s1.len()), sub(s2, p, s2.len()));
+    let a = sub(s1, p, s1.len() - s);
+    let b = sub(s2, p, s2.len() - s);
+    let mut out = Editops { ops: Vec.new(), src_len: s1.len(), dest_len: s2.len() };
+    let w = b.len() + 1;
+    let t = lcs_table(a, b);
+    let sim = t[t.len() - 1];
+    let mut dist = a.len() + b.len() - 2 * sim;
+    if dist == 0 {
+        return out;
+    }
+    let mut list: Vec[Editop] = Vec.new();
+    for _ in 0..dist {
+        list.push(editop("", 0, 0));
+    }
+    let mut col = a.len();
+    let mut row = b.len();
+    while row != 0 and col != 0 {
+        if t[col * w + row] == t[(col - 1) * w + row] {
+            dist -= 1;
+            col -= 1;
+            list[dist] = editop("delete", col + p, row + p);
+        } else {
+            row -= 1;
+            if row != 0 and t[col * w + row] != t[(col - 1) * w + row] {
+                dist -= 1;
+                list[dist] = editop("insert", col + p, row + p);
+            } else {
+                col -= 1;
+            }
+        }
+    }
+    while col != 0 {
+        dist -= 1;
+        col -= 1;
+        list[dist] = editop("delete", col + p, row + p);
+    }
+    while row != 0 {
+        dist -= 1;
+        row -= 1;
+        list[dist] = editop("insert", col + p, row + p);
+    }
+    out.ops = list;
+    out
+}
+
+fn hamming_editops(s1: ref Seq, s2: ref Seq, pad: bool) -> Result[Editops, PyErr] {
+    if not pad and s1.len() != s2.len() {
+        return Err(value_error("Sequences are not the same length."));
+    }
+    let mut ops: Vec[Editop] = Vec.new();
+    let m = min_i(s1.len(), s2.len());
+    for i in 0..m {
+        if s1[i] != s2[i] {
+            ops.push(editop("replace", i, i));
+        }
+    }
+    for i in m..s1.len() {
+        ops.push(editop("delete", i, s2.len()));
+    }
+    for i in m..s2.len() {
+        ops.push(editop("insert", s1.len(), i));
+    }
+    Ok(Editops { ops: ops, src_len: s1.len(), dest_len: s2.len() })
+}
+
+fn as_opcodes(e: ref Editops) -> Opcodes {
+    let mut blocks: Vec[Opcode] = Vec.new();
+    let mut sp = 0;
+    let mut dp = 0;
+    let mut i = 0;
+    let n = e.ops.len();
+    while i < n {
+        if sp < e.ops[i].src or dp < e.ops[i].dest {
+            blocks.push(Opcode { tag: "equal".to_string(), ss: sp, se: e.ops[i].src, ds: dp, de: e.ops[i].dest });
+            sp = e.ops[i].src;
+            dp = e.ops[i].dest;
+        }
+        let sb = sp;
+        let db = dp;
+        let tag = e.ops[i].tag.clone();
+        while i < n and e.ops[i].tag == tag and sp == e.ops[i].src and dp == e.ops[i].dest {
+            if tag == "replace" {
+                sp += 1;
+                dp += 1;
+            } else if tag == "insert" {
+                dp += 1;
+            } else if tag == "delete" {
+                sp += 1;
+            }
+            i += 1;
+        }
+        blocks.push(Opcode { tag: tag, ss: sb, se: sp, ds: db, de: dp });
+    }
+    if sp < e.src_len or dp < e.dest_len {
+        blocks.push(Opcode { tag: "equal".to_string(), ss: sp, se: e.src_len, ds: dp, de: e.dest_len });
+    }
+    Opcodes { ops: blocks, src_len: e.src_len, dest_len: e.dest_len }
+}
+
+fn editops_blocks(e: ref Editops) -> Vec[(i64, i64, i64)] {
+    let mut blocks: Vec[(i64, i64, i64)] = Vec.new();
+    let mut sp = 0;
+    let mut dp = 0;
+    for op in e.ops.iter() {
+        if sp < op.src or dp < op.dest {
+            let len = min_i(op.src - sp, op.dest - dp);
+            if len > 0 {
+                blocks.push((sp, dp, len));
+            }
+            sp = op.src;
+            dp = op.dest;
+        }
+        if op.tag == "replace" {
+            sp += 1;
+            dp += 1;
+        } else if op.tag == "delete" {
+            sp += 1;
+        } else if op.tag == "insert" {
+            dp += 1;
+        }
+    }
+    if sp < e.src_len or dp < e.dest_len {
+        let len = min_i(e.src_len - sp, e.dest_len - dp);
+        if len > 0 {
+            blocks.push((sp, dp, len));
+        }
+    }
+    blocks.push((e.src_len, e.dest_len, 0));
+    blocks
+}
+
+fn opcodes_blocks(e: ref Opcodes) -> Vec[(i64, i64, i64)] {
+    let mut blocks: Vec[(i64, i64, i64)] = Vec.new();
+    for op in e.ops.iter() {
+        if op.tag == "equal" {
+            let len = min_i(op.se - op.ss, op.de - op.ds);
+            if len > 0 {
+                blocks.push((op.ss, op.ds, len));
+            }
+        }
+    }
+    blocks.push((e.src_len, e.dest_len, 0));
+    blocks
+}
+
+fn editops_apply(e: ref Editops, src: ref Seq, dest: ref Seq) -> Seq {
+    let mut out: Seq = Vec.new();
+    let mut sp = 0;
+    for op in e.ops.iter() {
+        while sp < op.src {
+            out.push(src[sp]);
+            sp += 1;
+        }
+        if op.tag == "replace" {
+            out.push(dest[op.dest]);
+            sp += 1;
+        } else if op.tag == "insert" {
+            out.push(dest[op.dest]);
+        } else if op.tag == "delete" {
+            sp += 1;
+        }
+    }
+    while sp < src.len() {
+        out.push(src[sp]);
+        sp += 1;
+    }
+    out
+}
+
+fn opcodes_apply(e: ref Opcodes, src: ref Seq, dest: ref Seq) -> Seq {
+    let mut out: Seq = Vec.new();
+    for op in e.ops.iter() {
+        if op.tag == "equal" {
+            for k in op.ss..op.se {
+                out.push(src[k]);
+            }
+        } else if op.tag == "replace" or op.tag == "insert" {
+            for k in op.ds..op.de {
+                out.push(dest[k]);
+            }
+        }
+    }
+    out
+}
+
+fn inverse(e: ref Editops) -> Editops {
+    let mut ops: Vec[Editop] = Vec.new();
+    for op in e.ops.iter() {
+        let tag = if op.tag == "delete" {
+            "insert".to_string()
+        } else if op.tag == "insert" {
+            "delete".to_string()
+        } else {
+            op.tag.clone()
+        };
+        ops.push(Editop { tag: tag, src: op.dest, dest: op.src });
+    }
+    Editops { ops: ops, src_len: e.dest_len, dest_len: e.src_len }
+}
+
+fn as_editops(c: ref Opcodes) -> Editops {
+    let mut ops: Vec[Editop] = Vec.new();
+    for op in c.ops.iter() {
+        if op.tag == "replace" {
+            for j in 0..op.se - op.ss {
+                ops.push(editop("replace", op.ss + j, op.ds + j));
+            }
+        } else if op.tag == "insert" {
+            for j in 0..op.de - op.ds {
+                ops.push(editop("insert", op.ss, op.ds + j));
+            }
+        } else if op.tag == "delete" {
+            for j in 0..op.se - op.ss {
+                ops.push(editop("delete", op.ss + j, op.ds));
+            }
+        }
+    }
+    Editops { ops: ops, src_len: c.src_len, dest_len: c.dest_len }
+}
+
+fn editops_eq(a: ref Editops, b: ref Editops) -> bool {
+    if a.src_len != b.src_len or a.dest_len != b.dest_len or a.ops.len() != b.ops.len() {
+        return false;
+    }
+    for i in 0..a.ops.len() {
+        if a.ops[i].tag != b.ops[i].tag or a.ops[i].src != b.ops[i].src or a.ops[i].dest != b.ops[i].dest {
+            return false;
+        }
+    }
+    true
+}
+
+fn editops_of(m: Str, a: ref Seq, b: ref Seq, o: ref Opts) -> Result[Editops, PyErr] {
+    if m == "Levenshtein" {
+        Ok(lev_editops(a, b))
+    } else if m == "Hamming" {
+        hamming_editops(a, b, o.pad)
+    } else {
+        Ok(lcs_editops(a, b))
+    }
+}
+
+// ------------------------------------------------------------ process
+
+#[derive(Clone)]
+enum Key {
+    Idx(i64),
+    Name(String),
+}
+
+fn key_repr(k: ref Key) -> String {
+    match k {
+        Key.Idx(i) => f"{i}",
+        Key.Name(s) => py_repr(s),
+    }
+}
+
+#[derive(Clone)]
+struct Hit {
+    choice: Seq,
+    score: Num,
+    key: Key,
+}
+
+fn hit_repr(h: ref Hit) -> String {
+    f"({seq_repr(h.choice)}, {num_repr(h.score)}, {key_repr(h.key)})"
+}
+
+fn hits_repr(v: ref Vec[Hit]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for h in v.iter() {
+        parts.push(hit_repr(h));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// What a scorer's get_scorer_flags gives: (worst_score, optimal_score).
+fn scorer_flags(scorer: Str) -> (Num, Num) {
+    let (m, _, f) = partition(scorer, b'.');
+    if m == "fuzz" {
+        return (Num.I(0), Num.I(100));
+    }
+    let jaro = m == "Jaro" or m == "JaroWinkler";
+    if f == "distance" {
+        if jaro { (Num.I(1), Num.I(0)) } else { (Num.I(BIG), Num.I(0)) }
+    } else if f == "similarity" {
+        if jaro { (Num.I(0), Num.I(1)) } else { (Num.I(0), Num.I(BIG)) }
+    } else if f == "normalized_distance" {
+        (Num.I(1), Num.I(0))
+    } else {
+        (Num.I(0), Num.I(1))
+    }
+}
+
+fn score_with(scorer: Str, a: ref Seq, b: ref Seq, o: ref Opts, cut: ref Option[Num]) -> Result[Num, PyErr] {
+    let (m, _, f) = partition(scorer, b'.');
+    if m == "fuzz" {
+        return Ok(fuzz_score(f, a, b, cut));
+    }
+    metric(m, f, a, b, o, cut)
+}
+
+fn prep(s: ref Seq, o: ref Opts) -> Seq {
+    if o.processor { default_process(s) } else { s.clone() }
+}
+
+fn extract_one(query: ref Seq, choices: ref Vec[(Key, Option[Seq])], o: ref Opts) -> Result[Option[Hit], PyErr] {
+    let (worst, optimal) = scorer_flags(o.scorer);
+    let lowest_worst = n_gt(optimal, worst);
+    let mut cut = match o.cutoff {
+        Some(c) => c.clone(),
+        None => worst,
+    };
+    let q = prep(query, o);
+    let mut result: Option[Hit] = None;
+    for (key, choice) in choices.iter() {
+        let c = match choice {
+            Some(c) => c,
+            None => continue,
+        };
+        let score = score_with(o.scorer, q, prep(c, o), o, Some(cut.clone()))?;
+        let better = match result {
+            Some(ref r) => if lowest_worst { n_gt(score, r.score) } else { n_lt(score, r.score) },
+            None => true,
+        };
+        let inside = if lowest_worst { n_ge(score, cut) } else { n_le(score, cut) };
+        if inside and better {
+            cut = score.clone();
+            result = Some(Hit { choice: c.clone(), score: score.clone(), key: key.clone() });
+        }
+        if n_eq(score, optimal) {
+            break;
+        }
+    }
+    Ok(result)
+}
+
+fn extract_iter(query: ref Seq, choices: ref Vec[(Key, Option[Seq])], o: ref Opts) -> Result[Vec[Hit], PyErr] {
+    let (worst, optimal) = scorer_flags(o.scorer);
+    let lowest_worst = n_gt(optimal, worst);
+    let cut = match o.cutoff {
+        Some(c) => c.clone(),
+        None => worst,
+    };
+    let q = prep(query, o);
+    let mut out: Vec[Hit] = Vec.new();
+    for (key, choice) in choices.iter() {
+        let c = match choice {
+            Some(c) => c,
+            None => continue,
+        };
+        let score = score_with(o.scorer, q, prep(c, o), o, Some(cut.clone()))?;
+        let inside = if lowest_worst { n_ge(score, cut) } else { n_le(score, cut) };
+        if inside {
+            out.push(Hit { choice: c.clone(), score: score, key: key.clone() });
+        }
+    }
+    Ok(out)
+}
+
+// heapq.nlargest / nsmallest and sorted() are all stable: equal scores
+// keep the order the choices came in.
+fn extract(query: ref Seq, choices: ref Vec[(Key, Option[Seq])], o: ref Opts) -> Result[Vec[Hit], PyErr] {
+    if let Some(1) = o.limit {
+        return match extract_one(query, choices, o)? {
+            Some(h) => Ok([h]),
+            None => Ok(Vec.new()),
+        };
+    }
+    let (worst, optimal) = scorer_flags(o.scorer);
+    let lowest_worst = n_gt(optimal, worst);
+    let hits = extract_iter(query, choices, o)?;
+    let mut out: Vec[Hit] = Vec.new();
+    for h in hits.iter() {
+        let mut at = out.len();
+        while at > 0 and (if lowest_worst { n_gt(h.score, out[at - 1].score) } else { n_lt(h.score, out[at - 1].score) }) {
+            at -= 1;
+        }
+        out.insert(at, h.clone());
+    }
+    if let Some(n) = o.limit {
+        while out.len() > n {
+            out.pop();
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn num_of(v: ref JValue) -> Option[Num] {
+    match v {
+        JValue.Int(i) => Some(Num.I(*i)),
+        JValue.Float(x) => Some(Num.F(*x)),
+        _ => None,
+    }
+}
+
+fn jint(v: ref JValue) -> i64 {
+    match v {
+        JValue.Int(i) => *i,
+        _ => 0,
+    }
+}
+
+fn jstr(v: ref JValue) -> String {
+    match v {
+        JValue.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn jlist(v: ref JValue) -> Vec[JValue] {
+    match v {
+        JValue.List(xs) => xs.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn jseq(v: ref JValue) -> Seq {
+    cps_of(jstr(v))
+}
+
+fn read_opts(o: mut ref Opts, v: ref JValue) {
+    let pairs = match v {
+        JValue.Obj(p) => p.clone(),
+        _ => Vec.new(),
+    };
+    for (k, x) in pairs.iter() {
+        if k == "processor" {
+            o.processor = jstr(x) == "default";
+        } else if k == "score_cutoff" {
+            o.cutoff = num_of(x);
+        } else if k == "weights" {
+            let w = jlist(x);
+            if w.len() == 3 {
+                o.ins = jint(w[0]);
+                o.del = jint(w[1]);
+                o.rep = jint(w[2]);
+            } else {
+                o.ins = 1;
+                o.del = 1;
+                o.rep = 1;
+            }
+        } else if k == "pad" {
+            o.pad = match x {
+                JValue.Bool(b) => *b,
+                _ => true,
+            };
+        } else if k == "prefix_weight" {
+            o.prefix_weight = match num_of(x) {
+                Some(n) => nf(n),
+                None => 0.1,
+            };
+        } else if k == "limit" {
+            o.limit = match x {
+                JValue.Int(i) => Some(*i),
+                _ => None,
+            };
+        } else if k == "scorer" {
+            o.scorer = jstr(x);
+        } else if k == "scorer_kwargs" {
+            read_opts(mut o, x);
+        }
+    }
+}
+
+fn err_line(name: Str, e: ref PyErr) -> String {
+    f"  {name}: error {e.kind}: {e.msg}"
+}
+
+fn show_num(name: Str, r: ref Result[Num, PyErr]) {
+    match r {
+        Ok(n) => println(f"  {name}: {num_repr(n)}"),
+        Err(e) => println(err_line(name, e)),
+    }
+}
+
+fn choices_of(v: ref JValue) -> Vec[(Key, Option[Seq])] {
+    let mut out: Vec[(Key, Option[Seq])] = Vec.new();
+    match v {
+        JValue.List(xs) => {
+            for i in 0..xs.len() {
+                let c = match xs[i] {
+                    JValue.Str(s) => Some(cps_of(s)),
+                    _ => None,
+                };
+                out.push((Key.Idx(i), c));
+            }
+        }
+        JValue.Obj(ps) => {
+            for (k, x) in ps.iter() {
+                let c = match x {
+                    JValue.Str(s) => Some(cps_of(s)),
+                    _ => None,
+                };
+                out.push((Key.Name(k.clone()), c));
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn show_ops(m: Str, s1: ref Seq, s2: ref Seq, o: ref Opts) {
+    let a = prep(s1, o);
+    let b = prep(s2, o);
+    let ops = match editops_of(m, a, b, o) {
+        Ok(e) => e,
+        Err(e) => {
+            println(err_line("editops", e));
+            return;
+        }
+    };
+    let codes = as_opcodes(ops);
+    println(f"  editops: {editops_repr(ops)}");
+    println(f"  opcodes: {opcodes_repr(codes)}");
+    println(f"  editops.apply: {seq_repr(editops_apply(ops, a, b))}");
+    println(f"  opcodes.apply: {seq_repr(opcodes_apply(codes, a, b))}");
+    println(f"  matching_blocks: {blocks_repr(editops_blocks(ops))}");
+    println(f"  opcodes.matching_blocks: {blocks_repr(opcodes_blocks(codes))}");
+    let inv = inverse(ops);
+    println(f"  inverse: {editops_repr(inv)}");
+    println(f"  inverse.apply: {seq_repr(editops_apply(inv, b, a))}");
+    println(f"  as_editops: {py_bool(editops_eq(as_editops(codes), ops))}");
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn run_job(job: ref Vec[JValue]) {
+    let op = jstr(job[0]);
+    let mut o = opts_new();
+    if let JValue.Obj(_) = job[job.len() - 1] {
+        read_opts(mut o, job[job.len() - 1]);
+    }
+    let cut = o.cutoff.clone();
+    if op == "fuzz" {
+        let a = prep(jseq(job[2]), o);
+        let b = prep(jseq(job[3]), o);
+        let names = if jstr(job[1]) == "all" {
+            fuzz_names()
+        } else {
+            let mut v: Vec[String] = Vec.new();
+            for n in jlist(job[1]).iter() {
+                v.push(jstr(n));
+            }
+            v
+        };
+        for n in names.iter() {
+            println(f"  {n}: {num_repr(fuzz_score(n, a, b, cut))}");
+        }
+    } else if op == "align" {
+        let a = prep(jseq(job[1]), o);
+        let b = prep(jseq(job[2]), o);
+        match partial_ratio_alignment(a, b, cut) {
+            Some(al) => println(f"  alignment: {align_repr(al)}"),
+            None => println("  alignment: None"),
+        }
+    } else if op == "process" {
+        println(f"  default_process: {seq_repr(default_process(jseq(job[1])))}");
+    } else if op == "metric" {
+        let m = jstr(job[1]);
+        let a = prep(jseq(job[2]), o);
+        let b = prep(jseq(job[3]), o);
+        for f in split_on("distance similarity normalized_distance normalized_similarity", b' ').iter() {
+            show_num(f, metric(m, f, a, b, o, cut));
+        }
+    } else if op == "ops" {
+        show_ops(jstr(job[1]), jseq(job[2]), jseq(job[3]), o);
+    } else {
+        let q = jseq(job[1]);
+        let choices = choices_of(job[2]);
+        if op == "extractOne" {
+            match extract_one(q, choices, o) {
+                Ok(Some(h)) => println(f"  extractOne: {hit_repr(h)}"),
+                Ok(None) => println("  extractOne: None"),
+                Err(e) => println(err_line("extractOne", e)),
+            }
+        } else {
+            let r = if op == "extract" { extract(q, choices, o) } else { extract_iter(q, choices, o) };
+            match r {
+                Ok(hs) => println(f"  {op}: {hits_repr(hs)}"),
+                Err(e) => println(err_line(op, e)),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_lines(path: Str) -> Vec[String] {
+    let text = match fs.read_bytes(path.to_string()) {
+        Ok(b) => from_bytes(b),
+        Err(_) => String.new(),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for ln in split_on(text, b'\n').into_iter() {
+        if ln.len() > 0 {
+            out.push(ln);
+        }
+    }
+    out
+}
+
+fn opts_with(scorer: Str, processor: bool, cut: own Num, limit: Option[i64]) -> Opts {
+    let mut o = opts_new();
+    o.scorer = scorer.to_string();
+    o.processor = processor;
+    o.cutoff = Some(cut);
+    o.limit = limit;
+    o
+}
+
+// Group vendor names that are the same company written differently: each
+// name joins the first group whose first name it matches well enough.
+fn dedupe(path: Str) {
+    let o = opts_with("fuzz.WRatio", true, Num.I(88), Some(5));
+    let mut heads: Vec[(Key, Option[Seq])] = Vec.new();
+    let mut groups: Vec[Vec[(String, Num)]] = Vec.new();
+    let mut total = 0;
+    for name in read_lines(path).iter() {
+        total += 1;
+        match extract_one(cps_of(name), heads, o) {
+            Ok(Some(h)) => {
+                if let Key.Idx(i) = h.key {
+                    groups[i].push((name.clone(), h.score));
+                }
+            }
+            _ => {
+                heads.push((Key.Idx(heads.len()), Some(cps_of(name))));
+                groups.push([(name.clone(), Num.I(0))]);
+            }
+        }
+    }
+    for g in groups.iter() {
+        println(f"  {g[0].0}");
+        for k in 1..g.len() {
+            println(f"    = {g[k].0} ({num_repr(g[k].1)})");
+        }
+    }
+    println(f"  {total} names, {heads.len()} vendors");
+}
+
+// A `git`-style "did you mean": edit distance first, then Jaro-Winkler.
+fn suggest(cmd_path: Str, typo_path: Str) {
+    let mut commands: Vec[(Key, Option[Seq])] = Vec.new();
+    for c in read_lines(cmd_path).iter() {
+        commands.push((Key.Idx(commands.len()), Some(cps_of(c))));
+    }
+    let near_o = opts_with("Levenshtein.distance", false, Num.I(2), Some(3));
+    let jw_o = opts_with("JaroWinkler.similarity", false, Num.F(0.8), Some(5));
+    for typo in read_lines(typo_path).iter() {
+        let near = extract(cps_of(typo), commands, near_o).unwrap_or(Vec.new());
+        if near.len() > 0 {
+            let mut parts: Vec[String] = Vec.new();
+            for h in near.iter() {
+                parts.push(f"{cps_str(h.choice)} ({num_repr(h.score)})");
+            }
+            println(f"  {typo}: did you mean {join(parts, ", ")}?");
+            continue;
+        }
+        match extract_one(cps_of(typo), commands, jw_o) {
+            Ok(Some(h)) => println(f"  {typo}: maybe {cps_str(h.choice)} ({num_repr(h.score)})"),
+            _ => println(f"  {typo}: unknown command"),
+        }
+    }
+}
+
+// Match free-text order lines to the catalog, as a store's import does.
+fn reconcile(cat_path: Str, ord_path: Str) {
+    let mut catalog: Vec[(Key, Option[Seq])] = Vec.new();
+    for ln in read_lines(cat_path).iter() {
+        let (sku, _, name) = partition(ln, b'\t');
+        catalog.push((Key.Name(sku), Some(cps_of(name))));
+    }
+    let o = opts_with("fuzz.WRatio", true, Num.I(70), Some(2));
+    let orders = read_lines(ord_path);
+    let mut matched = 0;
+    for ln in orders.iter() {
+        let (order, _, item) = partition(ln, b'\t');
+        let best = extract(cps_of(item), catalog, o).unwrap_or(Vec.new());
+        if best.len() == 0 {
+            println(f"  {order} {py_repr(item)}: no match");
+            continue;
+        }
+        matched += 1;
+        for k in 0..best.len() {
+            let sku = match best[k].key {
+                Key.Name(ref s) => s.clone(),
+                Key.Idx(_) => String.new(),
+            };
+            if k == 0 {
+                println(f"  {order} {py_repr(item)} -> {sku} {cps_str(best[k].choice)} ({num_repr(best[k].score)})");
+            } else {
+                println(f"      also {sku} {cps_str(best[k].choice)} ({num_repr(best[k].score)})");
+            }
+        }
+    }
+    println(f"  {matched} of {orders.len()} orders matched");
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < b.len() {
+        out.push(hex_val(b[k]) * 16 + hex_val(b[k + 1]));
+        k += 2;
+    }
+    out
+}
+
+fn write_inputs() -> Result[(), String] {
+    let _ = fs.create_dir_all("data".to_string());
+    for line in split_on(inputs_text(), b'\n').into_iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, b' ');
+        let path = f"data/{f[0]}";
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    for line in split_on(jobs_text(), b'\n').into_iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        let job = from_bytes(hex_bytes(line));
+        if starts_with(job, "#") {
+            println(job);
+            continue;
+        }
+        println(f"> {job}");
+        if starts_with(job, "!") {
+            let parts = split_on(slice_from(job, 1), b' ');
+            if parts[0] == "dedupe" {
+                dedupe(parts[1]);
+            } else if parts[0] == "suggest" {
+                suggest(parts[1], parts[2]);
+            } else if parts[0] == "reconcile" {
+                reconcile(parts[1], parts[2]);
+            }
+            continue;
+        }
+        match json_loads(to_bytes(job)) {
+            Ok(v) => run_job(jlist(v)),
+            Err(_) => println("  bad job"),
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.jsonl.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("232066757a7a3a207468652074656e2073636f72657273206f6e2074686520706169727320746865697220646f63756d656e746174696f6e2075736573\n5b2266757a7a222c2022616c6c222c20227468697320697320612074657374222c2022746869732069732061207465737421225d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172225d\n5b2266757a7a222c2022616c6c222c202266757a7a792077617320612062656172222c202266757a7a792066757a7a792077617320612062656172225d\n5b2266757a7a222c2022616c6c222c20227468697320697320612074657374222c20227468697320697320612074657374225d\n5b2266757a7a222c2022616c6c222c20224e657720596f726b204d657473222c20224e657720596f726b204d65617473225d\n5b2266757a7a222c2022616c6c222c20224e657720596f726b204d6574732076732041746c616e746120427261766573222c202241746c616e746120427261766573207673204e657720596f726b204d657473225d\n5b2266757a7a222c2022616c6c222c202259414e4b454553222c20224e455720594f524b2059414e4b454553225d\n5b2266757a7a222c2022616c6c222c20224e455720594f524b204d455453222c20224e455720594f524b204d45415453225d\n5b2266757a7a222c2022616c6c222c20226e657720796f726b206d657473202d2061746c616e746120627261766573222c202261746c616e746120627261766573206e657720796f726b206d657473225d\n5b2266757a7a222c2022616c6c222c2022707572706c6520656c657068616e74222c2022656c657068616e74225d\n5b2266757a7a222c2022616c6c222c202244616c6c617320436f77626f7973222c2022636f77626f7973225d\n5b2266757a7a222c2022616c6c222c20226170706c6520696e63222c20226170706c6520696e636f72706f7261746564225d\n5b2266757a7a222c2022616c6c222c20224d6963726f736f667420436f72706f726174696f6e222c20224d6963726f736f667420436f72702e225d\n5b2266757a7a222c2022616c6c222c20225066697a657220496e632e222c20225066697a6572225d\n5b2266757a7a222c2022616c6c222c202274686520717569636b2062726f776e20666f78222c202274686520666173742062726f776e20646f67225d\n5b2266757a7a222c2022616c6c222c20224d61696e20537472656574222c20224d61696e205374225d\n5b2266757a7a222c2022616c6c222c2022313233204d61696e205374726565742c20537072696e676669656c64222c2022313233204d61696e20537420537072696e676669656c64225d\n");
+    s.push_str("5b2266757a7a222c2022616c6c222c2022436166c3a920526f756765222c20224361666520526f756765225d\n5b2266757a7a222c2022616c6c222c20225ac3bc726963682048617570746261686e686f66222c20225a7572696368204842225d\n5b2266757a7a222c2022616c6c222c20224a6fc3a36f2053696c7661222c20224a6f616f2064612053696c7661225d\n5b2266757a7a222c2022616c6c222c20226162222c20226261225d\n5b2266757a7a222c2022616c6c222c2022616263222c2022616263616263225d\n5b2266757a7a222c2022616c6c222c202261616161222c20226161225d\n5b2266757a7a222c2022616c6c222c202261206220632064222c202264206320622061225d\n5b2266757a7a222c2022616c6c222c202268656c6c6f20776f726c64222c2022776f726c642068656c6c6f20776f726c64225d\n5b2266757a7a222c2022616c6c222c2022616c676f726974686d222c20226c6f6761726974686d225d\n232066757a7a3a2064656661756c745f70726f63657373207374726970732070756e6374756174696f6e20616e642063617365206669727374\n5b2266757a7a222c2022616c6c222c20224e657720596f726b204d65747321222c20226e657720796f726b206d657473225d\n5b2266757a7a222c2022616c6c222c20224e657720596f726b204d65747321222c20226e657720796f726b206d657473222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c202248454c4c4f2c20574f524c44222c202268656c6c6f20776f726c64225d\n5b2266757a7a222c2022616c6c222c202248454c4c4f2c20574f524c44222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c20224f275265696c6c79204d65646961222c20224f5265696c6c79206d65646961225d\n5b2266757a7a222c2022616c6c222c20224f275265696c6c79204d65646961222c20224f5265696c6c79206d65646961222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c2022652d6d61696c222c2022656d61696c225d\n5b2266757a7a222c2022616c6c222c2022652d6d61696c222c2022656d61696c222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c20222835353529203132332d34353637222c20223535352e3132332e34353637225d\n5b2266757a7a222c2022616c6c222c20222835353529203132332d34353637222c20223535352e3132332e34353637222c207b2270726f636573736f72223a202264656661756c74227d5d\n");
+    s.push_str("5b2266757a7a222c2022616c6c222c2022c39c6ec3af63c3b664c3a92053747261737365222c2022c3bc6ec3af63c3b664c3a92073747261737365225d\n5b2266757a7a222c2022616c6c222c2022c39c6ec3af63c3b664c3a92053747261737365222c2022c3bc6ec3af63c3b664c3a92073747261737365222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c202220207061646465642020222c2022706164646564225d\n5b2266757a7a222c2022616c6c222c202220207061646465642020222c2022706164646564222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c2022736e616b655f636173655f6e616d65222c2022736e616b652063617365206e616d65225d\n5b2266757a7a222c2022616c6c222c2022736e616b655f636173655f6e616d65222c2022736e616b652063617365206e616d65222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c202253747261c39f65222c202253545241535345225d\n5b2266757a7a222c2022616c6c222c202253747261c39f65222c202253545241535345222c207b2270726f636573736f72223a202264656661756c74227d5d\n232066757a7a3a2073636f72655f6375746f6666207475726e732061206c6f7765722073636f726520696e746f2030\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a20307d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a2035307d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a2038357d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a2039307d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a2039352e357d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a2039392e39397d5d\n");
+    s.push_str("5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a203130307d5d\n5b2266757a7a222c2022616c6c222c202266757a7a792077757a7a792077617320612062656172222c202277757a7a792066757a7a792077617320612062656172222c207b2273636f72655f6375746f6666223a203130317d5d\n5b2266757a7a222c2022616c6c222c202244616c6c617320436f77626f7973222c2022636f77626f7973222c207b2273636f72655f6375746f6666223a2036302c202270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c2022707572706c6520656c657068616e74222c2022656c657068616e74222c207b2273636f72655f6375746f6666223a2036307d5d\n5b2266757a7a222c2022616c6c222c202244616c6c617320436f77626f7973222c2022636f77626f7973222c207b2273636f72655f6375746f6666223a2038302e352c202270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c2022707572706c6520656c657068616e74222c2022656c657068616e74222c207b2273636f72655f6375746f6666223a2038302e357d5d\n5b2266757a7a222c2022616c6c222c202244616c6c617320436f77626f7973222c2022636f77626f7973222c207b2273636f72655f6375746f6666223a203130302c202270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c2022707572706c6520656c657068616e74222c2022656c657068616e74222c207b2273636f72655f6375746f6666223a203130307d5d\n232066757a7a3a20656d7074792c20626c616e6b20616e64206f6e652d63686172616374657220737472696e6773\n5b2266757a7a222c2022616c6c222c2022222c2022225d\n5b2266757a7a222c2022616c6c222c2022222c202261225d\n5b2266757a7a222c2022616c6c222c202261222c2022225d\n5b2266757a7a222c2022616c6c222c202220222c202220225d\n5b2266757a7a222c2022616c6c222c2022202020222c202261225d\n5b2266757a7a222c2022616c6c222c202261222c202261225d\n5b2266757a7a222c2022616c6c222c202261222c202262225d\n5b2266757a7a222c2022616c6c222c202261222c20226162225d\n5b2266757a7a222c2022616c6c222c2022212121222c20223f3f3f225d\n5b2266757a7a222c2022616c6c222c202278222c20227878787878787878787878787878787878787878225d\n5b2266757a7a222c2022616c6c222c20226162222c202278787878787878787878787878787878787878787878787878787878787878787878787878786162225d\n");
+    s.push_str("5b2266757a7a222c2022616c6c222c20227468652074686520746865222c2022746865225d\n5b2266757a7a222c2022616c6c222c20226f6e652074776f222c202274776f206f6e652074776f206f6e65225d\n5b2266757a7a222c2022616c6c222c2022212121222c20223f3f3f222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c20222e2e2e222c2022616263222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2266757a7a222c2022616c6c222c20222020222c20222020222c207b2270726f636573736f72223a202264656661756c74227d5d\n23207061727469616c5f726174696f5f616c69676e6d656e743a207768657265207468652073686f7274657220737472696e67207369747320696e20746865206c6f6e676572\n5b22616c69676e222c202261206365727461696e20737472696e67222c202263657461696e225d\n5b22616c69676e222c202263657461696e222c202261206365727461696e20737472696e67225d\n5b22616c69676e222c2022707572706c6520656c657068616e74222c2022656c657068616e74225d\n5b22616c69676e222c2022656c657068616e74222c2022707572706c6520656c657068616e74225d\n5b22616c69676e222c202261626364222c20227878616263647878225d\n5b22616c69676e222c20226162222c20226261225d\n5b22616c69676e222c2022616263222c2022636261225d\n5b22616c69676e222c202268656c6c6f222c2022776f726c64225d\n5b22616c69676e222c2022222c2022225d\n5b22616c69676e222c2022222c2022616263225d\n5b22616c69676e222c2022616263222c2022616263225d\n5b22616c69676e222c20227468697320697320612074657374222c202269732061225d\n5b22616c69676e222c20224552524f523a20636f6e6e656374696f6e2072656675736564222c2022636f6e6e656374696f6e207265667573656420627920686f73742031302e302e302e31225d\n5b22616c69676e222c2022626364222c20226162636465225d\n5b22616c69676e222c202278797a222c2022616263225d\n5b22616c69676e222c202244616c6c617320436f77626f7973222c2022636f77626f7973222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b22616c69676e222c202261626364222c20227878616263657878222c207b2273636f72655f6375746f6666223a2038307d5d\n5b22616c69676e222c202261626364222c20227878616263657878222c207b2273636f72655f6375746f6666223a2037307d5d\n5b22616c69676e222c202261626364222c20227878616263657878222c207b2273636f72655f6375746f6666223a2037357d5d\n");
+    s.push_str("23207574696c732e64656661756c745f70726f63657373\n5b2270726f63657373222c202248656c6c6f2c20576f726c6421225d\n5b2270726f63657373222c202220204c6f74732020206f662020207370616365732020225d\n5b2270726f63657373222c2022432b2b202f204323202f204623225d\n5b2270726f63657373222c2022736e616b655f636173655f7374617973225d\n5b2270726f63657373222c2022c39c6ec3af63c3b664c3a920e280942064617368657320e2809320616e6420e2809c71756f746573e2809d225d\n5b2270726f63657373222c2022c3bc6265722073747261c39f65225d\n5b2270726f63657373222c20227461625c74616e645c6e6e65776c696e65225d\n5b2270726f63657373222c2022212121225d\n5b2270726f63657373222c2022225d\n5b2270726f63657373222c20224d69586544203132332043615365225d\n5b2270726f63657373222c2022652e672e20692e652e206574632e225d\n5b2270726f63657373222c20226e61c3af766520636166c3a92072c3a973756dc3a9225d\n5b2270726f63657373222c2022ce95cebbcebbceb7cebdceb9cebaceac20ce9ace95ce99ce9cce95ce9dce9f225d\n5b2270726f63657373222c2022d09fd180d0b8d0b2d0b5d1822c20d09cd098d0a0225d\n5b2270726f63657373222c2022e697a5e69cace8aa9ee381aee38386e382ade382b9e38388225d\n5b2270726f63657373222c202278c2b22b79c2b33d7ac2bd225d\n5b2270726f63657373222c202270726963653a2024392e39392028e282ac382e353029225d\n232064697374616e6365206d6574726963733a2064697374616e63652c2073696d696c617269747920616e6420626f7468206e6f726d616c697a6564\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226361222c2022616263225d\n5b226d6574726963222c20224c6576656e73687465696e222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c20224c6576656e73687465696e222c2022222c2022225d\n");
+    s.push_str("5b226d6574726963222c20224c6576656e73687465696e222c2022222c2022616263225d\n5b226d6574726963222c20224c6576656e73687465696e222c2022616263222c2022616263225d\n5b226d6574726963222c20224c6576656e73687465696e222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c20224c6576656e73687465696e222c20224352415445222c20225452414345225d\n5b226d6574726963222c20224c6576656e73687465696e222c202261222c202262225d\n5b226d6574726963222c20224c6576656e73687465696e222c20226162222c202262225d\n5b226d6574726963222c20224c6576656e73687465696e222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c20224c6576656e73687465696e222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c2022496e64656c222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c2022496e64656c222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c2022496e64656c222c20226361222c2022616263225d\n5b226d6574726963222c2022496e64656c222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c2022496e64656c222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c2022496e64656c222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c2022496e64656c222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c2022496e64656c222c2022222c2022225d\n5b226d6574726963222c2022496e64656c222c2022222c2022616263225d\n5b226d6574726963222c2022496e64656c222c2022616263222c2022616263225d\n5b226d6574726963222c2022496e64656c222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c2022496e64656c222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c2022496e64656c222c20224352415445222c20225452414345225d\n5b226d6574726963222c2022496e64656c222c202261222c202262225d\n5b226d6574726963222c2022496e64656c222c20226162222c202262225d\n5b226d6574726963222c2022496e64656c222c2022447741794e45222c20224475414e45225d\n");
+    s.push_str("5b226d6574726963222c2022496e64656c222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c20224c4353736571222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c20224c4353736571222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c20224c4353736571222c20226361222c2022616263225d\n5b226d6574726963222c20224c4353736571222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c20224c4353736571222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c20224c4353736571222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c20224c4353736571222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c20224c4353736571222c2022222c2022225d\n5b226d6574726963222c20224c4353736571222c2022222c2022616263225d\n5b226d6574726963222c20224c4353736571222c2022616263222c2022616263225d\n5b226d6574726963222c20224c4353736571222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c20224c4353736571222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c20224c4353736571222c20224352415445222c20225452414345225d\n5b226d6574726963222c20224c4353736571222c202261222c202262225d\n5b226d6574726963222c20224c4353736571222c20226162222c202262225d\n5b226d6574726963222c20224c4353736571222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c20224c4353736571222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c202248616d6d696e67222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c202248616d6d696e67222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c202248616d6d696e67222c20226361222c2022616263225d\n5b226d6574726963222c202248616d6d696e67222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c202248616d6d696e67222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c202248616d6d696e67222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c202248616d6d696e67222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n");
+    s.push_str("5b226d6574726963222c202248616d6d696e67222c2022222c2022225d\n5b226d6574726963222c202248616d6d696e67222c2022222c2022616263225d\n5b226d6574726963222c202248616d6d696e67222c2022616263222c2022616263225d\n5b226d6574726963222c202248616d6d696e67222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c202248616d6d696e67222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c202248616d6d696e67222c20224352415445222c20225452414345225d\n5b226d6574726963222c202248616d6d696e67222c202261222c202262225d\n5b226d6574726963222c202248616d6d696e67222c20226162222c202262225d\n5b226d6574726963222c202248616d6d696e67222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c202248616d6d696e67222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c20224a61726f222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c20224a61726f222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c20224a61726f222c20226361222c2022616263225d\n5b226d6574726963222c20224a61726f222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c20224a61726f222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c20224a61726f222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c20224a61726f222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c20224a61726f222c2022222c2022225d\n5b226d6574726963222c20224a61726f222c2022222c2022616263225d\n5b226d6574726963222c20224a61726f222c2022616263222c2022616263225d\n5b226d6574726963222c20224a61726f222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c20224a61726f222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c20224a61726f222c20224352415445222c20225452414345225d\n5b226d6574726963222c20224a61726f222c202261222c202262225d\n5b226d6574726963222c20224a61726f222c20226162222c202262225d\n5b226d6574726963222c20224a61726f222c2022447741794e45222c20224475414e45225d\n");
+    s.push_str("5b226d6574726963222c20224a61726f222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226361222c2022616263225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022222c2022225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022222c2022616263225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022616263222c2022616263225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20224352415445222c20225452414345225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c202261222c202262225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226162222c202262225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c20224f5341222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c20224f5341222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c20224f5341222c20226361222c2022616263225d\n5b226d6574726963222c20224f5341222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c20224f5341222c20226d6172746861222c20226d6172687461225d\n");
+    s.push_str("5b226d6574726963222c20224f5341222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c20224f5341222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c20224f5341222c2022222c2022225d\n5b226d6574726963222c20224f5341222c2022222c2022616263225d\n5b226d6574726963222c20224f5341222c2022616263222c2022616263225d\n5b226d6574726963222c20224f5341222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c20224f5341222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c20224f5341222c20224352415445222c20225452414345225d\n5b226d6574726963222c20224f5341222c202261222c202262225d\n5b226d6574726963222c20224f5341222c20226162222c202262225d\n5b226d6574726963222c20224f5341222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c20224f5341222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226361222c2022616263225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c2022222c2022225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c2022222c2022616263225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c2022616263222c2022616263225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n");
+    s.push_str("5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20224352415445222c20225452414345225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c202261222c202262225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c20226162222c202262225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c2022507265666978222c20226b697474656e222c202273697474696e67225d\n5b226d6574726963222c2022507265666978222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c2022507265666978222c20226361222c2022616263225d\n5b226d6574726963222c2022507265666978222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c2022507265666978222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c2022507265666978222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c2022507265666978222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c2022507265666978222c2022222c2022225d\n5b226d6574726963222c2022507265666978222c2022222c2022616263225d\n5b226d6574726963222c2022507265666978222c2022616263222c2022616263225d\n5b226d6574726963222c2022507265666978222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c2022507265666978222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c2022507265666978222c20224352415445222c20225452414345225d\n5b226d6574726963222c2022507265666978222c202261222c202262225d\n5b226d6574726963222c2022507265666978222c20226162222c202262225d\n5b226d6574726963222c2022507265666978222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c2022507265666978222c202253747261c39f65222c202253747261737365225d\n5b226d6574726963222c2022506f7374666978222c20226b697474656e222c202273697474696e67225d\n");
+    s.push_str("5b226d6574726963222c2022506f7374666978222c20226c6577656e737465696e222c20226c6576656e73687465696e225d\n5b226d6574726963222c2022506f7374666978222c20226361222c2022616263225d\n5b226d6574726963222c2022506f7374666978222c2022616263646566222c2022626164636665225d\n5b226d6574726963222c2022506f7374666978222c20226d6172746861222c20226d6172687461225d\n5b226d6574726963222c2022506f7374666978222c20226469786f6e222c20226469636b736f6e78225d\n5b226d6574726963222c2022506f7374666978222c20226a656c6c7966697368222c2022736d656c6c7966697368225d\n5b226d6574726963222c2022506f7374666978222c2022222c2022225d\n5b226d6574726963222c2022506f7374666978222c2022222c2022616263225d\n5b226d6574726963222c2022506f7374666978222c2022616263222c2022616263225d\n5b226d6574726963222c2022506f7374666978222c20227072656669785f6d61746368222c20227072656669785f6f74686572225d\n5b226d6574726963222c2022506f7374666978222c20226f746865725f737566666978222c20226d617463685f737566666978225d\n5b226d6574726963222c2022506f7374666978222c20224352415445222c20225452414345225d\n5b226d6574726963222c2022506f7374666978222c202261222c202262225d\n5b226d6574726963222c2022506f7374666978222c20226162222c202262225d\n5b226d6574726963222c2022506f7374666978222c2022447741794e45222c20224475414e45225d\n5b226d6574726963222c2022506f7374666978222c202253747261c39f65222c202253747261737365225d\n232064697374616e6365206d6574726963733a206f7074696f6e73\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b312c20312c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b312c20312c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b312c20312c20325d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b312c20312c20325d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b322c20312c20315d7d5d\n");
+    s.push_str("5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b322c20312c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b312c20322c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b312c20322c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b312c20312c20335d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b312c20312c20335d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b332c20352c20375d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b332c20352c20375d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b302c20312c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a205b302c20312c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a206e756c6c7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c202273697474696e67222c20226b697474656e222c207b2277656967687473223a206e756c6c7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2277656967687473223a205b312c20302c20315d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c2022222c2022616263222c207b2277656967687473223a205b322c20332c20345d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c2022616263222c2022222c207b2277656967687473223a205b322c20332c20345d7d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20307d5d\n");
+    s.push_str("5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20317d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20337d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20302e357d5d\n5b226d6574726963222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67222c207b2273636f72655f6375746f6666223a20302e367d5d\n5b226d6574726963222c20224a61726f222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20307d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20307d5d\n5b226d6574726963222c20224a61726f222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20302e357d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20302e357d5d\n5b226d6574726963222c20224a61726f222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20302e397d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20302e397d5d\n5b226d6574726963222c20224a61726f222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20317d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20226d6172746861222c20226d6172687461222c207b2273636f72655f6375746f6666223a20317d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a20302e307d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a20302e317d5d\n");
+    s.push_str("5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a20302e32357d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a20312e307d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a20312e357d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c20227072656669785f6d61746368222c20227072656669785f6f74686572222c207b227072656669785f776569676874223a202d302e317d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022647761796e65222c20226475616e65222c207b227072656669785f776569676874223a20302e32352c202273636f72655f6375746f6666223a20302e39357d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022647761796e65222c20226475616e65222c207b227072656669785f776569676874223a20302e312c202273636f72655f6375746f6666223a20302e39397d5d\n5b226d6574726963222c20224a61726f57696e6b6c6572222c2022647761796e65222c20226475616e65222c207b227072656669785f776569676874223a20302e332c202273636f72655f6375746f6666223a20302e397d5d\n5b226d6574726963222c202248616d6d696e67222c20226b61726f6c696e222c20226b61746872696e222c207b22706164223a2066616c73657d5d\n5b226d6574726963222c202248616d6d696e67222c2022616263222c20226162636465222c207b22706164223a2066616c73657d5d\n5b226d6574726963222c202248616d6d696e67222c2022616263222c20226162636465222c207b22706164223a20747275657d5d\n5b226d6574726963222c202248616d6d696e67222c2022222c2022222c207b22706164223a2066616c73657d5d\n5b226d6574726963222c2022496e64656c222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b226d6574726963222c2022496e64656c222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c20224f5341222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n");
+    s.push_str("5b226d6574726963222c20224f5341222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b226d6574726963222c202244616d657261754c6576656e73687465696e222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c2022507265666978222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b226d6574726963222c2022507265666978222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c2022506f7374666978222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b226d6574726963222c2022506f7374666978222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n5b226d6574726963222c20224c4353736571222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2270726f636573736f72223a202264656661756c74227d5d\n5b226d6574726963222c20224c4353736571222c202248656c6c6f20576f726c64222c202268656c6c6f20776f726c64222c207b2273636f72655f6375746f6666223a20327d5d\n2320656469746f707320616e64206f70636f646573\n5b226f7073222c20224c6576656e73687465696e222c2022716162786364222c2022616279636466225d\n5b226f7073222c20224c6576656e73687465696e222c20226b697474656e222c202273697474696e67225d\n5b226f7073222c20224c6576656e73687465696e222c20224c6576656e73687465696e222c20224c656e76696e7374656e225d\n5b226f7073222c20224c6576656e73687465696e222c2022222c2022616263225d\n5b226f7073222c20224c6576656e73687465696e222c2022616263222c2022225d\n5b226f7073222c20224c6576656e73687465696e222c2022616263222c2022616263225d\n5b226f7073222c20224c6576656e73687465696e222c20227370616d222c20227061726b225d\n5b226f7073222c20224c6576656e73687465696e222c2022616161626262222c2022616261626162225d\n");
+    s.push_str("5b226f7073222c2022496e64656c222c2022716162786364222c2022616279636466225d\n5b226f7073222c2022496e64656c222c20226b697474656e222c202273697474696e67225d\n5b226f7073222c2022496e64656c222c20224c6576656e73687465696e222c20224c656e76696e7374656e225d\n5b226f7073222c2022496e64656c222c2022222c2022616263225d\n5b226f7073222c2022496e64656c222c2022616263222c2022225d\n5b226f7073222c2022496e64656c222c2022616263222c2022616263225d\n5b226f7073222c2022496e64656c222c20227370616d222c20227061726b225d\n5b226f7073222c2022496e64656c222c2022616161626262222c2022616261626162225d\n5b226f7073222c20224c4353736571222c2022716162786364222c2022616279636466225d\n5b226f7073222c20224c4353736571222c20226b697474656e222c202273697474696e67225d\n5b226f7073222c20224c4353736571222c20224c6576656e73687465696e222c20224c656e76696e7374656e225d\n5b226f7073222c20224c4353736571222c2022222c2022616263225d\n5b226f7073222c20224c4353736571222c2022616263222c2022225d\n5b226f7073222c20224c4353736571222c2022616263222c2022616263225d\n5b226f7073222c20224c4353736571222c20227370616d222c20227061726b225d\n5b226f7073222c20224c4353736571222c2022616161626262222c2022616261626162225d\n5b226f7073222c202248616d6d696e67222c2022716162786364222c2022616279636466225d\n5b226f7073222c202248616d6d696e67222c20226b697474656e222c202273697474696e67225d\n5b226f7073222c202248616d6d696e67222c20224c6576656e73687465696e222c20224c656e76696e7374656e225d\n5b226f7073222c202248616d6d696e67222c2022222c2022616263225d\n5b226f7073222c202248616d6d696e67222c2022616263222c2022225d\n5b226f7073222c202248616d6d696e67222c2022616263222c2022616263225d\n5b226f7073222c202248616d6d696e67222c20227370616d222c20227061726b225d\n5b226f7073222c202248616d6d696e67222c2022616161626262222c2022616261626162225d\n5b226f7073222c202248616d6d696e67222c2022616263222c202261626364222c207b22706164223a2066616c73657d5d\n5b226f7073222c20224c6576656e73687465696e222c20224d61696e20537472656574222c20226d61696e207374222c207b2270726f636573736f72223a202264656661756c74227d5d\n232070726f636573733a20657874726163742c20657874726163744f6e6520616e6420657874726163745f69746572\n");
+    s.push_str("5b2265787472616374222c20226e657720796f726b206a657473222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b7d5d\n5b2265787472616374222c20226e657720796f726b206a657473222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b226c696d6974223a20327d5d\n5b2265787472616374222c20226e657720796f726b206a657473222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b226c696d6974223a206e756c6c7d5d\n5b2265787472616374222c20226e657720796f726b206a657473222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b226c696d6974223a20317d5d\n5b2265787472616374222c20226e657720796f726b206a657473222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b226c696d6974223a20307d5d\n5b22657874726163744f6e65222c2022636f77626f7973222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b7d5d\n5b22657874726163744f6e65222c2022636f77626f7973222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b2270726f636573736f72223a202264656661756c74227d5d\n");
+    s.push_str("5b2265787472616374222c2022636f77626f7973222c205b2241746c616e74612046616c636f6e73222c20224e657720596f726b204a657473222c20224e657720596f726b204769616e7473222c202244616c6c617320436f77626f7973222c20224e657720456e676c616e642050617472696f7473222c20224c61732056656761732052616964657273225d2c207b2270726f636573736f72223a202264656661756c74222c202273636f72655f6375746f6666223a2035307d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b7d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e726174696f222c20226c696d6974223a20337d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e7061727469616c5f726174696f222c20226c696d6974223a206e756c6c7d5d\n5b2265787472616374222c20226772617065222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e746f6b656e5f7365745f726174696f222c20226c696d6974223a206e756c6c2c202273636f72655f6375746f6666223a2035307d5d\n5b22657874726163745f69746572222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e51526174696f222c202273636f72655f6375746f6666223a2036307d5d\n5b22657874726163745f69746572222c20226170706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e726174696f227d5d\n");
+    s.push_str("5b22657874726163744f6e65222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e64697374616e6365227d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e64697374616e6365222c20226c696d6974223a20347d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e64697374616e6365222c202273636f72655f6375746f6666223a20332c20226c696d6974223a206e756c6c7d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e64697374616e6365222c20226c696d6974223a20332c202273636f7265725f6b7761726773223a207b2277656967687473223a205b312c20312c20325d7d7d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e6e6f726d616c697a65645f64697374616e6365222c20226c696d6974223a20337d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e73696d696c6172697479222c20226c696d6974223a20337d5d\n");
+    s.push_str("5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e6e6f726d616c697a65645f73696d696c6172697479222c20226c696d6974223a20332c202273636f72655f6375746f6666223a20302e357d5d\n5b2265787472616374222c202267726170222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224a61726f57696e6b6c65722e73696d696c6172697479222c20226c696d6974223a20337d5d\n5b2265787472616374222c202267726170222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224a61726f57696e6b6c65722e73696d696c6172697479222c20226c696d6974223a20332c202273636f7265725f6b7761726773223a207b227072656669785f776569676874223a20302e32357d7d5d\n5b22657874726163744f6e65222c202267726170222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224a61726f2e64697374616e6365227d5d\n5b2265787472616374222c202267726170222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20225072656669782e73696d696c6172697479222c20226c696d6974223a20337d5d\n5b2265787472616374222c20226265727279222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a2022506f73746669782e64697374616e6365222c20226c696d6974223a20337d5d\n");
+    s.push_str("5b2265787472616374222c20226368657279222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224f53412e64697374616e6365222c20226c696d6974223a20327d5d\n5b2265787472616374222c2022626e61616e61222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202244616d657261754c6576656e73687465696e2e64697374616e6365222c20226c696d6974223a20327d5d\n5b2265787472616374222c2022626e61616e61222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a2022496e64656c2e6e6f726d616c697a65645f64697374616e6365222c20226c696d6974223a20327d5d\n5b2265787472616374222c2022626e61616e61222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c43537365712e73696d696c6172697479222c20226c696d6974223a20327d5d\n5b2265787472616374222c202261706c65222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202248616d6d696e672e64697374616e6365222c20226c696d6974223a20337d5d\n5b22657874726163744f6e65222c20226170706c65222c205b224170706c65222c206e756c6c2c20224150504c45222c20226170706c65225d2c207b7d5d\n5b22657874726163744f6e65222c20226170706c65222c205b224170706c65222c206e756c6c2c20224150504c45222c20226170706c65225d2c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2265787472616374222c20226170706c65222c205b224170706c65222c206e756c6c2c20224150504c45222c20226170706c65225d2c207b2270726f636573736f72223a202264656661756c74227d5d\n");
+    s.push_str("5b22657874726163744f6e65222c20227a7a7a222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f72655f6375746f6666223a2035307d5d\n5b22657874726163744f6e65222c20227a7a7a222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a20224c6576656e73687465696e2e64697374616e6365222c202273636f72655f6375746f6666223a20327d5d\n5b2265787472616374222c20227a7a7a222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f72655f6375746f6666223a2035307d5d\n5b2265787472616374222c20226e79206a657473222c207b224e594a223a20224e657720596f726b204a657473222c20224e5947223a20224e657720596f726b204769616e7473222c202244414c223a202244616c6c617320436f77626f7973227d2c207b7d5d\n5b22657874726163744f6e65222c20226769616e7473222c207b224e594a223a20224e657720596f726b204a657473222c20224e5947223a20224e657720596f726b204769616e7473222c202244414c223a202244616c6c617320436f77626f7973227d2c207b2270726f636573736f72223a202264656661756c74227d5d\n5b2265787472616374222c2022616e797468696e67222c205b5d2c207b7d5d\n5b22657874726163744f6e65222c2022616e797468696e67222c205b5d2c207b7d5d\n5b2265787472616374222c2022222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b226c696d6974223a20327d5d\n5b2265787472616374222c2022222c205b226170706c65222c202262616e616e61222c2022636865727279222c20226772617065222c202270696e656170706c65222c202261707269636f74222c202267726170656672756974222c2022626c61636b6265727279225d2c207b2273636f726572223a202266757a7a2e726174696f222c20226c696d6974223a20327d5d\n");
+    s.push_str("2164656475706520646174612f76656e646f72732e747874\n217375676765737420646174612f636f6d6d616e64732e74787420646174612f7479706f732e747874\n217265636f6e63696c6520646174612f636174616c6f672e74737620646174612f6f72646572732e747376\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("vendors.txt 41636d6520436f72706f726174696f6e0a41434d4520436f72702e0a41636d6520436f72700a476c6f62657820496e630a476c6f6265782c20496e632e0a496e6974656368204c4c430a496e69746563680a556d6272656c6c6120436f72706f726174696f6e0a556d6272656c6c6120436f72700a536f796c656e7420477265656e204c74640a536f796c656e7420477265656e204c696d697465640a537461726b20496e64757374726965730a537461726b20496e647573747269657320496e632e0a5761796e6520456e7465727072697365730a5761796e6520456e7465727072697365732c20496e630a576f6e6b6120496e64757374726965730a437962657264796e652053797374656d730a437962657264796e652053797374656d7320436f72700a486f6f6c690a486f6f6c6920496e630a506965642050697065720a506965642050697065722c20496e632e0a56616e64656c617920496e64757374726965730a56616e64656c617920496d706f7274730a44756e646572204d6966666c696e0a44756e6465722d4d6966666c696e20506170657220436f6d70616e790a436166c3a9204dc3bc6c6c657220476d62480a43616665204d756c6c657220476d62480a547972656c6c20436f72700a547972656c6c20436f72706f726174696f6e0a\ncommands.txt 6164640a6269736563740a6272616e63680a636865636b6f75740a6368657272792d7069636b0a636c6f6e650a636f6d6d69740a646966660a66657463680a696e69740a6c6f670a6d657267650a70756c6c0a707573680a7265626173650a72656d6f74650a72657365740a726573746f72650a7265766572740a73686f770a73746173680a7374617475730a7377697463680a7461670a\ntypos.txt 636f6d69740a7374617574730a70756c0a707375680a6368656b6f75740a72656273650a62726e6163680a7374617473750a6d726567650a636c6e650a6368657272797069636b0a78797a7a790a737473680a6c676f0a72656d746f650a\ncatalog.tsv 534b552d31303031094170706c65206950686f6e652031352050726f20313238474220426c61636b20546974616e69756d0a534b552d31303032094170706c65206950686f6e6520313520313238474220426c75650a534b552d313030330953616d73756e672047616c6178792053323420556c7472612032353647420a534b552d3130303409476f6f676c6520506978656c20382050726f203132384742204f6273696469616e0a534b552d3130303509536f6e792057482d31303030584d3520576972656c657373204865616470686f6e65730a534b552d3130303609426f7365205175696574436f6d666f727420556c747261204865616470686f6e65730a534b552d31303037094170706c6520416972506f64732050726f2028326e642067656e65726174696f6e290a534b552d31303038094c6f676974656368204d58204d6173746572203353204d6f7573650a534b552d313030390944656c6c20585053203133204c6170746f7020313647422052414d0a534b552d31303130094c656e6f766f205468696e6b50616420583120436172626f6e2047656e2031310a534b552d3130313109416e6b657220506f776572436f726520313030303020506f727461626c6520436861726765720a534b552d31303132094b696e646c65205061706572776869746520313647420a\n");
+    s.push_str("orders.tsv 412d353031096970686f6e652031352070726f20626c61636b203132382067620a412d3530320967616c6178792073323420756c7472610a412d35303309736f6e7920776831303030786d35206865616470686f6e65730a412d35303409616972706f64732070726f20320a412d353035096d78206d61737465722033730a412d353036097468696e6b70616420783120636172626f6e0a412d353037096b696e646c6520706170657277686974650a412d35303809706978656c20382070726f0a412d35303909626f736520716320756c7472610a412d35313009616e6b657220706f7765722062616e6b2031303030306d61680a412d353131097573622d63206361626c6520326d0a412d3531320964656c6c207870732031330a\n");
+    s
+}
