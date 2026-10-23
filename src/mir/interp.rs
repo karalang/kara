@@ -1273,6 +1273,17 @@ impl<'a> Interp<'a> {
     /// A library function with no body: `arg_tys` and `ret` are the
     /// argument and result types at the call site, which say what a
     /// generic method's element type is and how its `Option` is laid out.
+    /// Whether `t`, behind any reference, is a program's own type named
+    /// `CStr` or `CString`: one with fields, which the builtin's natives
+    /// (opaque bytes) must not take.
+    fn user_c_string(&self, t: Ty) -> bool {
+        let t = self.tys.pointee(t).unwrap_or(t);
+        self.tys.tcx().adt_of(t).is_some_and(|(adt, _)| {
+            matches!(adt.name.as_str(), "CStr" | "CString")
+                && adt.variants.iter().any(|v| !v.fields.is_empty())
+        })
+    }
+
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
         let program: &'a Program = self.program;
         if let Some(sig) = program.externs.get(name) {
@@ -1444,7 +1455,9 @@ impl<'a> Interp<'a> {
                 let v = v.clone();
                 Ok(std::mem::replace(self.slot_mut(a)?, v))
             }
-            ("CStr" | "CString", _) | ("String", "to_cstring") => {
+            ("CStr" | "CString", _) | ("String", "to_cstring")
+                if !self.user_c_string(arg_tys.first().copied().unwrap_or(ret)) =>
+            {
                 self.c_string_method(name, base, method, args, ret)
             }
             ("String", "slice") => {

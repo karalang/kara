@@ -1208,6 +1208,20 @@ impl<'a> Lcx<'a> {
         (n >= 3 && segs[n - 2].starts_with("impl")).then(|| segs[n - 3].clone())
     }
 
+    /// The library's `f64_wrapper_from` for `F64.from` (and `F32`'s): the
+    /// constructor has no body of its own to name as a value.
+    fn wrapper_from(&self, d: DefId) -> Option<DefId> {
+        if self.def_name(d) != "from" {
+            return None;
+        }
+        let wrapper = match self.def_owner(d)?.as_str() {
+            "F64" => "f64_wrapper_from",
+            "F32" => "f32_wrapper_from",
+            _ => return None,
+        };
+        self.defs.lookup(0, wrapper)
+    }
+
     fn def_name(&self, d: DefId) -> String {
         self.defs
             .table
@@ -6249,6 +6263,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let name = self.lcx.def_name(*d);
                 let op = self.static_str(&name);
                 self.call_native("String.from", vec![op], dest);
+                return Ok(());
+            }
+        }
+        // `F64.from` as a value is the library's `f64_wrapper_from`.
+        if let ExprKind::Path { segments, .. } = &e.kind {
+            let wrapper = match segments.as_slice() {
+                [w, m] if m == "from" && w == "F64" => Some("f64_wrapper_from"),
+                [w, m] if m == "from" && w == "F32" => Some("f32_wrapper_from"),
+                _ => None,
+            };
+            if let Some(d) = wrapper.and_then(|w| self.lcx.defs.lookup(0, w)) {
+                let want = self.place_type(&dest);
+                let (op, _) = self.fn_item_value(e, d, Some(want))?;
+                self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
         }
@@ -15400,6 +15428,11 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A function item as a value: a constant of its `FnDef` type.
     fn fn_item_value(&mut self, e: &Expr, d: DefId, want: Option<Ty>) -> R<(Operand, Ty)> {
+        let d = if self.lcx.fns.contains_key(&d) {
+            d
+        } else {
+            self.lcx.wrapper_from(d).unwrap_or(d)
+        };
         let n_generic = self.lcx.fns.get(&d).map_or(0, |i| {
             i.f.generic_params.as_ref().map_or(0, |g| g.params.len())
         });
@@ -16359,6 +16392,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let (func, mut ops, param_tys) = match self.tys().tcx().kind(peeled) {
             HK::FnDef { def, args: fargs } => {
+                // `let g = F64.from; g(x)`.
+                let def = if self.lcx.fns.contains_key(&def) {
+                    def
+                } else {
+                    self.lcx.wrapper_from(def).unwrap_or(def)
+                };
                 let Some(f) = self.lcx.fns.get(&def).map(|i| i.f) else {
                     return self.unsupported(e.span, "a call to this function value");
                 };

@@ -1266,3 +1266,14 @@ fn f64_total_cmp(a: f64, b: f64) -> Ordering {
 fn f32_total_cmp(a: f32, b: f32) -> Ordering {
     a.total_cmp(b)
 }
+
+// `F64.from` and `F32.from` named as a value (`v.iter().map(F64.from)`):
+// the wrapper's constructor is the interpreter's and the backend's own, so
+// the MIR builder names these for the path, as it does `f64_total_cmp`.
+fn f64_wrapper_from(value: f64) -> F64 {
+    F64.from(value)
+}
+
+fn f32_wrapper_from(value: f32) -> F32 {
+    F32.from(value)
+}

@@ -8361,3 +8361,51 @@ fn mir_uppercase_local_field_paths() {
         }
     }
 }
+
+/// B-2026-10-22-36: `F64.from` and `F32.from` named as a value, passed to
+/// `map` and bound to a local, are the library's wrapper constructors.
+#[test]
+fn mir_the_float_wrapper_constructor_as_a_value() {
+    let src = r#"fn main() {
+    let a: Vec[f64] = [3.0, 1.0, 2.0];
+    let w: Vec[F64] = a.iter().map(F64.from).collect();
+    let hi: F64 = w.iter().max().unwrap();
+    println(f"{w[1].value} {hi.value}");
+    let g = F64.from;
+    println(g(4.5).value);
+    let b: Vec[f32] = [1.5, 0.5];
+    let v: Vec[F32] = b.iter().map(F32.from).collect();
+    println(v[1].value);
+}
+"#;
+    let want = "1.0 3.0\n4.5\n0.5\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
+/// B-2026-10-22-36: a program's own struct named `CStr` is cloned by its
+/// derived `Clone`, not by the builtin `CStr`'s natives.
+#[test]
+fn mir_a_user_struct_named_cstr_clones_its_fields() {
+    let src = r#"#[derive(Clone)]
+struct CStr { bytes: Vec[i64], source_len: i64 }
+fn main() {
+    let c = CStr { bytes: [1, 2, 3], source_len: 3 };
+    let d = c.clone();
+    println(f"{d.bytes[2]} {d.source_len} {c.bytes.len()}");
+}
+"#;
+    let want = "3 3 3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
