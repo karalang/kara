@@ -94,7 +94,7 @@ pub fn output_with_hang_watchdog(mut cmd: Command, timeout: Duration) -> Option<
 /// bare test-fn name (matched against the test thread's name, which
 /// libtest sets to the full `module::test_name` path), or a corpus
 /// prefix ending in `*`, and MUST carry a comment naming either the
-/// docs/bug-ledger.jsonl entry for the latent compiler bug it pins, or
+/// docs/bugs-v2.jsonl entry for the latent compiler bug it pins, or
 /// the reason the test can't be made ownership-clean yet. The list
 /// exists to shrink: fix the bug (or the test program), remove the
 /// entry.
@@ -529,7 +529,7 @@ pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult
         "[ownership-gate] test `{test_name}`: program fails the ownership checker \
          ({} error(s)) — `karac check` would reject it, so codegen is being fed \
          input it never sees in production. Fix the test program, or (for a latent \
-         compiler bug) file a docs/bug-ledger.jsonl entry and grandfather the test \
+         compiler bug) file a docs/bugs-v2.jsonl entry and grandfather the test \
          in tests/common/mod.rs:\n",
         blocking.len()
     );
@@ -697,7 +697,7 @@ pub fn assert_effects_clean(effects: &karac::effectchecker::EffectCheckResult, s
         "[effect-gate] test `{test_name}`: program fails the effect checker \
          ({} blocking error(s)) — `karac build` exits 1 on this source, so \
          codegen is being fed input it never sees in production. Fix the test \
-         program, or (for a latent compiler bug) file a docs/bug-ledger.jsonl \
+         program, or (for a latent compiler bug) file a docs/bugs-v2.jsonl \
          entry and grandfather the test in tests/common/mod.rs:\n",
         blocking.len()
     );
@@ -778,7 +778,7 @@ pub fn assert_check_clean(
          ({} resolve + {} type error(s)) — `karac build` exits 1 on this \
          source, so codegen is being fed input it never sees in \
          production. Fix the test program, or (for a front-end gap the \
-         backend already implements) file a docs/bug-ledger.jsonl entry \
+         backend already implements) file a docs/bugs-v2.jsonl entry \
          and grandfather the test in tests/common/mod.rs:\n",
         resolved.errors.len(),
         typed.errors.len()

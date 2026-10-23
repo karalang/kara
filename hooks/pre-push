@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-push gate: run the bug-ledger integrity lint before every push, so a
-# malformed docs/bug-ledger.jsonl is caught locally instead of reddening the
+# malformed docs/bugs-v2.jsonl is caught locally instead of reddening the
 # required `Lint` CI job on main. The recurring offender is a stale PRE-REBASE
 # fix SHA: a row's `fix` is filled in with a commit SHA that a later rebase
 # changes, leaving the ledger citing a SHA that no longer resolves.
@@ -52,8 +52,8 @@ fi
 
 echo >&2
 echo "pre-push: bug-ledger lint failed — push blocked." >&2
-echo "  Fix the error(s) above in docs/bug-ledger.jsonl (a dangling fix SHA is" >&2
+echo "  Fix the error(s) above in docs/bugs-v2.jsonl (a dangling fix SHA is" >&2
 echo "  usually a pre-rebase SHA — cite the post-rebase commit instead), then" >&2
-echo "  regenerate the rollup:  python3 scripts/bug-curve.py --inject docs/bug-ledger.md" >&2
+echo "  regenerate the rollup:  python3 scripts/bug-curve.py --inject docs/bugs-v2.md" >&2
 echo "  Or bypass this one push with:  git push --no-verify" >&2
 exit 1

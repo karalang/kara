@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Integrity gate for docs/bug-ledger.jsonl — makes the B-ID convention ENFORCED
+# Integrity gate for the bug ledger — makes the B-ID convention ENFORCED
 # rather than hoped-for. Run locally or in CI. Exits non-zero on any violation.
+#
+# Since the M3 split (scripts/ledger-split.py) there are two files: the live
+# ledger docs/bugs-v2.jsonl, where every rule applies, and the read-only
+# archive docs/legacy/bug-ledger.jsonl. Before the split, docs/bug-ledger.jsonl
+# is the live ledger and there is no archive. Ids are unique across both files,
+# so rules 2, 5, 7 and 9 read the UNION.
 #
 # Checks:
 #   1. every line is valid JSON with the required fields
@@ -20,18 +26,33 @@
 #   9. every B-ID cited in tracked code (src/ tests/ runtime/ hash/ selfhost/
 #      examples/) names a ledger row; a `PREDICTS <B-ID>` citation of a closed
 #      row warns
+#  10. the archive is FROZEN: byte-identical to origin/main's copy (skipped on
+#      the split commit itself, where origin/main has no archive yet)
+#  11. a live row's `detail` + `fix` stays under 6 KB (the size problem the
+#      split exists to end was prose piled up over months, not the field)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-LEDGER="docs/bug-ledger.jsonl"
+if [ -f docs/bugs-v2.jsonl ]; then
+    LEDGER="docs/bugs-v2.jsonl"
+    ARCHIVE="docs/legacy/bug-ledger.jsonl"
+else
+    LEDGER="docs/bug-ledger.jsonl"   # before the M3 split
+    ARCHIVE=""
+fi
 KATAS="${KARA_KATAS_DIR:-../kara-katas}"
 
-python3 - "$LEDGER" "$KATAS" <<'PY'
+python3 - "$LEDGER" "$KATAS" "$ARCHIVE" <<'PY'
 import json, re, sys, pathlib, glob
-ledger, katas_dir = sys.argv[1], sys.argv[2]
+ledger, katas_dir, archive = sys.argv[1], sys.argv[2], sys.argv[3]
 errs, warns = [], []
 REQ = ["id","date","source","surface","class","severity","status","fix","title","tracker"]
 IDRE = re.compile(r"^B-\d{4}-\d{2}-\d{2}-\d+$")
-SURF = {"codegen","typecheck","interp","ownership","effect","lexer","parser","runtime","resolver","cli","autopar","other"}
+# `mir` / `mir-llvm` are the v2 backends (since the M3 split). In the live
+# ledger `interp` means the MIR interpreter; `codegen` is legacy's and warns
+# there (rule 3), since a new row on v2 means `mir-llvm`.
+SURF = {"codegen","typecheck","interp","ownership","effect","lexer","parser","runtime","resolver","cli","autopar","other",
+        "mir","mir-llvm"}
+DETAIL_CAP = 6 * 1024
 # Failure-mode class — CONTROLLED vocabulary (canonicalized 2026-07-17). One
 # primary class per bug; nuance goes in `detail`, never into new class strings.
 CLASS = {"miscompile","double-free","use-after-free","leak","crash","codegen-gap",
@@ -42,7 +63,27 @@ CLASS = {"miscompile","double-free","use-after-free","leak","crash","codegen-gap
 FAM = {"kata","kata-gap","kata-gap-audit","selfhost","dogfood","probe","spike",
        "internal","followup","test-infra","example"}
 seen = {}
-rows = []
+rows = []    # the LIVE ledger: every rule applies
+arows = []   # the archive: read for uniqueness and citations, frozen by rule 10
+# A row the split moved to the live ledger keeps its id, and its archive copy is
+# a `relocated` stub pointing at docs/bugs-v2.jsonl. That pair is the one legal
+# id repeat across the two files.
+STUB = "docs/bugs-v2.jsonl"
+if archive:
+    for i, line in enumerate(pathlib.Path(archive).read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except Exception as e:
+            errs.append(f"{archive} line {i}: invalid JSON ({e})"); continue
+        arows.append(r)
+        bid = r.get("id", "")
+        if bid in seen:
+            errs.append(f"{archive} line {i}: duplicate B-ID '{bid}' (also line {seen[bid]})")
+        seen[bid] = f"{archive}:{i}"
+stubs = {r.get("id") for r in arows
+         if r.get("status") == "relocated" and r.get("tracker") == STUB}
 for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     if not line.strip():
         continue
@@ -57,9 +98,18 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     bid = r.get("id","")
     if not IDRE.match(bid):
         errs.append(f"line {i}: bad B-ID format '{bid}'")
-    if bid in seen:
+    if bid in seen and not (bid in stubs and isinstance(seen[bid], str)):
         errs.append(f"line {i}: duplicate B-ID '{bid}' (also line {seen[bid]})")
     seen[bid] = i
+    # 11. size cap on the live ledger. A row the split carried over keeps
+    # whatever prose it had (warn), a new row must fit (error).
+    size = len(r.get("detail", "") or "") + len(r.get("fix", "") or "")
+    if archive and size > DETAIL_CAP:
+        (warns if bid in stubs else errs).append(
+            f"{bid}: detail + fix is {size} bytes, over the {DETAIL_CAP}-byte cap — "
+            "put the measurements in a corpus program or a review note and cite it")
+    if archive and r.get("surface") and "codegen" in r.get("surface","").split("+") and bid not in stubs:
+        warns.append(f"{bid}: surface `codegen` is legacy's; a v2 backend bug is `mir-llvm`")
     # `open` is the WORK QUEUE — bug-curve.py renders open rows in full
     # precisely because you are expected to act on them. A row that is real and
     # reproduced but has no action left is `wontfix`, NOT `open` (it would sit
@@ -129,7 +179,8 @@ if kd.exists():
         return readmes.get(m.group(1)) if m else None
 
     ledger_bids = set(seen)
-    for r in rows:
+    live_ids = {r.get("id") for r in rows}
+    for r in rows + [a for a in arows if a.get("id") not in live_ids]:
         src = r.get("source","")
         if src.startswith("kata:"):
             # A withdrawn row has no claim on the kata's README: `invalid` /
@@ -279,9 +330,21 @@ def _split_shas(fix):
 # history". Everything else still needs full history and is still skipped, with
 # the count said out loud so a narrowed check cannot read as a complete one.
 _shallow = _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true"
+
+def _pub_live(paths=None):
+    """origin/main's LIVE ledger text — docs/bugs-v2.jsonl, or the single
+    pre-split file when origin/main has not been split yet. On the split commit
+    itself the pre-split file is what the moved rows are compared against, so
+    an unchanged carried row is not on trial."""
+    for p in (paths or ("docs/bugs-v2.jsonl", "docs/bug-ledger.jsonl")):
+        res = _git("show", f"origin/main:{p}")
+        if res.returncode == 0:
+            return res
+    return res
+
 _restrict = None
 if _shallow:
-    _pub = _git("show", "origin/main:docs/bug-ledger.jsonl")
+    _pub = _pub_live()
     if _pub.returncode != 0:
         warns.append(
             "shallow clone and no origin/main — skipped fix-SHA resolvability check "
@@ -431,7 +494,7 @@ else:
         return out
 
     cand = {}  # sha -> {B-ID, ...}
-    pub6b = _git("show", f"origin/main:{ledger}")
+    pub6b = _pub_live()
     if pub6b.returncode == 0:
         was = _headlines_by_id(pub6b.stdout)
         now = _headlines_by_id(pathlib.Path(ledger).read_text())
@@ -580,19 +643,21 @@ elif _git("merge-base", "--is-ancestor", "origin/main", "HEAD").returncode != 0:
         "rebase onto origin/main and re-run, which is when it is meaningful"
     )
 else:
-    pub = _git("show", f"origin/main:{ledger}")
-    if pub.returncode != 0:
+    pubs = [_git("show", f"origin/main:{p}") for p in
+            ("docs/bugs-v2.jsonl", "docs/legacy/bug-ledger.jsonl", "docs/bug-ledger.jsonl")]
+    pubs = [p for p in pubs if p.returncode == 0]
+    if not pubs:
         warns.append("could not read the ledger from origin/main — skipped the deleted-row check")
     else:
         published = set()
-        for line in pub.stdout.splitlines():
+        for line in "\n".join(p.stdout for p in pubs).splitlines():
             if not line.strip():
                 continue
             try:
                 published.add(json.loads(line)["id"])
             except Exception:
                 continue
-        here = {r["id"] for r in rows}
+        here = {r["id"] for r in rows} | {r["id"] for r in arows}
         for bid in sorted(published - here):
             errs.append(
                 f"{bid}: published on origin/main but MISSING here — the ledger is "
@@ -636,7 +701,8 @@ _code = _git("grep", "-nIoE", r"(PREDICTS )?B-20[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]
 if _code.returncode not in (0, 1):
     warns.append("could not `git grep` the tree — skipped the cited-id check (rule 9)")
 else:
-    by_id = {r["id"]: r for r in rows}
+    by_id = {r["id"]: r for r in arows}
+    by_id.update({r["id"]: r for r in rows})  # a carried row is judged by its live copy
     dangling, predicts = {}, {}
     for line in _code.stdout.splitlines():
         loc, _, tok = line.rpartition(":")
@@ -657,9 +723,25 @@ else:
             f"{', '.join(locs)}. Check the fixture flipped as predicted, then reword the comment."
         )
 
+# 10. THE ARCHIVE IS FROZEN. docs/legacy/bug-ledger.jsonl records legacy's
+# bugs as they stood when legacy was deleted, and every rule above that
+# protects a row's content runs on the live ledger only — so a later edit to
+# the archive is checked by nothing else. A legacy bug still live on v2 gets a
+# FRESH row in docs/bugs-v2.jsonl citing the archived one.
+if archive and _git("rev-parse", "--git-dir").returncode == 0:
+    _apub = _git("show", f"origin/main:{archive}")
+    if _apub.returncode != 0:
+        warns.append(f"origin/main has no {archive} — skipped the frozen-archive check "
+                     "(expected only on the split commit itself)")
+    elif _apub.stdout != pathlib.Path(archive).read_text():
+        errs.append(f"{archive} differs from origin/main's copy — the archive is read-only. "
+                    f"Restore it (`git checkout origin/main -- {archive}`) and file a fresh row in "
+                    f"{ledger} instead.")
+
 for w in warns: print(f"WARN  {w}")
 for e in errs: print(f"ERROR {e}")
-print(f"\n{len(rows)} ledger rows · {len(errs)} errors · {len(warns)} warnings")
+_arch = f" (+ {len(arows)} archived)" if archive else ""
+print(f"\n{len(rows)} ledger rows{_arch} · {len(errs)} errors · {len(warns)} warnings")
 sys.exit(1 if errs else 0)
 PY
 

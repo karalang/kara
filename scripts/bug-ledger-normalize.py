@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Rewrite docs/bug-ledger.jsonl in its canonical form (B-2026-08-07-13).
+"""Rewrite the bug ledger files in their canonical form (B-2026-08-07-13).
+
+The files are docs/bugs-v2.jsonl (live) and docs/legacy/bug-ledger.jsonl
+(the archive) after the M3 split, or docs/bug-ledger.jsonl before it.
 
 WHY THIS EXISTS. The ledger has no canonical writer — every lane appends to it
 with an ad-hoc script, and `json.dumps` escapes non-ASCII by DEFAULT while
@@ -31,7 +34,9 @@ import json
 import pathlib
 import sys
 
-LEDGER = pathlib.Path(__file__).resolve().parent.parent / "docs" / "bug-ledger.jsonl"
+_DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
+LEDGERS = [p for p in (_DOCS / "bugs-v2.jsonl", _DOCS / "legacy" / "bug-ledger.jsonl",
+                       _DOCS / "bug-ledger.jsonl") if p.exists()]
 
 
 def canonical(line: str) -> str:
@@ -40,7 +45,14 @@ def canonical(line: str) -> str:
 
 def main() -> int:
     check_only = "--check" in sys.argv[1:]
-    lines = LEDGER.read_text(encoding="utf-8").splitlines()
+    rc = 0
+    for ledger in LEDGERS:
+        rc |= normalize(ledger, check_only)
+    return rc
+
+
+def normalize(ledger: pathlib.Path, check_only: bool) -> int:
+    lines = ledger.read_text(encoding="utf-8").splitlines()
     out, bad = [], []
     for i, line in enumerate(lines, start=1):
         if not line.strip():
@@ -50,7 +62,7 @@ def main() -> int:
         except json.JSONDecodeError as e:
             # Invalid JSON is bug-lint.sh's check 1, not this one's; leave the
             # line alone so the caller reports it where the message belongs.
-            print(f"line {i}: not valid JSON ({e}) — see bug-lint.sh check 1")
+            print(f"{ledger.name} line {i}: not valid JSON ({e}) — see bug-lint.sh check 1")
             return 1
         if canon != line:
             bad.append(i)
@@ -59,7 +71,7 @@ def main() -> int:
     if check_only:
         if bad:
             print(
-                f"{len(bad)} of {len(out)} ledger row(s) are not in canonical form "
+                f"{ledger.name}: {len(bad)} of {len(out)} ledger row(s) are not in canonical form "
                 f"(first: line {bad[0]}).\n"
                 "Almost always this is `json.dumps` ASCII-escaping: pass "
                 "`ensure_ascii=False` when you write the file.\n"
@@ -68,8 +80,8 @@ def main() -> int:
             return 1
         return 0
 
-    LEDGER.write_text("\n".join(out) + "\n", encoding="utf-8")
-    print(f"normalized {len(bad)} of {len(out)} row(s)")
+    ledger.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print(f"{ledger.name}: normalized {len(bad)} of {len(out)} row(s)")
     return 0
 
 

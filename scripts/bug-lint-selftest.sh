@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Self-test for bug-lint.sh rule 6b — the fix-SHA orphan detector.
+# Self-test for bug-lint.sh rule 6b — the fix-SHA orphan detector — and for
+# the M3 split layout (rules 10 and 11, scripts/ledger-split.py).
 #
 # WHY A SELF-TEST. Rule 6b's failure mode is SILENCE: what it produces when it
 # works is a lint that says nothing, which is indistinguishable from a lint that
@@ -239,4 +240,48 @@ $out"
 grep -q "cafe123" <<<"$out" || fail "rule 6c said nothing about the unresolvable prose sha cafe123:
 $out"
 
-echo "bug-lint selftest: 9/9 cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped, prose orphan detected, recorded prose orphan silent, recorded orphan beside an all-digit twin silent, unresolvable prose sha warned)"
+# ---- the M3 split layout (docs/bugs-v2.jsonl + docs/legacy/) ---------------
+# S1: right after ledger-split.py, the lint passes (rule 10 is skipped, since
+#     origin/main has no archive yet).
+# S2: once the archive is published, editing it is an ERROR (rule 10).
+# S3: a NEW live row over the detail cap is an ERROR; a carried row only warns.
+s="$tmp/split"
+mkdir -p "$s/origin/docs" "$s/origin/scripts"
+cp "$here/bug-lint.sh" "$here/bug-ledger-normalize.py" "$here/ledger-split.py" "$s/origin/scripts/"
+cp "$tmp/origin/docs/bug-ledger.jsonl" "$s/origin/docs/"
+( cd "$s/origin" && "${G[@]}" init -q -b main && "${G[@]}" add -A && "${G[@]}" commit -q -m "selftest: unsplit" && "${G[@]}" config receive.denyCurrentBranch updateInstead )
+"${G[@]}" clone -q "file://$s/origin" "$s/work"
+sw="$s/work"
+slint() { ( cd "$sw" && KARA_KATAS_DIR=/nonexistent ./scripts/bug-lint.sh 2>&1 ); }
+( cd "$sw" && python3 scripts/ledger-split.py --archive-ref archive/selftest >/dev/null ) \
+    || fail "ledger-split.py failed on the selftest ledger"
+grep -q '"B-2026-01-01-1"' "$sw/docs/bugs-v2.jsonl" || fail "the open row was not carried to docs/bugs-v2.jsonl"
+grep -q '"tracker": "docs/bugs-v2.jsonl"' "$sw/docs/legacy/bug-ledger.jsonl" || fail "the open row was not stubbed in the archive"
+out="$(slint)" || fail "S1: the lint failed right after the split:
+$out"
+grep -q "skipped the frozen-archive check" <<<"$out" || fail "S1: rule 10 did not say it was skipped on the split commit:
+$out"
+"${G[@]}" -C "$sw" commit -q -am "selftest: split"
+"${G[@]}" -C "$sw" push -q origin HEAD:main
+"${G[@]}" -C "$sw" fetch -q origin main
+sed -i 's/closed long ago/closed long ago, edited/' "$sw/docs/legacy/bug-ledger.jsonl"
+out="$(slint)" && fail "S2: rule 10 did not fail an edit to the published archive:
+$out"
+grep -q "the archive is read-only" <<<"$out" || fail "S2: wrong failure for an archive edit:
+$out"
+"${G[@]}" -C "$sw" checkout -q -- docs/legacy/bug-ledger.jsonl
+python3 - "$sw/docs/bugs-v2.jsonl" <<'PY'
+import json, sys
+p = sys.argv[1]
+rows = [json.loads(l) for l in open(p) if l.strip()]
+rows.append(dict(rows[0], id="B-2026-01-02-1", title="selftest row — new and long", detail="x" * 7000))
+open(p, "w").write("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+PY
+out="$(slint)" && fail "S3: a new live row over the cap passed:
+$out"
+grep -q "B-2026-01-02-1: detail + fix is" <<<"$out" || fail "S3: wrong failure for the oversized row:
+$out"
+grep -q "ERROR B-2026-01-01-1" <<<"$out" && fail "S3: the carried row was failed instead of warned:
+$out"
+
+echo "bug-lint selftest: 12/12 cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped, prose orphan detected, recorded prose orphan silent, recorded orphan beside an all-digit twin silent, unresolvable prose sha warned, split passes, archive frozen, detail cap)"

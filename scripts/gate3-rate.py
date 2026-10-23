@@ -62,7 +62,14 @@ FIRST_RUN_BREAKING = {
     "run-vs-build",
 }
 
-LEDGER = pathlib.Path(__file__).resolve().parent.parent / "docs" / "bug-ledger.jsonl"
+_DOCS = pathlib.Path(__file__).resolve().parent.parent / "docs"
+# A rate is a statement about history, so it reads the archive and the live
+# ledger together (since the M3 split; a carried row counts once, as its live
+# copy). Before the split there is one file.
+LEDGER = _DOCS / "bugs-v2.jsonl"
+ARCHIVE = _DOCS / "legacy" / "bug-ledger.jsonl"
+if not LEDGER.exists():
+    LEDGER, ARCHIVE = _DOCS / "bug-ledger.jsonl", None
 
 # SCOPES — which `source` families count toward the launch promise.
 #
@@ -139,6 +146,9 @@ def main():
     args = ap.parse_args()
 
     rows = load(pathlib.Path(args.ledger))
+    if ARCHIVE is not None and pathlib.Path(args.ledger) == LEDGER and ARCHIVE.exists():
+        live = {r["id"] for r in rows}
+        rows = [r for r in load(ARCHIVE) if r["id"] not in live] + rows
     date = {r["id"]: datetime.date.fromisoformat(r["date"]) for r in rows}
     breaking = counts(rows)
 

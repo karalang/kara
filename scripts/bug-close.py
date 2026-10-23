@@ -41,7 +41,11 @@ requires the row to carry a `tracker` naming where the work went; bug-lint.sh
 enforces that, because a relocation whose pointer is missing is just a
 disappearance.
 
-After a successful write this regenerates `docs/bug-ledger.md`, because a close
+It writes only the live ledger, docs/bugs-v2.jsonl. The pre-M3 archive,
+docs/legacy/bug-ledger.jsonl, is read-only, and a close of an id that lives
+only there is refused with a pointer.
+
+After a successful write this regenerates `docs/bugs-v2.md`, because a close
 that skips the regeneration leaves the rollup lying about the queue.
 """
 
@@ -54,8 +58,12 @@ import sys
 import typing
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-LEDGER = ROOT / "docs" / "bug-ledger.jsonl"
-ROLLUP = ROOT / "docs" / "bug-ledger.md"
+LEDGER = ROOT / "docs" / "bugs-v2.jsonl"
+ROLLUP = ROOT / "docs" / "bugs-v2.md"
+ARCHIVE = ROOT / "docs" / "legacy" / "bug-ledger.jsonl"
+if not LEDGER.exists():  # before the M3 split
+    LEDGER = ROOT / "docs" / "bug-ledger.jsonl"
+    ROLLUP = ROOT / "docs" / "bug-ledger.md"
 
 CLOSED = {"fixed", "wontfix", "invalid", "not-reproduced", "relocated"}
 
@@ -244,6 +252,10 @@ def main() -> None:
 
     matches = [(i, r) for i, r in rows if r.get("id") == args.bid]
     if not matches:
+        if ARCHIVE.exists() and f'"id": "{args.bid}"' in ARCHIVE.read_text():
+            die(f"{args.bid} is in the read-only archive {ARCHIVE.relative_to(ROOT)}; "
+                "it cannot be closed there. If the bug is still live on v2, file a "
+                "fresh row in docs/bugs-v2.jsonl citing it.")
         die(f"{args.bid} not found in {LEDGER.relative_to(ROOT)}")
     if len(matches) > 1:
         die(f"{args.bid} appears {len(matches)} times — run scripts/bug-lint.sh")
@@ -335,7 +347,7 @@ def main() -> None:
     )
     if r.returncode != 0:
         die(f"row written, but rollup regeneration FAILED:\n{r.stderr}")
-    print("bug-close: regenerated docs/bug-ledger.md")
+    print(f"bug-close: regenerated {ROLLUP.relative_to(ROOT)}")
     print("bug-close: now run scripts/bug-lint.sh before committing")
 
 

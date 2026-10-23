@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Render the Kāra bug curve from docs/bug-ledger.jsonl.
+"""Render the Kāra bug curve from the live ledger, docs/bugs-v2.jsonl.
+
+Since the M3 split (scripts/ledger-split.py) the live ledger is
+docs/bugs-v2.jsonl and the pre-M3 one is archived read-only at
+docs/legacy/bug-ledger.jsonl. Pass `--ledger <path>` to render another file;
+before the split the default falls back to docs/bug-ledger.jsonl.
 
 The point of the ledger is to make "are we still finding bugs?" a number you
 can watch flatten — per surface (codegen/ownership/…) and per source
@@ -9,6 +14,7 @@ markdown report to stdout and writes a minimal cumulative-curve SVG.
 Usage:
     python3 scripts/bug-curve.py                  # report to stdout
     python3 scripts/bug-curve.py --svg out.svg    # also write the SVG
+    python3 scripts/bug-curve.py --ledger docs/legacy/bug-ledger.jsonl --inject docs/legacy/bug-ledger.md
     python3 scripts/bug-curve.py --inject f.md    # splice the generated state
                                                   # block into f.md (between the
                                                   # GEN markers — never edit it
@@ -21,7 +27,12 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
-LEDGER = Path(__file__).resolve().parent.parent / "docs" / "bug-ledger.jsonl"
+_DOCS = Path(__file__).resolve().parent.parent / "docs"
+LEDGER = _DOCS / "bugs-v2.jsonl"
+if not LEDGER.exists():  # before the M3 split
+    LEDGER = _DOCS / "bug-ledger.jsonl"
+if "--ledger" in sys.argv:
+    LEDGER = Path(sys.argv[sys.argv.index("--ledger") + 1])
 
 
 def load():
@@ -259,10 +270,10 @@ def ledger_view(rows) -> str:
     # No counts here either, and for the same reason as the tables above: a
     # `34 open · 1913 fixed` line is rewritten by EVERY close, so two concurrent
     # closes always collide on it. The tallies are one command away
-    # (`grep -c '"status": "open"' docs/bug-ledger.jsonl`) and the section
+    # (`grep -c '"status": "open"' docs/bugs-v2.jsonl`) and the section
     # tables below are the authoritative list regardless.
     out.append(
-        f"_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` "
+        f"_Generated from `{LEDGER.name}` by `scripts/bug-curve.py` "
         f"({rows[0]['date']} → {rows[-1]['date']}). Do not edit this block by "
         f"hand; edit the ledger and regenerate._"
     )
@@ -323,7 +334,7 @@ def ledger_view(rows) -> str:
     out.append(
         "<details><summary>"
         "Fixed — compact index (one-line titles; full write-up + "
-        "cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test "
+        f"cross-refs live in `{LEDGER.name}`, grep by id). The regression test "
         "is the durable artifact.</summary>\n"
     )
     out.append("| id | surface | sev | title | fix |")

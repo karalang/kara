@@ -129,7 +129,7 @@ cat > "$STAGE/README.md" <<EOF
 
 Pre-v1 development build of the Kāra compiler. Expect breakage; the
 compiler's own defect record is public at
-https://github.com/karalang/kara/blob/main/docs/bug-ledger.md — please
+https://github.com/karalang/kara/blob/main/docs/bugs-v2.md — please
 report issues with the exact version string from \`karac --version\`
 (its \`+g<sha>\` suffix identifies the commit this binary was built
 from).

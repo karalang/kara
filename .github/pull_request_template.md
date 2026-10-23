@@ -45,11 +45,11 @@ same dead end, and honestly-scoped partial work is welcome here.
 
 <!--
 Only if this fixes or discovers a bug.
-- Fixed a ledger bug? Set `status`/`fix` in docs/bug-ledger.jsonl, regenerate
-  the rollup (`python3 scripts/bug-curve.py --inject docs/bug-ledger.md`), and
+- Fixed a ledger bug? Set `status`/`fix` in docs/bugs-v2.jsonl, regenerate
+  the rollup (`python3 scripts/bug-curve.py --inject docs/bugs-v2.md`), and
   run `./scripts/bug-lint.sh`.
 - Found one you are not fixing? File it rather than working around it.
-- After any ledger edit, check `git diff --numstat docs/bug-ledger.jsonl`
+- After any ledger edit, check `git diff --numstat docs/bugs-v2.jsonl`
   shows only the lines you meant to touch — a scripted rewrite that
   re-serializes rows buries the real change.
 -->
