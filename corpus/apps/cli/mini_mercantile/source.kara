@@ -1,0 +1,452 @@
+// mini_mercantile — the integer tile API of mercantile 1.2.1
+// (mercantile/__init__.py), the spherical-Mercator "XYZ" web-map tile toolkit
+// Mapbox wrote for slippy maps and tile servers. It ports tile (lng/lat to the
+// tile containing it), quadkey and quadkey_to_tile (Bing's base-4 tile keys,
+// with QuadKeyError on a bad digit), parent, children, neighbors, tiles (every
+// tile covering a bounding box, split across the antimeridian), bounding_tile
+// (the smallest tile holding a box) and minmax.
+//
+// The library's bitwise &, |, << and >> are written as integer /, % and +
+// (Kāra has no bitwise operators; every operand is a non-negative tile index,
+// so truncating / is Python's floor //); the projection keeps its exact f64 ops
+// (sin, natural log, pow, floor) and the library's EPSILON / LL_EPSILON
+// nudges, so every tile is the library's tile. Every result is an integer
+// tile, a quadkey string or an integer pair, so the output never depends on
+// float formatting. jobs_text() holds data/jobs.tsv.
+
+const PI: f64 = 3.141592653589793;
+const EPSILON: f64 = 0.00000000000001;
+const LL_EPSILON: f64 = 0.00000000001;
+
+struct Tile {
+    x: i64,
+    y: i64,
+    z: i64,
+}
+
+// ----------------------------------------------------------- small helpers
+
+fn pow2(k: i64) -> i64 {
+    let mut v = 1;
+    let mut i = 0;
+    while i < k {
+        v = v * 2;
+        i += 1;
+    }
+    v
+}
+
+fn to_i64(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn tile_str(t: Tile) -> String {
+    f"{t.x}/{t.y}/{t.z}"
+}
+
+fn list_str(ts: Vec[Tile]) -> String {
+    let mut out = f"{ts.len()}:";
+    if ts.len() == 0 {
+        out.push_str(" ");
+    }
+    for t in ts {
+        out.push_str(" ");
+        out.push_str(tile_str(t));
+    }
+    out
+}
+
+// ------------------------------------------------------------- projection
+
+// Fractional web-Mercator position of a lng/lat, both in [0, 1] inside the
+// projection's latitude limits.
+fn xy_frac(lng: f64, lat: f64) -> (f64, f64) {
+    let x = lng / 360.0 + 0.5;
+    let sinlat = (lat * PI / 180.0).sin();
+    let y = 0.5 - 0.25 * ((1.0 + sinlat) / (1.0 - sinlat)).ln() / PI;
+    (x, y)
+}
+
+fn frac_to_index(v: f64, z2: f64) -> i64 {
+    if v <= 0.0 {
+        0
+    } else if v >= 1.0 {
+        (z2 - 1.0) as i64
+    } else {
+        ((v + EPSILON) * z2).floor() as i64
+    }
+}
+
+fn tile(lng: f64, lat: f64, zoom: i64) -> Tile {
+    let (x, y) = xy_frac(lng, lat);
+    let z2 = (2.0).pow(zoom as f64);
+    Tile { x: frac_to_index(x, z2), y: frac_to_index(y, z2), z: zoom }
+}
+
+// ---------------------------------------------------------------- quadkeys
+
+fn quadkey(x: i64, y: i64, z: i64) -> String {
+    let mut qk = String.new();
+    let mut zz = z;
+    while zz > 0 {
+        let mut digit = 0;
+        let mask = pow2(zz - 1);
+        if (x / mask) % 2 == 1 {
+            digit += 1;
+        }
+        if (y / mask) % 2 == 1 {
+            digit += 2;
+        }
+        qk.push_str(f"{digit}");
+        zz -= 1;
+    }
+    qk
+}
+
+// None is the library's QuadKeyError ("Unexpected quadkey digit").
+fn quadkey_to_tile(qk: String) -> Option[Tile] {
+    let b = qk.bytes().to_vec();
+    let n = b.len();
+    if n == 0 {
+        return Some(Tile { x: 0, y: 0, z: 0 });
+    }
+    let mut xt = 0;
+    let mut yt = 0;
+    let mut i = 0;
+    let mut bad = false;
+    while i < n {
+        let digit = b[n - 1 - i];
+        let mask = pow2(i);
+        if digit == b'1' {
+            xt += mask;
+        } else if digit == b'2' {
+            yt += mask;
+        } else if digit == b'3' {
+            xt += mask;
+            yt += mask;
+        } else if digit != b'0' {
+            bad = true;
+            i = n;
+        }
+        i += 1;
+    }
+    if bad {
+        None
+    } else {
+        Some(Tile { x: xt, y: yt, z: n })
+    }
+}
+
+// --------------------------------------------------------------- hierarchy
+
+// target < 0 means "not given": one zoom level up.
+fn parent(x: i64, y: i64, z: i64, target: i64) -> Option[Tile] {
+    if z == 0 {
+        return None;
+    }
+    let tz = if target < 0 { z - 1 } else { target };
+    let mut rx = x;
+    let mut ry = y;
+    let mut rz = z;
+    while rz > tz {
+        if rx % 2 == 0 and ry % 2 == 0 {
+            rx = rx / 2;
+            ry = ry / 2;
+        } else if rx % 2 == 0 {
+            rx = rx / 2;
+            ry = (ry - 1) / 2;
+        } else if ry % 2 == 0 {
+            rx = (rx - 1) / 2;
+            ry = ry / 2;
+        } else {
+            rx = (rx - 1) / 2;
+            ry = (ry - 1) / 2;
+        }
+        rz -= 1;
+    }
+    Some(Tile { x: rx, y: ry, z: rz })
+}
+
+// The library's breadth-first expansion: pop the front tile, append its four
+// children in the order top-left, top-right, bottom-right, bottom-left.
+fn children(x: i64, y: i64, z: i64, target: i64) -> Vec[Tile] {
+    let tz = if target < 0 { z + 1 } else { target };
+    let mut tiles: Vec[Tile] = Vec.new();
+    tiles.push(Tile { x: x, y: y, z: z });
+    let mut head = 0;
+    while tiles[head].z < tz {
+        let cx = tiles[head].x;
+        let cy = tiles[head].y;
+        let cz = tiles[head].z;
+        head += 1;
+        tiles.push(Tile { x: cx * 2, y: cy * 2, z: cz + 1 });
+        tiles.push(Tile { x: cx * 2 + 1, y: cy * 2, z: cz + 1 });
+        tiles.push(Tile { x: cx * 2 + 1, y: cy * 2 + 1, z: cz + 1 });
+        tiles.push(Tile { x: cx * 2, y: cy * 2 + 1, z: cz + 1 });
+    }
+    let mut out: Vec[Tile] = Vec.new();
+    let mut i = head;
+    while i < tiles.len() {
+        out.push(Tile { x: tiles[i].x, y: tiles[i].y, z: tiles[i].z });
+        i += 1;
+    }
+    out
+}
+
+fn neighbors(x: i64, y: i64, z: i64) -> Vec[Tile] {
+    let hi = pow2(z) - 1;
+    let mut out: Vec[Tile] = Vec.new();
+    let mut i = -1;
+    while i <= 1 {
+        let mut j = -1;
+        while j <= 1 {
+            let skip = (i == 0 and j == 0) or x + i < 0 or y + j < 0 or x + i > hi or y + j > hi;
+            if not skip {
+                out.push(Tile { x: x + i, y: y + j, z: z });
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+// ---------------------------------------------------------- bounding boxes
+
+fn max_f(a: f64, b: f64) -> f64 {
+    if a >= b { a } else { b }
+}
+
+fn min_f(a: f64, b: f64) -> f64 {
+    if a <= b { a } else { b }
+}
+
+fn tiles_in_box(w: f64, s: f64, e: f64, n: f64, zooms: Vec[i64], out: mut ref Vec[Tile]) {
+    let bw = max_f(-180.0, w);
+    let bs = max_f(-85.051129, s);
+    let be = min_f(180.0, e);
+    let bn = min_f(85.051129, n);
+    for z in zooms {
+        let ul = tile(bw, bn, z);
+        let lr = tile(be - LL_EPSILON, bs + LL_EPSILON, z);
+        let mut i = ul.x;
+        while i <= lr.x {
+            let mut j = ul.y;
+            while j <= lr.y {
+                out.push(Tile { x: i, y: j, z: z });
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+}
+
+// A box whose west edge is east of its east edge crosses the antimeridian and
+// is split in two, exactly as the library does.
+fn tiles(w: f64, s: f64, e: f64, n: f64, zooms: Vec[i64]) -> Vec[Tile] {
+    let mut out: Vec[Tile] = Vec.new();
+    if w > e {
+        tiles_in_box(-180.0, s, e, n, zooms.clone(), mut out);
+        tiles_in_box(w, s, 180.0, n, zooms, mut out);
+    } else {
+        tiles_in_box(w, s, e, n, zooms, mut out);
+    }
+    out
+}
+
+// The first zoom at which the two corner tiles' zoom-32 indices differ in a
+// bit; 28 when they agree all the way down.
+fn bbox_zoom(c0: i64, c1: i64, c2: i64, c3: i64) -> i64 {
+    let mut z = 0;
+    let mut found = 28;
+    while z < 28 {
+        let mask = pow2(32 - (z + 1));
+        if (c0 / mask) % 2 != (c2 / mask) % 2 or (c1 / mask) % 2 != (c3 / mask) % 2 {
+            found = z;
+            z = 28;
+        }
+        z += 1;
+    }
+    found
+}
+
+fn rshift(v: i64, nbits: i64) -> i64 {
+    (v % 4294967296) / pow2(nbits)
+}
+
+fn bounding_tile(w: f64, s: f64, e: f64, n: f64) -> Tile {
+    let tmin = tile(w, n, 32);
+    let tmax = tile(e - LL_EPSILON, s + LL_EPSILON, 32);
+    let z = bbox_zoom(tmin.x, tmin.y, tmax.x, tmax.y);
+    if z == 0 {
+        Tile { x: 0, y: 0, z: 0 }
+    } else {
+        Tile { x: rshift(tmin.x, 32 - z), y: rshift(tmin.y, 32 - z), z: z }
+    }
+}
+
+fn minmax(z: i64) -> (i64, i64) {
+    (0, pow2(z) - 1)
+}
+
+// --------------------------------------------------------------- the jobs
+
+fn run_job(f: Vec[String]) -> String {
+    let op = f[0].clone();
+    if op == "tile" {
+        tile_str(tile(to_f64(f[1].clone()), to_f64(f[2].clone()), to_i64(f[3].clone())))
+    } else if op == "quadkey" {
+        let qk = quadkey(to_i64(f[1].clone()), to_i64(f[2].clone()), to_i64(f[3].clone()));
+        f"[{qk}]"
+    } else if op == "qk2tile" {
+        match quadkey_to_tile(f[1].clone()) {
+            Some(t) => tile_str(t),
+            None => "ERR QuadKeyError".to_string(),
+        }
+    } else if op == "parent" {
+        let tz = if f[4] == "-" { -1 } else { to_i64(f[4].clone()) };
+        match parent(to_i64(f[1].clone()), to_i64(f[2].clone()), to_i64(f[3].clone()), tz) {
+            Some(t) => tile_str(t),
+            None => "None".to_string(),
+        }
+    } else if op == "children" {
+        let tz = if f[4] == "-" { -1 } else { to_i64(f[4].clone()) };
+        list_str(children(to_i64(f[1].clone()), to_i64(f[2].clone()), to_i64(f[3].clone()), tz))
+    } else if op == "neighbors" {
+        list_str(neighbors(to_i64(f[1].clone()), to_i64(f[2].clone()), to_i64(f[3].clone())))
+    } else if op == "tiles" {
+        let mut zooms: Vec[i64] = Vec.new();
+        for zs in split_on(f[5].clone(), b',') {
+            zooms.push(to_i64(zs));
+        }
+        list_str(tiles(to_f64(f[1].clone()), to_f64(f[2].clone()), to_f64(f[3].clone()), to_f64(f[4].clone()), zooms))
+    } else if op == "bounding" {
+        tile_str(bounding_tile(to_f64(f[1].clone()), to_f64(f[2].clone()), to_f64(f[3].clone()), to_f64(f[4].clone())))
+    } else if op == "minmax" {
+        let (lo, hi) = minmax(to_i64(f[1].clone()));
+        f"{lo} {hi}"
+    } else {
+        "ERR unknown op".to_string()
+    }
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            out.push_str(f[0]);
+            out.push_str("(");
+            let mut i = 1;
+            while i < f.len() {
+                if i > 1 {
+                    out.push_str(", ");
+                }
+                out.push_str(f[i]);
+                i += 1;
+            }
+            out.push_str(") => ");
+            out.push_str(run_job(f));
+            out.push_str("\n");
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("tile\t-105.0\t39.75\t10\n");
+    s.push_str("tile\t0.0\t51.5\t12\n");
+    s.push_str("tile\t139.6917\t35.6895\t14\n");
+    s.push_str("tile\t-74.006\t40.7128\t16\n");
+    s.push_str("tile\t151.2093\t-33.8688\t8\n");
+    s.push_str("tile\t2.3522\t48.8566\t1\n");
+    s.push_str("tile\t-122.4194\t37.7749\t18\n");
+    s.push_str("tile\t18.4241\t-33.9249\t5\n");
+    s.push_str("tile\t0.0\t0.0\t0\n");
+    s.push_str("tile\t-179.9\t85.0\t6\n");
+    s.push_str("tile\t179.9\t-85.0\t6\n");
+    s.push_str("quadkey\t486\t332\t10\n");
+    s.push_str("quadkey\t0\t0\t1\n");
+    s.push_str("quadkey\t1\t1\t1\n");
+    s.push_str("quadkey\t8191\t8191\t14\n");
+    s.push_str("quadkey\t0\t0\t0\n");
+    s.push_str("quadkey\t35210\t21493\t16\n");
+    s.push_str("qk2tile\t0313102310\n");
+    s.push_str("qk2tile\t\n");
+    s.push_str("qk2tile\t0\n");
+    s.push_str("qk2tile\t3\n");
+    s.push_str("qk2tile\t123\n");
+    s.push_str("qk2tile\t0313102310300\n");
+    s.push_str("qk2tile\t0312a\n");
+    s.push_str("parent\t486\t332\t10\t-\n");
+    s.push_str("parent\t0\t0\t2\t-\n");
+    s.push_str("parent\t0\t0\t2\t0\n");
+    s.push_str("parent\t486\t332\t10\t8\n");
+    s.push_str("parent\t759\t335\t10\t5\n");
+    s.push_str("parent\t1\t1\t1\t-\n");
+    s.push_str("children\t0\t0\t0\t-\n");
+    s.push_str("children\t0\t0\t0\t2\n");
+    s.push_str("children\t486\t332\t10\t-\n");
+    s.push_str("children\t243\t166\t9\t11\n");
+    s.push_str("neighbors\t486\t332\t10\n");
+    s.push_str("neighbors\t0\t0\t1\n");
+    s.push_str("neighbors\t0\t0\t10\n");
+    s.push_str("neighbors\t1023\t1023\t10\n");
+    s.push_str("neighbors\t0\t0\t0\n");
+    s.push_str("tiles\t-105.0\t39.0\t-104.0\t40.0\t10\n");
+    s.push_str("tiles\t-180.0\t-85.0\t180.0\t85.0\t1\n");
+    s.push_str("tiles\t-105.0\t39.0\t-104.0\t40.0\t9,10\n");
+    s.push_str("tiles\t179.0\t-1.0\t-179.0\t1.0\t4\n");
+    s.push_str("tiles\t2.0\t48.0\t3.0\t49.0\t12\n");
+    s.push_str("bounding\t-105.0\t39.0\t-104.0\t40.0\n");
+    s.push_str("bounding\t-105.0\t39.75\t-105.0\t39.75\n");
+    s.push_str("bounding\t2.0\t48.0\t3.0\t49.0\n");
+    s.push_str("bounding\t-180.0\t-85.0\t180.0\t85.0\n");
+    s.push_str("minmax\t0\n");
+    s.push_str("minmax\t1\n");
+    s.push_str("minmax\t10\n");
+    s.push_str("minmax\t14\n");
+    s.push_str("minmax\t20\n");
+    s
+}
