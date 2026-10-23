@@ -1,0 +1,311 @@
+// LeetCode #898: Bitwise ORs of Subarrays -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an integer array arr, return the number of
+// distinct bitwise ORs of all the non-empty subarrays of arr. The bitwise
+// OR of a subarray is the bitwise OR of each integer in the subarray; the
+// bitwise OR of a subarray of one integer is that integer. A subarray is
+// a contiguous non-empty sequence of elements within an array.
+
+// ---- the ★ arm: the ORs ending at each place ------------------------------
+fn star_subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut all: Set[i64] = Set.new();
+    let mut ending: Set[i64] = Set.new();
+    for x in arr.iter() {
+        let mut next: Set[i64] = Set.new();
+        next.insert(*x);
+        for y in ending.iter() {
+            next.insert(*y | *x);
+        }
+        for y in next.iter() {
+            all.insert(*y);
+        }
+        ending = next;
+    }
+    all.len()
+}
+
+// ---- the back arm: each number folded back --------------------------------
+fn back_subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut ors = arr.clone();
+    let mut seen: Set[i64] = Set.new();
+    for i in 0..ors.len() {
+        let x = ors[i];
+        seen.insert(x);
+        let mut j = i;
+        while j > 0 and (ors[j - 1] | x) != ors[j - 1] {
+            j -= 1;
+            ors[j] = ors[j] | x;
+            seen.insert(ors[j]);
+        }
+    }
+    seen.len()
+}
+
+// ---- the sorted arm: lists in place of sets, and one sort -----------------
+fn sorted_subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut every: Vec[i64] = Vec.new();
+    let mut ending: Vec[i64] = Vec.new();
+    for x in arr.iter() {
+        let mut next: Vec[i64] = Vec.new();
+        next.push(*x);
+        for y in ending.iter() {
+            let v = *y | *x;
+            if v != next[next.len() - 1] {
+                next.push(v);
+            }
+        }
+        for v in next.iter() {
+            every.push(*v);
+        }
+        ending = next;
+    }
+    every.sort();
+    let mut count = 0;
+    for i in 0..every.len() {
+        if i == 0 or every[i] != every[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the table arm: a hash table of its own -------------------------------
+struct Table {
+    slots: Vec[i64],
+    count: i64,
+}
+
+fn table_insert(t: mut ref Table, v: i64) {
+    let mask = t.slots.len() - 1;
+    let mut i = ((v * 2654435761) % 4294967296) & mask;
+    while t.slots[i] != -1 {
+        if t.slots[i] == v {
+            return;
+        }
+        i = (i + 1) & mask;
+    }
+    t.slots[i] = v;
+    t.count += 1;
+    if t.count * 2 > t.slots.len() {
+        let old = t.slots.clone();
+        t.slots = Vec.filled(old.len() * 2, -1);
+        t.count = 0;
+        for w in old.iter() {
+            if *w != -1 {
+                table_insert(mut t, *w);
+            }
+        }
+    }
+}
+
+fn table_subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut table = Table { slots: Vec.filled(64, -1), count: 0 };
+    let mut ending: Vec[i64] = Vec.new();
+    for x in arr.iter() {
+        let mut next: Vec[i64] = Vec.new();
+        next.push(*x);
+        for y in ending.iter() {
+            let v = *y | *x;
+            if v != next[next.len() - 1] {
+                next.push(v);
+            }
+        }
+        for v in next.iter() {
+            table_insert(mut table, *v);
+        }
+        ending = next;
+    }
+    table.count
+}
+
+// ---- the bits arm: where each bit was last seen ---------------------------
+fn bits_subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut last: Vec[i64] = Vec.filled(30, -1);
+    let mut seen: Set[i64] = Set.new();
+    for i in 0..arr.len() {
+        for b in 0..30 {
+            if ((arr[i] >> b) & 1) == 1 {
+                last[b] = i;
+            }
+        }
+        let mut places: Vec[i64] = Vec.new();
+        for b in 0..30 {
+            if last[b] >= 0 {
+                places.push(last[b]);
+            }
+        }
+        places.sort();
+        let mut v = arr[i];
+        seen.insert(v);
+        let mut k = places.len();
+        while k > 0 {
+            k -= 1;
+            v = v | arr[places[k]];
+            seen.insert(v);
+        }
+    }
+    seen.len()
+}
+
+fn arm(x: i64, arr: Vec[i64]) -> i64 {
+    match x {
+        0 => star_subarray_bitwise_ors(arr),
+        1 => back_subarray_bitwise_ors(arr),
+        2 => sorted_subarray_bitwise_ors(arr),
+        3 => table_subarray_bitwise_ors(arr),
+        _ => bits_subarray_bitwise_ors(arr),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the bitwise OR of the elements of every non-empty subarray, arr[i..=j]
+// for every i <= j, and the number of distinct ones
+fn literal(arr: Vec[i64]) -> i64 {
+    let mut ors: Set[i64] = Set.new();
+    for i in 0..arr.len() {
+        for j in i..arr.len() {
+            let mut v = 0;
+            for k in i..j + 1 {
+                v = v | arr[k];
+            }
+            ors.insert(v);
+        }
+    }
+    ors.len()
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` random numbers below 2^bits; with `sparse`, each is AND-ed with a
+// second one, so it has about a quarter of the bits rather than half
+fn random_case(seed: mut ref i64, len: i64, bits: i64, sparse: bool) -> Vec[i64] {
+    let mask = (1 << bits) - 1;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        let mut v = (next_random(mut seed) * 32768 + next_random(mut seed)) & mask;
+        if sparse {
+            v = v & (next_random(mut seed) * 32768 + next_random(mut seed));
+        }
+        arr.push(v);
+    }
+    arr
+}
+
+// the low `width` bits of v in reverse order
+fn reversed_bits(v: i64, width: i64) -> i64 {
+    let mut out = 0;
+    for b in 0..width {
+        if ((v >> b) & 1) == 1 {
+            out = out | (1 << (width - 1 - b));
+        }
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's count.
+fn properties(t: mut ref Tally, seed: mut ref i64, arr: Vec[i64], small: bool) -> i64 {
+    let n = arr.len();
+    let want = if small { literal(arr) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, arr));
+    }
+    // the different numbers, the OR of them all, and its width in bits
+    let mut values: Set[i64] = Set.new();
+    let mut whole = 0;
+    for v in arr.iter() {
+        values.insert(*v);
+        whole = whole | *v;
+    }
+    let mut width = 0;
+    while (whole >> width) > 0 {
+        width += 1;
+    }
+    let mut backwards: Vec[i64] = Vec.new();
+    let mut renamed: Vec[i64] = Vec.new();
+    let mut marked: Vec[i64] = Vec.new();
+    for i in 0..n {
+        backwards.push(arr[n - 1 - i]);
+        renamed.push(reversed_bits(arr[i], width));
+        marked.push(arr[i] | (1 << width));
+    }
+    let mut longer = arr.clone();
+    longer.push((next_random(mut seed) * 32768 + next_random(mut seed)) & ((1 << width) - 1));
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: at least the different numbers, which are subarrays of one;
+        // at most one for each subarray, 31 for each end, and 2^width
+        check(mut t, 2, got >= values.len() and got <= n * (n + 1) / 2 and got <= 31 * n and got <= (1 << width).max(1));
+        // P3: the same count for the array read backwards
+        check(mut t, 3, arm(x, backwards) == got);
+        // P4: the same count with the bits of every number in reverse
+        // order, and with a bit no number has set in every number
+        check(mut t, 4, arm(x, renamed) == got and (width >= 30 or arm(x, marked) == got));
+        // P5: a number added at the end adds at most 31 ORs, those ending
+        // there, and takes none away
+        let more = arm(x, longer);
+        check(mut t, 5, more >= got and more <= got + 31);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 898;
+    let mut cases = 0;
+    let mut total = 0;
+    // up to 12 numbers below 2^1 to 2^6 against the statement; then up to
+    // 400 below 2^1 to 2^30; half of them sparse
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 400 };
+        let bits = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 30 };
+        let arr = random_case(mut seed, len, bits, c % 2 == 0);
+        cases += 1;
+        total += properties(mut t, mut seed, arr, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {total} ORs in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

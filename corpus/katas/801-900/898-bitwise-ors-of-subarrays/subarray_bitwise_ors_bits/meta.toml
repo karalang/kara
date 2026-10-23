@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/898-bitwise-ors-of-subarrays/subarray_bitwise_ors_bits.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:set"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "51c902d69"
+extracted_src = "ba824d51"
+model_rev = "aafbe785"
+model_src = "ba824d51"

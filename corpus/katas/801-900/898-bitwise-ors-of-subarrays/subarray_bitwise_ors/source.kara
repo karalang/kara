@@ -1,0 +1,81 @@
+// LeetCode #898: Bitwise ORs of Subarrays -- the ORs ending at each place.
+//
+// The ORs of the subarrays ending at i are the ORs ending at i - 1, each
+// with arr[i] put in, and arr[i] alone. Extending a subarray to the left
+// only ever adds bits, so there are at most 31 different ones (one more
+// for each bit added). Keep that set from place to place and gather
+// every one of them. O(n * 31).
+
+fn subarray_bitwise_ors(arr: Vec[i64]) -> i64 {
+    let mut all: Set[i64] = Set.new();
+    let mut ending: Set[i64] = Set.new();
+    for x in arr.iter() {
+        let mut next: Set[i64] = Set.new();
+        next.insert(*x);
+        for y in ending.iter() {
+            next.insert(*y | *x);
+        }
+        for y in next.iter() {
+            all.insert(*y);
+        }
+        ending = next;
+    }
+    all.len()
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arr: Vec[i64]) {
+    println(f"arr = {arr} -> {subarray_bitwise_ors(arr)}");
+}
+
+// `len` random numbers below 2^bits; with `sparse`, each is AND-ed with a
+// second one, so it has about a quarter of the bits rather than half
+fn random_case(seed: mut ref i64, len: i64, bits: i64, sparse: bool) -> Vec[i64] {
+    let mask = (1 << bits) - 1;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        let mut v = (next_random(mut seed) * 32768 + next_random(mut seed)) & mask;
+        if sparse {
+            v = v & (next_random(mut seed) * 32768 + next_random(mut seed));
+        }
+        arr.push(v);
+    }
+    arr
+}
+
+fn main() {
+    show([0]);
+    show([1, 1, 2]);
+    show([1, 2, 4]);
+    show([0, 0, 0]);
+    show([7, 7, 7, 7]);
+    show([1, 2, 4, 8, 16, 32, 64, 128]);
+    show([3, 5, 6, 0, 1]);
+    show([1000000000, 0, 999999999, 536870912]);
+    // random cases of up to 1000 numbers, a third of them up to 8, below
+    // 2^1 to 2^30, half of them sparse
+    let mut seed = 898;
+    let mut total = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = if c % 3 == 0 { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 1000 };
+        let bits = 1 + next_random(mut seed) % 30;
+        let got = subarray_bitwise_ors(random_case(mut seed, len, bits, c % 2 == 0));
+        total += got;
+        check = (check * 131 + got) % 1000000007;
+    }
+    println(f"300 cases of up to 1000 numbers: {total} ORs in all, checksum {check}");
+    // LeetCode's largest: 50000 numbers up to 10^9, and 50000 below 2^12
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..50000 {
+        big.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001);
+    }
+    println(f"50000 numbers up to 10^9 -> {subarray_bitwise_ors(big)}");
+    println(f"50000 sparse numbers below 2^12 -> {subarray_bitwise_ors(random_case(mut seed, 50000, 12, true))}");
+}
