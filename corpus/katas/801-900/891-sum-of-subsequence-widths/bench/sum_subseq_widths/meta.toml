@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/891-sum-of-subsequence-widths/bench/sum_subseq_widths.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "457da6319"
+extracted_src = "c1b512e0"
+model_rev = "aafbe785"
+model_src = "c1b512e0"

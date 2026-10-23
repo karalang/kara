@@ -1,0 +1,65 @@
+// LeetCode #891: Sum of Subsequence Widths -- a running sum of starts.
+//
+// Sorted, take the values in turn as the end of a subsequence. Ending at
+// j, a subsequence starts at some i < j with 2^(j-i-1) choices between,
+// so the widths ending at j are a[j] (2^j - 1) less the sum s of a[i]
+// 2^(j-i-1); moving to j + 1 doubles s and adds a[j]. O(n log n).
+
+fn sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut a = nums.clone();
+    a.sort();
+    let mut total = 0;
+    let mut starts = 0;
+    let mut pow = 1;
+    for j in 0..a.len() {
+        total = (total + a[j] * (pow - 1) - starts) % modulus;
+        starts = (starts * 2 + a[j]) % modulus;
+        pow = pow * 2 % modulus;
+    }
+    (total + modulus) % modulus
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"nums = {nums} -> {sum_subseq_widths(nums)}");
+}
+
+fn main() {
+    show([2, 1, 3]);
+    show([2]);
+    show([7, 7, 7]);
+    show([1, 2]);
+    show([5, 1, 4, 2, 3, 3]);
+    // 1 to 40, where the widths overflow the modulus many times
+    let mut ramp: Vec[i64] = Vec.new();
+    for v in 1..41 {
+        ramp.push(v);
+    }
+    show(ramp);
+    // random cases: up to 200 numbers, from 1 to 100000 or, a third of
+    // the time, from 1 to 10 so that values repeat
+    let mut seed = 891;
+    let mut numbers = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let n = 1 + next_random(mut seed) % 200;
+        let top = if next_random(mut seed) % 3 == 0 { 10 } else { 100000 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % top);
+        }
+        let got = sum_subseq_widths(nums);
+        numbers += n;
+        sum = (sum + got) % 1000000007;
+        check = (check * 131 + got) % 1000000007;
+    }
+    println(f"2000 cases of up to 200 numbers ({numbers} in all): widths sum to {sum}, checksum {check}");
+}

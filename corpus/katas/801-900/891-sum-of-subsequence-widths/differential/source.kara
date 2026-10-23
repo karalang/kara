@@ -1,0 +1,284 @@
+// LeetCode #891: Sum of Subsequence Widths -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: the width of a sequence is the difference between its
+// largest and smallest elements. Given an array of integers nums, return
+// the sum of the widths of all the non-empty subsequences of nums, modulo
+// 10^9 + 7. A subsequence is derived from the array by deleting some or
+// no elements without changing the order of the rest.
+
+// ---- the ★ arm: sorted, with powers of two --------------------------------
+fn star_sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut pow: Vec[i64] = Vec.filled(n, 1);
+    for i in 1..n {
+        pow[i] = pow[i - 1] * 2 % modulus;
+    }
+    let mut total = 0;
+    for i in 0..n {
+        total = (total + a[i] * (pow[i] - pow[n - 1 - i])) % modulus;
+    }
+    (total + modulus) % modulus
+}
+
+// ---- the pairs arm: every pair of ends ------------------------------------
+fn pairs_sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut pow: Vec[i64] = Vec.filled(n, 1);
+    for i in 1..n {
+        pow[i] = pow[i - 1] * 2 % modulus;
+    }
+    let mut total = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            total = (total + (a[j] - a[i]) * pow[j - i - 1]) % modulus;
+        }
+    }
+    total
+}
+
+// ---- the counting arm: a count of each value ------------------------------
+fn counting_sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let n = nums.len();
+    let mut largest = 0;
+    for x in nums.iter() {
+        largest = largest.max(*x);
+    }
+    let mut count: Vec[i64] = Vec.filled(largest + 1, 0);
+    for x in nums.iter() {
+        count[*x] += 1;
+    }
+    let mut pow: Vec[i64] = Vec.filled(n + 1, 1);
+    for i in 1..n + 1 {
+        pow[i] = pow[i - 1] * 2 % modulus;
+    }
+    let mut total = 0;
+    let mut p = 0;
+    for v in 0..largest + 1 {
+        let c = count[v];
+        if c > 0 {
+            let block = pow[c] - 1;
+            let as_max = pow[p] * block % modulus;
+            let as_min = pow[n - p - c] * block % modulus;
+            total = (total + v * (as_max - as_min)) % modulus;
+            p += c;
+        }
+    }
+    (total + modulus) % modulus
+}
+
+// ---- the running arm: a running sum of starts -----------------------------
+fn running_sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let mut a = nums.clone();
+    a.sort();
+    let mut total = 0;
+    let mut starts = 0;
+    let mut pow = 1;
+    for j in 0..a.len() {
+        total = (total + a[j] * (pow - 1) - starts) % modulus;
+        starts = (starts * 2 + a[j]) % modulus;
+        pow = pow * 2 % modulus;
+    }
+    (total + modulus) % modulus
+}
+
+// ---- the rank arm: the rank of each value, counted ------------------------
+fn rank_sum_subseq_widths(nums: Vec[i64]) -> i64 {
+    let modulus = 1000000007;
+    let n = nums.len();
+    let mut pow: Vec[i64] = Vec.filled(n, 1);
+    for i in 1..n {
+        pow[i] = pow[i - 1] * 2 % modulus;
+    }
+    let mut total = 0;
+    for i in 0..n {
+        let mut below = 0;
+        for j in 0..n {
+            if nums[j] < nums[i] or (nums[j] == nums[i] and j < i) {
+                below += 1;
+            }
+        }
+        let above = n - 1 - below;
+        total = (total + nums[i] * (pow[below] - pow[above])) % modulus;
+    }
+    (total + modulus) % modulus
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> i64 {
+    match x {
+        0 => star_sum_subseq_widths(nums),
+        1 => pairs_sum_subseq_widths(nums),
+        2 => counting_sum_subseq_widths(nums),
+        3 => running_sum_subseq_widths(nums),
+        _ => rank_sum_subseq_widths(nums),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every non-empty subsequence, chosen by the bits of a mask, its largest
+// value less its smallest summed; the sum is exact before the modulus
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    for mask in 1..(1 << n) {
+        let mut low = 0;
+        let mut high = 0;
+        let mut first = true;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                if first {
+                    low = nums[i];
+                    high = nums[i];
+                    first = false;
+                } else {
+                    low = low.min(nums[i]);
+                    high = high.max(nums[i]);
+                }
+            }
+        }
+        total += high - low;
+    }
+    total % 1000000007
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn modulo(x: i64) -> i64 {
+    ((x % 1000000007) + 1000000007) % 1000000007
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's sum.
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], small: bool) -> i64 {
+    let want = if small { literal(nums) } else { 0 };
+    let n = nums.len();
+    let mut largest = 0;
+    for x in nums.iter() {
+        largest = largest.max(*x);
+    }
+    // the values shuffled, shifted up by `shift`, scaled by `scale`, and
+    // reflected so that the largest becomes the smallest
+    let mut shuffled = nums.clone();
+    for i in 1..n {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+    }
+    let shift = 1 + next_random(mut seed) % 1000;
+    let scale = 2 + next_random(mut seed) % 4;
+    let mut shifted: Vec[i64] = Vec.new();
+    let mut scaled: Vec[i64] = Vec.new();
+    let mut reflected: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        shifted.push(*x + shift);
+        scaled.push(*x * scale);
+        reflected.push(largest + 1 - *x);
+    }
+    // a new largest value, and the same moved up by `step`
+    let step = 1 + next_random(mut seed) % 1000;
+    let top = largest + next_random(mut seed) % 1000;
+    let mut with_top = nums.clone();
+    with_top.push(top);
+    let mut with_higher = nums.clone();
+    with_higher.push(top + step);
+    let mut pow = 1;
+    for _ in 0..n {
+        pow = pow * 2 % 1000000007;
+    }
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's sum
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: in range, and the same for the values in any order
+        check(mut t, 2, got >= 0 and got < 1000000007 and arm(x, shuffled) == got);
+        // P3: every value shifted up keeps every width, and every value
+        // scaled scales every width
+        check(mut t, 3, arm(x, shifted) == got and arm(x, scaled) == modulo(got * scale));
+        // P4: each value v turned into largest + 1 - v keeps every width
+        check(mut t, 4, arm(x, reflected) == got);
+        // P5: a new largest value moved up by `step` widens each of the
+        // 2^n - 1 subsequences that holds it and some other value by
+        // `step`
+        let gain = modulo(arm(x, with_higher) - arm(x, with_top));
+        check(mut t, 5, gain == modulo(step * (pow - 1)));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 891;
+    let mut cases = 0;
+    let mut numbers = 0;
+    let mut sum = 0;
+    // up to 12 numbers against the statement, from 1 to 3, 20 or 1000;
+    // then up to 200 numbers, from 1 to 10 or 100000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 200 };
+        let pick = next_random(mut seed) % 3;
+        let top = if small {
+            if pick == 0 { 3 } else if pick == 1 { 20 } else { 1000 }
+        } else {
+            if pick == 0 { 10 } else { 100000 }
+        };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % top);
+        }
+        cases += 1;
+        numbers += n;
+        sum = (sum + properties(mut t, mut seed, nums, small)) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {numbers} numbers, widths sum to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
