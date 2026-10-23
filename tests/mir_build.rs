@@ -7326,6 +7326,31 @@ fn main() {
     }
 }
 
+/// B-2026-10-22-36: a closure whose body ends in `return`, passed where its
+/// type is known (`filter`'s predicate), returns what its `return`s give,
+/// not the `!` of its tail.
+#[test]
+fn mir_a_closure_ending_in_return_where_its_type_is_known() {
+    let src = r#"fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let e: Vec[i64] = v.iter().filter(|n| { if n == 1 { return true; } return n > 3; }).collect();
+    println(f"{e[0]} {e[1]}");
+    let d: Vec[i64] = v.iter().map(|n| { if n == 2 { return 99; } return n; }).collect();
+    println(f"{d[0]} {d[1]} {d[2]}");
+    let pick: Fn(i64) -> String = |n| { if n > 2 { return "big".to_string(); } return "small".to_string(); };
+    println(f"{pick(1)} {pick(3)}");
+}
+"#;
+    let want = "1 4\n1 99 3\nsmall big\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
 /// B-2026-10-22-36: a raw pointer's own methods (`read`, `write`,
 /// `offset`/`add`, `is_null`) and the `ptr` module's `null`, `dangling`,
 /// `is_null` and `addr`, through memory C gave (`malloc`'s) and through a

@@ -2956,6 +2956,12 @@ impl<'a> super::TypeChecker<'a> {
                     if matches!(t, Type::Never | Type::Error) {
                         continue;
                     }
+                    // A body that ends in `return` returns what its
+                    // `return`s give, as the infer arm below takes it, not
+                    // its `!` tail.
+                    if matches!(body_ty, Type::Never) {
+                        body_ty = t.clone();
+                    }
                     self.check_assignable(expected_ret, &t, span);
                 }
                 self.leave_closure_d5_params(saved_d5);
