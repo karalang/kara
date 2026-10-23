@@ -963,6 +963,25 @@ fn run_ok_return(early: bool) -> Result[i64, String] {
     let (x, y) = r;
     Ok(x + y)
 }
+// Each branch's errdefer follows its own exit, not the join's: at k == 1
+// branch a returns Ok (its errdefer, on stderr, stays silent) and wins as
+// the source-earliest exit, while b's Err still runs b's.
+fn mixed(k: i64) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { eprintln("a errdefer"); }
+            if k == 1 { return Ok(10); }
+            1
+        },
+        {
+            errdefer { println("b errdefer"); }
+            if k >= 1 { return Err("b failed"); }
+            2
+        }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
 fn main() {
     println(f"{run(false)}");
     println(f"{run(true)}");
@@ -970,12 +989,32 @@ fn main() {
     println(f"{run_q(true)}");
     println(f"{run_ok_return(false)}");
     println(f"{run_ok_return(true)}");
+    for k in 0..3 { println(f"mixed {k}: {mixed(k)}"); }
 }
 "#;
     assert_eq!(
         stdout_on_both("par-errdefer", src),
-        "Ok(3)\na errdefer\nErr(a stopped)\nq defer\nOk(15)\nq defer\nq errdefer bad\nErr(bad)\nOk(8)\nOk(100)\n"
+        "Ok(3)\na errdefer\nErr(a stopped)\nq defer\nOk(15)\nq defer\nq errdefer bad\nErr(bad)\nOk(8)\nOk(100)\n\
+         mixed 0: Ok(3)\nb errdefer\nmixed 1: Ok(10)\nb errdefer\nmixed 2: Err(b failed)\n"
     );
+    // Branch a's errdefer writes to stderr, which the comparison above
+    // does not see: it must stay silent on both lanes.
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("karac-mir-tasks-errdefer-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    for lane in ["__mir-run", "__mir-llvm-run"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args([lane, file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{lane}: {err}");
+        assert!(!err.contains("a errdefer"), "{lane}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Core semantics §11.7: `break` and `continue` cannot leave a `par`
