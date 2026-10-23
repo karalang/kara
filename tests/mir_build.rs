@@ -7367,6 +7367,38 @@ fn main() {
     }
 }
 
+/// B-2026-10-22-36: `Result.expect_err`, `Result.map_or` and
+/// `Result.map_or_else`, the library's (docs/library/core-types.md).
+#[test]
+fn mir_result_expect_err_and_map_or() {
+    let src = r#"fn parse(ok: bool) -> Result[i64, String] {
+    if ok { Ok(4) } else { Err("bad".to_string()) }
+}
+fn main() {
+    println(parse(false).expect_err("wanted an error"));
+    println(parse(true).map_or(0, |x| x * 10));
+    println(parse(false).map_or(-1, |x| x * 10));
+    println(parse(true).map_or_else(|e| e.len(), |x| x + 1));
+    println(parse(false).map_or_else(|e| e.len(), |x| x + 1));
+    println(parse(true).expect_err("an Ok here"));
+}
+"#;
+    let want = "bad\n40\n-1\n5\n3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    assert_ne!(interp.exit_code(), Some(0), "expect_err on Ok panics");
+    let dir = Scratch::new();
+    if let Some(exe) = cli_build(&dir, src, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+        assert!(
+            String::from_utf8_lossy(&run.stderr).contains("an Ok here"),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+}
+
 /// B-2026-10-22-36: a closure whose body ends in `return`, passed where its
 /// type is known (`filter`'s predicate), returns what its `return`s give,
 /// not the `!` of its tail.

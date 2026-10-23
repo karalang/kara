@@ -46,6 +46,20 @@ impl[T, E] Result[T, E] {
         }
     }
 
+    fn map_or[U](own self, default: own U, f: own OnceFn(own T) -> U) -> U {
+        match self {
+            Ok(x) => f(x),
+            Err(_) => default,
+        }
+    }
+
+    fn map_or_else[U](own self, default: own OnceFn(own E) -> U, f: own OnceFn(own T) -> U) -> U {
+        match self {
+            Ok(x) => f(x),
+            Err(e) => default(e),
+        }
+    }
+
     fn and_then[U](own self, f: own OnceFn(own T) -> Result[U, E]) -> Result[U, E] {
         match self {
             Ok(x) => f(x),
@@ -77,6 +91,13 @@ impl[T, E] Result[T, E] {
     fn unwrap_err(own self) -> E {
         match self {
             Ok(_) => panic("called unwrap_err() on Ok"),
+            Err(e) => e,
+        }
+    }
+
+    fn expect_err(own self, msg: Str) -> E {
+        match self {
+            Ok(_) => panic(msg),
             Err(e) => e,
         }
     }

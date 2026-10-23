@@ -45,11 +45,14 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `err` | `fn err(own self) -> Option[E]` | Drops a value |
 | `map` | `fn map[U](own self, f: own OnceFn(own T) -> U) -> Result[U, E]` | |
 | `map_err` | `fn map_err[F](own self, f: own OnceFn(own E) -> F) -> Result[T, F]` | |
+| `map_or` | `fn map_or[U](own self, default: own U, f: own OnceFn(own T) -> U) -> U` | |
+| `map_or_else` | `fn map_or_else[U](own self, default: own OnceFn(own E) -> U, f: own OnceFn(own T) -> U) -> U` | `default` runs only on `Err`, given the error |
 | `and_then` | `fn and_then[U](own self, f: own OnceFn(own T) -> Result[U, E]) -> Result[U, E]` | |
 | `or_else` | `fn or_else[F](own self, f: own OnceFn(own E) -> Result[T, F]) -> Result[T, F]` | |
 | `unwrap` | `fn unwrap(own self) -> T` | Panics on `Err` |
 | `expect` | `fn expect(own self, msg: Str) -> T` | Panics on `Err` with `msg` |
 | `unwrap_err` | `fn unwrap_err(own self) -> E` | Panics on `Ok` |
+| `expect_err` | `fn expect_err(own self, msg: Str) -> E` | Panics on `Ok` with `msg` |
 | `unwrap_or` | `fn unwrap_or(own self, default: own T) -> T` | |
 | `unwrap_or_else` | `fn unwrap_or_else(own self, f: own OnceFn(own E) -> T) -> T` | |
 
