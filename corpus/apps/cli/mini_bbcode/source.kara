@@ -1,0 +1,1071 @@
+// mini_bbcode — a port of bbcode 1.1.0 (BSD-2, Dan Watson): a BBCode → HTML
+// renderer. Tokenize the markup with a tag stack, then render recursively
+// through the default formatters (b/i/u/s/hr/sub/sup/list/*/quote/code/center/
+// color/url). ASCII input. Global replace_links=False (documented boundary):
+// the bare-text URL autolinker is the one part of the library that needs a real
+// regex engine, so it is off, exactly as the restricted-op prototype verified.
+// The two tiny regexes the core keeps (the color validator and the url scheme/
+// domain test) are hand-coded in color_match / sanitize_scheme / domain_match.
+
+// -------------------------------------------------------------- byte/cp helpers
+
+fn bb_cp(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+    out
+}
+
+fn bb_to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn bb_slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn slen(s: ref String) -> i64 {
+    let mut n = 0;
+    for b in s.bytes() {
+        let _ = b;
+        n += 1;
+    }
+    n
+}
+
+fn is_py_ws(c: i64) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13 or c == 11 or c == 12
+}
+
+fn bb_strip(s: own String) -> String {
+    let mut bs: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        bs.push(b as i64);
+    }
+    let n = bs.len();
+    let mut st = 0;
+    while st < n and is_py_ws(bs[st]) {
+        st += 1;
+    }
+    let mut en = n;
+    while en > st and is_py_ws(bs[en - 1]) {
+        en -= 1;
+    }
+    s.substring(st, en)
+}
+
+fn has_sub(h: ref String, n: Str) -> bool {
+    match h.find(n) {
+        Some(_x) => true,
+        None => false,
+    }
+}
+
+fn bb_is_lower_letter(c: i64) -> bool {
+    c >= 97 and c <= 122
+}
+
+fn bb_is_letter(c: i64) -> bool {
+    (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+}
+
+fn bb_is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn bb_is_hex(c: i64) -> bool {
+    bb_is_digit(c) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+}
+
+// -------------------------------------------------------------- data types
+
+struct Pair {
+    lkey: String,
+    key: String,
+    value: String,
+}
+
+struct TagOpt {
+    tag_name: String,
+    newline_closes: bool,
+    same_tag_closes: bool,
+    standalone: bool,
+    render_embedded: bool,
+    transform_newlines: bool,
+    escape_html: bool,
+    replace_links: bool,
+    replace_cosmetic: bool,
+    strip: bool,
+    swallow: bool,
+}
+
+struct Token {
+    ttype: i64,
+    name: String,
+    text: String,
+    opts: Vec[Pair],
+}
+
+struct ParsedTag {
+    valid: bool,
+    name: String,
+    closer: bool,
+    opts: Vec[Pair],
+}
+
+struct OptParse {
+    name: String,
+    opts: Vec[Pair],
+}
+
+// -------------------------------------------------------------- option dict (case-insensitive)
+
+fn ci_set(opts: mut ref Vec[Pair], key: own String, value: own String) {
+    let lk = key.to_lowercase();
+    opts.push(Pair { lkey: lk, key: key, value: value });
+}
+
+fn ci_has(opts: ref Vec[Pair], key: Str) -> bool {
+    let lk = key.to_lowercase();
+    let mut i = 0;
+    while i < opts.len() {
+        if opts[i].lkey == lk {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn ci_get(opts: ref Vec[Pair], key: Str) -> String {
+    let lk = key.to_lowercase();
+    let mut r = String.new();
+    let mut i = 0;
+    while i < opts.len() {
+        if opts[i].lkey == lk {
+            r = opts[i].value.clone();
+        }
+        i += 1;
+    }
+    r
+}
+
+fn ci_first_key(opts: ref Vec[Pair]) -> String {
+    opts[0].key.clone()
+}
+
+// -------------------------------------------------------------- tag registry
+
+fn is_recognized(name: ref String) -> bool {
+    name == "b" or name == "i" or name == "u" or name == "s" or name == "sub"
+        or name == "sup" or name == "hr" or name == "list" or name == "*"
+        or name == "quote" or name == "code" or name == "center"
+        or name == "color" or name == "url"
+}
+
+fn tag_opt(name: ref String) -> TagOpt {
+    let mut t = TagOpt {
+        tag_name: name.clone(),
+        newline_closes: false,
+        same_tag_closes: false,
+        standalone: false,
+        render_embedded: true,
+        transform_newlines: true,
+        escape_html: true,
+        replace_links: true,
+        replace_cosmetic: true,
+        strip: false,
+        swallow: false,
+    };
+    if name == "hr" {
+        t.standalone = true;
+    } else if name == "list" {
+        t.transform_newlines = false;
+        t.strip = true;
+        t.swallow = true;
+    } else if name == "*" {
+        t.newline_closes = true;
+        t.transform_newlines = false;
+        t.same_tag_closes = true;
+        t.strip = true;
+    } else if name == "quote" {
+        t.strip = true;
+        t.swallow = true;
+    } else if name == "code" {
+        t.render_embedded = false;
+        t.transform_newlines = false;
+        t.swallow = true;
+        t.replace_cosmetic = false;
+    } else if name == "url" {
+        t.replace_links = false;
+        t.replace_cosmetic = false;
+    }
+    t
+}
+
+fn none_opt() -> TagOpt {
+    TagOpt {
+        tag_name: "",
+        newline_closes: false,
+        same_tag_closes: false,
+        standalone: false,
+        render_embedded: true,
+        transform_newlines: true,
+        escape_html: true,
+        replace_links: true,
+        replace_cosmetic: true,
+        strip: false,
+        swallow: false,
+    }
+}
+
+// -------------------------------------------------------------- option-string parser
+
+fn cp_has_eq_after(cp: ref Vec[i64], pos: i64) -> bool {
+    let n = cp.len();
+    let mut i = pos + 1;
+    while i < n {
+        if cp[i] == 61 {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn parse_opts(data_s: own String) -> OptParse {
+    let sd = bb_strip(data_s);
+    let cp = bb_cp(sd);
+    let ls = cp.len();
+    let mut name = String.new();
+    let mut has_name = false;
+    let mut opts: Vec[Pair] = Vec.new();
+    let mut in_value = false;
+    let mut in_quote = 0;
+    let mut attr: Vec[i64] = Vec.new();
+    let mut value: Vec[i64] = Vec.new();
+    let mut attr_done = false;
+    let mut pos = 0;
+    while pos < ls {
+        let ch = cp[pos];
+        if in_value {
+            if in_quote != 0 {
+                if ch == 92 and ls > pos + 1 and (cp[pos + 1] == 92 or cp[pos + 1] == 34 or cp[pos + 1] == 39) {
+                    value.push(cp[pos + 1]);
+                    pos += 1;
+                } else if ch == in_quote {
+                    in_quote = 0;
+                    in_value = false;
+                    if attr.len() > 0 {
+                        ci_set(mut opts, bb_to_string(attr), bb_strip(bb_to_string(value)));
+                    }
+                    attr = Vec.new();
+                    value = Vec.new();
+                } else {
+                    value.push(ch);
+                }
+            } else {
+                if ch == 34 or ch == 39 {
+                    in_quote = ch;
+                } else if ch == 32 and cp_has_eq_after(cp, pos) {
+                    ci_set(mut opts, bb_to_string(attr), bb_strip(bb_to_string(value)));
+                    attr = Vec.new();
+                    value = Vec.new();
+                    in_value = false;
+                } else {
+                    value.push(ch);
+                }
+            }
+        } else {
+            if ch == 61 {
+                in_value = true;
+                if not has_name {
+                    name = bb_to_string(attr);
+                    has_name = true;
+                }
+            } else if ch == 32 {
+                attr_done = true;
+            } else {
+                if attr_done {
+                    if attr.len() > 0 {
+                        if not has_name {
+                            name = bb_to_string(attr);
+                            has_name = true;
+                        } else {
+                            ci_set(mut opts, bb_to_string(attr), "");
+                        }
+                    }
+                    attr = Vec.new();
+                    attr_done = false;
+                }
+                attr.push(ch);
+            }
+        }
+        pos += 1;
+    }
+    if attr.len() > 0 {
+        if not has_name {
+            name = bb_to_string(attr);
+            has_name = true;
+        }
+        ci_set(mut opts, bb_to_string(attr), bb_strip(bb_to_string(value)));
+    }
+    OptParse { name: name.to_lowercase(), opts: opts }
+}
+
+// -------------------------------------------------------------- tag parsing
+
+fn pt_invalid(tag: ref String) -> ParsedTag {
+    ParsedTag { valid: false, name: tag.clone(), closer: false, opts: Vec.new() }
+}
+
+fn parse_tag(tag: ref String) -> ParsedTag {
+    let cp = bb_cp(tag);
+    let n = cp.len();
+    if n < 1 or cp[0] != 91 or cp[n - 1] != 93 {
+        return pt_invalid(tag);
+    }
+    let mut i = 0;
+    while i < n {
+        if cp[i] == 10 or cp[i] == 13 {
+            return pt_invalid(tag);
+        }
+        i += 1;
+    }
+    let inner = tag.substring(1, n - 1);
+    let tn0 = bb_strip(inner);
+    if slen(tn0) == 0 {
+        return pt_invalid(tag);
+    }
+    let tncp = bb_cp(tn0);
+    let mut closer = false;
+    let mut tnsub = tn0.clone();
+    if tncp[0] == 47 {
+        tnsub = tn0.substring(1, slen(tn0));
+        closer = true;
+    }
+    let mut opts: Vec[Pair] = Vec.new();
+    let mut finalname = tnsub.clone();
+    if (has_sub(tnsub, "=") or has_sub(tnsub, " ")) and not closer {
+        let op = parse_opts(tnsub);
+        finalname = op.name;
+        opts = op.opts;
+    }
+    ParsedTag { valid: true, name: bb_strip(finalname).to_lowercase(), closer: closer, opts: opts }
+}
+
+fn tag_extent(data: ref Vec[i64], start: i64) -> (i64, bool) {
+    let n = data.len();
+    let mut in_quote = 0;
+    let mut quotable = false;
+    let mut i = start + 1;
+    let mut result = n;
+    let mut close = false;
+    let mut done = false;
+    while i < n and not done {
+        let ch = data[i];
+        if ch == 61 {
+            quotable = true;
+        }
+        if ch == 34 or ch == 39 {
+            if quotable and in_quote == 0 {
+                in_quote = ch;
+            } else if in_quote == ch {
+                in_quote = 0;
+                quotable = false;
+            }
+        }
+        if in_quote == 0 and ch == 91 {
+            result = i;
+            close = false;
+            done = true;
+        } else if in_quote == 0 and ch == 93 {
+            result = i + 1;
+            close = true;
+            done = true;
+        }
+        if not done {
+            i += 1;
+        }
+    }
+    (result, close)
+}
+
+// -------------------------------------------------------------- tokenizer
+
+fn newline_tok(cp: ref Vec[i64], a: i64, b: i64, toks: mut ref Vec[Token]) {
+    let mut seg: Vec[i64] = Vec.new();
+    let mut i = a;
+    while i < b {
+        let c = cp[i];
+        if c == 10 {
+            if seg.len() > 0 {
+                toks.push(Token { ttype: 4, name: "", text: bb_to_string(seg), opts: Vec.new() });
+                seg = Vec.new();
+            }
+            toks.push(Token { ttype: 3, name: "", text: "\n", opts: Vec.new() });
+        } else {
+            seg.push(c);
+        }
+        i += 1;
+    }
+    if seg.len() > 0 {
+        toks.push(Token { ttype: 4, name: "", text: bb_to_string(seg), opts: Vec.new() });
+    }
+}
+
+fn tokenize(input: ref String) -> Vec[Token] {
+    let norm = input.replace("\r\n", "\n").replace("\r", "\n");
+    let data = bb_cp(norm);
+    let ld = data.len();
+    let mut toks: Vec[Token] = Vec.new();
+    let mut pos = 0;
+    let mut stop = false;
+    while pos < ld and not stop {
+        let mut start = -1;
+        let mut s = pos;
+        while s < ld and start < 0 {
+            if data[s] == 91 {
+                start = s;
+            }
+            s += 1;
+        }
+        if start >= 0 {
+            if start > pos {
+                newline_tok(data, pos, start, mut toks);
+                pos = start;
+            }
+            let (end, found_close) = tag_extent(data, start);
+            if found_close {
+                let tagstr = bb_to_string(bb_slice(data, start, end));
+                let pt = parse_tag(tagstr);
+                if pt.valid and is_recognized(pt.name) {
+                    let tt = if pt.closer { 2 } else { 1 };
+                    let o = if pt.closer { Vec.new() } else { pt.opts };
+                    toks.push(Token { ttype: tt, name: pt.name, text: tagstr, opts: o });
+                } else {
+                    newline_tok(data, start, end, mut toks);
+                }
+            } else {
+                newline_tok(data, start, end, mut toks);
+            }
+            pos = end;
+        } else {
+            stop = true;
+        }
+    }
+    if pos < ld {
+        newline_tok(data, pos, ld, mut toks);
+    }
+    toks
+}
+
+// -------------------------------------------------------------- close-token finder
+
+fn find_closing(tag: ref TagOpt, toks: ref Vec[Token], pos0: i64, hi: i64) -> (i64, bool) {
+    let mut embed = 0;
+    let mut block = 0;
+    let mut pos = pos0;
+    while pos < hi {
+        let tt = toks[pos].ttype;
+        if tt == 4 {
+            pos += 1;
+        } else {
+            if tag.newline_closes and (tt == 1 or tt == 2) {
+                let inner = tag_opt(toks[pos].name);
+                if not inner.transform_newlines {
+                    if tt == 1 {
+                        block += 1;
+                    } else {
+                        block -= 1;
+                    }
+                }
+            }
+            if tt == 3 and tag.newline_closes and block == 0 {
+                return (pos, true);
+            } else if tt == 1 and toks[pos].name == tag.tag_name {
+                if tag.same_tag_closes {
+                    return (pos, false);
+                }
+                if tag.render_embedded {
+                    embed += 1;
+                }
+                pos += 1;
+            } else if tt == 2 and toks[pos].name == tag.tag_name {
+                if embed > 0 {
+                    embed -= 1;
+                    pos += 1;
+                } else {
+                    return (pos, true);
+                }
+            } else {
+                pos += 1;
+            }
+        }
+    }
+    (hi, true)
+}
+
+// -------------------------------------------------------------- hand-coded regex equivalents
+
+fn color_match(color: ref String) -> String {
+    let cp = bb_cp(color);
+    let n = cp.len();
+    if n == 0 {
+        return "inherit";
+    }
+    let c0 = cp[0];
+    if bb_is_letter(c0) {
+        let mut i = 0;
+        while i < n and bb_is_letter(cp[i]) {
+            i += 1;
+        }
+        return bb_to_string(bb_slice(cp, 0, i));
+    }
+    if c0 == 35 {
+        let mut i = 1;
+        while i < n and i < 7 and bb_is_hex(cp[i]) {
+            i += 1;
+        }
+        let hexlen = i - 1;
+        if hexlen >= 3 {
+            return bb_to_string(bb_slice(cp, 0, i));
+        }
+        return "inherit";
+    }
+    "inherit"
+}
+
+fn sanitize_scheme(href: ref String) -> String {
+    let lo = href.to_lowercase();
+    let cp = bb_cp(lo);
+    let n = cp.len();
+    let mut end = n;
+    let mut i = 0;
+    let mut found = false;
+    while i < n and not found {
+        if cp[i] == 58 {
+            end = i;
+            found = true;
+        }
+        i += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < end {
+        let c = cp[j];
+        if bb_is_lower_letter(c) or bb_is_digit(c) or c == 43 {
+            out.push(c);
+        }
+        j += 1;
+    }
+    bb_to_string(out)
+}
+
+fn starts_any_tld(rest: ref String) -> bool {
+    rest.starts_with("com") or rest.starts_with("net") or rest.starts_with("org")
+        or rest.starts_with("edu") or rest.starts_with("biz") or rest.starts_with("gov")
+        or rest.starts_with("mil") or rest.starts_with("info") or rest.starts_with("io")
+        or rest.starts_with("name") or rest.starts_with("me") or rest.starts_with("tv")
+        or rest.starts_with("us") or rest.starts_with("uk") or rest.starts_with("mobi")
+}
+
+fn domain_match(href: ref String) -> bool {
+    let lo = href.to_lowercase();
+    let cpl = bb_cp(lo);
+    let n = cpl.len();
+    if lo.starts_with("www") {
+        let mut i = 3;
+        let mut digits = 0;
+        while i < n and digits < 3 and bb_is_digit(cpl[i]) {
+            i += 1;
+            digits += 1;
+        }
+        if i < n and cpl[i] == 46 {
+            return true;
+        }
+    }
+    let mut idx = 0;
+    while idx < n {
+        if cpl[idx] == 46 {
+            if idx >= 1 {
+                let mut clean = true;
+                let mut j = 0;
+                while j < idx {
+                    let c = cpl[j];
+                    if not (bb_is_lower_letter(c) or bb_is_digit(c) or c == 46 or c == 45) {
+                        clean = false;
+                        j = idx;
+                    } else {
+                        j += 1;
+                    }
+                }
+                if clean {
+                    let rest = bb_to_string(bb_slice(cpl, idx + 1, n));
+                    if starts_any_tld(rest) {
+                        return true;
+                    }
+                }
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+// -------------------------------------------------------------- transform & render
+
+fn transform(data: ref String, escape: bool, cosmetic: bool, newlines: bool) -> String {
+    let mut d = data.clone();
+    if escape {
+        d = d.replace("&", "&amp;");
+        d = d.replace("<", "&lt;");
+        d = d.replace(">", "&gt;");
+        d = d.replace("\"", "&quot;");
+        d = d.replace("'", "&#39;");
+    }
+    if cosmetic {
+        d = d.replace("---", "&mdash;");
+        d = d.replace("--", "&ndash;");
+        d = d.replace("...", "&#8230;");
+        d = d.replace("(c)", "&copy;");
+        d = d.replace("(reg)", "&reg;");
+        d = d.replace("(tm)", "&trade;");
+    }
+    if newlines {
+        d = d.replace("\n", "\r");
+    }
+    d
+}
+
+fn replace_escape(s: own String) -> String {
+    let mut d = s;
+    d = d.replace("&", "&amp;");
+    d = d.replace("<", "&lt;");
+    d = d.replace(">", "&gt;");
+    d = d.replace("\"", "&quot;");
+    d = d.replace("'", "&#39;");
+    d
+}
+
+fn wrap(a: Str, v: ref String, b: Str) -> String {
+    let mut r = String.new();
+    r.push_str(a);
+    r.push_str(v);
+    r.push_str(b);
+    r
+}
+
+fn list_tag(lt: ref String) -> String {
+    if lt == "1" or lt == "01" or lt == "a" or lt == "A" or lt == "i" or lt == "I" {
+        return "ol";
+    }
+    "ul"
+}
+
+fn list_css(lt: ref String) -> String {
+    if lt == "1" {
+        return " style=\"list-style-type:decimal;\"";
+    } else if lt == "01" {
+        return " style=\"list-style-type:decimal-leading-zero;\"";
+    } else if lt == "a" {
+        return " style=\"list-style-type:lower-alpha;\"";
+    } else if lt == "A" {
+        return " style=\"list-style-type:upper-alpha;\"";
+    } else if lt == "i" {
+        return " style=\"list-style-type:lower-roman;\"";
+    } else if lt == "I" {
+        return " style=\"list-style-type:upper-roman;\"";
+    }
+    ""
+}
+
+fn render(name: ref String, value: ref String, opts: ref Vec[Pair], parent: ref TagOpt) -> String {
+    if name == "b" {
+        return wrap("<strong>", value, "</strong>");
+    } else if name == "i" {
+        return wrap("<em>", value, "</em>");
+    } else if name == "u" {
+        return wrap("<u>", value, "</u>");
+    } else if name == "s" {
+        return wrap("<strike>", value, "</strike>");
+    } else if name == "sub" {
+        return wrap("<sub>", value, "</sub>");
+    } else if name == "sup" {
+        return wrap("<sup>", value, "</sup>");
+    } else if name == "center" {
+        return wrap("<div style=\"text-align:center;\">", value, "</div>");
+    } else if name == "quote" {
+        return wrap("<blockquote>", value, "</blockquote>");
+    } else if name == "code" {
+        return wrap("<code>", value, "</code>");
+    } else if name == "hr" {
+        return "<hr />";
+    } else if name == "list" {
+        let lt = if ci_has(opts, "list") { ci_get(opts, "list") } else { "*".to_string() };
+        let tag = list_tag(lt);
+        let css = list_css(lt);
+        let mut r = String.new();
+        r.push_str("<");
+        r.push_str(tag);
+        r.push_str(css);
+        r.push_str(">");
+        r.push_str(value);
+        r.push_str("</");
+        r.push_str(tag);
+        r.push_str(">");
+        return r;
+    } else if name == "*" {
+        if parent.tag_name != "list" {
+            let mut r = String.new();
+            r.push_str("[*]");
+            r.push_str(value);
+            r.push_str("<br />");
+            return r;
+        }
+        return wrap("<li>", value, "</li>");
+    } else if name == "color" {
+        let mut color = String.new();
+        if ci_has(opts, "color") {
+            color = bb_strip(ci_get(opts, "color"));
+        } else if opts.len() > 0 {
+            color = bb_strip(ci_first_key(opts));
+        } else {
+            return value.clone();
+        }
+        let c2 = color_match(color);
+        let mut r = String.new();
+        r.push_str("<span style=\"color:");
+        r.push_str(c2);
+        r.push_str(";\">");
+        r.push_str(value);
+        r.push_str("</span>");
+        return r;
+    } else if name == "url" {
+        let mut href = String.new();
+        if ci_has(opts, "url") {
+            href = replace_escape(ci_get(opts, "url"));
+        } else {
+            href = value.clone();
+        }
+        let sc = sanitize_scheme(href);
+        if sc == "javascript" or sc == "data" or sc == "vbscript" {
+            return "";
+        }
+        if (not has_sub(href, "://")) and domain_match(href) {
+            let mut h2 = String.new();
+            h2.push_str("http://");
+            h2.push_str(href);
+            href = h2;
+        }
+        let hq = href.replace("\"", "%22");
+        let mut r = String.new();
+        r.push_str("<a rel=\"nofollow\" href=\"");
+        r.push_str(hq);
+        r.push_str("\">");
+        r.push_str(value);
+        r.push_str("</a>");
+        return r;
+    }
+    value.clone()
+}
+
+// -------------------------------------------------------------- recursive formatter
+
+fn bb_format(toks: ref Vec[Token], lo: i64, hi: i64, parent: ref TagOpt, depth: i64) -> String {
+    let mut out = String.new();
+    let mut idx = lo;
+    while idx < hi {
+        let tt = toks[idx].ttype;
+        if tt == 1 {
+            let tname = toks[idx].name.clone();
+            let tag = tag_opt(tname);
+            if tag.standalone {
+                let empty = String.new();
+                out.push_str(render(tname, empty, toks[idx].opts, parent));
+                idx += 1;
+            } else {
+                let (cend, consume) = find_closing(tag, toks, idx + 1, hi);
+                let mut inner = String.new();
+                if tag.render_embedded and depth < 1000 {
+                    inner = bb_format(toks, idx + 1, cend, tag, depth + 1);
+                } else {
+                    let mut joined = String.new();
+                    let mut k = idx + 1;
+                    while k < cend {
+                        joined.push_str(toks[k].text);
+                        k += 1;
+                    }
+                    inner = transform(joined, tag.escape_html, tag.replace_cosmetic, tag.transform_newlines);
+                }
+                if tag.strip {
+                    inner = bb_strip(inner);
+                }
+                out.push_str(render(tname, inner, toks[idx].opts, parent));
+                let mut nend = cend;
+                if not consume {
+                    nend = cend - 1;
+                }
+                if tag.swallow {
+                    let np = nend + 1;
+                    if np < hi and toks[np].ttype == 3 {
+                        nend = np;
+                    }
+                }
+                idx = nend + 1;
+            }
+        } else if tt == 3 {
+            if parent.tag_name == "" or parent.transform_newlines {
+                out.push_str("\r");
+            } else {
+                out.push_str(toks[idx].text);
+            }
+            idx += 1;
+        } else if tt == 4 {
+            let esc0 = if parent.tag_name == "" { true } else { parent.escape_html };
+            let cos0 = if parent.tag_name == "" { true } else { parent.replace_cosmetic };
+            let nl0 = if parent.tag_name == "" { true } else { parent.transform_newlines };
+            out.push_str(transform(toks[idx].text, esc0, cos0, nl0));
+            idx += 1;
+        } else {
+            idx += 1;
+        }
+    }
+    out
+}
+
+fn bb_render(inp: own String) -> String {
+    let toks = tokenize(inp);
+    let none = none_opt();
+    let n = toks.len();
+    let body = bb_format(toks, 0, n, none, 1);
+    body.replace("\r", "<br />")
+}
+
+// -------------------------------------------------------------- job driver
+
+fn bb_lines(s: ref String) -> Vec[String] {
+    let cp = bb_cp(s);
+    let n = cp.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut seg: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = cp[i];
+        if c == 10 {
+            out.push(bb_to_string(seg));
+            seg = Vec.new();
+        } else {
+            seg.push(c);
+        }
+        i += 1;
+    }
+    out.push(bb_to_string(seg));
+    out
+}
+
+fn starts_job(line: ref String) -> bool {
+    line.starts_with("@JOB ")
+}
+
+fn join_nl(parts: ref Vec[String]) -> String {
+    let mut r = String.new();
+    let mut i = 0;
+    while i < parts.len() {
+        if i > 0 {
+            r.push_str("\n");
+        }
+        r.push_str(parts[i]);
+        i += 1;
+    }
+    r
+}
+
+fn esc(s: own String) -> String {
+    let mut d = s;
+    d = d.replace("\\", "\\\\");
+    d = d.replace("\n", "\\n");
+    d = d.replace("\t", "\\t");
+    d
+}
+
+fn main_run() -> String {
+    let text = jobs_text();
+    let lines = bb_lines(text);
+    let mut out = String.new();
+    let mut i = 0;
+    let n = lines.len();
+    let mut have = false;
+    let mut name = String.new();
+    let mut body: Vec[String] = Vec.new();
+    while i < n {
+        let line = lines[i].clone();
+        if starts_job(line) {
+            name = line.substring(5, slen(line));
+            body = Vec.new();
+            have = true;
+        } else if line == "@END" {
+            let inp = join_nl(body);
+            out.push_str("=== ");
+            out.push_str(name);
+            out.push_str(" ===\n");
+            out.push_str(esc(bb_render(inp)));
+            out.push_str("\n");
+            have = false;
+            body = Vec.new();
+        } else if have {
+            body.push(line);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("@JOB bold\n");
+    s.push_str("[b]hello[/b]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB nest\n");
+    s.push_str("[b]bold [i]and italic[/i][/b]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB escape\n");
+    s.push_str("a < b & c > d \"q\" 'p'\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB cosmetic\n");
+    s.push_str("well--- really -- ... (c) (reg) (tm)\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB newlines\n");
+    s.push_str("line one\n");
+    s.push_str("line two\n");
+    s.push_str("line three\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB standalone\n");
+    s.push_str("above[hr]below\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB list\n");
+    s.push_str("[list]\n");
+    s.push_str("[*]first\n");
+    s.push_str("[*]second\n");
+    s.push_str("[/list]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB olist\n");
+    s.push_str("[list=1]\n");
+    s.push_str("[*]one\n");
+    s.push_str("[*]two\n");
+    s.push_str("[/list]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB quote\n");
+    s.push_str("[quote]  spaced out  [/quote]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB code\n");
+    s.push_str("[code]if a < b:\n");
+    s.push_str("    return &amp;[/code]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB code_embed\n");
+    s.push_str("[code]not [b]bold[/b] here[/code]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB center\n");
+    s.push_str("[center]middle[/center]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB color_name\n");
+    s.push_str("[color=red]red text[/color]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB color_hex6\n");
+    s.push_str("[color=#00FF00]green[/color]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB color_hex3\n");
+    s.push_str("[color=#abc]short[/color]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB color_bad\n");
+    s.push_str("[color=123]nope[/color]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB color_free\n");
+    s.push_str("[color red]free[/color]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_abs\n");
+    s.push_str("[url]http://example.com/path[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_opt\n");
+    s.push_str("[url=http://example.com]visit[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_www\n");
+    s.push_str("[url]www.example.com[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_js\n");
+    s.push_str("[url]javascript:alert(1)[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_rel\n");
+    s.push_str("[url]/relative/path.html[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB url_optesc\n");
+    s.push_str("[url=a<b]link[/url]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB sub_sup\n");
+    s.push_str("H[sub]2[/sub]O and x[sup]2[/sup]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB strike_u\n");
+    s.push_str("[s]gone[/s] and [u]under[/u]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB unrecognized\n");
+    s.push_str("a [blink]tag[/blink] b\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB unclosed\n");
+    s.push_str("start [b]never ends\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB empty_tag\n");
+    s.push_str("x [] y [/] z\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB same_close\n");
+    s.push_str("[list]\n");
+    s.push_str("[*]a[*]b\n");
+    s.push_str("[/list]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB deep\n");
+    s.push_str("[b][i][u]deep[/u][/i][/b]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB mixed\n");
+    s.push_str("Hi [b]there[/b]!\n");
+    s.push_str("A [color=blue]test[/color] with --- dashes.\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB quote_author\n");
+    s.push_str("[quote author=\"Dan Watson\"]quoted[/quote]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB adjacent\n");
+    s.push_str("[b]one[/b][i]two[/i]\n");
+    s.push_str("@END\n");
+    s.push_str("@JOB text_bracket\n");
+    s.push_str("array[0] and dict[key]\n");
+    s.push_str("@END\n");
+    s
+}

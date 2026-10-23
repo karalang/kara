@@ -1,0 +1,68 @@
+=== bold ===
+<strong>hello</strong>
+=== nest ===
+<strong>bold <em>and italic</em></strong>
+=== escape ===
+a &lt; b &amp; c &gt; d &quot;q&quot; &#39;p&#39;
+=== cosmetic ===
+well&mdash; really &ndash; &#8230; &copy; &reg; &trade;
+=== newlines ===
+line one<br />line two<br />line three
+=== standalone ===
+above<hr />below
+=== list ===
+<ul><li>first</li><li>second</li></ul>
+=== olist ===
+<ol style="list-style-type:decimal;"><li>one</li><li>two</li></ol>
+=== quote ===
+<blockquote>spaced out</blockquote>
+=== code ===
+<code>if a &lt; b:\n    return &amp;amp;</code>
+=== code_embed ===
+<code>not [b]bold[/b] here</code>
+=== center ===
+<div style="text-align:center;">middle</div>
+=== color_name ===
+<span style="color:red;">red text</span>
+=== color_hex6 ===
+<span style="color:#00FF00;">green</span>
+=== color_hex3 ===
+<span style="color:#abc;">short</span>
+=== color_bad ===
+<span style="color:inherit;">nope</span>
+=== color_free ===
+<span style="color:red;">free</span>
+=== url_abs ===
+<a rel="nofollow" href="http://example.com/path">http://example.com/path</a>
+=== url_opt ===
+<a rel="nofollow" href="http://example.com">visit</a>
+=== url_www ===
+<a rel="nofollow" href="http://www.example.com">www.example.com</a>
+=== url_js ===
+
+=== url_rel ===
+<a rel="nofollow" href="/relative/path.html">/relative/path.html</a>
+=== url_optesc ===
+<a rel="nofollow" href="a&lt;b">link</a>
+=== sub_sup ===
+H<sub>2</sub>O and x<sup>2</sup>
+=== strike_u ===
+<strike>gone</strike> and <u>under</u>
+=== unrecognized ===
+a [blink]tag[/blink] b
+=== unclosed ===
+start <strong>never ends</strong>
+=== empty_tag ===
+x [] y [/] z
+=== same_close ===
+<ul><li>a</li><li>b</li></ul>
+=== deep ===
+<strong><em><u>deep</u></em></strong>
+=== mixed ===
+Hi <strong>there</strong>!<br />A <span style="color:blue;">test</span> with &mdash; dashes.
+=== quote_author ===
+<blockquote>quoted</blockquote>
+=== adjacent ===
+<strong>one</strong><em>two</em>
+=== text_bracket ===
+array[0] and dict[key]
