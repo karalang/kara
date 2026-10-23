@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 285 |
 | other | 198 |
 | diagnostics | 192 |
-| perf | 183 |
+| perf | 184 |
 | soundness | 137 |
 | crash | 129 |
 | use-after-free | 92 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 3040 |
-| interp | 1048 |
+| interp | 1049 |
 | typecheck | 575 |
 | ownership | 132 |
 | other | 127 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 12 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -192,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-22-45 | 2026-10-22 | cli | medium | `karac repl` runs on the legacy interpreter only. M3 item 3: the REPL on v2 (each entry checked as `karac check` checks a program and run on MIR), with the old path behind `--legacy` until legacy is deleted (M3 item 11) | — |
 | B-2026-10-22-46 | 2026-10-22 | typecheck | medium | `karac check` accepts a bare enum variant used to BUILD a value (`enum E { A(String), B } fn main() { let p = B; ... }`), and v2 runs it as `E.B`; design.md:1310 says a variant is built with its qualified name, and only a pattern may leave the enum name out | — |
 | B-2026-10-22-48 | 2026-10-22 | typecheck | low | `karac check` accepts `VecDeque`'s `push_front` / `push_back` / `pop_front` / `pop_back` on a `Vec`, which collections.md does not give `Vec`, so the program passes check and both MIR backends stop with "call of unknown function Vec[i64].push_front" | — |
+| B-2026-10-23-1 | 2026-10-23 | interp | medium | `SortedMap.ceiling` / `floor` / `min` / `max` / `range` on `karac __mir-run` copy and order every key on each call, so each query is O(n log n) where collections.md promises a B-tree: a loop of n queries is quadratic, and kata 870's SortedMap arm (10^5 queries) runs past 300 s while `__mir-llvm-run` takes under a second | — |
 
 ### Relocated
 
