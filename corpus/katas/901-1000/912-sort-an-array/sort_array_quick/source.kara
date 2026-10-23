@@ -1,0 +1,129 @@
+// LeetCode #912: Sort an Array -- quicksort, three ways.
+//
+// Partition around the median of the first, middle and last values into
+// those below, equal to and above it (Dijkstra's three-way partition), so
+// runs of equal values cost nothing more. The smaller side is sorted
+// first by recursion and the larger by looping, which keeps the stack
+// O(log n) deep. O(n log n) expected time.
+
+fn median_of_three(x: i64, y: i64, z: i64) -> i64 {
+    if x < y {
+        if y < z { y } else if x < z { z } else { x }
+    } else {
+        if x < z { x } else if y < z { z } else { y }
+    }
+}
+
+fn quick(a: mut ref Vec[i64], low: i64, high: i64) {
+    // sorts a[low..high], high exclusive
+    let mut lo = low;
+    let mut hi = high;
+    while hi - lo > 1 {
+        let pivot = median_of_three(a[lo], a[(lo + hi) / 2], a[hi - 1]);
+        // a[lo..lt] < pivot, a[lt..i] == pivot, a[gt..hi] > pivot
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i < gt {
+            if a[i] < pivot {
+                let held = a[i];
+                a[i] = a[lt];
+                a[lt] = held;
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                gt -= 1;
+                let held = a[i];
+                a[i] = a[gt];
+                a[gt] = held;
+            } else {
+                i += 1;
+            }
+        }
+        if lt - lo < hi - gt {
+            quick(mut a, lo, lt);
+            lo = gt;
+        } else {
+            quick(mut a, gt, hi);
+            hi = lt;
+        }
+    }
+}
+
+fn sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let n = a.len();
+    quick(mut a, 0, n);
+    a
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn join(v: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{join(nums)}] -> [{join(sort_array(nums))}]");
+}
+
+// The sorted values folded into a checksum, place by place.
+fn fold(nums: Vec[i64]) -> i64 {
+    let sorted = sort_array(nums);
+    let mut check = sorted.len();
+    for i in 0..sorted.len() {
+        check = (check * 1000003 + sorted[i] + 50000) % 1000000007;
+    }
+    check
+}
+
+fn main() {
+    show(vec![5, 2, 3, 1]);
+    show(vec![5, 1, 1, 2, 0, 0]);
+    show(vec![1]);
+    show(vec![50000, -50000]);
+    show(vec![-3, -1, -2, 0, 2, 1, 3]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    show(vec![8, 7, 6, 5, 4, 3, 2, 1]);
+    show(vec![4, 4, 4, 4, 4]);
+    show(vec![255, 256, 0, -1, 257, -256, 50000, -50000, 65535 - 50000]);
+    // random arrays of up to 2000 numbers in ranges of 10, 1000 or the
+    // whole span
+    let mut seed = 912;
+    let mut check = 0;
+    for c in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        let span = if c % 3 == 0 { 10 } else if c % 3 == 1 { 1000 } else { 100001 };
+        let low = -50000 + next_random(mut seed) % (100002 - span);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(low + next_random(mut seed) % span);
+        }
+        check = (check * 31 + fold(nums)) % 1000000007;
+    }
+    println(f"300 arrays: checksum {check}");
+    // LeetCode's largest: 5 * 10^4 numbers, random, falling and nearly all equal
+    let mut random: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    let mut equal: Vec[i64] = Vec.new();
+    for i in 0..50000 {
+        random.push(next_random(mut seed) % 100001 - 50000);
+        falling.push(50000 - 2 * i);
+        equal.push(if i % 1000 == 0 { i / 1000 } else { 7 });
+    }
+    println(f"50000 random: checksum {fold(random)}");
+    println(f"50000 falling: checksum {fold(falling)}");
+    println(f"50000 nearly equal: checksum {fold(equal)}");
+}

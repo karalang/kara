@@ -1,0 +1,355 @@
+// LeetCode #912: Sort an Array -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: given an array of integers nums, sort the array in
+// ascending order and return it. You must solve the problem without using
+// any built-in functions in O(n log(n)) time complexity and with the
+// smallest space complexity possible.
+
+// ---- the ★ arm: heap sort -------------------------------------------------
+fn star_sift_down(a: mut ref Vec[i64], start: i64, end: i64) {
+    let mut root = start;
+    loop {
+        let mut child = 2 * root + 1;
+        if child >= end {
+            return;
+        }
+        if child + 1 < end and a[child + 1] > a[child] {
+            child += 1;
+        }
+        if a[root] >= a[child] {
+            return;
+        }
+        let held = a[root];
+        a[root] = a[child];
+        a[child] = held;
+        root = child;
+    }
+}
+
+fn star_sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let n = a.len();
+    let mut parent = n / 2 - 1;
+    while parent >= 0 {
+        star_sift_down(mut a, parent, n);
+        parent -= 1;
+    }
+    let mut end = n - 1;
+    while end > 0 {
+        let top = a[0];
+        a[0] = a[end];
+        a[end] = top;
+        star_sift_down(mut a, 0, end);
+        end -= 1;
+    }
+    a
+}
+
+// ---- the merge arm: bottom-up merge sort ----------------------------------
+fn merge_sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut from = nums.clone();
+    let mut to: Vec[i64] = Vec.filled(n, 0);
+    let mut width = 1;
+    while width < n {
+        let mut left = 0;
+        while left < n {
+            let mid = (left + width).min(n);
+            let right = (left + 2 * width).min(n);
+            let mut i = left;
+            let mut j = mid;
+            for k in left..right {
+                if i < mid and (j >= right or from[i] <= from[j]) {
+                    to[k] = from[i];
+                    i += 1;
+                } else {
+                    to[k] = from[j];
+                    j += 1;
+                }
+            }
+            left = right;
+        }
+        let swap = from;
+        from = to;
+        to = swap;
+        width *= 2;
+    }
+    from
+}
+
+// ---- the quick arm: three-way quicksort -----------------------------------
+fn quick_median_of_three(x: i64, y: i64, z: i64) -> i64 {
+    if x < y {
+        if y < z { y } else if x < z { z } else { x }
+    } else {
+        if x < z { x } else if y < z { z } else { y }
+    }
+}
+
+fn quick_quick(a: mut ref Vec[i64], low: i64, high: i64) {
+    // sorts a[low..high], high exclusive
+    let mut lo = low;
+    let mut hi = high;
+    while hi - lo > 1 {
+        let pivot = quick_median_of_three(a[lo], a[(lo + hi) / 2], a[hi - 1]);
+        // a[lo..lt] < pivot, a[lt..i] == pivot, a[gt..hi] > pivot
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i < gt {
+            if a[i] < pivot {
+                let held = a[i];
+                a[i] = a[lt];
+                a[lt] = held;
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                gt -= 1;
+                let held = a[i];
+                a[i] = a[gt];
+                a[gt] = held;
+            } else {
+                i += 1;
+            }
+        }
+        if lt - lo < hi - gt {
+            quick_quick(mut a, lo, lt);
+            lo = gt;
+        } else {
+            quick_quick(mut a, gt, hi);
+            hi = lt;
+        }
+    }
+}
+
+fn quick_sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    let n = a.len();
+    quick_quick(mut a, 0, n);
+    a
+}
+
+// ---- the counting arm: counting sort --------------------------------------
+fn counting_sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let mut low = nums[0];
+    let mut high = nums[0];
+    for i in 0..nums.len() {
+        low = low.min(nums[i]);
+        high = high.max(nums[i]);
+    }
+    let mut count: Vec[i64] = Vec.filled(high - low + 1, 0);
+    for i in 0..nums.len() {
+        count[nums[i] - low] += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in 0..high - low + 1 {
+        for _ in 0..count[v] {
+            out.push(v + low);
+        }
+    }
+    out
+}
+
+// ---- the radix arm: radix sort base 256 -----------------------------------
+fn radix_sort_array(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let offset = 50000;
+    let mut from: Vec[i64] = Vec.new();
+    let mut largest = 0;
+    for i in 0..n {
+        from.push(nums[i] + offset);
+        largest = largest.max(nums[i] + offset);
+    }
+    let mut to: Vec[i64] = Vec.filled(n, 0);
+    let mut shift = 0;
+    while (largest >> shift) > 0 {
+        let mut start: Vec[i64] = Vec.filled(257, 0);
+        for i in 0..n {
+            start[((from[i] >> shift) & 255) + 1] += 1;
+        }
+        for d in 1..257 {
+            start[d] += start[d - 1];
+        }
+        for i in 0..n {
+            let d = (from[i] >> shift) & 255;
+            to[start[d]] = from[i];
+            start[d] += 1;
+        }
+        let swap = from;
+        from = to;
+        to = swap;
+        shift += 8;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        out.push(from[i] - offset);
+    }
+    out
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> Vec[i64] {
+    match x {
+        0 => star_sort_array(nums),
+        1 => merge_sort_array(nums),
+        2 => quick_sort_array(nums),
+        3 => counting_sort_array(nums),
+        _ => radix_sort_array(nums),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// ascending order: place i holds the value v with fewer than i + 1 values
+// below it and at least i + 1 values at or below it
+fn literal(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.filled(n, 0);
+    for j in 0..n {
+        let v = nums[j];
+        let mut below = 0;
+        let mut at_most = 0;
+        for k in 0..n {
+            if nums[k] < v {
+                below += 1;
+            }
+            if nums[k] <= v {
+                at_most += 1;
+            }
+        }
+        for i in below..at_most {
+            out[i] = v;
+        }
+    }
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the count, sum, sum of squares and sum of cubes of the values, the last
+// three modulo a prime: equal for any two orderings of the same values
+fn fingerprint(v: Vec[i64]) -> Vec[i64] {
+    let p = 1000000007;
+    let mut s1 = 0;
+    let mut s2 = 0;
+    let mut s3 = 0;
+    for i in 0..v.len() {
+        let x = (v[i] % p + p) % p;
+        s1 = (s1 + x) % p;
+        s2 = (s2 + x * x % p) % p;
+        s3 = (s3 + x * x % p * x % p) % p;
+    }
+    vec![v.len(), s1, s2, s3]
+}
+
+// P1 to P6 for one array over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, nums: Vec[i64], small: bool) {
+    let n = nums.len();
+    let want = if small { literal(nums) } else { Vec.new() };
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums));
+    }
+    let print = fingerprint(nums);
+    // P4: the values reversed
+    let mut reversed: Vec[i64] = Vec.new();
+    for i in 0..n {
+        reversed.push(nums[n - 1 - i]);
+    }
+    // P5: the values negated
+    let mut negated: Vec[i64] = Vec.new();
+    for i in 0..n {
+        negated.push(-nums[i]);
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the values in ascending order, as the statement defines it
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: as long as the input, and never falling
+        let mut rising = got.len() == n;
+        for i in 1..got.len() {
+            if got[i - 1] > got[i] {
+                rising = false;
+            }
+        }
+        check(mut t, 2, rising);
+        // P3: the same values: the same fingerprint
+        check(mut t, 3, fingerprint(got) == print);
+        // P4: the same answer for the values reversed
+        check(mut t, 4, arm(x, reversed) == got);
+        // P5: the negated values sort to the answer negated and reversed
+        let back = arm(x, negated);
+        let m = got.len();
+        let mut mirrored = back.len() == m;
+        if mirrored {
+            for i in 0..m {
+                if back[i] != -got[m - 1 - i] {
+                    mirrored = false;
+                }
+            }
+        }
+        check(mut t, 5, mirrored);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 912;
+    let mut arrays = 0;
+    let mut numbers = 0;
+    // up to 10 numbers against the statement, in ranges of 3, 100 or
+    // 10^4, then up to 500 against the other properties, in ranges of 3,
+    // 100 or the whole span from -5 * 10^4 to 5 * 10^4
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 500 };
+        let span = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else if small { 10000 } else { 100001 };
+        let low = -50000 + next_random(mut seed) % (100002 - span);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(low + next_random(mut seed) % span);
+        }
+        arrays += 1;
+        numbers += n;
+        properties(mut t, nums, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{arrays} arrays, {numbers} numbers, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
