@@ -1,0 +1,709 @@
+# compaction
+> compact text:Hello, world!
+  split text:13
+  merged text:13
+  words 237 131 344 853 807 674 521 118 760
+> compact text:ABC abc 123 ABC
+  split text:8 numeric:3 text:4
+  merged text:15
+  words 1 86 810 32 808 32 116 840 32
+> compact text:hello
+  split text:5
+  merged text:5
+  words 817 131 344
+> compact text:0123456789012
+  split numeric:13
+  merged numeric:13
+  words 902 15 386 694 721 112
+> compact text:01234567890123
+  split numeric:14
+  merged numeric:14
+  words 902 154 267 648 11 223
+> compact text:abc0123456789012def
+  split text:3 numeric:13 text:3
+  merged text:3 numeric:13 text:3
+  words 810 32 902 15 386 694 721 112 900 813 125
+> compact text:abc01234567890123def
+  split text:3 numeric:14 text:3
+  merged text:3 numeric:14 text:3
+  words 810 32 902 154 267 648 11 223 900 813 125
+> compact text:\t\n\r
+  split text:3
+  merged text:3
+  words 852 765 359
+> compact text:a~b{c}d|e
+  split text:9
+  merged text:9
+  words 810 865 299 811 865 809 812 865 839 813 865 659 814
+> compact text:email: a@b.co
+  split text:13
+  merged text:13
+  words 814 360 251 854 807 28 753 897 58 537 74
+> compact text:MiXeD CaSe; with (punct)!
+  split text:25
+  merged text:25
+  words 387 268 863 814 868 116 87 28 858 814 865 29 836 668 577 808 773 897 470 392 598 774 329
+> compact text:\u00e9t\u00e9
+  split byte:2 text:1 byte:2
+  merged byte:2 text:1 byte:2
+  words 901 195 169 900 829 901 195 169
+> compact hex:000102030405
+  split byte:6
+  merged byte:6
+  words 924 0 5 844 88 165
+> compact hex:00010203040506
+  split byte:7
+  merged byte:7
+  words 901 0 5 844 88 165 6
+> compact hex:ff
+  split byte:1
+  merged byte:1
+  words 901 255
+> compact text:
+  split 
+  merged -
+  words -
+> compact file:in/digits.txt
+  split numeric:92
+  merged numeric:92
+  words 902 442 468 658 254 249 833 72 640 676 489 54 267 648 11 223 636 717 883 177 859 97 540 504 190 1 556 544 895 316 167 21 42
+> compact file:in/blob.bin
+  split byte:9 text:2 byte:2 text:1 byte:18 text:16 numeric:10 text:69 byte:130 numeric:1 text:2 byte:4 numeric:1 text:2 byte:4 numeric:1 text:1 byte:5 numeric:1 text:1 byte:5 text:2 byte:5 text:2 byte:5 text:2 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:3 text:4 byte:3 text:1 numeric:1 text:2 byte:4 numeric:1 text:1 byte:5 numeric:1 text:1 byte:5 text:2 byte:5 text:1
+  merged byte:9 text:2 byte:2 text:1 byte:18 text:95 byte:130 text:3 byte:4 text:3 byte:4 text:2 byte:5 text:2 byte:5 text:2 byte:5 text:2 byte:5 text:2 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:4 text:3 byte:3 text:4 byte:3 text:4 byte:4 text:2 byte:5 text:2 byte:5 text:2 byte:5 text:1
+  words 901 0 5 844 88 165 6 7 8 900 852 765 901 11 12 900 851 924 23 504 173 802 699 33 589 143 723 285 43 674 113 643 771 900 808 760 629 855 561 325 863 742 898 613 497 570 32 94 156 218 284 750 59 863 752 753 870 32 94 156 218 280 342 404 466 528 590 652 714 778 754 156 898 745 218 897 1 63 125 187 249 311 373 435 497 559 621 683 745 865 801 819 901 213 604 357 206 252 223 689 327 126 738 233 774 297 47 324 243 859 266 867 810 254 44 236 788 396 264 129 206 708 882 274 214 176 629 468 284 299 146 550 54 294 384 116 470 540 304 469 86 391 126 314 554 56 311 612 324 639 26 232 198 334 723 896 152 684 344 808 866 73 270 354 893 835 893 756 365 78 805 814 342 375 163 775 734 828 385 248 745 655 414 395 333 715 576 0 405 418 685 496 486 415 503 655 417 72 253 254 255 11 900 840 860 835 901 159 196 233 14 900 843 863 865 839 901 162 199 236 17 900 846 754 901 128 165 202 239 20 900 849 749 901 131 168 205 242 23 900 865 59 810 901 134 171 208 245 26 900 865 779 813 901 137 174 211 248 29 900 57 209 901 140 177 214 251 900 784 819 901 143 180 217 254 900 855 847 822 901 146 183 220 1 900 850 850 825 901 149 186 223 4 900 865 749 417 569 901 152 189 226 7 900 853 856 831 901 155 192 229 900 865 469 889 834 901 158 195 232 900 851 88 688 771 901 161 198 235 16 900 845 865 901 127 164 201 238 19 900 848 756 901 130 167 204 241 22 900 865 8 901 133 170 207 244 25 900 865 89
+> compact file:in/parcel.txt
+  split text:3 byte:1 numeric:2 byte:1 numeric:2 byte:1 numeric:3 byte:1 numeric:3 byte:1 numeric:1 text:1 numeric:5 text:1 numeric:10 byte:1 text:4 byte:1 numeric:5 text:1 byte:1 numeric:3 byte:2 numeric:1 text:1 numeric:1 byte:1 numeric:2 text:1 numeric:1 byte:1 text:1 byte:2 text:9 byte:1 text:2 byte:2
+  merged text:3 byte:1 numeric:2 byte:1 numeric:2 byte:1 numeric:3 byte:1 numeric:3 byte:1 text:18 byte:1 text:4 byte:1 text:6 byte:1 numeric:3 byte:2 text:3 byte:1 text:4 byte:1 text:1 byte:2 text:9 byte:1 text:2 byte:2
+  words 865 144 89 901 30 902 101 901 29 902 102 901 29 902 2 40 901 29 902 1 101 901 29 900 841 865 841 63 125 844 840 60 152 211 188 269 901 29 900 615 553 901 29 900 841 63 125 844 901 29 902 1 189 901 29 29 900 841 571 901 29 900 841 17 59 901 29 900 749 901 29 29 900 540 416 98 126 449 901 29 900 60 901 30 4
+> compact text:x99999999999999999999999999999999999999999999999999y
+  split text:1 numeric:50 text:1
+  merged text:1 numeric:50 text:1
+  words 833 902 874 223 532 264 888 236 358 185 93 795 72 289 146 822 199 2 422 199 900 834
+> compact text:1234567890123456789012345678901234567890123456789
+  split numeric:49
+  merged numeric:49
+  words 902 491 81 137 450 302 67 15 174 492 862 667 475 869 12 434 174 189
+# compaction modes
+> text text:PDF417
+  interim 15 3 5 28 4 1 7
+  words 453 178 121 239
+> text text:pdf417
+  interim 27 15 3 5 28 4 1 7
+  words 825 95 844 37
+> text text:a.b.c
+  interim 27 0 28 17 27 1 28 17 27 2
+  words 810 857 811 857 812
+> text text:A;B;C
+  interim 0 28 25 0 29 1 28 25 0 29 2
+  words 28 750 871 865 29 89
+> text text:Ab
+  interim 0 27 1
+  words 27 59
+> text text:aB!C
+  interim 27 0 28 28 1 28 25 10 29 2
+  words 810 868 58 760 872
+> text text:#$%&
+  interim 28 15 18 21 10
+  words 855 561 329
+> text text:.
+  interim 28 17
+  words 857
+> text text:?
+  interim 28 25 25
+  words 865 779
+> text text:hello world
+  interim 27 7 4 11 11 14 26 22 14 17 11 3
+  words 817 131 344 802 437 333
+> text text:a b
+  interim 27 0 26 1
+  words 810 781
+> text text:a\nb
+  interim 27 0 28 25 15 29 27 1
+  words 810 865 479 811
+> text hex:41e942
+  error ValueError: Cannot encode char: 233
+> numeric text:0
+  words 10
+> numeric text:1
+  words 11
+> numeric text:000
+  words 1 100
+> numeric text:999999
+  words 2 422 199
+> numeric text:1234567890
+  words 15 369 753 190
+> numeric text:99999999999999999999999999999999999999999999
+  words 874 223 532 264 888 236 358 185 93 795 72 289 146 822 199
+> numeric text:111111111111111111111111111111111111111111111
+  words 485 624 195 647 193 431 299 2 752 141 640 160 581 556 711 11
+> numeric text:00000000000000000000000000000000000000000000000000
+  words 437 111 716 132 444 118 179 92 496 847 486 144 523 411 100 1 211 100
+> numeric text:
+  words -
+> numeric text:12a
+  error ValueError: invalid literal for int() with base 10: '112a'
+> bytes hex:00
+  words 0
+> bytes hex:010203
+  words 1 2 3
+> bytes hex:ffffffffffff
+  words 429 11 71 222 855
+> bytes hex:000000000000
+  words 0 0 0 0 0
+> bytes hex:0102030405060708090a0b0c
+  words 1 620 89 74 846 11 705 58 895 432
+> bytes hex:6162636465666768
+  words 163 179 507 603 522 103 104
+> bytes hex:
+  words -
+# error correction and bases
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 0
+  ec 156 765
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 1
+  ec 168 875 63 355
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 2
+  ec 628 715 393 299 863 601 169 708
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 3
+  ec 232 176 793 616 476 406 855 445 84 518 522 721 607 2 42 578
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 4
+  ec 281 156 276 668 44 252 877 30 549 856 773 639 420 330 693 329 283 723 480 482 102 925 535 892 374 472 837 331 343 608 390 364
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 5
+  ec 31 850 18 870 53 477 837 130 533 186 266 450 39 492 542 653 499 887 618 103 364 313 906 396 270 735 593 81 557 712 810 48 167 533 205 577 503 126 449 189 859 471 493 849 554 76 878 893 168 497 251 704 311 650 283 268 462 223 659 763 176 34 544 304
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 6
+  ec 345 775 909 489 650 568 869 577 574 349 885 317 492 222 783 451 647 385 168 366 118 655 643 551 179 880 880 752 132 206 765 862 727 240 32 266 911 287 813 437 868 201 681 867 567 398 508 564 504 676 785 554 831 566 424 93 515 275 61 544 272 621 374 922 779 663 789 295 631 536 755 465 485 416 76 412 76 431 28 614 767 419 600 779 94 584 647 846 121 97 790 205 424 793 263 271 694 522 437 817 382 164 113 849 178 602 554 261 415 737 401 675 203 271 649 120 765 209 522 687 420 32 60 266 270 228 304 270
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 7
+  ec 142 203 799 4 105 137 793 914 225 636 60 171 490 180 414 141 399 599 829 288 108 268 444 481 795 146 655 778 189 32 597 206 208 711 845 608 642 636 540 795 845 466 492 659 138 800 912 171 92 438 225 301 777 449 230 448 326 182 892 681 543 582 732 758 162 587 685 378 646 356 354 25 839 839 556 253 501 771 745 616 473 293 669 822 613 684 229 265 110 438 144 727 317 605 414 497 82 278 267 323 43 894 624 282 790 579 430 255 802 553 922 604 68 692 809 909 663 589 735 670 298 158 201 68 124 64 67 338 694 373 225 579 309 699 920 432 717 72 126 819 142 755 473 630 331 758 730 65 359 451 236 16 56 31 87 587 125 385 384 197 352 383 173 271 38 558 810 260 521 680 7 319 650 334 695 708 0 562 365 204 114 185 560 746 767 449 797 688 63 135 818 805 3 536 908 532 400 698 49 212 630 93 157 275 3 20 611 179 302 282 876 665 241 206 474 80 217 460 462 751 719 571 536 794 522 385 598 756 162 212 758 662 361 223 587 857 503 382 615 86 283 541 847 518 406 736 486 408 226 342 784 772 211 888 234 335
+> ec 16,902,1,278,827,900,295,902,2,326,823,544,900,149,900,900 8
+  ec 538 446 840 510 163 708 177 666 423 600 707 913 770 571 156 683 676 697 898 776 128 851 163 854 135 661 880 279 92 324 397 207 379 223 574 9 70 858 878 579 61 551 261 388 315 856 266 865 923 38 313 62 381 198 265 256 385 878 347 532 821 53 855 225 697 826 263 334 207 565 460 496 705 599 383 289 178 168 401 268 555 190 922 284 180 810 891 832 636 813 894 495 701 484 204 793 129 164 444 228 636 98 809 57 736 697 727 534 889 480 898 773 234 851 880 843 714 443 412 489 578 468 367 663 11 686 319 352 345 670 106 106 219 466 439 350 538 66 852 175 465 731 332 110 926 491 18 422 736 797 624 376 728 526 735 200 502 923 789 529 923 706 384 869 172 548 520 463 813 384 793 231 190 653 864 351 400 525 487 828 654 307 141 638 770 775 282 54 758 197 492 320 86 790 275 237 923 25 591 605 61 824 79 631 532 337 867 423 340 597 682 923 287 408 503 361 881 196 468 759 746 389 124 784 198 865 538 451 178 772 653 121 497 598 711 716 241 159 429 88 799 761 639 105 54 807 351 435 793 873 360 8 881 479 693 576 849 875 771 621 134 863 8 171 799 924 103 63 491 538 597 855 697 499 7 886 286 85 107 220 319 124 197 150 729 899 585 540 676 414 256 856 596 259 882 436 26 273 753 127 679 390 654 42 276 420 247 629 116 803 131 25 403 645 462 897 151 622 108 167 227 831 887 662 739 263 829 56 624 317 908 378 39 393 861 338 202 179 907 109 360 736 554 342 594 125 433 394 195 698 844 912 530 842 337 294 528 231 735 93 8 579 42 148 609 233 782 887 888 915 620 78 137 161 282 217 775 564 33 195 36 584 679 775 476 309 230 303 708 143 679 502 814 193 508 532 542 580 603 641 338 361 542 537 810 394 764 136 167 611 881 775 267 433 142 202 828 363 101 728 660 583 483 786 717 190 809 422 567 741 695 310 120 177 47 494 345 508 16 639 402 625 286 298 358 54 705 916 291 424 375 883 655 675 498 498 884 862 365 310 805 763 855 354 777 543 53 773 120 408 234 728 438 914 3 670 546 465 449 923 51 546 709 648 96 320 682 326 848 234 855 791 20 97 901 351 317 764 767 312 206 139 610 578 646 264 389 238 675 595 430 88
+> ec - 2
+  ec 0 0 0 0 0 0 0 0
+> ec 5,453,178,121,239 0
+  ec 471 661
+> ec 5,453,178,121,239 9
+  error AssertionError: 
+> ec 5,453,178,121,239 -1
+  error AssertionError: 
+> ec 928,928,928,928 1
+  ec 915 709 207 332
+> base 1,2,3 10 2
+  1 1 1 1 0 1 1
+> base 255,255,255,255,255,255 256 900
+  429 11 71 222 855
+> base 0,0,1 256 900
+  1
+> base - 10 900
+  -
+> base 1,0,0,0 900 256
+  43 115 168 64
+> base 8,9,9 10 16
+  3 8 3
+> rowwords 3 1 0
+  0 0 0
+  1 2 0
+  2 0 2
+> rowwords 5 2 2
+  0 1 1
+  1 7 1
+  2 1 7
+  3 31 31
+  4 37 31
+> rowwords 10 6 5
+  0 3 5
+  1 15 3
+  2 5 15
+  3 33 35
+  4 45 33
+  5 35 45
+  6 63 65
+  7 75 63
+  8 65 75
+  9 93 95
+> rowwords 7 3 8
+  0 2 2
+  1 24 2
+  2 2 24
+  3 32 32
+  4 54 32
+  5 32 54
+  6 62 62
+# encoding
+> encode text:Hello, world!
+  high 18: 10 237 131 344 853 807 674 521 118 760 120 891 178 156 814 211 598 741
+  rows 3 cols 6 size 171x3
+  1fea8 1d5c0 1a830 1ec9c 1a08c 120d8 18ec8 18298 1f53e 3fa29
+  1fea8 1ea10 1c2c4 1cdc4 14f86 119f2 14fce 10ebe 1f560 3fa29
+  1fea8 151e0 16838 1f2f6 13ec2 1f6f2 1384c 17ce6 150f0 3fa29
+> encode text:Hello, world! columns=3
+  high 18: 10 237 131 344 853 807 674 521 118 760 120 891 178 156 814 211 598 741
+  rows 6 cols 3 size 120x6
+  1fea8 1eaf0 1a830 1ec9c 1a08c 1f57c 3fa29
+  1fea8 1ea10 164fc 13d78 1c162 1fab8 3fa29
+  1fea8 153c0 13d8c 1de9c 1433e 150f0 3fa29
+  1fea8 15e78 1f796 1430c 18622 1af3e 3fa29
+  1fea8 1ae08 1a1c4 14782 105e4 1d730 3fa29
+  1fea8 1f5ec 1f6f2 1384c 17ce6 1ebec 3fa29
+> encode text:Hello, world! columns=1 security_level=0
+  high 12: 10 237 131 344 853 807 674 521 118 760 593 166
+  rows 12 cols 1 size 86x12
+  1fea8 1d4e0 1a830 1d5c0 3fa29
+  1fea8 1ea40 19720 1f530 3fa29
+  1fea8 1abe0 1cafc 153c0 3fa29
+  1fea8 15f7c 120d8 1af7c 3fa29
+  1fea8 1eb9c 13d78 1ae20 3fa29
+  1fea8 1f5c2 13ed0 1f5ec 3fa29
+  1fea8 14e70 19d84 14ee0 3fa29
+  1fea8 15fb8 1cdc4 1afde 3fa29
+  1fea8 14df0 1433e 1fa64 3fa29
+  1fea8 1460c 1f796 14630 3fa29
+  1fea8 1e9dc 199e4 1a720 3fa29
+  1fea8 1a27c 197e2 1a23e 3fa29
+> encode text:Hello, world! security_level=5
+  high 78: 14 237 131 344 853 807 674 521 118 760 900 900 900 900 22 460 576 899 586 587 778 33 678 812 666 396 910 888 789 114 165 457 163 866 135 7 67 278 906 572 251 80 607 231 553 802 845 200 907 463 781 71 674 925 199 424 924 533 76 31 18 332 157 520 82 644 907 398 313 147 790 395 291 64 436 721 765 362
+  rows 13 cols 6 size 171x13
+  1fea8 1ea78 1eb7c 1ec9c 1a08c 120d8 18ec8 18298 1f53e 3fa29
+  1fea8 1fade 1c2c4 1cdc4 14f86 119f2 17eb0 17eb0 1fa9c 3fa29
+  1fea8 151e0 18f92 18f92 1f5d0 10a78 1bcce 19fb4 159f0 3fa29
+  1fea8 1f5fa 19822 11028 19c62 15f7c 18458 10598 1d2e0 3fa29
+  1fea8 1af30 1e148 1627e 17e58 1837a 1087a 1a7dc 1d718 3fa29
+  1fea8 1ebc4 197e4 17026 197e8 10758 128f0 1d47e 1afc8 3fa29
+  1fea8 1a73c 14f78 1679c 11ce2 19866 16640 14420 14e38 3fa29
+  1fea8 1f486 177e2 1e586 1ba7e 1e0a4 1c33a 141e8 15f9c 3fa29
+  1fea8 1fa62 13f72 10a1e 18f58 1f4e4 13d8c 10fb4 1f4f6 3fa29
+  1fea8 14770 1ed9e 1130c 18e34 11084 1e89e 15e78 1a3bc 3fa29
+  1fea8 14f20 1f59c 193ee 147d8 1e6e6 1e998 131f2 1d398 3fa29
+  1fea8 1fa34 13f72 1dc9e 1c5f4 12c7c 1872e 1dcbc 1e8f2 3fa29
+  1fea8 14140 1d886 1a73c 1f75c 18c50 1de68 18a30 1a0b0 3fa29
+> encode text:PDF417 bar code columns=4 security_level=1
+  high 16: 12 453 178 121 236 811 17 782 423 149 900 900 570 800 916 132
+  rows 4 cols 4 size 137x4
+  1fea8 1eaf0 1adc0 1dd98 1f6bc 14306 1d4e0 3fa29
+  1fea8 1f530 1e5dc 182e2 1eb30 1c63a 1fab8 3fa29
+  1fea8 1a9f0 1dc5e 1f2e8 18f92 18f92 1a9f0 3fa29
+  1fea8 15e78 171d0 1bc72 1efb2 14108 15f7c 3fa29
+> encode text:01234567890123456789 columns=2
+  high 18: 10 902 190 441 566 613 798 85 289 900 87 678 22 508 153 828 239 743
+  rows 9 cols 2 size 103x9
+  1fea8 1f57c 1a830 13de8 1eaf0 3fa29
+  1fea8 1ea10 1e824 19072 1ea40 3fa29
+  1fea8 1d5f8 17908 13826 150f0 3fa29
+  1fea8 1af3e 19c34 1a370 15e78 3fa29
+  1fea8 1ae08 1ed82 17eb0 1eb9c 3fa29
+  1fea8 1ebd0 1a2f8 11cdc 1ebec 3fa29
+  1fea8 1d3be 1aef0 1cc58 1a778 3fa29
+  1fea8 1fa5c 14788 18274 15fb8 3fa29
+  1fea8 1a6fc 16678 1df16 1f4e8 3fa29
+> encode hex:deadbeefcafe columns=2
+  high 16: 8 924 373 154 306 260 590 900 215 237 777 471 791 292 827 90
+  rows 8 cols 2 size 103x8
+  1fea8 1f57c 1a860 18e34 1eaf0 3fa29
+  1fea8 1fa8e 1b3c8 1a3c6 1ea40 3fa29
+  1fea8 1d5f8 1167c 16270 1d47e 3fa29
+  1fea8 1af3e 11022 10c64 15e78 3fa29
+  1fea8 1d70c 1f94e 19720 1eb9c 3fa29
+  1fea8 1ebd0 10edc 18d78 1d7d0 3fa29
+  1fea8 1d3be 138e2 1b104 1a778 3fa29
+  1fea8 1f4b0 1c372 1a740 15fb8 3fa29
+> encode text:\u00e9t\u00e9 encoding=latin-1
+  high 18: 10 901 233 900 829 901 233 900 900 900 123 867 454 838 482 101 720 176
+  rows 3 cols 6 size 171x3
+  1fea8 1d5c0 1a830 10422 1ecb8 10c64 10d90 10422 1f53e 3fa29
+  1fea8 1ea10 1cb02 17eb0 17eb0 17eb0 1fa2e 13c9e 1f560 3fa29
+  1fea8 151e0 1302e 11e22 1093c 1f474 1be50 16870 150f0 3fa29
+> encode text:\u00e9t\u00e9 encoding=utf-8
+  high 18: 10 901 195 169 900 829 901 195 169 900 154 274 820 513 904 308 148 525
+  rows 3 cols 6 size 171x3
+  1fea8 1d5c0 1a830 10422 1c938 1973c 10c64 10d90 1f53e 3fa29
+  1fea8 1ea10 1bf5c 1d062 1e86c 17eb0 1a3c6 1f684 1f560 3fa29
+  1fea8 151e0 13ee6 13bbc 10f12 1f174 12c3e 17a10 150f0 3fa29
+> encode text:\u00e9t\u00e9 encoding=ascii
+  error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 0: ordinal not in range(128)
+> encode text:caf\u00e9 encoding=ascii
+  error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 3: ordinal not in range(128)
+> encode text:\u20ac encoding=latin-1
+  error UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+> encode text:\u20ac 5 encoding=utf-8 columns=3
+  high 18: 10 901 226 130 172 900 808 179 900 900 820 299 319 104 552 834 367 825
+  rows 6 cols 3 size 120x6
+  1fea8 1eaf0 1a830 10422 1b79e 1f57c 3fa29
+  1fea8 1ea10 1d1a0 1d0c4 17eb0 1fab8 3fa29
+  1fea8 153c0 19f6c 1b41e 18f92 150f0 3fa29
+  1fea8 15e78 10c64 18688 19098 1af3e 3fa29
+  1fea8 1ae08 193d8 1d3dc 174f8 1d730 3fa29
+  1fea8 1f5ec 13e68 19978 19f28 1ebec 3fa29
+> encode text:x columns=0
+  error ValueError: 'columns' must be between 1 and 30. Given: 0
+> encode text:x columns=31
+  error ValueError: 'columns' must be between 1 and 30. Given: 31
+> encode text:x security_level=9
+  error ValueError: 'security_level' must be between 1 and 8. Given: 9
+> encode text:x security_level=-1
+  error ValueError: 'security_level' must be between 1 and 8. Given: -1
+> encode text:x columns=30 security_level=0
+  error ValueError: Generated bar code has 1 rows. Minimum is 3 rows. Try decreasing column count.
+> encode text:x columns=12 security_level=0
+  error ValueError: Generated bar code has 1 rows. Minimum is 3 rows. Try decreasing column count.
+> encode text:x columns=11 security_level=0
+  error ValueError: Generated bar code has 1 rows. Minimum is 3 rows. Try decreasing column count.
+> encode text: columns=1
+  high 9: 1 379 428 653 646 284 436 308 237
+  rows 9 cols 1 size 86x9
+  1fea8 1f57c 1eaf0 1d5c0 3fa29
+  1fea8 1ea10 191ec 1ea40 3fa29
+  1fea8 1abe0 1710c 150f0 3fa29
+  1fea8 1af3e 109ce 1af7c 3fa29
+  1fea8 1ae08 1fb8a 1eb9c 3fa29
+  1fea8 1f5c2 1619e 1ebec 3fa29
+  1fea8 1d3be 1f75c 14ee0 3fa29
+  1fea8 1fa5c 19390 15fb8 3fa29
+  1fea8 14df0 12278 1f4e8 3fa29
+> encode int:42
+  error ValueError: Invalid input, expected string or bytes
+> encode text:x colour=red
+  error TypeError: encode() got an unexpected keyword argument 'colour'
+> encode file:in/boarding.txt columns=8
+  high 48: 40 388 58 94 552 17 8 568 598 350 86 806 806 806 120 32 841 63 808 740 335 510 2 808 8 94 782 66 845 840 1 840 840 2 176 30 29 900 900 900 11 199 866 186 447 114 244 880
+  rows 6 cols 8 size 205x6
+  1fea8 1eaf0 1e93c 19a40 14c30 14770 1ee26 1eb3e 1a860 11048 1d470 3fa29
+  1fea8 1ea10 111e8 1ecd0 1d308 1c164 1c164 1c164 14fce 1eb9c 1fab8 3fa29
+  1fea8 1d47e 17ee2 14cf8 19f6c 13c66 19b3e 108bc 153c0 19f6c 150f0 3fa29
+  1fea8 15e78 1a860 14770 11868 1a71e 1c750 10dcc 1eaf0 10dcc 1f4be 3fa29
+  1fea8 1ae08 1f1da 1ea40 1a1c8 1ae40 1f5de 17eb0 17eb0 17eb0 1d730 3fa29
+  1fea8 1d7d0 1fad0 1f932 10758 1927c 170dc 1423c 1f91a 10726 1ebec 3fa29
+> encode file:in/vcard.txt columns=10 security_level=3
+  high 120: 104 34 188 418 448 632 17 118 765 891 137 548 433 854 107 25 479 418 448 447 300 164 538 750 870 813 4 754 865 479 437 208 448 357 6 438 808 855 824 529 808 840 830 577 437 259 748 765 889 131 865 29 594 454 863 832 437 328 440 63 136 46 155 166 1 279 765 874 360 251 854 810 857 824 300 164 538 753 897 143 12 461 148 537 437 208 765 874 393 854 861 60 513 865 479 900 900 900 900 900 900 900 900 900 880 788 661 226 876 455 545 532 264 584 15 542 192 708 474 613
+  rows 12 cols 10 size 239x12
+  1fea8 1d4e0 1a130 1f5fa 1b410 11330 1bb40 1c24e 1eb3e 14318 1de68 18622 15040 3fa29
+  1fea8 1f506 1d184 1fba8 1e412 19ebe 1d3ce 1eb06 18b84 1b1e2 1e40a 1f60a 1f530 3fa29
+  1fea8 1a87c 1143c 1cbf6 19c8e 17c64 1032e 11e42 1d4fc 13c36 1034e 10978 1fad0 3fa29
+  1fea8 15f7c 1dd20 19370 1bb40 1c570 1a8c0 1ee98 10510 18ec4 104a0 198cc 1d270 3fa29
+  1fea8 1af60 182e8 1f1da 18272 1eee2 1c832 12f98 1c672 1bd3e 1027a 1e8d8 1ae20 3fa29
+  1fea8 1d7c8 1034e 15c7e 17882 1302e 17e3a 11e28 1105e 1340e 170b0 14cf8 1d7c4 3fa29
+  1fea8 14e70 14198 14820 196e0 19778 1eaf0 1238e 1de68 10ce6 1c538 16640 14f3c 3fa29
+  1fea8 1fa4e 19ebe 182e4 11cbe 1c134 1c984 1e848 189e6 19df4 13e8e 1d1cc 1afde 3fa29
+  1fea8 1fa76 15be0 1853e 12c3e 1bd9c 1105e 1f6f4 1835e 10f48 172c0 11e12 1f4e4 3fa29
+  1fea8 1460c 18226 14ee0 1b990 11dc8 17708 10c64 10c64 10c64 10c64 10c64 147bc 3fa29
+  1fea8 1a702 17eb0 17eb0 17eb0 17eb0 18174 1bdfa 130fa 1e598 17c4e 1f158 1a720 3fa29
+  1fea8 1467c 18c5e 1ce5e 1621c 138ce 159f0 13906 16c3c 13cd8 18d3c 13826 1f474 3fa29
+> encode file:in/utf8.txt columns=5
+  high 60: 52 779 901 195 188 900 827 242 236 901 226 128 147 900 809 924 346 181 326 892 811 346 316 782 258 457 900 809 901 226 128 147 900 809 924 386 425 671 334 580 900 809 901 226 156 147 900 865 479 900 900 900 30 102 490 660 741 391 186 732
+  rows 12 cols 5 size 154x12
+  1fea8 1d4e0 14cc0 1bce2 10422 1c938 1b410 1ea78 3fa29
+  1fea8 1ea10 17eb0 1c372 19708 1e5dc 1bf5c 1f530 3fa29
+  1fea8 1d4fc 1b278 1409e 12c7c 18f92 18f26 150f0 3fa29
+  1fea8 15f7c 18e34 161cc 1f69e 1d84c 19ee4 1f5fa 3fa29
+  1fea8 1ae08 182e2 1647e 19382 1c63a 197dc 1ae20 3fa29
+  1fea8 1f5e6 17026 18f92 18f26 19fb2 1b278 1ebec 3fa29
+  1fea8 14e70 1a098 1ca70 10c64 10508 18e34 1a73c 3fa29
+  1fea8 1fa5c 123c2 163e2 1e16c 127cc 1cce8 1afde 3fa29
+  1fea8 1a67e 18f92 18f26 19fb2 1b278 1f2f6 1f4e8 3fa29
+  1fea8 1460c 1ca70 10c64 11dc8 17708 10c64 14770 3fa29
+  1fea8 1a708 17eb0 17eb0 1ae40 14f40 117d8 1a720 3fa29
+  1fea8 1441e 1cf4e 17ce6 133be 1927c 1be66 1fa32 3fa29
+> encode file:in/empty.txt columns=2
+  high 10: 2 900 792 768 189 329 324 285 547 210
+  rows 5 cols 2 size 103x5
+  1fea8 1eaf0 1f57c 10c64 1eaf0 3fa29
+  1fea8 1fa8e 17978 1f9ca 1fab8 3fa29
+  1fea8 1d5f8 1923e 112f0 1d47e 3fa29
+  1fea8 15e78 1ec2e 1b120 15e78 3fa29
+  1fea8 1d70c 137e6 1e540 1d730 3fa29
+> encode file:in/digits.txt columns=1 security_level=0
+  high 36: 34 902 442 468 658 254 249 833 72 640 676 489 54 267 648 11 223 636 717 883 177 859 97 540 504 190 1 556 544 895 316 167 21 42 446 406
+  rows 36 cols 1 size 86x36
+  1fea8 15020 1f5fa 1d5c0 3fa29
+  1fea8 1ea40 17e98 1f506 3fa29
+  1fea8 1abe0 17098 153c0 3fa29
+  1fea8 1a460 17740 1af7c 3fa29
+  1fea8 1eb9c 1987a 1af60 3fa29
+  1fea8 1f5c2 1c8fa 1f5ec 3fa29
+  1fea8 1a2c0 19130 14ee0 3fa29
+  1fea8 15fb8 10df4 1fa4e 3fa29
+  1fea8 14df0 14e7e 1fa64 3fa29
+  1fea8 1d0b8 18d86 14630 3fa29
+  1fea8 1e9dc 185d0 1a702 3fa29
+  1fea8 1a27c 19d70 1a23e 3fa29
+  1fea8 1a08c 1d33c 1430c 3fa29
+  1fea8 1f458 16bf0 1e8d8 3fa29
+  1fea8 1e87a 10c9c 14178 3fa29
+  1fea8 12c60 15020 1ca38 3fa29
+  1fea8 1a3cc 1e5b0 147ee 3fa29
+  1fea8 1f976 11d60 1f2e4 3fa29
+  1fea8 1c970 1ef66 1ed38 3fa29
+  1fea8 143c8 102f2 1e822 3fa29
+  1fea8 1681c 1b43c 192f8 3fa29
+  1fea8 193bc 10cd0 16ec0 3fa29
+  1fea8 1f95c 1d38c 1e502 3fa29
+  1fea8 16f7e 1390c 1e4f4 3fa29
+  1fea8 16640 1ee46 1ec8e 3fa29
+  1fea8 19708 1e824 1cbce 3fa29
+  1fea8 1b33e 1d5f8 1221e 3fa29
+  1fea8 167de 1cc2c 1918e 3fa29
+  1fea8 1fb46 113ec 1fb6e 3fa29
+  1fea8 1633c 11f76 1631e 3fa29
+  1fea8 190dc 1b1ce 1c84e 3fa29
+  1fea8 1c982 1e842 1dbcc 3fa29
+  1fea8 1143c 1587c 1f8b4 3fa29
+  1fea8 12084 1d238 1b082 3fa29
+  1fea8 193ee 161f2 165f8 3fa29
+  1fea8 1897c 198bc 11278 3fa29
+> encode text:ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ columns=30 security_level=0
+  error ValueError: Data too long. Generated bar code has length descriptor of 958. Maximum is 928.
+> encode text:ZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZz columns=30 security_level=0
+  error ValueError: Data too long. Generated bar code has length descriptor of 1528. Maximum is 928.
+> encode text:abababababababababababababababababababababababababababababababababababababababababababababababababab columns=1
+  high 60: 52 810 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 30 59 276 170 453 452 170 0 13 311
+  rows 60 cols 1 size 86x60
+  1fea8 1ac70 14cc0 1d5c0 3fa29
+  1fea8 1ea10 182e4 1d620 3fa29
+  1fea8 1abe0 1f5c2 150f0 3fa29
+  1fea8 1a6e0 1af7c 1af7c 3fa29
+  1fea8 1ae08 1ae40 1d78e 3fa29
+  1fea8 1f5c2 1f5c2 1ebec 3fa29
+  1fea8 1d11c 1af7c 14ee0 3fa29
+  1fea8 1fa5c 1ae40 1e9b0 3fa29
+  1fea8 14df0 1f5c2 1f4e8 3fa29
+  1fea8 14210 1af7c 14630 3fa29
+  1fea8 1a708 1ae40 1a78c 3fa29
+  1fea8 1a27c 1f5c2 1fa32 3fa29
+  1fea8 1d02e 1af7c 1430c 3fa29
+  1fea8 1e884 1ae40 1a3a0 3fa29
+  1fea8 1e87a 1f5c2 1409e 3fa29
+  1fea8 1973c 1af7c 1ca38 3fa29
+  1fea8 1a3ee 1ae40 1e86c 3fa29
+  1fea8 1f976 1f5c2 1e5e2 3fa29
+  1fea8 1ed9e 1af7c 1ed38 3fa29
+  1fea8 1e828 1ae40 1a0e2 3fa29
+  1fea8 1681c 1f5c2 1b67c 3fa29
+  1fea8 16fbc 1af7c 16ec0 3fa29
+  1fea8 1e508 1ae40 1e58c 3fa29
+  1fea8 16f7e 1f5c2 1c9f2 3fa29
+  1fea8 1b30c 1af7c 1ec8e 3fa29
+  1fea8 1cbdc 1ae40 12f98 3fa29
+  1fea8 1b33e 1f5c2 1233e 3fa29
+  1fea8 1d88c 1af7c 1918e 3fa29
+  1fea8 1f92e 1ae40 1ed82 3fa29
+  1fea8 1633c 1f5c2 1b09e 3fa29
+  1fea8 16386 1af7c 1c84e 3fa29
+  1fea8 19390 1ae40 193d8 3fa29
+  1fea8 1143c 1f5c2 1f174 3fa29
+  1fea8 1d826 1af7c 1b082 3fa29
+  1fea8 127ee 1ae40 1f22c 3fa29
+  1fea8 1897c 1f5c2 1361e 3fa29
+  1fea8 18bbc 1af7c 1c538 3fa29
+  1fea8 191d0 1ae40 191ec 3fa29
+  1fea8 1dd1e 1f5c2 1ccbe 3fa29
+  1fea8 19b18 1af7c 1e69c 3fa29
+  1fea8 1e428 1ae40 1d8e4 3fa29
+  1fea8 111be 1f5c2 1dc9e 3fa29
+  1fea8 1f74e 1af7c 13730 3fa29
+  1fea8 1f614 1ae40 19074 3fa29
+  1fea8 1739e 1f5c2 1710c 3fa29
+  1fea8 13320 1af7c 1eedc 3fa29
+  1fea8 1f14c 1ae40 1e2c6 3fa29
+  1fea8 17058 1f5c2 10af0 3fa29
+  1fea8 1ee58 1af7c 11102 3fa29
+  1fea8 11784 1ae40 1f9a6 3fa29
+  1fea8 184be 1f5c2 13ac0 3fa29
+  1fea8 198cc 1a61c 1b9a0 3fa29
+  1fea8 1e266 1e4a0 19bc8 3fa29
+  1fea8 108bc 169c0 1ef5e 3fa29
+  1fea8 1cc26 1dd98 131d8 3fa29
+  1fea8 1fba8 1903a 132fc 3fa29
+  1fea8 1390c 169c0 17bb8 3fa29
+  1fea8 170e8 1d5c0 171d0 3fa29
+  1fea8 1c468 1eb60 1c476 3fa29
+  1fea8 138b0 1e2f4 13886 3fa29
+> encode text:abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab columns=1
+  error ValueError: Generated bar code has 110 rows. Maximum is 90 rows. Try increasing column count.
+> encode text:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa columns=30 security_level=8
+  error ValueError: Data too long. Generated bar code has length descriptor of 1018. Maximum is 928.
+> encode file:in/licence.txt columns=12 security_level=4
+  high 228: 196 865 105 901 30 900 851 840 408 266 846 96 1 120 120 0 88 101 840 4 30 67 268 752 840 91 270 0 268 101 90 483 841 63 125 182 765 873 78 470 41 242 865 479 93 133 865 479 90 69 427 418 765 873 95 418 765 873 3 500 253 84 865 479 93 193 865 479 92 3 865 479 92 43 433 148 765 873 63 404 394 865 479 91 118 8 91 60 33 765 873 31 840 243 31 277 235 479 91 28 8 91 60 62 765 873 32 841 765 873 20 840 189 807 253 865 479 90 726 523 865 479 90 208 218 296 844 794 10 798 598 765 873 8 13 739 442 418 765 873 9 60 865 479 90 328 270 62 90 0 26 805 479 92 178 0 570 19 0 0 853 403 13 859 840 395 118 598 744 865 479 92 200 540 865 479 92 303 841 63 125 182 808 713 713 713 713 713 851 900 900 900 900 900 900 900 425 795 67 35 922 310 858 552 352 55 536 315 217 757 888 854 280 737 424 526 555 518 652 345 610 139 394 368 474 879 519 691
+  rows 19 cols 12 size 273x19
+  1fea8 1a8c0 1e49e 11dc8 1d09c 10422 1af7c 10c64 1c76c 10dcc 13620 12330 1c748 14738 15020 3fa29
+  1fea8 1ea04 1fab8 14fce 14fce 1f560 1d304 1a702 1f1da 1fa9c 1ae40 1f4b0 1f690 18472 1f518 3fa29
+  1fea8 1fad0 13e62 14478 1633c 1abe0 16378 1f474 1a27c 11b3c 17ee2 14cf8 1411e 192f8 15be0 3fa29
+  1fea8 1e978 1de68 11dec 1a230 19998 1a460 1d90c 11dc8 17708 1460c 1a086 11dc8 17708 1a460 3fa29
+  1fea8 1d7b8 1a740 1e920 163f6 1b1e2 1bd3e 13c5e 1e9ce 1b1e2 1bd3e 13c5e 1f530 134fc 1ae10 3fa29
+  1fea8 1d7c4 1ecfa 1a7e4 1034e 10978 1443c 1241e 1034e 10978 1a23e 1a9f0 1034e 10978 1d7c2 3fa29
+  1fea8 1a71e 14618 14840 137de 1e53c 1de68 11dec 14e70 13640 19a10 11dc8 17708 1a31c 1a2c0 3fa29
+  1fea8 1e910 14f86 1ea10 1d3b0 1af8e 1ae20 1bd3e 13c5e 1d730 1f1da 1cb86 1d730 1f258 1e940 3fa29
+  1fea8 1f4e4 1917c 10978 14478 1f5c4 150f0 14478 14df0 1fa64 1835e 187ac 1f5ec 17ee2 14e7e 3fa29
+  1fea8 14738 1de68 11dec 15860 10dcc 1da0c 18298 1d99c 11dc8 17708 14630 1bdd0 1c42e 1d0b8 3fa29
+  1fea8 14f40 13cbc 18b84 1a740 1a074 1e508 1db90 1c11a 1793c 1ea08 178bc 111e8 1bd3e 1a710 3fa29
+  1fea8 1f474 187ac 150f0 1adf8 17cec 17098 173bc 1835e 187ac 1a87c 14df0 1034e 10978 1477e 3fa29
+  1fea8 1d05c 14630 1d846 1918e 1d3be 14630 1d5c0 1d73e 10540 17708 14618 1f6bc 1d5c0 1a08c 3fa29
+  1fea8 1f46e 1e668 1d620 1f560 1f560 13d78 1e422 1eb60 17d70 1f1da 1f624 14f86 111e8 1e888 3fa29
+  1fea8 1cafc 1be24 1034e 10978 1a23e 16ef8 1390c 1034e 10978 1a23e 116f8 17ee2 14cf8 129e0 3fa29
+  1fea8 1cb78 1a0b0 1b440 10510 1ded0 1ded0 1ded0 1ded0 1ded0 1c76c 10c64 10c64 10c64 12c60 3fa29
+  1fea8 1e850 17eb0 17eb0 17eb0 17eb0 163e2 1791e 1f4b0 1eb8e 19fae 1b790 13dbe 174f8 14782 3fa29
+  1fea8 1cbe4 1bae0 1a47c 17b30 18bf4 1dbf4 1be12 11f68 11e12 1610e 13c6c 17130 1bd0c 1cbe2 3fa29
+  1fea8 1da18 19850 1b984 11bdc 161d8 10b06 1d02e 19a10 116c0 1ddce 1c728 19882 10882 1c970 3fa29
+> encode file:in/invoice.txt columns=9 security_level=3
+  high 135: 119 253 644 242 146 842 2 136 8 35 388 2 364 799 824 431 566 868 357 573 857 765 871 818 341 799 448 446 857 818 634 510 808 326 858 824 408 853 781 86 847 810 511 440 536 868 537 118 535 479 267 574 378 854 784 807 716 868 388 266 811 431 588 808 753 897 808 17 95 750 897 808 86 833 783 518 341 781 259 566 865 719 845 822 388 774 897 808 753 897 808 137 60 765 889 824 570 356 868 140 536 849 518 26 496 807 110 146 843 26 813 24 568 765 900 900 900 900 900 136 105 452 216 178 851 223 268 384 301 569 605 7 74 839 295
+  rows 15 cols 9 size 222x15
+  1fea8 1ea78 1a18e 1d99c 11bb0 1d90c 194c0 10dc6 1f57c 14198 1a860 1a860 3fa29
+  1fea8 1f506 1eb8e 123ec 1ea40 1ece6 1789e 1c134 1e414 1767e 17d9e 1fa9c 3fa29
+  1fea8 150f0 1dd3c 13898 17e72 1835e 1076e 13eec 1f9ba 19f50 1304e 1fad0 3fa29
+  1fea8 1f5fa 1ccb0 18ec2 18690 18d98 1b9a0 10510 1d84c 10450 104a0 1a4c0 3fa29
+  1fea8 1af60 1c864 13d78 1c21a 1d308 1823a 182e4 1e6c4 1b0f4 137d0 1d718 3fa29
+  1fea8 1ebec 1074c 1bd9c 1433e 19c9c 10978 190be 19c4e 1320e 11e12 1d7c4 3fa29
+  1fea8 1a73c 138e8 18298 1dec8 11dc4 19a40 12330 105b0 1138e 13068 1a7be 3fa29
+  1fea8 1fa4e 182e8 19df4 13e8e 182e8 1eb30 1e9ce 18474 13e8e 182e8 15f9c 3fa29
+  1fea8 1f4e8 145e0 18f16 11e90 1ef5e 1f9ba 18f58 1d8be 17908 1034e 1f4e4 3fa29
+  1fea8 14770 1ce42 1c750 18684 19a40 1bce8 10c68 10510 10866 10c68 1471c 3fa29
+  1fea8 1a702 182e8 1d184 1af8e 1bd3e 1027a 1c134 1e668 1e442 17d9e 1d398 3fa29
+  1fea8 1fa32 1f968 17b30 1bf34 1ef5e 1fae6 13a18 13ed0 142f0 1f962 1f474 3fa29
+  1fea8 14140 104ee 1d73e 1058c 15ce0 11048 1de68 10c64 10c64 10c64 1a098 3fa29
+  1fea8 1e8d8 17eb0 17eb0 1e8c6 14f20 1903a 1e510 1a1c4 10cfa 1e5b0 1e890 3fa29
+  1fea8 1409e 16378 17778 1141e 17902 17850 1d47e 1e9e8 17ee4 1c57e 1cafc 3fa29
+> encode file:in/parcel.txt columns=6 security_level=4
+  high 120: 88 865 144 89 901 30 902 101 901 29 902 102 901 29 902 2 40 901 29 902 1 101 901 29 900 841 865 841 63 125 844 840 60 152 211 188 269 901 29 900 615 553 901 29 900 841 63 125 844 901 29 902 1 189 901 29 29 900 841 571 901 29 900 841 17 59 901 29 900 749 901 29 29 900 540 416 98 126 449 901 29 900 60 901 30 4 900 900 337 430 913 543 727 794 351 367 484 30 594 28 902 844 897 446 920 804 286 556 700 287 758 432 387 205 721 772 661 44 608 735
+  rows 20 cols 6 size 171x20
+  1fea8 1a8c0 1a338 11dc8 1e578 1d19e 10422 1af7c 1f53e 3fa29
+  1fea8 1eb60 17e98 1a702 1bf5c 1f5de 17e98 14f40 1f518 3fa29
+  1fea8 151e0 19fb2 15c7e 10f14 153c0 1ebe6 19fb2 1adf8 3fa29
+  1fea8 1e978 15ef0 13de8 1eaf0 1d0b8 10422 15ef0 1d2e0 3fa29
+  1fea8 1ebde 17eb0 1e08a 13cbc 1e08a 1afde 1f44c 1ae10 3fa29
+  1fea8 1ebc4 13e76 13e62 14df0 1f2e4 1f6f2 1b67c 1afd0 3fa29
+  1fea8 1a71e 1b39c 10422 15ef0 10c64 10bde 1dc44 14e38 3fa29
+  1fea8 1f48c 1bf5c 1f5de 17eb0 1e08a 1afde 1f44c 1e940 3fa29
+  1fea8 1fa62 13e76 19fb2 15c7e 10f14 1d5f8 1923e 1f4e2 3fa29
+  1fea8 14738 10422 15ef0 15ef0 10c64 104c6 130c8 1a3bc 3fa29
+  1fea8 1a7b0 1bf5c 1f5de 17eb0 1e08a 1eb30 15f18 1a710 3fa29
+  1fea8 1fa34 19fb2 15c7e 18f92 13c24 19fb2 15c7e 1f472 3fa29
+  1fea8 1d05c 15ef0 10c64 131d8 1c4de 1471c 1d05c 1a0b0 3fa29
+  1fea8 1d190 1ec1a 1bf5c 1f5de 17eb0 1af8e 1bf5c 1e888 3fa29
+  1fea8 1411e 1f5c2 1d4fc 18f92 18f92 1121e 130b8 194f8 3fa29
+  1fea8 1cb78 1e794 131cc 19cc8 179f6 1902c 11408 196e0 3fa29
+  1fea8 1f42c 11790 1ae40 188e2 1ebb8 17e98 1c11a 14782 3fa29
+  1fea8 1e5e8 1cfd2 1305c 10396 19f42 1b05e 139de 197e8 3fa29
+  1fea8 1da18 13bcc 1ec4e 17be6 113de 1f35e 1b618 1b420 3fa29
+  1fea8 1e836 11be4 1393e 130fa 15e40 111f6 1f192 143ec 3fa29
+> encode textfile:in/utf8.txt columns=7 encoding=utf-8
+  high 63: 55 779 901 195 188 900 827 242 236 901 226 128 147 900 809 924 346 181 326 892 811 346 316 782 258 457 900 809 901 226 128 147 900 809 924 386 425 671 334 580 900 809 901 226 156 147 900 865 479 900 900 900 900 900 900 32 415 246 780 594 897 691 928
+  rows 9 cols 7 size 188x9
+  1fea8 1f57c 14c60 1bce2 10422 1c938 1b410 10c64 186d8 1a8c0 3fa29
+  1fea8 1ea10 19708 1e5dc 1bf5c 1e598 1e884 1a382 17eb0 1ea40 3fa29
+  1fea8 1a8f8 18f26 10794 1f37a 125e0 19a1e 11f62 11e44 150f0 3fa29
+  1fea8 1af3e 161cc 1b1ce 11868 16610 1cc86 10c64 10508 1e978 3fa29
+  1fea8 1ae08 1bf5c 1e598 1e884 1a382 17eb0 1c176 13f46 1eb9c 3fa29
+  1fea8 1ebc2 1111e 1b89c 18e4e 13678 1185c 18f92 18f26 1ebec 3fa29
+  1fea8 1d3be 10422 1b79e 1cb78 1ca70 10c64 11dc8 17708 1a71e 3fa29
+  1fea8 1fa5c 17eb0 17eb0 17eb0 17eb0 17eb0 17eb0 1eb9c 15fb8 3fa29
+  1fea8 14c7c 110bc 1fb3a 11ea0 17882 1cfd2 1be82 1c7ea 1f4e8 3fa29
+> encode textfile:in/utf8.txt encoding=latin-1
+  error UnicodeEncodeError: 'latin-1' codec can't encode character '\u2013' in position 7: ordinal not in range(256)
+> encode file:in/missing.txt
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/in/missing.txt'
+# module grids
+> grid text:Hi columns=1 security_level=0
+  ########.#.#.#...####.#.#.####....###.#.#..###.....###.#.#.###......#######.#...#.#..#
+  ########.#.#.#...######.#.#.###...##..#.###..#.....######.#.#.###...#######.#...#.#..#
+  ########.#.#.#...##.#.#.#####.....#..#....#..####..###.#.#.######...#######.#...#.#..#
+  ########.#.#.#...#.#.####..####...###.##.#.##......##.#.####.#####..#######.#...#.#..#
+  ########.#.#.#...###.#.###..##....###...#....##.#..###.#.###..##....#######.#...#.#..#
+> grid text:PDF417 columns=2 security_level=1
+  ########.#.#.#...####.#.#.####....##.#.#...##......###.###.##..##...####.#.#.####....#######.#...#.#..#
+  ########.#.#.#...######.#.#..###..##.#....###...#..####.#...#.#.....######.#.#.###...#######.#...#.#..#
+  ########.#.#.#...###.#.#.######...#.##..##..####...##...#####..#..#.###.#.#..######..#######.#...#.#..#
+  ########.#.#.#...#.#.####..####...#.#.###.###......##....##.#...#...#.#.####..####...#######.#...#.#..#
+  ########.#.#.#...###.#.###...##...#....##.#.######.######.##...#.##.###.#.###..##....#######.#...#.#..#
+> grid hex:00ff00ff columns=1 security_level=1
+  ########.#.#.#...###.#.#..###.....##.#.#...##......###.#.#.###......#######.#...#.#..#
+  ########.#.#.#...#####.#.#..##....##.######.#.###..#####.#.#..##....#######.#...#.#..#
+  ########.#.#.#...##.#.#.#####.....##.#.#.#####.....##.#.#..#####....#######.#...#.#..#
+  ########.#.#.#...#.#.#####.#####..#.##..##...#.....##.#.####.#####..#######.#...#.#..#
+  ########.#.#.#...##.#.###...#.....#####.#.#.##.....##.#.###...#.....#######.#...#.#..#
+  ########.#.#.#...#####.#.###....#.###.##..######.#.####.#.####..#...#######.#...#.#..#
+  ########.#.#.#...#.#..###..###....##..###..##....#.#.#..###.###.....#######.#...#.#..#
+  ########.#.#.#...##.#.######.####.#####.###..##..#.##.#.######.####.#######.#...#.#..#
+  ########.#.#.#...#.#..##.#####....##..##.#..####...#.#..##..#####...#######.#...#.#..#
+  ########.#.#.#...#.#...##.....##..#....##..##...#..#.#...##...##....#######.#...#.#..#
+> grid text:0123456789012345 columns=2 security_level=0
+  ########.#.#.#...####.#.#.####....##.#.#....##.....#..####.####.#...####.#.#.####....#######.#...#.#..#
+  ########.#.#.#...######.#.#.###...####.#.##..##....####.#...#.....#.######.#.#.###...#######.#...#.#..#
+  ########.#.#.#...###.#.#.######...#..####.##..##...###.#.#.######...###.#.#.######...#######.#...#.#..#
+  ########.#.#.#...#.#.####..####...##..#..###..####.##..###..###..##.#.#.####..####...#######.#...#.#..#
+  ########.#.#.#...###.#.###..##....####.#.###...###.####..#.#....#...###.#.###..##....#######.#...#.#..#
+# colours
+> color #000
+  0,0,0 #000000
+> color #FFF
+  255,255,255 #ffffff
+> color #1a2B3c
+  26,43,60 #1a2b3c
+> color #12345678
+  18,52,86,120 #123456
+> color #abcd
+  170,187,204,221 #aabbcc
+> color rgb(10, 20, 30)
+  10,20,30 #0a141e
+> color rgb(100%,50%,0%)
+  255,128,0 #ff8000
+> color rgba(1,2,3,4)
+  1,2,3,4 #010203
+> color hsl(120, 100%, 25%)
+  0,128,0 #008000
+> color hsl(0,0%,50%)
+  128,128,128 #808080
+> color hsv(240, 50%, 100%)
+  128,128,255 #8080ff
+> color hsb(60,100%,100%)
+  255,255,0 #ffff00
+> color hsl(300.5, 20.5%, 80%)
+  214,194,214 #d6c2d6
+> color #12
+  error ValueError: unknown color specifier: '#12'
+> color #ggg
+  error ValueError: unknown color specifier: '#ggg'
+> color rgb(1,2)
+  error ValueError: unknown color specifier: 'rgb(1,2)'
+> color #000000 
+  error ValueError: unknown color specifier: '#000000 '
+> color  #000
+  error ValueError: unknown color specifier: ' #000'
+> color RGB(1,2,3)
+  1,2,3 #010203
+> color #000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  error ValueError: color specifier is too long
+> color hsl(10,200%,50%)
+  383,-42,-127 #17f-2a-7f
+# svg
+> svg hello.svg text:Hello, world!
+  hello.svg 513 x 27, 271 rects, 11813 bytes, crc32 7fd9351a
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="513" height="27"><g id="barcode" fill="#000000" stroke="none">
+> svg small.svg text:Hi columns=1 security_level=0 scale=1 ratio=1
+  small.svg 86 x 5, 247 rects, 10460 bytes, crc32 acbfd203
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="86" height="5"><g id="barcode" fill="#000000" stroke="none">
+> svg boarding.svg file:in/boarding.txt columns=8 scale=2 color=#1a2b3c description=IATA BCBP <YUL> & "FRA"
+  boarding.svg 410 x 36, 658 rects, 28731 bytes, crc32 59131193
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="410" height="36"><description>IATA BCBP &lt;YUL&gt; &amp; "FRA"</description><g id="barcode" fill="#1a2b3c" stroke="none">
+> svg licence.svg file:in/licence.txt columns=12 security_level=4 color=rgb(0,0,128) description=AAMVA été\tTAB
+  licence.svg 819 x 171, 2686 rects, 118624 bytes, crc32 8914f9b4
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="819" height="171"><description>AAMVA &#233;t&#233;	TAB</description><g id="barcode" fill="#000080" stroke="none">
+> svg vcard.svg file:in/vcard.txt columns=10 ratio=4 color=hsl(200, 80%, 30%)
+  vcard.svg 717 x 132, 1355 rects, 60956 bytes, crc32 3a22067e
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="717" height="132"><g id="barcode" fill="#0f618a" stroke="none">
+> svg bad.svg text:x columns=1 color=chartreuse-ish
+  error ValueError: unknown color specifier: 'chartreuse-ish'
+> svg nodesc.svg text:x columns=2 description=
+  nodesc.svg 309 x 45, 296 rects, 12908 bytes, crc32 b2584863
+  <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="309" height="45"><g id="barcode" fill="#000000" stroke="none">
+# images
+> image hello.ppm text:Hello, world!
+  hello.ppm 553x67, 111167 bytes, crc32 d7cfc8ca, corner 255,255,255, first module 0,0,0
+> image tiny.ppm text:Hi columns=1 security_level=0 scale=1 ratio=1 padding=0
+  tiny.ppm 86x5, 1302 bytes, crc32 2a44c544, corner 0,0,0, first module 0,0,0
+> image boarding.ppm file:in/boarding.txt columns=8 scale=2 padding=10 fg_color=#1a2b3c bg_color=#fafafa
+  boarding.ppm 430x56, 72254 bytes, crc32 c19f4231, corner 250,250,250, first module 26,43,60
+> image invoice.ppm file:in/invoice.txt columns=9 security_level=3 scale=1 ratio=2 padding=4 fg_color=rgb(128,0,0) bg_color=hsv(60, 10%, 100%)
+  invoice.ppm 230x38, 26234 bytes, crc32 05f42096, corner 255,255,230, first module 128,0,0
+> image parcel.ppm file:in/parcel.txt columns=6 ratio=1 padding=1 bg_color=#ffe
+  parcel.ppm 515x50, 77264 bytes, crc32 06042638, corner 255,255,238, first module 0,0,0
+> image bad.ppm text:x columns=1 fg_color=nope
+  error ValueError: unknown color specifier: 'nope'
+> image badbg.ppm text:x columns=1 fg_color=nope bg_color=#12
+  error ValueError: unknown color specifier: '#12'
+> image toolong.ppm text:999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999 columns=1
+  error ValueError: Data too long. Generated bar code has length descriptor of 1025. Maximum is 928.

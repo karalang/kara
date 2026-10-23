@@ -1,0 +1,1806 @@
+// mini_pdf417: a port of pdf417gen 0.8.1 (MIT; Ivan Habunek), the
+// pure-Python PDF417 encoder. PDF417 is the stacked two-dimensional bar
+// code printed on airline boarding passes (IATA BCBP), North American
+// driver's licences (AAMVA), shipping labels, invoices and ID cards: rows
+// of 17-module code words, each row framed by start and stop patterns and
+// by row indicators that say how many rows and columns there are and how
+// much error correction follows the data.
+//
+// The port covers the whole encoder: data compaction (text, numeric and
+// byte modes, with the text mode's four submodes and the library's two
+// chunk optimizations), the length descriptor and padding, Reed-Solomon
+// error correction over GF(929) at levels 0 to 8, the row indicators and
+// the three low-level code word tables, and both renderers: the SVG that
+// render_svg builds with ElementTree, and the raster image render_image
+// draws with Pillow (scaled with nearest-neighbour resampling, padded and
+// written as a binary PPM). Colours go through Pillow's ImageColor.getrgb,
+// so hex, rgb(), rgba(), hsl() and hsv() specifiers parse as Pillow
+// parses them, including its rounding.
+//
+// data/jobs.tsv (see mk.py) is a list of commands against the library's
+// functions; oracle.py runs the same commands against the real library.
+// A job that raises prints `error <class>: <message>`: the encoder's size
+// checks, Python's codec errors for text that does not fit the chosen
+// encoding, int() rejecting a non-digit, an unexpected keyword argument,
+// Pillow's colour errors and the error-correction assert.
+
+// ------------------------------------------------------------ text helpers
+
+const HEX: Str = "0123456789abcdef";
+
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn value_error(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn hex_string(s: ref String) -> String {
+    match String.from_utf8(hex_bytes(s)) {
+        Ok(t) => t,
+        Err(_) => String.new(),
+    }
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn join_strs(xs: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(sep);
+        }
+        out.push_str(x);
+        first = false;
+    }
+    out
+}
+
+// " ".join(str(w) for w in ws), or "-" for none, as the oracle prints.
+fn words(ws: ref Vec[i64]) -> String {
+    if ws.len() == 0 {
+        return "-".to_string();
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < ws.len() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(f"{ws[i]}");
+        i += 1;
+    }
+    out
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn clen(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn substr(s: ref String, lo: i64, hi: i64) -> String {
+    let v = chars(s);
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    let mut out = String.new();
+    let mut i = a;
+    while i < b {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// format(n, "x") for n >= 0.
+fn hex_of(n: i64) -> String {
+    let ds: Vec[char] = HEX.chars().collect();
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        rev.push(ds[v % 16]);
+        v = v / 16;
+    }
+    let mut out = String.new();
+    let mut i = rev.len();
+    while i > 0 {
+        i -= 1;
+        out.push(rev[i]);
+    }
+    out
+}
+
+// format(n, "0{width}x"), which puts the zeros after a minus sign.
+fn hex_pad(n: i64, width: i64) -> String {
+    let neg = n < 0;
+    let digits = hex_of(if neg { -n } else { n });
+    let mut out = String.new();
+    if neg {
+        out.push('-');
+    }
+    let mut k = digits.len() + if neg { 1 } else { 0 };
+    while k < width {
+        out.push('0');
+        k += 1;
+    }
+    out.push_str(digits);
+    out
+}
+
+// Whether str.isprintable() holds: the controls, the C1 range, the spaces
+// other than U+0020, the line and paragraph separators, the format
+// characters and the private use area are not printable.
+fn printable(n: i64) -> bool {
+    if n < 32 or (n >= 127 and n <= 160) or n == 173 or n == 0x1680 {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    if n == 0x3000 or n == 0xFEFF or (n >= 0xFFF9 and n <= 0xFFFB) {
+        return false;
+    }
+    not (n >= 0xE000 and n <= 0xF8FF)
+}
+
+// The escape repr() uses for a character it does not print as itself.
+fn char_escape(n: i64) -> String {
+    if n < 256 {
+        f"\\x{hex_pad(n, 2)}"
+    } else if n < 0x10000 {
+        f"\\u{hex_pad(n, 4)}"
+    } else {
+        f"\\U{hex_pad(n, 8)}"
+    }
+}
+
+// repr() of a str.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if not printable(n) {
+            out.push_str(char_escape(n));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn dirname_of(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut cut = 0;
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '/' {
+            cut = i;
+        }
+        i += 1;
+    }
+    substr(path, 0, cut)
+}
+
+// Parses a list of whitespace-separated integers, decimal or hex.
+fn parse_ints(s: Str, hex: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur: i64 = 0;
+    let mut neg = false;
+    let mut any = false;
+    for c in s.chars() {
+        if c == ' ' or c == ',' {
+            if any {
+                out.push(if neg { -cur } else { cur });
+            }
+            cur = 0;
+            neg = false;
+            any = false;
+        } else if c == '-' {
+            neg = true;
+        } else {
+            cur = cur * (if hex { 16 } else { 10 }) + hex_val(c);
+            any = true;
+        }
+    }
+    if any {
+        out.push(if neg { -cur } else { cur });
+    }
+    out
+}
+
+// zlib.crc32.
+fn crc_table() -> Vec[u64] {
+    let mut t: Vec[u64] = Vec.new();
+    let mut n: u64 = 0;
+    while n < 256 {
+        let mut c = n;
+        let mut k = 0;
+        while k < 8 {
+            if c & 1 == 1 {
+                c = 0xedb88320 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+            k += 1;
+        }
+        t.push(c);
+        n += 1;
+    }
+    t
+}
+
+fn crc32(t: ref Vec[u64], data: ref Vec[u8]) -> u64 {
+    let mut c: u64 = 0xffffffff;
+    for b in data {
+        c = t[((c ^ (*b as u64)) & 0xff) as i64] ^ (c >> 8);
+    }
+    c ^ 0xffffffff
+}
+
+// ------------------------------------------------------------ tables
+// Generated from pdf417gen/codes.py and pdf417gen/data.py.
+
+const CODES_TXT: Str = "1d5c0 1eaf0 1f57c 1d4e0 1ea78 1f53e 1a8c0 1d470 1a860 15040 1a830 15020 1adc0 1d6f0 1eb7c 1ace0 1d678 1eb3e 158c0 1ac70 15860 15dc0 1aef0 1d77c 15ce0 1ae78 1d73e 15c70 1ae3c 15ef0 1af7c 15e78 1af3e 15f7c 1f5fa 1d2e0 1e978 1f4be 1a4c0 1d270 1e93c 1a460 1d238 14840 1a430 1d21c 14820 1a418 14810 1a6e0 1d378 1e9be 14cc0 1a670 1d33c 14c60 1a638 1d31e 14c30 1a61c 14ee0 1a778 1d3be 14e70 1a73c 14e38 1a71e 14f78 1a7be 14f3c 14f1e 1a2c0 1d170 1e8bc 1a260 1d138 1e89e 14440 1a230 1d11c 14420 1a218 14410 14408 146c0 1a370 1d1bc 14660 1a338 1d19e 14630 1a31c 14618 1460c 14770 1a3bc 14738 1a39e 1471c 147bc 1a160 1d0b8 1e85e 14240 1a130 1d09c 14220 1a118 1d08e 14210 1a10c 14208 1a106 14360 1a1b8 1d0de 14330 1a19c 14318 1a18e 1430c 14306 1a1de 1438e 14140 1a0b0 1d05c 14120 1a098 1d04e 14110 1a08c 14108 1a086 14104 141b0 14198 1418c 140a0 1d02e 1a04c 1a046 14082 1cae0 1e578 1f2be 194c0 1ca70 1e53c 19460 1ca38 1e51e 12840 19430 12820 196e0 1cb78 1e5be 12cc0 19670 1cb3c 12c60 19638 12c30 12c18 12ee0 19778 1cbbe 12e70 1973c 12e38 12e1c 12f78 197be 12f3c 12fbe 1dac0 1ed70 1f6bc 1da60 1ed38 1f69e 1b440 1da30 1ed1c 1b420 1da18 1ed0e 1b410 1da0c 192c0 1c970 1e4bc 1b6c0 19260 1c938 1e49e 1b660 1db38 1ed9e 16c40 12420 19218 1c90e 16c20 1b618 16c10 126c0 19370 1c9bc 16ec0 12660 19338 1c99e 16e60 1b738 1db9e 16e30 12618 16e18 12770 193bc 16f70 12738 1939e 16f38 1b79e 16f1c 127bc 16fbc 1279e 16f9e 1d960 1ecb8 1f65e 1b240 1d930 1ec9c 1b220 1d918 1ec8e 1b210 1d90c 1b208 1b204 19160 1c8b8 1e45e 1b360 19130 1c89c 16640 12220 1d99c 1c88e 16620 12210 1910c 16610 1b30c 19106 12204 12360 191b8 1c8de 16760 12330 1919c 16730 1b39c 1918e 16718 1230c 12306 123b8 191de 167b8 1239c 1679c 1238e 1678e 167de 1b140 1d8b0 1ec5c 1b120 1d898 1ec4e 1b110 1d88c 1b108 1d886 1b104 1b102 12140 190b0 1c85c 16340 12120 19098 1c84e 16320 1b198 1d8ce 16310 12108 19086 16308 1b186 16304 121b0 190dc 163b0 12198 190ce 16398 1b1ce 1638c 12186 16386 163dc 163ce 1b0a0 1d858 1ec2e 1b090 1d84c 1b088 1d846 1b084 1b082 120a0 19058 1c82e 161a0 12090 1904c 16190 1b0cc 19046 16188 12084 16184 12082 120d8 161d8 161cc 161c6 1d82c 1d826 1b042 1902c 12048 160c8 160c4 160c2 18ac0 1c570 1e2bc 18a60 1c538 11440 18a30 1c51c 11420 18a18 11410 11408 116c0 18b70 1c5bc 11660 18b38 1c59e 11630 18b1c 11618 1160c 11770 18bbc 11738 18b9e 1171c 117bc 1179e 1cd60 1e6b8 1f35e 19a40 1cd30 1e69c 19a20 1cd18 1e68e 19a10 1cd0c 19a08 1cd06 18960 1c4b8 1e25e 19b60 18930 1c49c 13640 11220 1cd9c 1c48e 13620 19b18 1890c 13610 11208 13608 11360 189b8 1c4de 13760 11330 1cdde 13730 19b9c 1898e 13718 1130c 1370c 113b8 189de 137b8 1139c 1379c 1138e 113de 137de 1dd40 1eeb0 1f75c 1dd20 1ee98 1f74e 1dd10 1ee8c 1dd08 1ee86 1dd04 19940 1ccb0 1e65c 1bb40 19920 1eedc 1e64e 1bb20 1dd98 1eece 1bb10 19908 1cc86 1bb08 1dd86 19902 11140 188b0 1c45c 13340 11120 18898 1c44e 17740 13320 19998 1ccce 17720 1bb98 1ddce 18886 17710 13308 19986 17708 11102 111b0 188dc 133b0 11198 188ce 177b0 13398 199ce 17798 1bbce 11186 13386 111dc 133dc 111ce 177dc 133ce 1dca0 1ee58 1f72e 1dc90 1ee4c 1dc88 1ee46 1dc84 1dc82 198a0 1cc58 1e62e 1b9a0 19890 1ee6e 1b990 1dccc 1cc46 1b988 19884 1b984 19882 1b982 110a0 18858 1c42e 131a0 11090 1884c 173a0 13190 198cc 18846 17390 1b9cc 11084 17388 13184 11082 13182 110d8 1886e 131d8 110cc 173d8 131cc 110c6 173cc 131c6 110ee 173ee 1dc50 1ee2c 1dc48 1ee26 1dc44 1dc42 19850 1cc2c 1b8d0 19848 1cc26 1b8c8 1dc66 1b8c4 19842 1b8c2 11050 1882c 130d0 11048 18826 171d0 130c8 19866 171c8 1b8e6 11042 171c4 130c2 171c2 130ec 171ec 171e6 1ee16 1dc22 1cc16 19824 19822 11028 13068 170e8 11022 13062 18560 10a40 18530 10a20 18518 1c28e 10a10 1850c 10a08 18506 10b60 185b8 1c2de 10b30 1859c 10b18 1858e 10b0c 10b06 10bb8 185de 10b9c 10b8e 10bde 18d40 1c6b0 1e35c 18d20 1c698 18d10 1c68c 18d08 1c686 18d04 10940 184b0 1c25c 11b40 10920 1c6dc 1c24e 11b20 18d98 1c6ce 11b10 10908 18486 11b08 18d86 10902 109b0 184dc 11bb0 10998 184ce 11b98 18dce 11b8c 10986 109dc 11bdc 109ce 11bce 1cea0 1e758 1f3ae 1ce90 1e74c 1ce88 1e746 1ce84 1ce82 18ca0 1c658 19da0 18c90 1c64c 19d90 1cecc 1c646 19d88 18c84 19d84 18c82 19d82 108a0 18458 119a0 10890 1c66e 13ba0 11990 18ccc 18446 13b90 19dcc 10884 13b88 11984 10882 11982 108d8 1846e 119d8 108cc 13bd8 119cc 108c6 13bcc 119c6 108ee 119ee 13bee 1ef50 1f7ac 1ef48 1f7a6 1ef44 1ef42 1ce50 1e72c 1ded0 1ef6c 1e726 1dec8 1ef66 1dec4 1ce42 1dec2 18c50 1c62c 19cd0 18c48 1c626 1bdd0 19cc8 1ce66 1bdc8 1dee6 18c42 1bdc4 19cc2 1bdc2 10850 1842c 118d0 10848 18426 139d0 118c8 18c66 17bd0 139c8 19ce6 10842 17bc8 1bde6 118c2 17bc4 1086c 118ec 10866 139ec 118e6 17bec 139e6 17be6 1ef28 1f796 1ef24 1ef22 1ce28 1e716 1de68 1ef36 1de64 1ce22 1de62 18c28 1c616 19c68 18c24 1bce8 19c64 18c22 1bce4 19c62 1bce2 10828 18416 11868 18c36 138e8 11864 10822 179e8 138e4 11862 179e4 138e2 179e2 11876 179f6 1ef12 1de34 1de32 19c34 1bc74 1bc72 11834 13874 178f4 178f2 10540 10520 18298 10510 10508 10504 105b0 10598 1058c 10586 105dc 105ce 186a0 18690 1c34c 18688 1c346 18684 18682 104a0 18258 10da0 186d8 1824c 10d90 186cc 10d88 186c6 10d84 10482 10d82 104d8 1826e 10dd8 186ee 10dcc 104c6 10dc6 104ee 10dee 1c750 1c748 1c744 1c742 18650 18ed0 1c76c 1c326 18ec8 1c766 18ec4 18642 18ec2 10450 10cd0 10448 18226 11dd0 10cc8 10444 11dc8 10cc4 10442 11dc4 10cc2 1046c 10cec 10466 11dec 10ce6 11de6 1e7a8 1e7a4 1e7a2 1c728 1cf68 1e7b6 1cf64 1c722 1cf62 18628 1c316 18e68 1c736 19ee8 18e64 18622 19ee4 18e62 19ee2 10428 18216 10c68 18636 11ce8 10c64 10422 13de8 11ce4 10c62 13de4 11ce2 10436 10c76 11cf6 13df6 1f7d4 1f7d2 1e794 1efb4 1e792 1efb2 1c714 1cf34 1c712 1df74 1cf32 1df72 18614 18e34 18612 19e74 18e32 1bef4 1f560 1fab8 1ea40 1f530 1fa9c 1ea20 1f518 1fa8e 1ea10 1f50c 1ea08 1f506 1ea04 1eb60 1f5b8 1fade 1d640 1eb30 1f59c 1d620 1eb18 1f58e 1d610 1eb0c 1d608 1eb06 1d604 1d760 1ebb8 1f5de 1ae40 1d730 1eb9c 1ae20 1d718 1eb8e 1ae10 1d70c 1ae08 1d706 1ae04 1af60 1d7b8 1ebde 15e40 1af30 1d79c 15e20 1af18 1d78e 15e10 1af0c 15e08 1af06 15f60 1afb8 1d7de 15f30 1af9c 15f18 1af8e 15f0c 15fb8 1afde 15f9c 15f8e 1e940 1f4b0 1fa5c 1e920 1f498 1fa4e 1e910 1f48c 1e908 1f486 1e904 1e902 1d340 1e9b0 1f4dc 1d320 1e998 1f4ce 1d310 1e98c 1d308 1e986 1d304 1d302 1a740 1d3b0 1e9dc 1a720 1d398 1e9ce 1a710 1d38c 1a708 1d386 1a704 1a702 14f40 1a7b0 1d3dc 14f20 1a798 1d3ce 14f10 1a78c 14f08 1a786 14f04 14fb0 1a7dc 14f98 1a7ce 14f8c 14f86 14fdc 14fce 1e8a0 1f458 1fa2e 1e890 1f44c 1e888 1f446 1e884 1e882 1d1a0 1e8d8 1f46e 1d190 1e8cc 1d188 1e8c6 1d184 1d182 1a3a0 1d1d8 1e8ee 1a390 1d1cc 1a388 1d1c6 1a384 1a382 147a0 1a3d8 1d1ee 14790 1a3cc 14788 1a3c6 14784 14782 147d8 1a3ee 147cc 147c6 147ee 1e850 1f42c 1e848 1f426 1e844 1e842 1d0d0 1e86c 1d0c8 1e866 1d0c4 1d0c2 1a1d0 1d0ec 1a1c8 1d0e6 1a1c4 1a1c2 143d0 1a1ec 143c8 1a1e6 143c4 143c2 143ec 143e6 1e828 1f416 1e824 1e822 1d068 1e836 1d064 1d062 1a0e8 1d076 1a0e4 1a0e2 141e8 1a0f6 141e4 141e2 1e814 1e812 1d034 1d032 1a074 1a072 1e540 1f2b0 1f95c 1e520 1f298 1f94e 1e510 1f28c 1e508 1f286 1e504 1e502 1cb40 1e5b0 1f2dc 1cb20 1e598 1f2ce 1cb10 1e58c 1cb08 1e586 1cb04 1cb02 19740 1cbb0 1e5dc 19720 1cb98 1e5ce 19710 1cb8c 19708 1cb86 19704 19702 12f40 197b0 1cbdc 12f20 19798 1cbce 12f10 1978c 12f08 19786 12f04 12fb0 197dc 12f98 197ce 12f8c 12f86 12fdc 12fce 1f6a0 1fb58 16bf0 1f690 1fb4c 169f8 1f688 1fb46 168fc 1f684 1f682 1e4a0 1f258 1f92e 1eda0 1e490 1fb6e 1ed90 1f6cc 1f246 1ed88 1e484 1ed84 1e482 1ed82 1c9a0 1e4d8 1f26e 1dba0 1c990 1e4cc 1db90 1edcc 1e4c6 1db88 1c984 1db84 1c982 1db82 193a0 1c9d8 1e4ee 1b7a0 19390 1c9cc 1b790 1dbcc 1c9c6 1b788 19384 1b784 19382 1b782 127a0 193d8 1c9ee 16fa0 12790 193cc 16f90 1b7cc 193c6 16f88 12784 16f84 12782 127d8 193ee 16fd8 127cc 16fcc 127c6 16fc6 127ee 1f650 1fb2c 165f8 1f648 1fb26 164fc 1f644 1647e 1f642 1e450 1f22c 1ecd0 1e448 1f226 1ecc8 1f666 1ecc4 1e442 1ecc2 1c8d0 1e46c 1d9d0 1c8c8 1e466 1d9c8 1ece6 1d9c4 1c8c2 1d9c2 191d0 1c8ec 1b3d0 191c8 1c8e6 1b3c8 1d9e6 1b3c4 191c2 1b3c2 123d0 191ec 167d0 123c8 191e6 167c8 1b3e6 167c4 123c2 167c2 123ec 167ec 123e6 167e6 1f628 1fb16 162fc 1f624 1627e 1f622 1e428 1f216 1ec68 1f636 1ec64 1e422 1ec62 1c868 1e436 1d8e8 1c864 1d8e4 1c862 1d8e2 190e8 1c876 1b1e8 1d8f6 1b1e4 190e2 1b1e2 121e8 190f6 163e8 121e4 163e4 121e2 163e2 121f6 163f6 1f614 1617e 1f612 1e414 1ec34 1e412 1ec32 1c834 1d874 1c832 1d872 19074 1b0f4 19072 1b0f2 120f4 161f4 120f2 161f2 1f60a 1e40a 1ec1a 1c81a 1d83a 1903a 1b07a 1e2a0 1f158 1f8ae 1e290 1f14c 1e288 1f146 1e284 1e282 1c5a0 1e2d8 1f16e 1c590 1e2cc 1c588 1e2c6 1c584 1c582 18ba0 1c5d8 1e2ee 18b90 1c5cc 18b88 1c5c6 18b84 18b82 117a0 18bd8 1c5ee 11790 18bcc 11788 18bc6 11784 11782 117d8 18bee 117cc 117c6 117ee 1f350 1f9ac 135f8 1f348 1f9a6 134fc 1f344 1347e 1f342 1e250 1f12c 1e6d0 1e248 1f126 1e6c8 1f366 1e6c4 1e242 1e6c2 1c4d0 1e26c 1cdd0 1c4c8 1e266 1cdc8 1e6e6 1cdc4 1c4c2 1cdc2 189d0 1c4ec 19bd0 189c8 1c4e6 19bc8 1cde6 19bc4 189c2 19bc2 113d0 189ec 137d0 113c8 189e6 137c8 19be6 137c4 113c2 137c2 113ec 137ec 113e6 137e6 1fba8 175f0 1bafc 1fba4 174f8 1ba7e 1fba2 1747c 1743e 1f328 1f996 132fc 1f768 1fbb6 176fc 1327e 1f764 1f322 1767e 1f762 1e228 1f116 1e668 1e224 1eee8 1f776 1e222 1eee4 1e662 1eee2 1c468 1e236 1cce8 1c464 1dde8 1cce4 1c462 1dde4 1cce2 1dde2 188e8 1c476 199e8 188e4 1bbe8 199e4 188e2 1bbe4 199e2 1bbe2 111e8 188f6 133e8 111e4 177e8 133e4 111e2 177e4 133e2 177e2 111f6 133f6 1fb94 172f8 1b97e 1fb92 1727c 1723e 1f314 1317e 1f734 1f312 1737e 1f732 1e214 1e634 1e212 1ee74 1e632 1ee72 1c434 1cc74 1c432 1dcf4 1cc72 1dcf2 18874 198f4 18872 1b9f4 198f2 1b9f2 110f4 131f4 110f2 173f4 131f2 173f2 1fb8a 1717c 1713e 1f30a 1f71a 1e20a 1e61a 1ee3a 1c41a 1cc3a 1dc7a 1883a 1987a 1b8fa 1107a 130fa 171fa 170be 1e150 1f0ac 1e148 1f0a6 1e144 1e142 1c2d0 1e16c 1c2c8 1e166 1c2c4 1c2c2 185d0 1c2ec 185c8 1c2e6 185c4 185c2 10bd0 185ec 10bc8 185e6 10bc4 10bc2 10bec 10be6 1f1a8 1f8d6 11afc 1f1a4 11a7e 1f1a2 1e128 1f096 1e368 1e124 1e364 1e122 1e362 1c268 1e136 1c6e8 1c264 1c6e4 1c262 1c6e2 184e8 1c276 18de8 184e4 18de4 184e2 18de2 109e8 184f6 11be8 109e4 11be4 109e2 11be2 109f6 11bf6 1f9d4 13af8 19d7e 1f9d2 13a7c 13a3e 1f194 1197e 1f3b4 1f192 13b7e 1f3b2 1e114 1e334 1e112 1e774 1e332 1e772 1c234 1c674 1c232 1cef4 1c672 1cef2 18474 18cf4 18472 19df4 18cf2 19df2 108f4 119f4 108f2 13bf4 119f2 13bf2 17af0 1bd7c 17a78 1bd3e 17a3c 17a1e 1f9ca 1397c 1fbda 17b7c 1393e 17b3e 1f18a 1f39a 1f7ba 1e10a 1e31a 1e73a 1ef7a 1c21a 1c63a 1ce7a 1defa 1843a 18c7a 19cfa 1bdfa 1087a 118fa 139fa 17978 1bcbe 1793c 1791e 138be 179be 178bc 1789e 1785e 1e0a8 1e0a4 1e0a2 1c168 1e0b6 1c164 1c162 182e8 1c176 182e4 182e2 105e8 182f6 105e4 105e2 105f6 1f0d4 10d7e 1f0d2 1e094 1e1b4 1e092 1e1b2 1c134 1c374 1c132 1c372 18274 186f4 18272 186f2 104f4 10df4 104f2 10df2 1f8ea 11d7c 11d3e 1f0ca 1f1da 1e08a 1e19a 1e3ba 1c11a 1c33a 1c77a 1823a 1867a 18efa 1047a 10cfa 11dfa 13d78 19ebe 13d3c 13d1e 11cbe 13dbe 17d70 1bebc 17d38 1be9e 17d1c 17d0e 13cbc 17dbc 13c9e 17d9e 17cb8 1be5e 17c9c 17c8e 13c5e 17cde 17c5c 17c4e 17c2e 1c0b4 1c0b2 18174 18172 102f4 102f2 1e0da 1c09a 1c1ba 1813a 1837a 1027a 106fa 10ebe 11ebc 11e9e 13eb8 19f5e 13e9c 13e8e 11e5e 13ede 17eb0 1bf5c 17e98 1bf4e 17e8c 17e86 13e5c 17edc 13e4e 17ece 17e58 1bf2e 17e4c 17e46 13e2e 17e6e 17e2c 17e26 10f5e 11f5c 11f4e 13f58 19fae 13f4c 13f46 11f2e 13f6e 13f2c 13f26 1abe0 1d5f8 153c0 1a9f0 1d4fc 151e0 1a8f8 1d47e 150f0 1a87c 15078 1fad0 15be0 1adf8 1fac8 159f0 1acfc 1fac4 158f8 1ac7e 1fac2 1587c 1f5d0 1faec 15df8 1f5c8 1fae6 15cfc 1f5c4 15c7e 1f5c2 1ebd0 1f5ec 1ebc8 1f5e6 1ebc4 1ebc2 1d7d0 1ebec 1d7c8 1ebe6 1d7c4 1d7c2 1afd0 1d7ec 1afc8 1d7e6 1afc4 14bc0 1a5f0 1d2fc 149e0 1a4f8 1d27e 148f0 1a47c 14878 1a43e 1483c 1fa68 14df0 1a6fc 1fa64 14cf8 1a67e 1fa62 14c7c 14c3e 1f4e8 1fa76 14efc 1f4e4 14e7e 1f4e2 1e9e8 1f4f6 1e9e4 1e9e2 1d3e8 1e9f6 1d3e4 1d3e2 1a7e8 1d3f6 1a7e4 1a7e2 145e0 1a2f8 1d17e 144f0 1a27c 14478 1a23e 1443c 1441e 1fa34 146f8 1a37e 1fa32 1467c 1463e 1f474 1477e 1f472 1e8f4 1e8f2 1d1f4 1d1f2 1a3f4 1a3f2 142f0 1a17c 14278 1a13e 1423c 1421e 1fa1a 1437c 1433e 1f43a 1e87a 1d0fa 14178 1a0be 1413c 1411e 141be 140bc 1409e 12bc0 195f0 1cafc 129e0 194f8 1ca7e 128f0 1947c 12878 1943e 1283c 1f968 12df0 196fc 1f964 12cf8 1967e 1f962 12c7c 12c3e 1f2e8 1f976 12efc 1f2e4 12e7e 1f2e2 1e5e8 1f2f6 1e5e4 1e5e2 1cbe8 1e5f6 1cbe4 1cbe2 197e8 1cbf6 197e4 197e2 1b5e0 1daf8 1ed7e 169c0 1b4f0 1da7c 168e0 1b478 1da3e 16870 1b43c 16838 1b41e 1681c 125e0 192f8 1c97e 16de0 124f0 1927c 16cf0 1b67c 1923e 16c78 1243c 16c3c 1241e 16c1e 1f934 126f8 1937e 1fb74 1f932 16ef8 1267c 1fb72 16e7c 1263e 16e3e 1f274 1277e 1f6f4 1f272 16f7e 1f6f2 1e4f4 1edf4 1e4f2 1edf2 1c9f4 1dbf4 1c9f2 1dbf2 193f4 193f2 165c0 1b2f0 1d97c 164e0 1b278 1d93e 16470 1b23c 16438 1b21e 1641c 1640e 122f0 1917c 166f0 12278 1913e 16678 1b33e 1663c 1221e 1661e 1f91a 1237c 1fb3a 1677c 1233e 1673e 1f23a 1f67a 1e47a 1ecfa 1c8fa 1d9fa 191fa 162e0 1b178 1d8be 16270 1b13c 16238 1b11e 1621c 1620e 12178 190be 16378 1213c 1633c 1211e 1631e 121be 163be 16170 1b0bc 16138 1b09e 1611c 1610e 120bc 161bc 1209e 1619e 160b8 1b05e 1609c 1608e 1205e 160de 1605c 1604e 115e0 18af8 1c57e 114f0 18a7c 11478 18a3e 1143c 1141e 1f8b4 116f8 18b7e 1f8b2 1167c 1163e 1f174 1177e 1f172 1e2f4 1e2f2 1c5f4 1c5f2 18bf4 18bf2 135c0 19af0 1cd7c 134e0 19a78 1cd3e 13470 19a3c 13438 19a1e 1341c 1340e 112f0 1897c 136f0 11278 1893e 13678 19b3e 1363c 1121e 1361e 1f89a 1137c 1f9ba 1377c 1133e 1373e 1f13a 1f37a 1e27a 1e6fa 1c4fa 1cdfa 189fa 1bae0 1dd78 1eebe 174c0 1ba70 1dd3c 17460 1ba38 1dd1e 17430 1ba1c 17418 1ba0e 1740c 132e0 19978 1ccbe 176e0 13270 1993c 17670 1bb3c 1991e 17638 1321c 1761c 1320e 1760e 11178 188be 13378 1113c 17778 1333c 1111e 1773c 1331e 1771e 111be 133be 177be 172c0 1b970 1dcbc 17260 1b938 1dc9e 17230 1b91c 17218 1b90e 1720c 17206 13170 198bc 17370 13138 1989e 17338 1b99e 1731c 1310e 1730e 110bc 131bc 1109e 173bc 1319e 1739e 17160 1b8b8 1dc5e 17130 1b89c 17118 1b88e 1710c 17106 130b8 1985e 171b8 1309c 1719c 1308e 1718e 1105e 130de 171de 170b0 1b85c 17098 1b84e 1708c 17086 1305c 170dc 1304e 170ce 17058 1b82e 1704c 17046 1302e 1706e 1702c 17026 10af0 1857c 10a78 1853e 10a3c 10a1e 10b7c 10b3e 1f0ba 1e17a 1c2fa 185fa 11ae0 18d78 1c6be 11a70 18d3c 11a38 18d1e 11a1c 11a0e 10978 184be 11b78 1093c 11b3c 1091e 11b1e 109be 11bbe 13ac0 19d70 1cebc 13a60 19d38 1ce9e 13a30 19d1c 13a18 19d0e 13a0c 13a06 11970 18cbc 13b70 11938 18c9e 13b38 1191c 13b1c 1190e 13b0e 108bc 119bc 1089e 13bbc 1199e 13b9e 1bd60 1deb8 1ef5e 17a40 1bd30 1de9c 17a20 1bd18 1de8e 17a10 1bd0c 17a08 1bd06 17a04 13960 19cb8 1ce5e 17b60 13930 19c9c 17b30 1bd9c 19c8e 17b18 1390c 17b0c 13906 17b06 118b8 18c5e 139b8 1189c 17bb8 1399c 1188e 17b9c 1398e 17b8e 1085e 118de 139de 17bde 17940 1bcb0 1de5c 17920 1bc98 1de4e 17910 1bc8c 17908 1bc86 17904 17902 138b0 19c5c 179b0 13898 19c4e 17998 1bcce 1798c 13886 17986 1185c 138dc 1184e 179dc 138ce 179ce 178a0 1bc58 1de2e 17890 1bc4c 17888 1bc46 17884 17882 13858 19c2e 178d8 1384c 178cc 13846 178c6 1182e 1386e 178ee 17850 1bc2c 17848 1bc26 17844 17842 1382c 1786c 13826 17866 17828 1bc16 17824 17822 13816 17836 10578 182be 1053c 1051e 105be 10d70 186bc 10d38 1869e 10d1c 10d0e 104bc 10dbc 1049e 10d9e 11d60 18eb8 1c75e 11d30 18e9c 11d18 18e8e 11d0c 11d06 10cb8 1865e 11db8 10c9c 11d9c 10c8e 11d8e 1045e 10cde 11dde 13d40 19eb0 1cf5c 13d20 19e98 1cf4e 13d10 19e8c 13d08 19e86 13d04 13d02 11cb0 18e5c 13db0 11c98 18e4e 13d98 19ece 13d8c 11c86 13d86 10c5c 11cdc 10c4e 13ddc 11cce 13dce 1bea0 1df58 1efae 1be90 1df4c 1be88 1df46 1be84 1be82 13ca0 19e58 1cf2e 17da0 13c90 19e4c 17d90 1becc 19e46 17d88 13c84 17d84 13c82 17d82 11c58 18e2e 13cd8 11c4c 17dd8 13ccc 11c46 17dcc 13cc6 17dc6 10c2e 11c6e 13cee 17dee 1be50 1df2c 1be48 1df26 1be44 1be42 13c50 19e2c 17cd0 13c48 19e26 17cc8 1be66 17cc4 13c42 17cc2 11c2c 13c6c 11c26 17cec 13c66 17ce6 1be28 1df16 1be24 1be22 13c28 19e16 17c68 13c24 17c64 13c22 17c62 11c16 13c36 17c76 1be14 1be12 13c14 17c34 13c12 17c32 102bc 1029e 106b8 1835e 1069c 1068e 1025e 106de 10eb0 1875c 10e98 1874e 10e8c 10e86 1065c 10edc 1064e 10ece 11ea0 18f58 1c7ae 11e90 18f4c 11e88 18f46 11e84 11e82 10e58 1872e 11ed8 18f6e 11ecc 10e46 11ec6 1062e 10e6e 11eee 19f50 1cfac 19f48 1cfa6 19f44 19f42 11e50 18f2c 13ed0 19f6c 18f26 13ec8 11e44 13ec4 11e42 13ec2 10e2c 11e6c 10e26 13eec 11e66 13ee6 1dfa8 1efd6 1dfa4 1dfa2 19f28 1cf96 1bf68 19f24 1bf64 19f22 1bf62 11e28 18f16 13e68 11e24 17ee8 13e64 11e22 17ee4 13e62 17ee2 10e16 11e36 13e76 17ef6 1df94 1df92 19f14 1bf34 19f12 1bf32 11e14 13e34 11e12 17e74 13e32 17e72 1df8a 19f0a 1bf1a 11e0a 13e1a 17e3a 1035c 1034e 10758 183ae 1074c 10746 1032e 1076e 10f50 187ac 10f48 187a6 10f44 10f42 1072c 10f6c 10726 10f66 18fa8 1c7d6 18fa4 18fa2 10f28 18796 11f68 18fb6 11f64 10f22 11f62 10716 10f36 11f76 1cfd4 1cfd2 18f94 19fb4 18f92 19fb2 10f14 11f34 10f12 13f74 11f32 13f72 1cfca 18f8a 19f9a 10f0a 11f1a 13f3a 103ac 103a6 107a8 183d6 107a4 107a2 10396 107b6 187d4 187d2 10794 10fb4 10792 10fb2 1c7ea";
+
+const LOOKUP_TXT: Str = "-1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 12 12 -1 -1 -1 15 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 11 11 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 26 26 26 -1 -1 -1 -1 10 -1 -1 -1 20 -1 -1 15 -1 -1 -1 18 18 -1 -1 21 -1 -1 -1 10 -1 -1 -1 -1 28 -1 -1 -1 23 -1 -1 -1 24 -1 -1 22 22 -1 -1 20 -1 -1 -1 13 13 -1 -1 16 16 -1 -1 17 17 -1 -1 19 19 -1 -1 0 -1 -1 -1 1 -1 -1 -1 2 -1 -1 -1 3 -1 -1 -1 4 -1 -1 -1 5 -1 -1 -1 6 -1 -1 -1 7 -1 -1 -1 8 -1 -1 -1 9 -1 -1 -1 14 14 -1 -1 -1 0 -1 -1 -1 1 -1 -1 23 -1 -1 -1 -1 2 -1 -1 -1 25 -1 -1 -1 3 0 -1 -1 -1 1 -1 -1 -1 2 -1 -1 -1 3 -1 -1 -1 4 -1 -1 -1 5 -1 -1 -1 6 -1 -1 -1 7 -1 -1 -1 8 -1 -1 -1 9 -1 -1 -1 10 -1 -1 -1 11 -1 -1 -1 12 -1 -1 -1 13 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1 16 -1 -1 -1 17 -1 -1 -1 18 -1 -1 -1 19 -1 -1 -1 20 -1 -1 -1 21 -1 -1 -1 22 -1 -1 -1 23 -1 -1 -1 24 -1 -1 -1 25 -1 -1 -1 -1 -1 -1 4 -1 -1 -1 5 -1 -1 -1 6 -1 -1 24 -1 -1 -1 -1 7 -1 -1 -1 8 -1 0 -1 -1 -1 1 -1 -1 -1 2 -1 -1 -1 3 -1 -1 -1 4 -1 -1 -1 5 -1 -1 -1 6 -1 -1 -1 7 -1 -1 -1 8 -1 -1 -1 9 -1 -1 -1 10 -1 -1 -1 11 -1 -1 -1 12 -1 -1 -1 13 -1 -1 -1 14 -1 -1 -1 15 -1 -1 -1 16 -1 -1 -1 17 -1 -1 -1 18 -1 -1 -1 19 -1 -1 -1 20 -1 -1 -1 21 -1 -1 -1 22 -1 -1 -1 23 -1 -1 -1 24 -1 -1 -1 25 -1 -1 -1 -1 -1 26 -1 -1 -1 21 -1 -1 -1 27 -1 -1 -1 9 -1 -1 -1 -1";
+
+const SWITCH_TXT: Str = "- 27 28 28,25 28,28 - 28 28,25 28 27 - 25 29 29,27 29,28 -";
+
+const EC_TXT: Str = "27,917 522,568,723,809 237,308,436,284,646,653,428,379 274,562,232,755,599,524,801,132,295,116,442,428,295,42,176,65 361,575,922,525,176,586,640,321,536,742,677,742,687,284,193,517,273,494,263,147,593,800,571,320,803,133,231,390,685,330,63,410 539,422,6,93,862,771,453,106,610,287,107,505,733,877,381,612,723,476,462,172,430,609,858,822,543,376,511,400,672,762,283,184,440,35,519,31,460,594,225,535,517,352,605,158,651,201,488,502,648,733,717,83,404,97,280,771,840,629,4,381,843,623,264,543 521,310,864,547,858,580,296,379,53,779,897,444,400,925,749,415,822,93,217,208,928,244,583,620,246,148,447,631,292,908,490,704,516,258,457,907,594,723,674,292,272,96,684,432,686,606,860,569,193,219,129,186,236,287,192,775,278,173,40,379,712,463,646,776,171,491,297,763,156,732,95,270,447,90,507,48,228,821,808,898,784,663,627,378,382,262,380,602,754,336,89,614,87,432,670,616,157,374,242,726,600,269,375,898,845,454,354,130,814,587,804,34,211,330,539,297,827,865,37,517,834,315,550,86,801,4,108,539 524,894,75,766,882,857,74,204,82,586,708,250,905,786,138,720,858,194,311,913,275,190,375,850,438,733,194,280,201,280,828,757,710,814,919,89,68,569,11,204,796,605,540,913,801,700,799,137,439,418,592,668,353,859,370,694,325,240,216,257,284,549,209,884,315,70,329,793,490,274,877,162,749,812,684,461,334,376,849,521,307,291,803,712,19,358,399,908,103,511,51,8,517,225,289,470,637,731,66,255,917,269,463,830,730,433,848,585,136,538,906,90,2,290,743,199,655,903,329,49,802,580,355,588,188,462,10,134,628,320,479,130,739,71,263,318,374,601,192,605,142,673,687,234,722,384,177,752,607,640,455,193,689,707,805,641,48,60,732,621,895,544,261,852,655,309,697,755,756,60,231,773,434,421,726,528,503,118,49,795,32,144,500,238,836,394,280,566,319,9,647,550,73,914,342,126,32,681,331,792,620,60,609,441,180,791,893,754,605,383,228,749,760,213,54,297,134,54,834,299,922,191,910,532,609,829,189,20,167,29,872,449,83,402,41,656,505,579,481,173,404,251,688,95,497,555,642,543,307,159,924,558,648,55,497,10 352,77,373,504,35,599,428,207,409,574,118,498,285,380,350,492,197,265,920,155,914,299,229,643,294,871,306,88,87,193,352,781,846,75,327,520,435,543,203,666,249,346,781,621,640,268,794,534,539,781,408,390,644,102,476,499,290,632,545,37,858,916,552,41,542,289,122,272,383,800,485,98,752,472,761,107,784,860,658,741,290,204,681,407,855,85,99,62,482,180,20,297,451,593,913,142,808,684,287,536,561,76,653,899,729,567,744,390,513,192,516,258,240,518,794,395,768,848,51,610,384,168,190,826,328,596,786,303,570,381,415,641,156,237,151,429,531,207,676,710,89,168,304,402,40,708,575,162,864,229,65,861,841,512,164,477,221,92,358,785,288,357,850,836,827,736,707,94,8,494,114,521,2,499,851,543,152,729,771,95,248,361,578,323,856,797,289,51,684,466,533,820,669,45,902,452,167,342,244,173,35,463,651,51,699,591,452,578,37,124,298,332,552,43,427,119,662,777,475,850,764,364,578,911,283,711,472,420,245,288,594,394,511,327,589,777,699,688,43,408,842,383,721,521,560,644,714,559,62,145,873,663,713,159,672,729,624,59,193,417,158,209,563,564,343,693,109,608,563,365,181,772,677,310,248,353,708,410,579,870,617,841,632,860,289,536,35,777,618,586,424,833,77,597,346,269,757,632,695,751,331,247,184,45,787,680,18,66,407,369,54,492,228,613,830,922,437,519,644,905,789,420,305,441,207,300,892,827,141,537,381,662,513,56,252,341,242,797,838,837,720,224,307,631,61,87,560,310,756,665,397,808,851,309,473,795,378,31,647,915,459,806,590,731,425,216,548,249,321,881,699,535,673,782,210,815,905,303,843,922,281,73,469,791,660,162,498,308,155,422,907,817,187,62,16,425,535,336,286,437,375,273,610,296,183,923,116,667,751,353,62,366,691,379,687,842,37,357,720,742,330,5,39,923,311,424,242,749,321,54,669,316,342,299,534,105,667,488,640,672,576,540,316,486,721,610,46,656,447,171,616,464,190,531,297,321,762,752,533,175,134,14,381,433,717,45,111,20,596,284,736,138,646,411,877,669,141,919,45,780,407,164,332,899,165,726,600,325,498,655,357,752,768,223,849,647,63,310,863,251,366,304,282,738,675,410,389,244,31,121,303,263";
+
+
+// ------------------------------------------------------------ the encoder
+
+const START_CHARACTER: i64 = 0x1fea8;
+const STOP_CHARACTER: i64 = 0x3fa29;
+const PADDING_CODE_WORD: i64 = 900;
+const MAX_CODE_WORDS: i64 = 928;
+const MIN_ROWS: i64 = 3;
+const MAX_ROWS: i64 = 90;
+
+const TEXT_LATCH: i64 = 900;
+const BYTE_LATCH: i64 = 901;
+const BYTE_LATCH_ALT: i64 = 924;
+const NUMERIC_LATCH: i64 = 902;
+
+// Compaction modes, as the library's compact_* functions.
+const MODE_TEXT: i64 = 0;
+const MODE_BYTE: i64 = 1;
+const MODE_NUMERIC: i64 = 2;
+
+// Text submodes, the indexes of the lookup and switch tables.
+const UPPER: i64 = 0;
+const LOWER: i64 = 1;
+const MIXED: i64 = 2;
+const PUNCT: i64 = 3;
+
+// Since each text code word holds 2 characters, a lone character is padded
+// with 29, a switch in every submode that adds no data.
+const PADDING_INTERIM_CODE: i64 = 29;
+
+struct Tables {
+    codes: Vec[i64],
+    lookup: Vec[i64],
+    switches: Vec[Vec[i64]],
+    ec: Vec[Vec[i64]],
+    crc: Vec[u64],
+}
+
+fn load_tables() -> Tables {
+    let mut switches: Vec[Vec[i64]] = Vec.new();
+    for part in split_on(SWITCH_TXT.to_string(), ' ') {
+        switches.push(parse_ints(part, false));
+    }
+    let mut ec: Vec[Vec[i64]] = Vec.new();
+    for part in split_on(EC_TXT.to_string(), ' ') {
+        ec.push(parse_ints(part, false));
+    }
+    Tables {
+        codes: parse_ints(CODES_TXT, true),
+        lookup: parse_ints(LOOKUP_TXT, false),
+        switches: switches,
+        ec: ec,
+        crc: crc_table(),
+    }
+}
+
+// CHARACTERS_LOOKUP[char][submode], or -1 when the character has no code
+// in that submode (or is not a text character at all).
+fn lookup(t: ref Tables, ch: i64, submode: i64) -> i64 {
+    if ch < 0 or ch >= 128 {
+        return -1;
+    }
+    t.lookup[ch * 4 + submode]
+}
+
+fn is_text_char(t: ref Tables, ch: i64) -> bool {
+    let mut s = 0;
+    while s < 4 {
+        if lookup(t, ch, s) >= 0 {
+            return true;
+        }
+        s += 1;
+    }
+    false
+}
+
+fn pmod(a: i64, m: i64) -> i64 {
+    let r = a % m;
+    if r < 0 { r + m } else { r }
+}
+
+// ---- text compaction
+
+fn compact_text_interim(t: ref Tables, data: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    // By default, encoding starts in uppercase submode.
+    let mut submode = UPPER;
+    for b in data {
+        let ch = *b as i64;
+        if lookup(t, ch, submode) < 0 {
+            if not is_text_char(t, ch) {
+                return Err(value_error(f"Cannot encode char: {ch}"));
+            }
+            let prev = submode;
+            let preference = [LOWER, UPPER, MIXED, PUNCT];
+            for s in preference {
+                if lookup(t, ch, s) >= 0 {
+                    submode = s;
+                    break;
+                }
+            }
+            for code in t.switches[prev * 4 + submode] {
+                out.push(*code);
+            }
+        }
+        out.push(lookup(t, ch, submode));
+    }
+    Ok(out)
+}
+
+fn compact_text(t: ref Tables, data: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let interim = compact_text_interim(t, data)?;
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < interim.len() {
+        let second = if i + 1 < interim.len() { interim[i + 1] } else { PADDING_INTERIM_CODE };
+        out.push(30 * interim[i] + second);
+        i += 2;
+    }
+    Ok(out)
+}
+
+// ---- numeric compaction
+
+// str.isspace, which int() strips.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+// int(s) for a str of decimal digits, as a list of its decimal digits;
+// int() strips whitespace and allows single underscores between digits.
+fn int_digits(s: ref String) -> Result[Vec[i64], Exc] {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut ok = hi > lo;
+    let mut i = lo;
+    while i < hi and ok {
+        let c = v[i];
+        if is_digit(c) {
+            digits.push(c as i64 - 48);
+        } else if c == '_' and i > lo and i + 1 < hi and is_digit(v[i - 1]) and is_digit(v[i + 1]) {
+            // a separator
+        } else {
+            ok = false;
+        }
+        i += 1;
+    }
+    if not ok {
+        return Err(value_error(f"invalid literal for int() with base 10: {str_repr(s)}"));
+    }
+    Ok(digits)
+}
+
+// to_base(value, base) for a value given by its decimal digits: repeated
+// long division, most significant digit first.
+fn decimal_to_base(decimal: ref Vec[i64], base: i64) -> Vec[i64] {
+    let mut num: Vec[i64] = Vec.new();
+    for d in decimal {
+        num.push(*d);
+    }
+    let mut rev: Vec[i64] = Vec.new();
+    loop {
+        let mut nonzero = false;
+        for d in num.iter() {
+            if *d != 0 {
+                nonzero = true;
+            }
+        }
+        if not nonzero {
+            break;
+        }
+        let mut rem = 0;
+        let mut q: Vec[i64] = Vec.new();
+        for d in num.iter() {
+            let cur = rem * 10 + *d;
+            q.push(cur / base);
+            rem = cur % base;
+        }
+        rev.push(rem);
+        num = q;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = rev.len();
+    while i > 0 {
+        i -= 1;
+        out.push(rev[i]);
+    }
+    out
+}
+
+fn compact_numbers(data: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start < data.len() {
+        let end = if start + 44 < data.len() { start + 44 } else { data.len() };
+        let mut number = "1".to_string();
+        let mut i = start;
+        while i < end {
+            number.push(chr(data[i] as i64));
+            i += 1;
+        }
+        let digits = int_digits(number)?;
+        for w in decimal_to_base(digits, 900) {
+            out.push(w);
+        }
+        start = end;
+    }
+    Ok(out)
+}
+
+// ---- byte compaction
+
+fn from_base(digits: ref Vec[i64], base: i64) -> i128 {
+    let mut v: i128 = 0;
+    for d in digits {
+        v = v * (base as i128) + (*d as i128);
+    }
+    v
+}
+
+fn to_base(value: i128, base: i64) -> Vec[i64] {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut v = value;
+    while v > 0 {
+        rev.push((v % (base as i128)) as i64);
+        v = v / (base as i128);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = rev.len();
+    while i > 0 {
+        i -= 1;
+        out.push(rev[i]);
+    }
+    out
+}
+
+fn switch_base(digits: ref Vec[i64], source: i64, target: i64) -> Vec[i64] {
+    to_base(from_base(digits, source), target)
+}
+
+// Chunks of exactly 6 bytes become 5 code words by a base 256 to base 900
+// change; a shorter last chunk is left as it is.
+fn compact_bytes(data: ref Vec[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start < data.len() {
+        let end = if start + 6 < data.len() { start + 6 } else { data.len() };
+        let mut digits: Vec[i64] = Vec.new();
+        let mut i = start;
+        while i < end {
+            digits.push(data[i] as i64);
+            i += 1;
+        }
+        if digits.len() == 6 {
+            let b900 = switch_base(digits, 256, 900);
+            let mut k = b900.len();
+            while k < 5 {
+                out.push(0);
+                k += 1;
+            }
+            for w in b900 {
+                out.push(w);
+            }
+        } else {
+            for d in digits {
+                out.push(d);
+            }
+        }
+        start = end;
+    }
+    out
+}
+
+// ---- chunking
+
+struct Chunk {
+    data: Vec[u8],
+    mode: i64,
+}
+
+fn mode_name(mode: i64) -> Str {
+    if mode == MODE_TEXT {
+        "text"
+    } else if mode == MODE_BYTE {
+        "byte"
+    } else {
+        "numeric"
+    }
+}
+
+fn optimal_mode(t: ref Tables, ch: i64) -> i64 {
+    if ch >= 48 and ch <= 57 {
+        MODE_NUMERIC
+    } else if is_text_char(t, ch) {
+        MODE_TEXT
+    } else {
+        MODE_BYTE
+    }
+}
+
+fn split_to_chunks(t: ref Tables, data: ref Vec[u8]) -> Vec[Chunk] {
+    let mut out: Vec[Chunk] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut mode = -1;
+    for b in data {
+        let m = optimal_mode(t, *b as i64);
+        if m != mode and cur.len() > 0 {
+            out.push(Chunk { data: cur, mode: mode });
+            cur = Vec.new();
+        }
+        mode = m;
+        cur.push(*b);
+    }
+    if cur.len() > 0 {
+        out.push(Chunk { data: cur, mode: mode });
+    }
+    out
+}
+
+// Numeric compaction is recommended only for 13 or more digits, so a
+// shorter run of digits next to text is compacted as text.
+fn replace_short_numeric_chunks(chunks: ref Vec[Chunk]) -> Vec[Chunk] {
+    let mut out: Vec[Chunk] = Vec.new();
+    let mut i = 0;
+    while i < chunks.len() {
+        let c = ref chunks[i];
+        let short = c.mode == MODE_NUMERIC and c.data.len() < 13;
+        let borders = (i > 0 and chunks[i - 1].mode == MODE_TEXT) or (i + 1 < chunks.len() and chunks[i + 1].mode == MODE_TEXT);
+        let mode = if short and borders { MODE_TEXT } else { c.mode };
+        out.push(Chunk { data: c.data.clone(), mode: mode });
+        i += 1;
+    }
+    out
+}
+
+fn merge_chunks_with_same_mode(chunks: ref Vec[Chunk]) -> Vec[Chunk] {
+    let mut out: Vec[Chunk] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut mode = -1;
+    for c in chunks {
+        if c.mode != mode and mode >= 0 {
+            out.push(Chunk { data: cur, mode: mode });
+            cur = Vec.new();
+        }
+        mode = c.mode;
+        for b in c.data.iter() {
+            cur.push(*b);
+        }
+    }
+    if mode >= 0 {
+        out.push(Chunk { data: cur, mode: mode });
+    }
+    out
+}
+
+fn compact_chunk(t: ref Tables, c: ref Chunk) -> Result[Vec[i64], Exc] {
+    if c.mode == MODE_TEXT {
+        compact_text(t, c.data)
+    } else if c.mode == MODE_BYTE {
+        Ok(compact_bytes(c.data))
+    } else {
+        compact_numbers(c.data)
+    }
+}
+
+fn switch_code(c: ref Chunk) -> i64 {
+    if c.mode == MODE_TEXT {
+        TEXT_LATCH
+    } else if c.mode == MODE_BYTE {
+        if c.data.len() % 6 == 0 { BYTE_LATCH_ALT } else { BYTE_LATCH }
+    } else {
+        NUMERIC_LATCH
+    }
+}
+
+fn compact(t: ref Tables, data: ref Vec[u8]) -> Result[Vec[i64], Exc] {
+    let split = split_to_chunks(t, data);
+    let chunks = merge_chunks_with_same_mode(replace_short_numeric_chunks(split));
+    let mut out: Vec[i64] = Vec.new();
+    let mut ordinal = 0;
+    for c in chunks.iter() {
+        // A switch code goes before every chunk but a leading text one,
+        // since decoding starts in text mode.
+        if ordinal > 0 or c.mode != MODE_TEXT {
+            out.push(switch_code(c));
+        }
+        for w in compact_chunk(t, c)? {
+            out.push(w);
+        }
+        ordinal += 1;
+    }
+    Ok(out)
+}
+
+// ---- error correction
+
+fn compute_error_correction_code_words(t: ref Tables, data: ref Vec[i64], level: i64) -> Result[Vec[i64], Exc] {
+    if level < 0 or level > 8 {
+        return Err(exc("AssertionError", String.new()));
+    }
+    let factors = ref t.ec[level];
+    let count: i64 = 1 << (level + 1);
+    let mut ec: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < count {
+        ec.push(0);
+        k += 1;
+    }
+    for d in data {
+        let temp = pmod(*d + ec[count - 1], 929);
+        let mut x = count - 1;
+        while x >= 0 {
+            let word = if x > 0 { ec[x - 1] } else { 0 };
+            ec[x] = pmod(word + 929 - pmod(temp * factors[x], 929), 929);
+            x -= 1;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = count;
+    while i > 0 {
+        i -= 1;
+        let w = ec[i];
+        out.push(if w > 0 { 929 - w } else { w });
+    }
+    Ok(out)
+}
+
+// ---- code words and rows
+
+fn get_padding(data_count: i64, ec_count: i64, num_cols: i64) -> i64 {
+    // The data and error correction words plus the length descriptor.
+    let total = data_count + ec_count + 1;
+    let m = total % num_cols;
+    if m > 0 { num_cols - m } else { 0 }
+}
+
+fn validate_barcode_size(length_descriptor: i64, row_count: i64) -> Result[(), Exc] {
+    if length_descriptor > MAX_CODE_WORDS {
+        return Err(value_error(f"Data too long. Generated bar code has length descriptor of {length_descriptor}. Maximum is {MAX_CODE_WORDS}."));
+    }
+    if row_count < MIN_ROWS {
+        return Err(value_error(f"Generated bar code has {row_count} rows. Minimum is {MIN_ROWS} rows. Try decreasing column count."));
+    }
+    if row_count > MAX_ROWS {
+        return Err(value_error(f"Generated bar code has {row_count} rows. Maximum is {MAX_ROWS} rows. Try increasing column count."));
+    }
+    Ok(())
+}
+
+// The high-level code words: the length descriptor, data, padding and
+// error correction words.
+fn encode_high(t: ref Tables, data: ref Vec[u8], columns: i64, level: i64) -> Result[Vec[i64], Exc] {
+    let data_words = compact(t, data)?;
+    let data_count = data_words.len();
+    let ec_count: i64 = 1 << (level + 1);
+    let padding_count = get_padding(data_count, ec_count, columns);
+    // The length descriptor counts the data, the padding and itself, but
+    // not the error correction words.
+    let length_descriptor = data_count + padding_count + 1;
+    let cw_count = data_count + ec_count + padding_count + 1;
+    let row_count = (cw_count + columns - 1) / columns;
+    validate_barcode_size(length_descriptor, row_count)?;
+    let mut words: Vec[i64] = Vec.new();
+    words.push(length_descriptor);
+    for w in data_words {
+        words.push(w);
+    }
+    let mut k = 0;
+    while k < padding_count {
+        words.push(PADDING_CODE_WORD);
+        k += 1;
+    }
+    let ec_words = compute_error_correction_code_words(t, words, level)?;
+    for w in ec_words {
+        words.push(w);
+    }
+    Ok(words)
+}
+
+fn get_left_code_word(row_no: i64, num_rows: i64, num_cols: i64, level: i64) -> i64 {
+    let table_id = row_no % 3;
+    let x = if table_id == 0 {
+        (num_rows - 1) / 3
+    } else if table_id == 1 {
+        level * 3 + (num_rows - 1) % 3
+    } else {
+        num_cols - 1
+    };
+    30 * (row_no / 3) + x
+}
+
+fn get_right_code_word(row_no: i64, num_rows: i64, num_cols: i64, level: i64) -> i64 {
+    let table_id = row_no % 3;
+    let x = if table_id == 0 {
+        num_cols - 1
+    } else if table_id == 1 {
+        (num_rows - 1) / 3
+    } else {
+        level * 3 + (num_rows - 1) % 3
+    };
+    30 * (row_no / 3) + x
+}
+
+// High-level (base 929) code words to the low-level bar patterns; the
+// table cycles with the row number.
+fn map_code_word(t: ref Tables, table: i64, word: i64) -> i64 {
+    t.codes[table * 929 + word]
+}
+
+fn encode_rows(t: ref Tables, words: ref Vec[i64], num_cols: i64, level: i64) -> Vec[Vec[i64]] {
+    let num_rows = (words.len() + num_cols - 1) / num_cols;
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut row_no = 0;
+    while row_no < num_rows {
+        let table = row_no % 3;
+        let left = get_left_code_word(row_no, num_rows, num_cols, level);
+        let right = get_right_code_word(row_no, num_rows, num_cols, level);
+        let mut row: Vec[i64] = Vec.new();
+        row.push(START_CHARACTER);
+        row.push(map_code_word(t, table, left));
+        let mut i = row_no * num_cols;
+        let end = if i + num_cols < words.len() { i + num_cols } else { words.len() };
+        while i < end {
+            row.push(map_code_word(t, table, words[i]));
+            i += 1;
+        }
+        row.push(map_code_word(t, table, right));
+        row.push(STOP_CHARACTER);
+        rows.push(row);
+        row_no += 1;
+    }
+    rows
+}
+
+
+// ------------------------------------------------------------ input data
+
+// What a job hands the library: a str, bytes, or (to check the type
+// error) an int.
+enum Data {
+    Text(String),
+    Bytes(Vec[u8]),
+    Int(i64),
+}
+
+// The canonical name and the range limit of the codecs the jobs use, or
+// none for an unknown encoding.
+fn codec_of(encoding: ref String) -> Option[(String, i64)] {
+    let mut norm = String.new();
+    for c in encoding.to_lowercase().chars() {
+        norm.push(if c == '-' or c == ' ' { '_' } else { c });
+    }
+    if norm == "utf_8" or norm == "utf8" or norm == "u8" {
+        Some(("utf-8".to_string(), 0))
+    } else if norm == "latin_1" or norm == "latin1" or norm == "iso_8859_1" or norm == "iso8859_1" or norm == "l1" {
+        Some(("latin-1".to_string(), 256))
+    } else if norm == "ascii" or norm == "us_ascii" or norm == "646" {
+        Some(("ascii".to_string(), 128))
+    } else {
+        None
+    }
+}
+
+// str.encode(encoding), with the UnicodeEncodeError a one-byte codec
+// raises for the first run of characters out of its range.
+fn encode_str(s: ref String, encoding: ref String) -> Result[Vec[u8], Exc] {
+    let (name, limit) = match codec_of(encoding) {
+        Some(c) => c,
+        None => return Err(exc("LookupError", f"unknown encoding: {encoding}")),
+    };
+    if limit == 0 {
+        let mut out: Vec[u8] = Vec.new();
+        for b in s.bytes() {
+            out.push(b);
+        }
+        return Ok(out);
+    }
+    let cs = chars(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let n = cs[i] as i64;
+        if n >= limit {
+            let mut j = i + 1;
+            while j < cs.len() and cs[j] as i64 >= limit {
+                j += 1;
+            }
+            let msg = if j == i + 1 {
+                f"'{name}' codec can't encode character '{char_escape(n)}' in position {i}: ordinal not in range({limit})"
+            } else {
+                f"'{name}' codec can't encode characters in position {i}-{j - 1}: ordinal not in range({limit})"
+            };
+            return Err(exc("UnicodeEncodeError", msg));
+        }
+        out.push(n as u8);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn to_bytes(d: ref Data, encoding: ref String) -> Result[Vec[u8], Exc] {
+    match d {
+        Data.Bytes(b) => Ok(b.clone()),
+        Data.Text(s) => encode_str(s, encoding),
+        Data.Int(_) => Err(value_error("Invalid input, expected string or bytes".to_string())),
+    }
+}
+
+// Job text uses \t, \n, \r, \\ and \uXXXX escapes.
+fn unescape(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if c == '\\' and i + 1 < v.len() {
+            let n = v[i + 1];
+            if n == 't' {
+                out.push('\t');
+            } else if n == 'n' {
+                out.push('\n');
+            } else if n == 'r' {
+                out.push('\r');
+            } else if n == 'u' {
+                let mut code = 0;
+                let mut k = i + 2;
+                while k < i + 6 and k < v.len() {
+                    code = code * 16 + hex_val(v[k]);
+                    k += 1;
+                }
+                out.push(chr(code));
+                i += 4;
+            } else {
+                out.push(n);
+            }
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn not_found(path: ref String) -> Exc {
+    exc("FileNotFoundError", f"[Errno 2] No such file or directory: {str_repr(path)}")
+}
+
+// Reading a file in text mode turns \r\n and \r into \n.
+fn universal_newlines(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\r' {
+            out.push('\n');
+            if i + 1 < v.len() and v[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            out.push(v[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn data_of(spec: ref String) -> Result[Data, Exc] {
+    let v = chars(spec);
+    let mut cut = v.len();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == ':' {
+            cut = i;
+            break;
+        }
+        i += 1;
+    }
+    let kind = substr(spec, 0, cut);
+    let rest = substr(spec, cut + 1, v.len());
+    if kind == "text" {
+        return Ok(Data.Text(unescape(rest)));
+    }
+    if kind == "hex" {
+        return Ok(Data.Bytes(hex_bytes(rest)));
+    }
+    let path = f"data/{rest}";
+    if kind == "file" {
+        return match fs.read_bytes(path.clone()) {
+            Ok(b) => Ok(Data.Bytes(b)),
+            Err(_) => Err(not_found(path)),
+        };
+    }
+    if kind == "textfile" {
+        return match fs.read_to_string(path.clone()) {
+            Ok(s) => Ok(Data.Text(universal_newlines(s))),
+            Err(_) => Err(not_found(path)),
+        };
+    }
+    if kind == "int" {
+        return Ok(Data.Int(parse_ints(rest, false)[0]));
+    }
+    Err(value_error(f"unknown data kind: {kind}"))
+}
+
+// ------------------------------------------------------------ colours
+
+// colorsys works in floats; `x % 1.0` keeps Python's sign of the divisor.
+fn mod1(x: f64) -> f64 {
+    let m = x % 1.0;
+    if m == 0.0 {
+        0.0
+    } else if m < 0.0 {
+        m + 1.0
+    } else {
+        m
+    }
+}
+
+const ONE_THIRD: f64 = 1.0 / 3.0;
+const ONE_SIXTH: f64 = 1.0 / 6.0;
+const TWO_THIRD: f64 = 2.0 / 3.0;
+
+fn hls_v(m1: f64, m2: f64, h: f64) -> f64 {
+    let hue = mod1(h);
+    if hue < ONE_SIXTH {
+        return m1 + (m2 - m1) * hue * 6.0;
+    }
+    if hue < 0.5 {
+        return m2;
+    }
+    if hue < TWO_THIRD {
+        return m1 + (m2 - m1) * (TWO_THIRD - hue) * 6.0;
+    }
+    m1
+}
+
+fn hls_to_rgb(h: f64, l: f64, s: f64) -> (f64, f64, f64) {
+    if s == 0.0 {
+        return (l, l, l);
+    }
+    let m2 = if l <= 0.5 { l * (1.0 + s) } else { l + s - (l * s) };
+    let m1 = 2.0 * l - m2;
+    (hls_v(m1, m2, h + ONE_THIRD), hls_v(m1, m2, h), hls_v(m1, m2, h - ONE_THIRD))
+}
+
+fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f64, f64, f64) {
+    if s == 0.0 {
+        return (v, v, v);
+    }
+    let i0 = (h * 6.0) as i64;
+    let f = (h * 6.0) - (i0 as f64);
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let i = pmod(i0, 6);
+    if i == 0 {
+        (v, t, p)
+    } else if i == 1 {
+        (q, v, p)
+    } else if i == 2 {
+        (p, v, t)
+    } else if i == 3 {
+        (p, q, v)
+    } else if i == 4 {
+        (t, p, v)
+    } else {
+        (v, p, q)
+    }
+}
+
+fn byte_of(x: f64) -> i64 {
+    (x * 255.0 + 0.5) as i64
+}
+
+// Matches `name(\s*N\s*, ... \s*)$` the way ImageColor's regexes do: each
+// argument is `\d+`, or `\d+\.?\d*` when `float_args`, and those marked
+// in `pct` must be followed by `%`. Gives the argument texts.
+fn match_call(v: ref Vec[char], name: Str, pct: ref Vec[bool], float_args: bool) -> Option[Vec[String]] {
+    let nv: Vec[char] = name.chars().collect();
+    let mut i = 0;
+    while i < nv.len() {
+        if i >= v.len() or v[i] != nv[i] {
+            return None;
+        }
+        i += 1;
+    }
+    if i >= v.len() or v[i] != '(' {
+        return None;
+    }
+    i += 1;
+    let mut args: Vec[String] = Vec.new();
+    let mut a = 0;
+    while a < pct.len() {
+        while i < v.len() and py_space(v[i]) {
+            i += 1;
+        }
+        let mut num = String.new();
+        while i < v.len() and is_digit(v[i]) {
+            num.push(v[i]);
+            i += 1;
+        }
+        if num.len() == 0 {
+            return None;
+        }
+        if float_args {
+            if i < v.len() and v[i] == '.' {
+                num.push('.');
+                i += 1;
+            }
+            while i < v.len() and is_digit(v[i]) {
+                num.push(v[i]);
+                i += 1;
+            }
+        }
+        if pct[a] {
+            if i >= v.len() or v[i] != '%' {
+                return None;
+            }
+            i += 1;
+        }
+        while i < v.len() and py_space(v[i]) {
+            i += 1;
+        }
+        let sep = if a + 1 < pct.len() { ',' } else { ')' };
+        if i >= v.len() or v[i] != sep {
+            return None;
+        }
+        i += 1;
+        args.push(num);
+        a += 1;
+    }
+    if i != v.len() {
+        return None;
+    }
+    Some(args)
+}
+
+fn int_of(s: ref String) -> i64 {
+    parse_ints(s, false)[0]
+}
+
+fn float_of(s: ref String) -> f64 {
+    f64.parse(s.clone()).unwrap_or(0.0)
+}
+
+fn all_hex(v: ref Vec[char]) -> bool {
+    let mut i = 1;
+    while i < v.len() {
+        let c = v[i];
+        if not (is_digit(c) or (c >= 'a' and c <= 'f')) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_pair(a: char, b: char) -> i64 {
+    hex_val(a) * 16 + hex_val(b)
+}
+
+// ImageColor.getrgb: (r, g, b) or (r, g, b, a).
+fn getrgb(spec: ref String) -> Result[Vec[i64], Exc] {
+    if clen(spec) > 100 {
+        return Err(value_error("color specifier is too long".to_string()));
+    }
+    let color = spec.to_lowercase();
+    let mut v = chars(color);
+    // `$` also matches just before a final newline.
+    if v.len() > 0 and v[v.len() - 1] == '\n' {
+        let _ = v.pop();
+    }
+    if v.len() > 0 and v[0] == '#' and all_hex(v) {
+        let n = v.len() - 1;
+        if n == 3 or n == 4 {
+            let mut out: Vec[i64] = Vec.new();
+            let mut i = 1;
+            while i <= n {
+                out.push(hex_pair(v[i], v[i]));
+                i += 1;
+            }
+            return Ok(out);
+        }
+        if n == 6 or n == 8 {
+            let mut out: Vec[i64] = Vec.new();
+            let mut i = 1;
+            while i < n {
+                out.push(hex_pair(v[i], v[i + 1]));
+                i += 2;
+            }
+            return Ok(out);
+        }
+    }
+    let three_int = vec![false, false, false];
+    if let Some(a) = match_call(v, "rgb", three_int, false) {
+        return Ok(vec![int_of(a[0]), int_of(a[1]), int_of(a[2])]);
+    }
+    let three_pct = vec![true, true, true];
+    if let Some(a) = match_call(v, "rgb", three_pct, false) {
+        let mut out: Vec[i64] = Vec.new();
+        for x in a.iter() {
+            out.push(((int_of(x) * 255) as f64 / 100.0 + 0.5) as i64);
+        }
+        return Ok(out);
+    }
+    let hue_pct = vec![false, true, true];
+    if let Some(a) = match_call(v, "hsl", hue_pct, true) {
+        let (r, g, b) = hls_to_rgb(float_of(a[0]) / 360.0, float_of(a[2]) / 100.0, float_of(a[1]) / 100.0);
+        return Ok(vec![byte_of(r), byte_of(g), byte_of(b)]);
+    }
+    for name in ["hsb", "hsv"] {
+        if let Some(a) = match_call(v, name, hue_pct, true) {
+            let (r, g, b) = hsv_to_rgb(float_of(a[0]) / 360.0, float_of(a[1]) / 100.0, float_of(a[2]) / 100.0);
+            return Ok(vec![byte_of(r), byte_of(g), byte_of(b)]);
+        }
+    }
+    let four_int = vec![false, false, false, false];
+    if let Some(a) = match_call(v, "rgba", four_int, false) {
+        return Ok(vec![int_of(a[0]), int_of(a[1]), int_of(a[2]), int_of(a[3])]);
+    }
+    Err(value_error(f"unknown color specifier: {str_repr(color)}"))
+}
+
+fn rgb_to_hex(c: ref Vec[i64]) -> String {
+    f"#{hex_pad(c[0], 2)}{hex_pad(c[1], 2)}{hex_pad(c[2], 2)}"
+}
+
+fn join_ints(c: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in c {
+        parts.push(f"{x}");
+    }
+    join_strs(parts, ",")
+}
+
+// ------------------------------------------------------------ rendering
+
+// The bar code's size in modules: 17 a code word, plus the stop
+// pattern's extra module.
+fn barcode_size(codes: ref Vec[Vec[i64]]) -> (i64, i64) {
+    (codes[0].len() * 17 + 1, codes.len())
+}
+
+// The bits of format(value, "b"), most significant first.
+fn bits_of(value: i64) -> Vec[bool] {
+    let mut rev: Vec[bool] = Vec.new();
+    let mut v = value;
+    while v > 0 {
+        rev.push(v % 2 == 1);
+        v = v / 2;
+    }
+    let mut out: Vec[bool] = Vec.new();
+    let mut i = rev.len();
+    while i > 0 {
+        i -= 1;
+        out.push(rev[i]);
+    }
+    out
+}
+
+// The dark modules as a grid, one row a bar code row.
+fn module_grid(codes: ref Vec[Vec[i64]]) -> Vec[Vec[bool]] {
+    let (width, _) = barcode_size(codes);
+    let mut grid: Vec[Vec[bool]] = Vec.new();
+    for row in codes {
+        let mut line: Vec[bool] = Vec.new();
+        for value in row.iter() {
+            for b in bits_of(*value) {
+                line.push(b);
+            }
+        }
+        while line.len() < width {
+            line.push(false);
+        }
+        grid.push(line);
+    }
+    grid
+}
+
+// ElementTree text, written as us-ascii: &, < and > escaped, and anything
+// outside ASCII as a decimal character reference.
+fn xml_text(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '&' {
+            out.push_str("&amp;");
+        } else if c == '<' {
+            out.push_str("&lt;");
+        } else if c == '>' {
+            out.push_str("&gt;");
+        } else if c as i64 > 127 {
+            out.push_str(f"&#{c as i64};");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+struct Svg {
+    body: String,
+    width: i64,
+    height: i64,
+    rects: i64,
+}
+
+fn render_svg(codes: ref Vec[Vec[i64]], scale: i64, ratio: i64, color: ref String, description: ref String) -> Result[Svg, Exc] {
+    let (width, height) = barcode_size(codes);
+    let scale_x = scale;
+    let scale_y = scale * ratio;
+    let fill = rgb_to_hex(getrgb(color)?);
+    let w = width * scale_x;
+    let h = height * scale_y;
+    let mut body = f"<svg version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\">";
+    if description.len() > 0 {
+        body.push_str(f"<description>{xml_text(description)}</description>");
+    }
+    body.push_str(f"<g id=\"barcode\" fill=\"{fill}\" stroke=\"none\">");
+    let grid = module_grid(codes);
+    let mut rects = 0;
+    let mut y = 0;
+    while y < grid.len() {
+        let mut x = 0;
+        while x < grid[y].len() {
+            if grid[y][x] {
+                body.push_str(f"<rect x=\"{x * scale_x}\" y=\"{y * scale_y}\" width=\"{scale_x}\" height=\"{scale_y}\" />");
+                rects += 1;
+            }
+            x += 1;
+        }
+        y += 1;
+    }
+    body.push_str("</g></svg>");
+    Ok(Svg { body: body, width: w, height: h, rects: rects })
+}
+
+struct Image {
+    width: i64,
+    height: i64,
+    pixels: Vec[u8],
+}
+
+fn image_pixel(img: ref Image, x: i64, y: i64) -> String {
+    let k = (y * img.width + x) * 3;
+    f"{img.pixels[k]},{img.pixels[k + 1]},{img.pixels[k + 2]}"
+}
+
+// render_image: the module grid on the background colour, resized by
+// `scale` across and `scale * ratio` down with nearest-neighbour
+// resampling (an exact integer zoom), then padded on every side.
+fn render_image(codes: ref Vec[Vec[i64]], scale: i64, ratio: i64, padding: i64, fg_color: ref String, bg_color: ref String) -> Result[Image, Exc] {
+    let (width, height) = barcode_size(codes);
+    let bg = getrgb(bg_color)?;
+    let fg = getrgb(fg_color)?;
+    let fg_rgb = (fg[0] as u8, fg[1] as u8, fg[2] as u8);
+    let bg_rgb = (bg[0] as u8, bg[1] as u8, bg[2] as u8);
+    let grid = module_grid(codes);
+    let sx = scale;
+    let sy = scale * ratio;
+    let iw = width * sx + 2 * padding;
+    let ih = height * sy + 2 * padding;
+    let mut pixels: Vec[u8] = Vec.new();
+    let mut y = 0;
+    while y < ih {
+        let gy = y - padding;
+        let mut x = 0;
+        while x < iw {
+            let gx = x - padding;
+            let dark = gx >= 0 and gy >= 0 and gx < width * sx and gy < height * sy and grid[gy / sy][gx / sx];
+            let c = if dark { fg_rgb } else { bg_rgb };
+            pixels.push(c.0);
+            pixels.push(c.1);
+            pixels.push(c.2);
+            x += 1;
+        }
+        y += 1;
+    }
+    Ok(Image { width: iw, height: ih, pixels: pixels })
+}
+
+// A binary PPM, as Pillow's PPM plugin writes an RGB image.
+fn ppm_bytes(img: ref Image) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for b in f"P6\n{img.width} {img.height}\n255\n".bytes() {
+        out.push(b);
+    }
+    for b in img.pixels.iter() {
+        out.push(*b);
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ commands
+
+fn out(s: ref String) {
+    println(f"  {s}");
+}
+
+struct Opt {
+    key: String,
+    val: String,
+}
+
+fn is_int_key(key: ref String) -> bool {
+    key == "columns" or key == "security_level" or key == "scale" or key == "ratio" or key == "padding"
+}
+
+// The job's key=value fields as the oracle's options dict: a repeated key
+// keeps its first position and takes the last value.
+fn options(fields: ref Vec[String], from: i64) -> Vec[Opt] {
+    let mut opts: Vec[Opt] = Vec.new();
+    let mut i = from;
+    while i < fields.len() {
+        let f = ref fields[i];
+        let v = chars(f);
+        let mut cut = v.len();
+        let mut k = 0;
+        while k < v.len() {
+            if v[k] == '=' {
+                cut = k;
+                break;
+            }
+            k += 1;
+        }
+        let key = substr(f, 0, cut);
+        let raw = substr(f, cut + 1, v.len());
+        let val = if is_int_key(key) { raw } else { unescape(raw) };
+        let mut found = false;
+        for o in opts.iter_mut() {
+            if o.key == key {
+                o.val = val.clone();
+                found = true;
+            }
+        }
+        if not found {
+            opts.push(Opt { key: key, val: val });
+        }
+        i += 1;
+    }
+    opts
+}
+
+fn opt_str(opts: ref Vec[Opt], key: Str, default: Str) -> String {
+    for o in opts {
+        if o.key == key {
+            return o.val.clone();
+        }
+    }
+    default.to_string()
+}
+
+fn opt_int(opts: ref Vec[Opt], key: Str, default: i64) -> i64 {
+    for o in opts {
+        if o.key == key {
+            return parse_ints(o.val, false)[0];
+        }
+    }
+    default
+}
+
+struct EncodeArgs {
+    columns: i64,
+    level: i64,
+    encoding: String,
+}
+
+// encode(data, **opts): Python rejects an unknown keyword before the call.
+fn encode_args(opts: ref Vec[Opt]) -> Result[EncodeArgs, Exc] {
+    for o in opts {
+        if not (o.key == "columns" or o.key == "security_level" or o.key == "encoding") {
+            return Err(exc("TypeError", f"encode() got an unexpected keyword argument {str_repr(o.key)}"));
+        }
+    }
+    Ok(EncodeArgs {
+        columns: opt_int(opts, "columns", 6),
+        level: opt_int(opts, "security_level", 2),
+        encoding: opt_str(opts, "encoding", "utf-8"),
+    })
+}
+
+fn encode(t: ref Tables, data: ref Data, a: ref EncodeArgs) -> Result[Vec[Vec[i64]], Exc] {
+    if a.columns < 1 or a.columns > 30 {
+        return Err(value_error(f"'columns' must be between 1 and 30. Given: {a.columns}"));
+    }
+    if a.level < 0 or a.level > 8 {
+        return Err(value_error(f"'security_level' must be between 1 and 8. Given: {a.level}"));
+    }
+    let data_bytes = to_bytes(data, a.encoding)?;
+    let words = encode_high(t, data_bytes, a.columns, a.level)?;
+    Ok(encode_rows(t, words, a.columns, a.level))
+}
+
+fn cmd_encode(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let data = data_of(f[1])?;
+    let opts = options(f, 2);
+    let a = encode_args(opts)?;
+    let codes = encode(t, data, a)?;
+    let high = encode_high(t, to_bytes(data, a.encoding)?, a.columns, a.level)?;
+    out(f"high {high.len()}: {words(high)}");
+    let (w, h) = barcode_size(codes);
+    out(f"rows {codes.len()} cols {codes[0].len() - 4} size {w}x{h}");
+    for row in codes.iter() {
+        let mut parts: Vec[String] = Vec.new();
+        for v in row.iter() {
+            parts.push(hex_pad(*v, 5));
+        }
+        out(join_strs(parts, " "));
+    }
+    Ok(())
+}
+
+fn cmd_grid(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let data = data_of(f[1])?;
+    let a = encode_args(options(f, 2))?;
+    let codes = encode(t, data, a)?;
+    for line in module_grid(codes) {
+        let mut s = String.new();
+        for b in line {
+            s.push(if b { '#' } else { '.' });
+        }
+        out(s);
+    }
+    Ok(())
+}
+
+fn utf8_bytes(d: ref Data) -> Result[Vec[u8], Exc] {
+    to_bytes(d, "utf-8".to_string())
+}
+
+fn chunk_list(chunks: ref Vec[Chunk]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for c in chunks {
+        parts.push(f"{mode_name(c.mode)}:{c.data.len()}");
+    }
+    join_strs(parts, " ")
+}
+
+fn cmd_compact(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let data = utf8_bytes(data_of(f[1])?)?;
+    let split = split_to_chunks(t, data);
+    out(f"split {chunk_list(split)}");
+    let merged = merge_chunks_with_same_mode(replace_short_numeric_chunks(split));
+    let shown = if merged.len() == 0 { "-".to_string() } else { chunk_list(merged) };
+    out(f"merged {shown}");
+    out(f"words {words(compact(t, data)?)}");
+    Ok(())
+}
+
+fn cmd_text(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let data = utf8_bytes(data_of(f[1])?)?;
+    out(f"interim {words(compact_text_interim(t, data)?)}");
+    out(f"words {words(compact_text(t, data)?)}");
+    Ok(())
+}
+
+fn cmd_numeric(f: ref Vec[String]) -> Result[(), Exc] {
+    let data = utf8_bytes(data_of(f[1])?)?;
+    out(f"words {words(compact_numbers(data)?)}");
+    Ok(())
+}
+
+fn cmd_bytes(f: ref Vec[String]) -> Result[(), Exc] {
+    let data = utf8_bytes(data_of(f[1])?)?;
+    out(f"words {words(compact_bytes(data))}");
+    Ok(())
+}
+
+fn int_list(s: ref String) -> Vec[i64] {
+    if s == "-" { Vec.new() } else { parse_ints(s, false) }
+}
+
+fn cmd_ec(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let data = int_list(f[1]);
+    let level = int_of(f[2]);
+    out(f"ec {words(compute_error_correction_code_words(t, data, level)?)}");
+    Ok(())
+}
+
+fn cmd_base(f: ref Vec[String]) -> Result[(), Exc] {
+    let digits = int_list(f[1]);
+    out(words(switch_base(digits, int_of(f[2]), int_of(f[3]))));
+    Ok(())
+}
+
+fn cmd_rowwords(f: ref Vec[String]) -> Result[(), Exc] {
+    let rows = int_of(f[1]);
+    let cols = int_of(f[2]);
+    let level = int_of(f[3]);
+    let mut row = 0;
+    while row < rows {
+        let left = get_left_code_word(row, rows, cols, level);
+        let right = get_right_code_word(row, rows, cols, level);
+        out(f"{row} {left} {right}");
+        row += 1;
+    }
+    Ok(())
+}
+
+fn cmd_color(f: ref Vec[String]) -> Result[(), Exc] {
+    let rgb = getrgb(unescape(f[1]))?;
+    out(f"{join_ints(rgb)} {rgb_to_hex(rgb)}");
+    Ok(())
+}
+
+// Splits a render job's options between the renderer and encode().
+fn split_opts(opts: ref Vec[Opt], render_keys: ref Vec[String]) -> (Vec[Opt], Vec[Opt]) {
+    let mut enc: Vec[Opt] = Vec.new();
+    let mut ren: Vec[Opt] = Vec.new();
+    for o in opts {
+        let mut is_render = false;
+        for k in render_keys.iter() {
+            if o.key == *k {
+                is_render = true;
+            }
+        }
+        let copy = Opt { key: o.key.clone(), val: o.val.clone() };
+        if is_render {
+            ren.push(copy);
+        } else {
+            enc.push(copy);
+        }
+    }
+    (enc, ren)
+}
+
+fn write_out(name: ref String, bytes: own Vec[u8]) -> Result[(), Exc] {
+    let path = f"data/out/{name}";
+    match fs.write_bytes(path.clone(), bytes) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(not_found(path)),
+    }
+}
+
+fn cmd_svg(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let name = f[1].clone();
+    let data = data_of(f[2])?;
+    let keys = vec!["scale", "ratio", "color", "description"];
+    let (enc_opts, svg_opts) = split_opts(options(f, 3), keys);
+    let codes = encode(t, data, encode_args(enc_opts)?)?;
+    let svg = render_svg(codes, opt_int(svg_opts, "scale", 3), opt_int(svg_opts, "ratio", 3), opt_str(svg_opts, "color", "#000"), opt_str(svg_opts, "description", ""))?;
+    let mut bytes: Vec[u8] = Vec.new();
+    for b in svg.body.bytes() {
+        bytes.push(b);
+    }
+    let crc = crc32(t.crc, bytes);
+    let size = bytes.len();
+    write_out(name, bytes)?;
+    out(f"{name} {svg.width} x {svg.height}, {svg.rects} rects, {size} bytes, crc32 {hex_pad(crc as i64, 8)}");
+    let head = match svg.body.find("<rect") {
+        Some(k) => svg.body[0..k].to_string(),
+        None => svg.body.clone(),
+    };
+    out(head);
+    Ok(())
+}
+
+fn cmd_image(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let name = f[1].clone();
+    let data = data_of(f[2])?;
+    let keys = vec!["scale", "ratio", "padding", "fg_color", "bg_color"];
+    let (enc_opts, img_opts) = split_opts(options(f, 3), keys);
+    let codes = encode(t, data, encode_args(enc_opts)?)?;
+    let padding = opt_int(img_opts, "padding", 20);
+    let img = render_image(codes, opt_int(img_opts, "scale", 3), opt_int(img_opts, "ratio", 3), padding, opt_str(img_opts, "fg_color", "#000"), opt_str(img_opts, "bg_color", "#FFF"))?;
+    let bytes = ppm_bytes(img);
+    let crc = crc32(t.crc, bytes);
+    let size = bytes.len();
+    write_out(name, bytes)?;
+    out(f"{name} {img.width}x{img.height}, {size} bytes, crc32 {hex_pad(crc as i64, 8)}, corner {image_pixel(img, 0, 0)}, first module {image_pixel(img, padding, padding)}");
+    Ok(())
+}
+
+fn run_job(t: ref Tables, f: ref Vec[String]) -> Result[(), Exc] {
+    let cmd = f[0].clone();
+    if cmd == "encode" {
+        cmd_encode(t, f)
+    } else if cmd == "grid" {
+        cmd_grid(t, f)
+    } else if cmd == "compact" {
+        cmd_compact(t, f)
+    } else if cmd == "text" {
+        cmd_text(t, f)
+    } else if cmd == "numeric" {
+        cmd_numeric(f)
+    } else if cmd == "bytes" {
+        cmd_bytes(f)
+    } else if cmd == "ec" {
+        cmd_ec(t, f)
+    } else if cmd == "base" {
+        cmd_base(f)
+    } else if cmd == "rowwords" {
+        cmd_rowwords(f)
+    } else if cmd == "color" {
+        cmd_color(f)
+    } else if cmd == "svg" {
+        cmd_svg(t, f)
+    } else if cmd == "image" {
+        cmd_image(t, f)
+    } else {
+        Err(exc("KeyError", str_repr(cmd)))
+    }
+}
+
+fn write_inputs() -> Result[(), String] {
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        let path = f"data/{f[0]}";
+        let _ = fs.create_dir_all(dirname_of(path));
+        let bytes = if f.len() > 1 { hex_bytes(f[1]) } else { Vec.new() };
+        if let Err(e) = fs.write_bytes(path, bytes) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    let _ = fs.remove_dir_all("data/out".to_string());
+    if let Err(e) = fs.create_dir_all("data/out".to_string()) {
+        return Err(f"cannot create data/out: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let t = load_tables();
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let job = hex_string(line);
+        if job.starts_with("#") {
+            println(job);
+            continue;
+        }
+        let shown = job.replace("\t", " ");
+        println(f"> {shown}");
+        let f = split_on(job, '\t');
+        if let Err(e) = run_job(t, f) {
+            println(f"  error {e.cls}: {e.msg}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("2320636f6d70616374696f6e\n636f6d7061637409746578743a48656c6c6f2c20776f726c6421\n636f6d7061637409746578743a414243206162632031323320414243\n636f6d7061637409746578743a68656c6c6f\n636f6d7061637409746578743a30313233343536373839303132\n636f6d7061637409746578743a3031323334353637383930313233\n636f6d7061637409746578743a61626330313233343536373839303132646566\n636f6d7061637409746578743a6162633031323334353637383930313233646566\n636f6d7061637409746578743a5c745c6e5c72\n636f6d7061637409746578743a617e627b637d647c65\n636f6d7061637409746578743a656d61696c3a206140622e636f\n636f6d7061637409746578743a4d6958654420436153653b2077697468202870756e63742921\n636f6d7061637409746578743a5c7530306539745c7530306539\n636f6d70616374096865783a303030313032303330343035\n636f6d70616374096865783a3030303130323033303430353036\n636f6d70616374096865783a6666\n636f6d7061637409746578743a\n636f6d706163740966696c653a696e2f6469676974732e747874\n636f6d706163740966696c653a696e2f626c6f622e62696e\n636f6d706163740966696c653a696e2f70617263656c2e747874\n636f6d7061637409746578743a78393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393979\n636f6d7061637409746578743a31323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839\n2320636f6d70616374696f6e206d6f646573\n7465787409746578743a504446343137\n7465787409746578743a706466343137\n7465787409746578743a612e622e63\n7465787409746578743a413b423b43\n7465787409746578743a4162\n7465787409746578743a61422143\n7465787409746578743a23242526\n7465787409746578743a2e\n7465787409746578743a3f\n7465787409746578743a68656c6c6f20776f726c64\n7465787409746578743a612062\n7465787409746578743a615c6e62\n74657874096865783a343165393432\n6e756d6572696309746578743a30\n6e756d6572696309746578743a31\n6e756d6572696309746578743a303030\n6e756d6572696309746578743a393939393939\n6e756d6572696309746578743a31323334353637383930\n6e756d6572696309746578743a3939393939393939393939393939393939393939393939393939393939393939393939393939393939393939\n");
+    s.push_str("6e756d6572696309746578743a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131\n6e756d6572696309746578743a3030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030\n6e756d6572696309746578743a\n6e756d6572696309746578743a313261\n6279746573096865783a3030\n6279746573096865783a303130323033\n6279746573096865783a666666666666666666666666\n6279746573096865783a303030303030303030303030\n6279746573096865783a303130323033303430353036303730383039306130623063\n6279746573096865783a36313632363336343635363636373638\n6279746573096865783a\n23206572726f7220636f7272656374696f6e20616e64206261736573\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300930\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300931\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300932\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300933\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300934\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300935\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300936\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300937\n65630931362c3930322c312c3237382c3832372c3930302c3239352c3930322c322c3332362c3832332c3534342c3930302c3134392c3930302c3930300938\n6563092d0932\n656309352c3435332c3137382c3132312c3233390930\n656309352c3435332c3137382c3132312c3233390939\n656309352c3435332c3137382c3132312c323339092d31\n6563093932382c3932382c3932382c3932380931\n");
+    s.push_str("6261736509312c322c330931300932\n62617365093235352c3235352c3235352c3235352c3235352c3235350932353609393030\n6261736509302c302c310932353609393030\n62617365092d09313009393030\n6261736509312c302c302c300939303009323536\n6261736509382c392c39093130093136\n726f77776f726473093309310930\n726f77776f726473093509320932\n726f77776f72647309313009360935\n726f77776f726473093709330938\n2320656e636f64696e67\n656e636f646509746578743a48656c6c6f2c20776f726c6421\n656e636f646509746578743a48656c6c6f2c20776f726c642109636f6c756d6e733d33\n656e636f646509746578743a48656c6c6f2c20776f726c642109636f6c756d6e733d310973656375726974795f6c6576656c3d30\n656e636f646509746578743a48656c6c6f2c20776f726c64210973656375726974795f6c6576656c3d35\n656e636f646509746578743a5044463431372062617220636f646509636f6c756d6e733d340973656375726974795f6c6576656c3d31\n656e636f646509746578743a303132333435363738393031323334353637383909636f6c756d6e733d32\n656e636f6465096865783a64656164626565666361666509636f6c756d6e733d32\n656e636f646509746578743a5c7530306539745c753030653909656e636f64696e673d6c6174696e2d31\n656e636f646509746578743a5c7530306539745c753030653909656e636f64696e673d7574662d38\n656e636f646509746578743a5c7530306539745c753030653909656e636f64696e673d6173636969\n656e636f646509746578743a6361665c753030653909656e636f64696e673d6173636969\n656e636f646509746578743a5c753230616309656e636f64696e673d6c6174696e2d31\n656e636f646509746578743a5c7532306163203509656e636f64696e673d7574662d3809636f6c756d6e733d33\n656e636f646509746578743a7809636f6c756d6e733d30\n656e636f646509746578743a7809636f6c756d6e733d3331\n656e636f646509746578743a780973656375726974795f6c6576656c3d39\n656e636f646509746578743a780973656375726974795f6c6576656c3d2d31\n656e636f646509746578743a7809636f6c756d6e733d33300973656375726974795f6c6576656c3d30\n656e636f646509746578743a7809636f6c756d6e733d31320973656375726974795f6c6576656c3d30\n656e636f646509746578743a7809636f6c756d6e733d31310973656375726974795f6c6576656c3d30\n656e636f646509746578743a09636f6c756d6e733d31\n656e636f646509696e743a3432\n");
+    s.push_str("656e636f646509746578743a7809636f6c6f75723d726564\n656e636f64650966696c653a696e2f626f617264696e672e74787409636f6c756d6e733d38\n656e636f64650966696c653a696e2f76636172642e74787409636f6c756d6e733d31300973656375726974795f6c6576656c3d33\n656e636f64650966696c653a696e2f757466382e74787409636f6c756d6e733d35\n656e636f64650966696c653a696e2f656d7074792e74787409636f6c756d6e733d32\n656e636f64650966696c653a696e2f6469676974732e74787409636f6c756d6e733d310973656375726974795f6c6576656c3d30\n656e636f646509746578743a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a09636f6c756d6e733d33300973656375726974795f6c6576656c3d30\n");
+    s.push_str("656e636f646509746578743a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a5a7a09636f6c756d6e733d33300973656375726974795f6c6576656c3d30\n");
+    s.push_str("656e636f646509746578743a6162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616209636f6c756d6e733d31\n656e636f646509746578743a616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616209636f6c756d6e733d31\n656e636f646509746578743a616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616109636f6c756d6e733d33300973656375726974795f6c6576656c3d38\n");
+    s.push_str("656e636f64650966696c653a696e2f6c6963656e63652e74787409636f6c756d6e733d31320973656375726974795f6c6576656c3d34\n656e636f64650966696c653a696e2f696e766f6963652e74787409636f6c756d6e733d390973656375726974795f6c6576656c3d33\n656e636f64650966696c653a696e2f70617263656c2e74787409636f6c756d6e733d360973656375726974795f6c6576656c3d34\n656e636f6465097465787466696c653a696e2f757466382e74787409636f6c756d6e733d3709656e636f64696e673d7574662d38\n656e636f6465097465787466696c653a696e2f757466382e74787409656e636f64696e673d6c6174696e2d31\n656e636f64650966696c653a696e2f6d697373696e672e747874\n23206d6f64756c65206772696473\n6772696409746578743a486909636f6c756d6e733d310973656375726974795f6c6576656c3d30\n6772696409746578743a50444634313709636f6c756d6e733d320973656375726974795f6c6576656c3d31\n67726964096865783a303066663030666609636f6c756d6e733d310973656375726974795f6c6576656c3d31\n6772696409746578743a3031323334353637383930313233343509636f6c756d6e733d320973656375726974795f6c6576656c3d30\n2320636f6c6f757273\n636f6c6f720923303030\n636f6c6f720923464646\n636f6c6f720923316132423363\n636f6c6f7209233132333435363738\n636f6c6f72092361626364\n636f6c6f72097267622831302c2032302c20333029\n636f6c6f720972676228313030252c3530252c302529\n636f6c6f72097267626128312c322c332c3429\n636f6c6f720968736c283132302c20313030252c2032352529\n636f6c6f720968736c28302c30252c35302529\n636f6c6f7209687376283234302c203530252c203130302529\n636f6c6f72096873622836302c313030252c3130302529\n636f6c6f720968736c283330302e352c2032302e35252c2038302529\n636f6c6f7209233132\n636f6c6f720923676767\n636f6c6f720972676228312c3229\n636f6c6f72092330303030303020\n636f6c6f72092023303030\n636f6c6f720952474228312c322c3329\n636f6c6f720923303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030\n636f6c6f720968736c2831302c323030252c35302529\n2320737667\n7376670968656c6c6f2e73766709746578743a48656c6c6f2c20776f726c6421\n");
+    s.push_str("73766709736d616c6c2e73766709746578743a486909636f6c756d6e733d310973656375726974795f6c6576656c3d30097363616c653d3109726174696f3d31\n73766709626f617264696e672e7376670966696c653a696e2f626f617264696e672e74787409636f6c756d6e733d38097363616c653d3209636f6c6f723d23316132623363096465736372697074696f6e3d494154412042434250203c59554c3e2026202246524122\n737667096c6963656e63652e7376670966696c653a696e2f6c6963656e63652e74787409636f6c756d6e733d31320973656375726974795f6c6576656c3d3409636f6c6f723d72676228302c302c31323829096465736372697074696f6e3d41414d564120c3a974c3a95c74544142\n7376670976636172642e7376670966696c653a696e2f76636172642e74787409636f6c756d6e733d313009726174696f3d3409636f6c6f723d68736c283230302c203830252c2033302529\n737667096261642e73766709746578743a7809636f6c756d6e733d3109636f6c6f723d636861727472657573652d697368\n737667096e6f646573632e73766709746578743a7809636f6c756d6e733d32096465736372697074696f6e3d\n2320696d61676573\n696d6167650968656c6c6f2e70706d09746578743a48656c6c6f2c20776f726c6421\n696d6167650974696e792e70706d09746578743a486909636f6c756d6e733d310973656375726974795f6c6576656c3d30097363616c653d3109726174696f3d310970616464696e673d30\n696d61676509626f617264696e672e70706d0966696c653a696e2f626f617264696e672e74787409636f6c756d6e733d38097363616c653d320970616464696e673d31300966675f636f6c6f723d233161326233630962675f636f6c6f723d23666166616661\n696d61676509696e766f6963652e70706d0966696c653a696e2f696e766f6963652e74787409636f6c756d6e733d390973656375726974795f6c6576656c3d33097363616c653d3109726174696f3d320970616464696e673d340966675f636f6c6f723d726762283132382c302c30290962675f636f6c6f723d6873762836302c203130252c203130302529\n696d6167650970617263656c2e70706d0966696c653a696e2f70617263656c2e74787409636f6c756d6e733d3609726174696f3d310970616464696e673d310962675f636f6c6f723d23666665\n696d616765096261642e70706d09746578743a7809636f6c756d6e733d310966675f636f6c6f723d6e6f7065\n696d6167650962616462672e70706d09746578743a7809636f6c756d6e733d310966675f636f6c6f723d6e6f70650962675f636f6c6f723d233132\n");
+    s.push_str("696d61676509746f6f6c6f6e672e70706d09746578743a39393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393939393909636f6c756d6e733d31\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("in/boarding.txt 4d314445534d41524149532f4c554320202020202020454142433132332059554c465241414320303833342032323646303031413030323520313030\nin/licence.txt 400a1e0d414e534920363336303134303430303032444c30303431303237385a433033313930303038444c44415144313233343536320a4443535055424c49430a4444454e0a4441434a4f484e0a4444464e0a4441445155494e43590a4444474e0a444341440a4443424e4f4e450a4443444e4f4e450a44424430383331323031330a44424230383331313937370a44424130383331323032320a444243310a44415530363920696e0a44415947524e0a4441473738392045204f414b2053540a444149414e59544f574e0a44414a43410a44414b39303232333030303020200a44434630302f30302f303030304e4e4e414e2f414e46442f59590a4443475553410a44434b443132333435363220585858585858585858580d\nin/invoice.txt 494e564f49434520323032342d303831350941434d4520546f6f6c73204c74642e0a42696c6c20746f3a20526976657261202620536f6e732c20313220486172626f75722052642e0a4974656d733a20342078204d3820626f6c7473204020302e33353b20322078206472696c6c20626974732028356d6d29204020342e32300a546f74616c2045555220392e3830202d2d2064756520333020646179730a\nin/vcard.txt 424547494e3a56434152440a56455253494f4e3a332e300a4e3a4f6b61666f723b416461657a650a4f52473a4c61676f7320506f727420417574686f726974790a54454c3b545950453d776f726b3a2b3233342d312d3535352d303139390a454d41494c3a612e6f6b61666f72406578616d706c652e6f72670a454e443a56434152440a\nin/parcel.txt 5b293e1e30311d30321d3834301d3030311d315a313233343545303230353237313638381d5550534e1d3132333435451d3038391d1d312f311d31302e311d591d1d53414e20444945474f1d43411e04\nin/utf8.txt 5ac3bc7269636820e2809320ce95cebbcebbceacceb4ceb120e2809320e69db1e4baac20e29c930a\nin/digits.txt 3031323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393031323334353637383930313233343536373839303132333435363738393432\nin/blob.bin 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e\n");
+    s.push_str("in/empty.txt \n");
+    s
+}
