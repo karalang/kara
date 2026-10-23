@@ -665,6 +665,47 @@ fn mir_interp_with_capacity_past_the_allocation_bound_panics() {
     assert_eq!(r.output, "0\n");
 }
 
+/// `==`, `<`, `contains`, `starts_with` and `ends_with` on strings, which
+/// the compiled backend now lowers to a length test and `memcmp` (and a
+/// `memchr` scan for a short needle) where it called the runtime
+/// (B-2026-10-15-55, B-2026-10-19-26): every pair of a word list and a
+/// needle list agrees with the interpreter, which uses Rust's `str`.
+#[test]
+fn mir_string_tests_agree_on_both_backends() {
+    const SRC: &str = r#"fn main() {
+    let words: Vec[String] = vec!["", "a", "ab", "abc", "abcabc", "xabcx", "aaaaaaaaaaaaaaaaaaaaab", "h\u{e9}llo w\u{f6}rld", "zzz"];
+    let needles: Vec[String] = vec!["", "a", "b", "ab", "bc", "abc", "cab", "x", "aaab", "aaaaaaaaaaaaaaaaaaab", "aaaaaaaaaaaaaaaaaaac", "\u{f6}", "w\u{f6}rld", "zzzz", "h\u{e9}llo w\u{f6}rld"];
+    let mut line = 0;
+    for w in words {
+        let mut out = String.new();
+        for n in needles {
+            let c = if w.contains(n) { "c" } else { "-" };
+            let s = if w.starts_with(n) { "s" } else { "-" };
+            let e = if w.ends_with(n) { "e" } else { "-" };
+            let l = if w < n { "<" } else { "-" };
+            let q = if w == n { "=" } else { "-" };
+            out = out + c + s + e + l + q + " ";
+        }
+        println(f"{line} {out}");
+        line += 1;
+    }
+    let s = "abcdef";
+    println(f"{s.contains("cd")} {s.contains("cdx")} {s.starts_with("abc")} {s.ends_with("def")} {"ab" < "abc"} {"abd" < "abc"}");
+}
+"#;
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert!(
+        interp.output.ends_with("true false true true true false\n"),
+        "{}",
+        interp.output
+    );
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, interp.output, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

@@ -319,17 +319,25 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         if matches!(name, "malloc" | "calloc") && crate::target::active_target_is_wasm() {
             return self.libc_size_shim(name);
         }
+        let p = self.ptr_ty();
+        let (i32t, i64t) = (self.llcx.i32_type(), self.llcx.i64_type());
+        // `memcmp(a, b, n)` and `memchr(s, c, n)`: their `size_t` is the
+        // last parameter, 32 bits on wasm.
+        let sized = match name {
+            "memcmp" => Some(i32t.fn_type(&[p.into(), p.into(), i64t.into()], false)),
+            "memchr" => Some(p.fn_type(&[p.into(), i32t.into(), i64t.into()], false)),
+            _ => None,
+        };
+        if let (Some(ty), true) = (sized, crate::target::active_target_is_wasm()) {
+            return self.narrow_shim(name, ty, &[2]);
+        }
         if let Some(f) = self.module.get_function(name) {
             return f;
         }
-        let p = self.ptr_ty();
         let ty = match name {
-            "malloc" => p.fn_type(&[self.llcx.i64_type().into()], false),
-            "calloc" => {
-                let i64t = self.llcx.i64_type();
-                p.fn_type(&[i64t.into(), i64t.into()], false)
-            }
-            _ => self.llcx.void_type().fn_type(&[p.into()], false),
+            "malloc" => p.fn_type(&[i64t.into()], false),
+            "calloc" => p.fn_type(&[i64t.into(), i64t.into()], false),
+            _ => sized.unwrap_or_else(|| self.llcx.void_type().fn_type(&[p.into()], false)),
         };
         self.module.add_function(name, ty, Some(Linkage::External))
     }

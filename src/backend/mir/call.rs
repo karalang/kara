@@ -1012,9 +1012,8 @@ impl<'ctx> Cx<'ctx, '_> {
             ("String", "eq") => {
                 let (a, an) = self.str_parts(&args[0])?;
                 let (b, bn) = self.str_parts(&args[1])?;
-                let r = self.rt_u8("bytes_eq", &[a.into(), an.into(), b.into(), bn.into()])?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, r.into())?;
+                self.str_eq(d, (a, an), (b, bn))?;
                 self.drop_moved(args)
             }
             // Exactly `n` slots up front, and no elements (B-2026-10-14-14).

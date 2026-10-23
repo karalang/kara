@@ -696,11 +696,54 @@ pub unsafe extern "C" fn karac_mir_str_test(
     // SAFETY: the caller's contract.
     let (a, b) = unsafe { (text(a, an), text(b, bn)) };
     u8::from(match op {
-        0 => a.contains(b),
+        0 => contains(a, b),
         1 => a.starts_with(b),
         2 => a.ends_with(b),
         _ => a < b,
     })
+}
+
+extern "C" {
+    fn memchr(s: *const std::ffi::c_void, c: std::ffi::c_int, n: usize) -> *mut std::ffi::c_void;
+}
+
+/// Whether `needle` is in `hay`. Each place `memchr` finds the needle's
+/// first byte is compared byte by byte, which on ordinary text ends after a
+/// byte or two; once those comparisons have cost twice the haystack, the
+/// rest goes to Rust's two-way search, so the worst case stays linear. A
+/// two-way search alone sets up a factorization of the needle on every
+/// call, which made a 100-byte `contains` cost some 1.2 us (kata 796,
+/// B-2026-10-19-26).
+fn contains(hay: &str, needle: &str) -> bool {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    let Some((&first, rest)) = n.split_first() else {
+        return true;
+    };
+    if n.len() > h.len() {
+        return false;
+    }
+    let last = h.len() - n.len();
+    let budget = 2 * h.len() + 64;
+    let (mut i, mut spent) = (0, 0);
+    while i <= last {
+        let window = &h[i..=last];
+        // SAFETY: `window` is readable for its length.
+        let p = unsafe { memchr(window.as_ptr().cast(), first.into(), window.len()) };
+        if p.is_null() {
+            return false;
+        }
+        let at = i + (p as usize - window.as_ptr() as usize);
+        let tail = &h[at + 1..at + n.len()];
+        match tail.iter().zip(rest).position(|(x, y)| x != y) {
+            None => return true,
+            Some(k) => spent += k + 1,
+        }
+        if spent > budget {
+            return hay.contains(needle);
+        }
+        i = at + 1;
+    }
+    false
 }
 
 /// A new `String` at `out` from `s`: 0 `trim`, 1 `to_uppercase`, 2
@@ -3507,6 +3550,50 @@ mod tests {
                 "{spec}"
             );
         }
+    }
+
+    /// The memchr scan agrees with `str::contains`, on random text over
+    /// small alphabets and on the needles that exhaust its budget and hand
+    /// over to the two-way search (`aaa..ab` in `aaa..a`).
+    #[test]
+    fn contains_agrees_with_str_contains() {
+        let mut seed = 7u64;
+        let mut next = |k: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % k
+        };
+        for _ in 0..4000 {
+            let letters = 1 + next(3);
+            let hn = next(120) as usize;
+            let nn = next(12) as usize;
+            let word = |len: usize, next: &mut dyn FnMut(u64) -> u64| -> String {
+                (0..len)
+                    .map(|_| (b'a' + next(letters) as u8) as char)
+                    .collect()
+            };
+            let h = word(hn, &mut next);
+            let n = word(nn, &mut next);
+            assert_eq!(super::contains(&h, &n), h.contains(&n), "{h:?} {n:?}");
+            if hn > nn && nn > 0 {
+                let at = next((hn - nn) as u64) as usize;
+                let n = &h[at..at + nn];
+                assert!(super::contains(&h, n), "{h:?} {n:?}");
+            }
+        }
+        let hay = "a".repeat(5000);
+        for tail in ["b", "ab", "ba"] {
+            let needle = format!("{}{tail}", "a".repeat(300));
+            assert!(!super::contains(&hay, &needle));
+            assert!(
+                super::contains(&format!("{hay}{tail}"), &needle)
+                    == format!("{hay}{tail}").contains(&needle)
+            );
+        }
+        assert!(super::contains("héllo wörld", "ö"));
+        assert!(super::contains("x", ""));
+        assert!(!super::contains("", "x"));
     }
 
     use super::{

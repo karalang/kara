@@ -402,6 +402,224 @@ impl<'ctx> Cx<'ctx, '_> {
         self.abort_unless(ok, msg)
     }
 
+    /// Whether `n` bytes at `a` and at `b` are equal, through `memcmp`,
+    /// which LLVM folds to loads for a constant `n`.
+    pub(super) fn mem_eq(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let c = self.memcmp(a, b, n)?;
+        self.is_zero(c)
+    }
+
+    fn memcmp(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let f = self.libc_fn("memcmp");
+        let v = self
+            .builder
+            .build_call(f, &[a.into(), b.into(), n.into()], "cmp")
+            .map_err(e)?;
+        Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// `a == b` on two strings into the `bool` at `d`: equal lengths, then
+    /// `memcmp`, as legacy does (B-2026-10-15-55).
+    pub(super) fn str_eq(
+        &mut self,
+        d: PointerValue<'ctx>,
+        (ap, an): (PointerValue<'ctx>, IntValue<'ctx>),
+        (bp, bn): (PointerValue<'ctx>, IntValue<'ctx>),
+    ) -> R<()> {
+        let i8t = self.llcx.i8_type();
+        self.store(d, i8t.const_zero().into())?;
+        let same = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, an, bn, "")
+            .map_err(e)?;
+        self.if_then(same, |cx| {
+            let r = cx.mem_eq(ap, bp, an)?;
+            let r = cx.builder.build_int_z_extend(r, i8t, "").map_err(e)?;
+            cx.store(d, r.into())
+        })
+    }
+
+    /// A test of the string `a` against `b` into the `bool` at `d`: 0
+    /// `contains`, 1 `starts_with`, 2 `ends_with`, 3 `a < b`. The last
+    /// three are a length test and a `memcmp`; `contains` with a needle
+    /// of at most 16 bytes scans with `memchr` for its first byte and
+    /// compares the rest, and a longer one goes to the runtime's two-way
+    /// search (B-2026-10-15-55, B-2026-10-19-26: Rust's `str::contains`
+    /// cost a call and a searcher set-up per test, 4.6x legacy on kata 796).
+    fn str_test(
+        &mut self,
+        op: u64,
+        d: PointerValue<'ctx>,
+        (ap, an): (PointerValue<'ctx>, IntValue<'ctx>),
+        (bp, bn): (PointerValue<'ctx>, IntValue<'ctx>),
+    ) -> R<()> {
+        let i8t = self.llcx.i8_type();
+        let bool_of = |cx: &mut Self, r: IntValue<'ctx>| -> R<()> {
+            let r = cx.builder.build_int_z_extend(r, i8t, "").map_err(e)?;
+            cx.store(d, r.into())
+        };
+        let ule = |cx: &mut Self, x: IntValue<'ctx>, y: IntValue<'ctx>| {
+            cx.builder
+                .build_int_compare(IntPredicate::ULE, x, y, "")
+                .map_err(e)
+        };
+        match op {
+            1 | 2 => {
+                self.store(d, i8t.const_zero().into())?;
+                let fits = ule(self, bn, an)?;
+                self.if_then(fits, |cx| {
+                    let at = if op == 1 {
+                        ap
+                    } else {
+                        let off = cx.builder.build_int_sub(an, bn, "").map_err(e)?;
+                        cx.elem_ptr(ap, off, 1)?
+                    };
+                    let r = cx.mem_eq(at, bp, bn)?;
+                    bool_of(cx, r)
+                })
+            }
+            3 => {
+                let shorter = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, an, bn, "")
+                    .map_err(e)?;
+                let m = self
+                    .builder
+                    .build_select(shorter, an, bn, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let c = self.memcmp(ap, bp, m)?;
+                let zero = c.get_type().const_zero();
+                let below = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, c, zero, "")
+                    .map_err(e)?;
+                let tie = self.is_zero(c)?;
+                let tie = self.builder.build_and(tie, shorter, "").map_err(e)?;
+                let r = self.builder.build_or(below, tie, "").map_err(e)?;
+                bool_of(self, r)
+            }
+            _ => self.str_contains(d, (ap, an), (bp, bn)),
+        }
+    }
+
+    fn str_contains(
+        &mut self,
+        d: PointerValue<'ctx>,
+        (ap, an): (PointerValue<'ctx>, IntValue<'ctx>),
+        (bp, bn): (PointerValue<'ctx>, IntValue<'ctx>),
+    ) -> R<()> {
+        let i8t = self.llcx.i8_type();
+        let f = self.cur_fn()?;
+        let block = |n: &str| self.llcx.append_basic_block(f, n);
+        let (long, short, fits, pre, head, check, next, yes, done) = (
+            block("contains.long"),
+            block("contains.short"),
+            block("contains.fits"),
+            block("contains.pre"),
+            block("contains.head"),
+            block("contains.check"),
+            block("contains.next"),
+            block("contains.yes"),
+            block("contains.done"),
+        );
+        self.store(d, i8t.const_zero().into())?;
+        let is_long = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, bn, self.i64(16), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(is_long, long, short)
+            .map_err(e)?;
+        self.builder.position_at_end(long);
+        let op = self.llcx.i32_type().const_zero();
+        let r = self.rt_int(
+            "str_test",
+            &[op.into(), ap.into(), an.into(), bp.into(), bn.into()],
+            8,
+        )?;
+        self.store(d, r.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        // An empty needle is in every string.
+        self.builder.position_at_end(short);
+        let empty = self.is_zero(bn)?;
+        self.builder
+            .build_conditional_branch(empty, yes, fits)
+            .map_err(e)?;
+        self.builder.position_at_end(fits);
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, bn, an, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(ok, pre, done)
+            .map_err(e)?;
+        // `end` is one past the last place the needle can start.
+        self.builder.position_at_end(pre);
+        let starts = self.builder.build_int_sub(an, bn, "").map_err(e)?;
+        let starts = self
+            .builder
+            .build_int_add(starts, self.i64(1), "")
+            .map_err(e)?;
+        let end = self.elem_ptr(ap, starts, 1)?;
+        let first = self
+            .builder
+            .build_load(i8t, bp, "first")
+            .map_err(e)?
+            .into_int_value();
+        let first = self
+            .builder
+            .build_int_z_extend(first, self.llcx.i32_type(), "")
+            .map_err(e)?;
+        let rest_b = self.elem_ptr(bp, self.i64(1), 1)?;
+        let rest_n = self.builder.build_int_sub(bn, self.i64(1), "").map_err(e)?;
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        self.builder.position_at_end(head);
+        let i64t = self.llcx.i64_type();
+        let p = self.builder.build_phi(self.ptr_ty(), "at").map_err(e)?;
+        p.add_incoming(&[(&ap, pre)]);
+        let at = p.as_basic_value().into_pointer_value();
+        let hi = self.builder.build_ptr_to_int(end, i64t, "").map_err(e)?;
+        let lo = self.builder.build_ptr_to_int(at, i64t, "").map_err(e)?;
+        let left = self.builder.build_int_sub(hi, lo, "").map_err(e)?;
+        let memchr = self.libc_fn("memchr");
+        let q = self
+            .builder
+            .build_call(memchr, &[at.into(), first.into(), left.into()], "hit")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let none = self.builder.build_is_null(q, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(none, done, check)
+            .map_err(e)?;
+        self.builder.position_at_end(check);
+        let after = self.elem_ptr(q, self.i64(1), 1)?;
+        let same = self.mem_eq(after, rest_b, rest_n)?;
+        self.builder
+            .build_conditional_branch(same, yes, next)
+            .map_err(e)?;
+        self.builder.position_at_end(next);
+        p.add_incoming(&[(&after, next)]);
+        self.builder.build_unconditional_branch(head).map_err(e)?;
+        self.builder.position_at_end(yes);
+        self.store(d, i8t.const_int(1, false).into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
     /// The natives of `String`, or `None` for one that is not lowered here.
     pub(super) fn string_native(
         &mut self,
@@ -433,14 +651,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 let (ap, an) = self.str_parts(a)?;
                 let (bp, bn) = self.str_parts(b)?;
-                let op = self.llcx.i32_type().const_int(test.unwrap_or(0), false);
-                let r = self.rt_int(
-                    "str_test",
-                    &[op.into(), ap.into(), an.into(), bp.into(), bn.into()],
-                    8,
-                )?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, r.into())?;
+                self.str_test(test.unwrap_or(0), d, (ap, an), (bp, bn))?;
             }
             (_, [s]) if map.is_some() => {
                 let (p, n) = self.str_parts(s)?;
