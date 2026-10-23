@@ -830,7 +830,7 @@ fn selfhost_lexer_matches_rust_lexer() {
 
     let build = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["build", "--legacy"])
+        .args(["build"])
         .env_remove("KARAC_RUNTIME")
         .output()
         .expect("spawn karac build");

@@ -2336,6 +2336,15 @@ fn program_args_env(cmd: &mut process::Command) {
     }
 }
 
+/// `--legacy` named the pipeline M3 deleted (B-2026-10-22-12, -13, -14, -45).
+fn legacy_removed() -> ! {
+    eprintln!(
+        "error: --legacy is gone: the legacy pipeline was removed at M3, and every command \
+         runs on v2"
+    );
+    process::exit(2);
+}
+
 #[cfg(test)]
 mod tests {
     use super::classify_explain_name;
@@ -2468,13 +2477,4 @@ mod tests {
         assert!(matches!(classify_explain_name("E02A0"), T::Class(_)));
         assert!(matches!(classify_explain_name("e0200"), T::Concept(_)));
     }
-}
-
-/// `--legacy` named the pipeline M3 deleted (B-2026-10-22-12, -13, -14, -45).
-fn legacy_removed() -> ! {
-    eprintln!(
-        "error: --legacy is gone: the legacy pipeline was removed at M3, and every command \
-         runs on v2"
-    );
-    process::exit(2);
 }

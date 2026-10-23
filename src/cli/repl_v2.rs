@@ -1,8 +1,7 @@
 //! `karac repl` on v2 (M3 item 3, B-2026-10-22-45): each cell's program is
 //! checked as `karac check` checks a program and run on the MIR interpreter.
 //! The REPL's session (items, replayed `let`s, providers, `:save`) stays in
-//! `crate::repl`; this is its checker and executor. `--legacy` (or
-//! `KARAC_LEGACY=1`) keeps the legacy REPL until M3 deletes it.
+//! `crate::repl`; this is its checker and executor.
 
 use super::*;
 

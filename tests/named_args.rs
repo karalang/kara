@@ -26,11 +26,11 @@ fn write(tag: &str, src: &str) -> PathBuf {
     path
 }
 
-/// Runs `src` on the tree-walk interpreter and the MIR interpreter and
-/// asserts both print `expected`.
+/// Runs `src` with `karac run` (the JIT on a build with llvm) and on the
+/// MIR interpreter, and asserts both print `expected`.
 fn runs_on_both(tag: &str, src: &str, expected: &str) {
     let path = write(tag, src);
-    for args in [&["run", "--legacy", "--interp"][..], &["__mir-run"][..]] {
+    for args in [&["run"][..], &["__mir-run"][..]] {
         let out = karac().args(args).arg(&path).output().unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),

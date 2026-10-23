@@ -2,9 +2,9 @@
 //! checked as `karac check` checks it, built to MIR and compiled by mir-llvm
 //! into a native executable. A package with several modules is built as one
 //! source (project mode, src/cli/project_v2.rs), from a member file or, with
-//! no file named, from the package in the current directory. `--legacy` (or
-//! `KARAC_LEGACY=1`) keeps the legacy pipeline reachable until M3 deletes it;
-//! a flag v2 does not honour yet is refused by name, pointing there.
+//! no file named, from the package in the current directory. A flag v2 does not
+//! honour yet, or one whose feature went to the archive with the legacy
+//! pipeline at M3, is refused by name.
 
 use super::*;
 
@@ -86,7 +86,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         fail_with(
             &format!(
                 "error: the v2 build makes an executable from src/main.kara, and {} has none; \
-                 `karac build --legacy` builds a library package",
+                 v2 does not build a library package yet",
                 root.display()
             ),
             output,
@@ -197,9 +197,8 @@ fn refuse_unsupported(a: &BuildArgs) {
             && (crate::target::is_v1_target_name(t)
                 || *t != crate::build_cache::host_target_triple())
     });
-    // B-2026-10-22-21: a feature that goes to the archive with the legacy
-    // backend is refused by name, so deleting legacy turns no working
-    // command into an unknown-flag error.
+    // B-2026-10-22-21: a feature that went to the archive with the legacy
+    // backend is refused by name rather than as an unknown flag.
     let archived_target = match target {
         Some("wasm_browser") => Some("the browser wasm bindings"),
         Some("gpu") => Some("GPU compute"),
@@ -228,7 +227,10 @@ fn refuse_unsupported(a: &BuildArgs) {
             archived_target.unwrap_or(""),
         ),
         (
-            a.bindings.is_some(),
+            // `--bindings=none` asks for the raw core module, which is what
+            // the v2 `wasm_wasi` build emits.
+            a.bindings
+                .is_some_and(|b| !(b == super::BindingsMode::None && is_wasm_wasi(a))),
             "--bindings".to_string(),
             "the wasm component bindings",
         ),
@@ -249,16 +251,14 @@ fn refuse_unsupported(a: &BuildArgs) {
     let mut lines = Vec::new();
     if !refused.is_empty() {
         lines.push(format!(
-            "error: the v2 build does not honour {} yet; `karac build --legacy` does \
-             until M3 deletes it",
+            "error: the v2 build does not honour {} yet",
             refused.join(", ")
         ));
     }
     for (flag, feature) in archived {
         lines.push(format!(
             "error: {flag} builds {feature}, which goes to the archive with the legacy \
-             backend at M3 and returns on v2 on demand; `karac build --legacy` builds it \
-             until then"
+             backend at M3 and returns on v2 on demand"
         ));
     }
     if !lines.is_empty() {
@@ -268,8 +268,7 @@ fn refuse_unsupported(a: &BuildArgs) {
     if std::env::var("KARAC_AUTO_PAR").is_ok_and(|v| v == "1") {
         eprintln!(
             "warning: `KARAC_AUTO_PAR=1` is ignored: auto-parallelisation goes to the \
-             archive with the legacy backend at M3 and returns on v2 in M4; \
-             `karac build --legacy` honours it until then"
+             archive with the legacy backend at M3 and returns on v2 in M4"
         );
     }
 }

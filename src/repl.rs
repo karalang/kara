@@ -140,23 +140,13 @@ fn terminated(cell_src: &str) -> String {
 /// historical bare-`karac repl` behavior so existing callers keep working.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ReplOptions {
-    /// `--auto-clone`: when on, the REPL auto-inserts `.clone()` at
-    /// cross-cell consume sites flagged by `UseAfterMove`, rather than
-    /// surfacing the diagnostic. Each insertion emits a
-    /// `perf[auto-clone-in-repl]` note (never silent — design.md §
-    /// Interactive Evaluation Model > Ownership Across Cells).
+    /// `--auto-clone`: the legacy REPL's cross-cell `.clone()` insertion.
+    /// It went with that REPL at M3; `karac repl` refuses the flag, and
+    /// the session records it without acting on it.
     pub auto_clone: bool,
-    /// `--interp`: force the tree-walk interpreter instead of the default
-    /// LLJIT executor (LLJIT-productionization Slice 5). The ergonomic
-    /// equivalent of `KARAC_REPL_JIT=0`; the interpreter is the retained
-    /// dev/debug backend. No effect on a non-`llvm` build (the JIT isn't
-    /// compiled in, so the interpreter already runs).
+    /// `--interp`: accepted for compatibility; v2 cells always run on the
+    /// MIR interpreter.
     pub interp: bool,
-    /// Run each cell on v2 (M3 item 3, B-2026-10-22-45): checked as `karac
-    /// check` checks a program and run on the MIR interpreter, instead of the
-    /// legacy checker and the JIT or tree-walk interpreter. `karac repl`
-    /// sets it unless `--legacy` (or `KARAC_LEGACY=1`) asks for the old path.
-    pub v2: bool,
 }
 
 /// Run the interactive REPL until EOF or `:quit`. Returns once the user
@@ -597,10 +587,6 @@ pub struct Session {
     /// snapshot (they don't run main). Rolled back in lockstep with
     /// `cell_history` on diagnostic-side failure.
     cell_effect_history: Vec<CellEffectSnapshot>,
-
-    /// [`ReplOptions::v2`]: cells are checked and run by
-    /// `crate::cli::repl_v2`.
-    v2: bool,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -679,7 +665,6 @@ impl Session {
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
             cell_effect_history: Vec::new(),
-            v2: true,
         }
     }
 
@@ -878,28 +863,14 @@ impl Session {
         // Spec form: `%set auto-clone on|off`. The flag is the only
         // setting in the v1 surface; future settings extend the same
         // `<key> <value>` shape.
-        let (key, value) = match rest.split_once(char::is_whitespace) {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => (rest.trim(), ""),
-        };
+        let key = rest
+            .split_once(char::is_whitespace)
+            .map_or(rest, |(k, _)| k)
+            .trim();
         match key {
-            "auto-clone" if self.v2 => {
-                MagicOutput::error("auto-clone needs the legacy REPL: `karac repl --legacy`")
-            }
-            "auto-clone" => match value {
-                "on" | "true" | "1" => {
-                    self.auto_clone = true;
-                    MagicOutput::ok("auto-clone: on")
-                }
-                "off" | "false" | "0" => {
-                    self.auto_clone = false;
-                    MagicOutput::ok("auto-clone: off")
-                }
-                "" => MagicOutput::error("usage: %set auto-clone on|off"),
-                other => MagicOutput::error(format!(
-                    "unknown value `{other}` for auto-clone. Use `on` or `off`."
-                )),
-            },
+            "auto-clone" => MagicOutput::error(
+                "`%set auto-clone` is not supported: auto-clone went with the legacy REPL at M3",
+            ),
             "" => MagicOutput::error("usage: %set <key> <value>"),
             other => {
                 MagicOutput::error(format!("unknown setting `{other}`. Supported: auto-clone."))
@@ -1150,13 +1121,7 @@ impl Session {
         let mut s = Self::new();
         s.auto_clone = opts.auto_clone;
         let _ = opts.interp;
-        s.v2 = opts.v2;
         s
-    }
-
-    /// Whether cells run on v2 ([`ReplOptions::v2`]).
-    pub fn v2(&self) -> bool {
-        self.v2
     }
 
     /// Inspector for the `--auto-clone` flag. Used by integration tests.
@@ -1319,22 +1284,9 @@ impl Session {
         self.cell_history.push(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
-            if self.v2 {
-                for e in self.add_items_v2(trimmed) {
-                    eprintln!("{e}");
-                }
-                return;
+            for e in self.add_items_v2(trimmed) {
+                eprintln!("{e}");
             }
-            // Pure-item cell: append to the accumulated source and
-            // re-validate the whole thing so type-checker errors surface
-            // immediately rather than waiting for the next statement cell.
-            self.append_items(trimmed);
-            self.validate_accumulated();
-            // Pure-item cells contribute no main-effects; keep
-            // `cell_effect_history` aligned 1:1 with `cell_history` so
-            // `%timeline` indexes the same cells the rest of the
-            // session sees.
-            self.cell_effect_history.push(CellEffectSnapshot::default());
             return;
         }
 
@@ -1413,33 +1365,6 @@ impl Session {
         self.items_source = rebuilt;
     }
 
-    /// Run the resolver + typechecker over the accumulated items so that
-    /// item-only cells (struct/fn definitions) report errors immediately
-    /// rather than waiting for a future evaluation cell.
-    fn validate_accumulated(&mut self) {
-        if self.items_source.trim().is_empty() {
-            return;
-        }
-        let parsed = crate::parse(&self.items_source);
-        if !parsed.errors.is_empty() {
-            for e in &parsed.errors {
-                eprintln!("parse error: {}", e.message);
-            }
-            return;
-        }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            for e in &resolved.errors {
-                eprintln!("resolve error: {}", e.message);
-            }
-            return;
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        for e in &typed.errors {
-            eprintln!("type error: {}", e.message);
-        }
-    }
-
     fn run_with_wrapper(&mut self, cell_src: &str) {
         match self.run_with_wrapper_inner(cell_src, /* capture */ false) {
             Ok(out) => {
@@ -1486,52 +1411,9 @@ impl Session {
         self.cell_history.push(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
-            if self.v2 {
-                return EvaluatedCell {
-                    errors: self.add_items_v2(trimmed),
-                    ..EvaluatedCell::default()
-                };
-            }
-            self.append_items(trimmed);
-            // Mirror validate_accumulated but collect errors for return.
-            let mut errs = Vec::new();
-            if !self.items_source.trim().is_empty() {
-                let parsed = crate::parse(&self.items_source);
-                for e in &parsed.errors {
-                    errs.push(format!("parse error: {}", e.message));
-                }
-                if parsed.errors.is_empty() {
-                    let resolved = crate::resolve(&parsed.program);
-                    for e in &resolved.errors {
-                        errs.push(format!("resolve error: {}", e.message));
-                    }
-                    let typed = crate::typecheck(&parsed.program, &resolved);
-                    for e in &typed.errors {
-                        errs.push(format!("type error: {}", e.message));
-                    }
-                }
-            }
-            // Roll back history if pure-item parse trips an error so :save
-            // never bakes in a broken cell.
-            if !errs.is_empty() {
-                // Drop the failing cell from history AND from items_source —
-                // the failing definition would block all subsequent cells.
-                self.cell_history.pop();
-                let trimmed_added = trimmed.to_string();
-                if let Some(idx) = self.items_source.rfind(&trimmed_added) {
-                    self.items_source.truncate(idx);
-                }
-            } else {
-                // Pure-item cell ran clean — record an empty effect
-                // snapshot so the timeline's cell index stays aligned
-                // with `cell_history`.
-                self.cell_effect_history.push(CellEffectSnapshot::default());
-            }
             return EvaluatedCell {
-                stdout: String::new(),
-                errors: errs,
-                notes: Vec::new(),
-                effect_footer: String::new(),
+                errors: self.add_items_v2(trimmed),
+                ..EvaluatedCell::default()
             };
         }
 
@@ -1577,9 +1459,7 @@ impl Session {
     /// is a statement, as it is when it ends a cell that parses.
     fn classify(&self, src: &str) -> CellShape {
         let shape = classify_input(src);
-        if self.v2
-            && shape == CellShape::PureItems
-            && crate::parse(&terminated(src)).had_top_level_statements
+        if shape == CellShape::PureItems && crate::parse(&terminated(src)).had_top_level_statements
         {
             return CellShape::Statements;
         }
@@ -1850,14 +1730,12 @@ impl Session {
         // every wrap — bindings declared while a scope was open keep
         // replaying after `:end-provide` until slice 4's pruning lands.
         let cell_idx = self.cell_history.len();
-        if self.v2 {
-            // The output before this line is the replay's (v2 replays every
-            // `let`'s right-hand side), and `repl_v2::run_cell` drops it.
-            s.push_str(&format!(
-                "println(\"{}\");\n",
-                crate::cli::repl_v2::CELL_START
-            ));
-        }
+        // The output before this line is the replay's (v2 replays every
+        // `let`'s right-hand side), and `repl_v2::run_cell` drops it.
+        s.push_str(&format!(
+            "println(\"{}\");\n",
+            crate::cli::repl_v2::CELL_START
+        ));
         let body_start = s.len();
         let wrapped_body = self.wrap_in_active_providers(cell_src);
         s.push_str(&wrapped_body);
@@ -1903,7 +1781,7 @@ impl Session {
             .iter()
             .map(|f| f.resource.clone())
             .collect();
-        if self.v2 && active_scope.is_empty() {
+        if active_scope.is_empty() {
             // v2 carries no values across cells, so a later cell replays
             // this one whole: its statements as well as its `let`s, so a
             // mutation (`v.push(x)`, `n = 5`) reaches the cells after it.

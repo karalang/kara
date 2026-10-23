@@ -1,6 +1,6 @@
 //! `karac build` on v2 (M3 item 4, CLI half, B-2026-10-22-14): a single file,
 //! a package built from one of its files or from its directory, `install`,
-//! the flags v2 refuses by name, and `--legacy` / `KARAC_LEGACY=1`.
+//! the flags v2 refuses by name, and the refused `--legacy`.
 //!
 //! Without the llvm feature there is no code generator, so the build is the
 //! check alone: each test asserts the executable only where one is made.
@@ -165,7 +165,8 @@ fn build_v2_install_builds_on_v2() {
     }
 }
 
-/// A flag v2 does not honour yet is refused by name, pointing at `--legacy`.
+/// A flag v2 does not honour yet is refused by name, and so is one whose
+/// feature went to the archive with the legacy backend.
 #[test]
 fn build_v2_refuses_legacy_only_flags_by_name() {
     let dir = scratch("flags");
@@ -177,11 +178,9 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: the v2 build does not honour `--simd-report` yet; \
-         `karac build --legacy` does until M3 deletes it\n\
+        "error: the v2 build does not honour `--simd-report` yet\n\
          error: `--target=wasm_browser` builds the browser wasm bindings, which goes to the \
-         archive with the legacy backend at M3 and returns on v2 on demand; \
-         `karac build --legacy` builds it until then\n"
+         archive with the legacy backend at M3 and returns on v2 on demand\n"
     );
     let json = karac(
         &dir,
@@ -222,36 +221,28 @@ fn build_v2_says_it_ignores_auto_par() {
     );
 }
 
-/// `--legacy` and `KARAC_LEGACY=1` reach the legacy build, which prints its
-/// project banner and takes the flags v2 refuses.
+/// `--legacy` named the build M3 deleted and is refused; `KARAC_LEGACY=1`
+/// changes nothing, so the package builds on v2.
 #[test]
-fn build_v2_legacy_flag_and_env_reach_legacy() {
+fn build_v2_legacy_flag_is_refused_and_env_is_ignored() {
     let dir = package("legacy", UTIL);
     let flag = karac(&dir, &["build", "--legacy"]);
+    assert_eq!(flag.status.code(), Some(2), "{}", text(&flag.stderr));
+    assert!(
+        text(&flag.stderr).contains("--legacy is gone"),
+        "{}",
+        text(&flag.stderr)
+    );
     let env = Command::new(env!("CARGO_BIN_EXE_karac"))
         .env("KARAC_LEGACY", "1")
         .current_dir(&dir)
         .arg("build")
         .output()
         .unwrap();
-    for out in [flag, env] {
-        assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
-        assert!(
-            text(&out.stdout).contains("project: pkg"),
-            "{}",
-            text(&out.stdout)
-        );
-    }
-    let solo = scratch("legacy-solo");
-    std::fs::write(solo.join("a.kara"), "fn main() {\n    println(\"a\");\n}\n").unwrap();
-    let report = karac(
-        &solo,
-        &["build", "--legacy", "a.kara", "--concurrency-report"],
-    );
-    assert_eq!(report.status.code(), Some(0), "{}", text(&report.stderr));
+    built(&env);
 }
 
-/// A package's dependencies are resolved as the legacy build resolves them
+/// A package's dependencies are resolved as the legacy build resolved them
 /// (kara.lock written), and their modules are part of the program.
 #[test]
 fn build_v2_builds_a_package_with_a_path_dependency() {

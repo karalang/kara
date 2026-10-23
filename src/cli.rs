@@ -931,16 +931,14 @@ pub fn execute(cmd: Command) {
         } => test_v2::cmd_test_v2(filter, all, interp),
         Command::Repl { auto_clone, interp } => {
             if auto_clone {
-                eprintln!("error: --auto-clone is not supported by the REPL");
+                eprintln!(
+                    "error: --auto-clone is not supported: it went with the legacy REPL at M3"
+                );
                 process::exit(1);
             }
             // `--interp` is what v2 does already: cells run on the MIR
             // interpreter.
-            crate::repl::run_with_options(crate::repl::ReplOptions {
-                auto_clone,
-                interp,
-                v2: true,
-            })
+            crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone, interp })
         }
         Command::Doc => cmd_doc(),
         Command::Clean { global } => cmd_clean(global),

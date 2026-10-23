@@ -465,7 +465,7 @@ fn build_and_run_driver(tag: &str, driver: &str) -> Option<Vec<String>> {
 
     let build = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["build", "--legacy"])
+        .args(["build"])
         .env_remove("KARAC_RUNTIME")
         .output()
         .expect("spawn karac build");

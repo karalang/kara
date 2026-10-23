@@ -1,7 +1,7 @@
 //! `karac run` on v2 (M3 item 1, B-2026-10-22-12): checked as `karac check`
 //! checks, built to MIR, run on the JIT by default (the MIR interpreter on a
-//! build without llvm) and on the MIR interpreter under `--interp`, with the
-//! legacy pipeline behind `--legacy` / `KARAC_LEGACY=1`.
+//! build without llvm) and on the MIR interpreter under `--interp`.
+//! `--legacy` is refused.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -245,7 +245,7 @@ fn run_v2_refuses_sequential_by_name() {
         text(&out.stderr)
     );
     assert!(
-        text(&out.stderr).contains("--legacy"),
+        text(&out.stderr).contains("a different program"),
         "{}",
         text(&out.stderr)
     );
@@ -253,26 +253,27 @@ fn run_v2_refuses_sequential_by_name() {
     assert_eq!(out.status.code(), Some(1));
 }
 
-/// `--legacy` and `KARAC_LEGACY=1` reach the legacy pipeline, whose fault
-/// report reads differently.
+/// `--legacy` named the pipeline M3 deleted and is refused; `KARAC_LEGACY=1`
+/// changes nothing, so the program runs on v2.
 #[test]
-fn run_v2_legacy_flag_and_env_reach_legacy() {
+fn run_v2_legacy_flag_is_refused_and_env_is_ignored() {
     let path = write("legacy", PANICS);
     let flag = karac(&["run", "--legacy"], &path);
+    assert_eq!(flag.status.code(), Some(2));
+    assert!(
+        text(&flag.stderr).contains("--legacy is gone"),
+        "{}",
+        text(&flag.stderr)
+    );
     let env = Command::new(env!("CARGO_BIN_EXE_karac"))
         .env("KARAC_LEGACY", "1")
         .arg("run")
         .arg(&path)
         .output()
         .unwrap();
-    for out in [flag, env] {
-        let err = text(&out.stderr);
-        // v2 reads `runtime error: index out of bounds`; legacy names the
-        // index (its interpreter) or the container (its JIT).
-        assert!(!err.contains("runtime error: index out of bounds"), "{err}");
-        assert!(err.contains("out of bounds"), "{err}");
-        assert_eq!(out.status.code(), Some(101));
-    }
+    let err = text(&env.stderr);
+    assert!(err.contains("runtime error: index out of bounds"), "{err}");
+    assert_eq!(env.status.code(), Some(101));
 }
 
 /// `karac <file.kara>` is `karac run <file.kara>`.
@@ -374,6 +375,5 @@ fn run_v2_package_refuses_a_renaming_import() {
     let err = text(&out.stderr);
     assert!(err.contains("error[project]"), "{err}");
     assert!(err.contains("`double as ..` renames an import"), "{err}");
-    assert!(err.contains("--legacy"), "{err}");
     assert_eq!(out.status.code(), Some(1));
 }

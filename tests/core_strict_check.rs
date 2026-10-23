@@ -1,11 +1,11 @@
 //! `karac check` enforces the v2 core's ownership rules as errors
 //! (`docs/core-semantics.md` §3.2 use after move, §3.3 moves in loops, §3.7
 //! moves out of a borrowed place, §6.4 no implicit RC), and `karac fix`
-//! repairs each with `.clone()`. `build` and `run` keep the legacy rules until
-//! the v2 middle end lands, so their output stays the old-behaviour oracle.
+//! repairs each with `.clone()`. `build` and `run` check the same way, so a
+//! program here that runs is run on v2.
 //!
 //! The programs are the review thread's core pins (`review/core-pins/`), plus
-//! the places where legacy reports a move the core does not make.
+//! the places where the legacy checker reported a move the core does not make.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -221,33 +221,6 @@ fn allow_rc_fallback_does_not_silence_the_error() {
     );
     let out = karac().arg("check").arg(&path).output().unwrap();
     assert!(!out.status.success());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The legacy lane keeps compiling these programs, with the hidden copy, so
-/// its output remains the old-behaviour oracle.
-#[test]
-fn legacy_run_still_accepts_use_after_move() {
-    let (dir, path) = fixture(
-        "legacy",
-        "fn take(s: String) { println(s); }\n\
-         fn main() {\n\
-             let s = \"hi\".to_string();\n\
-             take(s);\n\
-             println(s);\n\
-         }\n",
-    );
-    let out = karac()
-        .args(["run", "--legacy", "--interp"])
-        .arg(&path)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\nhi\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -492,11 +465,11 @@ fn a_ref_binding_cannot_be_moved() {
 }
 
 #[test]
-fn a_ref_binding_runs_and_formats_under_legacy() {
-    // `ref name` is an ordinary binding to `build` and `run`, and
+fn a_ref_binding_runs_and_formats() {
+    // `ref name` is an ordinary binding to `run`, and
     // `karac fmt` keeps the `ref`.
     let (dir, path) = fixture(
-        "ref-binding-legacy",
+        "ref-binding-run",
         "enum T { Pair(String, i64), E }\n\
          fn main() {\n\
              let t = T.Pair(\"x\".to_string(), 3);\n\
@@ -507,8 +480,7 @@ fn a_ref_binding_runs_and_formats_under_legacy() {
          }\n",
     );
     let out = karac()
-        .args(["run", "--legacy"])
-        .arg("--interp")
+        .args(["run", "--interp"])
         .arg(&path)
         .output()
         .unwrap();
@@ -1592,16 +1564,18 @@ fn a_mut_ref_pattern_writes_through_its_scrutinee() {
                    }\n\
                }\n";
     accepted("mut-ref-pattern", src);
-    // The legacy backends would bind a copy, so they refuse it.
     let (dir, path) = fixture("mut-ref-pattern-run", src);
     let out = karac()
-        .args(["run", "--legacy", "--interp"])
+        .args(["run", "--interp"])
         .arg(&path)
         .output()
         .unwrap();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "legacy run must refuse: {err}");
-    assert!(err.contains("not supported by the legacy"), "{err}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3 1 1\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = std::fs::remove_dir_all(&dir);
     rejected_then_fixed_by(
         "mut-ref-pattern-immutable",
@@ -2542,7 +2516,7 @@ fn collect_all_is_removed() {
 /// design.md § 5: `i64`/`u64` -> `f64` rounds above 2^53, so it is not an
 /// implicit widening; `check` refuses it at a return, a `let`, an argument,
 /// a field and a push, and `fix` writes the `as f64`. `i32` -> `f64` is
-/// exact and stays implicit, and `run` keeps accepting the old spelling.
+/// exact and stays implicit.
 #[test]
 fn a_64_bit_integer_into_f64_needs_as() {
     let src = "\
@@ -2565,15 +2539,6 @@ fn main() {
         "implicit conversion from 'u64' to 'f64' can lose precision",
         "n as f64",
     );
-    let (dir, path) = fixture("int_to_f64_run", src);
-    let out = karac()
-        .args(["run", "--legacy"])
-        .arg("--interp")
-        .arg(&path)
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "7 3 2 3 3 3\n");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// §3.1: a block's tail moves, also where the block's value is only
@@ -3558,8 +3523,7 @@ fn collect_of_strings_into_set_deque_and_map() {
     accepted("collect-strings-into-set", src);
     let (dir, path) = fixture("collect-strings-into-set-run", src);
     let out = karac()
-        .args(["run", "--legacy"])
-        .arg("--interp")
+        .args(["run", "--interp"])
         .arg(&path)
         .output()
         .unwrap();
@@ -3587,8 +3551,7 @@ fn collect_into_sorted_set_and_map() {
     accepted("collect-into-sorted", src);
     let (dir, path) = fixture("collect-into-sorted-run", src);
     let out = karac()
-        .args(["run", "--legacy"])
-        .arg("--interp")
+        .args(["run", "--interp"])
         .arg(&path)
         .output()
         .unwrap();

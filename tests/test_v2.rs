@@ -170,10 +170,10 @@ fn test_v2_check_errors_stop_the_run() {
     assert_eq!(out.status.code(), Some(1));
 }
 
-/// `--legacy` and `KARAC_LEGACY=1` reach the legacy runner, whose
-/// `assert_eq` failure carries `left` and `right`.
+/// `--legacy` named the runner M3 deleted and is refused; `KARAC_LEGACY=1`
+/// changes nothing, so the cases run on v2.
 #[test]
-fn test_v2_legacy_flag_and_env_reach_legacy() {
+fn test_v2_legacy_flag_is_refused_and_env_is_ignored() {
     let dir = package(
         "legacy",
         &[
@@ -182,27 +182,26 @@ fn test_v2_legacy_flag_and_env_reach_legacy() {
             ("util_test.kara", UTIL_TEST),
         ],
     );
-    let v2 = karac_test(&dir, &["wrong"]);
-    assert!(
-        !text(&v2.stdout).contains("\"left\":"),
-        "{}",
-        text(&v2.stdout)
-    );
     let flag = karac_test(&dir, &["--legacy", "wrong"]);
+    assert_eq!(flag.status.code(), Some(2));
+    assert!(
+        text(&flag.stderr).contains("--legacy is gone"),
+        "{}",
+        text(&flag.stderr)
+    );
     let env = Command::new(env!("CARGO_BIN_EXE_karac"))
         .env("KARAC_LEGACY", "1")
         .current_dir(&dir)
         .args(["test", "wrong"])
         .output()
         .unwrap();
-    for out in [flag, env] {
-        let stdout = text(&out.stdout);
-        assert!(
-            stdout.contains("\"left\":\"4\",\"right\":\"5\""),
-            "{stdout}"
-        );
-        assert_eq!(out.status.code(), Some(1));
-    }
+    // v2's `assert_eq` failure carries no `left` / `right`; legacy's did.
+    assert!(
+        !text(&env.stdout).contains("\"left\":"),
+        "{}",
+        text(&env.stdout)
+    );
+    assert_eq!(env.status.code(), Some(1));
 }
 
 /// A fixture's constructor that is a path naming a function is called, and a

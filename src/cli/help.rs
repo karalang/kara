@@ -95,8 +95,7 @@ COMMANDS:
                       body of an implicit `fn main()`. Type :help inside
                       the REPL for the meta-command list. Each cell is
                       checked as `karac check` checks a program and run on
-                      the MIR interpreter; `--legacy` runs the legacy REPL
-                      until M3 deletes it.
+                      the MIR interpreter.
     doc               Render HTML documentation under dist/doc/ from the
                       `///` doc comments attached to each public item.
                       MVP — flat per-module layout, no cross-references.
@@ -139,8 +138,7 @@ pub(super) fn print_subcommand_help(subcmd: &str) {
 karac run - Check a .kara program and run it
 
 The program is checked as `karac check` checks it, built to MIR and run
-on the JIT (`--interp`: on the MIR interpreter). `--legacy` runs it on
-the legacy pipeline instead, until M3 deletes it.
+on the JIT (`--interp`: on the MIR interpreter).
 
 USAGE:
     karac run <file.kara> [options]
@@ -159,11 +157,6 @@ OPTIONS:
     --output=json       Structured JSON output on stdout
     --output=jsonl      Streaming JSONL output on stdout
     --interp            Run on the MIR interpreter instead of the JIT
-    --legacy            Run on the legacy pipeline (its JIT, or its
-                        tree-walk interpreter with --interp).
-                        KARAC_LEGACY=1 does the same.
-    --sequential        Legacy only (with --legacy): run `par` branches
-                        one after another
     --manifest=<path>   Override manifest discovery — load the supplied
                         kara.toml instead of walking upward from the
                         script's directory. Mutually exclusive with
@@ -248,15 +241,14 @@ file of a package with other modules builds the whole package. Without a
 file, builds the package in the current directory from `src/main.kara` into
 `<root>/<package name>`. The program is checked as `karac check` checks it,
 built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
-optimisation level, -O2 by default). `--legacy` (or KARAC_LEGACY=1) builds
-through the legacy pipeline instead, until M3 deletes it; the flags marked
-Legacy only below are refused without it.
+optimisation level, -O2 by default). The flags marked Not on v2 below are
+refused by name: v2 does not honour them yet, or their feature went to the
+archive with the legacy pipeline at M3.
 
 OPTIONS:
     --output=json           Structured JSON output on stdout
     --output=jsonl          Streaming JSONL output on stdout
-    --legacy                Build through the legacy pipeline.
-    --concurrency-report    Legacy only. Print a human-readable summary of
+    --concurrency-report    Not on v2. Print a human-readable summary of
                             the auto-par analyzer's per-function parallel
                             groups (with the
                             calls in source order, their reads/writes effects,
@@ -274,7 +266,7 @@ OPTIONS:
                             and KARAC_STRIP_ERROR_TRACE env vars.
     --mir                   The v2 build, now the default (accepted so
                             scripts that ask for it keep working).
-    --enable-hot-swap       Legacy only. Emit PLT-style indirection for extern-public
+    --enable-hot-swap       Not on v2. Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
                             forward-compatible with the post-v1 continuous-
                             PGO + shared-object reload story. Off by default.
@@ -294,8 +286,8 @@ OPTIONS:
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
     --target=<name|triple>  Compilation target; v2 builds `native` (or
-                            the host triple) only, the rest is legacy
-                            only. A v1 target NAME
+                            the host triple) and wasm_wasi only; the rest is
+                            not on v2. A v1 target NAME
                             (native, wasm_wasi, wasm_browser; gpu is
                             recognized but not standalone-buildable)
                             selects the cross-compile target:
@@ -316,7 +308,7 @@ OPTIONS:
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
                             See the TARGETS section.
-    --bindings=<mode>       Legacy only. WASM output shape: browser (emit `.js`
+    --bindings=<mode>       Not on v2. WASM output shape: browser (emit `.js`
                             ES-module glue + `.d.ts` TypeScript
                             declarations next to the `.wasm`),
                             component (a single embedded-WIT Component
@@ -364,7 +356,7 @@ OPTIONS:
                             targets `+simd128` is the default (Vector
                             ops lower to v128); `-simd128` opts back
                             down to an MVP-clean scalarized module.
-    --features=<list>       Legacy only. Build-feature opt-ins (`--features=help` lists
+    --features=<list>       Not on v2. Build-feature opt-ins (`--features=help` lists
                             them). The set is closed at one:
                             `wasm-threads` — shared-memory multithreading
                             for `--target=wasm_browser`. Emits a SECOND
@@ -390,7 +382,7 @@ OPTIONS:
                             (wasi-threads and the component model do not
                             compose). Accepts `--features <list>` too.
     --monomorphization-budget=warn:N,error:M
-                            Legacy only. Cap per-generic instantiations. After typecheck
+                            Not on v2. Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N
                             times emits warning[monomorphization-budget];
                             >= M fails the build. Either threshold may be
@@ -732,32 +724,14 @@ karac repl - Launch the interactive REPL
 
 Each cell's program is checked as `karac check` checks a program and run on
 the MIR interpreter. A later cell replays the earlier ones, so it sees what
-they did to a binding; what they printed is not printed again. `--legacy`
-(or KARAC_LEGACY=1) runs the legacy REPL instead, until M3 deletes it.
+they did to a binding; what they printed is not printed again.
 
 USAGE:
-    karac repl [--legacy [--auto-clone]] [--interp]
+    karac repl [--interp]
 
 FLAGS:
-    --legacy       Run the legacy REPL (its JIT, or its tree-walk
-                   interpreter under --interp).
-    --auto-clone   Legacy only (with --legacy). Opt into cross-cell ownership ergonomics. When a cell
-                   reuses a binding that an earlier cell consumed, the
-                   REPL rewrites the consume site to insert `.clone()` and
-                   emits a `perf[auto-clone-in-repl]` note (never silent).
-                   Inherited from `phase-5-diagnostics.md` § \"`--auto-clone`
-                   opt-in mode\". The rewrite goes into the cell's
-                   recorded source so subsequent compilations and `:save`
-                   exports see the cloned form. Off by default; without
-                   the flag the existing notebook-aware UAM diagnostic
-                   surfaces unchanged.
-    --interp       Legacy: run cells on the tree-walk interpreter instead
-                   of the default LLJIT backend; v2 cells always run on the
-                   MIR interpreter. The interpreter is a dev/debug
-                   executor (design.md § Tree-walk interpreter). Equivalent
-                   to `KARAC_REPL_JIT=0`; the flag wins over the env var.
-                   No effect on a build without the `llvm` feature (the JIT
-                   isn't compiled in, so the interpreter already runs).
+    --interp       Accepted for compatibility: cells always run on the MIR
+                   interpreter.
     -h, --help     Print this message"
         }
         "test" => {
@@ -765,7 +739,7 @@ FLAGS:
 karac test - Run the project's tests
 
 USAGE:
-    karac test [<filter>] [--all] [--interp] [--legacy]
+    karac test [<filter>] [--all] [--interp]
 
 Each case runs on v2: the package is checked as `karac check` checks it,
 built to MIR, and every case is a run of its own on the JIT (or the MIR
@@ -789,8 +763,6 @@ OPTIONS:
     --interp   Execute tests on the MIR interpreter instead of the JIT.
                Equivalent to `KARAC_TEST_JIT=0`; the flag wins over the
                env var. No effect on a build without the `llvm` feature.
-    --legacy   Run the legacy test runner instead of v2's, until M3
-               deletes it. `KARAC_LEGACY=1` does the same.
 
 OUTPUT:
     JSONL on stdout, one event per line. Event types: `run_start`,

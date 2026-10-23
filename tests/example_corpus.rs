@@ -77,9 +77,8 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// Entry packages (`kara.toml` + an entry file) that do not currently
 /// type-check, each with the first error the package-level build reports.
 /// Pinned rather than dropped: a fix turns this test RED and forces promotion.
-/// Currently empty — every entry package type-checks.
 ///
-/// `db_pipeline` was the last entry and was promoted out on 2026-07-31, after
+/// `db_pipeline` was the last legacy-era entry and was promoted out on 2026-07-31, after
 /// the pin inverted and this test went red demanding it. It began the sweep at
 /// 18 errors once B-2026-07-29-19 removed the call-site `ref` parse error that
 /// had been masking every later phase. Clearing it took de-rotting the example
@@ -94,15 +93,48 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// invisible to later selects, so it prints "(no rows)"), and codegen rejects
 /// the structural `==` on its reference-typed `Value` enum, a gap its own
 /// diagnostic documents. Neither is a reason to re-pin it here.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
-    "elevator_project",
-    "typecheck: the legacy `karac build` refuses `ref self.stops` (only `ref v[i]` in v1), \
-     and v2 requires the `ref` on a returned place (B-2026-10-22-28). This leg measures \
-     `karac build --legacy`; the v2 `karac build` builds the package (B-2026-10-22-14).",
-)];
+///
+/// Since M3 this gate type-checks on v2, the only front end left, so the four
+/// entries below are packages the legacy `karac build` accepted and the v2
+/// rules refuse. Each is example rot against the v2 core rules (or an M4a
+/// feature), not a regression: none of them built on v2 before the deletion.
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
+    (
+        "db_pipeline",
+        "typecheck (v2 core rules): moves out of borrowed places, e.g. \
+         `new_rows.push(row)` on a bare `for` element (borrow_projection_copy) \
+         and `table: table` from a `ref` binding in src/planner.kara.",
+    ),
+    (
+        "slipstream",
+        "ownership (v2 core rules): moves a non-`Copy` value out of a \
+         collection element, src/sim.kara:249 and four more sites.",
+    ),
+    (
+        "weave",
+        "typecheck (v2 core rules): `Str` expected where a `char` literal is \
+         written, src/main.kara:195, and 17 more errors.",
+    ),
+    (
+        "ws_idle_holder",
+        "typecheck: `TlsListener.bind_tls` and `WebSocket.accept_tls` are the \
+         services track (M4a), which the v2 build refuses by name until then.",
+    ),
+];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
+    (
+        "ssr_counter/ssr_counter.kara",
+        "typecheck under wasm_browser: `pub fn hydrate` is a WASM export, which \
+         went to the archive with the legacy backend at M3 and `karac check` \
+         refuses by name.",
+    ),
+    (
+        "interop/kernel.kara",
+        "typecheck: `pub extern \"C\" fn` is the exported C ABI, which went to \
+         the archive with the legacy backend at M3 and `karac check` refuses by name.",
+    ),
     (
         "word_count.kara",
         "resolve: undefined name 'read_file' — the spec spells this \
@@ -135,8 +167,8 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
         "std_net/ws_echo_freespawn.kara",
         "typecheck: free `spawn` is removed (§11.1, E0520). The file is the \
          legacy probe for the free-spawn coroutine leak \
-         (docs/spikes/windows-iocp-scale-investigation.md); legacy `build` \
-         still accepts it, and ws_echo_spawn.kara is the TaskGroup form.",
+         (docs/spikes/windows-iocp-scale-investigation.md), and \
+         ws_echo_spawn.kara is the TaskGroup form.",
     ),
     (
         "std_net/ws_echo.kara",
@@ -253,7 +285,7 @@ fn check_file(rel: &Path) -> (bool, String) {
 #[cfg_attr(feature = "llvm", allow(dead_code))]
 fn build_package(name: &str) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .args(["build", "--legacy"])
+        .args(["build"])
         .current_dir(examples_root().join(name))
         .output()
         .expect("spawn karac build");

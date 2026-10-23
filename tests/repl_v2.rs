@@ -1,15 +1,10 @@
 //! `karac repl` on v2 (M3 item 3, B-2026-10-22-45): each cell's program is
 //! checked as `karac check` checks a program and run on the MIR interpreter.
-//! `tests/repl.rs` and `tests/repl_jit.rs` keep covering the legacy REPL
-//! (`--legacy`) until M3 deletes it.
 
 use karac::repl::{ReplOptions, Session};
 
 fn session() -> Session {
-    Session::with_options(ReplOptions {
-        v2: true,
-        ..Default::default()
-    })
+    Session::with_options(ReplOptions::default())
 }
 
 /// Runs each cell, asserting it is accepted, and returns the last one's
@@ -27,7 +22,6 @@ fn run(cells: &[&str]) -> String {
 
 #[test]
 fn repl_v2_runs_items_and_statements() {
-    assert!(session().v2());
     assert_eq!(
         run(&[
             "struct P { x: i64 }",
@@ -173,15 +167,15 @@ fn repl_v2_runs_a_cell_under_a_provider() {
     assert_eq!(r.stdout, "42\n");
 }
 
-/// `%show` and auto-clone answer the legacy interpreter and checker; on v2
-/// they say so rather than doing nothing.
+/// `%show` and auto-clone went with the legacy REPL at M3; on v2 they say
+/// so rather than doing nothing.
 #[test]
-fn repl_v2_show_and_auto_clone_name_the_legacy_repl() {
+fn repl_v2_show_and_auto_clone_say_they_are_unsupported() {
     let mut s = session();
     let show = format!("{:?}", s.dispatch_magic("%show 1"));
-    assert!(show.contains("karac repl --legacy"), "{show}");
+    assert!(show.contains("`%show` is not supported yet"), "{show}");
     let set = format!("{:?}", s.dispatch_magic("%set auto-clone on"));
-    assert!(set.contains("karac repl --legacy"), "{set}");
+    assert!(set.contains("`%set auto-clone` is not supported"), "{set}");
     assert!(!s.auto_clone());
 }
 
@@ -208,44 +202,36 @@ fn karac_repl(args: &[&str], input: &str, legacy_env: bool) -> std::process::Out
     child.wait_with_output().expect("wait karac repl")
 }
 
-/// `karac repl` runs on v2; `--legacy` and `KARAC_LEGACY=1` reach the
-/// legacy REPL, whose checker lets a bare parameter be given away.
+/// `karac repl` runs on v2, whose checker refuses giving a bare parameter
+/// away; `--legacy` named the REPL M3 deleted and is refused, and
+/// `KARAC_LEGACY=1` changes nothing.
 #[test]
-fn repl_v2_is_the_default_and_legacy_stays_reachable() {
+fn repl_v2_is_the_default_and_legacy_is_gone() {
     let input = "struct H { n: i64 }\nfn id(h: H) -> H { return h }\n\
                  let a = 40;\nprintln(a + 2);\n:quit\n";
-    let out = karac_repl(&[], input, false);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stdout.contains("42\n"), "{stdout}\n{stderr}");
-    assert!(!stdout.contains("JIT"), "{stdout}");
-    assert!(
-        stderr.contains("cannot give away parameter `h`"),
-        "{stderr}"
-    );
-    // `--interp` keeps the legacy runs off the JIT runner; v2 takes it too.
-    for (args, env) in [
-        (&["--legacy", "--interp"][..], false),
-        (&["--interp"][..], true),
-    ] {
-        let out = karac_repl(args, input, env);
+    for env in [false, true] {
+        let out = karac_repl(&[], input, env);
+        let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stdout.contains("42\n"), "{env}: {stdout}\n{stderr}");
+        assert!(!stdout.contains("JIT"), "{stdout}");
         assert!(
-            !stderr.contains("cannot give away"),
-            "{args:?} {env}: {stderr}"
+            stderr.contains("cannot give away parameter `h`"),
+            "{env}: {stderr}"
         );
     }
+    let out = karac_repl(&["--legacy"], input, false);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--legacy is gone"), "{stderr}");
 }
 
 #[test]
-fn repl_v2_refuses_auto_clone_without_legacy() {
+fn repl_v2_refuses_auto_clone() {
     let out = karac_repl(&["--auto-clone"], ":quit\n", false);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("karac repl --legacy --auto-clone"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("--auto-clone is not supported"), "{stderr}");
 }
 
 /// The number of times the cells have appended to the file `path`.
