@@ -8556,3 +8556,40 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-22-36: a method call on an uppercase local (`C.doubled()`,
+/// `Q.inner.bump(2)`), which the parser reads as a path, takes the local
+/// (through any fields) as its receiver, in each receiver mode.
+#[test]
+fn mir_a_method_call_on_an_uppercase_local() {
+    let src = r#"struct Counter { n: i64 }
+impl Counter {
+    fn doubled(self) -> i64 { self.n * 2 }
+    fn bump(mut ref self, by: i64) { self.n += by; }
+    fn take(own self) -> i64 { self.n }
+}
+struct P { inner: Counter }
+fn show(c: Counter) -> i64 {
+    let K = c;
+    K.doubled() + 1
+}
+fn main() {
+    let mut C: Counter = Counter { n: 21 };
+    C.bump(4);
+    println(C.doubled());
+    let mut Q = P { inner: Counter { n: 1 } };
+    Q.inner.bump(2);
+    println(Q.inner.doubled());
+    println(show(C));
+    println(C.take());
+}
+"#;
+    let want = "50\n6\n51\n25\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    for opt in 0..=3 {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

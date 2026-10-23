@@ -4697,6 +4697,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Place::local(l))
     }
 
+    /// The place `segments` names from the uppercase local `sym` (its first
+    /// segment): the local, then each field in turn.
+    fn local_path_place(&mut self, span: Span, sym: SymbolId, segments: &[String]) -> R<Place> {
+        let mut p = match (self.locals.get(&sym), self.captured.get(&sym)) {
+            (Some(&l), _) => Place::local(l),
+            (None, Some(p)) => p.clone(),
+            (None, None) => {
+                let name = &segments[0];
+                return self.unsupported(span, &format!("the capture of `{name}`"));
+            }
+        };
+        for field in &segments[1..] {
+            let (base, bt) = self.strip_refs(p);
+            let Some((idx, ft)) = self.field_of(bt, None, field) else {
+                return self.unsupported(span, &format!("the field `{field}`"));
+            };
+            p = base.field(idx, ft);
+        }
+        Ok(p)
+    }
+
     fn expr_place_of(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
         match &e.kind {
             ExprKind::Identifier(name) => match self.lcx.res.get(&e.id) {
@@ -4716,22 +4737,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(&Res::LocalPath(sym)) = self.lcx.res.get(&e.id) else {
                     return self.temp_place(e);
                 };
-                let mut p = match (self.locals.get(&sym), self.captured.get(&sym)) {
-                    (Some(&l), _) => Place::local(l),
-                    (None, Some(p)) => p.clone(),
-                    (None, None) => {
-                        let name = &segments[0];
-                        return self.unsupported(e.span, &format!("the capture of `{name}`"));
-                    }
-                };
-                for field in &segments[1..] {
-                    let (base, bt) = self.strip_refs(p);
-                    let Some((idx, ft)) = self.field_of(bt, None, field) else {
-                        return self.unsupported(e.span, &format!("the field `{field}`"));
-                    };
-                    p = base.field(idx, ft);
-                }
-                Ok(p)
+                self.local_path_place(e.span, sym, segments)
             }
             // Inside a closure `self` is one of its captures.
             ExprKind::SelfValue => match self.self_local {
@@ -11493,6 +11499,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let callee_kind = rc.callee.clone();
         let substs = self.lcx.tys.tcx().list(rc.substs);
+        // `C.doubled()` with an uppercase local `C`, which the parser reads
+        // as a path: the local (through any fields before the method) is
+        // the receiver.
+        if let (ExprKind::Path { segments, .. }, Some(&Res::LocalPath(sym)), &Callee::Def(d)) =
+            (&callee.kind, self.lcx.res.get(&callee.id), &callee_kind)
+        {
+            let f = self.lcx.fns.get(&d).map(|i| i.f);
+            if let Some((f, mode)) = f.and_then(|f| Some((f, f.self_param.clone()?))) {
+                let p = self.local_path_place(callee.span, sym, &segments[..segments.len() - 1])?;
+                let (p, vt) = self.strip_refs(p);
+                let inst_args = self.instance_args(e.span, &substs)?;
+                let recv = match self.self_mode(f, mode, vt) {
+                    SelfParam::Owned => self.use_place(p, vt),
+                    SelfParam::Ref => self.ref_to(p, vt),
+                    SelfParam::MutRef => {
+                        let rt = self.tys().tcx().reference(vt, true);
+                        let r = self.temp(rt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Mut, p));
+                        Operand::Move(Place::local(r))
+                    }
+                };
+                return self.def_call(e, d, f, inst_args, Some(recv), args, dest);
+            }
+        }
         // `LOG_PATH.clone()` parses as a path: a library method of the
         // constant's value, which is computed here.
         if let ExprKind::Path { segments, .. } = &callee.kind {
