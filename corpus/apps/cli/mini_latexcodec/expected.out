@@ -1,0 +1,1612 @@
+== table
+> table
+  unicode_map 712 entries, max_length 7, latex_map 401 entries
+  dec space:' ' control_word:'\\par' -> '\n\n'
+  dec control_word:'\\par' -> '\n\n'
+  dec control_symbol:'\\ ' -> ' '
+  dec control_word:'\\quad' -> '\u2003'
+  dec control_symbol_x2:'\\%' -> '%'
+  dec chars:'--' -> '\u2013'
+  dec control_word:'\\textendash' -> '\u2013'
+  dec chars:'---' -> '\u2014'
+  dec control_word:'\\textemdash' -> '\u2014'
+  dec chars:'``' -> '\u201c'
+  dec chars:"''" -> '\u201d'
+  dec chars:',' chars:',' -> '\u201e'
+  dec control_word:'\\glqq' -> '\u201e'
+  dec control_word:'\\guillemotleft' -> '\xab'
+  dec control_word:'\\guillemotright' -> '\xbb'
+  dec control_word:'\\dag' -> '\u2020'
+  dec control_word:'\\ddag' -> '\u2021'
+  dec control_word:'\\textbackslash' -> '\\'
+  dec mathshift:'$' control_word:'\\backslash' mathshift:'$' -> '\\'
+  dec control_symbol_x:'\\(' control_word:'\\backslash' control_symbol_x:'\\)' -> '\\'
+  dec mathshift:'$' control_word:'\\sim' mathshift:'$' -> '\u223c'
+  dec control_symbol_x:'\\(' control_word:'\\sim' control_symbol_x:'\\)' -> '\u223c'
+  dec control_word:'\\texttildelow' -> '\u02f7'
+  dec control_symbol:'\\~' chars:'{' chars:'}' -> '\u02dc'
+  dec control_word:'\\textasciitilde' -> '~'
+  dec mathshift:'$' control_word:'\\bullet' mathshift:'$' -> '\u2022'
+  dec control_symbol_x:'\\(' control_word:'\\bullet' control_symbol_x:'\\)' -> '\u2022'
+  dec control_word:'\\textbullet' -> '\u2022'
+  dec mathshift:'$' control_word:'\\ast' mathshift:'$' -> '\u2217'
+  dec control_symbol_x:'\\(' control_word:'\\ast' control_symbol_x:'\\)' -> '\u2217'
+  dec control_symbol_x:'\\#' -> '#'
+  dec control_symbol_x:'\\_' -> '_'
+  dec control_symbol_x:'\\&' -> '&'
+  dec chars:'~' -> '\xa0'
+  dec chars:'!`' -> '\xa1'
+  dec control_word:'\\not' chars:'{' chars:'c' chars:'}' -> '\xa2'
+  dec control_word:'\\pounds' -> '\xa3'
+  dec control_word:'\\textsterling' -> '\xa3'
+  dec control_word:'\\yen' -> '\xa5'
+  dec control_word:'\\textyen' -> '\xa5'
+  dec control_word:'\\S' -> '\xa7'
+  dec control_symbol:'\\"' chars:'{' chars:'}' -> '\xa8'
+  dec control_word:'\\neg' -> '\xac'
+  dec control_symbol_x:'\\-' -> '\xad'
+  dec control_symbol:'\\=' chars:'{' chars:'}' -> '\xaf'
+  dec mathshift:'$' chars:'^' control_word:'\\circ' mathshift:'$' -> '\xb0'
+  dec control_symbol_x:'\\(' chars:'^' control_word:'\\circ' control_symbol_x:'\\)' -> '\xb0'
+  dec control_word:'\\textdegree' -> '\xb0'
+  dec mathshift:'$' chars:'-' mathshift:'$' -> '\u2212'
+  dec control_symbol_x:'\\(' chars:'-' control_symbol_x:'\\)' -> '\u2212'
+  dec mathshift:'$' control_word:'\\pm' mathshift:'$' -> '\xb1'
+  dec control_symbol_x:'\\(' control_word:'\\pm' control_symbol_x:'\\)' -> '\xb1'
+  dec control_word:'\\textpm' -> '\xb1'
+  dec mathshift:'$' chars:'^' chars:'2' mathshift:'$' -> '\xb2'
+  dec control_symbol_x:'\\(' chars:'^' chars:'2' control_symbol_x:'\\)' -> '\xb2'
+  dec control_word:'\\texttwosuperior' -> '\xb2'
+  dec mathshift:'$' chars:'^' chars:'3' mathshift:'$' -> '\xb3'
+  dec control_symbol_x:'\\(' chars:'^' chars:'3' control_symbol_x:'\\)' -> '\xb3'
+  dec control_word:'\\textthreesuperior' -> '\xb3'
+  dec control_symbol:"\\'" chars:'{' chars:'}' -> '\xb4'
+  dec mathshift:'$' control_word:'\\mu' mathshift:'$' -> '\xb5'
+  dec control_symbol_x:'\\(' control_word:'\\mu' control_symbol_x:'\\)' -> '\xb5'
+  dec control_word:'\\micro' -> '\xb5'
+  dec control_word:'\\P' -> '\xb6'
+  dec mathshift:'$' control_word:'\\cdot' mathshift:'$' -> '\xb7'
+  dec control_symbol_x:'\\(' control_word:'\\cdot' control_symbol_x:'\\)' -> '\xb7'
+  dec control_word:'\\textperiodcentered' -> '\xb7'
+  dec control_word:'\\c' chars:'{' chars:'}' -> '\xb8'
+  dec mathshift:'$' chars:'^' chars:'1' mathshift:'$' -> '\xb9'
+  dec control_symbol_x:'\\(' chars:'^' chars:'1' control_symbol_x:'\\)' -> '\xb9'
+  dec control_word:'\\textonesuperior' -> '\xb9'
+  dec chars:'?`' -> '\xbf'
+  dec control_symbol:'\\`' chars:'A' -> '\xc0'
+  dec control_symbol:'\\`' chars:'{' chars:'A' chars:'}' -> '{\xc0}'
+  dec control_symbol:'\\^' chars:'A' -> '\xc2'
+  dec control_symbol:'\\^' chars:'{' chars:'A' chars:'}' -> '{\xc2}'
+  dec control_symbol:'\\~' chars:'A' -> '\xc3'
+  dec control_symbol:'\\~' chars:'{' chars:'A' chars:'}' -> '{\xc3}'
+  dec control_symbol:'\\"' chars:'A' -> '\xc4'
+  dec control_symbol:'\\"' chars:'{' chars:'A' chars:'}' -> '{\xc4}'
+  dec control_word:'\\AA' -> '\xc5'
+  dec control_word:'\\r' chars:'A' -> '\xc5'
+  dec control_word:'\\r' chars:'{' chars:'A' chars:'}' -> '{\xc5}'
+  dec control_word:'\\AE' -> '\xc6'
+  dec control_word:'\\c' chars:'C' -> '\xc7'
+  dec control_word:'\\c' chars:'{' chars:'C' chars:'}' -> '{\xc7}'
+  dec control_symbol:'\\`' chars:'E' -> '\xc8'
+  dec control_symbol:'\\`' chars:'{' chars:'E' chars:'}' -> '{\xc8}'
+  dec control_symbol:"\\'" chars:'E' -> '\xc9'
+  dec control_symbol:"\\'" chars:'{' chars:'E' chars:'}' -> '{\xc9}'
+  dec control_symbol:'\\^' chars:'E' -> '\xca'
+  dec control_symbol:'\\^' chars:'{' chars:'E' chars:'}' -> '{\xca}'
+  dec control_symbol:'\\"' chars:'E' -> '\xcb'
+  dec control_symbol:'\\"' chars:'{' chars:'E' chars:'}' -> '{\xcb}'
+  dec control_symbol:'\\`' chars:'I' -> '\xcc'
+  dec control_symbol:'\\`' chars:'{' chars:'I' chars:'}' -> '{\xcc}'
+  dec control_symbol:'\\^' chars:'I' -> '\xce'
+  dec control_symbol:'\\^' chars:'{' chars:'I' chars:'}' -> '{\xce}'
+  dec control_symbol:'\\"' chars:'I' -> '\xcf'
+  dec control_symbol:'\\"' chars:'{' chars:'I' chars:'}' -> '{\xcf}'
+  dec control_symbol:'\\~' chars:'N' -> '\xd1'
+  dec control_symbol:'\\~' chars:'{' chars:'N' chars:'}' -> '{\xd1}'
+  dec control_symbol:'\\`' chars:'O' -> '\xd2'
+  dec control_symbol:'\\`' chars:'{' chars:'O' chars:'}' -> '{\xd2}'
+  dec control_symbol:"\\'" chars:'O' -> '\xd3'
+  dec control_symbol:"\\'" chars:'{' chars:'O' chars:'}' -> '{\xd3}'
+  dec control_symbol:'\\^' chars:'O' -> '\xd4'
+  dec control_symbol:'\\^' chars:'{' chars:'O' chars:'}' -> '{\xd4}'
+  dec control_symbol:'\\~' chars:'O' -> '\xd5'
+  dec control_symbol:'\\~' chars:'{' chars:'O' chars:'}' -> '{\xd5}'
+  dec control_symbol:'\\"' chars:'O' -> '\xd6'
+  dec control_symbol:'\\"' chars:'{' chars:'O' chars:'}' -> '{\xd6}'
+  dec mathshift:'$' control_word:'\\times' mathshift:'$' -> '\xd7'
+  dec control_symbol_x:'\\(' control_word:'\\times' control_symbol_x:'\\)' -> '\xd7'
+  dec control_word:'\\O' -> '\xd8'
+  dec control_symbol:'\\`' chars:'U' -> '\xd9'
+  dec control_symbol:'\\`' chars:'{' chars:'U' chars:'}' -> '{\xd9}'
+  dec control_symbol:"\\'" chars:'U' -> '\xda'
+  dec control_symbol:"\\'" chars:'{' chars:'U' chars:'}' -> '{\xda}'
+  dec control_symbol:'\\^' chars:'U' -> '\xdb'
+  dec control_symbol:'\\^' chars:'{' chars:'U' chars:'}' -> '{\xdb}'
+  dec control_symbol:'\\"' chars:'U' -> '\xdc'
+  dec control_symbol:'\\"' chars:'{' chars:'U' chars:'}' -> '{\xdc}'
+  dec control_symbol:"\\'" chars:'Y' -> '\xdd'
+  dec control_symbol:"\\'" chars:'{' chars:'Y' chars:'}' -> '{\xdd}'
+  dec control_word:'\\ss' -> '\xdf'
+  dec control_symbol:'\\`' chars:'a' -> '\xe0'
+  dec control_symbol:'\\`' chars:'{' chars:'a' chars:'}' -> '{\xe0}'
+  dec control_symbol:"\\'" chars:'a' -> '\xe1'
+  dec control_symbol:"\\'" chars:'{' chars:'a' chars:'}' -> '{\xe1}'
+  dec control_symbol:'\\^' chars:'a' -> '\xe2'
+  dec control_symbol:'\\^' chars:'{' chars:'a' chars:'}' -> '{\xe2}'
+  dec control_symbol:'\\~' chars:'a' -> '\xe3'
+  dec control_symbol:'\\~' chars:'{' chars:'a' chars:'}' -> '{\xe3}'
+  dec control_symbol:'\\"' chars:'a' -> '\xe4'
+  dec control_symbol:'\\"' chars:'{' chars:'a' chars:'}' -> '{\xe4}'
+  dec control_word:'\\aa' -> '\xe5'
+  dec control_word:'\\r' chars:'a' -> '\xe5'
+  dec control_word:'\\r' chars:'{' chars:'a' chars:'}' -> '{\xe5}'
+  dec control_word:'\\ae' -> '\xe6'
+  dec control_word:'\\c' chars:'c' -> '\xe7'
+  dec control_word:'\\c' chars:'{' chars:'c' chars:'}' -> '{\xe7}'
+  dec control_symbol:'\\`' chars:'e' -> '\xe8'
+  dec control_symbol:'\\`' chars:'{' chars:'e' chars:'}' -> '{\xe8}'
+  dec control_symbol:"\\'" chars:'e' -> '\xe9'
+  dec control_symbol:"\\'" chars:'{' chars:'e' chars:'}' -> '{\xe9}'
+  dec control_symbol:'\\^' chars:'e' -> '\xea'
+  dec control_symbol:'\\^' chars:'{' chars:'e' chars:'}' -> '{\xea}'
+  dec control_symbol:'\\"' chars:'e' -> '\xeb'
+  dec control_symbol:'\\"' chars:'{' chars:'e' chars:'}' -> '{\xeb}'
+  dec control_symbol:'\\`' control_word:'\\i' -> '\xec'
+  dec control_symbol:'\\`' chars:'i' -> '\xec'
+  dec control_symbol:'\\`' chars:'{' chars:'i' chars:'}' -> '{\xec}'
+  dec control_symbol:"\\'" control_word:'\\i' -> '\xed'
+  dec control_symbol:"\\'" chars:'i' -> '\xed'
+  dec control_symbol:"\\'" chars:'{' chars:'i' chars:'}' -> '{\xed}'
+  dec control_symbol:'\\^' control_word:'\\i' -> '\xee'
+  dec control_symbol:'\\^' chars:'i' -> '\xee'
+  dec control_symbol:'\\^' chars:'{' chars:'i' chars:'}' -> '{\xee}'
+  dec control_symbol:'\\"' control_word:'\\i' -> '\xef'
+  dec control_symbol:'\\"' chars:'i' -> '\xef'
+  dec control_symbol:'\\"' chars:'{' chars:'i' chars:'}' -> '{\xef}'
+  dec control_symbol:'\\~' chars:'n' -> '\xf1'
+  dec control_symbol:'\\~' chars:'{' chars:'n' chars:'}' -> '{\xf1}'
+  dec control_symbol:'\\`' chars:'o' -> '\xf2'
+  dec control_symbol:'\\`' chars:'{' chars:'o' chars:'}' -> '{\xf2}'
+  dec control_symbol:"\\'" chars:'o' -> '\xf3'
+  dec control_symbol:"\\'" chars:'{' chars:'o' chars:'}' -> '{\xf3}'
+  dec control_symbol:'\\^' chars:'o' -> '\xf4'
+  dec control_symbol:'\\^' chars:'{' chars:'o' chars:'}' -> '{\xf4}'
+  dec control_symbol:'\\~' chars:'o' -> '\xf5'
+  dec control_symbol:'\\~' chars:'{' chars:'o' chars:'}' -> '{\xf5}'
+  dec control_symbol:'\\"' chars:'o' -> '\xf6'
+  dec control_symbol:'\\"' chars:'{' chars:'o' chars:'}' -> '{\xf6}'
+  dec mathshift:'$' control_word:'\\div' mathshift:'$' -> '\xf7'
+  dec control_symbol_x:'\\(' control_word:'\\div' control_symbol_x:'\\)' -> '\xf7'
+  dec control_word:'\\o' -> '\xf8'
+  dec control_symbol:'\\`' chars:'u' -> '\xf9'
+  dec control_symbol:'\\`' chars:'{' chars:'u' chars:'}' -> '{\xf9}'
+  dec control_symbol:"\\'" chars:'u' -> '\xfa'
+  dec control_symbol:"\\'" chars:'{' chars:'u' chars:'}' -> '{\xfa}'
+  dec control_symbol:'\\^' chars:'u' -> '\xfb'
+  dec control_symbol:'\\^' chars:'{' chars:'u' chars:'}' -> '{\xfb}'
+  dec control_symbol:'\\"' chars:'u' -> '\xfc'
+  dec control_symbol:'\\"' chars:'{' chars:'u' chars:'}' -> '{\xfc}'
+  dec control_symbol:"\\'" chars:'y' -> '\xfd'
+  dec control_symbol:"\\'" chars:'{' chars:'y' chars:'}' -> '{\xfd}'
+  dec control_symbol:'\\"' chars:'y' -> '\xff'
+  dec control_symbol:'\\"' chars:'{' chars:'y' chars:'}' -> '{\xff}'
+  dec control_symbol:'\\=' chars:'A' -> '\u0100'
+  dec control_symbol:'\\=' chars:'{' chars:'A' chars:'}' -> '{\u0100}'
+  dec control_symbol:'\\=' chars:'a' -> '\u0101'
+  dec control_symbol:'\\=' chars:'{' chars:'a' chars:'}' -> '{\u0101}'
+  dec control_word:'\\u' chars:'A' -> '\u0102'
+  dec control_word:'\\u' chars:'{' chars:'A' chars:'}' -> '{\u0102}'
+  dec control_word:'\\u' chars:'a' -> '\u0103'
+  dec control_word:'\\u' chars:'{' chars:'a' chars:'}' -> '{\u0103}'
+  dec control_word:'\\k' chars:'A' -> '\u0104'
+  dec control_word:'\\k' chars:'{' chars:'A' chars:'}' -> '{\u0104}'
+  dec control_word:'\\k' chars:'a' -> '\u0105'
+  dec control_word:'\\k' chars:'{' chars:'a' chars:'}' -> '{\u0105}'
+  dec control_symbol:"\\'" chars:'C' -> '\u0106'
+  dec control_symbol:"\\'" chars:'{' chars:'C' chars:'}' -> '{\u0106}'
+  dec control_symbol:"\\'" chars:'c' -> '\u0107'
+  dec control_symbol:"\\'" chars:'{' chars:'c' chars:'}' -> '{\u0107}'
+  dec control_symbol:'\\^' chars:'C' -> '\u0108'
+  dec control_symbol:'\\^' chars:'{' chars:'C' chars:'}' -> '{\u0108}'
+  dec control_symbol:'\\^' chars:'c' -> '\u0109'
+  dec control_symbol:'\\^' chars:'{' chars:'c' chars:'}' -> '{\u0109}'
+  dec control_symbol:'\\.' chars:'C' -> '\u010a'
+  dec control_symbol:'\\.' chars:'{' chars:'C' chars:'}' -> '{\u010a}'
+  dec control_symbol:'\\.' chars:'c' -> '\u010b'
+  dec control_symbol:'\\.' chars:'{' chars:'c' chars:'}' -> '{\u010b}'
+  dec control_word:'\\v' chars:'C' -> '\u010c'
+  dec control_word:'\\v' chars:'{' chars:'C' chars:'}' -> '{\u010c}'
+  dec control_word:'\\v' chars:'c' -> '\u010d'
+  dec control_word:'\\v' chars:'{' chars:'c' chars:'}' -> '{\u010d}'
+  dec control_word:'\\v' chars:'D' -> '\u010e'
+  dec control_word:'\\v' chars:'{' chars:'D' chars:'}' -> '{\u010e}'
+  dec control_word:'\\v' chars:'d' -> '\u010f'
+  dec control_word:'\\v' chars:'{' chars:'d' chars:'}' -> '{\u010f}'
+  dec control_symbol:'\\=' chars:'E' -> '\u0112'
+  dec control_symbol:'\\=' chars:'{' chars:'E' chars:'}' -> '{\u0112}'
+  dec control_symbol:'\\=' chars:'e' -> '\u0113'
+  dec control_symbol:'\\=' chars:'{' chars:'e' chars:'}' -> '{\u0113}'
+  dec control_word:'\\u' chars:'E' -> '\u0114'
+  dec control_word:'\\u' chars:'{' chars:'E' chars:'}' -> '{\u0114}'
+  dec control_word:'\\u' chars:'e' -> '\u0115'
+  dec control_word:'\\u' chars:'{' chars:'e' chars:'}' -> '{\u0115}'
+  dec control_symbol:'\\.' chars:'E' -> '\u0116'
+  dec control_symbol:'\\.' chars:'{' chars:'E' chars:'}' -> '{\u0116}'
+  dec control_symbol:'\\.' chars:'e' -> '\u0117'
+  dec control_symbol:'\\.' chars:'{' chars:'e' chars:'}' -> '{\u0117}'
+  dec control_word:'\\k' chars:'E' -> '\u0118'
+  dec control_word:'\\k' chars:'{' chars:'E' chars:'}' -> '{\u0118}'
+  dec control_word:'\\k' chars:'e' -> '\u0119'
+  dec control_word:'\\k' chars:'{' chars:'e' chars:'}' -> '{\u0119}'
+  dec control_word:'\\v' chars:'E' -> '\u011a'
+  dec control_word:'\\v' chars:'{' chars:'E' chars:'}' -> '{\u011a}'
+  dec control_word:'\\v' chars:'e' -> '\u011b'
+  dec control_word:'\\v' chars:'{' chars:'e' chars:'}' -> '{\u011b}'
+  dec control_symbol:'\\^' chars:'G' -> '\u011c'
+  dec control_symbol:'\\^' chars:'{' chars:'G' chars:'}' -> '{\u011c}'
+  dec control_symbol:'\\^' chars:'g' -> '\u011d'
+  dec control_symbol:'\\^' chars:'{' chars:'g' chars:'}' -> '{\u011d}'
+  dec control_word:'\\u' chars:'G' -> '\u011e'
+  dec control_word:'\\u' chars:'{' chars:'G' chars:'}' -> '{\u011e}'
+  dec control_word:'\\u' chars:'g' -> '\u011f'
+  dec control_word:'\\u' chars:'{' chars:'g' chars:'}' -> '{\u011f}'
+  dec control_symbol:'\\.' chars:'G' -> '\u0120'
+  dec control_symbol:'\\.' chars:'{' chars:'G' chars:'}' -> '{\u0120}'
+  dec control_symbol:'\\.' chars:'g' -> '\u0121'
+  dec control_symbol:'\\.' chars:'{' chars:'g' chars:'}' -> '{\u0121}'
+  dec control_word:'\\c' chars:'G' -> '\u0122'
+  dec control_word:'\\c' chars:'{' chars:'G' chars:'}' -> '{\u0122}'
+  dec control_word:'\\c' chars:'g' -> '\u0123'
+  dec control_word:'\\c' chars:'{' chars:'g' chars:'}' -> '{\u0123}'
+  dec control_symbol:'\\^' chars:'H' -> '\u0124'
+  dec control_symbol:'\\^' chars:'{' chars:'H' chars:'}' -> '{\u0124}'
+  dec control_symbol:'\\^' chars:'h' -> '\u0125'
+  dec control_symbol:'\\^' chars:'{' chars:'h' chars:'}' -> '{\u0125}'
+  dec control_symbol:'\\~' chars:'I' -> '\u0128'
+  dec control_symbol:'\\~' chars:'{' chars:'I' chars:'}' -> '{\u0128}'
+  dec control_symbol:'\\~' control_word:'\\i' -> '\u0129'
+  dec control_symbol:'\\~' chars:'i' -> '\u0129'
+  dec control_symbol:'\\~' chars:'{' chars:'i' chars:'}' -> '{\u0129}'
+  dec control_symbol:'\\=' chars:'I' -> '\u012a'
+  dec control_symbol:'\\=' chars:'{' chars:'I' chars:'}' -> '{\u012a}'
+  dec control_symbol:'\\=' control_word:'\\i' -> '\u012b'
+  dec control_symbol:'\\=' chars:'i' -> '\u012b'
+  dec control_symbol:'\\=' chars:'{' chars:'i' chars:'}' -> '{\u012b}'
+  dec control_word:'\\u' chars:'I' -> '\u012c'
+  dec control_word:'\\u' chars:'{' chars:'I' chars:'}' -> '{\u012c}'
+  dec control_word:'\\u' control_word:'\\i' -> '\u012d'
+  dec control_word:'\\u' chars:'i' -> '\u012d'
+  dec control_word:'\\u' chars:'{' chars:'i' chars:'}' -> '{\u012d}'
+  dec control_word:'\\k' chars:'I' -> '\u012e'
+  dec control_word:'\\k' chars:'{' chars:'I' chars:'}' -> '{\u012e}'
+  dec control_word:'\\k' chars:'i' -> '\u012f'
+  dec control_word:'\\k' chars:'{' chars:'i' chars:'}' -> '{\u012f}'
+  dec control_symbol:'\\.' chars:'I' -> '\u0130'
+  dec control_symbol:'\\.' chars:'{' chars:'I' chars:'}' -> '{\u0130}'
+  dec control_word:'\\i' -> '\u0131'
+  dec control_symbol:'\\^' chars:'J' -> '\u0134'
+  dec control_symbol:'\\^' chars:'{' chars:'J' chars:'}' -> '{\u0134}'
+  dec control_symbol:'\\^' control_word:'\\j' -> '\u0135'
+  dec control_symbol:'\\^' chars:'j' -> '\u0135'
+  dec control_symbol:'\\^' chars:'{' chars:'j' chars:'}' -> '{\u0135}'
+  dec control_word:'\\c' chars:'K' -> '\u0136'
+  dec control_word:'\\c' chars:'{' chars:'K' chars:'}' -> '{\u0136}'
+  dec control_word:'\\c' chars:'k' -> '\u0137'
+  dec control_word:'\\c' chars:'{' chars:'k' chars:'}' -> '{\u0137}'
+  dec control_symbol:"\\'" chars:'L' -> '\u0139'
+  dec control_symbol:"\\'" chars:'{' chars:'L' chars:'}' -> '{\u0139}'
+  dec control_symbol:"\\'" chars:'l' -> '\u013a'
+  dec control_symbol:"\\'" chars:'{' chars:'l' chars:'}' -> '{\u013a}'
+  dec control_word:'\\c' chars:'L' -> '\u013b'
+  dec control_word:'\\c' chars:'{' chars:'L' chars:'}' -> '{\u013b}'
+  dec control_word:'\\c' chars:'l' -> '\u013c'
+  dec control_word:'\\c' chars:'{' chars:'l' chars:'}' -> '{\u013c}'
+  dec control_word:'\\v' chars:'L' -> '\u013d'
+  dec control_word:'\\v' chars:'{' chars:'L' chars:'}' -> '{\u013d}'
+  dec control_word:'\\v' chars:'l' -> '\u013e'
+  dec control_word:'\\v' chars:'{' chars:'l' chars:'}' -> '{\u013e}'
+  dec control_word:'\\L' -> '\u0141'
+  dec control_word:'\\l' -> '\u0142'
+  dec control_symbol:"\\'" chars:'N' -> '\u0143'
+  dec control_symbol:"\\'" chars:'{' chars:'N' chars:'}' -> '{\u0143}'
+  dec control_symbol:"\\'" chars:'n' -> '\u0144'
+  dec control_symbol:"\\'" chars:'{' chars:'n' chars:'}' -> '{\u0144}'
+  dec control_word:'\\c' chars:'N' -> '\u0145'
+  dec control_word:'\\c' chars:'{' chars:'N' chars:'}' -> '{\u0145}'
+  dec control_word:'\\c' chars:'n' -> '\u0146'
+  dec control_word:'\\c' chars:'{' chars:'n' chars:'}' -> '{\u0146}'
+  dec control_word:'\\v' chars:'N' -> '\u0147'
+  dec control_word:'\\v' chars:'{' chars:'N' chars:'}' -> '{\u0147}'
+  dec control_word:'\\v' chars:'n' -> '\u0148'
+  dec control_word:'\\v' chars:'{' chars:'n' chars:'}' -> '{\u0148}'
+  dec control_symbol:'\\=' chars:'O' -> '\u014c'
+  dec control_symbol:'\\=' chars:'{' chars:'O' chars:'}' -> '{\u014c}'
+  dec control_symbol:'\\=' chars:'o' -> '\u014d'
+  dec control_symbol:'\\=' chars:'{' chars:'o' chars:'}' -> '{\u014d}'
+  dec control_word:'\\u' chars:'O' -> '\u014e'
+  dec control_word:'\\u' chars:'{' chars:'O' chars:'}' -> '{\u014e}'
+  dec control_word:'\\u' chars:'o' -> '\u014f'
+  dec control_word:'\\u' chars:'{' chars:'o' chars:'}' -> '{\u014f}'
+  dec control_word:'\\H' chars:'O' -> '\u0150'
+  dec control_word:'\\H' chars:'{' chars:'O' chars:'}' -> '{\u0150}'
+  dec control_word:'\\H' chars:'o' -> '\u0151'
+  dec control_word:'\\H' chars:'{' chars:'o' chars:'}' -> '{\u0151}'
+  dec control_word:'\\OE' -> '\u0152'
+  dec control_word:'\\oe' -> '\u0153'
+  dec control_symbol:"\\'" chars:'R' -> '\u0154'
+  dec control_symbol:"\\'" chars:'{' chars:'R' chars:'}' -> '{\u0154}'
+  dec control_symbol:"\\'" chars:'r' -> '\u0155'
+  dec control_symbol:"\\'" chars:'{' chars:'r' chars:'}' -> '{\u0155}'
+  dec control_word:'\\c' chars:'R' -> '\u0156'
+  dec control_word:'\\c' chars:'{' chars:'R' chars:'}' -> '{\u0156}'
+  dec control_word:'\\c' chars:'r' -> '\u0157'
+  dec control_word:'\\c' chars:'{' chars:'r' chars:'}' -> '{\u0157}'
+  dec control_word:'\\v' chars:'R' -> '\u0158'
+  dec control_word:'\\v' chars:'{' chars:'R' chars:'}' -> '{\u0158}'
+  dec control_word:'\\v' chars:'r' -> '\u0159'
+  dec control_word:'\\v' chars:'{' chars:'r' chars:'}' -> '{\u0159}'
+  dec control_symbol:"\\'" chars:'S' -> '\u015a'
+  dec control_symbol:"\\'" chars:'{' chars:'S' chars:'}' -> '{\u015a}'
+  dec control_symbol:"\\'" chars:'s' -> '\u015b'
+  dec control_symbol:"\\'" chars:'{' chars:'s' chars:'}' -> '{\u015b}'
+  dec control_symbol:'\\^' chars:'S' -> '\u015c'
+  dec control_symbol:'\\^' chars:'{' chars:'S' chars:'}' -> '{\u015c}'
+  dec control_symbol:'\\^' chars:'s' -> '\u015d'
+  dec control_symbol:'\\^' chars:'{' chars:'s' chars:'}' -> '{\u015d}'
+  dec control_word:'\\c' chars:'S' -> '\u015e'
+  dec control_word:'\\c' chars:'{' chars:'S' chars:'}' -> '{\u015e}'
+  dec control_word:'\\c' chars:'s' -> '\u015f'
+  dec control_word:'\\c' chars:'{' chars:'s' chars:'}' -> '{\u015f}'
+  dec control_word:'\\v' chars:'S' -> '\u0160'
+  dec control_word:'\\v' chars:'{' chars:'S' chars:'}' -> '{\u0160}'
+  dec control_word:'\\v' chars:'s' -> '\u0161'
+  dec control_word:'\\v' chars:'{' chars:'s' chars:'}' -> '{\u0161}'
+  dec control_word:'\\c' chars:'T' -> '\u0162'
+  dec control_word:'\\c' chars:'{' chars:'T' chars:'}' -> '{\u0162}'
+  dec control_word:'\\c' chars:'t' -> '\u0163'
+  dec control_word:'\\c' chars:'{' chars:'t' chars:'}' -> '{\u0163}'
+  dec control_word:'\\v' chars:'T' -> '\u0164'
+  dec control_word:'\\v' chars:'{' chars:'T' chars:'}' -> '{\u0164}'
+  dec control_word:'\\v' chars:'t' -> '\u0165'
+  dec control_word:'\\v' chars:'{' chars:'t' chars:'}' -> '{\u0165}'
+  dec control_symbol:'\\~' chars:'U' -> '\u0168'
+  dec control_symbol:'\\~' chars:'{' chars:'U' chars:'}' -> '{\u0168}'
+  dec control_symbol:'\\~' chars:'u' -> '\u0169'
+  dec control_symbol:'\\~' chars:'{' chars:'u' chars:'}' -> '{\u0169}'
+  dec control_symbol:'\\=' chars:'U' -> '\u016a'
+  dec control_symbol:'\\=' chars:'{' chars:'U' chars:'}' -> '{\u016a}'
+  dec control_symbol:'\\=' chars:'u' -> '\u016b'
+  dec control_symbol:'\\=' chars:'{' chars:'u' chars:'}' -> '{\u016b}'
+  dec control_word:'\\u' chars:'U' -> '\u016c'
+  dec control_word:'\\u' chars:'{' chars:'U' chars:'}' -> '{\u016c}'
+  dec control_word:'\\u' chars:'u' -> '\u016d'
+  dec control_word:'\\u' chars:'{' chars:'u' chars:'}' -> '{\u016d}'
+  dec control_word:'\\r' chars:'U' -> '\u016e'
+  dec control_word:'\\r' chars:'{' chars:'U' chars:'}' -> '{\u016e}'
+  dec control_word:'\\r' chars:'u' -> '\u016f'
+  dec control_word:'\\r' chars:'{' chars:'u' chars:'}' -> '{\u016f}'
+  dec control_word:'\\H' chars:'U' -> '\u0170'
+  dec control_word:'\\H' chars:'{' chars:'U' chars:'}' -> '{\u0170}'
+  dec control_word:'\\H' chars:'u' -> '\u0171'
+  dec control_word:'\\H' chars:'{' chars:'u' chars:'}' -> '{\u0171}'
+  dec control_word:'\\k' chars:'U' -> '\u0172'
+  dec control_word:'\\k' chars:'{' chars:'U' chars:'}' -> '{\u0172}'
+  dec control_word:'\\k' chars:'u' -> '\u0173'
+  dec control_word:'\\k' chars:'{' chars:'u' chars:'}' -> '{\u0173}'
+  dec control_symbol:'\\^' chars:'W' -> '\u0174'
+  dec control_symbol:'\\^' chars:'{' chars:'W' chars:'}' -> '{\u0174}'
+  dec control_symbol:'\\^' chars:'w' -> '\u0175'
+  dec control_symbol:'\\^' chars:'{' chars:'w' chars:'}' -> '{\u0175}'
+  dec control_symbol:'\\^' chars:'Y' -> '\u0176'
+  dec control_symbol:'\\^' chars:'{' chars:'Y' chars:'}' -> '{\u0176}'
+  dec control_symbol:'\\^' chars:'y' -> '\u0177'
+  dec control_symbol:'\\^' chars:'{' chars:'y' chars:'}' -> '{\u0177}'
+  dec control_symbol:'\\"' chars:'Y' -> '\u0178'
+  dec control_symbol:'\\"' chars:'{' chars:'Y' chars:'}' -> '{\u0178}'
+  dec control_symbol:"\\'" chars:'Z' -> '\u0179'
+  dec control_symbol:"\\'" chars:'{' chars:'Z' chars:'}' -> '{\u0179}'
+  dec control_symbol:"\\'" chars:'z' -> '\u017a'
+  dec control_symbol:"\\'" chars:'{' chars:'z' chars:'}' -> '{\u017a}'
+  dec control_symbol:'\\.' chars:'Z' -> '\u017b'
+  dec control_symbol:'\\.' chars:'{' chars:'Z' chars:'}' -> '{\u017b}'
+  dec control_symbol:'\\.' chars:'z' -> '\u017c'
+  dec control_symbol:'\\.' chars:'{' chars:'z' chars:'}' -> '{\u017c}'
+  dec control_word:'\\v' chars:'Z' -> '\u017d'
+  dec control_word:'\\v' chars:'{' chars:'Z' chars:'}' -> '{\u017d}'
+  dec control_word:'\\v' chars:'z' -> '\u017e'
+  dec control_word:'\\v' chars:'{' chars:'z' chars:'}' -> '{\u017e}'
+  dec chars:'D' control_word:'\\v' chars:'Z' -> '\u01c4'
+  dec chars:'D' control_word:'\\v' chars:'z' -> '\u01c5'
+  dec chars:'d' control_word:'\\v' chars:'z' -> '\u01c6'
+  dec control_word:'\\v' chars:'A' -> '\u01cd'
+  dec control_word:'\\v' chars:'{' chars:'A' chars:'}' -> '{\u01cd}'
+  dec control_word:'\\v' chars:'a' -> '\u01ce'
+  dec control_word:'\\v' chars:'{' chars:'a' chars:'}' -> '{\u01ce}'
+  dec control_word:'\\v' chars:'I' -> '\u01cf'
+  dec control_word:'\\v' chars:'{' chars:'I' chars:'}' -> '{\u01cf}'
+  dec control_word:'\\v' control_word:'\\i' -> '\u01d0'
+  dec control_word:'\\v' chars:'O' -> '\u01d1'
+  dec control_word:'\\v' chars:'{' chars:'O' chars:'}' -> '{\u01d1}'
+  dec control_word:'\\v' chars:'o' -> '\u01d2'
+  dec control_word:'\\v' chars:'{' chars:'o' chars:'}' -> '{\u01d2}'
+  dec control_word:'\\v' chars:'U' -> '\u01d3'
+  dec control_word:'\\v' chars:'{' chars:'U' chars:'}' -> '{\u01d3}'
+  dec control_word:'\\v' chars:'u' -> '\u01d4'
+  dec control_word:'\\v' chars:'{' chars:'u' chars:'}' -> '{\u01d4}'
+  dec control_word:'\\v' chars:'G' -> '\u01e6'
+  dec control_word:'\\v' chars:'{' chars:'G' chars:'}' -> '{\u01e6}'
+  dec control_word:'\\v' chars:'g' -> '\u01e7'
+  dec control_word:'\\v' chars:'{' chars:'g' chars:'}' -> '{\u01e7}'
+  dec control_word:'\\v' chars:'K' -> '\u01e8'
+  dec control_word:'\\v' chars:'{' chars:'K' chars:'}' -> '{\u01e8}'
+  dec control_word:'\\v' chars:'k' -> '\u01e9'
+  dec control_word:'\\v' chars:'{' chars:'k' chars:'}' -> '{\u01e9}'
+  dec control_word:'\\k' chars:'O' -> '\u01ea'
+  dec control_word:'\\k' chars:'{' chars:'O' chars:'}' -> '{\u01ea}'
+  dec control_word:'\\k' chars:'o' -> '\u01eb'
+  dec control_word:'\\k' chars:'{' chars:'o' chars:'}' -> '{\u01eb}'
+  dec control_word:'\\v' control_word:'\\j' -> '\u01f0'
+  dec control_symbol:"\\'" chars:'G' -> '\u01f4'
+  dec control_symbol:"\\'" chars:'{' chars:'G' chars:'}' -> '{\u01f4}'
+  dec control_symbol:"\\'" chars:'g' -> '\u01f5'
+  dec control_symbol:"\\'" chars:'{' chars:'g' chars:'}' -> '{\u01f5}'
+  dec control_symbol:"\\'" control_word:'\\AE' -> '\u01fc'
+  dec control_symbol:"\\'" control_word:'\\ae' -> '\u01fd'
+  dec control_symbol:"\\'" control_word:'\\O' -> '\u01fe'
+  dec control_symbol:"\\'" control_word:'\\o' -> '\u01ff'
+  dec control_word:'\\DH' -> '\xd0'
+  dec control_word:'\\dh' -> '\xf0'
+  dec control_word:'\\TH' -> '\xde'
+  dec control_word:'\\th' -> '\xfe'
+  dec control_word:'\\DJ' -> '\u0110'
+  dec control_word:'\\dj' -> '\u0111'
+  dec control_word:'\\d' chars:'D' -> '\u1e0c'
+  dec control_word:'\\d' chars:'{' chars:'D' chars:'}' -> '{\u1e0c}'
+  dec control_word:'\\d' chars:'d' -> '\u1e0d'
+  dec control_word:'\\d' chars:'{' chars:'d' chars:'}' -> '{\u1e0d}'
+  dec control_word:'\\d' chars:'L' -> '\u1e36'
+  dec control_word:'\\d' chars:'{' chars:'L' chars:'}' -> '{\u1e36}'
+  dec control_word:'\\d' chars:'l' -> '\u1e37'
+  dec control_word:'\\d' chars:'{' chars:'l' chars:'}' -> '{\u1e37}'
+  dec control_word:'\\d' chars:'M' -> '\u1e42'
+  dec control_word:'\\d' chars:'{' chars:'M' chars:'}' -> '{\u1e42}'
+  dec control_word:'\\d' chars:'m' -> '\u1e43'
+  dec control_word:'\\d' chars:'{' chars:'m' chars:'}' -> '{\u1e43}'
+  dec control_word:'\\d' chars:'N' -> '\u1e46'
+  dec control_word:'\\d' chars:'{' chars:'N' chars:'}' -> '{\u1e46}'
+  dec control_word:'\\d' chars:'n' -> '\u1e47'
+  dec control_word:'\\d' chars:'{' chars:'n' chars:'}' -> '{\u1e47}'
+  dec control_word:'\\d' chars:'R' -> '\u1e5a'
+  dec control_word:'\\d' chars:'{' chars:'R' chars:'}' -> '{\u1e5a}'
+  dec control_word:'\\d' chars:'r' -> '\u1e5b'
+  dec control_word:'\\d' chars:'{' chars:'r' chars:'}' -> '{\u1e5b}'
+  dec control_word:'\\d' chars:'S' -> '\u1e62'
+  dec control_word:'\\d' chars:'{' chars:'S' chars:'}' -> '{\u1e62}'
+  dec control_word:'\\d' chars:'s' -> '\u1e63'
+  dec control_word:'\\d' chars:'{' chars:'s' chars:'}' -> '{\u1e63}'
+  dec control_word:'\\d' chars:'T' -> '\u1e6c'
+  dec control_word:'\\d' chars:'{' chars:'T' chars:'}' -> '{\u1e6c}'
+  dec control_word:'\\d' chars:'t' -> '\u1e6d'
+  dec control_word:'\\d' chars:'{' chars:'t' chars:'}' -> '{\u1e6d}'
+  dec control_word:'\\textcommabelow' chars:'S' -> '\u0218'
+  dec control_word:'\\textcommabelow' chars:'{' chars:'S' chars:'}' -> '{\u0218}'
+  dec control_word:'\\textcommabelow' chars:'s' -> '\u0219'
+  dec control_word:'\\textcommabelow' chars:'{' chars:'s' chars:'}' -> '{\u0219}'
+  dec control_word:'\\textcommabelow' chars:'T' -> '\u021a'
+  dec control_word:'\\textcommabelow' chars:'{' chars:'T' chars:'}' -> '{\u021a}'
+  dec control_word:'\\textcommabelow' chars:'t' -> '\u021b'
+  dec control_word:'\\textcommabelow' chars:'{' chars:'t' chars:'}' -> '{\u021b}'
+  dec mathshift:'$' control_word:'\\ell' mathshift:'$' -> '\u2113'
+  dec control_symbol_x:'\\(' control_word:'\\ell' control_symbol_x:'\\)' -> '\u2113'
+  dec mathshift:'$' control_word:'\\surd' mathshift:'$' -> '\u221a'
+  dec control_symbol_x:'\\(' control_word:'\\surd' control_symbol_x:'\\)' -> '\u221a'
+  dec mathshift:'$' control_word:'\\infty' mathshift:'$' -> '\u221e'
+  dec control_symbol_x:'\\(' control_word:'\\infty' control_symbol_x:'\\)' -> '\u221e'
+  dec mathshift:'$' control_word:'\\int' mathshift:'$' -> '\u222b'
+  dec control_symbol_x:'\\(' control_word:'\\int' control_symbol_x:'\\)' -> '\u222b'
+  dec mathshift:'$' control_word:'\\cap' mathshift:'$' -> '\u2229'
+  dec control_symbol_x:'\\(' control_word:'\\cap' control_symbol_x:'\\)' -> '\u2229'
+  dec mathshift:'$' control_word:'\\cup' mathshift:'$' -> '\u222a'
+  dec control_symbol_x:'\\(' control_word:'\\cup' control_symbol_x:'\\)' -> '\u222a'
+  dec mathshift:'$' control_word:'\\rightarrow' mathshift:'$' -> '\u2192'
+  dec control_symbol_x:'\\(' control_word:'\\rightarrow' control_symbol_x:'\\)' -> '\u2192'
+  dec mathshift:'$' control_word:'\\Rightarrow' mathshift:'$' -> '\u21d2'
+  dec control_symbol_x:'\\(' control_word:'\\Rightarrow' control_symbol_x:'\\)' -> '\u21d2'
+  dec mathshift:'$' control_word:'\\leftarrow' mathshift:'$' -> '\u2190'
+  dec control_symbol_x:'\\(' control_word:'\\leftarrow' control_symbol_x:'\\)' -> '\u2190'
+  dec mathshift:'$' control_word:'\\Leftarrow' mathshift:'$' -> '\u21d0'
+  dec control_symbol_x:'\\(' control_word:'\\Leftarrow' control_symbol_x:'\\)' -> '\u21d0'
+  dec mathshift:'$' control_word:'\\vee' mathshift:'$' -> '\u2228'
+  dec control_symbol_x:'\\(' control_word:'\\vee' control_symbol_x:'\\)' -> '\u2228'
+  dec mathshift:'$' control_word:'\\wedge' mathshift:'$' -> '\u2227'
+  dec control_symbol_x:'\\(' control_word:'\\wedge' control_symbol_x:'\\)' -> '\u2227'
+  dec mathshift:'$' control_word:'\\approx' mathshift:'$' -> '\u2248'
+  dec control_symbol_x:'\\(' control_word:'\\approx' control_symbol_x:'\\)' -> '\u2248'
+  dec mathshift:'$' control_word:'\\neq' mathshift:'$' -> '\u2260'
+  dec control_symbol_x:'\\(' control_word:'\\neq' control_symbol_x:'\\)' -> '\u2260'
+  dec mathshift:'$' control_word:'\\leq' mathshift:'$' -> '\u2264'
+  dec control_symbol_x:'\\(' control_word:'\\leq' control_symbol_x:'\\)' -> '\u2264'
+  dec mathshift:'$' control_word:'\\geq' mathshift:'$' -> '\u2265'
+  dec control_symbol_x:'\\(' control_word:'\\geq' control_symbol_x:'\\)' -> '\u2265'
+  dec mathshift:'$' control_word:'\\forall' mathshift:'$' -> '\u2200'
+  dec control_symbol_x:'\\(' control_word:'\\forall' control_symbol_x:'\\)' -> '\u2200'
+  dec mathshift:'$' control_word:'\\complement' mathshift:'$' -> '\u2201'
+  dec control_symbol_x:'\\(' control_word:'\\complement' control_symbol_x:'\\)' -> '\u2201'
+  dec mathshift:'$' control_word:'\\partial' mathshift:'$' -> '\u2202'
+  dec control_symbol_x:'\\(' control_word:'\\partial' control_symbol_x:'\\)' -> '\u2202'
+  dec mathshift:'$' control_word:'\\exists' mathshift:'$' -> '\u2203'
+  dec control_symbol_x:'\\(' control_word:'\\exists' control_symbol_x:'\\)' -> '\u2203'
+  dec mathshift:'$' control_word:'\\nexists' mathshift:'$' -> '\u2204'
+  dec control_symbol_x:'\\(' control_word:'\\nexists' control_symbol_x:'\\)' -> '\u2204'
+  dec mathshift:'$' control_word:'\\emptyset' mathshift:'$' -> '\u2205'
+  dec control_symbol_x:'\\(' control_word:'\\emptyset' control_symbol_x:'\\)' -> '\u2205'
+  dec mathshift:'$' control_word:'\\nabla' mathshift:'$' -> '\u2207'
+  dec control_symbol_x:'\\(' control_word:'\\nabla' control_symbol_x:'\\)' -> '\u2207'
+  dec mathshift:'$' control_word:'\\in' mathshift:'$' -> '\u2208'
+  dec control_symbol_x:'\\(' control_word:'\\in' control_symbol_x:'\\)' -> '\u2208'
+  dec mathshift:'$' control_word:'\\notin' mathshift:'$' -> '\u2209'
+  dec control_symbol_x:'\\(' control_word:'\\notin' control_symbol_x:'\\)' -> '\u2209'
+  dec mathshift:'$' control_word:'\\ni' mathshift:'$' -> '\u220b'
+  dec control_symbol_x:'\\(' control_word:'\\ni' control_symbol_x:'\\)' -> '\u220b'
+  dec mathshift:'$' control_word:'\\notni' mathshift:'$' -> '\u220c'
+  dec control_symbol_x:'\\(' control_word:'\\notni' control_symbol_x:'\\)' -> '\u220c'
+  dec mathshift:'$' control_word:'\\blacksquare' mathshift:'$' -> '\u220e'
+  dec control_symbol_x:'\\(' control_word:'\\blacksquare' control_symbol_x:'\\)' -> '\u220e'
+  dec mathshift:'$' control_word:'\\prod' mathshift:'$' -> '\u220f'
+  dec control_symbol_x:'\\(' control_word:'\\prod' control_symbol_x:'\\)' -> '\u220f'
+  dec mathshift:'$' control_word:'\\coprod' mathshift:'$' -> '\u2210'
+  dec control_symbol_x:'\\(' control_word:'\\coprod' control_symbol_x:'\\)' -> '\u2210'
+  dec mathshift:'$' control_word:'\\sum' mathshift:'$' -> '\u2211'
+  dec control_symbol_x:'\\(' control_word:'\\sum' control_symbol_x:'\\)' -> '\u2211'
+  dec mathshift:'$' control_word:'\\subset' mathshift:'$' -> '\u2282'
+  dec control_symbol_x:'\\(' control_word:'\\subset' control_symbol_x:'\\)' -> '\u2282'
+  dec mathshift:'$' control_word:'\\supset' mathshift:'$' -> '\u2283'
+  dec control_symbol_x:'\\(' control_word:'\\supset' control_symbol_x:'\\)' -> '\u2283'
+  dec mathshift:'$' control_word:'\\not' control_word:'\\subset' mathshift:'$' -> '\u2284'
+  dec control_symbol_x:'\\(' control_word:'\\not' control_word:'\\subset' control_symbol_x:'\\)' -> '\u2284'
+  dec mathshift:'$' control_word:'\\not' control_word:'\\supset' mathshift:'$' -> '\u2285'
+  dec control_symbol_x:'\\(' control_word:'\\not' control_word:'\\supset' control_symbol_x:'\\)' -> '\u2285'
+  dec mathshift:'$' control_word:'\\subseteq' mathshift:'$' -> '\u2286'
+  dec control_symbol_x:'\\(' control_word:'\\subseteq' control_symbol_x:'\\)' -> '\u2286'
+  dec mathshift:'$' control_word:'\\supseteq' mathshift:'$' -> '\u2287'
+  dec control_symbol_x:'\\(' control_word:'\\supseteq' control_symbol_x:'\\)' -> '\u2287'
+  dec mathshift:'$' control_word:'\\nsubseteq' mathshift:'$' -> '\u2288'
+  dec control_symbol_x:'\\(' control_word:'\\nsubseteq' control_symbol_x:'\\)' -> '\u2288'
+  dec mathshift:'$' control_word:'\\nsupseteq' mathshift:'$' -> '\u2289'
+  dec control_symbol_x:'\\(' control_word:'\\nsupseteq' control_symbol_x:'\\)' -> '\u2289'
+  dec mathshift:'$' control_word:'\\subsetneq' mathshift:'$' -> '\u228a'
+  dec control_symbol_x:'\\(' control_word:'\\subsetneq' control_symbol_x:'\\)' -> '\u228a'
+  dec mathshift:'$' control_word:'\\supsetneq' mathshift:'$' -> '\u228b'
+  dec control_symbol_x:'\\(' control_word:'\\supsetneq' control_symbol_x:'\\)' -> '\u228b'
+  dec control_symbol:'\\^' chars:'{' chars:'}' -> '\u02c6'
+  dec control_word:'\\v' chars:'{' chars:'}' -> '\u02c7'
+  dec control_word:'\\u' chars:'{' chars:'}' -> '\u02d8'
+  dec control_symbol:'\\.' chars:'{' chars:'}' -> '\u02d9'
+  dec control_word:'\\r' chars:'{' chars:'}' -> '\u02da'
+  dec control_word:'\\k' chars:'{' chars:'}' -> '\u02db'
+  dec control_word:'\\H' chars:'{' chars:'}' -> '\u02dd'
+  dec mathshift:'$' control_word:'\\alpha' mathshift:'$' -> '\u03b1'
+  dec control_symbol_x:'\\(' control_word:'\\alpha' control_symbol_x:'\\)' -> '\u03b1'
+  dec mathshift:'$' control_word:'\\beta' mathshift:'$' -> '\u03b2'
+  dec control_symbol_x:'\\(' control_word:'\\beta' control_symbol_x:'\\)' -> '\u03b2'
+  dec mathshift:'$' control_word:'\\gamma' mathshift:'$' -> '\u03b3'
+  dec control_symbol_x:'\\(' control_word:'\\gamma' control_symbol_x:'\\)' -> '\u03b3'
+  dec mathshift:'$' control_word:'\\delta' mathshift:'$' -> '\u03b4'
+  dec control_symbol_x:'\\(' control_word:'\\delta' control_symbol_x:'\\)' -> '\u03b4'
+  dec mathshift:'$' control_word:'\\epsilon' mathshift:'$' -> '\u03b5'
+  dec control_symbol_x:'\\(' control_word:'\\epsilon' control_symbol_x:'\\)' -> '\u03b5'
+  dec mathshift:'$' control_word:'\\zeta' mathshift:'$' -> '\u03b6'
+  dec control_symbol_x:'\\(' control_word:'\\zeta' control_symbol_x:'\\)' -> '\u03b6'
+  dec mathshift:'$' control_word:'\\eta' mathshift:'$' -> '\u03b7'
+  dec control_symbol_x:'\\(' control_word:'\\eta' control_symbol_x:'\\)' -> '\u03b7'
+  dec mathshift:'$' control_word:'\\theta' mathshift:'$' -> '\u03b8'
+  dec control_symbol_x:'\\(' control_word:'\\theta' control_symbol_x:'\\)' -> '\u03b8'
+  dec control_word:'\\texttheta' -> '\u03b8'
+  dec mathshift:'$' control_word:'\\iota' mathshift:'$' -> '\u03b9'
+  dec control_symbol_x:'\\(' control_word:'\\iota' control_symbol_x:'\\)' -> '\u03b9'
+  dec mathshift:'$' control_word:'\\kappa' mathshift:'$' -> '\u03ba'
+  dec control_symbol_x:'\\(' control_word:'\\kappa' control_symbol_x:'\\)' -> '\u03ba'
+  dec mathshift:'$' control_word:'\\lambda' mathshift:'$' -> '\u03bb'
+  dec control_symbol_x:'\\(' control_word:'\\lambda' control_symbol_x:'\\)' -> '\u03bb'
+  dec mathshift:'$' control_word:'\\nu' mathshift:'$' -> '\u03bd'
+  dec control_symbol_x:'\\(' control_word:'\\nu' control_symbol_x:'\\)' -> '\u03bd'
+  dec mathshift:'$' control_word:'\\xi' mathshift:'$' -> '\u03be'
+  dec control_symbol_x:'\\(' control_word:'\\xi' control_symbol_x:'\\)' -> '\u03be'
+  dec mathshift:'$' control_word:'\\omicron' mathshift:'$' -> '\u03bf'
+  dec control_symbol_x:'\\(' control_word:'\\omicron' control_symbol_x:'\\)' -> '\u03bf'
+  dec mathshift:'$' control_word:'\\pi' mathshift:'$' -> '\u03c0'
+  dec control_symbol_x:'\\(' control_word:'\\pi' control_symbol_x:'\\)' -> '\u03c0'
+  dec mathshift:'$' control_word:'\\rho' mathshift:'$' -> '\u03c1'
+  dec control_symbol_x:'\\(' control_word:'\\rho' control_symbol_x:'\\)' -> '\u03c1'
+  dec mathshift:'$' control_word:'\\sigma' mathshift:'$' -> '\u03c3'
+  dec control_symbol_x:'\\(' control_word:'\\sigma' control_symbol_x:'\\)' -> '\u03c3'
+  dec mathshift:'$' control_word:'\\tau' mathshift:'$' -> '\u03c4'
+  dec control_symbol_x:'\\(' control_word:'\\tau' control_symbol_x:'\\)' -> '\u03c4'
+  dec mathshift:'$' control_word:'\\upsilon' mathshift:'$' -> '\u03c5'
+  dec control_symbol_x:'\\(' control_word:'\\upsilon' control_symbol_x:'\\)' -> '\u03c5'
+  dec mathshift:'$' control_word:'\\phi' mathshift:'$' -> '\u03c6'
+  dec control_symbol_x:'\\(' control_word:'\\phi' control_symbol_x:'\\)' -> '\u03c6'
+  dec mathshift:'$' control_word:'\\varphi' mathshift:'$' -> '\u03d5'
+  dec control_symbol_x:'\\(' control_word:'\\varphi' control_symbol_x:'\\)' -> '\u03d5'
+  dec mathshift:'$' control_word:'\\chi' mathshift:'$' -> '\u03c7'
+  dec control_symbol_x:'\\(' control_word:'\\chi' control_symbol_x:'\\)' -> '\u03c7'
+  dec mathshift:'$' control_word:'\\psi' mathshift:'$' -> '\u03c8'
+  dec control_symbol_x:'\\(' control_word:'\\psi' control_symbol_x:'\\)' -> '\u03c8'
+  dec mathshift:'$' control_word:'\\omega' mathshift:'$' -> '\u03c9'
+  dec control_symbol_x:'\\(' control_word:'\\omega' control_symbol_x:'\\)' -> '\u03c9'
+  dec mathshift:'$' control_word:'\\Alpha' mathshift:'$' -> '\u0391'
+  dec control_symbol_x:'\\(' control_word:'\\Alpha' control_symbol_x:'\\)' -> '\u0391'
+  dec mathshift:'$' control_word:'\\Beta' mathshift:'$' -> '\u0392'
+  dec control_symbol_x:'\\(' control_word:'\\Beta' control_symbol_x:'\\)' -> '\u0392'
+  dec mathshift:'$' control_word:'\\Gamma' mathshift:'$' -> '\u0393'
+  dec control_symbol_x:'\\(' control_word:'\\Gamma' control_symbol_x:'\\)' -> '\u0393'
+  dec mathshift:'$' control_word:'\\Delta' mathshift:'$' -> '\u0394'
+  dec control_symbol_x:'\\(' control_word:'\\Delta' control_symbol_x:'\\)' -> '\u0394'
+  dec mathshift:'$' control_word:'\\Epsilon' mathshift:'$' -> '\u0395'
+  dec control_symbol_x:'\\(' control_word:'\\Epsilon' control_symbol_x:'\\)' -> '\u0395'
+  dec mathshift:'$' control_word:'\\Zeta' mathshift:'$' -> '\u0396'
+  dec control_symbol_x:'\\(' control_word:'\\Zeta' control_symbol_x:'\\)' -> '\u0396'
+  dec mathshift:'$' control_word:'\\Eta' mathshift:'$' -> '\u0397'
+  dec control_symbol_x:'\\(' control_word:'\\Eta' control_symbol_x:'\\)' -> '\u0397'
+  dec mathshift:'$' control_word:'\\Theta' mathshift:'$' -> '\u0398'
+  dec control_symbol_x:'\\(' control_word:'\\Theta' control_symbol_x:'\\)' -> '\u0398'
+  dec mathshift:'$' control_word:'\\Iota' mathshift:'$' -> '\u0399'
+  dec control_symbol_x:'\\(' control_word:'\\Iota' control_symbol_x:'\\)' -> '\u0399'
+  dec mathshift:'$' control_word:'\\Kappa' mathshift:'$' -> '\u039a'
+  dec control_symbol_x:'\\(' control_word:'\\Kappa' control_symbol_x:'\\)' -> '\u039a'
+  dec mathshift:'$' control_word:'\\Lambda' mathshift:'$' -> '\u039b'
+  dec control_symbol_x:'\\(' control_word:'\\Lambda' control_symbol_x:'\\)' -> '\u039b'
+  dec mathshift:'$' control_word:'\\Mu' mathshift:'$' -> '\u039c'
+  dec control_symbol_x:'\\(' control_word:'\\Mu' control_symbol_x:'\\)' -> '\u039c'
+  dec mathshift:'$' control_word:'\\Nu' mathshift:'$' -> '\u039d'
+  dec control_symbol_x:'\\(' control_word:'\\Nu' control_symbol_x:'\\)' -> '\u039d'
+  dec mathshift:'$' control_word:'\\Xi' mathshift:'$' -> '\u039e'
+  dec control_symbol_x:'\\(' control_word:'\\Xi' control_symbol_x:'\\)' -> '\u039e'
+  dec mathshift:'$' control_word:'\\Omicron' mathshift:'$' -> '\u039f'
+  dec control_symbol_x:'\\(' control_word:'\\Omicron' control_symbol_x:'\\)' -> '\u039f'
+  dec mathshift:'$' control_word:'\\Pi' mathshift:'$' -> '\u03a0'
+  dec control_symbol_x:'\\(' control_word:'\\Pi' control_symbol_x:'\\)' -> '\u03a0'
+  dec mathshift:'$' control_word:'\\Rho' mathshift:'$' -> '\u03a1'
+  dec control_symbol_x:'\\(' control_word:'\\Rho' control_symbol_x:'\\)' -> '\u03a1'
+  dec mathshift:'$' control_word:'\\Sigma' mathshift:'$' -> '\u03a3'
+  dec control_symbol_x:'\\(' control_word:'\\Sigma' control_symbol_x:'\\)' -> '\u03a3'
+  dec mathshift:'$' control_word:'\\Tau' mathshift:'$' -> '\u03a4'
+  dec control_symbol_x:'\\(' control_word:'\\Tau' control_symbol_x:'\\)' -> '\u03a4'
+  dec mathshift:'$' control_word:'\\Upsilon' mathshift:'$' -> '\u03a5'
+  dec control_symbol_x:'\\(' control_word:'\\Upsilon' control_symbol_x:'\\)' -> '\u03a5'
+  dec mathshift:'$' control_word:'\\Phi' mathshift:'$' -> '\u03a6'
+  dec control_symbol_x:'\\(' control_word:'\\Phi' control_symbol_x:'\\)' -> '\u03a6'
+  dec mathshift:'$' control_word:'\\Chi' mathshift:'$' -> '\u03a7'
+  dec control_symbol_x:'\\(' control_word:'\\Chi' control_symbol_x:'\\)' -> '\u03a7'
+  dec mathshift:'$' control_word:'\\Psi' mathshift:'$' -> '\u03a8'
+  dec control_symbol_x:'\\(' control_word:'\\Psi' control_symbol_x:'\\)' -> '\u03a8'
+  dec mathshift:'$' control_word:'\\Omega' mathshift:'$' -> '\u03a9'
+  dec control_symbol_x:'\\(' control_word:'\\Omega' control_symbol_x:'\\)' -> '\u03a9'
+  dec control_word:'\\copyright' -> '\xa9'
+  dec control_word:'\\textcopyright' -> '\xa9'
+  dec control_symbol:"\\'" chars:'A' -> '\xc1'
+  dec control_symbol:"\\'" chars:'{' chars:'A' chars:'}' -> '{\xc1}'
+  dec control_symbol:"\\'" chars:'I' -> '\xcd'
+  dec control_symbol:"\\'" chars:'{' chars:'I' chars:'}' -> '{\xcd}'
+  dec control_word:'\\ldots' -> '\u2026'
+  dec mathshift:'$' chars:'^' chars:'{' chars:'T' chars:'M' chars:'}' mathshift:'$' -> '\u2122'
+  dec control_symbol_x:'\\(' chars:'^' chars:'{' chars:'T' chars:'M' chars:'}' control_symbol_x:'\\)' -> '\u2122'
+  dec control_word:'\\texttrademark' -> '\u2122'
+  dec control_word:'\\textregistered' -> '\xae'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'N' mathshift:'$' -> '\u2115'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'{' chars:'N' chars:'}' mathshift:'$' -> '\u2115'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'N' control_symbol_x:'\\)' -> '\u2115'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'{' chars:'N' chars:'}' control_symbol_x:'\\)' -> '\u2115'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'Z' mathshift:'$' -> '\u2124'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'{' chars:'Z' chars:'}' mathshift:'$' -> '\u2124'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'Z' control_symbol_x:'\\)' -> '\u2124'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'{' chars:'Z' chars:'}' control_symbol_x:'\\)' -> '\u2124'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'Q' mathshift:'$' -> '\u211a'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'{' chars:'Q' chars:'}' mathshift:'$' -> '\u211a'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'Q' control_symbol_x:'\\)' -> '\u211a'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'{' chars:'Q' chars:'}' control_symbol_x:'\\)' -> '\u211a'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'R' mathshift:'$' -> '\u211d'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'{' chars:'R' chars:'}' mathshift:'$' -> '\u211d'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'R' control_symbol_x:'\\)' -> '\u211d'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'{' chars:'R' chars:'}' control_symbol_x:'\\)' -> '\u211d'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'C' mathshift:'$' -> '\u2102'
+  dec mathshift:'$' control_word:'\\mathbb' chars:'{' chars:'C' chars:'}' mathshift:'$' -> '\u2102'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'C' control_symbol_x:'\\)' -> '\u2102'
+  dec control_symbol_x:'\\(' control_word:'\\mathbb' chars:'{' chars:'C' chars:'}' control_symbol_x:'\\)' -> '\u2102'
+  enc '\u2003' -> '\\quad' [control_word:'\\quad']
+  enc '\u2009' -> ' ' [space:' ']
+  enc '\u200d' -> '' [(none)]
+  enc '\u200c' -> '{}' [chars:'{' chars:'}']
+  enc '\u200b' -> '\\hspace{0pt}' [control_word:'\\hspace' chars:'{' chars:'0' chars:'p' chars:'t' chars:'}']
+  enc '%' -> '\\%' [control_symbol_x2:'\\%']
+  enc '\u2013' -> '--' [chars:'--']
+  enc '\u2014' -> '---' [chars:'---']
+  enc '\ufffd' -> '????' [chars:'?' chars:'?' chars:'?' chars:'?']
+  enc '\u2018' -> '`' [chars:'`']
+  enc '\u2019' -> "'" [chars:"'"]
+  enc '\u201c' -> '``' [chars:'``']
+  enc '\u201d' -> "''" [chars:"''"]
+  enc '\u201e' -> ',,' [chars:',' chars:',']
+  enc '\xab' -> '\\guillemotleft' [control_word:'\\guillemotleft']
+  enc '\xbb' -> '\\guillemotright' [control_word:'\\guillemotright']
+  enc '\u02b9' -> "'" [chars:"'"]
+  enc '\u02ba' -> "''" [chars:"''"]
+  enc '\u02bb' -> '`' [chars:'`']
+  enc '\u02bc' -> "'" [chars:"'"]
+  enc '\u02bd' -> '`' [chars:'`']
+  enc '\u2020' -> '\\dag' [control_word:'\\dag']
+  enc '\u2021' -> '\\ddag' [control_word:'\\ddag']
+  enc '\u223c' -> '$\\sim$' [mathshift:'$' control_word:'\\sim' mathshift:'$']
+  enc '\u02f7' -> '\\texttildelow' [control_word:'\\texttildelow']
+  enc '\u02dc' -> '\\~{}' [control_symbol:'\\~' chars:'{' chars:'}']
+  enc '~' -> '\\textasciitilde' [control_word:'\\textasciitilde']
+  enc '\u2022' -> '$\\bullet$' [mathshift:'$' control_word:'\\bullet' mathshift:'$']
+  enc '\u2217' -> '$\\ast$' [mathshift:'$' control_word:'\\ast' mathshift:'$']
+  enc '#' -> '\\#' [control_symbol_x:'\\#']
+  enc '_' -> '\\_' [control_symbol_x:'\\_']
+  enc '&' -> '\\&' [control_symbol_x:'\\&']
+  enc '\xa0' -> '~' [chars:'~']
+  enc '\xa1' -> '!`' [chars:'!`']
+  enc '\xa2' -> '\\not{c}' [control_word:'\\not' chars:'{' chars:'c' chars:'}']
+  enc '\xa3' -> '\\pounds' [control_word:'\\pounds']
+  enc '\xa5' -> '\\yen' [control_word:'\\yen']
+  enc '\xa7' -> '\\S' [control_word:'\\S']
+  enc '\xa8' -> '\\"{}' [control_symbol:'\\"' chars:'{' chars:'}']
+  enc '\xac' -> '\\neg' [control_word:'\\neg']
+  enc '\u2010' -> '-' [chars:'-']
+  enc '\xad' -> '\\-' [control_symbol_x:'\\-']
+  enc '\xaf' -> '\\={}' [control_symbol:'\\=' chars:'{' chars:'}']
+  enc '\xb0' -> '$^\\circ$' [mathshift:'$' chars:'^' control_word:'\\circ' mathshift:'$']
+  enc '\u2212' -> '$-$' [mathshift:'$' chars:'-' mathshift:'$']
+  enc '\xb1' -> '$\\pm$' [mathshift:'$' control_word:'\\pm' mathshift:'$']
+  enc '\xb2' -> '$^2$' [mathshift:'$' chars:'^' chars:'2' mathshift:'$']
+  enc '\xb3' -> '$^3$' [mathshift:'$' chars:'^' chars:'3' mathshift:'$']
+  enc '\xb4' -> "\\'{}" [control_symbol:"\\'" chars:'{' chars:'}']
+  enc '\xb5' -> '$\\mu$' [mathshift:'$' control_word:'\\mu' mathshift:'$']
+  enc '\xb6' -> '\\P' [control_word:'\\P']
+  enc '\xb7' -> '$\\cdot$' [mathshift:'$' control_word:'\\cdot' mathshift:'$']
+  enc '\xb8' -> '\\c{}' [control_word:'\\c' chars:'{' chars:'}']
+  enc '\xb9' -> '$^1$' [mathshift:'$' chars:'^' chars:'1' mathshift:'$']
+  enc '\xbf' -> '?`' [chars:'?`']
+  enc '\xc0' -> '\\`A' [control_symbol:'\\`' chars:'A']
+  enc '\xc2' -> '\\^A' [control_symbol:'\\^' chars:'A']
+  enc '\xc3' -> '\\~A' [control_symbol:'\\~' chars:'A']
+  enc '\xc4' -> '\\"A' [control_symbol:'\\"' chars:'A']
+  enc '\xc5' -> '\\AA' [control_word:'\\AA']
+  enc '\xc6' -> '\\AE' [control_word:'\\AE']
+  enc '\xc7' -> '\\c C' [control_word:'\\c' chars:'C']
+  enc '\xc8' -> '\\`E' [control_symbol:'\\`' chars:'E']
+  enc '\xc9' -> "\\'E" [control_symbol:"\\'" chars:'E']
+  enc '\xca' -> '\\^E' [control_symbol:'\\^' chars:'E']
+  enc '\xcb' -> '\\"E' [control_symbol:'\\"' chars:'E']
+  enc '\xcc' -> '\\`I' [control_symbol:'\\`' chars:'I']
+  enc '\xce' -> '\\^I' [control_symbol:'\\^' chars:'I']
+  enc '\xcf' -> '\\"I' [control_symbol:'\\"' chars:'I']
+  enc '\xd1' -> '\\~N' [control_symbol:'\\~' chars:'N']
+  enc '\xd2' -> '\\`O' [control_symbol:'\\`' chars:'O']
+  enc '\xd3' -> "\\'O" [control_symbol:"\\'" chars:'O']
+  enc '\xd4' -> '\\^O' [control_symbol:'\\^' chars:'O']
+  enc '\xd5' -> '\\~O' [control_symbol:'\\~' chars:'O']
+  enc '\xd6' -> '\\"O' [control_symbol:'\\"' chars:'O']
+  enc '\xd7' -> '$\\times$' [mathshift:'$' control_word:'\\times' mathshift:'$']
+  enc '\xd8' -> '\\O' [control_word:'\\O']
+  enc '\xd9' -> '\\`U' [control_symbol:'\\`' chars:'U']
+  enc '\xda' -> "\\'U" [control_symbol:"\\'" chars:'U']
+  enc '\xdb' -> '\\^U' [control_symbol:'\\^' chars:'U']
+  enc '\xdc' -> '\\"U' [control_symbol:'\\"' chars:'U']
+  enc '\xdd' -> "\\'Y" [control_symbol:"\\'" chars:'Y']
+  enc '\xdf' -> '\\ss' [control_word:'\\ss']
+  enc '\xe0' -> '\\`a' [control_symbol:'\\`' chars:'a']
+  enc '\xe1' -> "\\'a" [control_symbol:"\\'" chars:'a']
+  enc '\xe2' -> '\\^a' [control_symbol:'\\^' chars:'a']
+  enc '\xe3' -> '\\~a' [control_symbol:'\\~' chars:'a']
+  enc '\xe4' -> '\\"a' [control_symbol:'\\"' chars:'a']
+  enc '\xe5' -> '\\aa' [control_word:'\\aa']
+  enc '\xe6' -> '\\ae' [control_word:'\\ae']
+  enc '\xe7' -> '\\c c' [control_word:'\\c' chars:'c']
+  enc '\xe8' -> '\\`e' [control_symbol:'\\`' chars:'e']
+  enc '\xe9' -> "\\'e" [control_symbol:"\\'" chars:'e']
+  enc '\xea' -> '\\^e' [control_symbol:'\\^' chars:'e']
+  enc '\xeb' -> '\\"e' [control_symbol:'\\"' chars:'e']
+  enc '\xec' -> '\\`\\i' [control_symbol:'\\`' control_word:'\\i']
+  enc '\xed' -> "\\'\\i" [control_symbol:"\\'" control_word:'\\i']
+  enc '\xee' -> '\\^\\i' [control_symbol:'\\^' control_word:'\\i']
+  enc '\xef' -> '\\"\\i' [control_symbol:'\\"' control_word:'\\i']
+  enc '\xf1' -> '\\~n' [control_symbol:'\\~' chars:'n']
+  enc '\xf2' -> '\\`o' [control_symbol:'\\`' chars:'o']
+  enc '\xf3' -> "\\'o" [control_symbol:"\\'" chars:'o']
+  enc '\xf4' -> '\\^o' [control_symbol:'\\^' chars:'o']
+  enc '\xf5' -> '\\~o' [control_symbol:'\\~' chars:'o']
+  enc '\xf6' -> '\\"o' [control_symbol:'\\"' chars:'o']
+  enc '\xf7' -> '$\\div$' [mathshift:'$' control_word:'\\div' mathshift:'$']
+  enc '\xf8' -> '\\o' [control_word:'\\o']
+  enc '\xf9' -> '\\`u' [control_symbol:'\\`' chars:'u']
+  enc '\xfa' -> "\\'u" [control_symbol:"\\'" chars:'u']
+  enc '\xfb' -> '\\^u' [control_symbol:'\\^' chars:'u']
+  enc '\xfc' -> '\\"u' [control_symbol:'\\"' chars:'u']
+  enc '\xfd' -> "\\'y" [control_symbol:"\\'" chars:'y']
+  enc '\xff' -> '\\"y' [control_symbol:'\\"' chars:'y']
+  enc '\u0100' -> '\\=A' [control_symbol:'\\=' chars:'A']
+  enc '\u0101' -> '\\=a' [control_symbol:'\\=' chars:'a']
+  enc '\u0102' -> '\\u A' [control_word:'\\u' chars:'A']
+  enc '\u0103' -> '\\u a' [control_word:'\\u' chars:'a']
+  enc '\u0104' -> '\\k A' [control_word:'\\k' chars:'A']
+  enc '\u0105' -> '\\k a' [control_word:'\\k' chars:'a']
+  enc '\u0106' -> "\\'C" [control_symbol:"\\'" chars:'C']
+  enc '\u0107' -> "\\'c" [control_symbol:"\\'" chars:'c']
+  enc '\u0108' -> '\\^C' [control_symbol:'\\^' chars:'C']
+  enc '\u0109' -> '\\^c' [control_symbol:'\\^' chars:'c']
+  enc '\u010a' -> '\\.C' [control_symbol:'\\.' chars:'C']
+  enc '\u010b' -> '\\.c' [control_symbol:'\\.' chars:'c']
+  enc '\u010c' -> '\\v C' [control_word:'\\v' chars:'C']
+  enc '\u010d' -> '\\v c' [control_word:'\\v' chars:'c']
+  enc '\u010e' -> '\\v D' [control_word:'\\v' chars:'D']
+  enc '\u010f' -> '\\v d' [control_word:'\\v' chars:'d']
+  enc '\u0112' -> '\\=E' [control_symbol:'\\=' chars:'E']
+  enc '\u0113' -> '\\=e' [control_symbol:'\\=' chars:'e']
+  enc '\u0114' -> '\\u E' [control_word:'\\u' chars:'E']
+  enc '\u0115' -> '\\u e' [control_word:'\\u' chars:'e']
+  enc '\u0116' -> '\\.E' [control_symbol:'\\.' chars:'E']
+  enc '\u0117' -> '\\.e' [control_symbol:'\\.' chars:'e']
+  enc '\u0118' -> '\\k E' [control_word:'\\k' chars:'E']
+  enc '\u0119' -> '\\k e' [control_word:'\\k' chars:'e']
+  enc '\u011a' -> '\\v E' [control_word:'\\v' chars:'E']
+  enc '\u011b' -> '\\v e' [control_word:'\\v' chars:'e']
+  enc '\u011c' -> '\\^G' [control_symbol:'\\^' chars:'G']
+  enc '\u011d' -> '\\^g' [control_symbol:'\\^' chars:'g']
+  enc '\u011e' -> '\\u G' [control_word:'\\u' chars:'G']
+  enc '\u011f' -> '\\u g' [control_word:'\\u' chars:'g']
+  enc '\u0120' -> '\\.G' [control_symbol:'\\.' chars:'G']
+  enc '\u0121' -> '\\.g' [control_symbol:'\\.' chars:'g']
+  enc '\u0122' -> '\\c G' [control_word:'\\c' chars:'G']
+  enc '\u0123' -> '\\c g' [control_word:'\\c' chars:'g']
+  enc '\u0124' -> '\\^H' [control_symbol:'\\^' chars:'H']
+  enc '\u0125' -> '\\^h' [control_symbol:'\\^' chars:'h']
+  enc '\u0128' -> '\\~I' [control_symbol:'\\~' chars:'I']
+  enc '\u0129' -> '\\~\\i' [control_symbol:'\\~' control_word:'\\i']
+  enc '\u012a' -> '\\=I' [control_symbol:'\\=' chars:'I']
+  enc '\u012b' -> '\\=\\i' [control_symbol:'\\=' control_word:'\\i']
+  enc '\u012c' -> '\\u I' [control_word:'\\u' chars:'I']
+  enc '\u012d' -> '\\u\\i' [control_word:'\\u' control_word:'\\i']
+  enc '\u012e' -> '\\k I' [control_word:'\\k' chars:'I']
+  enc '\u012f' -> '\\k i' [control_word:'\\k' chars:'i']
+  enc '\u0130' -> '\\.I' [control_symbol:'\\.' chars:'I']
+  enc '\u0131' -> '\\i' [control_word:'\\i']
+  enc '\u0132' -> 'IJ' [chars:'I' chars:'J']
+  enc '\u0133' -> 'ij' [chars:'i' chars:'j']
+  enc '\u0134' -> '\\^J' [control_symbol:'\\^' chars:'J']
+  enc '\u0135' -> '\\^\\j' [control_symbol:'\\^' control_word:'\\j']
+  enc '\u0136' -> '\\c K' [control_word:'\\c' chars:'K']
+  enc '\u0137' -> '\\c k' [control_word:'\\c' chars:'k']
+  enc '\u0139' -> "\\'L" [control_symbol:"\\'" chars:'L']
+  enc '\u013a' -> "\\'l" [control_symbol:"\\'" chars:'l']
+  enc '\u013b' -> '\\c L' [control_word:'\\c' chars:'L']
+  enc '\u013c' -> '\\c l' [control_word:'\\c' chars:'l']
+  enc '\u013d' -> '\\v L' [control_word:'\\v' chars:'L']
+  enc '\u013e' -> '\\v l' [control_word:'\\v' chars:'l']
+  enc '\u0141' -> '\\L' [control_word:'\\L']
+  enc '\u0142' -> '\\l' [control_word:'\\l']
+  enc '\u0143' -> "\\'N" [control_symbol:"\\'" chars:'N']
+  enc '\u0144' -> "\\'n" [control_symbol:"\\'" chars:'n']
+  enc '\u0145' -> '\\c N' [control_word:'\\c' chars:'N']
+  enc '\u0146' -> '\\c n' [control_word:'\\c' chars:'n']
+  enc '\u0147' -> '\\v N' [control_word:'\\v' chars:'N']
+  enc '\u0148' -> '\\v n' [control_word:'\\v' chars:'n']
+  enc '\u014c' -> '\\=O' [control_symbol:'\\=' chars:'O']
+  enc '\u014d' -> '\\=o' [control_symbol:'\\=' chars:'o']
+  enc '\u014e' -> '\\u O' [control_word:'\\u' chars:'O']
+  enc '\u014f' -> '\\u o' [control_word:'\\u' chars:'o']
+  enc '\u0150' -> '\\H O' [control_word:'\\H' chars:'O']
+  enc '\u0151' -> '\\H o' [control_word:'\\H' chars:'o']
+  enc '\u0152' -> '\\OE' [control_word:'\\OE']
+  enc '\u0153' -> '\\oe' [control_word:'\\oe']
+  enc '\u0154' -> "\\'R" [control_symbol:"\\'" chars:'R']
+  enc '\u0155' -> "\\'r" [control_symbol:"\\'" chars:'r']
+  enc '\u0156' -> '\\c R' [control_word:'\\c' chars:'R']
+  enc '\u0157' -> '\\c r' [control_word:'\\c' chars:'r']
+  enc '\u0158' -> '\\v R' [control_word:'\\v' chars:'R']
+  enc '\u0159' -> '\\v r' [control_word:'\\v' chars:'r']
+  enc '\u015a' -> "\\'S" [control_symbol:"\\'" chars:'S']
+  enc '\u015b' -> "\\'s" [control_symbol:"\\'" chars:'s']
+  enc '\u015c' -> '\\^S' [control_symbol:'\\^' chars:'S']
+  enc '\u015d' -> '\\^s' [control_symbol:'\\^' chars:'s']
+  enc '\u015e' -> '\\c S' [control_word:'\\c' chars:'S']
+  enc '\u015f' -> '\\c s' [control_word:'\\c' chars:'s']
+  enc '\u0160' -> '\\v S' [control_word:'\\v' chars:'S']
+  enc '\u0161' -> '\\v s' [control_word:'\\v' chars:'s']
+  enc '\u0162' -> '\\c T' [control_word:'\\c' chars:'T']
+  enc '\u0163' -> '\\c t' [control_word:'\\c' chars:'t']
+  enc '\u0164' -> '\\v T' [control_word:'\\v' chars:'T']
+  enc '\u0165' -> '\\v t' [control_word:'\\v' chars:'t']
+  enc '\u0168' -> '\\~U' [control_symbol:'\\~' chars:'U']
+  enc '\u0169' -> '\\~u' [control_symbol:'\\~' chars:'u']
+  enc '\u016a' -> '\\=U' [control_symbol:'\\=' chars:'U']
+  enc '\u016b' -> '\\=u' [control_symbol:'\\=' chars:'u']
+  enc '\u016c' -> '\\u U' [control_word:'\\u' chars:'U']
+  enc '\u016d' -> '\\u u' [control_word:'\\u' chars:'u']
+  enc '\u016e' -> '\\r U' [control_word:'\\r' chars:'U']
+  enc '\u016f' -> '\\r u' [control_word:'\\r' chars:'u']
+  enc '\u0170' -> '\\H U' [control_word:'\\H' chars:'U']
+  enc '\u0171' -> '\\H u' [control_word:'\\H' chars:'u']
+  enc '\u0172' -> '\\k U' [control_word:'\\k' chars:'U']
+  enc '\u0173' -> '\\k u' [control_word:'\\k' chars:'u']
+  enc '\u0174' -> '\\^W' [control_symbol:'\\^' chars:'W']
+  enc '\u0175' -> '\\^w' [control_symbol:'\\^' chars:'w']
+  enc '\u0176' -> '\\^Y' [control_symbol:'\\^' chars:'Y']
+  enc '\u0177' -> '\\^y' [control_symbol:'\\^' chars:'y']
+  enc '\u0178' -> '\\"Y' [control_symbol:'\\"' chars:'Y']
+  enc '\u0179' -> "\\'Z" [control_symbol:"\\'" chars:'Z']
+  enc '\u017a' -> "\\'z" [control_symbol:"\\'" chars:'z']
+  enc '\u017b' -> '\\.Z' [control_symbol:'\\.' chars:'Z']
+  enc '\u017c' -> '\\.z' [control_symbol:'\\.' chars:'z']
+  enc '\u017d' -> '\\v Z' [control_word:'\\v' chars:'Z']
+  enc '\u017e' -> '\\v z' [control_word:'\\v' chars:'z']
+  enc '\u01c4' -> 'D\\v Z' [chars:'D' control_word:'\\v' chars:'Z']
+  enc '\u01c5' -> 'D\\v z' [chars:'D' control_word:'\\v' chars:'z']
+  enc '\u01c6' -> 'd\\v z' [chars:'d' control_word:'\\v' chars:'z']
+  enc '\u01c7' -> 'LJ' [chars:'L' chars:'J']
+  enc '\u01c8' -> 'Lj' [chars:'L' chars:'j']
+  enc '\u01c9' -> 'lj' [chars:'l' chars:'j']
+  enc '\u01ca' -> 'NJ' [chars:'N' chars:'J']
+  enc '\u01cb' -> 'Nj' [chars:'N' chars:'j']
+  enc '\u01cc' -> 'nj' [chars:'n' chars:'j']
+  enc '\u01cd' -> '\\v A' [control_word:'\\v' chars:'A']
+  enc '\u01ce' -> '\\v a' [control_word:'\\v' chars:'a']
+  enc '\u01cf' -> '\\v I' [control_word:'\\v' chars:'I']
+  enc '\u01d0' -> '\\v\\i' [control_word:'\\v' control_word:'\\i']
+  enc '\u01d1' -> '\\v O' [control_word:'\\v' chars:'O']
+  enc '\u01d2' -> '\\v o' [control_word:'\\v' chars:'o']
+  enc '\u01d3' -> '\\v U' [control_word:'\\v' chars:'U']
+  enc '\u01d4' -> '\\v u' [control_word:'\\v' chars:'u']
+  enc '\u01e6' -> '\\v G' [control_word:'\\v' chars:'G']
+  enc '\u01e7' -> '\\v g' [control_word:'\\v' chars:'g']
+  enc '\u01e8' -> '\\v K' [control_word:'\\v' chars:'K']
+  enc '\u01e9' -> '\\v k' [control_word:'\\v' chars:'k']
+  enc '\u01ea' -> '\\k O' [control_word:'\\k' chars:'O']
+  enc '\u01eb' -> '\\k o' [control_word:'\\k' chars:'o']
+  enc '\u01f0' -> '\\v\\j' [control_word:'\\v' control_word:'\\j']
+  enc '\u01f1' -> 'DZ' [chars:'D' chars:'Z']
+  enc '\u01f2' -> 'Dz' [chars:'D' chars:'z']
+  enc '\u01f3' -> 'dz' [chars:'d' chars:'z']
+  enc '\u01f4' -> "\\'G" [control_symbol:"\\'" chars:'G']
+  enc '\u01f5' -> "\\'g" [control_symbol:"\\'" chars:'g']
+  enc '\u01fc' -> "\\'\\AE" [control_symbol:"\\'" control_word:'\\AE']
+  enc '\u01fd' -> "\\'\\ae" [control_symbol:"\\'" control_word:'\\ae']
+  enc '\u01fe' -> "\\'\\O" [control_symbol:"\\'" control_word:'\\O']
+  enc '\u01ff' -> "\\'\\o" [control_symbol:"\\'" control_word:'\\o']
+  enc '\xd0' -> '\\DH' [control_word:'\\DH']
+  enc '\xf0' -> '\\dh' [control_word:'\\dh']
+  enc '\xde' -> '\\TH' [control_word:'\\TH']
+  enc '\xfe' -> '\\th' [control_word:'\\th']
+  enc '\u0110' -> '\\DJ' [control_word:'\\DJ']
+  enc '\u0111' -> '\\dj' [control_word:'\\dj']
+  enc '\u1e0c' -> '\\d D' [control_word:'\\d' chars:'D']
+  enc '\u1e0d' -> '\\d d' [control_word:'\\d' chars:'d']
+  enc '\u1e36' -> '\\d L' [control_word:'\\d' chars:'L']
+  enc '\u1e37' -> '\\d l' [control_word:'\\d' chars:'l']
+  enc '\u1e42' -> '\\d M' [control_word:'\\d' chars:'M']
+  enc '\u1e43' -> '\\d m' [control_word:'\\d' chars:'m']
+  enc '\u1e46' -> '\\d N' [control_word:'\\d' chars:'N']
+  enc '\u1e47' -> '\\d n' [control_word:'\\d' chars:'n']
+  enc '\u1e5a' -> '\\d R' [control_word:'\\d' chars:'R']
+  enc '\u1e5b' -> '\\d r' [control_word:'\\d' chars:'r']
+  enc '\u1e62' -> '\\d S' [control_word:'\\d' chars:'S']
+  enc '\u1e63' -> '\\d s' [control_word:'\\d' chars:'s']
+  enc '\u1e6c' -> '\\d T' [control_word:'\\d' chars:'T']
+  enc '\u1e6d' -> '\\d t' [control_word:'\\d' chars:'t']
+  enc '\u0218' -> '\\textcommabelow S' [control_word:'\\textcommabelow' chars:'S']
+  enc '\u0219' -> '\\textcommabelow s' [control_word:'\\textcommabelow' chars:'s']
+  enc '\u021a' -> '\\textcommabelow T' [control_word:'\\textcommabelow' chars:'T']
+  enc '\u021b' -> '\\textcommabelow t' [control_word:'\\textcommabelow' chars:'t']
+  enc '\u2113' -> '$\\ell$' [mathshift:'$' control_word:'\\ell' mathshift:'$']
+  enc '\u221a' -> '$\\surd$' [mathshift:'$' control_word:'\\surd' mathshift:'$']
+  enc '\u221e' -> '$\\infty$' [mathshift:'$' control_word:'\\infty' mathshift:'$']
+  enc '\u222b' -> '$\\int$' [mathshift:'$' control_word:'\\int' mathshift:'$']
+  enc '\u2229' -> '$\\cap$' [mathshift:'$' control_word:'\\cap' mathshift:'$']
+  enc '\u222a' -> '$\\cup$' [mathshift:'$' control_word:'\\cup' mathshift:'$']
+  enc '\u2192' -> '$\\rightarrow$' [mathshift:'$' control_word:'\\rightarrow' mathshift:'$']
+  enc '\u21d2' -> '$\\Rightarrow$' [mathshift:'$' control_word:'\\Rightarrow' mathshift:'$']
+  enc '\u2190' -> '$\\leftarrow$' [mathshift:'$' control_word:'\\leftarrow' mathshift:'$']
+  enc '\u21d0' -> '$\\Leftarrow$' [mathshift:'$' control_word:'\\Leftarrow' mathshift:'$']
+  enc '\u2228' -> '$\\vee$' [mathshift:'$' control_word:'\\vee' mathshift:'$']
+  enc '\u2227' -> '$\\wedge$' [mathshift:'$' control_word:'\\wedge' mathshift:'$']
+  enc '\u2248' -> '$\\approx$' [mathshift:'$' control_word:'\\approx' mathshift:'$']
+  enc '\u2260' -> '$\\neq$' [mathshift:'$' control_word:'\\neq' mathshift:'$']
+  enc '\u2264' -> '$\\leq$' [mathshift:'$' control_word:'\\leq' mathshift:'$']
+  enc '\u2265' -> '$\\geq$' [mathshift:'$' control_word:'\\geq' mathshift:'$']
+  enc '\u2200' -> '$\\forall$' [mathshift:'$' control_word:'\\forall' mathshift:'$']
+  enc '\u2201' -> '$\\complement$' [mathshift:'$' control_word:'\\complement' mathshift:'$']
+  enc '\u2202' -> '$\\partial$' [mathshift:'$' control_word:'\\partial' mathshift:'$']
+  enc '\u2203' -> '$\\exists$' [mathshift:'$' control_word:'\\exists' mathshift:'$']
+  enc '\u2204' -> '$\\nexists$' [mathshift:'$' control_word:'\\nexists' mathshift:'$']
+  enc '\u2205' -> '$\\emptyset$' [mathshift:'$' control_word:'\\emptyset' mathshift:'$']
+  enc '\u2207' -> '$\\nabla$' [mathshift:'$' control_word:'\\nabla' mathshift:'$']
+  enc '\u2208' -> '$\\in$' [mathshift:'$' control_word:'\\in' mathshift:'$']
+  enc '\u2209' -> '$\\notin$' [mathshift:'$' control_word:'\\notin' mathshift:'$']
+  enc '\u220b' -> '$\\ni$' [mathshift:'$' control_word:'\\ni' mathshift:'$']
+  enc '\u220c' -> '$\\notni$' [mathshift:'$' control_word:'\\notni' mathshift:'$']
+  enc '\u220e' -> '$\\blacksquare$' [mathshift:'$' control_word:'\\blacksquare' mathshift:'$']
+  enc '\u220f' -> '$\\prod$' [mathshift:'$' control_word:'\\prod' mathshift:'$']
+  enc '\u2210' -> '$\\coprod$' [mathshift:'$' control_word:'\\coprod' mathshift:'$']
+  enc '\u2211' -> '$\\sum$' [mathshift:'$' control_word:'\\sum' mathshift:'$']
+  enc '\u2282' -> '$\\subset$' [mathshift:'$' control_word:'\\subset' mathshift:'$']
+  enc '\u2283' -> '$\\supset$' [mathshift:'$' control_word:'\\supset' mathshift:'$']
+  enc '\u2284' -> '$\\not\\subset$' [mathshift:'$' control_word:'\\not' control_word:'\\subset' mathshift:'$']
+  enc '\u2285' -> '$\\not\\supset$' [mathshift:'$' control_word:'\\not' control_word:'\\supset' mathshift:'$']
+  enc '\u2286' -> '$\\subseteq$' [mathshift:'$' control_word:'\\subseteq' mathshift:'$']
+  enc '\u2287' -> '$\\supseteq$' [mathshift:'$' control_word:'\\supseteq' mathshift:'$']
+  enc '\u2288' -> '$\\nsubseteq$' [mathshift:'$' control_word:'\\nsubseteq' mathshift:'$']
+  enc '\u2289' -> '$\\nsupseteq$' [mathshift:'$' control_word:'\\nsupseteq' mathshift:'$']
+  enc '\u228a' -> '$\\subsetneq$' [mathshift:'$' control_word:'\\subsetneq' mathshift:'$']
+  enc '\u228b' -> '$\\supsetneq$' [mathshift:'$' control_word:'\\supsetneq' mathshift:'$']
+  enc '\u02c6' -> '\\^{}' [control_symbol:'\\^' chars:'{' chars:'}']
+  enc '\u02c7' -> '\\v{}' [control_word:'\\v' chars:'{' chars:'}']
+  enc '\u02d8' -> '\\u{}' [control_word:'\\u' chars:'{' chars:'}']
+  enc '\u02d9' -> '\\.{}' [control_symbol:'\\.' chars:'{' chars:'}']
+  enc '\u02da' -> '\\r{}' [control_word:'\\r' chars:'{' chars:'}']
+  enc '\u02db' -> '\\k{}' [control_word:'\\k' chars:'{' chars:'}']
+  enc '\u02dd' -> '\\H{}' [control_word:'\\H' chars:'{' chars:'}']
+  enc '\ufb01' -> 'fi' [chars:'f' chars:'i']
+  enc '\ufb02' -> 'fl' [chars:'f' chars:'l']
+  enc '\ufb00' -> 'ff' [chars:'f' chars:'f']
+  enc '\ufb03' -> 'ffi' [chars:'f' chars:'f' chars:'i']
+  enc '\ufb04' -> 'ffl' [chars:'f' chars:'f' chars:'l']
+  enc '\ufb06' -> 'st' [chars:'s' chars:'t']
+  enc '\u03b1' -> '$\\alpha$' [mathshift:'$' control_word:'\\alpha' mathshift:'$']
+  enc '\u03b2' -> '$\\beta$' [mathshift:'$' control_word:'\\beta' mathshift:'$']
+  enc '\u03b3' -> '$\\gamma$' [mathshift:'$' control_word:'\\gamma' mathshift:'$']
+  enc '\u03b4' -> '$\\delta$' [mathshift:'$' control_word:'\\delta' mathshift:'$']
+  enc '\u03b5' -> '$\\epsilon$' [mathshift:'$' control_word:'\\epsilon' mathshift:'$']
+  enc '\u03b6' -> '$\\zeta$' [mathshift:'$' control_word:'\\zeta' mathshift:'$']
+  enc '\u03b7' -> '$\\eta$' [mathshift:'$' control_word:'\\eta' mathshift:'$']
+  enc '\u03b8' -> '$\\theta$' [mathshift:'$' control_word:'\\theta' mathshift:'$']
+  enc '\u03b9' -> '$\\iota$' [mathshift:'$' control_word:'\\iota' mathshift:'$']
+  enc '\u03ba' -> '$\\kappa$' [mathshift:'$' control_word:'\\kappa' mathshift:'$']
+  enc '\u03bb' -> '$\\lambda$' [mathshift:'$' control_word:'\\lambda' mathshift:'$']
+  enc '\u03bc' -> '$\\mu$' [mathshift:'$' control_word:'\\mu' mathshift:'$']
+  enc '\u03bd' -> '$\\nu$' [mathshift:'$' control_word:'\\nu' mathshift:'$']
+  enc '\u03be' -> '$\\xi$' [mathshift:'$' control_word:'\\xi' mathshift:'$']
+  enc '\u03bf' -> '$\\omicron$' [mathshift:'$' control_word:'\\omicron' mathshift:'$']
+  enc '\u03c0' -> '$\\pi$' [mathshift:'$' control_word:'\\pi' mathshift:'$']
+  enc '\u03c1' -> '$\\rho$' [mathshift:'$' control_word:'\\rho' mathshift:'$']
+  enc '\u03c3' -> '$\\sigma$' [mathshift:'$' control_word:'\\sigma' mathshift:'$']
+  enc '\u03c4' -> '$\\tau$' [mathshift:'$' control_word:'\\tau' mathshift:'$']
+  enc '\u03c5' -> '$\\upsilon$' [mathshift:'$' control_word:'\\upsilon' mathshift:'$']
+  enc '\u03c6' -> '$\\phi$' [mathshift:'$' control_word:'\\phi' mathshift:'$']
+  enc '\u03d5' -> '$\\varphi$' [mathshift:'$' control_word:'\\varphi' mathshift:'$']
+  enc '\u03c7' -> '$\\chi$' [mathshift:'$' control_word:'\\chi' mathshift:'$']
+  enc '\u03c8' -> '$\\psi$' [mathshift:'$' control_word:'\\psi' mathshift:'$']
+  enc '\u03c9' -> '$\\omega$' [mathshift:'$' control_word:'\\omega' mathshift:'$']
+  enc '\u0391' -> '$\\Alpha$' [mathshift:'$' control_word:'\\Alpha' mathshift:'$']
+  enc '\u0392' -> '$\\Beta$' [mathshift:'$' control_word:'\\Beta' mathshift:'$']
+  enc '\u0393' -> '$\\Gamma$' [mathshift:'$' control_word:'\\Gamma' mathshift:'$']
+  enc '\u0394' -> '$\\Delta$' [mathshift:'$' control_word:'\\Delta' mathshift:'$']
+  enc '\u0395' -> '$\\Epsilon$' [mathshift:'$' control_word:'\\Epsilon' mathshift:'$']
+  enc '\u0396' -> '$\\Zeta$' [mathshift:'$' control_word:'\\Zeta' mathshift:'$']
+  enc '\u0397' -> '$\\Eta$' [mathshift:'$' control_word:'\\Eta' mathshift:'$']
+  enc '\u0398' -> '$\\Theta$' [mathshift:'$' control_word:'\\Theta' mathshift:'$']
+  enc '\u0399' -> '$\\Iota$' [mathshift:'$' control_word:'\\Iota' mathshift:'$']
+  enc '\u039a' -> '$\\Kappa$' [mathshift:'$' control_word:'\\Kappa' mathshift:'$']
+  enc '\u039b' -> '$\\Lambda$' [mathshift:'$' control_word:'\\Lambda' mathshift:'$']
+  enc '\u039c' -> '$\\Mu$' [mathshift:'$' control_word:'\\Mu' mathshift:'$']
+  enc '\u039d' -> '$\\Nu$' [mathshift:'$' control_word:'\\Nu' mathshift:'$']
+  enc '\u039e' -> '$\\Xi$' [mathshift:'$' control_word:'\\Xi' mathshift:'$']
+  enc '\u039f' -> '$\\Omicron$' [mathshift:'$' control_word:'\\Omicron' mathshift:'$']
+  enc '\u03a0' -> '$\\Pi$' [mathshift:'$' control_word:'\\Pi' mathshift:'$']
+  enc '\u03a1' -> '$\\Rho$' [mathshift:'$' control_word:'\\Rho' mathshift:'$']
+  enc '\u03a3' -> '$\\Sigma$' [mathshift:'$' control_word:'\\Sigma' mathshift:'$']
+  enc '\u03a4' -> '$\\Tau$' [mathshift:'$' control_word:'\\Tau' mathshift:'$']
+  enc '\u03a5' -> '$\\Upsilon$' [mathshift:'$' control_word:'\\Upsilon' mathshift:'$']
+  enc '\u03a6' -> '$\\Phi$' [mathshift:'$' control_word:'\\Phi' mathshift:'$']
+  enc '\u03a7' -> '$\\Chi$' [mathshift:'$' control_word:'\\Chi' mathshift:'$']
+  enc '\u03a8' -> '$\\Psi$' [mathshift:'$' control_word:'\\Psi' mathshift:'$']
+  enc '\u03a9' -> '$\\Omega$' [mathshift:'$' control_word:'\\Omega' mathshift:'$']
+  enc '\xa9' -> '\\copyright' [control_word:'\\copyright']
+  enc '\xc1' -> "\\'A" [control_symbol:"\\'" chars:'A']
+  enc '\xcd' -> "\\'I" [control_symbol:"\\'" chars:'I']
+  enc '\u2026' -> '\\ldots' [control_word:'\\ldots']
+  enc '\u2122' -> '$^{TM}$' [mathshift:'$' chars:'^' chars:'{' chars:'T' chars:'M' chars:'}' mathshift:'$']
+  enc '\xae' -> '\\textregistered' [control_word:'\\textregistered']
+  enc '\u01ec' -> '\\textogonekcentered{\\=O}' [control_word:'\\textogonekcentered' chars:'{' control_symbol:'\\=' chars:'O' chars:'}']
+  enc '\u01ed' -> '\\textogonekcentered{\\=o}' [control_word:'\\textogonekcentered' chars:'{' control_symbol:'\\=' chars:'o' chars:'}']
+  enc '\u2115' -> '$\\mathbb N$' [mathshift:'$' control_word:'\\mathbb' chars:'N' mathshift:'$']
+  enc '\u2124' -> '$\\mathbb Z$' [mathshift:'$' control_word:'\\mathbb' chars:'Z' mathshift:'$']
+  enc '\u211a' -> '$\\mathbb Q$' [mathshift:'$' control_word:'\\mathbb' chars:'Q' mathshift:'$']
+  enc '\u211d' -> '$\\mathbb R$' [mathshift:'$' control_word:'\\mathbb' chars:'R' mathshift:'$']
+  enc '\u2102' -> '$\\mathbb C$' [mathshift:'$' control_word:'\\mathbb' chars:'C' mathshift:'$']
+== encode basics
+> enc latex strict 'M\xfcller'
+  -> b'M\\"uller'
+> enc latex strict 'Erd\u0151s, P\xe1l'
+  -> b"Erd\\H os, P\\'al"
+> enc latex strict '\xc5ngstr\xf6m'
+  -> b'\\AA ngstr\\"om'
+> enc latex strict '\xe5 b\xe5b\xe5'
+  -> b'\\aa\\ b\\aa b\\aa'
+> enc latex strict '100% & #1 _x_ $5 {braces} \\back ~tilde ^hat'
+  -> b'100\\% \\& \\#1 \\_x\\_ $5 {braces} \\back \\textasciitilde tilde ^hat'
+> enc latex strict 'Stra\xdfe and \u0152uvre, \xe6ther, \xf8'
+  -> b'Stra\\ss e and \\OE uvre, \\ae ther, \\o'
+> enc latex strict '\u201cquoted\u201d \u2013 \u2014 \u2026 \u2018single\u2019 \xabguillemets\xbb'
+  -> b"``quoted'' -- --- \\ldots\\ `single' \\guillemotleft guillemets\\guillemotright"
+> enc latex strict '\u03b1 \u03b2 \u03b3 \u03a9 \u221e \u2264 \u2265 \u2260 \u2211'
+  -> b'$\\alpha$ $\\beta$ $\\gamma$ $\\Omega$ $\\infty$ $\\leq$ $\\geq$ $\\neq$ $\\sum$'
+> enc latex strict '\ufb01ne \ufb02ow \ufb00 \ufb03 \ufb06'
+  -> b'fine flow ff ffi st'
+> enc latex strict '\xa9 \xae \u2122 \xb0 \xb1 \xb2 \xb5 \xb6 \xb7 \xbf \xa1'
+  -> b'\\copyright\\ \\textregistered\\ $^{TM}$ $^\\circ$ $\\pm$ $^2$ $\\mu$ \\P\\ $\\cdot$ ?` !`'
+> enc latex strict 'tab\there\nnewline\r\nCRLF'
+  -> b'tab\there\nnewline\r\nCRLF'
+> enc latex strict '\u200b\u200c\u200d\u2009\u2003 \ufffd \xa0 \xad'
+  -> b'\\hspace{0pt}{} \\quad\\ ???? ~ \\-'
+> enc latex strict ''
+  -> b''
+> enc latex strict 'plain ASCII text 123'
+  -> b'plain ASCII text 123'
+> enc latex strict '\\'
+  -> b'\\'
+> enc latex strict '\\\\ two'
+  -> b'\\\\ two'
+> enc latex strict 'e\u0301 combining'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u0301' in position 0: don't know how to translate '\u0301' into latex
+> enc latex strict '\u216b'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u216b' in position 0: don't know how to translate '\u216b' into latex
+== encode errors
+> enc latex strict 'snow \u2603 man'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2603' in position 0: don't know how to translate '\u2603' into latex
+> enc latex strict '\u20ac 12'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u20ac' in position 0: don't know how to translate '\u20ac' into latex
+> enc latex strict 'emoji \U0001f600'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\U0001f600' in position 0: don't know how to translate '\U0001f600' into latex
+> enc latex strict 'sep\u2028line'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2028' in position 0: don't know how to translate '\\u2028' into latex
+> enc latex ignore 'snow \u2603 man \u20ac 12'
+  -> b'snow  man  12'
+> enc latex ignore '\\aa \u2603b'
+  -> b'\\aa b'
+> enc latex replace 'snow \u2603 man \u20ac 12 \U0001f600'
+  -> b'snow {\\char9731} man {\\char8364} 12 {\\char128512}'
+> enc latex keep 'snow \u2603 man'
+  error LookupError: unknown error handler name 'keep'
+> enc latex keep 'ascii only'
+  -> b'ascii only'
+> enc ulatex keep 'snow \u2603 man'
+  -> 'snow \u2603 man'
+> enc latex backslashreplace '\u2603'
+  error ValueError: latex codec does not support backslashreplace errors
+> enc latex backslashreplace 'ok'
+  -> b'ok'
+> enc ulatex foo '\xe9 \u2603'
+  error ValueError: latex codec does not support foo errors
+== encode inputenc
+> enc latex+latin1 strict 'M\xfcller, Erd\u0151s, \xbd, \u2603'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2603' in position 0: don't know how to translate '\u2603' into latex
+> enc latex+latin1 replace 'M\xfcller, Erd\u0151s, \xbd, \u2603'
+  -> b'M\xfcller, Erd\\H os, \xbd, {\\char9731}'
+> enc latex+utf8 strict 'M\xfcller, Erd\u0151s, \u2603 \U0001f600 & 100%'
+  -> b'M\xc3\xbcller, Erd\xc5\x91s, \xe2\x98\x83 \xf0\x9f\x98\x80 \\& 100\\%'
+> enc latex+utf-8 strict '\xc5ngstr\xf6m'
+  -> b'\xc3\x85ngstr\xc3\xb6m'
+> enc latex+latin-1 strict '\xc5ngstr\xf6m \u0152'
+  -> b'\xc5ngstr\xf6m \\OE'
+> enc latex_utf8 strict '\xe9'
+  -> b'\xc3\xa9'
+> enc latex-utf8 strict '\xe9'
+  -> b'\xc3\xa9'
+> enc latex+cp1252 strict '\u201c\u20ac\u201d \u0152 \xbd'
+  -> b'\x93\x80\x94 \x8c \xbd'
+> enc latex+ascii strict '\xe9'
+  -> b"\\'e"
+> enc latex+ strict '\xe9'
+  -> b"\\'e"
+> enc LaTeX strict '\xe9'
+  -> b"\\'e"
+> enc ulatex+utf8 strict '\xe9 \u2603 \\'
+  -> '\xe9 \u2603 \\'
+> enc ulatex+latin1 strict '\xe9 \u0151'
+  -> '\xe9 \\H o'
+> enc ulatex strict '\xe9 \u0151'
+  -> "\\'e \\H o"
+> enc latex+klingon strict 'a'
+  error LookupError: unknown encoding: klingon
+> enc latex+klingon strict '&'
+  error LookupError: unknown encoding: klingon
+> enc latex++x strict '&\xe9'
+  error LookupError: unknown encoding: x
+> enc latexx strict 'a'
+  error LookupError: unknown encoding: latexx
+> enc latex.utf8 strict 'a'
+  error LookupError: unknown encoding: latex.utf8
+> enc latex+utf8+x strict '\xe9'
+  error LookupError: unknown encoding: utf8_x
+== str api
+> strenc latex strict 'M\xfcller'
+  -> b'M\\"uller'
+> strenc latex+utf8 strict 'M\xfcller \u2603'
+  -> b'M\xc3\xbcller \xe2\x98\x83'
+> strenc ulatex strict 'M\xfcller'
+  error TypeError: 'ulatex' encoder returned 'str' instead of 'bytes'; use codecs.encode() to encode to arbitrary types
+> strenc latex strict '\u2603'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2603' in position 0: don't know how to translate '\u2603' into latex
+> bdec latex strict b'M\\"{u}ller'
+  -> 'M{\xfc}ller'
+> bdec latex+latin1 strict b"G\xf6del \\'e"
+  -> 'G\xf6del \xe9'
+> bdec ulatex strict b'abc'
+  error TypeError: cannot use a string pattern on a bytes-like object
+> bdec latex strict b'\\'
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x5c in position 0: unknown token '\\\\'
+== decode basics
+> dec latex strict b'M\\"uller and M{\\"u}ller and M\\"{u}ller'
+  -> 'M\xfcller and M{\xfc}ller and M{\xfc}ller'
+> dec latex strict b"Erd\\H{o}s, P\\'al, Fran\\c cois, Fran\\c{c}ois"
+  -> 'Erd{\u0151}s, P\xe1l, Fran\xe7ois, Fran{\xe7}ois'
+> dec latex strict b'\\AA ngstr\\"om, \\aa, Stra\\ss e, \\o, \\ae\\ \\oe'
+  -> '\xc5ngstr\xf6m, \xe5, Stra\xdfe, \xf8, \xe6 \u0153'
+> dec latex strict b'\\\'\\i, \\\'i, \\^\\i, \\"\\i, \\v\\j, \\i\\j'
+  -> '\xed, \xed, \xee, \xef, \u01f0, \u0131\\j '
+> dec latex strict b"``quoted'' `single' -- --- - ?` !` ,,low''"
+  -> "\u201cquoted\u201d `single' \u2013 \u2014 - \xbf \xa1 \u201elow\u201d"
+> dec latex strict b'\\& \\% \\# \\_ \\$ \\{ \\} \\textbackslash \\S \\P'
+  -> '& % # _ \\$ \\{ \\} \\\xa7\xb6'
+> dec latex strict b'$\\alpha$ \\(\\beta\\) $\\gamma $ $ \\delta$ $$\\pi$$ \\alpha'
+  -> '\u03b1 \u03b2 \u03b3 $ \\delta $ $$\\pi $$ \\alpha '
+> dec latex strict b'\\textemdash \\textendash \\ldots \\copyright \\textregistered \\texttrademark'
+  -> '\u2014\u2013\u2026\xa9\xae\u2122'
+> dec latex strict b'a~b \\quad c \\ d \\, e \\- f'
+  -> 'a\xa0b \u2003c  d \\, e \xad f'
+> dec latex strict b'x\n\ny \\par z\n\n\nw'
+  -> 'x\n\ny\n\nz\n\n\n\nw'
+> dec latex strict b'one\ntwo\n   three \\foo\n bar %comment\n  baz'
+  -> 'one two three \\foo bar baz'
+> dec latex strict b'tabs\t\tand  spaces   \\bar   \tqux'
+  -> 'tabs\tand spaces \\bar qux'
+> dec latex strict b'\\\\ and \\\\% and \\%comment'
+  -> '\\\\ and \\\\'
+> dec latex strict b'#1 # #a param'
+  -> '#1 # #a param'
+> dec latex strict b'\\unknowncommand{arg} \\relax\\relax x'
+  -> '\\unknowncommand {arg} \\relax \\relax x'
+> dec latex strict b'{\\"o} {\\\'e} \\\'{}e \\^{} \\~{} \\"{}'
+  -> '{\xf6} {\xe9} \xb4e \u02c6 \u02dc \xa8'
+> dec latex strict b''
+  -> ''
+> dec latex strict b'   leading spaces'
+  -> 'leading spaces'
+> dec latex strict b'\n\nleading newlines'
+  -> '\n\n\n\nleading newlines'
+> dec latex strict b'\\v s \\v{s} \\u a \\k e \\r A \\H o \\d D \\textcommabelow S'
+  -> '\u0161 {\u0161} \u0103 \u0119 \xc5 \u0151 \u1e0c \u0218'
+> dec latex strict b'D\\v Z dz LJ Lj lj NJ IJ ij fi fl ff ffi ffl st'
+  -> '\u01c4 dz LJ Lj lj NJ IJ ij fi fl ff ffi ffl st'
+> dec latex strict b'$\\leq$\\(\\geq\\)$\\infty$ \\leq $\\neq$\\neq'
+  -> '\u2264\u2265\u221e \\leq \u2260\\neq '
+== decode errors
+> dec latex strict b'ab\\'
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x5c in position 2: unknown token '\\\\'
+> dec latex+utf8 strict b'\xc3\xa9b\\'
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x62 in position 2: unknown token '\\\\'
+> dec latex ignore b'ab\\'
+  -> 'ab'
+> dec latex replace b'ab\\'
+  -> 'ab\ufffd'
+> dec latex foo b'ab\\'
+  error NotImplementedError: error mode 'foo' not supported
+> dec latex foo b'ok'
+  -> 'ok'
+> dec latex strict b'caf\xe9'
+  error ValueError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+> dec latex replace b"caf\xe9 \\'e"
+  -> 'caf\ufffd \xe9'
+> dec latex ignore b"caf\xe9 \\'e"
+  -> 'caf \xe9'
+> dec latex foo b'caf\xe9'
+  error LookupError: unknown error handler name 'foo'
+> dec latex+utf8 strict b'ok \xc3\xa9 then \xe9 bad'
+  error ValueError: 'utf-8' codec can't decode byte 0xe9 in position 11: invalid continuation byte
+> dec latex+utf8 strict b'\xff'
+  error ValueError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> dec latex+utf8 strict b'cut \xe2\x82'
+  error ValueError: 'utf-8' codec can't decode bytes in position 4-5: unexpected end of data
+> dec latex+utf8 replace b'ok \xe9 bad \xe2\x82 \xff\xfe end \xf0\x9f'
+  -> 'ok \ufffd bad \ufffd \ufffd\ufffd end \ufffd'
+> dec latex+utf8 strict b'\xed\xa0\x80 surrogate'
+  error ValueError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+> dec latex+utf8 strict b'\xc0\xaf overlong'
+  error ValueError: 'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte
+> dec latex+latin1 strict b'G\xf6del \\"o'
+  -> 'G\xf6del \xf6'
+> dec latex+cp1252 strict b'\x93q\x94 \x80'
+  -> '\u201cq\u201d \u20ac'
+> dec latex+cp1252 strict b'abc \x81 def'
+  error ValueError: 'charmap' codec can't decode byte 0x81 in position 4: character maps to <undefined>
+> dec latex+klingon strict b'abc'
+  error LookupError: unknown encoding: klingon
+> dec ulatex+klingon strict 'abc'
+  error LookupError: unknown encoding: klingon
+> dec ulatex strict "\xe9 \u2603 \\'e \\"
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x27 in position 8: unknown token '\\\\'
+> dec ulatex replace '\xe9 \\'
+  -> '\xe9 \ufffd'
+> dec ulatex strict 'M\\"uller, \u2603, \\textemdash'
+  -> 'M\xfcller, \u2603, \u2014'
+== incremental encode
+> ienc latex strict n:c385 n:2062 f:c3a5
+  [0] -> b'\\AA'
+  [1] -> b'\\ b'
+  [2] -> b'\\aa'
+> ienc latex strict n:5c6161 n: f:2078
+  [0] -> b'\\aa'
+  [1] -> b''
+  [2] -> b' x'
+> ienc latex strict n:c3a5 r f:2078
+  [0] -> b'\\aa'
+  [1] reset
+  [2] -> b' x'
+> ienc ulatex strict n:457264c5917320 n:c3b8 f:20656e64
+  [0] -> 'Erd\\H os '
+  [1] -> '\\o'
+  [2] -> '\\ end'
+> ienc latex strict n:6f6b20 n:e29883 f:6166746572
+  [0] -> b'ok '
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2603' in position 0: don't know how to translate '\u2603' into latex
+> ienc latex+utf8 strict n:c3a9 f:26
+  [0] -> b'\xc3\xa9'
+  [1] -> b'\\&'
+== incremental decode
+> idec latex strict n:5c27 n:6520616e64202d n:2d f:2d2064617368
+  [0] -> ''
+  [1] -> '\xe9'
+  [2] -> ''
+  [3] -> ' and \u2014 dash'
+> idec latex strict n:656e6473205c f:25
+  [0] -> ''
+  [1] -> 'ends %'
+> idec latex strict n:656e6473205c f:
+  [0] -> ''
+  error UnicodeDecodeError: 'latex' codec can't decode bytes in position -1--1: unknown token '\\\\'
+> idec latex+utf8 strict n:73706c697420c3 n:a920e280 f:9420646f6e65
+  [0] -> ''
+  [1] -> 's'
+  [2] -> 'plit \xe9 \u2014 done'
+> idec latex+utf8 strict n:73706c697420c3 f:
+  [0] -> ''
+  error ValueError: 'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data
+> idec latex+utf8 replace n:73706c697420c3 f:2078
+  [0] -> ''
+  [1] -> 'split \ufffd x'
+> idec latex strict n:5c4141 n:206e67737472 n:5c22 f:6f6d
+  [0] -> ''
+  [1] -> '\xc5'
+  [2] -> ''
+  [3] -> 'ngstr\xf6m'
+> idec latex strict n:610a n:0a f:62
+  [0] -> ''
+  [1] -> ''
+  [2] -> 'a\n\nb'
+> idec latex strict n:245c616c n:70686124 r f:5c226f
+  [0] -> ''
+  [1] -> ''
+  [2] reset
+  [3] -> '\xf6'
+> idec ulatex strict n:5c63 n:2063 f:6f6973
+  [0] -> ''
+  [1] -> ''
+  [2] -> '\xe7ois'
+> idec ulatex strict n:747261696c696e67205c f:
+  [0] -> 'tra'
+  error UnicodeDecodeError: 'latex' codec can't decode bytes in position -1--1: unknown token '\\\\'
+== lexer
+> lex strict b"\\foo  bar \\' e \\\\ x \\% y %c\nz #1 #a $m$ $$d$$ -- --- ``q'' ?` !`"
+  control_word:'\\foo'
+  chars:'b'
+  chars:'a'
+  chars:'r'
+  space:' '
+  control_symbol:"\\'"
+  chars:'e'
+  space:' '
+  control_symbol_x2:'\\\\'
+  space:' '
+  chars:'x'
+  space:' '
+  control_symbol_x2:'\\%'
+  space:' '
+  chars:'y'
+  space:' '
+  chars:'z'
+  space:' '
+  parameter:'#1'
+  space:' '
+  parameter:'#'
+  chars:'a'
+  space:' '
+  mathshift:'$'
+  chars:'m'
+  mathshift:'$'
+  space:' '
+  mathshift:'$$'
+  chars:'d'
+  mathshift:'$$'
+  space:' '
+  chars:'--'
+  space:' '
+  chars:'---'
+  space:' '
+  chars:'``'
+  chars:'q'
+  chars:"''"
+  space:' '
+  chars:'?`'
+  space:' '
+  chars:'!`'
+  state M inline_math False
+> lex strict b'a\n\nb\n  c\t\\par\n'
+  chars:'a'
+  space:' '
+  control_word:'\\par'
+  chars:'b'
+  space:' '
+  chars:'c'
+  space:'\t'
+  control_word:'\\par'
+  state N inline_math False
+> lex strict b'\\1 \\@ \\ \\~ \\= \\^ \\! \\. \\" \\` \\{'
+  control_symbol_x:'\\1'
+  space:' '
+  control_symbol_x:'\\@'
+  space:' '
+  control_symbol:'\\ '
+  control_symbol:'\\~'
+  control_symbol:'\\='
+  control_symbol:'\\^'
+  control_symbol:'\\!'
+  control_symbol:'\\.'
+  control_symbol:'\\"'
+  control_symbol:'\\`'
+  control_symbol_x:'\\{'
+  state M inline_math False
+> lex strict b'end\\'
+  chars:'e'
+  chars:'n'
+  chars:'d'
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x5c in position 3: unknown token '\\\\'
+> lex replace b'end\\'
+  chars:'e'
+  chars:'n'
+  chars:'d'
+  chars:'\ufffd'
+  state M inline_math False
+> lex ignore b'end\\'
+  chars:'e'
+  chars:'n'
+  chars:'d'
+  state M inline_math False
+> lex strict b''
+  state N inline_math False
+> ilex strict n:5c666f n:6f20626172205c n:5c2078202d f:2d2d
+  [0] (none)
+      state control_word:'\\fo' 1
+  [1] control_word:'\\foo' chars:'b' chars:'a' chars:'r' space:' '
+      state unknown:'\\' 2
+  [2] control_symbol_x2:'\\\\' space:' ' chars:'x' space:' '
+      state chars:'-' 2
+  [3] chars:'---'
+      state unknown:'' 0
+> ilex strict n:2478 n:24200a f:0a
+  [0] mathshift:'$'
+      state chars:'x' 4
+  [1] chars:'x' mathshift:'$' space:' '
+      state newline:'\n' 2
+  [2] control_word:'\\par'
+      state unknown:'' 1
+> plain strict b"\\foo bar \\'e \\\\x %c\ny\n\nz"
+  -> "\\foo bar \\'e \\\\x y \\par z"
+> plain strict b'caf\xe9'
+  error ValueError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+> plain replace b'caf\xe9 \\'
+  -> 'caf\ufffd \ufffd'
+== files
+> read refs.bib latex strict
+  -> '@article{muller2019, author = {M{\xfc}ller, J{\xf6}rg and Erd{\u0151}s, P\xe1l and Fran\xe7ois Truffaut}, title = {On \u03b1-helices and \u03b2-sheets: a \u201csurvey\u201d \u2014 part\xa0I}, journal = {J. Struct. Biol. & Med.}, pages = {12\u201334}, note = {100% open access; see \xa73 # 4 and file_name}, }\n\n@book{angstrom1868, author = {\xc5ngstr\xf6m, Anders Jonas and Stra\xdfe, Hans}, title = {Recherches sur le spectre solaire\u2026{} \u2014{} \u0153uvres}, publisher = {W.\xa0Schultz}, year = 1868,\n\nabstract = {First paragraph.\n\nSecond paragraph,\twith a tab.\\\\ Next line with {\u0161}, \u0161, {\xe9}, {\xe9}, \xed, {\xe7} and \xe6 \xf8.} } '
+> read math.tex latex strict
+  -> '$\\alpha \\leq \\beta $, \u221e, $$x^2$$ and \\{} \u223c \u02dc \xa0'
+> read latin1.txt latex+latin1 strict
+  -> 'G\xf6del, Escher, Bach; \xc7a va; se\xf1or; 25\xb0C \xb12'
+> read cp1252.tex latex+cp1252 strict
+  -> '\u201cquoted\u201d \u20ac 5 \u2014 done'
+> read cp1252_bad.tex latex+cp1252 strict
+  error ValueError: 'charmap' codec can't decode byte 0x81 in position 4: character maps to <undefined>
+> read bad_utf8.tex latex+utf8 strict
+  error ValueError: 'utf-8' codec can't decode byte 0xe9 in position 11: invalid continuation byte
+> read bad_utf8.tex latex+utf8 replace
+  -> 'ok \xe9 then \ufffd bad'
+> read trailing.tex latex strict
+  error UnicodeDecodeError: 'latex' codec can't decode byte 0x5c in position 22: unknown token '\\\\'
+> read missing.tex latex strict
+  error FileNotFoundError: [Errno 2] No such file or directory: 'missing.tex'
+> read refs.bib ulatex strict
+  error TypeError: cannot use a string pattern on a bytes-like object
+> write out.tex latex strict 'M\xfcller & Erd\u0151s \u2014 100%'
+  wrote out.tex (30 bytes)
+    |M\\"uller \\& Erd\\H os --- 100\\%
+    (no newline at end)
+> write out2.tex latex strict '\u2603 snowman'
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\u2603' in position 0: don't know how to translate '\u2603' into latex
+  wrote out2.tex (0 bytes)
+> write out3.tex latex replace '\u2603 snowman'
+  wrote out3.tex (19 bytes)
+    |{\\char9731} snowman
+    (no newline at end)
+> write out4.tex ulatex strict 'plain'
+  error TypeError: a bytes-like object is required, not 'str'
+  wrote out4.tex (0 bytes)
+> write out5.tex latex+utf8 strict 'M\xfcller & \u2603'
+  wrote out5.tex (14 bytes)
+    |M\xfcller \\& \u2603
+    (no newline at end)
+== convert
+> convert refs.bib refs.txt latex utf-8 strict
+  wrote refs.txt (576 bytes)
+    |@article{muller2019, author = {M{\xfc}ller, J{\xf6}rg and Erd{\u0151}s, P\xe1l and Fran\xe7ois Truffaut}, title = {On \u03b1-helices and \u03b2-sheets: a \u201csurvey\u201d \u2014 part\xa0I}, journal = {J. Struct. Biol. & Med.}, pages = {12\u201334}, note = {100% open access; see \xa73 # 4 and file_name}, }
+    |
+    |@book{angstrom1868, author = {\xc5ngstr\xf6m, Anders Jonas and Stra\xdfe, Hans}, title = {Recherches sur le spectre solaire\u2026{} \u2014{} \u0153uvres}, publisher = {W.\xa0Schultz}, year = 1868,
+    |
+    |abstract = {First paragraph.
+    |
+    |Second paragraph,\twith a tab.\\\\ Next line with {\u0161}, \u0161, {\xe9}, {\xe9}, \xed, {\xe7} and \xe6 \xf8.} } 
+    (no newline at end)
+> convert names.txt names.bib utf-8 latex replace
+  wrote names.bib (329 bytes)
+    |M\\"uller, J\\"org; Erd\\H os, P\\\'al; Fran\\c cois Truffaut
+    |\\AA ngstr\\"om, Anders Jonas; Stra\\ss e; Dvo\\v r\\\'ak; \\L ukasiewicz; \\O resund
+    |$\\alpha$-helices $\\leq$ $\\beta$-sheets $\\geq$ $\\infty$ ``quoted'' -- --- \\ldots\\ fine {\\char189}
+    |{\\char8364} 12 $\\cdot$ \\copyright\\ 2024 $\\cdot$ $^{TM}$ $\\cdot$ {\\char9731} $\\cdot$ {\\char128512}
+> convert names.txt names_strict.bib utf-8 latex strict
+  error UnicodeEncodeError: 'latex' codec can't encode character '\\xbd' in position 0: don't know how to translate '\xbd' into latex
+> convert names.txt names_u8.bib utf-8 latex+utf8 strict
+  wrote names_u8.bib (224 bytes)
+    |M\xfcller, J\xf6rg; Erd\u0151s, P\xe1l; Fran\xe7ois Truffaut
+    |\xc5ngstr\xf6m, Anders Jonas; Stra\xdfe; Dvo\u0159\xe1k; \u0141ukasiewicz; \xd8resund
+    |\u03b1-helices \u2264 \u03b2-sheets \u2265 \u221e \u201cquoted\u201d \u2013 \u2014 \u2026 \ufb01ne \xbd
+    |\u20ac 12 \xb7 \xa9 2024 \xb7 \u2122 \xb7 \u2603 \xb7 \U0001f600
+> convert names_crlf.txt crlf.bib utf-8 latex strict
+  wrote crlf.bib (19 bytes)
+    |Caf\\'e\r
+    |Na\\"\\i ve\r
+> convert latin1.txt latin1.bib latin-1 latex strict
+  wrote latin1.bib (60 bytes)
+    |G\\"odel, Escher, Bach; \\c Ca va; se\\~nor; 25$^\\circ$C $\\pm$2
+    (no newline at end)
+> convert latin1.txt latin1_l1.bib latin-1 latex+latin1 strict
+  wrote latin1_l1.bib (42 bytes)
+    #47f664656c2c204573636865722c20426163683b20c7612076613b207365f16f
+    #723b203235b04320b132
+> convert math.tex math.txt latex utf-8 strict
+  wrote math.txt (52 bytes)
+    |$\\alpha \\leq \\beta $, \u221e, $$x^2$$ and \\{} \u223c \u02dc \xa0
+    (no newline at end)
+> convert trailing.tex trailing.txt latex utf-8 replace
+  wrote trailing.txt (25 bytes)
+    |ends with a backslash \ufffd
+    (no newline at end)
+> convert refs.txt refs_again.bib utf-8 latex strict
+  wrote refs_again.bib (619 bytes)
+    |@article{muller2019, author = {M{\\"u}ller, J{\\"o}rg and Erd{\\H o}s, P\\\'al and Fran\\c cois Truffaut}, title = {On $\\alpha$-helices and $\\beta$-sheets: a ``survey\'\' --- part~I}, journal = {J. Struct. Biol. \\& Med.}, pages = {12--34}, note = {100\\% open access; see \\S 3 \\# 4 and file\\_name}, }
+    |
+    |@book{angstrom1868, author = {\\AA ngstr\\"om, Anders Jonas and Stra\\ss e, Hans}, title = {Recherches sur le spectre solaire\\ldots {} ---{} \\oe uvres}, publisher = {W.~Schultz}, year = 1868,
+    |
+    |abstract = {First paragraph.
+    |
+    |Second paragraph,\twith a tab.\\\\ Next line with {\\v s}, \\v s, {\\'e}, {\\'e}, \\'\\i , {\\c c} and \\ae\\ \\o .} } 
+    (no newline at end)
+> convert refs.bib refs.bib latex utf-8 strict
+  wrote refs.bib (576 bytes)
+    |@article{muller2019, author = {M{\xfc}ller, J{\xf6}rg and Erd{\u0151}s, P\xe1l and Fran\xe7ois Truffaut}, title = {On \u03b1-helices and \u03b2-sheets: a \u201csurvey\u201d \u2014 part\xa0I}, journal = {J. Struct. Biol. & Med.}, pages = {12\u201334}, note = {100% open access; see \xa73 # 4 and file_name}, }
+    |
+    |@book{angstrom1868, author = {\xc5ngstr\xf6m, Anders Jonas and Stra\xdfe, Hans}, title = {Recherches sur le spectre solaire\u2026{} \u2014{} \u0153uvres}, publisher = {W.\xa0Schultz}, year = 1868,
+    |
+    |abstract = {First paragraph.
+    |
+    |Second paragraph,\twith a tab.\\\\ Next line with {\u0161}, \u0161, {\xe9}, {\xe9}, \xed, {\xe7} and \xe6 \xf8.} } 
+    (no newline at end)

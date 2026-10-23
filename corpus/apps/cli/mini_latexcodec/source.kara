@@ -1,0 +1,1428 @@
+// mini_latexcodec: a port of latexcodec 3.0.1 (MIT, Matthias C. M.
+// Troffaes), the codec that bibliography tools such as pybtex use to turn
+// LaTeX markup into Unicode and back, run as a university library's
+// bibliography desk. The jobs encode and decode text through the `latex`
+// and `ulatex` codecs, incrementally and in one go, lex LaTeX, and read,
+// write and convert files held in a small in-memory file system. See
+// README.md.
+
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters the jobs hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+fn char_esc(n: i64) -> String {
+    if n < 0x100 {
+        f"\\x{hex_digits(n, 2)}"
+    } else if n < 0x10000 {
+        f"\\u{hex_digits(n, 4)}"
+    } else {
+        f"\\U{hex_digits(n, 8)}"
+    }
+}
+
+fn quote_of(s: ref String) -> char {
+    if s.contains("'") and not s.contains("\"") { '"' } else { '\'' }
+}
+
+// repr() of a str, or ascii() of it when `all` is set.
+fn str_repr(s: ref String, all: bool) -> String {
+    let q = quote_of(s);
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if all and n >= 0x7f {
+            out.push_str(char_esc(n));
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            out.push_str(char_esc(n));
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn py_repr(s: ref String) -> String {
+    str_repr(s, false)
+}
+
+fn py_ascii(s: ref String) -> String {
+    str_repr(s, true)
+}
+
+// ascii() without its quotes: how the output shows any text.
+fn vis(s: ref String) -> String {
+    let cs: Vec[char] = py_ascii(s).chars().collect();
+    chars_str(cs, 1, cs.len() - 1)
+}
+
+// repr() of bytes.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut sq = false;
+    let mut dq = false;
+    for x in b {
+        if *x == 39 {
+            sq = true;
+        }
+        if *x == 34 {
+            dq = true;
+        }
+    }
+    let q: i64 = if sq and not dq { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(char.try_from(q as u32).unwrap());
+    for x in b {
+        let n = *x as i64;
+        if n == q or n == 92 {
+            out.push('\\');
+            out.push(char.try_from(n as u32).unwrap());
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n < 32 or n >= 127 {
+            out.push_str(f"\\x{hex_digits(n, 2)}");
+        } else {
+            out.push(char.try_from(n as u32).unwrap());
+        }
+    }
+    out.push(char.try_from(q as u32).unwrap());
+    out
+}
+
+fn chs(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn chars_str(s: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    for i in a..b {
+        out.push(s[i]);
+    }
+    out
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _ in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn one_char(c: char) -> String {
+    let mut s = String.new();
+    s.push(c);
+    s
+}
+
+fn push_cp(out: mut ref String, cp: i64) {
+    out.push(char.try_from(cp as u32).unwrap());
+}
+
+fn utf8_of(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in s.bytes() {
+        out.push(x);
+    }
+    out
+}
+
+fn lower_ascii(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as u32 + 32).unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_letter(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_dig(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn hex_val(c: char) -> i64 {
+    if is_dig(c) {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        c as i64 - 55
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs = chs(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push((hex_val(cs[i]) * 16 + hex_val(cs[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn sort_strings(xs: mut ref Vec[String]) {
+    for i in 1..xs.len() {
+        let mut j = i;
+        while j > 0 and xs[j - 1] > xs[j] {
+            let t = xs[j - 1].clone();
+            xs[j - 1] = xs[j].clone();
+            xs[j] = t;
+            j -= 1;
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.clone() }
+}
+
+// ------------------------------------------------------------ the input encodings
+//
+// latexcodec checks each character against its input encoding and decodes
+// bytes through it, so the port carries the four encodings the jobs name.
+
+enum Codec {
+    U8,
+    Ascii,
+    L1,
+    Cp1252,
+}
+
+// The normalization codecs.lookup applies to a name before the search
+// functions see it: ASCII lower case, runs of other characters than
+// letters, digits and '.' become one '_', none at either end.
+fn norm_encoding(name: ref String) -> String {
+    let mut out = String.new();
+    let mut pending = false;
+    for c in lower_ascii(name).chars() {
+        let alnum = (c >= 'a' and c <= 'z') or is_dig(c) or c == '.';
+        if alnum {
+            if pending and out.len() > 0 {
+                out.push('_');
+            }
+            pending = false;
+            out.push(c);
+        } else {
+            pending = true;
+        }
+    }
+    out
+}
+
+fn in_list(k: ref String, xs: ref Vec[Str]) -> bool {
+    for x in xs {
+        if *k == *x {
+            return true;
+        }
+    }
+    false
+}
+
+fn codec_lookup(name: ref String) -> Result[Codec, Exc] {
+    let k = norm_encoding(name);
+    if in_list(k, vec!["utf_8", "utf8", "u8", "utf", "cp65001"]) {
+        return Ok(Codec.U8);
+    }
+    if in_list(k, vec!["ascii", "us_ascii", "646", "ansi_x3.4_1968", "cp367", "us"]) {
+        return Ok(Codec.Ascii);
+    }
+    if in_list(k, vec!["latin_1", "latin1", "latin", "l1", "iso8859_1", "iso_8859_1", "8859", "cp819", "iso_ir_100"]) {
+        return Ok(Codec.L1);
+    }
+    if in_list(k, vec!["cp1252", "windows_1252", "1252"]) {
+        return Ok(Codec.Cp1252);
+    }
+    Err(unknown_encoding(name))
+}
+
+fn unknown_encoding(name: ref String) -> Exc {
+    exc("LookupError", f"unknown encoding: {name}")
+}
+
+fn handler_err(errors: ref String) -> Exc {
+    exc("LookupError", f"unknown error handler name '{errors}'")
+}
+
+fn codec_name(c: ref Codec) -> Str {
+    match c {
+        Codec.U8 => "utf-8",
+        Codec.Ascii => "ascii",
+        Codec.L1 => "latin-1",
+        Codec.Cp1252 => "charmap",
+    }
+}
+
+// The cp1252 characters of bytes 0x80..0x9f; 0 where the byte is undefined.
+fn cp1252_high() -> Vec[i64] {
+    vec![0x20ac, 0, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017d, 0,
+         0, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0, 0x017e, 0x0178]
+}
+
+// The bytes of one character, or false if the codec cannot encode it.
+fn encode_char(codec: ref Codec, c: char, out: mut ref Vec[u8]) -> bool {
+    let n = c as i64;
+    match codec {
+        Codec.U8 => {
+            for x in one_char(c).bytes() {
+                out.push(x);
+            }
+            true
+        }
+        Codec.Ascii => {
+            if n < 128 {
+                out.push(n as u8);
+            }
+            n < 128
+        }
+        Codec.L1 => {
+            if n < 256 {
+                out.push(n as u8);
+            }
+            n < 256
+        }
+        Codec.Cp1252 => {
+            if n < 0x80 or (n >= 0xa0 and n < 0x100) {
+                out.push(n as u8);
+                return true;
+            }
+            let high = cp1252_high();
+            for i in 0..32 {
+                if high[i] == n {
+                    out.push((0x80 + i) as u8);
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+fn encodable(codec: ref Codec, c: char) -> bool {
+    let mut scratch: Vec[u8] = Vec.new();
+    encode_char(codec, c, mut scratch)
+}
+
+// str.encode(codec, errors).
+fn encode_text(codec: ref Codec, s: ref String, errors: ref String) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    for c in s.chars() {
+        if not encode_char(codec, c, mut out) {
+            if *errors == "strict" {
+                let why = match codec {
+                    Codec.Ascii => "ordinal not in range(128)",
+                    Codec.L1 => "ordinal not in range(256)",
+                    _ => "character maps to <undefined>",
+                };
+                return Err(exc("UnicodeEncodeError", f"'{codec_name(codec)}' codec can't encode character '{char_esc(c as i64)}' in position {i}: {why}"));
+            } else if *errors == "replace" {
+                out.push(63);
+            } else if *errors != "ignore" {
+                return Err(handler_err(errors));
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn decode_err(codec: Str, a: i64, b: i64, bytes: ref Vec[u8], reason: Str) -> Exc {
+    if b == a {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode byte 0x{hex_digits(bytes[a] as i64, 2)} in position {a}: {reason}")
+    } else {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode bytes in position {a}-{b}: {reason}")
+    }
+}
+
+// codecs.getincrementaldecoder(codec)(errors): only utf-8 keeps bytes
+// between calls, the start of a character split across chunks.
+struct ByteDec {
+    codec: Codec,
+    errors: String,
+    pending: Vec[u8],
+}
+
+fn bad_bytes(d: ref ByteDec, out: mut ref String, b: ref Vec[u8], a: i64, e: i64, reason: Str) -> Result[(), Exc] {
+    if d.errors == "strict" {
+        return Err(decode_err(codec_name(d.codec), a, e - 1, b, reason));
+    }
+    if d.errors == "replace" {
+        push_cp(mut out, 0xfffd);
+        return Ok(());
+    }
+    if d.errors == "ignore" {
+        return Ok(());
+    }
+    Err(handler_err(d.errors))
+}
+
+fn bd_decode(d: mut ref ByteDec, input: ref Vec[u8], fin: bool) -> Result[String, Exc] {
+    let mut b = d.pending.clone();
+    for x in input {
+        b.push(*x);
+    }
+    d.pending = Vec.new();
+    let n = b.len();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let x = b[i] as i64;
+        let is_u8 = match d.codec {
+            Codec.U8 => true,
+            _ => false,
+        };
+        if not is_u8 {
+            if x < 0x80 {
+                push_cp(mut out, x);
+            } else {
+                match d.codec {
+                    Codec.L1 => push_cp(mut out, x),
+                    Codec.Ascii => bad_bytes(d, mut out, b, i, i + 1, "ordinal not in range(128)")?,
+                    _ => {
+                        let high = cp1252_high();
+                        if x < 0xa0 and high[x - 0x80] == 0 {
+                            bad_bytes(d, mut out, b, i, i + 1, "character maps to <undefined>")?;
+                        } else if x < 0xa0 {
+                            push_cp(mut out, high[x - 0x80]);
+                        } else {
+                            push_cp(mut out, x);
+                        }
+                    }
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if x < 0x80 {
+            push_cp(mut out, x);
+            i += 1;
+            continue;
+        }
+        let (need, lo, hi) = if x >= 0xc2 and x <= 0xdf {
+            (1, 0x80, 0xbf)
+        } else if x == 0xe0 {
+            (2, 0xa0, 0xbf)
+        } else if x == 0xed {
+            (2, 0x80, 0x9f)
+        } else if x >= 0xe1 and x <= 0xef {
+            (2, 0x80, 0xbf)
+        } else if x == 0xf0 {
+            (3, 0x90, 0xbf)
+        } else if x == 0xf4 {
+            (3, 0x80, 0x8f)
+        } else if x >= 0xf1 and x <= 0xf3 {
+            (3, 0x80, 0xbf)
+        } else {
+            bad_bytes(d, mut out, b, i, i + 1, "invalid start byte")?;
+            i += 1;
+            continue;
+        };
+        let mut good = need + 1;
+        let mut at_end = false;
+        for k in 1..(need + 1) {
+            if i + k >= n {
+                good = k;
+                at_end = true;
+                break;
+            }
+            let y = b[i + k] as i64;
+            let (l, h) = if k == 1 { (lo, hi) } else { (0x80, 0xbf) };
+            if y < l or y > h {
+                good = k;
+                break;
+            }
+        }
+        if good <= need {
+            if at_end and not fin {
+                for k in i..n {
+                    d.pending.push(b[k]);
+                }
+                break;
+            }
+            let reason = if at_end { "unexpected end of data" } else { "invalid continuation byte" };
+            bad_bytes(d, mut out, b, i, i + good, reason)?;
+            i += good;
+            continue;
+        }
+        let mut cp = if need == 1 { x & 0x1f } else if need == 2 { x & 0x0f } else { x & 0x07 };
+        for k in 1..(need + 1) {
+            cp = cp * 64 + (b[i + k] as i64 & 0x3f);
+        }
+        push_cp(mut out, cp);
+        i += need + 1;
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the lexer
+//
+// lexer.py's LatexLexer joins its token regexps into one alternation and
+// walks it with finditer. Every character starts some alternative, so the
+// tokens cover the input; raw_match picks the alternative the regex would.
+
+#[derive(Clone)]
+struct Tok {
+    name: String,
+    text: String,
+}
+
+fn tok(name: Str, text: ref String) -> Tok {
+    Tok { name: name.to_string(), text: text.clone() }
+}
+
+fn empty_tok() -> Tok {
+    tok("unknown", String.new())
+}
+
+fn at(cs: ref Vec[char], i: i64, c: char) -> bool {
+    i < cs.len() and cs[i] == c
+}
+
+// The token name and length the lexer's regexp matches at cs[i].
+fn raw_match(cs: ref Vec[char], i: i64) -> (Str, i64) {
+    let n = cs.len();
+    let c = cs[i];
+    if c == '\\' and i + 1 < n {
+        let d = cs[i + 1];
+        if d == '\\' or d == '%' {
+            return ("control_symbol_x2", 2);
+        }
+        if is_letter(d) {
+            let mut j = i + 1;
+            while j < n and is_letter(cs[j]) {
+                j += 1;
+            }
+            return ("control_word", j - i);
+        }
+        if d == '~' or d == '\'' or d == '"' or d == '`' or d == ' ' or d == '=' or d == '^' or d == '!' or d == '.' {
+            return ("control_symbol", 2);
+        }
+        return ("control_symbol_x", 2);
+    }
+    if c == '%' {
+        let mut j = i + 1;
+        while j < n and cs[j] != '\n' {
+            j += 1;
+        }
+        return ("comment", j - i);
+    }
+    if c == '#' {
+        return ("parameter", if i + 1 < n and is_dig(cs[i + 1]) { 2 } else { 1 });
+    }
+    if c == ' ' or c == '\t' {
+        return ("space", 1);
+    }
+    if c == '\n' {
+        return ("newline", 1);
+    }
+    if c == '$' {
+        return ("mathshift", if at(cs, i + 1, '$') { 2 } else { 1 });
+    }
+    if c == '-' {
+        if at(cs, i + 1, '-') and at(cs, i + 2, '-') {
+            return ("chars", 3);
+        }
+        return ("chars", if at(cs, i + 1, '-') { 2 } else { 1 });
+    }
+    if (c == '`' and at(cs, i + 1, '`')) or (c == '\'' and at(cs, i + 1, '\'')) {
+        return ("chars", 2);
+    }
+    if (c == '?' or c == '!') and at(cs, i + 1, '`') {
+        return ("chars", 2);
+    }
+    if c != '\\' {
+        return ("chars", 1);
+    }
+    ("unknown", 1)
+}
+
+// LatexIncrementalLexer: the raw buffer holds the last token until the
+// next call (or the final one) shows it is complete. State is N (new
+// line), S (skipping spaces) or M (middle of a line).
+struct Lexer {
+    errors: String,
+    raw: Tok,
+    state: char,
+    inline_math: bool,
+}
+
+fn lexer_new(errors: ref String) -> Lexer {
+    Lexer { errors: errors.clone(), raw: empty_tok(), state: 'N', inline_math: false }
+}
+
+fn lexer_reset(lx: mut ref Lexer) {
+    lx.raw = empty_tok();
+    lx.state = 'N';
+    lx.inline_math = false;
+}
+
+fn raw_tokens(lx: mut ref Lexer, chars: ref String, fin: bool) -> Vec[Tok] {
+    let mut s = lx.raw.text.clone();
+    s.push_str(chars);
+    lx.raw = empty_tok();
+    let cs = chs(s);
+    let mut out: Vec[Tok] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let (name, len) = raw_match(cs, i);
+        if lx.raw.text.len() > 0 {
+            out.push(lx.raw.clone());
+        }
+        lx.raw = tok(name, chars_str(cs, i, i + len));
+        i += len;
+    }
+    if fin {
+        if lx.raw.text.len() > 0 {
+            out.push(lx.raw.clone());
+        }
+        lx.raw = empty_tok();
+    }
+    out
+}
+
+// UnicodeDecodeError("latex", chars.encode("utf8"), start, end, reason):
+// the positions count characters, the byte shown is the byte at that index.
+fn unknown_err(chars: ref String, start: i64, end: i64, text: ref String) -> Exc {
+    let b = utf8_of(chars);
+    let reason = f"unknown token {py_repr(text)}";
+    if start >= 0 and start < b.len() and end <= b.len() and end == start + 1 {
+        exc("UnicodeDecodeError", f"'latex' codec can't decode byte 0x{hex_digits(b[start] as i64, 2)} in position {start}: {reason}")
+    } else {
+        exc("UnicodeDecodeError", f"'latex' codec can't decode bytes in position {start}-{end - 1}: {reason}")
+    }
+}
+
+// LatexIncrementalLexer.get_tokens; the tokens before an error stay in out.
+fn get_tokens(lx: mut ref Lexer, chars: ref String, fin: bool, out: mut ref Vec[Tok]) -> Result[(), Exc] {
+    let mut pos = 0 - char_count(lx.raw.text);
+    for t in raw_tokens(mut lx, chars, fin) {
+        let len = char_count(t.text);
+        pos += len;
+        let name = t.name.clone();
+        if name == "newline" {
+            if lx.state == 'N' {
+                out.push(tok("control_word", "\\par".to_string()));
+            } else if lx.state == 'S' {
+                lx.state = 'N';
+            } else {
+                lx.state = 'N';
+                out.push(tok("space", " ".to_string()));
+            }
+        } else if name == "space" {
+            if lx.state == 'M' {
+                lx.state = 'S';
+                out.push(t.clone());
+            }
+        } else if name == "mathshift" {
+            lx.inline_math = not lx.inline_math;
+            lx.state = 'M';
+            out.push(t.clone());
+        } else if name == "parameter" or name == "chars" or name == "control_symbol_x" or name == "control_symbol_x2" {
+            lx.state = 'M';
+            out.push(t.clone());
+        } else if name == "control_word" or name == "control_symbol" {
+            lx.state = 'S';
+            out.push(t.clone());
+        } else if name == "comment" {
+            lx.state = 'S';
+        } else {
+            if lx.errors == "strict" {
+                return Err(unknown_err(chars, pos - len, pos, t.text));
+            } else if lx.errors == "replace" {
+                out.push(tok("chars", one_char('\u{fffd}')));
+            } else if lx.errors != "ignore" {
+                return Err(exc("NotImplementedError", f"error mode {py_repr(lx.errors)} not supported"));
+            }
+        }
+    }
+    Ok(())
+}
+
+// LatexIncrementalDecoder.decode_token: a control word gets a space after
+// it, so that joined tokens stay apart.
+fn decode_token(t: ref Tok) -> String {
+    if t.name == "control_word" {
+        f"{t.text} "
+    } else {
+        t.text.clone()
+    }
+}
+
+// ------------------------------------------------------------ the translation table
+
+struct Trans {
+    uni: String,
+    latex: String,
+    encode: bool,
+    decode: bool,
+    text_mode: bool,
+    math_mode: bool,
+}
+
+struct Table {
+    umap: Map[String, String],
+    ukeys: Vec[String],
+    utoks: Vec[Vec[Tok]],
+    max_length: i64,
+    lmap: Map[String, (String, Vec[Tok])],
+    lkeys: Vec[String],
+}
+
+// A token sequence as a map key.
+fn tok_key(ts: ref Vec[Tok], from: i64) -> String {
+    let mut k = String.new();
+    for i in from..ts.len() {
+        k.push_str(ts[i].name);
+        k.push('\u{1}');
+        k.push_str(ts[i].text);
+        k.push('\u{2}');
+    }
+    k
+}
+
+fn starts_control(t: ref Tok) -> bool {
+    t.name.starts_with("control")
+}
+
+// LatexUnicodeTable.register.
+fn register(tb: mut ref Table, lx: mut ref Lexer, t: ref Trans) {
+    if t.math_mode and not t.text_mode {
+        for (a, b) in vec![("$", "$"), ("\\(", "\\)")] {
+            let v = Trans { uni: t.uni.clone(), latex: f"{a}{t.latex}{b}", encode: t.encode, decode: t.decode, text_mode: true, math_mode: false };
+            register(mut tb, mut lx, v);
+        }
+        return;
+    }
+    lexer_reset(mut lx);
+    lx.state = 'M';
+    let mut ts: Vec[Tok] = Vec.new();
+    let _ = get_tokens(mut lx, t.latex, true, mut ts);
+    if t.decode {
+        let key = tok_key(ts, 0);
+        if not tb.umap.contains_key(key) {
+            if ts.len() > tb.max_length {
+                tb.max_length = ts.len();
+            }
+            tb.umap.insert(key.clone(), t.uni.clone());
+            tb.ukeys.push(key);
+            tb.utoks.push(ts.clone());
+        }
+        if ts.len() == 2 and starts_control(ts[0]) and ts[1].name == "chars" {
+            let v = Trans { uni: f"{{{t.uni}}}", latex: f"{ts[0].text}{{{ts[1].text}}}", encode: false, decode: true, text_mode: t.text_mode, math_mode: t.math_mode };
+            register(mut tb, mut lx, v);
+        }
+        if ts.len() == 4 and (ts[0].text == "$" or ts[0].text == "\\(") and starts_control(ts[1]) and ts[2].name == "chars" and (ts[3].text == "$" or ts[3].text == "\\)") {
+            let v = Trans { uni: t.uni.clone(), latex: f"{ts[0].text}{ts[1].text}{{{ts[2].text}}}{ts[3].text}", encode: false, decode: true, text_mode: t.text_mode, math_mode: t.math_mode };
+            register(mut tb, mut lx, v);
+        }
+    }
+    if t.encode and not tb.lmap.contains_key(t.uni) {
+        tb.lmap.insert(t.uni.clone(), (t.latex.clone(), ts));
+        tb.lkeys.push(t.uni.clone());
+    }
+}
+
+// LatexUnicodeTable.register_all, over table_text(): a marker, the
+// characters as hex code points, and the LaTeX.
+fn build_table() -> Table {
+    let mut tb = Table { umap: Map.new(), ukeys: Vec.new(), utoks: Vec.new(), max_length: 0, lmap: Map.new(), lkeys: Vec.new() };
+    let mut lx = lexer_new("strict".to_string());
+    for latex in vec![" \\par", "\\par"] {
+        let t = Trans { uni: "\n\n".to_string(), latex: latex.to_string(), encode: false, decode: true, text_mode: true, math_mode: false };
+        register(mut tb, mut lx, t);
+    }
+    for line in split_on(table_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, '\t');
+        let m = chs(f[0]);
+        let mut uni = String.new();
+        for h in split_on(f[1], ',') {
+            let mut cp = 0;
+            for c in h.chars() {
+                cp = cp * 16 + hex_val(c);
+            }
+            push_cp(mut uni, cp);
+        }
+        let t = Trans {
+            uni: uni,
+            latex: f[2].clone(),
+            encode: m[1] == '-' or m[1] == '>',
+            decode: m[1] == '-' or m[1] == '<',
+            text_mode: m[0] == 'A' or m[0] == 'T',
+            math_mode: m[0] == 'A' or m[0] == 'M',
+        };
+        register(mut tb, mut lx, t);
+    }
+    tb
+}
+
+// ------------------------------------------------------------ the codecs
+
+// What find_latex makes of a name: the latex or ulatex codec and its
+// input encoding.
+struct Latex {
+    unicode: bool,
+    inputenc: String,
+}
+
+fn find_latex(name: ref String) -> Option[Latex] {
+    let k = norm_encoding(name);
+    let cs = chs(k);
+    let mut cut = cs.len();
+    for i in 0..cs.len() {
+        if cs[i] == '_' {
+            cut = i;
+            break;
+        }
+    }
+    let enc = chars_str(cs, 0, cut);
+    let mut inputenc = if cut < cs.len() { chars_str(cs, cut + 1, cs.len()) } else { String.new() };
+    if inputenc.len() == 0 {
+        inputenc = "ascii".to_string();
+    }
+    if enc == "latex" {
+        Some(Latex { unicode: false, inputenc: inputenc })
+    } else if enc == "ulatex" {
+        Some(Latex { unicode: true, inputenc: inputenc })
+    } else {
+        None
+    }
+}
+
+enum Kind {
+    Plain(Codec),
+    Tex(Latex),
+}
+
+// codecs.lookup: the standard encodings are searched before latexcodec's
+// search function.
+fn resolve(name: ref String) -> Result[Kind, Exc] {
+    match codec_lookup(name) {
+        Ok(c) => return Ok(Kind.Plain(c)),
+        Err(_) => {}
+    }
+    match find_latex(name) {
+        Some(l) => Ok(Kind.Tex(l)),
+        None => Err(unknown_encoding(name)),
+    }
+}
+
+enum Out {
+    Text(String),
+    Bytes(Vec[u8]),
+}
+
+fn out_repr(o: ref Out) -> String {
+    match o {
+        Out.Text(s) => py_ascii(s),
+        Out.Bytes(b) => bytes_repr(b),
+    }
+}
+
+// LatexIncrementalEncoder, and UnicodeLatexIncrementalEncoder when
+// `unicode` is set. In state S the last token was a control word, which
+// eats the space after it.
+struct Enc {
+    errors: String,
+    inputenc: String,
+    unicode: bool,
+    state: char,
+}
+
+fn enc_new(l: ref Latex, errors: ref String) -> Enc {
+    Enc { errors: errors.clone(), inputenc: l.inputenc.clone(), unicode: l.unicode, state: 'M' }
+}
+
+fn table_latex(tb: ref Table, s: ref String) -> Option[(String, Vec[Tok])] {
+    match tb.lmap.get(s) {
+        Some(v) => Some(v.clone()),
+        None => None,
+    }
+}
+
+// _get_latex_chars_tokens_from_char.
+fn char_latex(tb: ref Table, e: ref Enc, c: char) -> Result[(String, Vec[Tok]), Exc] {
+    let s = one_char(c);
+    if (c as i64) < 128 {
+        if let Some(v) = table_latex(tb, s) {
+            return Ok(v);
+        }
+    }
+    let codec = codec_lookup(e.inputenc)?;
+    if encodable(codec, c) {
+        return Ok((s.clone(), vec![tok("chars", s)]));
+    }
+    if let Some(v) = table_latex(tb, s) {
+        return Ok(v);
+    }
+    if e.errors == "strict" {
+        return Err(exc("UnicodeEncodeError", f"'latex' codec can't encode character '{char_esc(c as i64)}' in position 0: don't know how to translate {py_repr(s)} into latex"));
+    }
+    if e.errors == "ignore" {
+        return Ok((String.new(), vec![empty_tok()]));
+    }
+    if e.errors == "replace" {
+        let b = f"{{\\char{c as i64}}}";
+        return Ok((b.clone(), vec![tok("chars", b)]));
+    }
+    if e.errors == "keep" {
+        return Ok((s.clone(), vec![tok("chars", s)]));
+    }
+    Err(exc("ValueError", f"latex codec does not support {e.errors} errors"))
+}
+
+// LatexIncrementalEncoder.get_latex_chars, joined.
+fn enc_chars(tb: ref Table, e: mut ref Enc, s: ref String) -> Result[String, Exc] {
+    let mut out = String.new();
+    for c in s.chars() {
+        let (latex, ts) = char_latex(tb, e, c)?;
+        let mut bytes = latex;
+        if e.state == 'S' {
+            if bytes.starts_with(" ") {
+                out.push_str("\\ ");
+                let cs = chs(bytes);
+                bytes = chars_str(cs, 1, cs.len());
+            } else {
+                out.push(' ');
+            }
+        }
+        if ts.len() > 0 {
+            e.state = if ts[ts.len() - 1].name == "control_word" { 'S' } else { 'M' };
+        }
+        out.push_str(bytes);
+    }
+    Ok(out)
+}
+
+fn enc_encode(tb: ref Table, e: mut ref Enc, s: ref String) -> Result[Out, Exc] {
+    let chars = enc_chars(tb, mut e, s)?;
+    if e.unicode {
+        return Ok(Out.Text(chars));
+    }
+    let codec = codec_lookup(e.inputenc)?;
+    Ok(Out.Bytes(encode_text(codec, chars, e.errors)?))
+}
+
+// What a decoder is handed: str or bytes.
+enum In {
+    Str(String),
+    Raw(Vec[u8]),
+}
+
+// The translating LatexIncrementalDecoder (or the plain one in lexer.py
+// when `translate` is off), with its input-encoding decoder and the token
+// buffer that waits for a longer match.
+struct Dec {
+    lx: Lexer,
+    bd: ByteDec,
+    unicode: bool,
+    translate: bool,
+    buf: Vec[Tok],
+}
+
+fn dec_new(l: ref Latex, errors: ref String, translate: bool) -> Result[Dec, Exc] {
+    let codec = codec_lookup(l.inputenc)?;
+    Ok(Dec { lx: lexer_new(errors), bd: ByteDec { codec: codec, errors: errors.clone(), pending: Vec.new() }, unicode: l.unicode, translate: translate, buf: Vec.new() })
+}
+
+fn dec_reset(d: mut ref Dec) {
+    lexer_reset(mut d.lx);
+    d.buf = Vec.new();
+}
+
+// get_unicode_tokens, joined.
+fn udecode(tb: ref Table, d: mut ref Dec, chars: ref String, fin: bool) -> Result[String, Exc] {
+    let mut ts: Vec[Tok] = Vec.new();
+    get_tokens(mut d.lx, chars, fin, mut ts)?;
+    let mut out = String.new();
+    if not d.translate {
+        for t in ts {
+            out.push_str(decode_token(t));
+        }
+        return Ok(out);
+    }
+    for t in ts {
+        d.buf.push(t.clone());
+        let n = d.buf.len();
+        let mut i = n;
+        while i > 0 {
+            if let Some(u) = tb.umap.get(tok_key(d.buf, n - i)) {
+                for k in 0..(n - i) {
+                    out.push_str(decode_token(d.buf[k]));
+                }
+                out.push_str(u);
+                d.buf = Vec.new();
+                break;
+            }
+            i -= 1;
+        }
+        while d.buf.len() >= tb.max_length {
+            out.push_str(decode_token(d.buf[0]));
+            d.buf.remove(0);
+        }
+    }
+    if fin {
+        for t in d.buf {
+            out.push_str(decode_token(t));
+        }
+        d.buf = Vec.new();
+    }
+    Ok(out)
+}
+
+fn regex_bytes_err() -> Exc {
+    exc("TypeError", "cannot use a string pattern on a bytes-like object".to_string())
+}
+
+fn dec_decode(tb: ref Table, d: mut ref Dec, input: ref In, fin: bool) -> Result[String, Exc] {
+    match input {
+        In.Str(s) => udecode(tb, mut d, s, fin),
+        In.Raw(b) => {
+            if d.unicode {
+                return Err(regex_bytes_err());
+            }
+            let chars = match bd_decode(mut d.bd, b, fin) {
+                Ok(s) => s,
+                Err(e) => {
+                    if e.kind == "UnicodeDecodeError" {
+                        return Err(exc("ValueError", e.msg));
+                    }
+                    return Err(e);
+                }
+            };
+            udecode(tb, mut d, chars, fin)
+        }
+    }
+}
+
+// codecs.encode(text, name, errors).
+fn codec_encode(tb: ref Table, name: ref String, errors: ref String, text: ref String) -> Result[Out, Exc] {
+    match resolve(name)? {
+        Kind.Plain(c) => Ok(Out.Bytes(encode_text(c, text, errors)?)),
+        Kind.Tex(l) => {
+            let mut e = enc_new(l, errors);
+            enc_encode(tb, mut e, text)
+        }
+    }
+}
+
+// codecs.decode(data, name, errors).
+fn codec_decode(tb: ref Table, name: ref String, errors: ref String, input: ref In) -> Result[String, Exc] {
+    match resolve(name)? {
+        Kind.Plain(c) => {
+            match input {
+                In.Raw(b) => {
+                    let mut bd = ByteDec { codec: c, errors: errors.clone(), pending: Vec.new() };
+                    bd_decode(mut bd, b, true)
+                }
+                In.Str(_) => Err(exc("TypeError", "a bytes-like object is required, not 'str'".to_string())),
+            }
+        }
+        Kind.Tex(l) => {
+            let mut d = dec_new(l, errors, true)?;
+            dec_decode(tb, mut d, input, true)
+        }
+    }
+}
+
+// str.encode(name, errors): only bytes may come back.
+fn str_encode(tb: ref Table, name: ref String, errors: ref String, text: ref String) -> Result[Vec[u8], Exc] {
+    match codec_encode(tb, name, errors, text)? {
+        Out.Bytes(b) => Ok(b),
+        Out.Text(_) => Err(exc("TypeError", f"'{name}' encoder returned 'str' instead of 'bytes'; use codecs.encode() to encode to arbitrary types")),
+    }
+}
+
+// ------------------------------------------------------------ the desk
+
+struct World {
+    out: String,
+    files: Map[String, Vec[u8]],
+}
+
+fn emit(w: mut ref World, s: ref String) {
+    w.out.push_str(s);
+    w.out.push('\n');
+}
+
+fn emit_err(w: mut ref World, e: ref Exc) {
+    emit(mut w, f"  error {e.kind}: {vis(e.msg)}");
+}
+
+fn fs_read(w: ref World, path: ref String) -> Result[Vec[u8], Exc] {
+    match w.files.get(path) {
+        Some(b) => Ok(b.clone()),
+        None => Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {py_repr(path)}")),
+    }
+}
+
+fn file_names(w: ref World) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    for (k, _) in w.files {
+        names.push(k.clone());
+    }
+    sort_strings(mut names);
+    names
+}
+
+fn show_file(w: mut ref World, name: ref String, data: ref Vec[u8]) {
+    emit(mut w, f"  wrote {name} ({data.len()} bytes)");
+    match String.from_utf8(data.clone()) {
+        Ok(text) => {
+            let mut lines = split_on(text, '\n');
+            let last = lines.pop().unwrap();
+            for ln in lines {
+                emit(mut w, f"    |{vis(ln)}");
+            }
+            if last.len() > 0 {
+                emit(mut w, f"    |{vis(last)}");
+                emit(mut w, "    (no newline at end)".to_string());
+            }
+        }
+        Err(_) => {
+            let mut i = 0;
+            while i < data.len() {
+                let mut line = "    #".to_string();
+                let mut k = i;
+                while k < data.len() and k < i + 32 {
+                    line.push_str(hex_digits(data[k] as i64, 2));
+                    k += 1;
+                }
+                emit(mut w, line);
+                i += 32;
+            }
+        }
+    }
+}
+
+fn arg_bytes(word: ref String) -> Vec[u8] {
+    let cs = chs(word);
+    hex_bytes(chars_str(cs, 2, cs.len()))
+}
+
+fn arg_text(word: ref String) -> String {
+    String.from_utf8(arg_bytes(word)).unwrap()
+}
+
+fn shown(word: ref String) -> String {
+    if word.starts_with("h:") {
+        py_ascii(arg_text(word))
+    } else if word.starts_with("x:") {
+        bytes_repr(arg_bytes(word))
+    } else {
+        word.clone()
+    }
+}
+
+fn arg_in(word: ref String) -> In {
+    if word.starts_with("h:") { In.Str(arg_text(word)) } else { In.Raw(arg_bytes(word)) }
+}
+
+// An incremental op's chunk: str for ulatex, bytes for every other codec.
+fn chunk_in(codec: ref String, word: ref String) -> In {
+    if lower_ascii(codec).starts_with("ulatex") { In.Str(arg_text(word)) } else { In.Raw(arg_bytes(word)) }
+}
+
+fn toks_str(ts: ref Vec[Tok]) -> String {
+    if ts.len() == 0 {
+        return "(none)".to_string();
+    }
+    let mut out = String.new();
+    for i in 0..ts.len() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(f"{ts[i].name}:{py_ascii(ts[i].text)}");
+    }
+    out
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn run_table(w: mut ref World, tb: ref Table) {
+    emit(mut w, f"  unicode_map {tb.ukeys.len()} entries, max_length {tb.max_length}, latex_map {tb.lkeys.len()} entries");
+    for i in 0..tb.ukeys.len() {
+        let u = tb.umap.get(tb.ukeys[i]).unwrap();
+        emit(mut w, f"  dec {toks_str(tb.utoks[i])} -> {py_ascii(u)}");
+    }
+    for k in tb.lkeys {
+        let (latex, ts) = tb.lmap.get(k).unwrap();
+        emit(mut w, f"  enc {py_ascii(k)} -> {py_ascii(latex)} [{toks_str(ts)}]");
+    }
+}
+
+fn lexer_decoder(errors: ref String) -> Dec {
+    let l = Latex { unicode: false, inputenc: "ascii".to_string() };
+    dec_new(l, errors, false).unwrap()
+}
+
+fn run_op(w: mut ref World, tb: ref Table, words: ref Vec[String]) -> Result[(), Exc] {
+    let op = words[0].clone();
+    if op == "table" {
+        run_table(mut w, tb);
+    } else if op == "enc" {
+        let r = codec_encode(tb, words[1], words[2], arg_text(words[3]))?;
+        emit(mut w, f"  -> {out_repr(r)}");
+    } else if op == "dec" {
+        let r = codec_decode(tb, words[1], words[2], arg_in(words[3]))?;
+        emit(mut w, f"  -> {py_ascii(r)}");
+    } else if op == "strenc" {
+        let r = str_encode(tb, words[1], words[2], arg_text(words[3]))?;
+        emit(mut w, f"  -> {bytes_repr(r)}");
+    } else if op == "bdec" {
+        let r = codec_decode(tb, words[1], words[2], In.Raw(arg_bytes(words[3])))?;
+        emit(mut w, f"  -> {py_ascii(r)}");
+    } else if op == "ienc" {
+        let l = match resolve(words[1])? {
+            Kind.Tex(l) => l,
+            Kind.Plain(_) => return Err(exc("ValueError", "not a latex codec".to_string())),
+        };
+        let mut e = enc_new(l, words[2]);
+        for i in 3..words.len() {
+            let k = i - 3;
+            if words[i] == "r" {
+                e.state = 'M';
+                emit(mut w, f"  [{k}] reset");
+                continue;
+            }
+            match enc_encode(tb, mut e, arg_text(words[i])) {
+                Ok(r) => emit(mut w, f"  [{k}] -> {out_repr(r)}"),
+                Err(x) => {
+                    emit_err(mut w, x);
+                    return Ok(());
+                }
+            }
+        }
+    } else if op == "idec" {
+        let l = match resolve(words[1])? {
+            Kind.Tex(l) => l,
+            Kind.Plain(_) => return Err(exc("ValueError", "not a latex codec".to_string())),
+        };
+        let mut d = dec_new(l, words[2], true)?;
+        for i in 3..words.len() {
+            let k = i - 3;
+            if words[i] == "r" {
+                dec_reset(mut d);
+                emit(mut w, f"  [{k}] reset");
+                continue;
+            }
+            match dec_decode(tb, mut d, chunk_in(words[1], words[i]), words[i].starts_with("f:")) {
+                Ok(r) => emit(mut w, f"  [{k}] -> {py_ascii(r)}"),
+                Err(x) => {
+                    emit_err(mut w, x);
+                    return Ok(());
+                }
+            }
+        }
+    } else if op == "lex" {
+        let mut d = lexer_decoder(words[1]);
+        let mut ts: Vec[Tok] = Vec.new();
+        let r = get_tokens(mut d.lx, String.from_utf8(arg_bytes(words[2])).unwrap(), true, mut ts);
+        for t in ts {
+            emit(mut w, f"  {t.name}:{py_ascii(t.text)}");
+        }
+        match r {
+            Ok(_) => emit(mut w, f"  state {d.lx.state} inline_math {py_bool(d.lx.inline_math)}"),
+            Err(x) => emit_err(mut w, x),
+        }
+    } else if op == "ilex" {
+        let mut d = lexer_decoder(words[1]);
+        for i in 2..words.len() {
+            let mut ts: Vec[Tok] = Vec.new();
+            get_tokens(mut d.lx, String.from_utf8(arg_bytes(words[i])).unwrap(), words[i].starts_with("f:"), mut ts)?;
+            let st = if d.lx.state == 'M' { 0 } else if d.lx.state == 'N' { 1 } else { 2 };
+            let bits = st + if d.lx.inline_math { 4 } else { 0 };
+            emit(mut w, f"  [{i - 2}] {toks_str(ts)}");
+            emit(mut w, f"      state {d.lx.raw.name}:{py_ascii(d.lx.raw.text)} {bits}");
+        }
+    } else if op == "plain" {
+        let mut d = lexer_decoder(words[1]);
+        let r = dec_decode(tb, mut d, In.Raw(arg_bytes(words[2])), true)?;
+        emit(mut w, f"  -> {py_ascii(r)}");
+    } else if op == "read" {
+        // codecs.open(path, 'r', codec, errors).read()
+        let data = fs_read(w, words[1])?;
+        let kind = resolve(words[2])?;
+        if data.len() == 0 {
+            emit(mut w, "  -> ''".to_string());
+            return Ok(());
+        }
+        let r = match kind {
+            Kind.Tex(l) => {
+                let mut d = dec_new(l, words[3], true)?;
+                dec_decode(tb, mut d, In.Raw(data), true)?
+            }
+            Kind.Plain(c) => {
+                let mut bd = ByteDec { codec: c, errors: words[3].clone(), pending: Vec.new() };
+                bd_decode(mut bd, data, true)?
+            }
+        };
+        emit(mut w, f"  -> {py_ascii(r)}");
+    } else if op == "write" {
+        // codecs.open(path, 'w', codec, errors).write(text): the file is
+        // created before anything is encoded.
+        w.files.insert(words[1].clone(), Vec.new());
+        resolve(words[2])?;
+        let r = codec_encode(tb, words[2], words[3], arg_text(words[4]))?;
+        match r {
+            Out.Bytes(b) => {
+                w.files.insert(words[1].clone(), b);
+            }
+            Out.Text(_) => return Err(exc("TypeError", "a bytes-like object is required, not 'str'".to_string())),
+        }
+    } else if op == "convert" {
+        let data = fs_read(w, words[1])?;
+        let text = codec_decode(tb, words[3], words[5], In.Raw(data))?;
+        let out = str_encode(tb, words[4], words[5], text)?;
+        w.files.insert(words[2].clone(), out);
+    }
+    Ok(())
+}
+
+fn run_job(w: mut ref World, tb: ref Table, line: ref String) {
+    let fields = split_on(line, '\t');
+    emit(mut w, f"== {fields[0]}");
+    w.files = Map.new();
+    if fields[1] != "-" {
+        for item in split_on(fields[1], ',') {
+            let kv = split_on(item, '=');
+            w.files.insert(kv[0].clone(), hex_bytes(kv[1]));
+        }
+    }
+    for i in 2..fields.len() {
+        let words = split_on(fields[i], ' ');
+        let mut shown_line = ">".to_string();
+        for x in words {
+            shown_line.push(' ');
+            shown_line.push_str(shown(x));
+        }
+        emit(mut w, shown_line);
+        let before = w.files.clone();
+        match run_op(mut w, tb, words) {
+            Ok(_) => {}
+            Err(e) => emit_err(mut w, e),
+        }
+        for k in file_names(w) {
+            let now = w.files.get(k).unwrap().clone();
+            let changed = match before.get(k) {
+                Some(old) => *old != now,
+                None => true,
+            };
+            if changed {
+                show_file(mut w, k, now);
+            }
+        }
+    }
+}
+
+fn main() {
+    let tb = build_table();
+    let mut w = World { out: String.new(), files: Map.new() };
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() > 0 {
+            run_job(mut w, tb, line);
+        }
+    }
+    print(w.out);
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("table\t-\ttable\n");
+    s.push_str("encode basics\t-\tenc latex strict h:4dc3bc6c6c6572\tenc latex strict h:457264c591732c2050c3a16c\tenc latex strict h:c3856e67737472c3b66d\tenc latex strict h:c3a52062c3a562c3a5\tenc latex strict h:313030252026202331205f785f202435207b6272616365737d205c6261636b207e74696c6465205e686174\tenc latex strict h:53747261c39f6520616e6420c592757672652c20c3a6746865722c20c3b8\tenc latex strict h:e2809c71756f746564e2809d20e2809320e2809420e280a620e2809873696e676c65e2809920c2ab6775696c6c656d657473c2bb\tenc latex strict h:ceb120ceb220ceb320cea920e2889e20e289a420e289a520e289a020e28891\tenc latex strict h:efac816e6520efac826f7720efac8020efac8320efac86\tenc latex strict h:c2a920c2ae20e284a220c2b020c2b120c2b220c2b520c2b620c2b720c2bf20c2a1\tenc latex strict h:74616209686572650a6e65776c696e650d0a43524c46\tenc latex strict h:e2808be2808ce2808de28089e2808320efbfbd20c2a020c2ad\tenc latex strict h:\tenc latex strict h:706c61696e204153434949207465787420313233\tenc latex strict h:5c\tenc latex strict h:5c5c2074776f\tenc latex strict h:65cc8120636f6d62696e696e67\tenc latex strict h:e285ab\n");
+    s.push_str("encode errors\t-\tenc latex strict h:736e6f7720e29883206d616e\tenc latex strict h:e282ac203132\tenc latex strict h:656d6f6a6920f09f9880\tenc latex strict h:736570e280a86c696e65\tenc latex ignore h:736e6f7720e29883206d616e20e282ac203132\tenc latex ignore h:5c616120e2988362\tenc latex replace h:736e6f7720e29883206d616e20e282ac20313220f09f9880\tenc latex keep h:736e6f7720e29883206d616e\tenc latex keep h:6173636969206f6e6c79\tenc ulatex keep h:736e6f7720e29883206d616e\tenc latex backslashreplace h:e29883\tenc latex backslashreplace h:6f6b\tenc ulatex foo h:c3a920e29883\n");
+    s.push_str("encode inputenc\t-\tenc latex+latin1 strict h:4dc3bc6c6c65722c20457264c591732c20c2bd2c20e29883\tenc latex+latin1 replace h:4dc3bc6c6c65722c20457264c591732c20c2bd2c20e29883\tenc latex+utf8 strict h:4dc3bc6c6c65722c20457264c591732c20e2988320f09f988020262031303025\tenc latex+utf-8 strict h:c3856e67737472c3b66d\tenc latex+latin-1 strict h:c3856e67737472c3b66d20c592\tenc latex_utf8 strict h:c3a9\tenc latex-utf8 strict h:c3a9\tenc latex+cp1252 strict h:e2809ce282ace2809d20c59220c2bd\tenc latex+ascii strict h:c3a9\tenc latex+ strict h:c3a9\tenc LaTeX strict h:c3a9\tenc ulatex+utf8 strict h:c3a920e29883205c\tenc ulatex+latin1 strict h:c3a920c591\tenc ulatex strict h:c3a920c591\tenc latex+klingon strict h:61\tenc latex+klingon strict h:26\tenc latex++x strict h:26c3a9\tenc latexx strict h:61\tenc latex.utf8 strict h:61\tenc latex+utf8+x strict h:c3a9\n");
+    s.push_str("str api\t-\tstrenc latex strict h:4dc3bc6c6c6572\tstrenc latex+utf8 strict h:4dc3bc6c6c657220e29883\tstrenc ulatex strict h:4dc3bc6c6c6572\tstrenc latex strict h:e29883\tbdec latex strict x:4d5c227b757d6c6c6572\tbdec latex+latin1 strict x:47f664656c205c2765\tbdec ulatex strict x:616263\tbdec latex strict x:5c\n");
+    s.push_str("decode basics\t-\tdec latex strict x:4d5c22756c6c657220616e64204d7b5c22757d6c6c657220616e64204d5c227b757d6c6c6572\tdec latex strict x:4572645c487b6f7d732c20505c27616c2c204672616e5c6320636f69732c204672616e5c637b637d6f6973\tdec latex strict x:5c4141206e677374725c226f6d2c205c61612c20537472615c737320652c205c6f2c205c61655c205c6f65\tdec latex strict x:5c275c692c205c27692c205c5e5c692c205c225c692c205c765c6a2c205c695c6a\tdec latex strict x:606071756f7465642727206073696e676c6527202d2d202d2d2d202d203f60202160202c2c6c6f772727\tdec latex strict x:5c26205c25205c23205c5f205c24205c7b205c7d205c746578746261636b736c617368205c53205c50\tdec latex strict x:245c616c70686124205c285c626574615c2920245c67616d6d6120242024205c64656c7461242024245c70692424205c616c706861\tdec latex strict x:5c74657874656d64617368205c74657874656e64617368205c6c646f7473205c636f70797269676874205c7465787472656769737465726564205c7465787474726164656d61726b\tdec latex strict x:617e62205c717561642063205c2064205c2c2065205c2d2066\tdec latex strict x:780a0a79205c706172207a0a0a0a77\tdec latex strict x:6f6e650a74776f0a2020207468726565205c666f6f0a206261722025636f6d6d656e740a202062617a\tdec latex strict x:746162730909616e6420207370616365732020205c62617220202009717578\tdec latex strict x:5c5c20616e64205c5c2520616e64205c25636f6d6d656e74\tdec latex strict x:2331202320236120706172616d\tdec latex strict x:5c756e6b6e6f776e636f6d6d616e647b6172677d205c72656c61785c72656c61782078\tdec latex strict x:7b5c226f7d207b5c27657d205c277b7d65205c5e7b7d205c7e7b7d205c227b7d\tdec latex strict x:\tdec latex strict x:2020206c656164696e6720737061636573\tdec latex strict x:0a0a6c656164696e67206e65776c696e6573\tdec latex strict x:5c762073205c767b737d205c752061205c6b2065205c722041205c48206f205c642044205c74657874636f6d6d6162656c6f772053\tdec latex strict x:445c76205a20647a204c4a204c6a206c6a204e4a20494a20696a20666920666c206666206666692066666c207374\tdec latex strict x:245c6c6571245c285c6765715c29245c696e66747924205c6c657120245c6e6571245c6e6571\n");
+    s.push_str("decode errors\t-\tdec latex strict x:61625c\tdec latex+utf8 strict x:c3a9625c\tdec latex ignore x:61625c\tdec latex replace x:61625c\tdec latex foo x:61625c\tdec latex foo x:6f6b\tdec latex strict x:636166e9\tdec latex replace x:636166e9205c2765\tdec latex ignore x:636166e9205c2765\tdec latex foo x:636166e9\tdec latex+utf8 strict x:6f6b20c3a9207468656e20e920626164\tdec latex+utf8 strict x:ff\tdec latex+utf8 strict x:63757420e282\tdec latex+utf8 replace x:6f6b20e92062616420e28220fffe20656e6420f09f\tdec latex+utf8 strict x:eda08020737572726f67617465\tdec latex+utf8 strict x:c0af206f7665726c6f6e67\tdec latex+latin1 strict x:47f664656c205c226f\tdec latex+cp1252 strict x:9371942080\tdec latex+cp1252 strict x:616263208120646566\tdec latex+klingon strict x:616263\tdec ulatex+klingon strict h:616263\tdec ulatex strict h:c3a920e29883205c2765205c\tdec ulatex replace h:c3a9205c\tdec ulatex strict h:4d5c22756c6c65722c20e298832c205c74657874656d64617368\n");
+    s.push_str("incremental encode\t-\tienc latex strict n:c385 n:2062 f:c3a5\tienc latex strict n:5c6161 n: f:2078\tienc latex strict n:c3a5 r f:2078\tienc ulatex strict n:457264c5917320 n:c3b8 f:20656e64\tienc latex strict n:6f6b20 n:e29883 f:6166746572\tienc latex+utf8 strict n:c3a9 f:26\n");
+    s.push_str("incremental decode\t-\tidec latex strict n:5c27 n:6520616e64202d n:2d f:2d2064617368\tidec latex strict n:656e6473205c f:25\tidec latex strict n:656e6473205c f:\tidec latex+utf8 strict n:73706c697420c3 n:a920e280 f:9420646f6e65\tidec latex+utf8 strict n:73706c697420c3 f:\tidec latex+utf8 replace n:73706c697420c3 f:2078\tidec latex strict n:5c4141 n:206e67737472 n:5c22 f:6f6d\tidec latex strict n:610a n:0a f:62\tidec latex strict n:245c616c n:70686124 r f:5c226f\tidec ulatex strict n:5c63 n:2063 f:6f6973\tidec ulatex strict n:747261696c696e67205c f:\n");
+    s.push_str("lexer\t-\tlex strict x:5c666f6f2020626172205c272065205c5c2078205c2520792025630a7a20233120236120246d24202424642424202d2d202d2d2d206060712727203f60202160\tlex strict x:610a0a620a202063095c7061720a\tlex strict x:5c31205c40205c205c7e205c3d205c5e205c21205c2e205c22205c60205c7b\tlex strict x:656e645c\tlex replace x:656e645c\tlex ignore x:656e645c\tlex strict x:\tilex strict n:5c666f n:6f20626172205c n:5c2078202d f:2d2d\tilex strict n:2478 n:24200a f:0a\tplain strict x:5c666f6f20626172205c2765205c5c782025630a790a0a7a\tplain strict x:636166e9\tplain replace x:636166e9205c\n");
+    s.push_str("files\trefs.bib=2520726566732e626962202d2d206578706f727465642066726f6d20746865207265666572656e6365206d616e616765720a4061727469636c657b6d756c6c6572323031392c0a2020617574686f7220203d207b4d7b5c22757d6c6c65722c204a7b5c226f7d726720616e64204572645c487b6f7d732c20505c27616c20616e64204672616e5c6320636f69732054727566666175747d2c0a20207469746c652020203d207b4f6e20245c616c706861242d68656c6963657320616e64205c285c626574615c292d7368656574733a20612060607375727665792727202d2d2d20706172747e497d2c0a20206a6f75726e616c203d207b4a2e205374727563742e2042696f6c2e205c26204d65642e7d2c0a202070616765732020203d207b31322d2d33347d2c0a20206e6f7465202020203d207b3130305c25206f70656e206163636573733b20736565205c532033205c23203420616e642066696c655c5f6e616d657d2c0a7d0a0a40626f6f6b7b616e677374726f6d313836382c0a2020617574686f72202020203d207b5c4141206e677374725c226f6d2c20416e64657273204a6f6e617320616e6420537472615c737320652c2048616e737d2c0a20207469746c6520202020203d207b5265636865726368657320737572206c65207370656374726520736f6c616972655c6c646f74737b7d205c74657874656d646173687b7d205c6f652075767265737d2c0a20207075626c6973686572203d207b572e7e536368756c747a7d2c202020252055707073616c610a2020796561722020202020203d20313836382c0a0a2020616273747261637420203d207b4669727374207061726167726170682e5c706172205365636f6e642020207061726167726170682c09776974682061207461622e5c5c0a4e657874206c696e652077697468205c767b737d2c205c7620732c205c277b657d2c207b5c27657d2c205c275c692c205c637b637d20616e64205c61655c205c6f2e7d0a7d0a,names.txt=4dc3bc6c6c65722c204ac3b672673b20457264c591732c2050c3a16c3b204672616ec3a76f69732054727566666175740ac3856e67737472c3b66d2c20416e64657273204a6f6e61733b2053747261c39f653b2044766fc599c3a16b3b20c581756b617369657769637a3b20c398726573756e640aceb12d68656c6963657320e289a420ceb22d73686565747320e289a520e2889e20e2809c71756f746564e2809d20e2809320e2809420e280a620efac816e6520c2bd0ae282ac20313220c2b720c2a9203230323420c2b720e284a220c2b720e2988320c2b720f09f98800a,names_crlf.txt=436166c3a90d0a4e61c3af76650d0a,latin1.txt=47f664656c2c204573636865722c20426163683b20c7612076613b207365f16f723b203235b04320b132,cp1252.tex=9371756f7465649420802035209720646f6e65,cp1252_bad.tex=616263208120646566,bad_utf8.tex=6f6b20c3a9207468656e20e920626164,trailing.tex=656e647320776974682061206261636b736c617368205c,math.tex=245c616c706861205c6c6571205c62657461242c205c285c696e6674795c292c202424785e32242420616e64205c746578746261636b736c6173687b7d20245c73696d24205c7e7b7d207e\tread refs.bib latex strict\tread math.tex latex strict\tread latin1.txt latex+latin1 strict\tread cp1252.tex latex+cp1252 strict\tread cp1252_bad.tex latex+cp1252 strict\tread bad_utf8.tex latex+utf8 strict\tread bad_utf8.tex latex+utf8 replace\tread trailing.tex latex strict\tread missing.tex latex strict\tread refs.bib ulatex strict\twrite out.tex latex strict h:4dc3bc6c6c6572202620457264c5917320e280942031303025\twrite out2.tex latex strict h:e2988320736e6f776d616e\twrite out3.tex latex replace h:e2988320736e6f776d616e\twrite out4.tex ulatex strict h:706c61696e\twrite out5.tex latex+utf8 strict h:4dc3bc6c6c6572202620e29883\n");
+    s.push_str("convert\trefs.bib=2520726566732e626962202d2d206578706f727465642066726f6d20746865207265666572656e6365206d616e616765720a4061727469636c657b6d756c6c6572323031392c0a2020617574686f7220203d207b4d7b5c22757d6c6c65722c204a7b5c226f7d726720616e64204572645c487b6f7d732c20505c27616c20616e64204672616e5c6320636f69732054727566666175747d2c0a20207469746c652020203d207b4f6e20245c616c706861242d68656c6963657320616e64205c285c626574615c292d7368656574733a20612060607375727665792727202d2d2d20706172747e497d2c0a20206a6f75726e616c203d207b4a2e205374727563742e2042696f6c2e205c26204d65642e7d2c0a202070616765732020203d207b31322d2d33347d2c0a20206e6f7465202020203d207b3130305c25206f70656e206163636573733b20736565205c532033205c23203420616e642066696c655c5f6e616d657d2c0a7d0a0a40626f6f6b7b616e677374726f6d313836382c0a2020617574686f72202020203d207b5c4141206e677374725c226f6d2c20416e64657273204a6f6e617320616e6420537472615c737320652c2048616e737d2c0a20207469746c6520202020203d207b5265636865726368657320737572206c65207370656374726520736f6c616972655c6c646f74737b7d205c74657874656d646173687b7d205c6f652075767265737d2c0a20207075626c6973686572203d207b572e7e536368756c747a7d2c202020252055707073616c610a2020796561722020202020203d20313836382c0a0a2020616273747261637420203d207b4669727374207061726167726170682e5c706172205365636f6e642020207061726167726170682c09776974682061207461622e5c5c0a4e657874206c696e652077697468205c767b737d2c205c7620732c205c277b657d2c207b5c27657d2c205c275c692c205c637b637d20616e64205c61655c205c6f2e7d0a7d0a,names.txt=4dc3bc6c6c65722c204ac3b672673b20457264c591732c2050c3a16c3b204672616ec3a76f69732054727566666175740ac3856e67737472c3b66d2c20416e64657273204a6f6e61733b2053747261c39f653b2044766fc599c3a16b3b20c581756b617369657769637a3b20c398726573756e640aceb12d68656c6963657320e289a420ceb22d73686565747320e289a520e2889e20e2809c71756f746564e2809d20e2809320e2809420e280a620efac816e6520c2bd0ae282ac20313220c2b720c2a9203230323420c2b720e284a220c2b720e2988320c2b720f09f98800a,names_crlf.txt=436166c3a90d0a4e61c3af76650d0a,latin1.txt=47f664656c2c204573636865722c20426163683b20c7612076613b207365f16f723b203235b04320b132,math.tex=245c616c706861205c6c6571205c62657461242c205c285c696e6674795c292c202424785e32242420616e64205c746578746261636b736c6173687b7d20245c73696d24205c7e7b7d207e,trailing.tex=656e647320776974682061206261636b736c617368205c\tconvert refs.bib refs.txt latex utf-8 strict\tconvert names.txt names.bib utf-8 latex replace\tconvert names.txt names_strict.bib utf-8 latex strict\tconvert names.txt names_u8.bib utf-8 latex+utf8 strict\tconvert names_crlf.txt crlf.bib utf-8 latex strict\tconvert latin1.txt latin1.bib latin-1 latex strict\tconvert latin1.txt latin1_l1.bib latin-1 latex+latin1 strict\tconvert math.tex math.txt latex utf-8 strict\tconvert trailing.tex trailing.txt latex utf-8 replace\tconvert refs.txt refs_again.bib utf-8 latex strict\tconvert refs.bib refs.bib latex utf-8 strict\n");
+    s
+}
+
+fn table_text() -> String {
+    let mut s = String.new();
+    s.push_str("A<\t20\t\\ \nA-\t2003\t\\quad\nA>\t2009\t \nA>\t200d\t\nA>\t200c\t{}\nA>\t200b\t\\hspace{0pt}\nA-\t25\t\\%\nT-\t2013\t--\nT-\t2013\t\\textendash\nT-\t2014\t---\nT-\t2014\t\\textemdash\nA>\tfffd\t????\nT>\t2018\t`\nT>\t2019\t'\nT-\t201c\t``\nT-\t201d\t''\nT-\t201e\t,,\nT<\t201e\t\\glqq\nT-\tab\t\\guillemotleft\nT-\tbb\t\\guillemotright\nT>\t2b9\t'\nT>\t2ba\t''\nT>\t2bb\t`\nT>\t2bc\t'\nT>\t2bd\t`\nT-\t2020\t\\dag\nT-\t2021\t\\ddag\nT<\t5c\t\\textbackslash\nM<\t5c\t\\backslash\nM-\t223c\t\\sim\nT-\t2f7\t\\texttildelow\nT-\t2dc\t\\~{}\nT-\t7e\t\\textasciitilde\nM-\t2022\t\\bullet\nT-\t2022\t\\textbullet\nM-\t2217\t\\ast\nT-\t23\t\\#\nT-\t5f\t\\_\nT-\t26\t\\&\nT-\ta0\t~\nT-\ta1\t!`\nT-\ta2\t\\not{c}\nT-\ta3\t\\pounds\nT-\ta3\t\\textsterling\nT-\ta5\t\\yen\nT-\ta5\t\\textyen\nT-\ta7\t\\S\nT-\ta8\t\\\"{}\nT-\tac\t\\neg\nT>\t2010\t-\nT-\tad\t\\-\nT-\taf\t\\={}\nM-\tb0\t^\\circ\nT-\tb0\t\\textdegree\nM-\t2212\t-\nM-\tb1\t\\pm\nT-\tb1\t\\textpm\nM-\tb2\t^2\nT-\tb2\t\\texttwosuperior\nM-\tb3\t^3\n");
+    s.push_str("T-\tb3\t\\textthreesuperior\nT-\tb4\t\\'{}\nM-\tb5\t\\mu\nT-\tb5\t\\micro\nT-\tb6\t\\P\nM-\tb7\t\\cdot\nT-\tb7\t\\textperiodcentered\nT-\tb8\t\\c{}\nM-\tb9\t^1\nT-\tb9\t\\textonesuperior\nT-\tbf\t?`\nA-\tc0\t\\`A\nA-\tc2\t\\^A\nA-\tc3\t\\~A\nA-\tc4\t\\\"A\nA-\tc5\t\\AA\nA<\tc5\t\\r A\nA-\tc6\t\\AE\nA-\tc7\t\\c C\nA-\tc8\t\\`E\nA-\tc9\t\\'E\nA-\tca\t\\^E\nA-\tcb\t\\\"E\nA-\tcc\t\\`I\nA-\tce\t\\^I\nA-\tcf\t\\\"I\nA-\td1\t\\~N\nA-\td2\t\\`O\nA-\td3\t\\'O\nA-\td4\t\\^O\nA-\td5\t\\~O\nA-\td6\t\\\"O\nM-\td7\t\\times\nA-\td8\t\\O\nA-\td9\t\\`U\nA-\tda\t\\'U\nA-\tdb\t\\^U\nA-\tdc\t\\\"U\nA-\tdd\t\\'Y\nA-\tdf\t\\ss\nA-\te0\t\\`a\nA-\te1\t\\'a\nA-\te2\t\\^a\nA-\te3\t\\~a\nA-\te4\t\\\"a\nA-\te5\t\\aa\nA<\te5\t\\r a\nA-\te6\t\\ae\nA-\te7\t\\c c\nA-\te8\t\\`e\nA-\te9\t\\'e\nA-\tea\t\\^e\nA-\teb\t\\\"e\nA-\tec\t\\`\\i\nA-\tec\t\\`i\nA-\ted\t\\'\\i\nA-\ted\t\\'i\nA-\tee\t\\^\\i\nA-\tee\t\\^i\nA-\tef\t\\\"\\i\nA-\tef\t\\\"i\nA-\tf1\t\\~n\nA-\tf2\t\\`o\nA-\tf3\t\\'o\nA-\tf4\t\\^o\nA-\tf5\t\\~o\nA-\tf6\t\\\"o\n");
+    s.push_str("M-\tf7\t\\div\nA-\tf8\t\\o\nA-\tf9\t\\`u\nA-\tfa\t\\'u\nA-\tfb\t\\^u\nA-\tfc\t\\\"u\nA-\tfd\t\\'y\nA-\tff\t\\\"y\nA-\t100\t\\=A\nA-\t101\t\\=a\nA-\t102\t\\u A\nA-\t103\t\\u a\nA-\t104\t\\k A\nA-\t105\t\\k a\nA-\t106\t\\'C\nA-\t107\t\\'c\nA-\t108\t\\^C\nA-\t109\t\\^c\nA-\t10a\t\\.C\nA-\t10b\t\\.c\nA-\t10c\t\\v C\nA-\t10d\t\\v c\nA-\t10e\t\\v D\nA-\t10f\t\\v d\nA-\t112\t\\=E\nA-\t113\t\\=e\nA-\t114\t\\u E\nA-\t115\t\\u e\nA-\t116\t\\.E\nA-\t117\t\\.e\nA-\t118\t\\k E\nA-\t119\t\\k e\nA-\t11a\t\\v E\nA-\t11b\t\\v e\nA-\t11c\t\\^G\nA-\t11d\t\\^g\nA-\t11e\t\\u G\nA-\t11f\t\\u g\nA-\t120\t\\.G\nA-\t121\t\\.g\nA-\t122\t\\c G\nA-\t123\t\\c g\nA-\t124\t\\^H\nA-\t125\t\\^h\nA-\t128\t\\~I\nA-\t129\t\\~\\i\nA-\t129\t\\~i\nA-\t12a\t\\=I\nA-\t12b\t\\=\\i\nA-\t12b\t\\=i\nA-\t12c\t\\u I\nA-\t12d\t\\u\\i\nA-\t12d\t\\u i\nA-\t12e\t\\k I\nA-\t12f\t\\k i\nA-\t130\t\\.I\nA-\t131\t\\i\nA>\t132\tIJ\nA>\t133\tij\nA-\t134\t\\^J\nA-\t135\t\\^\\j\nA-\t135\t\\^j\nA-\t136\t\\c K\nA-\t137\t\\c k\nA-\t139\t\\'L\nA-\t13a\t\\'l\n");
+    s.push_str("A-\t13b\t\\c L\nA-\t13c\t\\c l\nA-\t13d\t\\v L\nA-\t13e\t\\v l\nA-\t141\t\\L\nA-\t142\t\\l\nA-\t143\t\\'N\nA-\t144\t\\'n\nA-\t145\t\\c N\nA-\t146\t\\c n\nA-\t147\t\\v N\nA-\t148\t\\v n\nA-\t14c\t\\=O\nA-\t14d\t\\=o\nA-\t14e\t\\u O\nA-\t14f\t\\u o\nA-\t150\t\\H O\nA-\t151\t\\H o\nA-\t152\t\\OE\nA-\t153\t\\oe\nA-\t154\t\\'R\nA-\t155\t\\'r\nA-\t156\t\\c R\nA-\t157\t\\c r\nA-\t158\t\\v R\nA-\t159\t\\v r\nA-\t15a\t\\'S\nA-\t15b\t\\'s\nA-\t15c\t\\^S\nA-\t15d\t\\^s\nA-\t15e\t\\c S\nA-\t15f\t\\c s\nA-\t160\t\\v S\nA-\t161\t\\v s\nA-\t162\t\\c T\nA-\t163\t\\c t\nA-\t164\t\\v T\nA-\t165\t\\v t\nA-\t168\t\\~U\nA-\t169\t\\~u\nA-\t16a\t\\=U\nA-\t16b\t\\=u\nA-\t16c\t\\u U\nA-\t16d\t\\u u\nA-\t16e\t\\r U\nA-\t16f\t\\r u\nA-\t170\t\\H U\nA-\t171\t\\H u\nA-\t172\t\\k U\nA-\t173\t\\k u\nA-\t174\t\\^W\nA-\t175\t\\^w\nA-\t176\t\\^Y\nA-\t177\t\\^y\nA-\t178\t\\\"Y\nA-\t179\t\\'Z\nA-\t17a\t\\'z\nA-\t17b\t\\.Z\nA-\t17c\t\\.z\nA-\t17d\t\\v Z\nA-\t17e\t\\v z\nA-\t1c4\tD\\v Z\nA-\t1c5\tD\\v z\nA-\t1c6\td\\v z\nA>\t1c7\tLJ\n");
+    s.push_str("A>\t1c8\tLj\nA>\t1c9\tlj\nA>\t1ca\tNJ\nA>\t1cb\tNj\nA>\t1cc\tnj\nA-\t1cd\t\\v A\nA-\t1ce\t\\v a\nA-\t1cf\t\\v I\nA-\t1d0\t\\v\\i\nA-\t1d1\t\\v O\nA-\t1d2\t\\v o\nA-\t1d3\t\\v U\nA-\t1d4\t\\v u\nA-\t1e6\t\\v G\nA-\t1e7\t\\v g\nA-\t1e8\t\\v K\nA-\t1e9\t\\v k\nA-\t1ea\t\\k O\nA-\t1eb\t\\k o\nA-\t1f0\t\\v\\j\nA>\t1f1\tDZ\nA>\t1f2\tDz\nA>\t1f3\tdz\nA-\t1f4\t\\'G\nA-\t1f5\t\\'g\nA-\t1fc\t\\'\\AE\nA-\t1fd\t\\'\\ae\nA-\t1fe\t\\'\\O\nA-\t1ff\t\\'\\o\nA-\td0\t\\DH\nA-\tf0\t\\dh\nA-\tde\t\\TH\nA-\tfe\t\\th\nA-\t110\t\\DJ\nA-\t111\t\\dj\nA-\t1e0c\t\\d D\nA-\t1e0d\t\\d d\nA-\t1e36\t\\d L\nA-\t1e37\t\\d l\nA-\t1e42\t\\d M\nA-\t1e43\t\\d m\nA-\t1e46\t\\d N\nA-\t1e47\t\\d n\nA-\t1e5a\t\\d R\nA-\t1e5b\t\\d r\nA-\t1e62\t\\d S\nA-\t1e63\t\\d s\nA-\t1e6c\t\\d T\nA-\t1e6d\t\\d t\nA-\t218\t\\textcommabelow S\nA-\t219\t\\textcommabelow s\nA-\t21a\t\\textcommabelow T\nA-\t21b\t\\textcommabelow t\nM-\t2113\t\\ell\nM-\t221a\t\\surd\nM-\t221e\t\\infty\nM-\t222b\t\\int\nM-\t2229\t\\cap\nM-\t222a\t\\cup\nM-\t2192\t\\rightarrow\n");
+    s.push_str("M-\t21d2\t\\Rightarrow\nM-\t2190\t\\leftarrow\nM-\t21d0\t\\Leftarrow\nM-\t2228\t\\vee\nM-\t2227\t\\wedge\nM-\t2248\t\\approx\nM-\t2260\t\\neq\nM-\t2264\t\\leq\nM-\t2265\t\\geq\nM-\t2200\t\\forall\nM-\t2201\t\\complement\nM-\t2202\t\\partial\nM-\t2203\t\\exists\nM-\t2204\t\\nexists\nM-\t2205\t\\emptyset\nM-\t2207\t\\nabla\nM-\t2208\t\\in\nM-\t2209\t\\notin\nM-\t220b\t\\ni\nM-\t220c\t\\notni\nM-\t220e\t\\blacksquare\nM-\t220f\t\\prod\nM-\t2210\t\\coprod\nM-\t2211\t\\sum\nM-\t2282\t\\subset\nM-\t2283\t\\supset\nM-\t2284\t\\not\\subset\nM-\t2285\t\\not\\supset\nM-\t2286\t\\subseteq\nM-\t2287\t\\supseteq\nM-\t2288\t\\nsubseteq\nM-\t2289\t\\nsupseteq\nM-\t228a\t\\subsetneq\nM-\t228b\t\\supsetneq\nT-\t2c6\t\\^{}\nT-\t2c7\t\\v{}\nT-\t2d8\t\\u{}\nT-\t2d9\t\\.{}\nT-\t2da\t\\r{}\nT-\t2db\t\\k{}\nT-\t2dd\t\\H{}\nA>\tfb01\tfi\nA>\tfb02\tfl\nA>\tfb00\tff\nA>\tfb03\tffi\nA>\tfb04\tffl\nA>\tfb06\tst\nM-\t3b1\t\\alpha\nM-\t3b2\t\\beta\nM-\t3b3\t\\gamma\nM-\t3b4\t\\delta\nM-\t3b5\t\\epsilon\nM-\t3b6\t\\zeta\n");
+    s.push_str("M-\t3b7\t\\eta\nM-\t3b8\t\\theta\nT<\t3b8\t\\texttheta\nM-\t3b9\t\\iota\nM-\t3ba\t\\kappa\nM-\t3bb\t\\lambda\nM-\t3bc\t\\mu\nM-\t3bd\t\\nu\nM-\t3be\t\\xi\nM-\t3bf\t\\omicron\nM-\t3c0\t\\pi\nM-\t3c1\t\\rho\nM-\t3c3\t\\sigma\nM-\t3c4\t\\tau\nM-\t3c5\t\\upsilon\nM-\t3c6\t\\phi\nM-\t3d5\t\\varphi\nM-\t3c7\t\\chi\nM-\t3c8\t\\psi\nM-\t3c9\t\\omega\nM-\t391\t\\Alpha\nM-\t392\t\\Beta\nM-\t393\t\\Gamma\nM-\t394\t\\Delta\nM-\t395\t\\Epsilon\nM-\t396\t\\Zeta\nM-\t397\t\\Eta\nM-\t398\t\\Theta\nM-\t399\t\\Iota\nM-\t39a\t\\Kappa\nM-\t39b\t\\Lambda\nM-\t39c\t\\Mu\nM-\t39d\t\\Nu\nM-\t39e\t\\Xi\nM-\t39f\t\\Omicron\nM-\t3a0\t\\Pi\nM-\t3a1\t\\Rho\nM-\t3a3\t\\Sigma\nM-\t3a4\t\\Tau\nM-\t3a5\t\\Upsilon\nM-\t3a6\t\\Phi\nM-\t3a7\t\\Chi\nM-\t3a8\t\\Psi\nM-\t3a9\t\\Omega\nT-\ta9\t\\copyright\nT-\ta9\t\\textcopyright\nT-\tc1\t\\'A\nT-\tcd\t\\'I\nA-\t2026\t\\ldots\nM-\t2122\t^{TM}\nT-\t2122\t\\texttrademark\nT-\tae\t\\textregistered\nT>\t1ec\t\\textogonekcentered{\\=O}\nT>\t1ed\t\\textogonekcentered{\\=o}\nM-\t2115\t\\mathbb N\n");
+    s.push_str("M-\t2124\t\\mathbb Z\nM-\t211a\t\\mathbb Q\nM-\t211d\t\\mathbb R\nM-\t2102\t\\mathbb C\n");
+    s
+}
