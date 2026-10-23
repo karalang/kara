@@ -131,12 +131,12 @@ def is_valid_utf8(b):
 def surfaces(path, workdir):
     """{surface: stdout} for every surface that produced one, plus failures."""
     out, bad = {}, {}
-    rc, so, se = run(["karac", "run", "--legacy", "--interp", str(path)])
+    rc, so, se = run(["karac", "run", "--interp", str(path)])
     if rc != 0:
         return None, {"interp": show(se or so).strip().splitlines()[:2]}
     out["interp"] = so
 
-    rc, so, se = run(["karac", "run", "--legacy", str(path)])
+    rc, so, se = run(["karac", "run", str(path)])
     if rc == 0:
         out["jit"] = so
     else:
@@ -148,7 +148,7 @@ def surfaces(path, workdir):
         binp = workdir / stem
         if binp.exists():
             binp.unlink()
-        rc, so, se = run(["karac", "build", "--legacy", str(path)], cwd=workdir, env=env)
+        rc, so, se = run(["karac", "build", str(path)], cwd=workdir, env=env)
         if rc != 0 or not binp.exists():
             bad[label] = show(se or so).strip().splitlines()[:2]
             continue

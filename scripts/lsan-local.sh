@@ -5,7 +5,7 @@
 # codegen-ownership leak class without pushing and waiting for CI.
 #
 # Usage:
-#   scripts/lsan-local.sh                       # full memory_sanitizer suite
+#   scripts/lsan-local.sh                       # full mir_asan suite
 #   scripts/lsan-local.sh <name-filter>         # only tests matching the filter
 #   scripts/lsan-local.sh --shell               # interactive shell in the container
 #
@@ -54,6 +54,6 @@ docker run "${RUN_ARGS[@]}" bash -euo pipefail -c '
   cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
   cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
   cargo rustc -p karac-runtime --release --crate-type staticlib
-  echo ">> cargo test --features llvm --test memory_sanitizer '"$FILTER"' ..."
-  cargo test --features llvm --test memory_sanitizer '"$FILTER"'
+  echo ">> cargo test --features llvm --test mir_asan '"$FILTER"' ..."
+  cargo test --features llvm --test mir_asan '"$FILTER"'
 '

@@ -54,9 +54,6 @@ LLVM_CFG = 'cfg(feature = "llvm")'
 # decision that should be visible in review — that is the point.
 ALLOWLIST = {
     "selfhost_codegen": "1 test, ~181 s; wants its own runtime-budget decision",
-    "parallax_bench": "bench reproduction is opt-in by design",
-    "relay_bench": "bench reproduction is opt-in by design",
-    "wasm_codegen": "documented Tier 3; covered by the separate `wasm` job",
 }
 
 

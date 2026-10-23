@@ -69,7 +69,7 @@ print(f'    print(emit_program(parse_program("{esc}")));')
 print("}")
 PY
 
-( cd "$TMP" && "$KARAC" build --legacy ) > "$TMP/build.log" 2>&1 || true
+( cd "$TMP" && "$KARAC" build ) > "$TMP/build.log" 2>&1 || true
 if [ ! -x "$TMP/cg" ]; then
   echo "!! emitter driver failed to build"; tail -25 "$TMP/build.log"; exit 1
 fi
@@ -106,7 +106,7 @@ C
 
 # ---- 3. seed output, for parity alongside the memory verdicts ----
 echo "== seed (karac run) =="
-"$KARAC" run --legacy "$PROG" 2>&1 | sed 's/^/   /'
+"$KARAC" run "$PROG" 2>&1 | sed 's/^/   /'
 
 # ---- 4. ASAN leg ----
 echo "== emitted, under AddressSanitizer =="

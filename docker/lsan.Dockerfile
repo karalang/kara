@@ -7,7 +7,7 @@
 #
 # Driven by scripts/lsan-local.sh. Mirrors .github/workflows/ci.yml `memory-sanitizer`:
 # ubuntu-24.04 + llvm-18 + rust stable, build lean->full runtime archives, then
-# `cargo test --features llvm --test memory_sanitizer`.
+# `cargo test --features llvm --test mir_asan`.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive

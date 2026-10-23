@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Run the program corpus (`corpus/`) on one backend.
 
-    python3 scripts/corpus/run.py --backend legacy            # each entry on the legacy backend it was recorded on
-    python3 scripts/corpus/run.py --backend legacy-build --filter drop
-    python3 scripts/corpus/run.py --backend legacy-interp --filter fixtures/interpreter/
+    python3 scripts/corpus/run.py --backend mir-interp
+    python3 scripts/corpus/run.py --backend mir-build --filter drop
 
-Backends: legacy (per entry, its `legacy_backend`), legacy-interp,
-legacy-build (AOT at the default auto-par setting, which is off), mir-interp
+The legacy backends went with the legacy pipeline at M3; what they printed
+stays in each entry's legacy.out. Backends: mir-interp
 (the MIR builder and interpreter, `karac __mir-run`), mir-llvm (the same
 MIR compiled to LLVM IR and run under `karac_jit_runner`, `karac
 __mir-llvm-run`; it needs a karac built with `--features llvm` and a
@@ -14,7 +13,7 @@ current `karac_jit_runner` beside it), and mir-llvm-asan (the same IR
 compiled with AddressSanitizer into a native binary, `karac __mir-llvm-asan`;
 a leak, double free or bad access fails the entry with the report's first
 line, whatever the stdout), and mir-build (the same IR compiled ahead of time
-by `karac build --mir`, then the binary run).
+by `karac build`, then the binary run).
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
 widen. Each entry is judged by its meta.toml `expect`:
@@ -62,7 +61,7 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     rel = str(entry.relative_to(corpus))
     meta = read_toml(entry / "meta.toml")
     expect = meta.get("expect", "stdout")
-    backend = meta.get("legacy_backend", "legacy-build") if args.backend == "legacy" else args.backend
+    backend = args.backend
     base = {"name": rel, "class": meta.get("class", "unknown"), "tags": meta.get("tags", []),
             "model": meta.get("model_verdict", "(none)")}
     if expect == "skip" or (meta.get("backends") and backend not in meta["backends"]):
@@ -189,13 +188,12 @@ def first_line(b: bytes) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", required=True, choices=["legacy", *BACKENDS])
+    ap.add_argument("--backend", required=True, choices=list(BACKENDS))
     ap.add_argument("--karac", default=str(ROOT / "target/debug/karac"))
     ap.add_argument("--corpus", default=str(ROOT / "corpus"))
     ap.add_argument("--filter", action="append", default=[], help="tag or path substring; repeatable")
     ap.add_argument("--exclude", action="append", default=[],
-                    help="tag or path substring to leave out; `--exclude core` gives the M0 legacy check, "
-                         "since the core pins hold v2 expectations legacy is meant to miss")
+                    help="tag or path substring to leave out; repeatable")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--seed", type=int, default=1, help="KARAC_HASH_SEED for every run")

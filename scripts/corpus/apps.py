@@ -76,10 +76,11 @@ def count(src: str) -> dict:
 
 
 def finalize(d: Path, stmt_par: bool, hand: list, groups: str, pre: list) -> int:
-    """expected.out from the same-stem Python mirror, legacy runs cross-checked,
-    meta.toml written, and the friction row stored in friction.json."""
+    """expected.out from the same-stem Python mirror, meta.toml written, and
+    the friction row stored in friction.json. The legacy cross-check runs went
+    with the legacy pipeline at M3; an app's earlier verdicts are kept."""
     sys.path.insert(0, str(ROOT / "scripts/corpus"))
-    from corpus_lib import read_toml, run_program, write_toml
+    from corpus_lib import read_toml, write_toml
     kind, name = d.parts[-2], d.parts[-1]
     m = subprocess.run([sys.executable, f"{name}.py"], cwd=d, capture_output=True, timeout=300)
     if m.returncode != 0:
@@ -87,16 +88,13 @@ def finalize(d: Path, stmt_par: bool, hand: list, groups: str, pre: list) -> int
         return 1
     sweep(d, name)
     (d / "expected.out").write_bytes(m.stdout)
-    legacy = {}
-    for b in ("legacy-build", "legacy-interp"):
-        r = run_program(d, b, KARAC, 300, {"KARAC_HASH_SEED": "1"})
-        legacy[b] = "agrees" if r["stdout"] == m.stdout and r["exit"] == 0 else \
-            f"differs ({r['status']}, exit {r['exit']}, {len(r['stdout'])} vs {len(m.stdout)} bytes)"
     row = json.loads(subprocess.run([sys.executable, __file__, "measure", str(d)], capture_output=True,
                                     text=True, check=True).stdout)
     fj = d.parent.parent / "friction.json"
     rows = json.loads(fj.read_text()) if fj.exists() else {}
     old = rows.get(f"{kind}/{name}", {})
+    not_run = "not run: the legacy pipeline went at M3"
+    legacy = old.get("legacy") or {"legacy-build": not_run, "legacy-interp": not_run}
     row.update({"program": f"{kind}/{name}", "stmt_par": stmt_par or bool(old.get("stmt_par_groups")),
                 "hand_edits": hand or old.get("hand_edits", []), "legacy": legacy,
                 "fix_rounds": old.get("fix_rounds"),
@@ -159,7 +157,8 @@ def table(apps: Path) -> int:
         fixc = f"{r['clones_by_fix']} (+{would} refused, note 1)" if would else str(r["clones_by_fix"])
         im = any("E_INDEX_MOVE_NON_COPY" in w for w in r.get("draft_workarounds", []))
         lb = r["legacy"]["legacy-build"]
-        legacy = "agrees" if lb == "agrees" else "interp agrees; build does not (note 2)"
+        legacy = "agrees" if lb == "agrees" else "not run (legacy went at M3)" if lb.startswith("not run") \
+            else "interp agrees; build does not (note 2)"
         # compiler gaps only: a spec-conformant adaptation legacy forces (index-move) or an
         # author's own type error is part of the natural draft, not a gap
         gaps = sum(1 for w in r.get("draft_workarounds", [])

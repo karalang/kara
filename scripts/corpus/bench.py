@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Time the corpus benchmarks on the compiled MIR backend against legacy.
 
+THE LEGACY SIDE IS ARCHIVED. The legacy pipeline went at M3, so only the
+`karac build` (v2) side is measured; `--baseline <bench.json>` reads the legacy
+measurements from an earlier `--json` and the ratios compare against those.
+Without it the summary reports the v2 numbers alone.
+
     python3 scripts/corpus/bench.py --karac target/release/karac
     python3 scripts/corpus/bench.py --karac target/release/karac --filter 233- --runs 5
     python3 scripts/corpus/bench.py --karac target/release/karac --apps --json bench.json
 
-Each program is built twice, `karac build` (legacy, `KARAC_AUTO_PAR=0`, as the
-corpus's legacy-build) and `karac build --mir`, and each binary is run
-`--runs` times. Reported per program and per backend: the build's wall time,
+Each program was built twice, legacy and v2; now it is built once with
+`karac build`, and the binary is run `--runs` times. Reported per program and per backend: the build's wall time,
 the binary's size (as linked, and stripped), and the fastest run's wall time.
 A run is counted only when its stdout is the entry's expected output (the
 same file `run.py` holds the mir backends to); otherwise the program is listed
@@ -40,8 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_lib import ROOT, entries, read_toml  # noqa: E402
 
 BUILDS = {
-    "legacy": (["build", "--legacy"], {"KARAC_AUTO_PAR": "0"}),
-    "mir": (["build", "--mir"], {}),
+    "mir": (["build"], {}),
 }
 
 
@@ -107,10 +110,10 @@ def geomean(xs: list[float]) -> float:
 
 def summarize(label: str, rows: list[dict], key: str, unit: str) -> list[str]:
     pairs = [(r["name"], r["mir"][key] / r["legacy"][key]) for r in rows
-             if r["mir"].get("status") == "ok" and r["legacy"].get("status") == "ok"
+             if "legacy" in r and r["mir"].get("status") == "ok" and r["legacy"].get("status") == "ok"
              and r["mir"].get(key) and r["legacy"].get(key)]
     if not pairs:
-        return [f"{label} {key}: no program ran on both backends"]
+        return [f"{label} {key}: no program has both a v2 run and an archived legacy one (--baseline)"]
     ratios = [p for _, p in pairs]
     within = sum(1 for p in ratios if p <= 1.5)
     worst = sorted(pairs, key=lambda p: -p[1])[:5]
@@ -130,6 +133,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--json", help="write every measurement here")
+    ap.add_argument("--baseline", help="an earlier --json whose legacy measurements the ratios compare against")
     args = ap.parse_args()
     args.karac = str(Path(args.karac).resolve())
     corpus = Path(args.corpus)
@@ -150,9 +154,16 @@ def main() -> int:
         print("bench: no program matched", file=sys.stderr)
         return 2
 
+    archived = {}
+    if args.baseline:
+        archived = {r["name"]: r["legacy"] for r in json.loads(Path(args.baseline).read_text()) if "legacy" in r}
+
     def one(item):
         e, rel, meta = item
-        return {"name": rel, **{b: measure(e, b, args, meta) for b in BUILDS}}
+        row = {"name": rel, **{b: measure(e, b, args, meta) for b in BUILDS}}
+        if rel in archived:
+            row["legacy"] = archived[rel]
+        return row
 
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         rows = []

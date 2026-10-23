@@ -304,9 +304,14 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
             # `error:codegen` records only that legacy-build's codegen declined
             # the program, which is no language rule. `karac check` accepts
             # it, so it is judged on its output, with legacy's interpreter as
-            # the legacy baseline.
-            li = sh([args.karac, "run", "--legacy", "--interp", "source.kara"], d, env, args.timeout)
-            legacy_interp = (li.stdout, li.returncode) if li is not None else (None, None)
+            # the legacy baseline. That baseline is archived: the expected.out
+            # an earlier classification wrote from a legacy-interp run. The
+            # legacy pipeline went at M3, so an entry without one has no
+            # legacy baseline and is judged against the spec alone.
+            if meta.get("expected_from") == "legacy-interp" and (entry / "expected.out").exists():
+                legacy_interp = ((entry / "expected.out").read_bytes(), int(meta.get("exit", 0)))
+            else:
+                legacy_interp = (None, None)
             expect = "stdout"
         if errs:
             codes = sorted({diag_key(e) for e in errs})

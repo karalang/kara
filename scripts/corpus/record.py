@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Record the legacy compiler's behaviour for every corpus entry, once.
+"""Tag every corpus entry from `karac check` and its archived legacy record.
 
-For each entry it runs `karac check --output=json` (for tags and error codes)
-and one legacy run, then writes:
+THE LEGACY RECORD IS ARCHIVED. Each entry's legacy.out (and `legacy_exit`,
+`legacy_backend` in meta.toml) was written by one run of the legacy compiler,
+which went at M3. Nothing here runs it any more: an entry that already has
+legacy.out keeps it, and a new entry has none, so it needs an expected.out of
+its own (`expected_from` = pin, spec or mirror) before the runner can judge it.
+
+What a record held when the legacy run still existed:
 
   legacy.out     the legacy run's stdout (its exit code goes in meta.toml as legacy_exit)
   meta.toml      expect, exit, tags, class = "unknown", expected_from, legacy_backend
@@ -26,7 +31,8 @@ expect: stdout | panic:<exit> | error:<code> | skip (deferred feature,
 format! template, or the legacy run timed out).
 
 Raw logs (check JSON, stdout, stderr) go to --work/logs/<entry>/.
-Entries that already have legacy.out are skipped unless --redo.
+Entries that already have legacy.out are skipped unless --redo, which re-runs
+`karac check` and re-derives the tags against the archived legacy.out.
 
 --model runs the source-level drop model (corpus/tools/drop-model/kmodel.py)
 over every recorded entry outside core/ and drop-matrix/ and writes:
@@ -40,11 +46,9 @@ An entry the model has no verdict for (UNSUP, PARSE, CRASH, LEGACY-REJECT)
 loses all of these. Entries already at the current model_rev are kept
 unless --redo.
 
---recheck runs every already-recorded entry (narrow it with --filter) once
-more on its legacy backend. One whose stdout or exit code differs from its
-record prints something that changes between runs (a bound port, thread
-scheduling, cancellation timing): it is tagged `nondeterministic` and set to
-expect = "skip", since no expected.out can hold it.
+--recheck re-ran a recorded entry on its legacy backend to find output that
+changes between runs. It went with the legacy pipeline: the entries it tagged
+`nondeterministic` keep the tag, and the option now refuses.
 """
 
 import argparse
@@ -56,7 +60,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from corpus_lib import ROOT, entries, matches_filter, read_toml, run_program, write_toml  # noqa: E402
+from corpus_lib import ROOT, entries, matches_filter, read_toml, write_toml  # noqa: E402
 
 DEFERRED = [
     ("gpu", re.compile(r"\bgpu\.")),
@@ -113,14 +117,6 @@ def check_json(entry: Path, karac: str, timeout: float) -> tuple[list[dict], str
         return json.loads(raw).get("diagnostics", []), raw
     except json.JSONDecodeError:
         return [], raw
-
-
-def norm_lines(s: str) -> list[str]:
-    return s.strip().splitlines()
-
-
-def matches(cand: str, out: str) -> bool:
-    return cand == out or cand.strip() == out.strip() or norm_lines(cand) == norm_lines(out)
 
 
 def derive(meta: dict, rel: str, cands: dict, out: str) -> dict:
@@ -264,85 +260,28 @@ def model_one(job) -> str:
     return v
 
 
-def recheck_one(entry: Path, args) -> str:
-    meta = read_toml(entry / "meta.toml")
-    if not (entry / "legacy.out").exists() or meta.get("expect") == "skip":
-        return "unrecorded-or-skip"
-    if not (meta.get("expect") == "stdout" or str(meta.get("expect", "")).startswith("panic:")):
-        return "not-a-run"
-    res = run_program(entry, meta.get("legacy_backend", "legacy-build"), args.karac, args.timeout,
-                      {"KARAC_HASH_SEED": "1", **meta.get("env", {})})
-    if res["stdout"] == (entry / "legacy.out").read_bytes() and res["exit"] == meta.get("legacy_exit"):
-        return "same"
-    meta["tags"] = sorted(set(meta.get("tags", [])) | {"nondeterministic"})
-    meta["expect"] = "skip"
-    meta["note"] = (meta.get("note", "") + " " if meta.get("note") else "") + \
-        "output differs between two legacy runs (a bound port, scheduling or timing)"
-    write_toml(entry / "meta.toml", meta)
-    print(f"nondeterministic: {entry}", flush=True)
-    return "nondeterministic"
-
-
 def record_one(entry: Path, corpus: Path, cands: dict, args) -> str:
+    """Tags from `karac check` plus the archived legacy record; no legacy run."""
     rel = str(entry.relative_to(corpus))
-    if (entry / "legacy.out").exists() and not args.redo:
+    has_record = (entry / "legacy.out").exists()
+    if has_record and not args.redo:
         return "kept"
     meta = read_toml(entry / "meta.toml")
+    if not has_record and meta.get("expected_from") not in ("pin", "spec", "mirror"):
+        # The legacy pipeline that wrote legacy.out went at M3.
+        return "no-legacy-record"
     src = (entry / "source.kara").read_text()
-    # drop-matrix: the model was compared against the interpreter when it was built
-    backend = "legacy-interp" if rel.startswith(("fixtures/interpreter/", "drop-matrix/")) else "legacy-build"
-    if meta.get("expected_from") == "mirror" and meta.get("legacy_backend"):
-        backend = meta["legacy_backend"]  # apps: chosen by apps.py finalize (a frozen legacy-build bug)
     logs = Path(args.work) / "logs" / rel
     logs.mkdir(parents=True, exist_ok=True)
-
     diags, raw = check_json(entry, args.karac, args.timeout)
     (logs / "check.json").write_text(raw)
-    tags = set(meta.get("tags", []))
-    note = meta.get("note", "")
-    res = None
-    if "format-template" not in tags:
-        res = run_program(entry, backend, args.karac, args.timeout, {"KARAC_HASH_SEED": "1", **meta.get("env", {})})
-        (logs / "stdout").write_bytes(res["stdout"])
-        (logs / "stderr").write_bytes(res["stderr"])
-    tags |= set(tags_for(src, diags, res and res["exit"]))
-
-    out = res["stdout"].decode(errors="replace") if res else ""
-    if res is None:
-        expect, exit_code, note = "skip", 0, note or "a format! template; the test fills in its holes"
-    elif res["status"] == "timeout":
-        expect, exit_code, note = "skip", 0, note or f"legacy run timed out after {args.timeout:.0f}s"
-    elif res["status"] == "refused":
-        errs = [d.get("code") or d.get("phase") for d in diags if d.get("severity") == "error"]
-        expect, exit_code = f"error:{errs[0] if errs else 'codegen'}", res["exit"]
-    elif res["exit"] == 0:
-        expect, exit_code = "stdout", 0
-    else:
-        expect, exit_code = f"panic:{res['exit']}", res["exit"]
-    if any(t.startswith("deferred:") for t in tags) and args.skip_deferred:
-        expect = "skip"
-
-    expected_from = "legacy-run"
-    if res is not None and res["status"] == "ran":
-        if any(matches(c, out) for c in cands.get(rel, [])):
-            expected_from = "assert"
-    (entry / "legacy.out").write_bytes(res["stdout"] if res else b"")
-    legacy_exit = -1 if res is None or res["exit"] is None else res["exit"]
-    if meta.get("expected_from") in ("pin", "spec", "mirror"):
-        # A v2 pin or drop-matrix program keeps the spec's expectation; only
-        # the legacy record is added.
-        meta.update({"tags": sorted(tags), "legacy_exit": legacy_exit, "legacy_backend": backend})
-    else:
-        meta.update({"expect": expect, "exit": exit_code, "tags": sorted(tags),
-                     "class": meta.get("class", "unknown"), "expected_from": expected_from,
-                     "legacy_exit": legacy_exit, "legacy_backend": backend})
-        meta.setdefault("rules", [])
-        meta.setdefault("backends", [])
-        meta.setdefault("env", {})
-        meta["note"] = note
+    tags = set(meta.get("tags", [])) | set(tags_for(src, diags, meta.get("legacy_exit")))
+    out = (entry / "legacy.out").read_bytes().decode(errors="replace") if has_record else ""
+    meta["tags"] = sorted(tags)
+    if meta.get("expected_from") not in ("pin", "spec", "mirror"):
         meta = derive(meta, rel, cands, out)
     write_toml(entry / "meta.toml", meta)
-    return expect.split(":")[0]
+    return "retagged"
 
 
 def main() -> int:
@@ -362,10 +301,7 @@ def main() -> int:
     ap.add_argument("--retag", action="store_true",
                     help="re-derive tags and class d from what is already recorded, without running anything")
     ap.add_argument("--recheck", action="store_true",
-                    help="re-run recorded entries and mark the ones whose output changes as nondeterministic")
-    ap.add_argument("--keep-deferred", dest="skip_deferred", action="store_false",
-                    help="keep expect=stdout for deferred-feature programs (default: expect=skip, "
-                         "since several need opt-in runtime archives and v2 defers them)")
+                    help="retired with the legacy pipeline at M3: refuses")
     args = ap.parse_args()
     corpus = Path(args.corpus)
     manifest = json.loads((Path(args.work) / "manifest.json").read_text())
@@ -388,7 +324,9 @@ def main() -> int:
     elif args.retag:
         step = lambda e: retag_one(e, corpus, cands)  # noqa: E731
     elif args.recheck:
-        step = lambda e: recheck_one(e, args)  # noqa: E731
+        print("corpus-record: --recheck needs a legacy run, and the legacy pipeline went at M3",
+              file=sys.stderr)
+        return 2
     else:
         step = lambda e: record_one(e, corpus, cands, args)  # noqa: E731
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:

@@ -127,15 +127,6 @@ jobs:
       - name: Bug-ledger rule-6b selftest
         run: ./scripts/bug-lint-selftest.sh
 
-      # The ASAN legs classify a new red by grepping the suite log for messages
-      # that tests/memory_sanitizer/mod.rs emits — a coupling across two files
-      # with nothing joining them, whose failure mode is silence: reword the
-      # message and the leg misroutes every red of that class with no symptom.
-      # It has already misrouted one (B-2026-09-22-3, four CI reds routed as a
-      # memory fault on a failure where ASAN had passed). Pure grep, no build.
-      - name: ASAN-leg failure-classification selftest
-        run: ./scripts/asan-leg-selftest.sh
-
       # Pure-python and milliseconds — it parses this file and greps tests/,
       # it does not build. Answers "which `#[cfg(feature = "llvm")]` tests does
       # no CI job run?", which was previously answerable only by redoing a
@@ -157,9 +148,9 @@ jobs:
 
       - name: Codegen containment guard
         run: |
-          violations=$(grep -rlE '^\s*use\s+inkwell|\b(LLVMValue|LLVMType|BasicValueEnum|BasicTypeEnum)\b' src/ | grep -vE '^src/(codegen(\.rs$|/)|backend/)' || true)
+          violations=$(grep -rlE '^\s*use\s+inkwell|\b(LLVMValue|LLVMType|BasicValueEnum|BasicTypeEnum)\b' src/ | grep -vE '^src/backend/' || true)
           if [ -n "$violations" ]; then
-            echo "::error::Codegen containment violation — LLVM/inkwell references outside src/codegen.{rs,/} and src/backend/:"
+            echo "::error::Codegen containment violation — LLVM/inkwell references outside src/backend/:"
             echo "$violations"
             echo "See docs/design.md § Codegen architecture and CLAUDE.md § Architecture > Codegen containment."
             exit 1
@@ -419,8 +410,8 @@ jobs:
   # closes the gap with the SAME LLVM-18.1 install as `codegen-e2e` below
   # (inkwell → llvm-sys needs `llvm-config-18` + libLLVM-18.so), plus the
   # `clippy` component the bare `codegen-e2e` job omits. `--all-targets` keeps
-  # the `#[cfg(feature = "llvm")]` test targets (`tests/codegen.rs`,
-  # `tests/par_codegen.rs`, `tests/memory_sanitizer.rs`) under the gate too —
+  # the `#[cfg(feature = "llvm")]` test targets (`tests/cli.rs`,
+  # `tests/run_v2.rs`, the `tests/mir_*.rs` set) under the gate too —
   # see CLAUDE.md § "Use `--all-targets`, not `--tests`". No runtime staticlib
   # archives are needed here: clippy type-checks but never links or runs a
   # binary, so the lean→full archive dance the E2E jobs do is unnecessary.
@@ -517,153 +508,13 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
-      - name: Codegen E2E + interpreter + typechecker + self-host oracle
-        # lljit_prototype added B-2026-07-16-4: no CI job ran it (this list
-        # excluded it; the plain `cargo test --all` job builds without
-        # --features llvm), so the GDB JIT-registration smoke test only ever
-        # ran on dev machines — where a Darwin toolchain drift silently broke
-        # it. Linux static-LLVM is the authoritative leg for the descriptor
-        # observation; keep it enforced here.
-        #
-        # http_server added for the same reason, one target later: its 29 tests
-        # are `#[cfg(feature = "llvm")]`, so `cargo test --all` compiles the
-        # module to nothing and reports green without running any of it. That
-        # covered the whole `Server.serve` handler surface — HTTP/1.1 and h2c
-        # routing, the response-header field, WebSocket upgrade, the TLS/ALPN
-        # legs, and `examples/shortener`'s end-to-end oracle. Measured before
-        # adding: 27/27 green on two runs, ~12 s warm and ~53 s cold, against a
-        # job that already runs 2 690 codegen cases plus a full JIT rerun. Every
-        # server in the file binds `127.0.0.1:0` and reads back `BOUND_PORT`, so
-        # no test claims a fixed port on a contended runner.
-        #
-        # B-2026-07-31-44 closed the rest of the gap in one sweep: 554
-        # llvm-gated tests across 19 targets were dark for the same
-        # one-at-a-time reason. The 17 targets appended below were each
-        # measured green across 8+ consecutive full `cargo test --features
-        # llvm` runs on a Linux container (2026-08-01 overnight session),
-        # warm per-target runtimes in parentheses — ~55 s of added test time
-        # total: par_codegen (223 tests, 10.4 s — the entire auto-par codegen
-        # surface), drop_differential (13, 0.3 s — the interp-vs-compiled
-        # drop parity gate), repl (137, 1.2 s), repl_jit (27, 1.1 s),
-        # coro_e2e (34, 14.0 s), disjoint_differential (7, 17.7 s),
-        # tls_codegen (17, 0.3 s), lljit_e2e (16, 0.4 s), ws_framing (15,
-        # 0.2 s), http_client_codegen (12, 0.2 s), parallax (6, 0.5 s),
-        # test_main_synth (6, 0.4 s), parallax_lite (5, 0.2 s),
-        # karac_jit_runner_repl (3, 0.25 s), extern_keep_list (2, 0.1 s),
-        # shared_ownership_matrix (1, 7.3 s), tangle_corpus (1, 1.9 s).
-        # The network-adjacent targets bind ephemeral local ports like
-        # http_server does. Still deliberately excluded: selfhost_codegen
-        # (1 test, ~181 s — needs its own runtime-budget decision),
-        # parallax_bench + relay_bench (bench reproduction is opt-in by
-        # design), wasm_codegen (documented Tier 3, separate `wasm` job).
-        #
-        # B-2026-08-08-26 caught the residual -44 missed: `cli` was never in
-        # any full-target run. It LOOKS covered — `cargo test --all` runs it,
-        # and the two producer-mode arm64 steps below invoke `--test cli` —
-        # but the first compiles the 43 `#[cfg(feature = "llvm")]` tests to
-        # nothing and the second filters to five names, leaving 35 dark. One
-        # of them (`test_build_text_pad_lever_moves_main_without_changing_behaviour`)
-        # was outright RED on Linux the whole time: the placement lever's
-        # filler landed after `main` on ELF, so it measured nothing. Added
-        # here whole rather than filtered, because a name filter is exactly
-        # the mechanism that hid it. Measured 577/577 green in 41–45 s warm on
-        # a Linux container, in line with the ~55 s the -44 sweep added.
-        #
-        # B-2026-09-04-5's guard (stdlib_span_table_isolation) is the fifth,
-        # appended 2026-09-05: the guard landed with its functional half
-        # `#[cfg(feature = "llvm")]` and no job running it, so
-        # `dark-llvm-tests.py` failed the lint job on arrival — exactly the
-        # "a fifth ever appears" case the paragraph above anticipates. One
-        # e2e compile; the file's other test is a static scan that the plain
-        # `cargo test --all` job already runs.
-        #
-        # B-2026-08-08-27 closed the loop: instead of a third manual sweep,
-        # `scripts/dark-llvm-tests.py` derives the dark set mechanically and
-        # now runs in the `lint` job. Its first run found a THIRD pocket that
-        # both hand audits missed — example_packages, safety_design,
-        # safety_design_loop, scaffold: 24 llvm-gated tests, all green, ~26 s.
-        # Green is exactly why they stayed invisible; -44 and -26 were both
-        # found by a dark test being RED, which is luck that only pays out
-        # after a regression has already landed. The four are appended below,
-        # unfiltered, and the guard fails the build if a fifth ever appears.
-        #
-        # The MIR backend's llvm-gated files are the sixth pocket
-        # (2026-10-12): mir_asan (the ASan/LSan lane's instrument checks; it
-        # skips without an ASan-capable cc), mir_build (`karac build --mir`),
-        # mir_io (I/O on the compiled MIR backend), mir_tasks (TaskGroup
-        # scheduling, 2026-10-15) and mir_regex (std.regex on both v2
-        # backends, against the regex archive built above, 2026-10-16). mir_mutex and
-        # mir_unroll joined 2026-10-19; mir_borrow_flags, mir_byvalue,
-        # mir_concat, mir_generic_own_self, mir_let_else_temp, mir_map_hash
-        # and mir_disjoint_field_capture 2026-10-20 (all from the drop schedule's
-        # MIR codegen work); mir_json (Json.parse / stringify on both v2
-        # backends) 2026-10-21, and mir_default_generic_shadow the same day.
-        #
-        # `--no-fail-fast` (2026-10-12): cargo stops at the first failing test
-        # binary, and `cli` sorts before most of this list, so a week of the
-        # plume pair timing out in `cli` meant `codegen`, `interpreter` and
-        # every later target here never ran on CI.
-        run: cargo test --features llvm --no-fail-fast --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold --test stdlib_span_table_isolation --test mir_asan --test mir_build --test mir_io --test mir_tasks --test mir_regex --test mir_json --test mir_crypto --test mir_std_streams --test mir_normalize --test mir_collections --test mir_mutex --test mir_unroll --test mir_borrow_flags --test mir_byvalue --test mir_concat --test mir_generic_own_self --test mir_default_generic_shadow --test mir_let_else_temp --test mir_map_hash --test mir_disjoint_field_capture --test run_v2 --test build_v2
-
-      # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
-      # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
-      # asserts the emitted LLVM param signatures equal clang's arm64 coercions
-      # (`[2 x i64]`, `[N x double]`, `i64`, …). Identical IR lowers identically,
-      # so a signature match IS an ABI match — this catches a coercion regression
-      # HERE, on Linux/x86-64, without arm64 hardware; the codegen-e2e-macos job
-      # is the paired real-execution confirmation.
-      - name: AArch64 repr(C) struct ABI signature match (forced arch)
-        run: cargo test --features llvm --test abi_repr_c_struct
-        env:
-          KARAC_FORCE_TARGET_ARCH: aarch64
-
-      # Windows x64 `#[repr(C)]` struct-by-value ABI signature match
-      # (B-2026-07-09-8). Same trick as the arm64 leg above — force the target
-      # classifier via KARAC_FORCE_TARGET_ARCH and diff the emitted LLVM
-      # signatures against the Microsoft x64 rules (1/2/4/8-byte aggregates
-      # coerce to `iN`; every other size passes as a plain `ptr` — no `byval`
-      # — and returns via `sret`). This is the sole correctness gate for the
-      # Windows classifier: llvm-sys 181 can't be built on Windows CI today
-      # (the official LLVM Windows installer omits `llvm-config.exe` and
-      # llvm-sys hard-requires it — see the "NOTE ON DROPPED MATRIX LEGS"
-      # comment below the codegen-e2e-macos block), so this Linux-hosted
-      # signature-match is what catches a coercion regression. Identical IR
-      # lowers identically through LLVM, so a match here IS an ABI match.
-      - name: Windows x64 repr(C) struct ABI signature match (forced arch)
-        run: cargo test --features llvm --test abi_repr_c_struct
-        env:
-          KARAC_FORCE_TARGET_ARCH: windows_x86_64
-
-      # LLJIT-productionization Slice 1 follow-up: re-run the codegen E2E suite
-      # through the JIT execution lane (not just AOT). `KARAC_TEST_JIT=1` routes
-      # `tests/codegen.rs`'s runner to a `karac_jit_runner` subprocess (which
-      # cargo built above via `CARGO_BIN_EXE_karac_jit_runner`, feature-gated on
-      # `llvm`), so this leg exercises the in-process LLJIT engine + the ELF
-      # `.dynsym` runtime-symbol export end-to-end. Until Slice 1 folded the JIT
-      # into `llvm`, this lane had ZERO CI coverage — exactly what let the
-      # whole-lane Linux breakage (B-2026-07-07-5) sit undetected. The AOT step
-      # above is the oracle; this asserts run==build parity across all 2084
-      # cases. The same compiled test binary reruns (the env var is read at
-      # test-runtime), so this adds run time, not build time.
-      - name: Codegen E2E via LLJIT (run==build parity)
-        run: cargo test --features llvm --test codegen
-        env:
-          KARAC_TEST_JIT: "1"
-
-      # The same parity assertion for the AUTO-PAR surface — B-2026-08-11-26's
-      # deferred remainder. The step above covers `tests/codegen.rs`, which
-      # compiles with `concurrency: None`, so every auto-par lowering is dead
-      # on it: it cannot detect a divergence that only appears once a loop is
-      # parallelized. `tests/par_codegen.rs` is the lane that threads
-      # `ConcurrencyAnalysis` into codegen, and it had no JIT leg at all, which
-      # left the DEFAULT `karac build` configuration (auto-par is on unless
-      # `KARAC_AUTO_PAR=0`) with no run==build coverage of any width. The AOT
-      # `Auto-par codegen E2E` step is the oracle; this re-runs the same
-      # compiled binary through the JIT, so it adds run time, not build time.
-      - name: Auto-par E2E via LLJIT (run==build parity)
-        run: cargo test --features llvm --test par_codegen
-        env:
-          KARAC_TEST_JIT: "1"
+      - name: v2 E2E + self-host oracle
+        # Every target with `#[cfg(feature = "llvm")]` code runs here: the
+        # plain `cargo test --all` job builds without the feature, so a target
+        # left off this list is compiled to nothing and reports green
+        # (`scripts/dark-llvm-tests.py`, in the lint job, checks the list). The
+        # legacy targets went with the legacy pipeline at M3.
+        run: cargo test --features llvm --no-fail-fast --lib --test typechecker --test selfhost_lexer --test http_server --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold --test mir_asan --test mir_build --test mir_io --test mir_tasks --test mir_regex --test mir_json --test mir_crypto --test mir_std_streams --test mir_normalize --test mir_collections --test mir_mutex --test mir_unroll --test mir_borrow_flags --test mir_byvalue --test mir_concat --test mir_generic_own_self --test mir_default_generic_shadow --test mir_let_else_temp --test mir_map_hash --test mir_disjoint_field_capture --test run_v2 --test build_v2 --test test_v2
 
   # The `--features llvm` codegen + producer-mode E2E on **Apple silicon
   # (arm64)** — the one non-x86_64, non-Linux leg that runs real binaries, so
@@ -737,50 +588,10 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
-      # Broad arm64 codegen/ABI oracle.
-      - name: Codegen E2E (arm64)
-        run: cargo test --features llvm --test codegen
-
-      # arm64 run==build parity via LLJIT. The x86 leg above (job "Codegen E2E
-      # (LLVM 18)") is the ONLY via-LLJIT run, but macOS `ld64 -dead_strip` is
-      # more aggressive than the x86 linker, so runtime `#[no_mangle]` symbols
-      # missing from `__preserve_no_mangle_symbols` get stripped from
-      # `karac_jit_runner` on arm64 while surviving on x86 — an arm64-only JIT
-      # keep-list gap the x86 leg CANNOT catch (16 alloc/string/regex/task
-      # symbols were silently red here; B-2026-07-16-N). Reruns the same
-      # compiled binary (env is read at test-runtime), so this adds run time,
-      # not build time.
-      - name: Codegen E2E via LLJIT (arm64 run==build parity)
-        run: cargo test --features llvm --test codegen
-        env:
-          KARAC_TEST_JIT: "1"
-
-      # Auto-par parity on arm64 (B-2026-08-11-26's remainder). Worth running
-      # on BOTH arches for the same reason its sequential sibling is: the
-      # x86 leg cannot see an arm64-only stripping or ABI difference, and
-      # auto-par adds a second arch-sensitive axis on top — thread spawn and
-      # the atomics the reduction lowering emits.
-      - name: Auto-par E2E via LLJIT (arm64 run==build parity)
-        run: cargo test --features llvm --test par_codegen
-        env:
-          KARAC_TEST_JIT: "1"
-
-      # The producer-mode library + `#[repr(C)]` enum + struct-by-value
-      # round-trips — the direct AArch64 confirmation for the artifact + ABI
-      # work. Multiple filters are OR'd by libtest. `test_build_crate_type`
-      # (the `stats_mean(Stats{ f64, i64 })` struct-by-value case) is the
-      # real-execution proof of the B-2026-07-09-2 fix: it was quarantined when
-      # this job first caught the arm64 struct-ABI mislowering, and is re-added
-      # now that codegen coerces `#[repr(C)]` struct params per AAPCS. If it
-      # regresses, the fix broke on real arm64 hardware.
-      - name: Producer-mode E2E (library artifacts + repr(C) enums + structs, arm64)
-        run: >
-          cargo test --features llvm --test cli --
-          test_build_repr_c_enum
-          test_build_repr_c_struct
-          test_build_crate_type
-          test_build_auto_boxed
-          test_project_lib_table
+      # The v2 build and run on arm64: the AAPCS64 calling convention and
+      # the arm64 linker see every program these targets build.
+      - name: v2 E2E (arm64)
+        run: cargo test --features llvm --test run_v2 --test build_v2 --test test_v2 --test mir_build --test mir_library
 
   # 4-target matrix STAGE 2 — Linux AArch64 (native `ubuntu-*-arm` runner, GA +
   # free for public repos). The SECOND arm64 execution leg: it runs the same
@@ -840,17 +651,10 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
-      - name: Codegen E2E (arm64)
-        run: cargo test --features llvm --test codegen
-
-      - name: Producer-mode E2E (library artifacts + repr(C) enums + structs, arm64)
-        run: >
-          cargo test --features llvm --test cli --
-          test_build_repr_c_enum
-          test_build_repr_c_struct
-          test_build_crate_type
-          test_build_auto_boxed
-          test_project_lib_table
+      # The v2 build and run on arm64: the AAPCS64 calling convention and
+      # the arm64 linker see every program these targets build.
+      - name: v2 E2E (arm64)
+        run: cargo test --features llvm --test run_v2 --test build_v2 --test test_v2 --test mir_build --test mir_library
 
   # NOTE ON DROPPED MATRIX LEGS
   #
@@ -877,12 +681,7 @@ jobs:
   # fragile against future llvm-sys flag additions and needs perpetual
   # maintenance; MSYS2/MinGW LLVM includes `llvm-config` but is
   # ABI-incompatible with our MSVC-toolchain Rust build; from-source
-  # LLVM adds ~1h to every push. Since the Windows classifier's IR
-  # (`B-2026-07-09-8`, the Microsoft x64 aggregate ABI) is already
-  # verified byte-correct via the `codegen-e2e` job's
-  # `KARAC_FORCE_TARGET_ARCH=windows_x86_64` signature-match step
-  # (identical IR ⇒ identical ABI on any host running LLVM 18), the
-  # Windows execution proof is a nice-to-have, not a correctness gate.
+  # LLVM adds ~1h to every push.
   # Reinstate this leg once one of: (a) LLVM ships `llvm-config.exe` on
   # Windows, (b) an accepted community LLVM Windows redistribution
   # includes it, or (c) someone signs up to maintain the shim. The
@@ -890,463 +689,6 @@ jobs:
   # arm64, macOS arm64) + the `windows-lint` clippy job + the standard
   # `Test (windows-latest)` non-LLVM workspace suite for Windows-side
   # coverage that doesn't require llvm-sys.
-
-  # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
-  # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /
-  # double-free, and on Linux `-fsanitize=address` ALSO runs LeakSanitizer,
-  # which is unsupported on macOS — so this leg adds leak coverage the local
-  # mac runs structurally cannot. Same LLVM-18 + native-archive setup as
-  # `codegen-e2e`; the test self-skips if the runner has no ASAN-capable `cc`
-  # (ubuntu-latest's gcc does). Deliberately a SEPARATE, NON-required job
-  # (not in branch protection) until it has a green streak — if a Linux-only
-  # leak surfaces (the whole point), it shouldn't block the required gates.
-  memory-sanitizer:
-    name: Memory sanitizer (ASAN + LeakSanitizer)
-    runs-on: ubuntu-latest
-    env:
-      # This job builds the runtime archives itself, so a link soft-skip here
-      # can only mean the archive step broke — fail loudly instead of green-
-      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
-      # archive half of the B-2026-07-28-1 vacuous-pass hole).
-      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: memsan
-
-      # regex + arrow opt-in archives added alongside lean/full: with
-      # KARAC_REQUIRE_RUNTIME_ARCHIVE=1 the Regex / Arrow-IPC E2E fixtures
-      # hard-require them — before the gate they LOOKED covered but
-      # green-skipped here (the archives were never built in CI, so those
-      # tests never ran). Build order per CLAUDE.md § "Four archives": every
-      # build emits the canonical name, so each rename happens before the
-      # next build, and the plain full build runs LAST so the canonical
-      # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
-        run: |
-          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
-          cargo rustc -p karac-runtime --release --features regex --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
-          cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
-          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      - name: Memory sanitizer (UAF / double-free + Linux leaks)
-        run: cargo test --features llvm --test memory_sanitizer
-
-  # ARM64 sibling of `memory-sanitizer` (B-2026-07-12-29). The premise that
-  # "leaks are architecture-independent" is FALSE for at least one RC codegen
-  # bug: a compound index-assign of a shared/`Option[shared]` Vec element
-  # (`work[i] = work[j]`) leaks the overwritten node on arm64 but balances on
-  # x86 — so the x86 leg above structurally cannot catch that class. This leg
-  # runs the same LSan suite on an arm64 Linux runner. Also a SEPARATE,
-  # NON-required job (not in branch protection). The one known arm64-only
-  # failure (`asan_owned_vec_param_let_move_interval_merge`) is
-  # `#[cfg_attr(target_arch = "aarch64", ignore)]` against B-2026-07-12-29, so
-  # this leg is green except for NEW arm64-only leaks; un-ignore that test when
-  # the bug is fixed. NOTE: needs GitHub arm64 Linux runners (`ubuntu-24.04-arm`)
-  # enabled for the repo — verify on first run.
-  memory-sanitizer-arm64:
-    name: Memory sanitizer arm64 (ASAN + LeakSanitizer)
-    runs-on: ubuntu-24.04-arm
-    env:
-      # This job builds the runtime archives itself, so a link soft-skip here
-      # can only mean the archive step broke — fail loudly instead of green-
-      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
-      # archive half of the B-2026-07-28-1 vacuous-pass hole).
-      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: memsan-arm64
-
-      # regex + arrow opt-in archives added alongside lean/full: with
-      # KARAC_REQUIRE_RUNTIME_ARCHIVE=1 the Regex / Arrow-IPC E2E fixtures
-      # hard-require them — before the gate they LOOKED covered but
-      # green-skipped here (the archives were never built in CI, so those
-      # tests never ran). Build order per CLAUDE.md § "Four archives": every
-      # build emits the canonical name, so each rename happens before the
-      # next build, and the plain full build runs LAST so the canonical
-      # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
-        run: |
-          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
-          cargo rustc -p karac-runtime --release --features regex --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
-          cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
-          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      - name: Memory sanitizer arm64 (UAF / double-free + Linux leaks)
-        run: cargo test --features llvm --test memory_sanitizer
-
-  # `-O0` sibling of `memory-sanitizer` (B-2026-08-04-17). ~70 fixtures in
-  # tests/memory_sanitizer.rs allocate NOTHING at the default `-O2`: their
-  # payload folds to a constant, or its bytes are never read, so LLVM deletes
-  # the allocation and the fixture asserts a clean ASAN run over memory the
-  # program never touched. At `KARAC_OPT_LEVEL=0` no pass pipeline runs, so
-  # those allocations are real and the fixtures test what they were written to
-  # test — measured: 20 fixtures are zero-allocation at BOTH levels (heapless by
-  # design) and 70 are zero at `-O2` but non-zero at `-O0`.
-  #
-  # Runs through `scripts/asan-o0-leg.sh` rather than `cargo test` directly. The
-  # script diffs the failing set against `tests/asan-o0-known-failures.txt` and
-  # fails on any NEW failure — and equally on any listed fixture that starts
-  # PASSING, so the list can only shrink. `#[ignore]` is not usable for this: it
-  # is per-test rather than per-level, so it would delete a quarantined
-  # fixture's `-O2` coverage to buy the `-O0` leg.
-  #
-  # That list is now EMPTY (2026-08-06, B-2026-08-06-10 closed the last of the
-  # four), so every fixture in the suite is expected to pass here and any
-  # failure is a regression. The script stays in the loop anyway: it is also the
-  # vacuity guard, treating a run that produced no `test result:` line as "did
-  # not run" rather than "everything passed".
-  #
-  # Cheap: the suite itself is ~90s (the archive build dominates). Also a
-  # SEPARATE, NON-required job, matching the other two sanitizer legs.
-  #
-  # STILL NON-REQUIRED, and as of 2026-08-06 that is a CI-capacity question
-  # rather than a leg-health one. The leg is green on `main` (961 passed / 0
-  # failed at c00ea51a, quarantine list empty), but this job did not actually
-  # EXECUTE in either of the two preceding runs to reach a conclusion — it was
-  # cancelled after 1h47m queued, then failed at "Set up job". Promoting it
-  # while that is true would block direct pushes to `main` on runner
-  # availability. The `concurrency` group added at the top of this file is the
-  # first half of the fix; the second is watching this job complete green a few
-  # times before flipping the branch-protection setting. B-2026-08-04-17.
-  memory-sanitizer-o0:
-    name: Memory sanitizer -O0 (unoptimized allocations)
-    runs-on: ubuntu-latest
-    env:
-      # This job builds the runtime archives itself, so a link soft-skip here
-      # can only mean the archive step broke — fail loudly instead of green-
-      # skipping the E2E suite (project-review-2026-08-16 item 4; the absent-
-      # archive half of the B-2026-07-28-1 vacuous-pass hole).
-      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: memsan-o0
-
-      # regex + arrow opt-in archives added alongside lean/full: with
-      # KARAC_REQUIRE_RUNTIME_ARCHIVE=1 the Regex / Arrow-IPC E2E fixtures
-      # hard-require them — before the gate they LOOKED covered but
-      # green-skipped here (the archives were never built in CI, so those
-      # tests never ran). Build order per CLAUDE.md § "Four archives": every
-      # build emits the canonical name, so each rename happens before the
-      # next build, and the plain full build runs LAST so the canonical
-      # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
-        run: |
-          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
-          cargo rustc -p karac-runtime --release --features regex --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
-          cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
-          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      - name: Memory sanitizer at KARAC_OPT_LEVEL=0 (ratcheted against known failures)
-        run: scripts/asan-o0-leg.sh
-
-  # SSO sibling of `memory-sanitizer-o0` (B-2026-09-16-35). `KARAC_SSO` is read
-  # once per process through a `OnceLock` defaulting to OFF, and
-  # tests/memory_sanitizer.rs compiles every fixture IN-PROCESS, so no fixture
-  # in that file can turn Small-String Optimization on for itself. Until this
-  # job existed, every one of the ~1660 ASAN cells exercised the non-SSO String
-  # paths only — and since B-2026-09-16-1 the inline surface includes a heap
-  # allocation CODEGEN owns while the free stays in the runtime, which is the
-  # seam a sanitizer is for.
-  #
-  # Runs through `scripts/asan-sso-leg.sh`, which exports the variable for the
-  # whole cargo run and ratchets against `tests/asan-sso-known-failures.txt` —
-  # its OWN list, not the -O0 one, because the two legs run DIFFERENT emitted
-  # code for the same fixture rather than the same code under different
-  # checking.
-  #
-  # That list is EMPTY as seeded (2026-09-19): 1674 passed / 0 failed, the only
-  # 5 non-passes being the regex + arrow fixtures whose opt-in archives this job
-  # does build. So any failure here is a real one.
-  #
-  # NON-REQUIRED, matching the other sanitizer legs. It is also not a pre-push
-  # gate for ordinary work: SSO is still staged behind the default-off flag, so
-  # a red run here is a defect in the unfinished SSO surface rather than a
-  # regression on the shipping default. The default flip is what promotes it.
-  memory-sanitizer-sso:
-    name: Memory sanitizer KARAC_SSO=1 (inline String surface)
-    runs-on: ubuntu-latest
-    env:
-      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: memsan-sso
-
-      # Same lean -> regex -> arrow -> unicode -> full order as memory-sanitizer-o0:
-      # every build emits the canonical name, so each rename happens before the
-      # next build and the plain full build runs LAST.
-      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
-        run: |
-          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
-          cargo rustc -p karac-runtime --release --features regex --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
-          cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
-          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      - name: Memory sanitizer at KARAC_SSO=1 (ratcheted against known failures)
-        run: scripts/asan-sso-leg.sh
-
-  # ── GPU execution lane (lavapipe software Vulkan) ───────────────────────
-  # The first CI coverage of `#[gpu]` kernels EXECUTING. Before this lane the
-  # repo had ~101 GPU tests across seven files and not one ran a shader — they
-  # assert on WGSL text or on the WGSL baked into emitted LLVM IR — so the
-  # whole kernel language was protected only against changes in what we
-  # *write*, never in what the device *computes*.
-  #
-  # It needs no GPU: `mesa-vulkan-drivers` ships lavapipe, a software Vulkan
-  # implementation, so `KARAC_GPU_BACKEND=cpu` drives the real naga + wgpu +
-  # Vulkan pipeline on a stock runner. That also makes this the first
-  # automated coverage of CG-6's `KARAC_GPU_BACKEND=cpu` leg, which was
-  # deferred at the time as "Linux-container territory" because Metal has no
-  # CPU compute adapter.
-  #
-  # NO VACUOUS PASSES, and this lane needs the gate more than most. Two
-  # existing runtime unit tests (`doubles_an_f32_buffer_on_the_gpu`,
-  # `select_adapter_honors_backend_cpu`) are written to pass adapterlessly, so
-  # without an explicit gate a silently-broken driver install would leave every
-  # GPU test green having touched no device. `KARAC_REQUIRE_GPU_ADAPTER=1`
-  # turns tests/gpu_e2e.rs's skip into a hard failure. (A *broken* probe —
-  # adapter present, kernel still fails — panics regardless of that variable;
-  # only a genuinely absent device is skippable.)
-  #
-  # Deliberately a SEPARATE, NON-required job (not in branch protection) until
-  # it builds a green streak, and NOTE FOR ITS FIRST RUN: lavapipe under
-  # GitHub's runner image is unverified here — the suite was validated in a
-  # local Linux container. If the adapter does not come up, the job fails
-  # loudly by design (that is the gate working, not a flake); check the probe
-  # output before assuming a compiler regression.
-  #
-  # COST, stated plainly: this is one more job against a matrix that has
-  # measured runner starvation (see the `concurrency` comment above), and the
-  # `gpu` archive is the heaviest of the opt-in set — wgpu + naga + objc2, ~4.5
-  # MB. If the queue degrades, this lane is a fair candidate to restrict to
-  # GPU-touching paths or to the nightly schedule.
-  gpu-e2e:
-    name: GPU execution E2E (lavapipe software Vulkan)
-    runs-on: ubuntu-latest
-    env:
-      # Force the software adapter rather than relying on lavapipe being the
-      # only one present — this asserts the CG-6 selection path itself.
-      KARAC_GPU_BACKEND: cpu
-      # A missing adapter must fail this job, not silently cover nothing.
-      KARAC_REQUIRE_GPU_ADAPTER: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install lavapipe (software Vulkan)
-        run: |
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-          # Fail here rather than 20 minutes later inside the test suite: if
-          # the ICD is absent the driver package did not land as expected.
-          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-            || test -f /usr/share/vulkan/icd.d/lvp_icd.json \
-            || { echo "lavapipe ICD missing after install"; ls -la /usr/share/vulkan/icd.d/ || true; exit 1; }
-          vulkaninfo --summary 2>/dev/null | head -40 || true
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: gpu-e2e
-
-      # Only the `gpu` and full archives matter here: a `gpu.dispatch` program
-      # references `karac_runtime_gpu_*`, which auto-selects the gpu archive,
-      # and the full archive is the fallback for anything else. Build order per
-      # CLAUDE.md § "Four archives" — the gpu build emits the canonical name,
-      # so it is renamed before the plain full build overwrites it.
-      - name: Build runtime staticlib archives (gpu → full)
-        run: |
-          cargo rustc -p karac-runtime --release --features gpu --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_gpu.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      # Executes every landed kernel-body form (let / while+mut / for-range /
-      # match / value-if) and asserts interpreter == GPU == expected output.
-      - name: GPU execution E2E (interpreter-vs-device oracle)
-        run: cargo test --features llvm --test gpu_e2e
-
-      # The runtime's own GPU unit tests. They skip gracefully when adapterless
-      # — which, before this lane, is what they did everywhere — so running
-      # them here is the point: with lavapipe present they finally execute.
-      - name: Runtime GPU unit tests (adapter selection + f32 map)
-        run: cargo test -p karac-runtime --features gpu --lib gpu
-
-  # ── The MSL half of the GPU execution matrix ────────────────────────────
-  # Its Linux sibling `gpu-e2e` above FORCES lavapipe, so it drives
-  # naga -> SPIR-V only; macOS drives naga -> MSL. Those are different shader
-  # languages with different validation rules, so a lowering valid in one and
-  # not the other is invisible to a single lane — which is exactly the gap
-  # B-2026-08-19-9 found, after every #[gpu] increment to date had been
-  # validated on lavapipe alone.
-  #
-  # Viability was measured before this job was written, not assumed: a hosted
-  # macOS runner is headless (`system_profiler SPDisplaysDataType` prints
-  # NOTHING, so it is not a usable proxy for "is there a GPU"), yet wgpu still
-  # enumerates and dispatches on a Metal adapter. The whole job runs in ~8
-  # minutes including the Homebrew LLVM install and the gpu archive build.
-  #
-  # NON-REQUIRED until it has a green streak, mirroring `codegen-e2e-macos` and
-  # `memory-sanitizer`: a first-run macOS-toolchain or driver hiccup must not
-  # block the required gates.
-  gpu-e2e-macos:
-    name: GPU execution E2E (macOS arm64, Metal)
-    runs-on: macos-latest
-    env:
-      # A missing adapter must fail this job, not silently cover nothing — the
-      # whole point of the lane is that it EXECUTES shaders.
-      KARAC_REQUIRE_GPU_ADAPTER: "1"
-      # And a broken archive step must fail it too, rather than green-skipping
-      # the suite (the absent-archive half of B-2026-07-28-1).
-      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM 18 (Homebrew)
-        run: |
-          brew install llvm@18
-          PREFIX="$(brew --prefix llvm@18)"
-          echo "LLVM_SYS_181_PREFIX=$PREFIX" >> "$GITHUB_ENV"
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: gpu-e2e-macos
-
-      # Only the gpu and full archives matter: a gpu.dispatch program
-      # references karac_runtime_gpu_*, which auto-selects the gpu archive, and
-      # the full archive is the fallback for anything else. The gpu build emits
-      # the canonical name, so it is renamed before the plain full build
-      # overwrites it (CLAUDE.md § "Four archives").
-      - name: Build runtime staticlib archives (gpu → full)
-        run: |
-          cargo rustc -p karac-runtime --release --features gpu --crate-type staticlib
-          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_gpu.a
-          cargo rustc -p karac-runtime --release --crate-type staticlib
-
-      # Executes every landed kernel-body form (let / while+mut / for-range /
-      # match / value-if / statement-if / wrapping arithmetic) through naga's
-      # MSL backend and asserts interpreter == GPU == expected output.
-      #
-      # KARAC_GPU_BACKEND is deliberately NOT set: the suite's probe resolves a
-      # backend (explicit env, then the host's own device, then software), and
-      # leaving it unset is what selects Metal. Setting it to `cpu` here would
-      # ask for a DeviceType::Cpu adapter, which macOS never has, and every
-      # fixture would skip while this job reported green — B-2026-08-19-9
-      # exactly, reintroduced inside the job meant to prevent it.
-      - name: GPU execution E2E on Metal (interpreter-vs-device oracle)
-        run: cargo test --features llvm --test gpu_e2e
-
-      # The runtime's own GPU unit tests on a real device rather than a
-      # software rasterizer — including the 2D-grid dispatch past the 1D cap.
-      - name: Runtime GPU unit tests (Metal)
-        run: cargo test -p karac-runtime --features gpu --lib gpu
-
-      # A green run above is only meaningful if it EXECUTED. gpu_e2e's skips go
-      # to stderr and the suite still reports `ok`, so re-run it capturing
-      # output and assert no fixture skipped. This is the same hazard
-      # KARAC_REQUIRE_GPU_ADAPTER covers, held one level lower where a
-      # soft-skip could still hide — and the reason the whole lane exists.
-      - name: Assert the suite executed (no vacuous pass)
-        run: |
-          set -o pipefail
-          cargo test --features llvm --test gpu_e2e -- --nocapture 2>&1 | tee gpu.txt
-          skips=$(grep -c 'gpu_e2e: skipping' gpu.txt || true)
-          echo "gpu_e2e skip lines: $skips"
-          [ "$skips" -eq 0 ] || { echo "FAIL: the suite skipped $skips fixture(s)"; exit 1; }
-          grep -m1 'gpu_e2e: running on' gpu.txt || { echo "FAIL: no backend banner"; exit 1; }
 
   # ── Phase 6.3 Slice 7: flagship-demo benchmark regression gate ──────────
   # Builds the `ws_idle_holder` flagship demo (Demo 1) with `karac build`,
@@ -1368,6 +710,10 @@ jobs:
   # docs/implementation_checklist/phase-6-runtime.md.
   bench-gate:
     name: Flagship demo bench gate (Demo 1)
+    # Skipped until M4a: the demo is a WebSocket server, which v2 refuses by
+    # name until the services track lands, and the legacy pipeline that
+    # built it went at M3. Re-enable by deleting this line.
+    if: false
     runs-on: ubuntu-latest
     env:
       # This job builds the runtime archives itself, so a link soft-skip here
@@ -1413,11 +759,9 @@ jobs:
 
       - name: Build the ws_idle_holder demo (karac build)
         working-directory: examples/ws_idle_holder
-        # A WebSocket server is M4a on v2, which `karac build` refuses by
-        # name, so the demo builds on the legacy pipeline until M4a lands.
         run: |
           KARAC_RUNTIME="$PWD/../../target/release/libkarac_runtime.a" \
-            ../../target/debug/karac build --legacy
+            ../../target/debug/karac build
           test -x ws_idle_holder
 
       - name: Build the bench harness
