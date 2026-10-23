@@ -4387,6 +4387,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     other
                 }
+                // The item of a refused `flatten` has no type; the refusal
+                // already said what to write.
+                Type::TypeVar(_) if self.flatten_hinted => Type::Error,
                 _ => {
                     let message = format!(
                         "unary '*' requires 'ref T', 'mut ref T', or a raw pointer \

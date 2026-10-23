@@ -5937,6 +5937,35 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     continue;
                 }
+                // `flatten` over items that are collections, not iterators
+                // (`v.iter().flatten()` on a `Vec[Vec[T]]`): name the
+                // spelling that walks each one.
+                if trait_name == "Iterator" {
+                    let walk = if matches!(resolved, Type::Ref(_) | Type::MutRef(_)) {
+                        "iter"
+                    } else {
+                        "into_iter"
+                    };
+                    let msg = format!(
+                        "`flatten` needs items that are themselves iterators \
+                         (docs/library/iterators.md: `where Self.Item: Iterator`), \
+                         and `{}` is not one: write `.flat_map(|v| v.{}())` in \
+                         place of `.flatten()`",
+                        type_display(&resolved),
+                        walk,
+                    );
+                    self.flatten_hinted = true;
+                    // A receiver re-inferred for a chained closure reaches
+                    // this call twice.
+                    if !self
+                        .errors
+                        .iter()
+                        .any(|e| e.span == *discharge_span && e.message == msg)
+                    {
+                        self.type_error(msg, *discharge_span, TypeErrorKind::TypeMismatch);
+                    }
+                    continue;
+                }
                 self.type_error(
                     format!(
                         "error[E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED]: \

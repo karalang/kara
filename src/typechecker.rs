@@ -2536,6 +2536,9 @@ pub struct TypeChecker<'a> {
     /// Whether that hint was given, so the adapter's later methods do not
     /// repeat the same bound (B-2026-10-20-33).
     pub(super) into_iter_hinted: bool,
+    /// A `flatten` over non-iterator items was already refused at the
+    /// call, so the adapters chained on it stay quiet.
+    pub(super) flatten_hinted: bool,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
     /// core §14.9: which functions can start a branch or a task, computed on
@@ -3468,6 +3471,7 @@ impl<'a> TypeChecker<'a> {
             collect_strings_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),
             into_iter_hinted: false,
+            flatten_hinted: false,
             core_once_calls: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),

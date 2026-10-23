@@ -1341,6 +1341,12 @@ impl<'a> super::TypeChecker<'a> {
                     let bound_trait = bound.path.last().cloned().unwrap_or_default();
                     // The adapter call that took the collection already said
                     // to write `.into_iter()` (B-2026-10-20-33).
+                    if type_name == "IterFlatten"
+                        && bound_trait == "Iterator"
+                        && self.flatten_hinted
+                    {
+                        return Type::Error;
+                    }
                     if bound_trait == "Iterator"
                         && self.into_iter_hinted
                         && self.has_into_iter(&concrete)

@@ -12350,3 +12350,55 @@ fn a_let_of_a_borrowed_receiver_is_a_ref() {
         "cannot move a non-`Copy` value out of a borrowed place",
     );
 }
+
+/// `flatten` declares `where Self.Item: Iterator`, so `v.iter().flatten()`
+/// over a `Vec[Vec[T]]` is refused at the call wherever the result goes: a
+/// `for` loop, a binding walked later, or a chain. Pre-fix only a chained
+/// method call was refused (B-2026-10-22-36).
+#[test]
+fn flatten_over_collections_is_refused_at_the_call() {
+    rejected(
+        "flatten-for",
+        "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3]];\n    \
+         for x in v.iter().flatten() {\n        println(x);\n    }\n}\n",
+        "write `.flat_map(|v| v.iter())` in place of `.flatten()`",
+    );
+    rejected(
+        "flatten-let",
+        "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3]];\n    \
+         let it = v.iter().flatten();\n    for x in it {\n        println(x);\n    }\n}\n",
+        "write `.flat_map(|v| v.iter())` in place of `.flatten()`",
+    );
+    rejected(
+        "flatten-owned",
+        "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3]];\n    \
+         for x in v.into_iter().flatten() {\n        println(x);\n    }\n}\n",
+        "write `.flat_map(|v| v.into_iter())` in place of `.flatten()`",
+    );
+    // A chain says it once, with nothing cascading from the adapters on it.
+    let (dir, path) = fixture(
+        "flatten-chain",
+        "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3]];\n    \
+         let s: Vec[i64] = v.iter().flatten().map(|x| *x).collect();\n    \
+         println(f\"{s.len()}\");\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("in place of `.flatten()`"),
+        "flatten-chain: {err}"
+    );
+    assert!(
+        err.contains("1 error(s) found"),
+        "flatten-chain: one error: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    accepted_and_runs(
+        "flatten-of-iterators",
+        "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3]];\n    \
+         let n = v.iter().map(|r| r.iter()).flatten().count();\n    \
+         let t: i64 = v.iter().flat_map(|r| r.iter()).map(|x| *x).sum();\n    \
+         println(f\"{n} {t}\");\n}\n",
+        "3 6\n",
+    );
+}

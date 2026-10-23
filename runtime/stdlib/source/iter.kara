@@ -136,7 +136,7 @@ trait Iterator {
     }
 
     /// The items of each item, in turn.
-    fn flatten(own self) -> IterFlatten[Self, Self.Item] {
+    fn flatten(own self) -> IterFlatten[Self, Self.Item] where Self.Item: Iterator {
         IterFlatten { it: self, cur: None }
     }
 
