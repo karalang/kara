@@ -1,0 +1,2174 @@
+== the documentation's examples
+> parse('x & y')
+  -> AND(Symbol('x'), Symbol('y'))
+  str: x&y
+> simplify()
+  -> AND(Symbol('x'), Symbol('y'))
+  str: x&y
+> parse('(apple or banana and (orange or pineapple and (lemon or cherry)))')
+  -> OR(Symbol('apple'), AND(Symbol('banana'), OR(Symbol('orange'), AND(Symbol('pineapple'), OR(Symbol('lemon'), Symbol('cherry'))))))
+  str: apple|(banana&(orange|(pineapple&(lemon|cherry))))
+> simplify()
+  -> OR(Symbol('apple'), AND(Symbol('banana'), OR(Symbol('orange'), AND(Symbol('pineapple'), OR(Symbol('cherry'), Symbol('lemon'))))))
+  str: apple|(banana&(orange|(pineapple&(cherry|lemon))))
+> parse('x&~x')
+  -> AND(Symbol('x'), NOT(Symbol('x')))
+  str: x&~x
+> simplify()
+  -> FALSE
+  str: 0
+> parse('x|~x')
+  -> OR(Symbol('x'), NOT(Symbol('x')))
+  str: x|~x
+> simplify()
+  -> TRUE
+  str: 1
+> parse('x|x')
+  -> OR(Symbol('x'), Symbol('x'))
+  str: x|x
+> simplify()
+  -> Symbol('x')
+  str: x
+> parse('x&x')
+  -> AND(Symbol('x'), Symbol('x'))
+  str: x&x
+> simplify()
+  -> Symbol('x')
+  str: x
+> parse('x&(x|y)')
+  -> AND(Symbol('x'), OR(Symbol('x'), Symbol('y')))
+  str: x&(x|y)
+> simplify()
+  -> Symbol('x')
+  str: x
+> parse('(x&y) | (x&~y)')
+  -> OR(AND(Symbol('x'), Symbol('y')), AND(Symbol('x'), NOT(Symbol('y'))))
+  str: (x&y)|(x&~y)
+> simplify()
+  -> Symbol('x')
+  str: x
+> parse('(((x|y)&z)|x&y)')
+  -> OR(AND(OR(Symbol('x'), Symbol('y')), Symbol('z')), AND(Symbol('x'), Symbol('y')))
+  str: ((x|y)&z)|(x&y)
+> simplify()
+  -> OR(AND(Symbol('x'), Symbol('y')), AND(Symbol('z'), OR(Symbol('x'), Symbol('y'))))
+  str: (x&y)|(z&(x|y))
+> parse('apple and (banana or orange)')
+  -> AND(Symbol('apple'), OR(Symbol('banana'), Symbol('orange')))
+  str: apple&(banana|orange)
+> simplify()
+  -> AND(Symbol('apple'), OR(Symbol('banana'), Symbol('orange')))
+  str: apple&(banana|orange)
+> parse('not a and not b and not (a and ba and c) and c or c')
+  -> OR(AND(NOT(Symbol('a')), NOT(Symbol('b')), NOT(AND(Symbol('a'), Symbol('ba'), Symbol('c'))), Symbol('c')), Symbol('c'))
+  str: (~a&~b&(~(a&ba&c))&c)|c
+> simplify()
+  -> Symbol('c')
+  str: c
+> parse('apple and (oranges or banana) and not banana')
+  -> AND(Symbol('apple'), OR(Symbol('oranges'), Symbol('banana')), NOT(Symbol('banana')))
+  str: apple&(oranges|banana)&~banana
+> simplify()
+  -> AND(Symbol('apple'), NOT(Symbol('banana')), Symbol('oranges'))
+  str: apple&~banana&oranges
+> parse('apple and (oranges or banana) and not banana', simplify=True)
+  -> AND(Symbol('apple'), NOT(Symbol('banana')), Symbol('oranges'))
+  str: apple&~banana&oranges
+> parse('~(a&b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> demorgan()
+  -> OR(NOT(Symbol('a')), NOT(Symbol('b')))
+  str: ~a|~b
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> algebra.cnf(expr)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> parse('a | (b & c)')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')))
+  str: a|(b&c)
+> algebra.dnf(expr)
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')))
+  str: a|(b&c)
+> parse('(a|b)&(c|d)')
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('c')), AND(Symbol('a'), Symbol('d')), AND(Symbol('b'), Symbol('c')), AND(Symbol('b'), Symbol('d')))
+  str: (a&c)|(a&d)|(b&c)|(b&d)
+== the grammar
+> parse('a')
+  -> Symbol('a')
+  str: a
+> parse('a and b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a AND b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a And b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a * b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a or b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('a OR b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('a + b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('not a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('NOT a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('!a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('~~a')
+  -> NOT(NOT(Symbol('a')))
+  str: ~(~a)
+> parse('not not not a')
+  -> NOT(NOT(NOT(Symbol('a'))))
+  str: ~(~(~a))
+> parse('[a | b] & c')
+  -> AND(OR(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a|b)&c
+> parse('(a)')
+  -> Symbol('a')
+  str: a
+> parse('((a))')
+  -> Symbol('a')
+  str: a
+> parse('(((a & b)))')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('true')
+  -> TRUE
+  str: 1
+> parse('TRUE')
+  -> TRUE
+  str: 1
+> parse('1')
+  -> TRUE
+  str: 1
+> parse('false')
+  -> FALSE
+  str: 0
+> parse('False')
+  -> FALSE
+  str: 0
+> parse('0')
+  -> FALSE
+  str: 0
+> parse('none')
+  -> FALSE
+  str: 0
+> parse('None')
+  -> FALSE
+  str: 0
+> parse('a & 1')
+  -> AND(Symbol('a'), TRUE)
+  str: a&(1)
+> parse('a | 0')
+  -> OR(Symbol('a'), FALSE)
+  str: a|(0)
+> parse('~1')
+  -> NOT(TRUE)
+  str: ~(1)
+> parse('~0')
+  -> NOT(FALSE)
+  str: ~(0)
+> parse('1 & 0')
+  -> AND(TRUE, FALSE)
+  str: (1)&(0)
+> parse('1|0')
+  -> OR(TRUE, FALSE)
+  str: (1)|(0)
+> parse('a & b & c & d')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'), Symbol('d'))
+  str: a&b&c&d
+> parse('a | b | c')
+  -> OR(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a|b|c
+> parse('a & b | c & d')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> parse('a | b & c | d')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')), Symbol('d'))
+  str: a|(b&c)|d
+> parse('a & ~b | ~c & d')
+  -> OR(AND(Symbol('a'), NOT(Symbol('b'))), AND(NOT(Symbol('c')), Symbol('d')))
+  str: (a&~b)|(~c&d)
+> parse('~(a | b) & c')
+  -> AND(NOT(OR(Symbol('a'), Symbol('b'))), Symbol('c'))
+  str: (~(a|b))&c
+> parse('~a & (b | ~c)')
+  -> AND(NOT(Symbol('a')), OR(Symbol('b'), NOT(Symbol('c'))))
+  str: ~a&(b|~c)
+> parse('a.b & c:d & e_f & _g')
+  -> AND(Symbol('a.b'), Symbol('c:d'), Symbol('e_f'), Symbol('_g'))
+  str: a.b&c:d&e_f&_g
+> parse('x1 & 2x & 42')
+  -> AND(Symbol('x1'), Symbol('2x'), Symbol('42'))
+  str: x1&2x&42
+> parse('foo.bar.baz | a:b:c')
+  -> OR(Symbol('foo.bar.baz'), Symbol('a:b:c'))
+  str: foo.bar.baz|a:b:c
+> parse('a\nand\tb\r\nor c')
+  -> OR(AND(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a&b)|c
+> parse('  a   ')
+  -> Symbol('a')
+  str: a
+> parse('café and thé')
+  -> AND(Symbol('café'), Symbol('thé'))
+  str: café&thé
+> parse('apple AND NOT banana OR cherry')
+  -> OR(AND(Symbol('apple'), NOT(Symbol('banana'))), Symbol('cherry'))
+  str: (apple&~banana)|cherry
+> parse('a & (b | (c & (d | (e & f))))')
+  -> AND(Symbol('a'), OR(Symbol('b'), AND(Symbol('c'), OR(Symbol('d'), AND(Symbol('e'), Symbol('f'))))))
+  str: a&(b|(c&(d|(e&f))))
+> parse('a or b and c or d and e and f or g')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')), AND(Symbol('d'), Symbol('e'), Symbol('f')), Symbol('g'))
+  str: a|(b&c)|(d&e&f)|g
+> parse('a & b | c & d', simplify=True)
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> parse('~(a & ~b) | ~~c', simplify=True)
+  -> OR(NOT(Symbol('a')), Symbol('b'), Symbol('c'))
+  str: ~a|b|c
+== broken expressions
+> parse('')
+  error ParseError: Invalid expression
+> parse('   ')
+  error ParseError: Invalid expression
+> parse('a b')
+  error ParseError: Invalid symbols sequence such as (A B) for token: "b" at position: 2
+> parse('a &')
+  error ParseError: Invalid expression
+> parse('& a')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "&"
+> parse('a & | b')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "|" at position: 4
+> parse('a | | b')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "|" at position: 4
+> parse('(a')
+  error ParseError: Invalid expression
+> parse('a)')
+  error ParseError: Unbalanced parenthesis for token: ")" at position: 1
+> parse('()')
+  error IndexError: list index out of range
+> parse('(a & b))')
+  error ParseError: Unbalanced parenthesis for token: ")" at position: 7
+> parse('a & (b')
+  error ParseError: Invalid expression
+> parse('a (b)')
+  error ParseError: Invalid expression nesting such as (AND xx) for token: "(" at position: 2
+> parse('a & b c')
+  error ParseError: Invalid symbols sequence such as (A B) for token: "c" at position: 6
+> parse('~')
+  error ParseError: Invalid expression
+> parse('~ & a')
+  error TypeError: NOT.__init__() missing 1 required positional argument: 'arg1'
+> parse('a & ~')
+  error ParseError: Invalid expression
+> parse('(~)')
+  error TypeError: NOT.__init__() missing 1 required positional argument: 'arg1'
+> parse('( & a)')
+  error AssertionError: Bad arguments: all arguments must be an Expression: (4, Symbol('a'))
+> parse('(a ~b)')
+  -> Symbol('a')
+  str: a
+> parse('a & - b')
+  error ParseError: Unknown token for token: "-" at position: 4
+> parse('a $ b')
+  error ParseError: Unknown token for token: "$" at position: 2
+> parse('a ^ b')
+  error ParseError: Unknown token for token: "^" at position: 2
+> parse('a == b')
+  error ParseError: Unknown token for token: "=" at position: 2
+> parse("'a' & b")
+  error ParseError: Unknown token for token: "'"
+> parse('a & "b"')
+  error ParseError: Unknown token for token: """ at position: 4
+> parse('a\x0cb')
+  error ParseError: Unknown token for token: "" at position: 1
+> parse('a & (b | c')
+  error ParseError: Invalid expression
+> parse('((a)')
+  error ParseError: Invalid expression
+> parse('a | b)')
+  error ParseError: Unbalanced parenthesis for token: ")" at position: 5
+> parse(')')
+  error ParseError: Unbalanced parenthesis for token: ")"
+> parse('a & ()')
+  error IndexError: list index out of range
+> parse('( | a & b')
+  error AssertionError: Bad arguments: all arguments must be an Expression: (4, AND(Symbol('a'), Symbol('b')))
+> parse('x & (y z)')
+  error ParseError: Invalid symbols sequence such as (A B) for token: "z" at position: 7
+> parse('1 1')
+  error ParseError: Invalid symbols sequence such as (A B) for token: "1" at position: 2
+> parse('a ~')
+  error ParseError: Invalid expression
+> parse('(a)(b)')
+  error ParseError: Invalid expression nesting such as (AND xx) for token: "(" at position: 3
+> parse('~(a')
+  error ParseError: Invalid expression
+> parse('a & ~(b c)')
+  error ParseError: Invalid symbols sequence such as (A B) for token: "c" at position: 8
+> parse('or')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "or" at position: 1
+> parse('and a')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "and" at position: 2
+> parse('a and or b')
+  error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "or" at position: 7
+== the tokenizer
+> tokenize('a & b')
+  - (8, 'a', 0)
+  - (1, '&', 2)
+  - (8, 'b', 4)
+> tokenize('abc')
+  - (8, 'abc', 2)
+> tokenize('a.b:c_d')
+  - (8, 'a.b:c_d', 6)
+> tokenize('not x or y')
+  - (3, 'not', 2)
+  - (8, 'x', 4)
+  - (2, 'or', 7)
+  - (8, 'y', 9)
+> tokenize('(a|b)&c')
+  - (4, '(', 0)
+  - (8, 'a', 1)
+  - (2, '|', 2)
+  - (8, 'b', 3)
+  - (5, ')', 4)
+  - (1, '&', 5)
+  - (8, 'c', 6)
+> tokenize('[x]')
+  - (4, '[', 0)
+  - (8, 'x', 1)
+  - (5, ']', 2)
+> tokenize('1 0 true FALSE none')
+  - (6, '1', 0)
+  - (7, '0', 2)
+  - (6, 'true', 7)
+  - (7, 'FALSE', 13)
+  - (7, 'none', 18)
+> tokenize('  spaced  out  ')
+  - (8, 'spaced', 7)
+  - (8, 'out', 12)
+> tokenize('x1 & 2x')
+  - (8, 'x1', 1)
+  - (1, '&', 3)
+  - (8, '2x', 6)
+> tokenize('a\nb')
+  - (8, 'a', 0)
+  - (8, 'b', 2)
+> tokenize('a - b')
+  - (8, 'a', 0)
+  error ParseError: Unknown token for token: "-" at position: 2
+> tokenize('_x & y_')
+  - (8, '_x', 1)
+  - (1, '&', 3)
+  - (8, 'y_', 6)
+> tokenize('AnD oR NoT')
+  - (1, 'AnD', 2)
+  - (2, 'oR', 5)
+  - (3, 'NoT', 9)
+> tokenize('a&&b')
+  - (8, 'a', 0)
+  - (1, '&', 1)
+  - (1, '&', 2)
+  - (8, 'b', 3)
+> tokenize('café')
+  - (8, 'café', 3)
+== simplifying
+> parse('a & a')
+  -> AND(Symbol('a'), Symbol('a'))
+  str: a&a
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a | a')
+  -> OR(Symbol('a'), Symbol('a'))
+  str: a|a
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a & b & a')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('a'))
+  str: a&b&a
+> simplify()
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a & ~a')
+  -> AND(Symbol('a'), NOT(Symbol('a')))
+  str: a&~a
+> simplify()
+  -> FALSE
+  str: 0
+> parse('a | ~a')
+  -> OR(Symbol('a'), NOT(Symbol('a')))
+  str: a|~a
+> simplify()
+  -> TRUE
+  str: 1
+> parse('a & 1')
+  -> AND(Symbol('a'), TRUE)
+  str: a&(1)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a & 0')
+  -> AND(Symbol('a'), FALSE)
+  str: a&(0)
+> simplify()
+  -> FALSE
+  str: 0
+> parse('a | 1')
+  -> OR(Symbol('a'), TRUE)
+  str: a|(1)
+> simplify()
+  -> TRUE
+  str: 1
+> parse('a | 0')
+  -> OR(Symbol('a'), FALSE)
+  str: a|(0)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('~~a')
+  -> NOT(NOT(Symbol('a')))
+  str: ~(~a)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('~~~a')
+  -> NOT(NOT(NOT(Symbol('a'))))
+  str: ~(~(~a))
+> simplify()
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('~(~a & ~b)')
+  -> NOT(AND(NOT(Symbol('a')), NOT(Symbol('b'))))
+  str: ~(~a&~b)
+> simplify()
+  -> NOT(AND(NOT(Symbol('a')), NOT(Symbol('b'))))
+  str: ~(~a&~b)
+> parse('~1')
+  -> NOT(TRUE)
+  str: ~(1)
+> simplify()
+  -> FALSE
+  str: 0
+> parse('~0')
+  -> NOT(FALSE)
+  str: ~(0)
+> simplify()
+  -> TRUE
+  str: 1
+> parse('~(1 & a)')
+  -> NOT(AND(TRUE, Symbol('a')))
+  str: ~((1)&a)
+> simplify()
+  -> NOT(Symbol('a'))
+  str: ~a
+> parse('a & (a | b)')
+  -> AND(Symbol('a'), OR(Symbol('a'), Symbol('b')))
+  str: a&(a|b)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a | (a & b)')
+  -> OR(Symbol('a'), AND(Symbol('a'), Symbol('b')))
+  str: a|(a&b)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a & (~a | b)')
+  -> AND(Symbol('a'), OR(NOT(Symbol('a')), Symbol('b')))
+  str: a&(~a|b)
+> simplify()
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a | (~a & b)')
+  -> OR(Symbol('a'), AND(NOT(Symbol('a')), Symbol('b')))
+  str: a|(~a&b)
+> simplify()
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('(a & b) | (a & ~b)')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), NOT(Symbol('b'))))
+  str: (a&b)|(a&~b)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('(a | b) & (a | ~b)')
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('a'), NOT(Symbol('b'))))
+  str: (a|b)&(a|~b)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('(a & b & c) | (a & b & ~c)')
+  -> OR(AND(Symbol('a'), Symbol('b'), Symbol('c')), AND(Symbol('a'), Symbol('b'), NOT(Symbol('c'))))
+  str: (a&b&c)|(a&b&~c)
+> simplify()
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('c & b & a')
+  -> AND(Symbol('c'), Symbol('b'), Symbol('a'))
+  str: c&b&a
+> simplify()
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> parse('c | b | a')
+  -> OR(Symbol('c'), Symbol('b'), Symbol('a'))
+  str: c|b|a
+> simplify()
+  -> OR(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a|b|c
+> parse('~c & b & ~a')
+  -> AND(NOT(Symbol('c')), Symbol('b'), NOT(Symbol('a')))
+  str: ~c&b&~a
+> simplify()
+  -> AND(NOT(Symbol('a')), Symbol('b'), NOT(Symbol('c')))
+  str: ~a&b&~c
+> parse('(b|a) & (d|c)')
+  -> AND(OR(Symbol('b'), Symbol('a')), OR(Symbol('d'), Symbol('c')))
+  str: (b|a)&(d|c)
+> simplify()
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> parse('a & (b & (c & d))')
+  -> AND(Symbol('a'), AND(Symbol('b'), AND(Symbol('c'), Symbol('d'))))
+  str: a&(b&(c&d))
+> simplify()
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'), Symbol('d'))
+  str: a&b&c&d
+> parse('a | (b | (c | d))')
+  -> OR(Symbol('a'), OR(Symbol('b'), OR(Symbol('c'), Symbol('d'))))
+  str: a|(b|(c|d))
+> simplify()
+  -> OR(Symbol('a'), Symbol('b'), Symbol('c'), Symbol('d'))
+  str: a|b|c|d
+> parse('(a & b) | (c & d) | (a & b)')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')), AND(Symbol('a'), Symbol('b')))
+  str: (a&b)|(c&d)|(a&b)
+> simplify()
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> parse('x & y | x & ~y | ~x & y')
+  -> OR(AND(Symbol('x'), Symbol('y')), AND(Symbol('x'), NOT(Symbol('y'))), AND(NOT(Symbol('x')), Symbol('y')))
+  str: (x&y)|(x&~y)|(~x&y)
+> simplify()
+  -> OR(Symbol('x'), Symbol('y'))
+  str: x|y
+> parse('(a | b) & (a | c) & (b | c)')
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('a'), Symbol('c')), OR(Symbol('b'), Symbol('c')))
+  str: (a|b)&(a|c)&(b|c)
+> simplify()
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('a'), Symbol('c')), OR(Symbol('b'), Symbol('c')))
+  str: (a|b)&(a|c)&(b|c)
+> parse('a & b | a & c | b & c')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')), AND(Symbol('b'), Symbol('c')))
+  str: (a&b)|(a&c)|(b&c)
+> simplify()
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')), AND(Symbol('b'), Symbol('c')))
+  str: (a&b)|(a&c)|(b&c)
+> parse('~(a & b) | (a & b)')
+  -> OR(NOT(AND(Symbol('a'), Symbol('b'))), AND(Symbol('a'), Symbol('b')))
+  str: (~(a&b))|(a&b)
+> simplify()
+  -> OR(NOT(Symbol('a')), Symbol('b'), NOT(Symbol('b')))
+  str: ~a|b|~b
+> parse('(a|b)&~(a|b)')
+  -> AND(OR(Symbol('a'), Symbol('b')), NOT(OR(Symbol('a'), Symbol('b'))))
+  str: (a|b)&(~(a|b))
+> simplify()
+  -> AND(NOT(Symbol('a')), Symbol('b'), NOT(Symbol('b')))
+  str: ~a&b&~b
+> parse('a & (b | ~b)')
+  -> AND(Symbol('a'), OR(Symbol('b'), NOT(Symbol('b'))))
+  str: a&(b|~b)
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('(a & ~b) | (~a & b) | (a & b)')
+  -> OR(AND(Symbol('a'), NOT(Symbol('b'))), AND(NOT(Symbol('a')), Symbol('b')), AND(Symbol('a'), Symbol('b')))
+  str: (a&~b)|(~a&b)|(a&b)
+> simplify()
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> parse('~(a | ~(b & ~c))')
+  -> NOT(OR(Symbol('a'), NOT(AND(Symbol('b'), NOT(Symbol('c'))))))
+  str: ~(a|(~(b&~c)))
+> simplify()
+  -> NOT(OR(Symbol('a'), NOT(Symbol('b')), Symbol('c')))
+  str: ~(a|~b|c)
+> parse('(a | 0) & (b | 1)')
+  -> AND(OR(Symbol('a'), FALSE), OR(Symbol('b'), TRUE))
+  str: (a|(0))&(b|(1))
+> simplify()
+  -> Symbol('a')
+  str: a
+> parse('a & b & c & ~a')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'), NOT(Symbol('a')))
+  str: a&b&c&~a
+> simplify()
+  -> FALSE
+  str: 0
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> flags
+  -> isliteral=False iscanonical=False
+> simplify()
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> flags
+  -> isliteral=False iscanonical=True
+> simplify()
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> flags
+  -> isliteral=False iscanonical=True
+== normal forms
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> use orig
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')))
+  str: (a&b)|(a&c)
+> parse('a | (b & c)')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')))
+  str: a|(b&c)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('a'), Symbol('c')))
+  str: (a|b)&(a|c)
+> use orig
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')))
+  str: a|(b&c)
+> algebra.dnf(expr)
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')))
+  str: a|(b&c)
+> parse('(a | b) & (c | d)')
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> use orig
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('c')), AND(Symbol('a'), Symbol('d')), AND(Symbol('b'), Symbol('c')), AND(Symbol('b'), Symbol('d')))
+  str: (a&c)|(a&d)|(b&c)|(b&d)
+> parse('(a & b) | (c & d)')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(Symbol('a'), Symbol('c')), OR(Symbol('a'), Symbol('d')), OR(Symbol('b'), Symbol('c')), OR(Symbol('b'), Symbol('d')))
+  str: (a|c)&(a|d)&(b|c)&(b|d)
+> use orig
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('c'), Symbol('d')))
+  str: (a&b)|(c&d)
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> keep as orig
+> algebra.cnf(expr)
+  -> OR(NOT(Symbol('a')), NOT(Symbol('b')))
+  str: ~a|~b
+> use orig
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> algebra.dnf(expr)
+  -> OR(NOT(Symbol('a')), NOT(Symbol('b')))
+  str: ~a|~b
+> parse('~(a | b) | c')
+  -> OR(NOT(OR(Symbol('a'), Symbol('b'))), Symbol('c'))
+  str: (~(a|b))|c
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(NOT(Symbol('a')), Symbol('c')), OR(NOT(Symbol('b')), Symbol('c')))
+  str: (~a|c)&(~b|c)
+> use orig
+  -> OR(NOT(OR(Symbol('a'), Symbol('b'))), Symbol('c'))
+  str: (~(a|b))|c
+> algebra.dnf(expr)
+  -> OR(Symbol('c'), AND(NOT(Symbol('a')), NOT(Symbol('b'))))
+  str: c|(~a&~b)
+> parse('a & ~(b | ~c)')
+  -> AND(Symbol('a'), NOT(OR(Symbol('b'), NOT(Symbol('c')))))
+  str: a&(~(b|~c))
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(Symbol('a'), NOT(Symbol('b')), Symbol('c'))
+  str: a&~b&c
+> use orig
+  -> AND(Symbol('a'), NOT(OR(Symbol('b'), NOT(Symbol('c')))))
+  str: a&(~(b|~c))
+> algebra.dnf(expr)
+  -> AND(Symbol('a'), NOT(Symbol('b')), Symbol('c'))
+  str: a&~b&c
+> parse('(a & b) | (a & c) | (b & c)')
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')), AND(Symbol('b'), Symbol('c')))
+  str: (a&b)|(a&c)|(b&c)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('a'), Symbol('c')), OR(Symbol('b'), Symbol('c')))
+  str: (a|b)&(a|c)&(b|c)
+> use orig
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')), AND(Symbol('b'), Symbol('c')))
+  str: (a&b)|(a&c)|(b&c)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')), AND(Symbol('b'), Symbol('c')))
+  str: (a&b)|(a&c)|(b&c)
+> parse('~(a & (b | ~c))')
+  -> NOT(AND(Symbol('a'), OR(Symbol('b'), NOT(Symbol('c')))))
+  str: ~(a&(b|~c))
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(NOT(Symbol('a')), NOT(Symbol('b'))), OR(NOT(Symbol('a')), Symbol('c')))
+  str: (~a|~b)&(~a|c)
+> use orig
+  -> NOT(AND(Symbol('a'), OR(Symbol('b'), NOT(Symbol('c')))))
+  str: ~(a&(b|~c))
+> algebra.dnf(expr)
+  -> OR(NOT(Symbol('a')), AND(NOT(Symbol('b')), Symbol('c')))
+  str: ~a|(~b&c)
+> parse('a | ~a')
+  -> OR(Symbol('a'), NOT(Symbol('a')))
+  str: a|~a
+> keep as orig
+> algebra.cnf(expr)
+  -> TRUE
+  str: 1
+> use orig
+  -> OR(Symbol('a'), NOT(Symbol('a')))
+  str: a|~a
+> algebra.dnf(expr)
+  -> TRUE
+  str: 1
+> parse('a & ~a')
+  -> AND(Symbol('a'), NOT(Symbol('a')))
+  str: a&~a
+> keep as orig
+> algebra.cnf(expr)
+  -> FALSE
+  str: 0
+> use orig
+  -> AND(Symbol('a'), NOT(Symbol('a')))
+  str: a&~a
+> algebra.dnf(expr)
+  -> FALSE
+  str: 0
+> parse('1')
+  -> TRUE
+  str: 1
+> keep as orig
+> algebra.cnf(expr)
+  -> TRUE
+  str: 1
+> use orig
+  -> TRUE
+  str: 1
+> algebra.dnf(expr)
+  -> TRUE
+  str: 1
+> parse('0')
+  -> FALSE
+  str: 0
+> keep as orig
+> algebra.cnf(expr)
+  -> FALSE
+  str: 0
+> use orig
+  -> FALSE
+  str: 0
+> algebra.dnf(expr)
+  -> FALSE
+  str: 0
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as orig
+> algebra.cnf(expr)
+  -> Symbol('a')
+  str: a
+> use orig
+  -> Symbol('a')
+  str: a
+> algebra.dnf(expr)
+  -> Symbol('a')
+  str: a
+> parse('(a | b) & ~a')
+  -> AND(OR(Symbol('a'), Symbol('b')), NOT(Symbol('a')))
+  str: (a|b)&~a
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(NOT(Symbol('a')), Symbol('b'))
+  str: ~a&b
+> use orig
+  -> AND(OR(Symbol('a'), Symbol('b')), NOT(Symbol('a')))
+  str: (a|b)&~a
+> algebra.dnf(expr)
+  -> AND(NOT(Symbol('a')), Symbol('b'))
+  str: ~a&b
+> parse('x & (y | (z & w))')
+  -> AND(Symbol('x'), OR(Symbol('y'), AND(Symbol('z'), Symbol('w'))))
+  str: x&(y|(z&w))
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(Symbol('x'), OR(Symbol('w'), Symbol('y')), OR(Symbol('y'), Symbol('z')))
+  str: x&(w|y)&(y|z)
+> use orig
+  -> AND(Symbol('x'), OR(Symbol('y'), AND(Symbol('z'), Symbol('w'))))
+  str: x&(y|(z&w))
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('w'), Symbol('x'), Symbol('z')), AND(Symbol('x'), Symbol('y')))
+  str: (w&x&z)|(x&y)
+> parse('(p | q) & (r | s) & (t | u)')
+  -> AND(OR(Symbol('p'), Symbol('q')), OR(Symbol('r'), Symbol('s')), OR(Symbol('t'), Symbol('u')))
+  str: (p|q)&(r|s)&(t|u)
+> keep as orig
+> algebra.cnf(expr)
+  -> AND(OR(Symbol('p'), Symbol('q')), OR(Symbol('r'), Symbol('s')), OR(Symbol('t'), Symbol('u')))
+  str: (p|q)&(r|s)&(t|u)
+> use orig
+  -> AND(OR(Symbol('p'), Symbol('q')), OR(Symbol('r'), Symbol('s')), OR(Symbol('t'), Symbol('u')))
+  str: (p|q)&(r|s)&(t|u)
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('p'), Symbol('r'), Symbol('t')), AND(Symbol('p'), Symbol('r'), Symbol('u')), AND(Symbol('p'), Symbol('s'), Symbol('t')), AND(Symbol('p'), Symbol('s'), Symbol('u')), AND(Symbol('q'), Symbol('r'), Symbol('t')), AND(Symbol('q'), Symbol('r'), Symbol('u')), AND(Symbol('q'), Symbol('s'), Symbol('t')), AND(Symbol('q'), Symbol('s'), Symbol('u')))
+  str: (p&r&t)|(p&r&u)|(p&s&t)|(p&s&u)|(q&r&t)|(q&r&u)|(q&s&t)|(q&s&u)
+> parse('~(x & y & z)')
+  -> NOT(AND(Symbol('x'), Symbol('y'), Symbol('z')))
+  str: ~(x&y&z)
+> keep as orig
+> algebra.cnf(expr)
+  -> OR(NOT(Symbol('x')), NOT(Symbol('y')), NOT(Symbol('z')))
+  str: ~x|~y|~z
+> use orig
+  -> NOT(AND(Symbol('x'), Symbol('y'), Symbol('z')))
+  str: ~(x&y&z)
+> algebra.dnf(expr)
+  -> OR(NOT(Symbol('x')), NOT(Symbol('y')), NOT(Symbol('z')))
+  str: ~x|~y|~z
+> parse('a ^ b')
+  error ParseError: Unknown token for token: "^" at position: 2
+> keep as orig
+> algebra.cnf(expr)
+  error: no expression
+> use orig
+  -> None
+  str: None
+> algebra.dnf(expr)
+  error: no expression
+> parse('a & (b | c)', simplify=True)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> keep as e
+> algebra.cnf(expr)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> use e
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> str
+  a&(b|c)
+> parse('(a | b) & (c | d)', simplify=True)
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> keep as e
+> algebra.dnf(expr)
+  -> OR(AND(Symbol('a'), Symbol('c')), AND(Symbol('a'), Symbol('d')), AND(Symbol('b'), Symbol('c')), AND(Symbol('b'), Symbol('d')))
+  str: (a&c)|(a&d)|(b&c)|(b&d)
+> use e
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> debug
+  | AND(<isliteral=False, iscanonical=True, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |   OR(<isliteral=False, iscanonical=True, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |     Symbol(<isliteral=True, iscanonical=True>'a'),
+  |     Symbol(<isliteral=True, iscanonical=True>'b')
+  |   ),
+  |   OR(<isliteral=False, iscanonical=True, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |     Symbol(<isliteral=True, iscanonical=True>'c'),
+  |     Symbol(<isliteral=True, iscanonical=True>'d')
+  |   )
+  | )
+== the methods one at a time
+> parse('a & ~(b | c)')
+  -> AND(Symbol('a'), NOT(OR(Symbol('b'), Symbol('c'))))
+  str: a&(~(b|c))
+> literalize()
+  -> AND(Symbol('a'), AND(NOT(Symbol('b')), NOT(Symbol('c'))))
+  str: a&(~b&~c)
+> parse('~(~(a & b))')
+  -> NOT(NOT(AND(Symbol('a'), Symbol('b'))))
+  str: ~(~(a&b))
+> cancel()
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('~~~(a | b)')
+  -> NOT(NOT(NOT(OR(Symbol('a'), Symbol('b')))))
+  str: ~(~(~(a|b)))
+> cancel()
+  -> NOT(OR(Symbol('a'), Symbol('b')))
+  str: ~(a|b)
+> demorgan()
+  -> AND(NOT(Symbol('a')), NOT(Symbol('b')))
+  str: ~a&~b
+> parse('~(a | ~(b & c))')
+  -> NOT(OR(Symbol('a'), NOT(AND(Symbol('b'), Symbol('c')))))
+  str: ~(a|(~(b&c)))
+> demorgan()
+  -> AND(NOT(Symbol('a')), AND(Symbol('b'), Symbol('c')))
+  str: ~a&(b&c)
+> literalize()
+  -> AND(NOT(Symbol('a')), AND(Symbol('b'), Symbol('c')))
+  str: ~a&(b&c)
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> demorgan()
+  error AttributeError: 'AND' object has no attribute 'demorgan'
+> parse('a & (b & c) & (d & e)')
+  -> AND(Symbol('a'), AND(Symbol('b'), Symbol('c')), AND(Symbol('d'), Symbol('e')))
+  str: a&(b&c)&(d&e)
+> flatten()
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'), Symbol('d'), Symbol('e'))
+  str: a&b&c&d&e
+> parse('a | (b & c) | (d | e)')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')), OR(Symbol('d'), Symbol('e')))
+  str: a|(b&c)|(d|e)
+> flatten()
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')), Symbol('d'), Symbol('e'))
+  str: a|(b&c)|d|e
+> parse('a')
+  -> Symbol('a')
+  str: a
+> flatten()
+  error AttributeError: 'Symbol' object has no attribute 'flatten'
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> distributive()
+  -> OR(AND(Symbol('a'), Symbol('b')), AND(Symbol('a'), Symbol('c')))
+  str: (a&b)|(a&c)
+> parse('(a | b) & (c | d)')
+  -> AND(OR(Symbol('a'), Symbol('b')), OR(Symbol('c'), Symbol('d')))
+  str: (a|b)&(c|d)
+> distributive()
+  -> OR(AND(Symbol('a'), Symbol('c')), AND(Symbol('a'), Symbol('d')), AND(Symbol('b'), Symbol('c')), AND(Symbol('b'), Symbol('d')))
+  str: (a&c)|(a&d)|(b&c)|(b&d)
+> parse('a | (b & c) | (d & e)')
+  -> OR(Symbol('a'), AND(Symbol('b'), Symbol('c')), AND(Symbol('d'), Symbol('e')))
+  str: a|(b&c)|(d&e)
+> distributive()
+  -> AND(OR(Symbol('a'), Symbol('b'), Symbol('d')), OR(Symbol('a'), Symbol('b'), Symbol('e')), OR(Symbol('a'), Symbol('c'), Symbol('d')), OR(Symbol('a'), Symbol('c'), Symbol('e')))
+  str: (a|b|d)&(a|b|e)&(a|c|d)&(a|c|e)
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> subtract('b', simplify=False)
+  -> AND(Symbol('a'), Symbol('c'))
+  str: a&c
+> subtract('a', simplify=False)
+  -> Symbol('c')
+  str: c
+> subtract('c', simplify=False)
+  error AttributeError: 'Symbol' object has no attribute 'subtract'
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> subtract('a & c', simplify=False)
+  -> Symbol('b')
+  str: b
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> subtract('a & d', simplify=False)
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subtract('a & b', simplify=False)
+  -> None
+> parse('a & (b | c) & b')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')), Symbol('b'))
+  str: a&(b|c)&b
+> subtract('b', simplify=True)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> subtract('a', simplify=False)
+  error AttributeError: 'NOT' object has no attribute 'subtract'
+> parse('1')
+  -> TRUE
+  str: 1
+> demorgan()
+  error AttributeError: '_TRUE' object has no attribute 'demorgan'
+> parse('~1')
+  -> NOT(TRUE)
+  str: ~(1)
+> demorgan()
+  -> FALSE
+  str: 0
+== pretty printing
+> parse('a')
+  -> Symbol('a')
+  str: a
+> pretty
+  | Symbol('a')
+> debug
+  | Symbol(<isliteral=True, iscanonical=True>'a')
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> pretty
+  |  NOT(Symbol('a'))
+> debug
+  |  NOT(<isliteral=True, iscanonical=False>Symbol(<isliteral=True, iscanonical=True>'a'))
+> parse('1')
+  -> TRUE
+  str: 1
+> pretty
+  | TRUE
+> debug
+  | TRUE
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> pretty
+  | AND(
+  |   Symbol('a'),
+  |   Symbol('b')
+  | )
+> debug
+  | AND(<isliteral=False, iscanonical=False, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |   Symbol(<isliteral=True, iscanonical=True>'a'),
+  |   Symbol(<isliteral=True, iscanonical=True>'b')
+  | )
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> pretty
+  |  NOT(
+  |    AND(
+  |      Symbol('a'),
+  |      Symbol('b')
+  |    )
+  |  )
+> debug
+  |  NOT(<isliteral=False, iscanonical=False>
+  |    AND(<isliteral=False, iscanonical=False, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |      Symbol(<isliteral=True, iscanonical=True>'a'),
+  |      Symbol(<isliteral=True, iscanonical=True>'b')
+  |    )
+  |  )
+> parse('not a and not b and not (a and ba and c) and c or c')
+  -> OR(AND(NOT(Symbol('a')), NOT(Symbol('b')), NOT(AND(Symbol('a'), Symbol('ba'), Symbol('c'))), Symbol('c')), Symbol('c'))
+  str: (~a&~b&(~(a&ba&c))&c)|c
+> pretty
+  | OR(
+  |   AND(
+  |     NOT(Symbol('a')),
+  |     NOT(Symbol('b')),
+  |     NOT(
+  |       AND(
+  |         Symbol('a'),
+  |         Symbol('ba'),
+  |         Symbol('c')
+  |       )
+  |     ),
+  |     Symbol('c')
+  |   ),
+  |   Symbol('c')
+  | )
+> debug
+  | OR(<isliteral=False, iscanonical=False, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |   AND(<isliteral=False, iscanonical=False, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |     NOT(<isliteral=True, iscanonical=False>Symbol(<isliteral=True, iscanonical=True>'a')),
+  |     NOT(<isliteral=True, iscanonical=False>Symbol(<isliteral=True, iscanonical=True>'b')),
+  |     NOT(<isliteral=False, iscanonical=False>
+  |       AND(<isliteral=False, iscanonical=False, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |         Symbol(<isliteral=True, iscanonical=True>'a'),
+  |         Symbol(<isliteral=True, iscanonical=True>'ba'),
+  |         Symbol(<isliteral=True, iscanonical=True>'c')
+  |       )
+  |     ),
+  |     Symbol(<isliteral=True, iscanonical=True>'c')
+  |   ),
+  |   Symbol(<isliteral=True, iscanonical=True>'c')
+  | )
+> parse('a & (b | ~c) & ~(d | e)')
+  -> AND(Symbol('a'), OR(Symbol('b'), NOT(Symbol('c'))), NOT(OR(Symbol('d'), Symbol('e'))))
+  str: a&(b|~c)&(~(d|e))
+> pretty
+  | AND(
+  |   Symbol('a'),
+  |   OR(
+  |     Symbol('b'),
+  |     NOT(Symbol('c'))
+  |   ),
+  |   NOT(
+  |     OR(
+  |       Symbol('d'),
+  |       Symbol('e')
+  |     )
+  |   )
+  | )
+> debug
+  | AND(<isliteral=False, iscanonical=False, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |   Symbol(<isliteral=True, iscanonical=True>'a'),
+  |   OR(<isliteral=False, iscanonical=False, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |     Symbol(<isliteral=True, iscanonical=True>'b'),
+  |     NOT(<isliteral=True, iscanonical=False>Symbol(<isliteral=True, iscanonical=True>'c'))
+  |   ),
+  |   NOT(<isliteral=False, iscanonical=False>
+  |     OR(<isliteral=False, iscanonical=False, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |       Symbol(<isliteral=True, iscanonical=True>'d'),
+  |       Symbol(<isliteral=True, iscanonical=True>'e')
+  |     )
+  |   )
+  | )
+> parse('a & (b | c)', simplify=True)
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> debug
+  | AND(<isliteral=False, iscanonical=True, identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>>
+  |   Symbol(<isliteral=True, iscanonical=True>'a'),
+  |   OR(<isliteral=False, iscanonical=True, identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>>
+  |     Symbol(<isliteral=True, iscanonical=True>'b'),
+  |     Symbol(<isliteral=True, iscanonical=True>'c')
+  |   )
+  | )
+== symbols and literals
+> parse('a & b & ~a')
+  -> AND(Symbol('a'), Symbol('b'), NOT(Symbol('a')))
+  str: a&b&~a
+> literals
+  - NOT(Symbol('a'))
+  - Symbol('a')
+  - Symbol('b')
+> symbols
+  - Symbol('a')
+  - Symbol('b')
+> objects
+  - 'a'
+  - 'b'
+> get_literals
+  -> [Symbol('a'), Symbol('b'), NOT(Symbol('a'))]
+> get_symbols
+  -> [Symbol('a'), Symbol('b'), Symbol('a')]
+> parse('x | ~y | ~~z')
+  -> OR(Symbol('x'), NOT(Symbol('y')), NOT(NOT(Symbol('z'))))
+  str: x|~y|(~(~z))
+> literals
+  - NOT(Symbol('y'))
+  - NOT(Symbol('z'))
+  - Symbol('x')
+> symbols
+  - Symbol('x')
+  - Symbol('y')
+  - Symbol('z')
+> objects
+  - 'x'
+  - 'y'
+  - 'z'
+> get_literals
+  -> [Symbol('x'), NOT(Symbol('y')), NOT(Symbol('z'))]
+> get_symbols
+  -> [Symbol('x'), Symbol('y'), Symbol('z')]
+> parse('1 & 0')
+  -> AND(TRUE, FALSE)
+  str: (1)&(0)
+> literals
+  (none)
+> symbols
+  (none)
+> objects
+  (none)
+> get_literals
+  -> []
+> get_symbols
+  -> []
+> parse('a & (b | (c & ~a)) & ~~b')
+  -> AND(Symbol('a'), OR(Symbol('b'), AND(Symbol('c'), NOT(Symbol('a')))), NOT(NOT(Symbol('b'))))
+  str: a&(b|(c&~a))&(~(~b))
+> literals
+  - NOT(Symbol('a'))
+  - NOT(Symbol('b'))
+  - Symbol('a')
+  - Symbol('b')
+  - Symbol('c')
+> symbols
+  - Symbol('a')
+  - Symbol('b')
+  - Symbol('c')
+> objects
+  - 'a'
+  - 'b'
+  - 'c'
+> get_literals
+  -> [Symbol('a'), Symbol('b'), Symbol('c'), NOT(Symbol('a')), NOT(Symbol('b'))]
+> get_symbols
+  -> [Symbol('a'), Symbol('b'), Symbol('c'), Symbol('a'), Symbol('b')]
+> parse('role:admin and team:ops or role:admin')
+  -> OR(AND(Symbol('role:admin'), Symbol('team:ops')), Symbol('role:admin'))
+  str: (role:admin&team:ops)|role:admin
+> literals
+  - Symbol('role:admin')
+  - Symbol('team:ops')
+> symbols
+  - Symbol('role:admin')
+  - Symbol('team:ops')
+> objects
+  - 'role:admin'
+  - 'team:ops'
+> get_literals
+  -> [Symbol('role:admin'), Symbol('team:ops'), Symbol('role:admin')]
+> get_symbols
+  -> [Symbol('role:admin'), Symbol('team:ops'), Symbol('role:admin')]
+== equality and order
+> parse('b & a')
+  -> AND(Symbol('b'), Symbol('a'))
+  str: b&a
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == True, != False
+> lt y
+  -> < True, > False
+> parse('a & b & a')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('a'))
+  str: a&b&a
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == True, != False
+> lt y
+  -> < True, > False
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> keep as y
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> eq y
+  -> == True, != False
+> lt y
+  -> < True, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('a')
+  -> Symbol('a')
+  str: a
+> eq y
+  -> == True, != False
+> lt y
+  -> < False, > False
+> parse('b')
+  -> Symbol('b')
+  str: b
+> keep as y
+> parse('a')
+  -> Symbol('a')
+  str: a
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('1')
+  -> TRUE
+  str: 1
+> keep as y
+> parse('1')
+  -> TRUE
+  str: 1
+> eq y
+  -> == True, != False
+> lt y
+  -> < False, > False
+> parse('0')
+  -> FALSE
+  str: 0
+> keep as y
+> parse('1')
+  -> TRUE
+  str: 1
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('1')
+  -> TRUE
+  str: 1
+> keep as y
+> parse('0')
+  -> FALSE
+  str: 0
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('1')
+  -> TRUE
+  str: 1
+> keep as y
+> parse('a')
+  -> Symbol('a')
+  str: a
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('1')
+  -> TRUE
+  str: 1
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('~b')
+  -> NOT(Symbol('b'))
+  str: ~b
+> keep as y
+> parse('a')
+  -> Symbol('a')
+  str: a
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('~b')
+  -> NOT(Symbol('b'))
+  str: ~b
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('c')
+  -> Symbol('c')
+  str: c
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> keep as y
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a & c')
+  -> AND(Symbol('a'), Symbol('c'))
+  str: a&c
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> keep as y
+> parse('a & c')
+  -> AND(Symbol('a'), Symbol('c'))
+  str: a&c
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> keep as y
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('c & (b | a)')
+  -> AND(Symbol('c'), OR(Symbol('b'), Symbol('a')))
+  str: c&(b|a)
+> keep as y
+> parse('(a | b) & c')
+  -> AND(OR(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a|b)&c
+> eq y
+  -> == True, != False
+> lt y
+  -> < False, > True
+> parse('0')
+  -> FALSE
+  str: 0
+> keep as y
+> parse('0')
+  -> FALSE
+  str: 0
+> eq y
+  -> == True, != False
+> lt y
+  -> < True, > True
+> parse('~b')
+  -> NOT(Symbol('b'))
+  str: ~b
+> keep as y
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> keep as y
+> parse('~b')
+  -> NOT(Symbol('b'))
+  str: ~b
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('b')
+  -> Symbol('b')
+  str: b
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('aa')
+  -> Symbol('aa')
+  str: aa
+> eq y
+  -> == False, != True
+> lt y
+  -> < False, > True
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as y
+> parse('B')
+  -> Symbol('B')
+  str: B
+> eq y
+  -> == False, != True
+> lt y
+  -> < True, > False
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> keep as y
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> eq y
+  -> == True, != False
+> lt y
+  -> < False, > False
+== membership
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> 'a' in expr
+  -> True
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> 'd' in expr
+  -> False
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> 'a & c' in expr
+  -> True
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> 'a & d' in expr
+  -> False
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> 'a | b' in expr
+  -> False
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> 'b' in expr
+  -> True
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> 'b | c' in expr
+  -> True
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> 'c | b' in expr
+  -> True
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> 'b' in expr
+  -> False
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> 'a' in expr
+  error TypeError: argument of type 'NOT' is not iterable
+> parse('a')
+  -> Symbol('a')
+  str: a
+> 'a' in expr
+  error TypeError: argument of type 'Symbol' is not iterable
+> parse('1')
+  -> TRUE
+  str: 1
+> 'a' in expr
+  error TypeError: argument of type '_TRUE' is not iterable
+> parse('a & ~b')
+  -> AND(Symbol('a'), NOT(Symbol('b')))
+  str: a&~b
+> '~b' in expr
+  -> True
+> parse('a & ~b')
+  -> AND(Symbol('a'), NOT(Symbol('b')))
+  str: a&~b
+> 'b' in expr
+  -> False
+== building expressions
+> parse('a')
+  -> Symbol('a')
+  str: a
+> keep as a
+> parse('b | c')
+  -> OR(Symbol('b'), Symbol('c'))
+  str: b|c
+> keep as bc
+> and a
+  -> AND(OR(Symbol('b'), Symbol('c')), Symbol('a'))
+  str: (b|c)&a
+> keep as e1
+> or bc
+  -> OR(AND(OR(Symbol('b'), Symbol('c')), Symbol('a')), OR(Symbol('b'), Symbol('c')))
+  str: ((b|c)&a)|(b|c)
+> invert
+  -> NOT(OR(AND(OR(Symbol('b'), Symbol('c')), Symbol('a')), OR(Symbol('b'), Symbol('c'))))
+  str: ~(((b|c)&a)|(b|c))
+> simplify()
+  -> NOT(OR(Symbol('b'), Symbol('c'), AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))))
+  str: ~(b|c|(a&(b|c)))
+> use e1
+  -> AND(OR(Symbol('b'), Symbol('c')), Symbol('a'))
+  str: (b|c)&a
+> invert
+  -> NOT(AND(OR(Symbol('b'), Symbol('c')), Symbol('a')))
+  str: ~((b|c)&a)
+> invert
+  -> NOT(NOT(AND(OR(Symbol('b'), Symbol('c')), Symbol('a'))))
+  str: ~(~((b|c)&a))
+> simplify()
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> parse('1')
+  -> TRUE
+  str: 1
+> and a
+  -> AND(TRUE, Symbol('a'))
+  str: (1)&a
+> simplify()
+  -> Symbol('a')
+  str: a
+== evaluating
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> expr(a=1,b=1)
+  -> True
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> expr(a=1,b=0)
+  -> False
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> expr(a=0,b=0)
+  -> False
+> parse('~a')
+  -> NOT(Symbol('a'))
+  str: ~a
+> expr(a=0)
+  -> True
+> parse('~~a')
+  -> NOT(NOT(Symbol('a')))
+  str: ~(~a)
+> expr(a=1)
+  -> True
+> parse('a & (b | ~c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), NOT(Symbol('c'))))
+  str: a&(b|~c)
+> expr(a=1,b=0,c=0)
+  -> True
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> expr(a=1)
+  error KeyError: 'b'
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> expr(b=1)
+  error KeyError: 'a'
+> parse('a | b')
+  -> OR(Symbol('a'), Symbol('b'))
+  str: a|b
+> expr(a=1,b=1,c=0)
+  -> True
+> parse('1')
+  -> TRUE
+  str: 1
+> expr()
+  -> TRUE
+> parse('0')
+  -> FALSE
+  str: 0
+> expr()
+  -> FALSE
+> parse('1')
+  -> TRUE
+  str: 1
+> expr(a=1)
+  error TypeError: _TRUE.__call__() got an unexpected keyword argument 'a'
+> parse('a & 1')
+  -> AND(Symbol('a'), TRUE)
+  str: a&(1)
+> expr(a=1)
+  error TypeError: _TRUE.__call__() got an unexpected keyword argument 'a'
+> parse('1 & a')
+  -> AND(TRUE, Symbol('a'))
+  str: (1)&a
+> expr(a=1)
+  error TypeError: _TRUE.__call__() got an unexpected keyword argument 'a'
+> parse('~1')
+  -> NOT(TRUE)
+  str: ~(1)
+> expr()
+  -> False
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> expr(a=1,b=1)
+  -> False
+> parse('1 & 0')
+  -> AND(TRUE, FALSE)
+  str: (1)&(0)
+> expr()
+  -> AND(TRUE, FALSE)
+> parse('1 | 0 | 1')
+  -> OR(TRUE, FALSE, TRUE)
+  str: (1)|(0)|(1)
+> expr()
+  -> OR(OR(TRUE, FALSE), TRUE)
+> parse('1 & a')
+  -> AND(TRUE, Symbol('a'))
+  str: (1)&a
+> expr()
+  error KeyError: 'a'
+> parse('~(1 & 0)')
+  -> NOT(AND(TRUE, FALSE))
+  str: ~((1)&(0))
+> expr()
+  error TypeError: Cannot evaluate expression as a Python Boolean.
+> parse('role:admin & mfa')
+  -> AND(Symbol('role:admin'), Symbol('mfa'))
+  str: role:admin&mfa
+> expr(role:admin=1,mfa=1)
+  -> True
+== substitution
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subs(a=c)
+  -> AND(Symbol('c'), Symbol('b'))
+  str: c&b
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subs(a=c | d)
+  -> AND(OR(Symbol('c'), Symbol('d')), Symbol('b'))
+  str: (c|d)&b
+> parse('a & b | c')
+  -> OR(AND(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a&b)|c
+> subs(b=1)
+  -> OR(AND(Symbol('a'), TRUE), Symbol('c'))
+  str: (a&(1))|c
+> parse('a & b | c')
+  -> OR(AND(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a&b)|c
+> subs(b=1, simplify=True)
+  -> OR(Symbol('a'), Symbol('c'))
+  str: a|c
+> parse('a & b | c')
+  -> OR(AND(Symbol('a'), Symbol('b')), Symbol('c'))
+  str: (a&b)|c
+> subs(b=0, simplify=True)
+  -> Symbol('c')
+  str: c
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> subs(b | c=x)
+  -> AND(Symbol('a'), Symbol('x'))
+  str: a&x
+> parse('a & (b | c)')
+  -> AND(Symbol('a'), OR(Symbol('b'), Symbol('c')))
+  str: a&(b|c)
+> subs(c | b=x)
+  -> AND(Symbol('a'), Symbol('x'))
+  str: a&x
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subs(z=1)
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> subs(a=1, default=0)
+  -> AND(TRUE, FALSE, FALSE)
+  str: (1)&(0)&(0)
+> parse('a & b & c')
+  -> AND(Symbol('a'), Symbol('b'), Symbol('c'))
+  str: a&b&c
+> subs(a=1, default=0, simplify=True)
+  -> FALSE
+  str: 0
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subs(a & b=q)
+  -> Symbol('q')
+  str: q
+> parse('~a | b')
+  -> OR(NOT(Symbol('a')), Symbol('b'))
+  str: ~a|b
+> subs(a=b;b=a)
+  -> OR(NOT(Symbol('b')), Symbol('a'))
+  str: ~b|a
+> parse('a')
+  -> Symbol('a')
+  str: a
+> subs(a=b)
+  -> Symbol('b')
+  str: b
+> parse('a')
+  -> Symbol('a')
+  str: a
+> subs(z=b)
+  -> Symbol('a')
+  str: a
+> parse('a')
+  -> Symbol('a')
+  str: a
+> subs(z=b, default=1)
+  -> TRUE
+  str: 1
+> parse('1 & a')
+  -> AND(TRUE, Symbol('a'))
+  str: (1)&a
+> subs(a=b)
+  -> AND(TRUE, Symbol('b'))
+  str: (1)&b
+> parse('~(a & b)')
+  -> NOT(AND(Symbol('a'), Symbol('b')))
+  str: ~(a&b)
+> subs(a=0, simplify=True)
+  -> TRUE
+  str: 1
+> parse('a & b')
+  -> AND(Symbol('a'), Symbol('b'))
+  str: a&b
+> subs(a=b, simplify=True)
+  -> Symbol('b')
+  str: b
+== an SPDX licence check
+> licences licences/packages.txt licences/allowed.txt
+  requests: Apache-2.0
+    simplified: Apache-2.0
+    choice Apache-2.0 -> allowed
+  leftpad: MIT|Apache-2.0
+    simplified: Apache-2.0|MIT
+    choice Apache-2.0 -> allowed
+    choice MIT -> allowed
+  fontkit: (MIT&OFL-1.1)|GPL-3.0-or-later
+    simplified: GPL-3.0-or-later|(MIT&OFL-1.1)
+    choice GPL-3.0-or-later -> not allowed
+    choice MIT + OFL-1.1 -> not allowed
+  cryptolib: Apache-2.0&(MIT|BSD-3-Clause)&ISC
+    simplified: Apache-2.0&ISC&(BSD-3-Clause|MIT)
+    choice Apache-2.0 + BSD-3-Clause + ISC -> allowed
+    choice Apache-2.0 + ISC + MIT -> allowed
+  jdk-shim: GPL-2.0-only WITH Classpath-exception-2.0
+    simplified: GPL-2.0-only WITH Classpath-exception-2.0
+    choice GPL-2.0-only WITH Classpath-exception-2.0 -> not allowed
+  rustls: Apache-2.0|ISC|MIT
+    simplified: Apache-2.0|ISC|MIT
+    choice Apache-2.0 -> allowed
+    choice ISC -> allowed
+    choice MIT -> allowed
+  spice: GPL-3.0-only
+    simplified: GPL-3.0-only
+    choice GPL-3.0-only -> not allowed
+  dual: (MIT&mit-0)|(Zlib|BSL-1.0)
+    simplified: BSL-1.0|Zlib|(MIT&mit-0)
+    choice BSL-1.0 -> not allowed
+    choice Zlib -> allowed
+    choice MIT + mit-0 -> not allowed
+  nested: ((MIT|Apache-2.0)&(BSD-2-Clause|BSD-3-Clause))|AGPL-3.0-only
+    simplified: AGPL-3.0-only|((Apache-2.0|MIT)&(BSD-2-Clause|BSD-3-Clause))
+    choice AGPL-3.0-only -> not allowed
+    choice Apache-2.0 + BSD-2-Clause -> allowed
+    choice Apache-2.0 + BSD-3-Clause -> allowed
+    choice BSD-2-Clause + MIT -> allowed
+    choice BSD-3-Clause + MIT -> allowed
+  oddball: error ParseError: Invalid expression
+  twin: MIT|MIT
+    simplified: MIT
+    choice MIT -> allowed
+  bracketed: Apache-2.0
+    simplified: Apache-2.0
+    choice Apache-2.0 -> allowed
+  weird: error ValueError: WITH at position 4 has no exception
+  nolicence: NOASSERTION
+    simplified: NOASSERTION
+    choice NOASSERTION -> not allowed
+  alone: error ValueError: WITH at position 0 does not follow a licence
+  redundant: (MIT&Apache-2.0)|MIT
+    simplified: MIT
+    choice MIT -> allowed
+  three: (Unlicense|0BSD)&(MIT|CC0-1.0)&(Zlib|ISC)
+    simplified: (0BSD|Unlicense)&(CC0-1.0|MIT)&(ISC|Zlib)
+    choice 0BSD + CC0-1.0 + ISC -> not allowed
+    choice 0BSD + CC0-1.0 + Zlib -> not allowed
+    choice 0BSD + ISC + MIT -> allowed
+    choice 0BSD + MIT + Zlib -> allowed
+    choice CC0-1.0 + ISC + Unlicense -> not allowed
+    choice CC0-1.0 + Unlicense + Zlib -> not allowed
+    choice ISC + MIT + Unlicense -> allowed
+    choice MIT + Unlicense + Zlib -> allowed
+  wrote out/licences.report (19 lines)
+  | # licence check of licences/packages.txt against licences/allowed.txt
+  | requests	ok	Apache-2.0
+  | leftpad	ok	Apache-2.0
+  | fontkit	BLOCKED	GPL-3.0-or-later|(MIT&OFL-1.1)
+  | cryptolib	ok	Apache-2.0 + BSD-3-Clause + ISC
+  | jdk-shim	BLOCKED	GPL-2.0-only WITH Classpath-exception-2.0
+  | rustls	ok	Apache-2.0
+  | spice	BLOCKED	GPL-3.0-only
+  | dual	ok	Zlib
+  | nested	ok	Apache-2.0 + BSD-2-Clause
+  | oddball	unreadable	MIT AND
+  | twin	ok	MIT
+  | bracketed	ok	Apache-2.0
+  | weird	unreadable	MIT WITH
+  | nolicence	BLOCKED	NOASSERTION
+  | alone	unreadable	WITH foo
+  | redundant	ok	MIT
+  | three	ok	0BSD + ISC + MIT
+  | # 10 ok, 7 blocked or unreadable
+== an access-rule matrix
+> access access/rules.txt access/users.txt
+  read: role:viewer|role:editor|role:admin
+    simplified: role:admin|role:editor|role:viewer
+    cnf: role:admin|role:editor|role:viewer
+    dnf: role:admin|role:editor|role:viewer
+  write: (role:editor|role:admin)&~suspended
+    simplified: ~suspended&(role:admin|role:editor)
+    cnf: ~suspended&(role:admin|role:editor)
+    dnf: (role:admin&~suspended)|(role:editor&~suspended)
+  delete: role:admin&mfa&~suspended
+    simplified: mfa&role:admin&~suspended
+    cnf: mfa&role:admin&~suspended
+    dnf: mfa&role:admin&~suspended
+  deploy: team:ops&mfa&(on_call|role:admin)
+    simplified: mfa&team:ops&(on_call|role:admin)
+    cnf: mfa&team:ops&(on_call|role:admin)
+    dnf: (mfa&on_call&team:ops)|(mfa&role:admin&team:ops)
+  billing: role:admin&(team:finance|team:ops)&mfa
+    simplified: mfa&role:admin&(team:finance|team:ops)
+    cnf: mfa&role:admin&(team:finance|team:ops)
+    dnf: (mfa&role:admin&team:finance)|(mfa&role:admin&team:ops)
+  audit: role:auditor|(role:admin&~role:admin)
+    simplified: role:auditor
+    cnf: role:auditor
+    dnf: role:auditor
+  open: mfa|~mfa
+    simplified: 1
+    cnf: 1
+    dnf: 1
+    always granted
+  closed: mfa&~mfa
+    simplified: 0
+    cnf: 0
+    dnf: 0
+    never granted
+  broken: error ParseError: Invalid operator sequence without symbols such as AND OR or OR OR for token: "and" at position: 17
+  legacy: (role:admin&~suspended)|role:root
+    simplified: role:root|(role:admin&~suspended)
+    cnf: (role:admin|role:root)&(role:root|~suspended)
+    dnf: role:root|(role:admin&~suspended)
+  wrote out/access.matrix (9 lines)
+  | user	read	write	delete	deploy	billing	audit	open	closed	legacy
+  | alice	Y	Y	Y	Y	Y	-	Y	-	Y
+  | bob	Y	Y	-	-	-	-	Y	-	-
+  | carol	Y	-	-	-	-	-	Y	-	-
+  | dave	Y	-	-	-	-	-	Y	-	-
+  | erin	-	-	-	Y	-	-	Y	-	-
+  | frank	-	-	-	-	-	-	Y	-	Y
+  | grace	-	-	-	-	-	Y	Y	-	-
+  | heidi	-	-	-	-	-	-	Y	-	-
+== truth tables
+> truthtable 'a & (b | c)'
+  expr: a&(b|c)
+  simplify: a&(b|c)
+  cnf: a&(b|c)
+  dnf: (a&b)|(a&c)
+  a b c | expr simplify cnf dnf
+  0 0 0 | 0 0 0 0
+  0 0 1 | 0 0 0 0
+  0 1 0 | 0 0 0 0
+  0 1 1 | 0 0 0 0
+  1 0 0 | 0 0 0 0
+  1 0 1 | 1 1 1 1
+  1 1 0 | 1 1 1 1
+  1 1 1 | 1 1 1 1
+  8 of 8 rows agree
+> truthtable '(a & b) | (a & ~b)'
+  expr: (a&b)|(a&~b)
+  simplify: a
+  cnf: a
+  dnf: a
+  a b | expr simplify cnf dnf
+  0 0 | 0 0 0 0
+  0 1 | 0 0 0 0
+  1 0 | 1 1 1 1
+  1 1 | 1 1 1 1
+  4 of 4 rows agree
+> truthtable '~(a | b) | c'
+  expr: (~(a|b))|c
+  simplify: c|(~a&~b)
+  cnf: (~a|c)&(~b|c)
+  dnf: c|(~a&~b)
+  a b c | expr simplify cnf dnf
+  0 0 0 | 1 1 1 1
+  0 0 1 | 1 1 1 1
+  0 1 0 | 0 0 0 0
+  0 1 1 | 1 1 1 1
+  1 0 0 | 0 0 0 0
+  1 0 1 | 1 1 1 1
+  1 1 0 | 0 0 0 0
+  1 1 1 | 1 1 1 1
+  8 of 8 rows agree
+> truthtable 'a | ~a'
+  expr: a|~a
+  simplify: 1
+  cnf: 1
+  dnf: 1
+  a | expr simplify cnf dnf
+  0 | 1 1 1 1
+  1 | 1 1 1 1
+  2 of 2 rows agree
+> truthtable 'x & ~x'
+  expr: x&~x
+  simplify: 0
+  cnf: 0
+  dnf: 0
+  x | expr simplify cnf dnf
+  0 | 0 0 0 0
+  1 | 0 0 0 0
+  2 of 2 rows agree
+> truthtable '(p | q) & (~p | r)'
+  expr: (p|q)&(~p|r)
+  simplify: (p|q)&(~p|r)
+  cnf: (p|q)&(~p|r)
+  dnf: (p&r)|(~p&q)|(q&r)
+  p q r | expr simplify cnf dnf
+  0 0 0 | 0 0 0 0
+  0 0 1 | 0 0 0 0
+  0 1 0 | 1 1 1 1
+  0 1 1 | 1 1 1 1
+  1 0 0 | 0 0 0 0
+  1 0 1 | 1 1 1 1
+  1 1 0 | 0 0 0 0
+  1 1 1 | 1 1 1 1
+  8 of 8 rows agree
+> truthtable 'a & 1'
+  expr: a&(1)
+  simplify: a
+  cnf: a
+  dnf: a
+  a | expr simplify cnf dnf
+  0 | TypeError 0 0 0
+  1 | TypeError 1 1 1
+  0 of 2 rows agree
+> truthtable '(a & b) | (b & c) | (c & a)'
+  expr: (a&b)|(b&c)|(c&a)
+  simplify: (a&b)|(a&c)|(b&c)
+  cnf: (a|b)&(a|c)&(b|c)
+  dnf: (a&b)|(a&c)|(b&c)
+  a b c | expr simplify cnf dnf
+  0 0 0 | 0 0 0 0
+  0 0 1 | 0 0 0 0
+  0 1 0 | 0 0 0 0
+  0 1 1 | 1 1 1 1
+  1 0 0 | 0 0 0 0
+  1 0 1 | 1 1 1 1
+  1 1 0 | 1 1 1 1
+  1 1 1 | 1 1 1 1
+  8 of 8 rows agree

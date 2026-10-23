@@ -1,0 +1,2613 @@
+// mini_boolean: a port of boolean.py 4.0 (BSD-2-Clause; Sebastian
+// Kraemer and contributors), the Boolean-algebra library that parses
+// expressions such as "a and (b or not c)", simplifies them and puts them
+// in conjunctive or disjunctive normal form. license-expression builds the
+// SPDX licence expressions of ScanCode on it, and access rules and feature
+// flags are written in it. It replays data/jobs.tsv (see mk.py): the
+// documentation's examples, the grammar and its errors, the tokenizer,
+// simplification, normal forms, each method alone, pretty printing,
+// symbols, equality and order, evaluation and substitution, and three
+// programs: a licence checker over a lock file's licences, an access-rule
+// matrix and a truth-table checker, which write reports under data/out/.
+//
+// The library's expressions are Python objects that are compared by
+// identity in places and mutated in one (normalize() reassigns `args`),
+// and its parser builds Python lists whose shape leaks into its errors,
+// so the port keeps an arena of objects and models those lists as they
+// are.
+
+// ------------------------------------------------------------ code points
+
+fn chr_of(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn cps_of(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+fn cps_str(cs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for c in cs {
+        s.push(chr_of(*c));
+    }
+    s
+}
+
+fn lit(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64);
+    }
+    out
+}
+
+fn sub(cs: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let end = if hi > cs.len() { cs.len() } else { hi };
+    let mut k = if lo < 0 { 0 } else { lo };
+    while k < end {
+        out.push(cs[k]);
+        k += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < a.len() {
+        if a[k] != b[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn is(a: ref Vec[i64], s: Str) -> bool {
+    same(a, lit(s))
+}
+
+fn has(cs: ref Vec[i64], x: i64) -> bool {
+    for c in cs {
+        if *c == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k + 1 < cs.len() {
+        bytes.push((hex_val(cs[k]) * 16 + hex_val(cs[k + 1])) as u8);
+        k += 2;
+    }
+    bytes
+}
+
+fn utf8_cps(bytes: own Vec[u8]) -> Vec[i64] {
+    match String.from_utf8(bytes) {
+        Ok(s) => cps_of(s),
+        Err(_) => Vec.new(),
+    }
+}
+
+fn hex_text(s: ref String) -> Vec[i64] {
+    utf8_cps(hex_bytes(s))
+}
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut pieces: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            pieces.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    pieces.push(cur);
+    pieces
+}
+
+fn split_cps(cs: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in cs {
+        if *c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(*c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.isspace() for one code point, as str.strip() uses it.
+fn is_space(c: i64) -> bool {
+    (c >= 9 and c <= 13) or (c >= 28 and c <= 32) or c == 0x85 or c == 0xa0 or c == 0x1680
+        or (c >= 0x2000 and c <= 0x200a) or c == 0x2028 or c == 0x2029 or c == 0x202f
+        or c == 0x205f or c == 0x3000
+}
+
+fn strip(cs: ref Vec[i64]) -> Vec[i64] {
+    let mut lo = 0;
+    let mut hi = cs.len();
+    while lo < hi and is_space(cs[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_space(cs[hi - 1]) {
+        hi -= 1;
+    }
+    sub(cs, lo, hi)
+}
+
+fn hex2(n: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(d[(n / 16) % 16]);
+    s.push(d[n % 16]);
+    s
+}
+
+// repr() of a str: printable text as it is, the rest escaped.
+fn str_repr(cs: ref Vec[i64]) -> String {
+    let q: i64 = if has(cs, 39) and not has(cs, 34) { 34 } else { 39 };
+    let mut out = String.new();
+    out.push(chr_of(q));
+    for c in cs {
+        let n = *c;
+        if n == q or n == 92 {
+            out.push('\\');
+            out.push(chr_of(n));
+        } else if n == 10 {
+            out.push_str("\\n");
+        } else if n == 13 {
+            out.push_str("\\r");
+        } else if n == 9 {
+            out.push_str("\\t");
+        } else if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(chr_of(n));
+        }
+    }
+    out.push(chr_of(q));
+    out
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class and message.
+#[derive(Clone)]
+struct Exc {
+    cls: String,
+    msg: String,
+}
+
+fn exc(cls: Str, msg: own String) -> Exc {
+    Exc { cls: cls.to_string(), msg: msg }
+}
+
+fn no_attr(obj: Str, name: Str) -> Exc {
+    exc("AttributeError", f"'{obj}' object has no attribute '{name}'")
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "list index out of range".to_string())
+}
+
+
+// ------------------------------------------------------------ the algebra
+
+// Token types, as the library numbers them; T_OBJ marks a token whose
+// type is a Symbol object already (the licence tokenizer's).
+const T_OBJ: i64 = 0;
+const T_AND: i64 = 1;
+const T_OR: i64 = 2;
+const T_NOT: i64 = 3;
+const T_LPAR: i64 = 4;
+const T_RPAR: i64 = 5;
+const T_TRUE: i64 = 6;
+const T_FALSE: i64 = 7;
+const T_SYMBOL: i64 = 8;
+
+const P_UNKNOWN_TOKEN: i64 = 1;
+const P_UNBALANCED: i64 = 2;
+const P_INVALID_EXPRESSION: i64 = 3;
+const P_INVALID_NESTING: i64 = 4;
+const P_SYMBOL_SEQUENCE: i64 = 5;
+const P_OPERATOR_SEQUENCE: i64 = 6;
+
+// The classes of the objects.
+const K_TRUE: i64 = 0;
+const K_FALSE: i64 = 1;
+const K_SYM: i64 = 2;
+const K_NOT: i64 = 3;
+const K_AND: i64 = 4;
+const K_OR: i64 = 5;
+
+// One expression object. The library's objects are mutable and shared
+// (normalize() assigns to `expr.args` of an object other expressions may
+// hold, and literalize() asks whether an argument `is` the old one), so
+// every object lives in one arena and an expression is its index there.
+// `dual` is a base element's dual element, or -1 for the TRUE and FALSE
+// objects the library makes without one.
+#[derive(Clone)]
+struct Node {
+    kind: i64,
+    obj: String,
+    args: Vec[i64],
+    isliteral: bool,
+    iscanonical: bool,
+    dual: i64,
+}
+
+// The algebra: the arena, with its TRUE at 0 and FALSE at 1.
+struct Alg {
+    nodes: Vec[Node],
+    err: Option[Exc],
+}
+
+fn alg_new() -> Alg {
+    let mut a = Alg { nodes: Vec.new(), err: None };
+    a.nodes.push(Node { kind: K_TRUE, obj: String.new(), args: Vec.new(), isliteral: false, iscanonical: true, dual: 1 });
+    a.nodes.push(Node { kind: K_FALSE, obj: String.new(), args: Vec.new(), isliteral: false, iscanonical: true, dual: 0 });
+    a
+}
+
+// The class called with these arguments (arity already checked).
+fn mk(a: mut ref Alg, kind: i64, args: own Vec[i64]) -> i64 {
+    if kind <= K_FALSE {
+        a.nodes.push(Node { kind: kind, obj: String.new(), args: Vec.new(), isliteral: false, iscanonical: true, dual: -1 });
+    } else {
+        let lit = kind == K_NOT and a.nodes[args[0]].kind == K_SYM;
+        a.nodes.push(Node { kind: kind, obj: String.new(), args: args, isliteral: lit, iscanonical: false, dual: -1 });
+    }
+    a.nodes.len() - 1
+}
+
+fn mk_sym(a: mut ref Alg, obj: own String) -> i64 {
+    a.nodes.push(Node { kind: K_SYM, obj: obj, args: Vec.new(), isliteral: true, iscanonical: true, dual: -1 });
+    a.nodes.len() - 1
+}
+
+fn mk_not(a: mut ref Alg, x: i64) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    mk(mut a, K_NOT, v)
+}
+
+fn mk2(a: mut ref Alg, kind: i64, x: i64, y: i64) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(y);
+    mk(mut a, kind, v)
+}
+
+fn kind_of(a: ref Alg, x: i64) -> i64 {
+    a.nodes[x].kind
+}
+
+fn args_of(a: ref Alg, x: i64) -> Vec[i64] {
+    a.nodes[x].args.clone()
+}
+
+fn dual_kind(k: i64) -> i64 {
+    if k == K_AND { K_OR } else { K_AND }
+}
+
+fn is_dual(k: i64) -> bool {
+    k == K_AND or k == K_OR
+}
+
+fn cls_name(k: i64) -> String {
+    if k == K_TRUE {
+        "_TRUE".to_string()
+    } else if k == K_FALSE {
+        "_FALSE".to_string()
+    } else if k == K_SYM {
+        "Symbol".to_string()
+    } else if k == K_NOT {
+        "NOT".to_string()
+    } else if k == K_AND {
+        "AND".to_string()
+    } else {
+        "OR".to_string()
+    }
+}
+
+fn set_err(a: mut ref Alg, e: own Exc) {
+    if a.err.is_none() {
+        a.err = Some(e);
+    }
+}
+
+// ------------------------------------------------------------ equality and order
+
+fn str_lt(x: ref String, y: ref String) -> bool {
+    let xs = cps_of(x);
+    let ys = cps_of(y);
+    let mut k = 0;
+    while k < xs.len() and k < ys.len() {
+        if xs[k] != ys[k] {
+            return xs[k] < ys[k];
+        }
+        k += 1;
+    }
+    xs.len() < ys.len()
+}
+
+// x == y: the same object, or the same class and (for a symbol) the same
+// object name or (for a function) the same frozenset of arguments.
+fn eq(a: ref Alg, x: i64, y: i64) -> bool {
+    if x == y {
+        return true;
+    }
+    let kx = a.nodes[x].kind;
+    if kx != a.nodes[y].kind {
+        return false;
+    }
+    if kx <= K_FALSE {
+        return true;
+    }
+    if kx == K_SYM {
+        return a.nodes[x].obj == a.nodes[y].obj;
+    }
+    let ax = args_of(a, x);
+    let ay = args_of(a, y);
+    for v in ax.clone() {
+        if not in_list(a, ay, v) {
+            return false;
+        }
+    }
+    for v in ay {
+        if not in_list(a, ax, v) {
+            return false;
+        }
+    }
+    true
+}
+
+// x in xs, for a list or a tuple.
+fn in_list(a: ref Alg, xs: ref Vec[i64], x: i64) -> bool {
+    for v in xs {
+        if eq(a, *v, x) {
+            return true;
+        }
+    }
+    false
+}
+
+// list.remove(x): the first element equal to x.
+fn remove_first(a: ref Alg, xs: mut ref Vec[i64], x: i64) {
+    let mut k = 0;
+    while k < xs.len() {
+        if eq(a, xs[k], x) {
+            xs.remove(k);
+            return;
+        }
+        k += 1;
+    }
+}
+
+fn sort_order(k: i64) -> i64 {
+    if k <= K_FALSE {
+        0
+    } else if k == K_SYM {
+        5
+    } else if k == K_NOT {
+        -1
+    } else if k == K_AND {
+        10
+    } else {
+        25
+    }
+}
+
+fn tri(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
+
+// x.__lt__(y) itself: 0 False, 1 True, 2 NotImplemented.
+fn lt_method(a: ref Alg, x: i64, y: i64) -> i64 {
+    let kx = a.nodes[x].kind;
+    let ky = a.nodes[y].kind;
+    if kx <= K_FALSE {
+        if ky <= K_FALSE {
+            return tri(kx == K_FALSE);
+        }
+        return 2;
+    }
+    if kx == K_NOT {
+        return tri(py_lt(a, a.nodes[x].args[0], y));
+    }
+    let sx = sort_order(kx);
+    let sy = sort_order(ky);
+    if sy >= 0 and sx != sy {
+        return tri(sx < sy);
+    }
+    if kx == K_SYM {
+        if ky == K_SYM {
+            return tri(str_lt(a.nodes[x].obj, a.nodes[y].obj));
+        }
+        return 2;
+    }
+    if kx == ky {
+        let ax = args_of(a, x);
+        let ay = args_of(a, y);
+        let mut i = 0;
+        while i < ax.len() and i < ay.len() {
+            if not eq(a, ax[i], ay[i]) {
+                return tri(py_lt(a, ax[i], ay[i]));
+            }
+            i += 1;
+        }
+        if ax.len() != ay.len() {
+            return tri(ax.len() < ay.len());
+        }
+    }
+    2
+}
+
+// x < y as Python evaluates it: x.__lt__(y), then the reflected
+// y.__gt__(x), which is Expression.__gt__: `not y.__lt__(x)`, and a
+// NotImplemented there counts as true, so the answer is False.
+fn py_lt(a: ref Alg, x: i64, y: i64) -> bool {
+    let r = lt_method(a, x, y);
+    if r != 2 {
+        return r == 1;
+    }
+    let r2 = lt_method(a, y, x);
+    if r2 == 2 {
+        return false;
+    }
+    r2 == 0
+}
+
+// list.sort(): a stable sort by `<` (the arguments of a simplified
+// expression are distinct, and on them the library's order is a strict
+// weak order, so every stable sort agrees with CPython's).
+fn sort_nodes(a: ref Alg, xs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in xs {
+        let mut k = out.len();
+        while k > 0 and py_lt(a, *x, out[k - 1]) {
+            k -= 1;
+        }
+        out.insert(k, *x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ printing
+
+fn repr(a: ref Alg, x: i64) -> String {
+    let k = a.nodes[x].kind;
+    if k == K_TRUE {
+        return "TRUE".to_string();
+    }
+    if k == K_FALSE {
+        return "FALSE".to_string();
+    }
+    if k == K_SYM {
+        let o = a.nodes[x].obj.clone();
+        return f"Symbol('{o}')";
+    }
+    let mut s = cls_name(k);
+    s.push('(');
+    let mut first = true;
+    for v in args_of(a, x) {
+        if not first {
+            s.push_str(", ");
+        }
+        first = false;
+        s.push_str(repr(a, v));
+    }
+    s.push(')');
+    s
+}
+
+fn opr(k: i64) -> String {
+    if k == K_NOT {
+        "~".to_string()
+    } else if k == K_AND {
+        "&".to_string()
+    } else {
+        "|".to_string()
+    }
+}
+
+fn py_str(a: ref Alg, x: i64) -> String {
+    let k = a.nodes[x].kind;
+    if k == K_TRUE {
+        return "1".to_string();
+    }
+    if k == K_FALSE {
+        return "0".to_string();
+    }
+    if k == K_SYM {
+        return a.nodes[x].obj.clone();
+    }
+    let xa = args_of(a, x);
+    let op = opr(k);
+    if xa.len() == 1 {
+        let inner = py_str(a, xa[0]);
+        if a.nodes[x].isliteral {
+            return f"{op}{inner}";
+        }
+        return f"{op}({inner})";
+    }
+    let mut s = String.new();
+    let mut first = true;
+    for v in xa {
+        if not first {
+            s.push_str(op);
+        }
+        first = false;
+        let inner = py_str(a, v);
+        if a.nodes[v].isliteral {
+            s.push_str(inner);
+        } else {
+            s.push_str(f"({inner})");
+        }
+    }
+    s
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(' ');
+        k += 1;
+    }
+    s
+}
+
+fn flags_of(a: ref Alg, x: i64) -> String {
+    let l = py_bool(a.nodes[x].isliteral);
+    let c = py_bool(a.nodes[x].iscanonical);
+    f"<isliteral={l}, iscanonical={c}"
+}
+
+// pretty(indent, debug), each class's own.
+fn pretty(a: ref Alg, x: i64, indent: i64, debug: bool) -> String {
+    let k = a.nodes[x].kind;
+    let pad = spaces(indent);
+    if k <= K_FALSE {
+        let r = repr(a, x);
+        return f"{pad}{r}";
+    }
+    if k == K_SYM {
+        let mut d = String.new();
+        if debug {
+            d = flags_of(a, x);
+            d.push('>');
+        }
+        let o = a.nodes[x].obj.clone();
+        return f"{pad}Symbol({d}'{o}')";
+    }
+    if k == K_NOT and a.nodes[x].isliteral {
+        let mut d = String.new();
+        if debug {
+            d = flags_of(a, x);
+            d.push('>');
+        }
+        let inner = pretty(a, a.nodes[x].args[0], 0, debug);
+        return f"{pad}NOT({d}{inner})";
+    }
+    let mut d = String.new();
+    if debug {
+        d = flags_of(a, x);
+        if k == K_AND {
+            d.push_str(", identity=TRUE, annihilator=FALSE, dual=<class 'boolean.boolean.OR'>");
+        } else if k == K_OR {
+            d.push_str(", identity=FALSE, annihilator=TRUE, dual=<class 'boolean.boolean.AND'>");
+        }
+        d.push('>');
+    }
+    let mut parts = String.new();
+    let mut first = true;
+    for v in args_of(a, x) {
+        if not first {
+            parts.push_str(",\n");
+        }
+        first = false;
+        parts.push_str(pretty(a, v, indent + 2, debug));
+    }
+    let nl = if a.nodes[x].isliteral { "" } else { "\n" };
+    let cls = cls_name(k);
+    f"{pad}{cls}({d}{nl}{parts}\n{pad})"
+}
+
+// ------------------------------------------------------------ the methods
+
+// NOT.cancel(): double negations removed as far as they go.
+fn cancel(a: ref Alg, x: i64) -> i64 {
+    let mut e = x;
+    loop {
+        let arg = a.nodes[e].args[0];
+        if a.nodes[arg].kind != K_NOT {
+            return e;
+        }
+        e = a.nodes[arg].args[0];
+        if a.nodes[e].kind != K_NOT {
+            return e;
+        }
+    }
+}
+
+// NOT.demorgan(): the negation moved inward one level.
+fn demorgan(a: mut ref Alg, x: i64) -> i64 {
+    let e = cancel(a, x);
+    if a.nodes[e].isliteral or a.nodes[e].kind != K_NOT {
+        return e;
+    }
+    let op = a.nodes[e].args[0];
+    let ok = a.nodes[op].kind;
+    let mut out: Vec[i64] = Vec.new();
+    for v in args_of(a, op) {
+        let n = mk_not(mut a, v);
+        out.push(cancel(a, n));
+    }
+    if is_dual(ok) {
+        return mk(mut a, dual_kind(ok), out);
+    }
+    // A base element's dual is an element, and calling it returns it.
+    let d = a.nodes[op].dual;
+    if d < 0 {
+        set_err(mut a, exc("TypeError", "'NoneType' object is not callable".to_string()));
+        return 0;
+    }
+    d
+}
+
+fn literalize(a: mut ref Alg, x: i64) -> i64 {
+    if a.nodes[x].isliteral {
+        return x;
+    }
+    let k = a.nodes[x].kind;
+    if k == K_NOT {
+        let e = demorgan(mut a, x);
+        if a.nodes[e].kind == K_NOT {
+            return e;
+        }
+        return literalize(mut a, e);
+    }
+    let xa = args_of(a, x);
+    let mut out: Vec[i64] = Vec.new();
+    let mut same_objs = true;
+    let mut i = 0;
+    while i < xa.len() {
+        let l = literalize(mut a, xa[i]);
+        if l != xa[i] {
+            same_objs = false;
+        }
+        out.push(l);
+        i += 1;
+    }
+    if same_objs {
+        return x;
+    }
+    mk(mut a, k, out)
+}
+
+fn flatten(a: mut ref Alg, x: i64) -> i64 {
+    let k = a.nodes[x].kind;
+    let mut out: Vec[i64] = Vec.new();
+    for v in args_of(a, x) {
+        if a.nodes[v].kind == k {
+            for w in args_of(a, v) {
+                out.push(w);
+            }
+        } else {
+            out.push(v);
+        }
+    }
+    mk(mut a, k, out)
+}
+
+// DualBase.__contains__(e): truthy when e is one of the arguments, or an
+// expression of the same class whose arguments all are.
+fn contains_dual(a: ref Alg, t: i64, e: i64) -> bool {
+    let ta = args_of(a, t);
+    if in_list(a, ta, e) {
+        return true;
+    }
+    if a.nodes[e].kind == a.nodes[t].kind {
+        for v in args_of(a, e) {
+            if not in_list(a, ta, v) {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+// DualBase.subtract(e, simplify); -1 is None.
+fn subtract(a: mut ref Alg, x: i64, e: i64, simp: bool) -> i64 {
+    let xa = args_of(a, x);
+    let mut args = xa.clone();
+    if in_list(a, xa, e) {
+        remove_first(a, mut args, e);
+    } else if a.nodes[e].kind == a.nodes[x].kind {
+        let mut all_in = true;
+        for v in args_of(a, e) {
+            if not in_list(a, xa, v) {
+                all_in = false;
+                break;
+            }
+        }
+        if all_in {
+            args = Vec.new();
+            for v in xa {
+                if not contains_dual(a, e, v) {
+                    args.push(v);
+                }
+            }
+        }
+    }
+    if args.len() == 0 {
+        return -1;
+    }
+    if args.len() == 1 {
+        return args[0];
+    }
+    let n = mk(mut a, a.nodes[x].kind, args);
+    if simp {
+        return simplify(mut a, n);
+    }
+    n
+}
+
+// DualBase.absorb(args): absorption and negative absorption.
+fn absorb(a: mut ref Alg, k: i64, given: ref Vec[i64]) -> Vec[i64] {
+    let dual = dual_kind(k);
+    let mut args = given.clone();
+    let mut i = 0;
+    while i < args.len() {
+        let absorber = args[i];
+        let mut j = 0;
+        while j < args.len() {
+            if j == i {
+                j += 1;
+                continue;
+            }
+            let target = args[j];
+            if a.nodes[target].kind != dual {
+                j += 1;
+                continue;
+            }
+            if contains_dual(a, target, absorber) {
+                args.remove(j);
+                if j < i {
+                    i -= 1;
+                }
+                continue;
+            }
+            let nn = mk_not(mut a, absorber);
+            let neg = cancel(a, nn);
+            if contains_dual(a, target, neg) {
+                let b = subtract(mut a, target, neg, false);
+                if b == -1 {
+                    args.remove(j);
+                    if j < i {
+                        i -= 1;
+                    }
+                    continue;
+                }
+                args[j] = b;
+                j += 1;
+                continue;
+            }
+            if a.nodes[absorber].kind == dual {
+                let mut rm = -1;
+                let ta = args_of(a, target);
+                for v in args_of(a, absorber) {
+                    let n2 = mk_not(mut a, v);
+                    let narg = cancel(a, n2);
+                    if in_list(a, ta, v) {
+                        continue;
+                    }
+                    if in_list(a, ta, narg) {
+                        if rm == -1 {
+                            rm = narg;
+                        } else {
+                            rm = -1;
+                            break;
+                        }
+                    } else {
+                        rm = -1;
+                        break;
+                    }
+                }
+                if rm != -1 {
+                    let b = subtract(mut a, target, rm, true);
+                    if b == -1 {
+                        set_err(mut a, exc("AttributeError", "'NoneType' object has no attribute 'args'".to_string()));
+                    } else {
+                        args[j] = b;
+                    }
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    args
+}
+
+fn simplify(a: mut ref Alg, x: i64) -> i64 {
+    let k = a.nodes[x].kind;
+    if k <= K_SYM {
+        return x;
+    }
+    if a.nodes[x].iscanonical {
+        return x;
+    }
+    if k == K_NOT {
+        let e = cancel(a, x);
+        if a.nodes[e].kind != K_NOT {
+            return simplify(mut a, e);
+        }
+        let arg = a.nodes[e].args[0];
+        if a.nodes[arg].kind <= K_FALSE {
+            let d = a.nodes[arg].dual;
+            if d < 0 {
+                set_err(mut a, exc("AttributeError", "'NoneType' object has no attribute 'simplify'".to_string()));
+                return 0;
+            }
+            return d;
+        }
+        let s = simplify(mut a, arg);
+        let n = mk_not(mut a, s);
+        a.nodes[n].iscanonical = true;
+        return n;
+    }
+    dual_simplify(mut a, x)
+}
+
+// DualBase.simplify(): associativity, annihilation, idempotence,
+// identity, complementation, elimination and absorption, then sorted.
+fn dual_simplify(a: mut ref Alg, x: i64) -> i64 {
+    let k = a.nodes[x].kind;
+    let dual = dual_kind(k);
+    let ann: i64 = if k == K_AND { 1 } else { 0 };
+    let ident: i64 = if k == K_AND { 0 } else { 1 };
+    let mut sargs: Vec[i64] = Vec.new();
+    for v in args_of(a, x) {
+        sargs.push(simplify(mut a, v));
+    }
+    let e0 = mk(mut a, k, sargs);
+    let e1 = literalize(mut a, e0);
+    let e = flatten(mut a, e1);
+    let ea = args_of(a, e);
+    if in_list(a, ea, ann) {
+        return ann;
+    }
+    let mut args: Vec[i64] = Vec.new();
+    for v in ea {
+        if not in_list(a, args, v) {
+            args.push(v);
+        }
+    }
+    if args.len() == 1 {
+        return args[0];
+    }
+    if in_list(a, args, ident) {
+        remove_first(a, mut args, ident);
+        if args.len() == 1 {
+            return args[0];
+        }
+    }
+    for v in args.clone() {
+        let n = mk_not(mut a, v);
+        if in_list(a, args, n) {
+            return ann;
+        }
+    }
+    // Elimination: (a & b) | (a & ~b) is a.
+    let mut i = 0;
+    while i < args.len() - 1 {
+        let mut j = i + 1;
+        let ai = args[i];
+        if a.nodes[ai].kind != dual {
+            i += 1;
+            continue;
+        }
+        while j < args.len() {
+            let aj = args[j];
+            if a.nodes[aj].kind != dual or a.nodes[ai].args.len() != a.nodes[aj].args.len() {
+                j += 1;
+                continue;
+            }
+            let mut negated = -1;
+            let aia = args_of(a, ai);
+            let aja = args_of(a, aj);
+            for v in aia.clone() {
+                if in_list(a, aja, v) {
+                    continue;
+                }
+                let n = mk_not(mut a, v);
+                let c = cancel(a, n);
+                if in_list(a, aja, c) {
+                    if negated == -1 {
+                        negated = v;
+                    } else {
+                        negated = -1;
+                        break;
+                    }
+                } else {
+                    negated = -1;
+                    break;
+                }
+            }
+            if negated != -1 {
+                args.remove(j);
+                let mut rest = aia.clone();
+                remove_first(a, mut rest, negated);
+                if rest.len() == 1 {
+                    args[i] = rest[0];
+                } else {
+                    args[i] = mk(mut a, dual, rest);
+                }
+                if args.len() == 1 {
+                    return args[0];
+                }
+                let n = mk(mut a, k, args);
+                return simplify(mut a, n);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    let absorbed = absorb(mut a, k, args);
+    if absorbed.len() == 1 {
+        return absorbed[0];
+    }
+    let sorted = sort_nodes(a, absorbed);
+    let r = mk(mut a, k, sorted);
+    a.nodes[r].iscanonical = true;
+    r
+}
+
+// DualBase.distributive(): A & (B|C) becomes (A&B) | (A&C).
+fn distributive(a: mut ref Alg, x: i64) -> i64 {
+    let k = a.nodes[x].kind;
+    let d = dual_kind(k);
+    let mut combos: Vec[Vec[i64]] = Vec.new();
+    combos.push(Vec.new());
+    for v in args_of(a, x) {
+        let choices: Vec[i64] = if a.nodes[v].kind == d {
+            args_of(a, v)
+        } else {
+            let mut one: Vec[i64] = Vec.new();
+            one.push(v);
+            one
+        };
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for c in combos {
+            for w in choices.clone() {
+                let mut c2 = c.clone();
+                c2.push(w);
+                next.push(c2);
+            }
+        }
+        combos = next;
+    }
+    let mut terms: Vec[i64] = Vec.new();
+    for c in combos {
+        let n = mk(mut a, k, c.clone());
+        terms.push(simplify(mut a, n));
+    }
+    if terms.len() == 1 {
+        return terms[0];
+    }
+    mk(mut a, d, terms)
+}
+
+// BooleanAlgebra._recurse_distributive(expr, operation_inst).
+fn recurse_distributive(a: mut ref Alg, e: i64, opk: i64) -> i64 {
+    if a.nodes[e].isliteral {
+        return e;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for v in args_of(a, e) {
+        let r = recurse_distributive(mut a, v, opk);
+        out.push(simplify(mut a, r));
+    }
+    if out.len() == 1 {
+        return out[0];
+    }
+    let f = mk(mut a, a.nodes[e].kind, out);
+    if a.nodes[f].kind == dual_kind(opk) {
+        return distributive(mut a, f);
+    }
+    f
+}
+
+// BooleanAlgebra.normalize(expr, operation), which assigns the normalized
+// arguments back to `expr.args` of the simplified object.
+fn normalize(a: mut ref Alg, e: i64, opk: i64) -> i64 {
+    let l = literalize(mut a, e);
+    let x = simplify(mut a, l);
+    let mut na: Vec[i64] = Vec.new();
+    for v in args_of(a, x) {
+        na.push(normalize(mut a, v, opk));
+    }
+    a.nodes[x].args = na;
+    let k = a.nodes[x].kind;
+    if a.nodes[x].args.len() > 1 and ((opk == K_AND and k == K_OR) or (opk == K_OR and k == K_AND)) {
+        let args = args_of(a, x);
+        let mut r = args[0];
+        let mut i = 1;
+        while i < args.len() {
+            let p = mk2(mut a, k, r, args[i]);
+            let q = recurse_distributive(mut a, p, opk);
+            r = simplify(mut a, q);
+            i += 1;
+        }
+        return r;
+    }
+    let q = recurse_distributive(mut a, x, opk);
+    simplify(mut a, q)
+}
+
+// Expression.subs(substitutions, default, simplify); -1 is None.
+fn subs(a: mut ref Alg, x: i64, keys: ref Vec[i64], vals: ref Vec[i64], default: i64, simp: bool) -> i64 {
+    let mut i = 0;
+    while i < keys.len() {
+        if eq(a, keys[i], x) {
+            return vals[i];
+        }
+        i += 1;
+    }
+    let r = subs_inner(mut a, x, keys, vals, default, simp);
+    if r == -1 { x } else { r }
+}
+
+fn subs_inner(a: mut ref Alg, x: i64, keys: ref Vec[i64], vals: ref Vec[i64], default: i64, simp: bool) -> i64 {
+    if x == 0 or x == 1 {
+        return x;
+    }
+    let xa = args_of(a, x);
+    if xa.len() == 0 {
+        return default;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut changed = false;
+    for arg in xa {
+        let mut hit = -1;
+        let mut i = 0;
+        while i < keys.len() {
+            if eq(a, arg, keys[i]) {
+                hit = i;
+                break;
+            }
+            i += 1;
+        }
+        if hit >= 0 {
+            out.push(vals[hit]);
+            changed = true;
+        } else {
+            let na = subs_inner(mut a, arg, keys, vals, default, simp);
+            if na == -1 {
+                out.push(arg);
+            } else {
+                out.push(na);
+                changed = true;
+            }
+        }
+    }
+    if not changed {
+        return -1;
+    }
+    let n = mk(mut a, a.nodes[x].kind, out);
+    if simp {
+        return simplify(mut a, n);
+    }
+    n
+}
+
+fn get_literals(a: ref Alg, x: i64, out: mut ref Vec[i64]) {
+    if a.nodes[x].isliteral {
+        out.push(x);
+        return;
+    }
+    for v in args_of(a, x) {
+        get_literals(a, v, mut out);
+    }
+}
+
+fn get_symbols(a: ref Alg, x: i64) -> Vec[i64] {
+    let mut lits: Vec[i64] = Vec.new();
+    get_literals(a, x, mut lits);
+    let mut out: Vec[i64] = Vec.new();
+    for l in lits {
+        if a.nodes[l].kind == K_SYM {
+            out.push(l);
+        } else {
+            out.push(a.nodes[l].args[0]);
+        }
+    }
+    out
+}
+
+fn sort_strings(xs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in xs {
+        let mut k = out.len();
+        while k > 0 and str_lt(x, out[k - 1]) {
+            k -= 1;
+        }
+        out.insert(k, x.clone());
+    }
+    out
+}
+
+fn has_str(xs: ref Vec[String], x: ref String) -> bool {
+    for v in xs {
+        if v == x {
+            return true;
+        }
+    }
+    false
+}
+
+// sorted(expr.objects): the distinct symbol names, in order.
+fn objects(a: ref Alg, x: i64) -> Vec[String] {
+    let mut names: Vec[String] = Vec.new();
+    for s in get_symbols(a, x) {
+        let o = a.nodes[s].obj.clone();
+        if not has_str(names, o) {
+            names.push(o);
+        }
+    }
+    sort_strings(names)
+}
+
+// ------------------------------------------------------------ evaluation
+
+// What calling an expression gives: a Python bool, or one of the
+// algebra's objects (TRUE() returns itself, and `TRUE & FALSE` builds an
+// AND).
+#[derive(Copy, Clone)]
+enum Val {
+    B(bool),
+    O(i64),
+}
+
+fn val_repr(a: ref Alg, v: Val) -> String {
+    match v {
+        Val.B(b) => py_bool(b),
+        Val.O(n) => repr(a, n),
+    }
+}
+
+// bool(v)
+fn truth(a: ref Alg, v: Val) -> Result[bool, Exc] {
+    match v {
+        Val.B(b) => Ok(b),
+        Val.O(n) => {
+            let k = a.nodes[n].kind;
+            if k == K_TRUE {
+                Ok(true)
+            } else if k == K_FALSE {
+                Ok(false)
+            } else {
+                Err(exc("TypeError", "Cannot evaluate expression as a Python Boolean.".to_string()))
+            }
+        }
+    }
+}
+
+// operator.and_ / operator.or_ on two values.
+fn binop(a: mut ref Alg, k: i64, x: Val, y: Val) -> Result[Val, Exc] {
+    let op = opr(k);
+    match x {
+        Val.B(bx) => match y {
+            Val.B(by) => Ok(Val.B(if k == K_AND { bx and by } else { bx or by })),
+            Val.O(n) => {
+                let c = cls_name(a.nodes[n].kind);
+                Err(exc("TypeError", f"unsupported operand type(s) for {op}: 'bool' and '{c}'"))
+            }
+        },
+        Val.O(n) => match y {
+            Val.B(by) => {
+                let r = repr(a, n);
+                let b = py_bool(by);
+                Err(exc("AssertionError", f"Bad arguments: all arguments must be an Expression: ({r}, {b})"))
+            }
+            Val.O(m) => Ok(Val.O(mk2(mut a, k, n, m))),
+        },
+    }
+}
+
+// expr(**kwargs), the names and values in keyword order.
+fn eval(a: mut ref Alg, x: i64, names: ref Vec[String], vals: ref Vec[bool]) -> Result[Val, Exc] {
+    let k = a.nodes[x].kind;
+    if k <= K_FALSE {
+        if names.len() > 0 {
+            let c = cls_name(k);
+            let n0 = names[0].clone();
+            return Err(exc("TypeError", f"{c}.__call__() got an unexpected keyword argument '{n0}'"));
+        }
+        return Ok(Val.O(x));
+    }
+    if k == K_SYM {
+        let mut i = 0;
+        while i < names.len() {
+            if names[i] == a.nodes[x].obj {
+                return Ok(Val.B(vals[i]));
+            }
+            i += 1;
+        }
+        return Err(exc("KeyError", str_repr(cps_of(a.nodes[x].obj))));
+    }
+    if k == K_NOT {
+        let v = eval(mut a, a.nodes[x].args[0], names, vals)?;
+        let t = truth(a, v)?;
+        return Ok(Val.B(not t));
+    }
+    let xa = args_of(a, x);
+    let mut acc = eval(mut a, xa[0], names, vals)?;
+    let mut i = 1;
+    while i < xa.len() {
+        let v = eval(mut a, xa[i], names, vals)?;
+        acc = binop(mut a, k, acc, v)?;
+        i += 1;
+    }
+    Ok(acc)
+}
+
+// bool(e(**{name: name in attrs for name in sorted(e.objects)})), the
+// apps' evaluation.
+fn truth_in(a: mut ref Alg, e: i64, attrs: ref Vec[String]) -> Result[bool, Exc] {
+    let names = objects(a, e);
+    let mut vals: Vec[bool] = Vec.new();
+    for n in names.clone() {
+        vals.push(has_str(attrs, n));
+    }
+    let v = eval(mut a, e, names, vals)?;
+    truth(a, v)
+}
+
+// ------------------------------------------------------------ tokens and parsing
+
+#[derive(Clone)]
+struct Tok {
+    kind: i64,
+    sym: i64,
+    s: String,
+    pos: i64,
+}
+
+fn parse_error(code: i64, ts: ref String, pos: i64) -> Exc {
+    let mut m = if code == P_UNKNOWN_TOKEN {
+        "Unknown token".to_string()
+    } else if code == P_UNBALANCED {
+        "Unbalanced parenthesis".to_string()
+    } else if code == P_INVALID_EXPRESSION {
+        "Invalid expression".to_string()
+    } else if code == P_INVALID_NESTING {
+        "Invalid expression nesting such as (AND xx)".to_string()
+    } else if code == P_SYMBOL_SEQUENCE {
+        "Invalid symbols sequence such as (A B)".to_string()
+    } else {
+        "Invalid operator sequence without symbols such as AND OR or OR OR".to_string()
+    };
+    if ts.len() > 0 {
+        m.push_str(f" for token: \"{ts}\"");
+    }
+    if pos > 0 {
+        m.push_str(f" at position: {pos}");
+    }
+    exc("ParseError", m)
+}
+
+fn plain_error(code: i64) -> Exc {
+    parse_error(code, String.new(), -1)
+}
+
+fn tok_error(code: i64, t: ref Tok) -> Exc {
+    parse_error(code, t.s, t.pos)
+}
+
+// str.isalnum() for the code points the inputs use (ASCII and Latin-1).
+fn is_alnum(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        or c == 0xaa or c == 0xb2 or c == 0xb3 or c == 0xb5 or c == 0xb9 or c == 0xba
+        or (c >= 0xbc and c <= 0xbe)
+        or (c >= 0xc0 and c <= 0xff and c != 0xd7 and c != 0xf7)
+}
+
+fn ascii_lower(cs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in cs {
+        if *c >= 65 and *c <= 90 {
+            out.push(*c + 32);
+        } else {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+// The TOKENS table of tokenize(); -1 when the text is not in it.
+fn token_type(t: ref Vec[i64]) -> i64 {
+    let l = ascii_lower(t);
+    if is(l, "*") or is(l, "&") or is(l, "and") {
+        T_AND
+    } else if is(l, "+") or is(l, "|") or is(l, "or") {
+        T_OR
+    } else if is(l, "~") or is(l, "!") or is(l, "not") {
+        T_NOT
+    } else if is(l, "(") or is(l, "[") {
+        T_LPAR
+    } else if is(l, ")") or is(l, "]") {
+        T_RPAR
+    } else if is(l, "true") or is(l, "1") {
+        T_TRUE
+    } else if is(l, "false") or is(l, "0") or is(l, "none") {
+        T_FALSE
+    } else {
+        -1
+    }
+}
+
+// BooleanAlgebra.tokenize(): the tokens before any error, and the error.
+fn tokenize(cs: ref Vec[i64]) -> (Vec[Tok], Option[Exc]) {
+    let mut out: Vec[Tok] = Vec.new();
+    let n = cs.len();
+    let mut position = 0;
+    while position < n {
+        let mut tok: Vec[i64] = Vec.new();
+        tok.push(cs[position]);
+        let c0 = cs[position];
+        let sym = is_alnum(c0) or c0 == 95;
+        if sym {
+            position += 1;
+            while position < n {
+                let ch = cs[position];
+                if is_alnum(ch) or ch == 46 or ch == 58 or ch == 95 {
+                    position += 1;
+                    tok.push(ch);
+                } else {
+                    break;
+                }
+            }
+            position -= 1;
+        }
+        let tt = token_type(tok);
+        if tt >= 0 {
+            out.push(Tok { kind: tt, sym: -1, s: cps_str(tok), pos: position });
+        } else if sym {
+            out.push(Tok { kind: T_SYMBOL, sym: -1, s: cps_str(tok), pos: position });
+        } else if not (c0 == 32 or c0 == 9 or c0 == 13 or c0 == 10) {
+            return (out, Some(parse_error(P_UNKNOWN_TOKEN, cps_str(tok), position)));
+        }
+        position += 1;
+    }
+    (out, None)
+}
+
+// An element of one of parse()'s lists: [parent, operation, args...].
+#[derive(Copy, Clone)]
+enum Item {
+    Nil,
+    Fr(i64),
+    Op(i64),
+    Nd(i64),
+}
+
+fn prec(c: i64) -> i64 {
+    if c == T_NOT {
+        5
+    } else if c == T_AND {
+        10
+    } else if c == T_OR {
+        15
+    } else {
+        20
+    }
+}
+
+fn item_repr(a: ref Alg, it: Item) -> String {
+    match it {
+        Item.Nil => "None".to_string(),
+        Item.Fr(_) => "[...]".to_string(),
+        Item.Op(c) => {
+            if c == T_LPAR {
+                "4".to_string()
+            } else {
+                let cls = if c == T_NOT { "NOT" } else if c == T_AND { "AND" } else { "OR" };
+                f"<class 'boolean.boolean.{cls}'>"
+            }
+        }
+        Item.Nd(x) => repr(a, x),
+    }
+}
+
+fn tail(xs: ref Vec[Item], from: i64) -> Vec[Item] {
+    let mut out: Vec[Item] = Vec.new();
+    let mut k = from;
+    while k < xs.len() {
+        out.push(xs[k]);
+        k += 1;
+    }
+    out
+}
+
+// ast[1](*ast[2:])
+fn call_op(a: mut ref Alg, op: Item, items: ref Vec[Item]) -> Result[i64, Exc] {
+    let n = items.len();
+    match op {
+        Item.Op(c) => {
+            if c == T_LPAR {
+                return Err(exc("TypeError", "'int' object is not callable".to_string()));
+            }
+            if c == T_NOT {
+                if n == 0 {
+                    return Err(exc("TypeError", "NOT.__init__() missing 1 required positional argument: 'arg1'".to_string()));
+                }
+                if n > 1 {
+                    let g = n + 1;
+                    return Err(exc("TypeError", f"NOT.__init__() takes 2 positional arguments but {g} were given"));
+                }
+            } else {
+                let cls = if c == T_AND { "AND" } else { "OR" };
+                if n == 0 {
+                    return Err(exc("TypeError", f"{cls}.__init__() missing 2 required positional arguments: 'arg1' and 'arg2'"));
+                }
+                if n == 1 {
+                    return Err(exc("TypeError", f"{cls}.__init__() missing 1 required positional argument: 'arg2'"));
+                }
+            }
+            let mut nodes: Vec[i64] = Vec.new();
+            let mut bad = false;
+            for it in items {
+                match *it {
+                    Item.Nd(x) => nodes.push(x),
+                    _ => {
+                        bad = true;
+                    }
+                }
+            }
+            if bad {
+                let mut r = "(".to_string();
+                let mut first = true;
+                for it in items {
+                    if not first {
+                        r.push_str(", ");
+                    }
+                    first = false;
+                    r.push_str(item_repr(a, *it));
+                }
+                if n == 1 {
+                    r.push(',');
+                }
+                r.push(')');
+                return Err(exc("AssertionError", f"Bad arguments: all arguments must be an Expression: {r}"));
+            }
+            let kind = if c == T_NOT { K_NOT } else if c == T_AND { K_AND } else { K_OR };
+            Ok(mk(mut a, kind, nodes))
+        }
+        Item.Nil => Err(exc("TypeError", "'NoneType' object is not callable".to_string())),
+        Item.Fr(_) => Err(exc("TypeError", "'list' object is not callable".to_string())),
+        Item.Nd(x) => {
+            let c = cls_name(a.nodes[x].kind);
+            let g = n + 1;
+            Err(exc("TypeError", f"{c}.__call__() takes 1 positional argument but {g} were given"))
+        }
+    }
+}
+
+fn is_function(it: Item) -> bool {
+    match it {
+        Item.Op(c) => c == T_NOT or c == T_AND or c == T_OR,
+        _ => false,
+    }
+}
+
+// BooleanAlgebra._start_operation(ast, operation, precedence)
+fn start_operation(a: mut ref Alg, fr: mut ref Vec[Vec[Item]], at: i64, op: i64) -> Result[i64, Exc] {
+    let op_prec = prec(op);
+    let mut ast = at;
+    loop {
+        if fr[ast].len() < 2 {
+            return Err(index_error());
+        }
+        let i1 = fr[ast][1];
+        let p = match i1 {
+            Item.Nil => {
+                fr[ast][1] = Item.Op(op);
+                return Ok(ast);
+            }
+            Item.Op(c) => prec(c),
+            Item.Nd(x) => {
+                return Err(exc("KeyError", repr(a, x)));
+            }
+            Item.Fr(_) => {
+                return Err(exc("TypeError", "unhashable type: 'list'".to_string()));
+            }
+        };
+        if p > op_prec {
+            let popped = fr[ast][fr[ast].len() - 1];
+            fr[ast].pop();
+            let mut nf: Vec[Item] = Vec.new();
+            nf.push(Item.Fr(ast));
+            nf.push(Item.Op(op));
+            nf.push(popped);
+            fr.push(nf);
+            return Ok(fr.len() - 1);
+        }
+        if p == op_prec {
+            return Ok(ast);
+        }
+        if not is_function(i1) {
+            return Err(plain_error(P_INVALID_NESTING));
+        }
+        let items = tail(fr[ast], 2);
+        match fr[ast][0] {
+            Item.Fr(parent) => {
+                let s = call_op(mut a, i1, items)?;
+                fr[parent].push(Item.Nd(s));
+                ast = parent;
+            }
+            _ => {
+                let s = call_op(mut a, i1, items)?;
+                let mut nf: Vec[Item] = Vec.new();
+                nf.push(Item.Nil);
+                nf.push(Item.Op(op));
+                nf.push(Item.Nd(s));
+                fr.push(nf);
+                return Ok(fr.len() - 1);
+            }
+        }
+    }
+}
+
+fn is_sym_tok(k: i64) -> bool {
+    k == T_OBJ or k == T_TRUE or k == T_FALSE or k == T_SYMBOL
+}
+
+fn is_op_tok(k: i64) -> bool {
+    k == T_AND or k == T_OR
+}
+
+// A TypeError while finishing the parse is an invalid expression.
+fn finish(a: mut ref Alg, op: Item, items: ref Vec[Item]) -> Result[i64, Exc] {
+    match call_op(mut a, op, items) {
+        Ok(n) => Ok(n),
+        Err(e) => {
+            if e.cls == "TypeError" {
+                Err(plain_error(P_INVALID_EXPRESSION))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// BooleanAlgebra.parse(expr, simplify) over a token list and the error the
+// tokenizer stopped at, if any (raised when the parser asks for the token
+// after the last one).
+fn parse_tokens(a: mut ref Alg, toks: ref Vec[Tok], tok_err: ref Option[Exc], simp: bool) -> Result[i64, Exc] {
+    let mut fr: Vec[Vec[Item]] = Vec.new();
+    let mut top: Vec[Item] = Vec.new();
+    top.push(Item.Nil);
+    top.push(Item.Nil);
+    fr.push(top);
+    let mut ast: i64 = 0;
+    let mut has_prev = false;
+    let mut prev_kind: i64 = 0;
+    for t in toks {
+        let tk = t.kind;
+        if has_prev {
+            if is_sym_tok(prev_kind) and is_sym_tok(tk) {
+                return Err(tok_error(P_SYMBOL_SEQUENCE, t));
+            }
+            if is_op_tok(prev_kind) and (is_op_tok(tk) or tk == T_RPAR) {
+                return Err(tok_error(P_OPERATOR_SEQUENCE, t));
+            }
+        } else if is_op_tok(tk) {
+            return Err(tok_error(P_OPERATOR_SEQUENCE, t));
+        }
+        if tk == T_SYMBOL {
+            let s = mk_sym(mut a, t.s.clone());
+            fr[ast].push(Item.Nd(s));
+        } else if tk == T_OBJ {
+            fr[ast].push(Item.Nd(t.sym));
+        } else if tk == T_TRUE {
+            fr[ast].push(Item.Nd(0));
+        } else if tk == T_FALSE {
+            fr[ast].push(Item.Nd(1));
+        } else if tk == T_NOT {
+            let mut nf: Vec[Item] = Vec.new();
+            nf.push(Item.Fr(ast));
+            nf.push(Item.Op(T_NOT));
+            fr.push(nf);
+            ast = fr.len() - 1;
+        } else if tk == T_AND or tk == T_OR {
+            ast = start_operation(mut a, mut fr, ast, tk)?;
+        } else if tk == T_LPAR {
+            if has_prev and not (prev_kind == T_NOT or prev_kind == T_AND or prev_kind == T_OR or prev_kind == T_LPAR) {
+                return Err(tok_error(P_INVALID_NESTING, t));
+            }
+            let mut nf: Vec[Item] = Vec.new();
+            nf.push(Item.Fr(ast));
+            nf.push(Item.Op(T_LPAR));
+            fr.push(nf);
+            ast = fr.len() - 1;
+        } else if tk == T_RPAR {
+            loop {
+                let parent = match fr[ast][0] {
+                    Item.Fr(p) => p,
+                    _ => {
+                        return Err(tok_error(P_UNBALANCED, t));
+                    }
+                };
+                if fr[ast].len() < 2 {
+                    return Err(index_error());
+                }
+                let i1 = fr[ast][1];
+                if let Item.Op(c) = i1 {
+                    if c == T_LPAR {
+                        if fr[ast].len() < 3 {
+                            return Err(index_error());
+                        }
+                        let x = fr[ast][2];
+                        fr[parent].push(x);
+                        ast = parent;
+                        break;
+                    }
+                }
+                if not is_function(i1) {
+                    return Err(tok_error(P_INVALID_NESTING, t));
+                }
+                let items = tail(fr[ast], 2);
+                let s = call_op(mut a, i1, items)?;
+                fr[parent].push(Item.Nd(s));
+                ast = parent;
+            }
+        } else {
+            return Err(tok_error(P_UNKNOWN_TOKEN, t));
+        }
+        has_prev = true;
+        prev_kind = tk;
+    }
+    if let Some(e) = tok_err {
+        return Err(e.clone());
+    }
+    let mut parsed: i64 = -1;
+    loop {
+        if fr[ast].len() < 2 {
+            return Err(index_error());
+        }
+        let i1 = fr[ast][1];
+        match fr[ast][0] {
+            Item.Fr(parent) => {
+                let items = tail(fr[ast], 2);
+                let s = finish(mut a, i1, items)?;
+                fr[parent].push(Item.Nd(s));
+                ast = parent;
+            }
+            _ => {
+                match i1 {
+                    Item.Nil => {
+                        if fr[ast].len() != 3 {
+                            return Err(plain_error(P_INVALID_EXPRESSION));
+                        }
+                        parsed = match fr[ast][2] {
+                            Item.Nd(x) => x,
+                            _ => {
+                                return Err(no_attr("int", "simplify"));
+                            }
+                        };
+                    }
+                    _ => {
+                        let items = tail(fr[ast], 2);
+                        parsed = finish(mut a, i1, items)?;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if simp {
+        return Ok(simplify(mut a, parsed));
+    }
+    Ok(parsed)
+}
+
+fn parse_text(a: mut ref Alg, text: ref Vec[i64], simp: bool) -> Result[i64, Exc] {
+    let (toks, err) = tokenize(text);
+    parse_tokens(mut a, toks, err, simp)
+}
+
+// A library call that can fail deep inside (see Alg.err).
+fn checked(a: mut ref Alg, r: i64) -> Result[i64, Exc] {
+    match a.err.clone() {
+        Some(e) => {
+            a.err = None;
+            Err(e)
+        }
+        None => Ok(r),
+    }
+}
+
+fn cnf(a: mut ref Alg, e: i64) -> Result[i64, Exc] {
+    let r = normalize(mut a, e, K_AND);
+    checked(mut a, r)
+}
+
+fn dnf(a: mut ref Alg, e: i64) -> Result[i64, Exc] {
+    let r = normalize(mut a, e, K_OR);
+    checked(mut a, r)
+}
+
+fn simplified(a: mut ref Alg, e: i64) -> Result[i64, Exc] {
+    let r = simplify(mut a, e);
+    checked(mut a, r)
+}
+
+// ------------------------------------------------------------ files
+
+fn read_text(rel: ref String) -> Result[Vec[i64], Exc] {
+    match fs.read_bytes(f"data/{rel}") {
+        Ok(b) => Ok(utf8_cps(b)),
+        Err(e) => Err(exc("FileNotFoundError", f"{e}")),
+    }
+}
+
+fn write_inputs() -> Result[(), String] {
+    for d in ["data/licences", "data/access", "data/out"] {
+        if let Err(e) = fs.create_dir_all(d.to_string()) {
+            return Err(f"cannot create {d}: {e}");
+        }
+    }
+    for line in split_on(inputs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, ' ');
+        if let Err(e) = fs.write_bytes(f"data/{f[0]}", hex_bytes(f[1])) {
+            return Err(f"cannot write {f[0]}: {e}");
+        }
+    }
+    Ok(())
+}
+
+// Writes data/out/<rel> and prints it back.
+fn write_back(rel: ref String, lines: ref Vec[String]) -> Result[(), Exc] {
+    let mut body = String.new();
+    for l in lines {
+        body.push_str(l);
+    }
+    if let Err(e) = fs.write(f"data/out/{rel}", body) {
+        return Err(exc("OSError", f"{e}"));
+    }
+    let back = read_text(f"out/{rel}")?;
+    let n = lines.len();
+    println(f"  wrote out/{rel} ({n} lines)");
+    let parts = split_cps(back, 10);
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        let s = cps_str(parts[k]);
+        println(f"  | {s}");
+        k += 1;
+    }
+    Ok(())
+}
+
+// str.split(): the words between runs of whitespace.
+fn words(cs: ref Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in cs {
+        if is_space(*c) {
+            if cur.len() > 0 {
+                out.push(cps_str(cur));
+                cur = Vec.new();
+            }
+        } else {
+            cur.push(*c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cps_str(cur));
+    }
+    out
+}
+
+// line.partition(":"): before and after the first colon.
+fn partition(cs: ref Vec[i64], sep: i64) -> (Vec[i64], Vec[i64]) {
+    let mut k = 0;
+    while k < cs.len() {
+        if cs[k] == sep {
+            return (sub(cs, 0, k), sub(cs, k + 1, cs.len()));
+        }
+        k += 1;
+    }
+    (cs.clone(), Vec.new())
+}
+
+// The non-blank lines of a file that do not start with "#", stripped.
+fn content_lines(text: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for raw in split_cps(text, 10) {
+        let line = strip(raw);
+        if line.len() == 0 or line[0] == 35 {
+            continue;
+        }
+        out.push(line);
+    }
+    out
+}
+
+// ------------------------------------------------------------ the licence checker
+
+// SPDX-style tokens: words split on blanks and brackets, AND / OR / NOT
+// in any case, and "X WITH Y" joined into one symbol.
+fn licence_tokens(a: mut ref Alg, text: ref Vec[i64]) -> Result[Vec[Tok], Exc] {
+    let mut out: Vec[Tok] = Vec.new();
+    let n = text.len();
+    let mut k = 0;
+    while k < n {
+        let c = text[k];
+        if c == 32 or c == 9 {
+            k += 1;
+            continue;
+        }
+        if c == 40 or c == 41 {
+            let kind = if c == 40 { T_LPAR } else { T_RPAR };
+            out.push(Tok { kind: kind, sym: -1, s: cps_str(sub(text, k, k + 1)), pos: k });
+            k += 1;
+            continue;
+        }
+        let s = k;
+        while k < n and not (text[k] == 32 or text[k] == 9 or text[k] == 40 or text[k] == 41) {
+            k += 1;
+        }
+        let word = sub(text, s, k);
+        let up = ascii_upper(word);
+        if is(up, "AND") {
+            out.push(Tok { kind: T_AND, sym: -1, s: cps_str(word), pos: s });
+        } else if is(up, "OR") {
+            out.push(Tok { kind: T_OR, sym: -1, s: cps_str(word), pos: s });
+        } else if is(up, "NOT") {
+            out.push(Tok { kind: T_NOT, sym: -1, s: cps_str(word), pos: s });
+        } else if is(up, "WITH") {
+            if out.len() == 0 or out[out.len() - 1].kind != T_OBJ {
+                return Err(exc("ValueError", f"WITH at position {s} does not follow a licence"));
+            }
+            while k < n and (text[k] == 32 or text[k] == 9) {
+                k += 1;
+            }
+            let e = k;
+            while k < n and not (text[k] == 32 or text[k] == 9 or text[k] == 40 or text[k] == 41) {
+                k += 1;
+            }
+            if e == k {
+                return Err(exc("ValueError", f"WITH at position {s} has no exception"));
+            }
+            let prev = out[out.len() - 1].clone();
+            out.pop();
+            let pobj = a.nodes[prev.sym].obj.clone();
+            let ex = cps_str(sub(text, e, k));
+            let sym = mk_sym(mut a, f"{pobj} WITH {ex}");
+            out.push(Tok { kind: T_OBJ, sym: sym, s: prev.s.clone(), pos: prev.pos });
+        } else {
+            let sym = mk_sym(mut a, cps_str(word));
+            out.push(Tok { kind: T_OBJ, sym: sym, s: cps_str(word), pos: s });
+        }
+    }
+    Ok(out)
+}
+
+fn ascii_upper(cs: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in cs {
+        if *c >= 97 and *c <= 122 {
+            out.push(*c - 32);
+        } else {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+// One package's expression: (as written, simplified, dnf), or the error.
+fn read_licence(a: mut ref Alg, text: ref Vec[i64]) -> Result[(i64, i64, i64), Exc] {
+    let toks = licence_tokens(mut a, text)?;
+    let none: Option[Exc] = None;
+    let e = parse_tokens(mut a, toks, none, false)?;
+    let s = simplified(mut a, e)?;
+    let d = dnf(mut a, e)?;
+    Ok((e, s, d))
+}
+
+fn licences(a: mut ref Alg, pkgs: ref String, allowed_file: ref String) -> Result[(), Exc] {
+    println(f"> licences {pkgs} {allowed_file}");
+    let allowed = words(read_text(allowed_file)?);
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(f"# licence check of {pkgs} against {allowed_file}\n");
+    let mut ok = 0;
+    let mut bad = 0;
+    for line in content_lines(read_text(pkgs)?) {
+        let (n0, t0) = partition(line, 58);
+        let name = cps_str(strip(n0));
+        let text = strip(t0);
+        let (e, s, d) = match read_licence(mut a, text) {
+            Ok(r) => r,
+            Err(ex) => {
+                let c = ex.cls.clone();
+                let m = ex.msg.clone();
+                println(f"  {name}: error {c}: {m}");
+                let t = cps_str(text);
+                lines.push(f"{name}\tunreadable\t{t}\n");
+                bad += 1;
+                continue;
+            }
+        };
+        let mut choices: Vec[i64] = Vec.new();
+        if a.nodes[d].kind == K_OR {
+            choices = args_of(a, d);
+        } else {
+            choices.push(d);
+        }
+        let es = py_str(a, e);
+        let ss = py_str(a, s);
+        println(f"  {name}: {es}");
+        println(f"    simplified: {ss}");
+        let mut pick = String.new();
+        let mut picked = false;
+        for c in choices {
+            let mut joined = String.new();
+            let mut fine = true;
+            let mut first = true;
+            for x in get_symbols(a, c) {
+                let nm = py_str(a, x);
+                if not has_str(allowed, nm) {
+                    fine = false;
+                }
+                if not first {
+                    joined.push_str(" + ");
+                }
+                first = false;
+                joined.push_str(nm);
+            }
+            let verdict = if fine { "allowed" } else { "not allowed" };
+            println(f"    choice {joined} -> {verdict}");
+            if fine and not picked {
+                pick = joined.clone();
+                picked = true;
+            }
+        }
+        if not picked {
+            bad += 1;
+            lines.push(f"{name}\tBLOCKED\t{ss}\n");
+        } else {
+            ok += 1;
+            lines.push(f"{name}\tok\t{pick}\n");
+        }
+    }
+    lines.push(f"# {ok} ok, {bad} blocked or unreadable\n");
+    write_back("licences.report".to_string(), lines)
+}
+
+// ------------------------------------------------------------ the access matrix
+
+fn access(a: mut ref Alg, rules_file: ref String, users_file: ref String) -> Result[(), Exc] {
+    println(f"> access {rules_file} {users_file}");
+    let mut rnames: Vec[String] = Vec.new();
+    let mut rexprs: Vec[i64] = Vec.new();
+    for line in content_lines(read_text(rules_file)?) {
+        let (n0, t0) = partition(line, 58);
+        let name = cps_str(strip(n0));
+        let e = match parse_text(mut a, strip(t0), false) {
+            Ok(x) => x,
+            Err(ex) => {
+                let c = ex.cls.clone();
+                let m = ex.msg.clone();
+                println(f"  {name}: error {c}: {m}");
+                continue;
+            }
+        };
+        let s = simplified(mut a, e)?;
+        let es = py_str(a, e);
+        let ss = py_str(a, s);
+        println(f"  {name}: {es}");
+        println(f"    simplified: {ss}");
+        let c = cnf(mut a, e)?;
+        let cs = py_str(a, c);
+        println(f"    cnf: {cs}");
+        let d = dnf(mut a, e)?;
+        let ds = py_str(a, d);
+        println(f"    dnf: {ds}");
+        if eq(a, s, 0) {
+            println("    always granted");
+        } else if eq(a, s, 1) {
+            println("    never granted");
+        }
+        rnames.push(name);
+        rexprs.push(s);
+    }
+    let mut unames: Vec[String] = Vec.new();
+    let mut uattrs: Vec[Vec[String]] = Vec.new();
+    for line in content_lines(read_text(users_file)?) {
+        let (n0, t0) = partition(line, 58);
+        unames.push(cps_str(strip(n0)));
+        uattrs.push(words(t0));
+    }
+    let mut lines: Vec[String] = Vec.new();
+    let mut head = "user".to_string();
+    for n in rnames.clone() {
+        head.push('\t');
+        head.push_str(n);
+    }
+    head.push('\n');
+    lines.push(head);
+    let mut u = 0;
+    while u < unames.len() {
+        let mut row = unames[u].clone();
+        for s in rexprs.clone() {
+            row.push('\t');
+            match truth_in(mut a, s, uattrs[u]) {
+                Ok(true) => row.push('Y'),
+                Ok(false) => row.push('-'),
+                Err(ex) => {
+                    row.push('!');
+                    row.push_str(ex.cls);
+                }
+            }
+        }
+        row.push('\n');
+        lines.push(row);
+        u += 1;
+    }
+    write_back("access.matrix".to_string(), lines)
+}
+
+// ------------------------------------------------------------ truth tables
+
+fn truthtable(a: mut ref Alg, text: ref Vec[i64]) -> Result[(), Exc] {
+    let r = str_repr(text);
+    println(f"> truthtable {r}");
+    let e = parse_text(mut a, text, false)?;
+    let s = simplified(mut a, e)?;
+    let c = cnf(mut a, e)?;
+    let d = dnf(mut a, e)?;
+    let forms = [e, s, c, d];
+    let labels = ["expr", "simplify", "cnf", "dnf"];
+    let mut k = 0;
+    while k < 4 {
+        let l = labels[k].clone();
+        let fs = py_str(a, forms[k]);
+        println(f"  {l}: {fs}");
+        k += 1;
+    }
+    let names = objects(a, e);
+    let mut head = "  ".to_string();
+    let mut first = true;
+    for n in names.clone() {
+        if not first {
+            head.push(' ');
+        }
+        first = false;
+        head.push_str(n);
+    }
+    head.push_str(" | expr simplify cnf dnf");
+    println(head);
+    let nn = names.len();
+    let mut rows = 1;
+    let mut q = 0;
+    while q < nn {
+        rows = rows * 2;
+        q += 1;
+    }
+    let mut agree = 0;
+    let mut r = 0;
+    while r < rows {
+        let mut attrs: Vec[String] = Vec.new();
+        let mut bits = String.new();
+        let mut i = 0;
+        while i < nn {
+            let mut p = 1;
+            let mut z = 0;
+            while z < nn - 1 - i {
+                p = p * 2;
+                z += 1;
+            }
+            if i > 0 {
+                bits.push(' ');
+            }
+            if (r / p) % 2 == 1 {
+                attrs.push(names[i].clone());
+                bits.push('1');
+            } else {
+                bits.push('0');
+            }
+            i += 1;
+        }
+        // Each form's value: 1, 0 or an exception class; -1 marks None.
+        let mut cells = String.new();
+        let mut vals: Vec[i64] = Vec.new();
+        let mut f = 0;
+        while f < 4 {
+            if f > 0 {
+                cells.push(' ');
+            }
+            match truth_in(mut a, forms[f], attrs) {
+                Ok(v) => {
+                    vals.push(if v { 1 } else { 0 });
+                    cells.push(if v { '1' } else { '0' });
+                }
+                Err(ex) => {
+                    vals.push(-1);
+                    cells.push_str(ex.cls);
+                }
+            }
+            f += 1;
+        }
+        println(f"  {bits} | {cells}");
+        if vals[0] == vals[1] and vals[1] == vals[2] and vals[2] == vals[3] {
+            agree += 1;
+        }
+        r += 1;
+    }
+    println(f"  {agree} of {rows} rows agree");
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn unesc(t: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < t.len() {
+        let c = t[k];
+        if c == 92 and k + 1 < t.len() {
+            let n = t[k + 1];
+            if n == 92 {
+                out.push(92);
+            } else if n == 116 {
+                out.push(9);
+            } else if n == 110 {
+                out.push(10);
+            } else if n == 114 {
+                out.push(13);
+            } else {
+                out.push(92);
+                out.push(n);
+            }
+            k += 2;
+        } else {
+            out.push(c);
+            k += 1;
+        }
+    }
+    out
+}
+
+// The current expression and the kept ones; -1 is None.
+struct State {
+    alg: Alg,
+    cur: i64,
+    names: Vec[Vec[i64]],
+    saved: Vec[i64],
+}
+
+fn saved_of(st: ref State, name: ref Vec[i64]) -> Result[i64, Exc] {
+    let mut k = 0;
+    while k < st.names.len() {
+        if same(st.names[k], name) {
+            return Ok(st.saved[k]);
+        }
+        k += 1;
+    }
+    Err(exc("KeyError", str_repr(name)))
+}
+
+fn show(a: ref Alg, x: i64) {
+    if x < 0 {
+        println("  -> None");
+        println("  str: None");
+        return;
+    }
+    let r = repr(a, x);
+    let s = py_str(a, x);
+    println(f"  -> {r}");
+    println(f"  str: {s}");
+}
+
+fn print_lines(text: ref String) {
+    for line in split_on(text, '\n') {
+        println(f"  | {line}");
+    }
+}
+
+fn reprs_line(a: ref Alg, xs: ref Vec[i64]) -> String {
+    let mut s = "[".to_string();
+    let mut first = true;
+    for x in xs {
+        if not first {
+            s.push_str(", ");
+        }
+        first = false;
+        s.push_str(repr(a, *x));
+    }
+    s.push(']');
+    s
+}
+
+fn method_on(k: i64, op: ref Vec[i64]) -> bool {
+    if is(op, "flatten") or is(op, "distributive") or is(op, "subtract") {
+        return is_dual(k);
+    }
+    if is(op, "demorgan") or is(op, "cancel") {
+        return k == K_NOT;
+    }
+    true
+}
+
+fn run(st: mut ref State, f: ref Vec[Vec[i64]]) -> Result[(), Exc] {
+    let op = f[0].clone();
+    let ops = cps_str(op);
+    let cur = st.cur;
+    if is(op, "parse") {
+        let d = unesc(f[1]);
+        let r = str_repr(d);
+        let simp = f.len() > 2;
+        let tail_s = if simp { ", simplify=True" } else { "" };
+        println(f"> parse({r}{tail_s})");
+        st.cur = -1;
+        let p = parse_text(mut st.alg, d, simp)?;
+        st.cur = checked(mut st.alg, p)?;
+        show(st.alg, st.cur);
+        return Ok(());
+    }
+    if is(op, "tokens") {
+        let d = unesc(f[1]);
+        let r = str_repr(d);
+        println(f"> tokenize({r})");
+        let (toks, err) = tokenize(d);
+        for t in toks {
+            let tr = str_repr(cps_of(t.s));
+            let k = t.kind;
+            let p = t.pos;
+            println(f"  - ({k}, {tr}, {p})");
+        }
+        if let Some(e) = err {
+            return Err(e);
+        }
+        return Ok(());
+    }
+    if is(op, "keep") {
+        let mut k = 0;
+        let mut found = false;
+        while k < st.names.len() {
+            if same(st.names[k], f[1]) {
+                st.saved[k] = cur;
+                found = true;
+            }
+            k += 1;
+        }
+        if not found {
+            st.names.push(f[1].clone());
+            st.saved.push(cur);
+        }
+        let n = cps_str(f[1]);
+        println(f"> keep as {n}");
+        return Ok(());
+    }
+    if is(op, "use") {
+        st.cur = saved_of(st, f[1])?;
+        let n = cps_str(f[1]);
+        println(f"> use {n}");
+        show(st.alg, st.cur);
+        return Ok(());
+    }
+    if is(op, "licences") {
+        return licences(mut st.alg, cps_str(f[1]), cps_str(f[2]));
+    }
+    if is(op, "access") {
+        return access(mut st.alg, cps_str(f[1]), cps_str(f[2]));
+    }
+    if is(op, "truthtable") {
+        return truthtable(mut st.alg, unesc(f[1]));
+    }
+    let a1 = if f.len() > 1 { cps_str(f[1]) } else { String.new() };
+    if is(op, "simplify") or is(op, "literalize") or is(op, "flatten") or is(op, "demorgan")
+        or is(op, "cancel") or is(op, "distributive") {
+        println(f"> {ops}()");
+    } else if is(op, "cnf") or is(op, "dnf") {
+        println(f"> algebra.{ops}(expr)");
+    } else if is(op, "subtract") {
+        let r = str_repr(unesc(f[1]));
+        let b = py_bool(f.len() > 2);
+        println(f"> subtract({r}, simplify={b})");
+    } else if is(op, "and") or is(op, "or") or is(op, "eq") or is(op, "lt") {
+        println(f"> {ops} {a1}");
+    } else if is(op, "in") {
+        let r = str_repr(unesc(f[1]));
+        println(f"> {r} in expr");
+    } else if is(op, "eval") {
+        println(f"> expr({a1})");
+    } else if is(op, "subs") {
+        let mut h = f"> subs({a1}";
+        if f.len() > 2 and not is(f[2], "-") {
+            let d = cps_str(f[2]);
+            h.push_str(f", default={d}");
+        }
+        if f.len() > 3 {
+            h.push_str(", simplify=True");
+        }
+        h.push(')');
+        println(h);
+    } else {
+        println(f"> {ops}");
+    }
+    if cur < 0 {
+        println("  error: no expression");
+        return Ok(());
+    }
+    let k = st.alg.nodes[cur].kind;
+    if not method_on(k, op) {
+        let c = cls_name(k);
+        return Err(exc("AttributeError", f"'{c}' object has no attribute '{ops}'"));
+    }
+    if is(op, "simplify") {
+        let r = simplify(mut st.alg, cur);
+        st.cur = checked(mut st.alg, r)?;
+        show(st.alg, st.cur);
+    } else if is(op, "literalize") {
+        let r = literalize(mut st.alg, cur);
+        st.cur = checked(mut st.alg, r)?;
+        show(st.alg, st.cur);
+    } else if is(op, "flatten") {
+        st.cur = flatten(mut st.alg, cur);
+        show(st.alg, st.cur);
+    } else if is(op, "demorgan") {
+        let r = demorgan(mut st.alg, cur);
+        st.cur = checked(mut st.alg, r)?;
+        show(st.alg, st.cur);
+    } else if is(op, "cancel") {
+        st.cur = cancel(st.alg, cur);
+        show(st.alg, st.cur);
+    } else if is(op, "distributive") {
+        let r = distributive(mut st.alg, cur);
+        st.cur = checked(mut st.alg, r)?;
+        show(st.alg, st.cur);
+    } else if is(op, "cnf") {
+        st.cur = cnf(mut st.alg, cur)?;
+        show(st.alg, st.cur);
+    } else if is(op, "dnf") {
+        st.cur = dnf(mut st.alg, cur)?;
+        show(st.alg, st.cur);
+    } else if is(op, "subtract") {
+        let e = parse_text(mut st.alg, unesc(f[1]), false)?;
+        let r = subtract(mut st.alg, cur, e, f.len() > 2);
+        let r2 = checked(mut st.alg, r)?;
+        if r2 < 0 {
+            println("  -> None");
+        } else {
+            st.cur = r2;
+            show(st.alg, r2);
+        }
+    } else if is(op, "and") or is(op, "or") {
+        let o = saved_of(st, f[1])?;
+        let kind = if is(op, "and") { K_AND } else { K_OR };
+        st.cur = mk2(mut st.alg, kind, cur, o);
+        show(st.alg, st.cur);
+    } else if is(op, "invert") {
+        st.cur = mk_not(mut st.alg, cur);
+        show(st.alg, st.cur);
+    } else if is(op, "eq") {
+        let o = saved_of(st, f[1])?;
+        let e = py_bool(eq(st.alg, cur, o));
+        let ne = py_bool(not eq(st.alg, cur, o));
+        println(f"  -> == {e}, != {ne}");
+    } else if is(op, "lt") {
+        let o = saved_of(st, f[1])?;
+        let l = py_bool(py_lt(st.alg, cur, o));
+        let g = py_bool(py_lt(st.alg, o, cur));
+        println(f"  -> < {l}, > {g}");
+    } else if is(op, "in") {
+        let x = parse_text(mut st.alg, unesc(f[1]), false)?;
+        if not is_dual(k) {
+            let c = cls_name(k);
+            return Err(exc("TypeError", f"argument of type '{c}' is not iterable"));
+        }
+        let b = py_bool(contains_dual(st.alg, cur, x));
+        println(f"  -> {b}");
+    } else if is(op, "str") {
+        let s = py_str(st.alg, cur);
+        println(f"  {s}");
+    } else if is(op, "pretty") {
+        let ind = if k == K_NOT { 1 } else { 0 };
+        print_lines(pretty(st.alg, cur, ind, false));
+    } else if is(op, "debug") {
+        let ind = if k == K_NOT { 1 } else { 0 };
+        print_lines(pretty(st.alg, cur, ind, true));
+    } else if is(op, "flags") {
+        let l = py_bool(st.alg.nodes[cur].isliteral);
+        let c = py_bool(st.alg.nodes[cur].iscanonical);
+        println(f"  -> isliteral={l} iscanonical={c}");
+    } else if is(op, "literals") or is(op, "symbols") or is(op, "objects") {
+        let mut items: Vec[String] = Vec.new();
+        if is(op, "objects") {
+            for o in objects(st.alg, cur) {
+                items.push(str_repr(cps_of(o)));
+            }
+        } else {
+            let mut xs: Vec[i64] = Vec.new();
+            if is(op, "literals") {
+                get_literals(st.alg, cur, mut xs);
+            } else {
+                xs = get_symbols(st.alg, cur);
+            }
+            for x in xs {
+                let r = repr(st.alg, x);
+                if not has_str(items, r) {
+                    items.push(r);
+                }
+            }
+            items = sort_strings(items);
+        }
+        if items.len() == 0 {
+            println("  (none)");
+        }
+        for x in items {
+            println(f"  - {x}");
+        }
+    } else if is(op, "get_literals") {
+        let mut xs: Vec[i64] = Vec.new();
+        get_literals(st.alg, cur, mut xs);
+        let s = reprs_line(st.alg, xs);
+        println(f"  -> {s}");
+    } else if is(op, "get_symbols") {
+        let xs = get_symbols(st.alg, cur);
+        let s = reprs_line(st.alg, xs);
+        println(f"  -> {s}");
+    } else if is(op, "eval") {
+        let mut names: Vec[String] = Vec.new();
+        let mut vals: Vec[bool] = Vec.new();
+        for part in split_cps(f[1], 44) {
+            if part.len() == 0 {
+                continue;
+            }
+            let (kk, vv) = partition(part, 61);
+            let key = cps_str(kk);
+            let v = is(vv, "1");
+            let mut found = false;
+            let mut i = 0;
+            while i < names.len() {
+                if names[i] == key {
+                    vals[i] = v;
+                    found = true;
+                }
+                i += 1;
+            }
+            if not found {
+                names.push(key);
+                vals.push(v);
+            }
+        }
+        let v = eval(mut st.alg, cur, names, vals)?;
+        let r = val_repr(st.alg, v);
+        println(f"  -> {r}");
+    } else if is(op, "subs") {
+        let mut keys: Vec[i64] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        for part in split_cps(unesc(f[1]), 59) {
+            let (kk, vv) = partition(part, 61);
+            let vx = parse_text(mut st.alg, vv, false)?;
+            let kx = parse_text(mut st.alg, kk, false)?;
+            let mut found = false;
+            let mut i = 0;
+            while i < keys.len() {
+                if eq(st.alg, keys[i], kx) {
+                    vals[i] = vx;
+                    found = true;
+                    break;
+                }
+                i += 1;
+            }
+            if not found {
+                keys.push(kx);
+                vals.push(vx);
+            }
+        }
+        let default = if f.len() > 2 and not is(f[2], "-") {
+            parse_text(mut st.alg, f[2], false)?
+        } else {
+            -1
+        };
+        let r = subs(mut st.alg, cur, keys, vals, default, f.len() > 3);
+        st.cur = checked(mut st.alg, r)?;
+        show(st.alg, st.cur);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_inputs() {
+        eprintln(e);
+        return;
+    }
+    let mut st = State { alg: alg_new(), cur: -1, names: Vec.new(), saved: Vec.new() };
+    for hex in split_on(jobs_text(), '\n') {
+        if hex.len() == 0 {
+            continue;
+        }
+        let f = split_cps(hex_text(hex), 9);
+        if is(f[0], "job") {
+            let t = cps_str(f[1]);
+            println(f"== {t}");
+            continue;
+        }
+        if let Err(e) = run(mut st, f) {
+            let c = e.cls.clone();
+            let m = e.msg.clone();
+            println(f"  error {c}: {m}");
+        }
+    }
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("6a6f620974686520646f63756d656e746174696f6e2773206578616d706c6573\n7061727365097820262079\n73696d706c696679\n706172736509286170706c65206f722062616e616e6120616e6420286f72616e6765206f722070696e656170706c6520616e6420286c656d6f6e206f7220636865727279292929\n73696d706c696679\n70617273650978267e78\n73696d706c696679\n706172736509787c7e78\n73696d706c696679\n706172736509787c78\n73696d706c696679\n706172736509782678\n73696d706c696679\n706172736509782628787c7929\n73696d706c696679\n7061727365092878267929207c202878267e7929\n73696d706c696679\n706172736509282828787c7929267a297c78267929\n73696d706c696679\n7061727365096170706c6520616e64202862616e616e61206f72206f72616e676529\n73696d706c696679\n7061727365096e6f74206120616e64206e6f74206220616e64206e6f7420286120616e6420626120616e6420632920616e642063206f722063\n73696d706c696679\n7061727365096170706c6520616e6420286f72616e676573206f722062616e616e612920616e64206e6f742062616e616e61\n73696d706c696679\n7061727365096170706c6520616e6420286f72616e676573206f722062616e616e612920616e64206e6f742062616e616e610973\n7061727365097e2861266229\n64656d6f7267616e\n706172736509612026202862207c206329\n636e66\n70617273650961207c2028622026206329\n646e66\n70617273650928617c62292628637c6429\n646e66\n6a6f6209746865206772616d6d6172\n70617273650961\n7061727365096120616e642062\n7061727365096120414e442062\n7061727365096120416e642062\n70617273650961202a2062\n7061727365096120262062\n70617273650961206f722062\n70617273650961204f522062\n70617273650961202b2062\n70617273650961207c2062\n7061727365096e6f742061\n7061727365094e4f542061\n7061727365097e61\n7061727365092161\n7061727365097e7e61\n7061727365096e6f74206e6f74206e6f742061\n7061727365095b61207c20625d20262063\n706172736509286129\n7061727365092828612929\n7061727365092828286120262062292929\n70617273650974727565\n70617273650954525545\n70617273650931\n70617273650966616c7365\n70617273650946616c7365\n70617273650930\n7061727365096e6f6e65\n7061727365094e6f6e65\n7061727365096120262031\n70617273650961207c2030\n7061727365097e31\n7061727365097e30\n");
+    s.push_str("7061727365093120262030\n706172736509317c30\n70617273650961202620622026206320262064\n70617273650961207c2062207c2063\n7061727365096120262062207c206320262064\n70617273650961207c206220262063207c2064\n706172736509612026207e62207c207e6320262064\n7061727365097e2861207c20622920262063\n7061727365097e612026202862207c207e6329\n706172736509612e62202620633a64202620655f662026205f67\n706172736509783120262032782026203432\n706172736509666f6f2e6261722e62617a207c20613a623a63\n706172736509615c6e616e645c74625c725c6e6f722063\n706172736509202061202020\n706172736509636166c3a920616e64207468c3a9\n7061727365096170706c6520414e44204e4f542062616e616e61204f5220636865727279\n706172736509612026202862207c2028632026202864207c2028652026206629292929\n70617273650961206f72206220616e642063206f72206420616e64206520616e642066206f722067\n7061727365096120262062207c2063202620640973\n7061727365097e28612026207e6229207c207e7e630973\n6a6f620962726f6b656e2065787072657373696f6e73\n706172736509\n706172736509202020\n706172736509612062\n706172736509612026\n706172736509262061\n706172736509612026207c2062\n70617273650961207c207c2062\n7061727365092861\n7061727365096129\n7061727365092829\n7061727365092861202620622929\n706172736509612026202862\n7061727365096120286229\n70617273650961202620622063\n7061727365097e\n7061727365097e20262061\n706172736509612026207e\n706172736509287e29\n706172736509282026206129\n7061727365092861207e6229\n706172736509612026202d2062\n7061727365096120242062\n70617273650961205e2062\n70617273650961203d3d2062\n70617273650927612720262062\n70617273650961202620226222\n706172736509610c62\n706172736509612026202862207c2063\n70617273650928286129\n70617273650961207c206229\n70617273650929\n706172736509612026202829\n70617273650928207c206120262062\n706172736509782026202879207a29\n706172736509312031\n70617273650961207e\n706172736509286129286229\n7061727365097e2861\n706172736509612026207e2862206329\n7061727365096f72\n706172736509616e642061\n7061727365096120616e64206f722062\n6a6f620974686520746f6b656e697a6572\n746f6b656e73096120262062\n");
+    s.push_str("746f6b656e7309616263\n746f6b656e7309612e623a635f64\n746f6b656e73096e6f742078206f722079\n746f6b656e730928617c62292663\n746f6b656e73095b785d\n746f6b656e730931203020747275652046414c5345206e6f6e65\n746f6b656e7309202073706163656420206f75742020\n746f6b656e730978312026203278\n746f6b656e7309615c6e62\n746f6b656e730961202d2062\n746f6b656e73095f78202620795f\n746f6b656e7309416e44206f52204e6f54\n746f6b656e730961262662\n746f6b656e7309636166c3a9\n6a6f620973696d706c696679696e67\n7061727365096120262061\n73696d706c696679\n70617273650961207c2061\n73696d706c696679\n706172736509612026206220262061\n73696d706c696679\n706172736509612026207e61\n73696d706c696679\n70617273650961207c207e61\n73696d706c696679\n7061727365096120262031\n73696d706c696679\n7061727365096120262030\n73696d706c696679\n70617273650961207c2031\n73696d706c696679\n70617273650961207c2030\n73696d706c696679\n7061727365097e7e61\n73696d706c696679\n7061727365097e7e7e61\n73696d706c696679\n7061727365097e287e612026207e6229\n73696d706c696679\n7061727365097e31\n73696d706c696679\n7061727365097e30\n73696d706c696679\n7061727365097e28312026206129\n73696d706c696679\n706172736509612026202861207c206229\n73696d706c696679\n70617273650961207c2028612026206229\n73696d706c696679\n70617273650961202620287e61207c206229\n73696d706c696679\n70617273650961207c20287e612026206229\n73696d706c696679\n70617273650928612026206229207c2028612026207e6229\n73696d706c696679\n7061727365092861207c2062292026202861207c207e6229\n73696d706c696679\n7061727365092861202620622026206329207c202861202620622026207e6329\n73696d706c696679\n706172736509632026206220262061\n73696d706c696679\n70617273650963207c2062207c2061\n73696d706c696679\n7061727365097e63202620622026207e61\n73696d706c696679\n70617273650928627c612920262028647c6329\n73696d706c696679\n7061727365096120262028622026202863202620642929\n73696d706c696679\n70617273650961207c202862207c202863207c20642929\n73696d706c696679\n70617273650928612026206229207c2028632026206429207c2028612026206229\n73696d706c696679\n7061727365097820262079207c20782026207e79207c207e7820262079\n");
+    s.push_str("73696d706c696679\n7061727365092861207c2062292026202861207c2063292026202862207c206329\n73696d706c696679\n7061727365096120262062207c206120262063207c206220262063\n73696d706c696679\n7061727365097e28612026206229207c2028612026206229\n73696d706c696679\n70617273650928617c6229267e28617c6229\n73696d706c696679\n706172736509612026202862207c207e6229\n73696d706c696679\n70617273650928612026207e6229207c20287e612026206229207c2028612026206229\n73696d706c696679\n7061727365097e2861207c207e28622026207e632929\n73696d706c696679\n7061727365092861207c2030292026202862207c203129\n73696d706c696679\n7061727365096120262062202620632026207e61\n73696d706c696679\n706172736509612026202862207c206329\n666c616773\n73696d706c696679\n666c616773\n73696d706c696679\n666c616773\n6a6f62096e6f726d616c20666f726d73\n706172736509612026202862207c206329\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650961207c2028622026206329\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365092861207c2062292026202863207c206429\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650928612026206229207c2028632026206429\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365097e28612026206229\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365097e2861207c206229207c2063\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n706172736509612026207e2862207c207e6329\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650928612026206229207c2028612026206329207c2028622026206329\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365097e28612026202862207c207e632929\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650961207c207e61\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n706172736509612026207e61\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650931\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650930\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650961\n6b656570096f726967\n636e66\n757365096f726967\n");
+    s.push_str("646e66\n7061727365092861207c2062292026207e61\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n706172736509782026202879207c20287a202620772929\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365092870207c2071292026202872207c2073292026202874207c207529\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n7061727365097e2878202620792026207a29\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n70617273650961205e2062\n6b656570096f726967\n636e66\n757365096f726967\n646e66\n706172736509612026202862207c2063290973\n6b6565700965\n636e66\n7573650965\n737472\n7061727365092861207c2062292026202863207c2064290973\n6b6565700965\n646e66\n7573650965\n6465627567\n6a6f6209746865206d6574686f6473206f6e6520617420612074696d65\n706172736509612026207e2862207c206329\n6c69746572616c697a65\n7061727365097e287e2861202620622929\n63616e63656c\n7061727365097e7e7e2861207c206229\n63616e63656c\n64656d6f7267616e\n7061727365097e2861207c207e2862202620632929\n64656d6f7267616e\n6c69746572616c697a65\n7061727365096120262062\n64656d6f7267616e\n706172736509612026202862202620632920262028642026206529\n666c617474656e\n70617273650961207c2028622026206329207c202864207c206529\n666c617474656e\n70617273650961\n666c617474656e\n706172736509612026202862207c206329\n646973747269627574697665\n7061727365092861207c2062292026202863207c206429\n646973747269627574697665\n70617273650961207c2028622026206329207c2028642026206529\n646973747269627574697665\n706172736509612026206220262063\n73756274726163740962\n73756274726163740961\n73756274726163740963\n706172736509612026206220262063\n7375627472616374096120262063\n706172736509612026206220262063\n7375627472616374096120262064\n7061727365096120262062\n7375627472616374096120262062\n706172736509612026202862207c20632920262062\n737562747261637409620973\n7061727365097e61\n73756274726163740961\n70617273650931\n64656d6f7267616e\n7061727365097e31\n64656d6f7267616e\n6a6f6209707265747479207072696e74696e67\n70617273650961\n707265747479\n6465627567\n7061727365097e61\n707265747479\n");
+    s.push_str("6465627567\n70617273650931\n707265747479\n6465627567\n7061727365096120262062\n707265747479\n6465627567\n7061727365097e28612026206229\n707265747479\n6465627567\n7061727365096e6f74206120616e64206e6f74206220616e64206e6f7420286120616e6420626120616e6420632920616e642063206f722063\n707265747479\n6465627567\n706172736509612026202862207c207e63292026207e2864207c206529\n707265747479\n6465627567\n706172736509612026202862207c2063290973\n6465627567\n6a6f620973796d626f6c7320616e64206c69746572616c73\n70617273650961202620622026207e61\n6c69746572616c73\n73796d626f6c73\n6f626a65637473\n6765745f6c69746572616c73\n6765745f73796d626f6c73\n70617273650978207c207e79207c207e7e7a\n6c69746572616c73\n73796d626f6c73\n6f626a65637473\n6765745f6c69746572616c73\n6765745f73796d626f6c73\n7061727365093120262030\n6c69746572616c73\n73796d626f6c73\n6f626a65637473\n6765745f6c69746572616c73\n6765745f73796d626f6c73\n706172736509612026202862207c2028632026207e6129292026207e7e62\n6c69746572616c73\n73796d626f6c73\n6f626a65637473\n6765745f6c69746572616c73\n6765745f73796d626f6c73\n706172736509726f6c653a61646d696e20616e64207465616d3a6f7073206f7220726f6c653a61646d696e\n6c69746572616c73\n73796d626f6c73\n6f626a65637473\n6765745f6c69746572616c73\n6765745f73796d626f6c73\n6a6f6209657175616c69747920616e64206f72646572\n7061727365096220262061\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n706172736509612026206220262061\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n70617273650961207c2062\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n7061727365097e61\n6b6565700979\n7061727365097e61\n65710979\n6c740979\n70617273650961\n6b6565700979\n7061727365097e61\n65710979\n6c740979\n70617273650961\n6b6565700979\n70617273650961\n65710979\n6c740979\n70617273650962\n6b6565700979\n70617273650961\n65710979\n6c740979\n70617273650931\n6b6565700979\n70617273650931\n65710979\n6c740979\n70617273650930\n6b6565700979\n70617273650931\n65710979\n6c740979\n70617273650931\n6b6565700979\n70617273650930\n65710979\n6c740979\n");
+    s.push_str("70617273650931\n6b6565700979\n70617273650961\n65710979\n6c740979\n70617273650961\n6b6565700979\n70617273650931\n65710979\n6c740979\n7061727365097e62\n6b6565700979\n70617273650961\n65710979\n6c740979\n70617273650961\n6b6565700979\n7061727365097e62\n65710979\n6c740979\n70617273650961\n6b6565700979\n7061727365097e61\n65710979\n6c740979\n70617273650963\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n70617273650961207c2062\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n7061727365096120262062\n6b6565700979\n70617273650961207c2062\n65710979\n6c740979\n7061727365096120262063\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n7061727365096120262062\n6b6565700979\n7061727365096120262063\n65710979\n6c740979\n706172736509612026206220262063\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n7061727365096120262062\n6b6565700979\n7061727365097e28612026206229\n65710979\n6c740979\n7061727365097e28612026206229\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n706172736509632026202862207c206129\n6b6565700979\n7061727365092861207c20622920262063\n65710979\n6c740979\n70617273650930\n6b6565700979\n70617273650930\n65710979\n6c740979\n7061727365097e62\n6b6565700979\n7061727365097e61\n65710979\n6c740979\n7061727365097e61\n6b6565700979\n7061727365097e62\n65710979\n6c740979\n70617273650961\n6b6565700979\n70617273650962\n65710979\n6c740979\n70617273650961\n6b6565700979\n7061727365096161\n65710979\n6c740979\n70617273650961\n6b6565700979\n70617273650942\n65710979\n6c740979\n7061727365096120262062\n6b6565700979\n7061727365096120262062\n65710979\n6c740979\n6a6f62096d656d62657273686970\n706172736509612026206220262063\n696e0961\n706172736509612026206220262063\n696e0964\n706172736509612026206220262063\n696e096120262063\n706172736509612026206220262063\n696e096120262064\n706172736509612026206220262063\n696e0961207c2062\n70617273650961207c2062\n696e0962\n706172736509612026202862207c206329\n696e0962207c2063\n706172736509612026202862207c206329\n696e0963207c2062\n");
+    s.push_str("706172736509612026202862207c206329\n696e0962\n7061727365097e61\n696e0961\n70617273650961\n696e0961\n70617273650931\n696e0961\n706172736509612026207e62\n696e097e62\n706172736509612026207e62\n696e0962\n6a6f62096275696c64696e672065787072657373696f6e73\n70617273650961\n6b6565700961\n70617273650962207c2063\n6b656570096263\n616e640961\n6b656570096531\n6f72096263\n696e76657274\n73696d706c696679\n757365096531\n696e76657274\n696e76657274\n73696d706c696679\n70617273650931\n616e640961\n73696d706c696679\n6a6f62096576616c756174696e67\n7061727365096120262062\n6576616c09613d312c623d31\n7061727365096120262062\n6576616c09613d312c623d30\n70617273650961207c2062\n6576616c09613d302c623d30\n7061727365097e61\n6576616c09613d30\n7061727365097e7e61\n6576616c09613d31\n706172736509612026202862207c207e6329\n6576616c09613d312c623d302c633d30\n7061727365096120262062\n6576616c09613d31\n70617273650961207c2062\n6576616c09623d31\n70617273650961207c2062\n6576616c09613d312c623d312c633d30\n70617273650931\n6576616c09\n70617273650930\n6576616c09\n70617273650931\n6576616c09613d31\n7061727365096120262031\n6576616c09613d31\n7061727365093120262061\n6576616c09613d31\n7061727365097e31\n6576616c09\n7061727365097e28612026206229\n6576616c09613d312c623d31\n7061727365093120262030\n6576616c09\n70617273650931207c2030207c2031\n6576616c09\n7061727365093120262061\n6576616c09\n7061727365097e28312026203029\n6576616c09\n706172736509726f6c653a61646d696e2026206d6661\n6576616c09726f6c653a61646d696e3d312c6d66613d31\n6a6f6209737562737469747574696f6e\n7061727365096120262062\n7375627309613d63092d\n7061727365096120262062\n7375627309613d63207c2064092d\n7061727365096120262062207c2063\n7375627309623d31092d\n7061727365096120262062207c2063\n7375627309623d31092d0973\n7061727365096120262062207c2063\n7375627309623d30092d0973\n706172736509612026202862207c206329\n737562730962207c20633d78092d\n706172736509612026202862207c206329\n737562730963207c20623d78092d\n7061727365096120262062\n73756273097a3d31092d\n706172736509612026206220262063\n7375627309613d310930\n");
+    s.push_str("706172736509612026206220262063\n7375627309613d3109300973\n7061727365096120262062\n737562730961202620623d71092d\n7061727365097e61207c2062\n7375627309613d623b623d61092d\n70617273650961\n7375627309613d62092d\n70617273650961\n73756273097a3d62092d\n70617273650961\n73756273097a3d620931\n7061727365093120262061\n7375627309613d62092d\n7061727365097e28612026206229\n7375627309613d30092d0973\n7061727365096120262062\n7375627309613d62092d0973\n6a6f6209616e2053504458206c6963656e636520636865636b\n6c6963656e636573096c6963656e6365732f7061636b616765732e747874096c6963656e6365732f616c6c6f7765642e747874\n6a6f6209616e206163636573732d72756c65206d6174726978\n616363657373096163636573732f72756c65732e747874096163636573732f75736572732e747874\n6a6f62097472757468207461626c6573\n74727574687461626c6509612026202862207c206329\n74727574687461626c650928612026206229207c2028612026207e6229\n74727574687461626c65097e2861207c206229207c2063\n74727574687461626c650961207c207e61\n74727574687461626c6509782026207e78\n74727574687461626c65092870207c207129202620287e70207c207229\n74727574687461626c65096120262031\n74727574687461626c650928612026206229207c2028622026206329207c2028632026206129\n");
+    s
+}
+
+fn inputs_text() -> String {
+    let mut s = String.new();
+    s.push_str("licences/allowed.txt 4d49540a4170616368652d322e300a4253442d322d436c617573650a4253442d332d436c617573650a4953430a5a6c69620a304253440a556e6c6963656e73650a\nlicences/packages.txt 23206e616d653a2053504458206c6963656e63652065787072657373696f6e2c2061732061206c6f636b2066696c652773206d65746164617461207265706f7274732069740a72657175657374733a204170616368652d322e300a6c6566747061643a204d4954204f52204170616368652d322e300a666f6e746b69743a20284d495420414e44204f464c2d312e3129204f522047504c2d332e302d6f722d6c617465720a63727970746f6c69623a204170616368652d322e3020414e4420284d4954204f52204253442d332d436c617573652920414e44204953430a6a646b2d7368696d3a2047504c2d322e302d6f6e6c79205749544820436c617373706174682d657863657074696f6e2d322e300a727573746c733a204170616368652d322e30204f5220495343204f52204d49540a73706963653a2047504c2d332e302d6f6e6c790a6475616c3a204d495420616e64206d69742d30206f7220285a6c6962204f522042534c2d312e30290a6e65737465643a2028284d4954204f52204170616368652d322e302920414e4420284253442d322d436c61757365204f52204253442d332d436c617573652929204f52204147504c2d332e302d6f6e6c790a6f646462616c6c3a204d495420414e440a7477696e3a204d4954204f52204d49540a627261636b657465643a20284170616368652d322e30290a77656972643a204d495420574954480a6e6f6c6963656e63653a204e4f415353455254494f4e0a616c6f6e653a205749544820666f6f0a726564756e64616e743a20284d495420414e44204170616368652d322e3029204f52204d49540a74687265653a2028556e6c6963656e7365204f5220304253442920414e4420284d4954204f52204343302d312e302920414e4420285a6c6962204f5220495343290a\naccess/rules.txt 2320616374696f6e3a2077686f206d617920646f2069740a726561643a20726f6c653a766965776572206f7220726f6c653a656469746f72206f7220726f6c653a61646d696e0a77726974653a2028726f6c653a656469746f72206f7220726f6c653a61646d696e2920616e64206e6f742073757370656e6465640a64656c6574653a20726f6c653a61646d696e20616e64206d666120616e64206e6f742073757370656e6465640a6465706c6f793a207465616d3a6f707320616e64206d666120616e6420286f6e5f63616c6c206f7220726f6c653a61646d696e290a62696c6c696e673a20726f6c653a61646d696e20616e6420287465616d3a66696e616e6365206f72207465616d3a6f70732920616e64206d66610a61756469743a20726f6c653a61756469746f72206f7220726f6c653a61646d696e20616e64206e6f7420726f6c653a61646d696e0a6f70656e3a206d6661206f72206e6f74206d66610a636c6f7365643a206d666120616e64207e6d66610a62726f6b656e3a20726f6c653a61646d696e20616e6420616e64206d66610a6c65676163793a20726f6c653a61646d696e2026202173757370656e646564207c20726f6c653a726f6f740a\n");
+    s.push_str("access/users.txt 616c6963653a20726f6c653a61646d696e206d6661207465616d3a6f70730a626f623a20726f6c653a656469746f72207465616d3a66696e616e63650a6361726f6c3a20726f6c653a7669657765720a646176653a20726f6c653a656469746f722073757370656e646564206d66610a6572696e3a207465616d3a6f7073206d6661206f6e5f63616c6c0a6672616e6b3a20726f6c653a726f6f742073757370656e6465640a67726163653a20726f6c653a61756469746f720a68656964693a0a\n");
+    s
+}
