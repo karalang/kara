@@ -2374,6 +2374,7 @@ impl<'a> super::TypeChecker<'a> {
                 Default::default()
             },
         );
+        let errors_before_body = self.errors.len();
         if f.body.final_expr.is_some() {
             if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
                 self.check_core_fresh_ref_return(f);
@@ -2407,6 +2408,9 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::ReturnTypeMismatch,
                 );
             }
+        }
+        if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
+            self.check_unsolved_call_results(&f.body, &gp, errors_before_body);
         }
         self.offer_iter_let_fixes();
         self.iter_lets = saved_iter_lets;
@@ -5790,6 +5794,70 @@ impl<'a> super::TypeChecker<'a> {
                 self.expr_types.insert(key, declared.clone());
             }
             _ => {}
+        }
+    }
+
+    /// design.md § Type inference: "An unsolved variable is an error at the
+    /// end of the body". A call whose result keeps a type parameter nothing
+    /// in the body fixes (the new error type of `r.or_else(|x| Ok(x * 2))`,
+    /// used only through `.unwrap_or(0)`) has no layout, so it is refused
+    /// here rather than in the MIR builder. A binding's own check already
+    /// reports at the `let`, so a body that said it once says nothing more.
+    fn check_unsolved_call_results(&mut self, body: &Block, gp: &[String], errors_before: usize) {
+        if self.errors[errors_before..]
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::CannotInferTypeParam))
+        {
+            return;
+        }
+        let in_scope: HashSet<&str> = gp
+            .iter()
+            .map(|s| s.as_str())
+            .chain(self.enclosing_bounds.keys().map(|s| s.as_str()))
+            .chain(["Self"])
+            .collect();
+        let mut found: Option<(Span, String, Type)> = None;
+        crate::span_visitor::for_each_expr_in_block(body, &mut |e| {
+            if found.is_some() {
+                return;
+            }
+            // The receiver of a method call: its type is final there, where
+            // a call's own recorded type may predate the context that fixes
+            // it (`s.chars().collect()` returned as a `Vec[char]`).
+            let ExprKind::MethodCall { object, .. } = &e.kind else {
+                return;
+            };
+            if !matches!(
+                object.kind,
+                ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+            ) {
+                return;
+            }
+            let Some(t) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+                return;
+            };
+            let t = match t {
+                Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+                t => t,
+            };
+            if matches!(t, Type::Pointer { .. } | Type::TypeParam(_)) {
+                return;
+            }
+            if let Some(name) = find_unbound_type_param(t, &in_scope) {
+                found = Some((object.span, name.to_string(), t.clone()));
+            }
+        });
+        if let Some((span, name, ty)) = found {
+            self.type_error(
+                format!(
+                    "cannot infer type parameter '{name}' of `{}`, this call's result: \
+                     nothing in the body fixes it (design.md § Type inference); bind \
+                     the result with a type annotation",
+                    type_display(&ty)
+                ),
+                span,
+                TypeErrorKind::CannotInferTypeParam,
+            );
         }
     }
 

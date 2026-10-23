@@ -12402,3 +12402,24 @@ fn flatten_over_collections_is_refused_at_the_call() {
         "3 6\n",
     );
 }
+
+/// design.md § Type inference: an unsolved variable is an error at the end
+/// of the body. `or_else`'s new error type, fixed by nothing when the result
+/// is only unwrapped, is refused by check rather than by the MIR builder;
+/// an annotated binding fixes it and runs (B-2026-10-22-36).
+#[test]
+fn a_call_result_no_use_fixes_is_refused() {
+    rejected(
+        "or-else-unwrapped",
+        "fn main() {\n    let r: Result[i64, i64] = Err(9);\n    \
+         println(r.or_else(|x: i64| Ok(x * 2)).unwrap_or(0));\n}\n",
+        "cannot infer type parameter 'E' of `Result[i64, E]`, this call's result",
+    );
+    accepted_and_runs(
+        "or-else-annotated",
+        "fn main() {\n    let r: Result[i64, i64] = Err(9);\n    \
+         let q: Result[i64, i64] = r.or_else(|x: i64| Ok(x * 2));\n    \
+         println(q.unwrap_or(0));\n}\n",
+        "18\n",
+    );
+}
