@@ -1,0 +1,2320 @@
+// mini_intelhex — intelhex 2.3.0 (Alexander Belchenko), the Python library
+// for Intel HEX firmware images, and its command-line scripts. The reader
+// with every record check and its error classes, the writer with its record
+// chaining over holes and 64K pages, binary conversion with start / end /
+// size and padding, slicing, byte and string access, find, segments,
+// fromdict / todict, merge with its overlap modes, the hex dump, 16-bit
+// word access, the Record builders, hex2bin and bin2hex, hexinfo's YAML
+// summary, hexdiff (a unified diff of two dumps), and hexmerge's command
+// line, getopt's GNU scanning and messages included.
+//
+// The image is a map from address to (byte, insertion number), so the
+// places where the Python dict's insertion order shows (todict, and which
+// overlapping address merge reports first) come out in the same order.
+// Exceptions are Result errors carrying "Class: str(e)", the way oracle.py
+// prints them. usage_text() and jobs_text() at the end are written by
+// gen_kara.py from vendor/scripts/hexmerge.py and data/jobs.tsv.
+
+const VERSION: Str = "2.3.0";
+
+// ------------------------------------------------------------ helpers
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn hexval(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        return (c as i64) - 48;
+    }
+    if c >= 'a' and c <= 'f' {
+        return (c as i64) - 87;
+    }
+    if c >= 'A' and c <= 'F' {
+        return (c as i64) - 55;
+    }
+    -1
+}
+
+// "%X"
+fn hx(v: i64) -> String {
+    let ds: Vec[char] = "0123456789ABCDEF".chars().collect();
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut cs: Vec[char] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        cs.push(ds[x & 15]);
+        x = x >> 4;
+    }
+    let mut s = String.new();
+    let mut i = cs.len() - 1;
+    while i >= 0 {
+        s.push(cs[i]);
+        i -= 1;
+    }
+    s
+}
+
+// "%0<w>X"
+fn hxw(v: i64, w: i64) -> String {
+    let mut s = hx(v);
+    while s.len() < w {
+        s = f"0{s}";
+    }
+    s
+}
+
+// bytes.hex()
+fn lhex(bs: ref Vec[i64]) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    for b in bs.iter() {
+        s.push(ds[(*b >> 4) & 15]);
+        s.push(ds[*b & 15]);
+    }
+    s
+}
+
+fn unhex(s: ref String) -> Vec[i64] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push(hexval(cs[i]) * 16 + hexval(cs[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn bytes_text(bs: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for b in bs.iter() {
+        s.push((*b as u8) as char);
+    }
+    s
+}
+
+fn addr_s(a: Option[i64]) -> String {
+    match a {
+        Some(v) => f"0x{hx(v)}",
+        None => "None".to_string(),
+    }
+}
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x20)
+}
+
+// int(s, 0) for the job fields: an optional sign, then 0x hex or decimal.
+fn int0(s: ref String) -> i64 {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '-' or cs[i] == '+') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let mut v: i64 = 0;
+    if i + 1 < cs.len() and cs[i] == '0' and (cs[i + 1] == 'x' or cs[i + 1] == 'X') {
+        i += 2;
+        while i < cs.len() {
+            v = v * 16 + hexval(cs[i]);
+            i += 1;
+        }
+    } else {
+        while i < cs.len() {
+            v = v * 10 + hexval(cs[i]);
+            i += 1;
+        }
+    }
+    if neg { -v } else { v }
+}
+
+// int(s, 16): surrounding whitespace, a sign, an optional 0x, and digits
+// with single underscores between them (one may follow the 0x).
+fn int16(s: ref String) -> Option[i64] {
+    let all: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = all.len();
+    while a < b and is_py_space(all[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(all[b - 1]) {
+        b -= 1;
+    }
+    let mut i = a;
+    let mut neg = false;
+    if i < b and (all[i] == '-' or all[i] == '+') {
+        neg = all[i] == '-';
+        i += 1;
+    }
+    let mut prefixed = false;
+    if i + 1 < b and all[i] == '0' and (all[i + 1] == 'x' or all[i + 1] == 'X') {
+        i += 2;
+        prefixed = true;
+    }
+    let mut v: i64 = 0;
+    let mut digits = 0;
+    let mut prev_digit = prefixed;
+    while i < b {
+        let c = all[i];
+        if c == '_' {
+            if not prev_digit {
+                return None;
+            }
+            prev_digit = false;
+        } else {
+            let d = hexval(c);
+            if d < 0 {
+                return None;
+            }
+            v = v * 16 + d;
+            digits += 1;
+            prev_digit = true;
+        }
+        i += 1;
+    }
+    if digits == 0 or not prev_digit {
+        return None;
+    }
+    Some(if neg { -v } else { v })
+}
+
+fn opt_int(s: ref String) -> Option[i64] {
+    if s == "-" { None } else { Some(int0(s)) }
+}
+
+// repr() of the short ASCII strings this program quotes
+fn repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { "\"" } else { "'" };
+    let mut out = q.to_string();
+    for c in s.chars() {
+        if c.to_string() == q or c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push_str(q);
+    out
+}
+
+fn err_msg(e: ref String) -> String {
+    let cs: Vec[char] = e.chars().collect();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        if cs[i] == ':' and cs[i + 1] == ' ' {
+            let mut s = String.new();
+            for k in (i + 2)..cs.len() {
+                s.push(cs[k]);
+            }
+            return s;
+        }
+        i += 1;
+    }
+    String.new()
+}
+
+fn overflow() -> String {
+    "OverflowError: unsigned byte integer is greater than maximum".to_string()
+}
+
+// ------------------------------------------------------------ IntelHex
+
+#[derive(Clone)]
+struct Ihex {
+    buf: Map[i64, (i64, i64)],
+    seq: i64,
+    padding: i64,
+    start: Vec[(String, i64)],
+    has_start: bool,
+}
+
+fn ih_new() -> Ihex {
+    Ihex { buf: Map.new(), seq: 0, padding: 255, start: Vec.new(), has_start: false }
+}
+
+fn ih_get(ih: ref Ihex, a: i64) -> Option[i64] {
+    match ih.buf.get(a) {
+        Some(p) => Some(p.0),
+        None => None,
+    }
+}
+
+// self._buf[a] = v: a new key goes to the end of the insertion order, an
+// existing one keeps its place.
+fn ih_set(ih: mut ref Ihex, a: i64, v: i64) {
+    let mut s: i64 = 0;
+    if ih.buf.contains_key(a) {
+        s = ih.buf.get(a).unwrap().1;
+    } else {
+        ih.seq += 1;
+        s = ih.seq;
+    }
+    ih.buf.insert(a, (v, s));
+}
+
+fn addresses(ih: ref Ihex) -> Vec[i64] {
+    let mut aa: Vec[i64] = Vec.new();
+    for (k, _) in ih.buf.iter() {
+        aa.push(*k);
+    }
+    aa.sort();
+    aa
+}
+
+// the keys in insertion order
+fn keys_in_order(ih: ref Ihex) -> Vec[i64] {
+    let mut ks: Vec[(i64, i64)] = Vec.new();
+    for (k, p) in ih.buf.iter() {
+        ks.push((p.1, *k));
+    }
+    ks.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for p in ks.iter() {
+        out.push(p.1);
+    }
+    out
+}
+
+fn minaddr(ih: ref Ihex) -> Option[i64] {
+    let aa = addresses(ih);
+    if aa.len() == 0 { None } else { Some(aa[0]) }
+}
+
+fn maxaddr(ih: ref Ihex) -> Option[i64] {
+    let aa = addresses(ih);
+    if aa.len() == 0 { None } else { Some(aa[aa.len() - 1]) }
+}
+
+fn start_truthy(ih: ref Ihex) -> bool {
+    ih.has_start and ih.start.len() > 0
+}
+
+fn start_get(ih: ref Ihex, key: Str) -> Option[i64] {
+    for p in ih.start.iter() {
+        if p.0 == key {
+            return Some(p.1);
+        }
+    }
+    None
+}
+
+fn start_keys_sorted(ih: ref Ihex) -> String {
+    let mut ks: Vec[String] = Vec.new();
+    for p in ih.start.iter() {
+        ks.push(p.0.clone());
+    }
+    ks.sort();
+    join(ks, ",")
+}
+
+// repr() (and str()) of start_addr
+fn start_repr(ih: ref Ihex) -> String {
+    if not ih.has_start {
+        return "None".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for p in ih.start.iter() {
+        parts.push(f"'{p.0}': {p.1}");
+    }
+    f"{{{join(parts, ", ")}}}"
+}
+
+// IntelHex(other): padding, a truthy start_addr and the buffer are copied.
+fn ih_copy(src: ref Ihex) -> Ihex {
+    let mut ih = ih_new();
+    ih.padding = src.padding;
+    if start_truthy(src) {
+        ih.start = src.start.clone();
+        ih.has_start = true;
+    }
+    ih.buf = src.buf.clone();
+    ih.seq = src.seq;
+    ih
+}
+
+// ------------------------------------------------------------ the reader
+
+// A text file read with universal newlines: \r\n, \r and \n each end a line.
+fn universal_lines(text: ref String) -> Vec[String] {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '\r' {
+            out.push(cur);
+            cur = String.new();
+            if i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+        } else if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// _decode_record; Ok(true) at the end-of-file record.
+fn decode_record(ih: mut ref Ihex, offset: mut ref i64, s: ref String, line: i64) -> Result[bool, String] {
+    let cs: Vec[char] = s.chars().collect();
+    if cs.len() == 0 {
+        return Ok(false);
+    }
+    let rec_err = f"HexRecordError: Hex file contains invalid record at line {line}";
+    if cs[0] != ':' {
+        return Err(rec_err);
+    }
+    if (cs.len() - 1) % 2 != 0 {
+        return Err(rec_err);
+    }
+    let mut bin: Vec[i64] = Vec.new();
+    let mut i = 1;
+    while i < cs.len() {
+        let h = hexval(cs[i]);
+        let l = hexval(cs[i + 1]);
+        if h < 0 or l < 0 {
+            return Err(rec_err);
+        }
+        bin.push(h * 16 + l);
+        i += 2;
+    }
+    if bin.len() < 5 {
+        return Err(rec_err);
+    }
+    let rl = bin[0];
+    if bin.len() != 5 + rl {
+        return Err(f"RecordLengthError: Record at line {line} has invalid length");
+    }
+    let mut addr = bin[1] * 256 + bin[2];
+    let rt = bin[3];
+    if rt > 5 {
+        return Err(f"RecordTypeError: Record at line {line} has invalid record type");
+    }
+    let mut crc: i64 = 0;
+    for b in bin.iter() {
+        crc += *b;
+    }
+    if crc & 255 != 0 {
+        return Err(f"RecordChecksumError: Record at line {line} has invalid checksum");
+    }
+    if rt == 0 {
+        addr += *offset;
+        for k in 4..(4 + rl) {
+            if ih_get(ih, addr).is_some() {
+                return Err(f"AddressOverlapError: Hex file has data overlap at address 0x{hx(addr)} on line {line}");
+            }
+            ih_set(mut ih, addr, bin[k]);
+            addr += 1;
+        }
+    } else if rt == 1 {
+        if rl != 0 {
+            return Err("EOFRecordError: File has invalid End-of-File record".to_string());
+        }
+        return Ok(true);
+    } else if rt == 2 {
+        if rl != 2 or addr != 0 {
+            return Err(f"ExtendedSegmentAddressRecordError: Invalid Extended Segment Address Record at line {line}");
+        }
+        *offset = (bin[4] * 256 + bin[5]) * 16;
+    } else if rt == 4 {
+        if rl != 2 or addr != 0 {
+            return Err(f"ExtendedLinearAddressRecordError: Invalid Extended Linear Address Record at line {line}");
+        }
+        *offset = (bin[4] * 256 + bin[5]) * 65536;
+    } else if rt == 3 {
+        if rl != 4 or addr != 0 {
+            return Err(f"StartSegmentAddressRecordError: Invalid Start Segment Address Record at line {line}");
+        }
+        if start_truthy(ih) {
+            return Err(f"DuplicateStartAddressRecordError: Start Address Record appears twice at line {line}");
+        }
+        ih.start = [("CS".to_string(), bin[4] * 256 + bin[5]), ("IP".to_string(), bin[6] * 256 + bin[7])];
+        ih.has_start = true;
+    } else {
+        if rl != 4 or addr != 0 {
+            return Err(f"StartLinearAddressRecordError: Invalid Start Linear Address Record at line {line}");
+        }
+        if start_truthy(ih) {
+            return Err(f"DuplicateStartAddressRecordError: Start Address Record appears twice at line {line}");
+        }
+        ih.start = [("EIP".to_string(), bin[4] * 16777216 + bin[5] * 65536 + bin[6] * 256 + bin[7])];
+        ih.has_start = true;
+    }
+    Ok(false)
+}
+
+fn file_bytes(files: ref Map[String, Vec[i64]], name: ref String) -> Result[Vec[i64], String] {
+    match files.get(name.clone()) {
+        Some(bs) => Ok(bs.clone()),
+        None => Err(f"FileNotFoundError: [Errno 2] No such file or directory: {repr_str(name)}"),
+    }
+}
+
+// IntelHex(fname)
+fn load_hex(files: ref Map[String, Vec[i64]], name: ref String) -> Result[Ihex, String] {
+    let text = bytes_text(file_bytes(files, name)?);
+    let mut ih = ih_new();
+    let mut offset: i64 = 0;
+    let mut line = 0;
+    for s in universal_lines(text).iter() {
+        line += 1;
+        if decode_record(mut ih, mut offset, s, line)? {
+            break;
+        }
+    }
+    Ok(ih)
+}
+
+// loadbin / frombytes
+fn load_bin(ih: mut ref Ihex, bs: ref Vec[i64], offset: i64) {
+    let mut a = offset;
+    for b in bs.iter() {
+        ih_set(mut ih, a, *b);
+        a += 1;
+    }
+}
+
+// ------------------------------------------------------------ access
+
+// ih[addr]
+fn get_item(ih: ref Ihex, a: i64) -> Result[i64, String] {
+    if a < 0 {
+        return Err("TypeError: Address should be >= 0.".to_string());
+    }
+    Ok(ih_get(ih, a).unwrap_or(ih.padding))
+}
+
+// ih[start:stop:step]: a new object (default padding, no start address)
+// with the bytes found; a missing (or zero) start is the lowest address.
+fn get_slice(ih: ref Ihex, start: Option[i64], stop: Option[i64], step: Option[i64]) -> Ihex {
+    let aa = addresses(ih);
+    let mut out = ih_new();
+    if aa.len() > 0 {
+        let lo = match start { Some(v) => if v != 0 { v } else { aa[0] }, None => aa[0] };
+        let hi = match stop { Some(v) => if v != 0 { v } else { aa[aa.len() - 1] + 1 }, None => aa[aa.len() - 1] + 1 };
+        let st = match step { Some(v) => if v != 0 { v } else { 1 }, None => 1 };
+        let mut i = lo;
+        while i < hi {
+            if let Some(x) = ih_get(ih, i) {
+                ih_set(mut out, i, x);
+            }
+            i += st;
+        }
+    }
+    out
+}
+
+fn range_len(start: i64, stop: i64, step: i64) -> i64 {
+    if stop <= start { 0 } else { (stop - start + step - 1) / step }
+}
+
+// ih[start:stop:step] = vals
+fn set_slice(ih: mut ref Ihex, start: Option[i64], stop: Option[i64], step: Option[i64], vals: ref Vec[i64]) -> Result[(), String] {
+    let st = match step { Some(v) => if v != 0 { v } else { 1 }, None => 1 };
+    let mut lo: i64 = 0;
+    let mut hi: i64 = 0;
+    match (start, stop) {
+        (Some(a), Some(b)) => {
+            if range_len(a, b, st) != vals.len() {
+                return Err("ValueError: Length of bytes sequence does not match address range".to_string());
+            }
+            lo = a;
+            hi = b;
+        }
+        (None, None) => {
+            return Err("TypeError: Unsupported address range".to_string());
+        }
+        (None, Some(b)) => {
+            lo = b - vals.len();
+            hi = b;
+        }
+        (Some(a), None) => {
+            lo = a;
+            hi = a + vals.len();
+        }
+    }
+    if lo < 0 {
+        return Err("TypeError: start address cannot be negative".to_string());
+    }
+    if hi < 0 {
+        return Err("TypeError: stop address cannot be negative".to_string());
+    }
+    let mut j = 0;
+    let mut i = lo;
+    while i < hi {
+        ih_set(mut ih, i, vals[j]);
+        j += 1;
+        i += st;
+    }
+    Ok(())
+}
+
+// del ih[addr]
+fn del_item(ih: mut ref Ihex, a: i64) -> Result[(), String] {
+    if a < 0 {
+        return Err("TypeError: Address should be >= 0.".to_string());
+    }
+    if not ih.buf.contains_key(a) {
+        return Err(f"KeyError: {a}");
+    }
+    ih.buf.remove(a);
+    Ok(())
+}
+
+// del ih[start:stop:step]
+fn del_slice(ih: mut ref Ihex, start: Option[i64], stop: Option[i64], step: Option[i64]) {
+    let aa = addresses(ih);
+    if aa.len() == 0 {
+        return;
+    }
+    let lo = match start { Some(v) => if v != 0 { v } else { aa[0] }, None => aa[0] };
+    let hi = match stop { Some(v) => if v != 0 { v } else { aa[aa.len() - 1] + 1 }, None => aa[aa.len() - 1] + 1 };
+    let st = match step { Some(v) => if v != 0 { v } else { 1 }, None => 1 };
+    let mut i = lo;
+    while i < hi {
+        if ih.buf.contains_key(i) {
+            ih.buf.remove(i);
+        }
+        i += st;
+    }
+}
+
+fn gets(ih: ref Ihex, a: i64, n: i64) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..n {
+        match ih_get(ih, a + i) {
+            Some(x) => out.push(x),
+            None => {
+                return Err(f"NotEnoughDataError: Bad access at 0x{hx(a)}: not enough data to read {n} contiguous bytes");
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn getsz(ih: ref Ihex, a: i64) -> Result[Vec[i64], String] {
+    let mut i = 0;
+    loop {
+        match ih_get(ih, a + i) {
+            Some(x) => {
+                if x == 0 {
+                    break;
+                }
+            }
+            None => {
+                return Err(f"NotEnoughDataError: Bad access at 0x{hx(a)}: not enough data to read zero-terminated string");
+            }
+        }
+        i += 1;
+    }
+    gets(ih, a, i)
+}
+
+fn puts(ih: mut ref Ihex, a: i64, bs: ref Vec[i64]) {
+    for i in 0..bs.len() {
+        ih_set(mut ih, a + i, bs[i]);
+    }
+}
+
+fn segments(ih: ref Ihex, min_gap: i64) -> Vec[(i64, i64)] {
+    let aa = addresses(ih);
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if aa.len() == 0 {
+        return out;
+    }
+    let mut begin = aa[0];
+    for i in 1..aa.len() {
+        if aa[i] - aa[i - 1] > min_gap {
+            out.push((begin, aa[i - 1] + 1));
+            begin = aa[i];
+        }
+    }
+    out.push((begin, aa[aa.len() - 1] + 1));
+    out
+}
+
+fn segs_s(ss: ref Vec[(i64, i64)]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in ss.iter() {
+        parts.push(f"0x{hx(s.0)}..0x{hx(s.1)}");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// bytes.find
+fn bytes_find(hay: ref Vec[i64], sub: ref Vec[i64]) -> i64 {
+    let n = hay.len();
+    let m = sub.len();
+    let mut i = 0;
+    while i + m <= n {
+        let mut ok = true;
+        for k in 0..m {
+            if hay[i + k] != sub[k] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn find(ih: ref Ihex, sub: ref Vec[i64], start: Option[i64], end: Option[i64]) -> Result[i64, String] {
+    let part = get_slice(ih, start, end, None);
+    for s in segments(part, 1).iter() {
+        let b = gets(ih, s.0, s.1 - s.0)?;
+        let i = bytes_find(b, sub);
+        if i != -1 {
+            return Ok(s.0 + i);
+        }
+    }
+    Ok(-1)
+}
+
+fn todict(ih: ref Ihex) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for k in keys_in_order(ih).iter() {
+        parts.push(f"{*k}: {ih_get(ih, *k).unwrap()}");
+    }
+    if start_truthy(ih) {
+        parts.push(f"'start_addr': {start_repr(ih)}");
+    }
+    f"{{{join(parts, ", ")}}}"
+}
+
+// ------------------------------------------------------------ binary
+
+// _get_start_end; `w16` uses IntelHex16bit's minaddr / maxaddr.
+fn get_start_end(ih: ref Ihex, start: Option[i64], end: Option[i64], size: Option[i64], w16: bool) -> Result[(i64, i64), String] {
+    if start.is_none() and end.is_none() and ih.buf.len() == 0 {
+        return Err("EmptyIntelHexError: Requested operation cannot be executed with empty object".to_string());
+    }
+    let lo_default = if w16 { minaddr(ih).unwrap_or(0) >> 1 } else { minaddr(ih).unwrap_or(0) };
+    let hi_default = if w16 { maxaddr(ih).unwrap_or(0) >> 1 } else { maxaddr(ih).unwrap_or(0) };
+    match size {
+        Some(n) => {
+            if start.is_some() and end.is_some() {
+                return Err("ValueError: tobinarray: you can't use start,end and size arguments in the same time".to_string());
+            }
+            let s0 = if start.is_none() and end.is_none() { Some(lo_default) } else { start };
+            match s0 {
+                Some(s) => Ok((s, s + n - 1)),
+                None => {
+                    let e = end.unwrap();
+                    let s = e - n + 1;
+                    if s < 0 {
+                        return Err(f"ValueError: tobinarray: invalid size ({n}) for given end address ({e})");
+                    }
+                    Ok((s, e))
+                }
+            }
+        }
+        None => {
+            let s = start.unwrap_or(lo_default);
+            let e = end.unwrap_or(hi_default);
+            if s > e { Ok((e, s)) } else { Ok((s, e)) }
+        }
+    }
+}
+
+// tobinarray / tobinstr, into array('B')
+fn tobin(ih: ref Ihex, start: Option[i64], end: Option[i64], size: Option[i64]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    if ih.buf.len() == 0 and (start.is_none() or end.is_none()) {
+        return Ok(out);
+    }
+    if let Some(n) = size {
+        if n <= 0 {
+            return Err("ValueError: tobinarray: wrong value for size".to_string());
+        }
+    }
+    let (s, e) = get_start_end(ih, start, end, size, false)?;
+    let mut i = s;
+    while i <= e {
+        let x = ih_get(ih, i).unwrap_or(ih.padding);
+        if x > 255 {
+            return Err(overflow());
+        }
+        out.push(x);
+        i += 1;
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the writer
+
+fn rec_text(bin: ref Vec[i64], eol: ref String) -> Result[String, String] {
+    let mut sum: i64 = 0;
+    let mut s = ":".to_string();
+    for b in bin.iter() {
+        if *b > 255 {
+            return Err(overflow());
+        }
+        sum += *b;
+        s.push_str(hxw(*b, 2));
+    }
+    s.push_str(hxw((256 - sum % 256) % 256, 2));
+    s.push_str(eol);
+    Ok(s)
+}
+
+fn bisect_right(a: ref Vec[i64], x: i64, lo0: i64, hi0: i64) -> i64 {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if x < a[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn min3(a: i64, b: i64, c: i64) -> i64 {
+    let m = if a < b { a } else { b };
+    if m < c { m } else { c }
+}
+
+// write_hex_file
+fn write_hex(ih: ref Ihex, write_start: bool, eolstyle: ref String, byte_count: i64) -> Result[String, String] {
+    if byte_count > 255 or byte_count < 1 {
+        return Err(f"ValueError: wrong byte_count value: {byte_count}");
+    }
+    let eol = if eolstyle == "native" {
+        "\n".to_string()
+    } else if eolstyle == "CRLF" {
+        "\r\n".to_string()
+    } else {
+        return Err(f"ValueError: wrong eolstyle {repr_str(eolstyle)}");
+    };
+    let mut out = String.new();
+    if start_truthy(ih) and write_start {
+        let keys = start_keys_sorted(ih);
+        if keys == "CS,IP" {
+            let cs = start_get(ih, "CS").unwrap();
+            let ip = start_get(ih, "IP").unwrap();
+            out.push_str(rec_text([4, 0, 0, 3, (cs >> 8) & 255, cs & 255, (ip >> 8) & 255, ip & 255], eol)?);
+        } else if keys == "EIP" {
+            let eip = start_get(ih, "EIP").unwrap();
+            out.push_str(rec_text([4, 0, 0, 5, (eip >> 24) & 255, (eip >> 16) & 255, (eip >> 8) & 255, eip & 255], eol)?);
+        } else {
+            return Err(f"InvalidStartAddressValueError: Invalid start address value: {start_repr(ih)}");
+        }
+    }
+    let aa = addresses(ih);
+    let n = aa.len();
+    if n > 0 {
+        let minaddr = aa[0];
+        let maxaddr = aa[n - 1];
+        let need_offset_record = maxaddr > 65535;
+        let mut high_ofs: i64 = 0;
+        let mut cur_addr = minaddr;
+        let mut cur_ix: i64 = 0;
+        while cur_addr <= maxaddr {
+            if need_offset_record {
+                high_ofs = cur_addr >> 16;
+                out.push_str(rec_text([2, 0, 0, 4, high_ofs / 256, high_ofs % 256], eol)?);
+            }
+            loop {
+                let low_addr = cur_addr & 0xFFFF;
+                let mut chain_len = min3(byte_count - 1, 65535 - low_addr, maxaddr - cur_addr);
+                let stop_addr = cur_addr + chain_len;
+                if chain_len != 0 {
+                    let hi = if cur_ix + chain_len + 1 < n { cur_ix + chain_len + 1 } else { n };
+                    let ix = bisect_right(aa, stop_addr, cur_ix, hi);
+                    chain_len = ix - cur_ix;
+                } else {
+                    chain_len = 1;
+                }
+                let mut data: Vec[i64] = Vec.new();
+                for i in 0..chain_len {
+                    match ih_get(ih, cur_addr + i) {
+                        Some(x) => {
+                            if x > 255 {
+                                return Err(overflow());
+                            }
+                            data.push(x);
+                        }
+                        None => break,
+                    }
+                }
+                chain_len = data.len();
+                let mut bin: Vec[i64] = [chain_len, low_addr / 256, low_addr % 256, 0];
+                for x in data.iter() {
+                    bin.push(*x);
+                }
+                out.push_str(rec_text(bin, eol)?);
+                cur_ix += chain_len;
+                if cur_ix < n {
+                    cur_addr = aa[cur_ix];
+                } else {
+                    cur_addr = maxaddr + 1;
+                    break;
+                }
+                if (cur_addr >> 16) > high_ofs {
+                    break;
+                }
+            }
+        }
+    }
+    out.push_str(f":00000001FF{eol}");
+    Ok(out)
+}
+
+// ------------------------------------------------------------ dump
+
+fn dump(ih: ref Ihex, width: i64, withpadding: bool) -> Result[String, String] {
+    if width < 1 {
+        return Err("ValueError: width must be a positive integer.".to_string());
+    }
+    let mut out = String.new();
+    if ih.has_start {
+        let cs = start_get(ih, "CS");
+        let ip = start_get(ih, "IP");
+        let eip = start_get(ih, "EIP");
+        if eip.is_some() and cs.is_none() and ip.is_none() {
+            out.push_str(f"EIP = 0x{hxw(eip.unwrap(), 8)}\n");
+        } else if eip.is_none() and cs.is_some() and ip.is_some() {
+            out.push_str(f"CS = 0x{hxw(cs.unwrap(), 4)}, IP = 0x{hxw(ip.unwrap(), 4)}\n");
+        } else {
+            // the library formats a name it never defined
+            return Err("NameError: name 'start_addr' is not defined".to_string());
+        }
+    }
+    let aa = addresses(ih);
+    if aa.len() > 0 {
+        let startaddr = (aa[0] / width) * width;
+        let endaddr = ((aa[aa.len() - 1] / width) + 1) * width;
+        let digits = hx(endaddr).len();
+        let maxdigits = if digits > 4 { digits } else { 4 };
+        let mut i = startaddr;
+        while i < endaddr {
+            out.push_str(hxw(i, maxdigits));
+            out.push_str(" ");
+            let mut s = String.new();
+            for j in 0..width {
+                let x = match ih_get(ih, i + j) {
+                    Some(v) => Some(v),
+                    None => if withpadding { Some(ih.padding) } else { None },
+                };
+                match x {
+                    Some(v) => {
+                        out.push_str(f" {hxw(v, 2)}");
+                        if v >= 32 and v < 127 {
+                            s.push((v as u8) as char);
+                        } else {
+                            s.push('.');
+                        }
+                    }
+                    None => {
+                        out.push_str(" --");
+                        s.push(' ');
+                    }
+                }
+            }
+            out.push_str(f"  |{s}|\n");
+            i += width;
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ merge
+
+// a.merge(b, overlap); `same` is `b is a`.
+fn merge(this: mut ref Ihex, other: ref Ihex, overlap: ref String, same: bool) -> Result[(), String] {
+    if same {
+        return Err("ValueError: Can't merge itself".to_string());
+    }
+    if overlap != "error" and overlap != "ignore" and overlap != "replace" {
+        return Err("ValueError: overlap argument should be either 'error', 'ignore' or 'replace'".to_string());
+    }
+    for i in keys_in_order(other).iter() {
+        let a = *i;
+        if this.buf.contains_key(a) {
+            if overlap == "error" {
+                return Err(f"AddressOverlapError: Data overlapped at address 0x{hx(a)}");
+            } else if overlap == "ignore" {
+                continue;
+            }
+        }
+        ih_set(mut this, a, ih_get(other, a).unwrap());
+    }
+    if not start_equal(this, other) {
+        if not this.has_start {
+            this.start = other.start.clone();
+            this.has_start = other.has_start;
+        } else if not other.has_start {
+        } else {
+            if overlap == "error" {
+                return Err("AddressOverlapError: Starting addresses are different".to_string());
+            } else if overlap == "replace" {
+                this.start = other.start.clone();
+                this.has_start = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+// dict equality of two start addresses, None included
+fn start_equal(a: ref Ihex, b: ref Ihex) -> bool {
+    if a.has_start != b.has_start {
+        return false;
+    }
+    if not a.has_start {
+        return true;
+    }
+    if a.start.len() != b.start.len() {
+        return false;
+    }
+    for p in a.start.iter() {
+        match start_get(b, p.0.as_str()) {
+            Some(v) => {
+                if v != p.1 {
+                    return false;
+                }
+            }
+            None => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ------------------------------------------------------------ IntelHex16bit
+
+fn word_at(ih: ref Ihex, a16: i64, padding: i64) -> Result[i64, String] {
+    let b1 = ih_get(ih, a16 * 2);
+    let b2 = ih_get(ih, a16 * 2 + 1);
+    if b1.is_some() and b2.is_some() {
+        return Ok(b1.unwrap() | (b2.unwrap() << 8));
+    }
+    if b1.is_none() and b2.is_none() {
+        return Ok(padding);
+    }
+    Err(f"BadAccess16bit: Bad access at 0x{hx(a16)}: not enough data to read 16 bit value")
+}
+
+fn tobin16(ih: ref Ihex, start: Option[i64], end: Option[i64], size: Option[i64], padding: i64) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    if ih.buf.len() == 0 and (start.is_none() or end.is_none()) {
+        return Ok(out);
+    }
+    if let Some(n) = size {
+        if n <= 0 {
+            return Err("ValueError: tobinarray: wrong value for size".to_string());
+        }
+    }
+    let (s, e) = get_start_end(ih, start, end, size, true)?;
+    let mut a = s;
+    while a <= e {
+        out.push(word_at(ih, a, padding)?);
+        a += 1;
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ Record
+
+fn record_bytes(b: ref Vec[i64]) -> String {
+    match rec_text(b, "") {
+        Ok(s) => s,
+        Err(e) => e,
+    }
+}
+
+// ------------------------------------------------------------ the scripts
+
+// hexinfo's summarize_yaml, each file in turn, stopping at an error.
+fn summarize(files: ref Map[String, Vec[i64]], names: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for name in names.iter() {
+        out.push_str(f"- file: '{name}'\n");
+        let ih = match load_hex(files, name) {
+            Ok(h) => h,
+            Err(e) => {
+                out.push_str(f"{e}\n");
+                return out;
+            }
+        };
+        if start_truthy(ih) {
+            let keys = start_keys_sorted(ih);
+            let entry = if keys == "CS,IP" {
+                start_get(ih, "CS").unwrap() * 65536 + start_get(ih, "IP").unwrap()
+            } else {
+                start_get(ih, "EIP").unwrap()
+            };
+            out.push_str(f"  entry: 0x{hxw(entry, 8)}\n");
+        }
+        let ss = segments(ih, 1);
+        if ss.len() > 0 {
+            out.push_str("  data:\n");
+            for s in ss.iter() {
+                out.push_str(f"  - {{ first: 0x{hxw(s.0, 8)}, last: 0x{hxw(s.1 - 1, 8)}, length: 0x{hxw(s.1 - s.0, 8)} }}\n");
+            }
+        }
+        out.push_str("\n");
+    }
+    out
+}
+
+fn dump_lines(ih: ref Ihex) -> Vec[String] {
+    let text = dump(ih, 16, false).unwrap_or(String.new());
+    let mut lines = split_on(text, '\n');
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    lines
+}
+
+// diff_dumps: difflib.unified_diff(..., lineterm=''), joined by newlines.
+fn diff_dumps(a_ih: ref Ihex, b_ih: ref Ihex, name1: ref String, name2: ref String) -> String {
+    let a = dump_lines(a_ih);
+    let b = dump_lines(b_ih);
+    let mut res: Vec[String] = Vec.new();
+    let m = Matcher.new(a.clone(), b.clone(), no_line_junk, true);
+    let mut started = false;
+    for group in m.grouped_opcodes(3) {
+        if not started {
+            started = true;
+            res.push(f"--- {name1}");
+            res.push(f"+++ {name2}");
+        }
+        let first = group[0].clone();
+        let last = group[group.len() - 1].clone();
+        res.push(f"@@ -{range_unified(first.i1, last.i2)} +{range_unified(first.j1, last.j2)} @@");
+        for op in group.iter() {
+            if op.tag == "equal" {
+                for k in op.i1..op.i2 {
+                    res.push(f" {a[k]}");
+                }
+                continue;
+            }
+            if op.tag == "replace" or op.tag == "delete" {
+                for k in op.i1..op.i2 {
+                    res.push(f"-{a[k]}");
+                }
+            }
+            if op.tag == "replace" or op.tag == "insert" {
+                for k in op.j1..op.j2 {
+                    res.push(f"+{b[k]}");
+                }
+            }
+        }
+    }
+    let mut out = join(res, "\n");
+    out.push_str("\n");
+    out
+}
+
+fn range_unified(start: i64, stop: i64) -> String {
+    let mut beginning = start + 1;
+    let length = stop - start;
+    if length == 1 {
+        return f"{beginning}";
+    }
+    if length == 0 {
+        beginning -= 1;
+    }
+    f"{beginning},{length}"
+}
+
+// hex2bin(): (stdout, return code, the bytes written)
+fn hex2bin(files: ref Map[String, Vec[i64]], name: ref String, start0: Option[i64], end: Option[i64], size: Option[i64], pad: Option[i64]) -> (String, i64, Vec[i64]) {
+    let mut h = match load_hex(files, name) {
+        Ok(h) => h,
+        Err(e) => {
+            return (f"ERROR: bad HEX file: {err_msg(e)}\n", 1, Vec.new());
+        }
+    };
+    let mut start = start0;
+    if let Some(n) = size {
+        if n != 0 {
+            match end {
+                None => {
+                    if start.is_none() {
+                        start = minaddr(h);
+                    }
+                    let s = start.unwrap();
+                    return finish_hex2bin(mut h, Some(s), Some(s + n - 1), pad);
+                }
+                Some(e) => {
+                    start = if e + 1 >= n { Some(e + 1 - n) } else { Some(0) };
+                }
+            }
+        }
+    }
+    finish_hex2bin(mut h, start, end, pad)
+}
+
+fn finish_hex2bin(h: mut ref Ihex, start: Option[i64], end: Option[i64], pad: Option[i64]) -> (String, i64, Vec[i64]) {
+    if let Some(p) = pad {
+        h.padding = p;
+    }
+    match tobin(h, start, end, None) {
+        Ok(bs) => (String.new(), 0, bs),
+        Err(e) => (f"{e}\n", 1, Vec.new()),
+    }
+}
+
+// ---- getopt.gnu_getopt
+
+struct Opts {
+    opts: Vec[(String, String)],
+    args: Vec[String],
+}
+
+fn long_has_args(opt: ref String, longopts: ref Vec[String]) -> Result[(bool, String), String] {
+    let mut poss: Vec[String] = Vec.new();
+    for o in longopts.iter() {
+        if o.starts_with(opt.as_str()) {
+            poss.push(o.clone());
+        }
+    }
+    if poss.len() == 0 {
+        return Err(f"option --{opt} not recognized");
+    }
+    let with_eq = f"{opt}=";
+    for p in poss.iter() {
+        if p == opt {
+            return Ok((false, opt.clone()));
+        }
+    }
+    for p in poss.iter() {
+        if *p == with_eq {
+            return Ok((true, opt.clone()));
+        }
+    }
+    if poss.len() > 1 {
+        return Err(f"option --{opt} not a unique prefix");
+    }
+    let m = poss[0].clone();
+    if m.ends_with("=") {
+        let cs: Vec[char] = m.chars().collect();
+        let mut t = String.new();
+        for k in 0..(cs.len() - 1) {
+            t.push(cs[k]);
+        }
+        return Ok((true, t));
+    }
+    Ok((false, m))
+}
+
+fn short_has_arg(opt: char, shortopts: ref String) -> Result[bool, String] {
+    let cs: Vec[char] = shortopts.chars().collect();
+    for i in 0..cs.len() {
+        if opt == cs[i] and cs[i] != ':' {
+            return Ok(i + 1 < cs.len() and cs[i + 1] == ':');
+        }
+    }
+    Err(f"option -{opt} not recognized")
+}
+
+fn tail(v: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..v.len() {
+        out.push(v[i].clone());
+    }
+    out
+}
+
+fn gnu_getopt(argv: ref Vec[String], shortopts: ref String, longopts: ref Vec[String]) -> Result[Opts, String] {
+    let mut opts: Vec[(String, String)] = Vec.new();
+    let mut prog_args: Vec[String] = Vec.new();
+    let mut args = argv.clone();
+    while args.len() > 0 {
+        let a0 = args[0].clone();
+        let cs: Vec[char] = a0.chars().collect();
+        if a0 == "--" {
+            for x in tail(args, 1).iter() {
+                prog_args.push(x.clone());
+            }
+            break;
+        }
+        if cs.len() >= 2 and cs[0] == '-' and cs[1] == '-' {
+            // do_longs
+            let mut opt = String.new();
+            let mut optarg: Option[String] = None;
+            let mut k = 2;
+            while k < cs.len() and cs[k] != '=' {
+                opt.push(cs[k]);
+                k += 1;
+            }
+            if k < cs.len() {
+                let mut v = String.new();
+                for q in (k + 1)..cs.len() {
+                    v.push(cs[q]);
+                }
+                optarg = Some(v);
+            }
+            let mut rest = tail(args, 1);
+            let (has_arg, name) = long_has_args(opt, longopts)?;
+            if has_arg {
+                if optarg.is_none() {
+                    if rest.len() == 0 {
+                        return Err(f"option --{name} requires argument");
+                    }
+                    optarg = Some(rest[0].clone());
+                    rest = tail(rest, 1);
+                }
+            } else if optarg.is_some() {
+                return Err(f"option --{name} must not have an argument");
+            }
+            opts.push((f"--{name}", optarg.unwrap_or(String.new())));
+            args = rest;
+        } else if cs.len() >= 1 and cs[0] == '-' and a0 != "-" {
+            // do_shorts
+            let mut rest = tail(args, 1);
+            let mut k = 1;
+            while k < cs.len() {
+                let o = cs[k];
+                k += 1;
+                if short_has_arg(o, shortopts)? {
+                    let mut optarg = String.new();
+                    if k == cs.len() {
+                        if rest.len() == 0 {
+                            return Err(f"option -{o} requires argument");
+                        }
+                        optarg = rest[0].clone();
+                        rest = tail(rest, 1);
+                    } else {
+                        while k < cs.len() {
+                            optarg.push(cs[k]);
+                            k += 1;
+                        }
+                    }
+                    opts.push((f"-{o}", optarg));
+                } else {
+                    opts.push((f"-{o}", String.new()));
+                }
+            }
+            args = rest;
+        } else {
+            prog_args.push(a0);
+            args = tail(args, 1);
+        }
+    }
+    Ok(Opts { opts: opts, args: prog_args })
+}
+
+struct Run {
+    rc: i64,
+    out: String,
+    err: String,
+}
+
+fn usage_fail(msg: ref String) -> Run {
+    Run { rc: 1, out: String.new(), err: f"{msg}\n{usage_text()}\n" }
+}
+
+// _get_file_and_addr_range on posix (no drive letters)
+fn file_and_range(s: ref String) -> Option[(String, Option[i64], Option[i64])] {
+    let parts = split_on(s, ':');
+    if parts.len() == 1 {
+        return Some((parts[0].clone(), None, None));
+    }
+    if parts.len() != 3 {
+        return None;
+    }
+    let mut lo: Option[i64] = None;
+    if parts[1].len() > 0 {
+        match int16(parts[1]) {
+            Some(v) => {
+                lo = Some(v);
+            }
+            None => {
+                return None;
+            }
+        }
+    }
+    let mut hi: Option[i64] = None;
+    if parts[2].len() > 0 {
+        match int16(parts[2]) {
+            Some(v) => {
+                hi = Some(v);
+            }
+            None => {
+                return None;
+            }
+        }
+    }
+    Some((parts[0].clone(), lo, hi))
+}
+
+fn plus_one(a: Option[i64]) -> Option[i64] {
+    match a {
+        Some(v) => Some(v + 1),
+        None => None,
+    }
+}
+
+// hexmerge.py's main(); an uncaught exception is the Err.
+fn hexmerge(files: ref Map[String, Vec[i64]], argv: ref Vec[String]) -> Result[Run, String] {
+    let mut start: Option[i64] = None;
+    let mut end: Option[i64] = None;
+    let mut write_start = true;
+    let mut overlap = "error".to_string();
+    let longopts: Vec[String] = ["help".to_string(), "version".to_string(), "output=".to_string(), "range=".to_string(),
+        "no-start-addr".to_string(), "overlap=".to_string()];
+    let parsed = match gnu_getopt(argv, "hvo:r:", longopts) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(usage_fail(e));
+        }
+    };
+    for p in parsed.opts.iter() {
+        let o = p.0.clone();
+        let a = p.1.clone();
+        if o == "-h" or o == "--help" {
+            return Ok(Run { rc: 0, out: f"{usage_text()}\n", err: String.new() });
+        } else if o == "-v" or o == "--version" {
+            return Ok(Run { rc: 0, out: f"{VERSION}\n", err: String.new() });
+        } else if o == "-r" or o == "--range" {
+            let l = split_on(a, ':');
+            if l[0].len() > 0 {
+                match int16(l[0]) {
+                    Some(v) => {
+                        start = Some(v);
+                    }
+                    None => {
+                        return Ok(usage_fail("Bad range value(s)"));
+                    }
+                }
+            }
+            if l.len() < 2 {
+                return Ok(usage_fail("Bad range value(s)"));
+            }
+            if l[1].len() > 0 {
+                match int16(l[1]) {
+                    Some(v) => {
+                        end = Some(v);
+                    }
+                    None => {
+                        return Ok(usage_fail("Bad range value(s)"));
+                    }
+                }
+            }
+        } else if o == "--no-start-addr" {
+            write_start = false;
+        } else if o == "--overlap" {
+            if a == "error" or a == "ignore" or a == "replace" {
+                overlap = a;
+            } else {
+                return Ok(usage_fail("Bad overlap value"));
+            }
+        }
+    }
+    if parsed.args.len() == 0 {
+        return Ok(usage_fail("You should specify file list"));
+    }
+    let mut res = ih_new();
+    for f in parsed.args.iter() {
+        let (fname, fstart, fend) = match file_and_range(f) {
+            Some(t) => t,
+            None => {
+                return Ok(Run { rc: 1, out: String.new(), err: f"Bad argument: \"{f}\"\n{usage_text()}\n" });
+            }
+        };
+        let mut ih = load_hex(files, fname)?;
+        if fstart.is_some() or fend.is_some() {
+            ih = get_slice(ih, fstart, plus_one(fend), None);
+        }
+        match merge(mut res, ih, overlap, false) {
+            Ok(_) => {}
+            Err(e) => {
+                return Ok(Run { rc: 1, out: String.new(), err: f"Merging: {fname}\n{err_msg(e)}\n" });
+            }
+        }
+    }
+    if start.is_some() or end.is_some() {
+        res = get_slice(res, start, plus_one(end), None);
+    }
+    let text = write_hex(res, write_start, "native", 16)?;
+    Ok(Run { rc: 0, out: text, err: String.new() })
+}
+
+// ------------------------------------------------------------ difflib
+
+// SequenceMatcher from difflib, as ported in mini_difflib, for hexdiff.
+#[derive(Clone)]
+struct MBlock {
+    a: i64,
+    b: i64,
+    size: i64,
+}
+
+#[derive(Clone)]
+struct Opcode {
+    tag: String,
+    i1: i64,
+    i2: i64,
+    j1: i64,
+    j2: i64,
+}
+
+struct Matcher[T] {
+    a: Vec[T],
+    b: Vec[T],
+    b2j: Map[T, Vec[i64]],
+    bjunk: Set[T],
+    bpopular: Set[T],
+    autojunk: bool,
+}
+
+fn no_line_junk(line: ref String) -> bool {
+    false
+}
+
+impl[T: Eq + Hash + Clone] Matcher[T] {
+    // __chain_b: where each element of b occurs, less the junk elements and,
+    // when b has 200 or more elements, the popular ones (more than 1% + 1).
+    fn new(a: own Vec[T], b: own Vec[T], isjunk: Fn(T) -> bool, autojunk: bool) -> Matcher[T] {
+        let mut b2j: Map[T, Vec[i64]] = Map.new();
+        for i in 0..b.len() {
+            let elt = b[i].clone();
+            // B-2026-10-12-3: there is no `Map.get_mut`; `entry` does it.
+            b2j.entry(elt).or_insert(Vec.new()).push(i);
+        }
+        let mut junk: Set[T] = Set.new();
+        for elt in b2j.keys() {
+            if isjunk(elt) {
+                junk.insert(elt.clone());
+            }
+        }
+        for elt in junk.iter() {
+            b2j.remove(elt);
+        }
+        let mut popular: Set[T] = Set.new();
+        let n = b.len();
+        if autojunk and n >= 200 {
+            let ntest = n / 100 + 1;
+            for (elt, idxs) in b2j.iter() {
+                if idxs.len() > ntest {
+                    popular.insert(elt.clone());
+                }
+            }
+            for elt in popular.iter() {
+                b2j.remove(elt);
+            }
+        }
+        Matcher { a: a, b: b, b2j: b2j, bjunk: junk, bpopular: popular, autojunk: autojunk }
+    }
+
+    fn find_longest_match(ref self, alo: i64, ahi: i64, blo: i64, bhi: i64) -> MBlock {
+        let mut besti = alo;
+        let mut bestj = blo;
+        let mut bestsize: i64 = 0;
+        let mut j2len: Map[i64, i64] = Map.new();
+        for i in alo..ahi {
+            let mut newj2len: Map[i64, i64] = Map.new();
+            if let Some(js) = self.b2j.get(self.a[i]) {
+                for j in js.iter() {
+                    let j = *j;
+                    if j < blo {
+                        continue;
+                    }
+                    if j >= bhi {
+                        break;
+                    }
+                    let k = j2len.get(j - 1).unwrap_or(0) + 1;
+                    newj2len.insert(j, k);
+                    if k > bestsize {
+                        besti = i - k + 1;
+                        bestj = j - k + 1;
+                        bestsize = k;
+                    }
+                }
+            }
+            j2len = newj2len;
+        }
+        // Extend the match with non-junk equal elements on each side, then
+        // with junk ones, so a run of junk next to a match joins it.
+        while besti > alo and bestj > blo and not self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and not self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        while besti > alo and bestj > blo and self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        MBlock { a: besti, b: bestj, size: bestsize }
+    }
+
+    fn matching_blocks(ref self) -> Vec[MBlock] {
+        let la = self.a.len();
+        let lb = self.b.len();
+        let mut queue: Vec[(i64, i64, i64, i64)] = vec![(0, la, 0, lb)];
+        let mut blocks: Vec[MBlock] = Vec.new();
+        while let Some((alo, ahi, blo, bhi)) = queue.pop() {
+            let m = self.find_longest_match(alo, ahi, blo, bhi);
+            if m.size > 0 {
+                if alo < m.a and blo < m.b {
+                    queue.push((alo, m.a, blo, m.b));
+                }
+                if m.a + m.size < ahi and m.b + m.size < bhi {
+                    queue.push((m.a + m.size, ahi, m.b + m.size, bhi));
+                }
+                blocks.push(m);
+            }
+        }
+        blocks.sort_by(|x, y| (x.a, x.b, x.size).cmp((y.a, y.b, y.size)));
+        // Join blocks that touch.
+        let mut out: Vec[MBlock] = Vec.new();
+        let mut cur = MBlock { a: 0, b: 0, size: 0 };
+        for m in blocks.iter() {
+            if cur.a + cur.size == m.a and cur.b + cur.size == m.b {
+                cur.size += m.size;
+            } else {
+                if cur.size > 0 {
+                    out.push(cur.clone());
+                }
+                cur = m.clone();
+            }
+        }
+        if cur.size > 0 {
+            out.push(cur);
+        }
+        out.push(MBlock { a: la, b: lb, size: 0 });
+        out
+    }
+
+    fn opcodes(ref self) -> Vec[Opcode] {
+        let mut i: i64 = 0;
+        let mut j: i64 = 0;
+        let mut out: Vec[Opcode] = Vec.new();
+        for m in self.matching_blocks() {
+            let tag = if i < m.a and j < m.b {
+                "replace"
+            } else if i < m.a {
+                "delete"
+            } else if j < m.b {
+                "insert"
+            } else {
+                ""
+            };
+            if tag != "" {
+                out.push(Opcode { tag: tag.to_string(), i1: i, i2: m.a, j1: j, j2: m.b });
+            }
+            i = m.a + m.size;
+            j = m.b + m.size;
+            if m.size > 0 {
+                out.push(Opcode { tag: "equal".to_string(), i1: m.a, i2: i, j1: m.b, j2: j });
+            }
+        }
+        out
+    }
+
+    // get_grouped_opcodes: hunks with up to n lines of context each side.
+    fn grouped_opcodes(ref self, n: i64) -> Vec[Vec[Opcode]] {
+        let mut codes = self.opcodes();
+        if codes.is_empty() {
+            codes.push(Opcode { tag: "equal".to_string(), i1: 0, i2: 1, j1: 0, j2: 1 });
+        }
+        if codes[0].tag == "equal" {
+            let c = codes[0].clone();
+            codes[0] = Opcode { tag: c.tag, i1: max(c.i1, c.i2 - n), i2: c.i2, j1: max(c.j1, c.j2 - n), j2: c.j2 };
+        }
+        let last = codes.len() - 1;
+        if codes[last].tag == "equal" {
+            let c = codes[last].clone();
+            codes[last] = Opcode { tag: c.tag, i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) };
+        }
+        let nn = n + n;
+        let mut groups: Vec[Vec[Opcode]] = Vec.new();
+        let mut group: Vec[Opcode] = Vec.new();
+        for c in codes {
+            let mut i1 = c.i1;
+            let mut j1 = c.j1;
+            if c.tag == "equal" and c.i2 - c.i1 > nn {
+                group.push(Opcode { tag: c.tag.clone(), i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) });
+                groups.push(group);
+                group = Vec.new();
+                i1 = max(c.i1, c.i2 - n);
+                j1 = max(c.j1, c.j2 - n);
+            }
+            group.push(Opcode { tag: c.tag.clone(), i1: i1, i2: c.i2, j1: j1, j2: c.j2 });
+        }
+        if not group.is_empty() and not (group.len() == 1 and group[0].tag == "equal") {
+            groups.push(group);
+        }
+        groups
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn show_text(out: mut ref String, s: ref String) {
+    for c in s.chars() {
+        if c == '\r' {
+            out.push_str("\\r");
+        } else {
+            out.push(c);
+        }
+    }
+}
+
+fn line(out: mut ref String, r: ref Result[String, String]) {
+    match r {
+        Ok(s) => out.push_str(s),
+        Err(e) => {
+            out.push_str(e);
+            out.push_str("\n");
+        }
+    }
+}
+
+fn summary(out: mut ref String, ih: ref Ihex) {
+    out.push_str(f"len {ih.buf.len()} min {addr_s(minaddr(ih))} max {addr_s(maxaddr(ih))} start {start_repr(ih)} padding 0x{hx(ih.padding)}\n");
+    out.push_str(f"segments {segs_s(segments(ih, 1))}\n");
+    if ih.buf.len() > 0 and maxaddr(ih).unwrap() - minaddr(ih).unwrap() <= 0x1000 {
+        line(mut out, dump(ih, 16, false));
+    } else {
+        out.push_str("dump skipped\n");
+    }
+    match write_hex(ih, true, "native", 16) {
+        Ok(s) => show_text(mut out, s),
+        Err(e) => out.push_str(f"{e}\n"),
+    }
+}
+
+fn parse_pairs(s: ref String) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for kv in split_on(s, ',').iter() {
+        let p = split_on(kv, '=');
+        out.push((p[0].clone(), p[1].clone()));
+    }
+    out
+}
+
+fn edit_op(ih: mut ref Ihex, files: ref Map[String, Vec[i64]], p: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let k = p[0].clone();
+    if k == "set" {
+        let a = int0(p[1]);
+        if a < 0 {
+            return Err("TypeError: Address should be >= 0.".to_string());
+        }
+        ih_set(mut ih, a, int0(p[2]));
+    } else if k == "del" {
+        del_item(mut ih, int0(p[1]))?;
+    } else if k == "setsl" {
+        let mut vals: Vec[i64] = Vec.new();
+        for v in split_on(p[4], ',').iter() {
+            vals.push(int0(v));
+        }
+        set_slice(mut ih, opt_int(p[1]), opt_int(p[2]), opt_int(p[3]), vals)?;
+    } else if k == "delsl" {
+        del_slice(mut ih, opt_int(p[1]), opt_int(p[2]), opt_int(p[3]));
+    } else if k == "puts" {
+        puts(mut ih, int0(p[1]), unhex(p[2]));
+    } else if k == "putsz" {
+        let bs = unhex(p[2]);
+        let a = int0(p[1]);
+        puts(mut ih, a, bs);
+        ih_set(mut ih, a + bs.len(), 0);
+    } else if k == "pad" {
+        ih.padding = int0(p[1]);
+    } else if k == "dict" {
+        // fromdict: every key is checked before any is stored
+        let mut d: Vec[(i64, i64)] = Vec.new();
+        for kv in parse_pairs(p[1]).iter() {
+            d.push((int0(kv.0), int0(kv.1)));
+        }
+        for kv in d.iter() {
+            if kv.0 < 0 {
+                return Err("ValueError: Source dictionary should have only int keys".to_string());
+            }
+        }
+        for kv in d.iter() {
+            ih_set(mut ih, kv.0, kv.1);
+        }
+    } else if k == "start" {
+        let mut st: Vec[(String, i64)] = Vec.new();
+        for kv in parse_pairs(p[1]).iter() {
+            st.push((kv.0.clone(), int0(kv.1)));
+        }
+        ih.start = st;
+        ih.has_start = true;
+    } else if k == "frombin" {
+        let bs = file_bytes(files, p[1])?;
+        load_bin(mut ih, bs, int0(p[2]));
+    } else if k == "copy" {
+        let c = ih_copy(ih);
+        *ih = c;
+    } else if k == "bin" {
+        let bs = tobin(ih, Some(int0(p[1])), Some(int0(p[2])), None)?;
+        out.push_str(f"bin {lhex(bs)}\n");
+    } else if k == "dumppad" {
+        line(mut out, dump(ih, 16, true));
+    }
+    Ok(())
+}
+
+fn run_edit(out: mut ref String, files: ref Map[String, Vec[i64]], f: ref String, ops: ref String) {
+    let mut ih = if f == "-" { ih_new() } else { load_hex(files, f).unwrap() };
+    let mut n = 0;
+    for op in split_on(ops, ';').iter() {
+        n += 1;
+        let p = split_on(op, ':');
+        match edit_op(mut ih, files, p, mut out) {
+            Ok(_) => {}
+            Err(e) => {
+                out.push_str(f"op {n}: {e}\n");
+                break;
+            }
+        }
+    }
+    summary(mut out, ih);
+}
+
+fn run_job(out: mut ref String, files: mut ref Map[String, Vec[i64]], job: ref Vec[String]) {
+    let kind = job[0].clone();
+    if kind == "file" {
+        let bs = unhex(job[2]);
+        out.push_str(f"== file {job[1]} {bs.len()} bytes\n");
+        files.insert(job[1].clone(), bs);
+        return;
+    }
+    let mut header = String.new();
+    for c in join(job, " ").chars() {
+        if c == '\x1f' {
+            header.push_str(" | ");
+        } else {
+            header.push(c);
+        }
+    }
+    out.push_str(f"== {header}\n");
+    let a = tail(job, 1);
+    if kind == "load" {
+        match load_hex(files, a[0]) {
+            Ok(ih) => {
+                out.push_str(f"len {ih.buf.len()} min {addr_s(minaddr(ih))} max {addr_s(maxaddr(ih))} start {start_repr(ih)}\n");
+                out.push_str(f"segments {segs_s(segments(ih, 1))}\n");
+            }
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "todict" {
+        let ih = load_hex(files, a[0]).unwrap();
+        out.push_str(f"{todict(ih)}\n");
+    } else if kind == "dump" {
+        let mut ih = load_hex(files, a[0]).unwrap();
+        if a[3] != "-" or a[4] != "-" {
+            ih = get_slice(ih, opt_int(a[3]), opt_int(a[4]), None);
+        }
+        line(mut out, dump(ih, int0(a[1]), a[2] == "1"));
+    } else if kind == "hex" {
+        let ih = load_hex(files, a[0]).unwrap();
+        match write_hex(ih, a[2] == "1", a[3], int0(a[1])) {
+            Ok(s) => show_text(mut out, s),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "bin" {
+        let mut ih = load_hex(files, a[0]).unwrap();
+        if a[4] != "-" {
+            ih.padding = int0(a[4]);
+        }
+        match tobin(ih, opt_int(a[1]), opt_int(a[2]), opt_int(a[3])) {
+            Ok(bs) => out.push_str(f"{lhex(bs)}\n"),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "get" {
+        let ih = load_hex(files, a[0]).unwrap();
+        for x in split_on(a[1], ',').iter() {
+            match get_item(ih, int0(x)) {
+                Ok(v) => out.push_str(f"{x} -> {v}\n"),
+                Err(e) => out.push_str(f"{x} -> {e}\n"),
+            }
+        }
+    } else if kind == "gets" {
+        let ih = load_hex(files, a[0]).unwrap();
+        match gets(ih, int0(a[1]), int0(a[2])) {
+            Ok(bs) => out.push_str(f"{lhex(bs)}\n"),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "getsz" {
+        let ih = load_hex(files, a[0]).unwrap();
+        match getsz(ih, int0(a[1])) {
+            Ok(bs) => out.push_str(f"{lhex(bs)}\n"),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "find" {
+        let ih = load_hex(files, a[0]).unwrap();
+        let sub = if a[1] == "-" { Vec.new() } else { unhex(a[1]) };
+        match find(ih, sub, opt_int(a[2]), opt_int(a[3])) {
+            Ok(v) => out.push_str(f"{v}\n"),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "seg" {
+        let ih = load_hex(files, a[0]).unwrap();
+        out.push_str(f"{segs_s(segments(ih, int0(a[1])))}\n");
+    } else if kind == "edit" {
+        run_edit(mut out, files, a[0], a[1]);
+    } else if kind == "merge" {
+        let mut x = load_hex(files, a[0]).unwrap();
+        let same = a[1] == "self";
+        let y = if same { x.clone() } else { load_hex(files, a[1]).unwrap() };
+        match merge(mut x, y, a[2], same) {
+            Ok(_) => {}
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+        summary(mut out, x);
+    } else if kind == "h16" {
+        let ih = load_hex(files, a[0]).unwrap();
+        let padding = if ih.padding == 255 { 65535 } else { ih.padding };
+        let lo = match minaddr(ih) { Some(v) => v >> 1, None => 0 };
+        let hi = match maxaddr(ih) { Some(v) => v >> 1, None => 0 };
+        out.push_str(f"min {lo} max {hi} padding 0x{hx(padding)}\n");
+        match tobin16(ih, opt_int(a[1]), opt_int(a[2]), opt_int(a[3]), padding) {
+            Ok(ws) => {
+                let mut parts: Vec[String] = Vec.new();
+                for w in ws.iter() {
+                    parts.push(hxw(*w, 4));
+                }
+                out.push_str(f"words {join(parts, " ")}\n");
+            }
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+        if a[4] != "-" {
+            for x in split_on(a[4], ',').iter() {
+                match word_at(ih, int0(x), padding) {
+                    Ok(v) => out.push_str(f"{x} -> 0x{hx(v)}\n"),
+                    Err(e) => out.push_str(f"{x} -> {e}\n"),
+                }
+            }
+        }
+    } else if kind == "record" {
+        let r = a[0].clone();
+        if r == "data" {
+            let off = int0(a[1]);
+            let mut bs: Vec[i64] = Vec.new();
+            if a[2].len() > 0 {
+                for v in split_on(a[2], ',').iter() {
+                    bs.push(int0(v));
+                }
+            }
+            if off < 0 or off >= 65536 or bs.len() == 0 or bs.len() >= 256 {
+                out.push_str("AssertionError\n");
+            } else {
+                let mut b: Vec[i64] = [bs.len(), (off >> 8) & 255, off & 255, 0];
+                for v in bs.iter() {
+                    b.push(*v);
+                }
+                out.push_str(f"{record_bytes(b)}\n");
+            }
+        } else if r == "eof" {
+            out.push_str(":00000001FF\n");
+        } else if r == "esa" or r == "ela" {
+            let v = int0(a[1]);
+            let t = if r == "esa" { 2 } else { 4 };
+            out.push_str(f"{record_bytes([2, 0, 0, t, (v >> 8) & 255, v & 255])}\n");
+        } else if r == "ssa" {
+            let cs = int0(a[1]);
+            let ip = int0(a[2]);
+            out.push_str(f"{record_bytes([4, 0, 0, 3, (cs >> 8) & 255, cs & 255, (ip >> 8) & 255, ip & 255])}\n");
+        } else if r == "sla" {
+            let e = int0(a[1]);
+            out.push_str(f"{record_bytes([4, 0, 0, 5, (e >> 24) & 255, (e >> 16) & 255, (e >> 8) & 255, e & 255])}\n");
+        }
+    } else if kind == "info" {
+        out.push_str(summarize(files, split_on(a[0], ',')));
+    } else if kind == "diff" {
+        let x = load_hex(files, a[0]).unwrap();
+        let y = load_hex(files, a[1]).unwrap();
+        out.push_str(diff_dumps(x, y, a[0], a[1]));
+    } else if kind == "hex2bin" {
+        let (text, rc, bs) = hex2bin(files, a[0], opt_int(a[1]), opt_int(a[2]), opt_int(a[3]), opt_int(a[4]));
+        out.push_str(text);
+        out.push_str(f"rc {rc} bin {lhex(bs)}\n");
+    } else if kind == "bin2hex" {
+        let bs = file_bytes(files, a[0]).unwrap();
+        let mut h = ih_new();
+        load_bin(mut h, bs, int0(a[1]));
+        out.push_str("rc 0\n");
+        match write_hex(h, true, "native", 16) {
+            Ok(s) => show_text(mut out, s),
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    } else if kind == "hexmerge" {
+        let argv: Vec[String] = if a[0] == "-" { Vec.new() } else { split_on(a[0], '\x1f') };
+        match hexmerge(files, argv) {
+            Ok(r) => {
+                out.push_str(f"rc {r.rc}\n");
+                out.push_str(r.out);
+                if r.err.len() > 0 {
+                    out.push_str("-- stderr\n");
+                    out.push_str(r.err);
+                }
+            }
+            Err(e) => out.push_str(f"{e}\n"),
+        }
+    }
+}
+
+fn main() {
+    let mut files: Map[String, Vec[i64]] = Map.new();
+    let mut out = String.new();
+    for ln in split_on(jobs_text(), '\n').iter() {
+        if ln.len() > 0 {
+            let f = split_on(ln, '\t');
+            run_job(mut out, mut files, f);
+        }
+    }
+    print(out);
+}
+
+// Generated by gen_kara.py from vendor/scripts/hexmerge.py and data/jobs.tsv.
+
+// USAGE from hexmerge.py, verbatim.
+fn usage_text() -> String {
+    let mut s = String.new();
+    s.push_str("hexmerge: merge content of hex files.\n");
+    s.push_str("Usage:\n");
+    s.push_str("    python hexmerge.py [options] FILES...\n");
+    s.push_str("\n");
+    s.push_str("Options:\n");
+    s.push_str("    -h, --help              this help message.\n");
+    s.push_str("    -v, --version           version info.\n");
+    s.push_str("    -o, --output=FILENAME   output file name (emit output to stdout\n");
+    s.push_str("                            if option is not specified)\n");
+    s.push_str("    -r, --range=START:END   specify address range for output\n");
+    s.push_str("                            (ascii hex value). Both values are inclusive.\n");
+    s.push_str("                            Range can be in form 'START:' or ':END'.\n");
+    s.push_str("    --no-start-addr         Don't write start addr to output file.\n");
+    s.push_str("    --overlap=METHOD        What to do when data in files overlapped.\n");
+    s.push_str("                            Supported variants:\n");
+    s.push_str("                            * error -- stop and show error message (default)\n");
+    s.push_str("                            * ignore -- keep data from first file that\n");
+    s.push_str("                                        contains data at overlapped address\n");
+    s.push_str("                            * replace -- use data from last file that\n");
+    s.push_str("                                         contains data at overlapped address\n");
+    s.push_str("\n");
+    s.push_str("Arguments:\n");
+    s.push_str("    FILES       list of hex files for merging\n");
+    s.push_str("                (use '-' to read content from stdin)\n");
+    s.push_str("\n");
+    s.push_str("You can specify address range for each file in the form:\n");
+    s.push_str("\n");
+    s.push_str("    filename:START:END\n");
+    s.push_str("\n");
+    s.push_str("See description of range option above.\n");
+    s.push_str("\n");
+    s.push_str("You can omit START or END, so supported variants are:\n");
+    s.push_str("\n");
+    s.push_str("    filename:START:     read filename and use data starting from START addr\n");
+    s.push_str("    filename::END       read filename and use data till END addr\n");
+    s.push_str("\n");
+    s.push_str("Use entire file content:\n");
+    s.push_str("\n");
+    s.push_str("    filename\n");
+    s.push_str("or\n");
+    s.push_str("    filename::\n");
+    s
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("file\tapp.bin\t96fe4b47bfea1c31c792b132419ca425fda176ea71f07a4a81b290e88be4234336527acc9c4d44032c95aa5e4fee6cb82ff8e065a99ef420dd6fe2438d90b732445e27ecc77d229a45676f322518a36fab59ee03f2196a95e6bcd70dff5a26c4f627b06ce63698bc6409ef500f567adc3a69c71d8122e5256a52a2d734baa29428aaffce71a50a94e177b953100f917946970d76331c20afed3fde492f2aa003fba5f9144a28214ff7b504127209ca8bc99e483c55bc990c196e26f3ca7596ec35e61ba7d87d5d303aa562d597ff5401e7ab237750c986070291cfbe9964db7edc8492e25acfe30acc4f493f63a931289ff00fc9cbba4e0f3766cb13369b49c2dd4a19f27bccc3447b825b55afb4d1276666552a360bfdce5a67a45de5cd775c62c36f5f5181fd76cb62cdc3\n");
+    s.push_str("file\tbad_colon.hex\t3034303030303030303130323033303446320a3a303030303030303146460a\n");
+    s.push_str("file\tbad_dup_start.hex\t3a3034303030303035303030303030303146360a3a3034303030303033303030313030303246360a3a303030303030303146460a\n");
+    s.push_str("file\tbad_eof.hex\t3a3031303030303031303046450a3a303030303030303146460a\n");
+    s.push_str("file\tbad_ext_lin.hex\t3a303330303030303430303031303246360a3a303030303030303146460a\n");
+    s.push_str("file\tbad_ext_seg.hex\t3a30323030303430323130303045380a3a303030303030303146460a\n");
+    s.push_str("file\tbad_len.hex\t3a3035303030303030303130323033303446310a3a303030303030303146460a\n");
+    s.push_str("file\tbad_line7.hex\t3a3130303030303030354341434643363935323635394346353035454131463538324446443445374245320a3a3130303031303030414443383031334141324536354431364333314433353139383137323045424134430a3a3130303032303030454637423734334232363933323734423844393738414239373739313634364334440a3a3130303033303030364141374137423636363335333334334246364642384137344335423430314641450a3a3130303034303030443241353135433830373346303233394132464634453434363735443443383531330a0a3a300a3a303030303030303146460a\n");
+    s.push_str("file\tbad_nonhex.hex\t3a3034303047473030303130323033303446320a3a303030303030303146460a\n");
+    s.push_str("file\tbad_odd.hex\t3a303430303030303030313032303330344632300a3a303030303030303146460a\n");
+    s.push_str("file\tbad_overlap.hex\t3a3034303030303030303130323033303446320a3a30323030303230303039303945410a3a303030303030303146460a\n");
+    s.push_str("file\tbad_short.hex\t3a30303030303030310a3a303030303030303146460a\n");
+    s.push_str("file\tbad_space.hex\t203a3034303030303030303130323033303446320a3a303030303030303146460a\n");
+    s.push_str("file\tbad_start_lin.hex\t3a3034303030313035303030303031303046350a3a303030303030303146460a\n");
+    s.push_str("file\tbad_start_seg.hex\t3a30323030303030333031303246380a3a303030303030303146460a\n");
+    s.push_str("file\tbad_sum.hex\t3a3034303030303030303130323033303430300a3a303030303030303146460a\n");
+    s.push_str("file\tbad_trailing.hex\t3a303430303030303030313032303330344632200a3a303030303030303146460a\n");
+    s.push_str("file\tbad_type.hex\t3a303030303030303646410a3a303030303030303146460a\n");
+    s.push_str("file\tblinky.hex\t3a3130303030303030323236303835353339324236413146304438363435323939343741343644353945350a3a3130303031303030353242454343333339444244393446313246393831414430324645344634414139300a3a3130303032303030423144323437443438454646323346433030454534443235434542363531344230360a3a3130303033303030344130363545464133314543454641364242384131333141423536304635323043410a3a3130303034303030393242394232314136464346334436443338413441384539313036413631313035390a3a3130303035303030453931343146304532384332303437414539453544314430424639463142433336330a3a3130303036303030353945393445383238384446453544393446364233454432384432333934333331380a3a3130303037303030414131304330373539363438303034373242423634353337453235393046383833440a3a3130303038303030354136363645334542343031304338393736303641433137324634453239414532370a3a3130303039303030303641383030384134443043373241354336373645453334314639413532413541410a3a3130303041303030454338393146334237444345314443313545394141433846374244304535373538300a3a3130303042303030373145323739334432333642334546323637423536383634373835463043314439310a3a3130303043303030424241353342443246423034433430463732324630313942343532324241313138320a3a3130303044303030393031323342343234374341434435364234343931463739314545304443414641460a3a3130303045303030313839323534453946343731463634353042323939393932383931323441453336320a3a3130303046303030394441463043424535374232303646364530454432433444363734344337363643370a3a3130303130303030323542313241323944343033303430383044444338373937323338333537434631300a3a3130303131303030394442354236323034314442414437383045343232463942443732444538384145360a3a3130303132303030464141373443353937453946394138333937304636384239383433373043434646320a3a3130303133303030323436304444323744324234333332364534394346323541383637363936454530430a3a3130303134303030363946423243304633384431424138413338373739393537364144373944304333410a3a3130303135303030374643454138303242393434353033423739463341313437373338314146374441430a3a3130303136303030343732434341383632344141384234323743364635443032394530354532444538340a3a3130303137303030443343454341444334413133394144304337333142453643303942444535364433370a3a3130303138303030434133313934354635433837334439333738313046353744323545443837453935320a3a3130303139303030443738413138304233333035323344373743384134323945424238443234373345340a3a3130303141303030303035373937344635353345343031384445444636383434394230383737393930420a3a3130303142303030344236393630323246373331464346393632344636384146393142343946374143360a3a3130303143303030414343383834393331383231354635444443424634343937384431363834444633330a3a3130303144303030373145463235373446323332364543443732393032314434443332464230414137340a3a3130303145303030453339424333363345464430363931304144344646334437344137353143363732420a3a3130303146303030453734423742314635443839353032414445413733314533434238373843344131320a3a3130303230303030304534314345413046374332454433443931434141324330344344314433413446440a3a3130303231303030383344383538314339363933323546433044444239453032433136304446333030440a3a3130303232303030423936383737433138463845443636414130444531323346453031343833363536440a3a3130303233303030364536354538313235453841343939434230303943394246314245333641443341380a3a3130303234303030384441343432413443323334323239344245454434463234333738354146353730420a3a30383032353030304330324630304538364634344341453037320a3a303030303030303146460a\n");
+    s.push_str("file\tblinky_v2.hex\t3a3130303030303030323236303835353339324236413146304438363435323939343741343644353945350a3a3130303031303030353242454343333339444244393446313246393831414430324645344634414139300a3a3130303032303030423144323437443438454646323346433030454534443235434542363531344230360a3a3130303033303030344130363545464133314543454641364242384131333141423536304635323043410a3a3130303034303030303030304232314136464346334436443338413441384539313036413631313041340a3a3130303035303030453931343146304532384332303437414539453544314430424639463142433336330a3a3130303036303030353945393445383238384446453544393446364233454432384432333934333331380a3a3130303037303030414131304330373539363438303034373242423634353337453235393046383833440a3a3130303038303030354136363645334542343031304338393736303641433137324634453239414532370a3a3130303039303030303641383030384134443043373241354336373645453334314639413532413541410a3a3130303041303030454338393146334237444345314443313545394141433846374244304535373538300a3a3130303042303030373145323739334432333642334546323637423536383634373835463043314439310a3a3130303043303030424241353342443246423034433430463732324630313942343532324241313138320a3a3130303044303030393031323342343234374341434435364234343931463739314545304443414641460a3a3130303045303030313839323534453946343731463634353042323939393932383931323441453336320a3a3130303046303030394441463043424535374232303646364530454432433444363734344337363643370a3a3130303130303030323542313241323944343033303430383044444338373937323338333537434631300a3a3130303131303030394442354236323034314442414437383045343232463942443732444538384145360a3a3130303132303030464141373443353937453946394138333937304636384239383433373043434646320a3a3130303133303030323436304444323744324234333332364534394346323541383637363936454530430a3a3130303134303030363946423243304633384431424138413338373739393537364144373944304333410a3a3130303135303030383043454138303242393434353033423739463341313437373338314146374441420a3a3130303136303030343732434341383632344141384234323743364635443032394530354532444538340a3a3130303137303030443343454341444334413133394144304337333142453643303942444535364433370a3a3130303138303030434133313934354635433837334439333738313046353744323545443837453935320a3a3130303139303030443738413138304233333035323344373743384134323945424238443234373345340a3a3130303141303030303035373937344635353345343031384445444636383434394230383737393930420a3a3130303142303030344236393630323246373331464346393632344636384146393142343946374143360a3a3130303143303030414343383834393331383231354635444443424634343937384431363834444633330a3a3130303144303030373145463235373446323332364543443732393032314434443332464230414137340a3a3130303145303030453339424333363345464430363931304144344646334437344137353143363732420a3a3130303146303030453734423742314635443839353032414445413733314533434238373843344131320a3a3130303230303030304534314345413046374332454433443931434141324330344344314433413446440a3a3130303231303030383344383538314339363933323546433044444239453032433136304446333030440a3a3130303232303030423936383737433138463845443636414130444531323346453031343833363536440a3a3130303233303030364536354538313235453841343939434230303943394246314245333641443341380a3a3130303234303030384441343432413443323334323239344245454434463234333738354146353730420a3a30383032353030304330324630304538364634344341453037320a3a303030303030303146460a\n");
+    s.push_str("file\tcrlf.hex\t3a3130303130303030633362306462633861363663386562336335373534323133386530323132616261610d0a0d0a3a3130303131303030636666343734306637393933633366663665373766326231376133373139373530340d0a3a30383031323030306636353865626237366237633537393531340d0a3a303030303030303146460d0a3a303330323030303030313032303346350d0a\n");
+    s.push_str("file\tdos.hex\t3a30323030303030323130303045430a3a3130303030303030303236333939363036333332383933324136383439413132374444363638323438440a3a3130303031303030463045453232434638323337333237424646393435433139353537334234333246350a3a3130303032303030393842374443323142373130363236463938343043344432324143383530433437380a3a3130303033303030393931313535444636333646413733443242444336343032423944423230424634430a3a30323030303030324630303030430a3a3130464646303030343930394637324530304533423236354641443934363531314246313434384234420a3a3034303030303033313030303031303045380a3a303030303030303146460a\n");
+    s.push_str("file\teeprom.hex\t3a3044303030303030454632413935324332444135313931344246424444374542324641440a3a3034303031343030394530433632323242410a3a303930303232303045394145363731363637333133384432374341330a3a30353030333230303835434634464539454135330a3a3037303034303030363344374534443734304130464545360a3a3044303035303030393631363238414141444437423636423945433035414434314344380a3a304630303630303039423946354335444330434431444538384539333543303441363238344636450a3a30353030374130303934413638443333353133360a3a3037303038373030333246374138333233313342434333370a3a3130303039303030363135434644443137394243443536433034303642463230334537433243303938370a3a3130303041303030323741463037314438424243364643313646343439304642333030323744374637330a3a30453030423230303331383744413635413739334345433238304246344645443746394645360a3a3034303043413030333946333939324533460a3a3034303044393030344231313642394243310a3a30423030453130303236453937393045314241334134333742453835323238300a3a30383030463130304133463733334538463545304439454142410a3a3130464646383030343237313042373545383744373932444443353037434645414234313238343542430a3a30323030303030343030303246380a3a303330303130303031313232333338370a3a303030303030303146460a\n");
+    s.push_str("file\tempty.hex\t\n");
+    s.push_str("file\teofonly.hex\t3a303030303030303146460a\n");
+    s.push_str("file\tmac.hex\t3a3130303034303030373332303338353044323942424130303836424539413143413137393842413032460d3a30383030353030303530304139353835393739394130323434300d3a303030303030303146460d\n");
+    s.push_str("file\tnoeof.hex\t3a3130303030303030343339304543423641353944393646394344353843454339394242374533443345360a3a303430303130303046394136434543344242\n");
+    s.push_str("file\tpart_a.hex\t3a3130303030303030343432374630353143364635303736364345323338423744453646454542314533360a3a3130303031303030434333423432373130463545363341414143303331453337304435323141453534410a3a3034303030303035303030303031303046360a3a303030303030303146460a\n");
+    s.push_str("file\tpart_b.hex\t3a3130303031303030413337463542463033423836343746303230343145344537324146393335323544320a3a3130303032303030343242344543433133413733423834393145423836353542353930393639383339420a3a3034303030303035303030303032303046350a3a303030303030303146460a\n");
+    s.push_str("file\tpart_c.hex\t3a3130303130303030394132383031464346424432374635434139363146443943444439313832393935430a3a303030303030303146460a\n");
+    s.push_str("file\tpic16.hex\t3a3130303030303030444345313338324330323746424446433141393437453346443739333044443145320a3a3130303031303030434132364636313146453946353641363732373630444146413138393742453931450a3a3031303034313030333438410a3a303030303030303146460a\n");
+    s.push_str("file\tsmall.bin\t0001ff7f2041\n");
+    s.push_str("file\tstm32.hex\t3a30323030303030343038303046320a3a32303030303030303137434438443130354342413342413539393944464445393837343837443331393730333243453241364142394243314642453246434541444530463832453936300a3a32303030323030303337423643423632363937464232313342463531344244434637354541423935433342304232303334393741443730443444393536334131384535323645393239380a3a32303030343030303843353434363938344633413037343330374144333036333634443635354537334532314245313938414543353444443631353132424131313443393839393346450a3a32303030363030304439383635443638303530373132443039383938333933424337313837463444394530424543423630383335383539443734304433443837393941314435413837390a3a32303030383030303138323745423733333541304138343841313735414538373439434144384235304433423132353142423837383843344632463335394546463342363245443230340a3a32303030413030303136314633343135444333314131323932314139464638363139413841323131413931363646413243383042354634383531364338414432454235393245374344370a3a32303030433030303245453835434438393534334435384442323846383236313838323842443230314136353741414230433943373732363836444134444646414530303446313634330a3a32303030453030304134334137314238363434314633453735463643353433423341414432373033304135413830354443413546423135424241353237344537394444423431303237370a3a32303031303030303732373131313237364431303136384641344342393944453737303832373937384538393439313731324442463832464534313446464645323230323245414330310a3a32303031323030303246443133333536314334393439393830414142454646373431413531373331464643333746384235423932464336363335423833343244453030334133453335350a3a32303031343030303944393836373338324235304341324443424541433330463930343542464635364630363930444142343141424435383931373234364339313344383045303137420a3a32303031363030303942373541334642463936323333373236373839384636323035333446463846374336343042373739323441333246353646303531343430314444313530334438310a3a3130303138303030413537413335413535434333323231424332423838313742334137433837374145440a3a32303130303030304134333531433331343232463338454632413845414633303734323136423842353946333541454231364137424336304342394131314536434243383744424635420a3a32303130323030304136384646463341343546383144453832383233414543364343393531323231324333414439414342363946414239414132333042304438343135314343443739390a3a32303130343030303938353439303833353236363644394232414231304337393446374531303045373241313330353633434533414533383932303438344131344337333635324244450a3a3034313036303030443939373038334144410a3a30323030303030343038303146310a3a32304638303030303535414135354141353541413535414135354141353541413535414135354141353541413535414135354141353541413535414135354141353541413535414146380a3a3034303030303035303830303031433132440a3a303030303030303146460a\n");
+    s.push_str("file\tstrings.hex\t3a3130303230303030343836353643364336463243323036363639373236443737363137323635323133300a3a3041303231303030303037363332324533333245333030303446344245330a3a303030303030303146460a\n");
+    s.push_str("load\tblinky.hex\n");
+    s.push_str("load\tstm32.hex\n");
+    s.push_str("load\tdos.hex\n");
+    s.push_str("load\tcrlf.hex\n");
+    s.push_str("load\tmac.hex\n");
+    s.push_str("load\tnoeof.hex\n");
+    s.push_str("load\tempty.hex\n");
+    s.push_str("load\teofonly.hex\n");
+    s.push_str("load\teeprom.hex\n");
+    s.push_str("load\tpic16.hex\n");
+    s.push_str("load\tpart_a.hex\n");
+    s.push_str("load\tpart_b.hex\n");
+    s.push_str("load\tpart_c.hex\n");
+    s.push_str("load\tstrings.hex\n");
+    s.push_str("load\tbad_colon.hex\n");
+    s.push_str("load\tbad_dup_start.hex\n");
+    s.push_str("load\tbad_eof.hex\n");
+    s.push_str("load\tbad_ext_lin.hex\n");
+    s.push_str("load\tbad_ext_seg.hex\n");
+    s.push_str("load\tbad_len.hex\n");
+    s.push_str("load\tbad_line7.hex\n");
+    s.push_str("load\tbad_nonhex.hex\n");
+    s.push_str("load\tbad_odd.hex\n");
+    s.push_str("load\tbad_overlap.hex\n");
+    s.push_str("load\tbad_short.hex\n");
+    s.push_str("load\tbad_space.hex\n");
+    s.push_str("load\tbad_start_lin.hex\n");
+    s.push_str("load\tbad_start_seg.hex\n");
+    s.push_str("load\tbad_sum.hex\n");
+    s.push_str("load\tbad_trailing.hex\n");
+    s.push_str("load\tbad_type.hex\n");
+    s.push_str("todict\tdos.hex\n");
+    s.push_str("todict\tcrlf.hex\n");
+    s.push_str("todict\tmac.hex\n");
+    s.push_str("todict\teofonly.hex\n");
+    s.push_str("todict\tpart_c.hex\n");
+    s.push_str("todict\tstrings.hex\n");
+    s.push_str("dump\tblinky.hex\t16\t0\t-\t-\n");
+    s.push_str("dump\tblinky.hex\t8\t0\t0x20\t0x60\n");
+    s.push_str("dump\tstm32.hex\t32\t0\t0x08000180\t0x08001010\n");
+    s.push_str("dump\tdos.hex\t16\t1\t0x10030\t0x10050\n");
+    s.push_str("dump\teeprom.hex\t16\t0\t-\t0x100\n");
+    s.push_str("dump\teeprom.hex\t16\t1\t0x0\t0x40\n");
+    s.push_str("dump\teeprom.hex\t7\t0\t0xFFF0\t0x10010\n");
+    s.push_str("dump\tstrings.hex\t16\t0\t-\t-\n");
+    s.push_str("dump\tstrings.hex\t5\t1\t-\t0x210\n");
+    s.push_str("dump\tcrlf.hex\t3\t0\t-\t-\n");
+    s.push_str("dump\tempty.hex\t16\t0\t-\t-\n");
+    s.push_str("dump\tpic16.hex\t1\t0\t0x3C\t-\n");
+    s.push_str("dump\tblinky.hex\t0\t0\t-\t-\n");
+    s.push_str("hex\tblinky.hex\t16\t1\tnative\n");
+    s.push_str("hex\tblinky.hex\t32\t1\tnative\n");
+    s.push_str("hex\tblinky.hex\t255\t1\tnative\n");
+    s.push_str("hex\tstm32.hex\t16\t1\tnative\n");
+    s.push_str("hex\tstm32.hex\t16\t0\tCRLF\n");
+    s.push_str("hex\tdos.hex\t16\t1\tCRLF\n");
+    s.push_str("hex\tdos.hex\t7\t1\tnative\n");
+    s.push_str("hex\teeprom.hex\t16\t1\tnative\n");
+    s.push_str("hex\teeprom.hex\t1\t1\tnative\n");
+    s.push_str("hex\tcrlf.hex\t16\t1\tnative\n");
+    s.push_str("hex\tempty.hex\t16\t1\tnative\n");
+    s.push_str("hex\tmac.hex\t0\t1\tnative\n");
+    s.push_str("hex\tmac.hex\t256\t1\tnative\n");
+    s.push_str("hex\tmac.hex\t16\t1\tLF\n");
+    s.push_str("hex\tpart_a.hex\t64\t1\tnative\n");
+    s.push_str("bin\tblinky.hex\t-\t-\t-\t-\n");
+    s.push_str("bin\tblinky.hex\t0x10\t0x1F\t-\t-\n");
+    s.push_str("bin\tblinky.hex\t0x250\t0x260\t-\t0\n");
+    s.push_str("bin\teeprom.hex\t0\t0x3F\t-\t0\n");
+    s.push_str("bin\teeprom.hex\t-\t0x20\t-\t-\n");
+    s.push_str("bin\teeprom.hex\t0x30\t-\t0x10\t-\n");
+    s.push_str("bin\teeprom.hex\t-\t0x20\t0x10\t0xAA\n");
+    s.push_str("bin\teeprom.hex\t-\t0x8\t0x10\t-\n");
+    s.push_str("bin\teeprom.hex\t0x10\t0x20\t0x10\t-\n");
+    s.push_str("bin\tblinky.hex\t-\t-\t0\t-\n");
+    s.push_str("bin\tempty.hex\t-\t-\t-\t-\n");
+    s.push_str("bin\tempty.hex\t0\t7\t-\t-\n");
+    s.push_str("bin\tempty.hex\t-\t-\t4\t-\n");
+    s.push_str("bin\tdos.hex\t0x100F0\t0x10010\t-\t-\n");
+    s.push_str("bin\tstrings.hex\t0x230\t0x200\t-\t-\n");
+    s.push_str("bin\tblinky.hex\t-\t-\t8\t-\n");
+    s.push_str("get\tblinky.hex\t0,1,2,0x100,0x257,0x258,1000\n");
+    s.push_str("get\teeprom.hex\t0x0,0xF,0x10007,0x10008,0x20010,-1\n");
+    s.push_str("get\tstm32.hex\t0x08000000,0x080001C1,0x0800F800\n");
+    s.push_str("gets\tstrings.hex\t0x200\t5\n");
+    s.push_str("gets\tstrings.hex\t0x207\t8\n");
+    s.push_str("gets\tstrings.hex\t0x200\t0\n");
+    s.push_str("gets\tstrings.hex\t0x210\t40\n");
+    s.push_str("gets\tblinky.hex\t0\t16\n");
+    s.push_str("gets\teeprom.hex\t0\t64\n");
+    s.push_str("getsz\tstrings.hex\t0x200\n");
+    s.push_str("getsz\tstrings.hex\t0x211\n");
+    s.push_str("getsz\tstrings.hex\t0x218\n");
+    s.push_str("getsz\tstrings.hex\t0x210\n");
+    s.push_str("getsz\tblinky.hex\t0\n");
+    s.push_str("find\tstrings.hex\t6669726d\t-\t-\n");
+    s.push_str("find\tstrings.hex\t7632\t-\t-\n");
+    s.push_str("find\tstrings.hex\t4f4b\t0x200\t0x21A\n");
+    s.push_str("find\tstrings.hex\t4f4b\t0x200\t-\n");
+    s.push_str("find\tstrings.hex\t7a7a\t-\t-\n");
+    s.push_str("find\tstrings.hex\t-\t-\t-\n");
+    s.push_str("find\tstrings.hex\t210076\t0x20F\t-\n");
+    s.push_str("find\teeprom.hex\t1122\t-\t-\n");
+    s.push_str("find\tempty.hex\t00\t-\t-\n");
+    s.push_str("seg\teeprom.hex\t1\n");
+    s.push_str("seg\teeprom.hex\t2\n");
+    s.push_str("seg\teeprom.hex\t3\n");
+    s.push_str("seg\teeprom.hex\t100\n");
+    s.push_str("seg\tstm32.hex\t1\n");
+    s.push_str("seg\tstm32.hex\t65536\n");
+    s.push_str("seg\tdos.hex\t1\n");
+    s.push_str("seg\tempty.hex\t1\n");
+    s.push_str("seg\tpic16.hex\t1\n");
+    s.push_str("edit\t-\tset:0:1;set:1:2;set:5:0xFF;set:3:4\n");
+    s.push_str("edit\t-\tset:-1:5\n");
+    s.push_str("edit\t-\tsetsl:0x10:0x14:-:1,2,3,4;setsl:-:0x30:-:9,8;setsl:0x40:-:2:7,7,7\n");
+    s.push_str("edit\t-\tsetsl:0:4:-:1,2\n");
+    s.push_str("edit\t-\tsetsl:-:-:-:1\n");
+    s.push_str("edit\t-\tsetsl:-:2:-:1,2,3\n");
+    s.push_str("edit\tblinky.hex\tdelsl:0x10:0x20:-;del:0x100;delsl:-:4:-;delsl:0x200:-:2\n");
+    s.push_str("edit\tblinky.hex\tdel:0x1000\n");
+    s.push_str("edit\tblinky.hex\tdel:-5\n");
+    s.push_str("edit\t-\tputs:0x100:626f6f74;putsz:0x110:6e616d65;pad:0\n");
+    s.push_str("edit\t-\tdict:0=1,1=2,7=0x80;start:EIP=0x1234\n");
+    s.push_str("edit\t-\tdict:0=1,-1=2\n");
+    s.push_str("edit\t-\tdict:16=1;start:CS=0x10,IP=0x20\n");
+    s.push_str("edit\t-\tdict:16=1;start:CS=0x10\n");
+    s.push_str("edit\t-\tdict:16=1;start:CS=1,IP=2,EIP=3\n");
+    s.push_str("edit\t-\tset:0:300\n");
+    s.push_str("edit\t-\tset:0x100000000:1\n");
+    s.push_str("edit\t-\tset:0x1000000:1;set:0x1000001:2\n");
+    s.push_str("edit\tstm32.hex\tpad:0x1234;bin:0x08000180:0x08000200\n");
+    s.push_str("edit\tstrings.hex\tset:0x205:0x0A;set:0x206:0x7F;pad:0x2E;dumppad\n");
+    s.push_str("edit\t-\tfrombin:small.bin:0x10\n");
+    s.push_str("edit\tdos.hex\tcopy\n");
+    s.push_str("merge\tpart_a.hex\tpart_b.hex\terror\n");
+    s.push_str("merge\tpart_a.hex\tpart_b.hex\tignore\n");
+    s.push_str("merge\tpart_a.hex\tpart_b.hex\treplace\n");
+    s.push_str("merge\tpart_a.hex\tpart_c.hex\terror\n");
+    s.push_str("merge\tpart_c.hex\tpart_a.hex\terror\n");
+    s.push_str("merge\tpart_b.hex\tpart_a.hex\treplace\n");
+    s.push_str("merge\tblinky.hex\tblinky_v2.hex\terror\n");
+    s.push_str("merge\tpart_a.hex\tpart_a.hex\tkeep\n");
+    s.push_str("merge\tpart_a.hex\tself\terror\n");
+    s.push_str("merge\tdos.hex\tstm32.hex\terror\n");
+    s.push_str("merge\tdos.hex\tstm32.hex\treplace\n");
+    s.push_str("h16\tpic16.hex\t-\t-\t-\t0,1,15,16,0x20,0x21\n");
+    s.push_str("h16\tpic16.hex\t0\t7\t-\t-\n");
+    s.push_str("h16\tpic16.hex\t-\t-\t4\t-\n");
+    s.push_str("h16\tpic16.hex\t0x1E\t0x22\t-\t-\n");
+    s.push_str("h16\tempty.hex\t-\t-\t-\t0\n");
+    s.push_str("h16\tblinky.hex\t0x10\t-\t8\t0x12C,0x12B\n");
+    s.push_str("record\tdata\t0\t1,2,3\n");
+    s.push_str("record\tdata\t0xFFFF\t0\n");
+    s.push_str("record\tdata\t0x1234\t255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255\n");
+    s.push_str("record\tdata\t65536\t1\n");
+    s.push_str("record\tdata\t0\t\n");
+    s.push_str("record\teof\n");
+    s.push_str("record\tesa\t0x1234\n");
+    s.push_str("record\tssa\t0x1234\t0x5678\n");
+    s.push_str("record\tela\t0xFFFF\n");
+    s.push_str("record\tsla\t0x12345678\n");
+    s.push_str("record\tsla\t0xFFFFFFFF\n");
+    s.push_str("info\tblinky.hex,stm32.hex,dos.hex,eeprom.hex,empty.hex\n");
+    s.push_str("info\tpart_a.hex,bad_sum.hex\n");
+    s.push_str("info\tnoeof.hex\n");
+    s.push_str("diff\tblinky.hex\tblinky_v2.hex\n");
+    s.push_str("diff\tblinky.hex\tblinky.hex\n");
+    s.push_str("diff\tpart_a.hex\tpart_b.hex\n");
+    s.push_str("diff\tempty.hex\tpart_c.hex\n");
+    s.push_str("diff\tpart_a.hex\tpart_c.hex\n");
+    s.push_str("hex2bin\tblinky.hex\t-\t-\t-\t-\n");
+    s.push_str("hex2bin\teeprom.hex\t-\t0x3F\t-\t0\n");
+    s.push_str("hex2bin\teeprom.hex\t-\t0x20\t0x40\t-\n");
+    s.push_str("hex2bin\teeprom.hex\t-\t0x40\t0x10\t-\n");
+    s.push_str("hex2bin\teeprom.hex\t0x10\t-\t0x10\t0x5A\n");
+    s.push_str("hex2bin\tbad_sum.hex\t-\t-\t-\t-\n");
+    s.push_str("hex2bin\tbad_overlap.hex\t-\t-\t-\t-\n");
+    s.push_str("hex2bin\tempty.hex\t-\t-\t-\t-\n");
+    s.push_str("hex2bin\tstrings.hex\t-\t-\t0\t-\n");
+    s.push_str("bin2hex\tapp.bin\t0\n");
+    s.push_str("bin2hex\tsmall.bin\t32768\n");
+    s.push_str("bin2hex\tsmall.bin\t65534\n");
+    s.push_str("bin2hex\tempty.hex\t0\n");
+    s.push_str("hexmerge\tpart_a.hex\x1fpart_c.hex\n");
+    s.push_str("hexmerge\tpart_a.hex\x1fpart_b.hex\n");
+    s.push_str("hexmerge\t--overlap=ignore\x1fpart_a.hex\x1fpart_b.hex\n");
+    s.push_str("hexmerge\tpart_a.hex\x1f--overlap=replace\x1fpart_b.hex\n");
+    s.push_str("hexmerge\t--overlap\x1freplace\x1fpart_b.hex\x1fpart_a.hex\x1fpart_c.hex\n");
+    s.push_str("hexmerge\t--no-start-addr\x1fpart_a.hex\x1fpart_c.hex\n");
+    s.push_str("hexmerge\t-r\x1f8:1F\x1fpart_a.hex\x1fpart_c.hex\n");
+    s.push_str("hexmerge\t--range=100:\x1fpart_a.hex\x1fpart_c.hex\n");
+    s.push_str("hexmerge\t--ra=:7\x1fpart_a.hex\n");
+    s.push_str("hexmerge\tpart_a.hex:10:1F\x1fpart_c.hex::103\n");
+    s.push_str("hexmerge\tpart_a.hex:0:7\x1fpart_b.hex:18:\n");
+    s.push_str("hexmerge\tpart_a.hex:0x0:0x0f\x1fpart_c.hex: 100 :\n");
+    s.push_str("hexmerge\tpart_a.hex:1\x1fpart_c.hex\n");
+    s.push_str("hexmerge\tpart_a.hex:xx:\x1fpart_c.hex\n");
+    s.push_str("hexmerge\t-r\x1fzz\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t-r\x1f10\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t--overlap=merge\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t--o=ignore\x1fpart_a.hex\x1fpart_b.hex\n");
+    s.push_str("hexmerge\t--no\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t--no-start-addr=1\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t--overlap\n");
+    s.push_str("hexmerge\t-x\x1fpart_a.hex\n");
+    s.push_str("hexmerge\t-r\n");
+    s.push_str("hexmerge\t-\n");
+    s.push_str("hexmerge\t-v\n");
+    s.push_str("hexmerge\t--version\x1fnope.hex\n");
+    s.push_str("hexmerge\t--\x1f-r\x1fpart_a.hex\n");
+    s.push_str("hexmerge\tstm32.hex\x1fdos.hex\n");
+    s.push_str("hexmerge\t-r801F808:801F81F\x1fstm32.hex\n");
+    s.push_str("hexmerge\tblinky.hex:250:\n");
+    s
+}
