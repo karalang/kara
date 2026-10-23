@@ -1,0 +1,303 @@
+// LeetCode #922: Sort Array By Parity II -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an array of integers nums, half of the integers in
+// nums are odd, and the other half are even. Sort the array so that
+// whenever nums[i] is odd, i is odd, and whenever nums[i] is even, i is
+// even. Return any answer array that satisfies this condition.
+
+// ---- the ★ arm: two pointers, in place ------------------------------------
+fn star_sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut j = 1;
+    let mut i = 0;
+    while i < nums.len() {
+        if nums[i] % 2 == 1 {
+            while nums[j] % 2 == 1 {
+                j += 2;
+            }
+            nums.swap(i, j);
+        }
+        i += 2;
+    }
+}
+
+// ---- the split arm: the even and the odd values apart, then dealt out -----
+fn split_sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut evens: Vec[i64] = Vec.new();
+    let mut odds: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        if *v % 2 == 0 {
+            evens.push(*v);
+        } else {
+            odds.push(*v);
+        }
+    }
+    for k in 0..evens.len() {
+        nums[2 * k] = evens[k];
+        nums[2 * k + 1] = odds[k];
+    }
+}
+
+// ---- the sorted arm: sorted, then dealt out -------------------------------
+fn sorted_sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut all = nums.clone();
+    all.sort();
+    let mut e = 0;
+    let mut o = 0;
+    for i in 0..nums.len() {
+        if i % 2 == 0 {
+            while all[e] % 2 == 1 {
+                e += 1;
+            }
+            nums[i] = all[e];
+            e += 1;
+        } else {
+            while all[o] % 2 == 0 {
+                o += 1;
+            }
+            nums[i] = all[o];
+            o += 1;
+        }
+    }
+}
+
+// ---- the stacks arm: the misplaced indices paired off ---------------------
+fn stacks_sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut wrong_even: Vec[i64] = Vec.new();
+    let mut wrong_odd: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        if nums[i] % 2 != i % 2 {
+            if i % 2 == 0 {
+                wrong_even.push(i);
+            } else {
+                wrong_odd.push(i);
+            }
+        }
+    }
+    while let Some(i) = wrong_even.pop() {
+        let j = wrong_odd.pop().unwrap();
+        nums.swap(i, j);
+    }
+}
+
+// ---- the counting arm: counting the values --------------------------------
+fn counting_sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut counts: Array[i64, 1001] = [0; 1001];
+    for v in nums.iter() {
+        counts[*v] += 1;
+    }
+    let mut next_even = 0;
+    let mut next_odd = 1;
+    for i in 0..nums.len() {
+        if i % 2 == 0 {
+            while counts[next_even] == 0 {
+                next_even += 2;
+            }
+            nums[i] = next_even;
+            counts[next_even] -= 1;
+        } else {
+            while counts[next_odd] == 0 {
+                next_odd += 2;
+            }
+            nums[i] = next_odd;
+            counts[next_odd] -= 1;
+        }
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, vals: Vec[i64]) -> Vec[i64] {
+    let mut nums = vals.clone();
+    if x == 0 {
+        star_sort_array_by_parity_ii(mut nums);
+    } else if x == 1 {
+        split_sort_array_by_parity_ii(mut nums);
+    } else if x == 2 {
+        sorted_sort_array_by_parity_ii(mut nums);
+    } else if x == 3 {
+        stacks_sort_array_by_parity_ii(mut nums);
+    } else {
+        counting_sort_array_by_parity_ii(mut nums);
+    }
+    nums
+}
+
+// The statement read literally: try every order of the values, keep those
+// in which an odd value sits at an odd index and an even value at an even
+// index, and say whether the arm's answer is one of them.
+fn lit_search(vals: Vec[i64], used: mut ref Vec[bool], order: mut ref Vec[i64], answer: Vec[i64]) -> bool {
+    if order.len() == vals.len() {
+        for i in 0..order.len() {
+            if order[i] % 2 == 1 and i % 2 == 0 {
+                return false;
+            }
+            if order[i] % 2 == 0 and i % 2 == 1 {
+                return false;
+            }
+        }
+        return order == answer;
+    }
+    for k in 0..vals.len() {
+        if not used[k] {
+            used[k] = true;
+            order.push(vals[k]);
+            let found = lit_search(vals, mut used, mut order, answer);
+            order.pop();
+            used[k] = false;
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn literal_accepts(vals: Vec[i64], answer: Vec[i64]) -> bool {
+    let mut used: Vec[bool] = Vec.filled(vals.len(), false);
+    let mut order: Vec[i64] = Vec.new();
+    lit_search(vals, mut used, mut order, answer)
+}
+
+fn sorted_copy(vals: Vec[i64]) -> Vec[i64] {
+    let mut c = vals.clone();
+    c.sort();
+    c
+}
+
+// the even-index values sorted, then the odd-index values sorted
+fn canonical(after: Vec[i64]) -> Vec[i64] {
+    let mut evens: Vec[i64] = Vec.new();
+    let mut odds: Vec[i64] = Vec.new();
+    for i in 0..after.len() {
+        if i % 2 == 0 {
+            evens.push(after[i]);
+        } else {
+            odds.push(after[i]);
+        }
+    }
+    let mut out = sorted_copy(evens);
+    for v in sorted_copy(odds).iter() {
+        out.push(*v);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n / 2 even and n / 2 odd values up to top, shuffled
+fn random_case(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for k in 0..n {
+        let v = 2 * (next_random(mut seed) % (top / 2 + 1));
+        vals.push(if k % 2 == 0 { v.min(top - top % 2) } else { (v + 1).min(top - 1 + top % 2) });
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+        i -= 1;
+    }
+    vals
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, vals: Vec[i64], small: bool) {
+    let mut lifted: Vec[i64] = Vec.new();
+    for v in vals.iter() {
+        lifted.push(*v + 2);
+    }
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, vals));
+    }
+    for x in 0..5 {
+        let a = got[x].clone();
+        // P1: an order the statement accepts
+        if small {
+            check(mut t, 1, literal_accepts(vals, a));
+        }
+        // P2: the same values, rearranged
+        let same_values = sorted_copy(a) == sorted_copy(vals);
+        check(mut t, 2, same_values);
+        // P3: every value at an index of its own parity
+        let mut placed = a.len() == vals.len();
+        for i in 0..a.len() {
+            if a[i] % 2 != i % 2 {
+                placed = false;
+            }
+        }
+        check(mut t, 3, placed);
+        // P4: an answer given back to the arm comes back unchanged (asked
+        // only of an answer that keeps P2 and P3, since a wrong one need
+        // not be a legal input)
+        check(mut t, 4, not (same_values and placed) or arm(x, a) == a);
+        // P5: every value 2 more, the same answer 2 more
+        let up = arm(x, lifted);
+        let mut shifted = up.len() == a.len();
+        for i in 0..up.len() {
+            if shifted and up[i] != a[i] + 2 {
+                shifted = false;
+            }
+        }
+        check(mut t, 5, shifted);
+        // P6: the arm's canonical form agrees with at least two of the
+        // other four
+        let mine = canonical(a);
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and canonical(got[y]) == mine {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 922;
+    let mut cases = 0;
+    let mut values = 0;
+    let mut check_sum = 0;
+    // 2, 4 or 6 values below 6 against the statement, then 2 to 2000
+    // values up to 998
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 2 * (1 + next_random(mut seed) % 3) } else { 2 * (1 + next_random(mut seed) % 1000) };
+        let top = if small { 5 } else { 998 };
+        let vals = random_case(mut seed, n, top);
+        cases += 1;
+        values += n;
+        for v in canonical(arm(0, vals)).iter() {
+            check_sum = (check_sum * 1000003 + *v) % 1000000007;
+        }
+        properties(mut t, vals, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} arrays, {values} values, checksum {check_sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

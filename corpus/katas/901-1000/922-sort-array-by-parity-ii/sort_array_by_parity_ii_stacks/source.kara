@@ -1,0 +1,143 @@
+// LeetCode #922: Sort Array By Parity II -- the misplaced indices paired
+// off.
+//
+// Note every even index holding an odd value and every odd index holding
+// an even value. There are as many of one as of the other, since each
+// parity has exactly as many values as indices, so pair them off and swap
+// each pair: one swap a pair, the fewest possible. O(n) time and space.
+
+fn sort_array_by_parity_ii(nums: mut ref Vec[i64]) {
+    let mut wrong_even: Vec[i64] = Vec.new();
+    let mut wrong_odd: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        if nums[i] % 2 != i % 2 {
+            if i % 2 == 0 {
+                wrong_even.push(i);
+            } else {
+                wrong_odd.push(i);
+            }
+        }
+    }
+    while let Some(i) = wrong_even.pop() {
+        let j = wrong_odd.pop().unwrap();
+        nums.swap(i, j);
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// The answer is not unique, so each arm's result is checked and shown in
+// one canonical form: whether it puts every value at an index of its own
+// parity and keeps the same values, and then its values at the even
+// indices and at the odd indices, each sorted.
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(vals: Vec[i64]) -> String {
+    let mut out = String.from("[");
+    for i in 0..vals.len() {
+        if i > 0 {
+            out = out + ",";
+        }
+        out = out + f"{vals[i]}";
+    }
+    out + "]"
+}
+
+fn sorted_copy(vals: Vec[i64]) -> Vec[i64] {
+    let mut c = vals.clone();
+    c.sort();
+    c
+}
+
+fn is_valid(before: Vec[i64], after: Vec[i64]) -> bool {
+    if before.len() != after.len() or sorted_copy(before) != sorted_copy(after) {
+        return false;
+    }
+    for i in 0..after.len() {
+        if after[i] % 2 != i % 2 {
+            return false;
+        }
+    }
+    true
+}
+
+// the even-index values sorted, then the odd-index values sorted
+fn canonical(after: Vec[i64]) -> (Vec[i64], Vec[i64]) {
+    let mut evens: Vec[i64] = Vec.new();
+    let mut odds: Vec[i64] = Vec.new();
+    for i in 0..after.len() {
+        if i % 2 == 0 {
+            evens.push(after[i]);
+        } else {
+            odds.push(after[i]);
+        }
+    }
+    (sorted_copy(evens), sorted_copy(odds))
+}
+
+fn run(vals: Vec[i64]) {
+    let mut nums = vals.clone();
+    sort_array_by_parity_ii(mut nums);
+    let (evens, odds) = canonical(nums);
+    println(f"{show(vals)}: valid {is_valid(vals, nums)}, evens {show(evens)}, odds {show(odds)}");
+}
+
+fn fold(check: i64, vals: Vec[i64]) -> i64 {
+    let mut h = check;
+    for v in vals.iter() {
+        h = (h * 1000003 + *v) % 1000000007;
+    }
+    h
+}
+
+// n / 2 even and n / 2 odd values up to top, shuffled
+fn random_case(seed: mut ref i64, n: i64, top: i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for k in 0..n {
+        let v = 2 * (next_random(mut seed) % (top / 2 + 1));
+        vals.push(if k % 2 == 0 { v.min(top - top % 2) } else { (v + 1).min(top - 1 + top % 2) });
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        vals.swap(i, j);
+        i -= 1;
+    }
+    vals
+}
+
+fn main() {
+    // LeetCode's two examples
+    run(vec![4, 2, 5, 7]);
+    run(vec![2, 3]);
+    // already in place; all misplaced; repeated values; the extremes
+    run(vec![0, 1, 2, 3, 4, 5]);
+    run(vec![1, 0, 3, 2, 5, 4]);
+    run(vec![7, 7, 8, 8, 7, 8]);
+    run(vec![1000, 999, 0, 1, 1000, 1]);
+    run(vec![3, 1, 4, 1, 5, 8, 2, 6]);
+    // 300 random arrays of 2 to 2000 values
+    let mut seed = 922;
+    let mut check = 0;
+    let mut all_valid = true;
+    for _ in 0..300 {
+        let n = 2 * (1 + next_random(mut seed) % 1000);
+        let vals = random_case(mut seed, n, 1000);
+        let mut nums = vals.clone();
+        sort_array_by_parity_ii(mut nums);
+        all_valid = all_valid and is_valid(vals, nums);
+        let (evens, odds) = canonical(nums);
+        check = fold(fold(check, evens), odds);
+    }
+    println(f"300 random arrays: all valid {all_valid}, checksum {check}");
+    // LeetCode's largest, 20000 values
+    let vals = random_case(mut seed, 20000, 1000);
+    let mut nums = vals.clone();
+    sort_array_by_parity_ii(mut nums);
+    let (evens, odds) = canonical(nums);
+    println(f"20000 values: valid {is_valid(vals, nums)}, checksum {fold(fold(0, evens), odds)}");
+}
