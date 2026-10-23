@@ -1,0 +1,435 @@
+// LeetCode #872: Leaf-Similar Trees -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: two binary trees are leaf-similar when the values of
+// their leaves, read from left to right, form the same sequence.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: the leaves of each, collected by recursion ----------------
+fn star_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    let mut first: Vec[i64] = Vec.new();
+    let mut second: Vec[i64] = Vec.new();
+    star_leaves(root1, mut first);
+    star_leaves(root2, mut second);
+    first == second
+}
+
+fn star_leaves(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n.val);
+        } else {
+            star_leaves(n.left, mut out);
+            star_leaves(n.right, mut out);
+        }
+    }
+}
+
+// ---- the stack arm: the leaves of each, collected with a stack ------------
+fn stack_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    stack_leaves(root1) == stack_leaves(root2)
+}
+
+fn stack_leaves(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n.val);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+    }
+    out
+}
+
+// ---- the lazy arm: compared as they are walked ----------------------------
+fn lazy_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    let mut first: Vec[TreeNode] = Vec.new();
+    let mut second: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root1 {
+        first.push(r);
+    }
+    if let Some(r) = root2 {
+        second.push(r);
+    }
+    loop {
+        match (lazy_next_leaf(mut first), lazy_next_leaf(mut second)) {
+            (None, None) => return true,
+            (Some(a), Some(b)) => {
+                if a != b {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+// the value of the next leaf on the stack's walk, or None at its end
+fn lazy_next_leaf(stack: mut ref Vec[TreeNode]) -> Option[i64] {
+    while let Some(n) = stack.pop() {
+        if n.left.is_none() and n.right.is_none() {
+            return Some(n.val);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+    }
+    None
+}
+
+// ---- the inorder arm: the leaves in an in-order walk ----------------------
+fn inorder_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    inorder_leaves(root1) == inorder_leaves(root2)
+}
+
+fn inorder_leaves(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut at = root;
+    loop {
+        while let Some(n) = at {
+            stack.push(n);
+            at = n.left;
+        }
+        match stack.pop() {
+            None => break,
+            Some(n) => {
+                if n.left.is_none() and n.right.is_none() {
+                    out.push(n.val);
+                }
+                at = n.right;
+            }
+        }
+    }
+    out
+}
+
+// ---- the text arm: the leaf sequences written out -------------------------
+fn text_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    let mut first = String.new();
+    let mut second = String.new();
+    text_write_leaves(root1, mut first);
+    text_write_leaves(root2, mut second);
+    first == second
+}
+
+fn text_write_leaves(node: Option[TreeNode], out: mut ref String) {
+    let Some(n) = node else {
+        return;
+    };
+    if n.left.is_none() and n.right.is_none() {
+        out.push_str(f"{n.val},");
+        return;
+    }
+    text_write_leaves(n.left, mut out);
+    text_write_leaves(n.right, mut out);
+}
+
+fn arm(a: i64, root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    match a {
+        0 => star_leaf_similar(root1, root2),
+        1 => stack_leaf_similar(root1, root2),
+        2 => lazy_leaf_similar(root1, root2),
+        3 => inorder_leaf_similar(root1, root2),
+        _ => text_leaf_similar(root1, root2),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every leaf with its path from the root, 'L' for a left step and 'R' for
+// a right one
+fn literal_paths(node: Option[TreeNode], path: own String, out: mut ref Vec[(String, i64)]) {
+    let Some(n) = node else {
+        return;
+    };
+    if n.left.is_none() and n.right.is_none() {
+        out.push((path, n.val));
+        return;
+    }
+    literal_paths(n.left, path + "L", mut out);
+    literal_paths(n.right, path + "R", mut out);
+}
+
+// the leaf value sequence "from left to right": no leaf's path is a prefix
+// of another's, so ordering the paths as words with L before R orders the
+// leaves from left to right
+fn literal_sequence(root: Option[TreeNode]) -> Vec[i64] {
+    let mut leaves: Vec[(String, i64)] = Vec.new();
+    literal_paths(root, String.new(), mut leaves);
+    for i in 1..leaves.len() {
+        let mut j = i;
+        while j > 0 and leaves[j].0 < leaves[j - 1].0 {
+            leaves.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    for i in 0..leaves.len() {
+        vals.push(leaves[i].1);
+    }
+    vals
+}
+
+fn literal_leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    literal_sequence(root1) == literal_sequence(root2)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree of n nodes with values below limit: each new node hangs
+// from a random node with a free side.
+fn random_tree(seed: mut ref i64, n: i64, limit: i64) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let node = TreeNode { val: next_random(mut seed) % limit, left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+// the leaves of a tree from left to right, as nodes
+fn leaf_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n);
+        } else {
+            leaf_nodes(n.left, mut out);
+            leaf_nodes(n.right, mut out);
+        }
+    }
+}
+
+// a random tree whose leaves, left to right, are vals[lo..hi], its
+// other nodes valued below limit; with `chains`, a leaf sometimes hangs
+// below a node with one child
+fn tree_with_leaves(seed: mut ref i64, vals: Vec[i64], lo: i64, hi: i64, limit: i64, chains: bool) -> TreeNode {
+    if hi - lo == 1 {
+        let leaf = TreeNode { val: vals[lo], left: None, right: None };
+        if chains and next_random(mut seed) % 3 == 0 {
+            if next_random(mut seed) % 2 == 0 {
+                return TreeNode { val: next_random(mut seed) % limit, left: Some(leaf), right: None };
+            }
+            return TreeNode { val: next_random(mut seed) % limit, left: None, right: Some(leaf) };
+        }
+        return leaf;
+    }
+    let mid = lo + 1 + next_random(mut seed) % (hi - lo - 1);
+    let left = tree_with_leaves(mut seed, vals, lo, mid, limit, chains);
+    let right = tree_with_leaves(mut seed, vals, mid, hi, limit, chains);
+    TreeNode { val: next_random(mut seed) % limit, left: Some(left), right: Some(right) }
+}
+
+// a random tree with the same leaves as `root`
+fn leaf_similar_to(seed: mut ref i64, root: Option[TreeNode], limit: i64, chains: bool) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    leaf_nodes(root, mut nodes);
+    let mut vals: Vec[i64] = Vec.new();
+    for n in nodes.iter() {
+        vals.push(n.val);
+    }
+    Some(tree_with_leaves(mut seed, vals, 0, vals.len(), limit, chains))
+}
+
+// a copy of the tree with left and right swapped at every node
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// a copy of the tree
+fn copied(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copied(n.left), right: copied(n.right) }),
+    }
+}
+
+// the digits, each from 1 to 9, cut into numbers of one or two digits at
+// random
+fn split_digits(seed: mut ref i64, digits: Vec[i64]) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < digits.len() {
+        if i + 1 < digits.len() and next_random(mut seed) % 2 == 0 {
+            vals.push(digits[i] * 10 + digits[i + 1]);
+            i += 2;
+        } else {
+            vals.push(digits[i]);
+            i += 1;
+        }
+    }
+    vals
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one pair, each over the five arms; returns 1
+// when the ★ arm answers true
+fn properties(t: mut ref Tally, seed: mut ref i64, a: Option[TreeNode], b: Option[TreeNode], limit: i64) -> i64 {
+    let want = literal_leaf_similar(a, b);
+    let rebuilt = leaf_similar_to(mut seed, a, limit, true);
+    let ma = mirrored(a);
+    let mb = mirrored(b);
+    // b with one leaf changed, when a and b are leaf-similar
+    let changed = copied(b);
+    let mut cl: Vec[TreeNode] = Vec.new();
+    leaf_nodes(changed, mut cl);
+    let i = next_random(mut seed) % cl.len();
+    cl[i].val = (cl[i].val + 1 + next_random(mut seed) % (limit - 1)) % limit;
+    let seq = literal_sequence(a);
+    let mut palindrome = true;
+    for k in 0..seq.len() {
+        if seq[k] != seq[seq.len() - 1 - k] {
+            palindrome = false;
+        }
+    }
+    let mut star = 0;
+    for x in 0..5 {
+        let got = arm(x, a, b);
+        if x == 0 and got {
+            star = 1;
+        }
+        // P1: the statement's answer
+        check(mut t, 1, got == want);
+        // P2: the order of the two trees does not matter
+        check(mut t, 2, arm(x, b, a) == got);
+        // P3: a tree is leaf-similar to itself and to any tree built on its
+        // leaves
+        check(mut t, 3, arm(x, a, a) and arm(x, a, rebuilt) and arm(x, rebuilt, a));
+        // P4: both trees mirrored give the same answer
+        check(mut t, 4, arm(x, ma, mb) == got);
+        // P5: leaf-similar trees stop being so when one leaf changes
+        if got {
+            check(mut t, 5, not arm(x, a, changed));
+        }
+        // P6: a tree and its mirror are leaf-similar exactly when its leaves
+        // read the same both ways
+        check(mut t, 6, arm(x, a, ma) == palindrome);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut similar = 0;
+    let mut seed = 872;
+    // small trees with few values, so that pairs often match by chance
+    for k in 0..1500 {
+        let a = random_tree(mut seed, k % 10 + 1, 3);
+        let b = if k % 3 == 0 { leaf_similar_to(mut seed, a, 3, true) } else { random_tree(mut seed, next_random(mut seed) % 10 + 1, 3) };
+        count += 1;
+        similar += properties(mut t, mut seed, a, b, 3);
+    }
+    // larger trees, values up to 200
+    for k in 0..200 {
+        let n = next_random(mut seed) % 120 + 1;
+        let a = random_tree(mut seed, n, 201);
+        let b = if k % 2 == 0 { leaf_similar_to(mut seed, a, 201, true) } else { random_tree(mut seed, n, 201) };
+        count += 1;
+        similar += properties(mut t, mut seed, a, b, 201);
+    }
+    // leaves that spell the same digits, cut into numbers two ways
+    for _ in 0..200 {
+        let mut digits: Vec[i64] = Vec.new();
+        for _ in 0..next_random(mut seed) % 7 + 2 {
+            digits.push(next_random(mut seed) % 9 + 1);
+        }
+        let x = split_digits(mut seed, digits);
+        let y = split_digits(mut seed, digits);
+        let a = Some(tree_with_leaves(mut seed, x, 0, x.len(), 201, true));
+        let b = Some(tree_with_leaves(mut seed, y, 0, y.len(), 201, true));
+        count += 1;
+        similar += properties(mut t, mut seed, a, b, 201);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} pairs of trees, {similar} leaf-similar, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

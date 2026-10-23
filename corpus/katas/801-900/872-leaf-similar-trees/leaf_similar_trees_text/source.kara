@@ -1,0 +1,193 @@
+// LeetCode #872: Leaf-Similar Trees -- the leaf sequences written out.
+//
+// Each tree's leaves, left to right, written into a String with a comma
+// after every value, so that [1, 23] and [12, 3] read differently; the
+// trees are leaf-similar when the two strings are equal. O(n1 + n2).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf_similar(root1: Option[TreeNode], root2: Option[TreeNode]) -> bool {
+    let mut first = String.new();
+    let mut second = String.new();
+    write_leaves(root1, mut first);
+    write_leaves(root2, mut second);
+    first == second
+}
+
+fn write_leaves(node: Option[TreeNode], out: mut ref String) {
+    let Some(n) = node else {
+        return;
+    };
+    if n.left.is_none() and n.right.is_none() {
+        out.push_str(f"{n.val},");
+        return;
+    }
+    write_leaves(n.left, mut out);
+    write_leaves(n.right, mut out);
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree of n nodes with values below limit: each new node hangs
+// from a random node with a free side.
+fn random_tree(seed: mut ref i64, n: i64, limit: i64) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let node = TreeNode { val: next_random(mut seed) % limit, left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+// the leaves of a tree from left to right, as nodes
+fn leaf_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n);
+        } else {
+            leaf_nodes(n.left, mut out);
+            leaf_nodes(n.right, mut out);
+        }
+    }
+}
+
+// a random tree whose leaves, left to right, are vals[lo..hi], its
+// other nodes valued below limit; with `chains`, a leaf sometimes hangs
+// below a node with one child
+fn tree_with_leaves(seed: mut ref i64, vals: Vec[i64], lo: i64, hi: i64, limit: i64, chains: bool) -> TreeNode {
+    if hi - lo == 1 {
+        let leaf = TreeNode { val: vals[lo], left: None, right: None };
+        if chains and next_random(mut seed) % 3 == 0 {
+            if next_random(mut seed) % 2 == 0 {
+                return TreeNode { val: next_random(mut seed) % limit, left: Some(leaf), right: None };
+            }
+            return TreeNode { val: next_random(mut seed) % limit, left: None, right: Some(leaf) };
+        }
+        return leaf;
+    }
+    let mid = lo + 1 + next_random(mut seed) % (hi - lo - 1);
+    let left = tree_with_leaves(mut seed, vals, lo, mid, limit, chains);
+    let right = tree_with_leaves(mut seed, vals, mid, hi, limit, chains);
+    TreeNode { val: next_random(mut seed) % limit, left: Some(left), right: Some(right) }
+}
+
+// a random tree with the same leaves as `root`
+fn leaf_similar_to(seed: mut ref i64, root: Option[TreeNode], limit: i64, chains: bool) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    leaf_nodes(root, mut nodes);
+    let mut vals: Vec[i64] = Vec.new();
+    for n in nodes.iter() {
+        vals.push(n.val);
+    }
+    Some(tree_with_leaves(mut seed, vals, 0, vals.len(), limit, chains))
+}
+
+fn show(vals1: Vec[Option[i64]], vals2: Vec[Option[i64]]) {
+    let mut text1: Vec[String] = Vec.new();
+    for v in vals1.iter() {
+        text1.push(match *v { Some(x) => f"{x}", None => "null".to_string() });
+    }
+    let mut text2: Vec[String] = Vec.new();
+    for v in vals2.iter() {
+        text2.push(match *v { Some(x) => f"{x}", None => "null".to_string() });
+    }
+    let answer = leaf_similar(from_level_order(vals1), from_level_order(vals2));
+    println(f"root1 = [{text1.join(", ")}], root2 = [{text2.join(", ")}] -> {answer}");
+}
+
+fn main() {
+    show([Some(3), Some(5), Some(1), Some(6), Some(2), Some(9), Some(8), None, None, Some(7), Some(4)],
+        [Some(3), Some(5), Some(1), Some(6), Some(7), Some(4), Some(2), None, None, None, None, None, None, Some(9), Some(8)]);
+    show([Some(1), Some(2), Some(3)], [Some(1), Some(3), Some(2)]);
+    show([Some(1)], [Some(1)]);
+    show([Some(1)], [Some(2)]);
+    show([Some(1), Some(2)], [Some(2)]);
+    show([Some(1), Some(2)], [Some(3), None, Some(2)]);
+    show([Some(1), Some(2), Some(3)], [Some(4), Some(2), Some(5), None, None, Some(3)]);
+    show([Some(1), Some(2), Some(3)], [Some(1), Some(2), Some(3), Some(3)]);
+    show([Some(1), Some(12), Some(3)], [Some(1), Some(1), Some(23)]);
+    show([Some(0), Some(200), Some(200)], [Some(200), Some(200), Some(200), Some(0), Some(200)]);
+    // pairs that are leaf-similar by construction, and pairs that are not
+    let mut seed = 872;
+    let mut similar = 0;
+    for k in 0..3000 {
+        let n1 = k % 12 + 1;
+        let a = random_tree(mut seed, n1, 4);
+        let b = if k % 2 == 0 { leaf_similar_to(mut seed, a, 4, true) } else { random_tree(mut seed, next_random(mut seed) % 12 + 1, 4) };
+        if leaf_similar(a, b) {
+            similar += 1;
+        }
+    }
+    println(f"3000 pairs of up to 12 nodes: {similar} leaf-similar");
+    // LeetCode's largest: 200 nodes with values up to 200
+    similar = 0;
+    let mut check = 0;
+    for k in 0..200 {
+        let a = random_tree(mut seed, 200, 201);
+        let b = if k % 4 == 0 { random_tree(mut seed, 200, 201) } else { leaf_similar_to(mut seed, a, 201, false) };
+        if k % 4 == 1 {
+            let mut bl: Vec[TreeNode] = Vec.new();
+            leaf_nodes(b, mut bl);
+            let i = next_random(mut seed) % bl.len();
+            bl[i].val = (bl[i].val + 1) % 201;
+        }
+        let answer = leaf_similar(a, b);
+        if answer {
+            similar += 1;
+        }
+        check = (check * 3 + if answer { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"200 pairs of 200 nodes: {similar} leaf-similar, checksum {check}");
+}

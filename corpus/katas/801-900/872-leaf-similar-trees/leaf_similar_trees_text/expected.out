@@ -1,0 +1,12 @@
+root1 = [3, 5, 1, 6, 2, 9, 8, null, null, 7, 4], root2 = [3, 5, 1, 6, 7, 4, 2, null, null, null, null, null, null, 9, 8] -> true
+root1 = [1, 2, 3], root2 = [1, 3, 2] -> false
+root1 = [1], root2 = [1] -> true
+root1 = [1], root2 = [2] -> false
+root1 = [1, 2], root2 = [2] -> true
+root1 = [1, 2], root2 = [3, null, 2] -> true
+root1 = [1, 2, 3], root2 = [4, 2, 5, null, null, 3] -> true
+root1 = [1, 2, 3], root2 = [1, 2, 3, 3] -> false
+root1 = [1, 12, 3], root2 = [1, 1, 23] -> false
+root1 = [0, 200, 200], root2 = [200, 200, 200, 0, 200] -> false
+3000 pairs of up to 12 nodes: 1527 leaf-similar
+200 pairs of 200 nodes: 100 leaf-similar, checksum 729502260

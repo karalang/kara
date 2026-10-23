@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/872-leaf-similar-trees/bench/leaf_similar_trees.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "5aa4e16e5"
+extracted_src = "e1704b8a"
+model_rev = "aafbe785"
+model_src = "e1704b8a"
