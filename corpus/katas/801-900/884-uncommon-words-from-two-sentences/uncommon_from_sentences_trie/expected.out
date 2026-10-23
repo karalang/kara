@@ -1,0 +1,10 @@
+s1 = "this apple is sweet", s2 = "this apple is sour" -> [sour, sweet]
+s1 = "apple apple", s2 = "banana" -> [banana]
+s1 = "a", s2 = "b" -> [a, b]
+s1 = "a", s2 = "a" -> []
+s1 = "a a a", s2 = "b" -> [b]
+s1 = "x y z", s2 = "z y x" -> []
+s1 = "go to the store and buy the milk", s2 = "the milk is at the store" -> [and, at, buy, go, is, to]
+s1 = 199 characters, s2 = 199 characters -> [z]
+3000 pairs of up to 20 characters: 10722 uncommon words, checksum 234308188
+1000 pairs of up to 200 characters: 46024 uncommon words, checksum 10151522

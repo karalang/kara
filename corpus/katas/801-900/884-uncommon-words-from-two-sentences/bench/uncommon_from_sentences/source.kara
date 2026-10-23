@@ -1,0 +1,78 @@
+// LeetCode #884 bench: the ★ arm (one map of counts) on 1000 sentences of
+// LeetCode's sizes, each paired with 200 others.
+
+fn uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut counts: Map[String, i64] = [:];
+    for word in s1.split(" ") {
+        let n = counts.get(word) ?? 0;
+        counts[word.to_string()] = n + 1;
+    }
+    for word in s2.split(" ") {
+        let n = counts.get(word) ?? 0;
+        counts[word.to_string()] = n + 1;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for (word, n) in counts.iter() {
+        if *n == 1 {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// up to 200 characters, words of 1 to 4 of the letters a to e
+fn sentence(seed: mut ref i64) -> String {
+    let mut out = String.new();
+    loop {
+        let size = next_random(mut seed) % 4 + 1;
+        let mut word = String.new();
+        for _ in 0..size {
+            word.push((97 + next_random(mut seed) % 5) as u8 as char);
+        }
+        if out.len() == 0 {
+            out = word;
+        } else if out.len() + 1 + word.len() <= 200 {
+            out = out + " " + word;
+        } else {
+            return out;
+        }
+        if next_random(mut seed) % 80 == 0 {
+            return out;
+        }
+    }
+}
+
+// the same for a word wherever it sits in the answer
+fn word_hash(word: String) -> i64 {
+    let bytes = word.bytes();
+    let mut h = 7;
+    for k in 0..bytes.len() {
+        h = (h * 131 + bytes[k] as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let mut seed = 884;
+    let mut sentences: Vec[String] = Vec.new();
+    for _ in 0..1000 {
+        sentences.push(sentence(mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..200 {
+        for i in 0..1000 {
+            let words = uncommon_from_sentences(sentences[i], sentences[(i + r + 1) % 1000]);
+            total += words.len();
+            for k in 0..words.len() {
+                check = (check + word_hash(words[k])) % 1000000007;
+            }
+        }
+    }
+    println(f"1000 sentences, each paired with 200 others: {total} uncommon words, checksum {check}");
+}

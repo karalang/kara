@@ -1,0 +1,367 @@
+// LeetCode #884: Uncommon Words from Two Sentences -- differential test
+// of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: a sentence is a string of words separated by single
+// spaces, each word of lowercase letters. A word is uncommon if it
+// appears exactly once in one of the sentences, and does not appear in
+// the other sentence. Given two sentences, return a list of all the
+// uncommon words, in any order.
+
+// ---- the ★ arm: one map of counts -----------------------------------------
+fn star_uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut counts: Map[String, i64] = [:];
+    for word in s1.split(" ") {
+        let n = counts.get(word) ?? 0;
+        counts[word.to_string()] = n + 1;
+    }
+    for word in s2.split(" ") {
+        let n = counts.get(word) ?? 0;
+        counts[word.to_string()] = n + 1;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for (word, n) in counts.iter() {
+        if *n == 1 {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+// ---- the sorted arm: sorting the words ------------------------------------
+fn sorted_uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    for word in s1.split(" ") {
+        words.push(word.to_string());
+    }
+    for word in s2.split(" ") {
+        words.push(word.to_string());
+    }
+    words.sort();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < words.len() {
+        let mut j = i + 1;
+        while j < words.len() and words[j] == words[i] {
+            j += 1;
+        }
+        if j == i + 1 {
+            out.push(words[i].clone());
+        }
+        i = j;
+    }
+    out
+}
+
+// ---- the sets arm: two sets -----------------------------------------------
+fn sets_meet(word: Str, once: mut ref Set[String], again: mut ref Set[String]) {
+    if again.contains(word) {
+        return;
+    }
+    if once.contains(word) {
+        once.remove(word);
+        again.insert(word.to_string());
+    } else {
+        once.insert(word.to_string());
+    }
+}
+
+fn sets_uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut once: Set[String] = Set.new();
+    let mut again: Set[String] = Set.new();
+    for word in s1.split(" ") {
+        sets_meet(word, mut once, mut again);
+    }
+    for word in s2.split(" ") {
+        sets_meet(word, mut once, mut again);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in once.iter() {
+        out.push(word.clone());
+    }
+    out
+}
+
+// ---- the ordered arm: each sentence counted on its own, in order ----------
+fn ordered_tally(s: Str) -> SortedMap[String, i64] {
+    let mut counts: SortedMap[String, i64] = SortedMap.new();
+    for word in s.split(" ") {
+        let n = counts.get(word) ?? 0;
+        counts.insert(word.to_string(), n + 1);
+    }
+    counts
+}
+
+fn ordered_uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let first = ordered_tally(s1);
+    let second = ordered_tally(s2);
+    let mut out: Vec[String] = Vec.new();
+    for (word, n) in first.iter() {
+        if *n == 1 and not second.contains_key(word) {
+            out.push(word.clone());
+        }
+    }
+    for (word, n) in second.iter() {
+        if *n == 1 and not first.contains_key(word) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+// ---- the trie arm: a trie of counts ---------------------------------------
+fn trie_add(s: Str, next: mut ref Vec[i64], ends: mut ref Vec[i64]) {
+    let bytes = s.bytes();
+    let mut node = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] == 32 {
+            ends[node] += 1;
+            node = 0;
+        } else {
+            let slot = node * 26 + (bytes[i] - 97) as i64;
+            if next[slot] == 0 {
+                next[slot] = ends.len();
+                ends.push(0);
+                for _ in 0..26 {
+                    next.push(0);
+                }
+            }
+            node = next[slot];
+        }
+    }
+    ends[node] += 1;
+}
+
+fn trie_collect(node: i64, word: mut ref String, next: Vec[i64], ends: Vec[i64], out: mut ref Vec[String]) {
+    if ends[node] == 1 {
+        out.push(word.clone());
+    }
+    for c in 0..26 {
+        let child = next[node * 26 + c];
+        if child != 0 {
+            word.push((97 + c) as u8 as char);
+            trie_collect(child, mut word, next, ends, mut out);
+            let _ = word.pop();
+        }
+    }
+}
+
+fn trie_uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut next: Vec[i64] = Vec.filled(26, 0);
+    let mut ends: Vec[i64] = [0];
+    trie_add(s1, mut next, mut ends);
+    trie_add(s2, mut next, mut ends);
+    let mut out: Vec[String] = Vec.new();
+    let mut word = String.new();
+    trie_collect(0, mut word, next, ends, mut out);
+    out
+}
+
+// each arm's words in alphabetical order, as LeetCode takes any order
+fn arm(x: i64, s1: Str, s2: Str) -> Vec[String] {
+    let mut words = match x {
+        0 => star_uncommon_from_sentences(s1, s2),
+        1 => sorted_uncommon_from_sentences(s1, s2),
+        2 => sets_uncommon_from_sentences(s1, s2),
+        3 => ordered_uncommon_from_sentences(s1, s2),
+        _ => trie_uncommon_from_sentences(s1, s2),
+    };
+    words.sort();
+    words
+}
+
+// ---- the statement read literally -----------------------------------------
+
+fn occurrences(words: Vec[Str], w: Str) -> i64 {
+    let mut n = 0;
+    for i in 0..words.len() {
+        if words[i] == w {
+            n += 1;
+        }
+    }
+    n
+}
+
+// a word is uncommon if it appears exactly once in one of the sentences
+// and does not appear in the other; every word of s1 is tried, counted in
+// s1 and in s2, and then every word of s2
+fn literal(s1: Str, s2: Str) -> Vec[String] {
+    let a: Vec[Str] = s1.split(" ").collect();
+    let b: Vec[Str] = s2.split(" ").collect();
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..a.len() {
+        if occurrences(a, a[i]) == 1 and occurrences(b, a[i]) == 0 {
+            out.push(a[i].to_string());
+        }
+    }
+    for i in 0..b.len() {
+        if occurrences(b, b[i]) == 1 and occurrences(a, b[i]) == 0 {
+            out.push(b[i].to_string());
+        }
+    }
+    out.sort();
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sentence(seed: mut ref i64, limit: i64, longest: i64, letters: i64, stop: i64) -> String {
+    let mut out = String.new();
+    loop {
+        let size = next_random(mut seed) % longest + 1;
+        let mut word = String.new();
+        for _ in 0..size {
+            word.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+        if out.len() == 0 {
+            out = word;
+        } else if out.len() + 1 + word.len() <= limit {
+            out = out + " " + word;
+        } else {
+            return out;
+        }
+        if next_random(mut seed) % stop == 0 {
+            return out;
+        }
+    }
+}
+
+// the words of s in another order
+fn shuffled(seed: mut ref i64, s: Str) -> String {
+    let mut words: Vec[Str] = s.split(" ").collect();
+    for i in 0..words.len() {
+        let j = i + next_random(mut seed) % (words.len() - i);
+        words.swap(i, j);
+    }
+    let mut out = String.new();
+    for i in 0..words.len() {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(words[i]);
+    }
+    out
+}
+
+fn same(a: Vec[String], b: Vec[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn without(words: Vec[String], w: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..words.len() {
+        if words[i] != w {
+            out.push(words[i].clone());
+        }
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one pair of sentences over the five arms (P1 only when
+// `small`). Returns the number of uncommon words the ★ arm finds.
+fn properties(t: mut ref Tally, seed: mut ref i64, s1: Str, s2: Str, small: bool) -> i64 {
+    let want = if small { literal(s1, s2) } else { Vec.new() };
+    let a: Vec[Str] = s1.split(" ").collect();
+    let b: Vec[Str] = s2.split(" ").collect();
+    let moved1 = shuffled(mut seed, s1);
+    let moved2 = shuffled(mut seed, s2);
+    // a word of s1 said once more in s2
+    let w = a[next_random(mut seed) % a.len()];
+    let again = f"{s2} {w}";
+    let joined = f"{s1} {s2}";
+    let mut answers: Vec[Vec[String]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, s1, s2));
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's words
+        if small {
+            check(mut t, 1, same(got, want));
+        }
+        // P2: each word once, each one a word of the sentences
+        let mut ok = got.len() <= a.len() + b.len();
+        for i in 0..got.len() {
+            if i > 0 and got[i - 1] >= got[i] {
+                ok = false;
+            }
+            if occurrences(a, got[i]) + occurrences(b, got[i]) != 1 {
+                ok = false;
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: the sentences swapped, and their words in another order
+        check(mut t, 3, same(arm(x, s2, s1), got) and same(arm(x, moved1, moved2), got));
+        // P4: a word of s1 said again in s2 leaves the answer if it was in
+        // it, and changes nothing else
+        check(mut t, 4, same(arm(x, s1, again), without(got, w)));
+        // P5: the sentences joined into one, beside a sentence of one new
+        // word, give the same words and the new one
+        let mut plus = got.clone();
+        plus.push("zz");
+        check(mut t, 5, same(arm(x, joined, "zz"), plus));
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and same(answers[y], got) {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0].len()
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 884;
+    // up to 20 characters, words of 1 or 2 of 3 letters, against the
+    // statement; then LeetCode's sizes, up to 200 characters with words of
+    // up to 4 of 5 letters
+    for c in 0..3400 {
+        let small = c < 3000;
+        let s1 = if small { sentence(mut seed, 20, 2, 3, 5) } else { sentence(mut seed, 200, 4, 5, 80) };
+        let s2 = if small { sentence(mut seed, 20, 2, 3, 5) } else { sentence(mut seed, 200, 4, 5, 80) };
+        cases += 1;
+        total += properties(mut t, mut seed, s1, s2, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {total} uncommon words in all, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

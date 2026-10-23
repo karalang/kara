@@ -1,0 +1,140 @@
+// LeetCode #884: Uncommon Words from Two Sentences -- two sets.
+//
+// Each word of the two sentences is met in turn: the first time it goes
+// into the set of words seen once, and any later time it leaves that set
+// for the set of words seen again, where it stays. The words left seen
+// once at the end are the answer. O(total length).
+
+fn meet(word: Str, once: mut ref Set[String], again: mut ref Set[String]) {
+    if again.contains(word) {
+        return;
+    }
+    if once.contains(word) {
+        once.remove(word);
+        again.insert(word.to_string());
+    } else {
+        once.insert(word.to_string());
+    }
+}
+
+fn uncommon_from_sentences(s1: Str, s2: Str) -> Vec[String] {
+    let mut once: Set[String] = Set.new();
+    let mut again: Set[String] = Set.new();
+    for word in s1.split(" ") {
+        meet(word, mut once, mut again);
+    }
+    for word in s2.split(" ") {
+        meet(word, mut once, mut again);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in once.iter() {
+        out.push(word.clone());
+    }
+    out
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn sorted_answer(s1: Str, s2: Str) -> Vec[String] {
+    let mut words = uncommon_from_sentences(s1, s2);
+    words.sort();
+    words
+}
+
+fn text(words: Vec[String]) -> String {
+    let mut out = "[";
+    for i in 0..words.len() {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + words[i];
+    }
+    out + "]"
+}
+
+fn show(s1: Str, s2: Str) {
+    let shown1 = if s1.len() > 40 { f"{s1.len()} characters" } else { f"\"{s1}\"" };
+    let shown2 = if s2.len() > 40 { f"{s2.len()} characters" } else { f"\"{s2}\"" };
+    println(f"s1 = {shown1}, s2 = {shown2} -> {text(sorted_answer(s1, s2))}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a sentence of at most `limit` characters, at least one word, of words of
+// 1 to `longest` letters from the first `letters` of the alphabet, ending
+// after each word with chance 1 in `stop`
+fn sentence(seed: mut ref i64, limit: i64, longest: i64, letters: i64, stop: i64) -> String {
+    let mut out = String.new();
+    loop {
+        let size = next_random(mut seed) % longest + 1;
+        let mut word = String.new();
+        for _ in 0..size {
+            word.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+        if out.len() == 0 {
+            out = word;
+        } else if out.len() + 1 + word.len() <= limit {
+            out = out + " " + word;
+        } else {
+            return out;
+        }
+        if next_random(mut seed) % stop == 0 {
+            return out;
+        }
+    }
+}
+
+fn fold(check: i64, words: Vec[String]) -> i64 {
+    let mut c = check;
+    for i in 0..words.len() {
+        let bytes = words[i].bytes();
+        for k in 0..bytes.len() {
+            c = (c * 131 + bytes[k] as i64) % 1000000007;
+        }
+        c = (c * 131 + 44) % 1000000007;
+    }
+    (c * 131 + 59) % 1000000007
+}
+
+fn main() {
+    show("this apple is sweet", "this apple is sour");
+    show("apple apple", "banana");
+    show("a", "b");
+    show("a", "a");
+    show("a a a", "b");
+    show("x y z", "z y x");
+    show("go to the store and buy the milk", "the milk is at the store");
+    let mut long1 = "w";
+    let mut long2 = "q";
+    for i in 0..99 {
+        long1 = long1 + " " + if i % 2 == 0 { "u" } else { "w" };
+        long2 = long2 + " " + if i == 98 { "z" } else { "q" };
+    }
+    show(long1, long2);
+    // small cases
+    let mut seed = 884;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let s1 = sentence(mut seed, 20, 2, 3, 5);
+        let s2 = sentence(mut seed, 20, 2, 3, 5);
+        let words = sorted_answer(s1, s2);
+        total += words.len();
+        check = fold(check, words);
+    }
+    println(f"3000 pairs of up to 20 characters: {total} uncommon words, checksum {check}");
+    // LeetCode's sizes: up to 200 characters
+    total = 0;
+    check = 0;
+    for _ in 0..1000 {
+        let s1 = sentence(mut seed, 200, 4, 5, 80);
+        let s2 = sentence(mut seed, 200, 4, 5, 80);
+        let words = sorted_answer(s1, s2);
+        total += words.len();
+        check = fold(check, words);
+    }
+    println(f"1000 pairs of up to 200 characters: {total} uncommon words, checksum {check}");
+}
