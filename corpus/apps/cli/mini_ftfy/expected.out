@@ -1,0 +1,3297 @@
+== support inbox
+> fix_text('âœ” No problems')
+  -> '✔ No problems'
+> fix_and_explain('âœ” No problems')
+  -> ExplainedText(text='✔ No problems', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('&macr;\\_(ã\x83\x84)_/&macr;')
+  -> '¯\\_(ツ)_/¯'
+> fix_and_explain('&macr;\\_(ã\x83\x84)_/&macr;')
+  -> ExplainedText(text='¯\\_(ツ)_/¯', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8')])
+> fix_text('Broken text&hellip; it&#x2019;s ﬂubberiﬁc!')
+  -> "Broken text… it's flubberific!"
+> fix_and_explain('Broken text&hellip; it&#x2019;s ﬂubberiﬁc!')
+  -> ExplainedText(text="Broken text… it's flubberific!", explanation=[('apply', 'unescape_html'), ('apply', 'fix_latin_ligatures'), ('apply', 'uncurl_quotes')])
+> fix_text('ＬＯＵＤ\u3000ＮＯＩＳＥＳ')
+  -> 'LOUD NOISES'
+> fix_and_explain('ＬＯＵＤ\u3000ＮＯＩＳＥＳ')
+  -> ExplainedText(text='LOUD NOISES', explanation=[('apply', 'fix_character_width')])
+> fix_text('sÃ³')
+  -> 'só'
+> fix_and_explain('sÃ³')
+  -> ExplainedText(text='só', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('voilÃ le travail')
+  -> 'voilà le travail'
+> fix_and_explain('voilÃ le travail')
+  -> ExplainedText(text='voilà le travail', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_text('schÃ¶n')
+  -> 'schön'
+> fix_and_explain('schÃ¶n')
+  -> ExplainedText(text='schön', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Ã la mode')
+  -> 'à la mode'
+> fix_and_explain('Ã la mode')
+  -> ExplainedText(text='à la mode', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_text('Ã  la mode')
+  -> 'à la mode'
+> fix_and_explain('Ã  la mode')
+  -> ExplainedText(text='à la mode', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_text('fÃ cil')
+  -> 'fà cil'
+> fix_and_explain('fÃ cil')
+  -> ExplainedText(text='fà cil', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_text('Ã s vezes, Ã quele dia')
+  -> 'às vezes, àquele dia'
+> fix_and_explain('Ã s vezes, Ã quele dia')
+  -> ExplainedText(text='às vezes, àquele dia', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_text('â€œquotedâ€\x9d')
+  -> '"quoted"'
+> fix_and_explain('â€œquotedâ€\x9d')
+  -> ExplainedText(text='"quoted"', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_text('â€œ like this â€�')
+  -> '" like this �'
+> fix_and_explain('â€œ like this â€�')
+  -> ExplainedText(text='" like this �', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_text('The Mona Lisa doesnÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t have eyebrows.')
+  -> "The Mona Lisa doesn't have eyebrows."
+> fix_and_explain('The Mona Lisa doesnÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢t have eyebrows.')
+  -> ExplainedText(text="The Mona Lisa doesn't have eyebrows.", explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_text('Ã¨Ã©Ã®Ã¯')
+  -> 'èéîï'
+> fix_and_explain('Ã¨Ã©Ã®Ã¯')
+  -> ExplainedText(text='èéîï', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Ã¨ Ã© Ã® Ã¯')
+  -> 'è é î ï'
+> fix_and_explain('Ã¨ Ã© Ã® Ã¯')
+  -> ExplainedText(text='è é î ï', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('This â€” should be an em dash')
+  -> 'This — should be an em dash'
+> fix_and_explain('This â€” should be an em dash')
+  -> ExplainedText(text='This — should be an em dash', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Ð¿Ñ€Ð¸Ð²ÐµÑ‚')
+  -> 'привет'
+> fix_and_explain('Ð¿Ñ€Ð¸Ð²ÐµÑ‚')
+  -> ExplainedText(text='привет', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Ð\xa0Ð¾ÑÑÐ¸Ñ')
+  -> 'РоÑÑиÑ'
+> fix_and_explain('Ð\xa0Ð¾ÑÑÐ¸Ñ')
+  -> ExplainedText(text='РоÑÑиÑ', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fix_text('ÐŸÑ€Ð¸Ð²ÐµÑ‚ Ð¼Ð¸Ñ€')
+  -> 'Привет мир'
+> fix_and_explain('ÐŸÑ€Ð¸Ð²ÐµÑ‚ Ð¼Ð¸Ñ€')
+  -> ExplainedText(text='Привет мир', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('ã“ã‚“ã«ã¡ã¯')
+  -> 'ã"ã\'"ã«ã¡ã¯'
+> fix_and_explain('ã“ã‚“ã«ã¡ã¯')
+  -> ExplainedText(text='ã"ã\'"ã«ã¡ã¯', explanation=[('apply', 'uncurl_quotes')])
+> fix_text('Ã°Å¸Ëœâ€š')
+  -> '😂'
+> fix_and_explain('Ã°Å¸Ëœâ€š')
+  -> ExplainedText(text='😂', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Ã°Å¸â€˜Â')
+  -> "ðŸ'Â"
+> fix_and_explain('Ã°Å¸â€˜Â')
+  -> ExplainedText(text="ðŸ'Â", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'uncurl_quotes')])
+> fix_text('IÃ±tÃ«rnÃ¢tiÃ´nÃ\xa0lizÃ¦tiÃ¸n')
+  -> 'Iñtërnâtiônàlizætiøn'
+> fix_and_explain('IÃ±tÃ«rnÃ¢tiÃ´nÃ\xa0lizÃ¦tiÃ¸n')
+  -> ExplainedText(text='Iñtërnâtiônàlizætiøn', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Ã¢â‚¬Å“hello Ã¢â‚¬Â')
+  -> '"hello â€Â'
+> fix_and_explain('Ã¢â‚¬Å“hello Ã¢â‚¬Â')
+  -> ExplainedText(text='"hello â€Â', explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'uncurl_quotes')])
+> fix_text('\x84Handwerk bringt dich überall hin\x93: Von der YOU bis nach Monaco')
+  -> '"Handwerk bringt dich überall hin": Von der YOU bis nach Monaco'
+> fix_and_explain('\x84Handwerk bringt dich überall hin\x93: Von der YOU bis nach Monaco')
+  -> ExplainedText(text='"Handwerk bringt dich überall hin": Von der YOU bis nach Monaco', explanation=[('encode', 'latin-1'), ('decode', 'windows-1252'), ('apply', 'uncurl_quotes')])
+> fix_text('Lo\x92s Angeles')
+  -> "Lo's Angeles"
+> fix_and_explain('Lo\x92s Angeles')
+  -> ExplainedText(text="Lo's Angeles", explanation=[('encode', 'latin-1'), ('decode', 'windows-1252'), ('apply', 'uncurl_quotes')])
+> fix_text('kÃ¶nnen Ã¼ber')
+  -> 'können über'
+> fix_and_explain('kÃ¶nnen Ã¼ber')
+  -> ExplainedText(text='können über', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('CÃ´te dâ€™Ivoire')
+  -> "Côte d'Ivoire"
+> fix_and_explain('CÃ´te dâ€™Ivoire')
+  -> ExplainedText(text="Côte d'Ivoire", explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_text('PÃ©rez &EACUTE;TÃ‰')
+  -> 'Pérez ÉTÉ'
+> fix_and_explain('PÃ©rez &EACUTE;TÃ‰')
+  -> ExplainedText(text='Pérez ÉTÉ', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8')])
+> fix_text('P&EACUTE;REZ')
+  -> 'PÉREZ'
+> fix_and_explain('P&EACUTE;REZ')
+  -> ExplainedText(text='PÉREZ', explanation=[('apply', 'unescape_html')])
+> fix_text('BUNDESSTRA&SZLIG;E')
+  -> 'BUNDESSTRASSE'
+> fix_and_explain('BUNDESSTRA&SZLIG;E')
+  -> ExplainedText(text='BUNDESSTRASSE', explanation=[('apply', 'unescape_html')])
+> fix_text('&ntilde; &Ntilde; &NTILDE; &nTILDE;')
+  -> 'ñ Ñ Ñ &nTILDE;'
+> fix_and_explain('&ntilde; &Ntilde; &NTILDE; &nTILDE;')
+  -> ExplainedText(text='ñ Ñ Ñ &nTILDE;', explanation=[('apply', 'unescape_html')])
+> fix_text('&lt;b&gt;bold&lt;/b&gt;')
+  -> '<b>bold</b>'
+> fix_and_explain('&lt;b&gt;bold&lt;/b&gt;')
+  -> ExplainedText(text='<b>bold</b>', explanation=[('apply', 'unescape_html')])
+> fix_text('<p>AT&amp;T &lt;rocks&gt;</p>')
+  -> '<p>AT&amp;T &lt;rocks&gt;</p>'
+> fix_and_explain('<p>AT&amp;T &lt;rocks&gt;</p>')
+  -> ExplainedText(text='<p>AT&amp;T &lt;rocks&gt;</p>', explanation=[])
+> fix_text("\x1b[36;44mI'm blue, da ba dee\x1b[0m")
+  -> "I'm blue, da ba dee"
+> fix_and_explain("\x1b[36;44mI'm blue, da ba dee\x1b[0m")
+  -> ExplainedText(text="I'm blue, da ba dee", explanation=[('apply', 'remove_terminal_escapes')])
+> fix_text('\ufeffWhere do you want to go today?')
+  -> 'Where do you want to go today?'
+> fix_and_explain('\ufeffWhere do you want to go today?')
+  -> ExplainedText(text='Where do you want to go today?', explanation=[('apply', 'remove_control_chars')])
+> fix_text('Line one\r\nLine two\rLine three\u2028Line four\u2029Line five\x85end')
+  -> 'Line one\nLine two\nLine three\nLine four\nLine five…end'
+> fix_and_explain('Line one\r\nLine two\rLine three\u2028Line four\u2029Line five\x85end')
+  -> ExplainedText(text='Line one\nLine two\nLine three\nLine four\nLine five…end', explanation=[('transcode', 'fix_c1_controls'), ('apply', 'fix_line_breaks')])
+> fix_text('ﬂuﬃeﬆ ﬁnancial oﬃce')
+  -> 'fluffiest financial office'
+> fix_and_explain('ﬂuﬃeﬆ ﬁnancial oﬃce')
+  -> ExplainedText(text='fluffiest financial office', explanation=[('apply', 'fix_latin_ligatures')])
+> fix_text('Ｕﾀｰﾝ ｶﾀｶﾅ ﾊﾟﾋﾟ')
+  -> 'Uターン カタカナ パピ'
+> fix_and_explain('Ｕﾀｰﾝ ｶﾀｶﾅ ﾊﾟﾋﾟ')
+  -> ExplainedText(text='Uターン カタカナ パピ', explanation=[('apply', 'fix_character_width'), ('normalize', 'NFC')])
+> fix_text('“here’s a test” ‘single‛')
+  -> '"here\'s a test" \'single\''
+> fix_and_explain('“here’s a test” ‘single‛')
+  -> ExplainedText(text='"here\'s a test" \'single\'', explanation=[('apply', 'uncurl_quotes')])
+> fix_text('tab\there\x00nul\x07bell\x7fdel\u200bzwsp\u206aold￼obj')
+  -> 'tab\therenulbelldel\u200bzwspoldobj'
+> fix_and_explain('tab\there\x00nul\x07bell\x7fdel\u200bzwsp\u206aold￼obj')
+  -> ExplainedText(text='tab\therenulbelldel\u200bzwspoldobj', explanation=[('apply', 'remove_control_chars')])
+> fix_text('été café ñ')
+  -> 'été café ñ'
+> fix_and_explain('été café ñ')
+  -> ExplainedText(text='été café ñ', explanation=[('normalize', 'NFC')])
+> fix_text('각 한글')
+  -> '각 한글'
+> fix_and_explain('각 한글')
+  -> ExplainedText(text='각 한글', explanation=[('normalize', 'NFC')])
+> fix_text('ＡＢＣ\u3000１２３\u3000！？')
+  -> 'ABC 123 !?'
+> fix_and_explain('ＡＢＣ\u3000１２３\u3000！？')
+  -> ExplainedText(text='ABC 123 !?', explanation=[('apply', 'fix_character_width')])
+> fix_text('')
+  -> ''
+> fix_and_explain('')
+  -> ExplainedText(text='', explanation=[])
+> fix_text('plain ascii text')
+  -> 'plain ascii text'
+> fix_and_explain('plain ascii text')
+  -> ExplainedText(text='plain ascii text', explanation=[])
+> fix_text('already fine: café, naïve, 東京')
+  -> 'already fine: café, naïve, 東京'
+> fix_and_explain('already fine: café, naïve, 東京')
+  -> ExplainedText(text='already fine: café, naïve, 東京', explanation=[])
+> fix_text('İstanbul ve çok güzel')
+  -> 'İstanbul ve çok güzel'
+> fix_and_explain('İstanbul ve çok güzel')
+  -> ExplainedText(text='İstanbul ve çok güzel', explanation=[])
+== wrong codec
+> fix_and_explain("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain("CafГ© crГЁme, s'il vous plaГ®t.")
+  -> ExplainedText(text="CafГ© crГЁme, s'il vous plaГ®t.", explanation=[])
+> fix_and_explain("CafĂ© crĂ¨me, s'il vous plaĂ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain("CafΓ© crΓ¨me, s'il vous plaΓ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain("CafĆ© crĆØme, s'il vous plaĆ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain("CafĂŠ crĂ¨me, s'il vous plaĂŽt.")
+  -> ExplainedText(text="CafÊ crème, s'il vous plaÎt.", explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain("Caf√© cr√®me, s'il vous pla√Æt.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain("Caf├⌐ cr├¿me, s'il vous pla├«t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivÃ© Ã\xa0 MontrÃ©al â\x80\x94 merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivГ© Г\xa0 MontrГ©al вЂ” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivĂ© Ă\xa0 MontrĂ©al â€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivΓ© Γ\xa0 MontrΓ©al β€” merci !')
+  -> ExplainedText(text='Le colis est arrivΓ© Γ\xa0 MontrΓ©al β€" merci !', explanation=[('apply', 'uncurl_quotes')])
+> fix_and_explain('Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivĆ© Ć\xa0 MontrĆ©al ā€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivĂŠ Ă\xa0 MontrĂŠal â\x80\x94 merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arriv√© √† Montr√©al ‚Äî merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arriv├⌐ ├á Montr├⌐al ΓÇö merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ВїDГіnde estГЎ mi pedido? Lo paguГ© el miГ©rcoles.')
+  -> ExplainedText(text='ВїDГіnde estГЎ mi pedido? Lo paguГ© el miГ©rcoles.', explanation=[])
+> fix_and_explain('ÂżDĂłnde estĂˇ mi pedido? Lo paguĂ© el miĂ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('ΒΏDΓ³nde estΓ΅ mi pedido? Lo paguΓ© el miΓ©rcoles.')
+  -> ExplainedText(text='ΒΏDΓ³nde estΓ΅ mi pedido? Lo paguΓ© el miΓ©rcoles.', explanation=[])
+> fix_and_explain('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ĀæDĆ³nde estĆ¡ mi pedido? Lo paguĆ© el miĆ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('ÂżDĂłnde estĂĄ mi pedido? Lo paguĂŠ el miĂŠrcoles.')
+  -> ExplainedText(text='ÂżDĂłnde estĂĄ mi pedido? Lo paguĂŠ el miĂŠrcoles.', explanation=[])
+> fix_and_explain('¬øD√≥nde est√° mi pedido? Lo pagu√© el mi√©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('┬┐D├│nde est├í mi pedido? Lo pagu├⌐ el mi├⌐rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼Ã\x9fe aus KÃ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼ÃŸe aus KÃ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fГјr Herrn MГјller kam nicht an. GrГјГџe aus KГ¶ln')
+  -> ExplainedText(text='Die Lieferung fГјr Herrn MГјller kam nicht an. GrГјГџe aus KГ¶ln', explanation=[])
+> fix_and_explain('Die Lieferung fĂĽr Herrn MĂĽller kam nicht an. GrĂĽĂźe aus KĂ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fΓΌr Herrn MΓΌller kam nicht an. GrΓΌΓ\x9fe aus KΓ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼ÃŸe aus KÃ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fĆ¼r Herrn MĆ¼ller kam nicht an. GrĆ¼Ć\x9fe aus KĆ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fĂźr Herrn MĂźller kam nicht an. GrĂźĂ\x9fe aus KĂśln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung f√ºr Herrn M√ºller kam nicht an. Gr√º√üe aus K√∂ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung f├╝r Herrn M├╝ller kam nicht an. Gr├╝├ƒe aus K├╢ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('NГЈo consegui acessar a conta. Obrigado pela atenГ§ГЈo')
+  -> ExplainedText(text='NГЈo consegui acessar a conta. Obrigado pela atenГ§ГЈo', explanation=[])
+> fix_and_explain('NĂŁo consegui acessar a conta. Obrigado pela atenĂ§ĂŁo')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('NΓ£o consegui acessar a conta. Obrigado pela atenΓ§Γ£o')
+  -> ExplainedText(text='NΓ£o consegui acessar a conta. Obrigado pela atenΓ§Γ£o', explanation=[])
+> fix_and_explain('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('NĆ£o consegui acessar a conta. Obrigado pela atenĆ§Ć£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('NĂŁo consegui acessar a conta. Obrigado pela atenĂ§ĂŁo')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('N√£o consegui acessar a conta. Obrigado pela aten√ß√£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('N├úo consegui acessar a conta. Obrigado pela aten├º├úo')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('ZamÃ³wienie nr 4411 nie dotarÅ\x82o do Å\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ZamÃ³wienie nr 4411 nie dotarÅ‚o do Å\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('ZamГіwienie nr 4411 nie dotarЕ‚o do ЕЃodzi.')
+  -> ExplainedText(text="ZamГіwienie nr 4411 nie dotarЕ'o do ЕЃodzi.", explanation=[('apply', 'uncurl_quotes')])
+> fix_and_explain('ZamĂłwienie nr 4411 nie dotarĹ‚o do Ĺ\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('ZamΓ³wienie nr 4411 nie dotarΕ‚o do Ε\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('ZamÃ³wienie nr 4411 nie dotarÅ‚o do Å\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('ZamĆ³wienie nr 4411 nie dotarÅ‚o do Å\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('ZamĂłwienie nr 4411 nie dotarĹ\x82o do Ĺ\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Zam√≥wienie nr 4411 nie dotar≈Ço do ≈Åodzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Zam├│wienie nr 4411 nie dotar┼éo do ┼üodzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('DobrÃ½ den, objednÃ¡vka pÅ\x99iÅ¡la poÅ¡kozenÃ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('DobrÃ½ den, objednÃ¡vka pÅ™iÅ¡la poÅ¡kozenÃ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('DobrГЅ den, objednГЎvka pЕ™iЕЎla poЕЎkozenГЎ.')
+  -> ExplainedText(text='DobrГЅ den, objednГЎvka pЕ™iЕЎla poЕЎkozenГЎ.', explanation=[])
+> fix_and_explain('DobrĂ˝ den, objednĂˇvka pĹ™iĹˇla poĹˇkozenĂˇ.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('DobrΓ½ den, objednΓ΅vka pΕ™iΕ΅la poΕ΅kozenΓ΅.')
+  -> ExplainedText(text='DobrΓ½ den, objednΓ΅vka pΕ™iΕ΅la poΕ΅kozenΓ΅.', explanation=[])
+> fix_and_explain('DobrÃ½ den, objednÃ¡vka pÅ™iÅ¡la poÅ¡kozenÃ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('DobrĆ½ den, objednĆ¡vka pÅ™iÅ¡la poÅ¡kozenĆ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('DobrĂ˝ den, objednĂĄvka pĹ\x99iĹĄla poĹĄkozenĂĄ.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Dobr√Ω den, objedn√°vka p≈ôi≈°la po≈°kozen√°.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Dobr├╜ den, objedn├ívka p┼Öi┼íla po┼íkozen├í.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Ð\x97Ð´Ñ\x80Ð°Ð²Ñ\x81Ñ\x82Ð²Ñ\x83Ð¹Ñ\x82Ðµ! Ð\x97Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ\x80Ð¸Ñ\x88Ñ\x91Ð».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ð—Ð´Ñ€Ð°Ð²Ñ\x81Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ! Р—Р°РєР°Р· РЅРµ РїСЂРёС€С‘Р».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8')])
+> fix_and_explain('Đ—Đ´Ń€Đ°Đ˛Ń\x81Ń‚Đ˛Ń\x83ĐąŃ‚Đµ! Đ—Đ°ĐşĐ°Đ· Đ˝Đµ ĐżŃ€Đ¸Ń\x88Ń‘Đ».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Π—Π΄Ρ€Π°Π²Ρ\x81Ρ‚Π²ΡƒΠΉΡ‚Πµ! Π—Π°ΠΊΠ°Π· Π½Πµ ΠΏΡ€ΠΈΡ\x88Ρ‘Π».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Ğ—Ğ´Ñ€Ğ°Ğ²Ñ\x81Ñ‚Ğ²ÑƒĞ¹Ñ‚Ğµ! Ğ—Ğ°ĞºĞ°Ğ· Ğ½Ğµ Ğ¿Ñ€Ğ¸ÑˆÑ‘Ğ».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1254'), ('decode', 'utf-8')])
+> fix_and_explain('Š—Š´Ń€Š°Š²Ń\x81Ń‚Š²Ń\x83Š¹Ń‚Šµ! Š—Š°ŠŗŠ°Š· Š½Šµ ŠæŃ€ŠøŃ\x88Ń‘Š».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Đ\x97Đ´Ń\x80Đ°Đ˛Ń\x81Ń\x82Đ˛Ń\x83ĐšŃ\x82Đľ! Đ\x97Đ°ĐşĐ°Đˇ Đ˝Đľ ĐżŃ\x80Đ¸Ń\x88Ń\x91Đť.')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('–ó–¥—Ä–∞–≤—Å—Ç–≤—É–π—Ç–µ! –ó–∞–∫–∞–∑ –Ω–µ –ø—Ä–∏—à—ë–ª.')
+  -> ExplainedText(text='–ó–¥—Ä–∞–≤—Å—Ç–≤—É–π—Ç–µ! –ó–∞–∫–∞–∑ –Ω–µ –ø—Ä–∏—à—ë–ª.', explanation=[])
+> fix_and_explain('╨ù╨┤╤Ç╨░╨▓╤ü╤é╨▓╤â╨╣╤é╨╡! ╨ù╨░╨║╨░╨╖ ╨╜╨╡ ╨┐╤Ç╨╕╤ê╤æ╨╗.')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Î\x95Ï\x85Ï\x87Î±Ï\x81Î¹Ï\x83Ï\x84Ï\x8e Î³Î¹Î± Ï\x84Î· Î³Ï\x81Î®Î³Î¿Ï\x81Î· Î±Ï\x80Î¬Î½Ï\x84Î·Ï\x83Î·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Î•Ï…Ï‡Î±Ï\x81Î¹ÏƒÏ„ÏŽ Î³Î¹Î± Ï„Î· Î³Ï\x81Î®Î³Î¿Ï\x81Î· Î±Ï€Î¬Î½Ï„Î·ÏƒÎ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('О•П…П‡О±ПЃО№ПѓП„ПЋ ОіО№О± П„О· ОіПЃО®ОіОїПЃО· О±ПЂО¬ОЅП„О·ПѓО·')
+  -> ExplainedText(text='О•П…П‡О±ПЃО№ПѓП"ПЋ ОіО№О± П"О· ОіПЃО®ОіОїПЃО· О±ПЂО¬ОЅП"О·ПѓО·', explanation=[('apply', 'uncurl_quotes')])
+> fix_and_explain('Î•Ď…Ď‡Î±Ď\x81ÎąĎ\x83Ď„ĎŽ ÎłÎąÎ± Ď„Î· ÎłĎ\x81Î®ÎłÎżĎ\x81Î· Î±Ď€Î¬Î˝Ď„Î·Ď\x83Î·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Ξ•Ο…Ο‡Ξ±Ο\x81ΞΉΟƒΟ„Ο\x8e Ξ³ΞΉΞ± Ο„Ξ· Ξ³Ο\x81Ξ®Ξ³ΞΏΟ\x81Ξ· Ξ±Ο€Ξ¬Ξ½Ο„Ξ·ΟƒΞ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Î•Ï…Ï‡Î±Ï\x81Î¹ÏƒÏ„Ï\x8e Î³Î¹Î± Ï„Î· Î³Ï\x81Î®Î³Î¿Ï\x81Î· Î±Ï€Î¬Î½Ï„Î·ÏƒÎ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1254'), ('decode', 'utf-8')])
+> fix_and_explain('Ī•Ļ…Ļ‡Ī±Ļ\x81Ī¹Ļ\x83Ļ„Ļˇ Ī³Ī¹Ī± Ļ„Ī· Ī³Ļ\x81Ī®Ī³ĪæĻ\x81Ī· Ī±Ļ€Ī¬Ī½Ļ„Ī·Ļ\x83Ī·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Î\x95Ď\x85Ď\x87ÎąĎ\x81ÎšĎ\x83Ď\x84Ď\x8e ÎłÎšÎą Ď\x84Îˇ ÎłĎ\x81ÎŽÎłÎżĎ\x81Îˇ ÎąĎ\x80ÎŹÎ˝Ď\x84ÎˇĎ\x83Îˇ')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('ŒïœÖœáŒ±œÅŒπœÉœÑœé Œ≥ŒπŒ± œÑŒ∑ Œ≥œÅŒÆŒ≥ŒøœÅŒ∑ Œ±œÄŒ¨ŒΩœÑŒ∑œÉŒ∑')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('╬ò╧à╧ç╬▒╧ü╬╣╧â╧ä╧Ä ╬│╬╣╬▒ ╧ä╬╖ ╬│╧ü╬«╬│╬┐╧ü╬╖ ╬▒╧Ç╬¼╬╜╧ä╬╖╧â╬╖')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÅ\x9fim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÅŸim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('SipariЕџim hГўlГў gelmedi, lГјtfen yardД±m edin.')
+  -> ExplainedText(text='SipariЕџim hГўlГў gelmedi, lГјtfen yardД±m edin.', explanation=[])
+> fix_and_explain('SipariĹźim hĂ˘lĂ˘ gelmedi, lĂĽtfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('SipariΕ\x9fim hΓΆlΓΆ gelmedi, lΓΌtfen yardΔ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÅŸim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÅ\x9fim hĆ¢lĆ¢ gelmedi, lĆ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('SipariĹ\x9fim hĂ˘lĂ˘ gelmedi, lĂźtfen yardÄąm edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Sipari≈üim h√¢l√¢ gelmedi, l√ºtfen yardƒ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Sipari┼ƒim h├ól├ó gelmedi, l├╝tfen yard─▒m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ\x8diÅ«, prekÄ\x97s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ\x8diÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('AДЌiЕ«, prekД—s gautos laiku.')
+  -> ExplainedText(text='AДЌiЕ«, prekД—s gautos laiku.', explanation=[])
+> fix_and_explain('AÄŤiĹ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('AΔ\x8diΕ«, prekΔ—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ\x8diÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ¨iÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='AĨiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ\x8diĹŤ, prekÄ\x97s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Aƒçi≈´, prekƒós gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('A─ìi┼½, prek─ùs gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par ДЃtro piegДЃdi!')
+  -> ExplainedText(text='Paldies par ДЃtro piegДЃdi!', explanation=[])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Δ\x81tro piegΔ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par ƒÅtro piegƒÅdi!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par ─ütro pieg─üdi!')
+  -> ExplainedText(text='Paldies par ─ütro pieg─üdi!', explanation=[])
+> fix_and_explain('æ³¨æ\x96\x87ã\x81\x8cã\x81¾ã\x81\xa0å±\x8aã\x81\x84ã\x81¦ã\x81\x84ã\x81¾ã\x81\x9bã\x82\x93ã\x80\x82')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('æ³¨æ–‡ã\x81Œã\x81¾ã\x81\xa0å±Šã\x81„ã\x81¦ã\x81„ã\x81¾ã\x81›ã‚“ã€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('жіЁж–‡гЃЊгЃѕгЃ\xa0е±ЉгЃ„гЃ¦гЃ„гЃѕгЃ›г‚“гЂ‚')
+  -> ExplainedText(text='жіЁж–‡гЃЊгЃѕгЃ\xa0е±ЉгЃ"гЃ¦гЃ"гЃѕгЃ›г\'"гЂ\'', explanation=[('apply', 'uncurl_quotes')])
+> fix_and_explain('ćł¨ć–‡ă\x81Śă\x81ľă\x81\xa0ĺ±Šă\x81„ă\x81¦ă\x81„ă\x81ľă\x81›ă‚“ă€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('ζ³¨ζ–‡γ\x81\x8cγ\x81Ύγ\x81\xa0ε±\x8aγ\x81„γ\x81¦γ\x81„γ\x81Ύγ\x81›γ‚“γ€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('æ³¨æ–‡ã\x81Œã\x81¾ã\x81\xa0å±Šã\x81„ã\x81¦ã\x81„ã\x81¾ã\x81›ã‚“ã€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('ę³Øę–‡ć\x81\x8cć\x81¾ć\x81\xa0å±\x8ać\x81„ć\x81¦ć\x81„ć\x81¾ć\x81›ć‚“ć€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('ćł¨ć\x96\x87ă\x81\x8că\x81žă\x81\xa0ĺą\x8aă\x81\x84ă\x81Śă\x81\x84ă\x81žă\x81\x9bă\x82\x93ă\x80\x82')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Ê≥®Êñá„Åå„Åæ„Å†Â±ä„ÅÑ„Å¶„ÅÑ„Åæ„Åõ„Çì„ÄÇ')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('µ│¿µûçπüîπü╛πüáσ▒èπüäπüªπüäπü╛πü¢πéôπÇé')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('æ\x88\x91ç\x9a\x84è®¢å\x8d\x95ä»\x80ä¹\x88æ\x97¶å\x80\x99å\x8f\x91è´§ï¼\x9f')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'latin-1'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('æˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ж€‘зљ„и®ўеЌ•д»Ђд№€ж—¶еЂ™еЏ‘иґ§пјџ')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ć\x88‘çš„č®˘ĺŤ•ä»€äą\x88ć—¶ĺ€™ĺŹ‘č´§ďĽź')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ζ\x88‘η\x9a„θ®Άε\x8d•δ»€δΉ\x88ζ—¶ε€™ε\x8f‘θ΄§οΌ\x9f')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('æˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ę\x88‘ē\x9a„č®¢å¨•ä»€ä¹\x88ę—¶å€™å¸‘č´§ļ¼\x9f')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ć\x88\x91ç\x9a\x84čŽ˘ĺ\x8d\x95äť\x80äš\x88ć\x97śĺ\x80\x99ĺ\x8f\x91č´§ďź\x9f')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('ÊàëÁöÑËÆ¢Âçï‰ªÄ‰πàÊó∂ÂÄôÂèëË¥ßÔºü')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'macroman'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('µêæτÜäΦ«óσìòΣ╗ÇΣ╣êµù╢σÇÖσÅæΦ┤º∩╝ƒ')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'cp437'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('Great product â\x80\x94 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Great product â€” 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Great product вЂ” 5 stars в\xadђв\xadђв\xadђв\xadђв\xadђ')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8')])
+> fix_and_explain('Great product â€” 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Great product β€” 5 stars β\xad\x90β\xad\x90β\xad\x90β\xad\x90β\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Great product â€” 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Great product ā€” 5 stars ā\xad\x90ā\xad\x90ā\xad\x90ā\xad\x90ā\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Great product â\x80\x94 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Great product ‚Äî 5 stars ‚≠ê‚≠ê‚≠ê‚≠ê‚≠ê')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Great product ΓÇö 5 stars Γ¡ÉΓ¡ÉΓ¡ÉΓ¡ÉΓ¡É')
+  -> ExplainedText(text='Great product ΓÇö 5 stars Γ¡ÉΓ¡ÉΓ¡ÉΓ¡ÉΓ¡É', explanation=[])
+> fix_and_explain('Itâ\x80\x99s â\x80\x9cperfectâ\x80\x9d â\x80¦ really ð\x9f\x91\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'latin-1'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itâ€™s â€œperfectâ€\x9d â€¦ really ðŸ‘\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('ItвЂ™s вЂњperfectвЂќ вЂ¦ really рџ‘Ќ')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itâ€™s â€śperfectâ€ť â€¦ really đź‘Ť')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itβ€™s β€\x9cperfectβ€\x9d β€¦ really π\x9f‘\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itâ€™s â€œperfectâ€\x9d â€¦ really ğŸ‘\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1254'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itā€™s ā€\x9cperfectā€¯ ā€¦ really š\x9f‘¨')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Itâ\x80\x99s â\x80\x9cperfectâ\x80\x9d â\x80Ś really đ\x9f\x91\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('It‚Äôs ‚Äúperfect‚Äù ‚Ä¶ really \uf8ffüëç')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'macroman'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('ItΓÇÖs ΓÇ£perfectΓÇ¥ ΓÇª really ≡ƒæì')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'cp437'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Price: 25 â\x82¬ (was 30 â\x82¬) â\x80¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 в‚¬ (was 30 в‚¬) вЂў free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1251'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 â‚¬ (was 30 â‚¬) â€˘ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 β‚¬ (was 30 β‚¬) β€Ά free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 ā‚¬ (was 30 ā‚¬) ā€¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 â\x82Ź (was 30 â\x82Ź) â\x80˘ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 ‚Ç¨ (was 30 ‚Ç¨) ‚Ä¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Price: 25 Γé¼ (was 30 Γé¼) ΓÇó free shipping')
+  -> ExplainedText(text='Price: 25 Γé¼ (was 30 Γé¼) ΓÇó free shipping', explanation=[])
+> fix_and_explain('Temperature range: â\x88\x9240Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: âˆ’40Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: в€’40В°C to +85В°C, В±0.5В°')
+  -> ExplainedText(text="Temperature range: в€'40В°C to +85В°C, В±0.5В°", explanation=[('apply', 'uncurl_quotes')])
+> fix_and_explain('Temperature range: â\x88’40Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: β\x88’40Β°C to +85Β°C, Β±0.5Β°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: âˆ’40Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: ā\x88’40Ā°C to +85Ā°C, Ā±0.5Ā°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: â\x88\x9240Â°C to +85Â°C, Âą0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: ‚àí40¬∞C to +85¬∞C, ¬±0.5¬∞')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: ΓêÆ40┬░C to +85┬░C, ┬▒0.5┬░')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ВїQuГ©? ВЎIncreГ\xadble!')
+  -> ExplainedText(text='ВїQuГ©? ВЎIncreГ\xadble!', explanation=[])
+> fix_and_explain('ÂżQuĂ©? ÂˇIncreĂ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('ΒΏQuΓ©? Β΅IncreΓ\xadble!')
+  -> ExplainedText(text='ΒΏQuΓ©? Β΅IncreΓ\xadble!', explanation=[])
+> fix_and_explain('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ĀæQuĆ©? Ā¡IncreĆ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('ÂżQuĂŠ? ÂĄIncreĂ\xadble!')
+  -> ExplainedText(text='ÂżQuĂŠ? ÂĄIncreĂ\xadble!', explanation=[])
+> fix_and_explain('¬øQu√©? ¬°Incre√≠ble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('┬┐Qu├⌐? ┬íIncre├¡ble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('naГЇve rГ©sumГ© coГ¶perate')
+  -> ExplainedText(text='naГЇve rГ©sumГ© coГ¶perate', explanation=[])
+> fix_and_explain('naĂŻve rĂ©sumĂ© coĂ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('naΓ―ve rΓ©sumΓ© coΓ¶perate')
+  -> ExplainedText(text='naΓ―ve rΓ©sumΓ© coΓ¶perate', explanation=[])
+> fix_and_explain('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('naĆÆve rĆ©sumĆ© coĆ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('naĂŻve rĂŠsumĂŠ coĂśperate')
+  -> ExplainedText(text='naĂŻve rĂŠsumĂŠ coĂśperate', explanation=[])
+> fix_and_explain('na√Øve r√©sum√© co√∂perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('na├»ve r├⌐sum├⌐ co├╢perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Ã\xa0 la mode, Ã\xa0 bientÃ´t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ã\xa0 la mode, Ã\xa0 bientÃ´t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Г\xa0 la mode, Г\xa0 bientГґt')
+  -> ExplainedText(text='Г\xa0 la mode, Г\xa0 bientГґt', explanation=[])
+> fix_and_explain('Ă\xa0 la mode, Ă\xa0 bientĂ´t')
+  -> ExplainedText(text='Ă\xa0 la mode, Ă\xa0 bientĂ´t', explanation=[])
+> fix_and_explain('Γ\xa0 la mode, Γ\xa0 bientΓ΄t')
+  -> ExplainedText(text='Γ\xa0 la mode, Γ\xa0 bientΓ΄t', explanation=[])
+> fix_and_explain('Ã\xa0 la mode, Ã\xa0 bientÃ´t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ć\xa0 la mode, Ć\xa0 bientĆ´t')
+  -> ExplainedText(text='Ć\xa0 la mode, Ć\xa0 bientĆ´t', explanation=[])
+> fix_and_explain('Ă\xa0 la mode, Ă\xa0 bientĂ´t')
+  -> ExplainedText(text='Ă\xa0 la mode, Ă\xa0 bientĂ´t', explanation=[])
+> fix_and_explain('√† la mode, √† bient√¥t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('├á la mode, ├á bient├┤t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Â½ Ã\x97 4Â¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Â½ Ã— 4Â¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10ВЅ Г— 4Вј in')
+  -> ExplainedText(text='Size: 10ВЅ Г— 4Вј in', explanation=[])
+> fix_and_explain('Size: 10Â˝ Ă— 4ÂĽ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Β½ Γ— 4ΒΌ in')
+  -> ExplainedText(text='Size: 10Β½ Γ— 4ΒΌ in', explanation=[])
+> fix_and_explain('Size: 10Â½ Ã— 4Â¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Ā½ Ć— 4Ā¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Â˝ Ă\x97 4Âź in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10¬Ω √ó 4¬º in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10┬╜ ├ù 4┬╝ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('TschÃ¼Ã\x9f')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('TschÃ¼ÃŸ')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('TschГјГџ')
+  -> ExplainedText(text='TschГјГџ', explanation=[])
+> fix_and_explain('TschĂĽĂź')
+  -> ExplainedText(text='TschĂĽĂź', explanation=[])
+> fix_and_explain('TschΓΌΓ\x9f')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1253'), ('decode', 'utf-8')])
+> fix_and_explain('TschÃ¼ÃŸ')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('TschĆ¼Ć\x9f')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1257'), ('decode', 'utf-8')])
+> fix_and_explain('TschĂźĂ\x9f')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('Tsch√º√ü')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('Tsch├╝├ƒ')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Ã\x85ngstrÃ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ã…ngstrÃ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Г…ngstrГ¶m')
+  -> ExplainedText(text='Г…ngstrГ¶m', explanation=[])
+> fix_and_explain('Ă…ngstrĂ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Γ…ngstrΓ¶m')
+  -> ExplainedText(text='Γ…ngstrΓ¶m', explanation=[])
+> fix_and_explain('Ã…ngstrÃ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Ć…ngstrĆ¶m')
+  -> ExplainedText(text='ƅngstrƶm', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Ă\x85ngstrĂśm')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'iso-8859-2'), ('decode', 'utf-8')])
+> fix_and_explain('√Öngstr√∂m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('├àngstr├╢m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+> fix_and_explain('Å\xa0koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Å\xa0koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Е\xa0koda ЕЅilina')
+  -> ExplainedText(text='Е\xa0koda ЕЅilina', explanation=[])
+> fix_and_explain('Ĺ\xa0koda Ĺ˝ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('Ε\xa0koda Ε½ilina')
+  -> ExplainedText(text='Ε\xa0koda Ε½ilina', explanation=[])
+> fix_and_explain('Å\xa0koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Å\xa0koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ĺ\xa0koda Ĺ˝ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'sloppy-windows-1250'), ('decode', 'utf-8')])
+> fix_and_explain('≈†koda ≈Ωilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'macroman'), ('decode', 'utf-8')])
+> fix_and_explain('┼ákoda ┼╜ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'cp437'), ('decode', 'utf-8')])
+== twice wrong
+> fix_and_explain("CafÃƒÂ© crÃƒÂ¨me, s'il vous plaÃƒÂ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text("CafÃƒÂ© crÃƒÂ¨me, s'il vous plaÃƒÂ®t.")
+  -> "Café crème, s'il vous plaît."
+> fix_and_explain("CafÃƒÂ© crÃƒÂ¨me, s'il vous plaÃƒÂ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivÃƒÂ© ÃƒÂ\xa0 MontrÃƒÂ©al Ã¢â‚¬â€\x9d merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Le colis est arrivÃƒÂ© ÃƒÂ\xa0 MontrÃƒÂ©al Ã¢â‚¬â€\x9d merci !')
+  -> 'Le colis est arrivé à Montréal — merci !'
+> fix_and_explain('Le colis est arrivÃƒÂ© ÃƒÂ\xa0 MontrÃƒÂ©al Ã¢Â€Â” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ã‚Â¿DÃƒÂ³nde estÃƒÂ¡ mi pedido? Lo paguÃƒÂ© el miÃƒÂ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Ã‚Â¿DÃƒÂ³nde estÃƒÂ¡ mi pedido? Lo paguÃƒÂ© el miÃƒÂ©rcoles.')
+  -> '¿Dónde está mi pedido? Lo pagué el miércoles.'
+> fix_and_explain('Ã‚Â¿DÃƒÂ³nde estÃƒÂ¡ mi pedido? Lo paguÃƒÂ© el miÃƒÂ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fÃƒÂ¼r Herrn MÃƒÂ¼ller kam nicht an. GrÃƒÂ¼ÃƒÅ¸e aus KÃƒÂ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Die Lieferung fÃƒÂ¼r Herrn MÃƒÂ¼ller kam nicht an. GrÃƒÂ¼ÃƒÅ¸e aus KÃƒÂ¶ln')
+  -> 'Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln'
+> fix_and_explain('Die Lieferung fÃƒÂ¼r Herrn MÃƒÂ¼ller kam nicht an. GrÃƒÂ¼ÃƒÂŸe aus KÃƒÂ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('NÃƒÂ£o consegui acessar a conta. Obrigado pela atenÃƒÂ§ÃƒÂ£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('NÃƒÂ£o consegui acessar a conta. Obrigado pela atenÃƒÂ§ÃƒÂ£o')
+  -> 'Não consegui acessar a conta. Obrigado pela atenção'
+> fix_and_explain('NÃƒÂ£o consegui acessar a conta. Obrigado pela atenÃƒÂ§ÃƒÂ£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ZamÃƒÂ³wienie nr 4411 nie dotarÃ…â€šo do Ã…Â\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('ZamÃƒÂ³wienie nr 4411 nie dotarÃ…â€šo do Ã…Â\x81odzi.')
+  -> 'Zamówienie nr 4411 nie dotarło do Łodzi.'
+> fix_and_explain('ZamÃƒÂ³wienie nr 4411 nie dotarÃ…Â‚o do Ã…Â\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('DobrÃƒÂ½ den, objednÃƒÂ¡vka pÃ…â„¢iÃ…Â¡la poÃ…Â¡kozenÃƒÂ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('DobrÃƒÂ½ den, objednÃƒÂ¡vka pÃ…â„¢iÃ…Â¡la poÃ…Â¡kozenÃƒÂ¡.')
+  -> 'Dobrý den, objednávka přišla poškozená.'
+> fix_and_explain('DobrÃƒÂ½ den, objednÃƒÂ¡vka pÃ…Â™iÃ…Â¡la poÃ…Â¡kozenÃƒÂ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ã\x90â€”Ã\x90Â´Ã‘â‚¬Ã\x90Â°Ã\x90Â²Ã‘Â\x81Ã‘â€šÃ\x90Â²Ã‘Æ’Ã\x90Â¹Ã‘â€šÃ\x90Âµ! Ã\x90â€”Ã\x90Â°Ã\x90ÂºÃ\x90Â°Ã\x90Â· Ã\x90Â½Ã\x90Âµ Ã\x90Â¿Ã‘â‚¬Ã\x90Â¸Ã‘Ë†Ã‘â€˜Ã\x90Â».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Ã\x90â€”Ã\x90Â´Ã‘â‚¬Ã\x90Â°Ã\x90Â²Ã‘Â\x81Ã‘â€šÃ\x90Â²Ã‘Æ’Ã\x90Â¹Ã‘â€šÃ\x90Âµ! Ã\x90â€”Ã\x90Â°Ã\x90ÂºÃ\x90Â°Ã\x90Â· Ã\x90Â½Ã\x90Âµ Ã\x90Â¿Ã‘â‚¬Ã\x90Â¸Ã‘Ë†Ã‘â€˜Ã\x90Â».')
+  -> 'Здравствуйте! Заказ не пришёл.'
+> fix_and_explain('Ã\x90Â—Ã\x90Â´Ã‘Â€Ã\x90Â°Ã\x90Â²Ã‘Â\x81Ã‘Â‚Ã\x90Â²Ã‘ÂƒÃ\x90Â¹Ã‘Â‚Ã\x90Âµ! Ã\x90Â—Ã\x90Â°Ã\x90ÂºÃ\x90Â°Ã\x90Â· Ã\x90Â½Ã\x90Âµ Ã\x90Â¿Ã‘Â€Ã\x90Â¸Ã‘ÂˆÃ‘Â‘Ã\x90Â».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ÃŽâ€¢Ã\x8fâ€¦Ã\x8fâ€¡ÃŽÂ±Ã\x8fÂ\x81ÃŽÂ¹Ã\x8fÆ’Ã\x8fâ€žÃ\x8fÅ½ ÃŽÂ³ÃŽÂ¹ÃŽÂ± Ã\x8fâ€žÃŽÂ· ÃŽÂ³Ã\x8fÂ\x81ÃŽÂ®ÃŽÂ³ÃŽÂ¿Ã\x8fÂ\x81ÃŽÂ· ÃŽÂ±Ã\x8fâ‚¬ÃŽÂ¬ÃŽÂ½Ã\x8fâ€žÃŽÂ·Ã\x8fÆ’ÃŽÂ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('ÃŽâ€¢Ã\x8fâ€¦Ã\x8fâ€¡ÃŽÂ±Ã\x8fÂ\x81ÃŽÂ¹Ã\x8fÆ’Ã\x8fâ€žÃ\x8fÅ½ ÃŽÂ³ÃŽÂ¹ÃŽÂ± Ã\x8fâ€žÃŽÂ· ÃŽÂ³Ã\x8fÂ\x81ÃŽÂ®ÃŽÂ³ÃŽÂ¿Ã\x8fÂ\x81ÃŽÂ· ÃŽÂ±Ã\x8fâ‚¬ÃŽÂ¬ÃŽÂ½Ã\x8fâ€žÃŽÂ·Ã\x8fÆ’ÃŽÂ·')
+  -> 'Ευχαριστώ για τη γρήγορη απάντηση'
+> fix_and_explain('ÃŽÂ•Ã\x8fÂ…Ã\x8fÂ‡ÃŽÂ±Ã\x8fÂ\x81ÃŽÂ¹Ã\x8fÂƒÃ\x8fÂ„Ã\x8fÂŽ ÃŽÂ³ÃŽÂ¹ÃŽÂ± Ã\x8fÂ„ÃŽÂ· ÃŽÂ³Ã\x8fÂ\x81ÃŽÂ®ÃŽÂ³ÃŽÂ¿Ã\x8fÂ\x81ÃŽÂ· ÃŽÂ±Ã\x8fÂ€ÃŽÂ¬ÃŽÂ½Ã\x8fÂ„ÃŽÂ·Ã\x8fÂƒÃŽÂ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÃ…Å¸im hÃƒÂ¢lÃƒÂ¢ gelmedi, lÃƒÂ¼tfen yardÃ„Â±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('SipariÃ…Å¸im hÃƒÂ¢lÃƒÂ¢ gelmedi, lÃƒÂ¼tfen yardÃ„Â±m edin.')
+  -> 'Siparişim hâlâ gelmedi, lütfen yardım edin.'
+> fix_and_explain('SipariÃ…ÂŸim hÃƒÂ¢lÃƒÂ¢ gelmedi, lÃƒÂ¼tfen yardÃ„Â±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('AÃ„Â\x8diÃ…Â«, prekÃ„â€”s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('AÃ„Â\x8diÃ…Â«, prekÃ„â€”s gautos laiku.')
+  -> 'Ačiū, prekės gautos laiku.'
+> fix_and_explain('AÃ„Â\x8diÃ…Â«, prekÃ„Â—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ã„Â\x81tro piegÃ„Â\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Paldies par Ã„Â\x81tro piegÃ„Â\x81di!')
+  -> 'Paldies par ātro piegādi!'
+> fix_and_explain('Paldies par Ã„Â\x81tro piegÃ„Â\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+== lost bytes
+> fix_and_explain("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> "Café crème, s'il vous plaît."
+> fix_and_explain("CafÃ© crÃ¨me, s'il vous plaÃ®t.")
+  -> ExplainedText(text="Café crème, s'il vous plaît.", explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !')
+  -> 'Le colis est arrivé à Montréal — merci !'
+> fix_and_explain('Le colis est arrivÃ© Ã  MontrÃ©al â€” merci !')
+  -> ExplainedText(text='Le colis est arrivé à Montréal — merci !', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> '¿Dónde está mi pedido? Lo pagué el miércoles.'
+> fix_and_explain('Â¿DÃ³nde estÃ¡ mi pedido? Lo paguÃ© el miÃ©rcoles.')
+  -> ExplainedText(text='¿Dónde está mi pedido? Lo pagué el miércoles.', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼ÃŸe aus KÃ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼ÃŸe aus KÃ¶ln')
+  -> 'Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln'
+> fix_and_explain('Die Lieferung fÃ¼r Herrn MÃ¼ller kam nicht an. GrÃ¼ÃŸe aus KÃ¶ln')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> 'Não consegui acessar a conta. Obrigado pela atenção'
+> fix_and_explain('NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Não consegui acessar a conta. Obrigado pela atenção', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('ZamÃ³wienie nr 4411 nie dotarÅ‚o do Å�odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do �odzi.', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('ZamÃ³wienie nr 4411 nie dotarÅ‚o do Å?odzi.')
+  -> "Zamówienie nr 4411 nie dotarÅ'o do Å?odzi."
+> fix_and_explain('ZamÃ³wienie nr 4411 nie dotarÅ‚o do Å\x81odzi.')
+  -> ExplainedText(text='Zamówienie nr 4411 nie dotarło do Łodzi.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('DobrÃ½ den, objednÃ¡vka pÅ™iÅ¡la poÅ¡kozenÃ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('DobrÃ½ den, objednÃ¡vka pÅ™iÅ¡la poÅ¡kozenÃ¡.')
+  -> 'Dobrý den, objednávka přišla poškozená.'
+> fix_and_explain('DobrÃ½ den, objednÃ¡vka pÅ™iÅ¡la poÅ¡kozenÃ¡.')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Ð—Ð´Ñ€Ð°Ð²Ñ�Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> ExplainedText(text='Здрав�твуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('Ð—Ð´Ñ€Ð°Ð²Ñ?Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> 'ЗдравÑ?твуйте! Заказ не пришёл.'
+> fix_and_explain('Ð—Ð´Ñ€Ð°Ð²Ñ\x81Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> ExplainedText(text='Здравствуйте! Заказ не пришёл.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Î•Ï…Ï‡Î±Ï�Î¹ÏƒÏ„ÏŽ Î³Î¹Î± Ï„Î· Î³Ï�Î®Î³Î¿Ï�Î· Î±Ï€Î¬Î½Ï„Î·ÏƒÎ·')
+  -> ExplainedText(text='Ευχα�ιστώ για τη γ�ήγο�η απάντηση', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('Î•Ï…Ï‡Î±Ï?Î¹ÏƒÏ„ÏŽ Î³Î¹Î± Ï„Î· Î³Ï?Î®Î³Î¿Ï?Î· Î±Ï€Î¬Î½Ï„Î·ÏƒÎ·')
+  -> 'ΕυχαÏ?ιστώ για τη γÏ?ήγοÏ?η απάντηση'
+> fix_and_explain('Î•Ï…Ï‡Î±Ï\x81Î¹ÏƒÏ„ÏŽ Î³Î¹Î± Ï„Î· Î³Ï\x81Î®Î³Î¿Ï\x81Î· Î±Ï€Î¬Î½Ï„Î·ÏƒÎ·')
+  -> ExplainedText(text='Ευχαριστώ για τη γρήγορη απάντηση', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('SipariÅŸim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('SipariÅŸim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> 'Siparişim hâlâ gelmedi, lütfen yardım edin.'
+> fix_and_explain('SipariÅŸim hÃ¢lÃ¢ gelmedi, lÃ¼tfen yardÄ±m edin.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('AÄ�iÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='A�iū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('AÄ?iÅ«, prekÄ—s gautos laiku.')
+  -> 'AÄ?iÅ«, prekÄ—s gautos laiku.'
+> fix_and_explain('AÄ\x8diÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='Ačiū, prekės gautos laiku.', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Paldies par Ä�tro piegÄ�di!')
+  -> ExplainedText(text='Paldies par �tro pieg�di!', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('Paldies par Ä?tro piegÄ?di!')
+  -> 'Paldies par Ä?tro piegÄ?di!'
+> fix_and_explain('Paldies par Ä\x81tro piegÄ\x81di!')
+  -> ExplainedText(text='Paldies par ātro piegādi!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('æ³¨æ–‡ã�Œã�¾ã�\xa0å±Šã�„ã�¦ã�„ã�¾ã�›ã‚“ã€‚')
+  -> ExplainedText(text='注文���届�����ん。', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('æ³¨æ–‡ã?Œã?¾ã?\xa0å±Šã?„ã?¦ã?„ã?¾ã?›ã‚“ã€‚')
+  -> '注文���届�����ん。'
+> fix_and_explain('æ³¨æ–‡ã\x81Œã\x81¾ã\x81 å±Šã\x81„ã\x81¦ã\x81„ã\x81¾ã\x81›ã‚“ã€‚')
+  -> ExplainedText(text='注文がまだ届いていません。', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_and_explain('æˆ‘çš„è®¢å�•ä»€ä¹ˆæ—¶å€™å�‘è´§ï¼Ÿ')
+  -> ExplainedText(text='我的订�什么时候�货?', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_text('æˆ‘çš„è®¢å?•ä»€ä¹ˆæ—¶å€™å?‘è´§ï¼Ÿ')
+  -> '我的订�什么时候�货?'
+> fix_and_explain('æˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ')
+  -> ExplainedText(text='我的订单什么时候发货?', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'fix_character_width')])
+> fix_and_explain('Great product â€” 5 stars â\xad�â\xad�â\xad�â\xad�â\xad�')
+  -> ExplainedText(text='Great product — 5 stars �����', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_text('Great product â€” 5 stars â\xad?â\xad?â\xad?â\xad?â\xad?')
+  -> 'Great product — 5 stars �����'
+> fix_and_explain('Great product â€” 5 stars â\xad\x90â\xad\x90â\xad\x90â\xad\x90â\xad\x90')
+  -> ExplainedText(text='Great product — 5 stars ⭐⭐⭐⭐⭐', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Itâ€™s â€œperfectâ€� â€¦ really ðŸ‘�')
+  -> ExplainedText(text='It\'s "perfect� … really �', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_text('Itâ€™s â€œperfectâ€? â€¦ really ðŸ‘?')
+  -> 'It\'s "perfect� … really �'
+> fix_and_explain('Itâ€™s â€œperfectâ€\x9d â€¦ really ðŸ‘\x8d')
+  -> ExplainedText(text='It\'s "perfect" … really 👍', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> 'Price: 25 € (was 30 €) • free shipping'
+> fix_and_explain('Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> ExplainedText(text='Price: 25 € (was 30 €) • free shipping', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Temperature range: âˆ’40Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Temperature range: âˆ’40Â°C to +85Â°C, Â±0.5Â°')
+  -> 'Temperature range: −40°C to +85°C, ±0.5°'
+> fix_and_explain('Temperature range: âˆ’40Â°C to +85Â°C, Â±0.5Â°')
+  -> ExplainedText(text='Temperature range: −40°C to +85°C, ±0.5°', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> '¿Qué? ¡Increíble!'
+> fix_and_explain('Â¿QuÃ©? Â¡IncreÃ\xadble!')
+  -> ExplainedText(text='¿Qué? ¡Increíble!', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> 'naïve résumé coöperate'
+> fix_and_explain('naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='naïve résumé coöperate', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('Ã\xa0 la mode, Ã\xa0 bientÃ´t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Ã\xa0 la mode, Ã\xa0 bientÃ´t')
+  -> 'à la mode, à bientôt'
+> fix_and_explain('Ã  la mode, Ã  bientÃ´t')
+  -> ExplainedText(text='à la mode, à bientôt', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_and_explain('Size: 10Â½ Ã— 4Â¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Size: 10Â½ Ã— 4Â¼ in')
+  -> 'Size: 10½ × 4¼ in'
+> fix_and_explain('Size: 10Â½ Ã— 4Â¼ in')
+  -> ExplainedText(text='Size: 10½ × 4¼ in', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('TschÃ¼ÃŸ')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('TschÃ¼ÃŸ')
+  -> 'Tschüß'
+> fix_and_explain('TschÃ¼ÃŸ')
+  -> ExplainedText(text='Tschüß', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Ã…ngstrÃ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_text('Ã…ngstrÃ¶m')
+  -> 'Ångström'
+> fix_and_explain('Ã…ngstrÃ¶m')
+  -> ExplainedText(text='Ångström', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_and_explain('Å\xa0koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_text('Å\xa0koda Å½ilina')
+  -> 'Škoda Žilina'
+> fix_and_explain('Å koda Å½ilina')
+  -> ExplainedText(text='Škoda Žilina', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+== mixed lines
+> fix_text("Café crème, s'il vous plaît.\nLe colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !\nВїDГіnde estГЎ mi pedido? Lo paguГ© el miГ©rcoles.\n")
+  -> "Café crème, s'il vous plaît.\nLe colis est arrivé à Montréal — merci !\nВїDГіnde estГЎ mi pedido? Lo paguГ© el miГ©rcoles.\n"
+> fix_and_explain("Café crème, s'il vous plaît. | Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !")
+  -> ExplainedText(text="Café crème, s'il vous plaît. | Le colis est arrivé à Montréal — merci !", explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8("Café crème, s'il vous plaît. | Le colis est arrivÃ© Ã\xa0 MontrÃ©al â€” merci !")
+  -> "Café crème, s'il vous plaît. | Le colis est arrivé à Montréal — merci !"
+> fix_text('Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln\nNÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o\nZamГіwienie nr 4411 nie dotarЕ‚o do ЕЃodzi.\n')
+  -> "Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln\nNão consegui acessar a conta. Obrigado pela atenção\nZamГіwienie nr 4411 nie dotarЕ'o do ЕЃodzi.\n"
+> fix_and_explain('Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln | NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> ExplainedText(text='Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln | Não consegui acessar a conta. Obrigado pela atenção', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8('Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln | NÃ£o consegui acessar a conta. Obrigado pela atenÃ§Ã£o')
+  -> 'Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln | Não consegui acessar a conta. Obrigado pela atenção'
+> fix_text('Dobrý den, objednávka přišla poškozená.\nÐ—Ð´Ñ€Ð°Ð²Ñ\x81Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».\nО•П…П‡О±ПЃО№ПѓП„ПЋ ОіО№О± П„О· ОіПЃО®ОіОїПЃО· О±ПЂО¬ОЅП„О·ПѓО·\n')
+  -> 'Dobrý den, objednávka přišla poškozená.\nЗдравствуйте! Заказ не пришёл.\nО•П…П‡О±ПЃО№ПѓП"ПЋ ОіО№О± П"О· ОіПЃО®ОіОїПЃО· О±ПЂО¬ОЅП"О·ПѓО·\n'
+> fix_and_explain('Dobrý den, objednávka přišla poškozená. | Ð—Ð´Ñ€Ð°Ð²Ñ\x81Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> ExplainedText(text='Dobrý den, objednávka přišla poškozená. | Здравствуйте! Заказ не пришёл.', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8('Dobrý den, objednávka přišla poškozená. | Ð—Ð´Ñ€Ð°Ð²Ñ\x81Ñ‚Ð²ÑƒÐ¹Ñ‚Ðµ! Ð—Ð°ÐºÐ°Ð· Ð½Ðµ Ð¿Ñ€Ð¸ÑˆÑ‘Ð».')
+  -> 'Dobrý den, objednávka přišla poškozená. | Здравствуйте! Заказ не пришёл.'
+> fix_text('Siparişim hâlâ gelmedi, lütfen yardım edin.\nAÄ\x8diÅ«, prekÄ—s gautos laiku.\nPaldies par ДЃtro piegДЃdi!\n')
+  -> 'Siparişim hâlâ gelmedi, lütfen yardım edin.\nAčiū, prekės gautos laiku.\nPaldies par ДЃtro piegДЃdi!\n'
+> fix_and_explain('Siparişim hâlâ gelmedi, lütfen yardım edin. | AÄ\x8diÅ«, prekÄ—s gautos laiku.')
+  -> ExplainedText(text='Siparişim hâlâ gelmedi, lütfen yardım edin. | AčiÅ«, prekÄ—s gautos laiku.', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8('Siparişim hâlâ gelmedi, lütfen yardım edin. | AÄ\x8diÅ«, prekÄ—s gautos laiku.')
+  -> 'Siparişim hâlâ gelmedi, lütfen yardım edin. | AčiÅ«, prekÄ—s gautos laiku.'
+> fix_text('注文がまだ届いていません。\næˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ\nGreat product вЂ” 5 stars в\xadђв\xadђв\xadђв\xadђв\xadђ\n')
+  -> '注文がまだ届いていません。\n我的订单什么时候发货?\nGreat product — 5 stars ⭐⭐⭐⭐⭐\n'
+> fix_and_explain('注文がまだ届いていません。 | æˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ')
+  -> ExplainedText(text='注文がまだ届いていません。 | 我的订单什么时候发货?', explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_character_width')])
+> fixes.decode_inconsistent_utf8('注文がまだ届いていません。 | æˆ‘çš„è®¢å\x8d•ä»€ä¹ˆæ—¶å€™å\x8f‘è´§ï¼Ÿ')
+  -> '注文がまだ届いていません。 | 我的订单什么时候发货？'
+> fix_text('It’s “perfect” … really 👍\nPrice: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping\nTemperature range: в€’40В°C to +85В°C, В±0.5В°\n')
+  -> 'It\'s "perfect" … really 👍\nPrice: 25 € (was 30 €) • free shipping\nTemperature range: в€\'40В°C to +85В°C, В±0.5В°\n'
+> fix_and_explain('It’s “perfect” … really 👍 | Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> ExplainedText(text='It\'s "perfect" … really 👍 | Price: 25 € (was 30 €) • free shipping', explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'uncurl_quotes')])
+> fixes.decode_inconsistent_utf8('It’s “perfect” … really 👍 | Price: 25 â‚¬ (was 30 â‚¬) â€¢ free shipping')
+  -> 'It’s “perfect” … really 👍 | Price: 25 € (was 30 €) • free shipping'
+> fix_text('¿Qué? ¡Increíble!\nnaÃ¯ve rÃ©sumÃ© coÃ¶perate\nГ\xa0 la mode, Г\xa0 bientГґt\n')
+  -> '¿Qué? ¡Increíble!\nnaïve résumé coöperate\nГ\xa0 la mode, Г\xa0 bientГґt\n'
+> fix_and_explain('¿Qué? ¡Increíble! | naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> ExplainedText(text='¿Qué? ¡Increíble! | naïve résumé coöperate', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8('¿Qué? ¡Increíble! | naÃ¯ve rÃ©sumÃ© coÃ¶perate')
+  -> '¿Qué? ¡Increíble! | naïve résumé coöperate'
+> fix_text('Size: 10½ × 4¼ in\nTschÃ¼ÃŸ\nГ…ngstrГ¶m\n')
+  -> 'Size: 10½ × 4¼ in\nTschüß\nГ…ngstrГ¶m\n'
+> fix_and_explain('Size: 10½ × 4¼ in | TschÃ¼ÃŸ')
+  -> ExplainedText(text='Size: 10½ × 4¼ in | Tschüß', explanation=[('apply', 'decode_inconsistent_utf8')])
+> fixes.decode_inconsistent_utf8('Size: 10½ × 4¼ in | TschÃ¼ÃŸ')
+  -> 'Size: 10½ × 4¼ in | Tschüß'
+> fix_text('&lt;b&gt;\n<i>x</i> &amp;\n&lt;c&gt;')
+  -> '<b>\n<i>x</i> &amp;\n&lt;c&gt;'
+> fix_text('&lt;b&gt;\n&amp;\n<i>x</i> &amp;')
+  -> '<b>\n&\n<i>x</i> &amp;'
+> fix_text('Ã©Ã©Ã©Ã©Ã©Ã©Ã©Ã©', max_decode_length=4)
+  -> 'éééééééé'
+> fix_text('Ã©Ã©\nÃ©Ã©\r\nÃ©Ã©', max_decode_length=3)
+  -> 'éÃ©\néÃ©\néÃ©'
+== options
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', unescape_html=False)
+  -> ExplainedText(text='&lt;é&gt; "quote" fi AB\n', explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', unescape_html=True)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', unescape_html='auto')
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', remove_terminal_escapes=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_encoding=False)
+  -> ExplainedText(text='<Ã©> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', restore_byte_a0=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', replace_lossy_sequences=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', decode_inconsistent_utf8=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_c1_controls=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_latin_ligatures=False)
+  -> ExplainedText(text='<é> "quote" ﬁ AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_character_width=False)
+  -> ExplainedText(text='<é> "quote" fi ＡＢ\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', uncurl_quotes=False)
+  -> ExplainedText(text='<é> “quote” fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_line_breaks=False)
+  -> ExplainedText(text='<é> "quote" fi AB\r\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', fix_surrogates=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', remove_control_chars=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', normalization='NFD')
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('normalize', 'NFD')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', normalization='NFKC')
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', normalization='NFKD')
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('normalize', 'NFKD')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', normalization=None)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=[('apply', 'unescape_html'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', explain=False)
+  -> ExplainedText(text='<é> "quote" fi AB\n', explanation=None)
+> fix_text('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n', uncurl_quotes=False, normalization='NFKC')
+  -> '<é> “quote” fi AB\n'
+> fix_text_segment('&lt;Ã©&gt; “quote” ﬁ ＡＢ\r\n')
+  -> '<é> "quote" fi AB\n'
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', unescape_html=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', unescape_html=True)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', unescape_html='auto')
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', remove_terminal_escapes=False)
+  -> ExplainedText(text='[1mbold[0m and café — é', explanation=[('apply', 'remove_control_chars'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_encoding=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', restore_byte_a0=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', replace_lossy_sequences=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', decode_inconsistent_utf8=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_c1_controls=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_latin_ligatures=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_character_width=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', uncurl_quotes=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_line_breaks=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', fix_surrogates=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', remove_control_chars=False)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', normalization='NFD')
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFD')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', normalization='NFKC')
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFKC')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', normalization='NFKD')
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes'), ('normalize', 'NFKD')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', normalization=None)
+  -> ExplainedText(text='bold and café — é', explanation=[('apply', 'remove_terminal_escapes')])
+> fix_and_explain('\x1b[1mbold\x1b[0m and café — é', explain=False)
+  -> ExplainedText(text='bold and café — é', explanation=None)
+> fix_text('\x1b[1mbold\x1b[0m and café — é', uncurl_quotes=False, normalization='NFKC')
+  -> 'bold and café — é'
+> fix_text_segment('\x1b[1mbold\x1b[0m and café — é')
+  -> 'bold and café — é'
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', unescape_html=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', unescape_html=True)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', unescape_html='auto')
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', remove_terminal_escapes=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_encoding=False)
+  -> ExplainedText(text="Ã¡\x9d ' fi A   \n ", explanation=[('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', restore_byte_a0=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', replace_lossy_sequences=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', decode_inconsistent_utf8=False)
+  -> ExplainedText(text="Ã¡\x9d ' fi A   \n ", explanation=[('transcode', 'fix_c1_controls'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars'), ('transcode', 'fix_c1_controls')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_c1_controls=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_latin_ligatures=False)
+  -> ExplainedText(text="ᝠ' ﬁ A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_character_width=False)
+  -> ExplainedText(text="ᝠ' fi Ａ \u3000 \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', uncurl_quotes=False)
+  -> ExplainedText(text='ᝠ’ fi A   \n ', explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_line_breaks=False)
+  -> ExplainedText(text="ᝠ' fi A   \u2028 ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', fix_surrogates=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', remove_control_chars=False)
+  -> ExplainedText(text="ᝠ' fi A   \n \x00", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', normalization='NFD')
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', normalization='NFKC')
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', normalization='NFKD')
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', normalization=None)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=[('apply', 'decode_inconsistent_utf8'), ('apply', 'decode_inconsistent_utf8'), ('apply', 'fix_latin_ligatures'), ('apply', 'fix_character_width'), ('apply', 'uncurl_quotes'), ('apply', 'fix_line_breaks'), ('apply', 'remove_control_chars')])
+> fix_and_explain('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', explain=False)
+  -> ExplainedText(text="ᝠ' fi A   \n ", explanation=None)
+> fix_text('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00', uncurl_quotes=False, normalization='NFKC')
+  -> 'ᝠ’ fi A   \n '
+> fix_text_segment('Ã¡\x9d ’ ﬁ Ａ \u3000 \u2028 \x00')
+  -> "ᝠ' fi A   \n "
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', unescape_html=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', unescape_html=True)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', unescape_html='auto')
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', remove_terminal_escapes=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_encoding=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', restore_byte_a0=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', replace_lossy_sequences=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', decode_inconsistent_utf8=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_c1_controls=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_latin_ligatures=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_character_width=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', uncurl_quotes=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_line_breaks=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', fix_surrogates=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', remove_control_chars=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', normalization='NFD')
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[('normalize', 'NFD')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', normalization='NFKC')
+  -> ExplainedText(text='Å Å Å ṩ 1 1⁄2 가 ᄀ', explanation=[('normalize', 'NFKC')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', normalization='NFKD')
+  -> ExplainedText(text='Å Å Å ṩ 1 1⁄2 가 ᄀ', explanation=[('normalize', 'NFKD')])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', normalization=None)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=[])
+> fix_and_explain('Å Å Å ẛ̣ ① ½ 가 ㄱ', explain=False)
+  -> ExplainedText(text='Å Å Å ẛ̣ ① ½ 가 ㄱ', explanation=None)
+> fix_text('Å Å Å ẛ̣ ① ½ 가 ㄱ', uncurl_quotes=False, normalization='NFKC')
+  -> 'Å Å Å ṩ 1 1⁄2 가 ᄀ'
+> fix_text_segment('Å Å Å ẛ̣ ① ½ 가 ㄱ')
+  -> 'Å Å Å ẛ̣ ① ½ 가 ㄱ'
+> fix_text('x', normalization='NFX')
+  error ValueError: invalid normalization form
+> fix_text('x', colour=True)
+  error TypeError: Got unexpected field names: ['colour']
+> fix_text(b'caf\xc3\xa9')
+  error UnicodeError: Hey wait, this isn't Unicode.
+
+ftfy is designed to fix problems with text. Treating bytes like they're
+interchangeable with Unicode text is usually something that introduces
+problems with text.
+
+You should first decode these bytes from the encoding you think they're in.
+If you're not sure what encoding they're in:
+
+- First, try to find out. 'utf-8' is a good assumption.
+- If the encoding is simply unknowable, try running your bytes through
+  ftfy.guess_bytes. As the name implies, this may not always be accurate.
+
+For more information on the distinction between bytes and text, read the
+Python Unicode HOWTO:
+
+    http://docs.python.org/3/howto/unicode.html
+
+> fix_and_explain(b'caf\xc3\xa9')
+  error UnicodeError: Hey wait, this isn't Unicode.
+
+ftfy is designed to fix problems with text. Treating bytes like they're
+interchangeable with Unicode text is usually something that introduces
+problems with text.
+
+You should first decode these bytes from the encoding you think they're in.
+If you're not sure what encoding they're in:
+
+- First, try to find out. 'utf-8' is a good assumption.
+- If the encoding is simply unknowable, try running your bytes through
+  ftfy.guess_bytes. As the name implies, this may not always be accurate.
+
+For more information on the distinction between bytes and text, read the
+Python Unicode HOWTO:
+
+    http://docs.python.org/3/howto/unicode.html
+
+== normalization
+> fix_text('Å Å Å ẛ̣ q̣̇', normalization='NFC')
+  -> 'Å Å Å ẛ̣ q̣̇'
+> fix_text('Å Å Å ẛ̣ q̣̇', normalization='NFD')
+  -> 'Å Å Å ẛ̣ q̣̇'
+> fix_text('Å Å Å ẛ̣ q̣̇', normalization='NFKC')
+  -> 'Å Å Å ṩ q̣̇'
+> fix_text('Å Å Å ẛ̣ q̣̇', normalization='NFKD')
+  -> 'Å Å Å ṩ q̣̇'
+> fix_text('ḍ̇ ḍ̇ ḍ̇ ḍ̇', normalization='NFC')
+  -> 'ḍ̇ ḍ̇ ḍ̇ ḍ̇'
+> fix_text('ḍ̇ ḍ̇ ḍ̇ ḍ̇', normalization='NFD')
+  -> 'ḍ̇ ḍ̇ ḍ̇ ḍ̇'
+> fix_text('ḍ̇ ḍ̇ ḍ̇ ḍ̇', normalization='NFKC')
+  -> 'ḍ̇ ḍ̇ ḍ̇ ḍ̇'
+> fix_text('ḍ̇ ḍ̇ ḍ̇ ḍ̇', normalization='NFKD')
+  -> 'ḍ̇ ḍ̇ ḍ̇ ḍ̇'
+> fix_text('각 각 각 가 힣', normalization='NFC')
+  -> '각 각 각 가 힣'
+> fix_text('각 각 각 가 힣', normalization='NFD')
+  -> '각 각 각 가 힣'
+> fix_text('각 각 각 가 힣', normalization='NFKC')
+  -> '각 각 각 가 힣'
+> fix_text('각 각 각 가 힣', normalization='NFKD')
+  -> '각 각 각 가 힣'
+> fix_text('क़ Ω Ḉ ̈́ ཱི ཱུ', normalization='NFC')
+  -> 'क़ Ω Ḉ ̈́ ཱི ཱུ'
+> fix_text('क़ Ω Ḉ ̈́ ཱི ཱུ', normalization='NFD')
+  -> 'क़ Ω Ḉ ̈́ ཱི ཱུ'
+> fix_text('क़ Ω Ḉ ̈́ ཱི ཱུ', normalization='NFKC')
+  -> 'क़ Ω Ḉ ̈́ ཱི ཱུ'
+> fix_text('क़ Ω Ḉ ̈́ ཱི ཱུ', normalization='NFKD')
+  -> 'क़ Ω Ḉ ̈́ ཱི ཱུ'
+> fix_text('ﬃ ① ½ ㏂ ⁵ ᴬ ™ Ⅳ', normalization='NFC')
+  -> 'ffi ① ½ ㏂ ⁵ ᴬ ™ Ⅳ'
+> fix_text('ﬃ ① ½ ㏂ ⁵ ᴬ ™ Ⅳ', normalization='NFD')
+  -> 'ffi ① ½ ㏂ ⁵ ᴬ ™ Ⅳ'
+> fix_text('ﬃ ① ½ ㏂ ⁵ ᴬ ™ Ⅳ', normalization='NFKC')
+  -> 'ffi 1 1⁄2 a.m. 5 A TM IV'
+> fix_text('ﬃ ① ½ ㏂ ⁵ ᴬ ™ Ⅳ', normalization='NFKD')
+  -> 'ffi 1 1⁄2 a.m. 5 A TM IV'
+> fix_text('ﷺ ㌀ ｶﾞ ⷮ ΅', normalization='NFC')
+  -> 'ﷺ ㌀ ガ ⷮ ΅'
+> fix_text('ﷺ ㌀ ｶﾞ ⷮ ΅', normalization='NFD')
+  -> 'ﷺ ㌀ ガ ⷮ ΅'
+> fix_text('ﷺ ㌀ ｶﾞ ⷮ ΅', normalization='NFKC')
+  -> 'صلى الله عليه وسلم アパート ガ ⷮ  ̈́'
+> fix_text('ﷺ ㌀ ｶﾞ ⷮ ΅', normalization='NFKD')
+  -> 'صلى الله عليه وسلم アパート ガ ⷮ  ̈́'
+> fix_text('ą̱́ אַָ เก่า', normalization='NFC')
+  -> 'ą̱́ אַָ เก่า'
+> fix_text('ą̱́ אַָ เก่า', normalization='NFD')
+  -> 'ą̱́ אַָ เก่า'
+> fix_text('ą̱́ אַָ เก่า', normalization='NFKC')
+  -> 'ą̱́ אַָ เก่า'
+> fix_text('ą̱́ אַָ เก่า', normalization='NFKD')
+  -> 'ą̱́ אַָ เก่า'
+> fix_text('ᾀͅ ᾂ ΐ', normalization='NFC')
+  -> 'ᾀͅ ᾂ ΐ'
+> fix_text('ᾀͅ ᾂ ΐ', normalization='NFD')
+  -> 'ᾀͅ ᾂ ΐ'
+> fix_text('ᾀͅ ᾂ ΐ', normalization='NFKC')
+  -> 'ᾀͅ ᾂ ΐ'
+> fix_text('ᾀͅ ᾂ ΐ', normalization='NFKD')
+  -> 'ᾀͅ ᾂ ΐ'
+> fix_text('𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽', normalization='NFC')
+  -> '𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽'
+> fix_text('𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽', normalization='NFD')
+  -> '𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽'
+> fix_text('𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽', normalization='NFKC')
+  -> '𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽'
+> fix_text('𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽', normalization='NFKD')
+  -> '𝅗𝅥 𝅘𝅥𝅮 🇯🇵 丽'
+== html entities
+> fixes.unescape_html('&lt;tag&gt;')
+  -> '<tag>'
+> fixes.unescape_html('&Jscr;ohn &HilbertSpace;ancock')
+  -> '𝒥ohn ℋancock'
+> fixes.unescape_html('&checkmark;')
+  -> '✓'
+> fixes.unescape_html('P&eacute;rez')
+  -> 'Pérez'
+> fixes.unescape_html('&AMP; &amp &amp; &AmP;')
+  -> '& &amp & &AmP;'
+> fixes.unescape_html('this&not that')
+  -> 'this&not that'
+> fixes.unescape_html('&#65;&#x42;&#X43;&#0;&#1;&#128;&#150;&#x80;&#xD800;&#1114112;')
+  -> 'ABC�€–€��'
+> fixes.unescape_html('&#99999999999999999999; &#x110000; &#65abc; &#x41g; &#abc;')
+  -> '� � &#65abc; &#x41g; &#abc;'
+> fixes.unescape_html('&#13; &#x0D; &#127; &#xFDD0; &#xFFFE; &#x1F600; &#x10FFFF;')
+  -> '\r \r    😀 '
+> fixes.unescape_html('&EURO; &euro; &COPY; &Copy; &copy; &AElig; &AELIG; &aelig;')
+  -> '€ € © &Copy; © Æ Æ æ'
+> fixes.unescape_html('&SZLIG; &szlig; &IEXCL; &NBSP; &nbsp; &SHY;')
+  -> 'SS ß ¡ \xa0 \xa0 \xad'
+> fixes.unescape_html('&abcdefghijklmnopqrstuvwxyz; &a; &;')
+  -> '&abcdefghijklmnopqrstuvwxyz; &a; &;'
+> fixes.unescape_html('&NotNestedGreaterGreater; &nGt; &ngE;')
+  -> '⪢̸ ≫⃒ ≧̸'
+> fixes.unescape_html('&ACIRC;&ATILDE;&SUP3;')
+  -> 'ÂÃ³'
+== fixers
+> fixes.remove_terminal_escapes('\x1b[36;44mblue\x1b[0m')
+  -> 'blue'
+> fixes.remove_terminal_escapes('\x1b[1;31;4mred\x1b[m \x1b[2J')
+  -> 'red '
+> fixes.remove_terminal_escapes('\x1b[١٢mdigits\x1b[0m')
+  -> 'digits'
+> fixes.remove_terminal_escapes('\x1b(B kept')
+  -> '\x1b(B kept'
+> fixes.remove_terminal_escapes('\x1b[3;x')
+  -> ''
+> fixes.uncurl_quotes('“here’s a test”')
+  -> '"here\'s a test"'
+> fixes.uncurl_quotes('ʼokina ‛‟')
+  -> '\'okina \'"'
+> fixes.uncurl_quotes('«guillemets» „‚')
+  -> '«guillemets» "\''
+> fixes.fix_latin_ligatures('ﬂuﬃeﬆ')
+  -> 'fluffiest'
+> fixes.fix_latin_ligatures('ĲSSEL ĳs Ǆ ǅ ǆ ǉ ǌ ŉ')
+  -> 'IJSSEL ijs DŽ Dž dž lj nj ʼn'
+> fixes.fix_latin_ligatures('æ œ ﬅ')
+  -> 'æ œ ſt'
+> fixes.fix_character_width('ＬＯＵＤ\u3000ＮＯＩＳＥＳ')
+  -> 'LOUD NOISES'
+> fixes.fix_character_width('Ｕﾀｰﾝ')
+  -> 'Uターン'
+> fixes.fix_character_width('￠￡￥￦ ￨￮')
+  -> '¢£¥₩ │○'
+> fixes.fix_character_width('ﾞﾟ ﾠﾡￜ')
+  -> '゙゚ ᅠ기'
+> fixes.fix_line_breaks('a\r\nb\rc\u2028d\u2029e\x85f')
+  -> 'a\nb\nc\nd\ne\nf'
+> fixes.fix_line_breaks('\r\r\n\n\r')
+  -> '\n\n\n\n'
+> fixes.fix_line_breaks('no breaks')
+  -> 'no breaks'
+> fixes.remove_control_chars('a\x00b\x08c\td\ne\x0bf\x0cg\rh\x0ei\x1fj\x7fk')
+  -> 'abc\td\nef\x0cg\rhijk'
+> fixes.remove_control_chars('\u206a\u206f\ufeff\ufff9\ufffb￼�\u200d\u202e')
+  -> '�\u200d\u202e'
+> fixes.remove_control_chars('\x80\x9f\u2028')
+  -> '\x80\x9f\u2028'
+> fixes.remove_bom('\ufeff\ufeffstart\ufeff')
+  -> 'start\ufeff'
+> fixes.remove_bom('none')
+  -> 'none'
+> fixes.decode_escapes('\\u20a1 is the currency symbol for the colón.')
+  -> '₡ is the currency symbol for the colón.'
+> fixes.decode_escapes('\\x41\\x42 \\101\\7\\777 \\U0001F600 \\n\\t\\\\ \\\' \\" \\a\\b\\f\\v\\r')
+  -> 'AB A\x07ǿ 😀 \n\t\\ \' " \x07\x08\x0c\x0b\r'
+> fixes.decode_escapes('\\q \\x4 \\u12 caf\\xe9')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-2: truncated \xXX escape
+> fixes.decode_escapes('\\x4z')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-2: truncated \xXX escape
+> fixes.decode_escapes('\\xzz')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-1: truncated \xXX escape
+> fixes.decode_escapes('\\u12zz')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-3: truncated \uXXXX escape
+> fixes.decode_escapes('\\U0000004g')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-8: truncated \UXXXXXXXX escape
+> fixes.decode_escapes('\\U00110000')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-9: illegal Unicode character
+> fixes.decode_escapes('\\xéz')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-1: truncated \xXX escape
+> fixes.decode_escapes('\\u1€z9')
+  error UnicodeDecodeError: 'unicodeescape' codec can't decode bytes in position 0-2: truncated \uXXXX escape
+> fixes.fix_c1_controls('\x80\x81\x8d\x8f\x90\x93\x94\x9d\x9f')
+  -> '€\x81\x8d\x8f\x90“”\x9dŸ'
+> fixes.fix_c1_controls('Lo\x92s \x96 dash')
+  -> 'Lo’s – dash'
+> fixes.fix_surrogates('no surrogates here 😀')
+  -> 'no surrogates here 😀'
+> fixes.restore_byte_a0(b'\xc3 la')
+  -> b'\xc3\xa0 la'
+> fixes.restore_byte_a0(b'\xc3 quele')
+  -> b'\xc3\xa0quele'
+> fixes.restore_byte_a0(b'\xc3 s ')
+  -> b'\xc3\xa0s '
+> fixes.restore_byte_a0(b'\xc3  x')
+  -> b'\xc3\xa0 x'
+> fixes.restore_byte_a0(b'\xc2 \xe2 \x80\xe2\x80 \xf0 \x9f\x98')
+  -> b'\xc2\xa0\xe2\xa0\x80\xe2\x80\xa0\xf0\xa0\x9f\x98'
+> fixes.restore_byte_a0(b'\xf0\x9f \x98 \xce ')
+  -> b'\xf0\x9f\xa0\x98 \xce\xa0'
+> fixes.restore_byte_a0(b'\xe0\x80 \xe1\x85 ')
+  -> b'\xe0\x80\xa0\xe1\x85 '
+> fixes.replace_lossy_sequences(b'\xe2\x80\x1a')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'\xe2\x1a\x9c')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'\xc3?')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'\xc4?')
+  -> b'\xc4?'
+> fixes.replace_lossy_sequences(b'\xed\xa0\x1a\xed\xb0\x80')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'\xf0\x9f\x1a\x80')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'a\x1ab')
+  -> b'a\xef\xbf\xbdb'
+> fixes.replace_lossy_sequences(b'\xe2\x1a\x1a')
+  -> b'\xef\xbf\xbd'
+> fixes.replace_lossy_sequences(b'\xf4?\x80\x80')
+  -> b'\xef\xbf\xbd'
+== badness
+> badness.badness("Café crème, s'il vous plaît.")
+  -> 0
+> badness.is_bad("Café crème, s'il vous plaît.")
+  -> False
+> badness.badness('Le colis est arrivé à Montréal — merci !')
+  -> 0
+> badness.is_bad('Le colis est arrivé à Montréal — merci !')
+  -> False
+> badness.badness('¿Dónde está mi pedido? Lo pagué el miércoles.')
+  -> 0
+> badness.is_bad('¿Dónde está mi pedido? Lo pagué el miércoles.')
+  -> False
+> badness.badness('Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln')
+  -> 0
+> badness.is_bad('Die Lieferung für Herrn Müller kam nicht an. Grüße aus Köln')
+  -> False
+> badness.badness('Não consegui acessar a conta. Obrigado pela atenção')
+  -> 0
+> badness.is_bad('Não consegui acessar a conta. Obrigado pela atenção')
+  -> False
+> badness.badness('Zamówienie nr 4411 nie dotarło do Łodzi.')
+  -> 0
+> badness.is_bad('Zamówienie nr 4411 nie dotarło do Łodzi.')
+  -> False
+> badness.badness('Dobrý den, objednávka přišla poškozená.')
+  -> 0
+> badness.is_bad('Dobrý den, objednávka přišla poškozená.')
+  -> False
+> badness.badness('Здравствуйте! Заказ не пришёл.')
+  -> 0
+> badness.is_bad('Здравствуйте! Заказ не пришёл.')
+  -> False
+> badness.badness('Ευχαριστώ για τη γρήγορη απάντηση')
+  -> 0
+> badness.is_bad('Ευχαριστώ για τη γρήγορη απάντηση')
+  -> False
+> badness.badness('Siparişim hâlâ gelmedi, lütfen yardım edin.')
+  -> 0
+> badness.is_bad('Siparişim hâlâ gelmedi, lütfen yardım edin.')
+  -> False
+> badness.badness('Ačiū, prekės gautos laiku.')
+  -> 0
+> badness.is_bad('Ačiū, prekės gautos laiku.')
+  -> False
+> badness.badness('Paldies par ātro piegādi!')
+  -> 0
+> badness.is_bad('Paldies par ātro piegādi!')
+  -> False
+> badness.badness('注文がまだ届いていません。')
+  -> 0
+> badness.is_bad('注文がまだ届いていません。')
+  -> False
+> badness.badness('我的订单什么时候发货？')
+  -> 0
+> badness.is_bad('我的订单什么时候发货？')
+  -> False
+> badness.badness('Great product — 5 stars ⭐⭐⭐⭐⭐')
+  -> 0
+> badness.is_bad('Great product — 5 stars ⭐⭐⭐⭐⭐')
+  -> False
+> badness.badness('It’s “perfect” … really 👍')
+  -> 0
+> badness.is_bad('It’s “perfect” … really 👍')
+  -> False
+> badness.badness('Price: 25 € (was 30 €) • free shipping')
+  -> 0
+> badness.is_bad('Price: 25 € (was 30 €) • free shipping')
+  -> False
+> badness.badness('Temperature range: −40°C to +85°C, ±0.5°')
+  -> 0
+> badness.is_bad('Temperature range: −40°C to +85°C, ±0.5°')
+  -> False
+> badness.badness('¿Qué? ¡Increíble!')
+  -> 0
+> badness.is_bad('¿Qué? ¡Increíble!')
+  -> False
+> badness.badness('naïve résumé coöperate')
+  -> 0
+> badness.is_bad('naïve résumé coöperate')
+  -> False
+> badness.badness('à la mode, à bientôt')
+  -> 0
+> badness.is_bad('à la mode, à bientôt')
+  -> False
+> badness.badness('Size: 10½ × 4¼ in')
+  -> 0
+> badness.is_bad('Size: 10½ × 4¼ in')
+  -> False
+> badness.badness('Tschüß')
+  -> 0
+> badness.is_bad('Tschüß')
+  -> False
+> badness.badness('Ångström')
+  -> 0
+> badness.is_bad('Ångström')
+  -> False
+> badness.badness('Škoda Žilina')
+  -> 0
+> badness.is_bad('Škoda Žilina')
+  -> False
+> badness.badness('âœ” No problems')
+  -> 1
+> badness.is_bad('âœ” No problems')
+  -> True
+> badness.badness('Ã©')
+  -> 1
+> badness.is_bad('Ã©')
+  -> True
+> badness.badness('Ã©té')
+  -> 1
+> badness.is_bad('Ã©té')
+  -> True
+> badness.badness('Ã©')
+  -> 1
+> badness.is_bad('Ã©')
+  -> True
+> badness.badness('Â£5')
+  -> 1
+> badness.is_bad('Â£5')
+  -> True
+> badness.badness('à²')
+  -> 1
+> badness.is_bad('à²')
+  -> True
+> badness.badness('√±')
+  -> 1
+> badness.is_bad('√±')
+  -> True
+> badness.badness('×²')
+  -> 1
+> badness.is_bad('×²')
+  -> True
+> badness.badness('вЂ')
+  -> 1
+> badness.is_bad('вЂ')
+  -> True
+> badness.badness('ГўВЂВ¦x')
+  -> 1
+> badness.is_bad('ГўВЂВ¦x')
+  -> True
+> badness.badness('Ã\xa0')
+  -> 1
+> badness.is_bad('Ã\xa0')
+  -> True
+> badness.badness('a Ã ')
+  -> 1
+> badness.is_bad('a Ã ')
+  -> True
+> badness.badness('Ã ')
+  -> 1
+> badness.is_bad('Ã ')
+  -> True
+> badness.badness('x.Â ')
+  -> 1
+> badness.is_bad('x.Â ')
+  -> True
+> badness.badness('β€™')
+  -> 1
+> badness.is_bad('β€™')
+  -> True
+> badness.badness('ā€')
+  -> 1
+> badness.is_bad('ā€')
+  -> True
+> badness.badness('Œx œA')
+  -> 0
+> badness.is_bad('Œx œA')
+  -> False
+> badness.badness('─│┌ box ┐┘')
+  -> 0
+> badness.is_bad('─│┌ box ┐┘')
+  -> False
+> badness.badness('(╯°□°)╯︵ ┻━┻')
+  -> 0
+> badness.is_bad('(╯°□°)╯︵ ┻━┻')
+  -> False
+> badness.badness('É°')
+  -> 1
+> badness.is_bad('É°')
+  -> True
+> badness.badness('Ø¨ÙŠ')
+  -> 1
+> badness.is_bad('Ø¨ÙŠ')
+  -> True
+== plans
+> fix_encoding_and_explain('schÃ¶n')
+  -> ExplainedText(text='schön', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_encoding('schÃ¶n')
+  -> 'schön'
+> fix_encoding_and_explain('voilÃ le travail')
+  -> ExplainedText(text='voilà le travail', explanation=[('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+> fix_encoding('voilÃ le travail')
+  -> 'voilà le travail'
+> fix_encoding_and_explain('â€œ like this â€�')
+  -> ExplainedText(text='“ like this �', explanation=[('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+> fix_encoding('â€œ like this â€�')
+  -> '“ like this �'
+> fix_encoding_and_explain('Ð¿Ñ€Ð¸Ð²ÐµÑ‚')
+  -> ExplainedText(text='привет', explanation=[('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+> fix_encoding('Ð¿Ñ€Ð¸Ð²ÐµÑ‚')
+  -> 'привет'
+> fix_encoding_and_explain('Ã© Ã\xa0')
+  -> ExplainedText(text='é à', explanation=[('encode', 'latin-1'), ('decode', 'utf-8')])
+> fix_encoding('Ã© Ã\xa0')
+  -> 'é à'
+> apply_plan('schÃ¶n', [('encode', 'latin-1'), ('decode', 'utf-8')])
+  -> 'schön'
+> apply_plan('voilÃ le travail', [('encode', 'latin-1'), ('transcode', 'restore_byte_a0'), ('decode', 'utf-8')])
+  -> 'voilà le travail'
+> apply_plan('â€œ like this â€�', [('encode', 'sloppy-windows-1252'), ('transcode', 'replace_lossy_sequences'), ('decode', 'utf-8')])
+  -> '“ like this �'
+> apply_plan('Ð¿Ñ€Ð¸Ð²ÐµÑ‚', [('encode', 'sloppy-windows-1252'), ('decode', 'utf-8')])
+  -> 'привет'
+> apply_plan('&lt;Ã¶&gt;', [('apply', 'unescape_html'), ('encode', 'latin-1'), ('decode', 'utf-8'), ('apply', 'uncurl_quotes')])
+  -> '<ö>'
+> apply_plan('Ã©', [('encode', 'macroman')])
+  -> b'\xcc\xa9'
+> apply_plan('Ã©', [('encode', 'cp437'), ('decode', 'iso-8859-2')])
+  error UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
+> apply_plan('Ã©', [('encode', 'iso-8859-2')])
+  error UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-1: character maps to <undefined>
+> apply_plan('Ã\x81', [('encode', 'latin-1'), ('decode', 'windows-1252')])
+  error UnicodeDecodeError: 'charmap' codec can't decode byte 0x81 in position 1: character maps to <undefined>
+> apply_plan('Ã©Ā', [('encode', 'latin-1')])
+  error UnicodeEncodeError: 'latin-1' codec can't encode character '\u0100' in position 2: ordinal not in range(256)
+> apply_plan('xĀ', [('encode', 'sloppy-windows-1252')])
+  error UnicodeEncodeError: 'charmap' codec can't encode character '\u0100' in position 1: character maps to <undefined>
+> apply_plan('ÿ', [('encode', 'latin-1'), ('decode', 'utf-8')])
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> apply_plan('í\xa0\x80', [('encode', 'latin-1'), ('decode', 'utf-8-variants')])
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte
+> apply_plan('abí\xa0½í¸\x80À\x80', [('encode', 'latin-1'), ('decode', 'utf-8-variants')])
+  -> 'ab😀\x00'
+> apply_plan('ok', [('encode', 'utf-8'), ('decode', 'sloppy-windows-1251')])
+  -> 'ok'
+> apply_plan('ok', [('encode', 'klingon')])
+  error LookupError: unknown encoding: klingon
+> apply_plan('ok', [('decode', 'utf-8')])
+  error AttributeError: 'str' object has no attribute 'decode'
+> apply_plan('ok', [('encode', 'utf-8'), ('encode', 'utf-8')])
+  error AttributeError: 'bytes' object has no attribute 'encode'
+> apply_plan('ok', [('frobnicate', 'utf-8')])
+  error ValueError: Unknown plan step: frobnicate
+> apply_plan('ok', [('apply', 'fix_everything')])
+  error ValueError: Unknown function to apply: fix_everything
+> apply_plan('ok', [])
+  -> 'ok'
+== guess bytes
+> guess_bytes(b'caf\xc3\xa9')
+  -> ('café', 'utf-8')
+> guess_bytes(b'caf\xe9')
+  -> ('café', 'sloppy-windows-1252')
+> guess_bytes(b'caf\x8e\r')
+  -> ('café\r', 'macroman')
+> guess_bytes(b'caf\xe9\r\n')
+  -> ('café\r\n', 'sloppy-windows-1252')
+> guess_bytes(b'\xff\xfeh\x00\xe9\x00')
+  -> ('hé', 'utf-16')
+> guess_bytes(b'\x00h\x00\xe9')
+  -> ('\x00h\x00é', 'sloppy-windows-1252')
+> guess_bytes(b'\xfe\xff\x00h\x00\xe9')
+  -> ('hé', 'utf-16')
+> guess_bytes(b'\xff\xfeh\x00=\xd8\x00\xde')
+  -> ('h😀', 'utf-16')
+> guess_bytes(b'\xff\xfeh')
+  error UnicodeDecodeError: 'utf-16-le' codec can't decode byte 0x68 in position 2: truncated data
+> guess_bytes(b'\xff\xfe\x00\xd8')
+  error UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-3: unexpected end of data
+> guess_bytes(b'\xff\xfe\x00\xdca\x00')
+  error UnicodeDecodeError: 'utf-16-le' codec can't decode bytes in position 2-3: illegal encoding
+> guess_bytes(b'null \xc0\x80 here')
+  -> ('null \x00 here', 'utf-8-variants')
+> guess_bytes(b'\xed\xa0\xbd\xed\xb8\x80 cesu')
+  -> ('😀 cesu', 'utf-8-variants')
+> guess_bytes(b'\xed\xa0\x80 lone')
+  -> ('í\xa0€ lone', 'sloppy-windows-1252')
+> guess_bytes(b'\xc0')
+  -> ('À', 'sloppy-windows-1252')
+> guess_bytes(b'\x81\x8d\x8f\x90\x9d plain')
+  -> ('\x81\x8d\x8f\x90\x9d plain', 'sloppy-windows-1252')
+> guess_bytes(b'')
+  -> ('', 'utf-8')
+> guess_bytes(b'ascii')
+  -> ('ascii', 'utf-8')
+== tables
+> chardata.WIDTH_MAP
+  -> 226 entries
+  0x3000: ' '
+  0xff01: '!'
+  0xff02: '"'
+  0xff03: '#'
+  0xff04: '$'
+  0xff05: '%'
+  0xff06: '&'
+  0xff07: "'"
+  0xff08: '('
+  0xff09: ')'
+  0xff0a: '*'
+  0xff0b: '+'
+  0xff0c: ','
+  0xff0d: '-'
+  0xff0e: '.'
+  0xff0f: '/'
+  0xff10: '0'
+  0xff11: '1'
+  0xff12: '2'
+  0xff13: '3'
+  0xff14: '4'
+  0xff15: '5'
+  0xff16: '6'
+  0xff17: '7'
+  0xff18: '8'
+  0xff19: '9'
+  0xff1a: ':'
+  0xff1b: ';'
+  0xff1c: '<'
+  0xff1d: '='
+  0xff1e: '>'
+  0xff1f: '?'
+  0xff20: '@'
+  0xff21: 'A'
+  0xff22: 'B'
+  0xff23: 'C'
+  0xff24: 'D'
+  0xff25: 'E'
+  0xff26: 'F'
+  0xff27: 'G'
+  0xff28: 'H'
+  0xff29: 'I'
+  0xff2a: 'J'
+  0xff2b: 'K'
+  0xff2c: 'L'
+  0xff2d: 'M'
+  0xff2e: 'N'
+  0xff2f: 'O'
+  0xff30: 'P'
+  0xff31: 'Q'
+  0xff32: 'R'
+  0xff33: 'S'
+  0xff34: 'T'
+  0xff35: 'U'
+  0xff36: 'V'
+  0xff37: 'W'
+  0xff38: 'X'
+  0xff39: 'Y'
+  0xff3a: 'Z'
+  0xff3b: '['
+  0xff3c: '\\'
+  0xff3d: ']'
+  0xff3e: '^'
+  0xff3f: '_'
+  0xff40: '`'
+  0xff41: 'a'
+  0xff42: 'b'
+  0xff43: 'c'
+  0xff44: 'd'
+  0xff45: 'e'
+  0xff46: 'f'
+  0xff47: 'g'
+  0xff48: 'h'
+  0xff49: 'i'
+  0xff4a: 'j'
+  0xff4b: 'k'
+  0xff4c: 'l'
+  0xff4d: 'm'
+  0xff4e: 'n'
+  0xff4f: 'o'
+  0xff50: 'p'
+  0xff51: 'q'
+  0xff52: 'r'
+  0xff53: 's'
+  0xff54: 't'
+  0xff55: 'u'
+  0xff56: 'v'
+  0xff57: 'w'
+  0xff58: 'x'
+  0xff59: 'y'
+  0xff5a: 'z'
+  0xff5b: '{'
+  0xff5c: '|'
+  0xff5d: '}'
+  0xff5e: '~'
+  0xff5f: '⦅'
+  0xff60: '⦆'
+  0xff61: '。'
+  0xff62: '「'
+  0xff63: '」'
+  0xff64: '、'
+  0xff65: '・'
+  0xff66: 'ヲ'
+  0xff67: 'ァ'
+  0xff68: 'ィ'
+  0xff69: 'ゥ'
+  0xff6a: 'ェ'
+  0xff6b: 'ォ'
+  0xff6c: 'ャ'
+  0xff6d: 'ュ'
+  0xff6e: 'ョ'
+  0xff6f: 'ッ'
+  0xff70: 'ー'
+  0xff71: 'ア'
+  0xff72: 'イ'
+  0xff73: 'ウ'
+  0xff74: 'エ'
+  0xff75: 'オ'
+  0xff76: 'カ'
+  0xff77: 'キ'
+  0xff78: 'ク'
+  0xff79: 'ケ'
+  0xff7a: 'コ'
+  0xff7b: 'サ'
+  0xff7c: 'シ'
+  0xff7d: 'ス'
+  0xff7e: 'セ'
+  0xff7f: 'ソ'
+  0xff80: 'タ'
+  0xff81: 'チ'
+  0xff82: 'ツ'
+  0xff83: 'テ'
+  0xff84: 'ト'
+  0xff85: 'ナ'
+  0xff86: 'ニ'
+  0xff87: 'ヌ'
+  0xff88: 'ネ'
+  0xff89: 'ノ'
+  0xff8a: 'ハ'
+  0xff8b: 'ヒ'
+  0xff8c: 'フ'
+  0xff8d: 'ヘ'
+  0xff8e: 'ホ'
+  0xff8f: 'マ'
+  0xff90: 'ミ'
+  0xff91: 'ム'
+  0xff92: 'メ'
+  0xff93: 'モ'
+  0xff94: 'ヤ'
+  0xff95: 'ユ'
+  0xff96: 'ヨ'
+  0xff97: 'ラ'
+  0xff98: 'リ'
+  0xff99: 'ル'
+  0xff9a: 'レ'
+  0xff9b: 'ロ'
+  0xff9c: 'ワ'
+  0xff9d: 'ン'
+  0xff9e: '゙'
+  0xff9f: '゚'
+  0xffa0: 'ᅠ'
+  0xffa1: 'ᄀ'
+  0xffa2: 'ᄁ'
+  0xffa3: 'ᆪ'
+  0xffa4: 'ᄂ'
+  0xffa5: 'ᆬ'
+  0xffa6: 'ᆭ'
+  0xffa7: 'ᄃ'
+  0xffa8: 'ᄄ'
+  0xffa9: 'ᄅ'
+  0xffaa: 'ᆰ'
+  0xffab: 'ᆱ'
+  0xffac: 'ᆲ'
+  0xffad: 'ᆳ'
+  0xffae: 'ᆴ'
+  0xffaf: 'ᆵ'
+  0xffb0: 'ᄚ'
+  0xffb1: 'ᄆ'
+  0xffb2: 'ᄇ'
+  0xffb3: 'ᄈ'
+  0xffb4: 'ᄡ'
+  0xffb5: 'ᄉ'
+  0xffb6: 'ᄊ'
+  0xffb7: 'ᄋ'
+  0xffb8: 'ᄌ'
+  0xffb9: 'ᄍ'
+  0xffba: 'ᄎ'
+  0xffbb: 'ᄏ'
+  0xffbc: 'ᄐ'
+  0xffbd: 'ᄑ'
+  0xffbe: 'ᄒ'
+  0xffc2: 'ᅡ'
+  0xffc3: 'ᅢ'
+  0xffc4: 'ᅣ'
+  0xffc5: 'ᅤ'
+  0xffc6: 'ᅥ'
+  0xffc7: 'ᅦ'
+  0xffca: 'ᅧ'
+  0xffcb: 'ᅨ'
+  0xffcc: 'ᅩ'
+  0xffcd: 'ᅪ'
+  0xffce: 'ᅫ'
+  0xffcf: 'ᅬ'
+  0xffd2: 'ᅭ'
+  0xffd3: 'ᅮ'
+  0xffd4: 'ᅯ'
+  0xffd5: 'ᅰ'
+  0xffd6: 'ᅱ'
+  0xffd7: 'ᅲ'
+  0xffda: 'ᅳ'
+  0xffdb: 'ᅴ'
+  0xffdc: 'ᅵ'
+  0xffe0: '¢'
+  0xffe1: '£'
+  0xffe2: '¬'
+  0xffe3: ' ̄'
+  0xffe4: '¦'
+  0xffe5: '¥'
+  0xffe6: '₩'
+  0xffe8: '│'
+  0xffe9: '←'
+  0xffea: '↑'
+  0xffeb: '→'
+  0xffec: '↓'
+  0xffed: '■'
+  0xffee: '○'
+> chardata.HTML_ENTITIES
+  -> 3501 entries
+  '&AACUTE;': 'Á'
+  '&ABREVE;': 'Ă'
+  '&AC;': '∾'
+  '&ACD;': '∿'
+  '&ACIRC;': 'Â'
+  '&ACUTE;': '´'
+  '&ACY;': 'А'
+  '&AELIG;': 'Æ'
+  '&AF;': '\u2061'
+  '&AFR;': '𝔞'
+  '&AGRAVE;': 'À'
+  '&ALEFSYM;': 'ℵ'
+  '&ALEPH;': 'ℵ'
+  '&ALPHA;': 'Α'
+  '&AMACR;': 'Ā'
+  '&AMALG;': '⨿'
+  '&AND;': '∧'
+  '&ANDAND;': '⩕'
+  '&ANDD;': '⩜'
+  '&ANDSLOPE;': '⩘'
+  '&ANDV;': '⩚'
+  '&ANG;': '∠'
+  '&ANGE;': '⦤'
+  '&ANGLE;': '∠'
+  '&ANGMSD;': '∡'
+  '&ANGMSDAA;': '⦨'
+  '&ANGMSDAB;': '⦩'
+  '&ANGMSDAC;': '⦪'
+  '&ANGMSDAD;': '⦫'
+  '&ANGMSDAE;': '⦬'
+  '&ANGMSDAF;': '⦭'
+  '&ANGMSDAG;': '⦮'
+  '&ANGMSDAH;': '⦯'
+  '&ANGRT;': '∟'
+  '&ANGRTVB;': '⊾'
+  '&ANGRTVBD;': '⦝'
+  '&ANGSPH;': '∢'
+  '&ANGST;': 'Å'
+  '&ANGZARR;': '⍼'
+  '&AOGON;': 'Ą'
+  '&AOPF;': '𝕒'
+  '&AP;': '≈'
+  '&APACIR;': '⩯'
+  '&APE;': '≊'
+  '&APID;': '≋'
+  '&APOS;': "'"
+  '&APPROX;': '≈'
+  '&APPROXEQ;': '≊'
+  '&ARING;': 'Å'
+  '&ASCR;': '𝒶'
+  '&AST;': '*'
+  '&ASYMP;': '≈'
+  '&ASYMPEQ;': '≍'
+  '&ATILDE;': 'Ã'
+  '&AUML;': 'Ä'
+  '&AWCONINT;': '∳'
+  '&AWINT;': '⨑'
+  '&BACKCONG;': '≌'
+  '&BACKEPSILON;': '϶'
+  '&BACKPRIME;': '‵'
+  '&BACKSIM;': '∽'
+  '&BACKSIMEQ;': '⋍'
+  '&BARVEE;': '⊽'
+  '&BARWED;': '⌅'
+  '&BARWEDGE;': '⌅'
+  '&BBRK;': '⎵'
+  '&BBRKTBRK;': '⎶'
+  '&BCONG;': '≌'
+  '&BCY;': 'Б'
+  '&BDQUO;': '„'
+  '&BECAUS;': '∵'
+  '&BECAUSE;': '∵'
+  '&BEMPTYV;': '⦰'
+  '&BEPSI;': '϶'
+  '&BERNOU;': 'ℬ'
+  '&BETA;': 'Β'
+  '&BETH;': 'ℶ'
+  '&BETWEEN;': '≬'
+  '&BFR;': '𝔟'
+  '&BIGCAP;': '⋂'
+  '&BIGCIRC;': '◯'
+  '&BIGCUP;': '⋃'
+  '&BIGODOT;': '⨀'
+  '&BIGOPLUS;': '⨁'
+  '&BIGOTIMES;': '⨂'
+  '&BIGSQCUP;': '⨆'
+  '&BIGSTAR;': '★'
+  '&BIGTRIANGLEDOWN;': '▽'
+  '&BIGTRIANGLEUP;': '△'
+  '&BIGUPLUS;': '⨄'
+  '&BIGVEE;': '⋁'
+  '&BIGWEDGE;': '⋀'
+  '&BKAROW;': '⤍'
+  '&BLACKLOZENGE;': '⧫'
+  '&BLACKSQUARE;': '▪'
+  '&BLACKTRIANGLE;': '▴'
+  '&BLACKTRIANGLEDOWN;': '▾'
+  '&BLACKTRIANGLELEFT;': '◂'
+  '&BLACKTRIANGLERIGHT;': '▸'
+  '&BLANK;': '␣'
+  '&BLK12;': '▒'
+  '&BLK14;': '░'
+  '&BLK34;': '▓'
+  '&BLOCK;': '█'
+  '&BNE;': '=⃥'
+  '&BNEQUIV;': '≡⃥'
+  '&BNOT;': '⌐'
+  '&BOPF;': '𝕓'
+  '&BOT;': '⊥'
+  '&BOTTOM;': '⊥'
+  '&BOWTIE;': '⋈'
+  '&BOXBOX;': '⧉'
+  '&BOXDL;': '┐'
+  '&BOXDR;': '┌'
+  '&BOXH;': '─'
+  '&BOXHD;': '┬'
+  '&BOXHU;': '┴'
+  '&BOXMINUS;': '⊟'
+  '&BOXPLUS;': '⊞'
+  '&BOXTIMES;': '⊠'
+  '&BOXUL;': '┘'
+  '&BOXUR;': '└'
+  '&BOXV;': '│'
+  '&BOXVH;': '┼'
+  '&BOXVL;': '┤'
+  '&BOXVR;': '├'
+  '&BPRIME;': '‵'
+  '&BREVE;': '˘'
+  '&BRVBAR;': '¦'
+  '&BSCR;': '𝒷'
+  '&BSEMI;': '⁏'
+  '&BSIM;': '∽'
+  '&BSIME;': '⋍'
+  '&BSOL;': '\\'
+  '&BSOLB;': '⧅'
+  '&BSOLHSUB;': '⟈'
+  '&BULL;': '•'
+  '&BULLET;': '•'
+  '&BUMP;': '≎'
+  '&BUMPE;': '≏'
+  '&BUMPEQ;': '≏'
+  '&CACUTE;': 'Ć'
+  '&CAP;': '∩'
+  '&CAPAND;': '⩄'
+  '&CAPBRCUP;': '⩉'
+  '&CAPCAP;': '⩋'
+  '&CAPCUP;': '⩇'
+  '&CAPDOT;': '⩀'
+  '&CAPS;': '∩︀'
+  '&CARET;': '⁁'
+  '&CARON;': 'ˇ'
+  '&CCAPS;': '⩍'
+  '&CCARON;': 'Č'
+  '&CCEDIL;': 'Ç'
+  '&CCIRC;': 'Ĉ'
+  '&CCUPS;': '⩌'
+  '&CCUPSSM;': '⩐'
+  '&CDOT;': 'Ċ'
+  '&CEDIL;': '¸'
+  '&CEMPTYV;': '⦲'
+  '&CENT;': '¢'
+  '&CENTERDOT;': '·'
+  '&CFR;': '𝔠'
+  '&CHCY;': 'Ч'
+  '&CHECK;': '✓'
+  '&CHECKMARK;': '✓'
+  '&CHI;': 'Χ'
+  '&CIR;': '○'
+  '&CIRC;': 'ˆ'
+  '&CIRCEQ;': '≗'
+  '&CIRCLEARROWLEFT;': '↺'
+  '&CIRCLEARROWRIGHT;': '↻'
+  '&CIRCLEDAST;': '⊛'
+  '&CIRCLEDCIRC;': '⊚'
+  '&CIRCLEDDASH;': '⊝'
+  '&CIRE;': '≗'
+  '&CIRFNINT;': '⨐'
+  '&CIRMID;': '⫯'
+  '&CIRSCIR;': '⧂'
+  '&CLUBS;': '♣'
+  '&CLUBSUIT;': '♣'
+  '&COLON;': ':'
+  '&COLONE;': '≔'
+  '&COLONEQ;': '≔'
+  '&COMMA;': ','
+  '&COMMAT;': '@'
+  '&COMP;': '∁'
+  '&COMPFN;': '∘'
+  '&COMPLEMENT;': '∁'
+  '&COMPLEXES;': 'ℂ'
+  '&CONG;': '≅'
+  '&CONGDOT;': '⩭'
+  '&CONINT;': '∮'
+  '&COPF;': '𝕔'
+  '&COPROD;': '∐'
+  '&CRARR;': '↵'
+  '&CROSS;': '✗'
+  '&CSCR;': '𝒸'
+  '&CSUB;': '⫏'
+  '&CSUBE;': '⫑'
+  '&CSUP;': '⫐'
+  '&CSUPE;': '⫒'
+  '&CTDOT;': '⋯'
+  '&CUDARRL;': '⤸'
+  '&CUDARRR;': '⤵'
+  '&CUEPR;': '⋞'
+  '&CUESC;': '⋟'
+  '&CULARR;': '↶'
+  '&CULARRP;': '⤽'
+  '&CUP;': '∪'
+  '&CUPBRCAP;': '⩈'
+  '&CUPCAP;': '⩆'
+  '&CUPCUP;': '⩊'
+  '&CUPDOT;': '⊍'
+  '&CUPOR;': '⩅'
+  '&CUPS;': '∪︀'
+  '&CURARR;': '↷'
+  '&CURARRM;': '⤼'
+  '&CURLYEQPREC;': '⋞'
+  '&CURLYEQSUCC;': '⋟'
+  '&CURLYVEE;': '⋎'
+  '&CURLYWEDGE;': '⋏'
+  '&CURREN;': '¤'
+  '&CURVEARROWLEFT;': '↶'
+  '&CURVEARROWRIGHT;': '↷'
+  '&CUVEE;': '⋎'
+  '&CUWED;': '⋏'
+  '&CWCONINT;': '∲'
+  '&CWINT;': '∱'
+  '&CYLCTY;': '⌭'
+  '&DAGGER;': '†'
+  '&DALETH;': 'ℸ'
+  '&DARR;': '↓'
+  '&DASH;': '‐'
+  '&DASHV;': '⊣'
+  '&DBKAROW;': '⤏'
+  '&DBLAC;': '˝'
+  '&DCARON;': 'Ď'
+  '&DCY;': 'Д'
+  '&DDAGGER;': '‡'
+  '&DDARR;': '⇊'
+  '&DDOTSEQ;': '⩷'
+  '&DEG;': '°'
+  '&DELTA;': 'Δ'
+  '&DEMPTYV;': '⦱'
+  '&DFISHT;': '⥿'
+  '&DFR;': '𝔡'
+  '&DHARL;': '⇃'
+  '&DHARR;': '⇂'
+  '&DIAM;': '⋄'
+  '&DIAMOND;': '⋄'
+  '&DIAMONDSUIT;': '♦'
+  '&DIAMS;': '♦'
+  '&DIE;': '¨'
+  '&DIGAMMA;': 'Ϝ'
+  '&DISIN;': '⋲'
+  '&DIV;': '÷'
+  '&DIVIDE;': '÷'
+  '&DIVIDEONTIMES;': '⋇'
+  '&DIVONX;': '⋇'
+  '&DJCY;': 'Ђ'
+  '&DLCORN;': '⌞'
+  '&DLCROP;': '⌍'
+  '&DOLLAR;': '$'
+  '&DOPF;': '𝕕'
+  '&DOT;': '˙'
+  '&DOTEQ;': '≐'
+  '&DOTEQDOT;': '≑'
+  '&DOTMINUS;': '∸'
+  '&DOTPLUS;': '∔'
+  '&DOTSQUARE;': '⊡'
+  '&DOUBLEBARWEDGE;': '⌆'
+  '&DOWNARROW;': '↓'
+  '&DOWNDOWNARROWS;': '⇊'
+  '&DOWNHARPOONLEFT;': '⇃'
+  '&DOWNHARPOONRIGHT;': '⇂'
+  '&DRBKAROW;': '⤐'
+  '&DRCORN;': '⌟'
+  '&DRCROP;': '⌌'
+  '&DSCR;': '𝒹'
+  '&DSCY;': 'Ѕ'
+  '&DSOL;': '⧶'
+  '&DSTROK;': 'Đ'
+  '&DTDOT;': '⋱'
+  '&DTRI;': '▿'
+  '&DTRIF;': '▾'
+  '&DUARR;': '⇵'
+  '&DUHAR;': '⥯'
+  '&DWANGLE;': '⦦'
+  '&DZCY;': 'Џ'
+  '&DZIGRARR;': '⟿'
+  '&EACUTE;': 'É'
+  '&EASTER;': '⩮'
+  '&ECARON;': 'Ě'
+  '&ECIR;': '≖'
+  '&ECIRC;': 'Ê'
+  '&ECOLON;': '≕'
+  '&ECY;': 'Э'
+  '&EDOT;': 'Ė'
+  '&EE;': 'ⅇ'
+  '&EFR;': '𝔢'
+  '&EG;': '⪚'
+  '&EGRAVE;': 'È'
+  '&EGS;': '⪖'
+  '&EGSDOT;': '⪘'
+  '&EL;': '⪙'
+  '&ELINTERS;': '⏧'
+  '&ELL;': 'ℓ'
+  '&ELS;': '⪕'
+  '&ELSDOT;': '⪗'
+  '&EMACR;': 'Ē'
+  '&EMPTY;': '∅'
+  '&EMPTYSET;': '∅'
+  '&EMPTYV;': '∅'
+  '&EMSP13;': '\u2004'
+  '&EMSP14;': '\u2005'
+  '&EMSP;': '\u2003'
+  '&ENSP;': '\u2002'
+  '&EOGON;': 'Ę'
+  '&EOPF;': '𝕖'
+  '&EPAR;': '⋕'
+  '&EPARSL;': '⧣'
+  '&EPLUS;': '⩱'
+  '&EPSI;': 'Ε'
+  '&EPSILON;': 'Ε'
+  '&EPSIV;': 'Ε'
+  '&EQCIRC;': '≖'
+  '&EQCOLON;': '≕'
+  '&EQSIM;': '≂'
+  '&EQSLANTGTR;': '⪖'
+  '&EQSLANTLESS;': '⪕'
+  '&EQUALS;': '='
+  '&EQUEST;': '≟'
+  '&EQUIV;': '≡'
+  '&EQVPARSL;': '⧥'
+  '&ERARR;': '⥱'
+  '&ESCR;': 'ℯ'
+  '&ESDOT;': '≐'
+  '&ESIM;': '≂'
+  '&ETA;': 'Η'
+  '&EUML;': 'Ë'
+  '&EURO;': '€'
+  '&EXCL;': '!'
+  '&EXIST;': '∃'
+  '&EXPECTATION;': 'ℰ'
+  '&EXPONENTIALE;': 'ⅇ'
+  '&FALLINGDOTSEQ;': '≒'
+  '&FCY;': 'Ф'
+  '&FEMALE;': '♀'
+  '&FFILIG;': 'FFI'
+  '&FFLIG;': 'FF'
+  '&FFLLIG;': 'FFL'
+  '&FFR;': '𝔣'
+  '&FILIG;': 'FI'
+  '&FJLIG;': 'FJ'
+  '&FLAT;': '♭'
+  '&FLLIG;': 'FL'
+  '&FLTNS;': '▱'
+  '&FNOF;': 'Ƒ'
+  '&FOPF;': '𝕗'
+  '&FORALL;': '∀'
+  '&FORK;': '⋔'
+  '&FORKV;': '⫙'
+  '&FPARTINT;': '⨍'
+  '&FRAC12;': '½'
+  '&FRAC13;': '⅓'
+  '&FRAC14;': '¼'
+  '&FRAC15;': '⅕'
+  '&FRAC16;': '⅙'
+  '&FRAC18;': '⅛'
+  '&FRAC23;': '⅔'
+  '&FRAC25;': '⅖'
+  '&FRAC34;': '¾'
+  '&FRAC35;': '⅗'
+  '&FRAC38;': '⅜'
+  '&FRAC45;': '⅘'
+  '&FRAC56;': '⅚'
+  '&FRAC58;': '⅝'
+  '&FRAC78;': '⅞'
+  '&FRASL;': '⁄'
+  '&FROWN;': '⌢'
+  '&FSCR;': '𝒻'
+  '&GACUTE;': 'Ǵ'
+  '&GAMMA;': 'Γ'
+  '&GAMMAD;': 'Ϝ'
+  '&GAP;': '⪆'
+  '&GBREVE;': 'Ğ'
+  '&GCIRC;': 'Ĝ'
+  '&GCY;': 'Г'
+  '&GDOT;': 'Ġ'
+  '&GE;': '≥'
+  '&GEL;': '⋛'
+  '&GEQ;': '≥'
+  '&GEQQ;': '≧'
+  '&GEQSLANT;': '⩾'
+  '&GES;': '⩾'
+  '&GESCC;': '⪩'
+  '&GESDOT;': '⪀'
+  '&GESDOTO;': '⪂'
+  '&GESDOTOL;': '⪄'
+  '&GESL;': '⋛︀'
+  '&GESLES;': '⪔'
+  '&GFR;': '𝔤'
+  '&GG;': '≫'
+  '&GGG;': '⋙'
+  '&GIMEL;': 'ℷ'
+  '&GJCY;': 'Ѓ'
+  '&GL;': '≷'
+  '&GLA;': '⪥'
+  '&GLJ;': '⪤'
+  '&GNAP;': '⪊'
+  '&GNAPPROX;': '⪊'
+  '&GNE;': '⪈'
+  '&GNEQ;': '⪈'
+  '&GNEQQ;': '≩'
+  '&GNSIM;': '⋧'
+  '&GOPF;': '𝕘'
+  '&GRAVE;': '`'
+  '&GSCR;': 'ℊ'
+  '&GSIM;': '≳'
+  '&GSIME;': '⪎'
+  '&GSIML;': '⪐'
+  '&GVERTNEQQ;': '≩︀'
+  '&HAIRSP;': '\u200a'
+  '&HALF;': '½'
+  '&HAMILT;': 'ℋ'
+  '&HARDCY;': 'Ъ'
+  '&HARR;': '↔'
+  '&HARRCIR;': '⥈'
+  '&HARRW;': '↭'
+  '&HBAR;': 'ℏ'
+  '&HCIRC;': 'Ĥ'
+  '&HEARTS;': '♥'
+  '&HEARTSUIT;': '♥'
+  '&HELLIP;': '…'
+  '&HERCON;': '⊹'
+  '&HFR;': '𝔥'
+  '&HKSEAROW;': '⤥'
+  '&HKSWAROW;': '⤦'
+  '&HOARR;': '⇿'
+  '&HOMTHT;': '∻'
+  '&HOOKLEFTARROW;': '↩'
+  '&HOOKRIGHTARROW;': '↪'
+  '&HOPF;': '𝕙'
+  '&HORBAR;': '―'
+  '&HSCR;': '𝒽'
+  '&HSLASH;': 'ℏ'
+  '&HSTROK;': 'Ħ'
+  '&HYBULL;': '⁃'
+  '&HYPHEN;': '‐'
+  '&IACUTE;': 'Í'
+  '&IC;': '\u2063'
+  '&ICIRC;': 'Î'
+  '&ICY;': 'И'
+  '&IECY;': 'Е'
+  '&IEXCL;': '¡'
+  '&IFF;': '⇔'
+  '&IFR;': '𝔦'
+  '&IGRAVE;': 'Ì'
+  '&II;': 'ⅈ'
+  '&IIIINT;': '⨌'
+  '&IIINT;': '∭'
+  '&IINFIN;': '⧜'
+  '&IIOTA;': '℩'
+  '&IJLIG;': 'Ĳ'
+  '&IMACR;': 'Ī'
+  '&IMAGE;': 'ℑ'
+  '&IMAGLINE;': 'ℐ'
+  '&IMAGPART;': 'ℑ'
+  '&IMATH;': 'I'
+  '&IMOF;': '⊷'
+  '&IMPED;': 'Ƶ'
+  '&IN;': '∈'
+  '&INCARE;': '℅'
+  '&INFIN;': '∞'
+  '&INFINTIE;': '⧝'
+  '&INODOT;': 'I'
+  '&INT;': '∫'
+  '&INTCAL;': '⊺'
+  '&INTEGERS;': 'ℤ'
+  '&INTERCAL;': '⊺'
+  '&INTLARHK;': '⨗'
+  '&INTPROD;': '⨼'
+  '&IOCY;': 'Ё'
+  '&IOGON;': 'Į'
+  '&IOPF;': '𝕚'
+  '&IOTA;': 'Ι'
+  '&IPROD;': '⨼'
+  '&IQUEST;': '¿'
+  '&ISCR;': '𝒾'
+  '&ISIN;': '∈'
+  '&ISINDOT;': '⋵'
+  '&ISINS;': '⋴'
+  '&ISINSV;': '⋳'
+  '&ISINV;': '∈'
+  '&IT;': '\u2062'
+  '&ITILDE;': 'Ĩ'
+  '&IUKCY;': 'І'
+  '&IUML;': 'Ï'
+  '&JCIRC;': 'Ĵ'
+  '&JCY;': 'Й'
+  '&JFR;': '𝔧'
+  '&JMATH;': 'ȷ'
+  '&JOPF;': '𝕛'
+  '&JSCR;': '𝒿'
+  '&JSERCY;': 'Ј'
+  '&JUKCY;': 'Є'
+  '&KAPPA;': 'Κ'
+  '&KAPPAV;': 'Κ'
+  '&KCEDIL;': 'Ķ'
+  '&KCY;': 'К'
+  '&KFR;': '𝔨'
+  '&KGREEN;': 'ĸ'
+  '&KHCY;': 'Х'
+  '&KJCY;': 'Ќ'
+  '&KOPF;': '𝕜'
+  '&KSCR;': '𝓀'
+  '&LACUTE;': 'Ĺ'
+  '&LAEMPTYV;': '⦴'
+  '&LAGRAN;': 'ℒ'
+  '&LAMBDA;': 'Λ'
+  '&LANG;': '⟨'
+  '&LANGD;': '⦑'
+  '&LANGLE;': '⟨'
+  '&LAP;': '⪅'
+  '&LAQUO;': '«'
+  '&LARR;': '←'
+  '&LARRB;': '⇤'
+  '&LARRBFS;': '⤟'
+  '&LARRFS;': '⤝'
+  '&LARRHK;': '↩'
+  '&LARRLP;': '↫'
+  '&LARRPL;': '⤹'
+  '&LARRSIM;': '⥳'
+  '&LARRTL;': '↢'
+  '&LAT;': '⪫'
+  '&LATAIL;': '⤙'
+  '&LATE;': '⪭'
+  '&LATES;': '⪭︀'
+  '&LBARR;': '⤌'
+  '&LBBRK;': '❲'
+  '&LBRACE;': '{'
+  '&LBRACK;': '['
+  '&LBRKE;': '⦋'
+  '&LBRKSLD;': '⦏'
+  '&LBRKSLU;': '⦍'
+  '&LCARON;': 'Ľ'
+  '&LCEDIL;': 'Ļ'
+  '&LCEIL;': '⌈'
+  '&LCUB;': '{'
+  '&LCY;': 'Л'
+  '&LDCA;': '⤶'
+  '&LDQUO;': '“'
+  '&LDQUOR;': '„'
+  '&LDRDHAR;': '⥧'
+  '&LDRUSHAR;': '⥋'
+  '&LDSH;': '↲'
+  '&LE;': '≤'
+  '&LEFTARROW;': '←'
+  '&LEFTARROWTAIL;': '↢'
+  '&LEFTHARPOONDOWN;': '↽'
+  '&LEFTHARPOONUP;': '↼'
+  '&LEFTLEFTARROWS;': '⇇'
+  '&LEFTRIGHTARROW;': '↔'
+  '&LEFTRIGHTARROWS;': '⇆'
+  '&LEFTRIGHTHARPOONS;': '⇋'
+  '&LEFTRIGHTSQUIGARROW;': '↭'
+  '&LEFTTHREETIMES;': '⋋'
+  '&LEG;': '⋚'
+  '&LEQ;': '≤'
+  '&LEQQ;': '≦'
+  '&LEQSLANT;': '⩽'
+  '&LES;': '⩽'
+  '&LESCC;': '⪨'
+  '&LESDOT;': '⩿'
+  '&LESDOTO;': '⪁'
+  '&LESDOTOR;': '⪃'
+  '&LESG;': '⋚︀'
+  '&LESGES;': '⪓'
+  '&LESSAPPROX;': '⪅'
+  '&LESSDOT;': '⋖'
+  '&LESSEQGTR;': '⋚'
+  '&LESSEQQGTR;': '⪋'
+  '&LESSGTR;': '≶'
+  '&LESSSIM;': '≲'
+  '&LFISHT;': '⥼'
+  '&LFLOOR;': '⌊'
+  '&LFR;': '𝔩'
+  '&LG;': '≶'
+  '&LHARD;': '↽'
+  '&LHARU;': '↼'
+  '&LHARUL;': '⥪'
+  '&LHBLK;': '▄'
+  '&LJCY;': 'Љ'
+  '&LL;': '≪'
+  '&LLARR;': '⇇'
+  '&LLCORNER;': '⌞'
+  '&LLHARD;': '⥫'
+  '&LLTRI;': '◺'
+  '&LMIDOT;': 'Ŀ'
+  '&LMOUST;': '⎰'
+  '&LMOUSTACHE;': '⎰'
+  '&LNAP;': '⪉'
+  '&LNAPPROX;': '⪉'
+  '&LNE;': '⪇'
+  '&LNEQ;': '⪇'
+  '&LNEQQ;': '≨'
+  '&LNSIM;': '⋦'
+  '&LOANG;': '⟬'
+  '&LOARR;': '⇽'
+  '&LOBRK;': '⟦'
+  '&LONGLEFTARROW;': '⟵'
+  '&LONGLEFTRIGHTARROW;': '⟷'
+  '&LONGMAPSTO;': '⟼'
+  '&LONGRIGHTARROW;': '⟶'
+  '&LOOPARROWLEFT;': '↫'
+  '&LOOPARROWRIGHT;': '↬'
+  '&LOPAR;': '⦅'
+  '&LOPF;': '𝕝'
+  '&LOPLUS;': '⨭'
+  '&LOTIMES;': '⨴'
+  '&LOWAST;': '∗'
+  '&LOWBAR;': '_'
+  '&LOZ;': '◊'
+  '&LOZENGE;': '◊'
+  '&LOZF;': '⧫'
+  '&LPAR;': '('
+  '&LPARLT;': '⦓'
+  '&LRARR;': '⇆'
+  '&LRCORNER;': '⌟'
+  '&LRHAR;': '⇋'
+  '&LRHARD;': '⥭'
+  '&LRM;': '\u200e'
+  '&LRTRI;': '⊿'
+  '&LSAQUO;': '‹'
+  '&LSCR;': '𝓁'
+  '&LSH;': '↰'
+  '&LSIM;': '≲'
+  '&LSIME;': '⪍'
+  '&LSIMG;': '⪏'
+  '&LSQB;': '['
+  '&LSQUO;': '‘'
+  '&LSQUOR;': '‚'
+  '&LSTROK;': 'Ł'
+  '&LURDSHAR;': '⥊'
+  '&LURUHAR;': '⥦'
+  '&LVERTNEQQ;': '≨︀'
+  '&MACR;': '¯'
+  '&MALE;': '♂'
+  '&MALT;': '✠'
+  '&MALTESE;': '✠'
+  '&MAP;': '↦'
+  '&MAPSTO;': '↦'
+  '&MAPSTODOWN;': '↧'
+  '&MAPSTOLEFT;': '↤'
+  '&MAPSTOUP;': '↥'
+  '&MARKER;': '▮'
+  '&MCOMMA;': '⨩'
+  '&MCY;': 'М'
+  '&MDASH;': '—'
+  '&MEASUREDANGLE;': '∡'
+  '&MFR;': '𝔪'
+  '&MHO;': '℧'
+  '&MICRO;': 'Μ'
+  '&MID;': '∣'
+  '&MIDAST;': '*'
+  '&MIDCIR;': '⫰'
+  '&MIDDOT;': '·'
+  '&MINUS;': '−'
+  '&MINUSB;': '⊟'
+  '&MINUSD;': '∸'
+  '&MINUSDU;': '⨪'
+  '&MLCP;': '⫛'
+  '&MLDR;': '…'
+  '&MNPLUS;': '∓'
+  '&MODELS;': '⊧'
+  '&MOPF;': '𝕞'
+  '&MP;': '∓'
+  '&MSCR;': '𝓂'
+  '&MSTPOS;': '∾'
+  '&MU;': 'Μ'
+  '&MULTIMAP;': '⊸'
+  '&MUMAP;': '⊸'
+  '&NABLA;': '∇'
+  '&NACUTE;': 'Ń'
+  '&NANG;': '∠⃒'
+  '&NAP;': '≉'
+  '&NAPID;': '≋̸'
+  '&NAPOS;': 'ʼN'
+  '&NAPPROX;': '≉'
+  '&NATUR;': '♮'
+  '&NATURAL;': '♮'
+  '&NATURALS;': 'ℕ'
+  '&NBSP;': '\xa0'
+  '&NBUMP;': '≎̸'
+  '&NBUMPE;': '≏̸'
+  '&NCAP;': '⩃'
+  '&NCARON;': 'Ň'
+  '&NCEDIL;': 'Ņ'
+  '&NCONG;': '≇'
+  '&NCONGDOT;': '⩭̸'
+  '&NCUP;': '⩂'
+  '&NCY;': 'Н'
+  '&NDASH;': '–'
+  '&NE;': '≠'
+  '&NEARHK;': '⤤'
+  '&NEARR;': '↗'
+  '&NEARROW;': '↗'
+  '&NEDOT;': '≐̸'
+  '&NEQUIV;': '≢'
+  '&NESEAR;': '⤨'
+  '&NESIM;': '≂̸'
+  '&NEXIST;': '∄'
+  '&NEXISTS;': '∄'
+  '&NFR;': '𝔫'
+  '&NGE;': '≱'
+  '&NGEQ;': '≱'
+  '&NGEQQ;': '≧̸'
+  '&NGEQSLANT;': '⩾̸'
+  '&NGES;': '⩾̸'
+  '&NGSIM;': '≵'
+  '&NGT;': '≯'
+  '&NGTR;': '≯'
+  '&NHARR;': '↮'
+  '&NHPAR;': '⫲'
+  '&NI;': '∋'
+  '&NIS;': '⋼'
+  '&NISD;': '⋺'
+  '&NIV;': '∋'
+  '&NJCY;': 'Њ'
+  '&NLARR;': '↚'
+  '&NLDR;': '‥'
+  '&NLE;': '≰'
+  '&NLEFTARROW;': '↚'
+  '&NLEFTRIGHTARROW;': '↮'
+  '&NLEQ;': '≰'
+  '&NLEQQ;': '≦̸'
+  '&NLEQSLANT;': '⩽̸'
+  '&NLES;': '⩽̸'
+  '&NLESS;': '≮'
+  '&NLSIM;': '≴'
+  '&NLT;': '≮'
+  '&NLTRI;': '⋪'
+  '&NLTRIE;': '⋬'
+  '&NMID;': '∤'
+  '&NOPF;': '𝕟'
+  '&NOT;': '¬'
+  '&NOTIN;': '∉'
+  '&NOTINDOT;': '⋵̸'
+  '&NOTINVA;': '∉'
+  '&NOTINVB;': '⋷'
+  '&NOTINVC;': '⋶'
+  '&NOTNI;': '∌'
+  '&NOTNIVA;': '∌'
+  '&NOTNIVB;': '⋾'
+  '&NOTNIVC;': '⋽'
+  '&NPAR;': '∦'
+  '&NPARALLEL;': '∦'
+  '&NPARSL;': '⫽⃥'
+  '&NPART;': '∂̸'
+  '&NPOLINT;': '⨔'
+  '&NPR;': '⊀'
+  '&NPRCUE;': '⋠'
+  '&NPRE;': '⪯̸'
+  '&NPREC;': '⊀'
+  '&NPRECEQ;': '⪯̸'
+  '&NRARR;': '↛'
+  '&NRARRC;': '⤳̸'
+  '&NRARRW;': '↝̸'
+  '&NRIGHTARROW;': '↛'
+  '&NRTRI;': '⋫'
+  '&NRTRIE;': '⋭'
+  '&NSC;': '⊁'
+  '&NSCCUE;': '⋡'
+  '&NSCE;': '⪰̸'
+  '&NSCR;': '𝓃'
+  '&NSHORTMID;': '∤'
+  '&NSHORTPARALLEL;': '∦'
+  '&NSIM;': '≁'
+  '&NSIME;': '≄'
+  '&NSIMEQ;': '≄'
+  '&NSMID;': '∤'
+  '&NSPAR;': '∦'
+  '&NSQSUBE;': '⋢'
+  '&NSQSUPE;': '⋣'
+  '&NSUB;': '⊄'
+  '&NSUBE;': '⊈'
+  '&NSUBSET;': '⊂⃒'
+  '&NSUBSETEQ;': '⊈'
+  '&NSUBSETEQQ;': '⫅̸'
+  '&NSUCC;': '⊁'
+  '&NSUCCEQ;': '⪰̸'
+  '&NSUP;': '⊅'
+  '&NSUPE;': '⊉'
+  '&NSUPSET;': '⊃⃒'
+  '&NSUPSETEQ;': '⊉'
+  '&NSUPSETEQQ;': '⫆̸'
+  '&NTGL;': '≹'
+  '&NTILDE;': 'Ñ'
+  '&NTLG;': '≸'
+  '&NTRIANGLELEFT;': '⋪'
+  '&NTRIANGLELEFTEQ;': '⋬'
+  '&NTRIANGLERIGHT;': '⋫'
+  '&NTRIANGLERIGHTEQ;': '⋭'
+  '&NU;': 'Ν'
+  '&NUM;': '#'
+  '&NUMERO;': '№'
+  '&NUMSP;': '\u2007'
+  '&NVAP;': '≍⃒'
+  '&NVDASH;': '⊬'
+  '&NVGE;': '≥⃒'
+  '&NVGT;': '>⃒'
+  '&NVINFIN;': '⧞'
+  '&NVLE;': '≤⃒'
+  '&NVLT;': '<⃒'
+  '&NVLTRIE;': '⊴⃒'
+  '&NVRTRIE;': '⊵⃒'
+  '&NVSIM;': '∼⃒'
+  '&NWARHK;': '⤣'
+  '&NWARR;': '↖'
+  '&NWARROW;': '↖'
+  '&NWNEAR;': '⤧'
+  '&OACUTE;': 'Ó'
+  '&OAST;': '⊛'
+  '&OCIR;': '⊚'
+  '&OCIRC;': 'Ô'
+  '&OCY;': 'О'
+  '&ODASH;': '⊝'
+  '&ODBLAC;': 'Ő'
+  '&ODIV;': '⨸'
+  '&ODOT;': '⊙'
+  '&ODSOLD;': '⦼'
+  '&OELIG;': 'Œ'
+  '&OFCIR;': '⦿'
+  '&OFR;': '𝔬'
+  '&OGON;': '˛'
+  '&OGRAVE;': 'Ò'
+  '&OGT;': '⧁'
+  '&OHBAR;': '⦵'
+  '&OHM;': 'Ω'
+  '&OINT;': '∮'
+  '&OLARR;': '↺'
+  '&OLCIR;': '⦾'
+  '&OLCROSS;': '⦻'
+  '&OLINE;': '‾'
+  '&OLT;': '⧀'
+  '&OMACR;': 'Ō'
+  '&OMEGA;': 'Ω'
+  '&OMICRON;': 'Ο'
+  '&OMID;': '⦶'
+  '&OMINUS;': '⊖'
+  '&OOPF;': '𝕠'
+  '&OPAR;': '⦷'
+  '&OPERP;': '⦹'
+  '&OPLUS;': '⊕'
+  '&OR;': '∨'
+  '&ORARR;': '↻'
+  '&ORD;': '⩝'
+  '&ORDER;': 'ℴ'
+  '&ORDEROF;': 'ℴ'
+  '&ORDF;': 'ª'
+  '&ORDM;': 'º'
+  '&ORIGOF;': '⊶'
+  '&OROR;': '⩖'
+  '&ORSLOPE;': '⩗'
+  '&ORV;': '⩛'
+  '&OSCR;': 'ℴ'
+  '&OSLASH;': 'Ø'
+  '&OSOL;': '⊘'
+  '&OTILDE;': 'Õ'
+  '&OTIMES;': '⊗'
+  '&OTIMESAS;': '⨶'
+  '&OUML;': 'Ö'
+  '&OVBAR;': '⌽'
+  '&PAR;': '∥'
+  '&PARA;': '¶'
+  '&PARALLEL;': '∥'
+  '&PARSIM;': '⫳'
+  '&PARSL;': '⫽'
+  '&PART;': '∂'
+  '&PCY;': 'П'
+  '&PERCNT;': '%'
+  '&PERIOD;': '.'
+  '&PERMIL;': '‰'
+  '&PERP;': '⊥'
+  '&PERTENK;': '‱'
+  '&PFR;': '𝔭'
+  '&PHI;': 'Φ'
+  '&PHIV;': 'Φ'
+  '&PHMMAT;': 'ℳ'
+  '&PHONE;': '☎'
+  '&PI;': 'Π'
+  '&PITCHFORK;': '⋔'
+  '&PIV;': 'Π'
+  '&PLANCK;': 'ℏ'
+  '&PLANCKH;': 'ℎ'
+  '&PLANKV;': 'ℏ'
+  '&PLUS;': '+'
+  '&PLUSACIR;': '⨣'
+  '&PLUSB;': '⊞'
+  '&PLUSCIR;': '⨢'
+  '&PLUSDO;': '∔'
+  '&PLUSDU;': '⨥'
+  '&PLUSE;': '⩲'
+  '&PLUSMN;': '±'
+  '&PLUSSIM;': '⨦'
+  '&PLUSTWO;': '⨧'
+  '&PM;': '±'
+  '&POINTINT;': '⨕'
+  '&POPF;': '𝕡'
+  '&POUND;': '£'
+  '&PR;': '≺'
+  '&PRAP;': '⪷'
+  '&PRCUE;': '≼'
+  '&PRE;': '⪯'
+  '&PREC;': '≺'
+  '&PRECAPPROX;': '⪷'
+  '&PRECCURLYEQ;': '≼'
+  '&PRECEQ;': '⪯'
+  '&PRECNAPPROX;': '⪹'
+  '&PRECNEQQ;': '⪵'
+  '&PRECNSIM;': '⋨'
+  '&PRECSIM;': '≾'
+  '&PRIME;': '′'
+  '&PRIMES;': 'ℙ'
+  '&PRNAP;': '⪹'
+  '&PRNSIM;': '⋨'
+  '&PROD;': '∏'
+  '&PROFALAR;': '⌮'
+  '&PROFLINE;': '⌒'
+  '&PROFSURF;': '⌓'
+  '&PROP;': '∝'
+  '&PROPTO;': '∝'
+  '&PRSIM;': '≾'
+  '&PRUREL;': '⊰'
+  '&PSCR;': '𝓅'
+  '&PSI;': 'Ψ'
+  '&PUNCSP;': '\u2008'
+  '&QFR;': '𝔮'
+  '&QINT;': '⨌'
+  '&QOPF;': '𝕢'
+  '&QPRIME;': '⁗'
+  '&QSCR;': '𝓆'
+  '&QUATERNIONS;': 'ℍ'
+  '&QUATINT;': '⨖'
+  '&QUEST;': '?'
+  '&QUESTEQ;': '≟'
+  '&RACE;': '∽̱'
+  '&RACUTE;': 'Ŕ'
+  '&RADIC;': '√'
+  '&RAEMPTYV;': '⦳'
+  '&RANG;': '⟩'
+  '&RANGD;': '⦒'
+  '&RANGE;': '⦥'
+  '&RANGLE;': '⟩'
+  '&RAQUO;': '»'
+  '&RARR;': '→'
+  '&RARRAP;': '⥵'
+  '&RARRB;': '⇥'
+  '&RARRBFS;': '⤠'
+  '&RARRC;': '⤳'
+  '&RARRFS;': '⤞'
+  '&RARRHK;': '↪'
+  '&RARRLP;': '↬'
+  '&RARRPL;': '⥅'
+  '&RARRSIM;': '⥴'
+  '&RARRTL;': '↣'
+  '&RARRW;': '↝'
+  '&RATAIL;': '⤚'
+  '&RATIO;': '∶'
+  '&RATIONALS;': 'ℚ'
+  '&RBARR;': '⤍'
+  '&RBBRK;': '❳'
+  '&RBRACE;': '}'
+  '&RBRACK;': ']'
+  '&RBRKE;': '⦌'
+  '&RBRKSLD;': '⦎'
+  '&RBRKSLU;': '⦐'
+  '&RCARON;': 'Ř'
+  '&RCEDIL;': 'Ŗ'
+  '&RCEIL;': '⌉'
+  '&RCUB;': '}'
+  '&RCY;': 'Р'
+  '&RDCA;': '⤷'
+  '&RDLDHAR;': '⥩'
+  '&RDQUO;': '”'
+  '&RDQUOR;': '”'
+  '&RDSH;': '↳'
+  '&REAL;': 'ℜ'
+  '&REALINE;': 'ℛ'
+  '&REALPART;': 'ℜ'
+  '&REALS;': 'ℝ'
+  '&RECT;': '▭'
+  '&RFISHT;': '⥽'
+  '&RFLOOR;': '⌋'
+  '&RFR;': '𝔯'
+  '&RHARD;': '⇁'
+  '&RHARU;': '⇀'
+  '&RHARUL;': '⥬'
+  '&RHO;': 'Ρ'
+  '&RHOV;': 'Ρ'
+  '&RIGHTARROW;': '→'
+  '&RIGHTARROWTAIL;': '↣'
+  '&RIGHTHARPOONDOWN;': '⇁'
+  '&RIGHTHARPOONUP;': '⇀'
+  '&RIGHTLEFTARROWS;': '⇄'
+  '&RIGHTLEFTHARPOONS;': '⇌'
+  '&RIGHTRIGHTARROWS;': '⇉'
+  '&RIGHTSQUIGARROW;': '↝'
+  '&RIGHTTHREETIMES;': '⋌'
+  '&RING;': '˚'
+  '&RISINGDOTSEQ;': '≓'
+  '&RLARR;': '⇄'
+  '&RLHAR;': '⇌'
+  '&RLM;': '\u200f'
+  '&RMOUST;': '⎱'
+  '&RMOUSTACHE;': '⎱'
+  '&RNMID;': '⫮'
+  '&ROANG;': '⟭'
+  '&ROARR;': '⇾'
+  '&ROBRK;': '⟧'
+  '&ROPAR;': '⦆'
+  '&ROPF;': '𝕣'
+  '&ROPLUS;': '⨮'
+  '&ROTIMES;': '⨵'
+  '&RPAR;': ')'
+  '&RPARGT;': '⦔'
+  '&RPPOLINT;': '⨒'
+  '&RRARR;': '⇉'
+  '&RSAQUO;': '›'
+  '&RSCR;': '𝓇'
+  '&RSH;': '↱'
+  '&RSQB;': ']'
+  '&RSQUO;': '’'
+  '&RSQUOR;': '’'
+  '&RTHREE;': '⋌'
+  '&RTIMES;': '⋊'
+  '&RTRI;': '▹'
+  '&RTRIE;': '⊵'
+  '&RTRIF;': '▸'
+  '&RTRILTRI;': '⧎'
+  '&RULUHAR;': '⥨'
+  '&RX;': '℞'
+  '&SACUTE;': 'Ś'
+  '&SBQUO;': '‚'
+  '&SC;': '≻'
+  '&SCAP;': '⪸'
+  '&SCARON;': 'Š'
+  '&SCCUE;': '≽'
+  '&SCE;': '⪰'
+  '&SCEDIL;': 'Ş'
+  '&SCIRC;': 'Ŝ'
+  '&SCNAP;': '⪺'
+  '&SCNSIM;': '⋩'
+  '&SCPOLINT;': '⨓'
+  '&SCSIM;': '≿'
+  '&SCY;': 'С'
+  '&SDOT;': '⋅'
+  '&SDOTB;': '⊡'
+  '&SDOTE;': '⩦'
+  '&SEARHK;': '⤥'
+  '&SEARR;': '↘'
+  '&SEARROW;': '↘'
+  '&SECT;': '§'
+  '&SEMI;': ';'
+  '&SESWAR;': '⤩'
+  '&SETMINUS;': '∖'
+  '&SETMN;': '∖'
+  '&SEXT;': '✶'
+  '&SFR;': '𝔰'
+  '&SFROWN;': '⌢'
+  '&SHARP;': '♯'
+  '&SHCHCY;': 'Щ'
+  '&SHCY;': 'Ш'
+  '&SHORTMID;': '∣'
+  '&SHORTPARALLEL;': '∥'
+  '&SHY;': '\xad'
+  '&SIGMA;': 'Σ'
+  '&SIGMAF;': 'Σ'
+  '&SIGMAV;': 'Σ'
+  '&SIM;': '∼'
+  '&SIMDOT;': '⩪'
+  '&SIME;': '≃'
+  '&SIMEQ;': '≃'
+  '&SIMG;': '⪞'
+  '&SIML;': '⪝'
+  '&SIMNE;': '≆'
+  '&SIMPLUS;': '⨤'
+  '&SIMRARR;': '⥲'
+  '&SLARR;': '←'
+  '&SMALLSETMINUS;': '∖'
+  '&SMASHP;': '⨳'
+  '&SMEPARSL;': '⧤'
+  '&SMID;': '∣'
+  '&SMILE;': '⌣'
+  '&SMT;': '⪪'
+  '&SMTE;': '⪬'
+  '&SMTES;': '⪬︀'
+  '&SOFTCY;': 'Ь'
+  '&SOL;': '/'
+  '&SOLB;': '⧄'
+  '&SOLBAR;': '⌿'
+  '&SOPF;': '𝕤'
+  '&SPADES;': '♠'
+  '&SPADESUIT;': '♠'
+  '&SPAR;': '∥'
+  '&SQCAP;': '⊓'
+  '&SQCAPS;': '⊓︀'
+  '&SQCUP;': '⊔'
+  '&SQCUPS;': '⊔︀'
+  '&SQSUB;': '⊏'
+  '&SQSUBE;': '⊑'
+  '&SQSUBSET;': '⊏'
+  '&SQSUBSETEQ;': '⊑'
+  '&SQSUP;': '⊐'
+  '&SQSUPE;': '⊒'
+  '&SQSUPSET;': '⊐'
+  '&SQSUPSETEQ;': '⊒'
+  '&SQU;': '□'
+  '&SQUARE;': '□'
+  '&SQUARF;': '▪'
+  '&SQUF;': '▪'
+  '&SRARR;': '→'
+  '&SSCR;': '𝓈'
+  '&SSETMN;': '∖'
+  '&SSMILE;': '⌣'
+  '&SSTARF;': '⋆'
+  '&STAR;': '☆'
+  '&STARF;': '★'
+  '&STRAIGHTEPSILON;': 'Ε'
+  '&STRAIGHTPHI;': 'Φ'
+  '&STRNS;': '¯'
+  '&SUB;': '⊂'
+  '&SUBDOT;': '⪽'
+  '&SUBE;': '⊆'
+  '&SUBEDOT;': '⫃'
+  '&SUBMULT;': '⫁'
+  '&SUBNE;': '⊊'
+  '&SUBPLUS;': '⪿'
+  '&SUBRARR;': '⥹'
+  '&SUBSET;': '⊂'
+  '&SUBSETEQ;': '⊆'
+  '&SUBSETEQQ;': '⫅'
+  '&SUBSETNEQ;': '⊊'
+  '&SUBSETNEQQ;': '⫋'
+  '&SUBSIM;': '⫇'
+  '&SUBSUB;': '⫕'
+  '&SUBSUP;': '⫓'
+  '&SUCC;': '≻'
+  '&SUCCAPPROX;': '⪸'
+  '&SUCCCURLYEQ;': '≽'
+  '&SUCCEQ;': '⪰'
+  '&SUCCNAPPROX;': '⪺'
+  '&SUCCNEQQ;': '⪶'
+  '&SUCCNSIM;': '⋩'
+  '&SUCCSIM;': '≿'
+  '&SUM;': '∑'
+  '&SUNG;': '♪'
+  '&SUP1;': '¹'
+  '&SUP2;': '²'
+  '&SUP3;': '³'
+  '&SUP;': '⊃'
+  '&SUPDOT;': '⪾'
+  '&SUPDSUB;': '⫘'
+  '&SUPE;': '⊇'
+  '&SUPEDOT;': '⫄'
+  '&SUPHSOL;': '⟉'
+  '&SUPHSUB;': '⫗'
+  '&SUPLARR;': '⥻'
+  '&SUPMULT;': '⫂'
+  '&SUPNE;': '⊋'
+  '&SUPPLUS;': '⫀'
+  '&SUPSET;': '⊃'
+  '&SUPSETEQ;': '⊇'
+  '&SUPSETEQQ;': '⫆'
+  '&SUPSETNEQ;': '⊋'
+  '&SUPSETNEQQ;': '⫌'
+  '&SUPSIM;': '⫈'
+  '&SUPSUB;': '⫔'
+  '&SUPSUP;': '⫖'
+  '&SWARHK;': '⤦'
+  '&SWARR;': '↙'
+  '&SWARROW;': '↙'
+  '&SWNWAR;': '⤪'
+  '&SZLIG;': 'SS'
+  '&TARGET;': '⌖'
+  '&TAU;': 'Τ'
+  '&TBRK;': '⎴'
+  '&TCARON;': 'Ť'
+  '&TCEDIL;': 'Ţ'
+  '&TCY;': 'Т'
+  '&TDOT;': '⃛'
+  '&TELREC;': '⌕'
+  '&TFR;': '𝔱'
+  '&THERE4;': '∴'
+  '&THEREFORE;': '∴'
+  '&THETA;': 'Θ'
+  '&THETASYM;': 'Θ'
+  '&THETAV;': 'Θ'
+  '&THICKAPPROX;': '≈'
+  '&THICKSIM;': '∼'
+  '&THINSP;': '\u2009'
+  '&THKAP;': '≈'
+  '&THKSIM;': '∼'
+  '&TILDE;': '˜'
+  '&TIMES;': '×'
+  '&TIMESB;': '⊠'
+  '&TIMESBAR;': '⨱'
+  '&TIMESD;': '⨰'
+  '&TINT;': '∭'
+  '&TOEA;': '⤨'
+  '&TOP;': '⊤'
+  '&TOPBOT;': '⌶'
+  '&TOPCIR;': '⫱'
+  '&TOPF;': '𝕥'
+  '&TOPFORK;': '⫚'
+  '&TOSA;': '⤩'
+  '&TPRIME;': '‴'
+  '&TRIANGLE;': '▵'
+  '&TRIANGLEDOWN;': '▿'
+  '&TRIANGLELEFT;': '◃'
+  '&TRIANGLELEFTEQ;': '⊴'
+  '&TRIANGLEQ;': '≜'
+  '&TRIANGLERIGHT;': '▹'
+  '&TRIANGLERIGHTEQ;': '⊵'
+  '&TRIDOT;': '◬'
+  '&TRIE;': '≜'
+  '&TRIMINUS;': '⨺'
+  '&TRIPLUS;': '⨹'
+  '&TRISB;': '⧍'
+  '&TRITIME;': '⨻'
+  '&TRPEZIUM;': '⏢'
+  '&TSCR;': '𝓉'
+  '&TSCY;': 'Ц'
+  '&TSHCY;': 'Ћ'
+  '&TSTROK;': 'Ŧ'
+  '&TWIXT;': '≬'
+  '&TWOHEADLEFTARROW;': '↞'
+  '&TWOHEADRIGHTARROW;': '↠'
+  '&UACUTE;': 'Ú'
+  '&UARR;': '↑'
+  '&UBRCY;': 'Ў'
+  '&UBREVE;': 'Ŭ'
+  '&UCIRC;': 'Û'
+  '&UCY;': 'У'
+  '&UDARR;': '⇅'
+  '&UDBLAC;': 'Ű'
+  '&UDHAR;': '⥮'
+  '&UFISHT;': '⥾'
+  '&UFR;': '𝔲'
+  '&UGRAVE;': 'Ù'
+  '&UHARL;': '↿'
+  '&UHARR;': '↾'
+  '&UHBLK;': '▀'
+  '&ULCORN;': '⌜'
+  '&ULCORNER;': '⌜'
+  '&ULCROP;': '⌏'
+  '&ULTRI;': '◸'
+  '&UMACR;': 'Ū'
+  '&UML;': '¨'
+  '&UOGON;': 'Ų'
+  '&UOPF;': '𝕦'
+  '&UPARROW;': '↑'
+  '&UPDOWNARROW;': '↕'
+  '&UPHARPOONLEFT;': '↿'
+  '&UPHARPOONRIGHT;': '↾'
+  '&UPLUS;': '⊎'
+  '&UPSI;': 'Υ'
+  '&UPSIH;': 'ϒ'
+  '&UPSILON;': 'Υ'
+  '&UPUPARROWS;': '⇈'
+  '&URCORN;': '⌝'
+  '&URCORNER;': '⌝'
+  '&URCROP;': '⌎'
+  '&URING;': 'Ů'
+  '&URTRI;': '◹'
+  '&USCR;': '𝓊'
+  '&UTDOT;': '⋰'
+  '&UTILDE;': 'Ũ'
+  '&UTRI;': '▵'
+  '&UTRIF;': '▴'
+  '&UUARR;': '⇈'
+  '&UUML;': 'Ü'
+  '&UWANGLE;': '⦧'
+  '&VANGRT;': '⦜'
+  '&VAREPSILON;': 'Ε'
+  '&VARKAPPA;': 'Κ'
+  '&VARNOTHING;': '∅'
+  '&VARPHI;': 'Φ'
+  '&VARPI;': 'Π'
+  '&VARPROPTO;': '∝'
+  '&VARR;': '↕'
+  '&VARRHO;': 'Ρ'
+  '&VARSIGMA;': 'Σ'
+  '&VARSUBSETNEQ;': '⊊︀'
+  '&VARSUBSETNEQQ;': '⫋︀'
+  '&VARSUPSETNEQ;': '⊋︀'
+  '&VARSUPSETNEQQ;': '⫌︀'
+  '&VARTHETA;': 'Θ'
+  '&VARTRIANGLELEFT;': '⊲'
+  '&VARTRIANGLERIGHT;': '⊳'
+  '&VCY;': 'В'
+  '&VDASH;': '⊢'
+  '&VEE;': '∨'
+  '&VEEBAR;': '⊻'
+  '&VEEEQ;': '≚'
+  '&VELLIP;': '⋮'
+  '&VERBAR;': '|'
+  '&VERT;': '|'
+  '&VFR;': '𝔳'
+  '&VLTRI;': '⊲'
+  '&VNSUB;': '⊂⃒'
+  '&VNSUP;': '⊃⃒'
+  '&VOPF;': '𝕧'
+  '&VPROP;': '∝'
+  '&VRTRI;': '⊳'
+  '&VSCR;': '𝓋'
+  '&VSUBNE;': '⊊︀'
+  '&VSUPNE;': '⊋︀'
+  '&VZIGZAG;': '⦚'
+  '&WCIRC;': 'Ŵ'
+  '&WEDBAR;': '⩟'
+  '&WEDGE;': '∧'
+  '&WEDGEQ;': '≙'
+  '&WEIERP;': '℘'
+  '&WFR;': '𝔴'
+  '&WOPF;': '𝕨'
+  '&WP;': '℘'
+  '&WR;': '≀'
+  '&WREATH;': '≀'
+  '&WSCR;': '𝓌'
+  '&XCAP;': '⋂'
+  '&XCIRC;': '◯'
+  '&XCUP;': '⋃'
+  '&XDTRI;': '▽'
+  '&XFR;': '𝔵'
+  '&XHARR;': '⟷'
+  '&XI;': 'Ξ'
+  '&XLARR;': '⟵'
+  '&XMAP;': '⟼'
+  '&XNIS;': '⋻'
+  '&XODOT;': '⨀'
+  '&XOPF;': '𝕩'
+  '&XOPLUS;': '⨁'
+  '&XOTIME;': '⨂'
+  '&XRARR;': '⟶'
+  '&XSCR;': '𝓍'
+  '&XSQCUP;': '⨆'
+  '&XUPLUS;': '⨄'
+  '&XUTRI;': '△'
+  '&XVEE;': '⋁'
+  '&XWEDGE;': '⋀'
+  '&YACUTE;': 'Ý'
+  '&YACY;': 'Я'
+  '&YCIRC;': 'Ŷ'
+  '&YCY;': 'Ы'
+  '&YEN;': '¥'
+  '&YFR;': '𝔶'
+  '&YICY;': 'Ї'
+  '&YOPF;': '𝕪'
+  '&YSCR;': '𝓎'
+  '&YUCY;': 'Ю'
+  '&YUML;': 'Ÿ'
+  '&ZACUTE;': 'Ź'
+  '&ZCARON;': 'Ž'
+  '&ZCY;': 'З'
+  '&ZDOT;': 'Ż'
+  '&ZEETRF;': 'ℨ'
+  '&ZETA;': 'Ζ'
+  '&ZFR;': '𝔷'
+  '&ZHCY;': 'Ж'
+  '&ZIGRARR;': '⇝'
+  '&ZOPF;': '𝕫'
+  '&ZSCR;': '𝓏'
+  '&ZWJ;': '\u200d'
+  '&ZWNJ;': '\u200c'
