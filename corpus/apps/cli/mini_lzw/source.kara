@@ -1,0 +1,347 @@
+// mini_lzw — a port of the lzw3 library (Stefano Dottore, MIT): LZW
+// compression, the dictionary coder behind Unix `compress` (.Z), GIF, TIFF and
+// the PDF LZWDecode filter. For each input the program LZW-compresses the bytes
+// to lzw3's variable-width code stream and decompresses the result back.
+//
+// LZW builds a dictionary of byte sequences on the fly: sequence 0..255 are the
+// single bytes, 256 is an end-of-stream marker, and each new sequence is the
+// previous one plus one byte. Codes are written most-significant-bit first with
+// a width that grows as the dictionary fills (9 bits, then 10, ...). lzw3's
+// exact asymmetry is reproduced: the compressor widens the code AFTER assigning
+// a sequence number, the decompressor BEFORE — "the decompressor switches one
+// step before the compressor". No bitwise operators: a shift `n >> k` is the
+// integer `n / pow2(k)`, and the bit vector is packed to bytes with arithmetic,
+// so the compressed bytes are byte-identical to the library's.
+//
+// Each input line is a lowercase hex string (the raw bytes). The job prints the
+// compressed bytes as hex and the hex of decompressing them back (= the input).
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn hexval(b: u8) -> i64 {
+    let c = b as i64;
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    c - 97 + 10
+}
+
+fn hex2(b: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut v: Vec[u8] = Vec.new();
+    v.push(digs[b / 16]);
+    v.push(digs[b % 16]);
+    String.from_utf8(v).unwrap_or("")
+}
+
+// append `val` as a `nbits`-wide MSB-first 0/1 sequence to `out`
+fn push_code(out: mut ref Vec[i64], nbits: i64, val: i64) {
+    let mut i = 0;
+    while i < nbits {
+        let place = pow2(nbits - 1 - i);
+        out.push((val / place) % 2);
+        i = i + 1;
+    }
+}
+
+// pack a 0/1 bit vector to bytes, MSB-first. lzw3's BitWriter flushes full
+// bytes as they fill, then close() ALWAYS writes one final byte holding the
+// leftover bits right-padded (a 00 byte when the stream is already
+// byte-aligned), so the output is floor(total/8) + 1 bytes.
+fn bits_to_bytes(bitv: ref Vec[i64]) -> Vec[i64] {
+    let total = bitv.len();
+    let full = total / 8;
+    let mut bytes: Vec[i64] = Vec.new();
+    let mut b = 0;
+    while b < full {
+        let base = b * 8;
+        let mut byte = 0;
+        let mut m = 0;
+        while m < 8 {
+            byte = byte * 2 + bitv[base + m];
+            m = m + 1;
+        }
+        bytes.push(byte);
+        b = b + 1;
+    }
+    // final close byte: the remaining (total - full*8) bits, right-padded
+    let rem = full * 8;
+    let mut last = 0;
+    let mut k = 0;
+    while k < 8 {
+        let idx = rem + k;
+        let bit = if idx < total { bitv[idx] } else { 0 };
+        last = last * 2 + bit;
+        k = k + 1;
+    }
+    bytes.push(last);
+    bytes
+}
+
+fn bytes_to_bits(data: ref Vec[u8]) -> Vec[i64] {
+    let mut bits: Vec[i64] = Vec.new();
+    let n = data.len();
+    let mut i = 0;
+    while i < n {
+        push_code(mut bits, 8, data[i] as i64);
+        i = i + 1;
+    }
+    bits
+}
+
+// read `nbits` MSB-first starting at bit index `pos` (missing bits read as 0)
+fn peek_bits(bits: ref Vec[i64], pos: i64, nbits: i64) -> i64 {
+    let n = bits.len();
+    let mut v = 0;
+    let mut k = 0;
+    while k < nbits {
+        let idx = pos + k;
+        let bit = if idx < n { bits[idx] } else { 0 };
+        v = v * 2 + bit;
+        k = k + 1;
+    }
+    v
+}
+
+// dictionary key for (parent sequence, edge byte); ROOT = -1 maps to slot 0
+fn dkey(parent: i64, edge: i64) -> i64 {
+    (parent + 1) * 257 + edge
+}
+
+// compressor insert: assign the next sequence number to (parent, edge), then
+// widen the code AFTER assigning (st[0] = next number, st[1] = bit width)
+fn comp_insert(table: mut ref Map[i64, i64], st: mut ref Vec[i64], parent: i64, edge: i64) {
+    let nxt = st[0];
+    table.insert(dkey(parent, edge), nxt);
+    st[1] = st[1] + nxt / pow2(st[1]);
+    st[0] = nxt + 1;
+}
+
+fn compress(data: ref Vec[u8]) -> Vec[i64] {
+    let mut table: Map[i64, i64] = Map.new();
+    let mut st: Vec[i64] = Vec.new();
+    st.push(0); // next sequence number
+    st.push(0); // current code bit width
+
+    let mut i = 0;
+    while i < 256 {
+        comp_insert(mut table, mut st, -1, i);
+        i = i + 1;
+    }
+    comp_insert(mut table, mut st, -1, 256); // STREAM_END
+
+    let mut bitv: Vec[i64] = Vec.new();
+    let mut seq_parent = -1;
+    let n = data.len();
+    let mut p = 0;
+    while p < n {
+        let c = data[p] as i64;
+        let found = match table.get(dkey(seq_parent, c)) {
+            Some(s) => s,
+            None => -1,
+        };
+        if found >= 0 {
+            seq_parent = found;
+        } else {
+            push_code(mut bitv, st[1], seq_parent);
+            comp_insert(mut table, mut st, seq_parent, c);
+            seq_parent = match table.get(dkey(-1, c)) {
+                Some(s) => s,
+                None => 0,
+            };
+        }
+        p = p + 1;
+    }
+    push_code(mut bitv, st[1], seq_parent);
+    push_code(mut bitv, st[1], 256); // STREAM_END
+
+    bits_to_bytes(bitv)
+}
+
+// decompressor insert: append the path, increment the next number, then widen
+// the code using the INCREMENTED number (one step before the compressor)
+fn dec_insert(table: mut ref Vec[Vec[i64]], st: mut ref Vec[i64], path: own Vec[i64]) {
+    table.push(path);
+    st[0] = st[0] + 1;
+    st[1] = st[1] + st[0] / pow2(st[1]);
+}
+
+fn decompress(data: ref Vec[u8]) -> Vec[u8] {
+    let bits = bytes_to_bits(data);
+
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    let mut st: Vec[i64] = Vec.new();
+    st.push(0); // next sequence number
+    st.push(0); // current code bit width
+
+    let mut i = 0;
+    while i < 256 {
+        let mut path: Vec[i64] = Vec.new();
+        path.push(i);
+        dec_insert(mut table, mut st, path);
+        i = i + 1;
+    }
+    let mut epath: Vec[i64] = Vec.new();
+    epath.push(256);
+    dec_insert(mut table, mut st, epath); // STREAM_END
+
+    let mut out: Vec[u8] = Vec.new();
+    let mut pos = 0;
+
+    let seq0 = peek_bits(bits, pos, st[1]);
+    pos = pos + st[1];
+    let mut seq_parent_path = table[seq0].clone();
+    let mut w = 0;
+    while w < seq_parent_path.len() {
+        out.push(seq_parent_path[w] as u8);
+        w = w + 1;
+    }
+    let mut seq_path = seq_parent_path.clone();
+    let mut seq_path_first = seq_parent_path[0];
+
+    let mut go = true;
+    while go {
+        let seq = peek_bits(bits, pos, st[1]);
+        pos = pos + st[1];
+        if seq == 256 {
+            go = false;
+        } else {
+            let is_normal = seq < st[0];
+            if is_normal {
+                seq_path = table[seq].clone();
+                seq_path_first = seq_path[0];
+            }
+            let mut new_seq_path = seq_parent_path.clone();
+            new_seq_path.push(seq_path_first);
+            dec_insert(mut table, mut st, new_seq_path.clone());
+
+            let seq_out_path = if is_normal { seq_path.clone() } else { new_seq_path.clone() };
+            let mut q = 0;
+            while q < seq_out_path.len() {
+                out.push(seq_out_path[q] as u8);
+                q = q + 1;
+            }
+            seq_parent_path = seq_out_path;
+        }
+    }
+    out
+}
+
+fn run_job(line: String) -> String {
+    let hb = str_bytes(line);
+    let hn = hb.len();
+    let mut data: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < hn {
+        let hi = hexval(hb[i]);
+        let lo = hexval(hb[i + 1]);
+        data.push((hi * 16 + lo) as u8);
+        i = i + 2;
+    }
+
+    let comp = compress(data);
+
+    let mut enc = String.new();
+    let mut e = 0;
+    let cn = comp.len();
+    while e < cn {
+        enc.push_str(hex2(comp[e]));
+        e = e + 1;
+    }
+
+    let cb = bytes_u8(comp);
+    let dec = decompress(cb);
+    let mut dhex = String.new();
+    let mut d = 0;
+    let dn = dec.len();
+    while d < dn {
+        dhex.push_str(hex2(dec[d] as i64));
+        d = d + 1;
+    }
+
+    let mut out = String.new();
+    out.push_str("enc ");
+    out.push_str(enc);
+    out.push_str("\ndec ");
+    out.push_str(dhex);
+    out
+}
+
+// the compressed stream is a Vec[i64] of byte values; decompress wants Vec[u8]
+fn bytes_u8(v: ref Vec[i64]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let n = v.len();
+    let mut i = 0;
+    while i < n {
+        out.push(v[i] as u8);
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("61\n");
+    s.push_str("6162\n");
+    s.push_str("61616161\n");
+    s.push_str("6162726163616461627261\n");
+    s.push_str("6d69737369737369707069\n");
+    s.push_str("544f42454f524e4f54544f42454f52544f42454f524e4f54\n");
+    s.push_str("68656c6c6f20776f726c64\n");
+    s.push_str("74686520717569636b2062726f776e20666f78\n");
+    s.push_str("000000\n");
+    s.push_str("ffffffffffffffffffffffff\n");
+    s.push_str("62616e616e612062616e616e612062616e616e61\n");
+    s.push_str("414141414141414142\n");
+    s.push_str("616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162\n");
+    s.push_str("616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263616263\n");
+    s.push_str("000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304000102030400010203040001020304\n");
+    s.push_str("000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f\n");
+    s.push_str("0102030405\n");
+    s.push_str("48656c6c6f2c20576f726c6421\n");
+    s.push_str("7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a\n");
+    s.push_str("6d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d69737373206d6973737320\n");
+    s
+}
