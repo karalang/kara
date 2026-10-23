@@ -1,0 +1,339 @@
+// LeetCode #870: Advantage Shuffle -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: return a permutation of nums1 that makes as many i as
+// possible have nums1[i] > nums2[i]. Any such permutation is accepted, so
+// the arms are compared by the advantage they reach, not by the
+// permutation.
+// ---- the ★ arm: greedy from the largest -----------------------------------
+fn star_advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut sorted = nums1.clone();
+    sorted.sort();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| -nums2[i]);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    for i in order.iter() {
+        if sorted[hi] > nums2[*i] {
+            result[*i] = sorted[hi];
+            hi -= 1;
+        } else {
+            result[*i] = sorted[lo];
+            lo += 1;
+        }
+    }
+    result
+}
+
+// ---- the ascending arm: greedy from the smallest --------------------------
+fn ascending_advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut sorted = nums1.clone();
+    sorted.sort();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| nums2[i]);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    let mut spare: Vec[i64] = Vec.new();
+    let mut beaten = 0;
+    for x in sorted.iter() {
+        if *x > nums2[order[beaten]] {
+            result[order[beaten]] = *x;
+            beaten += 1;
+        } else {
+            spare.push(*x);
+        }
+    }
+    for x in spare.iter() {
+        result[order[beaten]] = *x;
+        beaten += 1;
+    }
+    result
+}
+
+// ---- the sortedmap arm: the smallest value that beats it ------------------
+fn sortedmap_advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut left: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums1.iter() {
+        if left.contains_key(*x) {
+            left[*x] += 1;
+        } else {
+            left[*x] = 1;
+        }
+    }
+    let mut result: Vec[i64] = Vec.new();
+    for b in nums2.iter() {
+        let pick = match left.ceiling(*b + 1) {
+            Some((x, _)) => *x,
+            None => match left.keys().next() {
+                Some(x) => *x,
+                None => 0,
+            },
+        };
+        if left[pick] == 1 {
+            left.remove(pick);
+        } else {
+            left[pick] -= 1;
+        }
+        result.push(pick);
+    }
+    result
+}
+
+// ---- the heap arm: a heap of nums2 ----------------------------------------
+fn heap_advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut sorted = nums1.clone();
+    sorted.sort();
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        pairs.push((nums2[i], i));
+    }
+    let mut heap = PriorityQueue.max_first_from(pairs);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    while let Some((b, i)) = heap.pop() {
+        if sorted[hi] > b {
+            result[i] = sorted[hi];
+            hi -= 1;
+        } else {
+            result[i] = sorted[lo];
+            lo += 1;
+        }
+    }
+    result
+}
+
+// ---- the count arm: binary search on the advantage ------------------------
+fn count_advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut a = nums1.clone();
+    a.sort();
+    let mut b = nums2.clone();
+    b.sort();
+    let mut lo = 0;
+    let mut hi = n;
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if count_wins(a, b, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let k = lo;
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| nums2[i]);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    for i in 0..k {
+        result[order[i]] = a[n - k + i];
+    }
+    for i in k..n {
+        result[order[i]] = a[i - k];
+    }
+    result
+}
+
+// whether the k largest of a, in order, beat the k smallest of b
+fn count_wins(a: Vec[i64], b: Vec[i64], k: i64) -> bool {
+    let n = a.len();
+    for i in 0..k {
+        if a[n - k + i] <= b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn arm(a: i64, nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    match a {
+        0 => star_advantage_count(nums1, nums2),
+        1 => ascending_advantage_count(nums1, nums2),
+        2 => sortedmap_advantage_count(nums1, nums2),
+        3 => heap_advantage_count(nums1, nums2),
+        _ => count_advantage_count(nums1, nums2),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the most wins over every way to give the unused values of nums1 to
+// positions i, i + 1, ... of nums2
+fn literal_best(nums1: Vec[i64], nums2: Vec[i64], used: mut ref Vec[bool], i: i64) -> i64 {
+    if i == nums2.len() {
+        return 0;
+    }
+    let mut best = 0;
+    for j in 0..nums1.len() {
+        if not used[j] {
+            used[j] = true;
+            let win = if nums1[j] > nums2[i] { 1 } else { 0 };
+            let wins = win + literal_best(nums1, nums2, mut used, i + 1);
+            used[j] = false;
+            if wins > best {
+                best = wins;
+            }
+        }
+    }
+    best
+}
+
+// the largest advantage of any permutation of nums1, every one tried
+fn literal_advantage(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let mut used: Vec[bool] = Vec.filled(nums1.len(), false);
+    literal_best(nums1, nums2, mut used, 0)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit
+}
+
+fn random_vec(seed: mut ref i64, n: i64, limit: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(random_below(mut seed, limit));
+    }
+    v
+}
+
+fn shuffled(seed: mut ref i64, v: Vec[i64]) -> Vec[i64] {
+    let mut w = v.clone();
+    for i in 1..w.len() {
+        let j = next_random(mut seed) % (i + 1);
+        w.swap(i, j);
+    }
+    w
+}
+
+fn advantage(result: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let mut wins = 0;
+    for i in 0..nums2.len() {
+        if result[i] > nums2[i] {
+            wins += 1;
+        }
+    }
+    wins
+}
+
+fn is_permutation(result: Vec[i64], nums1: Vec[i64]) -> bool {
+    if result.len() != nums1.len() {
+        return false;
+    }
+    let mut x = result.clone();
+    let mut y = nums1.clone();
+    x.sort();
+    y.sort();
+    x == y
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one pair, each over the five arms (P2 only when
+// `literal`); returns the ★ arm's advantage
+fn properties(t: mut ref Tally, seed: mut ref i64, nums1: Vec[i64], nums2: Vec[i64], literal: bool) -> i64 {
+    let want = if literal { literal_advantage(nums1, nums2) } else { 0 };
+    let other2 = shuffled(mut seed, nums2);
+    let other1 = shuffled(mut seed, nums1);
+    let mut raised: Vec[i64] = Vec.new();
+    for x in nums1.iter() {
+        raised.push(*x + 1);
+    }
+    let mut top = 0;
+    for x in nums1.iter() {
+        if *x > top {
+            top = *x;
+        }
+    }
+    for x in nums2.iter() {
+        if *x > top {
+            top = *x;
+        }
+    }
+    let mut longer1 = nums1.clone();
+    longer1.push(top + 2);
+    let mut longer2 = nums2.clone();
+    longer2.push(top + 1);
+    let mut star = 0;
+    for a in 0..5 {
+        let result = arm(a, nums1, nums2);
+        // P1: the answer is a permutation of nums1
+        let ok = is_permutation(result, nums1);
+        check(mut t, 1, ok);
+        let got = if ok { advantage(result, nums2) } else { -1 };
+        if a == 0 {
+            star = got;
+        }
+        // P2: the statement's answer, the most any permutation reaches
+        if literal {
+            check(mut t, 2, got == want);
+        }
+        // P3: nums2 in a random order keeps the advantage
+        check(mut t, 3, advantage(arm(a, nums1, other2), other2) == got);
+        // P4: nums1 with every value raised by 1 never does worse
+        check(mut t, 4, advantage(arm(a, raised, nums2), nums2) >= got);
+        // P5: a value above all others added to nums1, and one just
+        // below it to nums2, adds exactly one win
+        check(mut t, 5, advantage(arm(a, longer1, longer2), longer2) == got + 1);
+        // P6: nums1 in a random order keeps the advantage
+        check(mut t, 6, advantage(arm(a, other1, nums2), nums2) == got);
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut seed = 870;
+    // small arrays with many repeats, against the statement
+    for k in 0..1500 {
+        let n = k % 6 + 1;
+        let limit = if k % 3 == 0 { 3 } else { 10 };
+        let nums1 = random_vec(mut seed, n, limit);
+        let nums2 = random_vec(mut seed, n, limit);
+        count += 1;
+        total += properties(mut t, mut seed, nums1, nums2, true);
+    }
+    // larger arrays, values up to 10^9 or below n
+    for k in 0..200 {
+        let n = random_below(mut seed, 60) + 1;
+        let limit = if k % 2 == 0 { 1000000001 } else { n };
+        let nums1 = random_vec(mut seed, n, limit);
+        let nums2 = random_vec(mut seed, n, limit);
+        count += 1;
+        total += properties(mut t, mut seed, nums1, nums2, false);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} pairs of arrays, advantages sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

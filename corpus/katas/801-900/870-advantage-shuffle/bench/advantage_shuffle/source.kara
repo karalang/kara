@@ -1,0 +1,64 @@
+// LeetCode #870: Advantage Shuffle -- bench program: the ★ arm (greedy
+// from the largest) on 20 pairs of arrays of 100,000 values up to 10^9,
+// LeetCode's largest.
+//
+// Take nums2's values from largest to smallest. The largest value left in
+// nums1 either beats the current one, and then nothing smaller in nums2
+// needs it more, or it beats nothing left in nums2, and then the current
+// value is beaten by nothing and should take the smallest value left,
+// which no other value could use as well. nums1 sorted once, nums2's
+// indices sorted by value, two pointers. O(n log n).
+
+fn advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut sorted = nums1.clone();
+    sorted.sort();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| -nums2[i]);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    for i in order.iter() {
+        if sorted[hi] > nums2[*i] {
+            result[*i] = sorted[hi];
+            hi -= 1;
+        } else {
+            result[*i] = sorted[lo];
+            lo += 1;
+        }
+    }
+    result
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_vec(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let hi = next_random(mut seed);
+        let lo = next_random(mut seed);
+        v.push((hi * 32768 + lo) % 1000000001);
+    }
+    v
+}
+
+fn main() {
+    let mut seed = 870;
+    let mut wins = 0;
+    let mut check = 0;
+    for _ in 0..20 {
+        let nums1 = random_vec(mut seed, 100000);
+        let nums2 = random_vec(mut seed, 100000);
+        let result = advantage_count(nums1, nums2);
+        for i in 0..result.len() {
+            if result[i] > nums2[i] {
+                wins += 1;
+            }
+            check = (check + result[i] * (i + 1)) % 1000000007;
+        }
+    }
+    println(f"20 pairs of 100000 values: {wins} wins, checksum {check}");
+}

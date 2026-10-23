@@ -1,0 +1,145 @@
+// LeetCode #870: Advantage Shuffle -- greedy from the largest.
+//
+// Take nums2's values from largest to smallest. The largest value left in
+// nums1 either beats the current one, and then nothing smaller in nums2
+// needs it more, or it beats nothing left in nums2, and then the current
+// value is beaten by nothing and should take the smallest value left,
+// which no other value could use as well. nums1 sorted once, nums2's
+// indices sorted by value, two pointers. O(n log n).
+
+fn advantage_count(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let n = nums1.len();
+    let mut sorted = nums1.clone();
+    sorted.sort();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| -nums2[i]);
+    let mut result: Vec[i64] = Vec.filled(n, 0);
+    let mut lo = 0;
+    let mut hi = n - 1;
+    for i in order.iter() {
+        if sorted[hi] > nums2[*i] {
+            result[*i] = sorted[hi];
+            hi -= 1;
+        } else {
+            result[*i] = sorted[lo];
+            lo += 1;
+        }
+    }
+    result
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random value from 0 to limit - 1, for limit up to 10^9 + 1
+fn random_below(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit
+}
+
+fn random_vec(seed: mut ref i64, n: i64, limit: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(random_below(mut seed, limit));
+    }
+    v
+}
+
+// how many i have result[i] > nums2[i]
+fn advantage(result: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let mut wins = 0;
+    for i in 0..nums2.len() {
+        if result[i] > nums2[i] {
+            wins += 1;
+        }
+    }
+    wins
+}
+
+fn is_permutation(result: Vec[i64], nums1: Vec[i64]) -> bool {
+    let mut x = result.clone();
+    let mut y = nums1.clone();
+    x.sort();
+    y.sort();
+    x == y
+}
+
+// the advantage, or -1 when the answer is not a permutation of nums1
+fn score(nums1: Vec[i64], nums2: Vec[i64]) -> i64 {
+    let result = advantage_count(nums1, nums2);
+    if result.len() == nums1.len() and is_permutation(result, nums1) {
+        advantage(result, nums2)
+    } else {
+        -1
+    }
+}
+
+fn show(nums1: Vec[i64], nums2: Vec[i64]) {
+    let s = score(nums1, nums2);
+    if s < 0 {
+        println(f"nums1 = {nums1}, nums2 = {nums2} -> not a permutation of nums1");
+    } else {
+        println(f"nums1 = {nums1}, nums2 = {nums2} -> advantage {s}");
+    }
+}
+
+fn main() {
+    show([2, 7, 11, 15], [1, 10, 4, 11]);
+    show([12, 24, 8, 32], [13, 25, 32, 11]);
+    show([5], [5]);
+    show([6], [5]);
+    show([0], [1000000000]);
+    show([3, 3, 3, 3], [3, 3, 3, 3]);
+    show([4, 4, 4, 4], [3, 3, 3, 3]);
+    show([1, 2, 3, 4], [4, 3, 2, 1]);
+    show([1, 2, 3, 4], [1, 2, 3, 4]);
+    show([2, 0, 4, 1, 2], [1, 3, 0, 0, 2]);
+    show([9, 1, 2, 4, 5], [6, 2, 9, 1, 4]);
+    show([1000000000, 0, 999999999], [999999999, 1000000000, 0]);
+    // many small arrays with repeated values
+    let mut seed = 870;
+    let mut total = 0;
+    let mut bad = 0;
+    for t in 0..3000 {
+        let n = t % 8 + 1;
+        let nums1 = random_vec(mut seed, n, 10);
+        let nums2 = random_vec(mut seed, n, 10);
+        let s = score(nums1, nums2);
+        if s < 0 {
+            bad += 1;
+        } else {
+            total += s;
+        }
+    }
+    println(f"3000 arrays of 1 to 8 values below 10: advantages sum to {total}, {bad} not permutations");
+    // mid-sized arrays up to 10^9
+    total = 0;
+    bad = 0;
+    let mut check = 0;
+    for t in 0..60 {
+        let n = random_below(mut seed, 1000) + 1;
+        let limit = if t % 2 == 0 { 1000000001 } else { n };
+        let nums1 = random_vec(mut seed, n, limit);
+        let nums2 = random_vec(mut seed, n, limit);
+        let s = score(nums1, nums2);
+        if s < 0 {
+            bad += 1;
+        } else {
+            total += s;
+            check = (check * 1009 + s) % 1000000007;
+        }
+    }
+    println(f"60 arrays of up to 1000 values: advantages sum to {total}, checksum {check}, {bad} not permutations");
+    // LeetCode's largest: 10^5 values up to 10^9, and 10^5 values below 100
+    for limit in [1000000001, 100] {
+        let nums1 = random_vec(mut seed, 100000, limit);
+        let nums2 = random_vec(mut seed, 100000, limit);
+        let s = score(nums1, nums2);
+        println(f"100000 values below {limit}: advantage {s}");
+    }
+}

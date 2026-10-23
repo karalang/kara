@@ -1,0 +1,16 @@
+nums1 = [2, 7, 11, 15], nums2 = [1, 10, 4, 11] -> advantage 4
+nums1 = [12, 24, 8, 32], nums2 = [13, 25, 32, 11] -> advantage 3
+nums1 = [5], nums2 = [5] -> advantage 0
+nums1 = [6], nums2 = [5] -> advantage 1
+nums1 = [0], nums2 = [1000000000] -> advantage 0
+nums1 = [3, 3, 3, 3], nums2 = [3, 3, 3, 3] -> advantage 0
+nums1 = [4, 4, 4, 4], nums2 = [3, 3, 3, 3] -> advantage 4
+nums1 = [1, 2, 3, 4], nums2 = [4, 3, 2, 1] -> advantage 3
+nums1 = [1, 2, 3, 4], nums2 = [1, 2, 3, 4] -> advantage 3
+nums1 = [2, 0, 4, 1, 2], nums2 = [1, 3, 0, 0, 2] -> advantage 4
+nums1 = [9, 1, 2, 4, 5], nums2 = [6, 2, 9, 1, 4] -> advantage 4
+nums1 = [1000000000, 0, 999999999], nums2 = [999999999, 1000000000, 0] -> advantage 2
+3000 arrays of 1 to 8 values below 10: advantages sum to 8610, 0 not permutations
+60 arrays of up to 1000 values: advantages sum to 29510, checksum 918845122, 0 not permutations
+100000 values below 1000000001: advantage 99912
+100000 values below 100: advantage 98831
