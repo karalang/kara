@@ -93,10 +93,10 @@ COMMANDS:
     repl              Launch the interactive REPL. Items (fn/struct/...)
                       accumulate across cells; statement cells run as the
                       body of an implicit `fn main()`. Type :help inside
-                      the REPL for the meta-command list. Pass
-                      `--auto-clone` to opt into cross-cell ergonomics
-                      (auto-insert `.clone()` at consume sites; emits a
-                      `perf[auto-clone-in-repl]` note on every insertion).
+                      the REPL for the meta-command list. Each cell is
+                      checked as `karac check` checks a program and run on
+                      the MIR interpreter; `--legacy` runs the legacy REPL
+                      until M3 deletes it.
     doc               Render HTML documentation under dist/doc/ from the
                       `///` doc comments attached to each public item.
                       MVP — flat per-module layout, no cross-references.
@@ -730,11 +730,18 @@ NOTES:
             "\
 karac repl - Launch the interactive REPL
 
+Each cell's program is checked as `karac check` checks a program and run on
+the MIR interpreter. A later cell replays the earlier ones, so it sees what
+they did to a binding; what they printed is not printed again. `--legacy`
+(or KARAC_LEGACY=1) runs the legacy REPL instead, until M3 deletes it.
+
 USAGE:
-    karac repl [--auto-clone] [--interp]
+    karac repl [--legacy [--auto-clone]] [--interp]
 
 FLAGS:
-    --auto-clone   Opt into cross-cell ownership ergonomics. When a cell
+    --legacy       Run the legacy REPL (its JIT, or its tree-walk
+                   interpreter under --interp).
+    --auto-clone   Legacy only (with --legacy). Opt into cross-cell ownership ergonomics. When a cell
                    reuses a binding that an earlier cell consumed, the
                    REPL rewrites the consume site to insert `.clone()` and
                    emits a `perf[auto-clone-in-repl]` note (never silent).
@@ -744,8 +751,9 @@ FLAGS:
                    exports see the cloned form. Off by default; without
                    the flag the existing notebook-aware UAM diagnostic
                    surfaces unchanged.
-    --interp       Run cells on the tree-walk interpreter instead of the
-                   default LLJIT backend. The interpreter is a dev/debug
+    --interp       Legacy: run cells on the tree-walk interpreter instead
+                   of the default LLJIT backend; v2 cells always run on the
+                   MIR interpreter. The interpreter is a dev/debug
                    executor (design.md § Tree-walk interpreter). Equivalent
                    to `KARAC_REPL_JIT=0`; the flag wins over the env var.
                    No effect on a build without the `llvm` feature (the JIT

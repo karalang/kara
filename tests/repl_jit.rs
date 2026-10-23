@@ -1381,6 +1381,8 @@ fn repl_jit_banner_advertises_jit_mode() {
 
     let mut child = Command::new(karac)
         .arg("repl")
+        // The legacy REPL: `karac repl` runs on v2 (B-2026-10-22-45).
+        .arg("--legacy")
         .env("KARAC_REPL_JIT", "1")
         .env("KARAC_JIT_RUNNER", runner)
         .stdin(Stdio::piped())
@@ -1498,6 +1500,7 @@ fn repl_interp_flag_forces_interpreter_over_default_jit() {
     let s = Session::with_options(ReplOptions {
         auto_clone: false,
         interp: true,
+        ..Default::default()
     });
     assert!(
         !s.jit_enabled(),
@@ -1521,6 +1524,7 @@ fn repl_default_is_jit_after_slice5_flip() {
     let s = Session::with_options(ReplOptions {
         auto_clone: false,
         interp: false,
+        ..Default::default()
     });
     assert!(
         s.jit_enabled(),
@@ -1549,6 +1553,8 @@ fn repl_jit_interactive_subprocess_prints_cell_output() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_karac"))
         .arg("repl")
+        // The legacy REPL: `karac repl` runs on v2 (B-2026-10-22-45).
+        .arg("--legacy")
         .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
         // Ensure the JIT default holds even if the ambient env opted out.
         .env_remove("KARAC_REPL_JIT")
@@ -1597,6 +1603,8 @@ fn repl_jit_interactive_subprocess_surfaces_panic_and_recovers() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_karac"))
         .arg("repl")
+        // The legacy REPL: `karac repl` runs on v2 (B-2026-10-22-45).
+        .arg("--legacy")
         .env("KARAC_JIT_RUNNER", env!("CARGO_BIN_EXE_karac_jit_runner"))
         .env_remove("KARAC_REPL_JIT")
         .stdin(Stdio::piped())

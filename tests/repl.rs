@@ -42,6 +42,7 @@ fn pinned_session_with_auto_clone() -> Session {
     let mut s = karac::repl::Session::with_options(ReplOptions {
         auto_clone: true,
         interp: false,
+        ..Default::default()
     });
     pin_interpreter(&mut s);
     s

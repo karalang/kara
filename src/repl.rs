@@ -66,6 +66,20 @@ fn bytes_to_stdout_lines(bytes: &[u8]) -> Vec<String> {
 pub use display::{render_display, render_text_plain, DisplayBundle};
 use util::*;
 
+/// A v2 statement cell as a run of statements: a cell may end in an
+/// expression without its `;` (`println(x)`), which a later cell's replay
+/// would run into. The `;` goes on a line of its own, past any trailing
+/// comment, and only where it makes the cell parse.
+fn terminated(cell_src: &str) -> String {
+    let src = cell_src.trim_end();
+    let with = format!("{src}\n;");
+    if crate::parse(src).errors.is_empty() || !crate::parse(&with).errors.is_empty() {
+        src.to_string()
+    } else {
+        with
+    }
+}
+
 /// Caller-supplied options for `run_with_options` — mirrors the flags
 /// surfaced on the `karac repl` subcommand. `Default` matches the
 /// historical bare-`karac repl` behavior so existing callers keep working.
@@ -83,6 +97,11 @@ pub struct ReplOptions {
     /// dev/debug backend. No effect on a non-`llvm` build (the JIT isn't
     /// compiled in, so the interpreter already runs).
     pub interp: bool,
+    /// Run each cell on v2 (M3 item 3, B-2026-10-22-45): checked as `karac
+    /// check` checks a program and run on the MIR interpreter, instead of the
+    /// legacy checker and the JIT or tree-walk interpreter. `karac repl`
+    /// sets it unless `--legacy` (or `KARAC_LEGACY=1`) asks for the old path.
+    pub v2: bool,
 }
 
 /// Run the interactive REPL until EOF or `:quit`. Returns once the user
@@ -579,6 +598,9 @@ pub struct Session {
     /// half-route cells.
     #[cfg(feature = "llvm")]
     jit_enabled: bool,
+    /// [`ReplOptions::v2`]: cells are checked and run by
+    /// `crate::cli::repl_v2`.
+    v2: bool,
     /// Slice c-repl.B.B: monotonic cell id for the JIT subprocess
     /// protocol framing. The runner echoes the id back on `result`
     /// lines so framing-integrity drift surfaces as a `RunnerDied`
@@ -723,6 +745,7 @@ impl Session {
             // § Slice 5.) Tests pin the interpreter via
             // `set_jit_enabled_for_tests(false)`.
             jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() != Ok("0"),
+            v2: false,
             #[cfg(feature = "llvm")]
             jit_next_cell_id: 0,
             #[cfg(feature = "llvm")]
@@ -945,6 +968,9 @@ impl Session {
             None => (rest.trim(), ""),
         };
         match key {
+            "auto-clone" if self.v2 => {
+                MagicOutput::error("auto-clone needs the legacy REPL: `karac repl --legacy`")
+            }
             "auto-clone" => match value {
                 "on" | "true" | "1" => {
                     self.auto_clone = true;
@@ -985,6 +1011,12 @@ impl Session {
     fn magic_show(&self, rest: &str) -> MagicOutput {
         if rest.is_empty() {
             return MagicOutput::error("usage: %show <expression>");
+        }
+        if self.v2 {
+            // The rich display renders the legacy interpreter's values.
+            return MagicOutput::error(
+                "`%show` needs the legacy REPL for now: start it with `karac repl --legacy`",
+            );
         }
         match self.eval_expr_for_display(rest) {
             Ok(value) => {
@@ -1309,7 +1341,17 @@ impl Session {
         }
         #[cfg(not(feature = "llvm"))]
         let _ = opts.interp;
+        s.v2 = opts.v2;
+        #[cfg(feature = "llvm")]
+        if opts.v2 {
+            s.jit_enabled = false;
+        }
         s
+    }
+
+    /// Whether cells run on v2 ([`ReplOptions::v2`]).
+    pub fn v2(&self) -> bool {
+        self.v2
     }
 
     /// Inspector for the `--auto-clone` flag. Used by integration tests.
@@ -1489,7 +1531,13 @@ impl Session {
         let trimmed = src.trim_end();
         self.cell_history.push(trimmed.to_string());
 
-        if classify_input(trimmed) == CellShape::PureItems {
+        if self.classify(trimmed) == CellShape::PureItems {
+            if self.v2 {
+                for e in self.add_items_v2(trimmed) {
+                    eprintln!("{e}");
+                }
+                return;
+            }
             // Pure-item cell: append to the accumulated source and
             // re-validate the whole thing so type-checker errors surface
             // immediately rather than waiting for the next statement cell.
@@ -1647,6 +1695,9 @@ impl Session {
         // binding — B-2026-07-02-33). Only the stale value snapshot is
         // cleared, so the current cell's own `let` evaluates fresh.
         self.clear_rebound_let_snapshots(cell_src);
+        if self.v2 {
+            return self.run_cell_v2(&terminated(cell_src), capture);
+        }
 
         // Auto-clone iteration loop: when `auto_clone` is on, cross-cell
         // UAM errors found by the ownership pass drive a source rewrite of
@@ -2692,7 +2743,13 @@ impl Session {
         let trimmed = src.trim_end();
         self.cell_history.push(trimmed.to_string());
 
-        if classify_input(trimmed) == CellShape::PureItems {
+        if self.classify(trimmed) == CellShape::PureItems {
+            if self.v2 {
+                return EvaluatedCell {
+                    errors: self.add_items_v2(trimmed),
+                    ..EvaluatedCell::default()
+                };
+            }
             self.append_items(trimmed);
             // Mirror validate_accumulated but collect errors for return.
             let mut errs = Vec::new();
@@ -2763,7 +2820,9 @@ impl Session {
                 // Roll back history on diagnostic-side failure.
                 self.cell_history.pop();
                 EvaluatedCell {
-                    stdout: String::new(),
+                    // What a v2 cell printed before it panicked; empty for
+                    // a diagnostic.
+                    stdout: out.stdout.join(""),
                     errors: out.errors,
                     notes: out.notes,
                     effect_footer: String::new(),
@@ -2833,6 +2892,153 @@ impl Session {
         }
     }
 
+    /// The cell's shape. On v2 a statement missing its final `;` (`n = 5`)
+    /// is a statement, as it is when it ends a cell that parses.
+    fn classify(&self, src: &str) -> CellShape {
+        let shape = classify_input(src);
+        if self.v2
+            && shape == CellShape::PureItems
+            && crate::parse(&terminated(src)).had_top_level_statements
+        {
+            return CellShape::Statements;
+        }
+        shape
+    }
+
+    /// An item cell on v2 (its entry already in `cell_history`): the items
+    /// join the session when the v2 check accepts them, and otherwise the
+    /// cell is rolled back whole, so one bad item does not fail every later
+    /// cell. Returns the check's errors.
+    fn add_items_v2(&mut self, src: &str) -> Vec<String> {
+        let before = self.items_source.clone();
+        self.append_items(src);
+        let (checked, errs) = self.check_items_v2();
+        // Places in the new cell are named by its line, as a statement
+        // cell's are.
+        let errs: Vec<String> = match checked.rfind(src) {
+            Some(at) => {
+                let saved = std::mem::replace(
+                    &mut self.cell_byte_ranges,
+                    vec![(self.cell_history.len(), at..at + src.len())],
+                );
+                let errs = errs.iter().map(|e| self.relabel_v2(&checked, e)).collect();
+                self.cell_byte_ranges = saved;
+                errs
+            }
+            None => errs,
+        };
+        if errs.is_empty() {
+            self.cell_effect_history.push(CellEffectSnapshot::default());
+        } else {
+            self.items_source = before;
+            self.cell_history.pop();
+        }
+        errs
+    }
+
+    /// The v2 check of the accumulated items, under an empty
+    /// `main` (a user's own `main` is replaced, as a cell's program does).
+    /// Returns the source checked with the errors.
+    fn check_items_v2(&self) -> (String, Vec<String>) {
+        let mut src = strip_main(&self.items_source);
+        if !src.is_empty() && !src.ends_with('\n') {
+            src.push('\n');
+        }
+        src.push_str("fn main() {}\n");
+        let errs = crate::cli::repl_v2::check(&src).err().unwrap_or_default();
+        (src, errs)
+    }
+
+    /// A statement cell on v2: its program checked and run by
+    /// `crate::cli::repl_v2`. Printed directly unless `capture`.
+    fn run_cell_v2(
+        &mut self,
+        cell_src: &str,
+        capture: bool,
+    ) -> Result<WrapperOutcome, WrapperOutcome> {
+        use std::io::Write;
+        let synthetic = self.build_synthetic_cell(cell_src);
+        let lines =
+            |s: &str| -> Vec<String> { s.split_inclusive('\n').map(|l| l.to_string()).collect() };
+        match crate::cli::repl_v2::run_cell(&synthetic) {
+            Ok(mut ran) => {
+                ran.stderr = self.relabel_v2(&synthetic, &ran.stderr);
+                if capture {
+                    return Ok(WrapperOutcome {
+                        stdout: lines(&ran.stdout),
+                        errors: Vec::new(),
+                        notes: Vec::new(),
+                    });
+                }
+                print!("{}", ran.stdout);
+                let _ = std::io::stdout().flush();
+                eprint!("{}", ran.stderr);
+                Ok(WrapperOutcome::errors(Vec::new(), Vec::new()))
+            }
+            Err(f) => {
+                let errors = f
+                    .errors
+                    .iter()
+                    .map(|e| self.relabel_v2(&synthetic, e))
+                    .collect();
+                let mut out = WrapperOutcome::errors(errors, Vec::new());
+                if capture {
+                    out.stdout = lines(&f.stdout);
+                } else {
+                    print!("{}", f.stdout);
+                    let _ = std::io::stdout().flush();
+                }
+                Err(out)
+            }
+        }
+    }
+
+    /// `text` (a diagnostic, a panic's trace) with each `<repl>:LINE:COL`
+    /// place in `synthetic` that falls in a cell named as that cell's line,
+    /// `cell N:LINE:COL`, and a snippet's gutter numbered to match. Places in
+    /// the accumulated items keep the program's numbering.
+    fn relabel_v2(&self, synthetic: &str, text: &str) -> String {
+        let line_of = |at: usize| synthetic[..at.min(synthetic.len())].matches('\n').count() + 1;
+        let cells: Vec<(usize, usize, usize)> = self
+            .cell_byte_ranges
+            .iter()
+            .filter(|(_, r)| !r.is_empty())
+            .map(|(cell, r)| (*cell, line_of(r.start), line_of(r.end - 1)))
+            .collect();
+        let place = |line: usize| {
+            cells
+                .iter()
+                .find(|(_, first, last)| (*first..=*last).contains(&line))
+                .map(|(cell, first, _)| (*cell, line - first + 1))
+        };
+        // `<repl>:L:C` in a header or trace, `line L:C` in a message's text.
+        let at = regex::Regex::new(r"<repl>:(\d+):(\d+)|\bline (\d+):(\d+)").expect("valid regex");
+        let gutter = regex::Regex::new(r"(?m)^( *)(\d+) \|").expect("valid regex");
+        let mut out = String::new();
+        for block in text.split_inclusive('\n') {
+            out.push_str(&at.replace_all(block, |c: &regex::Captures| {
+                let (line, col) = match (c.get(1), c.get(2)) {
+                    (Some(l), Some(col)) => (l.as_str(), col.as_str()),
+                    _ => (&c[3], &c[4]),
+                };
+                match place(line.parse().unwrap_or(0)) {
+                    Some((cell, l)) => format!("cell {cell}:{l}:{col}"),
+                    None => c[0].to_string(),
+                }
+            }));
+        }
+        gutter
+            .replace_all(&out, |c: &regex::Captures| {
+                let line: usize = c[2].parse().unwrap_or(0);
+                let width = c[1].len() + c[2].len();
+                match place(line) {
+                    Some((_, l)) => format!("{l:>width$} |"),
+                    None => c[0].to_string(),
+                }
+            })
+            .into_owned()
+    }
+
     fn build_synthetic_cell(&mut self, cell_src: &str) -> String {
         let mut s = String::new();
         s.push_str(&strip_main(&self.items_source));
@@ -2875,6 +3081,14 @@ impl Session {
         // RHS re-evaluation so the replay doesn't actually re-touch the
         // closed-scope resource at runtime.
         let cell_idx = self.cell_history.len();
+        if self.v2 {
+            // The output before this line is the replay's (v2 replays every
+            // `let`'s right-hand side), and `repl_v2::run_cell` drops it.
+            s.push_str(&format!(
+                "println(\"{}\");\n",
+                crate::cli::repl_v2::CELL_START
+            ));
+        }
         let body_start = s.len();
         let wrapped_body = self.wrap_in_active_providers(cell_src);
         s.push_str(&wrapped_body);
@@ -2914,6 +3128,18 @@ impl Session {
             .iter()
             .map(|f| f.resource.clone())
             .collect();
+        if self.v2 && active_scope.is_empty() {
+            // v2 carries no values across cells, so a later cell replays
+            // this one whole: its statements as well as its `let`s, so a
+            // mutation (`v.push(x)`, `n = 5`) reaches the cells after it.
+            // What the replay prints is dropped (`repl_v2::CELL_START`).
+            // Under a provider the cell's `let`s alone are replayed, outside
+            // the provider's closure, as on the legacy REPL.
+            self.persistent_lets.push(terminated(cell_src));
+            self.persistent_let_origin.push(cell_idx);
+            self.persistent_let_provider_scope.push(active_scope);
+            return;
+        }
         for entry in scan_top_level_lets(cell_src) {
             // A new binding with the same name as a previously-pruned one
             // nullifies the prune diagnostic — the user re-bound it, so
@@ -3562,6 +3788,16 @@ impl Session {
         }
         synth.push_str("}\n");
 
+        if self.v2 {
+            return crate::cli::repl_v2::run_cell(&synth)
+                .map(|_| ())
+                .map_err(|f| {
+                    format!(
+                        "error: in `:provide {resource}` construction: {}",
+                        f.errors.join("\n")
+                    )
+                });
+        }
         let mut parsed = crate::parse(&synth);
         if !parsed.errors.is_empty() {
             return Err(format!(

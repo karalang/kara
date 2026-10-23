@@ -1584,9 +1584,12 @@ fn parse_test_command(args: &[String]) -> Command {
 fn parse_repl_command(args: &[String]) -> Command {
     let mut auto_clone = false;
     let mut interp = false;
+    let mut legacy = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--auto-clone" => auto_clone = true,
+            // The legacy REPL, until M3 deletes it (B-2026-10-22-45).
+            "--legacy" => legacy = true,
             // `--interp`: force the interpreter over the default JIT backend
             // (LLJIT Slice 5). Parsed on every build; a no-op without `llvm`.
             "--interp" => interp = true,
@@ -1600,7 +1603,11 @@ fn parse_repl_command(args: &[String]) -> Command {
             }
         }
     }
-    Command::Repl { auto_clone, interp }
+    Command::Repl {
+        auto_clone,
+        interp,
+        legacy,
+    }
 }
 
 fn parse_init_command(args: &[String]) -> Command {

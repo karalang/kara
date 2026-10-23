@@ -37,6 +37,7 @@ mod maintenance_cmds;
 mod pkg_cmds;
 mod project_v2;
 mod query_cmd;
+pub(crate) mod repl_v2;
 mod run_check_cmds;
 mod run_v2;
 mod test_cmd;
@@ -511,6 +512,9 @@ pub enum Command {
         /// ergonomic equivalent of `KARAC_REPL_JIT=0`; the interpreter is
         /// retained as a dev/debug backend. No-op on a non-`llvm` build.
         interp: bool,
+        /// `--legacy`: the legacy REPL, until M3 deletes it
+        /// (B-2026-10-22-45). Without it, cells run on v2.
+        legacy: bool,
     },
     /// Walk the project, parse every module, render one HTML page per
     /// documented item under `dist/doc/`. v1 MVP — no cross-references,
@@ -997,8 +1001,28 @@ pub fn execute(cmd: Command) {
                 test_v2::cmd_test_v2(filter, all, interp)
             }
         }
-        Command::Repl { auto_clone, interp } => {
-            crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone, interp })
+        Command::Repl {
+            auto_clone,
+            interp,
+            legacy,
+        } => {
+            let v2 = !run_v2::legacy_requested(legacy);
+            if v2 && auto_clone {
+                // The rewrite answers the legacy checker's cross-cell
+                // use-after-move errors.
+                eprintln!(
+                    "error: --auto-clone needs the legacy REPL for now: \
+                     run `karac repl --legacy --auto-clone`"
+                );
+                process::exit(1);
+            }
+            // `--interp` is what v2 does already: cells run on the MIR
+            // interpreter.
+            crate::repl::run_with_options(crate::repl::ReplOptions {
+                auto_clone,
+                interp,
+                v2,
+            })
         }
         Command::Doc => cmd_doc(),
         Command::Clean { global } => cmd_clean(global),
