@@ -1,0 +1,97 @@
+// LeetCode #915: Partition Array into Disjoint Intervals -- the left
+// side's sum against the smallest values' sum.
+//
+// The first k values can stand left of all the rest exactly when they are
+// k of the smallest values, ties aside; and among all choices of k values
+// the smallest ones have the least sum, a sum no other choice reaches. So
+// sort a copy, and the answer is the first k at which the running sum of
+// the array equals the running sum of the sorted copy. O(n log n).
+
+fn partition_disjoint(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut have = 0;
+    let mut least = 0;
+    for k in 1..nums.len() {
+        have += nums[k - 1];
+        least += sorted[k - 1];
+        if have == least {
+            return k;
+        }
+    }
+    nums.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut s = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            s.push_str(",");
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    println(f"nums = [{s}]: {partition_disjoint(nums)}");
+}
+
+// A block of `left` values from 0 to `cut`, then `right` values from `cut`
+// to `top`, so that a split exists.
+fn random_nums(seed: mut ref i64, left: i64, right: i64, cut: i64, top: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..left {
+        nums.push(next_random(mut seed) % (cut + 1));
+    }
+    for _ in 0..right {
+        nums.push(cut + next_random(mut seed) % (top - cut + 1));
+    }
+    nums
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001
+}
+
+fn main() {
+    show(vec![5, 0, 3, 8, 6]);
+    show(vec![1, 1, 1, 0, 6, 12]);
+    show(vec![1, 1]);
+    show(vec![0, 1000000]);
+    show(vec![2, 1, 3]);
+    show(vec![3, 1, 2, 4, 3, 5]);
+    show(vec![1, 2, 3, 4, 5]);
+    show(vec![4, 3, 2, 1, 5]);
+    show(vec![7, 7, 7, 7]);
+    // random arrays of up to 1000 values, the split somewhere inside
+    let mut seed = 915;
+    let mut check = 0;
+    let mut total = 0;
+    for c in 0..500 {
+        let n = 2 + next_random(mut seed) % 999;
+        let left = 1 + next_random(mut seed) % (n - 1);
+        let top = if c % 3 == 0 { 5 } else if c % 3 == 1 { 1000 } else { 1000000 };
+        let cut = next_random(mut seed) % (top + 1);
+        let k = partition_disjoint(random_nums(mut seed, left, n - left, cut, top));
+        total += k;
+        check = (check * 1000003 + k) % 1000000007;
+    }
+    println(f"500 arrays: lengths summing to {total}, checksum {check}");
+    // LeetCode's largest: 10^5 values
+    let mut rising: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        rising.push(i * 10);
+    }
+    println(f"100000 rising: {partition_disjoint(rising)}");
+    let mut late: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        late.push(if i == 99998 { 0 } else if i == 99999 { 1000000 } else { 1 + big(mut seed) % 999999 });
+    }
+    println(f"100000 with the smallest second to last: {partition_disjoint(late)}");
+    let half = random_nums(mut seed, 50000, 50000, 500000, 1000000);
+    println(f"100000 in two halves: {partition_disjoint(half)}");
+}

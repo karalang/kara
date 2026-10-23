@@ -1,0 +1,287 @@
+// LeetCode #915: Partition Array into Disjoint Intervals -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: given an integer array nums, partition it into two
+// contiguous subarrays left and right so that every element in left is
+// less than or equal to every element in right, left and right are
+// non-empty, and left has the smallest possible size. Return the length
+// of left. Test cases are generated such that partitioning exists.
+
+// ---- the ★ arm: the largest on the left against the smallest on the right -
+fn star_partition_disjoint(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut least_after: Vec[i64] = Vec.filled(n, 0);
+    least_after[n - 1] = nums[n - 1];
+    let mut i = n - 1;
+    while i > 0 {
+        i -= 1;
+        least_after[i] = nums[i].min(least_after[i + 1]);
+    }
+    let mut most = nums[0];
+    for k in 1..n {
+        if most <= least_after[k] {
+            return k;
+        }
+        most = most.max(nums[k]);
+    }
+    n
+}
+
+// ---- the onepass arm: one pass, the split moved on when undercut ----------
+fn onepass_partition_disjoint(nums: Vec[i64]) -> i64 {
+    let mut split = 1;
+    let mut left_most = nums[0];
+    let mut most = nums[0];
+    for i in 1..nums.len() {
+        most = most.max(nums[i]);
+        if nums[i] < left_most {
+            split = i + 1;
+            left_most = most;
+        }
+    }
+    split
+}
+
+// ---- the sums arm: the left side's sum against the smallest values' sum ---
+fn sums_partition_disjoint(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut have = 0;
+    let mut least = 0;
+    for k in 1..nums.len() {
+        have += nums[k - 1];
+        least += sorted[k - 1];
+        if have == least {
+            return k;
+        }
+    }
+    nums.len()
+}
+
+// ---- the chunks arm: the most chunks that sort independently --------------
+struct ChunksChunk {
+    most: i64,
+    len: i64,
+}
+
+fn chunks_partition_disjoint(nums: Vec[i64]) -> i64 {
+    let mut stack: Vec[ChunksChunk] = Vec.new();
+    for v in nums.iter() {
+        let mut chunk = ChunksChunk { most: *v, len: 1 };
+        while stack.len() > 0 and stack[stack.len() - 1].most > *v {
+            let below = stack.pop().unwrap();
+            chunk = ChunksChunk { most: chunk.most.max(below.most), len: chunk.len + below.len };
+        }
+        stack.push(chunk);
+    }
+    stack[0].len
+}
+
+// ---- the sparse arm: a sparse table of minimums ---------------------------
+fn sparse_partition_disjoint(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    table.push(nums.clone());
+    let mut width = 1;
+    while width * 2 <= n {
+        let below = table.len() - 1;
+        let mut level: Vec[i64] = Vec.new();
+        for i in 0..n - width * 2 + 1 {
+            level.push(table[below][i].min(table[below][i + width]));
+        }
+        table.push(level);
+        width *= 2;
+    }
+    let mut most = nums[0];
+    for k in 1..n {
+        // the largest j with 2^j <= n - k
+        let mut j = 0;
+        while (1 << (j + 1)) <= n - k {
+            j += 1;
+        }
+        let least = table[j][k].min(table[j][n - (1 << j)]);
+        if most <= least {
+            return k;
+        }
+        most = most.max(nums[k]);
+    }
+    n
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> i64 {
+    if x == 0 {
+        star_partition_disjoint(nums)
+    } else if x == 1 {
+        onepass_partition_disjoint(nums)
+    } else if x == 2 {
+        sums_partition_disjoint(nums)
+    } else if x == 3 {
+        chunks_partition_disjoint(nums)
+    } else {
+        sparse_partition_disjoint(nums)
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// The smallest k for which every value in left = nums[0..k] is at most
+// every value in right = nums[k..], both non-empty; 0 when there is none.
+fn literal(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    for k in 1..n {
+        let mut fits = true;
+        for i in 0..k {
+            for j in k..n {
+                if nums[i] > nums[j] {
+                    fits = false;
+                }
+            }
+        }
+        if fits {
+            return k;
+        }
+    }
+    0
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// as in the harness: `left` values from 0 to `cut`, then `right` values
+// from `cut` to `top`
+fn random_nums(seed: mut ref i64, left: i64, right: i64, cut: i64, top: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..left {
+        nums.push(next_random(mut seed) % (cut + 1));
+    }
+    for _ in 0..right {
+        nums.push(cut + next_random(mut seed) % (top - cut + 1));
+    }
+    nums
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one array over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], small: bool) {
+    let n = nums.len();
+    let want = if small { literal(nums) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums));
+    }
+    let mut least = nums[0];
+    let mut most = nums[0];
+    for v in nums.iter() {
+        least = least.min(*v);
+        most = most.max(*v);
+    }
+    // P2: every value raised by the same amount, staying within 10^6
+    let lift = next_random(mut seed) % (1000000 - most + 1).min(1000);
+    let mut raised: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        raised.push(*v + lift);
+    }
+    // P3: a value at least the largest appended
+    let mut longer = nums.clone();
+    longer.push((most + next_random(mut seed) % 3).min(1000000));
+    // P4: a value at most the smallest put in front
+    let mut front: Vec[i64] = vec![(least - next_random(mut seed) % 3).max(0)];
+    for v in nums.iter() {
+        front.push(*v);
+    }
+    // P5: the values right of the ★ arm's split shuffled
+    let k = answers[0];
+    let mut shuffled = nums.clone();
+    let mut i = n;
+    while i > k + 1 {
+        let j = k + next_random(mut seed) % (i - k);
+        i -= 1;
+        let keep = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = keep;
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the smallest left side every value of which is at most every
+        // value of the right side
+        if small {
+            check(mut t, 1, got == want);
+        }
+        check(mut t, 2, arm(x, raised) == got);
+        check(mut t, 3, arm(x, longer) == got);
+        check(mut t, 4, arm(x, front) == 1);
+        check(mut t, 5, arm(x, shuffled) == got);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 915;
+    let mut arrays = 0;
+    let mut values = 0;
+    let mut lengths = 0;
+    // 2 to 10 values below 4 or 10, drawn at random and kept when a split
+    // exists, against the statement; then up to 1,000 values in two
+    // blocks split at a random value below 5, 1,000 or 10^6
+    let mut c = 0;
+    while c < 3200 {
+        let small = c < 3000;
+        let mut nums: Vec[i64] = Vec.new();
+        if small {
+            let n = 2 + next_random(mut seed) % 9;
+            let top = if c % 2 == 0 { 4 } else { 10 };
+            for _ in 0..n {
+                nums.push(next_random(mut seed) % top);
+            }
+        } else {
+            let n = 2 + next_random(mut seed) % 999;
+            let left = 1 + next_random(mut seed) % (n - 1);
+            let top = if c % 3 == 0 { 5 } else if c % 3 == 1 { 1000 } else { 1000000 };
+            let cut = next_random(mut seed) % (top + 1);
+            nums = random_nums(mut seed, left, n - left, cut, top);
+        }
+        if not small or literal(nums) > 0 {
+            arrays += 1;
+            values += nums.len();
+            lengths += star_partition_disjoint(nums);
+            properties(mut t, mut seed, nums, small);
+            c += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{arrays} arrays, {values} values, left sides summing to {lengths}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

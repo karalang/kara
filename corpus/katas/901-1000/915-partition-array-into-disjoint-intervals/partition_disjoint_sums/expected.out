@@ -1,0 +1,13 @@
+nums = [5,0,3,8,6]: 3
+nums = [1,1,1,0,6,12]: 4
+nums = [1,1]: 1
+nums = [0,1000000]: 1
+nums = [2,1,3]: 2
+nums = [3,1,2,4,3,5]: 3
+nums = [1,2,3,4,5]: 1
+nums = [4,3,2,1,5]: 4
+nums = [7,7,7,7]: 1
+500 arrays: lengths summing to 106628, checksum 217535424
+100000 rising: 1
+100000 with the smallest second to last: 99999
+100000 in two halves: 50000

@@ -1,0 +1,61 @@
+// LeetCode #915: Partition Array into Disjoint Intervals -- bench: the
+// largest on the left against the smallest on the right.
+//
+// A split after the first k values works when the largest of them is at
+// most the smallest of the rest. Fill a table of the smallest value of
+// every suffix from the right, then walk from the left keeping the
+// largest so far, and stop at the first k where it is at most the
+// smallest after k. O(n) time and space.
+
+fn partition_disjoint(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut least_after: Vec[i64] = Vec.filled(n, 0);
+    least_after[n - 1] = nums[n - 1];
+    let mut i = n - 1;
+    while i > 0 {
+        i -= 1;
+        least_after[i] = nums[i].min(least_after[i + 1]);
+    }
+    let mut most = nums[0];
+    for k in 1..n {
+        if most <= least_after[k] {
+            return k;
+        }
+        most = most.max(nums[k]);
+    }
+    n
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn big(seed: mut ref i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000001
+}
+
+fn main() {
+    let rounds = 2000;
+    let n = 100000;
+    let mut seed = 915;
+    // the first half below 500000, the second half at or above it
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let v = big(mut seed) % 500000;
+        nums.push(if i < n / 2 { v } else { 500000 + v });
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        // one value rewritten at random, then put back
+        let i = big(mut seed) % n;
+        let old = nums[i];
+        nums[i] = big(mut seed);
+        let k = partition_disjoint(nums);
+        total += k;
+        check = (check * 1000003 + k) % 1000000007;
+        nums[i] = old;
+    }
+    println(f"{rounds} rounds over {n} values: left sides summing to {total}, checksum {check}");
+}
