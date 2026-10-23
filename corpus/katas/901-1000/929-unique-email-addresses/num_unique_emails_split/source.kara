@@ -1,0 +1,116 @@
+// LeetCode #929: Unique Email Addresses -- split, replace and sort.
+//
+// Split each address at the '@', keep the local name up to its first '+',
+// take its dots out with replace, and join it back to the domain. Sort
+// the rewritten addresses and count the places where one differs from
+// the one before. O(L log n) for total length L.
+
+fn num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut addresses: Vec[String] = Vec.new();
+    for e in emails.iter() {
+        let parts: Vec[Str] = e.split("@").collect();
+        let pieces: Vec[Str] = parts[0].split("+").collect();
+        let local = pieces[0].to_string().replace(".", "");
+        addresses.push(local + "@" + parts[1].to_string());
+    }
+    addresses.sort();
+    let mut count = 0;
+    for i in 0..addresses.len() {
+        if i == 0 or addresses[i] != addresses[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: String, emails: Vec[String]) {
+    println(f"{name}: {num_unique_emails(emails)}");
+}
+
+// a local name of 1 to 3 letters from "ab" with dots among them, perhaps
+// a tag after a '+', and one of six domains, some differing only by a
+// '.' or after a '+', and two whose ends can meet a local name
+fn random_email(seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let letters = 1 + next_random(mut seed) % 3;
+    for _ in 0..letters {
+        if next_random(mut seed) % 3 == 0 {
+            s = s + ".";
+        }
+        s = s + if next_random(mut seed) % 2 == 0 { "a" } else { "b" };
+    }
+    if next_random(mut seed) % 2 == 0 {
+        s = s + "+";
+        for _ in 0..next_random(mut seed) % 4 {
+            let r = next_random(mut seed) % 4;
+            s = s + if r == 0 { "a" } else if r == 1 { "b" } else if r == 2 { "." } else { "+" };
+        }
+    }
+    let d = next_random(mut seed) % 6;
+    s + if d == 0 { "@b.com" } else if d == 1 { "@ab.com" } else if d == 2 { "@xy.com" } else if d == 3 { "@x.y.com" } else if d == 4 { "@x+y.com" } else { "@x+b.com" }
+}
+
+fn main() {
+    // LeetCode's two examples
+    show("example 1", vec!["test.email+alex@leetcode.com", "test.e.mail+bob.cathy@leetcode.com", "testemail+david@lee.tcode.com"]);
+    show("example 2", vec!["a@leetcode.com", "b@leetcode.com", "c@leetcode.com"]);
+    // one address; four ways to write one address; dots in the domain
+    // kept; a '+' in the domain kept; a tag of dots and '+'s; dots
+    // before a '+' and a local name of dots and one letter
+    show("one address", vec!["a@b.com"]);
+    show("one address four ways", vec!["ab@x.com", "a.b@x.com", "ab+c@x.com", "a.b+c.d@x.com"]);
+    show("dots in the domain", vec!["a@b.c.com", "a@bc.com"]);
+    show("a '+' in the domain", vec!["a@b+c.com", "a@b.com"]);
+    show("a tag of dots and '+'s", vec!["a+.+.@x.com", "a@x.com", "a+@x.com"]);
+    show("dots around one letter", vec!["..a..+b@x.com", "a@x.com", "b@x.com"]);
+    // 300 random lists of 1 to 100 addresses
+    let mut seed = 929;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 100;
+        let mut emails: Vec[String] = Vec.new();
+        for _ in 0..n {
+            emails.push(random_email(mut seed));
+        }
+        let a = num_unique_emails(emails);
+        sum += a;
+        check = (check * 1000003 + a) % 1000000007;
+    }
+    println(f"300 random lists: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 100 addresses of 100 characters: a different
+    // 7-letter name in each, written with dots; and one name written 100
+    // ways
+    let mut distinct: Vec[String] = Vec.new();
+    let mut same: Vec[String] = Vec.new();
+    for t in 0..100 {
+        let mut local = String.new();
+        let mut v = t;
+        for _ in 0..7 {
+            local = local + if v % 2 == 0 { "a." } else { "b." };
+            v = v / 2;
+        }
+        while local.len() < 93 {
+            local = local + ".";
+        }
+        distinct.push(local + "@ab.com");
+        let mut other = String.from("a");
+        for _ in 0..t % 40 {
+            other = other + ".";
+        }
+        other = other + "b+";
+        while other.len() < 94 {
+            other = other + "c";
+        }
+        same.push(other + "@x.com");
+    }
+    println(f"100 addresses of {distinct[0].len()} characters, all different: {num_unique_emails(distinct)}");
+    println(f"100 addresses of {same[0].len()} characters, one address: {num_unique_emails(same)}");
+}

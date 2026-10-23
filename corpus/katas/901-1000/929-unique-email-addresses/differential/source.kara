@@ -1,0 +1,400 @@
+// LeetCode #929: Unique Email Addresses -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: every valid email consists of a local name and a domain
+// name, separated by the '@' sign. Besides lowercase letters, the email
+// may contain one or more '.' or '+'. If you add periods '.' between some
+// characters in the local name part of an email address, mail sent there
+// will be forwarded to the same address without dots in the local name.
+// Note that this rule does not apply to domain names. If you add a plus
+// '+' in the local name, everything after the first plus sign will be
+// ignored. This allows certain emails to be filtered. Note that this rule
+// does not apply to domain names. It is possible to use both of these
+// rules at the same time. Given an array of strings emails where we send
+// one email to each emails[i], return the number of different addresses
+// that actually receive mails.
+
+// ---- the ★ arm: one walk per address and a set ----------------------------
+fn star_num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut seen: Set[String] = Set.new();
+    for e in emails.iter() {
+        let mut out: Vec[u8] = Vec.new();
+        let mut domain = false;
+        let mut tagged = false;
+        for c in e.bytes() {
+            if domain {
+                out.push(c);
+            } else if c == b'@' {
+                domain = true;
+                out.push(c);
+            } else if c == b'+' {
+                tagged = true;
+            } else if c != b'.' and not tagged {
+                out.push(c);
+            }
+        }
+        seen.insert(String.from_utf8(out).unwrap());
+    }
+    seen.len()
+}
+
+// ---- the split arm: split, replace and sort -------------------------------
+fn split_num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut addresses: Vec[String] = Vec.new();
+    for e in emails.iter() {
+        let parts: Vec[Str] = e.split("@").collect();
+        let pieces: Vec[Str] = parts[0].split("+").collect();
+        let local = pieces[0].to_string().replace(".", "");
+        addresses.push(local + "@" + parts[1].to_string());
+    }
+    addresses.sort();
+    let mut count = 0;
+    for i in 0..addresses.len() {
+        if i == 0 or addresses[i] != addresses[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the states arm: a state machine and pairwise comparison --------------
+fn states_rewrite(e: String) -> Vec[u8] {
+    // 0: local name, 1: tag, 2: domain
+    let mut state = 0;
+    let mut out: Vec[u8] = Vec.new();
+    for c in e.bytes() {
+        if c == b'@' and state < 2 {
+            state = 2;
+        }
+        if state == 0 and c == b'+' {
+            state = 1;
+        }
+        if state == 2 or (state == 0 and c != b'.') {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn states_num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut keys: Vec[Vec[u8]] = Vec.new();
+    for e in emails.iter() {
+        keys.push(states_rewrite(e));
+    }
+    let mut count = 0;
+    for i in 0..keys.len() {
+        let mut first = true;
+        for j in 0..i {
+            if keys[j] == keys[i] {
+                first = false;
+                break;
+            }
+        }
+        if first {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- the find arm: positions found, then copied ---------------------------
+fn find_num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut counts: Map[String, i64] = Map.new();
+    for e in emails.iter() {
+        let b = e.bytes().to_vec();
+        let mut at = 0;
+        while b[at] != b'@' {
+            at += 1;
+        }
+        let mut end = 0;
+        while end < at and b[end] != b'+' {
+            end += 1;
+        }
+        let mut out: Vec[u8] = Vec.new();
+        for i in 0..end {
+            if b[i] != b'.' {
+                out.push(b[i]);
+            }
+        }
+        for i in at..b.len() {
+            out.push(b[i]);
+        }
+        let key = String.from_utf8(out).unwrap();
+        let before = counts.get(key).unwrap_or(0);
+        counts.insert(key, before + 1);
+    }
+    counts.len()
+}
+
+// ---- the backward arm: read from the right, into a sorted set -------------
+fn backward_num_unique_emails(emails: Vec[String]) -> i64 {
+    let mut seen: SortedSet[String] = SortedSet.new();
+    for e in emails.iter() {
+        let b = e.bytes().to_vec();
+        let mut domain: Vec[u8] = Vec.new();
+        let mut i = b.len() - 1;
+        while b[i] != b'@' {
+            domain.push(b[i]);
+            i -= 1;
+        }
+        domain.push(b'@');
+        let mut local: Vec[u8] = Vec.new();
+        while i > 0 {
+            i -= 1;
+            if b[i] == b'+' {
+                local.clear();
+            } else if b[i] != b'.' {
+                local.push(b[i]);
+            }
+        }
+        let mut out: Vec[u8] = Vec.new();
+        let mut k = local.len();
+        while k > 0 {
+            k -= 1;
+            out.push(local[k]);
+        }
+        let mut k = domain.len();
+        while k > 0 {
+            k -= 1;
+            out.push(domain[k]);
+        }
+        seen.insert(String.from_utf8(out).unwrap());
+    }
+    seen.len()
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, emails: Vec[String]) -> i64 {
+    if x == 0 {
+        star_num_unique_emails(emails)
+    } else if x == 1 {
+        split_num_unique_emails(emails)
+    } else if x == 2 {
+        states_num_unique_emails(emails)
+    } else if x == 3 {
+        find_num_unique_emails(emails)
+    } else {
+        backward_num_unique_emails(emails)
+    }
+}
+
+fn at_of(b: Vec[u8]) -> i64 {
+    let mut at = 0;
+    while b[at] != b'@' {
+        at += 1;
+    }
+    at
+}
+
+// The statement read literally: two addresses receive the same mail when
+// their domain names are the same and their local names name the same
+// box, comparing the letters before any '+' and passing over the dots;
+// count the addresses that receive mail no earlier one does.
+fn same_box(a: Vec[u8], b: Vec[u8]) -> bool {
+    let p = at_of(a);
+    let q = at_of(b);
+    if a.len() - p != b.len() - q {
+        return false;
+    }
+    for k in 0..a.len() - p {
+        if a[p + k] != b[q + k] {
+            return false;
+        }
+    }
+    let mut i = 0;
+    let mut j = 0;
+    loop {
+        while i < p and a[i] == b'.' {
+            i += 1;
+        }
+        while j < q and b[j] == b'.' {
+            j += 1;
+        }
+        let a_done = i == p or a[i] == b'+';
+        let b_done = j == q or b[j] == b'+';
+        if a_done or b_done {
+            return a_done and b_done;
+        }
+        if a[i] != b[j] {
+            return false;
+        }
+        i += 1;
+        j += 1;
+    }
+}
+
+fn literal(emails: Vec[String]) -> i64 {
+    let mut bytes: Vec[Vec[u8]] = Vec.new();
+    for e in emails.iter() {
+        bytes.push(e.bytes().to_vec());
+    }
+    let mut count = 0;
+    for i in 0..bytes.len() {
+        let mut first = true;
+        for j in 0..i {
+            if same_box(bytes[j], bytes[i]) {
+                first = false;
+            }
+        }
+        if first {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a local name of 1 to 3 letters from "ab" with dots among them, perhaps
+// a tag after a '+', and one of six domains, some differing only by a
+// '.' or after a '+', and two whose ends can meet a local name
+fn random_email(seed: mut ref i64) -> String {
+    let mut s = String.new();
+    let letters = 1 + next_random(mut seed) % 3;
+    for _ in 0..letters {
+        if next_random(mut seed) % 3 == 0 {
+            s = s + ".";
+        }
+        s = s + if next_random(mut seed) % 2 == 0 { "a" } else { "b" };
+    }
+    if next_random(mut seed) % 2 == 0 {
+        s = s + "+";
+        for _ in 0..next_random(mut seed) % 4 {
+            let r = next_random(mut seed) % 4;
+            s = s + if r == 0 { "a" } else if r == 1 { "b" } else if r == 2 { "." } else { "+" };
+        }
+    }
+    let d = next_random(mut seed) % 6;
+    s + if d == 0 { "@b.com" } else if d == 1 { "@ab.com" } else if d == 2 { "@xy.com" } else if d == 3 { "@x.y.com" } else if d == 4 { "@x+y.com" } else { "@x+b.com" }
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, emails: Vec[String], small: bool) {
+    let n = emails.len();
+    // how many different domains
+    let mut domains: Vec[Vec[u8]] = Vec.new();
+    for e in emails.iter() {
+        let b = e.bytes().to_vec();
+        let d = b[at_of(b)..b.len()].to_vec();
+        let mut new = true;
+        for other in domains.iter() {
+            if *other == d {
+                new = false;
+            }
+        }
+        if new {
+            domains.push(d);
+        }
+    }
+    // the list shuffled
+    let mut shuffled = emails.clone();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+        i -= 1;
+    }
+    // a '.' put somewhere in each local name
+    let mut dotted: Vec[String] = Vec.new();
+    for e in emails.iter() {
+        let b = e.bytes().to_vec();
+        let at = at_of(b);
+        let place = next_random(mut seed) % (at + 1);
+        let mut c: Vec[u8] = b[0..place].to_vec();
+        c.push(b'.');
+        for k in place..b.len() {
+            c.push(b[k]);
+        }
+        dotted.push(String.from_utf8(c).unwrap());
+    }
+    // the list followed by every address again, tagged at the end of its
+    // local name
+    let mut doubled = emails.clone();
+    for e in emails.iter() {
+        let b = e.bytes().to_vec();
+        let at = at_of(b);
+        let mut c: Vec[u8] = b[0..at].to_vec();
+        c.push(b'+');
+        c.push(b't');
+        for k in at..b.len() {
+            c.push(b[k]);
+        }
+        doubled.push(String.from_utf8(c).unwrap());
+    }
+    let truth = if small { literal(emails) } else { -1 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, emails));
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small lists
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: at least the number of different domains, at most n
+        check(mut t, 2, a >= domains.len() and a <= n);
+        // P3: the same answer for the list shuffled
+        check(mut t, 3, arm(x, shuffled) == a);
+        // P4: the same answer with a '.' put somewhere in each local name
+        check(mut t, 4, arm(x, dotted) == a);
+        // P5: the same answer with every address added again, tagged
+        check(mut t, 5, arm(x, doubled) == a);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 929;
+    let mut cases = 0;
+    let mut addresses = 0;
+    let mut sum = 0;
+    // 1 to 6 addresses against the statement, then 1 to 100
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 100 };
+        let mut emails: Vec[String] = Vec.new();
+        for _ in 0..n {
+            emails.push(random_email(mut seed));
+        }
+        cases += 1;
+        addresses += n;
+        sum += arm(0, emails);
+        properties(mut t, mut seed, emails, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} lists, {addresses} addresses, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

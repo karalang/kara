@@ -1,0 +1,11 @@
+example 1: 2
+example 2: 3
+one address: 1
+one address four ways: 1
+dots in the domain: 2
+a '+' in the domain: 2
+a tag of dots and '+'s: 1
+dots around one letter: 2
+300 random lists: answers summing to 9879, checksum 893411385
+100 addresses of 100 characters, all different: 100
+100 addresses of 100 characters, one address: 1
