@@ -10,6 +10,6 @@ fn eval(e: Expr) -> i64 {
     }
 }
 fn main() {
-    let e = Add(Num(3), Add(Num(4), Num(5)));
+    let e = Expr.Add(Expr.Num(3), Expr.Add(Expr.Num(4), Expr.Num(5)));
     println(eval(e));
 }

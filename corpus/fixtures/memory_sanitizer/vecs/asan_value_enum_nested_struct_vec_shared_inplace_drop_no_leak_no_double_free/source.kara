@@ -9,14 +9,14 @@ fn main() {
     while j < 20 {
         let mut args: Vec[Expr] = Vec.new();
         let mut i: i64 = 0;
-        while i < 3 { args.push(Num(i)); i = i + 1; }
+        while i < 3 { args.push(Expr.Num(i)); i = i + 1; }
         // Dropped IN PLACE (wildcard match consumes nothing) — exercises the
         // VALUE-drop of `Stmt`, whose `Call(CallExpr)` payload owns a
         // `Vec[shared Expr]`: the walker must rc-dec the inline `callee` Expr
         // box AND drain the `args` element boxes, while `__karac_drop_struct_
         // CallExpr` frees the `args` buffer exactly once (and runs AFTER the
         // drain, so the drain reads a live buffer).
-        let s = Call(CallExpr { callee: Num(100), args: args });
+        let s = Stmt.Call(CallExpr { callee: Expr.Num(100), args: args });
         let k = match s { Call(_) => 1 };
         total = total + k;
         j = j + 1;

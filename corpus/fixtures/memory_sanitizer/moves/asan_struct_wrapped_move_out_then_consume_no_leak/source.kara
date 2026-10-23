@@ -14,16 +14,16 @@ fn main() {
     let mut i: i64 = 0;
     while i < 40 {
         // move-out then consume
-        let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+        let t1 = Expr.Add(BinOp { left: Expr.Num(3), right: Expr.Num(4) });
         let t2 = t1;
         total = total + eval(t2);
         // move-out then drop WHOLE (no consume)
-        let u1 = Neg(Unary { operand: Num(5) });
+        let u1 = Expr.Neg(Unary { operand: Expr.Num(5) });
         let u2 = u1;
         match u2 { Num(n) => { total = total + n; } Add(b) => { total = total + 0; } Neg(x) => { total = total + 0; } }
         // subtree moved into a parent literal, then consumed
-        let sub = Add(BinOp { left: Num(2), right: Num(3) });
-        let p1 = Add(BinOp { left: sub, right: Num(10) });
+        let sub = Expr.Add(BinOp { left: Expr.Num(2), right: Expr.Num(3) });
+        let p1 = Expr.Add(BinOp { left: sub, right: Expr.Num(10) });
         total = total + eval(p1);
         i = i + 1;
     }

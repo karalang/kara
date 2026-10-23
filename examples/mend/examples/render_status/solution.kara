@@ -11,5 +11,5 @@ fn status_code(o: Order) -> i64 {
 }
 
 fn main() {
-    println(status_code(Pending));
+    println(status_code(Order.Pending));
 }

@@ -3,7 +3,7 @@ enum E { V(Slice[i64]) }
 fn main() {
     let a: Array[i64, 3] = [10, 20, 30];
     let s: Slice[i64] = a.as_slice();
-    let e = V(s);
+    let e = E.V(s);
     match e {
         V(xs) => {
             println(xs.len());

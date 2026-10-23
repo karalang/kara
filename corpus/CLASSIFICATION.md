@@ -6,9 +6,9 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 9485 / 9646 = 98.3%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 7755 / 7884 = 98.4%.
-- Every classified non-deferred program (context): 15823 / 17045 = 92.8%.
+- Every classified non-deferred program (context): 15826 / 17045 = 92.8%.
 - Bench variants (outside the gate): 223 / 893 = 25.0%; timeouts 611.
-- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5293 / 5411 = 97.8%; failing mir-gap 47, check-refuses 41, e-not-refused 24, e-differs 4, b-fix-incomplete 2.
+- Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5296 / 5411 = 97.9%; failing mir-gap 47, check-refuses 41, e-not-refused 23, b-fix-incomplete 2, e-differs 2.
 - Deferred (class d): 736; outside the slice (`post-m1:*`): 1095.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
@@ -16,10 +16,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | bucket | programs |
 |---|---|
-| a | 5831 |
+| a | 5832 |
 | e-spec | 2996 |
 | a:refused | 326 |
-| b->a | 238 |
+| b->a | 237 |
 | b->e-spec | 63 |
 | check-refuses | 60 |
 | b-fix-incomplete | 35 |
@@ -38,7 +38,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | runtime: in main at bbN[term]: the `_` function `_` is in no library the progra | 4 |
 | build | 3 |
 | this path | 2 |
-| this name | 1 |
+| runtime: in main at bbN[term]: call of unknown function String.len | 1 |
 | runtime: in main at bbN[term]: in barrier at bbN[term]: `_` takes an ordering s | 1 |
 | `assert_eq` of two types | 1 |
 | error[mir]: borrow check IterMap[VecIter[String], Fn(String) | 1 |
@@ -62,7 +62,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:layout | 18 |
 | post-m1:url | 4 |
 
-## Auto-resolved e-spec (3803): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (3800): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -1764,7 +1764,6 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/enums/DECLS__fmt_7`
 - `fixtures/memory_sanitizer/enums/DECLS__fmt_8`
 - `fixtures/memory_sanitizer/enums/H__fmt_11`
-- `fixtures/memory_sanitizer/enums/H__fmt_12`
 - `fixtures/memory_sanitizer/enums/H__fmt_3`
 - `fixtures/memory_sanitizer/enums/H__fmt_6`
 - `fixtures/memory_sanitizer/enums/H__fmt_7`
@@ -1775,8 +1774,6 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/memory_sanitizer/enums/PRE__fmt_12`
 - `fixtures/memory_sanitizer/enums/PRE__fmt_13`
 - `fixtures/memory_sanitizer/enums/PRE__fmt_9`
-- `fixtures/memory_sanitizer/enums/ROUNDS_4`
-- `fixtures/memory_sanitizer/enums/asan_bare_variant_ctor_tuple_elem_keeps_one_owner`
 - `fixtures/memory_sanitizer/enums/asan_boxed_tuple_enum_payload_is_freed_in_every_position`
 - `fixtures/memory_sanitizer/enums/asan_enum_arg_on_the_return_route_frees_its_orphan`
 - `fixtures/memory_sanitizer/enums/asan_enum_container_payload_in_struct_field_keeps_one_owner`

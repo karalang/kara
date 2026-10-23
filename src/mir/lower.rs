@@ -18826,7 +18826,8 @@ pub fn lower_program_with_roots(
     roots: &[String],
 ) -> Lowered {
     let defs = ProgramDefs::build_for_program(program);
-    let res = crate::node_res::node_res(r, &defs, 0, None);
+    let mut res = crate::node_res::node_res(r, &defs, 0, None);
+    crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
     let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
     let captures = crate::ownershipcheck(program, tc).closure_captures;
     let mut lowered = lower_program_inner(
@@ -18862,7 +18863,8 @@ fn lower_typed(
 ) -> Result<Lowered, String> {
     let mut t = std::time::Instant::now();
     let defs = ProgramDefs::build_for_program(program);
-    let res = crate::node_res::node_res(r, &defs, 0, None);
+    let mut res = crate::node_res::node_res(r, &defs, 0, None);
+    crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
     phase_time("defs+node_res", &mut t);
     let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
     phase_time("typed_hir", &mut t);

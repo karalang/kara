@@ -11604,7 +11604,8 @@ fn a_const_of_a_heap_type_is_fixed_to_str_or_array() {
 }
 
 /// B-2026-10-22-19: every "Allowed initializers" form of design.md
-/// § Constants passes, a bare variant constructor (`Some(42)`) included.
+/// § Constants passes, a bare prelude variant constructor (`Some(42)`)
+/// included; a user variant is built qualified (B-2026-10-22-46).
 #[test]
 fn a_const_accepts_every_allowed_initializer_form() {
     accepted(
@@ -11618,7 +11619,7 @@ fn a_const_accepts_every_allowed_initializer_form() {
          const APP_NAME: Str = \"karac\";\n\
          const ANSWER: Option[i64] = Some(42);\n\
          const SHADE: Color = Color.Rgb(1, 2, 3);\n\
-         const BARE: Color = Rgb(4, 5, 6);\n\
+         const BARE: Color = Color.Rgb(4, 5, 6);\n\
          const ORIGIN: Point = Point { x: 0, y: 0 };\n\
          const TRIPLE: (i64, i64, i64) = (1, 2, 3);\n\
          const TABLE: Array[i64, 3] = [1, 2, 3];\n\
@@ -12111,5 +12112,69 @@ fn vec_to_vec_copies_into_a_new_vec() {
          println(f\"{v.len()} {w.len()} {w[3]}\");\n    \
          let s = [String.from(\"a\"), String.from(\"b\")];\n    let t = s.to_vec();\n    println(t[1]);\n}\n",
         "3 4 4\nb\n",
+    );
+}
+
+/// A bare name in a pattern that the scrutinee's enum declares is that
+/// variant, even when the name means something else in scope (the prelude's
+/// `Fn`) or nothing (a library enum's `NotFound`); a capitalised name the
+/// enum does not declare is an error, not a catch-all binding
+/// (B-2026-10-22-31).
+#[test]
+fn a_bare_variant_pattern_is_the_scrutinees_variant() {
+    accepted_and_runs(
+        "bare-variant-prelude-name",
+        "enum Tok { Fn, Let, Plus }\n\
+         fn kind(t: Tok) -> i64 {\n    match t { Fn => 1, Let => 2, _ => 3 }\n}\n\
+         fn by_ref(t: ref Tok) -> i64 {\n    match t { Fn => 1, _ => 3 }\n}\n\
+         fn main() {\n    \
+         println(f\"{kind(Tok.Fn)} {kind(Tok.Let)} {kind(Tok.Plus)} {by_ref(Tok.Plus)}\");\n}\n",
+        "1 2 3 3\n",
+    );
+    accepted_and_runs(
+        "bare-variant-library-enum",
+        "fn main() {\n    let e = IoError.PermissionDenied;\n    \
+         let n = match e { NotFound => 1, PermissionDenied => 2, _ => 3 };\n    \
+         match e { NotFound => println(\"nf\"), _ => println(f\"{n}\") }\n}\n",
+        "2\n",
+    );
+    let (dir, path) = fixture(
+        "bare-variant-unknown",
+        "enum Color { Red, Green }\n\
+         fn f(c: Color) -> i64 {\n    match c { Red => 1, Purple => 2 }\n}\n\
+         fn main() {\n    println(f(Color.Green));\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("`Color` has no variant `Purple`"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A variant is built with its qualified name; only `Some`, `None`, `Ok` and
+/// `Err` are written bare, and a pattern may leave the enum name out
+/// (design.md § Enums, B-2026-10-22-46).
+#[test]
+fn a_bare_variant_does_not_build_a_value() {
+    rejected_then_fixed_by(
+        "bare-variant-unit",
+        "enum E { A(String), B }\n\
+         fn main() {\n    let p = B;\n    match p { E.A(s) => println(s), B => println(\"b\") }\n}\n",
+        "write `E.B`",
+        "let p = E.B;",
+    );
+    rejected_then_fixed_by(
+        "bare-variant-tuple",
+        "enum E { A(String), B }\n\
+         fn main() {\n    let p = A(\"a\");\n    match p { A(s) => println(s), B => println(\"b\") }\n}\n",
+        "write `E.A`",
+        "let p = E.A(\"a\");",
+    );
+    accepted_and_runs(
+        "bare-prelude-variants",
+        "fn main() {\n    let a: Option[i64] = None;\n    let b = Some(2);\n    \
+         let c: Result[i64, String] = Ok(3);\n    \
+         println(f\"{a.unwrap_or(1)} {b.unwrap_or(0)} {c.unwrap_or(0)}\");\n}\n",
+        "1 2 3\n",
     );
 }

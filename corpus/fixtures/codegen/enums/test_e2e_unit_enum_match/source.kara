@@ -8,7 +8,7 @@ fn describe(c: own Color) -> i64 {
     }
 }
 fn main() {
-    println(describe(Green));
-    println(describe(Red));
-    println(describe(Blue));
+    println(describe(Color.Green));
+    println(describe(Color.Red));
+    println(describe(Color.Blue));
 }

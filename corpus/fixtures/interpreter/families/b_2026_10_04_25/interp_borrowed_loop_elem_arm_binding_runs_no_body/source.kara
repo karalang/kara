@@ -34,7 +34,7 @@ fn walk_enum(items: ref Vec[E]) -> i64 {
     total
 }
 fn main() {
-    let items = vec![Many(vec![D { n: 1 }, D { n: 2 }]), One(D { n: 3 })];
+    let items = vec![E.Many(vec![D { n: 1 }, D { n: 2 }]), E.One(D { n: 3 })];
     println(f"walk {walk(items)}");
     println(f"walk {walk_place(items)}");
     println(f"walk {walk_enum(items)}");

@@ -7,6 +7,6 @@ fn apply(a: Action, base: i64) -> i64 {
     }
 }
 fn main() {
-    let a = Add(5);
+    let a = Action.Add(5);
     println(apply(a, 10));
 }

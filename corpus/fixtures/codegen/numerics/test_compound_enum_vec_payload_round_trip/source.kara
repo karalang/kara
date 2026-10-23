@@ -9,7 +9,7 @@ fn main() {
     let mut v: Vec[i64] = Vec.new();
     v.push(7);
     v.push(8);
-    let e = V(v);
+    let e = E.V(v);
     match e {
         V(xs) => println(sum(xs)),
     }

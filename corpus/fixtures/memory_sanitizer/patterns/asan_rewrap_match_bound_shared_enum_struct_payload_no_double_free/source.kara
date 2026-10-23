@@ -14,19 +14,19 @@ fn emit(e: Expr) -> i64 {
 fn process(value: Expr) -> i64 {
     match value {
         Lit(s) => s.len(),
-        MethodCall(mc) => emit(MethodCall(mc.clone())),
+        MethodCall(mc) => emit(Expr.MethodCall(mc.clone())),
     }
 }
 fn main() {
     let mut total = 0;
     let mut i = 0;
     while i < 300 {
-        let inner: Expr = Lit("x".to_string());
+        let inner: Expr = Expr.Lit("x".to_string());
         let mut a: Vec[i64] = Vec.new();
         a.push(1);
         a.push(2);
         let mc = MCall { object: inner, method: "substring".to_string(), args: a };
-        let v: Expr = MethodCall(mc);
+        let v: Expr = Expr.MethodCall(mc);
         total = total + process(v);
         i = i + 1;
     }

@@ -6,7 +6,7 @@ fn main() {
     v.push(2);
     v.push(3);
     v.push(4);
-    let e = V((v, 100));
+    let e = E.V((v, 100));
     match e {
         V((xs, n)) => {
             println(xs.len());

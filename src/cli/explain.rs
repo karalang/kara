@@ -829,6 +829,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0520",
         ty("RemovedInCore", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // v2 core: a variant built with its bare name (B-2026-10-22-46).
+    (
+        "E0521",
+        ty(
+            "BareVariantConstructor",
+            Some(DiagnosticClass::TypeMismatch),
+        ),
+    ),
     // B-2026-10-20-8: the TLS server and WebSocket keep their services-track
     // (M4a) placement.
     (

@@ -15,15 +15,15 @@ fn mku() -> U { U.C(3) }
 fn main() {
     println("arg"); let x = take(U.A); println(f"  {x}");
     println("refarg"); let y = rtake(U.B); println(f"  {y}");
-    println("bare"); let z = take(A); println(f"  {z}");
+    println("bare"); let z = take(U.A); println(f"  {z}");
     println("loop"); let mut i = 0; let mut t = 0; while i < 5 { t = t + tv(V.X) + take(U.B); i = i + 1; } println(f"  {t}");
     println("method"); let o = Obj { n: 1 }; let a = o.eat(U.A); println(f"  {a}");
     println("mref"); let b = o.look(U.B); println(f"  {b}");
     println("scrut"); let r = match U.A { U.A => 1, _ => 2 }; println(f"  {r}");
-    println("scrutbare"); let r2 = match B { U.A => 1, _ => 2 }; println(f"  {r2}");
+    println("scrutbare"); let r2 = match U.B { U.A => 1, _ => 2 }; println(f"  {r2}");
     println("scrutnodrop"); let r3 = match V.Y { V.X => 1, V.Y => 2 }; println(f"  {r3}");
     println("discard"); U.A; println("  after");
-    println("discardbare"); B; println("  after");
+    println("discardbare"); U.B; println("  after");
     println("letdisc"); let _ = U.B; println("  after");
     println("ctor"); U.C(5); println("  after");
     println("call"); mku(); println("  after");

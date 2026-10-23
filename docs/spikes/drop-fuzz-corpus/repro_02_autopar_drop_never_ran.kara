@@ -90,7 +90,7 @@ fn main() {
     let mut acc: i64 = 0i64;
     let mut round: i64 = 0i64;
     while round < 40i64 {
-        let mut bn3: Bin = Packed([new_tracked(1i64, "df12_payload_bytes_kept_long_enough_for_lsan_12".to_string()), new_tracked(2i64, "df13_payload_bytes_kept_long_enough_for_lsan_13".to_string())]);
+        let mut bn3: Bin = Bin.Packed([new_tracked(1i64, "df12_payload_bytes_kept_long_enough_for_lsan_12".to_string()), new_tracked(2i64, "df13_payload_bytes_kept_long_enough_for_lsan_13".to_string())]);
         round = round + 1i64;
     }
     println(acc);

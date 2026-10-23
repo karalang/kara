@@ -7,5 +7,5 @@ fn chk(e: E) -> i64 {
     }
 }
 fn main() {
-    println(chk(Node(Node(Node(Leaf(42))))));
+    println(chk(E.Node(E.Node(E.Node(E.Leaf(42))))));
 }

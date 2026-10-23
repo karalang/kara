@@ -16,14 +16,14 @@ fn eval(e: Expr) -> i64 {
     }
 }
 fn build(n: i64) -> Expr {
-    if n <= 0 { Num(0) }
-    else { Neg(Unary { operand: Add(BinOp { left: Num(n), right: build(n - 1) }) }) }
+    if n <= 0 { Expr.Num(0) }
+    else { Expr.Neg(Unary { operand: Expr.Add(BinOp { left: Expr.Num(n), right: build(n - 1) }) }) }
 }
 fn main() {
     let mut args: Vec[Expr] = Vec.new();
     let mut i: i64 = 0;
-    while i < 10 { args.push(Num(i)); i = i + 1; }
-    let call = Call(CallExpr { callee: Num(100), args: args });
+    while i < 10 { args.push(Expr.Num(i)); i = i + 1; }
+    let call = Expr.Call(CallExpr { callee: Expr.Num(100), args: args });
     let mut forest: Vec[Expr] = Vec.new();
     let mut j: i64 = 0;
     while j < 30 { forest.push(build(j)); j = j + 1; }

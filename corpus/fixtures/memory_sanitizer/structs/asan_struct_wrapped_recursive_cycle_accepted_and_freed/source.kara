@@ -11,7 +11,7 @@ fn main() {
     let mut i: i64 = 0;
     let mut total: i64 = 0;
     while i < 40 {
-        let t: Expr = Bin(BinOp { left: Num(i), right: Bin(BinOp { left: Num(i), right: Num(2) }) });
+        let t: Expr = Expr.Bin(BinOp { left: Expr.Num(i), right: Expr.Bin(BinOp { left: Expr.Num(i), right: Expr.Num(2) }) });
         total = total + eval(t);
         i = i + 1;
     }

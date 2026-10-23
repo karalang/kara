@@ -1087,6 +1087,11 @@ pub enum TypeErrorKind {
     /// falls out of that scan as alphabetical, and which nothing ever chose —
     /// is rejected.
     AmbiguousBareVariant,
+    /// v2 core: an enum variant built with its bare name (`let p = B;`).
+    /// A variant is built with its qualified name; only `Some`, `None`, `Ok`
+    /// and `Err` are written bare (design.md § Enums, B-2026-10-22-46)
+    /// (E0521).
+    BareVariantConstructor,
     /// `redundant_suffix` lint (B-2026-08-20-36) — a numeric literal carries
     /// the suffix it would have had anyway. design.md § Numeric Semantics >
     /// Literal suffixes: "A suffix matching the default type (`42i64`,
@@ -1501,6 +1506,7 @@ pub(crate) fn class_for_type_error_kind(
         // follow-up commit naming the slot.
         TypeErrorKind::NonExhaustiveMatch
         | TypeErrorKind::AmbiguousBareVariant
+        | TypeErrorKind::BareVariantConstructor
         | TypeErrorKind::UnsupportedNumericSuffix
         | TypeErrorKind::PrivateTypeInPublicSignature
         | TypeErrorKind::ConflictingImpl
@@ -2195,6 +2201,13 @@ pub struct TypeCheckResult {
     /// `NodeId`, so the callee's name resolution (keyed by that expression's
     /// own node) can be read per call.
     pub node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
+    /// A bare name in a pattern that names a variant of the scrutinee's
+    /// enum, keyed by the pattern's `NodeId`: the enum and the variant. The
+    /// resolver cannot tell `Fn` in `match t { Fn => .. }` from a binding
+    /// when the name also means something else in scope (the prelude's
+    /// `Fn`), or nothing (a library enum's `NotFound`); the scrutinee's type
+    /// says which (B-2026-10-22-31). Read by `crate::node_res`.
+    pub variant_patterns: FxHashMap<crate::ids::NodeId, (String, String)>,
     /// Each function's declared return type (`Self` resolved), keyed by its
     /// impl block's span (`None` outside one) and the function's span, with
     /// the generic frame its parameters are placed in. The impl is part of
@@ -3113,6 +3126,8 @@ pub struct TypeChecker<'a> {
     pub(super) node_type_slots: Vec<(crate::ids::NodeId, Type)>,
     pub(super) node_method_callees: FxHashMap<crate::ids::NodeId, String>,
     pub(super) node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
+    /// See [`TypeCheckResult::variant_patterns`].
+    pub(super) variant_patterns: FxHashMap<crate::ids::NodeId, (String, String)>,
     /// The call expression `infer_expr` is inside, with its span, so
     /// `record_call_type_subs` can key a frame by node as well as by span.
     pub(super) current_call_node: Option<(crate::ids::NodeId, SpanKey)>,
@@ -3577,6 +3592,7 @@ impl<'a> TypeChecker<'a> {
             current_impl_span: None,
             node_method_callees: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
+            variant_patterns: FxHashMap::default(),
             current_call_node: None,
             float_coerced_arg_sites: FxHashMap::default(),
             cast_source_unsigned: FxHashSet::default(),
@@ -4029,6 +4045,7 @@ impl<'a> TypeChecker<'a> {
             node_call_subs,
             node_method_callees: std::mem::take(&mut self.node_method_callees),
             node_call_callees: std::mem::take(&mut self.node_call_callees),
+            variant_patterns: std::mem::take(&mut self.variant_patterns),
             fn_return_types: std::mem::take(&mut self.fn_return_types),
             fn_self_types: std::mem::take(&mut self.fn_self_types),
             float_coerced_arg_sites: self.float_coerced_arg_sites,

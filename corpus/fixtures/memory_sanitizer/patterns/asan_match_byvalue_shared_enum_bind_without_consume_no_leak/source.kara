@@ -9,13 +9,13 @@ fn eval(e: Expr) -> i64 {
 }
 fn fold(e: Expr) -> Expr {
     match e {
-        Num(n) => Num(n),
-        Add(b) => Add(BinOp { left: Num(99), right: Num(99) }),
+        Num(n) => Expr.Num(n),
+        Add(b) => Expr.Add(BinOp { left: Expr.Num(99), right: Expr.Num(99) }),
     }
 }
 fn build(n: i64) -> Expr {
-    if n <= 0 { Num(n) }
-    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+    if n <= 0 { Expr.Num(n) }
+    else { Expr.Add(BinOp { left: Expr.Num(n), right: build(n - 1) }) }
 }
 fn main() {
     let mut i: i64 = 0;

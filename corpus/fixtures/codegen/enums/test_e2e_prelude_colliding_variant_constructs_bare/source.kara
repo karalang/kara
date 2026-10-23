@@ -11,7 +11,7 @@ fn describe(e: own Ev) -> String {
 fn main() {
     let a = Request("/users");
     let b = Response(200);
-    let c = Idle;
+    let c = Ev.Idle;
     println(describe(a));
     println(describe(b));
     println(describe(c));

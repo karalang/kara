@@ -5,7 +5,7 @@ fn main() {
     v.push("alpha");
     v.push("beta");
     v.push("gamma");
-    let e = V(v);
+    let e = E.V(v);
     match e {
         V(xs) => println(xs.len()),
     }

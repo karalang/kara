@@ -9,6 +9,6 @@ fn to_num(d: Dir) -> i64 {
     }
 }
 fn main() {
-    println(to_num(East));
-    println(to_num(North));
+    println(to_num(Dir.East));
+    println(to_num(Dir.North));
 }

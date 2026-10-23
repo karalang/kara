@@ -1828,6 +1828,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
                 crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
                 crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
+                crate::typechecker::TypeErrorKind::BareVariantConstructor => "E0521",
                 crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
                 crate::typechecker::TypeErrorKind::ArchivedWithLegacy => "E_ARCHIVED",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",

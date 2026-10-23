@@ -5,6 +5,6 @@ fn main() {
     v.push(1);
     v.push(2);
     v.push(3);
-    let _e = V(v);
+    let _e = E.V(v);
     println(1);
 }

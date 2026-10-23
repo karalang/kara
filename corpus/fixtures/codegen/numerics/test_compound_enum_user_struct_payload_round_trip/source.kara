@@ -3,7 +3,7 @@ struct Point { x: i64, y: i64 }
 enum E { V(Point) }
 fn main() {
     let p = Point { x: 3, y: 4 };
-    let e = V(p);
+    let e = E.V(p);
     match e {
         V(q) => {
             println(q.x);

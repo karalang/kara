@@ -11,18 +11,18 @@ fn eval(e: Expr) -> i64 {
 }
 fn fold(e: Expr) -> Expr {
     match e {
-        Num(n) => Num(n),
-        Neg(u) => Neg(Unary { operand: fold(u.operand) }),
+        Num(n) => Expr.Num(n),
+        Neg(u) => Expr.Neg(Unary { operand: fold(u.operand) }),
         Add(b) => {
             let l = fold(b.left);
             let r = fold(b.right);
-            Add(BinOp { left: l, right: r })
+            Expr.Add(BinOp { left: l, right: r })
         }
     }
 }
 fn build(n: i64) -> Expr {
-    if n <= 0 { Num(1) }
-    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+    if n <= 0 { Expr.Num(1) }
+    else { Expr.Add(BinOp { left: Expr.Num(n), right: build(n - 1) }) }
 }
 fn main() {
     let t = build(15);

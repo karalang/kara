@@ -31,21 +31,21 @@ fn main() {
     let n = env.args().len() as i64;
     let mut i: i64 = 0i64;
     while i < 8i64 {
-        let c1: Slot[String] = Filled(f"row-aaaaaaaaaaaa-{i}-{n}");
+        let c1: Slot[String] = Slot.Filled(f"row-aaaaaaaaaaaa-{i}-{n}");
         println(f"c1:{peek(c1)}");
-        let c2: Slot[String] = Filled(f"row-bbbbbbbbbbbb-{i}-{n}");
+        let c2: Slot[String] = Slot.Filled(f"row-bbbbbbbbbbbb-{i}-{n}");
         println(f"c2:{blind(c2)}");
-        let c3: Slot[String] = Filled(f"row-cccccccccccc-{i}-{n}");
+        let c3: Slot[String] = Slot.Filled(f"row-cccccccccccc-{i}-{n}");
         println("c3");
-        let c4: Slot[String] = Filled(f"row-dddddddddddd-{i}-{n}");
+        let c4: Slot[String] = Slot.Filled(f"row-dddddddddddd-{i}-{n}");
         println(f"c4:{take(c4)}");
-        let c5: Slot[String] = Filled(f"row-eeeeeeeeeeee-{i}-{n}");
+        let c5: Slot[String] = Slot.Filled(f"row-eeeeeeeeeeee-{i}-{n}");
         println(f"c5:{match c5 { Filled(x) => x.contains("row"), Blank => false, }}");
-        let c6: StrSlot = FilledS(f"row-ffffffffffff-{i}-{n}");
+        let c6: StrSlot = StrSlot.FilledS(f"row-ffffffffffff-{i}-{n}");
         println(f"c6:{mono(c6)}");
-        let c7: Slot[Vec[String]] = Filled(Vec[f"row-gggggggggggg-{i}-{n}", f"row-hhhhhhhhhhhh-{i}-{n}"]);
+        let c7: Slot[Vec[String]] = Slot.Filled(Vec[f"row-gggggggggggg-{i}-{n}", f"row-hhhhhhhhhhhh-{i}-{n}"]);
         println(f"c7:{vpeek(c7)}");
-        let c8: Slot[Vec[String]] = Filled(Vec[f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"]);
+        let c8: Slot[Vec[String]] = Slot.Filled(Vec[f"row-iiiiiiiiiiii-{i}-{n}", f"row-jjjjjjjjjjjj-{i}-{n}"]);
         println(f"c8:{vtake(c8)}");
         i = i + 1i64;
     }

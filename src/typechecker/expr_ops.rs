@@ -638,6 +638,55 @@ impl<'a> super::TypeChecker<'a> {
         Some(owners)
     }
 
+    /// v2 core: a variant is built with its qualified name (design.md
+    /// § Enums); only `Some`, `None`, `Ok` and `Err` are written bare. `ty`
+    /// is what the bare `name` resolved to: the enum for a unit variant, the
+    /// constructor for a tuple variant (B-2026-10-22-46).
+    pub(super) fn refuse_core_bare_variant(&mut self, name: &str, ty: &Type, span: &Span) {
+        if !self.cli_lint_overrides.strict_core
+            || Self::builtin_variant_owner(name).is_some()
+            || self.name_shadows_variant(name)
+        {
+            return;
+        }
+        let owner = match ty {
+            Type::Named { name, .. } => name,
+            Type::Function { return_type, .. } => match &**return_type {
+                Type::Named { name, .. } => name,
+                _ => return,
+            },
+            _ => return,
+        };
+        let declares = self
+            .env
+            .enums
+            .get(owner)
+            .is_some_and(|e| e.variants.iter().any(|(v, _)| v == name));
+        if !declares || owner.contains("__") {
+            return;
+        }
+        let qualified = format!("{owner}.{name}");
+        if self
+            .errors
+            .iter()
+            .any(|e| e.span == *span && matches!(e.kind, TypeErrorKind::BareVariantConstructor))
+        {
+            return;
+        }
+        self.type_error_with_fix_it(
+            format!(
+                "a variant is built with its enum's name: write `{qualified}`; only \
+                 `Some`, `None`, `Ok` and `Err` are written bare (design.md § Enums)"
+            ),
+            *span,
+            TypeErrorKind::BareVariantConstructor,
+            FixIt {
+                span: *span,
+                replacement: qualified,
+            },
+        );
+    }
+
     pub(super) fn builtin_variant_owner(name: &str) -> Option<&'static str> {
         match name {
             "Some" | "None" => Some("Option"),

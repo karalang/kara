@@ -1,7 +1,7 @@
 
 enum E { V((String, i64)) }
 fn main() {
-    let e = V(("hello", 42));
+    let e = E.V(("hello", 42));
     match e {
         V((s, n)) => {
             println(s);

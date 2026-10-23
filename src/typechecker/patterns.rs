@@ -1235,15 +1235,29 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             PatternKind::Binding(name) => {
-                // Check if this binding name is actually an enum variant
-                // (unit variants are parsed as Binding since the parser can't distinguish)
+                // A bare name that the scrutinee's enum declares is that
+                // variant (design.md § Enums), whatever else the name means in
+                // scope: a prelude type (`Fn`), or nothing at all (a library
+                // enum's `NotFound`). Record which variant, since the resolver
+                // made it a binding (B-2026-10-22-31).
+                let mut peeled = expected;
+                while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+                    peeled = inner;
+                }
                 if let Type::Named {
                     name: enum_name, ..
-                } = expected
+                } = peeled
                 {
-                    if let Some(enum_info) = self.env.enums.get(enum_name).cloned() {
-                        if enum_info.variants.iter().any(|(vn, _)| vn == name) {
-                            // It's a unit variant match, not a variable binding
+                    let declares = self
+                        .env
+                        .enums
+                        .get(enum_name)
+                        .is_some_and(|e| e.variants.iter().any(|(vn, _)| vn == name));
+                    if declares {
+                        self.variant_patterns
+                            .insert(pattern.id, (enum_name.clone(), name.clone()));
+                        // It's a unit variant match, not a variable binding
+                        if std::ptr::eq(peeled, expected) {
                             return;
                         }
                     }
@@ -1283,6 +1297,34 @@ impl<'a> super::TypeChecker<'a> {
                         &pattern.span,
                     );
                     return;
+                }
+                // v2 core: a binding is Value class (design.md CN-2), so a
+                // bare Type-class name over an enum that does not declare it
+                // is a misspelt or foreign variant, not a catch-all binding
+                // (B-2026-10-22-31).
+                if self.cli_lint_overrides.strict_core
+                    && !name.contains('.')
+                    && crate::lexer::classify_ident(name) == crate::lexer::IdentClass::Type
+                    && !self.variant_patterns.contains_key(&pattern.id)
+                {
+                    if let Type::Named {
+                        name: enum_name, ..
+                    } = peeled
+                    {
+                        if self.env.enums.contains_key(enum_name) {
+                            self.type_error(
+                                format!(
+                                    "`{enum_name}` has no variant `{name}`: a bare name \
+                                     in a pattern that starts with a capital letter is a \
+                                     variant of the scrutinee's enum, and a binding's name \
+                                     starts with a lowercase letter (design.md CN-2)"
+                                ),
+                                pattern.span,
+                                TypeErrorKind::PatternScrutineeMismatch,
+                            );
+                            return;
+                        }
+                    }
                 }
                 // v2 core: a dotted unit variant (`Slot.Empty`) over its own
                 // enum binds nothing, so it moves nothing (§4.6). Legacy

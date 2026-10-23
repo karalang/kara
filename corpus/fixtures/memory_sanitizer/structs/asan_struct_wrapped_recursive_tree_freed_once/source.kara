@@ -10,8 +10,8 @@ fn eval(e: Expr) -> i64 {
     }
 }
 fn main() {
-    let inner = Add(BinOp { left: Num(2), right: Num(3) });
-    let sum = Add(BinOp { left: Num(1), right: inner });
-    let t = Neg(Unary { operand: sum });
+    let inner = Expr.Add(BinOp { left: Expr.Num(2), right: Expr.Num(3) });
+    let sum = Expr.Add(BinOp { left: Expr.Num(1), right: inner });
+    let t = Expr.Neg(Unary { operand: sum });
     println(eval(t));
 }

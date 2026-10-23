@@ -8,13 +8,13 @@ fn eval(e: Expr) -> i64 {
 }
 fn fold(e: Expr) -> Expr {
     match e {
-        Num(n) => Num(n),
-        Add(l, r) => Add(Num(99), Num(99)),
+        Num(n) => Expr.Num(n),
+        Add(l, r) => Expr.Add(Expr.Num(99), Expr.Num(99)),
     }
 }
 fn build(n: i64) -> Expr {
-    if n <= 0 { Num(n) }
-    else { Add(Num(n), build(n - 1)) }
+    if n <= 0 { Expr.Num(n) }
+    else { Expr.Add(Expr.Num(n), build(n - 1)) }
 }
 fn main() {
     let mut i: i64 = 0;

@@ -10,11 +10,11 @@ fn eval(e: Expr) -> i64 {
     }
 }
 fn main() {
-    let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+    let t1 = Expr.Add(BinOp { left: Expr.Num(3), right: Expr.Num(4) });
     let t2 = t1;
-    let sub = Add(BinOp { left: Num(2), right: Num(3) });
-    let p1 = Add(BinOp { left: sub, right: Num(10) });
-    let p2 = Neg(Unary { operand: Num(7) });
+    let sub = Expr.Add(BinOp { left: Expr.Num(2), right: Expr.Num(3) });
+    let p1 = Expr.Add(BinOp { left: sub, right: Expr.Num(10) });
+    let p2 = Expr.Neg(Unary { operand: Expr.Num(7) });
     println(eval(t2));
     println(eval(p1));
     println(eval(p2));

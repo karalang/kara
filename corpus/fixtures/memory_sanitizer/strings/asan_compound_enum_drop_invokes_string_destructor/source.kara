@@ -3,6 +3,6 @@ enum E { V(String) }
 fn main() {
     let mut s: String = String.new();
     s.push_str("disk full");
-    let _e = V(s);
+    let _e = E.V(s);
     println(1);
 }

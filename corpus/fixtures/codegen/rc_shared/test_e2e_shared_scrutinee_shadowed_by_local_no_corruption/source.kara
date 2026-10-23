@@ -16,5 +16,5 @@ fn chk(e: E) -> i64 {
     }
 }
 fn main() {
-    println(chk(B(10)));
+    println(chk(E.B(10)));
 }

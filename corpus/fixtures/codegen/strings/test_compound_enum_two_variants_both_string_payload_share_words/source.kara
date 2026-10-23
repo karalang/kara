@@ -1,8 +1,8 @@
 
 enum E { V1(String), V2(String) }
 fn main() {
-    let a = V1("first");
-    let b = V2("second");
+    let a = E.V1("first");
+    let b = E.V2("second");
     match a {
         V1(s) => println(s),
         V2(_s) => println("nope"),

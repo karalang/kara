@@ -7,6 +7,6 @@ fn extract(v: Value) -> i64 {
     }
 }
 fn main() {
-    let v = Num(42);
+    let v = Value.Num(42);
     println(extract(v));
 }

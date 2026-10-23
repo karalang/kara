@@ -15,14 +15,14 @@ fn main() {
     while k < 25 {
         let mut args: Vec[Expr] = Vec.new();
         let mut i: i64 = 0;
-        while i < 10 { args.push(Num(i)); i = i + 1; }
-        let call: Expr = Call(CallExpr { callee: Num(100), args: args });
+        while i < 10 { args.push(Expr.Num(i)); i = i + 1; }
+        let call: Expr = Expr.Call(CallExpr { callee: Expr.Num(100), args: args });
         total = total + sum_args(call);
         // a struct whose ONLY shared content is a Vec[shared] field
         let mut items: Vec[Expr] = Vec.new();
         let mut j: i64 = 0;
-        while j < 5 { items.push(Num(j)); j = j + 1; }
-        let wrapped: Expr = Wrapped(Wrap { items: items });
+        while j < 5 { items.push(Expr.Num(j)); j = j + 1; }
+        let wrapped: Expr = Expr.Wrapped(Wrap { items: items });
         total = total + sum_args(wrapped);
         k = k + 1;
     }

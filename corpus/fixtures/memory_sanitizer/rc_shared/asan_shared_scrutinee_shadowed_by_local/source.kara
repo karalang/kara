@@ -19,7 +19,7 @@ fn main() {
     let mut i: i64 = 0;
     let mut t: i64 = 0;
     while i < 200 {
-        t = t + chk(B(10));
+        t = t + chk(E.B(10));
         i = i + 1;
     }
     println(f"{t}");

@@ -1,7 +1,6 @@
 shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }
 struct BinOp { left: Expr, right: Expr }
 struct Unary { operand: Expr }
-#[derive(Clone)]
 struct CallExpr { callee: Expr, args: Vec[Expr] }
 fn eval(e: Expr) -> i64 {
 match e {
@@ -20,7 +19,7 @@ match e {
 Num(n) => Num(n),
 Neg(u) => Neg(Unary { operand: fold(u.operand) }),
 Add(b) => Add(BinOp { left: fold(b.left), right: fold(b.right) }),
-Call(c) => Call(c.clone()),
+Call(c) => Call(c),
 }
 }
 fn build(n: i64) -> Expr {

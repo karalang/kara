@@ -27,7 +27,7 @@ fn main() {
         println("g5");
         let m1: E = E.A([f"row-oooooooooooo-{i}-{n}", f"row-pppppppppppp-{i}-{n}"]);
         println("m1");
-        let m2: E = A([f"row-qqqqqqqqqqqq-{i}-{n}", f"row-rrrrrrrrrrrr-{i}-{n}"]);
+        let m2: E = E.A([f"row-qqqqqqqqqqqq-{i}-{n}", f"row-rrrrrrrrrrrr-{i}-{n}"]);
         println(f"m2:{match m2 { A(t) => { t[1].contains("row") } B => { false } }}");
         let m3: Ei = Ei.Ai([i, i + n, i * 2i64]);
         println("m3");

@@ -63,6 +63,25 @@ pub fn node_res(
         .collect()
 }
 
+/// Add the bare variant patterns the typechecker resolved against their
+/// scrutinee's enum ([`crate::typechecker::TypeCheckResult::variant_patterns`]),
+/// over whatever the resolver recorded for them (B-2026-10-22-31).
+pub fn add_variant_patterns(
+    res: &mut FxHashMap<NodeId, Res>,
+    defs: &ProgramDefs,
+    module: ModuleId,
+    patterns: &FxHashMap<NodeId, (String, String)>,
+) {
+    for (&node, (enum_name, variant)) in patterns {
+        if let Some(v) = defs
+            .lookup(module, enum_name)
+            .and_then(|e| defs.variant(e, variant))
+        {
+            res.insert(node, Res::Def(v));
+        }
+    }
+}
+
 fn res_of(
     result: &ResolveResult,
     defs: &ProgramDefs,

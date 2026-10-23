@@ -16,7 +16,7 @@ fn main() {
     println("qualtemp");   let _ = optArg((Option.Some(mk(12)), 7));         println("qualtemp end");
     println("twobare");    let _ = twoArg((Some(mk(13)), Some(mk(14))));     println("twobare end");
     println("secondpos");  let _ = sndArg((7, Some(mk(15))));                println("secondpos end");
-    println("bareuv");     let _ = uvArg((A(mk(16)), 7));                    println("bareuv end");
+    println("bareuv");     let _ = uvArg((W.A(mk(16)), 7));                    println("bareuv end");
     println("qualuv");     let _ = uvArg((W.A(mk(17)), 7));                  println("qualuv end");
     println("mixed");      let _ = mixArg((Some(mk(18)), mk(19)));           println("mixed end");
     println("nested");     let _ = nestArg(((Some(mk(20)), 7), 9));          println("nested end");

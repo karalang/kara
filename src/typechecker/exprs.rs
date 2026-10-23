@@ -1788,6 +1788,7 @@ impl<'a> super::TypeChecker<'a> {
         // free or corruption` at run time rather than into any type error.
         if let ExprKind::Identifier(name) = &expr.kind {
             if let Some(ty) = self.bare_variant_from_expected(name, expected) {
+                self.refuse_core_bare_variant(name, &ty, &expr.span);
                 self.record_expr_type(&expr.span, &ty);
                 return ty;
             }
@@ -8058,6 +8059,7 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
+                self.refuse_core_bare_variant(name, &ty, &expr.span);
                 // B-2026-08-19-17 (b) — a bare variant name that two or more
                 // USER enums declare is rejected rather than silently resolved
                 // to whichever the scan's alphabetical tie-break happens to

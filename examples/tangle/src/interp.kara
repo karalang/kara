@@ -140,10 +140,10 @@ fn main() {
     //   x = 10;
     //   y = (x + 5) * 2;
     //   x + y
-    let program = Seq([
-        Assign("x", [Num(10)]),
-        Assign("y", [Mul([Add([Var("x"), Num(5)]), Num(2)])]),
-        Add([Var("x"), Var("y")]),
+    let program = Expr.Seq([
+        Expr.Assign("x", [Expr.Num(10)]),
+        Expr.Assign("y", [Expr.Mul([Expr.Add([Expr.Var("x"), Expr.Num(5)]), Expr.Num(2)])]),
+        Expr.Add([Expr.Var("x"), Expr.Var("y")]),
     ]);
 
     let scope = Scope { names: Vec.new(), values: Vec.new() };

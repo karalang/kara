@@ -10,7 +10,7 @@ fn main() {
     let mut i: i64 = 0;
     let mut t: i64 = 0;
     while i < 200 {
-        t = t + chk(Node(Node(Node(Leaf(1)))));
+        t = t + chk(E.Node(E.Node(E.Node(E.Leaf(1)))));
         i = i + 1;
     }
     println(f"{t}");

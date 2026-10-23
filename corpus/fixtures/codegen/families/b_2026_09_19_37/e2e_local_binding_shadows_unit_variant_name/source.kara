@@ -11,7 +11,7 @@ fn main() {
     println("arith"); { let Pc = 9; let t = Pc + 1; println(f"  n{t}") }
     println("string"); { let Uc = "hi"; println(f"  n{Uc.len()}") }
     println("struct"); { let Uc = P2 { x: 3 }; println(f"  n{Uc.x}") }
-    println("real-variant"); { let v = Pc; println(f"  {show(v)}") }
-    println("after-scope"); println(f"  {show(Pc)}");
+    println("real-variant"); { let v = Plain.Pc; println(f"  {show(v)}") }
+    println("after-scope"); println(f"  {show(Plain.Pc)}");
     println("end")
 }

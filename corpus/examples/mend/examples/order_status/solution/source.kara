@@ -15,7 +15,7 @@ fn describe(status: OrderStatus) -> String {
 }
 
 fn main() {
-    let s: OrderStatus = Shipped;
+    let s: OrderStatus = OrderStatus.Shipped;
     let d: String = describe(s);
     println(d);
 }

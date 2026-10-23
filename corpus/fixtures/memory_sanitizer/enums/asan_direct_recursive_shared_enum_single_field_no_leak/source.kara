@@ -10,6 +10,6 @@ fn depth(w: Wrap) -> i64 {
     }
 }
 fn main() {
-    let w = Box(Box(Box(Leaf(7))));
+    let w = Wrap.Box(Wrap.Box(Wrap.Box(Wrap.Leaf(7))));
     println(depth(w));
 }

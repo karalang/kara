@@ -7,7 +7,7 @@ fn main() {
     let mut v: Vec[(String, i64)] = Vec.new();
     v.push(("alpha", 1));
     v.push(("beta", 2));
-    let e = V(v);
+    let e = E.V(v);
     match e {
         V(xs) => println(count(xs)),
     }

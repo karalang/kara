@@ -8,7 +8,7 @@ impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
 fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } } }
 fn main() {
     println("qual");     { let s = U.Ua; println("  mid") } println("  out");
-    println("bare");     { let s = Ub; println("  mid") } println("  out");
+    println("bare");     { let s = U.Ub; println("  mid") } println("  out");
     println("two");      { let s = U.Ua; let t = U.Ub; println("  mid") } println("  out");
     println("alias");    { let s = U.Ua; let t = s; println("  mid") } println("  out");
     println("uselater"); { let s = U.Ua; println("  mid"); println(f"  t{tag(s)}") } println("  out");
