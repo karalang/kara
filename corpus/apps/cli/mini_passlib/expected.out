@@ -1,0 +1,1453 @@
+# hex digests
+> hex_md5.hash('password')
+  5f4dcc3b5aa765d61d8327deb882cf99
+> hex_md5.verify('password', '5F4DCC3B5AA765D61D8327DEB882CF99')
+  True
+> hex_md5.verify('Password', '5f4dcc3b5aa765d61d8327deb882cf99')
+  False
+> hex_md5.identify('5f4dcc3b5aa765d61d8327deb882cf99')
+  True
+> hex_md5.identify('5f4dcc3b')
+  False
+> hex_md5.identify('')
+  False
+> hex_md4.hash('password')
+  8a9d093f14f8701df17732b2bb182c74
+> hex_sha1.hash('p\xe4ssw\xf6rd')
+  f517ddf1d32a112ff1ad55c66d1b12cb38e7e8f7
+> hex_sha256.hash(b'password')
+  5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
+> hex_sha512.hash('')
+  cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+> hex_sha256.verify('x', 'zz')
+  error ValueError: malformed hex_sha256 hash (checksum must be exactly 64 chars)
+> hex_sha256.verify('x', 'g' * 64)
+  error ValueError: invalid characters in hex_sha256 checksum
+> hex_sha1.verify('x', None)
+  error TypeError: hash must be unicode or bytes, not None
+> hex_md5.verify(None, '5f4dcc3b5aa765d61d8327deb882cf99')
+  error TypeError: secret must be unicode or bytes, not None
+> hex_md5.verify(3, '5f4dcc3b5aa765d61d8327deb882cf99')
+  error TypeError: secret must be unicode or bytes, not int
+> hex_md5.hash('x' * 4097)
+  error PasswordSizeError: password exceeds maximum allowed size
+> hex_md5.name
+  hex_md5
+> hex_md5.setting_kwds
+  ()
+> hex_sha256.checksum_size
+  64
+> htdigest.hash('secret', 'alice', 'Restricted')
+  a133dce6ab85d37eed532a26b4227f12
+> htdigest.verify('secret', 'a133dce6ab85d37eed532a26b4227f12', 'alice', 'Restricted')
+  True
+> htdigest.verify('secret', 'ABC', 'alice', 'Restricted')
+  error ValueError: malformed htdigest hash (wrong size)
+> htdigest.verify('secret', 'Z' * 32, 'alice', 'Restricted')
+  error ValueError: malformed htdigest hash (invalid chars in hash)
+> htdigest.identify('cf4f79795ce19be46f2b47d187cbf365')
+  True
+> htdigest.identify('nope')
+  False
+> htdigest.hash('p\xe4ss', 'j\xf6rg', 'Zone', encoding='latin-1')
+  78cd5e1e1d3000b840b817437e6480ab
+> htdigest.hash('\u20ac', 'u', 'r', encoding='latin-1')
+  error UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+> htdigest.context_kwds
+  ('user', 'realm', 'encoding')
+# LDAP digests
+> ldap_md5.hash('password')
+  {MD5}X03MO1qnZdYdgyfeuILPmQ==
+> ldap_sha1.hash('password')
+  {SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=
+> ldap_sha1.verify('password', '{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=')
+  True
+> ldap_sha1.verify('password', '{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g')
+  False
+> ldap_sha1.verify('password', '{SHA}W6ph5Mm5Pz8G!iULbPgzG37mj9g=')
+  error ValueError: invalid characters in ldap_sha1 checksum
+> ldap_sha1.verify('password', '{SSHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=')
+  error ValueError: not a valid ldap_sha1 hash
+> ldap_md5.identify('{MD5}X03MO1qnZdYdgyfeuILPmQ==')
+  True
+> ldap_md5.identify('{md5}X03MO1qnZdYdgyfeuILPmQ==')
+  False
+> ldap_salted_md5.hash('password')
+  {SMD5}16WFOgwr9hWHfFS5pkByxhJCqJU=
+> ldap_salted_sha1.hash('password')
+  {SSHA}0Mhf53uaZq9y2T+f55aRxtBbm6rYmzPm
+> ldap_salted_sha1.using(salt_size=8).hash('password')
+  {SSHA}PTRhTb2Qqqia0GtgrJvcz2Aj9F2e8743JqR0Tg==
+> ldap_salted_sha256.hash('password')
+  {SSHA256}d3EBy4CfhIfhVSxZiqWWOpDmEl6l3nVvEosaUkvcO9ZlLEUIAaDUeg==
+> ldap_salted_sha512.using(salt=b'NaCl').hash('password')
+  {SSHA512}tYbIf/bI/HhZZ2dslhzEvDWQNDXWPZk57IcB8/xZ698Upu3uBGo3dQ5GOJEj+qQsLM75NndOI8FhWhOszXhbCU5hQ2w=
+> ldap_salted_sha1.verify('password', '{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs')
+  True
+> ldap_salted_sha1.verify('Password', '{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs')
+  False
+> ldap_salted_sha1.parsehash('{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs')
+  {'salt': b'NaCl', 'checksum': b"@'H\x92\xd2\xfe\x01\xa6\xab\x1e\x0f\xbd\xe5\xc2+\x83\x12\xd1\x07\x80"}
+> ldap_salted_sha1.parsehash('{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs', sanitize=True)
+  {'salt': '******', 'checksum': 'QCd************************'}
+> ldap_salted_sha1.parsehash('{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs', checksum=False)
+  {'salt': b'NaCl'}
+> ldap_salted_sha1.using(salt_size=2)
+  error ValueError: ldap_salted_sha1: salt_size (2) below min_salt_size (4)
+> H = ldap_salted_sha1.using(salt_size=20, relaxed=True)
+  warning PasslibHashWarning: ldap_salted_sha1: salt_size (20) above max_salt_size (16)
+> H.default_salt_size
+  16
+> H.hash('password')
+  {SSHA}ogrhQWeoooimxHJbdOZXsbPyVDgkhLC2lnIOgRDCOGfMeW/N
+> ldap_salted_sha1.using(salt=b'ab')
+  error ValueError: salt too small (ldap_salted_sha1 requires >= 4 bytes)
+> ldap_salted_sha1.using(salt='abcd')
+  error TypeError: salt must be bytes, not str
+> ldap_salted_sha1.using(salt=b'0123456789abcdefXYZ')
+  error ValueError: salt too large (ldap_salted_sha1 requires <= 16 bytes)
+> ldap_salted_sha1.using(salt=b'0123456789abcdefXYZ', relaxed=True).hash('pw')
+  warning PasslibHashWarning: salt too large (ldap_salted_sha1 requires <= 16 bytes)
+  {SSHA}w91YRaDx0FWi0GY8MEwVe7kCjcEwMTIzNDU2Nzg5YWJjZGVm
+> ldap_salted_sha1.using(salt_size=8, default_salt_size=8)
+  error TypeError: 'salt_size' and 'default_salt_size' aliases are mutually exclusive
+> ldap_salted_sha1.verify('x', '{SSHA}abc')
+  error ValueError: not a valid ldap_salted_sha1 hash
+> ldap_salted_sha1.verify('x', '{SSHA}' + 'A' * 33)
+  error Error: Invalid base64-encoded string: number of data characters (33) cannot be 1 more than a multiple of 4
+> ldap_salted_sha1.verify('x', '{SSHA}' + 'A' * 34)
+  error Error: Incorrect padding
+> ldap_salted_md5.verify('x', '{SMD5}' + 'A' * 24)
+  error ValueError: not a valid ldap_salted_md5 hash
+> ldap_salted_md5.verify('x', '{SMD5}' + 'A' * 48)
+  error ValueError: salt too large (ldap_salted_md5 requires <= 16 bytes)
+> ldap_salted_sha1.min_salt_size
+  4
+> ldap_salted_sha1.max_salt_size
+  16
+> ldap_plaintext.hash('password')
+  password
+> ldap_plaintext.identify('{SHA}abc')
+  False
+> ldap_plaintext.identify('secret')
+  True
+> ldap_plaintext.identify('')
+  False
+> ldap_plaintext.verify('secret', 'secret')
+  True
+> ldap_plaintext.verify('x', '{SHA}abc')
+  error ValueError: not a valid ldap_plaintext hash
+> ldap_hex_md5.hash('password')
+  {MD5}5f4dcc3b5aa765d61d8327deb882cf99
+> ldap_hex_sha1.hash('password')
+  {SHA}5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8
+> ldap_hex_md5.verify('password', '{MD5}5F4DCC3B5AA765D61D8327DEB882CF99')
+  True
+> ldap_hex_md5.identify('{MD5}5f4dcc3b5aa765d61d8327deb882cf99')
+  True
+> ldap_hex_md5.verify('password', '5f4dcc3b5aa765d61d8327deb882cf99')
+  error ValueError: not a valid ldap_hex_md5 hash
+> ldap_hex_md5.ident
+  None
+> ldap_pbkdf2_sha256.ident
+  {PBKDF2-SHA256}
+# DES crypt family
+> des_crypt.hash('password')
+  w/jSAugKD.UAg
+> des_crypt.using(salt='ab').hash('password')
+  abJnggxhB/yWI
+> des_crypt.verify('password', 'abJnggxhB/yWI')
+  True
+> des_crypt.verify('passwordXYZ', 'abJnggxhB/yWI')
+  True
+> des_crypt.verify('passwor', 'abJnggxhB/yWI')
+  False
+> des_crypt.hash('')
+  l1IXeve0jIeK2
+> des_crypt.hash('\xe9t\xe9')
+  o44Engp44NPnY
+> des_crypt.using(truncate_error=True).hash('password1')
+  error PasswordTruncateError: Password too long (des_crypt truncates to 8 characters)
+> des_crypt.using(truncate_error=True).hash('password')
+  .RkDISPQTFoMA
+> des_crypt.using(truncate_error='yes')
+  <handler des_crypt>
+> des_crypt.using(salt='a')
+  error ValueError: salt too small (des_crypt requires exactly 2 chars)
+> des_crypt.using(salt='a$')
+  error ValueError: invalid characters in des_crypt salt
+> des_crypt.using(salt_size=3)
+  error ValueError: des_crypt: salt_size (3) must be exactly 2
+> des_crypt.using(salt_size=3, relaxed=True).default_salt_size
+  warning PasslibHashWarning: des_crypt: salt_size (3) must be exactly 2
+  2
+> des_crypt.identify('abJnggxhB/yWI')
+  True
+> des_crypt.identify('ab')
+  True
+> des_crypt.identify('ab$')
+  False
+> des_crypt.identify(b'abJnggxhB/yWI')
+  True
+> des_crypt.verify('x', 'ab')
+  error ValueError: expected des_crypt hash, got des_crypt config string instead
+> des_crypt.verify('x', 'abJnggxhB/yW')
+  error ValueError: malformed des_crypt hash (checksum must be exactly 11 chars)
+> des_crypt.verify('x', 'a')
+  error ValueError: salt too small (des_crypt requires exactly 2 chars)
+> des_crypt.verify('x', 'a$Jnggxh!/yWI')
+  error ValueError: invalid characters in des_crypt checksum
+> des_crypt.hash('pass\x00word')
+  error PasswordValueError: des_crypt does not allow NULL bytes in password
+> des_crypt.parsehash('abJnggxhB/yWI')
+  {'salt': 'ab', 'checksum': 'JnggxhB/yWI'}
+> des_crypt.truncate_size
+  8
+> des_crypt.truncate_error
+  False
+> bsdi_crypt.using(rounds=101).hash('password')
+  _Z/..mcpc.SuClRcIP2k
+> H = bsdi_crypt.using(rounds=100)
+  warning PasslibSecurityWarning: bsdi_crypt rounds should be odd, as even rounds may reveal weak DES keys
+> H.default_rounds
+  100
+> H.hash('password')
+  _Z/..3qzizMi08FW17Jo
+> bsdi_crypt.verify('password', '_Z/..EZ.ubDElvcNntbo')
+  True
+> bsdi_crypt.verify('passwor', '_Z/..EZ.ubDElvcNntbo')
+  False
+> bsdi_crypt.parsehash('_Z/..EZ.ubDElvcNntbo')
+  {'salt': 'EZ.u', 'rounds': 101, 'checksum': 'bDElvcNntbo'}
+> bsdi_crypt.needs_update('_Z/..EZ.ubDElvcNntbo')
+  False
+> bsdi_crypt.needs_update('_1/..EZ.uwKgJjMpXmeg')
+  False
+> bsdi_crypt.using(min_rounds=200).needs_update('_Z/..EZ.ubDElvcNntbo')
+  True
+> bsdi_crypt.identify('_/...EZ.u')
+  True
+> bsdi_crypt.verify('x', '_/...EZ.uwKgJjMp')
+  error ValueError: not a valid bsdi_crypt hash
+> bsdi_crypt.verify('x', '_....EZ.uwKgJjMpXmeg')
+  error ValueError: bsdi_crypt: rounds (0) is too low, must be at least 1
+> bsdi_crypt.using(rounds=0)
+  error ValueError: bsdi_crypt: min_desired_rounds (0) is too low, must be at least 1
+> bsdi_crypt.using(rounds=20000000)
+  error ValueError: bsdi_crypt: min_desired_rounds (20000000) is too large, cannot be more than 16777215
+> bigcrypt.hash('passwordpassword2')
+  UeaaTXZ1LvmxEjfMKNH1hTm2vXIfmdjENCo
+> bigcrypt.verify('passwordpassword2', 'SaIQ1RiNlnVxc88huRqmf.0giLMC5.wAxhk')
+  True
+> bigcrypt.verify('passwordpassword', 'SaIQ1RiNlnVxc88huRqmf.0giLMC5.wAxhk')
+  False
+> bigcrypt.verify('x', 'Sa' + 'A' * 12)
+  error ValueError: not a valid bigcrypt hash
+> bigcrypt.parsehash('SaIQ1RiNlnVxc88huRqmf.0giLMC5.wAxhk')
+  {'salt': 'Sa', 'checksum': 'IQ1RiNlnVxc88huRqmf.0giLMC5.wAxhk'}
+> crypt16.hash('passwordpassword')
+  ke5mQO3AgmtGkhGkc7LvsLyQ
+> crypt16.verify('passwordpassword', 'aahYGy/FgMMyAqrNKfwUKAM.')
+  True
+> crypt16.verify('passwordpasswordXX', 'aahYGy/FgMMyAqrNKfwUKAM.')
+  True
+> crypt16.using(truncate_error=True).hash('x' * 17)
+  error PasswordTruncateError: Password too long (crypt16 truncates to 16 characters)
+> ldap_des_crypt.hash('password')
+  {CRYPT}9EX1keezbdDs2
+> ldap_des_crypt.verify('password', '{CRYPT}' + 'abJnggxhB/yWI')
+  True
+> ldap_des_crypt.identify('{CRYPT}' + 'abJnggxhB/yWI')
+  True
+> ldap_des_crypt.identify('abJnggxhB/yWI')
+  False
+> ldap_des_crypt.verify('password', 'abJnggxhB/yWI')
+  error ValueError: not a valid ldap_des_crypt hash
+> des_crypt.genconfig()
+  warning DeprecationWarning: the method passlib.handlers.des_crypt.des_crypt.genconfig() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  d4...........
+> des_crypt.genhash('password', 'ab')
+  warning DeprecationWarning: the method passlib.handlers.des_crypt.des_crypt.genhash() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  abJnggxhB/yWI
+> des_crypt.genhash('password', None)
+  warning DeprecationWarning: the method passlib.handlers.des_crypt.des_crypt.genhash() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  error TypeError: config must be string
+# MD5 crypt
+> md5_crypt.hash('password')
+  $1$7SjqpIES$u69e2W8VxwHtnGT0Bftdg0
+> md5_crypt.verify('password', '$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  True
+> apr_md5_crypt.verify('apache', '$apr1$Xr4ilOzQ$5vLZqnkrMVEnJ73ZVay8d1')
+  True
+> md5_crypt.using(salt='toolongsalt')
+  error ValueError: salt too large (md5_crypt requires <= 8 chars)
+> H = md5_crypt.using(salt='toolongsalt', relaxed=True)
+  warning PasslibHashWarning: salt too large (md5_crypt requires <= 8 chars)
+> md5_crypt.verify('x', '$1$abc')
+  error ValueError: expected md5_crypt hash, got md5_crypt config string instead
+> md5_crypt.verify('x', '$1$abc$def$ghi')
+  error ValueError: malformed md5_crypt hash
+> md5_crypt.verify('x', '$2$abc$def')
+  error ValueError: not a valid md5_crypt hash
+> md5_crypt.verify('x', '$1$abc$def')
+  error ValueError: malformed md5_crypt hash (checksum must be exactly 22 chars)
+> md5_crypt.verify('x', '$1$a!c$qjXMvbEw8oaL.CzflDtaK/')
+  error ValueError: invalid characters in md5_crypt salt
+> md5_crypt.verify('x', '$1$abc$qjXMvbEw8oaL.CzflDt!K/')
+  error ValueError: invalid characters in md5_crypt checksum
+> md5_crypt.hash('a\x00b')
+  error PasswordValueError: md5_crypt does not allow NULL bytes in password
+> md5_crypt.parsehash('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  {'salt': 'saltsalt', 'checksum': 'qjXMvbEw8oaL.CzflDtaK/'}
+> md5_crypt.parsehash('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/', checksum=False)
+  {'salt': 'saltsalt'}
+> md5_crypt.parsehash('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/', sanitize=True)
+  {'salt': 's*******', 'checksum': 'qj********************'}
+> md5_crypt.parsehash('$1$$qjXMvbEw8oaL.CzflDtaK/')
+  {'salt': '', 'checksum': 'qjXMvbEw8oaL.CzflDtaK/'}
+> md5_crypt.identify('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  True
+> md5_crypt.identify('$apr1$Xr4ilOzQ$5vLZqnkrMVEnJ73ZVay8d1')
+  False
+> apr_md5_crypt.identify('$apr1$Xr4ilOzQ$5vLZqnkrMVEnJ73ZVay8d1')
+  True
+> md5_crypt.genconfig()
+  warning DeprecationWarning: the method passlib.handlers.md5_crypt.md5_crypt.genconfig() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  $1$up/nuGD5$......................
+> md5_crypt.genconfig(salt='abc')
+  warning DeprecationWarning: the method passlib.handlers.md5_crypt.md5_crypt.genconfig() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  warning DeprecationWarning: the method passlib.handlers.md5_crypt.<customized md5_crypt hasher>.genconfig() is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0.
+  $1$abc$......................
+> md5_crypt.ident
+  $1$
+> apr_md5_crypt.ident
+  $apr1$
+> md5_crypt.default_salt_size
+  8
+> md5_crypt.setting_kwds
+  ('salt', 'salt_size')
+> md5_crypt.needs_update('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  False
+> ldap_md5_crypt.ident
+  {CRYPT}$1$
+> ldap_md5_crypt.identify('{CRYPT}' + '$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  True
+> ldap_md5_crypt.verify('x', '{CRYPT}$5$abc')
+  error ValueError: not a valid md5_crypt hash
+# SHA crypt
+> sha256_crypt.using(rounds=1000).hash('password')
+  $5$rounds=1000$FBBO6ww1RLfnRqxb$aIT4nxZEk0g73UCzej/DUb/GPBIKZYtoCPmRSC.Ev9C
+> sha512_crypt.verify('password', '$6$rounds=1000$saltsalt$Z/J9iYO1iE9xnr8JPQL57ZWsVRtVjrUv3CiWc/wKWseqXgSqn3HFYJ/Ng7YXa8XlLj.wpdAwHOJJzuGFqBBRa0')
+  True
+> sha256_crypt.verify('x', '$5$rounds=01000$saltsalt$' + 'a' * 43)
+  error ValueError: malformed sha256_crypt hash (zero-padded rounds)
+> sha256_crypt.verify('x', '$5$rounds=999$saltsalt$' + 'a' * 43)
+  error ValueError: sha256_crypt: rounds (999) is too low, must be at least 1000
+> sha256_crypt.verify('x', '$5$rounds=999$saltsalt')
+  warning PasslibHashWarning: sha256_crypt: rounds (999) is too low, must be at least 1000
+  error ValueError: expected sha256_crypt hash, got sha256_crypt config string instead
+> sha256_crypt.verify('x', '$5$rounds=1000$saltsalt$abc$def')
+  error ValueError: malformed sha256_crypt hash
+> sha256_crypt.verify('x', '$5$rounds=10x0$saltsalt$')
+  error ValueError: invalid literal for int() with base 10: '10x0'
+> sha256_crypt.verify('x', '$5$saltsaltsaltsaltsalt$' + 'a' * 43)
+  error ValueError: salt too large (sha256_crypt requires <= 16 chars)
+> sha256_crypt.parsehash('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  {'salt': 'saltsalt', 'rounds': 1000, 'checksum': 'azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9'}
+> sha256_crypt.parsehash('$5$saltsalt$' + 'a' * 43)
+  {'salt': 'saltsalt', 'rounds': 5000, 'implicit_rounds': True, 'checksum': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+> sha256_crypt.parsehash('$5$rounds=5000$saltsalt$' + 'a' * 43)
+  {'salt': 'saltsalt', 'rounds': 5000, 'checksum': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+> sha512_crypt.parsehash('$6$rounds=1000$saltsalt$Z/J9iYO1iE9xnr8JPQL57ZWsVRtVjrUv3CiWc/wKWseqXgSqn3HFYJ/Ng7YXa8XlLj.wpdAwHOJJzuGFqBBRa0', sanitize=True)
+  {'salt': 's*******', 'rounds': 1000, 'checksum': 'Z/J9**********************************************************************************'}
+> sha256_crypt.identify('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  True
+> sha256_crypt.identify('$6$rounds=1000$saltsalt$Z/J9iYO1iE9xnr8JPQL57ZWsVRtVjrUv3CiWc/wKWseqXgSqn3HFYJ/Ng7YXa8XlLj.wpdAwHOJJzuGFqBBRa0')
+  False
+> sha256_crypt.needs_update('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  False
+> sha256_crypt.using(min_rounds=2000).needs_update('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  True
+> sha256_crypt.using(max_rounds=999999).needs_update('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  False
+> sha256_crypt.using(rounds=999)
+  error ValueError: sha256_crypt: min_desired_rounds (999) is too low, must be at least 1000
+> H = sha256_crypt.using(rounds=999, relaxed=True)
+  warning PasslibHashWarning: sha256_crypt: min_desired_rounds (999) is too low, must be at least 1000
+  warning PasslibHashWarning: sha256_crypt: max_desired_rounds (999) is too low, must be at least 1000
+  warning PasslibHashWarning: sha256_crypt: default_rounds (999) is too low, must be at least 1000
+> H.default_rounds
+  1000
+> H.min_desired_rounds
+  1000
+> sha256_crypt.using(min_desired_rounds=2000, default_rounds=1500)
+  error ValueError: sha256_crypt: default_rounds (1500) below min_desired_rounds (2000)
+> sha256_crypt.using(max_rounds=1000, min_rounds=2000)
+  error ValueError: sha256_crypt: max_desired_rounds (1000) below min_desired_rounds (2000)
+> sha256_crypt.using(max_rounds=1000).max_desired_rounds
+  1000
+> sha256_crypt.using(max_rounds=500000).default_rounds
+  500000
+> sha256_crypt.using(min_rounds='1500').min_desired_rounds
+  1500
+> sha256_crypt.using(min_rounds=1500, min_desired_rounds=1500)
+  error TypeError: 'min_rounds' and 'min_desired_rounds' aliases are mutually exclusive
+> sha256_crypt.using(default_rounds=2000000000)
+  error ValueError: sha256_crypt: default_rounds (2000000000) is too large, cannot be more than 999999999
+> H = sha256_crypt.using(rounds=1000, vary_rounds=0.1)
+  warning PasslibConfigWarning: The 'vary_rounds' option is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+> H.vary_rounds
+  0.1
+> sha256_crypt.using(vary_rounds=-1)
+  error ValueError: sha256_crypt: vary_rounds (-1) below 0
+> sha256_crypt.using(vary_rounds=1.5)
+  error ValueError: sha256_crypt: vary_rounds (1.5) above 1.0
+> sha256_crypt.using(vary_rounds='10%').vary_rounds
+  warning PasslibConfigWarning: The 'vary_rounds' option is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  0.1
+> sha256_crypt.default_rounds
+  535000
+> sha512_crypt.default_rounds
+  656000
+> sha256_crypt.min_rounds
+  1000
+> sha256_crypt.max_rounds
+  999999999
+> sha256_crypt.rounds_cost
+  linear
+> sha256_crypt.setting_kwds
+  ('salt', 'rounds', 'implicit_rounds', 'salt_size')
+> sha256_crypt.checksum_size
+  43
+> sha512_crypt.checksum_size
+  86
+> ldap_sha512_crypt.identify('{CRYPT}' + '$6$rounds=1000$saltsalt$Z/J9iYO1iE9xnr8JPQL57ZWsVRtVjrUv3CiWc/wKWseqXgSqn3HFYJ/Ng7YXa8XlLj.wpdAwHOJJzuGFqBBRa0')
+  True
+> sha1_crypt.using(rounds=40).hash('password')
+  $sha1$40$6SApHUZi$kcKardk.4BooW.hmCGbDuX62N4IH
+> sha1_crypt.using(rounds=40, salt='saltsalt').hash('password')
+  $sha1$40$saltsalt$HH7kz8x6ZxEINnLKKfWxS34q.n9p
+> sha1_crypt.verify('password', '$sha1$40$saltsalt$HH7kz8x6ZxEINnLKKfWxS34q.n9p')
+  True
+> sha1_crypt.using(rounds=10, salt_size=4).hash('pw')
+  $sha1$10$PzOH$LycI5ornxL2GDPEWgsCd6Z.cG3oZ
+> sha1_crypt.using(salt_size=70)
+  error ValueError: sha1_crypt: salt_size (70) above max_salt_size (64)
+> sha1_crypt.using(salt_size=70, relaxed=True).default_salt_size
+  warning PasslibHashWarning: sha1_crypt: salt_size (70) above max_salt_size (64)
+  64
+> sha1_crypt.parsehash('$sha1$40$saltsalt$' + 'a' * 28)
+  {'salt': 'saltsalt', 'rounds': 40, 'checksum': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+> sha1_crypt.verify('x', '$sha1$$saltsalt$' + 'a' * 28)
+  error ValueError: malformed sha1_crypt hash (empty rounds field)
+> sha1_crypt.verify('x', '$sha1$040$saltsalt$' + 'a' * 28)
+  error ValueError: malformed sha1_crypt hash (zero-padded rounds)
+> sha1_crypt.verify('x', '$sha1$40$saltsalt')
+  error ValueError: expected sha1_crypt hash, got sha1_crypt config string instead
+> sha1_crypt.verify('x', '$sha1$0$saltsalt$' + 'a' * 28)
+  error ValueError: sha1_crypt: rounds (0) is too low, must be at least 1
+> sha1_crypt.default_rounds
+  480000
+# bcrypt
+> bcrypt.using(rounds=4).hash('password')
+  $2b$04$LTh94eJNq8URGXf2QL3HquF/vtKL26RB5C.QpUB9jFx.dDsQUa85G
+> bcrypt.verify('password', '$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  True
+> bcrypt.using(rounds=4, ident='2y').hash('password')
+  $2y$04$KN3zEJCO0wccALK/RMISIuhvqKncqC2Z4PXBdWXnBBWVNUJc2uhQW
+> bcrypt.using(rounds=3)
+  error ValueError: bcrypt: min_desired_rounds (3) is too low, must be at least 4
+> bcrypt.using(rounds=32)
+  error ValueError: bcrypt: min_desired_rounds (32) is too large, cannot be more than 31
+> bcrypt.using(ident='2x')
+  error ValueError: invalid ident: '2x'
+> bcrypt.using(ident='$2x$').default_ident
+  $2x$
+> bcrypt.using(ident='2q')
+  error ValueError: invalid ident: '2q'
+> bcrypt.using(ident='2a', default_ident='2b')
+  error TypeError: 'default_ident' and 'ident' are mutually exclusive
+> bcrypt.using(default_ident='2').default_ident
+  $2$
+> bcrypt.verify('x', '$2x$04$abcdefghijklmnopqrstuu' + 'a' * 31)
+  error ValueError: crypt_blowfish's buggy '2x' hashes are not currently supported
+> bcrypt.verify('x', '$2b$4$abcdefghijklmnopqrstuu' + 'a' * 31)
+  error ValueError: malformed bcrypt hash (malformed cost field)
+> bcrypt.verify('x', '$2z$04$abcdefghijklmnopqrstuu')
+  error ValueError: not a valid bcrypt hash
+> bcrypt.verify('x', '$2b$04$abcdefghijklmnopqrstuu')
+  error ValueError: expected bcrypt hash, got bcrypt config string instead
+> bcrypt.verify('x', '$2b$04$abcdefghijklmnopqrstu')
+  error ValueError: salt too small (bcrypt requires exactly 22 chars)
+> bcrypt.verify('x', '$2b$04$abc$defghijklmnopqrstuu')
+  error ValueError: too many values to unpack (expected 2)
+> bcrypt.verify('x', '$2b$40$abcdefghijklmnopqrstuu' + 'a' * 31)
+  error ValueError: bcrypt: rounds (40) is too large, cannot be more than 31
+> bcrypt.parsehash('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  {'salt': 'abcdefghijklmnopqrstuu', 'rounds': 4, 'ident': '$2b$', 'checksum': 'ghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm'}
+> bcrypt.parsehash('$2b$04$abcdefghijklmnopqrstuvghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  warning PasslibHashWarning: encountered a bcrypt salt with incorrectly set padding bits; you may want to use bcrypt.normhash() to fix this; this will be an error under Passlib 2.0
+  {'salt': 'abcdefghijklmnopqrstuu', 'rounds': 4, 'ident': '$2b$', 'checksum': 'ghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm'}
+> bcrypt.parsehash('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdb')
+  warning PasslibHashWarning: encountered a bcrypt hash with incorrectly set padding bits; you may want to use bcrypt.normhash() to fix this; this will be an error under Passlib 2.0
+  {'salt': 'abcdefghijklmnopqrstuu', 'rounds': 4, 'ident': '$2b$', 'checksum': 'ghE8Ev8uGFaUgY2cNEySvxngrb/Jzda'}
+> bcrypt.normhash('$2b$04$abcdefghijklmnopqrstuvghE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  warning PasslibHashWarning: encountered a bcrypt salt with incorrectly set padding bits; you may want to use bcrypt.normhash() to fix this; this will be an error under Passlib 2.0
+  $2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm
+> bcrypt.normhash('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  $2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm
+> bcrypt.normhash('$1$abc')
+  $1$abc
+> bcrypt.identify('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  True
+> bcrypt.identify('$2y$04$x')
+  True
+> bcrypt.identify('$2c$04$x')
+  False
+> bcrypt.needs_update('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  False
+> bcrypt.needs_update('$2a$04$abcdefghijklmnopqrstuv' + 'a' * 30 + 'e')
+  True
+> bcrypt.needs_update('$2a$04$abcdefghijklmnopqrstuu' + 'a' * 30 + 'e')
+  False
+> bcrypt.using(rounds=5).needs_update('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  True
+> bcrypt.using(truncate_error=True).hash('x' * 73)
+  error PasswordTruncateError: Password too long (bcrypt truncates to 72 characters)
+> bcrypt.hash('a\x00b')
+  error PasswordValueError: bcrypt does not allow NULL bytes in password
+> bcrypt.ident_values
+  ('$2$', '$2a$', '$2x$', '$2y$', '$2b$')
+> bcrypt.default_rounds
+  12
+> bcrypt.rounds_cost
+  log2
+> bcrypt.truncate_size
+  72
+> bcrypt.checksum_size
+  31
+> bcrypt.setting_kwds
+  ('salt', 'rounds', 'ident', 'truncate_error')
+> bcrypt.using(rounds=4, vary_rounds=0.5).vary_rounds
+  warning PasslibConfigWarning: The 'vary_rounds' option is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  0.5
+> bcrypt_sha256.using(rounds=4).hash('password')
+  $bcrypt-sha256$v=2,t=2b,r=4$cR9vtLk2sPOfC21aEciHEu$7O7sGPihbBeXDmwYJMIhv19le8zaxoS
+> bcrypt_sha256.verify('password', '$bcrypt-sha256$v=2,t=2b,r=4$abcdefghijklmnopqrstuu$6eeTxYH54oiZ0Z7.zjNaUH4ORExX7RG')
+  True
+> bcrypt_sha256.using(ident='2a')
+  error ValueError: bcrypt '$2a$' hashes not allowed for version 2
+> bcrypt_sha256.using(version=1, ident='2a').default_ident
+  $2a$
+> bcrypt_sha256.using(version=3)
+  error ValueError: bcrypt_sha256: unknown or unsupported version: 3
+> bcrypt_sha256.parsehash('$bcrypt-sha256$v=2,t=2b,r=4$abcdefghijklmnopqrstuu$6eeTxYH54oiZ0Z7.zjNaUH4ORExX7RG')
+  {'salt': 'abcdefghijklmnopqrstuu', 'rounds': 4, 'ident': '$2b$', 'checksum': '6eeTxYH54oiZ0Z7.zjNaUH4ORExX7RG'}
+> bcrypt_sha256.parsehash('$bcrypt-sha256$2a,4$abcdefghijklmnopqrstuu$' + 'a' * 31)
+  {'salt': 'abcdefghijklmnopqrstuu', 'rounds': 4, 'ident': '$2a$', 'checksum': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+> bcrypt_sha256.parsehash('$bcrypt-sha256$v=1,t=2b,r=4$abcdefghijklmnopqrstuu$' + 'a' * 31)
+  error ValueError: malformed bcrypt_sha256 hash
+> bcrypt_sha256.parsehash('$bcrypt-sha256$v=2,t=2b,r=04$abcdefghijklmnopqrstuu$' + 'a' * 31)
+  error ValueError: malformed bcrypt_sha256 hash (zero-padded rounds)
+> bcrypt_sha256.parsehash('$bcrypt-sha256$v=2,t=2a,r=4$abcdefghijklmnopqrstuu$' + 'a' * 31)
+  error ValueError: malformed bcrypt_sha256 hash
+> bcrypt_sha256.needs_update('$bcrypt-sha256$2a,4$abcdefghijklmnopqrstuu$' + 'a' * 31)
+  True
+> bcrypt_sha256.needs_update('$bcrypt-sha256$v=2,t=2b,r=4$abcdefghijklmnopqrstuu$6eeTxYH54oiZ0Z7.zjNaUH4ORExX7RG')
+  False
+> bcrypt_sha256.identify('$bcrypt-sha256$x')
+  True
+> bcrypt_sha256.identify('$2b$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm')
+  False
+> bcrypt_sha256.setting_kwds
+  ('salt', 'rounds', 'ident')
+> bcrypt_sha256.truncate_size
+  None
+> bcrypt_sha256.version
+  2
+# scrypt
+> scrypt.using(rounds=4, block_size=1).hash('password')
+  $scrypt$ln=4,r=1,p=1$wrj3nlNqTcnZW8s5p/T+vw$ICCv4ojkTwm0ATaYIefwQrnf+c/XmK/inZA5MQb8TFQ
+> scrypt.using(rounds=3, block_size=2, parallelism=2).hash('password')
+  $scrypt$ln=3,r=2,p=2$iBGC8D5nLAXgfE8JYaw1Zg$HbTjDVA0LmuB9AiL5CsGOSi0GUxpotAJ8VlujnV/XaE
+> scrypt.using(rounds=3, block_size=1, salt_size=6, ident='$7$').hash('password')
+  $7$1/..../....VAqBsFaq$sH5z8WGsNXAwmpMMTPOSSsKCj2FFEShzzcuqQsmKMZ4
+> scrypt.verify('password', '$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  True
+> scrypt.verify('passwort', '$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  False
+> scrypt.parsehash('$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  {'ident': '$scrypt$', 'salt': b'saltsalt', 'rounds': 4, 'block_size': 1, 'checksum': b'\xd1\xad\xc6>\x89\xb7g[\xa7\n\x87\x1b\xc5\x82\xb8\xd1A\xf2\x1a>a-\xee\xc9\xe8\x17\xc8\x10C\xe3)9'}
+> scrypt.verify('x', '$scrypt$ln=4,r=1$c2FsdA$c2FsdA')
+  error ValueError: malformed scrypt hash (malformed settings field)
+> scrypt.verify('x', '$scrypt$ln=4,r=1,p=1')
+  error ValueError: malformed scrypt hash (malformed hash)
+> scrypt.verify('x', '$scrypt$ln=4,r=1,p=1$c2FsdA')
+  error ValueError: expected scrypt hash, got scrypt config string instead
+> scrypt.verify('x', '$scrypt$ln=4,r=0,p=1$c2FsdA$c2FsdA')
+  error ValueError: malformed scrypt hash (checksum must be exactly 32 bytes)
+> scrypt.verify('x', '$scrypt$ln=4,r=1,p=1$c2FsdA$c2FsdA')
+  error ValueError: malformed scrypt hash (checksum must be exactly 32 bytes)
+> scrypt.verify('x', '$7$abc')
+  error ValueError: malformed scrypt hash (params field too short)
+> scrypt.verify('x', '$7$abc$def$ghi')
+  error ValueError: malformed <unnamed> hash
+> scrypt.using(rounds=40)
+  error ValueError: scrypt: min_desired_rounds (40) is too large, cannot be more than 31
+> scrypt.using(block_size=0)
+  error ValueError: scrypt: block_size (0) is too low, must be at least 1
+> scrypt.using(block_size='2').block_size
+  2
+> scrypt.using(parallelism=0)
+  error ValueError: scrypt: parallelism (0) is too low, must be at least 1
+> scrypt.needs_update('$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  True
+> scrypt.using(block_size=1).needs_update('$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  False
+> scrypt.using(block_size=1, parallelism=2).needs_update('$scrypt$ln=4,r=1,p=1$c2FsdHNhbHQ$0a3GPom3Z1unCocbxYK40UHyGj5hLe7J6BfIEEPjKTk')
+  True
+> scrypt.identify('$7$abc')
+  True
+> scrypt.ident_values
+  ('$scrypt$', '$7$')
+> scrypt.default_rounds
+  16
+> scrypt.block_size
+  8
+> scrypt.setting_kwds
+  ('ident', 'salt', 'salt_size', 'rounds', 'block_size', 'parallelism')
+# PBKDF2
+> pbkdf2_sha256.using(rounds=20).hash('password')
+  $pbkdf2-sha256$20$5TwH4Lz3vheCcE7pvbdWCg$rlGkA9hUE3ZWwQ/kHIMTs6Jih56l30vt9JvKlS6buv0
+> pbkdf2_sha1.using(rounds=20, salt_size=8).hash('password')
+  $pbkdf2$20$rHWOMYbwXks$O/vTErMI5OPIDNLgb0yOdQRtDg4
+> pbkdf2_sha512.using(rounds=5, salt=b'saltsalt').hash('password')
+  $pbkdf2-sha512$5$c2FsdHNhbHQ$c/G25WHZpmmtETatdT5PiRA1.loYthLORLK4/iY5ejlk/XQ7zpcTPVUYgcfbAFB9cfW4D7kYslTJlgyI3hdVkQ
+> pbkdf2_sha256.verify('password', '$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  True
+> pbkdf2_sha256.verify('Password', '$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  False
+> pbkdf2_sha256.parsehash('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  {'salt': b'saltsalt', 'rounds': 20, 'checksum': b"\xba(7\xf3\xbd\xa2^\x82\xcaH\xfb\x1a\tQ\x81\x1c\xd1\x8b\x0b\xaa\x9e\xc9\xdcQ:-r|'\xd5\xe2\x14"}
+> pbkdf2_sha256.parsehash('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ', sanitize=True)
+  {'salt': 'c**********', 'rounds': 20, 'checksum': 'uig3***************************************'}
+> pbkdf2_sha256.using(rounds=0)
+  error ValueError: pbkdf2_sha256: min_desired_rounds (0) is too low, must be at least 1
+> pbkdf2_sha256.using(rounds=0, relaxed=True).default_rounds
+  warning PasslibHashWarning: pbkdf2_sha256: min_desired_rounds (0) is too low, must be at least 1
+  warning PasslibHashWarning: pbkdf2_sha256: max_desired_rounds (0) is too low, must be at least 1
+  warning PasslibHashWarning: pbkdf2_sha256: default_rounds (0) is too low, must be at least 1
+  1
+> pbkdf2_sha256.using(rounds=5000000000)
+  error ValueError: pbkdf2_sha256: min_desired_rounds (5000000000) is too large, cannot be more than 4294967295
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$20$c2FsdHNhbHQ$')
+  error ValueError: expected pbkdf2_sha256 hash, got pbkdf2_sha256 config string instead
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$20$c2FsdHNhbHQ$abc')
+  error ValueError: malformed pbkdf2_sha256 hash (checksum must be exactly 32 bytes)
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$20$c2FsdHNhbHQ$a')
+  error ValueError: invalid base64 input
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$$c2FsdHNhbHQ$abc')
+  error ValueError: malformed pbkdf2_sha256 hash (empty rounds field)
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$20$c2Fs!HNhbHQ$abc')
+  error TypeError: Incorrect padding
+> pbkdf2_sha256.verify('x', '$pbkdf2-sha256$20$c2FsdHNhbHQ')
+  error ValueError: expected pbkdf2_sha256 hash, got pbkdf2_sha256 config string instead
+> pbkdf2_sha256.verify('x', '$pbkdf2$20$c2FsdHNhbHQ$abc')
+  error ValueError: not a valid pbkdf2_sha256 hash
+> pbkdf2_sha256.default_rounds
+  29000
+> pbkdf2_sha1.default_rounds
+  131000
+> pbkdf2_sha512.default_rounds
+  25000
+> pbkdf2_sha1.ident
+  $pbkdf2$
+> pbkdf2_sha256.using(salt_size=0).hash('pw', rounds=3)
+  warning DeprecationWarning: passing settings to pbkdf2_sha256.hash() is deprecated, and won't be supported in Passlib 2.0; use 'pbkdf2_sha256.using(**settings).hash(secret)' instead
+  $pbkdf2-sha256$3$$clCKW/zxTfNNz8/SoSOs4X.8px79cKKnKoInXScPv2c
+> pbkdf2_sha256.hash('pw', rounds=3, salt=b'')
+  warning DeprecationWarning: passing settings to pbkdf2_sha256.hash() is deprecated, and won't be supported in Passlib 2.0; use 'pbkdf2_sha256.using(**settings).hash(secret)' instead
+  $pbkdf2-sha256$3$$clCKW/zxTfNNz8/SoSOs4X.8px79cKKnKoInXScPv2c
+> pbkdf2_sha256.using(salt_size=1025)
+  error ValueError: pbkdf2_sha256: salt_size (1025) above max_salt_size (1024)
+> cta_pbkdf2_sha1.using(rounds=20).hash('password')
+  $p5k2$14$fe_9f0-JsfYeQ8j5PwdACA==$HoXS7u1GoW3DY9qKnwX90wCPoWg=
+> cta_pbkdf2_sha1.verify('password', '$p5k2$1a$-__-$PCPgal0asVE6dO4O51t87S3oAwY=')
+  True
+> cta_pbkdf2_sha1.parsehash('$p5k2$1a$-__-$PCPgal0asVE6dO4O51t87S3oAwY=')
+  {'salt': b'\xfb\xff\xfe', 'rounds': 26, 'checksum': b'<#\xe0j]\x1a\xb1Q:t\xee\x0e\xe7[|\xed-\xe8\x03\x06'}
+> dlitz_pbkdf2_sha1.using(rounds=20).hash('password')
+  $p5k2$14$nDQu29rp8FLpnznD$ttAzXNoICUophtYeflx/AQPHFYEmAKEM
+> dlitz_pbkdf2_sha1.verify('password', '$p5k2$14$JQQ1pQ.1$NhqTkONc0Hg4xeBl3QmklgiaiZOQHrLw')
+  True
+> dlitz_pbkdf2_sha1.parsehash('$p5k2$$JQQ1pQ.1$abc')
+  {'salt': 'JQQ1pQ.1', 'rounds': 400, 'checksum': 'abc'}
+> dlitz_pbkdf2_sha1.parsehash('$p5k2$1f$JQQ1pQ.1$abc')
+  {'salt': 'JQQ1pQ.1', 'rounds': 31, 'checksum': 'abc'}
+> grub_pbkdf2_sha512.using(rounds=5, salt_size=16).hash('password')
+  grub.pbkdf2.sha512.5.E93DC73847680D614C696D2DA51482B0.B7A2DEB7D081A83CA6AA747DFFF642E6F04482F3806A31BB0C06BD3AA86A0AEADCC9A675E050882353B97C4EEA28AC999AADC46739FC0B9A282AECE1CC487F8E
+> grub_pbkdf2_sha512.verify('password', 'grub.pbkdf2.sha512.5.30313233343536373839616263646566.C03449D0683519589FCD3BC8BBAFB97FC3AAC335AD5BF073E208BFC18E7C9B8D8401161C121DFBFD1D8EEE4872C8C5AF34A4DD6F2AE1C7690CC7545831070940')
+  True
+> grub_pbkdf2_sha512.verify('x', 'grub.pbkdf2.sha512.5.XYZ.ABC')
+  error Error: Odd-length string
+> atlassian_pbkdf2_sha1.parsehash('{PKCS5S2}' + 'QUJDREVGR0hJSktMTU5PUA' + 'A' * 42 + '==')
+  {'salt': b'ABCDEFGHIJKLMNOP', 'checksum': b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'}
+> atlassian_pbkdf2_sha1.verify('x', '{PKCS5S2}QUJD')
+  error ValueError: malformed atlassian_pbkdf2_sha1 hash (checksum must be exactly 32 bytes)
+> atlassian_pbkdf2_sha1.identify('{PKCS5S2}QUJD')
+  True
+> ldap_pbkdf2_sha256.using(rounds=20).hash('password')
+  {PBKDF2-SHA256}20$jzEGoHROyZlzbo0RQmiNsQ$uOqJKhXkQKtoIiKSYJULBtoaeL.mWrZDps3G3qSIUBw
+> ldap_pbkdf2_sha256.verify('password', '{PBKDF2-SHA256}20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  True
+> ldap_pbkdf2_sha256.identify('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  False
+> django_pbkdf2_sha256.using(rounds=20).hash('password')
+  pbkdf2_sha256$20$mv2pmjP3lgRm$lt49v/cthA8X3iC+yB21svFKlictEDT2fJ+BRyMnn0Y=
+> django_pbkdf2_sha1.using(rounds=20, salt='NaCl').hash('password')
+  pbkdf2_sha1$20$NaCl$MO37MpCZsARzsWhWZsIaEN9qxx4=
+> django_pbkdf2_sha256.verify('password', 'pbkdf2_sha256$20$seasalt$P4xdhZ7D8eP7NlqFyrLV8Cx8PvoWkd0x3i5DuYB+0pE=')
+  True
+> django_pbkdf2_sha256.parsehash('pbkdf2_sha256$20$seasalt$P4xdhZ7D8eP7NlqFyrLV8Cx8PvoWkd0x3i5DuYB+0pE=')
+  {'salt': 'seasalt', 'rounds': 20, 'checksum': 'P4xdhZ7D8eP7NlqFyrLV8Cx8PvoWkd0x3i5DuYB+0pE='}
+> django_pbkdf2_sha256.using(salt='')
+  error ValueError: salt too small (django_pbkdf2_sha256 requires >= 1 chars)
+> django_pbkdf2_sha256.using(salt='a$b')
+  error ValueError: invalid characters in django_pbkdf2_sha256 salt
+# Windows, MySQL, PostgreSQL, PHP
+> nthash.hash('password')
+  8846f7eaee8fb117ad06bdd830b7586c
+> nthash.verify('password', '8846F7EAEE8FB117AD06BDD830B7586C')
+  True
+> nthash.hash('p\xe4ss\u20ac')
+  452468b2e855e49f1169698e4c086623
+> nthash.raw('password')
+  b'\x88F\xf7\xea\xee\x8f\xb1\x17\xad\x06\xbd\xd80\xb7Xl'
+> lmhash.hash('password')
+  e52cac67419a9a224a3b108f3fa6cb6d
+> lmhash.verify('PASSWORD', 'e52cac67419a9a224a3b108f3fa6cb6d')
+  True
+> lmhash.verify('passwor', 'e52cac67419a9a224a3b108f3fa6cb6d')
+  False
+> lmhash.hash('passwordpassword')
+  e52cac67419a9a22255639348d6f5f19
+> lmhash.using(truncate_error=True).hash('x' * 15)
+  error PasswordTruncateError: Password too long (lmhash truncates to 14 characters)
+> lmhash.raw('Password')
+  b'\xe5,\xacgA\x9a\x9a"J;\x10\x8f?\xa6\xcbm'
+> lmhash.raw(b'abc')
+  b'\x8co]\x02\xde\xb2\x15\x01\xaa\xd3\xb45\xb5\x14\x04\xee'
+> lmhash.hash('')
+  aad3b435b51404eeaad3b435b51404ee
+> bsd_nthash.hash('password')
+  $3$$8846f7eaee8fb117ad06bdd830b7586c
+> bsd_nthash.verify('password', '$3$$8846f7eaee8fb117ad06bdd830b7586c')
+  True
+> bsd_nthash.identify('$3$$8846f7eaee8fb117ad06bdd830b7586c')
+  True
+> bsd_nthash.verify('password', '8846f7eaee8fb117ad06bdd830b7586c')
+  error ValueError: not a valid bsd_nthash hash
+> msdcc.hash('password', user='Administrator')
+  25fd08fa89795ed54207e6e8442a6ca0
+> msdcc.verify('password', '25fd08fa89795ed54207e6e8442a6ca0', user='administrator')
+  True
+> msdcc.verify('password', '25fd08fa89795ed54207e6e8442a6ca0', user='admin')
+  False
+> msdcc.hash('password')
+  error TypeError: user must be unicode or bytes, not None
+> mysql323.hash('password')
+  5d2e19393cc5ef67
+> mysql323.hash('pass word\t')
+  5d2e19393cc5ef67
+> mysql323.verify('password', '5D2E19393CC5EF67')
+  True
+> mysql41.hash('password')
+  *2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19
+> mysql41.verify('password', '*2470c0c06dee42fd1618bb99005adca2ec9d1e19')
+  True
+> mysql41.verify('password', '2470c0c06dee42fd1618bb99005adca2ec9d1e19')
+  error ValueError: not a valid mysql41 hash
+> mysql41.identify('*2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19')
+  True
+> postgres_md5.hash('password', user='admin')
+  md580a19f669b02edfbc208a5386ab5036b
+> postgres_md5.verify('password', 'md580a19f669b02edfbc208a5386ab5036b', user='admin')
+  True
+> postgres_md5.verify('password', 'md580a19f669b02edfbc208a5386ab5036b', user='root')
+  False
+> postgres_md5.hash('password')
+  error TypeError: user must be unicode or bytes, not None
+> postgres_md5.context_kwds
+  ('user',)
+> phpass.using(rounds=7).hash('password')
+  $P$5MsCm2adKc/nMTeqN0j2qX0DF/avFQ.
+> phpass.using(rounds=7, ident='H').hash('password')
+  $H$5Q0RpKcSWqlEcNu6No86l9PjSb8kwV1
+> phpass.verify('password', '$P$6saltsaltRxaFvRrkynTitytVBZApo0')
+  True
+> phpass.parsehash('$P$6saltsaltRxaFvRrkynTitytVBZApo0')
+  {'salt': 'saltsalt', 'rounds': 8, 'ident': '$P$', 'checksum': 'RxaFvRrkynTitytVBZApo0'}
+> phpass.verify('x', '$P$')
+  error IndexError: string index out of range
+> phpass.verify('x', '$P$9saltsalt')
+  error ValueError: expected phpass hash, got phpass config string instead
+> phpass.verify('x', '$P$!saltsalt')
+  error ValueError: invalid character
+> phpass.verify('x', '$P$5saltsalt')
+  error ValueError: expected phpass hash, got phpass config string instead
+> phpass.verify('x', '$Q$9saltsalt')
+  error ValueError: not a valid phpass hash
+> phpass.using(rounds=6)
+  error ValueError: phpass: min_desired_rounds (6) is too low, must be at least 7
+> phpass.default_ident
+  $P$
+> phpass.ident_values
+  ('$P$', '$H$')
+# Cisco, Django and the disabled hashes
+> cisco_type7.hash('cisco')
+  104D000A0618
+> cisco_type7.using(salt=5).hash('cisco')
+  05080F1C2243
+> cisco_type7.decode('0822455D0A16')
+  cisco
+> cisco_type7.decode('0822455D0A16', None)
+  b'cisco'
+> cisco_type7.verify('cisco', '0822455D0A16')
+  True
+> cisco_type7.verify('cisco', '0822455d0a16')
+  True
+> cisco_type7.using(salt=60)
+  error ValueError: salt/offset must be in 0..52 range
+> cisco_type7.using(salt=60, relaxed=True).hash('x')
+  warning PasslibHashWarning: salt/offset must be in 0..52 range
+  524F
+> cisco_type7.using(salt='5')
+  error TypeError: salt must be integer, not str
+> cisco_type7.verify('x', 'zz1234')
+  error ValueError: invalid literal for int() with base 10: 'zz'
+> cisco_type7.verify('x', '7')
+  error ValueError: not a valid cisco_type7 hash
+> cisco_type7.verify('x', '99ABCD')
+  error ValueError: salt/offset must be in 0..52 range
+> cisco_type7.verify('x', '05GH')
+  error ValueError: invalid characters in cisco_type7 checksum
+> cisco_pix.hash('cisco')
+  2KFQnbNIdI.2KYOU
+> cisco_pix.hash('cisco', user='admin')
+  f3UhLvUj1QsXsuK7
+> cisco_asa.hash('a long password here', user='user')
+  qZSBmhfM3.5C7.bb
+> cisco_asa.hash('a password of exactly 28 ch', user='u')
+  vA2i33AiMDrPmCxP
+> cisco_pix.hash('a' * 17)
+  error PasswordSizeError: Password too long (cisco_pix allows at most 16 bytes)
+> cisco_pix.verify('a' * 17, 'XcwF0EzaZap8e3H9')
+  False
+> cisco_pix.verify('a' * 16, 'XcwF0EzaZap8e3H9')
+  True
+> cisco_pix.truncate_size
+  16
+> cisco_asa.truncate_size
+  32
+> django_salted_sha1.hash('password')
+  sha1$ueAqQBkPZzMM$968464fdb3dbc1f9615a97452f3fdf3fad712f50
+> django_salted_md5.using(salt='abc').hash('password')
+  md5$abc$243c7aa68f30e9dee78b87fe48106f76
+> django_salted_sha1.verify('password', 'sha1$NaCl$e329d4054aff39056c09041993fe859a861d272f')
+  True
+> django_salted_sha1.parsehash('sha1$NaCl$e329d4054aff39056c09041993fe859a861d272f')
+  {'salt': 'NaCl', 'checksum': 'e329d4054aff39056c09041993fe859a861d272f'}
+> django_salted_sha1.verify('x', 'sha1$NaCl$ABC')
+  error ValueError: malformed django_salted_sha1 hash (checksum must be exactly 40 chars)
+> django_salted_sha1.verify('x', 'sha1$Na-Cl$' + 'a' * 40)
+  error ValueError: invalid characters in django_salted_sha1 salt
+> django_salted_md5.default_salt_size
+  12
+> django_disabled.hash('x')
+  !525y2VnnO3IbX3EXWuAERIXe0aIgbKJzfd2S3ajf
+> django_disabled.verify('x', '!abc')
+  False
+> django_disabled.verify('x', 'abc')
+  error ValueError: not a valid django_disabled hash
+> django_disabled.identify('!')
+  True
+> plaintext.hash('password')
+  password
+> plaintext.hash(b'caf\xc3\xa9')
+  café
+> plaintext.verify('password', 'password')
+  True
+> plaintext.verify('password', b'password')
+  True
+> plaintext.identify('$1$abc')
+  True
+> plaintext.hash('caf\xe9', encoding='latin-1')
+  café
+> plaintext.verify('caf\xe9', b'caf\xe9', encoding='latin-1')
+  True
+> plaintext.verify('x', 3)
+  error TypeError: hash must be unicode or bytes, not int
+> unix_disabled.hash('x')
+  !
+> unix_disabled.using(marker='*').hash('x')
+  *
+> unix_disabled.using(marker='x')
+  error ValueError: invalid marker: 'x'
+> unix_disabled.verify('x', '!')
+  False
+> unix_disabled.verify('x', '*abc')
+  False
+> unix_disabled.verify('x', '')
+  False
+> unix_disabled.verify('x', 'abc')
+  error ValueError: not a valid unix_disabled hash
+> unix_disabled.identify('')
+  True
+> unix_disabled.disable('$1$abc$def')
+  !$1$abc$def
+> unix_disabled.disable('!$1$abc$def')
+  !$1$abc$def
+> unix_disabled.disable()
+  !
+> unix_disabled.enable('!$1$abc$def')
+  $1$abc$def
+> unix_disabled.enable('*x')
+  x
+> unix_disabled.enable('!')
+  error ValueError: cannot restore original hash
+> unix_disabled.enable('$1$abc')
+  error ValueError: not a valid unix_disabled hash
+> unix_disabled.is_disabled
+  True
+> md5_crypt.is_disabled
+  False
+> unix_disabled.hash('x', marker='*')
+  warning DeprecationWarning: passing settings to unix_disabled.hash() is deprecated, and won't be supported in Passlib 2.0; use 'unix_disabled.using(**settings).hash(secret)' instead
+  *
+# CryptContext
+> C = CryptContext(schemes=['sha256_crypt', 'md5_crypt', 'des_crypt'], deprecated=['des_crypt'], sha256_crypt__default_rounds=1000)
+> C.schemes()
+  ('sha256_crypt', 'md5_crypt', 'des_crypt')
+> C.default_scheme()
+  sha256_crypt
+> C.to_string()
+  [passlib]
+  schemes = sha256_crypt, md5_crypt, des_crypt
+  deprecated = des_crypt
+  sha256_crypt__default_rounds = 1000
+  |
+  |
+> C.to_dict()
+  {'schemes': ['sha256_crypt', 'md5_crypt', 'des_crypt'], 'deprecated': ['des_crypt'], 'sha256_crypt__default_rounds': 1000}
+> C.identify('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  md5_crypt
+> C.identify('nonsense')
+  None
+> C.identify('nonsense', required=True)
+  error UnknownHashError: hash could not be identified
+> C.identify('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9', resolve=True)
+  <handler sha256_crypt>
+> C.identify(None)
+  error TypeError: hash must be unicode or bytes, not None
+> C.verify('password', 'abJnggxhB/yWI')
+  True
+> C.verify('wrong', 'abJnggxhB/yWI')
+  False
+> C.verify('password', '$9$abc')
+  error UnknownHashError: hash could not be identified
+> C.needs_update('abJnggxhB/yWI')
+  True
+> C.needs_update('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  False
+> C.needs_update('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  False
+> C.verify_and_update('password', 'abJnggxhB/yWI')
+  (True, '$5$rounds=1000$7MbT4jOx.uv8KAPB$inhSnAR5jpxJr2a2brlf37Wea50v0U81ZL13W4Wuc83')
+> C.verify_and_update('wrong', 'abJnggxhB/yWI')
+  (False, None)
+> C.hash('password', scheme='des_crypt')
+  warning DeprecationWarning: CryptContext.hash(): 'scheme' keyword is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  hrjt/QAMcR89k
+> C.hash('password', scheme='bcrypt')
+  warning DeprecationWarning: CryptContext.hash(): 'scheme' keyword is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  error KeyError: "crypt algorithm not found in policy: 'bcrypt'"
+> C.handler('md5_crypt')
+  <handler md5_crypt>
+> C.handler('bcrypt')
+  error KeyError: "crypt algorithm not found in this CryptContext instance: 'bcrypt'"
+> C.handler().default_rounds
+  1000
+> C.handler('md5_crypt').deprecated
+  False
+> C.handler('des_crypt').deprecated
+  True
+> C.handler('des_crypt', unconfigured=True)
+  <handler des_crypt>
+> C2 = C.copy(default='md5_crypt')
+> C2.default_scheme()
+  md5_crypt
+> C.default_scheme()
+  sha256_crypt
+> C.update(deprecated=['md5_crypt', 'des_crypt'])
+  None
+> C.to_string()
+  [passlib]
+  schemes = sha256_crypt, md5_crypt, des_crypt
+  deprecated = md5_crypt, des_crypt
+  sha256_crypt__default_rounds = 1000
+  |
+  |
+> C.needs_update('$1$saltsalt$qjXMvbEw8oaL.CzflDtaK/')
+  True
+> C.update(sha256_crypt__min_rounds=2000, sha256_crypt__default_rounds=2000)
+  None
+> C.needs_update('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  True
+> C.handler().default_rounds
+  2000
+> C.update({'default': 'md5_crypt'})
+  error ValueError: default scheme cannot be deprecated
+> C.update('[passlib]\nschemes = des_crypt\n')
+  error KeyError: "deprecated scheme not found in policy: 'md5_crypt'"
+> C.schemes()
+  ('sha256_crypt', 'md5_crypt', 'des_crypt')
+> C.update({}, x=1)
+  error TypeError: positional arg and keywords mutually exclusive
+> CryptContext(schemes=['md5_crypt', 'md5_crypt'])
+  error KeyError: "multiple handlers with same name: 'md5_crypt'"
+> CryptContext(schemes=['nosuch'])
+  error KeyError: "no crypt handler found for algorithm: 'nosuch'"
+> CryptContext(schemes=['md5_crypt'], default='des_crypt')
+  error KeyError: 'default scheme not found in policy'
+> CryptContext(schemes=['md5_crypt'], default=md5_crypt).default_scheme()
+  md5_crypt
+> CryptContext(schemes=['md5_crypt'], default=1)
+  error TypeError: default must be str, not int
+> CryptContext(schemes=['md5_crypt'], deprecated=['md5_crypt'])
+  error ValueError: must have at least one non-deprecated scheme
+> CryptContext(schemes=['md5_crypt', 'des_crypt'], default='des_crypt', deprecated=['des_crypt'])
+  error ValueError: default scheme cannot be deprecated
+> CryptContext(schemes=['md5_crypt'], foo=1)
+  error KeyError: "unknown CryptContext keyword: 'foo'"
+> CryptContext(schemes=['md5_crypt'], md5_crypt__salt='abc')
+  error KeyError: "'salt' option not allowed in CryptContext configuration"
+> CryptContext(schemes=['md5_crypt'], md5_crypt__rounds=5)
+  error KeyError: "keyword not supported by md5_crypt handler: 'rounds'"
+> CryptContext(schemes=['md5_crypt'], md5_crypt__salt_size=4).handler().default_salt_size
+  4
+> CryptContext(schemes=['md5_crypt'], md5_crypt__salt_size=40)
+  warning PasslibHashWarning: md5_crypt: salt_size (40) above max_salt_size (8)
+  <CryptContext>
+> CryptContext(schemes=['sha256_crypt'], all__vary_rounds=0.1).to_string()
+  warning DeprecationWarning: The 'all' scheme is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0; Please configure options on a per-algorithm basis.
+  warning PasslibConfigWarning: The 'vary_rounds' option is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  [passlib]
+  schemes = sha256_crypt
+  all__vary_rounds = 0.1
+  |
+  |
+> CryptContext(schemes=['sha256_crypt'], vary_rounds='5%').to_dict()
+  warning PasslibConfigWarning: The 'vary_rounds' option is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0
+  {'schemes': ['sha256_crypt'], 'all__vary_rounds': 0.05}
+> CryptContext(schemes=['sha256_crypt'], all__default_rounds=1000).handler().default_rounds
+  warning PasslibConfigWarning: The 'default_rounds' option should be configured per-algorithm, and not set globally in the context; This will be an error in Passlib 2.0
+  warning DeprecationWarning: The 'all' scheme is deprecated as of Passlib 1.7, and will be removed in Passlib 2.0; Please configure options on a per-algorithm basis.
+  1000
+> CryptContext(schemes=['md5_crypt'], deprecated=['auto', 'md5_crypt'])
+  error ValueError: cannot list other schemes if ``deprecated=['auto']`` is used
+> CryptContext(schemes=['md5_crypt'], deprecated=['des_crypt'])
+  error KeyError: "deprecated scheme not found in policy: 'des_crypt'"
+> CryptContext(schemes=['md5_crypt'], deprecated='md5_crypt, des_crypt')
+  error KeyError: "deprecated scheme not found in policy: 'des_crypt'"
+> CryptContext(schemes='md5_crypt, des_crypt').schemes()
+  ('md5_crypt', 'des_crypt')
+> CryptContext(schemes=[md5_crypt, 'des_crypt', ldap_md5_crypt]).schemes()
+  ('md5_crypt', 'des_crypt', 'ldap_md5_crypt')
+> CryptContext(schemes=['md5_crypt'], admin__schemes=['des_crypt'])
+  <CryptContext>
+> CryptContext(schemes=['md5_crypt'], a__b__c__d=1)
+  error TypeError: keys must have less than 3 separators: 'a__b__c__d'
+> CryptContext(schemes=['md5_crypt'], __md5_crypt__x=1)
+  error TypeError: empty category: '__md5_crypt__x'
+> CryptContext(schemes=['md5_crypt'], min_verify_time=0.5).to_dict()
+  warning DeprecationWarning: 'min_verify_time' was deprecated in Passlib 1.6, is ignored in 1.7, and will be removed in 1.8
+  {'schemes': ['md5_crypt']}
+> CryptContext(schemes=['md5_crypt'], harden_verify=True).to_dict()
+  warning DeprecationWarning: 'harden_verify' is deprecated & ignored as of Passlib 1.7.1,  and will be removed in 1.8
+  {'schemes': ['md5_crypt'], 'harden_verify': True}
+> CryptContext().schemes()
+  ()
+> CryptContext().hash('x')
+  error KeyError: 'no hash schemes configured for this CryptContext instance'
+> CryptContext().identify('x')
+  None
+> CryptContext().handler()
+  error KeyError: 'no crypt algorithms loaded in this CryptContext instance'
+> CryptContext(schemes=['ldap_salted_sha1']).verify('pw', None)
+  False
+> CryptContext(schemes=['ldap_salted_sha1']).verify_and_update('pw', None)
+  (False, None)
+> D = CryptContext(schemes=['sha256_crypt', 'unix_disabled'])
+> D.disable('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  !$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9
+> D.disable()
+  !
+> D.enable('!' + '$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  $5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9
+> D.enable('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  $5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9
+> D.is_enabled('!' + '$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  False
+> D.is_enabled('$5$rounds=1000$saltsalt$azOwbpkvuuBKkE82dQPwTsQE8JyT9Fflpr9aKid3aT9')
+  True
+> D.is_enabled('nonsense')
+  error UnknownHashError: hash could not be identified
+> D.verify('x', '!')
+  False
+> CryptContext(schemes=['md5_crypt']).disable()
+  error RuntimeError: no disabled hasher present (perhaps add 'unix_disabled' to list of schemes?)
+# categories and config files
+> A = CryptContext.from_path('data/app.ini')
+> A.to_string()
+  [passlib]
+  schemes = pbkdf2_sha256, ldap_salted_sha1, des_crypt
+  deprecated = auto
+  pbkdf2_sha256__default_rounds = 20
+  pbkdf2_sha256__min_rounds = 10
+  admin__pbkdf2_sha256__default_rounds = 40
+  admin__pbkdf2_sha256__min_rounds = 30
+  |
+  |
+> A.schemes()
+  ('pbkdf2_sha256', 'ldap_salted_sha1', 'des_crypt')
+> A.default_scheme()
+  pbkdf2_sha256
+> A.default_scheme('admin')
+  pbkdf2_sha256
+> A.handler(category='admin').default_rounds
+  40
+> A.handler(category='admin').min_desired_rounds
+  30
+> A.handler(category='staff').default_rounds
+  20
+> A.hash('password')
+  $pbkdf2-sha256$20$lZJS6p2zFgKgFKJUqpUypg$vjse7C6dp.VTo.jhScOax/.q/JEMBpYXv3KAYeQ9MEU
+> A.hash('password', category='admin')
+  $pbkdf2-sha256$40$XOvdu3eutTamVColZEypVQ$C9BHnWPzIdyFRaItDmkxA3yih8xfsV1CzlIH4c4JxJo
+> A.needs_update('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  False
+> A.needs_update('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ', category='admin')
+  True
+> A.needs_update('{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs')
+  True
+> A.verify_and_update('password', '{SSHA}QCdIktL+AaarHg+95cIrgxLRB4BOYUNs')
+  (True, '$pbkdf2-sha256$20$dS4FAOCcMwbA.D9njDHG.A$GnxZRW9nVzPQxCYkqzsJMx1kWBqTYpHalegxgUWEszQ')
+> A.verify_and_update('password', '$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ', category='admin')
+  (True, '$pbkdf2-sha256$40$O4eQUsqZ0zrHGMM4R.g9pw$./yfhifohvQ8wAUn8.XNqfx9JQEbtbRzBntJlH5xP7E')
+> A.verify_and_update('password', '$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  (True, None)
+> A.to_dict()
+  {'schemes': ['pbkdf2_sha256', 'ldap_salted_sha1', 'des_crypt'], 'deprecated': ['auto'], 'pbkdf2_sha256__default_rounds': 20, 'pbkdf2_sha256__min_rounds': 10, 'admin__pbkdf2_sha256__default_rounds': 40, 'admin__pbkdf2_sha256__min_rounds': 30}
+> A.to_string(section='app')
+  [app]
+  schemes = pbkdf2_sha256, ldap_salted_sha1, des_crypt
+  deprecated = auto
+  pbkdf2_sha256__default_rounds = 20
+  pbkdf2_sha256__min_rounds = 10
+  admin__pbkdf2_sha256__default_rounds = 40
+  admin__pbkdf2_sha256__min_rounds = 30
+  |
+  |
+> CryptContext.from_string(read_text('data/app.ini'), section='other').schemes()
+  ('md5_crypt',)
+> CryptContext.from_string('[passlib]\nschemes = md5_crypt\n').schemes()
+  ('md5_crypt',)
+> CryptContext.from_string('[other]\nx = 1\n')
+  error NoSectionError: No section: 'passlib'
+> CryptContext.from_string('schemes = md5_crypt')
+  error MissingSectionHeaderError: File contains no section headers.
+file: '<string passed to CryptContext.load()>', line: 1
+'schemes = md5_crypt'
+> CryptContext.from_string(3)
+  error TypeError: source must be unicode or bytes, not int
+> CryptContext.from_path('data/bad.ini')
+  error TypeError: keys must have less than 3 separators: 'bogus__x__y__z'
+> CryptContext.from_path('data/missing.ini')
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.ini'
+> CryptContext.from_string('[passlib]\nschemes = md5_crypt\ndefault = md5_crypt\nmd5_crypt__salt_size = 6\n').to_string()
+  [passlib]
+  schemes = md5_crypt
+  default = md5_crypt
+  md5_crypt__salt_size = 6
+  |
+  |
+> CryptContext.from_string('[passlib]\nSchemes = des_crypt\nDES_CRYPT__Truncate_Error = true\n').to_dict()
+  {'schemes': ['des_crypt'], 'des_crypt__truncate_error': 'true'}
+> B = CryptContext(schemes=['pbkdf2_sha256', 'des_crypt'], default='pbkdf2_sha256', pbkdf2_sha256__default_rounds=20, staff__context__default='des_crypt', staff__des_crypt__truncate_error=True, staff__context__deprecated=['pbkdf2_sha256'])
+> B.to_string()
+  [passlib]
+  schemes = pbkdf2_sha256, des_crypt
+  default = pbkdf2_sha256
+  pbkdf2_sha256__default_rounds = 20
+  staff__context__default = des_crypt
+  staff__context__deprecated = pbkdf2_sha256
+  staff__des_crypt__truncate_error = True
+  |
+  |
+> B.default_scheme('staff')
+  des_crypt
+> B.hash('password', category='staff')
+  UqUk7dNWtnMLY
+> B.hash('password1', category='staff')
+  error PasswordTruncateError: Password too long (des_crypt truncates to 8 characters)
+> B.needs_update('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ', category='staff')
+  True
+> B.needs_update('$pbkdf2-sha256$20$c2FsdHNhbHQ$uig3872iXoLKSPsaCVGBHNGLC6qeydxROi1yfCfV4hQ')
+  False
+> B.handler('pbkdf2_sha256', 'staff').deprecated
+  True
+> B.handler('pbkdf2_sha256').deprecated
+  False
+> B.identify('abJnggxhB/yWI', category='staff')
+  des_crypt
+> CryptContext(schemes=['md5_crypt'], staff__context__default='des_crypt')
+  error KeyError: 'default scheme not found in policy'
+> CryptContext(schemes=['md5_crypt', 'des_crypt'], staff__context__deprecated=['md5_crypt', 'des_crypt'])
+  error ValueError: must have at least one non-deprecated scheme for 'staff' category
+> CryptContext(schemes=['md5_crypt', 'des_crypt'], staff__context__default='des_crypt', staff__context__deprecated=['des_crypt'])
+  error ValueError: default scheme for 'staff' category cannot be deprecated
+# Apache htpasswd
+> F = HtpasswdFile('data/htpasswd')
+> F.users()
+  ['alice', 'bob', 'carol', 'dave', 'erin']
+> F.check_password('alice', 'secret')
+  True
+> F.check_password('alice', 'wrong')
+  False
+> F.check_password('bob', 'hunter2')
+  True
+> F.check_password('carol', 'letmein')
+  True
+> F.check_password('dave', 'apache')
+  True
+> F.check_password('erin', 's3cret')
+  False
+> F.check_password('nobody', 'x')
+  None
+> F.get_hash('alice')
+  b'{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ='
+> F.get_hash('nobody')
+  None
+> F.context.schemes()
+  ('bcrypt', 'sha256_crypt', 'sha512_crypt', 'apr_md5_crypt', 'des_crypt', 'ldap_sha1', 'plaintext')
+> F.context.default_scheme()
+  apr_md5_crypt
+> F.set_hash('frank', '{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ=')
+  False
+> F.set_hash('alice', 'plain')
+  True
+> F.delete('bob')
+  True
+> F.delete('bob')
+  False
+> F.users()
+  ['alice', 'carol', 'dave', 'erin', 'frank']
+> F.to_string().decode()
+  # web users
+  alice:plain
+  |
+  carol:crFeHI8jVn0LQ
+  dave:$apr1$Xr4ilOzQ$5vLZqnkrMVEnJ73ZVay8d1
+  # retired
+  erin:{SSHA}xhwvAVlxQgjdD+6rzZoVg7iQWZROYUNs
+  frank:{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ=
+  |
+> F.save('data/out/htpasswd')
+  None
+> read_text('data/out/htpasswd')
+  # web users
+  alice:plain
+  |
+  carol:crFeHI8jVn0LQ
+  dave:$apr1$Xr4ilOzQ$5vLZqnkrMVEnJ73ZVay8d1
+  # retired
+  erin:{SSHA}xhwvAVlxQgjdD+6rzZoVg7iQWZROYUNs
+  frank:{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ=
+  |
+> F.set_password('bad:user', 'x')
+  error ValueError: user contains invalid characters: b'bad:user'
+> F.set_password('tab\tuser', 'x')
+  error ValueError: user contains invalid characters: b'tab\tuser'
+> F.set_password('u' * 256, 'x')
+  error ValueError: user must be at most 255 characters: b'uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu'
+> F.set_password(5, 'x')
+  error TypeError: user must be unicode or bytes, not int
+> F.path
+  data/htpasswd
+> G = HtpasswdFile('data/out/new.htpasswd', new=True, default_scheme='portable')
+> G.context.default_scheme()
+  bcrypt
+> G.users()
+  []
+> G.path
+  data/out/new.htpasswd
+> G = HtpasswdFile(new=True, default_scheme='plaintext')
+> G.set_password('zed', 'pw')
+  False
+> G.set_password('zed', 'pw2')
+  True
+> G.set_password('amy', 'pw3')
+  False
+> G.to_string()
+  b'zed:pw2\namy:pw3\n'
+> G.save()
+  error RuntimeError: HtpasswdFile().path is not set, cannot autosave
+> G.load()
+  error RuntimeError: HtpasswdFile().path is not set, an explicit path is required
+> G.context.default_scheme()
+  plaintext
+> HtpasswdFile(new=True, default_scheme='portable_apache_22').context.default_scheme()
+  apr_md5_crypt
+> HtpasswdFile(new=True, default_scheme='ldap_salted_sha1')
+  error KeyError: 'default scheme not found in policy'
+> HtpasswdFile('data/missing')
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/missing'
+> HtpasswdFile('data/bad.htpasswd')
+  error ValueError: malformed htpasswd file (error reading line 3)
+> HtpasswdFile('data/dup.htpasswd').users()
+  log WARNING: username occurs multiple times in source file: b'alice'
+  ['alice', 'bob']
+> HtpasswdFile('data/dup.htpasswd').get_hash('alice')
+  log WARNING: username occurs multiple times in source file: b'alice'
+  b'{SHA}abc='
+> HtpasswdFile.from_string('alice:{SHA}abc\n\n# end\n').to_string()
+  b'alice:{SHA}abc\n\n# end\n'
+> HtpasswdFile.from_string(b'alice:{SHA}abc\n').users()
+  ['alice']
+> HtpasswdFile.from_string('x:y\n', path='p')
+  error TypeError: 'path' not accepted by from_string()
+> HtpasswdFile(encoding='utf-16')
+  error ValueError: encoding must be 7-bit ascii compatible
+> E = HtpasswdFile(new=True, context=CryptContext(schemes=['ldap_salted_sha1', 'ldap_sha1', 'plaintext']))
+> E.set_password('ana', 'pw')
+  False
+> E.set_password('ana', 'pw2')
+  True
+> E.check_password('ana', 'pw2')
+  True
+> E.check_password('ana', 'pw')
+  False
+> E.to_string().decode()
+  ana:{SSHA}7i/D9gem1AxO3Qbw3YB5O7GKlxLhnDPG
+  |
+> U = HtpasswdFile('data/out/legacy.htpasswd', new=True, autosave=True, context=CryptContext.from_path('data/migrate.ini'))
+> U.load('data/legacy.htpasswd')
+  True
+> U.users()
+  ['admin', 'ops', 'guest', 'web']
+> U.check_password('admin', 'admin123')
+  True
+> U.check_password('ops', 'opsops')
+  True
+> U.check_password('guest', 'guest')
+  True
+> U.check_password('web', 'wrong')
+  False
+> U.check_password('web', 'webweb')
+  True
+> read_text('data/out/legacy.htpasswd')
+  admin:$pbkdf2-sha256$20$Tcn5f.8dY0zpnXOuFYLQmg$.aA51lVoXkXJbGvdwwuTI1.Yq8pK68mH98OvCtA9Y54
+  ops:$pbkdf2-sha256$20$EyKE0LoXwnjvvff.3ztHSA$32HuWhNJVZz1OlMhCU2kIoH3ZvwJWZgMNlHWhPRgwn0
+  guest:$pbkdf2-sha256$20$2ZsTopQSorT23nvPmfO.9w$A8BVanWBaC0BftfhG96bFk/EuF19DJB6sOpZObZAjdQ
+  web:$pbkdf2-sha256$20$ZiwlxFgL4RwDIIRwLmVsTQ$4Uq9oIpxrtiHiR51SrEwUdnRJkubzwYDqvsWF9Gd2mk
+  |
+> U.check_password('admin', 'admin123')
+  True
+> U.delete('guest')
+  True
+> read_text('data/out/legacy.htpasswd')
+  admin:$pbkdf2-sha256$20$Tcn5f.8dY0zpnXOuFYLQmg$.aA51lVoXkXJbGvdwwuTI1.Yq8pK68mH98OvCtA9Y54
+  ops:$pbkdf2-sha256$20$EyKE0LoXwnjvvff.3ztHSA$32HuWhNJVZz1OlMhCU2kIoH3ZvwJWZgMNlHWhPRgwn0
+  web:$pbkdf2-sha256$20$ZiwlxFgL4RwDIIRwLmVsTQ$4Uq9oIpxrtiHiR51SrEwUdnRJkubzwYDqvsWF9Gd2mk
+  |
+> HtpasswdFile('data/out/legacy.htpasswd').users()
+  ['admin', 'ops', 'web']
+# Apache htdigest
+> W = HtdigestFile('data/htdigest')
+> sorted(W.realms())
+  ['Admin', 'Restricted']
+> W.users('Restricted')
+  ['alice', 'bob']
+> W.users('Admin')
+  ['alice']
+> W.users('Nowhere')
+  []
+> W.users()
+  error TypeError: you must specify a realm explicitly, or set the default_realm attribute
+> W.check_password('alice', 'Restricted', 'secret')
+  True
+> W.check_password('alice', 'Admin', 'secret')
+  False
+> W.check_password('alice', 'Admin', 'root')
+  True
+> W.check_password('zed', 'Admin', 'root')
+  None
+> W.check_password('alice', 'secret')
+  error TypeError: you must specify a realm explicitly, or set the default_realm attribute
+> W.get_hash('bob', 'Restricted')
+  f240c7e4a702e9c258f5269a805048ac
+> W.set_password('erin', 'Admin', 'pw')
+  False
+> W.set_password('erin', 'Admin', 'pw2')
+  True
+> W.get_hash('erin', 'Admin')
+  794fecf6e3413358b345c89ed0f3cf00
+> W.set_hash('frank', 'Admin', 'ABC')
+  False
+> W.delete('bob', 'Restricted')
+  True
+> W.delete('bob', 'Restricted')
+  False
+> W.to_string().decode()
+  alice:Restricted:a133dce6ab85d37eed532a26b4227f12
+  alice:Admin:dd06b3d5dfa392ced776aab072371066
+  erin:Admin:794fecf6e3413358b345c89ed0f3cf00
+  frank:Admin:ABC
+  |
+> W.delete_realm('Admin')
+  3
+> W.to_string().decode()
+  alice:Restricted:a133dce6ab85d37eed532a26b4227f12
+  |
+> W.set_password('a:b', 'Admin', 'x')
+  error ValueError: user contains invalid characters: b'a:b'
+> V = HtdigestFile('data/htdigest', default_realm='Restricted')
+> V.check_password('alice', 'secret')
+  True
+> V.users()
+  ['alice', 'bob']
+> V.set_password('gil', 'pw')
+  False
+> V.get_hash('gil')
+  0e0cc24fffd69e1f26494464e30ea2b7
+> V.save('data/out/htdigest')
+  None
+> read_text('data/out/htdigest')
+  alice:Restricted:a133dce6ab85d37eed532a26b4227f12
+  bob:Restricted:f240c7e4a702e9c258f5269a805048ac
+  alice:Admin:dd06b3d5dfa392ced776aab072371066
+  gil:Restricted:0e0cc24fffd69e1f26494464e30ea2b7
+  |
+> HtdigestFile.from_string('alice:Restricted\n')
+  error ValueError: malformed htdigest file (error reading line 1)
+> HtdigestFile.from_string('a:r:' + 'f' * 32 + '\n').users('r')
+  ['a']
+# reference values
+> md5_crypt.name
+  md5_crypt
+> sha512_crypt.name
+  sha512_crypt
+> C.schemes(resolve=True)
+  (<handler sha256_crypt>, <handler md5_crypt>, <handler des_crypt>)
+> A.schemes(resolve=True, category='admin')
+  (<handler pbkdf2_sha256>, <handler ldap_salted_sha1>, <handler des_crypt>)
