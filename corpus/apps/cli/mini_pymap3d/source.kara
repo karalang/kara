@@ -1,0 +1,2628 @@
+// mini_pymap3d — pymap3d 3.2.0 (SciVision, Felipe Geremia Nievinski,
+// Michael Kleder), the coordinate-conversion library behind a good share of
+// Python radar, GNSS, drone and satellite-tracking code: geodetic <-> ECEF,
+// local East-North-Up, North-East-Down, azimuth-elevation-range and
+// down-range/cross-range frames, n-vectors, geocentric and spherical
+// coordinates, the auxiliary latitudes (isometric, conformal, rectifying,
+// authalic, parametric, geocentric), radii of curvature and of the mean
+// spheres, rhumb lines, Vincenty's inverse and direct geodesics, the
+// haversine separation and the line-of-sight intersection with the
+// ellipsoid, on any of the library's 37 built-in bodies or one given by its
+// axes.
+//
+// It follows the pure-Python path a numpy-free install takes: each function
+// works on scalars through the math module, and the library's try/except
+// fallbacks (a float that has no item assignment, a NameError for a missing
+// numpy name, a ZeroDivisionError on the pole or the axis) pick the branch
+// they pick there. Every operation that raises in Python raises here too, as
+// an Err carrying the same exception: the math module's domain errors
+// (sqrt, asin, atanh and log out of range, sin, cos and tan of an infinity),
+// float division and modulo by zero, and a power that overflows. Three
+// primitives come from CPython rather than libm and are ported: math.hypot
+// (CPython's scaled sum with a Dekker product), math.radians and
+// math.degrees (a multiply by pi/180 and 180/pi), and the float % operator
+// (fmod, then moved onto the divisor's sign). Formulas keep Python's
+// evaluation order, and x ** y is pow. jobs_text() holds data/jobs.tsv.
+
+const PI_F: f64 = 3.141592653589793;
+const TAU_F: f64 = 6.283185307179586;
+const DBL_MIN: f64 = 2.2250738585072014e-308;
+const COS_EPS: f64 = 1e-09;
+
+// ----------------------------------------------------------- CPython math
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn finite(x: f64) -> bool {
+    x == x and x.abs() != f64.INFINITY
+}
+
+fn radians(x: f64) -> f64 {
+    x * (PI_F / 180.0)
+}
+
+fn degrees(x: f64) -> f64 {
+    x * (180.0 / PI_F)
+}
+
+fn rd(x: f64, deg: bool) -> f64 {
+    if deg { radians(x) } else { x }
+}
+
+fn dg(x: f64, deg: bool) -> f64 {
+    if deg { degrees(x) } else { x }
+}
+
+fn dom_err() -> String {
+    "ValueError: math domain error".to_string()
+}
+
+fn val_err(msg: Str) -> String {
+    f"ValueError: {msg}"
+}
+
+// ArithmeticError: what an `except (ArithmeticError, ...)` catches.
+fn arith(e: ref String) -> bool {
+    e.starts_with("ZeroDivisionError") or e.starts_with("OverflowError")
+}
+
+fn sin_(x: f64) -> Result[f64, String] {
+    if x.abs() == f64.INFINITY { Err(dom_err()) } else { Ok(x.sin()) }
+}
+
+fn cos_(x: f64) -> Result[f64, String] {
+    if x.abs() == f64.INFINITY { Err(dom_err()) } else { Ok(x.cos()) }
+}
+
+fn tan_(x: f64) -> Result[f64, String] {
+    if x.abs() == f64.INFINITY { Err(dom_err()) } else { Ok(x.tan()) }
+}
+
+fn sqrt_(x: f64) -> Result[f64, String] {
+    if x < 0.0 { Err(dom_err()) } else { Ok(x.sqrt()) }
+}
+
+fn asin_(x: f64) -> Result[f64, String] {
+    if x.abs() > 1.0 { Err(dom_err()) } else { Ok(x.asin()) }
+}
+
+fn atanh_(x: f64) -> Result[f64, String] {
+    if x.abs() >= 1.0 { Err(dom_err()) } else { Ok(x.atanh()) }
+}
+
+fn log_(x: f64) -> Result[f64, String] {
+    if x <= 0.0 { Err(dom_err()) } else { Ok(x.ln()) }
+}
+
+fn exp_(x: f64) -> Result[f64, String] {
+    let r = x.exp();
+    if finite(x) and r == f64.INFINITY {
+        Err("OverflowError: math range error".to_string())
+    } else {
+        Ok(r)
+    }
+}
+
+// float / float
+fn dv(a: f64, b: f64) -> Result[f64, String] {
+    if b == 0.0 {
+        Err("ZeroDivisionError: float division by zero".to_string())
+    } else {
+        Ok(a / b)
+    }
+}
+
+// float % float: fmod, then moved onto the divisor's sign.
+fn pmod(a: f64, b: f64) -> Result[f64, String] {
+    if b == 0.0 {
+        return Err("ZeroDivisionError: float modulo by zero".to_string());
+    }
+    let m = a % b;
+    if m != 0.0 {
+        if (b < 0.0) != (m < 0.0) { Ok(m + b) } else { Ok(m) }
+    } else {
+        Ok(0.0.copysign(b))
+    }
+}
+
+// float ** float. A negative base to a fractional power would be a complex
+// number in Python; no job reaches one.
+fn pw(x: f64, y: f64) -> Result[f64, String] {
+    if x == 0.0 and y < 0.0 {
+        return Err("ZeroDivisionError: 0.0 cannot be raised to a negative power".to_string());
+    }
+    if x < 0.0 and finite(x) and finite(y) and y != y.floor() {
+        return Err("TypeError: complex result".to_string());
+    }
+    let r = x.pow(y);
+    if finite(x) and finite(y) and r.abs() == f64.INFINITY {
+        Err("OverflowError: (34, 'Numerical result out of range')".to_string())
+    } else {
+        Ok(r)
+    }
+}
+
+// mathfun.sign without numpy.
+fn sign(x: f64) -> f64 {
+    if x < 0.0 {
+        -1.0
+    } else if x > 0.0 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+// Dekker's exact product: z + zz == x * y.
+fn two_prod(x: f64, y: f64) -> (f64, f64) {
+    let mut t = x * 134217729.0;
+    let xh = t - (t - x);
+    let xl = x - xh;
+    t = y * 134217729.0;
+    let yh = t - (t - y);
+    let yl = y - yh;
+    let p = xh * yh;
+    let q = xh * yl + xl * yh;
+    let z = p + q;
+    let zz = p - z + q + xl * yl;
+    (z, zz)
+}
+
+// The exponent e of m = f * 2^e with 0.5 <= f < 1 (m > 0, finite).
+fn frexp_e(m: f64) -> i64 {
+    let mut e = 0;
+    let mut x = m;
+    while x >= 1.0 {
+        x *= 0.5;
+        e += 1;
+    }
+    while x < 0.5 {
+        x *= 2.0;
+        e -= 1;
+    }
+    e
+}
+
+fn pow2(n: i64) -> f64 {
+    let mut r = 1.0;
+    let mut i = 0;
+    if n >= 0 {
+        while i < n {
+            r *= 2.0;
+            i += 1;
+        }
+    } else {
+        while i < -n {
+            r *= 0.5;
+            i += 1;
+        }
+    }
+    r
+}
+
+// CPython's vector_norm for two coordinates.
+fn vector_norm2(a: f64, b: f64, mx: f64, nan: bool) -> f64 {
+    if mx == f64.INFINITY {
+        return mx;
+    }
+    if nan {
+        return f64.NAN;
+    }
+    if mx == 0.0 {
+        return mx;
+    }
+    let e = frexp_e(mx);
+    if e < -1023 {
+        return DBL_MIN * vector_norm2(a / DBL_MIN, b / DBL_MIN, mx / DBL_MIN, nan);
+    }
+    let scale = pow2(-e);
+    let mut csum = 1.0;
+    let mut f1 = 0.0;
+    let mut f2 = 0.0;
+    let mut k = 0;
+    while k < 2 {
+        let x = if k == 0 { a * scale } else { b * scale };
+        let (hi, lo) = two_prod(x, x);
+        let s = csum + hi;
+        let y = (csum - s) + hi;
+        csum = s;
+        f1 += lo;
+        f2 += y;
+        k += 1;
+    }
+    let mut h = (csum - 1.0 + (f1 + f2)).sqrt();
+    let (hi, lo) = two_prod(-h, h);
+    let s = csum + hi;
+    let y = (csum - s) + hi;
+    csum = s;
+    f1 += lo;
+    f2 += y;
+    let x = csum - 1.0 + (f1 + f2);
+    h += x / (2.0 * h);
+    h / scale
+}
+
+fn hypot(x: f64, y: f64) -> f64 {
+    let ax = x.abs();
+    let ay = y.abs();
+    let nan = ax != ax or ay != ay;
+    let mut mx = 0.0;
+    if ax > mx {
+        mx = ax;
+    }
+    if ay > mx {
+        mx = ay;
+    }
+    vector_norm2(ax, ay, mx, nan)
+}
+
+// ----------------------------------------------------------- output
+
+// Python's repr of a float: the shortest digits that read back, which is
+// Kara's Display too, except that Python spells NaN "nan".
+fn fmt(x: f64) -> String {
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_f64(s: String) -> f64 {
+    if s == "nan" {
+        return f64.NAN;
+    }
+    if s == "inf" {
+        return f64.INFINITY;
+    }
+    if s == "-inf" {
+        return -f64.INFINITY;
+    }
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn join_from(f: ref Vec[String], from: i64, upto: i64, sep: Str) -> String {
+    let mut out = String.new();
+    let mut i = from;
+    while i < upto {
+        if i > from {
+            out.push_str(sep);
+        }
+        out.push_str(f[i]);
+        i += 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------- Ellipsoid
+
+struct Ell {
+    model: String,
+    name: String,
+    a: f64,
+    b: f64,
+    f: f64,
+    n: f64,
+    e: f64,
+}
+
+// Ellipsoid(a, b): flattening, third flattening and eccentricity are derived
+// in that order, with the constructor's assert between the first two.
+fn new_ell(a: f64, b: f64, name: Str, model: Str) -> Result[Ell, String] {
+    let f = dv(a - b, a)?;
+    if not (f >= 0.0) {
+        return Err("AssertionError: flattening must be >= 0".to_string());
+    }
+    let n = dv(a - b, a + b)?;
+    let e = sqrt_(2.0 * f - pw(f, 2.0)?)?;
+    Ok(Ell { model: model.to_string(), name: name.to_string(), a: a, b: b, f: f, n: n, e: e })
+}
+
+// Ellipsoid.models: (display name, a, b).
+fn model_entry(m: ref String) -> Option[(Str, f64, f64)] {
+    if m == "maupertuis" {
+        Some(("Maupertuis (1738)", 6397300.0, 6363806.283))
+    } else if m == "plessis" {
+        Some(("Plessis (1817)", 6376523.0, 6355862.9333))
+    } else if m == "everest1830" {
+        Some(("Everest (1830)", 6377299.365, 6356098.359))
+    } else if m == "everest1830m" {
+        Some(("Everest 1830 Modified (1967)", 6377304.063, 6356103.039))
+    } else if m == "everest1967" {
+        Some(("Everest 1830 (1967 Definition)", 6377298.556, 6356097.55))
+    } else if m == "airy" {
+        Some(("Airy (1830)", 6377563.396, 6356256.909))
+    } else if m == "bessel" {
+        Some(("Bessel (1841)", 6377397.155, 6356078.963))
+    } else if m == "clarke1866" {
+        Some(("Clarke (1866)", 6378206.4, 6356583.8))
+    } else if m == "clarke1878" {
+        Some(("Clarke (1878)", 6378190.0, 6356456.0))
+    } else if m == "clarke1860" {
+        Some(("Clarke (1880)", 6378249.145, 6356514.87))
+    } else if m == "helmert" {
+        Some(("Helmert (1906)", 6378200.0, 6356818.17))
+    } else if m == "hayford" {
+        Some(("Hayford (1910)", 6378388.0, 6356911.946))
+    } else if m == "international1924" {
+        Some(("International (1924)", 6378388.0, 6356911.946))
+    } else if m == "krassovsky1940" {
+        Some(("Krassovsky (1940)", 6378245.0, 6356863.019))
+    } else if m == "wgs66" {
+        Some(("WGS66 (1966)", 6378145.0, 6356759.769))
+    } else if m == "australian" {
+        Some(("Australian National (1966)", 6378160.0, 6356774.719))
+    } else if m == "international1967" {
+        Some(("New International (1967)", 6378157.5, 6356772.2))
+    } else if m == "grs67" {
+        Some(("GRS-67 (1967)", 6378160.0, 6356774.516))
+    } else if m == "sa1969" {
+        Some(("South American (1969)", 6378160.0, 6356774.719))
+    } else if m == "wgs72" {
+        Some(("WGS-72 (1972)", 6378135.0, 6356750.52001609))
+    } else if m == "grs80" {
+        Some(("GRS-80 (1979)", 6378137.0, 6356752.31414036))
+    } else if m == "wgs84" {
+        Some(("WGS-84 (1984)", 6378137.0, 6356752.31424518))
+    } else if m == "wgs84_mean" {
+        Some(("WGS-84 (1984) Mean", 6371008.7714, 6371008.7714))
+    } else if m == "iers1989" {
+        Some(("IERS (1989)", 6378136.0, 6356751.302))
+    } else if m == "pz90.11" {
+        Some(("ПЗ-90 (2011)", 6378136.0, 6356751.3618))
+    } else if m == "iers2003" {
+        Some(("IERS (2003)", 6378136.6, 6356751.9))
+    } else if m == "gsk2011" {
+        Some(("ГСК (2011)", 6378136.5, 6356751.758))
+    } else if m == "mercury" {
+        Some(("Mercury", 2440500.0, 2438300.0))
+    } else if m == "venus" {
+        Some(("Venus", 6051800.0, 6051800.0))
+    } else if m == "moon" {
+        Some(("Moon", 1738100.0, 1736000.0))
+    } else if m == "mars" {
+        Some(("Mars", 3396900.0, 3376097.80585952))
+    } else if m == "jupyter" {
+        Some(("Jupiter", 71492000.0, 66770054.3475922))
+    } else if m == "io" {
+        Some(("Io", 1829.7, 1815.8))
+    } else if m == "saturn" {
+        Some(("Saturn", 60268000.0, 54364301.5271271))
+    } else if m == "uranus" {
+        Some(("Uranus", 25559000.0, 24973000.0))
+    } else if m == "neptune" {
+        Some(("Neptune", 24764000.0, 24341000.0))
+    } else if m == "pluto" {
+        Some(("Pluto", 1188000.0, 1188000.0))
+    } else {
+        None
+    }
+}
+
+fn from_name(m: ref String) -> Result[Ell, String] {
+    match model_entry(m) {
+        Some((name, a, b)) => new_ell(a, b, name, m.as_str()),
+        None => Err(f"KeyError: '{m}'"),
+    }
+}
+
+fn wgs84() -> Ell {
+    from_name("wgs84".to_string()).unwrap()
+}
+
+fn ell_repr(g: ref Ell) -> String {
+    f"Ellipsoid(model='{g.model}', name='{g.name}', semimajor_axis={fmt(g.a)}, semiminor_axis={fmt(g.b)}, flattening={fmt(g.f)}, thirdflattening={fmt(g.n)}, eccentricity={fmt(g.e)})"
+}
+
+// ----------------------------------------------------------- ecef
+
+fn geodetic2ecef(lat0: f64, lon0: f64, alt: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat = rd(lat0, deg);
+    let lon = rd(lon0, deg);
+    let nn = dv(pw(ell.a, 2.0)?, hypot(ell.a * cos_(lat)?, ell.b * sin_(lat)?))?;
+    let x = (nn + alt) * cos_(lat)? * cos_(lon)?;
+    let y = (nn + alt) * cos_(lat)? * sin_(lon)?;
+    let z = (nn * pw(dv(ell.b, ell.a)?, 2.0)? + alt) * sin_(lat)?;
+    Ok((x, y, z))
+}
+
+// The numpy-free branch of ecef2geodetic's Beta: the two statements inside
+// its try block.
+fn ecef_beta(ell: ref Ell, u: f64, hxy: f64, hue: f64, z: f64, ee: f64) -> Result[f64, String] {
+    let mut beta = dv(dv(hue, u)? * z, hxy)?.atan();
+    let num = (ell.b * u - ell.a * hue + pw(ee, 2.0)?) * sin_(beta)?;
+    let den = dv(ell.a * hue * 1.0, cos_(beta)?)? - pw(ee, 2.0)? * cos_(beta)?;
+    beta += dv(num, den)?;
+    Ok(beta)
+}
+
+fn ecef2geodetic(x: f64, y: f64, z: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let r = sqrt_(pw(x, 2.0)? + pw(y, 2.0)? + pw(z, 2.0)?)?;
+    let ee = sqrt_(pw(ell.a, 2.0)? - pw(ell.b, 2.0)?)?;
+    let r2e2 = pw(r, 2.0)? - pw(ee, 2.0)?;
+    let u = sqrt_(0.5 * (pw(r, 2.0)? - pw(ee, 2.0)?) + 0.5 * hypot(r2e2, 2.0 * ee * z))?;
+    let hxy = hypot(x, y);
+    let hue = hypot(u, ee);
+    let beta = match ecef_beta(ell, u, hxy, hue, z, ee) {
+        Ok(b) => b,
+        Err(e) => {
+            if not arith(e) {
+                return Err(e);
+            }
+            if z == 0.0 {
+                0.0
+            } else if z > 0.0 {
+                PI_F / 2.0
+            } else {
+                -PI_F / 2.0
+            }
+        }
+    };
+    let mut lat = (dv(ell.a, ell.b)? * tan_(beta)?).atan();
+    let mut lon = y.atan2(x);
+    let cos_beta = cos_(beta)?;
+    let mut alt = hypot(z - ell.b * sin_(beta)?, hxy - ell.a * cos_beta);
+    let inside = dv(pw(x, 2.0)?, pw(ell.a, 2.0)?)? + dv(pw(y, 2.0)?, pw(ell.a, 2.0)?)? + dv(pw(z, 2.0)?, pw(ell.b, 2.0)?)? < 1.0;
+    if inside {
+        alt = -alt;
+    }
+    if deg {
+        lat = degrees(lat);
+        lon = degrees(lon);
+    }
+    Ok((lat, lon, alt))
+}
+
+fn ecef2enuv(u: f64, v: f64, w: f64, lat00: f64, lon00: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat0 = rd(lat00, deg);
+    let lon0 = rd(lon00, deg);
+    let t = cos_(lon0)? * u + sin_(lon0)? * v;
+    let u_east = -sin_(lon0)? * u + cos_(lon0)? * v;
+    let w_up = cos_(lat0)? * t + sin_(lat0)? * w;
+    let v_north = -sin_(lat0)? * t + cos_(lat0)? * w;
+    Ok((u_east, v_north, w_up))
+}
+
+fn ecef2enu(x: f64, y: f64, z: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x0, y0, z0) = geodetic2ecef(lat0, lon0, h0, ell, deg)?;
+    uvw2enu(x - x0, y - y0, z - z0, lat0, lon0, deg)
+}
+
+fn enu2uvw(east: f64, north: f64, up: f64, lat00: f64, lon00: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat0 = rd(lat00, deg);
+    let lon0 = rd(lon00, deg);
+    let t = cos_(lat0)? * up - sin_(lat0)? * north;
+    let w = sin_(lat0)? * up + cos_(lat0)? * north;
+    let u = cos_(lon0)? * t - sin_(lon0)? * east;
+    let v = sin_(lon0)? * t + cos_(lon0)? * east;
+    Ok((u, v, w))
+}
+
+fn uvw2enu(u: f64, v: f64, w: f64, lat00: f64, lon00: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat0 = rd(lat00, deg);
+    let lon0 = rd(lon00, deg);
+    let t = cos_(lon0)? * u + sin_(lon0)? * v;
+    let east = -sin_(lon0)? * u + cos_(lon0)? * v;
+    let up = cos_(lat0)? * t + sin_(lat0)? * w;
+    let north = -sin_(lat0)? * t + cos_(lat0)? * w;
+    Ok((east, north, up))
+}
+
+fn enu2ecef(e1: f64, n1: f64, u1: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x0, y0, z0) = geodetic2ecef(lat0, lon0, h0, ell, deg)?;
+    let (u, v, w) = enu2uvw(e1, n1, u1, lat0, lon0, deg)?;
+    Ok((x0 + u, y0 + v, z0 + w))
+}
+
+// ----------------------------------------------------------- enu
+
+fn enu2aer(e0: f64, n0: f64, u0: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let e = if e0.abs() < 0.001 { 0.0 } else { e0 };
+    let n = if n0.abs() < 0.001 { 0.0 } else { n0 };
+    let u = if u0.abs() < 0.001 { 0.0 } else { u0 };
+    let r = hypot(e, n);
+    let slant = hypot(r, u);
+    let mut elev = u.atan2(r);
+    let mut az = pmod(e.atan2(n), TAU_F)?;
+    if deg {
+        az = degrees(az);
+        elev = degrees(elev);
+    }
+    Ok((az, elev, slant))
+}
+
+fn aer2enu(az0: f64, el0: f64, srange: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let el = rd(el0, deg);
+    let az = rd(az0, deg);
+    if srange < 0.0 {
+        return Err(val_err("Slant range  [0, Infinity)"));
+    }
+    let r = srange * cos_(el)?;
+    Ok((r * sin_(az)?, r * cos_(az)?, srange * sin_(el)?))
+}
+
+fn enu2geodetic(e: f64, n: f64, u: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x, y, z) = enu2ecef(e, n, u, lat0, lon0, h0, ell, deg)?;
+    ecef2geodetic(x, y, z, ell, deg)
+}
+
+fn geodetic2enu(lat: f64, lon: f64, h: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x1, y1, z1) = geodetic2ecef(lat, lon, h, ell, deg)?;
+    let (x2, y2, z2) = geodetic2ecef(lat0, lon0, h0, ell, deg)?;
+    uvw2enu(x1 - x2, y1 - y2, z1 - z2, lat0, lon0, deg)
+}
+
+fn enu2ecefv(e: f64, n: f64, u: f64, lat00: f64, lon00: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat0 = rd(lat00, deg);
+    let lon0 = rd(lon00, deg);
+    let x = -sin_(lon0)? * e - sin_(lat0)? * cos_(lon0)? * n + cos_(lat0)? * cos_(lon0)? * u;
+    let y = cos_(lon0)? * e - sin_(lat0)? * sin_(lon0)? * n + cos_(lat0)? * sin_(lon0)? * u;
+    let z = cos_(lat0)? * n + sin_(lat0)? * u;
+    Ok((x, y, z))
+}
+
+// ----------------------------------------------------------- aer
+
+fn ecef2aer(x: f64, y: f64, z: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = ecef2enu(x, y, z, lat0, lon0, h0, ell, deg)?;
+    enu2aer(e, n, u, deg)
+}
+
+fn geodetic2aer(lat: f64, lon: f64, h: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = geodetic2enu(lat, lon, h, lat0, lon0, h0, ell, deg)?;
+    enu2aer(e, n, u, deg)
+}
+
+fn aer2geodetic(az: f64, el: f64, srange: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x, y, z) = aer2ecef(az, el, srange, lat0, lon0, h0, ell, deg)?;
+    ecef2geodetic(x, y, z, ell, deg)
+}
+
+fn aer2ecef(az: f64, el: f64, srange: f64, lat0: f64, lon0: f64, alt0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x0, y0, z0) = geodetic2ecef(lat0, lon0, alt0, ell, deg)?;
+    let (e1, n1, u1) = aer2enu(az, el, srange, deg)?;
+    let (dx, dy, dz) = enu2uvw(e1, n1, u1, lat0, lon0, deg)?;
+    Ok((x0 + dx, y0 + dy, z0 + dz))
+}
+
+// ----------------------------------------------------------- ned
+
+fn aer2ned(az: f64, elev: f64, slant: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = aer2enu(az, elev, slant, deg)?;
+    Ok((n, e, -u))
+}
+
+fn ned2aer(n: f64, e: f64, d: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    enu2aer(e, n, -d, deg)
+}
+
+fn ned2geodetic(n: f64, e: f64, d: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (x, y, z) = enu2ecef(e, n, -d, lat0, lon0, h0, ell, deg)?;
+    ecef2geodetic(x, y, z, ell, deg)
+}
+
+fn ned2ecef(n: f64, e: f64, d: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    enu2ecef(e, n, -d, lat0, lon0, h0, ell, deg)
+}
+
+fn ecef2ned(x: f64, y: f64, z: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = ecef2enu(x, y, z, lat0, lon0, h0, ell, deg)?;
+    Ok((n, e, -u))
+}
+
+fn geodetic2ned(lat: f64, lon: f64, h: f64, lat0: f64, lon0: f64, h0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = geodetic2enu(lat, lon, h, lat0, lon0, h0, ell, deg)?;
+    Ok((n, e, -u))
+}
+
+fn ecef2nedv(x: f64, y: f64, z: f64, lat0: f64, lon0: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = ecef2enuv(x, y, z, lat0, lon0, deg)?;
+    Ok((n, e, -u))
+}
+
+// ----------------------------------------------------------- dca
+
+fn enu2dca(e: f64, n: f64, u: f64, heading0: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let heading = rd(heading0, deg);
+    let dr = e * sin_(heading)? + n * cos_(heading)?;
+    let cr = -e * cos_(heading)? + n * sin_(heading)?;
+    Ok((dr, cr, u))
+}
+
+fn dca2enu(dr: f64, cr: f64, above: f64, heading0: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let heading = rd(heading0, deg);
+    let e = dr * sin_(heading)? - cr * cos_(heading)?;
+    let n = dr * cos_(heading)? + cr * sin_(heading)?;
+    Ok((e, n, above))
+}
+
+fn dca2ned(dr: f64, cr: f64, above: f64, heading: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = dca2enu(dr, cr, above, heading, deg)?;
+    Ok((n, e, -u))
+}
+
+fn ned2dca(n: f64, e: f64, d: f64, heading: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    enu2dca(e, n, -d, heading, deg)
+}
+
+fn ecef2dca(x: f64, y: f64, z: f64, lat0: f64, lon0: f64, h0: f64, heading: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = ecef2enu(x, y, z, lat0, lon0, h0, ell, deg)?;
+    enu2dca(e, n, u, heading, deg)
+}
+
+fn dca2ecef(dr: f64, cr: f64, above: f64, lat0: f64, lon0: f64, h0: f64, heading: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = dca2enu(dr, cr, above, heading, deg)?;
+    enu2ecef(e, n, u, lat0, lon0, h0, ell, deg)
+}
+
+fn geodetic2dca(lat: f64, lon: f64, h: f64, lat0: f64, lon0: f64, h0: f64, heading: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = geodetic2enu(lat, lon, h, lat0, lon0, h0, ell, deg)?;
+    enu2dca(e, n, u, heading, deg)
+}
+
+fn dca2geodetic(dr: f64, cr: f64, above: f64, lat0: f64, lon0: f64, h0: f64, heading: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = dca2enu(dr, cr, above, heading, deg)?;
+    enu2geodetic(e, n, u, lat0, lon0, h0, ell, deg)
+}
+
+fn aer2dca(az: f64, el: f64, srange: f64, heading: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = aer2enu(az, el, srange, deg)?;
+    enu2dca(e, n, u, heading, deg)
+}
+
+fn dca2aer(dr: f64, cr: f64, above: f64, heading: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (e, n, u) = dca2enu(dr, cr, above, heading, deg)?;
+    enu2aer(e, n, u, deg)
+}
+
+// ----------------------------------------------------------- utils
+
+fn cart2pol(x: f64, y: f64) -> (f64, f64) {
+    (y.atan2(x), hypot(x, y))
+}
+
+fn pol2cart(theta: f64, rho: f64) -> Result[(f64, f64), String] {
+    Ok((rho * cos_(theta)?, rho * sin_(theta)?))
+}
+
+fn cart2sph(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+    let hxy = hypot(x, y);
+    let r = hypot(hxy, z);
+    let el = z.atan2(hxy);
+    let az = y.atan2(x);
+    (az, el, r)
+}
+
+fn sph2cart(az: f64, el: f64, r: f64) -> Result[(f64, f64, f64), String] {
+    let rcos_theta = r * cos_(el)?;
+    let x = rcos_theta * cos_(az)?;
+    let y = rcos_theta * sin_(az)?;
+    let z = r * sin_(el)?;
+    Ok((x, y, z))
+}
+
+// ----------------------------------------------------------- nvector
+
+fn geodetic2nvector(lat0: f64, lon0: f64, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat = rd(lat0, deg);
+    let lon = rd(lon0, deg);
+    let sin_lat = sin_(lat)?;
+    let cos_lat = cos_(lat)?;
+    let sin_lon = sin_(lon)?;
+    let cos_lon = cos_(lon)?;
+    Ok((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat))
+}
+
+fn nvector2geodetic(n1: f64, n2: f64, n3: f64, deg: bool) -> Result[(f64, f64), String] {
+    let lat = asin_(n3)?;
+    let lon = n2.atan2(n1);
+    Ok((dg(lat, deg), dg(lon, deg)))
+}
+
+fn ecef2nvector(x: f64, y: f64, z: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (lat, lon, _) = ecef2geodetic(x, y, z, ell, deg)?;
+    geodetic2nvector(lat, lon, deg)
+}
+
+fn nvector2ecef(n1: f64, n2: f64, n3: f64, alt: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let (lat, lon) = nvector2geodetic(n1, n2, n3, deg)?;
+    geodetic2ecef(lat, lon, alt, ell, deg)
+}
+
+// ----------------------------------------------------------- spherical
+
+fn geodetic2spherical(lat0: f64, lon0: f64, alt: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat = rd(lat0, deg);
+    let lon = rd(lon0, deg);
+    let sinlat = sin_(lat)?;
+    let coslat = sqrt_(1.0 - pw(sinlat, 2.0)?)?;
+    let nn = dv(pw(ell.a, 2.0)?, hypot(ell.a * coslat, ell.b * sinlat))?;
+    let xy_projection = (alt + nn) * coslat;
+    let z_cartesian = (alt + (1.0 - pw(ell.e, 2.0)?) * nn) * sinlat;
+    let radius = hypot(xy_projection, z_cartesian);
+    let slat = asin_(dv(z_cartesian, radius)?)?;
+    Ok((dg(slat, deg), dg(lon, deg), radius))
+}
+
+fn spherical2geodetic(lat0: f64, lon0: f64, radius: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    let lat = rd(lat0, deg);
+    let lon = rd(lon0, deg);
+    let e = ell.e;
+    let sinlat = sin_(lat)?;
+    let coslat = sqrt_(1.0 - pw(sinlat, 2.0)?)?;
+    let zz = radius * sinlat;
+    let p_0 = dv(pw(radius, 2.0)? * pw(coslat, 2.0)?, pw(ell.a, 2.0)?)?;
+    let q_0 = dv(1.0 - pw(e, 2.0)?, pw(ell.a, 2.0)?)? * pw(zz, 2.0)?;
+    let r_0 = (p_0 + q_0 - pw(e, 4.0)?) / 6.0;
+    let s_0 = dv(pw(e, 4.0)? * p_0 * q_0 / 4.0, pw(r_0, 3.0)?)?;
+    let t_0 = pw(1.0 + s_0 + sqrt_(2.0 * s_0 + pw(s_0, 2.0)?)?, 1.0 / 3.0)?;
+    let u_0 = r_0 * (1.0 + t_0 + dv(1.0, t_0)?);
+    let v_0 = sqrt_(pw(u_0, 2.0)? + q_0 * pw(e, 4.0)?)?;
+    let w_0 = dv(pw(e, 2.0)? * (u_0 + v_0 - q_0) / 2.0, v_0)?;
+    let k = sqrt_(u_0 + v_0 + pw(w_0, 2.0)?)? - w_0;
+    let d = dv(k * radius * coslat, k + pw(e, 2.0)?)?;
+    let hypot_dz = hypot(d, zz);
+    let glat = 2.0 * zz.atan2(d + hypot_dz);
+    let alt = dv(k + pw(e, 2.0)? - 1.0, k)? * hypot_dz;
+    Ok((dg(glat, deg), dg(lon, deg), alt))
+}
+
+// ----------------------------------------------------------- latitude
+
+fn geoc2geod(gc0: f64, dist: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let gc = rd(gc0, deg);
+    let r = dv(dist, ell.a)?;
+    let t1 = dv(sin_(2.0 * gc)?, r)? * ell.f;
+    let t2 = (dv(1.0, pw(r, 2.0)?)? + dv(1.0, 4.0 * r)?) * sin_(4.0 * gc)? * pw(ell.f, 2.0)?;
+    Ok(dg(gc + t1 + t2, deg))
+}
+
+fn geodetic2geocentric(lat0: f64, alt_m: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let r = transverse(lat, ell, false)?;
+    let g = ((1.0 - pw(ell.e, 2.0)? * dv(r, r + alt_m)?) * tan_(lat)?).atan();
+    Ok(dg(g, deg))
+}
+
+fn geocentric2geodetic(lat0: f64, alt_m: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let r = transverse(lat, ell, false)?;
+    let t = tan_(lat)?;
+    let g = dv(t, 1.0 - pw(ell.e, 2.0)? * dv(r, r + alt_m)?)?.atan();
+    Ok(dg(g, deg))
+}
+
+fn geodetic2isometric(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let e = ell.e;
+    let mut iso = tan_(lat)?.asinh() - e * atanh_(e * sin_(lat)?)?;
+    let coslat = cos_(lat)?;
+    if coslat.abs() <= COS_EPS {
+        iso = sign(lat) * f64.INFINITY;
+    }
+    Ok(dg(iso, deg))
+}
+
+fn isometric2geodetic(iso0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let iso = rd(iso0, deg);
+    let conformal = 2.0 * exp_(iso)?.atan() - PI_F / 2.0;
+    let g = conformal2geodetic(conformal, ell, false)?;
+    Ok(dg(g, deg))
+}
+
+fn conformal2geodetic(c0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let c = rd(c0, deg);
+    let e = ell.e;
+    let f1 = pw(e, 2.0)? / 2.0 + 5.0 * pw(e, 4.0)? / 24.0 + pw(e, 6.0)? / 12.0 + 13.0 * pw(e, 8.0)? / 360.0;
+    let f2 = 7.0 * pw(e, 4.0)? / 48.0 + 29.0 * pw(e, 6.0)? / 240.0 + 811.0 * pw(e, 8.0)? / 11520.0;
+    let f3 = 7.0 * pw(e, 6.0)? / 120.0 + 81.0 * pw(e, 8.0)? / 1120.0;
+    let f4 = 4279.0 * pw(e, 8.0)? / 161280.0;
+    let g = c + f1 * sin_(2.0 * c)? + f2 * sin_(4.0 * c)? + f3 * sin_(6.0 * c)? + f4 * sin_(8.0 * c)?;
+    Ok(dg(g, deg))
+}
+
+fn conformal_try(f1: f64, f2: f64, f3: f64, f4: f64, e: f64) -> Result[f64, String] {
+    Ok(2.0 * sqrt_(dv(f4, f3)? * pw(dv(f1, f2)?, e)?)?.atan() - PI_F / 2.0)
+}
+
+fn geodetic2conformal(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let e = ell.e;
+    let f1 = 1.0 - e * sin_(lat)?;
+    let f2 = 1.0 + e * sin_(lat)?;
+    let f3 = 1.0 - sin_(lat)?;
+    let f4 = 1.0 + sin_(lat)?;
+    let c = match conformal_try(f1, f2, f3, f4, e) {
+        Ok(v) => v,
+        Err(err) => {
+            if not arith(err) {
+                return Err(err);
+            }
+            PI_F / 2.0
+        }
+    };
+    Ok(dg(c, deg))
+}
+
+fn geodetic2rectifying(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let n = ell.n;
+    let f1 = 3.0 * n / 2.0 - 9.0 * pw(n, 3.0)? / 16.0;
+    let f2 = 15.0 * pw(n, 2.0)? / 16.0 - 15.0 * pw(n, 4.0)? / 32.0;
+    let f3 = 35.0 * pw(n, 3.0)? / 48.0;
+    let f4 = 315.0 * pw(n, 4.0)? / 512.0;
+    let r = lat - f1 * sin_(2.0 * lat)? + f2 * sin_(4.0 * lat)? - f3 * sin_(6.0 * lat)? + f4 * sin_(8.0 * lat)?;
+    Ok(dg(r, deg))
+}
+
+fn rectifying2geodetic(r0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let r = rd(r0, deg);
+    let n = ell.n;
+    let f1 = 3.0 * n / 2.0 - 27.0 * pw(n, 3.0)? / 32.0;
+    let f2 = 21.0 * pw(n, 2.0)? / 16.0 - 55.0 * pw(n, 4.0)? / 32.0;
+    let f3 = 151.0 * pw(n, 3.0)? / 96.0;
+    let f4 = 1097.0 * pw(n, 4.0)? / 512.0;
+    let g = r + f1 * sin_(2.0 * r)? + f2 * sin_(4.0 * r)? + f3 * sin_(6.0 * r)? + f4 * sin_(8.0 * r)?;
+    Ok(dg(g, deg))
+}
+
+fn geodetic2authalic(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let e = ell.e;
+    let f1 = pw(e, 2.0)? / 3.0 + 31.0 * pw(e, 4.0)? / 180.0 + 59.0 * pw(e, 6.0)? / 560.0;
+    let f2 = 17.0 * pw(e, 4.0)? / 360.0 + 61.0 * pw(e, 6.0)? / 1260.0;
+    let f3 = 383.0 * pw(e, 6.0)? / 45360.0;
+    let a = lat - f1 * sin_(2.0 * lat)? + f2 * sin_(4.0 * lat)? - f3 * sin_(6.0 * lat)?;
+    Ok(dg(a, deg))
+}
+
+fn authalic2geodetic(a0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let a = rd(a0, deg);
+    let e = ell.e;
+    let f1 = pw(e, 2.0)? / 3.0 + 31.0 * pw(e, 4.0)? / 180.0 + 517.0 * pw(e, 6.0)? / 5040.0;
+    let f2 = 23.0 * pw(e, 4.0)? / 360.0 + 251.0 * pw(e, 6.0)? / 3780.0;
+    let f3 = 761.0 * pw(e, 6.0)? / 45360.0;
+    let g = a + f1 * sin_(2.0 * a)? + f2 * sin_(4.0 * a)? + f3 * sin_(6.0 * a)?;
+    Ok(dg(g, deg))
+}
+
+fn geodetic2parametric(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let p = (sqrt_(1.0 - pw(ell.e, 2.0)?)? * tan_(lat)?).atan();
+    Ok(dg(p, deg))
+}
+
+fn parametric2geodetic(p0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let p = rd(p0, deg);
+    let t = tan_(p)?;
+    let g = dv(t, sqrt_(1.0 - pw(ell.e, 2.0)?)?)?.atan();
+    Ok(dg(g, deg))
+}
+
+// ----------------------------------------------------------- rcurve
+
+fn geocentric_radius(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let num = pw(pw(ell.a, 2.0)? * cos_(lat)?, 2.0)? + pw(pw(ell.b, 2.0)? * sin_(lat)?, 2.0)?;
+    let den = pw(ell.a * cos_(lat)?, 2.0)? + pw(ell.b * sin_(lat)?, 2.0)?;
+    sqrt_(dv(num, den)?)
+}
+
+fn parallel(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let c = cos_(lat)?;
+    Ok(c * transverse(lat, ell, false)?)
+}
+
+fn meridian(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let f1 = ell.a * (1.0 - pw(ell.e, 2.0)?);
+    let f2 = 1.0 - pw(ell.e * sin_(lat)?, 2.0)?;
+    dv(f1, sqrt_(pw(f2, 3.0)?)?)
+}
+
+fn transverse(lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    dv(ell.a, sqrt_(1.0 - pw(ell.e * sin_(lat)?, 2.0)?)?)
+}
+
+// ----------------------------------------------------------- rsphere
+
+fn eqavol(ell: ref Ell) -> Result[f64, String] {
+    let f = ell.f;
+    Ok(ell.a * (1.0 - f / 3.0 - pw(f, 2.0)? / 9.0))
+}
+
+fn authalic(ell: ref Ell) -> Result[f64, String] {
+    let e = ell.e;
+    if e > 0.0 {
+        let f1 = pw(ell.a, 2.0)? / 2.0;
+        let f2 = dv(1.0 - pw(e, 2.0)?, 2.0 * e)?;
+        let f3 = log_(dv(1.0 + e, 1.0 - e)?)?;
+        sqrt_(f1 * (1.0 + f2 * f3))
+    } else {
+        Ok(ell.a)
+    }
+}
+
+fn rectifying(ell: ref Ell) -> Result[f64, String] {
+    pw((pw(ell.a, 3.0 / 2.0)? + pw(ell.b, 3.0 / 2.0)?) / 2.0, 2.0 / 3.0)
+}
+
+fn euler(lat10: f64, lon10: f64, lat20: f64, lon20: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat1 = if deg { lat10 } else { degrees(lat10) };
+    let lon1 = if deg { lon10 } else { degrees(lon10) };
+    let lat2 = if deg { lat20 } else { degrees(lat20) };
+    let lon2 = if deg { lon20 } else { degrees(lon20) };
+    let latmid = lat1 + (lat2 - lat1) / 2.0;
+    let (_, az0) = vdist(lat1, lon1, lat2, lon2, ell, true)?;
+    let rho = meridian(latmid, ell, true)?;
+    let nu = transverse(latmid, ell, true)?;
+    let az = radians(az0);
+    let den = rho * pw(sin_(az)?, 2.0)? + nu * pw(cos_(az)?, 2.0)?;
+    dv(rho * nu, den)
+}
+
+fn method_err() -> String {
+    val_err("method must be mean or norm")
+}
+
+fn curve(lat0: f64, ell: ref Ell, deg: bool, method: ref String) -> Result[f64, String] {
+    let lat = rd(lat0, deg);
+    let rho = meridian(lat, ell, false)?;
+    let nu = transverse(lat, ell, false)?;
+    if method == "mean" {
+        Ok((rho + nu) / 2.0)
+    } else if method == "norm" {
+        sqrt_(rho * nu)
+    } else {
+        Err(method_err())
+    }
+}
+
+fn triaxial(ell: ref Ell, method: ref String) -> Result[f64, String] {
+    if method == "mean" {
+        Ok((2.0 * ell.a + ell.b) / 3.0)
+    } else if method == "norm" {
+        pw(pw(ell.a, 2.0)? * ell.b, 1.0 / 3.0)
+    } else {
+        Err(method_err())
+    }
+}
+
+fn biaxial(ell: ref Ell, method: ref String) -> Result[f64, String] {
+    if method == "mean" {
+        Ok((ell.a + ell.b) / 2.0)
+    } else if method == "norm" {
+        sqrt_(ell.a * ell.b)
+    } else {
+        Err(method_err())
+    }
+}
+
+// ----------------------------------------------------------- lox
+
+fn meridian_arc(lat10: f64, lat20: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lat1 = rd(lat10, deg);
+    let lat2 = rd(lat20, deg);
+    let rlat1 = geodetic2rectifying(lat1, ell, false)?;
+    let rlat2 = geodetic2rectifying(lat2, ell, false)?;
+    Ok(rectifying(ell)? * (rlat2 - rlat1).abs())
+}
+
+fn loxodrome_inverse(lat10: f64, lon10: f64, lat20: f64, lon20: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64), String] {
+    let lat1 = rd(lat10, deg);
+    let lon1 = rd(lon10, deg);
+    let lat2 = rd(lat20, deg);
+    let lon2 = rd(lon20, deg);
+    let disolat = geodetic2isometric(lat2, ell, false)? - geodetic2isometric(lat1, ell, false)?;
+    let dlon = lon2 - lon1;
+    let mut az12 = dlon.atan2(disolat);
+    let aux = cos_(az12)?.abs();
+    let mut dist = dv(meridian_arc(lat2, lat1, ell, false)?, aux)?;
+    if aux < COS_EPS {
+        dist = departure(lon2, lon1, lat1, ell, false)?;
+    }
+    if deg {
+        az12 = pmod(degrees(az12), 360.0)?;
+    }
+    Ok((dist, az12))
+}
+
+fn loxodrome_direct(lat10: f64, lon10: f64, rng: f64, a120: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64), String] {
+    let lat1 = rd(lat10, deg);
+    let lon1 = rd(lon10, deg);
+    let a12 = pmod(rd(a120, deg), TAU_F)?;
+    if lat1.abs() > PI_F / 2.0 {
+        return Err(val_err("-90 <= latitude <= 90"));
+    }
+    if rng < 0.0 {
+        return Err(val_err("ground distance must be >= 0"));
+    }
+    let reclat = geodetic2rectifying(lat1, ell, false)?;
+    let cosaz = cos_(a12)?;
+    let lat2r = reclat + dv(rng, rectifying(ell)?)? * cosaz;
+    let lat2 = rectifying2geodetic(lat2r, ell, false)?;
+    let newiso = geodetic2isometric(lat2, ell, false)?;
+    let iso = geodetic2isometric(lat1, ell, false)?;
+    let i = cos_(a12)?.abs() < COS_EPS;
+    let mut dlon = tan_(a12)? * (newiso - iso);
+    if i {
+        dlon = dv(sign(PI_F - a12) * rng, parallel(lat1, ell, false)?)?;
+    }
+    let lon2 = lon1 + dlon;
+    Ok((dg(lat2, deg), dg(lon2, deg)))
+}
+
+fn departure(lon10: f64, lon20: f64, lat0: f64, ell: ref Ell, deg: bool) -> Result[f64, String] {
+    let lon1 = rd(lon10, deg);
+    let lon2 = rd(lon20, deg);
+    let lat = rd(lat0, deg);
+    Ok(parallel(lat, ell, false)? * pmod((lon2 - lon1).abs(), PI_F)?)
+}
+
+// meanm builds a numpy array, a NameError without numpy, once the authalic
+// latitude has been taken.
+fn meanm(lat0: f64, _lon0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64), String] {
+    let lat = rd(lat0, deg);
+    let _a = geodetic2authalic(lat, ell, false)?;
+    Err("NameError: name 'array' is not defined".to_string())
+}
+
+// ----------------------------------------------------------- vincenty
+
+fn vd_sin_alpha(u1: f64, u2: f64, lamb: f64, sigma: f64) -> Result[f64, String] {
+    dv(cos_(u1)? * cos_(u2)? * sin_(lamb)?, sin_(sigma)?)
+}
+
+fn vdist(lat10: f64, lon10: f64, lat20: f64, lon20: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64), String] {
+    let a = ell.a;
+    let b = ell.b;
+    let f = ell.f;
+    let mut lat1 = rd(lat10, deg);
+    let mut lon1 = rd(lon10, deg);
+    let mut lat2 = rd(lat20, deg);
+    let mut lon2 = rd(lon20, deg);
+    if lat1.abs() > PI_F / 2.0 or lat2.abs() > PI_F / 2.0 {
+        return Err(val_err("Input latitudes must be in [-90, 90] degrees."));
+    }
+    if (PI_F / 2.0 - lat1.abs()).abs() < 1e-10 {
+        lat1 = sign(lat1) * (PI_F / 2.0 - 1e-10);
+    }
+    if (PI_F / 2.0 - lat2.abs()).abs() < 1e-10 {
+        lat2 = sign(lat2) * (PI_F / 2.0 - 1e-10);
+    }
+    let u1 = ((1.0 - f) * tan_(lat1)?).atan();
+    let u2 = ((1.0 - f) * tan_(lat2)?).atan();
+    lon1 = pmod(lon1, 2.0 * PI_F)?;
+    lon2 = pmod(lon2, 2.0 * PI_F)?;
+    let mut ll = (lon2 - lon1).abs();
+    if ll > PI_F {
+        ll = 2.0 * PI_F - ll;
+    }
+    let mut lamb = ll;
+    let mut itercount = 0;
+    let mut notdone = true;
+    let mut sigma = 0.0;
+    let mut alpha = 0.0;
+    let mut cos2sigmam = 0.0;
+    while notdone {
+        itercount += 1;
+        if itercount > 50 {
+            lamb = PI_F;
+            break;
+        }
+        let mut lambdaold = lamb;
+        let sinsigma = sqrt_(pw(cos_(u2)? * sin_(lamb)?, 2.0)? + pw(cos_(u1)? * sin_(u2)? - sin_(u1)? * cos_(u2)? * cos_(lamb)?, 2.0)?)?;
+        let cossigma = sin_(u1)? * sin_(u2)? + cos_(u1)? * cos_(u2)? * cos_(lamb)?;
+        sigma = sinsigma.atan2(cossigma);
+        let sin_alpha = match vd_sin_alpha(u1, u2, lamb, sigma) {
+            Ok(v) => v,
+            Err(e) => {
+                if not arith(e) {
+                    return Err(e);
+                }
+                0.0
+            }
+        };
+        alpha = if is_nan(sin_alpha) {
+            0.0
+        } else if sin_alpha > 1.0 or (sin_alpha - 1.0).abs() < 1e-16 {
+            PI_F / 2.0
+        } else {
+            asin_(sin_alpha)?
+        };
+        cos2sigmam = cos_(sigma)? - dv(2.0 * sin_(u1)? * sin_(u2)?, pw(cos_(alpha)?, 2.0)?)?;
+        let c = f / 16.0 * pw(cos_(alpha)?, 2.0)? * (4.0 + f * (4.0 - 3.0 * pw(cos_(alpha)?, 2.0)?));
+        lamb = ll + (1.0 - c) * f * sin_(alpha)? * (sigma + c * sin_(sigma)? * (cos2sigmam + c * cos_(sigma)? * (-1.0 + 2.0 * pw(cos2sigmam, 2.0)?)));
+        if lamb > PI_F {
+            lambdaold = PI_F;
+            lamb = PI_F;
+        }
+        notdone = (lamb - lambdaold).abs() > 1e-12;
+    }
+    let u2s = dv(pw(cos_(alpha)?, 2.0)? * (pw(a, 2.0)? - pw(b, 2.0)?), pw(b, 2.0)?)?;
+    let aa = 1.0 + u2s / 16384.0 * (4096.0 + u2s * (-768.0 + u2s * (320.0 - 175.0 * u2s)));
+    let bb = u2s / 1024.0 * (256.0 + u2s * (-128.0 + u2s * (74.0 - 47.0 * u2s)));
+    let deltasigma = bb * sin_(sigma)? * (cos2sigmam + bb / 4.0 * (cos_(sigma)? * (-1.0 + 2.0 * pw(cos2sigmam, 2.0)?) - bb / 6.0 * cos2sigmam * (-3.0 + 4.0 * pw(sin_(sigma)?, 2.0)?) * (-3.0 + 4.0 * pw(cos2sigmam, 2.0)?)));
+    let dist_m = b * aa * (sigma - deltasigma);
+    lamb = lamb.abs();
+    if sign(sin_(lon2 - lon1)?) * sign(sin_(lamb)?) < 0.0 {
+        lamb = -lamb;
+    }
+    let numer = cos_(u2)? * sin_(lamb)?;
+    let denom = cos_(u1)? * sin_(u2)? - sin_(u1)? * cos_(u2)? * cos_(lamb)?;
+    let mut a12 = numer.atan2(denom);
+    a12 = pmod(a12, TAU_F)?;
+    Ok((dist_m, dg(a12, deg)))
+}
+
+fn vreckon(lat10: f64, lon10: f64, rng: f64, azim0: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64), String] {
+    if rng < 0.0 {
+        return Err(val_err("Ground distance must be positive"));
+    }
+    let a = ell.a;
+    let b = ell.b;
+    let f = ell.f;
+    let mut lat1 = rd(lat10, deg);
+    let lon1 = rd(lon10, deg);
+    let azim = rd(azim0, deg);
+    if lat1.abs() > PI_F / 2.0 {
+        return Err(val_err("Input lat. must be between -90 and 90 deg., inclusive."));
+    }
+    if (PI_F / 2.0 - lat1.abs()).abs() < 1e-10 {
+        lat1 = sign(lat1) * (PI_F / 2.0 - 1e-10);
+    }
+    let alpha1 = azim;
+    let sin_alpha1 = sin_(alpha1)?;
+    let cos_alpha1 = cos_(alpha1)?;
+    let tan_u1 = (1.0 - f) * tan_(lat1)?;
+    let cos_u1 = dv(1.0, sqrt_(1.0 + pw(tan_u1, 2.0)?)?)?;
+    let sin_u1 = tan_u1 * cos_u1;
+    let sigma1 = tan_u1.atan2(cos_alpha1);
+    let sin_alpha = cos_u1 * sin_alpha1;
+    let cos_sq_alpha = 1.0 - sin_alpha * sin_alpha;
+    let u_sq = dv(cos_sq_alpha * (pw(a, 2.0)? - pw(b, 2.0)?), pw(b, 2.0)?)?;
+    let aa = 1.0 + u_sq / 16384.0 * (4096.0 + u_sq * (-768.0 + u_sq * (320.0 - 175.0 * u_sq)));
+    let bb = u_sq / 1024.0 * (256.0 + u_sq * (-128.0 + u_sq * (74.0 - 47.0 * u_sq)));
+    let mut sigma = dv(rng, b * aa)?;
+    let mut sigma_p = 2.0 * PI_F;
+    let mut sin_sigma = f64.NAN;
+    let mut cos_sigma = f64.NAN;
+    let mut cos2_sigma_m = f64.NAN;
+    let mut i = (sigma - sigma_p).abs() > 1e-12;
+    while i {
+        cos2_sigma_m = cos_(2.0 * sigma1 + sigma)?;
+        sin_sigma = sin_(sigma)?;
+        cos_sigma = cos_(sigma)?;
+        let delta_sigma = bb * sin_sigma * (cos2_sigma_m + bb / 4.0 * (cos_sigma * (-1.0 + 2.0 * cos2_sigma_m * cos2_sigma_m) - bb / 6.0 * cos2_sigma_m * (-3.0 + 4.0 * sin_sigma * sin_sigma) * (-3.0 + 4.0 * cos2_sigma_m * cos2_sigma_m)));
+        sigma_p = sigma;
+        sigma = dv(rng, b * aa)? + delta_sigma;
+        i = (sigma - sigma_p).abs() > 1e-12;
+    }
+    let tmp = sin_u1 * sin_sigma - cos_u1 * cos_sigma * cos_alpha1;
+    let lat2 = (sin_u1 * cos_sigma + cos_u1 * sin_sigma * cos_alpha1).atan2((1.0 - f) * sqrt_(sin_alpha * sin_alpha + pw(tmp, 2.0)?)?);
+    let lamb = (sin_sigma * sin_alpha1).atan2(cos_u1 * cos_sigma - sin_u1 * sin_sigma * cos_alpha1);
+    let c = f / 16.0 * cos_sq_alpha * (4.0 + f * (4.0 - 3.0 * cos_sq_alpha));
+    let ll = lamb - f * (1.0 - c) * sin_alpha * (sigma + c * sin_sigma * (cos2_sigma_m + c * cos_sigma * (-1.0 + 2.0 * cos2_sigma_m * cos2_sigma_m)));
+    let lon2 = pmod(lon1 + ll, TAU_F)?;
+    Ok((dg(lat2, deg), dg(lon2, deg)))
+}
+
+// track2 hands vreckon the list of distances, and without numpy its first
+// comparison `Rng < 0.0` is a TypeError.
+fn track2(lat10: f64, lon10: f64, lat20: f64, lon20: f64, ell: ref Ell, npts: i64, deg: bool) -> Result[String, String] {
+    if npts < 2 {
+        return Err(val_err("npts must be greater than 1"));
+    }
+    if npts == 2 {
+        return Ok(f"([{fmt(lat10)}, {fmt(lat20)}], [{fmt(lon10)}, {fmt(lon20)}])");
+    }
+    let lat1 = rd(lat10, deg);
+    let lon1 = rd(lon10, deg);
+    let lat2 = rd(lat20, deg);
+    let lon2 = rd(lon20, deg);
+    let h = pw(sin_((lat1 - lat2) / 2.0)?, 2.0)? + cos_(lat1)? * cos_(lat2)? * pw(sin_((lon1 - lon2) / 2.0)?, 2.0)?;
+    let gcarclen = 2.0 * asin_(sqrt_(h)?)?;
+    if (gcarclen - PI_F).abs() < 1e-12 {
+        return Err(val_err("cannot compute intermediate points on a great circle whose endpoints are antipodal"));
+    }
+    let _ = vdist(lat1, lon1, lat2, lon2, ell, false)?;
+    Err("TypeError: '<' not supported between instances of 'list' and 'float'".to_string())
+}
+
+// ----------------------------------------------------------- haversine
+
+fn haversine(theta: f64) -> Result[f64, String] {
+    Ok((1.0 - cos_(theta)?) / 2.0)
+}
+
+fn anglesep_meeus(lon00: f64, lat00: f64, lon10: f64, lat10: f64, deg: bool) -> Result[f64, String] {
+    let lon0 = rd(lon00, deg);
+    let lat0 = rd(lat00, deg);
+    let lon1 = rd(lon10, deg);
+    let lat1 = rd(lat10, deg);
+    let sep = 2.0 * asin_(sqrt_(haversine(lat0 - lat1)? + cos_(lat0)? * cos_(lat1)? * haversine(lon0 - lon1)?)?)?;
+    Ok(dg(sep, deg))
+}
+
+// Without astropy loaded, anglesep is anglesep_meeus on radians.
+fn anglesep(lon00: f64, lat00: f64, lon10: f64, lat10: f64, deg: bool) -> Result[f64, String] {
+    let sep = anglesep_meeus(rd(lon00, deg), rd(lat00, deg), rd(lon10, deg), rd(lat10, deg), false)?;
+    Ok(dg(sep, deg))
+}
+
+// ----------------------------------------------------------- los
+
+fn look_at_spheroid(lat0: f64, lon0: f64, h0: f64, az: f64, tilt: f64, ell: ref Ell, deg: bool) -> Result[(f64, f64, f64), String] {
+    if h0 < 0.0 {
+        return Err(val_err("Intersection calculation requires altitude  [0, Infinity)"));
+    }
+    let a = ell.a;
+    let b = ell.a;
+    let c = ell.b;
+    let el = if deg { tilt - 90.0 } else { tilt - PI_F / 2.0 };
+    let (e, n, u0) = aer2enu(az, el, 1.0, deg)?;
+    let (u, v, w) = enu2uvw(e, n, u0, lat0, lon0, deg)?;
+    let w84 = wgs84();
+    let (x, y, z) = geodetic2ecef(lat0, lon0, h0, w84, deg)?;
+    let a2 = pw(a, 2.0)?;
+    let b2 = pw(b, 2.0)?;
+    let c2 = pw(c, 2.0)?;
+    let value = -a2 * b2 * w * z - a2 * c2 * v * y - b2 * c2 * u * x;
+    let mut radical = pw(a, 2.0)? * pw(b, 2.0)? * pw(w, 2.0)? + pw(a, 2.0)? * pw(c, 2.0)? * pw(v, 2.0)? - pw(a, 2.0)? * pw(v, 2.0)? * pw(z, 2.0)?
+        + 2.0 * pw(a, 2.0)? * v * w * y * z - pw(a, 2.0)? * pw(w, 2.0)? * pw(y, 2.0)? + pw(b, 2.0)? * pw(c, 2.0)? * pw(u, 2.0)?
+        - pw(b, 2.0)? * pw(u, 2.0)? * pw(z, 2.0)? + 2.0 * pw(b, 2.0)? * u * w * x * z - pw(b, 2.0)? * pw(w, 2.0)? * pw(x, 2.0)?
+        - pw(c, 2.0)? * pw(u, 2.0)? * pw(y, 2.0)? + 2.0 * pw(c, 2.0)? * u * v * x * y - pw(c, 2.0)? * pw(v, 2.0)? * pw(x, 2.0)?;
+    let magnitude = pw(a, 2.0)? * pw(b, 2.0)? * pw(w, 2.0)? + pw(a, 2.0)? * pw(c, 2.0)? * pw(v, 2.0)? + pw(b, 2.0)? * pw(c, 2.0)? * pw(u, 2.0)?;
+    if radical < 0.0 {
+        radical = f64.NAN;
+    }
+    let mut d = dv(value - a * b * c * sqrt_(radical)?, magnitude)?;
+    if d < 0.0 {
+        d = f64.NAN;
+    }
+    let (lat, lon, _) = ecef2geodetic(x + d * u, y + d * v, z + d * w, w84, deg)?;
+    Ok((lat, lon, d))
+}
+
+// ----------------------------------------------------------- jobs
+
+fn t2(r: Result[(f64, f64), String]) -> String {
+    match r {
+        Ok((a, b)) => f"({fmt(a)}, {fmt(b)})",
+        Err(e) => e.clone(),
+    }
+}
+
+fn t3(r: Result[(f64, f64, f64), String]) -> String {
+    match r {
+        Ok((a, b, c)) => f"({fmt(a)}, {fmt(b)}, {fmt(c)})",
+        Err(e) => e.clone(),
+    }
+}
+
+fn t1(r: Result[f64, String]) -> String {
+    match r {
+        Ok(a) => fmt(a),
+        Err(e) => e.clone(),
+    }
+}
+
+fn ell_of(s: ref String) -> Result[Ell, String] {
+    let p = split_on(s.clone(), b':');
+    if p.len() == 2 {
+        new_ell(to_f64(p[0].clone()), to_f64(p[1].clone()), "", "")
+    } else {
+        from_name(s)
+    }
+}
+
+fn after(s: ref String, n: i64) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = n;
+    while i < b.len() {
+        out.push(b[i]);
+        i += 1;
+    }
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+fn to_i64(s: String) -> i64 {
+    match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+fn run_job(f: ref Vec[String]) -> String {
+    let name = f[0].clone();
+    if name == "ellipsoid" {
+        return match ell_of(f[1]) {
+            Ok(g) => ell_repr(g),
+            Err(e) => e,
+        };
+    }
+    let mut p: Vec[f64] = Vec.new();
+    let mut ell = wgs84();
+    let mut deg = true;
+    let mut method = "mean".to_string();
+    let mut npts = 100;
+    let mut alt = 0.0;
+    let mut i = 1;
+    while i < f.len() {
+        let tok = f[i].clone();
+        if tok.starts_with("ell=") {
+            match ell_of(after(tok, 4)) {
+                Ok(g) => {
+                    ell = g;
+                }
+                Err(e) => {
+                    return e;
+                }
+            }
+        } else if tok == "deg=False" {
+            deg = false;
+        } else if tok.starts_with("method=") {
+            method = after(tok, 7);
+        } else if tok.starts_with("npts=") {
+            npts = to_i64(after(tok, 5));
+        } else if tok.starts_with("alt=") {
+            alt = to_f64(after(tok, 4));
+        } else {
+            p.push(to_f64(tok));
+        }
+        i += 1;
+    }
+    let n = p.len();
+    let x0 = if n > 0 { p[0] } else { 0.0 };
+    let x1 = if n > 1 { p[1] } else { 0.0 };
+    let x2 = if n > 2 { p[2] } else { 0.0 };
+    let x3 = if n > 3 { p[3] } else { 0.0 };
+    let x4 = if n > 4 { p[4] } else { 0.0 };
+    let x5 = if n > 5 { p[5] } else { 0.0 };
+    let x6 = if n > 6 { p[6] } else { 0.0 };
+    if name == "geodetic2ecef" {
+        t3(geodetic2ecef(x0, x1, x2, ell, deg))
+    } else if name == "ecef2geodetic" {
+        t3(ecef2geodetic(x0, x1, x2, ell, deg))
+    } else if name == "ecef2enuv" {
+        t3(ecef2enuv(x0, x1, x2, x3, x4, deg))
+    } else if name == "ecef2enu" {
+        t3(ecef2enu(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "enu2uvw" {
+        t3(enu2uvw(x0, x1, x2, x3, x4, deg))
+    } else if name == "uvw2enu" {
+        t3(uvw2enu(x0, x1, x2, x3, x4, deg))
+    } else if name == "enu2ecef" {
+        t3(enu2ecef(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "enu2aer" {
+        t3(enu2aer(x0, x1, x2, deg))
+    } else if name == "aer2enu" {
+        t3(aer2enu(x0, x1, x2, deg))
+    } else if name == "enu2geodetic" {
+        t3(enu2geodetic(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "geodetic2enu" {
+        t3(geodetic2enu(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "enu2ecefv" {
+        t3(enu2ecefv(x0, x1, x2, x3, x4, deg))
+    } else if name == "ecef2aer" {
+        t3(ecef2aer(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "geodetic2aer" {
+        t3(geodetic2aer(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "aer2geodetic" {
+        t3(aer2geodetic(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "aer2ecef" {
+        t3(aer2ecef(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "aer2ned" {
+        t3(aer2ned(x0, x1, x2, deg))
+    } else if name == "ned2aer" {
+        t3(ned2aer(x0, x1, x2, deg))
+    } else if name == "ned2geodetic" {
+        t3(ned2geodetic(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "ned2ecef" {
+        t3(ned2ecef(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "ecef2ned" {
+        t3(ecef2ned(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "geodetic2ned" {
+        t3(geodetic2ned(x0, x1, x2, x3, x4, x5, ell, deg))
+    } else if name == "ecef2nedv" {
+        t3(ecef2nedv(x0, x1, x2, x3, x4, deg))
+    } else if name == "enu2dca" {
+        t3(enu2dca(x0, x1, x2, x3, deg))
+    } else if name == "dca2enu" {
+        t3(dca2enu(x0, x1, x2, x3, deg))
+    } else if name == "dca2ned" {
+        t3(dca2ned(x0, x1, x2, x3, deg))
+    } else if name == "ned2dca" {
+        t3(ned2dca(x0, x1, x2, x3, deg))
+    } else if name == "ecef2dca" {
+        t3(ecef2dca(x0, x1, x2, x3, x4, x5, x6, ell, deg))
+    } else if name == "dca2ecef" {
+        t3(dca2ecef(x0, x1, x2, x3, x4, x5, x6, ell, deg))
+    } else if name == "geodetic2dca" {
+        t3(geodetic2dca(x0, x1, x2, x3, x4, x5, x6, ell, deg))
+    } else if name == "dca2geodetic" {
+        t3(dca2geodetic(x0, x1, x2, x3, x4, x5, x6, ell, deg))
+    } else if name == "aer2dca" {
+        t3(aer2dca(x0, x1, x2, x3, deg))
+    } else if name == "dca2aer" {
+        t3(dca2aer(x0, x1, x2, x3, deg))
+    } else if name == "geodetic2nvector" {
+        t3(geodetic2nvector(x0, x1, deg))
+    } else if name == "nvector2geodetic" {
+        t2(nvector2geodetic(x0, x1, x2, deg))
+    } else if name == "ecef2nvector" {
+        t3(ecef2nvector(x0, x1, x2, ell, deg))
+    } else if name == "nvector2ecef" {
+        t3(nvector2ecef(x0, x1, x2, alt, ell, deg))
+    } else if name == "lookAtSpheroid" {
+        t3(look_at_spheroid(x0, x1, x2, x3, x4, ell, deg))
+    } else if name == "utils.cart2pol" {
+        t2(Ok(cart2pol(x0, x1)))
+    } else if name == "utils.pol2cart" {
+        t2(pol2cart(x0, x1))
+    } else if name == "utils.cart2sph" {
+        t3(Ok(cart2sph(x0, x1, x2)))
+    } else if name == "utils.sph2cart" {
+        t3(sph2cart(x0, x1, x2))
+    } else if name == "latitude.geoc2geod" {
+        t1(geoc2geod(x0, x1, ell, deg))
+    } else if name == "latitude.geodetic2geocentric" {
+        t1(geodetic2geocentric(x0, x1, ell, deg))
+    } else if name == "latitude.geocentric2geodetic" {
+        t1(geocentric2geodetic(x0, x1, ell, deg))
+    } else if name == "latitude.geodetic2isometric" {
+        t1(geodetic2isometric(x0, ell, deg))
+    } else if name == "latitude.isometric2geodetic" {
+        t1(isometric2geodetic(x0, ell, deg))
+    } else if name == "latitude.conformal2geodetic" {
+        t1(conformal2geodetic(x0, ell, deg))
+    } else if name == "latitude.geodetic2conformal" {
+        t1(geodetic2conformal(x0, ell, deg))
+    } else if name == "latitude.geodetic2rectifying" {
+        t1(geodetic2rectifying(x0, ell, deg))
+    } else if name == "latitude.rectifying2geodetic" {
+        t1(rectifying2geodetic(x0, ell, deg))
+    } else if name == "latitude.geodetic2authalic" {
+        t1(geodetic2authalic(x0, ell, deg))
+    } else if name == "latitude.authalic2geodetic" {
+        t1(authalic2geodetic(x0, ell, deg))
+    } else if name == "latitude.geodetic2parametric" {
+        t1(geodetic2parametric(x0, ell, deg))
+    } else if name == "latitude.parametric2geodetic" {
+        t1(parametric2geodetic(x0, ell, deg))
+    } else if name == "rcurve.geocentric_radius" {
+        t1(geocentric_radius(x0, ell, deg))
+    } else if name == "rcurve.parallel" {
+        t1(parallel(x0, ell, deg))
+    } else if name == "rcurve.meridian" {
+        t1(meridian(x0, ell, deg))
+    } else if name == "rcurve.transverse" {
+        t1(transverse(x0, ell, deg))
+    } else if name == "rsphere.eqavol" {
+        t1(eqavol(ell))
+    } else if name == "rsphere.authalic" {
+        t1(authalic(ell))
+    } else if name == "rsphere.rectifying" {
+        t1(rectifying(ell))
+    } else if name == "rsphere.euler" {
+        t1(euler(x0, x1, x2, x3, ell, deg))
+    } else if name == "rsphere.curve" {
+        t1(curve(x0, ell, deg, method))
+    } else if name == "rsphere.triaxial" {
+        t1(triaxial(ell, method))
+    } else if name == "rsphere.biaxial" {
+        t1(biaxial(ell, method))
+    } else if name == "lox.meridian_dist" {
+        t1(meridian_arc(0.0, x0, ell, deg))
+    } else if name == "lox.meridian_arc" {
+        t1(meridian_arc(x0, x1, ell, deg))
+    } else if name == "lox.loxodrome_inverse" {
+        t2(loxodrome_inverse(x0, x1, x2, x3, ell, deg))
+    } else if name == "lox.loxodrome_direct" {
+        t2(loxodrome_direct(x0, x1, x2, x3, ell, deg))
+    } else if name == "lox.departure" {
+        t1(departure(x0, x1, x2, ell, deg))
+    } else if name == "lox.meanm" {
+        t2(meanm(x0, x1, ell, deg))
+    } else if name == "vincenty.vdist" {
+        t2(vdist(x0, x1, x2, x3, ell, deg))
+    } else if name == "vincenty.vreckon" {
+        t2(vreckon(x0, x1, x2, x3, ell, deg))
+    } else if name == "vincenty.track2" {
+        match track2(x0, x1, x2, x3, ell, npts, deg) {
+            Ok(s) => s,
+            Err(e) => e,
+        }
+    } else if name == "haversine.anglesep_meeus" {
+        t1(anglesep_meeus(x0, x1, x2, x3, deg))
+    } else if name == "haversine.anglesep" {
+        t1(anglesep(x0, x1, x2, x3, deg))
+    } else if name == "haversine.haversine" {
+        t1(haversine(x0))
+    } else if name == "spherical.geodetic2spherical" {
+        t3(geodetic2spherical(x0, x1, x2, ell, deg))
+    } else if name == "spherical.spherical2geodetic" {
+        t3(spherical2geodetic(x0, x1, x2, ell, deg))
+    } else {
+        f"unknown function {name}"
+    }
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            out.push_str(f"{f[0]}({join_from(f, 1, f.len(), ", ")}) => {run_job(f)}\n");
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("ellipsoid\twgs84\n");
+    s.push_str("ellipsoid\tgrs80\n");
+    s.push_str("ellipsoid\tairy\n");
+    s.push_str("ellipsoid\tbessel\n");
+    s.push_str("ellipsoid\tclarke1866\n");
+    s.push_str("ellipsoid\twgs72\n");
+    s.push_str("ellipsoid\tpz90.11\n");
+    s.push_str("ellipsoid\tgsk2011\n");
+    s.push_str("ellipsoid\twgs84_mean\n");
+    s.push_str("ellipsoid\tmoon\n");
+    s.push_str("ellipsoid\tmars\n");
+    s.push_str("ellipsoid\tjupyter\n");
+    s.push_str("ellipsoid\tsaturn\n");
+    s.push_str("ellipsoid\tvenus\n");
+    s.push_str("ellipsoid\tio\n");
+    s.push_str("ellipsoid\tpluto\n");
+    s.push_str("ellipsoid\tmaupertuis\n");
+    s.push_str("ellipsoid\teverest1830\n");
+    s.push_str("ellipsoid\tinternational1967\n");
+    s.push_str("ellipsoid\tnosuch\n");
+    s.push_str("ellipsoid\t6378137.0:6356752.0\n");
+    s.push_str("ellipsoid\t1.0:1.0\n");
+    s.push_str("ellipsoid\t2.0:-1.0\n");
+    s.push_str("ellipsoid\t1.0:0.0\n");
+    s.push_str("ellipsoid\t1.0:2.0\n");
+    s.push_str("ellipsoid\t0.0:0.0\n");
+    s.push_str("ellipsoid\t1.0:-1.0\n");
+    s.push_str("ellipsoid\t1.0:-5.0\n");
+    s.push_str("ellipsoid\t-1.0:-2.0\n");
+    s.push_str("ellipsoid\t6400000.0:6300000.0\n");
+    s.push_str("geodetic2ecef\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2ecef\t40.9701\t-5.6635\t800.0\n");
+    s.push_str("geodetic2ecef\t42.3601\t-71.0589\t43.0\n");
+    s.push_str("geodetic2ecef\t35.6762\t139.6503\t40.0\n");
+    s.push_str("geodetic2ecef\t-0.1807\t-78.4678\t2850.0\n");
+    s.push_str("geodetic2ecef\t-77.846\t166.676\t10.0\n");
+    s.push_str("geodetic2ecef\t78.2232\t15.6267\t0.0\n");
+    s.push_str("geodetic2ecef\t31.5\t35.5\t-430.5\n");
+    s.push_str("geodetic2ecef\t27.9881\t86.925\t8848.86\n");
+    s.push_str("geodetic2ecef\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2ecef\t90.0\t0.0\t0.0\n");
+    s.push_str("geodetic2ecef\t-90.0\t0.0\t2835.0\n");
+    s.push_str("geodetic2ecef\t10.0\t180.0\t0.0\n");
+    s.push_str("geodetic2ecef\t-10.0\t-180.0\t0.0\n");
+    s.push_str("geodetic2ecef\t0.0\t-75.2\t35786000.0\n");
+    s.push_str("geodetic2ecef\t51.6\t-30.0\t408000.0\n");
+    s.push_str("geodetic2ecef\t45.0\t45.0\t-6000000.0\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=grs80\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=airy\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=bessel\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=clarke1866\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=wgs72\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=pz90.11\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=gsk2011\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=wgs84_mean\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=moon\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=mars\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=jupyter\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=saturn\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=venus\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=io\n");
+    s.push_str("geodetic2ecef\t33.3\t-111.9\t1500.0\tell=pluto\n");
+    s.push_str("geodetic2ecef\t0.5\t-1.2\t100.0\tdeg=False\n");
+    s.push_str("geodetic2ecef\t1.5707963267948966\t0.0\t0.0\tdeg=False\n");
+    s.push_str("geodetic2ecef\tinf\t0.0\t0.0\n");
+    s.push_str("geodetic2ecef\t0.0\t-inf\t0.0\n");
+    s.push_str("geodetic2ecef\tnan\t10.0\t0.0\n");
+    s.push_str("geodetic2ecef\t45.0\t45.0\t0.0\tell=1.0:2.0\n");
+    s.push_str("geodetic2ecef\t45.0\t45.0\t0.0\tell=1.0:0.0\n");
+    s.push_str("ecef2geodetic\t6378137.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t0.0\t6378137.0\t0.0\n");
+    s.push_str("ecef2geodetic\t-6378137.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t6356752.31424518\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t-6356752.31424518\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t7000000.0\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t-7000000.0\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t1000.0\t2000.0\t3000.0\n");
+    s.push_str("ecef2geodetic\t0.001\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t0.001\n");
+    s.push_str("ecef2geodetic\t42164000.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t1334000.0\t-4654000.0\t4138000.0\n");
+    s.push_str("ecef2geodetic\t-4645000.0\t2553000.0\t-3536000.0\n");
+    s.push_str("ecef2geodetic\t3500000.0\t3500000.0\t3500000.0\n");
+    s.push_str("ecef2geodetic\t6378137.0\t0.0\t1e-09\n");
+    s.push_str("ecef2geodetic\t100000.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t5000.0\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\tnan\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\tinf\t0.0\t0.0\n");
+    s.push_str("ecef2geodetic\t6378137.0\t0.0\t0.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t0.0\t6378137.0\t0.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t-6378137.0\t0.0\t0.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t6356752.31424518\tdeg=False\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t-6356752.31424518\tdeg=False\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t7000000.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t1334000.0\t-4654000.0\t4138000.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t-4645000.0\t2553000.0\t-3536000.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t3500000.0\t3500000.0\t3500000.0\tdeg=False\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=moon\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=moon\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=mars\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=mars\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=jupyter\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=jupyter\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=venus\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=venus\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=io\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=io\n");
+    s.push_str("ecef2geodetic\t1000000.0\t2000000.0\t1500000.0\tell=1.0:0.0\n");
+    s.push_str("ecef2geodetic\t0.0\t0.0\t1000.0\tell=1.0:0.0\n");
+    s.push_str("ecef2geodetic\t11018566.197584398\t-15950691.243968923\t15392625.50850436\n");
+    s.push_str("ecef2geodetic\t1636976.2902549207\t-5900954.436999105\t-38419375.60939435\n");
+    s.push_str("ecef2geodetic\t-8978585.63961951\t10092827.02549313\t-23353724.13215296\n");
+    s.push_str("ecef2geodetic\t-12355844.9162\t-23422435.12069409\t20294013.88315562\n");
+    s.push_str("ecef2geodetic\t19618332.563412204\t26306762.32434375\t32814545.54907866\n");
+    s.push_str("ecef2geodetic\t16709720.299903646\t29402071.737959087\t-36463168.78412918\n");
+    s.push_str("ecef2geodetic\t-13083580.332465053\t-20054542.68661449\t-20168442.022475004\n");
+    s.push_str("ecef2geodetic\t-8314940.831028394\t738381.1846678033\t27438581.084319144\n");
+    s.push_str("ecef2geodetic\t-14696895.81068284\t-11702587.123389188\t30724814.59605205\n");
+    s.push_str("ecef2geodetic\t-36638045.51893135\t-38748096.07717649\t-37688224.03475035\n");
+    s.push_str("ecef2geodetic\t22639861.25743585\t20835659.588730305\t7786792.7789077535\n");
+    s.push_str("ecef2geodetic\t-22828414.03555329\t18951160.317827016\t-28672817.86987105\n");
+    s.push_str("ecef2geodetic\t23271627.939896956\t39988772.33751695\t23952195.601028576\n");
+    s.push_str("ecef2geodetic\t-27928248.35209613\t-16756523.87577105\t-16908638.716564354\n");
+    s.push_str("ecef2geodetic\t33257825.84612459\t19250447.869172983\t-6859541.467107207\n");
+    s.push_str("ecef2geodetic\t-16985615.30178675\t-34057823.971233815\t17885609.11370442\n");
+    s.push_str("ecef2geodetic\t-19627721.861618433\t11272190.56276238\t3954731.9414846376\n");
+    s.push_str("ecef2geodetic\t4330164.858800776\t37542211.77067521\t-35715496.338549405\n");
+    s.push_str("ecef2geodetic\t-26725691.41308819\t8727988.188238122\t-39389347.892854325\n");
+    s.push_str("ecef2geodetic\t32284811.922414556\t-32010881.22217973\t39235728.540523455\n");
+    s.push_str("ecef2geodetic\t19629900.44598367\t25929310.7684874\t-26992772.608622007\n");
+    s.push_str("ecef2geodetic\t-32570705.37147662\t39757536.89660053\t-9259990.039567806\n");
+    s.push_str("ecef2geodetic\t35090004.968881115\t-35280340.84997163\t2240069.3031898662\n");
+    s.push_str("ecef2geodetic\t8766269.779981233\t19968550.983257443\t-16063326.841202281\n");
+    s.push_str("ecef2geodetic\t-11507704.898303509\t32756959.715312093\t39425372.758983284\n");
+    s.push_str("ecef2geodetic\t-24513211.755841337\t-7991412.843500063\t-21313972.34094784\n");
+    s.push_str("ecef2geodetic\t-23337162.351618186\t-8284746.62266542\t18897377.10094516\n");
+    s.push_str("ecef2geodetic\t11175987.889182143\t-16413734.464083482\t-28764080.78908982\n");
+    s.push_str("ecef2geodetic\t21251510.626132317\t6122955.451061651\t28178950.947473854\n");
+    s.push_str("ecef2geodetic\t21524556.507435054\t17896025.921531603\t542028.7812525257\n");
+    s.push_str("ecef2geodetic\t-32672773.46873981\t11367688.266273573\t12715625.255240522\n");
+    s.push_str("ecef2geodetic\t-9335757.892055146\t-15550294.849296726\t6685809.863746561\n");
+    s.push_str("ecef2geodetic\t30159277.81913264\t-12089780.174020443\t-21361379.92503066\n");
+    s.push_str("ecef2geodetic\t38008126.20492247\t7585199.416208826\t2182791.628513135\n");
+    s.push_str("ecef2geodetic\t28998049.99410279\t-34274209.54665095\t-24961724.369039573\n");
+    s.push_str("ecef2geodetic\t6417731.55938971\t-17476537.66116482\t18266303.816457458\n");
+    s.push_str("ecef2geodetic\t3272961.5827173367\t30573122.092827886\t6428923.974361293\n");
+    s.push_str("ecef2geodetic\t12938488.818985082\t5236821.816790335\t-10796315.376636904\n");
+    s.push_str("ecef2geodetic\t-18264276.481393926\t36070394.26159388\t35968344.9381111\n");
+    s.push_str("ecef2geodetic\t-17717059.08380099\t-39288860.44556962\t-34257898.61057881\n");
+    s.push_str("geodetic2ecef\t81.51058545636687\t-11.141101746517023\t28094410.089390505\tell=gsk2011\n");
+    s.push_str("geodetic2ecef\t-50.184385476943795\t65.99628169027068\t29400847.882418036\tell=grs80\n");
+    s.push_str("geodetic2ecef\t-51.78242738964854\t163.93925628785894\t36941533.70108199\tell=jupyter\n");
+    s.push_str("geodetic2ecef\t37.06852886624371\t28.372873818918237\t36903763.11290883\tell=io\n");
+    s.push_str("geodetic2ecef\t49.90529740805553\t169.36823276272668\t33587698.915444516\tell=pluto\n");
+    s.push_str("geodetic2ecef\t38.123282145704366\t-38.82415395463002\t4350.00102087734\tell=saturn\n");
+    s.push_str("geodetic2ecef\t67.79499531772927\t165.57297366094843\t15422953.650719214\tell=wgs84_mean\n");
+    s.push_str("geodetic2ecef\t-9.272006010356378\t100.44719416514016\t-254.2800195735635\tell=venus\n");
+    s.push_str("geodetic2ecef\t65.44626944978233\t-63.531118433019856\t37123763.83121846\tell=pz90.11\n");
+    s.push_str("geodetic2ecef\t-88.86298281676171\t37.144194586940046\t7095817.215510647\tell=airy\n");
+    s.push_str("geodetic2ecef\t29.67420040114979\t16.64054179403405\t7819.717650575663\tell=io\n");
+    s.push_str("geodetic2ecef\t-0.8134722675174686\t-143.72646854900472\t8586.133042007532\tell=wgs84\n");
+    s.push_str("geodetic2ecef\t83.03164104154581\t96.9680760325071\t5308.245187665079\tell=clarke1866\n");
+    s.push_str("geodetic2ecef\t4.830525822779421\t-111.06424353979355\t2891.470957257261\tell=airy\n");
+    s.push_str("geodetic2ecef\t-14.164965522250881\t177.191282144455\t1790.9360994501444\tell=mars\n");
+    s.push_str("geodetic2ecef\t25.56362121018951\t109.59014506737219\t39103469.874793\tell=saturn\n");
+    s.push_str("geodetic2ecef\t-81.01380997585201\t-89.20183911541511\t13886023.856056271\tell=clarke1866\n");
+    s.push_str("geodetic2ecef\t21.55973293692543\t-130.23058998322801\t26623571.284067117\tell=wgs84_mean\n");
+    s.push_str("geodetic2ecef\t-66.3705315248504\t158.9943906623398\t10857534.497791983\tell=jupyter\n");
+    s.push_str("geodetic2ecef\t20.868059060277346\t-93.71686256914967\t435777.97930848924\tell=gsk2011\n");
+    s.push_str("geodetic2ecef\t17.665093946019226\t96.43448449939109\t16880491.681194194\tell=venus\n");
+    s.push_str("geodetic2ecef\t78.75230740812768\t-35.65643491762941\t3788.8109865143006\tell=jupyter\n");
+    s.push_str("geodetic2ecef\t-69.04060117523044\t93.80259460747021\t1327.399053131599\tell=pz90.11\n");
+    s.push_str("geodetic2ecef\t13.105080498147885\t87.7035042821301\t23324112.93669031\tell=io\n");
+    s.push_str("geodetic2ecef\t-58.067201466399894\t145.47013503658695\t33915461.0139577\tell=wgs84_mean\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2enu\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2enu\t660930.0\t-4701424.0\t4246579.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2enu\t660930.0\t-4701424.0\t4246579.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t90.0\t45.0\t0.0\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("ecef2enu\t1345660.0\t-4350891.0\t4452314.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("ecef2enu\t593359.6438251268\t-9461391.086585922\t3031073.0152551252\t81.09585779938803\t122.62874280346699\t8980.268115879737\n");
+    s.push_str("ecef2enu\t4718075.161045812\t7965608.939010192\t-2690795.7469634125\t-18.197464686203006\t-167.3494654398265\t33871611.51294313\n");
+    s.push_str("ecef2enu\t4807461.491974942\t-4185521.2451190082\t-6138405.4581222\t84.60830823042642\t84.92607207466887\t10910681.591502711\n");
+    s.push_str("ecef2enu\t4515702.87306563\t-8428974.09524443\t-1986731.5227224026\t31.16127031194553\t-97.2302793595323\t851.3401603897444\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t42.0\t-82.0\t200.0\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t0.0\t0.0\t0.0\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("enu2ecef\t-1000.0\t0.0\t50.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("enu2ecef\t-1000.0\t0.0\t50.0\t0.0\t0.0\t0.0\n");
+    s.push_str("enu2ecef\t-1000.0\t0.0\t50.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t90.0\t45.0\t0.0\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("enu2ecef\t186.277521\t286.842228\t939.692621\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("enu2ecef\t-35249.185048025254\t-39648.083343664206\t18225.255075584326\t82.49049954302862\t104.89623298796687\t896318.9111295833\n");
+    s.push_str("enu2ecef\t42812.957452488365\t-77063.11112773512\t91345.38927975093\t-29.280570822947723\t-50.55876109478049\t1302.6080423314681\n");
+    s.push_str("enu2ecef\t-57836.22612140256\t48852.305637856974\t94754.05008353118\t-28.1910939315679\t176.57709843209943\t7259.745676080856\n");
+    s.push_str("enu2ecef\t-26366.98278278012\t82499.9448265218\t-14306.668061410339\t-14.640429753568114\t179.27843801324053\t33554327.542140447\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t0.0\t0.0\t0.0\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("enu2geodetic\t3000.0\t-4000.0\t120.5\t42.0\t-82.0\t200.0\n");
+    s.push_str("enu2geodetic\t3000.0\t-4000.0\t120.5\t0.0\t0.0\t0.0\n");
+    s.push_str("enu2geodetic\t3000.0\t-4000.0\t120.5\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t90.0\t45.0\t0.0\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("enu2geodetic\t0.0\t0.0\t-1.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("enu2geodetic\t-72048.07153549648\t67634.66734916557\t-16339.952166357354\t29.924957554246248\t23.698241792254066\t20282953.130189486\n");
+    s.push_str("enu2geodetic\t46652.16594045202\t58126.34095865142\t105.00277621654095\t-83.75814372699757\t4.0162487850379875\t6398.379383993333\n");
+    s.push_str("enu2geodetic\t-86379.68151985304\t-22824.774208638308\t-53573.851799657015\t-79.08587378762965\t90.3123435768992\t8547905.737368215\n");
+    s.push_str("enu2geodetic\t33358.845774227666\t79088.21635663896\t2667.7742181353824\t-29.843085603570678\t-121.29836381491168\t2106019.1094507584\n");
+    s.push_str("geodetic2enu\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2enu\t42.002582\t-81.997752\t1139.7018\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2enu\t42.002582\t-81.997752\t1139.7018\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2enu\t-41.28\t174.9\t0.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2enu\t-41.28\t174.9\t0.0\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2enu\t-41.28\t174.9\t0.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2enu\t42.002582\t-81.997752\t1139.7018\t90.0\t45.0\t0.0\n");
+    s.push_str("geodetic2enu\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("geodetic2enu\t0.17453292519943295\t0.3490658503988659\t1139.7018\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("geodetic2enu\t-41.55789438763762\t112.85763007575662\t18953840.568143316\t21.604299396297975\t132.1810060191827\t28260523.514786184\n");
+    s.push_str("geodetic2enu\t-6.384387634968235\t153.62718084094877\t22229659.828068335\t-86.02035842370796\t-49.15529379130217\t7166418.566378887\n");
+    s.push_str("geodetic2enu\t26.247227746829736\t49.17743223527077\t4514.030430407203\t54.77676890798401\t-31.93606527112172\t2745.4115457676867\n");
+    s.push_str("geodetic2enu\t-77.79126033476824\t-13.047899129757923\t29703391.639447358\t69.96859824123428\t-37.826945022263686\t8292.342596132217\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2aer\t0.0\t0.0\t0.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2aer\t0.0\t0.0\t0.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2aer\t0.0\t0.0\t0.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t90.0\t45.0\t0.0\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("ecef2aer\t660930.0\t-4701424.0\t4246579.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("ecef2aer\t-6294625.508940068\t-1591294.0407126471\t9864580.330992937\t4.78724930421717\t141.83140027786771\t4268.147445050468\n");
+    s.push_str("ecef2aer\t4914918.913080115\t7992905.9309816845\t-5030424.5471392935\t87.71565682360153\t108.27369749511229\t7831742.891493563\n");
+    s.push_str("ecef2aer\t132192.64504636638\t6388160.442516388\t-8456262.148527993\t38.10746257689743\t76.82172079444825\t37013994.54366467\n");
+    s.push_str("ecef2aer\t4124026.238182185\t-3917517.916905595\t2564394.679838065\t-33.444620476535164\t-48.11648387425572\t35156922.16405728\n");
+    s.push_str("geodetic2aer\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2aer\t42.002582\t-81.997752\t1139.7018\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2aer\t42.002582\t-81.997752\t1139.7018\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2aer\t40.97\t-5.66\t800.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2aer\t40.97\t-5.66\t800.0\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2aer\t40.97\t-5.66\t800.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2aer\t42.002582\t-81.997752\t1139.7018\t90.0\t45.0\t0.0\n");
+    s.push_str("geodetic2aer\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("geodetic2aer\t0.17453292519943295\t0.3490658503988659\t1139.7018\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("geodetic2aer\t-31.40125647289328\t-131.47251711361764\t4485.187962529377\t-27.364599589351656\t-70.37064141065409\t1433.066021849021\n");
+    s.push_str("geodetic2aer\t82.96372113944363\t26.649435130781995\t4756320.141456172\t2.7936980946278425\t-86.0888266977636\t5583.312852110731\n");
+    s.push_str("geodetic2aer\t32.30094532838429\t-47.43057894803803\t4827.984502890575\t4.047701814506965\t154.81872678588434\t18615551.123126484\n");
+    s.push_str("geodetic2aer\t-23.606199991674927\t-107.93852127995486\t19738856.34023925\t-67.56206357833611\t39.812756495854785\t27116073.55922899\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("aer2geodetic\t270.0\t-5.0\t250000.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("aer2geodetic\t270.0\t-5.0\t250000.0\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2geodetic\t270.0\t-5.0\t250000.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t90.0\t45.0\t0.0\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t1000.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("aer2geodetic\t70.14589606522233\t-68.0414346991528\t641743.2119449823\t-41.420559104763115\t-158.73238184882064\t-161.8349102500561\n");
+    s.push_str("aer2geodetic\t254.35776887764175\t25.85097474144608\t520188.3093467879\t41.77019820220684\t-179.80397992729334\t1578.2270566482512\n");
+    s.push_str("aer2geodetic\t151.2163373946037\t-51.6073208592843\t133635.87889104223\t-66.64336834332444\t-139.4813588286027\t8041.509877656112\n");
+    s.push_str("aer2geodetic\t61.53893216631593\t17.94491761029967\t773827.739865033\t-50.18948742002367\t5.424559554040172\t5994.465435975043\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("aer2ecef\t0.0\t90.0\t35786000.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("aer2ecef\t0.0\t90.0\t35786000.0\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2ecef\t0.0\t90.0\t35786000.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t90.0\t45.0\t0.0\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t1000.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("aer2ecef\t313.32696482422915\t-48.63394926614295\t122144.13484252107\t33.06597752225173\t26.95284658180276\t30795904.327642538\n");
+    s.push_str("aer2ecef\t3.959003294101069\t78.91748331024343\t368386.5943587292\t-60.412851875481\t76.89321268220021\t19908667.84769245\n");
+    s.push_str("aer2ecef\t337.88232618742677\t-66.1812587952385\t874023.1522522572\t-70.17048290461894\t48.91381181459775\t34994774.91170595\n");
+    s.push_str("aer2ecef\t54.134856662058574\t-47.4406879664565\t342750.4879537416\t27.382757919516692\t-55.78344745972757\t2767.907333316245\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t42.0\t-82.0\t200.0\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t0.0\t0.0\t0.0\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ned2geodetic\t10.0\t10.0\t10.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ned2geodetic\t10.0\t10.0\t10.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ned2geodetic\t10.0\t10.0\t10.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t90.0\t45.0\t0.0\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("ned2geodetic\t286.842228\t186.277521\t-939.692621\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("ned2geodetic\t72141.21132907667\t81486.18307622886\t31266.38077588225\t8.171004477500418\t-28.977443206117044\t35372609.37665229\n");
+    s.push_str("ned2geodetic\t15192.49674834247\t-28697.704909417414\t38987.993056739244\t77.80735859607256\t14.529410981111397\t13339386.870392157\n");
+    s.push_str("ned2geodetic\t98988.21982102265\t-6412.695268116237\t-53923.51780512339\t-82.89326697711513\t146.45988876345837\t5560.151166258383\n");
+    s.push_str("ned2geodetic\t78227.71706802622\t77836.62310424191\t47183.10858377052\t-72.91973298360904\t-68.39061229620822\t8352.859396677046\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t42.0\t-82.0\t200.0\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t0.0\t0.0\t0.0\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ned2ecef\t0.0\t0.0\t0.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ned2ecef\t0.0\t0.0\t0.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ned2ecef\t0.0\t0.0\t0.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t90.0\t45.0\t0.0\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("ned2ecef\t286.842228\t186.277521\t-939.692621\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("ned2ecef\t77797.75697225149\t29578.393304331563\t-52461.869079437995\t-78.71001873677791\t80.99835988455516\t36500458.31258895\n");
+    s.push_str("ned2ecef\t72363.44341254677\t91919.9772937361\t71033.86491252063\t-7.025630067281469\t34.3749090341461\t5200495.288047207\n");
+    s.push_str("ned2ecef\t-42150.06277646463\t78898.68877635346\t67111.08946413049\t-30.570613035585765\t-156.27155253438602\t19460844.93320567\n");
+    s.push_str("ned2ecef\t449.4546404481953\t-20584.633642709305\t71.10908543062396\t-2.537937625521863\t-89.73031525890269\t21098544.17351908\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2ned\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2ned\t660930.0\t-4701424.0\t4246579.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2ned\t660930.0\t-4701424.0\t4246579.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t90.0\t45.0\t0.0\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("ecef2ned\t1345660.0\t-4350891.0\t4452314.0\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("ecef2ned\t-6021713.5635212865\t4937017.045896176\t9782467.628691714\t-26.850567518458128\t105.43472780665121\t27978820.77933065\n");
+    s.push_str("ecef2ned\t695946.545492541\t-5082929.527753482\t6129195.13981192\t58.4526283496231\t150.915640954955\t1768637.7045128588\n");
+    s.push_str("ecef2ned\t-1811414.6122742584\t-9356487.234857013\t-2704835.1197467335\t19.886222741963422\t-175.83524779123326\t15850591.242954092\n");
+    s.push_str("ecef2ned\t-8908243.330601063\t7956034.979807481\t-4557376.06845829\t-54.81181632811543\t-175.33249635422465\t327.9373682354899\n");
+    s.push_str("geodetic2ned\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2ned\t42.002582\t-81.997752\t1139.7018\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2ned\t42.002582\t-81.997752\t1139.7018\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2ned\t89.0\t0.0\t0.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("geodetic2ned\t89.0\t0.0\t0.0\t0.0\t0.0\t0.0\n");
+    s.push_str("geodetic2ned\t89.0\t0.0\t0.0\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("geodetic2ned\t42.002582\t-81.997752\t1139.7018\t90.0\t45.0\t0.0\n");
+    s.push_str("geodetic2ned\t42.002582\t-81.997752\t1139.7018\t42.0\t-82.0\t200.0\tell=mars\n");
+    s.push_str("geodetic2ned\t0.17453292519943295\t0.3490658503988659\t1139.7018\t0.7330382858376184\t-1.43116998663535\t200.0\tdeg=False\n");
+    s.push_str("geodetic2ned\t-44.69393243977164\t177.65960055222678\t3336.8213089358915\t-61.84433970587901\t-105.96099013045227\t6449.291609331288\n");
+    s.push_str("geodetic2ned\t-31.619066967912524\t161.13192008471276\t2604.8561500312203\t74.78907051362688\t68.8700616862626\t38133315.60098554\n");
+    s.push_str("geodetic2ned\t-60.93567553138541\t86.76613197353942\t8231.969582484795\t30.65111048575585\t-89.79526695053318\t4907.8550577574715\n");
+    s.push_str("geodetic2ned\t48.59107144939807\t114.87805903532364\t1612.877169641824\t-10.155830017402792\t-58.00118979791387\t16917044.434583463\n");
+    s.push_str("aer2geodetic\t33.0\t70.0\t-1.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("aer2ecef\t33.0\t70.0\t-1000.0\t42.0\t-82.0\t200.0\n");
+    s.push_str("ecef2enuv\t1.0\t2.0\t3.0\t42.0\t-82.0\n");
+    s.push_str("ecef2enuv\t100.0\t-50.0\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2enuv\t0.5\t0.5\t0.5\t90.0\t180.0\n");
+    s.push_str("ecef2enuv\t1.0\t2.0\t3.0\t0.7330382858376184\t-1.43116998663535\tdeg=False\n");
+    s.push_str("enu2uvw\t186.277521\t286.842228\t939.692621\t42.0\t-82.0\n");
+    s.push_str("enu2uvw\t1.0\t0.0\t0.0\t-45.0\t135.0\n");
+    s.push_str("enu2uvw\t186.277521\t286.842228\t939.692621\t0.7330382858376184\t-1.43116998663535\tdeg=False\n");
+    s.push_str("uvw2enu\t-1000.0\t2000.0\t300.0\t42.0\t-82.0\n");
+    s.push_str("uvw2enu\t0.0\t0.0\t1.0\t0.0\t90.0\n");
+    s.push_str("uvw2enu\t-1000.0\t2000.0\t300.0\t0.7330382858376184\t-1.43116998663535\tdeg=False\n");
+    s.push_str("enu2ecefv\t1.0\t2.0\t3.0\t42.0\t-82.0\n");
+    s.push_str("enu2ecefv\t0.0\t1.0\t0.0\t30.0\t60.0\n");
+    s.push_str("enu2ecefv\t1.0\t2.0\t3.0\t0.7330382858376184\t-1.43116998663535\tdeg=False\n");
+    s.push_str("ecef2nedv\t1.0\t2.0\t3.0\t42.0\t-82.0\n");
+    s.push_str("ecef2nedv\t-7.0\t0.0\t7.0\t-12.0\t300.0\n");
+    s.push_str("ecef2nedv\t1.0\t2.0\t3.0\t0.7330382858376184\t-1.43116998663535\tdeg=False\n");
+    s.push_str("enu2aer\t186.277521\t286.842228\t939.692621\n");
+    s.push_str("ned2aer\t186.277521\t286.842228\t939.692621\n");
+    s.push_str("enu2aer\t0.0\t0.0\t0.0\n");
+    s.push_str("ned2aer\t0.0\t0.0\t0.0\n");
+    s.push_str("enu2aer\t0.0005\t-0.0002\t10.0\n");
+    s.push_str("ned2aer\t0.0005\t-0.0002\t10.0\n");
+    s.push_str("enu2aer\t-1.0\t-1.0\t-1.0\n");
+    s.push_str("ned2aer\t-1.0\t-1.0\t-1.0\n");
+    s.push_str("enu2aer\t-0.0\t0.0\t0.0\n");
+    s.push_str("ned2aer\t-0.0\t0.0\t0.0\n");
+    s.push_str("enu2aer\t0.0\t-1.0\t0.0\n");
+    s.push_str("ned2aer\t0.0\t-1.0\t0.0\n");
+    s.push_str("enu2aer\t-5.0\t0.0\t0.0\n");
+    s.push_str("ned2aer\t-5.0\t0.0\t0.0\n");
+    s.push_str("enu2aer\t0.0001\t0.0001\t0.0001\n");
+    s.push_str("ned2aer\t0.0001\t0.0001\t0.0001\n");
+    s.push_str("enu2aer\t3.0\t4.0\t0.0\n");
+    s.push_str("ned2aer\t3.0\t4.0\t0.0\n");
+    s.push_str("enu2aer\t0.0\t0.0\t-100.0\n");
+    s.push_str("ned2aer\t0.0\t0.0\t-100.0\n");
+    s.push_str("enu2aer\t3.0\t4.0\t5.0\tdeg=False\n");
+    s.push_str("aer2enu\t33.0\t70.0\t1000.0\n");
+    s.push_str("aer2ned\t33.0\t70.0\t1000.0\n");
+    s.push_str("aer2enu\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2ned\t0.0\t0.0\t0.0\n");
+    s.push_str("aer2enu\t360.0\t-90.0\t5.0\n");
+    s.push_str("aer2ned\t360.0\t-90.0\t5.0\n");
+    s.push_str("aer2enu\t90.0\t45.0\t0.0\n");
+    s.push_str("aer2ned\t90.0\t45.0\t0.0\n");
+    s.push_str("aer2enu\t33.0\t70.0\t-1.0\n");
+    s.push_str("aer2ned\t33.0\t70.0\t-1.0\n");
+    s.push_str("aer2enu\t-30.0\t10.0\t10000000.0\n");
+    s.push_str("aer2ned\t-30.0\t10.0\t10000000.0\n");
+    s.push_str("aer2enu\t1.0\t0.5\t10.0\tdeg=False\n");
+    s.push_str("aer2enu\t344.0543420772603\t64.77295416973834\t597668.7116029646\n");
+    s.push_str("enu2aer\t381.5005369099399\t-8841.443776746564\t-9507.604952317446\n");
+    s.push_str("aer2enu\t340.92949711980356\t80.23871255920221\t557489.1891464029\n");
+    s.push_str("enu2aer\t4968.4101956338145\t-2211.010461762239\t-4725.2896312146795\n");
+    s.push_str("aer2enu\t59.036336846141126\t87.3105217780352\t349852.23352201935\n");
+    s.push_str("enu2aer\t1168.5097274171258\t-4270.451252470307\t-4573.105789282737\n");
+    s.push_str("aer2enu\t337.4786621335711\t-67.3448802499951\t345115.0348032451\n");
+    s.push_str("enu2aer\t396.26482891198066\t-3103.1781257554285\t3127.419481296698\n");
+    s.push_str("aer2enu\t109.39234215737638\t73.06280430612804\t944913.1497564503\n");
+    s.push_str("enu2aer\t9999.227226650743\t2799.387566032785\t2108.6617832392094\n");
+    s.push_str("aer2enu\t243.26417304200027\t-7.708824978684461\t950707.297896027\n");
+    s.push_str("enu2aer\t-2875.3858413199705\t592.4243015279844\t-3458.333084785565\n");
+    s.push_str("aer2enu\t322.5321630964619\t68.00406825622935\t253537.03169254694\n");
+    s.push_str("enu2aer\t-7791.425798971514\t-9674.39044929566\t-4243.084619318549\n");
+    s.push_str("aer2enu\t243.86916500865868\t-22.40290667353125\t234485.41745224173\n");
+    s.push_str("enu2aer\t7761.953114688935\t7998.651784112688\t4561.6847691438725\n");
+    s.push_str("aer2enu\t107.67604094886136\t-8.151505015778937\t812697.2579135401\n");
+    s.push_str("enu2aer\t2119.858779450289\t355.5588417392737\t-7856.979296035595\n");
+    s.push_str("aer2enu\t314.82650581252483\t47.86123525270327\t35260.90327329989\n");
+    s.push_str("enu2aer\t9163.486525053966\t6399.01956829608\t8199.426047465724\n");
+    s.push_str("enu2dca\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("enu2dca\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("enu2dca\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("enu2dca\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("dca2enu\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("dca2enu\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("dca2enu\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("dca2enu\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("dca2ned\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("dca2ned\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("dca2ned\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("dca2ned\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("ned2dca\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("ned2dca\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("ned2dca\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("ned2dca\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("aer2dca\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("aer2dca\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("aer2dca\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("aer2dca\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("dca2aer\t100.0\t200.0\t30.0\t45.0\n");
+    s.push_str("dca2aer\t-5.0\t0.0\t1.0\t0.0\n");
+    s.push_str("dca2aer\t1000.0\t-1000.0\t0.0\t270.0\n");
+    s.push_str("dca2aer\t100.0\t200.0\t30.0\t0.7\tdeg=False\n");
+    s.push_str("aer2dca\t10.0\t20.0\t-5.0\t0.0\n");
+    s.push_str("ecef2dca\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\t30.0\n");
+    s.push_str("ecef2dca\t660930.0\t-4701424.0\t4246579.0\t42.0\t-82.0\t200.0\t30.0\tell=airy\n");
+    s.push_str("ecef2dca\t660930.0\t-4701424.0\t4246579.0\t-41.2865\t174.7762\t20.0\t315.0\n");
+    s.push_str("dca2ecef\t500.0\t-20.0\t10.0\t42.0\t-82.0\t200.0\t30.0\n");
+    s.push_str("dca2ecef\t500.0\t-20.0\t10.0\t42.0\t-82.0\t200.0\t30.0\tell=airy\n");
+    s.push_str("dca2ecef\t500.0\t-20.0\t10.0\t-41.2865\t174.7762\t20.0\t315.0\n");
+    s.push_str("geodetic2dca\t42.01\t-81.99\t300.0\t42.0\t-82.0\t200.0\t30.0\n");
+    s.push_str("geodetic2dca\t42.01\t-81.99\t300.0\t42.0\t-82.0\t200.0\t30.0\tell=airy\n");
+    s.push_str("geodetic2dca\t42.01\t-81.99\t300.0\t-41.2865\t174.7762\t20.0\t315.0\n");
+    s.push_str("dca2geodetic\t500.0\t-20.0\t10.0\t42.0\t-82.0\t200.0\t30.0\n");
+    s.push_str("dca2geodetic\t500.0\t-20.0\t10.0\t42.0\t-82.0\t200.0\t30.0\tell=airy\n");
+    s.push_str("dca2geodetic\t500.0\t-20.0\t10.0\t-41.2865\t174.7762\t20.0\t315.0\n");
+    s.push_str("utils.cart2pol\t3.0\t4.0\n");
+    s.push_str("utils.cart2pol\t-1.0\t0.0\n");
+    s.push_str("utils.cart2pol\t0.0\t-0.0\n");
+    s.push_str("utils.cart2pol\t-0.0\t-0.0\n");
+    s.push_str("utils.cart2pol\t1e+300\t1e+300\n");
+    s.push_str("utils.pol2cart\t0.0\t1.0\n");
+    s.push_str("utils.pol2cart\t3.141592653589793\t2.0\n");
+    s.push_str("utils.pol2cart\t-1.0\t5.0\n");
+    s.push_str("utils.pol2cart\t1.0\t-2.0\n");
+    s.push_str("utils.cart2sph\t1.0\t2.0\t3.0\n");
+    s.push_str("utils.cart2sph\t0.0\t0.0\t-1.0\n");
+    s.push_str("utils.cart2sph\t-3.0\t-4.0\t0.0\n");
+    s.push_str("utils.cart2sph\t0.0\t0.0\t0.0\n");
+    s.push_str("utils.sph2cart\t0.5\t0.25\t10.0\n");
+    s.push_str("utils.sph2cart\t0.0\t1.5707963267948966\t1.0\n");
+    s.push_str("utils.sph2cart\t-2.0\t-1.0\t3.0\n");
+    s.push_str("geodetic2nvector\t-41.2865\t174.7762\n");
+    s.push_str("ecef2nvector\t1329871.35\t-4652252.238\t4138020.0\n");
+    s.push_str("geodetic2nvector\t40.9701\t-5.6635\n");
+    s.push_str("ecef2nvector\t1338097.01\t-4654056.635\t4138800.0\n");
+    s.push_str("geodetic2nvector\t42.3601\t-71.0589\n");
+    s.push_str("ecef2nvector\t1338236.01\t-4654710.589\t4138043.0\n");
+    s.push_str("geodetic2nvector\t35.6762\t139.6503\n");
+    s.push_str("ecef2nvector\t1337567.62\t-4652603.497\t4138040.0\n");
+    s.push_str("geodetic2nvector\t-0.1807\t-78.4678\n");
+    s.push_str("ecef2nvector\t1333981.93\t-4654784.678\t4140850.0\n");
+    s.push_str("geodetic2nvector\t-77.846\t166.676\n");
+    s.push_str("ecef2nvector\t1326215.4\t-4652333.24\t4138010.0\n");
+    s.push_str("geodetic2nvector\t78.2232\t15.6267\n");
+    s.push_str("ecef2nvector\t1341822.32\t-4653843.733\t4138000.0\n");
+    s.push_str("geodetic2nvector\t31.5\t35.5\n");
+    s.push_str("ecef2nvector\t1337150.0\t-4653645.0\t4137569.5\n");
+    s.push_str("geodetic2nvector\t27.9881\t86.925\n");
+    s.push_str("ecef2nvector\t1336798.81\t-4653130.75\t4146848.86\n");
+    s.push_str("geodetic2nvector\t0.0\t0.0\n");
+    s.push_str("ecef2nvector\t1334000.0\t-4654000.0\t4138000.0\n");
+    s.push_str("geodetic2nvector\t90.0\t0.0\n");
+    s.push_str("ecef2nvector\t1343000.0\t-4654000.0\t4138000.0\n");
+    s.push_str("geodetic2nvector\t-90.0\t0.0\n");
+    s.push_str("ecef2nvector\t1325000.0\t-4654000.0\t4140835.0\n");
+    s.push_str("geodetic2nvector\t0.3\t-0.2\tdeg=False\n");
+    s.push_str("nvector2geodetic\t0.0\t0.0\t1.0\n");
+    s.push_str("nvector2ecef\t0.0\t0.0\t1.0\n");
+    s.push_str("nvector2geodetic\t1.0\t0.0\t0.0\n");
+    s.push_str("nvector2ecef\t1.0\t0.0\t0.0\n");
+    s.push_str("nvector2geodetic\t0.5\t0.5\t0.7071067811865476\n");
+    s.push_str("nvector2ecef\t0.5\t0.5\t0.7071067811865476\n");
+    s.push_str("nvector2geodetic\t0.0\t0.0\t2.0\n");
+    s.push_str("nvector2ecef\t0.0\t0.0\t2.0\n");
+    s.push_str("nvector2geodetic\t0.0\t0.0\t-1.0\n");
+    s.push_str("nvector2ecef\t0.0\t0.0\t-1.0\n");
+    s.push_str("nvector2geodetic\t-0.6\t-0.8\t0.0\n");
+    s.push_str("nvector2ecef\t-0.6\t-0.8\t0.0\n");
+    s.push_str("nvector2geodetic\t0.6\t0.8\t0.0\tdeg=False\n");
+    s.push_str("nvector2ecef\t0.6\t0.8\t0.0\talt=1000.0\n");
+    s.push_str("nvector2ecef\t0.6\t0.8\t0.0\talt=500.0\tell=moon\n");
+    s.push_str("ecef2nvector\t0.0\t0.0\t0.0\n");
+    s.push_str("ecef2nvector\t1700000.0\t0.0\t0.0\tell=moon\tdeg=False\n");
+    s.push_str("spherical.geodetic2spherical\t-41.2865\t174.7762\t20.0\n");
+    s.push_str("spherical.geodetic2spherical\t40.9701\t-5.6635\t800.0\n");
+    s.push_str("spherical.geodetic2spherical\t42.3601\t-71.0589\t43.0\n");
+    s.push_str("spherical.geodetic2spherical\t35.6762\t139.6503\t40.0\n");
+    s.push_str("spherical.geodetic2spherical\t-0.1807\t-78.4678\t2850.0\n");
+    s.push_str("spherical.geodetic2spherical\t-77.846\t166.676\t10.0\n");
+    s.push_str("spherical.geodetic2spherical\t78.2232\t15.6267\t0.0\n");
+    s.push_str("spherical.geodetic2spherical\t31.5\t35.5\t-430.5\n");
+    s.push_str("spherical.geodetic2spherical\t27.9881\t86.925\t8848.86\n");
+    s.push_str("spherical.geodetic2spherical\t0.0\t0.0\t0.0\n");
+    s.push_str("spherical.geodetic2spherical\t90.0\t0.0\t0.0\n");
+    s.push_str("spherical.geodetic2spherical\t-90.0\t0.0\t2835.0\n");
+    s.push_str("spherical.geodetic2spherical\t10.0\t180.0\t0.0\n");
+    s.push_str("spherical.geodetic2spherical\t-10.0\t-180.0\t0.0\n");
+    s.push_str("spherical.geodetic2spherical\t0.0\t-75.2\t35786000.0\n");
+    s.push_str("spherical.geodetic2spherical\t51.6\t-30.0\t408000.0\n");
+    s.push_str("spherical.spherical2geodetic\t30.0\t40.0\t6370000.0\n");
+    s.push_str("spherical.spherical2geodetic\t0.0\t0.0\t6378137.0\n");
+    s.push_str("spherical.spherical2geodetic\t89.9\t10.0\t6356800.0\n");
+    s.push_str("spherical.spherical2geodetic\t-60.0\t-120.0\t7000000.0\n");
+    s.push_str("spherical.spherical2geodetic\t45.0\t45.0\t42164000.0\n");
+    s.push_str("spherical.spherical2geodetic\t90.0\t0.0\t6356752.31424518\n");
+    s.push_str("spherical.spherical2geodetic\t-10.0\t50.0\t1000000.0\n");
+    s.push_str("spherical.geodetic2spherical\t0.5\t0.5\t0.0\tdeg=False\n");
+    s.push_str("spherical.spherical2geodetic\t0.5\t0.5\t6371000.0\tdeg=False\n");
+    s.push_str("spherical.geodetic2spherical\t20.0\t30.0\t1000.0\tell=mars\n");
+    s.push_str("spherical.spherical2geodetic\t20.0\t30.0\t3390000.0\tell=mars\n");
+    s.push_str("spherical.geodetic2spherical\t74.25297643587058\t-18.631860945944737\t2752551.7598781236\n");
+    s.push_str("spherical.spherical2geodetic\t13.592231108638543\t55.34804105476431\t2851675.929725886\n");
+    s.push_str("spherical.geodetic2spherical\t-36.008740177063146\t77.00021281940707\t2815.410035782072\n");
+    s.push_str("spherical.spherical2geodetic\t-77.95314216189234\t99.80366743990663\t18595191.96522597\n");
+    s.push_str("spherical.geodetic2spherical\t-46.76569424246209\t133.4426965102408\t7083.699216691644\n");
+    s.push_str("spherical.spherical2geodetic\t4.998682241167913\t-178.05154277363903\t15975337.86838154\n");
+    s.push_str("spherical.geodetic2spherical\t89.08579635826726\t145.51086608171045\t24664781.925363526\n");
+    s.push_str("spherical.spherical2geodetic\t51.98540707437758\t-93.3807413191043\t15566647.233946523\n");
+    s.push_str("spherical.geodetic2spherical\t-16.12565659221019\t143.53720815096767\t14929526.37567356\n");
+    s.push_str("spherical.spherical2geodetic\t-60.68200478902354\t179.88643378809098\t5075767.314814367\n");
+    s.push_str("spherical.geodetic2spherical\t-3.4821850090687576\t115.67787931456246\t12923272.792686027\n");
+    s.push_str("spherical.spherical2geodetic\t33.59184020321962\t-76.41564999207974\t16845285.493613683\n");
+    s.push_str("spherical.geodetic2spherical\t-6.240954066584408\t67.53325088682718\t20157149.763152327\n");
+    s.push_str("spherical.spherical2geodetic\t-2.4624837733069\t7.430767733953331\t6089616.793648129\n");
+    s.push_str("spherical.geodetic2spherical\t43.46108176809966\t28.76030412765178\t1976879.515493084\n");
+    s.push_str("spherical.spherical2geodetic\t-38.74026536081668\t130.32121416698442\t10715873.367567731\n");
+    s.push_str("spherical.geodetic2spherical\t-84.61503977143256\t-92.28608991240056\t8567.862901253011\n");
+    s.push_str("spherical.spherical2geodetic\t-31.59669509641892\t55.79554548080557\t11983296.413389463\n");
+    s.push_str("spherical.geodetic2spherical\t28.305027046695244\t-52.16986015462069\t8189.213187701736\n");
+    s.push_str("spherical.spherical2geodetic\t11.571689203732674\t-161.2731326414913\t21891542.79310797\n");
+    s.push_str("spherical.geodetic2spherical\t-71.57963550009221\t-14.951872493975173\t13245172.267728003\n");
+    s.push_str("spherical.spherical2geodetic\t18.31306159057509\t-170.902941254524\t3643578.847985574\n");
+    s.push_str("spherical.geodetic2spherical\t46.635063780874134\t39.783898703454895\t13369077.311178824\n");
+    s.push_str("spherical.spherical2geodetic\t-16.39975727721277\t159.49229086573865\t9209461.050782437\n");
+    s.push_str("latitude.geodetic2isometric\t0.0\n");
+    s.push_str("latitude.geodetic2isometric\t10.0\n");
+    s.push_str("latitude.geodetic2isometric\t45.0\n");
+    s.push_str("latitude.geodetic2isometric\t-45.0\n");
+    s.push_str("latitude.geodetic2isometric\t60.0\n");
+    s.push_str("latitude.geodetic2isometric\t89.9\n");
+    s.push_str("latitude.geodetic2isometric\t90.0\n");
+    s.push_str("latitude.geodetic2isometric\t-90.0\n");
+    s.push_str("latitude.geodetic2isometric\t-33.3\n");
+    s.push_str("latitude.geodetic2isometric\t1e-07\n");
+    s.push_str("latitude.geodetic2isometric\t0.7\tdeg=False\n");
+    s.push_str("latitude.geodetic2isometric\t30.0\tell=jupyter\n");
+    s.push_str("latitude.geodetic2isometric\t30.0\tell=venus\n");
+    s.push_str("latitude.isometric2geodetic\t0.0\n");
+    s.push_str("latitude.isometric2geodetic\t10.0\n");
+    s.push_str("latitude.isometric2geodetic\t45.0\n");
+    s.push_str("latitude.isometric2geodetic\t-45.0\n");
+    s.push_str("latitude.isometric2geodetic\t60.0\n");
+    s.push_str("latitude.isometric2geodetic\t89.9\n");
+    s.push_str("latitude.isometric2geodetic\t90.0\n");
+    s.push_str("latitude.isometric2geodetic\t-90.0\n");
+    s.push_str("latitude.isometric2geodetic\t-33.3\n");
+    s.push_str("latitude.isometric2geodetic\t1e-07\n");
+    s.push_str("latitude.isometric2geodetic\t0.7\tdeg=False\n");
+    s.push_str("latitude.isometric2geodetic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.isometric2geodetic\t30.0\tell=venus\n");
+    s.push_str("latitude.conformal2geodetic\t0.0\n");
+    s.push_str("latitude.conformal2geodetic\t10.0\n");
+    s.push_str("latitude.conformal2geodetic\t45.0\n");
+    s.push_str("latitude.conformal2geodetic\t-45.0\n");
+    s.push_str("latitude.conformal2geodetic\t60.0\n");
+    s.push_str("latitude.conformal2geodetic\t89.9\n");
+    s.push_str("latitude.conformal2geodetic\t90.0\n");
+    s.push_str("latitude.conformal2geodetic\t-90.0\n");
+    s.push_str("latitude.conformal2geodetic\t-33.3\n");
+    s.push_str("latitude.conformal2geodetic\t1e-07\n");
+    s.push_str("latitude.conformal2geodetic\t0.7\tdeg=False\n");
+    s.push_str("latitude.conformal2geodetic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.conformal2geodetic\t30.0\tell=venus\n");
+    s.push_str("latitude.geodetic2conformal\t0.0\n");
+    s.push_str("latitude.geodetic2conformal\t10.0\n");
+    s.push_str("latitude.geodetic2conformal\t45.0\n");
+    s.push_str("latitude.geodetic2conformal\t-45.0\n");
+    s.push_str("latitude.geodetic2conformal\t60.0\n");
+    s.push_str("latitude.geodetic2conformal\t89.9\n");
+    s.push_str("latitude.geodetic2conformal\t90.0\n");
+    s.push_str("latitude.geodetic2conformal\t-90.0\n");
+    s.push_str("latitude.geodetic2conformal\t-33.3\n");
+    s.push_str("latitude.geodetic2conformal\t1e-07\n");
+    s.push_str("latitude.geodetic2conformal\t0.7\tdeg=False\n");
+    s.push_str("latitude.geodetic2conformal\t30.0\tell=jupyter\n");
+    s.push_str("latitude.geodetic2conformal\t30.0\tell=venus\n");
+    s.push_str("latitude.geodetic2rectifying\t0.0\n");
+    s.push_str("latitude.geodetic2rectifying\t10.0\n");
+    s.push_str("latitude.geodetic2rectifying\t45.0\n");
+    s.push_str("latitude.geodetic2rectifying\t-45.0\n");
+    s.push_str("latitude.geodetic2rectifying\t60.0\n");
+    s.push_str("latitude.geodetic2rectifying\t89.9\n");
+    s.push_str("latitude.geodetic2rectifying\t90.0\n");
+    s.push_str("latitude.geodetic2rectifying\t-90.0\n");
+    s.push_str("latitude.geodetic2rectifying\t-33.3\n");
+    s.push_str("latitude.geodetic2rectifying\t1e-07\n");
+    s.push_str("latitude.geodetic2rectifying\t0.7\tdeg=False\n");
+    s.push_str("latitude.geodetic2rectifying\t30.0\tell=jupyter\n");
+    s.push_str("latitude.geodetic2rectifying\t30.0\tell=venus\n");
+    s.push_str("latitude.rectifying2geodetic\t0.0\n");
+    s.push_str("latitude.rectifying2geodetic\t10.0\n");
+    s.push_str("latitude.rectifying2geodetic\t45.0\n");
+    s.push_str("latitude.rectifying2geodetic\t-45.0\n");
+    s.push_str("latitude.rectifying2geodetic\t60.0\n");
+    s.push_str("latitude.rectifying2geodetic\t89.9\n");
+    s.push_str("latitude.rectifying2geodetic\t90.0\n");
+    s.push_str("latitude.rectifying2geodetic\t-90.0\n");
+    s.push_str("latitude.rectifying2geodetic\t-33.3\n");
+    s.push_str("latitude.rectifying2geodetic\t1e-07\n");
+    s.push_str("latitude.rectifying2geodetic\t0.7\tdeg=False\n");
+    s.push_str("latitude.rectifying2geodetic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.rectifying2geodetic\t30.0\tell=venus\n");
+    s.push_str("latitude.geodetic2authalic\t0.0\n");
+    s.push_str("latitude.geodetic2authalic\t10.0\n");
+    s.push_str("latitude.geodetic2authalic\t45.0\n");
+    s.push_str("latitude.geodetic2authalic\t-45.0\n");
+    s.push_str("latitude.geodetic2authalic\t60.0\n");
+    s.push_str("latitude.geodetic2authalic\t89.9\n");
+    s.push_str("latitude.geodetic2authalic\t90.0\n");
+    s.push_str("latitude.geodetic2authalic\t-90.0\n");
+    s.push_str("latitude.geodetic2authalic\t-33.3\n");
+    s.push_str("latitude.geodetic2authalic\t1e-07\n");
+    s.push_str("latitude.geodetic2authalic\t0.7\tdeg=False\n");
+    s.push_str("latitude.geodetic2authalic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.geodetic2authalic\t30.0\tell=venus\n");
+    s.push_str("latitude.authalic2geodetic\t0.0\n");
+    s.push_str("latitude.authalic2geodetic\t10.0\n");
+    s.push_str("latitude.authalic2geodetic\t45.0\n");
+    s.push_str("latitude.authalic2geodetic\t-45.0\n");
+    s.push_str("latitude.authalic2geodetic\t60.0\n");
+    s.push_str("latitude.authalic2geodetic\t89.9\n");
+    s.push_str("latitude.authalic2geodetic\t90.0\n");
+    s.push_str("latitude.authalic2geodetic\t-90.0\n");
+    s.push_str("latitude.authalic2geodetic\t-33.3\n");
+    s.push_str("latitude.authalic2geodetic\t1e-07\n");
+    s.push_str("latitude.authalic2geodetic\t0.7\tdeg=False\n");
+    s.push_str("latitude.authalic2geodetic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.authalic2geodetic\t30.0\tell=venus\n");
+    s.push_str("latitude.geodetic2parametric\t0.0\n");
+    s.push_str("latitude.geodetic2parametric\t10.0\n");
+    s.push_str("latitude.geodetic2parametric\t45.0\n");
+    s.push_str("latitude.geodetic2parametric\t-45.0\n");
+    s.push_str("latitude.geodetic2parametric\t60.0\n");
+    s.push_str("latitude.geodetic2parametric\t89.9\n");
+    s.push_str("latitude.geodetic2parametric\t90.0\n");
+    s.push_str("latitude.geodetic2parametric\t-90.0\n");
+    s.push_str("latitude.geodetic2parametric\t-33.3\n");
+    s.push_str("latitude.geodetic2parametric\t1e-07\n");
+    s.push_str("latitude.geodetic2parametric\t0.7\tdeg=False\n");
+    s.push_str("latitude.geodetic2parametric\t30.0\tell=jupyter\n");
+    s.push_str("latitude.geodetic2parametric\t30.0\tell=venus\n");
+    s.push_str("latitude.parametric2geodetic\t0.0\n");
+    s.push_str("latitude.parametric2geodetic\t10.0\n");
+    s.push_str("latitude.parametric2geodetic\t45.0\n");
+    s.push_str("latitude.parametric2geodetic\t-45.0\n");
+    s.push_str("latitude.parametric2geodetic\t60.0\n");
+    s.push_str("latitude.parametric2geodetic\t89.9\n");
+    s.push_str("latitude.parametric2geodetic\t90.0\n");
+    s.push_str("latitude.parametric2geodetic\t-90.0\n");
+    s.push_str("latitude.parametric2geodetic\t-33.3\n");
+    s.push_str("latitude.parametric2geodetic\t1e-07\n");
+    s.push_str("latitude.parametric2geodetic\t0.7\tdeg=False\n");
+    s.push_str("latitude.parametric2geodetic\t30.0\tell=jupyter\n");
+    s.push_str("latitude.parametric2geodetic\t30.0\tell=venus\n");
+    s.push_str("latitude.geodetic2isometric\t200.0\n");
+    s.push_str("latitude.geodetic2isometric\t-400.0\n");
+    s.push_str("latitude.geodetic2isometric\t1.5707963267948966\n");
+    s.push_str("latitude.geodetic2isometric\t1.5707963267948966\tdeg=False\n");
+    s.push_str("latitude.geodetic2isometric\t90.0\tell=1.0:0.0\n");
+    s.push_str("latitude.geodetic2isometric\t30.0\tell=1.0:-5.0\n");
+    s.push_str("latitude.geodetic2conformal\t90.0\tell=1.0:0.0\n");
+    s.push_str("latitude.geodetic2conformal\t-90.0\tell=mars\n");
+    s.push_str("latitude.isometric2geodetic\tinf\n");
+    s.push_str("latitude.isometric2geodetic\t1000.0\n");
+    s.push_str("latitude.geodetic2geocentric\t0.0\t0.0\n");
+    s.push_str("latitude.geodetic2geocentric\t45.0\t0.0\n");
+    s.push_str("latitude.geodetic2geocentric\t45.0\t10000.0\n");
+    s.push_str("latitude.geodetic2geocentric\t-60.0\t400000.0\n");
+    s.push_str("latitude.geodetic2geocentric\t89.0\t-500.0\n");
+    s.push_str("latitude.geodetic2geocentric\t90.0\t0.0\n");
+    s.push_str("latitude.geodetic2geocentric\t30.0\t35786000.0\n");
+    s.push_str("latitude.geodetic2geocentric\t0.0\t-6378137.0\tdeg=False\n");
+    s.push_str("latitude.geodetic2geocentric\t0.5\t100.0\tdeg=False\tell=moon\n");
+    s.push_str("latitude.geocentric2geodetic\t0.0\t0.0\n");
+    s.push_str("latitude.geocentric2geodetic\t45.0\t0.0\n");
+    s.push_str("latitude.geocentric2geodetic\t45.0\t10000.0\n");
+    s.push_str("latitude.geocentric2geodetic\t-60.0\t400000.0\n");
+    s.push_str("latitude.geocentric2geodetic\t89.0\t-500.0\n");
+    s.push_str("latitude.geocentric2geodetic\t90.0\t0.0\n");
+    s.push_str("latitude.geocentric2geodetic\t30.0\t35786000.0\n");
+    s.push_str("latitude.geocentric2geodetic\t0.0\t-6378137.0\tdeg=False\n");
+    s.push_str("latitude.geocentric2geodetic\t0.5\t100.0\tdeg=False\tell=moon\n");
+    s.push_str("latitude.geoc2geod\t0.0\t6378137.0\n");
+    s.push_str("latitude.geoc2geod\t45.0\t6378137.0\n");
+    s.push_str("latitude.geoc2geod\t-30.0\t7000000.0\n");
+    s.push_str("latitude.geoc2geod\t89.0\t6357000.0\n");
+    s.push_str("latitude.geoc2geod\t10.0\t0.0\n");
+    s.push_str("latitude.geoc2geod\t45.0\t-1.0\n");
+    s.push_str("latitude.geoc2geod\t0.5\t6371000.0\tdeg=False\tell=grs80\n");
+    s.push_str("rcurve.geocentric_radius\t0.0\n");
+    s.push_str("rcurve.geocentric_radius\t30.0\n");
+    s.push_str("rcurve.geocentric_radius\t45.0\n");
+    s.push_str("rcurve.geocentric_radius\t-60.0\n");
+    s.push_str("rcurve.geocentric_radius\t90.0\n");
+    s.push_str("rcurve.geocentric_radius\t-90.0\n");
+    s.push_str("rcurve.geocentric_radius\t1.0\tdeg=False\n");
+    s.push_str("rcurve.geocentric_radius\t30.0\tell=saturn\n");
+    s.push_str("rcurve.geocentric_radius\t30.0\tell=1.0:0.0\n");
+    s.push_str("rcurve.parallel\t0.0\n");
+    s.push_str("rcurve.parallel\t30.0\n");
+    s.push_str("rcurve.parallel\t45.0\n");
+    s.push_str("rcurve.parallel\t-60.0\n");
+    s.push_str("rcurve.parallel\t90.0\n");
+    s.push_str("rcurve.parallel\t-90.0\n");
+    s.push_str("rcurve.parallel\t1.0\tdeg=False\n");
+    s.push_str("rcurve.parallel\t30.0\tell=saturn\n");
+    s.push_str("rcurve.parallel\t30.0\tell=1.0:0.0\n");
+    s.push_str("rcurve.meridian\t0.0\n");
+    s.push_str("rcurve.meridian\t30.0\n");
+    s.push_str("rcurve.meridian\t45.0\n");
+    s.push_str("rcurve.meridian\t-60.0\n");
+    s.push_str("rcurve.meridian\t90.0\n");
+    s.push_str("rcurve.meridian\t-90.0\n");
+    s.push_str("rcurve.meridian\t1.0\tdeg=False\n");
+    s.push_str("rcurve.meridian\t30.0\tell=saturn\n");
+    s.push_str("rcurve.meridian\t30.0\tell=1.0:0.0\n");
+    s.push_str("rcurve.transverse\t0.0\n");
+    s.push_str("rcurve.transverse\t30.0\n");
+    s.push_str("rcurve.transverse\t45.0\n");
+    s.push_str("rcurve.transverse\t-60.0\n");
+    s.push_str("rcurve.transverse\t90.0\n");
+    s.push_str("rcurve.transverse\t-90.0\n");
+    s.push_str("rcurve.transverse\t1.0\tdeg=False\n");
+    s.push_str("rcurve.transverse\t30.0\tell=saturn\n");
+    s.push_str("rcurve.transverse\t30.0\tell=1.0:0.0\n");
+    s.push_str("rsphere.eqavol\n");
+    s.push_str("rsphere.authalic\n");
+    s.push_str("rsphere.rectifying\n");
+    s.push_str("rsphere.triaxial\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=grs80\n");
+    s.push_str("rsphere.authalic\tell=grs80\n");
+    s.push_str("rsphere.rectifying\tell=grs80\n");
+    s.push_str("rsphere.triaxial\tell=grs80\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=grs80\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=grs80\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=grs80\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=airy\n");
+    s.push_str("rsphere.authalic\tell=airy\n");
+    s.push_str("rsphere.rectifying\tell=airy\n");
+    s.push_str("rsphere.triaxial\tell=airy\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=airy\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=airy\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=airy\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=bessel\n");
+    s.push_str("rsphere.authalic\tell=bessel\n");
+    s.push_str("rsphere.rectifying\tell=bessel\n");
+    s.push_str("rsphere.triaxial\tell=bessel\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=bessel\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=bessel\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=bessel\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=clarke1866\n");
+    s.push_str("rsphere.authalic\tell=clarke1866\n");
+    s.push_str("rsphere.rectifying\tell=clarke1866\n");
+    s.push_str("rsphere.triaxial\tell=clarke1866\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=clarke1866\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=clarke1866\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=clarke1866\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=wgs72\n");
+    s.push_str("rsphere.authalic\tell=wgs72\n");
+    s.push_str("rsphere.rectifying\tell=wgs72\n");
+    s.push_str("rsphere.triaxial\tell=wgs72\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=wgs72\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=wgs72\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=wgs72\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=pz90.11\n");
+    s.push_str("rsphere.authalic\tell=pz90.11\n");
+    s.push_str("rsphere.rectifying\tell=pz90.11\n");
+    s.push_str("rsphere.triaxial\tell=pz90.11\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=pz90.11\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=pz90.11\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=pz90.11\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=gsk2011\n");
+    s.push_str("rsphere.authalic\tell=gsk2011\n");
+    s.push_str("rsphere.rectifying\tell=gsk2011\n");
+    s.push_str("rsphere.triaxial\tell=gsk2011\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=gsk2011\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=gsk2011\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=gsk2011\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=wgs84_mean\n");
+    s.push_str("rsphere.authalic\tell=wgs84_mean\n");
+    s.push_str("rsphere.rectifying\tell=wgs84_mean\n");
+    s.push_str("rsphere.triaxial\tell=wgs84_mean\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=wgs84_mean\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=wgs84_mean\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=wgs84_mean\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=moon\n");
+    s.push_str("rsphere.authalic\tell=moon\n");
+    s.push_str("rsphere.rectifying\tell=moon\n");
+    s.push_str("rsphere.triaxial\tell=moon\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=moon\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=moon\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=moon\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=mars\n");
+    s.push_str("rsphere.authalic\tell=mars\n");
+    s.push_str("rsphere.rectifying\tell=mars\n");
+    s.push_str("rsphere.triaxial\tell=mars\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=mars\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=mars\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=mars\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=jupyter\n");
+    s.push_str("rsphere.authalic\tell=jupyter\n");
+    s.push_str("rsphere.rectifying\tell=jupyter\n");
+    s.push_str("rsphere.triaxial\tell=jupyter\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=jupyter\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=jupyter\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=jupyter\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=saturn\n");
+    s.push_str("rsphere.authalic\tell=saturn\n");
+    s.push_str("rsphere.rectifying\tell=saturn\n");
+    s.push_str("rsphere.triaxial\tell=saturn\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=saturn\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=saturn\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=saturn\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=venus\n");
+    s.push_str("rsphere.authalic\tell=venus\n");
+    s.push_str("rsphere.rectifying\tell=venus\n");
+    s.push_str("rsphere.triaxial\tell=venus\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=venus\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=venus\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=venus\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=io\n");
+    s.push_str("rsphere.authalic\tell=io\n");
+    s.push_str("rsphere.rectifying\tell=io\n");
+    s.push_str("rsphere.triaxial\tell=io\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=io\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=io\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=io\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=pluto\n");
+    s.push_str("rsphere.authalic\tell=pluto\n");
+    s.push_str("rsphere.rectifying\tell=pluto\n");
+    s.push_str("rsphere.triaxial\tell=pluto\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=pluto\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=pluto\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=pluto\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=1.0:0.0\n");
+    s.push_str("rsphere.authalic\tell=1.0:0.0\n");
+    s.push_str("rsphere.rectifying\tell=1.0:0.0\n");
+    s.push_str("rsphere.triaxial\tell=1.0:0.0\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=1.0:0.0\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=1.0:0.0\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=1.0:0.0\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=1.0:-5.0\n");
+    s.push_str("rsphere.authalic\tell=1.0:-5.0\n");
+    s.push_str("rsphere.rectifying\tell=1.0:-5.0\n");
+    s.push_str("rsphere.triaxial\tell=1.0:-5.0\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=1.0:-5.0\tmethod=mean\n");
+    s.push_str("rsphere.triaxial\tell=1.0:-5.0\tmethod=norm\n");
+    s.push_str("rsphere.biaxial\tell=1.0:-5.0\tmethod=norm\n");
+    s.push_str("rsphere.eqavol\tell=2.0:-1.0\n");
+    s.push_str("rsphere.authalic\tell=2.0:-1.0\n");
+    s.push_str("rsphere.triaxial\tell=2.0:-1.0\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=2.0:-1.0\tmethod=mean\n");
+    s.push_str("rsphere.biaxial\tell=2.0:-1.0\tmethod=norm\n");
+    s.push_str("rsphere.triaxial\tmethod=median\n");
+    s.push_str("rsphere.biaxial\tmethod=max\n");
+    s.push_str("rsphere.curve\t0.0\tmethod=mean\n");
+    s.push_str("rsphere.curve\t0.0\tmethod=norm\n");
+    s.push_str("rsphere.curve\t45.0\tmethod=mean\n");
+    s.push_str("rsphere.curve\t45.0\tmethod=norm\n");
+    s.push_str("rsphere.curve\t-80.0\tmethod=mean\n");
+    s.push_str("rsphere.curve\t-80.0\tmethod=norm\n");
+    s.push_str("rsphere.curve\t90.0\tmethod=mean\n");
+    s.push_str("rsphere.curve\t90.0\tmethod=norm\n");
+    s.push_str("rsphere.curve\t45.0\tmethod=geometric\n");
+    s.push_str("rsphere.curve\t0.3\tdeg=False\tell=mars\tmethod=norm\n");
+    s.push_str("rsphere.euler\t42.0\t-82.0\t41.0\t-81.0\n");
+    s.push_str("rsphere.euler\t0.0\t0.0\t0.0\t90.0\n");
+    s.push_str("rsphere.euler\t-41.28\t174.77\t40.96\t-5.5\n");
+    s.push_str("rsphere.euler\t10.0\t10.0\t10.0\t10.0\n");
+    s.push_str("rsphere.euler\t80.0\t0.0\t-80.0\t180.0\n");
+    s.push_str("rsphere.euler\t0.0\t0.0\t0.5\t179.5\n");
+    s.push_str("rsphere.euler\t0.7\t-1.4\t0.71\t-1.39\tdeg=False\n");
+    s.push_str("rsphere.euler\t42.0\t-82.0\t41.0\t-81.0\tell=clarke1866\n");
+    s.push_str("haversine.anglesep_meeus\t35.0\t23.0\t84.0\t20.0\n");
+    s.push_str("haversine.anglesep\t35.0\t23.0\t84.0\t20.0\n");
+    s.push_str("haversine.anglesep_meeus\t0.0\t0.0\t180.0\t0.0\n");
+    s.push_str("haversine.anglesep\t0.0\t0.0\t180.0\t0.0\n");
+    s.push_str("haversine.anglesep_meeus\t10.0\t10.0\t10.0\t10.0\n");
+    s.push_str("haversine.anglesep\t10.0\t10.0\t10.0\t10.0\n");
+    s.push_str("haversine.anglesep_meeus\t-71.06\t42.36\t139.65\t35.68\n");
+    s.push_str("haversine.anglesep\t-71.06\t42.36\t139.65\t35.68\n");
+    s.push_str("haversine.anglesep_meeus\t0.0\t90.0\t0.0\t-90.0\n");
+    s.push_str("haversine.anglesep\t0.0\t90.0\t0.0\t-90.0\n");
+    s.push_str("haversine.anglesep_meeus\t179.9\t0.0\t-179.9\t0.0\n");
+    s.push_str("haversine.anglesep\t179.9\t0.0\t-179.9\t0.0\n");
+    s.push_str("haversine.anglesep\t0.6\t0.4\t1.4\t0.3\tdeg=False\n");
+    s.push_str("haversine.haversine\t0.0\n");
+    s.push_str("haversine.haversine\t1.0\n");
+    s.push_str("haversine.haversine\t3.141592653589793\n");
+    s.push_str("haversine.haversine\t-2.5\n");
+    s.push_str("haversine.haversine\t100.0\n");
+    s.push_str("vincenty.vdist\t42.0\t-82.0\t41.0\t-81.0\n");
+    s.push_str("vincenty.vdist\t-41.32\t174.81\t40.96\t-5.5\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.0\t179.5\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.5\t179.7\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.0\t180.0\n");
+    s.push_str("vincenty.vdist\t90.0\t0.0\t-90.0\t0.0\n");
+    s.push_str("vincenty.vdist\t89.99999999999\t0.0\t10.0\t10.0\n");
+    s.push_str("vincenty.vdist\t10.0\t10.0\t10.0\t10.0\n");
+    s.push_str("vincenty.vdist\t-33.9\t18.4\t51.5\t-0.13\n");
+    s.push_str("vincenty.vdist\t30.0\t0.0\t-30.0\t179.9\n");
+    s.push_str("vincenty.vdist\t91.0\t0.0\t0.0\t0.0\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t-95.0\t0.0\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.0\t1e-09\n");
+    s.push_str("vincenty.vdist\t60.0\t359.0\t60.0\t1.0\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.0\tnan\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.0\tinf\n");
+    s.push_str("vincenty.vdist\t0.0\t0.0\t0.1\t179.9\n");
+    s.push_str("vincenty.vdist\t0.7\t-1.4\t0.71\t-1.39\tdeg=False\n");
+    s.push_str("vincenty.vdist\t42.0\t-82.0\t41.0\t-81.0\tell=mars\n");
+    s.push_str("vincenty.vdist\t42.0\t-82.0\t41.0\t-81.0\tell=wgs84_mean\n");
+    s.push_str("vincenty.vreckon\t42.0\t-82.0\t1000.0\t45.0\n");
+    s.push_str("vincenty.vreckon\t-41.32\t174.81\t19959679.0\t161.07\n");
+    s.push_str("vincenty.vreckon\t0.0\t0.0\t0.0\t0.0\n");
+    s.push_str("vincenty.vreckon\t89.0\t10.0\t500000.0\t180.0\n");
+    s.push_str("vincenty.vreckon\t90.0\t0.0\t1000.0\t90.0\n");
+    s.push_str("vincenty.vreckon\t10.0\t170.0\t3000000.0\t90.0\n");
+    s.push_str("vincenty.vreckon\t10.0\t10.0\t-1.0\t0.0\n");
+    s.push_str("vincenty.vreckon\t95.0\t10.0\t1.0\t0.0\n");
+    s.push_str("vincenty.vreckon\t-60.0\t-60.0\t10000000.0\t300.0\n");
+    s.push_str("vincenty.vreckon\t0.0\t0.0\t20003930.0\t90.0\n");
+    s.push_str("vincenty.vreckon\t0.7\t-1.4\t10000.0\t0.5\tdeg=False\n");
+    s.push_str("vincenty.vreckon\t42.0\t-82.0\t1000.0\t45.0\tell=moon\n");
+    s.push_str("vincenty.vdist\t59.75048894239734\t24.55750561900456\t4.073055303437201\t-147.30429690500097\n");
+    s.push_str("vincenty.vreckon\t35.77018845616688\t64.62179166685192\t8733271.279570423\t44.19759452695824\n");
+    s.push_str("vincenty.vdist\t4.966953722942193\t-144.81443606567714\t-40.5069816115202\t-51.65409782419462\n");
+    s.push_str("vincenty.vreckon\t81.63896897130269\t52.68807309096928\t8838977.343036437\t291.40582474311225\n");
+    s.push_str("vincenty.vdist\t-87.54596982214014\t-25.621077687581675\t-74.51461151536135\t116.26622595179458\n");
+    s.push_str("vincenty.vreckon\t13.66189240738042\t42.250565719206804\t3867088.4766633916\t184.7066867073744\n");
+    s.push_str("vincenty.vdist\t29.638565407663805\t-52.03155379579955\t48.25648178211193\t-120.96814938200268\n");
+    s.push_str("vincenty.vreckon\t57.88311672764411\t20.993956026328192\t19301194.91312804\t188.71729085780183\n");
+    s.push_str("vincenty.vdist\t50.649772710495796\t56.80278380940811\t-5.728833073085312\t-90.5972399221485\n");
+    s.push_str("vincenty.vreckon\t12.937831360684356\t23.797979684799316\t12662032.21107049\t173.3121263337228\n");
+    s.push_str("vincenty.vdist\t-36.04911191004417\t-170.73151721250466\t-15.682566498118987\t140.53382408117312\n");
+    s.push_str("vincenty.vreckon\t-37.8984274041117\t-77.36184509664699\t13175024.823251067\t153.80962872259687\n");
+    s.push_str("vincenty.vdist\t-0.4914460982889892\t-90.89122831578364\t13.972799882079755\t-133.7784868835938\n");
+    s.push_str("vincenty.vreckon\t-53.3475384227449\t-177.63177091048647\t10478592.807693124\t201.71579052563337\n");
+    s.push_str("vincenty.vdist\t63.229719482275584\t103.10434654492462\t-22.81903289658986\t-107.34573872343982\n");
+    s.push_str("vincenty.vreckon\t-54.53972829913434\t-175.84984517560673\t16190063.874952387\t75.30824360182518\n");
+    s.push_str("vincenty.vdist\t-24.519134971192898\t73.82917562213237\t-53.71166149214671\t160.11630480320082\n");
+    s.push_str("vincenty.vreckon\t-76.84034327894881\t92.23186372126304\t2231208.000417577\t26.086235646309177\n");
+    s.push_str("vincenty.vdist\t-42.09123136552451\t111.61406122670792\t-57.756157465546515\t119.19112084138123\n");
+    s.push_str("vincenty.vreckon\t-62.14179592817531\t103.56257425464457\t16707807.346345816\t335.99597137258104\n");
+    s.push_str("vincenty.vdist\t-3.745165874740323\t121.04786209496558\t74.25345962950178\t-154.12199522424055\n");
+    s.push_str("vincenty.vreckon\t-63.672414428326334\t116.96728417045779\t1470682.6411505358\t74.19236566195751\n");
+    s.push_str("vincenty.vdist\t66.38011514416911\t-95.85873786382885\t-83.12270156499203\t-125.20139257278815\n");
+    s.push_str("vincenty.vreckon\t85.80203640629716\t-125.04915396123684\t19926195.76661099\t81.9014402493667\n");
+    s.push_str("vincenty.vdist\t-43.787907797941685\t-66.94674821539725\t-85.27931572421971\t129.53899256127391\n");
+    s.push_str("vincenty.vreckon\t10.126604148825862\t-52.370730269738075\t12430445.7547528\t312.1851351666933\n");
+    s.push_str("vincenty.vdist\t-25.414739467069708\t-157.7122743992361\t69.92115175571954\t-53.211358228581034\n");
+    s.push_str("vincenty.vreckon\t-22.233592749542424\t132.11679358631437\t5401634.514974214\t75.6245287917102\n");
+    s.push_str("vincenty.vdist\t68.86702858125511\t-154.30307368546693\t-4.109648772717691\t-60.118707626302395\n");
+    s.push_str("vincenty.vreckon\t-82.80783308646153\t113.41939293989833\t9642333.418329747\t144.43742529174057\n");
+    s.push_str("vincenty.track2\t40.0\t-80.0\t65.0\t148.0\tnpts=2\n");
+    s.push_str("vincenty.track2\t40.0\t-80.0\t65.0\t148.0\tnpts=1\n");
+    s.push_str("vincenty.track2\t40.0\t-80.0\t65.0\t148.0\tnpts=5\n");
+    s.push_str("vincenty.track2\t0.0\t0.0\t0.0\t180.0\tnpts=5\n");
+    s.push_str("lox.meridian_dist\t0.0\n");
+    s.push_str("lox.meridian_dist\t45.0\n");
+    s.push_str("lox.meridian_dist\t-45.0\n");
+    s.push_str("lox.meridian_dist\t90.0\n");
+    s.push_str("lox.meridian_dist\t30.5\n");
+    s.push_str("lox.meridian_dist\t0.5\tdeg=False\tell=moon\n");
+    s.push_str("lox.meridian_arc\t0.0\t90.0\n");
+    s.push_str("lox.meridian_arc\t-90.0\t90.0\n");
+    s.push_str("lox.meridian_arc\t45.0\t46.0\n");
+    s.push_str("lox.meridian_arc\t10.0\t-20.0\n");
+    s.push_str("lox.loxodrome_inverse\t40.0\t-80.0\t65.0\t-148.0\n");
+    s.push_str("lox.loxodrome_inverse\t0.0\t0.0\t0.0\t90.0\n");
+    s.push_str("lox.loxodrome_inverse\t0.0\t0.0\t10.0\t0.0\n");
+    s.push_str("lox.loxodrome_inverse\t10.0\t20.0\t10.0\t-30.0\n");
+    s.push_str("lox.loxodrome_inverse\t40.0\t30.0\t40.0\t30.0\n");
+    s.push_str("lox.loxodrome_inverse\t89.9\t0.0\t-89.9\t10.0\n");
+    s.push_str("lox.loxodrome_inverse\t90.0\t0.0\t80.0\t0.0\n");
+    s.push_str("lox.loxodrome_inverse\t-90.0\t0.0\t90.0\t0.0\n");
+    s.push_str("lox.loxodrome_inverse\t35.0\t140.0\t-35.0\t-40.0\n");
+    s.push_str("lox.loxodrome_inverse\t0.7\t-1.4\t0.2\t0.3\tdeg=False\n");
+    s.push_str("lox.loxodrome_inverse\t40.0\t-80.0\t65.0\t-148.0\tell=jupyter\n");
+    s.push_str("lox.loxodrome_direct\t40.0\t-80.0\t10000.0\t30.0\n");
+    s.push_str("lox.loxodrome_direct\t0.0\t0.0\t1000000.0\t90.0\n");
+    s.push_str("lox.loxodrome_direct\t0.0\t0.0\t1000000.0\t270.0\n");
+    s.push_str("lox.loxodrome_direct\t10.0\t10.0\t0.0\t45.0\n");
+    s.push_str("lox.loxodrome_direct\t40.0\t-80.0\t5000000.0\t180.0\n");
+    s.push_str("lox.loxodrome_direct\t40.0\t-80.0\t5000000.0\t-45.0\n");
+    s.push_str("lox.loxodrome_direct\t40.0\t-80.0\t-1.0\t0.0\n");
+    s.push_str("lox.loxodrome_direct\t91.0\t0.0\t1.0\t0.0\n");
+    s.push_str("lox.loxodrome_direct\t-30.0\t150.0\t2000000.0\t450.0\n");
+    s.push_str("lox.loxodrome_direct\t0.7\t-1.4\t10000.0\t1.0\tdeg=False\n");
+    s.push_str("lox.loxodrome_direct\t40.0\t-80.0\t10000.0\t30.0\tell=mars\n");
+    s.push_str("lox.departure\t0.0\t90.0\t0.0\n");
+    s.push_str("lox.departure\t-80.0\t100.0\t45.0\n");
+    s.push_str("lox.departure\t10.0\t370.0\t60.0\n");
+    s.push_str("lox.departure\t0.0\t0.0\t90.0\n");
+    s.push_str("lox.departure\t0.1\t0.4\t0.5\tdeg=False\n");
+    s.push_str("lox.meanm\t10.0\t20.0\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t1000.0\t0.0\t0.0\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t1000.0\t45.0\t30.0\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t1000.0\t45.0\t90.0\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t1000.0\t45.0\t120.0\n");
+    s.push_str("lookAtSpheroid\t0.0\t0.0\t35786000.0\t0.0\t5.0\n");
+    s.push_str("lookAtSpheroid\t0.0\t0.0\t35786000.0\t90.0\t9.0\n");
+    s.push_str("lookAtSpheroid\t-41.28\t174.77\t10.0\t180.0\t60.0\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t-1.0\t0.0\t0.0\n");
+    s.push_str("lookAtSpheroid\t89.0\t0.0\t400000.0\t270.0\t45.0\n");
+    s.push_str("lookAtSpheroid\t10.0\t20.0\t0.0\t0.0\t0.0\n");
+    s.push_str("lookAtSpheroid\t0.7\t-1.4\t1000.0\t0.5\t0.3\tdeg=False\n");
+    s.push_str("lookAtSpheroid\t42.0\t-82.0\t1000.0\t45.0\t30.0\tell=mars\n");
+    s
+}
