@@ -320,7 +320,25 @@ impl<'a> Validator<'a> {
                         ));
                     }
                 }
-                None
+                // An arithmetic operation's value has its left operand's
+                // type; a comparison's is a `bool`, a checked one's a pair,
+                // which the builder interns and this does not re-derive.
+                match rv {
+                    Rvalue::BinaryOp(
+                        BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Rem
+                        | BinOp::BitAnd
+                        | BinOp::BitOr
+                        | BinOp::BitXor
+                        | BinOp::Shl
+                        | BinOp::Shr,
+                        ..,
+                    ) => ta,
+                    _ => None,
+                }
             }
             Rvalue::UnaryOp(_, o) => self.operand(o),
             Rvalue::Cast(kind, o, t) => {

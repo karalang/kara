@@ -619,6 +619,52 @@ fn mir_a_cast_into_a_wider_place_widens() {
     }
 }
 
+/// Float arithmetic computed at `f32` and returned or bound as `f64` is the
+/// operation, then the widening. The compiled backend stored the `f32` bits
+/// into the `f64` slot, so `x + 1.0` at 2.5 printed 5.3360734e-315 (item 9 on
+/// mir-llvm, `test_e2e_float_wrapper_value_field_from_enum_payload`).
+#[test]
+fn mir_float_arithmetic_into_a_wider_place_widens() {
+    const SRC: &str = "enum Num { I(i64), F(F32) }\n\
+        fn arith(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value + 1.0 } }\n\
+        fn twice(f: f32) -> f64 { f * 2.0 }\n\
+        fn neg(f: f32) -> f64 { -f }\n\
+        fn main() {\n    let w: f32 = 2.5;\n    let q: f64 = w - 0.25;\n    \
+        println(f\"{arith(Num.F(F32 { value: 2.5 }))} {twice(1.5)} {neg(1.5)} {q}\");\n}\n";
+    let want = "3.5 3.0 -1.5 2.25\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// `Vec.with_capacity(n)` whose bytes no allocation can hold panics on the
+/// interpreter as it does compiled (collections.md § Fallible allocation),
+/// where it used to ignore the capacity and print the empty Vec's length.
+#[test]
+fn mir_interp_with_capacity_past_the_allocation_bound_panics() {
+    let r = karac::mir::lower::run_source(
+        "fn main() {\n    let v: Vec[i64] = Vec.with_capacity(2305843009213693953);\n    \
+         println(v.len());\n}\n",
+    )
+    .expect("MIR interpreter");
+    assert_eq!(r.output, "");
+    assert!(
+        matches!(r.outcome, karac::mir::interp::Outcome::Aborted(_)),
+        "{:?}",
+        r.outcome
+    );
+    // A large capacity that fits is still only a hint.
+    let r = karac::mir::lower::run_source(
+        "fn main() {\n    let v: Vec[u8] = Vec.with_capacity(1 << 40);\n    println(v.len());\n}\n",
+    )
+    .expect("MIR interpreter");
+    assert_eq!(r.output, "0\n");
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

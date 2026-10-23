@@ -2453,6 +2453,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let kind = self.widening(self.operand_ty(&op), pt).unwrap();
                 Rvalue::Cast(kind, op, pt)
             }
+            // Arithmetic computed at the operands' width and widened into
+            // the slot (`fn f(x: f32) -> f64 { x + 1.0 }`): the operation,
+            // then the widening. Integer operations already reach here as
+            // a `Use` of the checked result's value.
+            Rvalue::BinaryOp(op, a, b) if self.widening(self.operand_ty(&a), pt).is_some() => {
+                let at = self.operand_ty(&a);
+                let kind = self.widening(at, pt).unwrap();
+                let t = self.temp(at);
+                let bb = self.cur;
+                self.b
+                    .assign(bb, Place::local(t), Rvalue::BinaryOp(op, a, b));
+                Rvalue::Cast(kind, Operand::Move(Place::local(t)), pt)
+            }
+            Rvalue::UnaryOp(op, a) if self.widening(self.operand_ty(&a), pt).is_some() => {
+                let at = self.operand_ty(&a);
+                let kind = self.widening(at, pt).unwrap();
+                let t = self.temp(at);
+                let bb = self.cur;
+                self.b.assign(bb, Place::local(t), Rvalue::UnaryOp(op, a));
+                Rvalue::Cast(kind, Operand::Move(Place::local(t)), pt)
+            }
             Rvalue::Aggregate(kind, ops) => {
                 // A variant of a generic type named bare in its own impl
                 // (`self = Cnt.Done`) is recorded without its arguments:

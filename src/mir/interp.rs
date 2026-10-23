@@ -2682,8 +2682,14 @@ impl<'a> Interp<'a> {
         let name = MethodName(ty_name, method);
         let is_vec = ty_name.starts_with("Vec");
         match (is_vec, method, args.as_slice()) {
-            (true, "with_capacity", [Value::Int(n), ..]) if *n < 0 => {
-                // A negative capacity panics, as in legacy.
+            (true, "with_capacity", [Value::Int(n), ..])
+                if *n < 0 || self.over_max_alloc(*n as u128, ret) =>
+            {
+                // A negative capacity panics, as in legacy, and so does one
+                // whose bytes no allocation can hold (collections.md
+                // § Fallible allocation: `with_capacity` panics when the
+                // allocation fails; runtime/src/alloc.rs's
+                // `KARAC_MAX_ALLOC_BYTES` is the compiled backend's bound).
                 if self.trace {
                     self.events.push(Event::Abort(AbortReason::Panic));
                 }
@@ -9127,6 +9133,19 @@ impl<'a> Interp<'a> {
             Value::Agg(fs) => Ok(fs),
             other => err(format!("a Vec allocation holds {other:?}")),
         }
+    }
+
+    /// Whether `n` elements of the `Vec[T]` type `vec` need more bytes
+    /// than runtime/src/alloc.rs's `KARAC_MAX_ALLOC_BYTES`.
+    fn over_max_alloc(&self, n: u128, vec: Ty) -> bool {
+        const MAX_BYTES: u128 = (1 << 61) - 1;
+        let size = match self.tys.kind(vec) {
+            TyKind::Intrinsic(IntrinsicTy::Vec(el) | IntrinsicTy::VecDeque(el)) => {
+                super::layout::layout(self.tys, el).map_or(1, |l| l.size as u128)
+            }
+            _ => 1,
+        };
+        n.checked_mul(size).is_none_or(|b| b > MAX_BYTES)
     }
 
     /// `T` for a method whose receiver is a reference to a `Vec[T]`.
