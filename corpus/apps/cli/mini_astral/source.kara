@@ -1,0 +1,3485 @@
+// mini_astral — astral 3.2 (Simon Kennedy), the Python library for the times
+// of the sun and moon: dawn, sunrise, solar noon and midnight, sunset, dusk,
+// daylight, night, twilight, the golden and blue hours, rahukaalam, the time
+// the sun reaches a given elevation, its zenith, azimuth and elevation at an
+// instant, moonrise and moonset, the moon's position, azimuth, elevation and
+// phase, the Julian day and sidereal time helpers, degrees/minutes/seconds
+// parsing, and the built-in geocoder database with its lookups.
+//
+// Every float is computed in the order the Python computes it, with its float
+// `%` (fmod moved onto the divisor's sign) and int() truncation. Its
+// datetime arithmetic is ported for fixed UTC offsets: wall-clock fields plus
+// an offset, with timedelta and date arithmetic in exact microseconds, and
+// the constructors' range checks and messages. math.acos/asin/sqrt raise
+// "math domain error" outside their domains, which is what the sun functions
+// catch to say the sun never reaches an angle. Exceptions are Result errors
+// carrying "Type: repr(message)", the way oracle.py prints them.
+// table4(), location_info() and jobs_text() at the end are written by
+// gen_kara.py from vendor/astral and data/jobs.tsv.
+
+const PI: f64 = 3.141592653589793;
+const DEG_TO_RAD: f64 = 0.017453292519943295;
+const RAD_TO_DEG: f64 = 57.29577951308232;
+const SUN_APPARENT_RADIUS: f64 = 0.26666666666666666;
+const MOON_APPARENT_RADIUS: f64 = 0.5266666666666666;
+const MAX_ORDINAL: i64 = 3652059;
+const NAN_F: f64 = f64.NAN;
+
+// ---------------------------------------------------------- Python numbers
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn nan3() -> (f64, f64, f64) {
+    (NAN_F, NAN_F, NAN_F)
+}
+
+fn copysign0(b: f64) -> f64 {
+    let z = 0.0;
+    z.copysign(b)
+}
+
+// Python's float %: fmod, then moved onto the divisor's sign. Every divisor
+// here is a nonzero constant.
+fn pmod(a: f64, b: f64) -> f64 {
+    let m = a % b;
+    if m != 0.0 {
+        if (b < 0.0) != (m < 0.0) {
+            return m + b;
+        }
+        return m;
+    }
+    copysign0(b)
+}
+// int // and % (floor division)
+fn idiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+fn imod(a: i64, b: i64) -> i64 {
+    a - b * idiv(a, b)
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => NAN_F,
+    }
+}
+
+fn to_i64(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}
+
+// repr() of a float
+fn fmt(x: f64) -> String {
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+fn lpad(s: String, w: i64) -> String {
+    let mut t = s.clone();
+    while t.len() < w {
+        t = f" {t}";
+    }
+    t
+}
+
+fn rpad(s: String, w: i64) -> String {
+    let mut t = s.clone();
+    while t.len() < w {
+        t.push_str(" ");
+    }
+    t
+}
+
+// ---------------------------------------------------------- Python strings
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x20) or o == 0x85 or o == 0xA0 or o == 0x1680
+        or (o >= 0x2000 and o <= 0x200A) or o == 0x2028 or o == 0x2029 or o == 0x202F or o == 0x205F or o == 0x3000
+}
+
+fn slice_chars(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut i = if lo < 0 { 0 } else { lo };
+    let top = if hi > cs.len() { cs.len() } else { hi };
+    while i < top {
+        s.push(cs[i]);
+        i += 1;
+    }
+    s
+}
+
+// s[lo:hi]
+fn sl(s: ref String, lo: i64, hi: i64) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    slice_chars(cs, lo, hi)
+}
+
+// s[i] == c, with False past the end
+fn at_is(cs: ref Vec[char], i: i64, c: char) -> bool {
+    i < cs.len() and cs[i] == c
+}
+
+fn py_strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    slice_chars(cs, a, b)
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    slice_chars(cs, 0, b)
+}
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    let mut k = (n - 1) * 4;
+    while k >= 0 {
+        s.push(ds[(v >> k) & 15]);
+        k -= 4;
+    }
+    s
+}
+
+// str.isprintable() for one character of the text this program sees
+fn is_printable(c: char) -> bool {
+    let o = c as i64;
+    if o < 0x20 or (o >= 0x7F and o <= 0xA0) or o == 0xAD {
+        return false;
+    }
+    if o == 0x1680 or (o >= 0x2000 and o <= 0x200F) or (o >= 0x2028 and o <= 0x202F) or (o >= 0x205F and o <= 0x2064) {
+        return false;
+    }
+    not (o == 0x3000 or o == 0xFEFF or (o >= 0xD800 and o <= 0xDFFF) or (o >= 0xE000 and o <= 0xF8FF))
+}
+
+// repr() of a str
+fn py_repr_str(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let q = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if is_printable(c) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str("\\x");
+            out.push_str(hex_digits(o, 2));
+        } else if o < 0x10000 {
+            out.push_str("\\u");
+            out.push_str(hex_digits(o, 4));
+        } else {
+            out.push_str("\\U");
+            out.push_str(hex_digits(o, 8));
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn val_err(msg: ref String) -> String {
+    f"ValueError: {py_repr_str(msg)}"
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_alpha(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+// Digits with single underscores between them, from cs[i]; the index past
+// them, or -1 when an underscore is misplaced. `out` gets the digits.
+fn digit_run(cs: ref Vec[char], from: i64, out: mut ref String) -> i64 {
+    let mut i = from;
+    while i < cs.len() {
+        if is_digit(cs[i]) {
+            out.push(cs[i]);
+        } else if cs[i] == '_' {
+            if i == from or not is_digit(cs[i - 1]) or i + 1 >= cs.len() or not is_digit(cs[i + 1]) {
+                return -1;
+            }
+        } else {
+            return i;
+        }
+        i += 1;
+    }
+    i
+}
+fn lower_ascii(s: ref String) -> String {
+    let lower: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(lower[(c as i64) - 65]);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// float(s)
+fn py_float(s: ref String) -> Result[f64, String] {
+    let bad = val_err(f"could not convert string to float: {py_repr_str(s)}");
+    let t = py_strip(s);
+    let cs: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    let word = lower_ascii(slice_chars(cs, i, cs.len()));
+    if word == "inf" or word == "infinity" {
+        return Ok(if neg { -f64.INFINITY } else { f64.INFINITY });
+    }
+    if word == "nan" {
+        return Ok(NAN_F);
+    }
+    let mut text = String.new();
+    let mut ip = String.new();
+    let mut e = digit_run(cs, i, mut ip);
+    if e < 0 {
+        return Err(bad);
+    }
+    let mut fp = String.new();
+    if e < cs.len() and cs[e] == '.' {
+        e = digit_run(cs, e + 1, mut fp);
+        if e < 0 {
+            return Err(bad);
+        }
+    }
+    if ip.len() == 0 and fp.len() == 0 {
+        return Err(bad);
+    }
+    text.push_str(if ip.len() == 0 { "0" } else { ip });
+    text.push_str(".");
+    text.push_str(if fp.len() == 0 { "0" } else { fp });
+    if e < cs.len() and (cs[e] == 'e' or cs[e] == 'E') {
+        let mut k = e + 1;
+        let mut esign = "";
+        if k < cs.len() and (cs[k] == '+' or cs[k] == '-') {
+            esign = if cs[k] == '-' { "-" } else { "+" };
+            k += 1;
+        }
+        let mut ed = String.new();
+        let e2 = digit_run(cs, k, mut ed);
+        if e2 < 0 or ed.len() == 0 {
+            return Err(bad);
+        }
+        text.push_str(f"e{esign}{ed}");
+        e = e2;
+    }
+    if e != cs.len() {
+        return Err(bad);
+    }
+    let v = to_f64(text);
+    Ok(if neg { -v } else { v })
+}
+
+fn py_trunc(x: f64) -> Result[i64, String] {
+    if is_nan(x) {
+        return Err(val_err("cannot convert float NaN to integer"));
+    }
+    if x == f64.INFINITY or x == -f64.INFINITY {
+        return Err(f"OverflowError: {py_repr_str("cannot convert float infinity to integer")}");
+    }
+    Ok(x as i64)
+}
+
+fn tr(x: f64) -> i64 {
+    x as i64
+}
+
+fn math_domain() -> String {
+    val_err("math domain error")
+}
+
+fn radians(x: f64) -> f64 {
+    x * DEG_TO_RAD
+}
+
+fn degrees(x: f64) -> f64 {
+    x * RAD_TO_DEG
+}
+
+fn py_acos(x: f64) -> Result[f64, String] {
+    if x > 1.0 or x < -1.0 {
+        return Err(math_domain());
+    }
+    Ok(x.acos())
+}
+
+fn py_asin(x: f64) -> Result[f64, String] {
+    if x > 1.0 or x < -1.0 {
+        return Err(math_domain());
+    }
+    Ok(x.asin())
+}
+
+fn py_sqrt(x: f64) -> Result[f64, String] {
+    if x < 0.0 {
+        return Err(math_domain());
+    }
+    Ok(x.sqrt())
+}
+
+fn zero_div() -> String {
+    f"ZeroDivisionError: {py_repr_str("float division by zero")}"
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn pad6(n: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < 6 {
+        s = f"0{s}";
+    }
+    s
+}
+
+// ---------------------------------------------------------- dates and times
+
+fn is_leap(y: i64) -> bool {
+    imod(y, 4) == 0 and (imod(y, 100) != 0 or imod(y, 400) == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if is_leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn days_before_month(y: i64, m: i64) -> i64 {
+    let mut n = 0;
+    let mut k = 1;
+    while k < m {
+        n += days_in_month(y, k);
+        k += 1;
+    }
+    n
+}
+
+// date.toordinal()
+fn ordinal(y: i64, m: i64, d: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + p / 4 - p / 100 + p / 400 + days_before_month(y, m) + d
+}
+
+// date.fromordinal(), CPython's _ord2ymd
+fn from_ordinal(n0: i64) -> (i64, i64, i64) {
+    let mut n = n0 - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let mut year = n400 * 400 + 1;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    year += n100 * 100 + n4 * 4 + n1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let mut month = 1;
+    while n >= days_in_month(year, month) {
+        n -= days_in_month(year, month);
+        month += 1;
+    }
+    (year, month, n + 1)
+}
+
+#[derive(Copy, Clone)]
+struct Date {
+    y: i64,
+    m: i64,
+    d: i64,
+}
+
+fn date_ord(d: Date) -> i64 {
+    ordinal(d.y, d.m, d.d)
+}
+
+fn date_add_days(d: Date, n: i64) -> Result[Date, String] {
+    let o = date_ord(d) + n;
+    if o < 1 or o > MAX_ORDINAL {
+        return Err(f"OverflowError: {py_repr_str("date value out of range")}");
+    }
+    let (y, m, dd) = from_ordinal(o);
+    Ok(Date { y: y, m: m, d: dd })
+}
+
+fn date_str(d: Date) -> String {
+    let mut ys = f"{d.y}";
+    while ys.len() < 4 {
+        ys = f"0{ys}";
+    }
+    f"{ys}-{pad2(d.m)}-{pad2(d.d)}"
+}
+
+// A datetime: its wall-clock fields, and a fixed UTC offset in seconds when
+// it is aware.
+#[derive(Copy, Clone)]
+struct Dt {
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    aware: bool,
+    off: i64,
+}
+
+fn check_date(y: i64, mo: i64, d: i64) -> Result[(), String] {
+    if y < 1 or y > 9999 {
+        return Err(val_err(f"year {y} is out of range"));
+    }
+    if mo < 1 or mo > 12 {
+        return Err(val_err("month must be in 1..12"));
+    }
+    if d < 1 or d > days_in_month(y, mo) {
+        return Err(val_err("day is out of range for month"));
+    }
+    Ok(())
+}
+
+fn check_time(h: i64, mi: i64, s: i64, us: i64) -> Result[(), String] {
+    if h < 0 or h > 23 {
+        return Err(val_err("hour must be in 0..23"));
+    }
+    if mi < 0 or mi > 59 {
+        return Err(val_err("minute must be in 0..59"));
+    }
+    if s < 0 or s > 59 {
+        return Err(val_err("second must be in 0..59"));
+    }
+    if us < 0 or us > 999999 {
+        return Err(val_err("microsecond must be in 0..999999"));
+    }
+    Ok(())
+}
+
+// datetime.datetime(y, mo, d, h, mi, s, us, tzinfo=...)
+fn mk_dt(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, us: i64, aware: bool, off: i64) -> Result[Dt, String] {
+    check_date(y, mo, d)?;
+    check_time(h, mi, s, us)?;
+    Ok(Dt { y: y, mo: mo, d: d, h: h, mi: mi, s: s, us: us, aware: aware, off: off })
+}
+
+fn utc_dt(d: Date, h: i64, mi: i64, s: i64) -> Result[Dt, String] {
+    mk_dt(d.y, d.m, d.d, h, mi, s, 0, true, 0)
+}
+
+// The wall clock as microseconds since 0001-01-01 00:00 minus a day
+fn wall_us(t: Dt) -> i64 {
+    ((ordinal(t.y, t.mo, t.d) * 86400 + t.h * 3600 + t.mi * 60 + t.s) * 1000000) + t.us
+}
+
+fn dt_from_wall(us: i64, aware: bool, off: i64) -> Result[Dt, String] {
+    let days = idiv(us, 86400000000);
+    let rem = us - days * 86400000000;
+    if days < 1 or days > MAX_ORDINAL {
+        return Err(f"OverflowError: {py_repr_str("date value out of range")}");
+    }
+    let (y, m, d) = from_ordinal(days);
+    let secs = rem / 1000000;
+    Ok(Dt { y: y, mo: m, d: d, h: secs / 3600, mi: (secs / 60) % 60, s: secs % 60, us: rem % 1000000, aware: aware, off: off })
+}
+
+// dt + timedelta(microseconds=delta)
+fn dt_add(t: Dt, delta: i64) -> Result[Dt, String] {
+    dt_from_wall(wall_us(t) + delta, t.aware, t.off)
+}
+
+// dt.astimezone(timezone(timedelta(seconds=off))) for an aware dt
+fn astimezone(t: Dt, off: i64) -> Result[Dt, String] {
+    dt_from_wall(wall_us(t) - t.off * 1000000 + off * 1000000, true, off)
+}
+
+fn utc_us(t: Dt) -> i64 {
+    wall_us(t) - t.off * 1000000
+}
+
+fn dt_date(t: Dt) -> Date {
+    Date { y: t.y, m: t.mo, d: t.d }
+}
+
+fn time_str(h: i64, mi: i64, s: i64, us: i64) -> String {
+    let base = f"{pad2(h)}:{pad2(mi)}:{pad2(s)}";
+    if us != 0 { f"{base}.{pad6(us)}" } else { base }
+}
+
+fn offset_str(off: i64) -> String {
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = if off < 0 { -off } else { off };
+    let base = f"{sign}{pad2(a / 3600)}:{pad2((a / 60) % 60)}";
+    if a % 60 != 0 { f"{base}:{pad2(a % 60)}" } else { base }
+}
+
+// str(datetime)
+fn dt_str(t: Dt) -> String {
+    let base = f"{date_str(dt_date(t))} {time_str(t.h, t.mi, t.s, t.us)}";
+    if t.aware { f"{base}{offset_str(t.off)}" } else { base }
+}
+
+// str(timedelta(microseconds=us))
+fn td_str(us: i64) -> String {
+    let days = idiv(us, 86400000000);
+    let rem = us - days * 86400000000;
+    let secs = rem / 1000000;
+    let frac = rem % 1000000;
+    let mut s = String.new();
+    if days != 0 {
+        let a = if days < 0 { -days } else { days };
+        let plural = if a != 1 { "s" } else { "" };
+        s.push_str(f"{days} day{plural}, ");
+    }
+    s.push_str(f"{secs / 3600}:{pad2((secs / 60) % 60)}:{pad2(secs % 60)}");
+    if frac != 0 {
+        s.push_str(f".{pad6(frac)}");
+    }
+    s
+}
+
+// date.weekday()
+fn weekday(d: Date) -> i64 {
+    (date_ord(d) + 6) % 7
+}
+
+// ------------------------------------------------------------ astral/__init__
+
+// The text of a Python number as f"{x}" prints it: a float, or the int a
+// Depression or a literal int carries.
+#[derive(Clone)]
+struct Num {
+    v: f64,
+    text: String,
+}
+
+fn quote_char(c: char, primes: Str) -> bool {
+    for p in primes.chars() {
+        if c == p {
+            return true;
+        }
+    }
+    false
+}
+
+// The optional `(?P<x>\d{1,2})[<marks>]` group of the dms pattern, greedy
+fn dms_part(cs: ref Vec[char], pos: i64, marks: Str) -> (String, i64) {
+    if pos + 2 < cs.len() and is_digit(cs[pos]) and is_digit(cs[pos + 1]) and quote_char(cs[pos + 2], marks) {
+        return (slice_chars(cs, pos, pos + 2), pos + 3);
+    }
+    if pos + 1 < cs.len() and is_digit(cs[pos]) and quote_char(cs[pos + 1], marks) {
+        return (slice_chars(cs, pos, pos + 1), pos + 2);
+    }
+    ("".to_string(), pos)
+}
+
+fn dms_to_float(dms: ref String, has_limit: bool, limit: f64) -> Result[f64, String] {
+    let mut res = 0.0;
+    match py_float(dms) {
+        Ok(v) => {
+            res = v;
+        }
+        Err(_) => {
+            // re.match(r"(?P<deg>\d{1,3})[°]((?P<min>\d{1,2})[′'])?((?P<sec>\d{1,2})[″\"])?(?P<dir>[NSEW])?", dms, re.I)
+            let cs: Vec[char] = dms.chars().collect();
+            let mut n = 0;
+            while n < cs.len() and is_digit(cs[n]) {
+                n += 1;
+            }
+            if n < 1 or n > 3 or n >= cs.len() or cs[n] != '°' {
+                return Err(val_err("Unable to convert degrees/minutes/seconds to float"));
+            }
+            let deg = slice_chars(cs, 0, n);
+            let (min_, p1) = dms_part(cs, n + 1, "′'");
+            let (sec, p2) = dms_part(cs, p1, "″\"");
+            let mut dir_ = 'E';
+            if p2 < cs.len() and quote_char(cs[p2], "NSEWnsew") {
+                dir_ = cs[p2];
+            }
+            res = to_f64(deg);
+            if min_.len() > 0 {
+                res += to_f64(min_) / 60.0;
+            }
+            if sec.len() > 0 {
+                res += to_f64(sec) / 3600.0;
+            }
+            if dir_ == 'S' or dir_ == 's' or dir_ == 'W' or dir_ == 'w' {
+                res = -res;
+            }
+        }
+    }
+    if has_limit {
+        if res > limit {
+            res = limit;
+        } else if res < -limit {
+            res = -limit;
+        }
+    }
+    Ok(res)
+}
+
+fn hours_to_time(value0: f64) -> Result[String, String] {
+    let mut value = value0;
+    let hour = py_trunc(value)?;
+    value -= hour as f64;
+    value *= 60.0;
+    let minute = tr(value);
+    value -= minute as f64;
+    value *= 60.0;
+    let second = tr(value);
+    value -= second as f64;
+    let microsecond = tr(value * 1000000.0);
+    check_time(hour, minute, second, microsecond)?;
+    Ok(time_str(hour, minute, second, microsecond))
+}
+
+fn time_to_hours(h: i64, m: i64, s: i64, us: i64) -> f64 {
+    let mut hours = 0.0;
+    hours += h as f64;
+    hours += (m as f64) / 60.0;
+    hours += (s as f64) / 3600.0;
+    hours += (us as f64) / 1000000.0;
+    hours
+}
+
+// refraction_at_zenith; `.1` is true when it returns the int 0
+fn refraction_at_zenith(zenith: f64) -> (f64, bool) {
+    let elevation = 90.0 - zenith;
+    if elevation >= 85.0 {
+        return (0.0, true);
+    }
+    let mut refraction_correction = 0.0;
+    let te = radians(elevation).tan();
+    if elevation > 5.0 {
+        refraction_correction = 58.1 / te - 0.07 / (te * te * te) + 0.000086 / (te * te * te * te * te);
+    } else if elevation > -0.575 {
+        let step1 = -12.79 + elevation * 0.711;
+        let step2 = 103.4 + elevation * step1;
+        let step3 = -518.2 + elevation * step2;
+        refraction_correction = 1735.0 + elevation * step3;
+    } else {
+        refraction_correction = -20.774 / te;
+    }
+    refraction_correction = refraction_correction / 3600.0;
+    (refraction_correction, false)
+}
+
+#[derive(Copy, Clone)]
+struct Observer {
+    latitude: f64,
+    longitude: f64,
+    tuple_elev: bool,
+    e0: f64,
+    e1: f64,
+}
+
+fn observer_repr(o: Observer) -> String {
+    let el = if o.tuple_elev { f"({fmt(o.e0)}, {fmt(o.e1)})" } else { fmt(o.e0) };
+    f"{fmt(o.latitude)} {fmt(o.longitude)} {el}"
+}
+
+// ------------------------------------------------------------ julian.py
+
+fn julianday_at(y0: i64, m0: i64, day: i64, has_time: bool, secs: i64, gregorian: bool) -> f64 {
+    let mut year = y0;
+    let mut month = m0;
+    let day_fraction = if has_time { (secs as f64) / 86400.0 } else { 0.0 };
+    if month <= 2 {
+        year -= 1;
+        month += 12;
+    }
+    let a = tr((year as f64) / 100.0);
+    let b = if gregorian { 2 - a + tr((a as f64) / 4.0) } else { 0 };
+    let s1 = tr(365.25 * ((year + 4716) as f64)) + tr(30.6001 * ((month + 1) as f64)) + day;
+    (s1 as f64 + day_fraction + b as f64) - 1524.5
+}
+
+fn julianday_date(d: Date) -> f64 {
+    julianday_at(d.y, d.m, d.d, false, 0, true)
+}
+
+fn julianday_dt(t: Dt) -> f64 {
+    julianday_at(t.y, t.mo, t.d, true, t.h * 3600 + t.mi * 60 + t.s, true)
+}
+
+fn julianday_modified(t: Dt) -> f64 {
+    let mut year = t.y;
+    let mut month = t.mo;
+    let day = t.d;
+    let a0 = 10000 * year + 100 * month + day;
+    if year < 0 {
+        year += 1;
+    }
+    if month <= 2 {
+        month += 12;
+        year -= 1;
+    }
+    let yf = year as f64;
+    let b = if (a0 as f64) <= 15821004.1 {
+        -2.0 + ((year + 4716) as f64) / 4.0 - 1179.0
+    } else {
+        (yf / 400.0) - (yf / 100.0) + (yf / 4.0)
+    };
+    let a = 365 * year - 679004;
+    a as f64 + b + (tr(30.6001 * ((month + 1) as f64)) as f64) + (day as f64) + (t.h as f64) / 24.0
+}
+
+fn julianday_to_datetime(jd0: f64) -> Result[String, String] {
+    let jd = jd0 + 0.5;
+    let z = py_trunc(jd)?;
+    let f = jd - z as f64;
+    let mut a = z;
+    if z >= 2299161 {
+        let alpha = tr((z as f64 - 1867216.25) / 36524.25);
+        a = z + 1 + alpha + tr((alpha as f64) / 4.0);
+    }
+    let b = a + 1524;
+    let c = tr((b as f64 - 122.1) / 365.25);
+    let d0 = tr(365.25 * (c as f64));
+    let e = tr(((b - d0) as f64) / 30.6001);
+    let d = ((b - d0 - tr(30.6001 * (e as f64))) as f64) + f;
+    let day = tr(d);
+    let t = d - day as f64;
+    let mut total_seconds = t * 86400.0;
+    let hour = tr(total_seconds / 3600.0);
+    total_seconds -= (hour * 3600) as f64;
+    let minute = tr(total_seconds / 60.0);
+    total_seconds -= (minute * 60) as f64;
+    let seconds = tr(total_seconds);
+    let month = if e < 14 { e - 1 } else { e - 13 };
+    let year = if month > 2 { c - 4716 } else { c - 4715 };
+    let r = mk_dt(year, month, day, hour, minute, seconds, 0, false, 0)?;
+    Ok(dt_str(r))
+}
+
+fn day_fraction_to_time(fraction: f64) -> Result[String, String] {
+    let mut s = fraction * 86400.0;
+    let h = tr(s / 3600.0);
+    s -= (h * 3600) as f64;
+    let m = tr(s / 60.0);
+    s -= (m * 60) as f64;
+    let si = tr(s);
+    check_time(h, m, si, 0)?;
+    Ok(time_str(h, m, si, 0))
+}
+
+fn julianday_to_juliancentury(jd: f64) -> f64 {
+    (jd - 2451545.0) / 36525.0
+}
+
+fn juliancentury_to_julianday(jc: f64) -> f64 {
+    (jc * 36525.0) + 2451545.0
+}
+
+// ------------------------------------------------------------ sidereal.py
+
+fn gmst_of(jd2000: f64) -> f64 {
+    let t0 = jd2000 / 36525.0;
+    let value = 280.46061837 + 360.98564736629 * jd2000 + 0.000387933 * t0.pow(2.0) + t0.pow(3.0) / 38710000.0;
+    pmod(value, 360.0)
+}
+
+fn lmst_of(jd2000: f64, longitude: f64) -> f64 {
+    let mut mst = gmst_of(jd2000);
+    mst += longitude;
+    mst
+}
+
+// ------------------------------------------------------------ sun.py
+
+fn minutes_to_timedelta(minutes0: f64) -> i64 {
+    let mut minutes = minutes0;
+    let d = tr(minutes / 1440.0);
+    minutes = minutes - (d * 1440) as f64;
+    minutes = minutes * 60.0;
+    let s = tr(minutes);
+    let sfrac = minutes - s as f64;
+    let us = tr(sfrac * 1000000.0);
+    d * 86400000000 + s * 1000000 + us
+}
+
+fn geom_mean_long_sun(jc: f64) -> f64 {
+    let l0 = 280.46646 + jc * (36000.76983 + 0.0003032 * jc);
+    pmod(l0, 360.0)
+}
+
+fn geom_mean_anomaly_sun(jc: f64) -> f64 {
+    357.52911 + jc * (35999.05029 - 0.0001537 * jc)
+}
+
+fn eccentric_location_earth_orbit(jc: f64) -> f64 {
+    0.016708634 - jc * (0.000042037 + 0.0000001267 * jc)
+}
+
+fn sun_eq_of_center(jc: f64) -> f64 {
+    let m = geom_mean_anomaly_sun(jc);
+    let mrad = radians(m);
+    let sinm = mrad.sin();
+    let sin2m = (mrad + mrad).sin();
+    let sin3m = (mrad + mrad + mrad).sin();
+    sinm * (1.914602 - jc * (0.004817 + 0.000014 * jc)) + sin2m * (0.019993 - 0.000101 * jc) + sin3m * 0.000289
+}
+
+fn sun_true_long(jc: f64) -> f64 {
+    geom_mean_long_sun(jc) + sun_eq_of_center(jc)
+}
+
+fn sun_apparent_long(jc: f64) -> f64 {
+    let true_long = sun_true_long(jc);
+    let omega = 125.04 - 1934.136 * jc;
+    true_long - 0.00569 - 0.00478 * radians(omega).sin()
+}
+
+fn mean_obliquity_of_ecliptic(jc: f64) -> f64 {
+    let seconds = 21.448 - jc * (46.815 + jc * (0.00059 - jc * (0.001813)));
+    23.0 + (26.0 + (seconds / 60.0)) / 60.0
+}
+
+fn obliquity_correction(jc: f64) -> f64 {
+    let e0 = mean_obliquity_of_ecliptic(jc);
+    let omega = 125.04 - 1934.136 * jc;
+    e0 + 0.00256 * radians(omega).cos()
+}
+
+fn sun_declination(jc: f64) -> Result[f64, String] {
+    let e = obliquity_correction(jc);
+    let lambd = sun_apparent_long(jc);
+    let sint = radians(e).sin() * radians(lambd).sin();
+    Ok(degrees(py_asin(sint)?))
+}
+
+fn var_y(jc: f64) -> f64 {
+    let epsilon = obliquity_correction(jc);
+    let y = (radians(epsilon) / 2.0).tan();
+    y * y
+}
+
+fn eq_of_time(jc: f64) -> f64 {
+    let l0 = geom_mean_long_sun(jc);
+    let e = eccentric_location_earth_orbit(jc);
+    let m = geom_mean_anomaly_sun(jc);
+    let y = var_y(jc);
+    let sin2l0 = (2.0 * radians(l0)).sin();
+    let sinm = radians(m).sin();
+    let cos2l0 = (2.0 * radians(l0)).cos();
+    let sin4l0 = (4.0 * radians(l0)).sin();
+    let sin2m = (2.0 * radians(m)).sin();
+    let etime = y * sin2l0 - 2.0 * e * sinm + 4.0 * e * y * sinm * cos2l0 - 0.5 * y * y * sin4l0 - 1.25 * e * e * sin2m;
+    degrees(etime) * 4.0
+}
+
+// direction: 1 rising, -1 setting
+fn hour_angle(latitude: f64, declination: f64, zenith: f64, direction: i64) -> Result[f64, String] {
+    let latitude_rad = radians(latitude);
+    let declination_rad = radians(declination);
+    let zenith_rad = radians(zenith);
+    let h = (zenith_rad.cos() - latitude_rad.sin() * declination_rad.sin()) / (latitude_rad.cos() * declination_rad.cos());
+    let mut ha = py_acos(h)?;
+    if direction == -1 {
+        ha = -ha;
+    }
+    Ok(ha)
+}
+
+fn adjust_to_horizon(elevation: f64) -> f64 {
+    if elevation <= 0.0 {
+        return 0.0;
+    }
+    let r = 6356900.0;
+    let h1 = r + elevation;
+    degrees((r / h1).acos())
+}
+
+fn adjust_to_obscuring_feature(e0: f64, e1: f64) -> f64 {
+    if e0 == 0.0 {
+        return 0.0;
+    }
+    let sign = if e0 < 0.0 { -1.0 } else { 1.0 };
+    sign * degrees((e0.abs() / (e0.pow(2.0) + e1.pow(2.0)).sqrt()).acos())
+}
+
+fn clip_lat(lat: f64) -> f64 {
+    if lat > 89.8 {
+        89.8
+    } else if lat < -89.8 {
+        -89.8
+    } else {
+        lat
+    }
+}
+
+fn time_of_transit(o: Observer, date: Date, zenith: f64, direction: i64, with_refraction: bool) -> Result[Dt, String] {
+    let latitude = clip_lat(o.latitude);
+    let mut adjustment_for_elevation = 0.0;
+    if not o.tuple_elev and o.e0 > 0.0 {
+        adjustment_for_elevation = adjust_to_horizon(o.e0);
+    } else if o.tuple_elev {
+        adjustment_for_elevation = adjust_to_obscuring_feature(o.e0, o.e1);
+    }
+    let adjustment_for_refraction = if with_refraction {
+        let (r, _) = refraction_at_zenith(zenith + adjustment_for_elevation);
+        r
+    } else {
+        0.0
+    };
+    let jd = julianday_date(date);
+    let mut adjustment = 0.0;
+    let mut time_utc = 0.0;
+    let mut i = 0;
+    while i < 2 {
+        let jc = julianday_to_juliancentury(jd + adjustment);
+        let declination = sun_declination(jc)?;
+        let hourangle = hour_angle(latitude, declination, zenith + adjustment_for_elevation + adjustment_for_refraction, direction)?;
+        let delta = -o.longitude - degrees(hourangle);
+        let eqtime = eq_of_time(jc);
+        let mut offset = delta * 4.0 - eqtime;
+        if offset < -720.0 {
+            offset += 1440.0;
+        }
+        time_utc = 720.0 + offset;
+        adjustment = time_utc / 1440.0;
+        i += 1;
+    }
+    let td = minutes_to_timedelta(time_utc);
+    let midnight = utc_dt(date, 0, 0, 0)?;
+    dt_add(midnight, td)
+}
+
+fn is_domain(e: ref String) -> bool {
+    e == math_domain()
+}
+
+fn time_at_elevation(o: Observer, elevation0: f64, date: Date, direction0: i64, off: i64, with_refraction: bool) -> Result[Dt, String] {
+    let mut elevation = elevation0;
+    let mut direction = direction0;
+    if elevation > 90.0 {
+        elevation = 180.0 - elevation;
+        direction = -1;
+    }
+    let zenith = 90.0 - elevation;
+    match time_of_transit(o, date, zenith, direction, with_refraction) {
+        Ok(t) => astimezone(t, off),
+        Err(e) => {
+            if is_domain(e) {
+                Err(val_err(f"Sun never reaches an elevation of {fmt(elevation)} degrees at this location."))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+// The hour, minute and second fix-ups noon() and midnight() share
+fn hms_of(time_utc: f64) -> (i64, i64, i64) {
+    let mut hour = tr(time_utc);
+    let mut minute = tr((time_utc - hour as f64) * 60.0);
+    let mut second = tr((((time_utc - hour as f64) * 60.0) - minute as f64) * 60.0);
+    if second > 59 {
+        second -= 60;
+        minute += 1;
+    } else if second < 0 {
+        second += 60;
+        minute -= 1;
+    }
+    if minute > 59 {
+        minute -= 60;
+        hour += 1;
+    } else if minute < 0 {
+        minute += 60;
+        hour -= 1;
+    }
+    (hour, minute, second)
+}
+
+fn noon(o: Observer, date0: Date, off: i64) -> Result[Dt, String] {
+    let mut date = date0;
+    let jc = julianday_to_juliancentury(julianday_date(date));
+    let eqtime = eq_of_time(jc);
+    let time_utc = (720.0 - (4.0 * o.longitude) - eqtime) / 60.0;
+    let (h0, minute, second) = hms_of(time_utc);
+    let mut hour = h0;
+    if hour > 23 {
+        hour -= 24;
+        date = date_add_days(date, 1)?;
+    } else if hour < 0 {
+        hour += 24;
+        date = date_add_days(date, -1)?;
+    }
+    let t = utc_dt(date, hour, minute, second)?;
+    astimezone(t, off)
+}
+
+fn midnight(o: Observer, date0: Date, off: i64) -> Result[Dt, String] {
+    let mut date = date0;
+    let jd = julianday_at(date.y, date.m, date.d, true, 43200, true);
+    let newt = julianday_to_juliancentury(jd + 0.5 + -o.longitude / 360.0);
+    let eqtime = eq_of_time(newt);
+    let mut time_utc = (-o.longitude * 4.0) - eqtime;
+    time_utc = time_utc / 60.0;
+    let (h0, minute, second) = hms_of(time_utc);
+    let mut hour = h0;
+    if hour < 0 {
+        hour += 24;
+        date = date_add_days(date, -1)?;
+    }
+    let t = utc_dt(date, hour, minute, second)?;
+    astimezone(t, off)
+}
+
+fn zenith_and_azimuth(o: Observer, t: Dt, with_refraction: bool) -> Result[(f64, f64), String] {
+    let latitude = clip_lat(o.latitude);
+    let longitude = o.longitude;
+    let mut zone = 0.0;
+    let mut utc = t;
+    if t.aware {
+        zone = -(t.off as f64) / 3600.0;
+        utc = astimezone(t, 0)?;
+    }
+    let jd = julianday_dt(utc);
+    let jc = julianday_to_juliancentury(jd);
+    let declination = sun_declination(jc)?;
+    let eqtime = eq_of_time(jc);
+    let solar_time_fix = eqtime + (4.0 * longitude) + (60.0 * zone);
+    let mut true_solar_time = (t.h as f64) * 60.0 + (t.mi as f64) + (t.s as f64) / 60.0 + solar_time_fix;
+    while true_solar_time > 1440.0 {
+        true_solar_time = true_solar_time - 1440.0;
+    }
+    let mut hourangle = true_solar_time / 4.0 - 180.0;
+    if hourangle < -180.0 {
+        hourangle = hourangle + 360.0;
+    }
+    let ch = radians(hourangle).cos();
+    let cl = radians(latitude).cos();
+    let sl = radians(latitude).sin();
+    let sd = radians(declination).sin();
+    let cd = radians(declination).cos();
+    let mut csz = cl * cd * ch + sl * sd;
+    if csz > 1.0 {
+        csz = 1.0;
+    } else if csz < -1.0 {
+        csz = -1.0;
+    }
+    let mut zenith = degrees(csz.acos());
+    let az_denom = cl * radians(zenith).sin();
+    let mut azimuth = 0.0;
+    if az_denom.abs() > 0.001 {
+        let mut az_rad = ((sl * radians(zenith).cos()) - sd) / az_denom;
+        if az_rad.abs() > 1.0 {
+            if az_rad < 0.0 {
+                az_rad = -1.0;
+            } else {
+                az_rad = 1.0;
+            }
+        }
+        azimuth = 180.0 - degrees(az_rad.acos());
+        if hourangle > 0.0 {
+            azimuth = -azimuth;
+        }
+    } else {
+        if latitude > 0.0 {
+            azimuth = 180.0;
+        } else {
+            azimuth = 0.0;
+        }
+    }
+    if azimuth < 0.0 {
+        azimuth = azimuth + 360.0;
+    }
+    if with_refraction {
+        let (r, _) = refraction_at_zenith(zenith);
+        zenith -= r;
+    }
+    Ok((zenith, azimuth))
+}
+
+fn sun_zenith(o: Observer, t: Dt, with_refraction: bool) -> Result[f64, String] {
+    let (z, _) = zenith_and_azimuth(o, t, with_refraction)?;
+    Ok(z)
+}
+
+fn sun_azimuth(o: Observer, t: Dt) -> Result[f64, String] {
+    let (_, a) = zenith_and_azimuth(o, t, true)?;
+    Ok(a)
+}
+
+fn sun_elevation(o: Observer, t: Dt, with_refraction: bool) -> Result[f64, String] {
+    Ok(90.0 - sun_zenith(o, t, with_refraction)?)
+}
+
+// The local date of `tot`, compared with the date asked for
+fn date_cmp(a: Date, b: Date) -> i64 {
+    let x = date_ord(a);
+    let y = date_ord(b);
+    if x < y {
+        -1
+    } else if x > y {
+        1
+    } else {
+        0
+    }
+}
+
+// The search dawn, sunrise, sunset and dusk share: the transit on `date`,
+// else on the day before or after, else an error naming `what`.
+fn transit_on_date(o: Observer, date: Date, zenith: f64, direction: i64, off: i64, what: Str) -> Result[Dt, String] {
+    let mut tot = astimezone(time_of_transit(o, date, zenith, direction, true)?, off)?;
+    let c = date_cmp(dt_date(tot), date);
+    if c != 0 {
+        let delta = if c < 0 { 1 } else { -1 };
+        let new_date = date_add_days(date, delta)?;
+        tot = astimezone(time_of_transit(o, new_date, zenith, direction, true)?, off)?;
+        if date_cmp(dt_date(tot), date) != 0 {
+            return Err(val_err(f"Unable to find a {what} time on the date specified"));
+        }
+    }
+    Ok(tot)
+}
+
+fn dawn_dusk(o: Observer, date: Date, dep: ref Num, off: i64, direction: i64) -> Result[Dt, String] {
+    let what = if direction == 1 { "dawn" } else { "dusk" };
+    match transit_on_date(o, date, 90.0 + dep.v, direction, off, what) {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            if is_domain(e) {
+                Err(val_err(f"Sun never reaches {dep.text} degrees below the horizon, at this location."))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn dawn(o: Observer, date: Date, dep: ref Num, off: i64) -> Result[Dt, String] {
+    dawn_dusk(o, date, dep, off, 1)
+}
+
+fn dusk(o: Observer, date: Date, dep: ref Num, off: i64) -> Result[Dt, String] {
+    dawn_dusk(o, date, dep, off, -1)
+}
+
+fn rise_set(o: Observer, date: Date, off: i64, direction: i64) -> Result[Dt, String] {
+    let what = if direction == 1 { "sunrise" } else { "sunset" };
+    match transit_on_date(o, date, 90.0 + SUN_APPARENT_RADIUS, direction, off, what) {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            if is_domain(e) {
+                let z = sun_zenith(o, noon(o, date, 0)?, true)?;
+                if z > 90.0 {
+                    Err(val_err("Sun is always below the horizon on this day, at this location."))
+                } else {
+                    Err(val_err("Sun is always above the horizon on this day, at this location."))
+                }
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn sunrise(o: Observer, date: Date, off: i64) -> Result[Dt, String] {
+    rise_set(o, date, off, 1)
+}
+
+fn sunset(o: Observer, date: Date, off: i64) -> Result[Dt, String] {
+    rise_set(o, date, off, -1)
+}
+
+fn daylight(o: Observer, date: Date, off: i64) -> Result[(Dt, Dt), String] {
+    let sr = sunrise(o, date, off)?;
+    let ss = sunset(o, date, off)?;
+    Ok((sr, ss))
+}
+
+fn night(o: Observer, date: Date, off: i64) -> Result[(Dt, Dt), String] {
+    let six = Num { v: 6.0, text: "6".to_string() };
+    let start = dusk(o, date, six, off)?;
+    let tomorrow = date_add_days(date, 1)?;
+    let end = dawn(o, tomorrow, six, off)?;
+    Ok((start, end))
+}
+
+fn twilight(o: Observer, date: Date, direction: i64, off: i64) -> Result[(Dt, Dt), String] {
+    let start = astimezone(time_of_transit(o, date, 96.0, direction, true)?, off)?;
+    let end = if direction == 1 {
+        astimezone(sunrise(o, date, off)?, off)?
+    } else {
+        astimezone(sunset(o, date, off)?, off)?
+    };
+    if direction == 1 { Ok((start, end)) } else { Ok((end, start)) }
+}
+
+// golden_hour (zeniths 94 and 84) and blue_hour (96 and 94)
+fn hour_between(o: Observer, date: Date, direction: i64, off: i64, z_start: f64, z_end: f64) -> Result[(Dt, Dt), String] {
+    let start = astimezone(time_of_transit(o, date, z_start, direction, true)?, off)?;
+    let end = astimezone(time_of_transit(o, date, z_end, direction, true)?, off)?;
+    if direction == 1 { Ok((start, end)) } else { Ok((end, start)) }
+}
+
+fn rahukaalam(o: Observer, date: Date, daytime: bool, off: i64) -> Result[(Dt, Dt), String] {
+    let (start, end) = if daytime {
+        (sunrise(o, date, off)?, sunset(o, date, off)?)
+    } else {
+        (sunset(o, date, off)?, sunrise(o, date_add_days(date, 1)?, off)?)
+    };
+    // timedelta(seconds=(end - start).seconds / 8), in microseconds
+    let diff = utc_us(end) - utc_us(start);
+    let seconds = imod(diff, 86400000000) / 1000000;
+    let octant_duration = seconds * 125000;
+    let octant_index: Vec[i64] = [1, 6, 4, 5, 3, 2, 7];
+    let octant = octant_index[weekday(date)];
+    let s2 = dt_add(start, octant_duration * octant)?;
+    let e2 = dt_add(s2, octant_duration)?;
+    Ok((s2, e2))
+}
+
+// ------------------------------------------------------------ moon.py
+
+#[derive(Copy, Clone)]
+struct Pos {
+    right_ascension: f64,
+    declination: f64,
+    distance: f64,
+}
+
+#[derive(Clone)]
+struct T4Row {
+    coefficient: f64,
+    t: bool,
+    is_sin: bool,
+    m: Vec[i64],
+}
+
+fn interpolate(f0: f64, f1: f64, f2: f64, p: f64) -> f64 {
+    let a = f1 - f0;
+    let b = f2 - f1 - a;
+    f0 + p * (2.0 * a + b * (2.0 * p - 1.0))
+}
+
+fn sgn(v: f64) -> i64 {
+    if v < 0.0 {
+        -1
+    } else if v > 0.0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn frac_rev(x: f64) -> f64 {
+    x - (tr(x) as f64)
+}
+
+fn calc_value(table: ref Vec[T4Row], args: ref Vec[f64], t_big: f64) -> Result[f64, String] {
+    // argument numbers of the multipliers: Gm, Fm, D, Om, Ls, Gs, L2
+    let arg_numbers: Vec[i64] = [2, 3, 4, 5, 7, 8, 12];
+    let mut result = 0.0;
+    for row in table {
+        let mut revolutions = 0.0;
+        let mut k = 0;
+        while k < 7 {
+            let multiplier = row.m[k];
+            if multiplier != 0 {
+                let arg_value = args[arg_numbers[k] - 1];
+                if arg_value != 0.0 {
+                    revolutions += arg_value * (multiplier as f64);
+                } else {
+                    return Err(val_err(""));
+                }
+            }
+            k += 1;
+        }
+        let t_multipler = if row.t { t_big } else { 1.0 };
+        let x = revolutions * 2.0 * PI;
+        let sc = if row.is_sin { x.sin() } else { x.cos() };
+        result += row.coefficient * t_multipler * sc;
+    }
+    Ok(result)
+}
+
+fn moon_position(jd2000: f64, tv: ref Vec[T4Row], tu: ref Vec[T4Row], tw: ref Vec[T4Row]) -> Result[Pos, String] {
+    let lm = frac_rev(0.606434 + 0.03660110129 * jd2000);
+    let gm = frac_rev(0.374897 + 0.03629164709 * jd2000);
+    let fm = frac_rev(0.259091 + 0.03674819520 * jd2000);
+    let d = frac_rev(0.827362 + 0.03386319198 * jd2000);
+    let om = lm - fm;
+    let ls = frac_rev(0.779072 + 0.00273790931 * jd2000);
+    let gs = frac_rev(0.993126 + 0.00273777850 * jd2000);
+    let l2 = frac_rev(0.505498 + 0.00445046867 * jd2000);
+    let args: Vec[f64] = [lm, gm, fm, d, om, 0.0, ls, gs, 0.0, 0.0, 0.0, l2];
+    let t_big = jd2000 / 36525.0 + 1.0;
+    let v = calc_value(tv, args, t_big)?;
+    let u = calc_value(tu, args, t_big)?;
+    let w = calc_value(tw, args, t_big)?;
+    let mut s = w / py_sqrt(u - v * v)?;
+    let right_ascension = py_asin(s)? + lm * 2.0 * PI;
+    s = v / py_sqrt(u)?;
+    let declination = py_asin(s)?;
+    let distance = 60.40974 * py_sqrt(u)?;
+    Ok(Pos { right_ascension: right_ascension, declination: declination, distance: distance })
+}
+
+// kind: 0 no transit, 1 rise, 2 set
+#[derive(Copy, Clone)]
+struct Transit {
+    kind: i64,
+    h: i64,
+    m: i64,
+}
+
+fn moon_transit_event(hour: i64, lmst: f64, latitude: f64, distance: f64, window: mut ref Vec[Pos]) -> Result[Transit, String] {
+    let none = Transit { kind: 0, h: 0, m: 0 };
+    let mst = radians(lmst);
+    let mut ha: Vec[f64] = [0.0, 0.0, 0.0];
+    let k1 = radians(15.0 * 1.0027379097096138907193594760917);
+    if window[2].right_ascension < window[0].right_ascension {
+        window[2].right_ascension = window[2].right_ascension + 2.0 * PI;
+    }
+    let hf = hour as f64;
+    ha[0] = mst - window[0].right_ascension + (hf * k1);
+    ha[2] = mst - window[2].right_ascension + (hf * k1) + k1;
+    ha[1] = (ha[2] + ha[0]) / 2.0;
+    window[1].declination = (window[2].declination + window[0].declination) / 2.0;
+    let sl = radians(latitude).sin();
+    let cl = radians(latitude).cos();
+    let z = radians(90.0 + MOON_APPARENT_RADIUS - (41.685 / distance)).cos();
+    if hour == 0 {
+        window[0].distance = sl * window[0].declination.sin() + cl * window[0].declination.cos() * ha[0].cos() - z;
+    }
+    window[2].distance = sl * window[2].declination.sin() + cl * window[2].declination.cos() * ha[2].cos() - z;
+    if sgn(window[0].distance) == sgn(window[2].distance) {
+        return Ok(none);
+    }
+    window[1].distance = sl * window[1].declination.sin() + cl * window[1].declination.cos() * ha[1].cos() - z;
+    let a = 2.0 * window[2].distance - 4.0 * window[1].distance + 2.0 * window[0].distance;
+    let b = 4.0 * window[1].distance - 3.0 * window[0].distance - window[2].distance;
+    let mut discriminant = b * b - 4.0 * a * window[0].distance;
+    if discriminant < 0.0 {
+        return Ok(none);
+    }
+    discriminant = discriminant.sqrt();
+    if 2.0 * a == 0.0 {
+        return Err(zero_div());
+    }
+    let mut e = (-b + discriminant) / (2.0 * a);
+    if e > 1.0 or e < 0.0 {
+        e = (-b - discriminant) / (2.0 * a);
+    }
+    let time = hf + e + 1.0 / 120.0;
+    let h = tr(time);
+    let m = tr((time - h as f64) * 60.0);
+    check_time(h, m, 0, 0)?;
+    if window[0].distance < 0.0 and window[2].distance > 0.0 {
+        return Ok(Transit { kind: 1, h: h, m: m });
+    }
+    if window[0].distance > 0.0 and window[2].distance < 0.0 {
+        return Ok(Transit { kind: 2, h: h, m: m });
+    }
+    Ok(none)
+}
+
+fn secs_between(a: Dt, b: Dt) -> f64 {
+    ((utc_us(a) - utc_us(b)) / 1000000) as f64
+}
+
+// Whether a new event replaces the one kept so far (`kept`), given the other
+// kind's event (`other`), relative to the hour being searched.
+fn should_update(kept: Dt, event: Dt, other: Option[Dt], query: Dt) -> bool {
+    let kq = secs_between(kept, query);
+    let eq = secs_between(event, query);
+    let mut oq = 0.0;
+    let mut has_other = false;
+    match other {
+        Some(t) => {
+            oq = secs_between(t, query);
+            has_other = true;
+        }
+        None => {}
+    }
+    let mut update = sgn(kq) == sgn(eq) and kq.abs() > eq.abs();
+    update = update or (sgn(kq) != sgn(eq) and (has_other and sgn(kq) == sgn(oq)));
+    update
+}
+
+fn riseset(on: Date, o: Observer, t4: ref Vec[Vec[T4Row]]) -> Result[(Option[Dt], Option[Dt]), String] {
+    let jd2000 = julianday_date(on) - 2451545.0;
+    let t0 = lmst_of(jd2000, o.longitude);
+    let mut m: Vec[Pos] = Vec.new();
+    let mut interval = 0;
+    while interval < 3 {
+        m.push(moon_position(jd2000 + (interval as f64) * 0.5, t4[0], t4[1], t4[2])?);
+        interval += 1;
+    }
+    interval = 1;
+    while interval < 3 {
+        if m[interval].right_ascension <= m[interval - 1].right_ascension {
+            m[interval].right_ascension = m[interval].right_ascension + 2.0 * PI;
+        }
+        interval += 1;
+    }
+    let zero = Pos { right_ascension: 0.0, declination: 0.0, distance: 0.0 };
+    let mut window: Vec[Pos] = [m[0], zero, zero];
+    let mut rise_time: Option[Dt] = None;
+    let mut set_time: Option[Dt] = None;
+    let mut hour = 0;
+    while hour < 24 {
+        let ph = ((hour + 1) as f64) / 24.0;
+        window[2].right_ascension = interpolate(m[0].right_ascension, m[1].right_ascension, m[2].right_ascension, ph);
+        window[2].declination = interpolate(m[0].declination, m[1].declination, m[2].declination, ph);
+        let info = moon_transit_event(hour, t0, o.latitude, m[1].distance, mut window)?;
+        if info.kind != 0 {
+            let query_time = utc_dt(on, hour, 0, 0)?;
+            let event = utc_dt(on, info.h, info.m, 0)?;
+            if info.kind == 1 {
+                match rise_time {
+                    None => {
+                        rise_time = Some(event);
+                    }
+                    Some(kept) => {
+                        if should_update(kept, event, set_time, query_time) {
+                            rise_time = Some(event);
+                        }
+                    }
+                }
+            } else {
+                match set_time {
+                    None => {
+                        set_time = Some(event);
+                    }
+                    Some(kept) => {
+                        if should_update(kept, event, rise_time, query_time) {
+                            set_time = Some(event);
+                        }
+                    }
+                }
+            }
+        }
+        window[0].right_ascension = window[2].right_ascension;
+        window[0].declination = window[2].declination;
+        window[0].distance = window[2].distance;
+        hour += 1;
+    }
+    Ok((rise_time, set_time))
+}
+
+// moonrise (which = 0) and moonset (which = 1)
+fn moon_event(o: Observer, date: Date, off: i64, which: i64, t4: ref Vec[Vec[T4Row]]) -> Result[Option[Dt], String] {
+    let (r0, s0) = riseset(date, o, t4)?;
+    let first = if which == 0 { r0 } else { s0 };
+    match first {
+        None => {
+            if which == 0 {
+                Err(val_err("Moon never rises on this date, at this location"))
+            } else {
+                Err(val_err("Moon never sets on this date, at this location"))
+            }
+        }
+        Some(t) => {
+            let mut ev = astimezone(t, off)?;
+            let c = date_cmp(dt_date(ev), date);
+            if c != 0 {
+                let delta = if c > 0 { -1 } else { 1 };
+                let new_date = date_add_days(date, delta)?;
+                let (r1, s1) = riseset(new_date, o, t4)?;
+                let second = if which == 0 { r1 } else { s1 };
+                match second {
+                    Some(t2) => {
+                        ev = astimezone(t2, off)?;
+                        if date_cmp(dt_date(ev), date) != 0 {
+                            return Ok(None);
+                        }
+                    }
+                    None => {}
+                }
+            }
+            Ok(Some(ev))
+        }
+    }
+}
+
+// moon.azimuth and moon.elevation; julianday() reads the wall clock fields
+// whatever the time zone
+fn moon_altaz(o: Observer, at: Dt, t4: ref Vec[Vec[T4Row]]) -> Result[(f64, f64), String] {
+    let jd2000 = julianday_dt(at) - 2451545.0;
+    let position = moon_position(jd2000, t4[0], t4[1], t4[2])?;
+    let lst0 = radians(lmst_of(jd2000, o.longitude));
+    let hourangle = lst0 - position.right_ascension;
+    let sh = hourangle.sin();
+    let ch = hourangle.cos();
+    let sd = position.declination.sin();
+    let cd = position.declination.cos();
+    let sl = radians(o.latitude).sin();
+    let cl = radians(o.latitude).cos();
+    let x = -ch * cd * sl + sd * cl;
+    let y = -sh * cd;
+    let azimuth = pmod(degrees(y.atan2(x)), 360.0);
+    let z = ch * cd * cl + sd * sl;
+    let r = (x * x + y * y).sqrt();
+    let elevation = degrees(z.atan2(r));
+    Ok((azimuth, elevation))
+}
+
+fn phase(date: Date) -> f64 {
+    let jd = julianday_date(date);
+    let dt = (jd - 2382148.0).pow(2.0) / (41048480.0 * 86400.0);
+    let t = (jd + dt - 2451545.0) / 36525.0;
+    let t2 = t.pow(2.0);
+    let t3 = t.pow(3.0);
+    let mut d = 297.85 + (445267.1115 * t) - (0.0016300 * t2) + (t3 / 545868.0);
+    d = radians(pmod(d, 360.0));
+    let mut m = 357.53 + (35999.0503 * t);
+    m = radians(pmod(m, 360.0));
+    let mut m1 = 134.96 + (477198.8676 * t) + (0.0089970 * t2) + (t3 / 69699.0);
+    m1 = radians(pmod(m1, 360.0));
+    let mut elong = degrees(d) + 6.29 * m1.sin();
+    elong -= 2.10 * m.sin();
+    elong += 1.27 * (2.0 * d - m1).sin();
+    elong += 0.66 * (2.0 * d).sin();
+    elong = pmod(elong, 360.0);
+    let ei = tr(elong);
+    let mut moon = ((ei as f64 + 6.43) / 360.0) * 28.0;
+    if moon >= 28.0 {
+        moon -= 28.0;
+    }
+    moon
+}
+
+// ------------------------------------------------------------ geocoder.py
+
+#[derive(Clone)]
+struct LocationInfo {
+    name: String,
+    region: String,
+    timezone: String,
+    latitude: f64,
+    longitude: f64,
+}
+
+#[derive(Clone)]
+struct GeoEntry {
+    key: String,
+    locs: Vec[LocationInfo],
+}
+
+#[derive(Clone)]
+struct Group {
+    key: String,
+    entries: Vec[GeoEntry],
+}
+
+fn sanitize_key(key: ref String) -> String {
+    lower_ascii(key).replace(" ", "_")
+}
+
+fn timezone_group(loc: ref LocationInfo) -> String {
+    match loc.timezone.find("/") {
+        Some(i) => loc.timezone.substring(0, i),
+        None => loc.timezone.clone(),
+    }
+}
+
+fn loc_repr(loc: ref LocationInfo) -> String {
+    f"LocationInfo(name={py_repr_str(loc.name)}, region={py_repr_str(loc.region)}, timezone={py_repr_str(loc.timezone)}, latitude={fmt(loc.latitude)}, longitude={fmt(loc.longitude)})"
+}
+
+fn database() -> Vec[Group] {
+    let mut db: Vec[Group] = Vec.new();
+    for raw in split_on(location_info(), '\n') {
+        let line = py_strip(raw);
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let f = split_on(line, ',');
+        let lat = match dms_to_float(f[3], true, 90.0) {
+            Ok(v) => v,
+            Err(_) => NAN_F,
+        };
+        let lon = match dms_to_float(f[4], true, 180.0) {
+            Ok(v) => v,
+            Err(_) => NAN_F,
+        };
+        let loc = LocationInfo { name: f[0].clone(), region: f[1].clone(), timezone: f[2].clone(), latitude: lat, longitude: lon };
+        let gkey = sanitize_key(timezone_group(loc));
+        let mut gi = -1;
+        let mut i = 0;
+        while i < db.len() {
+            if db[i].key == gkey {
+                gi = i;
+            }
+            i += 1;
+        }
+        if gi < 0 {
+            db.push(Group { key: gkey, entries: Vec.new() });
+            gi = db.len() - 1;
+        }
+        let lkey = sanitize_key(loc.name);
+        let mut ei = -1;
+        let mut j = 0;
+        while j < db[gi].entries.len() {
+            if db[gi].entries[j].key == lkey {
+                ei = j;
+            }
+            j += 1;
+        }
+        if ei < 0 {
+            db[gi].entries.push(GeoEntry { key: lkey, locs: [loc] });
+        } else {
+            db[gi].entries[ei].locs.push(loc);
+        }
+    }
+    db
+}
+
+fn key_err(msg: ref String) -> String {
+    f"KeyError: {py_repr_str(msg)}"
+}
+
+fn strip_quotes(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and (cs[a] == '"' or cs[a] == '\'') {
+        a += 1;
+    }
+    while b > a and (cs[b - 1] == '"' or cs[b - 1] == '\'') {
+        b -= 1;
+    }
+    slice_chars(cs, a, b)
+}
+
+fn lookup_in_group(location: ref String, g: ref Group) -> Option[LocationInfo] {
+    let key = sanitize_key(location);
+    let mut lookup_name = key.clone();
+    let mut lookup_region = "".to_string();
+    match key.find(",") {
+        Some(i) => {
+            lookup_name = key.substring(0, i);
+            lookup_region = key.substring(i + 1, key.len());
+        }
+        None => {}
+    }
+    lookup_name = strip_quotes(lookup_name);
+    lookup_region = strip_quotes(lookup_region);
+    for e in g.entries {
+        if e.key == lookup_name {
+            if lookup_region.len() == 0 {
+                return Some(e.locs[0].clone());
+            }
+            for loc in e.locs {
+                if sanitize_key(loc.region) == lookup_region {
+                    return Some(loc.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+// lookup(): a group (its index in .0) or a location (.1)
+fn lookup(name: ref String, db: ref Vec[Group]) -> Result[(i64, Option[LocationInfo]), String] {
+    let key = sanitize_key(name);
+    let mut i = 0;
+    while i < db.len() {
+        if db[i].key == key {
+            return Ok((i, None));
+        }
+        match lookup_in_group(name, db[i]) {
+            Some(loc) => {
+                return Ok((-1, Some(loc)));
+            }
+            None => {}
+        }
+        i += 1;
+    }
+    Err(key_err(f"Unrecognised name - {name}"))
+}
+
+fn group_of(region: ref String, db: ref Vec[Group]) -> Result[i64, String] {
+    let key = sanitize_key(region);
+    let mut i = 0;
+    while i < db.len() {
+        if db[i].key == key {
+            return Ok(i);
+        }
+        i += 1;
+    }
+    Err(key_err(f"Unrecognised Group - {region}"))
+}
+
+fn group_names(g: ref Group, limit: i64) -> (i64, String) {
+    let mut s = String.new();
+    let mut n = 0;
+    for e in g.entries {
+        if n < limit {
+            if n > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(e.key);
+        }
+        n += 1;
+    }
+    (n, s)
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn to_int(s: ref String) -> i64 {
+    to_i64(s)
+}
+
+fn parse_tz(tz: ref String) -> (bool, i64) {
+    if tz == "naive" {
+        return (false, 0);
+    }
+    if tz == "utc" {
+        return (true, 0);
+    }
+    let secs = to_int(sl(tz, 1, 3)) * 3600 + to_int(sl(tz, 4, 6)) * 60;
+    (true, if sl(tz, 0, 1) == "-" { -secs } else { secs })
+}
+
+fn parse_date(s: ref String) -> Date {
+    Date { y: to_int(sl(s, 0, 4)), m: to_int(sl(s, 5, 7)), d: to_int(sl(s, 8, 10)) }
+}
+
+fn parse_dt(s: ref String, aware: bool, off: i64) -> Dt {
+    Dt { y: to_int(sl(s, 0, 4)), mo: to_int(sl(s, 5, 7)), d: to_int(sl(s, 8, 10)), h: to_int(sl(s, 11, 13)), mi: to_int(sl(s, 14, 16)), s: to_int(sl(s, 17, 19)), us: to_int(sl(s, 20, 26)), aware: aware, off: off }
+}
+
+fn observer(lat: ref String, lon: ref String, el: ref String) -> Observer {
+    let la = match dms_to_float(lat, true, 90.0) {
+        Ok(v) => v,
+        Err(_) => NAN_F,
+    };
+    let lo = match dms_to_float(lon, true, 180.0) {
+        Ok(v) => v,
+        Err(_) => NAN_F,
+    };
+    match el.find("/") {
+        Some(i) => Observer { latitude: la, longitude: lo, tuple_elev: true, e0: to_f64(el.substring(0, i)), e1: to_f64(el.substring(i + 1, el.len())) },
+        None => Observer { latitude: la, longitude: lo, tuple_elev: false, e0: to_f64(el.clone()), e1: 0.0 },
+    }
+}
+
+fn depression(s: ref String) -> Num {
+    if s == "CIVIL" {
+        return Num { v: 6.0, text: "6".to_string() };
+    }
+    if s == "NAUTICAL" {
+        return Num { v: 12.0, text: "12".to_string() };
+    }
+    if s == "ASTRONOMICAL" {
+        return Num { v: 18.0, text: "18".to_string() };
+    }
+    let v = to_f64(s.clone());
+    Num { v: v, text: if s.contains(".") { fmt(v) } else { s.clone() } }
+}
+
+fn line(out: mut ref String, name: ref String, r: ref String) {
+    out.push_str(f"  {name} => {r}\n");
+}
+
+fn show_dt(r: own Result[Dt, String]) -> String {
+    match r {
+        Ok(t) => dt_str(t),
+        Err(e) => e,
+    }
+}
+
+fn show_pair(r: own Result[(Dt, Dt), String]) -> String {
+    match r {
+        Ok((a, b)) => f"({dt_str(a)}, {dt_str(b)})",
+        Err(e) => e,
+    }
+}
+
+fn show_opt(r: own Result[Option[Dt], String]) -> String {
+    match r {
+        Ok(Some(t)) => dt_str(t),
+        Ok(None) => "None".to_string(),
+        Err(e) => e,
+    }
+}
+
+fn show_f(r: own Result[f64, String]) -> String {
+    match r {
+        Ok(v) => fmt(v),
+        Err(e) => e,
+    }
+}
+
+fn show_str(r: own Result[String, String]) -> String {
+    match r {
+        Ok(v) => v,
+        Err(e) => e,
+    }
+}
+
+fn sun_dict(o: Observer, d: Date, dep: ref Num, off: i64) -> Result[String, String] {
+    let a = dawn(o, d, dep, off)?;
+    let b = sunrise(o, d, off)?;
+    let c = noon(o, d, off)?;
+    let e = sunset(o, d, off)?;
+    let f = dusk(o, d, dep, off)?;
+    Ok(f"{{dawn: {dt_str(a)}, sunrise: {dt_str(b)}, noon: {dt_str(c)}, sunset: {dt_str(e)}, dusk: {dt_str(f)}}}")
+}
+
+fn day_job(out: mut ref String, f: ref Vec[String], t4: ref Vec[Vec[T4Row]]) {
+    let o = observer(f[1], f[2], f[3]);
+    let d = parse_date(f[4]);
+    let (_, off) = parse_tz(f[5]);
+    let dep = depression(f[6]);
+    let civil = depression("CIVIL".to_string());
+    let mut hdr = String.new();
+    let mut i = 1;
+    while i < f.len() {
+        if i > 1 {
+            hdr.push_str(", ");
+        }
+        hdr.push_str(f[i]);
+        i += 1;
+    }
+    out.push_str(f"day({hdr})\n");
+    out.push_str(f"  observer => {observer_repr(o)}\n");
+    line(mut out, "dawn", show_dt(dawn(o, d, civil, off)));
+    line(mut out, "dawn(dep)", show_dt(dawn(o, d, dep, off)));
+    line(mut out, "sunrise", show_dt(sunrise(o, d, off)));
+    line(mut out, "noon", show_dt(noon(o, d, off)));
+    line(mut out, "midnight", show_dt(midnight(o, d, off)));
+    line(mut out, "sunset", show_dt(sunset(o, d, off)));
+    line(mut out, "dusk", show_dt(dusk(o, d, civil, off)));
+    line(mut out, "dusk(dep)", show_dt(dusk(o, d, dep, off)));
+    line(mut out, "daylight", show_pair(daylight(o, d, off)));
+    line(mut out, "night", show_pair(night(o, d, off)));
+    line(mut out, "twilight(rising)", show_pair(twilight(o, d, 1, off)));
+    line(mut out, "twilight(setting)", show_pair(twilight(o, d, -1, off)));
+    line(mut out, "golden_hour(rising)", show_pair(hour_between(o, d, 1, off, 94.0, 84.0)));
+    line(mut out, "golden_hour(setting)", show_pair(hour_between(o, d, -1, off, 94.0, 84.0)));
+    line(mut out, "blue_hour(rising)", show_pair(hour_between(o, d, 1, off, 96.0, 94.0)));
+    line(mut out, "blue_hour(setting)", show_pair(hour_between(o, d, -1, off, 96.0, 94.0)));
+    line(mut out, "rahukaalam(day)", show_pair(rahukaalam(o, d, true, off)));
+    line(mut out, "rahukaalam(night)", show_pair(rahukaalam(o, d, false, off)));
+    line(mut out, "sun", show_str(sun_dict(o, d, dep, off)));
+    for spec in split_on(f[7], ',') {
+        let p = split_on(spec, ':');
+        let direction = if p[1] == "R" { 1 } else { -1 };
+        let r = time_at_elevation(o, to_f64(p[0].clone()), d, direction, off, p[2] == "1");
+        line(mut out, f"time_at_elevation({p[0]}, {p[1]}, {p[2]})", show_dt(r));
+    }
+    line(mut out, "moonrise", show_opt(moon_event(o, d, off, 0, t4)));
+    line(mut out, "moonset", show_opt(moon_event(o, d, off, 1, t4)));
+    line(mut out, "phase", fmt(phase(d)));
+}
+
+fn pos_job(out: mut ref String, f: ref Vec[String], t4: ref Vec[Vec[T4Row]]) {
+    let o = observer(f[1], f[2], f[3]);
+    let (aware, off) = parse_tz(f[5]);
+    let t = parse_dt(f[4], aware, off);
+    out.push_str(f"pos({f[1]}, {f[2]}, {f[3]}, {f[4]}, {f[5]})\n");
+    line(mut out, "sun.zenith", show_f(sun_zenith(o, t, true)));
+    line(mut out, "sun.zenith(no refraction)", show_f(sun_zenith(o, t, false)));
+    line(mut out, "sun.azimuth", show_f(sun_azimuth(o, t)));
+    line(mut out, "sun.elevation", show_f(sun_elevation(o, t, true)));
+    line(mut out, "sun.elevation(no refraction)", show_f(sun_elevation(o, t, false)));
+    match moon_altaz(o, t, t4) {
+        Ok((az, el)) => {
+            line(mut out, "moon.azimuth", fmt(az));
+            line(mut out, "moon.elevation", fmt(el));
+            line(mut out, "moon.zenith", fmt(90.0 - el));
+        }
+        Err(e) => {
+            line(mut out, "moon.azimuth", e);
+            line(mut out, "moon.elevation", e);
+            line(mut out, "moon.zenith", e);
+        }
+    }
+}
+
+fn city_job(out: mut ref String, f: ref Vec[String], db: ref Vec[Group], t4: ref Vec[Vec[T4Row]]) {
+    out.push_str(f"city({py_repr_str(f[1])}, {f[2]}, {f[3]})\n");
+    match lookup(f[1], db) {
+        Err(e) => {
+            out.push_str(f"  {e}\n");
+        }
+        Ok((gi, found)) => {
+            match found {
+                None => {
+                    let (n, names) = group_names(db[gi], 6);
+                    out.push_str(f"  group of {n} names: {names}\n");
+                }
+                Some(loc) => {
+                    out.push_str(f"  {loc_repr(loc)}\n");
+                    out.push_str(f"  timezone_group => {py_repr_str(timezone_group(loc))}\n");
+                    let o = Observer { latitude: loc.latitude, longitude: loc.longitude, tuple_elev: false, e0: 0.0, e1: 0.0 };
+                    let d = parse_date(f[2]);
+                    let (_, off) = parse_tz(f[3]);
+                    let civil = depression("CIVIL".to_string());
+                    line(mut out, "sun", show_str(sun_dict(o, d, civil, off)));
+                    line(mut out, "moonrise", show_opt(moon_event(o, d, off, 0, t4)));
+                }
+            }
+        }
+    }
+}
+
+fn run_job(out: mut ref String, f: ref Vec[String], db: ref Vec[Group], t4: ref Vec[Vec[T4Row]]) {
+    let k = f[0].clone();
+    if k == "day" {
+        day_job(mut out, f, t4);
+    } else if k == "pos" {
+        pos_job(mut out, f, t4);
+    } else if k == "city" {
+        city_job(mut out, f, db, t4);
+    } else if k == "group" {
+        out.push_str(f"group({py_repr_str(f[1])})\n");
+        match group_of(f[1], db) {
+            Err(e) => {
+                out.push_str(f"  {e}\n");
+            }
+            Ok(gi) => {
+                let (n, names) = group_names(db[gi], 1000000);
+                out.push_str(f"  {n} names: {names}\n");
+                let mut j = 0;
+                while j < 3 and j < db[gi].entries.len() {
+                    for loc in db[gi].entries[j].locs {
+                        out.push_str(f"  {loc_repr(loc)}\n");
+                    }
+                    j += 1;
+                }
+            }
+        }
+    } else if k == "dms" {
+        out.push_str(f"dms({py_repr_str(f[1])}, {f[2]})\n");
+        let has = f[2] != "none";
+        let lim = if has { to_f64(f[2].clone()) } else { 0.0 };
+        line(mut out, "dms_to_float", show_f(dms_to_float(f[1], has, lim)));
+    } else if k == "h2t" {
+        out.push_str(f"h2t({f[1]})\n");
+        line(mut out, "hours_to_time", show_str(hours_to_time(to_f64(f[1].clone()))));
+    } else if k == "t2h" {
+        out.push_str(f"t2h({f[1]}, {f[2]}, {f[3]}, {f[4]})\n");
+        let h = to_int(f[1]);
+        let m = to_int(f[2]);
+        let s = to_int(f[3]);
+        let us = to_int(f[4]);
+        match check_time(h, m, s, us) {
+            Err(e) => {
+                out.push_str(f"  {e}\n");
+            }
+            Ok(_) => {
+                let hours = time_to_hours(h, m, s, us);
+                line(mut out, "time_to_hours", fmt(hours));
+                line(mut out, "time_to_seconds", fmt(hours * 3600.0));
+            }
+        }
+    } else if k == "refr" {
+        out.push_str(f"refr({f[1]})\n");
+        let (r, is_int) = refraction_at_zenith(to_f64(f[1].clone()));
+        line(mut out, "refraction_at_zenith", if is_int { "0".to_string() } else { fmt(r) });
+    } else if k == "jd" {
+        out.push_str(f"jd({f[1]}, {f[2]})\n");
+        let has_time = f[1].contains("T");
+        let t = parse_dt(f[1], false, 0);
+        let secs = if has_time { t.h * 3600 + t.mi * 60 + t.s } else { 0 };
+        let lon = to_f64(f[2].clone());
+        let jd = julianday_at(t.y, t.mo, t.d, has_time, secs, true);
+        line(mut out, "julianday", fmt(jd));
+        line(mut out, "julianday(julian)", fmt(julianday_at(t.y, t.mo, t.d, has_time, secs, false)));
+        if has_time {
+            line(mut out, "julianday_modified", fmt(julianday_modified(t)));
+        }
+        line(mut out, "julianday_2000", fmt(jd - 2451545.0));
+        let jc = julianday_to_juliancentury(jd);
+        line(mut out, "juliancentury", fmt(jc));
+        line(mut out, "julianday(juliancentury)", fmt(juliancentury_to_julianday(jc)));
+        line(mut out, "gmst", fmt(gmst_of(jd - 2451545.0)));
+        line(mut out, "lmst", fmt(lmst_of(jd - 2451545.0, lon)));
+    } else if k == "jd2dt" {
+        out.push_str(f"jd2dt({f[1]})\n");
+        line(mut out, "julianday_to_datetime", show_str(julianday_to_datetime(to_f64(f[1].clone()))));
+    } else if k == "dft" {
+        out.push_str(f"dft({f[1]})\n");
+        line(mut out, "day_fraction_to_time", show_str(day_fraction_to_time(to_f64(f[1].clone()))));
+    } else if k == "m2td" {
+        out.push_str(f"m2td({f[1]})\n");
+        line(mut out, "minutes_to_timedelta", td_str(minutes_to_timedelta(to_f64(f[1].clone()))));
+    } else if k == "mpos" {
+        out.push_str(f"mpos({f[1]})\n");
+        let r = match moon_position(to_f64(f[1].clone()), t4[0], t4[1], t4[2]) {
+            Ok(p) => f"AstralBodyPosition(right_ascension={fmt(p.right_ascension)}, declination={fmt(p.declination)}, distance={fmt(p.distance)})",
+            Err(e) => e,
+        };
+        line(mut out, "moon_position", r);
+    } else if k == "phase" {
+        out.push_str(f"phase({f[1]})\n");
+        line(mut out, "phase", fmt(phase(parse_date(f[1]))));
+    }
+}
+
+fn main() {
+    let db = database();
+    let t4: Vec[Vec[T4Row]] = [table4(0), table4(1), table4(2)];
+    let mut out = String.new();
+    for ln in split_on(jobs_text(), '\n') {
+        if ln.len() > 0 {
+            let f = split_on(ln, '\t');
+            run_job(mut out, f, db, t4);
+        }
+    }
+    let mut n = 0;
+    for g in db {
+        for e in g.entries {
+            n += e.locs.len();
+        }
+    }
+    out.push_str(f"database: {db.len()} groups, {n} locations\n");
+    print(out);
+}
+
+// Generated by gen_kara.py from vendor/astral and data/jobs.tsv.
+
+// The series terms of table4.py; `which` is 0 for v, 1 for u, 2 for w.
+fn table4(which: i64) -> Vec[T4Row] {
+    let mut t: Vec[T4Row] = Vec.new();
+    if which == 0 {
+        t.push(T4Row { coefficient: 0.39558, t: false, is_sin: true, m: [0, 1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.082, t: false, is_sin: true, m: [0, 1, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.03257, t: false, is_sin: true, m: [1, -1, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.01092, t: false, is_sin: true, m: [1, 1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00666, t: false, is_sin: true, m: [1, -1, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00644, t: false, is_sin: true, m: [1, 1, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00331, t: false, is_sin: true, m: [0, 1, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00304, t: false, is_sin: true, m: [0, 1, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.0024, t: false, is_sin: true, m: [1, -1, -2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00226, t: false, is_sin: true, m: [1, 1, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00108, t: false, is_sin: true, m: [1, 1, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00079, t: false, is_sin: true, m: [0, 1, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00078, t: false, is_sin: true, m: [0, 1, 2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00066, t: false, is_sin: true, m: [0, 1, 0, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -0.00062, t: false, is_sin: true, m: [0, 1, 0, 1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.0005, t: false, is_sin: true, m: [1, -1, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00045, t: false, is_sin: true, m: [2, 1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00031, t: false, is_sin: true, m: [2, 1, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00027, t: false, is_sin: true, m: [1, 1, -2, 1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00024, t: false, is_sin: true, m: [0, 1, -2, 1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00021, t: true, is_sin: true, m: [0, 1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00018, t: false, is_sin: true, m: [0, 1, -1, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00016, t: false, is_sin: true, m: [0, 1, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00016, t: false, is_sin: true, m: [1, -1, 0, -1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -0.00016, t: false, is_sin: true, m: [2, -1, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00015, t: false, is_sin: true, m: [0, 1, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00012, t: false, is_sin: true, m: [1, -1, -2, -1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00011, t: false, is_sin: true, m: [1, -1, 0, -1, 0, 1, 0] });
+        t.push(T4Row { coefficient: 9e-05, t: false, is_sin: true, m: [1, 1, 0, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: 9e-05, t: false, is_sin: true, m: [2, 1, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 8e-05, t: false, is_sin: true, m: [2, -1, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 8e-05, t: false, is_sin: true, m: [1, 1, 2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -8e-05, t: false, is_sin: true, m: [0, 3, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 7e-05, t: false, is_sin: true, m: [1, -1, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -7e-05, t: false, is_sin: true, m: [2, -1, -2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -7e-05, t: false, is_sin: true, m: [1, 1, 0, 1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -6e-05, t: false, is_sin: true, m: [0, 1, 1, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: true, m: [0, 1, -2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: true, m: [1, -1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: true, m: [0, 1, 2, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: true, m: [1, 1, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [2, 1, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 4e-05, t: false, is_sin: true, m: [1, -3, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 4e-05, t: false, is_sin: true, m: [1, -1, 0, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [1, -1, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [0, 1, -1, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [0, 1, -2, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [0, 1, -2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [1, 1, -2, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [0, 1, 0, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [0, 1, -1, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, -1, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [0, 1, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [1, 1, -1, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, 1, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [3, 1, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, -1, -4, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [1, -1, -2, -1, 0, -1, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: true, is_sin: true, m: [1, -1, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, -1, -4, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, 1, -4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, -1, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [1, 1, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [1, 1, 0, 0, 0, -1, 0] });
+    }
+    if which == 1 {
+        t.push(T4Row { coefficient: 1.0, t: false, is_sin: false, m: [0, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.10828, t: false, is_sin: false, m: [1, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.0188, t: false, is_sin: false, m: [1, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.01479, t: false, is_sin: false, m: [0, 0, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00181, t: false, is_sin: false, m: [2, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00147, t: false, is_sin: false, m: [2, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00105, t: false, is_sin: false, m: [0, 0, 2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -0.00075, t: false, is_sin: false, m: [1, 0, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00067, t: false, is_sin: false, m: [1, 0, 0, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: 0.00057, t: false, is_sin: false, m: [0, 0, 1, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00055, t: false, is_sin: false, m: [1, 0, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00046, t: false, is_sin: false, m: [1, 0, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00041, t: false, is_sin: false, m: [1, -2, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00024, t: false, is_sin: false, m: [0, 0, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 0.00017, t: false, is_sin: false, m: [0, 0, 2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 0.00013, t: false, is_sin: false, m: [1, 0, -2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -0.0001, t: false, is_sin: false, m: [1, 0, -4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -9e-05, t: false, is_sin: false, m: [0, 0, 1, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 7e-05, t: false, is_sin: false, m: [2, 0, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: false, m: [3, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: false, m: [0, 2, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: false, m: [0, 0, 2, 0, 0, -2, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: false, m: [2, 0, -4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 5e-05, t: false, is_sin: false, m: [1, 2, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: false, m: [1, 0, -1, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: false, m: [1, 0, 2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: false, m: [3, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: false, m: [1, 0, -4, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: false, m: [2, -2, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: false, m: [0, 2, 0, 0, 0, 0, 0] });
+    }
+    if which == 2 {
+        t.push(T4Row { coefficient: 0.10478, t: false, is_sin: true, m: [1, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.04105, t: false, is_sin: true, m: [0, 2, 0, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.0213, t: false, is_sin: true, m: [1, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.01779, t: false, is_sin: true, m: [0, 2, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.01774, t: false, is_sin: true, m: [0, 0, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00987, t: false, is_sin: true, m: [0, 0, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00338, t: false, is_sin: true, m: [1, -2, 0, -2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00309, t: false, is_sin: true, m: [0, 0, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.0019, t: false, is_sin: true, m: [0, 2, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00144, t: false, is_sin: true, m: [1, 0, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00144, t: false, is_sin: true, m: [1, -2, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00113, t: false, is_sin: true, m: [1, 2, 0, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00094, t: false, is_sin: true, m: [1, 0, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -0.00092, t: false, is_sin: true, m: [2, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00071, t: false, is_sin: true, m: [0, 0, 2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: 0.0007, t: false, is_sin: true, m: [2, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00067, t: false, is_sin: true, m: [1, 2, -2, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00066, t: false, is_sin: true, m: [0, 2, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00066, t: false, is_sin: true, m: [0, 0, 2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00061, t: false, is_sin: true, m: [1, 0, 0, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -0.00058, t: false, is_sin: true, m: [0, 0, 1, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00049, t: false, is_sin: true, m: [1, 2, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00049, t: false, is_sin: true, m: [1, 0, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00042, t: false, is_sin: true, m: [1, 0, 0, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 0.00034, t: false, is_sin: true, m: [0, 2, -2, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.00026, t: false, is_sin: true, m: [0, 2, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00025, t: false, is_sin: true, m: [1, -2, -2, -2, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00024, t: false, is_sin: true, m: [1, -2, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00023, t: false, is_sin: true, m: [1, 2, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00023, t: false, is_sin: true, m: [1, 0, -2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00019, t: false, is_sin: true, m: [1, 0, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00012, t: false, is_sin: true, m: [1, 0, -2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: 0.00011, t: false, is_sin: true, m: [1, 0, -2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 0.00011, t: false, is_sin: true, m: [1, -2, -2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -0.0001, t: false, is_sin: true, m: [0, 0, 2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 9e-05, t: false, is_sin: true, m: [1, 0, -1, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 8e-05, t: false, is_sin: true, m: [0, 0, 1, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: -8e-05, t: false, is_sin: true, m: [0, 2, 2, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -8e-05, t: false, is_sin: true, m: [0, 0, 0, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -7e-05, t: false, is_sin: true, m: [0, 2, 0, 2, 0, -1, 0] });
+        t.push(T4Row { coefficient: 6e-05, t: false, is_sin: true, m: [0, 2, 0, 2, 0, 1, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: true, m: [1, 2, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 5e-05, t: false, is_sin: true, m: [3, 0, 0, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: true, m: [1, 0, 0, 0, 16, 0, -18] });
+        t.push(T4Row { coefficient: -5e-05, t: false, is_sin: true, m: [2, 2, 0, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: 4e-05, t: true, is_sin: true, m: [0, 2, 0, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: 4e-05, t: false, is_sin: false, m: [1, 0, 0, 0, 16, 0, -18] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [1, -2, 2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [1, 0, -4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [3, 0, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [0, 2, 2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -4e-05, t: false, is_sin: true, m: [0, 0, 2, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [0, 0, 0, 0, 0, 2, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [1, 0, -2, 0, 0, 2, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [0, 2, -2, 1, 0, 1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [0, 0, 2, 1, 0, -1, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [2, 2, -2, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [0, 0, 2, 0, 0, -2, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [2, 0, -2, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 3e-05, t: false, is_sin: true, m: [1, 2, -2, 2, 0, 1, 0] });
+        t.push(T4Row { coefficient: -3e-05, t: false, is_sin: true, m: [2, 0, -4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [0, 2, -2, 2, 0, 1, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, 2, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, 0, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: true, is_sin: false, m: [1, 0, 0, 0, 16, 0, -18] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [0, 0, 4, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [0, 2, -1, 2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, 2, -2, 0, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, 0, 0, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [2, -2, 0, -1, 0, 0, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [1, 0, 2, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [2, 0, 0, 0, 0, -1, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, 0, -4, 0, 0, 1, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: true, is_sin: true, m: [1, 0, 0, 0, 16, 0, -18] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, -2, 0, -2, 0, -1, 0] });
+        t.push(T4Row { coefficient: 2e-05, t: false, is_sin: true, m: [2, -2, 0, -2, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, 0, 2, 1, 0, 0, 0] });
+        t.push(T4Row { coefficient: -2e-05, t: false, is_sin: true, m: [1, -2, 2, -1, 0, 0, 0] });
+    }
+    t
+}
+
+// _LOCATION_INFO from geocoder.py, verbatim.
+fn location_info() -> String {
+    let mut s = String.new();
+    s.push_str("Abu Dhabi,UAE,Asia/Dubai,24°28'N,54°22'E\n");
+    s.push_str("Abu Dhabi,United Arab Emirates,Asia/Dubai,24°28'N,54°22'E\n");
+    s.push_str("Abuja,Nigeria,Africa/Lagos,09°05'N,07°32'E\n");
+    s.push_str("Accra,Ghana,Africa/Accra,05°35'N,00°06'W\n");
+    s.push_str("Addis Ababa,Ethiopia,Africa/Addis_Ababa,09°02'N,38°42'E\n");
+    s.push_str("Adelaide,Australia,Australia/Adelaide,34°56'S,138°36'E\n");
+    s.push_str("Al Jubail,Saudi Arabia,Asia/Riyadh,25°24'N,49°39'W\n");
+    s.push_str("Algiers,Algeria,Africa/Algiers,36°42'N,03°08'E\n");
+    s.push_str("Amman,Jordan,Asia/Amman,31°57'N,35°52'E\n");
+    s.push_str("Amsterdam,Netherlands,Europe/Amsterdam,52°23'N,04°54'E\n");
+    s.push_str("Andorra la Vella,Andorra,Europe/Andorra,42°31'N,01°32'E\n");
+    s.push_str("Ankara,Turkey,Europe/Istanbul,39°57'N,32°54'E\n");
+    s.push_str("Antananarivo,Madagascar,Indian/Antananarivo,18°55'S,47°31'E\n");
+    s.push_str("Apia,Samoa,Pacific/Apia,13°50'S,171°50'W\n");
+    s.push_str("Ashgabat,Turkmenistan,Asia/Ashgabat,38°00'N,57°50'E\n");
+    s.push_str("Asmara,Eritrea,Africa/Asmara,15°19'N,38°55'E\n");
+    s.push_str("Astana,Kazakhstan,Asia/Qyzylorda,51°10'N,71°30'E\n");
+    s.push_str("Asuncion,Paraguay,America/Asuncion,25°10'S,57°30'W\n");
+    s.push_str("Athens,Greece,Europe/Athens,37°58'N,23°46'E\n");
+    s.push_str("Avarua,Cook Islands,Etc/GMT-10,21°12'N,159°46'W\n");
+    s.push_str("Baghdad,Iraq,Asia/Baghdad,33°20'N,44°30'E\n");
+    s.push_str("Baku,Azerbaijan,Asia/Baku,40°29'N,49°56'E\n");
+    s.push_str("Bamako,Mali,Africa/Bamako,12°34'N,07°55'W\n");
+    s.push_str("Bandar Seri Begawan,Brunei Darussalam,Asia/Brunei,04°52'N,115°00'E\n");
+    s.push_str("Bangkok,Thailand,Asia/Bangkok,13°45'N,100°35'E\n");
+    s.push_str("Bangui,Central African Republic,Africa/Bangui,04°23'N,18°35'E\n");
+    s.push_str("Banjul,Gambia,Africa/Banjul,13°28'N,16°40'W\n");
+    s.push_str("Basse-Terre,Guadeloupe,America/Guadeloupe,16°00'N,61°44'W\n");
+    s.push_str("Basseterre,Saint Kitts and Nevis,America/St_Kitts,17°17'N,62°43'W\n");
+    s.push_str("Beijing,China,Asia/Harbin,39°55'N,116°20'E\n");
+    s.push_str("Beirut,Lebanon,Asia/Beirut,33°53'N,35°31'E\n");
+    s.push_str("Belfast,Northern Ireland,Europe/Belfast,54°36'N,5°56'W\n");
+    s.push_str("Belgrade,Yugoslavia,Europe/Belgrade,44°50'N,20°37'E\n");
+    s.push_str("Belmopan,Belize,America/Belize,17°18'N,88°30'W\n");
+    s.push_str("Berlin,Germany,Europe/Berlin,52°30'N,13°25'E\n");
+    s.push_str("Bern,Switzerland,Europe/Zurich,46°57'N,07°28'E\n");
+    s.push_str("Bishkek,Kyrgyzstan,Asia/Bishkek,42°54'N,74°46'E\n");
+    s.push_str("Bissau,Guinea-Bissau,Africa/Bissau,11°45'N,15°45'W\n");
+    s.push_str("Bloemfontein,South Africa,Africa/Johannesburg,29°12'S,26°07'E\n");
+    s.push_str("Bogota,Colombia,America/Bogota,04°34'N,74°00'W\n");
+    s.push_str("Brasilia,Brazil,Brazil/East,15°47'S,47°55'W\n");
+    s.push_str("Bratislava,Slovakia,Europe/Bratislava,48°10'N,17°07'E\n");
+    s.push_str("Brazzaville,Congo,Africa/Brazzaville,04°09'S,15°12'E\n");
+    s.push_str("Bridgetown,Barbados,America/Barbados,13°05'N,59°30'W\n");
+    s.push_str("Brisbane,Australia,Australia/Brisbane,27°30'S,153°01'E\n");
+    s.push_str("Brussels,Belgium,Europe/Brussels,50°51'N,04°21'E\n");
+    s.push_str("Bucharest,Romania,Europe/Bucharest,44°27'N,26°10'E\n");
+    s.push_str("Bucuresti,Romania,Europe/Bucharest,44°27'N,26°10'E\n");
+    s.push_str("Budapest,Hungary,Europe/Budapest,47°29'N,19°05'E\n");
+    s.push_str("Buenos Aires,Argentina,America/Buenos_Aires,34°62'S,58°44'W\n");
+    s.push_str("Bujumbura,Burundi,Africa/Bujumbura,03°16'S,29°18'E\n");
+    s.push_str("Cairo,Egypt,Africa/Cairo,30°01'N,31°14'E\n");
+    s.push_str("Canberra,Australia,Australia/Canberra,35°15'S,149°08'E\n");
+    s.push_str("Cape Town,South Africa,Africa/Johannesburg,33°55'S,18°22'E\n");
+    s.push_str("Caracas,Venezuela,America/Caracas,10°30'N,66°55'W\n");
+    s.push_str("Castries,Saint Lucia,America/St_Lucia,14°02'N,60°58'W\n");
+    s.push_str("Cayenne,French Guiana,America/Cayenne,05°05'N,52°18'W\n");
+    s.push_str("Charlotte Amalie,United States of Virgin Islands,America/Virgin,18°21'N,64°56'W\n");
+    s.push_str("Chisinau,Moldova,Europe/Chisinau,47°02'N,28°50'E\n");
+    s.push_str("Conakry,Guinea,Africa/Conakry,09°29'N,13°49'W\n");
+    s.push_str("Copenhagen,Denmark,Europe/Copenhagen,55°41'N,12°34'E\n");
+    s.push_str("Cotonou,Benin,Africa/Porto-Novo,06°23'N,02°42'E\n");
+    s.push_str("Dakar,Senegal,Africa/Dakar,14°34'N,17°29'W\n");
+    s.push_str("Damascus,Syrian Arab Republic,Asia/Damascus,33°30'N,36°18'E\n");
+    s.push_str("Dammam,Saudi Arabia,Asia/Riyadh,26°30'N,50°12'E\n");
+    s.push_str("Darwin,Australia,Australia/Darwin,12°26'S,130°50'E\n");
+    s.push_str("Dhaka,Bangladesh,Asia/Dhaka,23°43'N,90°26'E\n");
+    s.push_str("Dili,East Timor,Asia/Dili,08°29'S,125°34'E\n");
+    s.push_str("Djibouti,Djibouti,Africa/Djibouti,11°08'N,42°20'E\n");
+    s.push_str("Dodoma,United Republic of Tanzania,Africa/Dar_es_Salaam,06°08'S,35°45'E\n");
+    s.push_str("Doha,Qatar,Asia/Qatar,25°15'N,51°35'E\n");
+    s.push_str("Douglas,Isle Of Man,Europe/London,54°9'N,4°29'W\n");
+    s.push_str("Dublin,Ireland,Europe/Dublin,53°21'N,06°15'W\n");
+    s.push_str("Dushanbe,Tajikistan,Asia/Dushanbe,38°33'N,68°48'E\n");
+    s.push_str("El Aaiun,Morocco,UTC,27°9'N,13°12'W\n");
+    s.push_str("Fort-de-France,Martinique,America/Martinique,14°36'N,61°02'W\n");
+    s.push_str("Freetown,Sierra Leone,Africa/Freetown,08°30'N,13°17'W\n");
+    s.push_str("Funafuti,Tuvalu,Pacific/Funafuti,08°31'S,179°13'E\n");
+    s.push_str("Gaborone,Botswana,Africa/Gaborone,24°45'S,25°57'E\n");
+    s.push_str("George Town,Cayman Islands,America/Cayman,19°20'N,81°24'W\n");
+    s.push_str("Georgetown,Guyana,America/Guyana,06°50'N,58°12'W\n");
+    s.push_str("Gibraltar,Gibraltar,Europe/Gibraltar,36°9'N,5°21'W\n");
+    s.push_str("Guatemala,Guatemala,America/Guatemala,14°40'N,90°22'W\n");
+    s.push_str("Hanoi,Viet Nam,Asia/Saigon,21°05'N,105°55'E\n");
+    s.push_str("Harare,Zimbabwe,Africa/Harare,17°43'S,31°02'E\n");
+    s.push_str("Havana,Cuba,America/Havana,23°08'N,82°22'W\n");
+    s.push_str("Helsinki,Finland,Europe/Helsinki,60°15'N,25°03'E\n");
+    s.push_str("Hobart,Tasmania,Australia/Hobart,42°53'S,147°19'E\n");
+    s.push_str("Hong Kong,China,Asia/Hong_Kong,22°16'N,114°09'E\n");
+    s.push_str("Honiara,Solomon Islands,Pacific/Guadalcanal,09°27'S,159°57'E\n");
+    s.push_str("Islamabad,Pakistan,Asia/Karachi,33°40'N,73°10'E\n");
+    s.push_str("Jakarta,Indonesia,Asia/Jakarta,06°09'S,106°49'E\n");
+    s.push_str("Jerusalem,Israel,Asia/Jerusalem,31°47'N,35°12'E\n");
+    s.push_str("Juba,South Sudan,Africa/Juba,4°51'N,31°36'E\n");
+    s.push_str("Jubail,Saudi Arabia,Asia/Riyadh,27°02'N,49°39'E\n");
+    s.push_str("Kabul,Afghanistan,Asia/Kabul,34°28'N,69°11'E\n");
+    s.push_str("Kampala,Uganda,Africa/Kampala,00°20'N,32°30'E\n");
+    s.push_str("Kathmandu,Nepal,Asia/Kathmandu,27°45'N,85°20'E\n");
+    s.push_str("Khartoum,Sudan,Africa/Khartoum,15°31'N,32°35'E\n");
+    s.push_str("Kiev,Ukraine,Europe/Kiev,50°30'N,30°28'E\n");
+    s.push_str("Kigali,Rwanda,Africa/Kigali,01°59'S,30°04'E\n");
+    s.push_str("Kingston,Jamaica,America/Jamaica,18°00'N,76°50'W\n");
+    s.push_str("Kingston,Norfolk Island,Pacific/Norfolk,45°20'S,168°43'E\n");
+    s.push_str("Kingstown,Saint Vincent and the Grenadines,America/St_Vincent,13°10'N,61°10'W\n");
+    s.push_str("Kinshasa,Democratic Republic of the Congo,Africa/Kinshasa,04°20'S,15°15'E\n");
+    s.push_str("Koror,Palau,Pacific/Palau,07°20'N,134°28'E\n");
+    s.push_str("Kuala Lumpur,Malaysia,Asia/Kuala_Lumpur,03°09'N,101°41'E\n");
+    s.push_str("Kuwait,Kuwait,Asia/Kuwait,29°30'N,48°00'E\n");
+    s.push_str("La Paz,Bolivia,America/La_Paz,16°20'S,68°10'W\n");
+    s.push_str("Libreville,Gabon,Africa/Libreville,00°25'N,09°26'E\n");
+    s.push_str("Lilongwe,Malawi,Africa/Blantyre,14°00'S,33°48'E\n");
+    s.push_str("Lima,Peru,America/Lima,12°00'S,77°00'W\n");
+    s.push_str("Lisbon,Portugal,Europe/Lisbon,38°42'N,09°10'W\n");
+    s.push_str("Ljubljana,Slovenia,Europe/Ljubljana,46°04'N,14°33'E\n");
+    s.push_str("Lome,Togo,Africa/Lome,06°09'N,01°20'E\n");
+    s.push_str("London,England,Europe/London,51°28'24\"N,00°00'3\"W\n");
+    s.push_str("Luanda,Angola,Africa/Luanda,08°50'S,13°15'E\n");
+    s.push_str("Lusaka,Zambia,Africa/Lusaka,15°28'S,28°16'E\n");
+    s.push_str("Luxembourg,Luxembourg,Europe/Luxembourg,49°37'N,06°09'E\n");
+    s.push_str("Macau,Macao,Asia/Macau,22°12'N,113°33'E\n");
+    s.push_str("Madinah,Saudi Arabia,Asia/Riyadh,24°28'N,39°36'E\n");
+    s.push_str("Madrid,Spain,Europe/Madrid,40°25'N,03°45'W\n");
+    s.push_str("Majuro,Marshall Islands,Pacific/Majuro,7°4'N,171°16'E\n");
+    s.push_str("Makkah,Saudi Arabia,Asia/Riyadh,21°26'N,39°49'E\n");
+    s.push_str("Malabo,Equatorial Guinea,Africa/Malabo,03°45'N,08°50'E\n");
+    s.push_str("Male,Maldives,Indian/Maldives,04°00'N,73°28'E\n");
+    s.push_str("Mamoudzou,Mayotte,Indian/Mayotte,12°48'S,45°14'E\n");
+    s.push_str("Managua,Nicaragua,America/Managua,12°06'N,86°20'W\n");
+    s.push_str("Manama,Bahrain,Asia/Bahrain,26°10'N,50°30'E\n");
+    s.push_str("Manila,Philippines,Asia/Manila,14°40'N,121°03'E\n");
+    s.push_str("Maputo,Mozambique,Africa/Maputo,25°58'S,32°32'E\n");
+    s.push_str("Maseru,Lesotho,Africa/Maseru,29°18'S,27°30'E\n");
+    s.push_str("Masqat,Oman,Asia/Muscat,23°37'N,58°36'E\n");
+    s.push_str("Mbabane,Swaziland,Africa/Mbabane,26°18'S,31°06'E\n");
+    s.push_str("Mecca,Saudi Arabia,Asia/Riyadh,21°26'N,39°49'E\n");
+    s.push_str("Medina,Saudi Arabia,Asia/Riyadh,24°28'N,39°36'E\n");
+    s.push_str("Melbourne,Australia,Australia/Melbourne,37°48'S,144°57'E\n");
+    s.push_str("Mexico,Mexico,America/Mexico_City,19°20'N,99°10'W\n");
+    s.push_str("Minsk,Belarus,Europe/Minsk,53°52'N,27°30'E\n");
+    s.push_str("Mogadishu,Somalia,Africa/Mogadishu,02°02'N,45°25'E\n");
+    s.push_str("Monaco,Priciplality Of Monaco,Europe/Monaco,43°43'N,7°25'E\n");
+    s.push_str("Monrovia,Liberia,Africa/Monrovia,06°18'N,10°47'W\n");
+    s.push_str("Montevideo,Uruguay,America/Montevideo,34°50'S,56°11'W\n");
+    s.push_str("Moroni,Comoros,Indian/Comoro,11°40'S,43°16'E\n");
+    s.push_str("Moscow,Russian Federation,Europe/Moscow,55°45'N,37°35'E\n");
+    s.push_str("Moskva,Russian Federation,Europe/Moscow,55°45'N,37°35'E\n");
+    s.push_str("Mumbai,India,Asia/Kolkata,18°58'N,72°49'E\n");
+    s.push_str("Muscat,Oman,Asia/Muscat,23°37'N,58°32'E\n");
+    s.push_str("N'Djamena,Chad,Africa/Ndjamena,12°10'N,14°59'E\n");
+    s.push_str("Nairobi,Kenya,Africa/Nairobi,01°17'S,36°48'E\n");
+    s.push_str("Nassau,Bahamas,America/Nassau,25°05'N,77°20'W\n");
+    s.push_str("Naypyidaw,Myanmar,Asia/Rangoon,19°45'N,96°6'E\n");
+    s.push_str("New Delhi,India,Asia/Kolkata,28°37'N,77°13'E\n");
+    s.push_str("Ngerulmud,Palau,Pacific/Palau,7°30'N,134°37'E\n");
+    s.push_str("Niamey,Niger,Africa/Niamey,13°27'N,02°06'E\n");
+    s.push_str("Nicosia,Cyprus,Asia/Nicosia,35°10'N,33°25'E\n");
+    s.push_str("Nouakchott,Mauritania,Africa/Nouakchott,20°10'S,57°30'E\n");
+    s.push_str("Noumea,New Caledonia,Pacific/Noumea,22°17'S,166°30'E\n");
+    s.push_str("Nuku'alofa,Tonga,Pacific/Tongatapu,21°10'S,174°00'W\n");
+    s.push_str("Nuuk,Greenland,America/Godthab,64°10'N,51°35'W\n");
+    s.push_str("Oranjestad,Aruba,America/Aruba,12°32'N,70°02'W\n");
+    s.push_str("Oslo,Norway,Europe/Oslo,59°55'N,10°45'E\n");
+    s.push_str("Ottawa,Canada,US/Eastern,45°27'N,75°42'W\n");
+    s.push_str("Ouagadougou,Burkina Faso,Africa/Ouagadougou,12°15'N,01°30'W\n");
+    s.push_str("P'yongyang,Democratic People's Republic of Korea,Asia/Pyongyang,39°09'N,125°30'E\n");
+    s.push_str("Pago Pago,American Samoa,Pacific/Pago_Pago,14°16'S,170°43'W\n");
+    s.push_str("Palikir,Micronesia,Pacific/Ponape,06°55'N,158°09'E\n");
+    s.push_str("Panama,Panama,America/Panama,09°00'N,79°25'W\n");
+    s.push_str("Papeete,French Polynesia,Pacific/Tahiti,17°32'S,149°34'W\n");
+    s.push_str("Paramaribo,Suriname,America/Paramaribo,05°50'N,55°10'W\n");
+    s.push_str("Paris,France,Europe/Paris,48°50'N,02°20'E\n");
+    s.push_str("Perth,Australia,Australia/Perth,31°56'S,115°50'E\n");
+    s.push_str("Phnom Penh,Cambodia,Asia/Phnom_Penh,11°33'N,104°55'E\n");
+    s.push_str("Podgorica,Montenegro,Europe/Podgorica,42°28'N,19°16'E\n");
+    s.push_str("Port Louis,Mauritius,Indian/Mauritius,20°9'S,57°30'E\n");
+    s.push_str("Port Moresby,Papua New Guinea,Pacific/Port_Moresby,09°24'S,147°08'E\n");
+    s.push_str("Port-Vila,Vanuatu,Pacific/Efate,17°45'S,168°18'E\n");
+    s.push_str("Port-au-Prince,Haiti,America/Port-au-Prince,18°40'N,72°20'W\n");
+    s.push_str("Port of Spain,Trinidad and Tobago,America/Port_of_Spain,10°40'N,61°31'W\n");
+    s.push_str("Porto-Novo,Benin,Africa/Porto-Novo,06°23'N,02°42'E\n");
+    s.push_str("Prague,Czech Republic,Europe/Prague,50°05'N,14°22'E\n");
+    s.push_str("Praia,Cape Verde,Atlantic/Cape_Verde,15°02'N,23°34'W\n");
+    s.push_str("Pretoria,South Africa,Africa/Johannesburg,25°44'S,28°12'E\n");
+    s.push_str("Pristina,Albania,Europe/Tirane,42°40'N,21°10'E\n");
+    s.push_str("Quito,Ecuador,America/Guayaquil,00°15'S,78°35'W\n");
+    s.push_str("Rabat,Morocco,Africa/Casablanca,34°1'N,6°50'W\n");
+    s.push_str("Reykjavik,Iceland,Atlantic/Reykjavik,64°10'N,21°57'W\n");
+    s.push_str("Riga,Latvia,Europe/Riga,56°53'N,24°08'E\n");
+    s.push_str("Riyadh,Saudi Arabia,Asia/Riyadh,24°41'N,46°42'E\n");
+    s.push_str("Road Town,British Virgin Islands,America/Virgin,18°27'N,64°37'W\n");
+    s.push_str("Rome,Italy,Europe/Rome,41°54'N,12°29'E\n");
+    s.push_str("Roseau,Dominica,America/Dominica,15°20'N,61°24'W\n");
+    s.push_str("Saint Helier,Jersey,Etc/GMT,49°11'N,2°6'W\n");
+    s.push_str("Saint Pierre,Saint Pierre and Miquelon,America/Miquelon,46°46'N,56°12'W\n");
+    s.push_str("Saipan,Northern Mariana Islands,Pacific/Saipan,15°12'N,145°45'E\n");
+    s.push_str("Sana,Yemen,Asia/Aden,15°20'N,44°12'W\n");
+    s.push_str("Sana'a,Yemen,Asia/Aden,15°20'N,44°12'W\n");
+    s.push_str("San Jose,Costa Rica,America/Costa_Rica,09°55'N,84°02'W\n");
+    s.push_str("San Juan,Puerto Rico,America/Puerto_Rico,18°28'N,66°07'W\n");
+    s.push_str("San Marino,San Marino,Europe/San_Marino,43°55'N,12°30'E\n");
+    s.push_str("San Salvador,El Salvador,America/El_Salvador,13°40'N,89°10'W\n");
+    s.push_str("Santiago,Chile,America/Santiago,33°24'S,70°40'W\n");
+    s.push_str("Santo Domingo,Dominica Republic,America/Santo_Domingo,18°30'N,69°59'W\n");
+    s.push_str("Sao Tome,Sao Tome and Principe,Africa/Sao_Tome,00°10'N,06°39'E\n");
+    s.push_str("Sarajevo,Bosnia and Herzegovina,Europe/Sarajevo,43°52'N,18°26'E\n");
+    s.push_str("Seoul,Republic of Korea,Asia/Seoul,37°31'N,126°58'E\n");
+    s.push_str("Singapore,Republic of Singapore,Asia/Singapore,1°18'N,103°48'E\n");
+    s.push_str("Skopje,The Former Yugoslav Republic of Macedonia,Europe/Skopje,42°01'N,21°26'E\n");
+    s.push_str("Sofia,Bulgaria,Europe/Sofia,42°45'N,23°20'E\n");
+    s.push_str("Sri Jayawardenapura Kotte,Sri Lanka,Asia/Colombo,6°54'N,79°53'E\n");
+    s.push_str("St. George's,Grenada,America/Grenada,32°22'N,64°40'W\n");
+    s.push_str("St. John's,Antigua and Barbuda,America/Antigua,17°7'N,61°51'W\n");
+    s.push_str("St. Peter Port,Guernsey,Europe/Guernsey,49°26'N,02°33'W\n");
+    s.push_str("Stanley,Falkland Islands,Atlantic/Stanley,51°40'S,59°51'W\n");
+    s.push_str("Stockholm,Sweden,Europe/Stockholm,59°20'N,18°05'E\n");
+    s.push_str("Sucre,Bolivia,America/La_Paz,16°20'S,68°10'W\n");
+    s.push_str("Suva,Fiji,Pacific/Fiji,18°06'S,178°30'E\n");
+    s.push_str("Sydney,Australia,Australia/Sydney,33°53'S,151°13'E\n");
+    s.push_str("Taipei,Republic of China (Taiwan),Asia/Taipei,25°02'N,121°38'E\n");
+    s.push_str("T'bilisi,Georgia,Asia/Tbilisi,41°43'N,44°50'E\n");
+    s.push_str("Tbilisi,Georgia,Asia/Tbilisi,41°43'N,44°50'E\n");
+    s.push_str("Tallinn,Estonia,Europe/Tallinn,59°22'N,24°48'E\n");
+    s.push_str("Tarawa,Kiribati,Pacific/Tarawa,01°30'N,173°00'E\n");
+    s.push_str("Tashkent,Uzbekistan,Asia/Tashkent,41°20'N,69°10'E\n");
+    s.push_str("Tegucigalpa,Honduras,America/Tegucigalpa,14°05'N,87°14'W\n");
+    s.push_str("Tehran,Iran,Asia/Tehran,35°44'N,51°30'E\n");
+    s.push_str("Thimphu,Bhutan,Asia/Thimphu,27°31'N,89°45'E\n");
+    s.push_str("Tirana,Albania,Europe/Tirane,41°18'N,19°49'E\n");
+    s.push_str("Tirane,Albania,Europe/Tirane,41°18'N,19°49'E\n");
+    s.push_str("Torshavn,Faroe Islands,Atlantic/Faroe,62°05'N,06°56'W\n");
+    s.push_str("Tokyo,Japan,Asia/Tokyo,35°41'N,139°41'E\n");
+    s.push_str("Tripoli,Libyan Arab Jamahiriya,Africa/Tripoli,32°49'N,13°07'E\n");
+    s.push_str("Tunis,Tunisia,Africa/Tunis,36°50'N,10°11'E\n");
+    s.push_str("Ulan Bator,Mongolia,Asia/Ulaanbaatar,47°55'N,106°55'E\n");
+    s.push_str("Ulaanbaatar,Mongolia,Asia/Ulaanbaatar,47°55'N,106°55'E\n");
+    s.push_str("Vaduz,Liechtenstein,Europe/Vaduz,47°08'N,09°31'E\n");
+    s.push_str("Valletta,Malta,Europe/Malta,35°54'N,14°31'E\n");
+    s.push_str("Vienna,Austria,Europe/Vienna,48°12'N,16°22'E\n");
+    s.push_str("Vientiane,Lao People's Democratic Republic,Asia/Vientiane,17°58'N,102°36'E\n");
+    s.push_str("Vilnius,Lithuania,Europe/Vilnius,54°38'N,25°19'E\n");
+    s.push_str("W. Indies,Antigua and Barbuda,America/Antigua,17°20'N,61°48'W\n");
+    s.push_str("Warsaw,Poland,Europe/Warsaw,52°13'N,21°00'E\n");
+    s.push_str("Washington DC,USA,US/Eastern,39°91'N,77°02'W\n");
+    s.push_str("Wellington,New Zealand,Pacific/Auckland,41°19'S,174°46'E\n");
+    s.push_str("Willemstad,Netherlands Antilles,America/Curacao,12°05'N,69°00'W\n");
+    s.push_str("Windhoek,Namibia,Africa/Windhoek,22°35'S,17°04'E\n");
+    s.push_str("Yamoussoukro,Cote d'Ivoire,Africa/Abidjan,06°49'N,05°17'W\n");
+    s.push_str("Yangon,Myanmar,Asia/Rangoon,16°45'N,96°20'E\n");
+    s.push_str("Yaounde,Cameroon,Africa/Douala,03°50'N,11°35'E\n");
+    s.push_str("Yaren,Nauru,Pacific/Nauru,0°32'S,166°55'E\n");
+    s.push_str("Yerevan,Armenia,Asia/Yerevan,40°10'N,44°31'E\n");
+    s.push_str("Zagreb,Croatia,Europe/Zagreb,45°50'N,15°58'E\n");
+    s.push_str("Zurich,Switzerland,Europe/Zurich,47°22'N,08°33'E\n");
+    s.push_str("\n");
+    s.push_str("# UK Cities\n");
+    s.push_str("Aberdeen,Scotland,Europe/London,57°08'N,02°06'W\n");
+    s.push_str("Birmingham,England,Europe/London,52°30'N,01°50'W\n");
+    s.push_str("Bolton,England,Europe/London,53°35'N,02°15'W\n");
+    s.push_str("Bradford,England,Europe/London,53°47'N,01°45'W\n");
+    s.push_str("Bristol,England,Europe/London,51°28'N,02°35'W\n");
+    s.push_str("Cardiff,Wales,Europe/London,51°29'N,03°13'W\n");
+    s.push_str("Crawley,England,Europe/London,51°8'N,00°10'W\n");
+    s.push_str("Edinburgh,Scotland,Europe/London,55°57'N,03°13'W\n");
+    s.push_str("Glasgow,Scotland,Europe/London,55°50'N,04°15'W\n");
+    s.push_str("Greenwich,England,Europe/London,51°28'N,00°00'W\n");
+    s.push_str("Leeds,England,Europe/London,53°48'N,01°35'W\n");
+    s.push_str("Leicester,England,Europe/London,52°38'N,01°08'W\n");
+    s.push_str("Liverpool,England,Europe/London,53°25'N,03°00'W\n");
+    s.push_str("Manchester,England,Europe/London,53°30'N,02°15'W\n");
+    s.push_str("Newcastle Upon Tyne,England,Europe/London,54°59'N,01°36'W\n");
+    s.push_str("Newcastle,England,Europe/London,54°59'N,01°36'W\n");
+    s.push_str("Norwich,England,Europe/London,52°38'N,01°18'E\n");
+    s.push_str("Oxford,England,Europe/London,51°45'N,01°15'W\n");
+    s.push_str("Plymouth,England,Europe/London,50°25'N,04°15'W\n");
+    s.push_str("Portsmouth,England,Europe/London,50°48'N,01°05'W\n");
+    s.push_str("Reading,England,Europe/London,51°27'N,0°58'W\n");
+    s.push_str("Sheffield,England,Europe/London,53°23'N,01°28'W\n");
+    s.push_str("Southampton,England,Europe/London,50°55'N,01°25'W\n");
+    s.push_str("Swansea,England,Europe/London,51°37'N,03°57'W\n");
+    s.push_str("Swindon,England,Europe/London,51°34'N,01°47'W\n");
+    s.push_str("Wolverhampton,England,Europe/London,52°35'N,2°08'W\n");
+    s.push_str("Barrow-In-Furness,England,Europe/London,54°06'N,3°13'W\n");
+    s.push_str("\n");
+    s.push_str("# US State Capitals\n");
+    s.push_str("Montgomery,USA,US/Central,32°21'N,86°16'W\n");
+    s.push_str("Juneau,USA,US/Alaska,58°23'N,134°11'W\n");
+    s.push_str("Phoenix,USA,America/Phoenix,33°26'N,112°04'W\n");
+    s.push_str("Little Rock,USA,US/Central,34°44'N,92°19'W\n");
+    s.push_str("Sacramento,USA,US/Pacific,38°33'N,121°28'W\n");
+    s.push_str("Denver,USA,US/Mountain,39°44'N,104°59'W\n");
+    s.push_str("Hartford,USA,US/Eastern,41°45'N,72°41'W\n");
+    s.push_str("Dover,USA,US/Eastern,39°09'N,75°31'W\n");
+    s.push_str("Tallahassee,USA,US/Eastern,30°27'N,84°16'W\n");
+    s.push_str("Atlanta,USA,US/Eastern,33°45'N,84°23'W\n");
+    s.push_str("Honolulu,USA,US/Hawaii,21°18'N,157°49'W\n");
+    s.push_str("Boise,USA,US/Mountain,43°36'N,116°12'W\n");
+    s.push_str("Springfield,USA,US/Central,39°47'N,89°39'W\n");
+    s.push_str("Indianapolis,USA,US/Eastern,39°46'N,86°9'W\n");
+    s.push_str("Des Moines,USA,US/Central,41°35'N,93°37'W\n");
+    s.push_str("Topeka,USA,US/Central,39°03'N,95°41'W\n");
+    s.push_str("Frankfort,USA,US/Eastern,38°11'N,84°51'W\n");
+    s.push_str("Baton Rouge,USA,US/Central,30°27'N,91°8'W\n");
+    s.push_str("Augusta,USA,US/Eastern,44°18'N,69°46'W\n");
+    s.push_str("Annapolis,USA,US/Eastern,38°58'N,76°30'W\n");
+    s.push_str("Boston,USA,US/Eastern,42°21'N,71°03'W\n");
+    s.push_str("Lansing,USA,US/Eastern,42°44'N,84°32'W\n");
+    s.push_str("Saint Paul,USA,US/Central,44°56'N,93°05'W\n");
+    s.push_str("Jackson,USA,US/Central,32°17'N,90°11'W\n");
+    s.push_str("Jefferson City,USA,US/Central,38°34'N,92°10'W\n");
+    s.push_str("Helena,USA,US/Mountain,46°35'N,112°1'W\n");
+    s.push_str("Lincoln,USA,US/Central,40°48'N,96°40'W\n");
+    s.push_str("Carson City,USA,US/Pacific,39°9'N,119°45'W\n");
+    s.push_str("Concord,USA,US/Eastern,43°12'N,71°32'W\n");
+    s.push_str("Trenton,USA,US/Eastern,40°13'N,74°45'W\n");
+    s.push_str("Santa Fe,USA,US/Mountain,35°40'N,105°57'W\n");
+    s.push_str("Albany,USA,US/Eastern,42°39'N,73°46'W\n");
+    s.push_str("Raleigh,USA,US/Eastern,35°49'N,78°38'W\n");
+    s.push_str("Bismarck,USA,US/Central,46°48'N,100°46'W\n");
+    s.push_str("Columbus,USA,US/Eastern,39°59'N,82°59'W\n");
+    s.push_str("Oklahoma City,USA,US/Central,35°28'N,97°32'W\n");
+    s.push_str("Salem,USA,US/Pacific,44°55'N,123°1'W\n");
+    s.push_str("Harrisburg,USA,US/Eastern,40°16'N,76°52'W\n");
+    s.push_str("Providence,USA,US/Eastern,41°49'N,71°25'W\n");
+    s.push_str("Columbia,USA,US/Eastern,34°00'N,81°02'W\n");
+    s.push_str("Pierre,USA,US/Central,44°22'N,100°20'W\n");
+    s.push_str("Nashville,USA,US/Central,36°10'N,86°47'W\n");
+    s.push_str("Austin,USA,US/Central,30°16'N,97°45'W\n");
+    s.push_str("Salt Lake City,USA,US/Mountain,40°45'N,111°53'W\n");
+    s.push_str("Montpelier,USA,US/Eastern,44°15'N,72°34'W\n");
+    s.push_str("Richmond,USA,US/Eastern,37°32'N,77°25'W\n");
+    s.push_str("Olympia,USA,US/Pacific,47°2'N,122°53'W\n");
+    s.push_str("Charleston,USA,US/Eastern,38°20'N,81°38'W\n");
+    s.push_str("Madison,USA,US/Central,43°4'N,89°24'W\n");
+    s.push_str("Cheyenne,USA,US/Mountain,41°8'N,104°48'W\n");
+    s.push_str("\n");
+    s.push_str("# Major US Cities\n");
+    s.push_str("Birmingham,USA,US/Central,33°39'N,86°48'W\n");
+    s.push_str("Anchorage,USA,US/Alaska,61°13'N,149°53'W\n");
+    s.push_str("Los Angeles,USA,US/Pacific,34°03'N,118°15'W\n");
+    s.push_str("San Francisco,USA,US/Pacific,37°46'N,122°25'W\n");
+    s.push_str("Bridgeport,USA,US/Eastern,41°11'N,73°11'W\n");
+    s.push_str("Wilmington,USA,US/Eastern,39°44'N,75°32'W\n");
+    s.push_str("Jacksonville,USA,US/Eastern,30°19'N,81°39'W\n");
+    s.push_str("Miami,USA,US/Eastern,26°8'N,80°12'W\n");
+    s.push_str("Chicago,USA,US/Central,41°50'N,87°41'W\n");
+    s.push_str("Wichita,USA,US/Central,37°41'N,97°20'W\n");
+    s.push_str("Louisville,USA,US/Eastern,38°15'N,85°45'W\n");
+    s.push_str("New Orleans,USA,US/Central,29°57'N,90°4'W\n");
+    s.push_str("Portland,USA,US/Eastern,43°39'N,70°16'W\n");
+    s.push_str("Baltimore,USA,US/Eastern,39°17'N,76°37'W\n");
+    s.push_str("Detroit,USA,US/Eastern,42°19'N,83°2'W\n");
+    s.push_str("Minneapolis,USA,US/Central,44°58'N,93°15'W\n");
+    s.push_str("Kansas City,USA,US/Central,39°06'N,94°35'W\n");
+    s.push_str("Billings,USA,US/Mountain,45°47'N,108°32'W\n");
+    s.push_str("Omaha,USA,US/Central,41°15'N,96°0'W\n");
+    s.push_str("Las Vegas,USA,US/Pacific,36°10'N,115°08'W\n");
+    s.push_str("Manchester,USA,US/Eastern,42°59'N,71°27'W\n");
+    s.push_str("Newark,USA,US/Eastern,40°44'N,74°11'W\n");
+    s.push_str("Albuquerque,USA,US/Mountain,35°06'N,106°36'W\n");
+    s.push_str("New York,USA,US/Eastern,40°43'N,74°0'W\n");
+    s.push_str("Charlotte,USA,US/Eastern,35°13'N,80°50'W\n");
+    s.push_str("Fargo,USA,US/Central,46°52'N,96°47'W\n");
+    s.push_str("Cleveland,USA,US/Eastern,41°28'N,81°40'W\n");
+    s.push_str("Philadelphia,USA,US/Eastern,39°57'N,75°10'W\n");
+    s.push_str("Sioux Falls,USA,US/Central,43°32'N,96°43'W\n");
+    s.push_str("Memphis,USA,US/Central,35°07'N,89°58'W\n");
+    s.push_str("Houston,USA,US/Central,29°45'N,95°22'W\n");
+    s.push_str("Dallas,USA,US/Central,32°47'N,96°48'W\n");
+    s.push_str("Burlington,USA,US/Eastern,44°28'N,73°9'W\n");
+    s.push_str("Virginia Beach,USA,US/Eastern,36°50'N,76°05'W\n");
+    s.push_str("Seattle,USA,US/Pacific,47°36'N,122°19'W\n");
+    s.push_str("Milwaukee,USA,US/Central,43°03'N,87°57'W\n");
+    s.push_str("San Diego,USA,US/Pacific,32°42'N,117°09'W\n");
+    s.push_str("Orlando,USA,US/Eastern,28°32'N,81°22'W\n");
+    s.push_str("Buffalo,USA,US/Eastern,42°54'N,78°50'W\n");
+    s.push_str("Toledo,USA,US/Eastern,41°39'N,83°34'W\n");
+    s.push_str("\n");
+    s.push_str("# Canadian cities\n");
+    s.push_str("Vancouver,Canada,America/Vancouver,49°15'N,123°6'W\n");
+    s.push_str("Calgary,Canada,America/Edmonton,51°2'N,114°3'W\n");
+    s.push_str("Edmonton,Canada,America/Edmonton,53°32'N,113°29'W\n");
+    s.push_str("Saskatoon,Canada,America/Regina,52°8'N,106°40'W\n");
+    s.push_str("Regina,Canada,America/Regina,50°27'N,104°36'W\n");
+    s.push_str("Winnipeg,Canada,America/Winnipeg,49°53'N,97°8'W\n");
+    s.push_str("Toronto,Canada,America/Toronto,43°39'N,79°22'W\n");
+    s.push_str("Montreal,Canada,America/Montreal,45°30'N,73°33'W\n");
+    s.push_str("Quebec,Canada,America/Toronto,46°48'N,71°14'W\n");
+    s.push_str("Fredericton,Canada,America/Halifax,45°57'N,66°38'W\n");
+    s.push_str("Halifax,Canada,America/Halifax,44°38'N,63°34'W\n");
+    s.push_str("Charlottetown,Canada,America/Halifax,46°14'N,63°7'W\n");
+    s.push_str("St. John's,Canada,America/Halifax,47°33'N,52°42'W\n");
+    s.push_str("Whitehorse,Canada,America/Whitehorse,60°43'N,135°3'W\n");
+    s.push_str("Yellowknife,Canada,America/Yellowknife,62°27'N,114°22'W\n");
+    s.push_str("Iqaluit,Canada,America/Iqaluit,63°44'N,68°31'W\n");
+    s
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("day\t51.4733\t-0.0008333\t0.0\t2015-12-25\t-01:00\tNAUTICAL\t40.279:R:0,120.0:R:1,120.0:R:0\n");
+    s.push_str("day\t51.4733\t-0.0008333\t0.0\t2020-03-20\t-08:00\tASTRONOMICAL\t120.0:R:1\n");
+    s.push_str("day\t51.4733\t-0.0008333\t0.0\t2015-12-01\tutc\t3\t148.288:S:0,0.0:S:1\n");
+    s.push_str("day\t51.4733\t-0.0008333\t0.0\t1934-04-29\tutc\t3\t0.0:S:1,25.035:R:1,120.0:R:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t0.0\t2015-12-01\tutc\t15.5\t6.066:R:0,115.774:S:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t0.0\t2000-01-01\t-03:30\tCIVIL\t120.0:S:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t0.0\t2015-12-25\t-12:00\tCIVIL\t120.0:R:1,120.0:S:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t0.0\t1977-04-30\t-08:00\tCIVIL\t45.0:S:0\n");
+    s.push_str("day\t28.61\t77.2\t0.0\t1900-03-01\tutc\tCIVIL\t25.407:R:0,45.0:R:1,120.0:R:1\n");
+    s.push_str("day\t28.61\t77.2\t0.0\t2021-12-21\t+08:00\t0.833\t120.0:R:1,52.251:R:0,120.0:S:1\n");
+    s.push_str("day\t28.61\t77.2\t0.0\t2024-02-29\t-01:00\t15.5\t45.0:S:1\n");
+    s.push_str("day\t28.61\t77.2\t0.0\t1903-04-04\t-05:00\t0.833\t119.849:R:0,120.0:S:1\n");
+    s.push_str("day\t-33.8688\t151.2093\t58.0\t1900-03-01\t+03:00\t6.0\t112.672:S:0,42.788:R:1\n");
+    s.push_str("day\t-33.8688\t151.2093\t58.0\t2100-12-31\t-03:30\t0.833\t98.939:R:0,0.0:S:1,120.0:R:1\n");
+    s.push_str("day\t-33.8688\t151.2093\t58.0\t2000-01-01\t-01:00\t15.5\t45.0:S:1\n");
+    s.push_str("day\t-33.8688\t151.2093\t58.0\t1951-04-29\t+01:00\t15.5\t0.0:R:0,174.582:S:1,18.39:S:1\n");
+    s.push_str("day\t64.1466\t-21.9426\t0.0\t1900-03-01\t+12:45\t0.833\t0.0:R:1,46.803:S:1,45.0:S:1\n");
+    s.push_str("day\t64.1466\t-21.9426\t0.0\t2024-02-29\t+12:45\t3\t0.0:R:0,7.823:R:0,0.0:R:1\n");
+    s.push_str("day\t64.1466\t-21.9426\t0.0\t2015-12-25\tutc\tNAUTICAL\t100.593:S:0,121.585:S:1\n");
+    s.push_str("day\t64.1466\t-21.9426\t0.0\t1911-03-29\tutc\t3\t45.0:S:0\n");
+    s.push_str("day\t78.2232\t15.6267\t0.0\t2015-12-25\t-03:30\t3\t120.736:R:0\n");
+    s.push_str("day\t78.2232\t15.6267\t0.0\t2100-12-31\t-04:00\tNAUTICAL\t0.0:S:1,45.0:S:1,121.024:R:0\n");
+    s.push_str("day\t78.2232\t15.6267\t0.0\t2015-12-01\t+03:00\tNAUTICAL\t0.0:S:0,0.0:S:1\n");
+    s.push_str("day\t78.2232\t15.6267\t0.0\t1949-07-03\t-05:00\t15.5\t120.0:S:0\n");
+    s.push_str("day\t-77.85\t166.6667\t10.0\t2015-12-01\t+01:00\t15.5\t0.0:R:0,120.0:S:1,32.164:R:1\n");
+    s.push_str("day\t-77.85\t166.6667\t10.0\t2024-02-29\t+05:30\t6.0\t120.0:S:1\n");
+    s.push_str("day\t-77.85\t166.6667\t10.0\t2019-01-01\t+14:00\t3\t120.0:S:0,120.0:S:0,0.0:R:1\n");
+    s.push_str("day\t-77.85\t166.6667\t10.0\t2047-04-17\t-12:00\tASTRONOMICAL\t0.0:S:1,120.0:S:0,-8.168:S:1\n");
+    s.push_str("day\t69.6492\t18.9553\t100.0\t2100-12-31\t+12:45\t0.833\t152.072:R:1\n");
+    s.push_str("day\t69.6492\t18.9553\t100.0\t1900-03-01\tutc\tNAUTICAL\t120.0:R:1,45.0:R:0,45.0:R:0\n");
+    s.push_str("day\t69.6492\t18.9553\t100.0\t2015-12-25\t+12:45\tCIVIL\t45.0:S:0\n");
+    s.push_str("day\t69.6492\t18.9553\t100.0\t1925-06-28\tutc\tASTRONOMICAL\t0.0:S:0,45.0:R:1,138.14:R:1\n");
+    s.push_str("day\t0.0\t0.0\t0.0\t2015-12-25\tutc\t0.833\t40.123:S:0,39.939:S:1,36.063:S:1\n");
+    s.push_str("day\t0.0\t0.0\t0.0\t2000-01-01\t+05:30\tASTRONOMICAL\t40.462:S:1,-11.282:R:0,137.556:S:1\n");
+    s.push_str("day\t0.0\t0.0\t0.0\t2015-12-01\tutc\t3\t-0.244:R:1,33.494:R:1,0.0:S:0\n");
+    s.push_str("day\t0.0\t0.0\t0.0\t1926-12-22\tutc\tCIVIL\t99.264:S:0,171.563:S:0\n");
+    s.push_str("day\t40.7128\t-74.006\t10.0\t2019-01-01\t+09:30\t0.833\t45.0:R:1,45.0:R:0,120.0:S:0\n");
+    s.push_str("day\t40.7128\t-74.006\t10.0\t2020-03-20\t+05:30\tCIVIL\t6.63:R:1\n");
+    s.push_str("day\t40.7128\t-74.006\t10.0\t2024-02-29\t-08:00\t3\t45.0:S:1,120.0:S:1,160.59:R:1\n");
+    s.push_str("day\t40.7128\t-74.006\t10.0\t2100-02-11\t+03:00\tCIVIL\t120.0:S:1\n");
+    s.push_str("day\t35.6762\t139.6503\t40.0\t2021-12-21\tutc\t15.5\t162.622:S:0,120.0:S:1\n");
+    s.push_str("day\t35.6762\t139.6503\t40.0\t2000-01-01\tutc\t3\t161.433:S:1\n");
+    s.push_str("day\t35.6762\t139.6503\t40.0\t1900-03-01\t+03:00\t6.0\t0.0:R:1,0.0:S:0,45.0:S:0\n");
+    s.push_str("day\t35.6762\t139.6503\t40.0\t1974-05-10\t+14:00\t6.0\t40.016:S:1,45.0:S:0,-1.294:R:1\n");
+    s.push_str("day\t-54.8019\t-68.303\t0.0\t2100-12-31\tutc\tNAUTICAL\t0.0:R:1,118.986:R:1\n");
+    s.push_str("day\t-54.8019\t-68.303\t0.0\t2015-12-01\tutc\t6.0\t120.0:R:1,120.0:S:1\n");
+    s.push_str("day\t-54.8019\t-68.303\t0.0\t2021-12-21\t+05:45\t0.833\t45.0:R:1\n");
+    s.push_str("day\t-54.8019\t-68.303\t0.0\t1951-12-10\t+03:00\t15.5\t120.0:R:1,143.264:S:1\n");
+    s.push_str("day\t27.9881\t86.925\t8848.0\t1900-03-01\t+02:00\tNAUTICAL\t0.0:S:1,2.465:S:1\n");
+    s.push_str("day\t27.9881\t86.925\t8848.0\t2024-02-29\tutc\t3\t120.0:R:1,104.872:S:1,96.962:R:1\n");
+    s.push_str("day\t27.9881\t86.925\t8848.0\t2015-12-01\tutc\t6.0\t120.0:R:0,45.0:S:1,134.603:R:1\n");
+    s.push_str("day\t27.9881\t86.925\t8848.0\t2068-02-11\tutc\tASTRONOMICAL\t-16.887:R:0,132.521:S:1,45.0:R:1\n");
+    s.push_str("day\t52°30'N\t13°25'E\t34.0\t2015-12-01\t-04:00\tNAUTICAL\t0.0:R:0,30.344:R:0\n");
+    s.push_str("day\t52°30'N\t13°25'E\t34.0\t2016-06-21\tutc\tNAUTICAL\t-0.49:R:1,120.0:S:0,4.389:R:0\n");
+    s.push_str("day\t52°30'N\t13°25'E\t34.0\t2019-01-01\t+02:00\t3\t138.691:R:0,45.0:R:1,0.0:S:1\n");
+    s.push_str("day\t52°30'N\t13°25'E\t34.0\t1956-07-17\t+10:00\tNAUTICAL\t0.0:S:0\n");
+    s.push_str("day\t41°54'N\t12°29'E\t0.0\t2020-03-20\tutc\t15.5\t120.0:S:0,47.788:S:1,45.0:S:1\n");
+    s.push_str("day\t41°54'N\t12°29'E\t0.0\t2019-01-01\t-04:00\tNAUTICAL\t0.0:S:0,-10.162:R:1,130.121:S:0\n");
+    s.push_str("day\t41°54'N\t12°29'E\t0.0\t2015-12-01\t-05:00\t3\t56.659:S:1,45.0:S:1,45.0:R:0\n");
+    s.push_str("day\t41°54'N\t12°29'E\t0.0\t2047-09-30\t+05:45\t6.0\t169.238:R:1,0.0:R:1\n");
+    s.push_str("day\t33°55'S\t18°25'E\t0.0\t2015-12-01\tutc\tASTRONOMICAL\t0.0:R:1,0.0:S:1,0.0:R:1\n");
+    s.push_str("day\t33°55'S\t18°25'E\t0.0\t2100-12-31\t+05:30\tCIVIL\t21.739:S:0,131.737:R:0\n");
+    s.push_str("day\t33°55'S\t18°25'E\t0.0\t2024-02-29\tutc\tASTRONOMICAL\t111.938:S:1,120.0:R:1\n");
+    s.push_str("day\t33°55'S\t18°25'E\t0.0\t2020-04-03\t+12:45\t3\t0.0:S:0,120.0:R:1,45.0:R:1\n");
+    s.push_str("day\t89.9\t45.0\t0.0\t2020-03-20\t-12:00\tCIVIL\t-14.84:S:1\n");
+    s.push_str("day\t89.9\t45.0\t0.0\t2015-12-01\t+09:30\t6.0\t0.0:S:0,23.923:R:1\n");
+    s.push_str("day\t89.9\t45.0\t0.0\t2100-12-31\tutc\t3\t25.908:R:1\n");
+    s.push_str("day\t89.9\t45.0\t0.0\t1908-02-27\t-12:00\tASTRONOMICAL\t0.0:S:0,18.919:S:1,103.908:R:1\n");
+    s.push_str("day\t-90\t-180\t0.0\t1900-03-01\tutc\t3\t109.715:R:0\n");
+    s.push_str("day\t-90\t-180\t0.0\t2019-01-01\tutc\t6.0\t120.0:R:1,20.96:R:1\n");
+    s.push_str("day\t-90\t-180\t0.0\t2024-02-29\tutc\t0.833\t113.144:R:0\n");
+    s.push_str("day\t-90\t-180\t0.0\t1946-08-20\tutc\tASTRONOMICAL\t0.0:R:1\n");
+    s.push_str("day\t95\t200\t0.0\t2019-01-01\tutc\t0.833\t20.369:R:0,45.0:R:1,120.0:R:1\n");
+    s.push_str("day\t95\t200\t0.0\t2015-12-25\tutc\tASTRONOMICAL\t-3.162:R:0\n");
+    s.push_str("day\t95\t200\t0.0\t2024-02-29\tutc\t0.833\t0.0:R:1\n");
+    s.push_str("day\t95\t200\t0.0\t1969-05-18\t-01:00\t0.833\t37.006:S:1,-9.205:R:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t100/1000\t2100-12-31\t+09:00\t3\t0.0:S:1,12.149:S:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t100/1000\t2020-03-20\tutc\tNAUTICAL\t149.858:R:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t100/1000\t2015-12-25\tutc\tNAUTICAL\t9.43:S:0,31.719:R:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t100/1000\t2068-11-25\t-10:00\tCIVIL\t115.184:S:0,141.316:R:0,45.0:R:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t-50/1000\t2020-03-20\t+03:00\t15.5\t45.0:S:0,45.0:S:0,-1.164:R:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t-50/1000\t2021-12-21\tutc\t15.5\t120.0:S:0,-15.911:S:1,120.0:S:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t-50/1000\t2015-12-01\t+09:30\t0.833\t101.638:S:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t-50/1000\t2058-11-26\t+09:00\tNAUTICAL\t120.0:S:0,17.085:R:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t0/1000\t2015-12-01\t+10:00\t0.833\t8.484:R:0,153.532:R:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t0/1000\t2024-02-29\tutc\t0.833\t0.0:S:0\n");
+    s.push_str("day\t51.5\t-0.1166666\t0/1000\t2019-01-01\t+10:00\t3\t45.0:S:1\n");
+    s.push_str("day\t51.5\t-0.1166666\t0/1000\t1989-07-05\tutc\t0.833\t120.0:R:1,170.241:S:1,115.651:R:1\n");
+    s.push_str("day\t60.0\t25.0\t0.0\t2019-01-01\tutc\t3\t42.942:R:0,120.0:S:1\n");
+    s.push_str("day\t60.0\t25.0\t0.0\t2016-06-21\t-12:00\t6.0\t28.341:S:0,0.0:S:1,-2.018:S:1\n");
+    s.push_str("day\t60.0\t25.0\t0.0\t1900-03-01\t+03:00\tCIVIL\t-0.425:S:1,0.0:S:1,0.0:R:1\n");
+    s.push_str("day\t60.0\t25.0\t0.0\t2046-01-01\t+09:30\tCIVIL\t45.0:R:1,-5.157:R:1,0.0:R:0\n");
+    s.push_str("day\t-23.5\t-46.6\t760.0\t2020-03-20\tutc\t0.833\t0.0:S:1,0.0:R:1,0.0:S:0\n");
+    s.push_str("day\t-23.5\t-46.6\t760.0\t2015-12-01\t+09:00\t0.833\t45.0:S:1\n");
+    s.push_str("day\t-23.5\t-46.6\t760.0\t1900-03-01\tutc\tNAUTICAL\t0.0:S:0\n");
+    s.push_str("day\t-23.5\t-46.6\t760.0\t1925-08-25\t+12:45\tASTRONOMICAL\t45.0:R:1\n");
+    s.push_str("day\t44.4749\t-124.3528\t0.0\t1934-04-19\t-04:00\tASTRONOMICAL\t170.23:S:1\n");
+    s.push_str("day\t-59.3806\t38.8024\t1342.8\t1968-11-17\tutc\t15.5\t29.1:R:1\n");
+    s.push_str("day\t50.2249\t-176.2596\t1015.4\t2055-10-20\t+09:30\t6.0\t0.0:S:1\n");
+    s.push_str("day\t-67.1514\t77.0587\t0.0\t1983-11-07\t+05:30\t6.0\t-1.182:R:1\n");
+    s.push_str("day\t-40.3141\t103.7253\t2174.6\t1917-05-27\t-03:30\tASTRONOMICAL\t21.639:R:0,0.0:R:1\n");
+    s.push_str("day\t65.0778\t-138.244\t0.0\t1994-01-11\t-12:00\t15.5\t120.0:R:1,120.0:R:0,8.251:R:1\n");
+    s.push_str("day\t8.5144\t94.0179\t0.0\t1975-09-19\t-01:00\tASTRONOMICAL\t41.266:S:1,0.0:R:1\n");
+    s.push_str("day\t-52.5068\t-123.9763\t0.0\t1905-06-08\t-01:00\tCIVIL\t58.697:S:1,120.0:R:1,45.0:S:0\n");
+    s.push_str("day\t-24.9148\t60.4559\t0.0\t1920-06-03\tutc\t15.5\t0.0:S:1,45.0:R:1,139.385:S:1\n");
+    s.push_str("day\t48.1221\t-164.2606\t0.0\t2056-06-18\t+09:30\t15.5\t120.0:R:1\n");
+    s.push_str("day\t74.5333\t-6.3587\t1815.7\t2100-06-10\t-08:00\tASTRONOMICAL\t135.906:R:1\n");
+    s.push_str("day\t76.005\t14.313\t2809.3\t2096-01-15\t+08:00\tNAUTICAL\t146.9:R:1,0.0:S:1\n");
+    s.push_str("day\t33.27\t153.6997\t2550.5\t2035-12-06\t+01:00\t3\t120.0:S:1,54.71:R:1,-1.35:S:0\n");
+    s.push_str("day\t72.2101\t-12.7666\t0.0\t1962-03-01\t-08:00\t15.5\t21.749:R:1,120.0:R:1\n");
+    s.push_str("day\t35.2052\t-170.6873\t1891.8\t1972-05-04\tutc\tNAUTICAL\t38.363:R:1,-4.182:S:1,120.608:R:0\n");
+    s.push_str("day\t-73.6282\t-10.2332\t1292.9\t1941-03-10\t+05:45\tNAUTICAL\t122.245:S:1,48.726:S:1\n");
+    s.push_str("day\t22.4512\t92.9391\t0.0\t2026-11-17\t+01:00\t15.5\t-10.562:R:0\n");
+    s.push_str("day\t-35.1336\t158.8378\t0.0\t2051-12-02\t+14:00\t6.0\t95.301:R:1\n");
+    s.push_str("day\t-13.0937\t-0.6798\t0.0\t1992-02-13\tutc\tASTRONOMICAL\t-12.091:S:0\n");
+    s.push_str("day\t55.9846\t-109.3673\t0.0\t2051-03-23\tutc\tNAUTICAL\t51.377:S:0,0.0:S:1,138.226:S:1\n");
+    s.push_str("day\t7.4568\t115.0839\t0.0\t2056-05-12\t-12:00\tCIVIL\t0.0:S:0\n");
+    s.push_str("day\t51.5608\t-88.9839\t0.0\t2018-07-17\tutc\tCIVIL\t45.0:S:1,120.0:R:1\n");
+    s.push_str("day\t-14.6151\t-31.9027\t0.0\t1957-09-11\t+01:00\tNAUTICAL\t120.0:S:1,0.0:R:1\n");
+    s.push_str("day\t-29.558\t-111.1395\t2569.5\t2042-09-08\t+05:30\tCIVIL\t45.0:S:0,1.662:R:1,0.0:S:1\n");
+    s.push_str("day\t65.6657\t158.2885\t0.0\t1916-12-14\t+05:30\tASTRONOMICAL\t0.0:R:0\n");
+    s.push_str("day\t76.3619\t79.0619\t0.0\t2073-01-14\t+08:00\t6.0\t144.502:S:1,55.582:R:1,120.0:R:1\n");
+    s.push_str("day\t-74.5154\t31.1516\t175.7\t2038-04-22\t+02:00\t3\t45.0:R:1,45.0:S:1\n");
+    s.push_str("day\t-2.8728\t40.3102\t0.0\t2058-01-07\t+02:00\tCIVIL\t95.216:S:1,45.0:R:0\n");
+    s.push_str("day\t52.8403\t-101.4641\t835.5\t1995-10-26\tutc\t6.0\t0.0:S:1,45.0:R:0\n");
+    s.push_str("day\t9.4192\t-77.7988\t0.0\t2086-03-22\t+05:30\tNAUTICAL\t0.0:S:1,120.0:R:0\n");
+    s.push_str("day\t13.2196\t178.392\t0.0\t2013-08-05\tutc\tASTRONOMICAL\t0.0:R:1\n");
+    s.push_str("day\t-8.8021\t-115.2549\t0.0\t2037-02-14\tutc\t0.833\t45.0:S:1\n");
+    s.push_str("day\t52.2389\t-10.5517\t0.0\t2000-07-02\t+09:30\t15.5\t133.405:S:0,13.871:R:1,45.0:S:1\n");
+    s.push_str("day\t-36.2698\t147.5355\t0.0\t1939-05-11\t+05:30\t0.833\t120.0:S:1,45.0:S:1,96.412:S:0\n");
+    s.push_str("day\t-42.021\t83.7703\t0.0\t1942-11-28\tutc\t6.0\t0.0:R:0,99.35:S:0,100.386:S:1\n");
+    s.push_str("day\t6.883\t-104.1647\t0.0\t1991-04-24\tutc\tASTRONOMICAL\t120.0:R:1,132.422:R:1,135.932:R:1\n");
+    s.push_str("day\t-11.0699\t-135.9303\t0.0\t2014-10-21\t+09:30\tNAUTICAL\t27.536:S:0\n");
+    s.push_str("day\t23.2296\t162.3159\t611.2\t1956-11-12\t-01:00\tNAUTICAL\t0.0:R:0,90.735:S:1,120.0:S:1\n");
+    s.push_str("day\t28.2744\t56.9069\t1344.6\t1924-05-20\t+05:45\t0.833\t167.229:R:1,0.0:S:1,120.0:R:0\n");
+    s.push_str("day\t-53.5624\t-110.3157\t0.0\t1980-11-05\tutc\t3\t0.0:R:0,0.0:R:1\n");
+    s.push_str("day\t22.2642\t-34.8884\t0.0\t2074-07-28\tutc\t6.0\t120.0:R:0,45.0:R:1,-15.262:S:0\n");
+    s.push_str("day\t-55.5969\t-165.4259\t0.0\t1919-06-17\t+03:00\tNAUTICAL\t0.0:S:1\n");
+    s.push_str("day\t-63.5372\t96.934\t0.0\t1966-06-12\tutc\t15.5\t120.0:S:1\n");
+    s.push_str("day\t-44.7703\t24.9723\t0.0\t2074-12-16\tutc\tNAUTICAL\t-1.02:R:1,128.087:R:1\n");
+    s.push_str("day\t43.1053\t117.3804\t2717.8\t2018-01-17\t+02:00\tNAUTICAL\t0.0:R:1\n");
+    s.push_str("day\t-77.1912\t174.3574\t2364.6\t2074-12-01\t-05:00\t3\t101.119:R:1,132.523:R:1,51.705:R:1\n");
+    s.push_str("day\t-50.9756\t172.8533\t0.0\t1953-11-29\t-05:00\tNAUTICAL\t13.458:R:1,35.355:R:1,46.692:S:1\n");
+    s.push_str("day\t-37.7568\t23.6258\t1080.5\t1900-08-18\t-12:00\t0.833\t170.64:S:1\n");
+    s.push_str("day\t20.6037\t38.2183\t0.0\t2012-06-13\tutc\t15.5\t143.567:R:0,120.0:R:1\n");
+    s.push_str("day\t33.4643\t102.0848\t0.0\t2091-01-24\t+09:00\t15.5\t27.656:S:1,170.651:S:0\n");
+    s.push_str("day\t-75.2195\t-167.5212\t0.0\t2031-08-05\t+02:00\tCIVIL\t-15.067:S:0,45.0:S:1,147.311:S:1\n");
+    s.push_str("day\t34.9631\t8.0736\t2356.9\t1940-05-18\t+03:00\tCIVIL\t45.0:S:1,45.0:S:0,163.762:R:1\n");
+    s.push_str("day\t13.0166\t32.573\t179.7\t2062-07-17\tutc\t3\t120.0:S:0,158.505:R:0\n");
+    s.push_str("day\t-53.6562\t-54.255\t0.0\t1925-09-02\t-08:00\t0.833\t28.013:S:1,45.0:S:1,95.018:S:1\n");
+    s.push_str("day\t65.9068\t49.1997\t0.0\t1945-11-16\tutc\t0.833\t45.0:S:1,47.153:R:1\n");
+    s.push_str("day\t-11.8748\t-108.0068\t1193.8\t1983-09-24\t-03:30\t6.0\t0.0:S:1\n");
+    s.push_str("day\t-30.3185\t-122.3791\t0.0\t1985-07-19\tutc\t15.5\t120.0:R:0,120.0:R:1\n");
+    s.push_str("day\t11.0206\t61.3841\t0.0\t1954-07-30\tutc\t0.833\t164.712:R:1,141.465:R:1,45.0:S:1\n");
+    s.push_str("day\t-44.8447\t57.4856\t567.2\t1970-04-23\t+03:00\tCIVIL\t113.028:S:1\n");
+    s.push_str("day\t-11.747\t-98.1761\t0.0\t1933-07-25\t+09:30\t15.5\t120.0:S:0,54.273:R:1,0.0:S:1\n");
+    s.push_str("day\t1.4988\t55.0412\t0.0\t2021-11-02\t+08:00\tNAUTICAL\t45.0:R:1\n");
+    s.push_str("day\t50.7563\t64.1003\t0.0\t2017-09-18\tutc\tCIVIL\t0.0:S:1,57.877:R:1,145.311:R:1\n");
+    s.push_str("day\t-1.2328\t-49.1069\t0.0\t1938-09-04\tutc\tCIVIL\t120.0:R:0,143.409:S:0,0.0:S:1\n");
+    s.push_str("day\t-76.9418\t-58.9417\t0.0\t2015-03-23\t+08:00\t3\t120.0:S:1\n");
+    s.push_str("day\t9.004\t-100.1005\t1623.7\t2070-03-26\t+09:30\tNAUTICAL\t120.0:R:1,45.0:S:1\n");
+    s.push_str("day\t22.2457\t38.2889\t0.0\t1956-12-07\t-04:00\t0.833\t45.0:R:0\n");
+    s.push_str("day\t66.7355\t50.3\t0.0\t1932-04-13\t-05:00\tASTRONOMICAL\t120.0:S:1,4.116:S:1\n");
+    s.push_str("day\t-79.5346\t-155.6473\t0.0\t1947-10-08\t-10:00\t6.0\t160.843:S:1,120.0:R:1\n");
+    s.push_str("day\t-24.6134\t158.7104\t257.4\t2007-01-12\t+08:00\t3\t120.0:S:1,20.611:S:1,120.0:R:1\n");
+    s.push_str("day\t43.113\t-68.0654\t741.4\t1915-05-29\t-05:00\t0.833\t120.0:R:1,45.0:R:0\n");
+    s.push_str("day\t66.0\t46.44\t0.0\t2021-06-21\t-08:00\t3\t0.0:S:1,45.0:R:0,120.0:R:0\n");
+    s.push_str("day\t66.0\t128.24\t0.0\t2021-12-21\tutc\t6.0\t120.0:R:1,48.456:S:0,45.0:R:0\n");
+    s.push_str("day\t66.0\t114.3\t0.0\t2021-03-21\tutc\tCIVIL\t45.0:R:0\n");
+    s.push_str("day\t66.0\t-98.63\t0.0\t2021-05-01\tutc\tASTRONOMICAL\t0.0:R:1,120.0:S:1,45.0:R:1\n");
+    s.push_str("day\t66.0\t8.34\t0.0\t2021-08-10\tutc\t15.5\t45.0:R:1\n");
+    s.push_str("day\t66.0\t146.55\t0.0\t2021-11-15\t+14:00\tASTRONOMICAL\t101.238:R:1,0.0:S:0,45.0:S:0\n");
+    s.push_str("day\t67.5\t-121.84\t0.0\t2021-06-21\t-05:00\t15.5\t45.0:R:1\n");
+    s.push_str("day\t67.5\t-148.53\t0.0\t2021-12-21\t-01:00\t15.5\t120.0:S:0\n");
+    s.push_str("day\t67.5\t-110.46\t0.0\t2021-03-21\t-03:30\t15.5\t39.073:S:0\n");
+    s.push_str("day\t67.5\t-57.64\t0.0\t2021-05-01\t+01:00\tNAUTICAL\t7.937:S:1,98.018:S:1\n");
+    s.push_str("day\t67.5\t127.1\t0.0\t2021-08-10\t+09:00\t0.833\t110.778:R:1\n");
+    s.push_str("day\t67.5\t124.5\t0.0\t2021-11-15\tutc\t6.0\t45.0:S:0,45.0:S:1\n");
+    s.push_str("day\t70.0\t-42.47\t0.0\t2021-06-21\t-03:30\t15.5\t120.0:R:0\n");
+    s.push_str("day\t70.0\t-171.37\t0.0\t2021-12-21\tutc\t6.0\t142.525:S:1\n");
+    s.push_str("day\t70.0\t1.13\t0.0\t2021-03-21\tutc\tASTRONOMICAL\t45.0:S:0,0.0:R:0,93.635:S:0\n");
+    s.push_str("day\t70.0\t99.08\t0.0\t2021-05-01\t-01:00\t3\t24.449:R:1,0.0:S:0,45.0:S:1\n");
+    s.push_str("day\t70.0\t-4.87\t0.0\t2021-08-10\t+09:30\t3\t58.865:S:1,0.0:R:0\n");
+    s.push_str("day\t70.0\t-21.45\t0.0\t2021-11-15\t+12:45\t6.0\t0.0:R:1,120.0:R:1,45.0:S:0\n");
+    s.push_str("day\t75.0\t109.75\t0.0\t2021-06-21\tutc\tNAUTICAL\t26.569:S:1,115.985:R:1,155.185:R:1\n");
+    s.push_str("day\t75.0\t-163.24\t0.0\t2021-12-21\tutc\tASTRONOMICAL\t0.0:R:0,24.631:R:1,90.093:S:1\n");
+    s.push_str("day\t75.0\t127.18\t0.0\t2021-03-21\t+03:00\t0.833\t0.0:R:1,10.857:R:1\n");
+    s.push_str("day\t75.0\t70.32\t0.0\t2021-05-01\tutc\t6.0\t155.577:S:1,110.133:S:0\n");
+    s.push_str("day\t75.0\t-125.28\t0.0\t2021-08-10\tutc\t3\t45.731:R:1,18.149:R:1,168.235:S:0\n");
+    s.push_str("day\t75.0\t-131.68\t0.0\t2021-11-15\t+02:00\tASTRONOMICAL\t45.0:R:0\n");
+    s.push_str("day\t-66.0\t1.46\t0.0\t2021-06-21\t-04:00\tNAUTICAL\t1.78:R:1,120.0:S:1,45.0:R:0\n");
+    s.push_str("day\t-66.0\t144.07\t0.0\t2021-12-21\tutc\tASTRONOMICAL\t173.872:S:1,-3.564:S:1\n");
+    s.push_str("day\t-66.0\t49.9\t0.0\t2021-03-21\t+03:00\t0.833\t45.0:S:1,0.0:S:1,45.963:S:1\n");
+    s.push_str("day\t-66.0\t174.82\t0.0\t2021-05-01\t-04:00\tCIVIL\t45.0:R:1,-1.379:S:0\n");
+    s.push_str("day\t-66.0\t120.06\t0.0\t2021-08-10\t+10:00\tCIVIL\t0.0:S:1\n");
+    s.push_str("day\t-66.0\t-156.52\t0.0\t2021-11-15\tutc\t15.5\t0.0:S:0\n");
+    s.push_str("day\t-70.0\t17.62\t0.0\t2021-06-21\t+03:00\tNAUTICAL\t0.0:S:0,120.0:R:1\n");
+    s.push_str("day\t-70.0\t-109.1\t0.0\t2021-12-21\t+14:00\t0.833\t33.512:R:0,0.0:S:1,143.294:R:1\n");
+    s.push_str("day\t-70.0\t-25.67\t0.0\t2021-03-21\tutc\t6.0\t6.046:S:1,-17.595:S:1\n");
+    s.push_str("day\t-70.0\t-70.81\t0.0\t2021-05-01\t-05:00\t6.0\t45.0:R:0,133.885:S:0,152.563:S:1\n");
+    s.push_str("day\t-70.0\t0.09\t0.0\t2021-08-10\tutc\tASTRONOMICAL\t0.0:R:1,169.531:R:0,0.0:R:0\n");
+    s.push_str("day\t-70.0\t-141.42\t0.0\t2021-11-15\tutc\t3\t165.331:S:1,0.0:R:1,120.0:R:1\n");
+    s.push_str("day\t80.0\t-137.89\t0.0\t2021-06-21\t-10:00\t15.5\t-17.086:R:1\n");
+    s.push_str("day\t80.0\t25.9\t0.0\t2021-12-21\t+14:00\t3\t149.276:S:1\n");
+    s.push_str("day\t80.0\t98.03\t0.0\t2021-03-21\t+09:00\t15.5\t156.479:S:0\n");
+    s.push_str("day\t80.0\t111.05\t0.0\t2021-05-01\t+08:00\t3\t120.0:S:1,127.767:S:0\n");
+    s.push_str("day\t80.0\t-120.86\t0.0\t2021-08-10\tutc\tASTRONOMICAL\t165.763:R:1\n");
+    s.push_str("day\t80.0\t-17.03\t0.0\t2021-11-15\t+01:00\t0.833\t123.399:S:1,22.839:S:0,14.51:R:1\n");
+    s.push_str("day\t-85.0\t135.14\t0.0\t2021-06-21\t+10:00\t6.0\t26.999:S:1,-12.633:S:0,-14.87:S:1\n");
+    s.push_str("day\t-85.0\t58.87\t0.0\t2021-12-21\t+09:30\t15.5\t45.0:S:1,0.0:R:1\n");
+    s.push_str("day\t-85.0\t131.07\t0.0\t2021-03-21\tutc\t0.833\t45.0:R:1,45.0:S:1,45.0:S:0\n");
+    s.push_str("day\t-85.0\t-88.18\t0.0\t2021-05-01\tutc\t6.0\t120.0:S:1\n");
+    s.push_str("day\t-85.0\t-111.45\t0.0\t2021-08-10\t+12:45\tCIVIL\t120.0:R:1\n");
+    s.push_str("day\t-85.0\t164.58\t0.0\t2021-11-15\t-12:00\t6.0\t-7.599:S:1,45.0:S:1\n");
+    s.push_str("day\t10.0\t179.9\t0.0\t2020-01-01\t-12:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-179.9\t0.0\t2020-01-01\t+14:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t120.0\t0.0\t2020-01-01\t-10:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-150.0\t0.0\t2020-01-01\t+12:45\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t179.9\t0.0\t2020-06-30\t-12:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-179.9\t0.0\t2020-06-30\t+14:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t120.0\t0.0\t2020-06-30\t-10:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-150.0\t0.0\t2020-06-30\t+12:45\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t179.9\t0.0\t2020-12-31\t-12:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-179.9\t0.0\t2020-12-31\t+14:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t120.0\t0.0\t2020-12-31\t-10:00\tCIVIL\t10.0:R:1\n");
+    s.push_str("day\t10.0\t-150.0\t0.0\t2020-12-31\t+12:45\tCIVIL\t10.0:R:1\n");
+    s.push_str("pos\t43.1028\t-84.2916\t2532.6\t1917-10-21T00:45:18.422182\t-03:30\n");
+    s.push_str("pos\t-55.8823\t171.5527\t1249.0\t2038-08-30T05:08:13.996845\t+09:30\n");
+    s.push_str("pos\t19.9173\t102.1158\t0.0\t2018-08-13T16:31:37.096107\t-01:00\n");
+    s.push_str("pos\t-6.6469\t131.1911\t1832.5\t1954-06-19T23:37:25.584171\tnaive\n");
+    s.push_str("pos\t-35.887\t-110.9133\t0.0\t1926-02-28T09:08:27.196984\t+12:45\n");
+    s.push_str("pos\t-39.6686\t-1.6685\t109.3\t1907-11-08T17:03:00.926112\t+10:00\n");
+    s.push_str("pos\t26.1992\t96.385\t198.4\t2012-02-16T19:51:14.703407\t-10:00\n");
+    s.push_str("pos\t23.1966\t63.1356\t20/500\t2019-01-07T14:03:56.806436\t-08:00\n");
+    s.push_str("pos\t-50.4021\t173.2911\t0.0\t1996-03-01T23:24:31.955415\tutc\n");
+    s.push_str("pos\t84.9278\t-39.1737\t262.6\t1936-06-16T17:20:16.872377\tnaive\n");
+    s.push_str("pos\t48.3095\t-6.8649\t20/500\t2086-09-18T08:44:42.283367\t-01:00\n");
+    s.push_str("pos\t-43.2135\t-32.9488\t20/500\t2033-10-05T13:07:19.471659\tnaive\n");
+    s.push_str("pos\t-86.9532\t52.274\t20/500\t1913-08-01T22:11:59.437228\tutc\n");
+    s.push_str("pos\t-14.7435\t-155.8209\t0.0\t1996-07-16T15:59:15.275442\tutc\n");
+    s.push_str("pos\t-77.8167\t74.2096\t0.0\t2008-04-03T12:51:53.461351\tutc\n");
+    s.push_str("pos\t-85.6979\t-19.4223\t1660.2\t2051-05-13T10:19:54.667585\tutc\n");
+    s.push_str("pos\t35.1423\t-21.4482\t20/500\t1997-03-13T17:06:24.736316\tnaive\n");
+    s.push_str("pos\t38.7005\t-12.713\t20/500\t2025-05-22T18:45:16.403128\tutc\n");
+    s.push_str("pos\t87.0334\t9.1961\t305.4\t1981-04-13T21:18:10.923051\t-04:00\n");
+    s.push_str("pos\t-84.2189\t-136.0585\t20/500\t1923-02-18T14:53:51.446408\t+03:00\n");
+    s.push_str("pos\t13.8862\t-76.9655\t20/500\t1938-02-01T01:00:09.727010\tutc\n");
+    s.push_str("pos\t33.3307\t40.7639\t20/500\t2038-12-11T01:48:29.321246\t-08:00\n");
+    s.push_str("pos\t77.0097\t94.1407\t1487.8\t2005-12-10T15:34:00.341718\tutc\n");
+    s.push_str("pos\t60.1071\t-38.7272\t1525.2\t1929-04-09T10:39:24.192606\tnaive\n");
+    s.push_str("pos\t-8.4488\t-58.2438\t20/500\t2071-02-09T13:20:13.851874\tnaive\n");
+    s.push_str("pos\t71.379\t142.1395\t0.0\t2004-05-24T02:46:28.303732\tutc\n");
+    s.push_str("pos\t-50.2839\t42.5372\t0.0\t1947-06-07T20:11:05.631214\tutc\n");
+    s.push_str("pos\t16.7605\t117.9466\t2278.7\t1921-09-23T03:17:14.122547\t+12:45\n");
+    s.push_str("pos\t-66.4833\t122.0181\t1818.8\t2047-04-29T08:33:06.617308\t+05:45\n");
+    s.push_str("pos\t-23.605\t81.8199\t2291.8\t2088-02-11T17:21:41.041554\tnaive\n");
+    s.push_str("pos\t39.8359\t55.9591\t20/500\t2030-03-08T22:25:20.663230\tnaive\n");
+    s.push_str("pos\t48.544\t-22.0031\t0.0\t2007-03-22T13:15:10.130720\t+08:00\n");
+    s.push_str("pos\t19.5989\t144.4961\t20/500\t2089-09-27T17:43:08.299767\tnaive\n");
+    s.push_str("pos\t83.4368\t30.2344\t0.0\t1980-09-02T00:09:19.890736\t+05:30\n");
+    s.push_str("pos\t-43.4396\t-5.6171\t0.0\t1934-09-18T01:39:35.417871\tutc\n");
+    s.push_str("pos\t-48.3611\t-176.1481\t2786.1\t1941-08-03T02:38:12.141242\t-10:00\n");
+    s.push_str("pos\t43.1301\t97.8316\t2240.8\t2014-10-01T22:25:24.978708\tnaive\n");
+    s.push_str("pos\t-50.1959\t156.3594\t2314.7\t2050-01-30T16:35:33.427652\tutc\n");
+    s.push_str("pos\t-45.2711\t157.3857\t1352.8\t2090-03-22T03:22:14.204972\tutc\n");
+    s.push_str("pos\t-84.3569\t-104.4522\t570.4\t1924-05-11T02:42:27.769453\t-10:00\n");
+    s.push_str("pos\t88.0672\t-119.7817\t672.2\t2004-08-16T06:00:21.161435\t-03:30\n");
+    s.push_str("pos\t59.1878\t106.5578\t20/500\t1971-07-13T08:19:19.125825\t+05:30\n");
+    s.push_str("pos\t-48.9903\t-35.0606\t0.0\t1974-10-29T13:54:11.117584\t+02:00\n");
+    s.push_str("pos\t-53.0777\t10.3065\t20/500\t1916-05-19T05:22:34.082289\t-03:30\n");
+    s.push_str("pos\t22.0973\t37.2628\t20/500\t1923-03-12T21:03:40.137308\tnaive\n");
+    s.push_str("pos\t14.1823\t178.3392\t0.0\t2062-09-30T07:02:57.960856\t-04:00\n");
+    s.push_str("pos\t32.246\t152.7684\t20/500\t2004-06-24T03:01:48.302285\tutc\n");
+    s.push_str("pos\t75.3831\t-107.6183\t1167.5\t1957-03-04T15:50:42.995294\tutc\n");
+    s.push_str("pos\t-22.2397\t81.0798\t1081.5\t1920-11-26T06:40:23.029348\t-08:00\n");
+    s.push_str("pos\t-3.2972\t115.829\t2933.9\t2088-09-07T15:14:50.226906\tnaive\n");
+    s.push_str("pos\t48.9457\t-30.568\t0.0\t1933-09-02T21:00:50.747809\tutc\n");
+    s.push_str("pos\t-65.2545\t-146.5291\t20/500\t1900-09-04T08:54:03.666569\tnaive\n");
+    s.push_str("pos\t-35.3567\t-17.2989\t1130.2\t2034-07-04T16:47:07.345262\tutc\n");
+    s.push_str("pos\t-0.0553\t51.3279\t0.0\t1953-02-08T12:17:03.827084\tutc\n");
+    s.push_str("pos\t11.1063\t94.0337\t2355.9\t2041-07-22T05:26:31.595617\t+02:00\n");
+    s.push_str("pos\t88.9665\t-1.8845\t0.0\t1908-03-22T04:36:42.067346\tnaive\n");
+    s.push_str("pos\t-52.8103\t-127.8938\t20/500\t2015-06-05T14:32:55.531744\t+05:45\n");
+    s.push_str("pos\t-31.412\t-24.8639\t0.0\t2048-09-06T00:56:08.573706\tnaive\n");
+    s.push_str("pos\t-42.7379\t-143.3969\t2630.8\t1964-02-16T22:44:59.360249\tnaive\n");
+    s.push_str("pos\t16.1652\t13.2293\t1053.3\t2045-01-25T22:10:58.592026\t+12:45\n");
+    s.push_str("pos\t-62.373\t82.0056\t20/500\t2007-08-02T09:47:37.600423\tutc\n");
+    s.push_str("pos\t14.1901\t-177.3908\t20/500\t2024-06-30T02:15:19.452110\tutc\n");
+    s.push_str("pos\t80.2725\t145.6636\t20/500\t2004-04-03T01:20:52.054885\tnaive\n");
+    s.push_str("pos\t80.2272\t-69.302\t1897.1\t1967-03-01T10:40:19.559881\tutc\n");
+    s.push_str("pos\t-71.8517\t-151.1766\t446.5\t2021-12-16T12:37:41.393160\tnaive\n");
+    s.push_str("pos\t22.602\t122.5189\t0.0\t1951-05-20T12:28:16.079529\tutc\n");
+    s.push_str("pos\t-76.2116\t167.8435\t20/500\t1959-02-06T07:40:15.371460\t-10:00\n");
+    s.push_str("pos\t84.034\t169.2117\t20/500\t2007-04-01T11:12:24.508009\t-10:00\n");
+    s.push_str("pos\t-71.113\t-139.7981\t0.0\t2020-08-07T16:42:22.716926\t+05:45\n");
+    s.push_str("pos\t4.3182\t51.8323\t0.0\t2030-09-23T11:51:44.363231\t+10:00\n");
+    s.push_str("pos\t-13.803\t38.5508\t0.0\t1985-07-25T15:32:12.629476\tutc\n");
+    s.push_str("pos\t-6.626\t-116.363\t20/500\t2099-12-28T22:15:30.412115\t+14:00\n");
+    s.push_str("pos\t73.3249\t166.9485\t721.1\t1925-10-18T15:47:06.922170\t+10:00\n");
+    s.push_str("pos\t-63.1031\t174.2488\t1300.8\t1911-09-01T16:00:05.156050\tnaive\n");
+    s.push_str("pos\t75.8026\t137.1996\t1946.8\t2067-05-25T09:16:00.132847\tutc\n");
+    s.push_str("pos\t43.8204\t-91.6902\t0.0\t1950-08-29T04:32:53.337793\tnaive\n");
+    s.push_str("pos\t23.9987\t29.8072\t1440.4\t1983-09-06T02:17:50.624416\tutc\n");
+    s.push_str("pos\t39.3725\t-5.3222\t20/500\t2058-12-13T18:03:51.365725\tutc\n");
+    s.push_str("pos\t25.1809\t-76.7084\t2525.8\t2053-08-15T16:48:38.603725\t+12:45\n");
+    s.push_str("pos\t-23.1905\t59.6381\t1876.2\t1916-10-01T03:47:24.104047\t+14:00\n");
+    s.push_str("pos\t70.6692\t21.4495\t0.0\t1941-04-22T16:21:59.732207\tutc\n");
+    s.push_str("pos\t-45.3853\t160.6388\t1639.0\t2011-11-30T19:13:05.789911\t-03:30\n");
+    s.push_str("pos\t41.7337\t-171.243\t0.0\t1963-11-15T09:31:27.010877\t-10:00\n");
+    s.push_str("pos\t-57.7912\t116.5433\t0.0\t1992-11-14T22:30:11.974608\tutc\n");
+    s.push_str("pos\t51.415\t99.8274\t20/500\t2006-02-27T17:51:56.930198\tutc\n");
+    s.push_str("pos\t58.1862\t82.399\t20/500\t1945-03-02T11:56:25.937167\t-12:00\n");
+    s.push_str("pos\t-14.4843\t136.8882\t0.0\t2044-06-02T12:28:52.484803\tnaive\n");
+    s.push_str("pos\t11.5487\t-161.6664\t0.0\t1993-03-01T00:08:34.634009\t+08:00\n");
+    s.push_str("pos\t86.5183\t-142.2437\t0.0\t1981-06-28T07:27:50.985941\t-05:00\n");
+    s.push_str("pos\t75.6905\t87.6073\t0.0\t2058-10-30T09:22:22.009958\tutc\n");
+    s.push_str("pos\t69.7622\t162.6544\t0.0\t1974-08-18T14:13:56.212340\t+10:00\n");
+    s.push_str("pos\t37.4758\t135.6082\t0.0\t2010-11-07T09:51:14.828686\tnaive\n");
+    s.push_str("pos\t-60.5097\t24.16\t20/500\t1953-10-19T12:17:53.241250\tutc\n");
+    s.push_str("pos\t30.3859\t88.3499\t1503.0\t1933-06-23T01:30:20.727589\t+01:00\n");
+    s.push_str("pos\t44.4563\t-50.8514\t2167.7\t1964-10-27T04:47:22.342870\t+14:00\n");
+    s.push_str("pos\t29.2145\t-131.5114\t20/500\t2055-08-18T04:36:27.699476\tnaive\n");
+    s.push_str("pos\t-51.552\t-121.3936\t394.8\t2057-03-10T05:47:13.199016\tnaive\n");
+    s.push_str("pos\t19.1178\t-106.8171\t2161.2\t1992-04-12T23:12:09.090931\tnaive\n");
+    s.push_str("pos\t21.2866\t132.827\t1606.4\t1988-04-16T11:02:16.565130\tutc\n");
+    s.push_str("pos\t-69.3134\t-108.7381\t2330.6\t2027-05-24T19:01:31.449504\tutc\n");
+    s.push_str("pos\t-44.0074\t99.9456\t20/500\t2024-04-24T01:49:11.674656\tutc\n");
+    s.push_str("pos\t-66.6136\t138.8971\t0.0\t2014-10-26T01:13:44.915954\t+14:00\n");
+    s.push_str("pos\t59.0613\t-80.0274\t20/500\t1962-07-02T11:26:42.522850\t+08:00\n");
+    s.push_str("pos\t27.8521\t18.9891\t20/500\t1978-03-21T21:00:59.964103\t-01:00\n");
+    s.push_str("pos\t-75.5823\t-55.6001\t20/500\t1966-04-29T02:05:07.923891\tutc\n");
+    s.push_str("pos\t16.3259\t-104.1121\t20/500\t1913-11-08T03:47:58.403099\t+05:30\n");
+    s.push_str("pos\t53.6727\t97.7747\t0.0\t2091-07-04T15:37:29.794366\tutc\n");
+    s.push_str("pos\t75.2781\t16.3741\t0.0\t2018-12-22T20:04:54.012798\tutc\n");
+    s.push_str("pos\t64.1557\t-119.0824\t0.0\t1908-10-10T23:43:52.652972\tutc\n");
+    s.push_str("pos\t60.9173\t-44.317\t43.1\t1901-02-01T20:21:38.848016\tnaive\n");
+    s.push_str("pos\t-34.164\t-163.3321\t20/500\t2061-02-24T23:45:47.315884\tnaive\n");
+    s.push_str("pos\t-13.2402\t-90.326\t0.0\t1948-12-22T16:58:19.765474\t-04:00\n");
+    s.push_str("pos\t25.693\t54.9855\t902.6\t2055-03-19T19:59:44.304196\t-08:00\n");
+    s.push_str("pos\t6.2562\t108.5738\t2322.6\t2009-07-05T05:59:19.510623\t-05:00\n");
+    s.push_str("pos\t61.6243\t-69.9623\t0.0\t1916-04-25T07:29:47.977308\t+08:00\n");
+    s.push_str("pos\t-80.2424\t-109.1003\t0.0\t1937-07-22T06:06:20.806154\tnaive\n");
+    s.push_str("pos\t19.9343\t134.4358\t0.0\t1920-02-07T01:29:26.719595\tutc\n");
+    s.push_str("pos\t38.3973\t158.8553\t0.0\t1994-11-06T17:43:09.409229\tnaive\n");
+    s.push_str("pos\t63.7568\t-125.9872\t20/500\t1968-02-06T03:40:06.507101\tnaive\n");
+    s.push_str("pos\t-37.7742\t3.3848\t0.0\t1971-02-18T23:55:35.095830\tutc\n");
+    s.push_str("pos\t82.1089\t-59.0746\t2969.1\t2058-11-04T10:59:35.948012\tnaive\n");
+    s.push_str("pos\t-80.6429\t-35.8315\t666.3\t1918-06-25T00:56:00.762189\tutc\n");
+    s.push_str("pos\t-4.206\t148.7216\t0.0\t1981-07-22T22:05:02.194353\tnaive\n");
+    s.push_str("pos\t-87.007\t-165.6133\t20/500\t2092-09-26T20:30:15.703060\t+09:00\n");
+    s.push_str("pos\t-33.348\t179.3834\t1281.0\t2085-10-12T00:51:46.324850\t+14:00\n");
+    s.push_str("pos\t0.0202\t101.0874\t0.0\t1925-07-08T10:05:31.377563\tnaive\n");
+    s.push_str("pos\t58.8858\t160.7969\t916.4\t1980-10-18T04:10:38.540148\tnaive\n");
+    s.push_str("pos\t-77.7638\t66.7455\t20/500\t2047-12-14T21:24:35.677487\tnaive\n");
+    s.push_str("pos\t-4.1036\t154.706\t20/500\t1958-06-17T16:17:28.659832\t-10:00\n");
+    s.push_str("pos\t-32.2926\t-31.8274\t643.0\t1996-10-28T17:14:21.720724\tutc\n");
+    s.push_str("pos\t-47.4901\t74.9132\t2770.3\t2078-01-25T06:36:01.163509\tnaive\n");
+    s.push_str("pos\t-16.9001\t87.431\t20/500\t1992-11-25T00:51:52.058440\tnaive\n");
+    s.push_str("pos\t-86.8292\t102.6566\t0.0\t2068-11-21T13:03:23.168944\t+12:45\n");
+    s.push_str("pos\t64.4189\t152.9267\t20/500\t2040-11-12T05:56:32.434492\t-12:00\n");
+    s.push_str("pos\t49.529\t150.5715\t0.0\t1943-09-08T17:50:42.687926\tutc\n");
+    s.push_str("pos\t11.7004\t-97.5714\t20/500\t2066-01-26T15:07:53.564374\tutc\n");
+    s.push_str("pos\t-9.4129\t-28.7098\t979.5\t2083-03-21T01:41:06.707716\t+10:00\n");
+    s.push_str("pos\t-88.7811\t-53.6397\t0.0\t1905-04-14T15:08:53.380480\tutc\n");
+    s.push_str("pos\t34.4449\t-59.8849\t0.0\t2028-11-24T17:33:33.517471\tnaive\n");
+    s.push_str("pos\t64.5363\t171.3471\t20/500\t1906-08-15T01:07:29.614010\tutc\n");
+    s.push_str("pos\t53.9169\t-137.7511\t907.1\t2000-12-16T06:18:00.985806\tutc\n");
+    s.push_str("pos\t31.808\t169.0188\t0.0\t2074-04-10T07:52:13.842224\tnaive\n");
+    s.push_str("pos\t32.3148\t91.9823\t20/500\t1926-12-22T15:41:24.375291\t-03:30\n");
+    s.push_str("pos\t-75.7388\t168.5885\t2277.0\t1900-10-10T08:11:21.740625\t-03:30\n");
+    s.push_str("pos\t29.5416\t-161.4525\t20/500\t1938-09-04T10:19:23.758022\tutc\n");
+    s.push_str("pos\t30.6509\t-76.5271\t0.0\t2041-01-18T14:05:53.767567\t+10:00\n");
+    s.push_str("pos\t0.0701\t47.1169\t20/500\t1921-07-19T22:07:44.625062\t+02:00\n");
+    s.push_str("pos\t45.4185\t-35.3166\t20/500\t2050-12-30T08:40:20.519931\t+05:30\n");
+    s.push_str("pos\t-55.421\t177.2245\t1903.2\t2096-10-01T14:34:08.394470\tnaive\n");
+    s.push_str("pos\t-57.266\t-26.4288\t0.0\t1989-12-06T03:26:55.277994\tutc\n");
+    s.push_str("pos\t89.95\t0.0\t0.0\t2020-06-21T00:00:00.000000\tutc\n");
+    s.push_str("pos\t-89.95\t0.0\t0.0\t2020-06-21T00:00:00.000000\tutc\n");
+    s.push_str("pos\t0.0\t0.0\t0.0\t2020-03-20T00:00:00.000000\tnaive\n");
+    s.push_str("pos\t89.95\t0.0\t0.0\t2020-06-21T12:00:00.000000\tutc\n");
+    s.push_str("pos\t-89.95\t0.0\t0.0\t2020-06-21T12:00:00.000000\tutc\n");
+    s.push_str("pos\t0.0\t0.0\t0.0\t2020-03-20T12:00:00.000000\tnaive\n");
+    s.push_str("pos\t89.95\t0.0\t0.0\t2020-06-21T23:59:59.999999\tutc\n");
+    s.push_str("pos\t-89.95\t0.0\t0.0\t2020-06-21T23:59:59.999999\tutc\n");
+    s.push_str("pos\t0.0\t0.0\t0.0\t2020-03-20T23:59:59.999999\tnaive\n");
+    s.push_str("city\tLondon\t2016-06-21\tutc\n");
+    s.push_str("city\tlondon\t2019-01-01\tutc\n");
+    s.push_str("city\tLONDON\t2020-03-20\tutc\n");
+    s.push_str("city\tAbu Dhabi\t2024-02-29\tutc\n");
+    s.push_str("city\tAbu Dhabi,UAE\t2016-06-21\tutc\n");
+    s.push_str("city\tabu dhabi,united arab emirates\t2016-06-21\tutc\n");
+    s.push_str("city\tAbu Dhabi,Nowhere\t2016-06-21\tutc\n");
+    s.push_str("city\tNew Delhi\t2015-12-25\tutc\n");
+    s.push_str("city\tBirmingham\t2019-01-01\tutc\n");
+    s.push_str("city\tBirmingham,USA\t2024-02-29\tutc\n");
+    s.push_str("city\tBirmingham,England\t2100-12-31\tutc\n");
+    s.push_str("city\tWashington DC\t2016-06-21\tutc\n");
+    s.push_str("city\tAvarua\t2016-06-21\tutc\n");
+    s.push_str("city\tReykjavik\t2019-01-01\tutc\n");
+    s.push_str("city\t'London'\t2024-02-29\tutc\n");
+    s.push_str("city\t\"London\",'England'\t2100-12-31\tutc\n");
+    s.push_str("city\tLondon, England\t2100-12-31\tutc\n");
+    s.push_str("city\tLondon,england\t2021-12-21\tutc\n");
+    s.push_str("city\tnowhere\t2021-12-21\tutc\n");
+    s.push_str("city\t\t2015-12-25\tutc\n");
+    s.push_str("city\tWellington\t2020-03-20\tutc\n");
+    s.push_str("city\tUshuaia\t2020-03-20\tutc\n");
+    s.push_str("city\tHobart\t2024-02-29\tutc\n");
+    s.push_str("city\tsan_francisco\t2019-01-01\tutc\n");
+    s.push_str("city\tSan Francisco\t2015-12-01\tutc\n");
+    s.push_str("city\tEurope\t2016-06-21\tutc\n");
+    s.push_str("city\tIqaluit\t2024-02-29\tutc\n");
+    s.push_str("city\tYellowknife\t2100-12-31\tutc\n");
+    s.push_str("city\tApia\t2000-01-01\tutc\n");
+    s.push_str("city\tBeijing\t2021-12-21\tutc\n");
+    s.push_str("city\tAl Jubail\t2016-06-21\tutc\n");
+    s.push_str("city\tAstana\t2024-02-29\tutc\n");
+    s.push_str("city\teurope\t2016-06-21\tutc\n");
+    s.push_str("group\tEurope\n");
+    s.push_str("group\teurope\n");
+    s.push_str("group\tAMERICA\n");
+    s.push_str("group\tAsia\n");
+    s.push_str("group\tEtc\n");
+    s.push_str("group\tPacific\n");
+    s.push_str("group\tIndian\n");
+    s.push_str("group\tAntarctica\n");
+    s.push_str("group\tAustralia\n");
+    s.push_str("group\tAfrica\n");
+    s.push_str("group\tAtlantic\n");
+    s.push_str("group\tnowhere\n");
+    s.push_str("group\tus\n");
+    s.push_str("dms\t51°31'N\tnone\n");
+    s.push_str("dms\t51°31'N\t90.0\n");
+    s.push_str("dms\t51°31'N\t180.0\n");
+    s.push_str("dms\t51°31'S\tnone\n");
+    s.push_str("dms\t51°31'S\t90.0\n");
+    s.push_str("dms\t51°31'S\t180.0\n");
+    s.push_str("dms\t0°06'W\tnone\n");
+    s.push_str("dms\t0°06'W\t90.0\n");
+    s.push_str("dms\t0°06'W\t180.0\n");
+    s.push_str("dms\t24°28'N\tnone\n");
+    s.push_str("dms\t24°28'N\t90.0\n");
+    s.push_str("dms\t24°28'N\t180.0\n");
+    s.push_str("dms\t51°31′N\tnone\n");
+    s.push_str("dms\t51°31′N\t90.0\n");
+    s.push_str("dms\t51°31′N\t180.0\n");
+    s.push_str("dms\t51°31'12\"N\tnone\n");
+    s.push_str("dms\t51°31'12\"N\t90.0\n");
+    s.push_str("dms\t51°31'12\"N\t180.0\n");
+    s.push_str("dms\t51°31'12″S\tnone\n");
+    s.push_str("dms\t51°31'12″S\t90.0\n");
+    s.push_str("dms\t51°31'12″S\t180.0\n");
+    s.push_str("dms\t51°\tnone\n");
+    s.push_str("dms\t51°\t90.0\n");
+    s.push_str("dms\t51°\t180.0\n");
+    s.push_str("dms\t51°N\tnone\n");
+    s.push_str("dms\t51°N\t90.0\n");
+    s.push_str("dms\t51°N\t180.0\n");
+    s.push_str("dms\t51°n\tnone\n");
+    s.push_str("dms\t51°n\t90.0\n");
+    s.push_str("dms\t51°n\t180.0\n");
+    s.push_str("dms\t51°w\tnone\n");
+    s.push_str("dms\t51°w\t90.0\n");
+    s.push_str("dms\t51°w\t180.0\n");
+    s.push_str("dms\t123°45'E\tnone\n");
+    s.push_str("dms\t123°45'E\t90.0\n");
+    s.push_str("dms\t123°45'E\t180.0\n");
+    s.push_str("dms\t180°00'W\tnone\n");
+    s.push_str("dms\t180°00'W\t90.0\n");
+    s.push_str("dms\t180°00'W\t180.0\n");
+    s.push_str("dms\t200°E\tnone\n");
+    s.push_str("dms\t200°E\t90.0\n");
+    s.push_str("dms\t200°E\t180.0\n");
+    s.push_str("dms\t1234°\tnone\n");
+    s.push_str("dms\t1234°\t90.0\n");
+    s.push_str("dms\t1234°\t180.0\n");
+    s.push_str("dms\t51°123'N\tnone\n");
+    s.push_str("dms\t51°123'N\t90.0\n");
+    s.push_str("dms\t51°123'N\t180.0\n");
+    s.push_str("dms\t51°3'N\tnone\n");
+    s.push_str("dms\t51°3'N\t90.0\n");
+    s.push_str("dms\t51°3'N\t180.0\n");
+    s.push_str("dms\t51°31'1\"E\tnone\n");
+    s.push_str("dms\t51°31'1\"E\t90.0\n");
+    s.push_str("dms\t51°31'1\"E\t180.0\n");
+    s.push_str("dms\t5°5'5\"S\tnone\n");
+    s.push_str("dms\t5°5'5\"S\t90.0\n");
+    s.push_str("dms\t5°5'5\"S\t180.0\n");
+    s.push_str("dms\t°31'N\tnone\n");
+    s.push_str("dms\t°31'N\t90.0\n");
+    s.push_str("dms\t°31'N\t180.0\n");
+    s.push_str("dms\t51°31'\tnone\n");
+    s.push_str("dms\t51°31'\t90.0\n");
+    s.push_str("dms\t51°31'\t180.0\n");
+    s.push_str("dms\tabc\tnone\n");
+    s.push_str("dms\tabc\t90.0\n");
+    s.push_str("dms\tabc\t180.0\n");
+    s.push_str("dms\t\tnone\n");
+    s.push_str("dms\t\t90.0\n");
+    s.push_str("dms\t\t180.0\n");
+    s.push_str("dms\t 51.5 \tnone\n");
+    s.push_str("dms\t 51.5 \t90.0\n");
+    s.push_str("dms\t 51.5 \t180.0\n");
+    s.push_str("dms\t51.5\tnone\n");
+    s.push_str("dms\t51.5\t90.0\n");
+    s.push_str("dms\t51.5\t180.0\n");
+    s.push_str("dms\t-0.1166\tnone\n");
+    s.push_str("dms\t-0.1166\t90.0\n");
+    s.push_str("dms\t-0.1166\t180.0\n");
+    s.push_str("dms\t1e3\tnone\n");
+    s.push_str("dms\t1e3\t90.0\n");
+    s.push_str("dms\t1e3\t180.0\n");
+    s.push_str("dms\t-1e3\tnone\n");
+    s.push_str("dms\t-1e3\t90.0\n");
+    s.push_str("dms\t-1e3\t180.0\n");
+    s.push_str("dms\tinf\tnone\n");
+    s.push_str("dms\tinf\t90.0\n");
+    s.push_str("dms\tinf\t180.0\n");
+    s.push_str("dms\t-inf\tnone\n");
+    s.push_str("dms\t-inf\t90.0\n");
+    s.push_str("dms\t-inf\t180.0\n");
+    s.push_str("dms\tnan\tnone\n");
+    s.push_str("dms\tnan\t90.0\n");
+    s.push_str("dms\tnan\t180.0\n");
+    s.push_str("dms\t1_000\tnone\n");
+    s.push_str("dms\t1_000\t90.0\n");
+    s.push_str("dms\t1_000\t180.0\n");
+    s.push_str("dms\t+12\tnone\n");
+    s.push_str("dms\t+12\t90.0\n");
+    s.push_str("dms\t+12\t180.0\n");
+    s.push_str("dms\t12.\tnone\n");
+    s.push_str("dms\t12.\t90.0\n");
+    s.push_str("dms\t12.\t180.0\n");
+    s.push_str("dms\t.5\tnone\n");
+    s.push_str("dms\t.5\t90.0\n");
+    s.push_str("dms\t.5\t180.0\n");
+    s.push_str("dms\t0x10\tnone\n");
+    s.push_str("dms\t0x10\t90.0\n");
+    s.push_str("dms\t0x10\t180.0\n");
+    s.push_str("dms\t51°31'Nonsense\tnone\n");
+    s.push_str("dms\t51°31'Nonsense\t90.0\n");
+    s.push_str("dms\t51°31'Nonsense\t180.0\n");
+    s.push_str("dms\tN51°31'\tnone\n");
+    s.push_str("dms\tN51°31'\t90.0\n");
+    s.push_str("dms\tN51°31'\t180.0\n");
+    s.push_str("dms\t51° 31'N\tnone\n");
+    s.push_str("dms\t51° 31'N\t90.0\n");
+    s.push_str("dms\t51° 31'N\t180.0\n");
+    s.push_str("dms\t51°31'X\tnone\n");
+    s.push_str("dms\t51°31'X\t90.0\n");
+    s.push_str("dms\t51°31'X\t180.0\n");
+    s.push_str("dms\t999°59'59\"S\tnone\n");
+    s.push_str("dms\t999°59'59\"S\t90.0\n");
+    s.push_str("dms\t999°59'59\"S\t180.0\n");
+    s.push_str("dms\t07°32'E\tnone\n");
+    s.push_str("dms\t07°32'E\t90.0\n");
+    s.push_str("dms\t07°32'E\t180.0\n");
+    s.push_str("h2t\t0.0\n");
+    s.push_str("h2t\t1.5\n");
+    s.push_str("h2t\t12.25\n");
+    s.push_str("h2t\t23.999\n");
+    s.push_str("h2t\t23.9999999\n");
+    s.push_str("h2t\t6.123456789\n");
+    s.push_str("h2t\t0.0001\n");
+    s.push_str("h2t\t18.75\n");
+    s.push_str("h2t\t24.0\n");
+    s.push_str("h2t\t-1.5\n");
+    s.push_str("h2t\t25.0\n");
+    s.push_str("h2t\t-0.25\n");
+    s.push_str("h2t\tnan\n");
+    s.push_str("h2t\tinf\n");
+    s.push_str("h2t\t11.513566\n");
+    s.push_str("h2t\t19.142346\n");
+    s.push_str("h2t\t0.411623\n");
+    s.push_str("h2t\t23.051546\n");
+    s.push_str("h2t\t3.16763\n");
+    s.push_str("h2t\t11.312664\n");
+    s.push_str("h2t\t22.894742\n");
+    s.push_str("h2t\t15.315864\n");
+    s.push_str("h2t\t23.08591\n");
+    s.push_str("h2t\t5.668106\n");
+    s.push_str("h2t\t2.184621\n");
+    s.push_str("h2t\t17.822594\n");
+    s.push_str("t2h\t6\t34\t52\t439789\n");
+    s.push_str("t2h\t13\t47\t8\t898747\n");
+    s.push_str("t2h\t8\t42\t57\t573660\n");
+    s.push_str("t2h\t3\t26\t6\t622952\n");
+    s.push_str("t2h\t12\t19\t40\t296121\n");
+    s.push_str("t2h\t14\t0\t9\t237253\n");
+    s.push_str("t2h\t17\t0\t48\t548509\n");
+    s.push_str("t2h\t8\t10\t44\t356890\n");
+    s.push_str("t2h\t7\t27\t19\t603262\n");
+    s.push_str("t2h\t22\t59\t49\t790810\n");
+    s.push_str("t2h\t2\t18\t55\t611602\n");
+    s.push_str("t2h\t7\t52\t30\t615075\n");
+    s.push_str("t2h\t15\t25\t15\t141570\n");
+    s.push_str("t2h\t4\t51\t41\t755492\n");
+    s.push_str("t2h\t4\t17\t43\t674101\n");
+    s.push_str("t2h\t0\t0\t0\t0\n");
+    s.push_str("t2h\t23\t59\t59\t999999\n");
+    s.push_str("t2h\t24\t0\t0\t0\n");
+    s.push_str("t2h\t0\t60\t0\t0\n");
+    s.push_str("t2h\t0\t0\t61\t0\n");
+    s.push_str("t2h\t0\t0\t0\t1000000\n");
+    s.push_str("refr\t0.0\n");
+    s.push_str("refr\t5.0\n");
+    s.push_str("refr\t10.0\n");
+    s.push_str("refr\t45.0\n");
+    s.push_str("refr\t84.0\n");
+    s.push_str("refr\t84.99\n");
+    s.push_str("refr\t85.0\n");
+    s.push_str("refr\t89.0\n");
+    s.push_str("refr\t90.0\n");
+    s.push_str("refr\t90.575\n");
+    s.push_str("refr\t90.5\n");
+    s.push_str("refr\t90.833\n");
+    s.push_str("refr\t91.0\n");
+    s.push_str("refr\t95.0\n");
+    s.push_str("refr\t108.0\n");
+    s.push_str("refr\t180.0\n");
+    s.push_str("refr\t-10.0\n");
+    s.push_str("refr\t17.838\n");
+    s.push_str("refr\t19.7364\n");
+    s.push_str("refr\t111.8637\n");
+    s.push_str("refr\t74.4623\n");
+    s.push_str("refr\t77.3199\n");
+    s.push_str("refr\t8.0853\n");
+    s.push_str("refr\t34.8641\n");
+    s.push_str("refr\t26.4543\n");
+    s.push_str("refr\t20.9427\n");
+    s.push_str("refr\t77.948\n");
+    s.push_str("refr\t16.812\n");
+    s.push_str("refr\t106.2316\n");
+    s.push_str("jd\t1607-12-30T00:53:40.709996\t100.219\n");
+    s.push_str("jd\t2284-01-21T13:49:07.582356\t159.156\n");
+    s.push_str("jd\t1848-03-03\t-22.282\n");
+    s.push_str("jd\t1724-05-20T05:43:56.370775\t116.733\n");
+    s.push_str("jd\t1646-08-22T01:24:42.084949\t-45.717\n");
+    s.push_str("jd\t1798-11-19\t128.174\n");
+    s.push_str("jd\t1587-03-05T08:13:36.162089\t6.575\n");
+    s.push_str("jd\t1597-03-18T16:35:19.264325\t101.684\n");
+    s.push_str("jd\t1702-03-11\t-56.178\n");
+    s.push_str("jd\t2162-04-09T03:51:02.085777\t114.172\n");
+    s.push_str("jd\t2010-07-17\t133.32\n");
+    s.push_str("jd\t2206-01-21\t-75.265\n");
+    s.push_str("jd\t2223-06-30T22:54:14.595632\t-35.887\n");
+    s.push_str("jd\t2304-05-10T22:40:18.348801\t139.786\n");
+    s.push_str("jd\t1655-08-28\t-74.148\n");
+    s.push_str("jd\t1606-09-09\t19.933\n");
+    s.push_str("jd\t1977-02-09T02:26:43.969935\t-178.516\n");
+    s.push_str("jd\t1676-06-06\t93.662\n");
+    s.push_str("jd\t1767-03-03T19:34:59.513325\t-146.479\n");
+    s.push_str("jd\t2138-06-07T19:54:20.021268\t40.554\n");
+    s.push_str("jd\t2000-01-01\t-0.1166666\n");
+    s.push_str("jd\t2000-01-01T12:00:00.000000\t-0.1166666\n");
+    s.push_str("jd\t1582-10-04\t-0.1166666\n");
+    s.push_str("jd\t1582-10-15\t-0.1166666\n");
+    s.push_str("jd\t1858-11-17T00:00:00.000000\t-0.1166666\n");
+    s.push_str("jd\t0001-01-01\t-0.1166666\n");
+    s.push_str("jd\t0001-01-01T00:00:00.000000\t-0.1166666\n");
+    s.push_str("jd\t9999-12-31T23:59:59.999999\t-0.1166666\n");
+    s.push_str("jd\t1900-02-28T18:00:00.000000\t-0.1166666\n");
+    s.push_str("jd\t2024-02-29\t-0.1166666\n");
+    s.push_str("jd2dt\t2451545.0\n");
+    s.push_str("jd2dt\t2451544.5\n");
+    s.push_str("jd2dt\t2299160.5\n");
+    s.push_str("jd2dt\t2299161.0\n");
+    s.push_str("jd2dt\t2299160.0\n");
+    s.push_str("jd2dt\t2415020.5\n");
+    s.push_str("jd2dt\t2460000.25\n");
+    s.push_str("jd2dt\t2440587.5\n");
+    s.push_str("jd2dt\t1721425.5\n");
+    s.push_str("jd2dt\t1721424.5\n");
+    s.push_str("jd2dt\t0.0\n");
+    s.push_str("jd2dt\t-1.0\n");
+    s.push_str("jd2dt\t5373484.0\n");
+    s.push_str("jd2dt\t5373484.4999\n");
+    s.push_str("jd2dt\t2451545.75\n");
+    s.push_str("jd2dt\t2451545.999999\n");
+    s.push_str("jd2dt\tnan\n");
+    s.push_str("jd2dt\tinf\n");
+    s.push_str("jd2dt\t2336397.289299\n");
+    s.push_str("jd2dt\t2471138.068329\n");
+    s.push_str("jd2dt\t2514958.759342\n");
+    s.push_str("jd2dt\t2408627.917419\n");
+    s.push_str("jd2dt\t2468736.475233\n");
+    s.push_str("jd2dt\t2562471.195414\n");
+    s.push_str("jd2dt\t2591751.913692\n");
+    s.push_str("jd2dt\t2274306.407246\n");
+    s.push_str("jd2dt\t2579986.554828\n");
+    s.push_str("jd2dt\t2298323.809501\n");
+    s.push_str("jd2dt\t2347772.862453\n");
+    s.push_str("jd2dt\t2575119.638766\n");
+    s.push_str("jd2dt\t2229869.992008\n");
+    s.push_str("jd2dt\t2250899.510275\n");
+    s.push_str("jd2dt\t2349260.812133\n");
+    s.push_str("jd2dt\t2220296.832169\n");
+    s.push_str("jd2dt\t2598973.815843\n");
+    s.push_str("jd2dt\t2205815.142576\n");
+    s.push_str("jd2dt\t2290874.088165\n");
+    s.push_str("jd2dt\t2342034.215736\n");
+    s.push_str("dft\t0.0\n");
+    s.push_str("dft\t0.5\n");
+    s.push_str("dft\t0.25\n");
+    s.push_str("dft\t0.999999\n");
+    s.push_str("dft\t0.99999999\n");
+    s.push_str("dft\t1.0\n");
+    s.push_str("dft\t1.5\n");
+    s.push_str("dft\t-0.1\n");
+    s.push_str("dft\t0.123456\n");
+    s.push_str("dft\t0.0899984\n");
+    s.push_str("dft\t0.0957042\n");
+    s.push_str("dft\t0.4184625\n");
+    s.push_str("dft\t0.8137984\n");
+    s.push_str("dft\t0.8820509\n");
+    s.push_str("dft\t0.7242467\n");
+    s.push_str("dft\t0.2772924\n");
+    s.push_str("dft\t0.4331722\n");
+    s.push_str("m2td\t0.0\n");
+    s.push_str("m2td\t1.0\n");
+    s.push_str("m2td\t59.99\n");
+    s.push_str("m2td\t720.0\n");
+    s.push_str("m2td\t1439.9999\n");
+    s.push_str("m2td\t1440.0\n");
+    s.push_str("m2td\t1440.5\n");
+    s.push_str("m2td\t2880.25\n");
+    s.push_str("m2td\t-1.0\n");
+    s.push_str("m2td\t-1440.5\n");
+    s.push_str("m2td\t0.0001\n");
+    s.push_str("m2td\t123.456789\n");
+    s.push_str("m2td\t10000.123\n");
+    s.push_str("m2td\t2179.83281\n");
+    s.push_str("m2td\t596.7561\n");
+    s.push_str("m2td\t1003.41368\n");
+    s.push_str("m2td\t423.90887\n");
+    s.push_str("m2td\t560.2075\n");
+    s.push_str("m2td\t1275.46456\n");
+    s.push_str("m2td\t2151.79442\n");
+    s.push_str("m2td\t1443.96156\n");
+    s.push_str("m2td\t971.15659\n");
+    s.push_str("m2td\t2958.76826\n");
+    s.push_str("mpos\t0.0\n");
+    s.push_str("mpos\t1.0\n");
+    s.push_str("mpos\t-36525.0\n");
+    s.push_str("mpos\t36525.0\n");
+    s.push_str("mpos\t7305.5\n");
+    s.push_str("mpos\t8000.123\n");
+    s.push_str("mpos\t-10000.75\n");
+    s.push_str("mpos\t39488.3782\n");
+    s.push_str("mpos\t-28034.834\n");
+    s.push_str("mpos\t-33072.2711\n");
+    s.push_str("mpos\t20209.8176\n");
+    s.push_str("mpos\t9788.8181\n");
+    s.push_str("mpos\t32658.8049\n");
+    s.push_str("mpos\t19707.9502\n");
+    s.push_str("mpos\t32458.144\n");
+    s.push_str("mpos\t-8006.3739\n");
+    s.push_str("mpos\t-38032.2794\n");
+    s.push_str("mpos\t-3157.3199\n");
+    s.push_str("mpos\t9550.4502\n");
+    s.push_str("phase\t2015-01-01\n");
+    s.push_str("phase\t2015-12-01\n");
+    s.push_str("phase\t2015-12-02\n");
+    s.push_str("phase\t2015-12-03\n");
+    s.push_str("phase\t2015-12-14\n");
+    s.push_str("phase\t2015-12-15\n");
+    s.push_str("phase\t2015-12-16\n");
+    s.push_str("phase\t2015-12-26\n");
+    s.push_str("phase\t2000-01-06\n");
+    s.push_str("phase\t1999-12-22\n");
+    s.push_str("phase\t2148-08-18\n");
+    s.push_str("phase\t1880-09-29\n");
+    s.push_str("phase\t1878-01-10\n");
+    s.push_str("phase\t1833-06-21\n");
+    s.push_str("phase\t1995-11-28\n");
+    s.push_str("phase\t2074-12-29\n");
+    s.push_str("phase\t1900-09-08\n");
+    s.push_str("phase\t1988-05-06\n");
+    s.push_str("phase\t1822-04-24\n");
+    s.push_str("phase\t2096-07-16\n");
+    s.push_str("phase\t1965-03-12\n");
+    s.push_str("phase\t2094-09-12\n");
+    s.push_str("phase\t1969-03-09\n");
+    s.push_str("phase\t2161-12-22\n");
+    s.push_str("phase\t1952-01-06\n");
+    s.push_str("phase\t2155-08-03\n");
+    s.push_str("phase\t1852-01-14\n");
+    s.push_str("phase\t1921-05-11\n");
+    s.push_str("phase\t1994-04-10\n");
+    s.push_str("phase\t1861-05-13\n");
+    s.push_str("phase\t2045-03-08\n");
+    s.push_str("phase\t1976-02-18\n");
+    s.push_str("phase\t2153-09-11\n");
+    s.push_str("phase\t1829-05-27\n");
+    s.push_str("phase\t2155-06-09\n");
+    s
+}
