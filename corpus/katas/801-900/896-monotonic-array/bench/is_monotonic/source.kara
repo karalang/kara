@@ -1,0 +1,57 @@
+// LeetCode #896 bench: the ★ arm (one pass, two flags) over 16 arrays of
+// 100,000 numbers, LeetCode's largest, built once as random walks, half
+// rising and half falling. Each of 2,000 rounds sets one random place of
+// one array to the number before it, which keeps the array monotonic, or
+// in every other round to a random number, asks whether the array is
+// monotonic, and puts the number back.
+
+fn is_monotonic(nums: Vec[i64]) -> bool {
+    let mut rising = true;
+    let mut falling = true;
+    for i in 1..nums.len() {
+        if nums[i] > nums[i - 1] {
+            falling = false;
+        }
+        if nums[i] < nums[i - 1] {
+            rising = false;
+        }
+    }
+    rising or falling
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 896;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for k in 0..16 {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut x = if k % 2 == 0 { -100000 } else { 100000 };
+        for _ in 0..100000 {
+            nums.push(x);
+            let step = next_random(mut seed) % 2;
+            x = if k % 2 == 0 { x + step } else { x - step };
+        }
+        arrays.push(nums);
+    }
+    let mut monotonic = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let a = next_random(mut seed) % 16;
+        let p = (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+        let random = (next_random(mut seed) * 32768 + next_random(mut seed)) % 200001 - 100000;
+        let old = arrays[a][p];
+        let value = if next_random(mut seed) % 2 == 0 and p > 0 { arrays[a][p - 1] } else { random };
+        arrays[a][p] = value;
+        let got = is_monotonic(arrays[a]);
+        arrays[a][p] = old;
+        if got {
+            monotonic += 1;
+        }
+        check = (check * 131 + p * 2 + if got { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 rounds over 16 arrays of 100000 numbers: {monotonic} monotonic, checksum {check}");
+}

@@ -1,0 +1,274 @@
+// LeetCode #896: Monotonic Array -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: an array is monotonic if it is either monotone
+// increasing or monotone decreasing. An array nums is monotone increasing
+// if for all i <= j, nums[i] <= nums[j], and monotone decreasing if for
+// all i <= j, nums[i] >= nums[j]. Given an integer array nums, return
+// true if the given array is monotonic, or false otherwise.
+
+// ---- the ★ arm: one pass, two flags ---------------------------------------
+fn star_is_monotonic(nums: Vec[i64]) -> bool {
+    let mut rising = true;
+    let mut falling = true;
+    for i in 1..nums.len() {
+        if nums[i] > nums[i - 1] {
+            falling = false;
+        }
+        if nums[i] < nums[i - 1] {
+            rising = false;
+        }
+    }
+    rising or falling
+}
+
+// ---- the twopass arm: two passes ------------------------------------------
+fn twopass_is_monotonic(nums: Vec[i64]) -> bool {
+    twopass_never_down(nums) or twopass_never_up(nums)
+}
+
+fn twopass_never_down(nums: Vec[i64]) -> bool {
+    for i in 1..nums.len() {
+        if nums[i] < nums[i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+fn twopass_never_up(nums: Vec[i64]) -> bool {
+    for i in 1..nums.len() {
+        if nums[i] > nums[i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the sign arm: the first change sets the direction --------------------
+fn sign_is_monotonic(nums: Vec[i64]) -> bool {
+    let mut direction = 0;
+    for i in 1..nums.len() {
+        let step = nums[i] - nums[i - 1];
+        if step != 0 {
+            if direction == 0 {
+                direction = if step > 0 { 1 } else { -1 };
+            } else if (step > 0) != (direction > 0) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- the sorted arm: against its own sorted copy --------------------------
+fn sorted_is_monotonic(nums: Vec[i64]) -> bool {
+    let mut up = nums.clone();
+    up.sort();
+    if up == nums {
+        return true;
+    }
+    up.reverse();
+    up == nums
+}
+
+// ---- the ends arm: the ends choose the direction --------------------------
+fn ends_is_monotonic(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    if nums[0] <= nums[n - 1] {
+        for i in 1..n {
+            if nums[i] < nums[i - 1] {
+                return false;
+            }
+        }
+    } else {
+        for i in 1..n {
+            if nums[i] > nums[i - 1] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn arm(x: i64, nums: Vec[i64]) -> bool {
+    match x {
+        0 => star_is_monotonic(nums),
+        1 => twopass_is_monotonic(nums),
+        2 => sign_is_monotonic(nums),
+        3 => sorted_is_monotonic(nums),
+        _ => ends_is_monotonic(nums),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// monotone increasing: nums[i] <= nums[j] for all i <= j; monotone
+// decreasing: nums[i] >= nums[j] for all i <= j; monotonic: either
+fn literal(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut increasing = true;
+    let mut decreasing = true;
+    for i in 0..n {
+        for j in i..n {
+            if not (nums[i] <= nums[j]) {
+                increasing = false;
+            }
+            if not (nums[i] >= nums[j]) {
+                decreasing = false;
+            }
+        }
+    }
+    increasing or decreasing
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` random numbers spread over `span` values centred on 0, sorted up
+// for kind 1, 3 and 5 and down for kind 2 and 4; kinds 3 and 4 then swap
+// two random places, and kind 5 sets one random place to a random number
+fn random_case(seed: mut ref i64, kind: i64, len: i64, span: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        let r = next_random(mut seed) * 32768 + next_random(mut seed);
+        nums.push(r % span - span / 2);
+    }
+    if kind >= 1 {
+        nums.sort();
+    }
+    if kind == 2 or kind == 4 {
+        nums.reverse();
+    }
+    if kind == 3 or kind == 4 {
+        let i = next_random(mut seed) % len;
+        let j = next_random(mut seed) % len;
+        nums.swap(i, j);
+    }
+    if kind == 5 {
+        let i = next_random(mut seed) % len;
+        let r = next_random(mut seed) * 32768 + next_random(mut seed);
+        nums[i] = r % span - span / 2;
+    }
+    nums
+}
+
+// each number mapped to `scale * x + shift`, in reverse order if `back`,
+// and each written `times` times
+fn mapped(nums: Vec[i64], scale: i64, shift: i64, back: bool, times: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = Vec.new();
+    for k in 0..n {
+        let i = if back { n - 1 - k } else { k };
+        for _ in 0..times {
+            out.push(scale * nums[i] + shift);
+        }
+    }
+    out
+}
+
+// nums[a..b]
+fn window(nums: Vec[i64], a: i64, b: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in a..b {
+        out.push(nums[i]);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+// Returns the ★ arm's answer.
+fn properties(t: mut ref Tally, seed: mut ref i64, nums: Vec[i64], small: bool) -> bool {
+    let n = nums.len();
+    let want = if small { literal(nums) } else { false };
+    let mut answers: Vec[bool] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, nums));
+    }
+    let mut up = nums.clone();
+    up.sort();
+    let down = mapped(up, 1, 0, true, 1);
+    let same: Vec[i64] = Vec.filled(n, nums[0]);
+    let a = next_random(mut seed) % n;
+    let b = a + 1 + next_random(mut seed) % (n - a);
+    let part = window(nums, a, b);
+    let mut longer = nums.clone();
+    longer.push(next_random(mut seed) % 7 - 3);
+    let mut wider = nums.clone();
+    wider.insert(0, next_random(mut seed) % 7 - 3);
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the same answer read backwards, and with every sign flipped
+        check(mut t, 2, arm(x, mapped(nums, 1, 0, true, 1)) == got and arm(x, mapped(nums, -1, 0, false, 1)) == got);
+        // P3: a monotonic array's every window is monotonic, and a
+        // non-monotonic one stays so with a number added at either end
+        check(mut t, 3, if got { arm(x, part) } else { not arm(x, longer) and not arm(x, wider) });
+        // P4: the numbers sorted up, sorted down, or all the same are
+        // monotonic, and so is any array of at most two
+        check(mut t, 4, arm(x, up) and arm(x, down) and arm(x, same) and (n > 2 or got));
+        // P5: the same answer with every number tripled and shifted, and
+        // with every number written twice
+        check(mut t, 5, arm(x, mapped(nums, 3, 7, false, 1)) == got and arm(x, mapped(nums, 1, 0, false, 2)) == got);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 896;
+    let mut cases = 0;
+    let mut monotonic = 0;
+    // up to 10 numbers from at most 4 values against the statement; then
+    // up to 1000 from LeetCode's whole range
+    for c in 0..3200 {
+        let small = c < 3000;
+        let kind = next_random(mut seed) % 6;
+        let len = if small { 1 + next_random(mut seed) % 10 } else { 1 + next_random(mut seed) % 1000 };
+        let span = if small { 1 + next_random(mut seed) % 4 } else { 200001 };
+        let nums = random_case(mut seed, kind, len, span);
+        cases += 1;
+        if properties(mut t, mut seed, nums, small) {
+            monotonic += 1;
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {monotonic} monotonic, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
