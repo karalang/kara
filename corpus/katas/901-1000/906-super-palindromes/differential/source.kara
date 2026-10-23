@@ -1,0 +1,371 @@
+// LeetCode #906: Super Palindromes -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: let's say a positive integer is a super-palindrome if it
+// is a palindrome, and it is also the square of a palindrome. Given two
+// positive integers left and right represented as strings, return the
+// number of super-palindromes integers in the inclusive range
+// [left, right].
+
+// ---- the ★ arm: palindromic roots built from their first halves -----------
+fn star_superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    for odd in [true, false] {
+        let mut half = 1;
+        loop {
+            let digits = f"{half}";
+            let back: String = digits.chars().rev().collect();
+            let tail = if odd { back.substring(1, back.len()) } else { back };
+            let root = i64.parse(digits + tail).unwrap();
+            if root > hi / root {
+                break;
+            }
+            let square = root * root;
+            let shown = f"{square}";
+            let mirrored: String = shown.chars().rev().collect();
+            if square >= lo and shown == mirrored {
+                count += 1;
+            }
+            half += 1;
+        }
+    }
+    count
+}
+
+// ---- the numeric arm: the same roots, mirrored with arithmetic ------------
+fn numeric_reversed_onto(start: i64, digits: i64) -> i64 {
+    let mut out = start;
+    let mut rest = digits;
+    while rest > 0 {
+        out = out * 10 + rest % 10;
+        rest /= 10;
+    }
+    out
+}
+
+fn numeric_superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    for odd in [true, false] {
+        let mut half = 1;
+        loop {
+            let root = if odd { numeric_reversed_onto(half, half / 10) } else { numeric_reversed_onto(half, half) };
+            if root > hi / root {
+                break;
+            }
+            let square = root * root;
+            if square >= lo and numeric_reversed_onto(0, square) == square {
+                count += 1;
+            }
+            half += 1;
+        }
+    }
+    count
+}
+
+// ---- the digits arm: roots of the digits 0, 1 and 2 -----------------------
+fn digits_mirrored(half: i64, odd: bool) -> i64 {
+    let mut out = half;
+    let mut rest = if odd { half / 10 } else { half };
+    while rest > 0 {
+        out = out * 10 + rest % 10;
+        rest /= 10;
+    }
+    out
+}
+
+fn digits_is_palindrome(x: i64) -> bool {
+    let mut back = 0;
+    let mut rest = x;
+    while rest > 0 {
+        back = back * 10 + rest % 10;
+        rest /= 10;
+    }
+    back == x
+}
+
+fn digits_superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = if 9 >= lo and 9 <= hi { 1 } else { 0 };
+    for odd in [true, false] {
+        let mut code = 1;
+        loop {
+            // the decimal number whose digits are `code` written in base 3
+            let mut half = 0;
+            let mut place = 1;
+            let mut rest = code;
+            while rest > 0 {
+                half += (rest % 3) * place;
+                place *= 10;
+                rest /= 3;
+            }
+            let root = digits_mirrored(half, odd);
+            if root > hi / root {
+                break;
+            }
+            let square = root * root;
+            if square >= lo and digits_is_palindrome(square) {
+                count += 1;
+            }
+            code += 1;
+        }
+    }
+    count
+}
+
+// ---- the squares arm: roots whose digits' squares sum to at most 9 --------
+fn squares_fill(digits: mut ref Vec[i64], at: i64, spent: i64, lo: i64, hi: i64) -> i64 {
+    let len = digits.len();
+    if at > (len - 1) / 2 {
+        let mut root = 0;
+        for d in digits.iter() {
+            root = root * 10 + *d;
+        }
+        if root > hi / root {
+            return 0;
+        }
+        return if root * root >= lo { 1 } else { 0 };
+    }
+    let weight = if at == len - 1 - at { 1 } else { 2 };
+    let first = if at == 0 { 1 } else { 0 };
+    let mut found = 0;
+    let mut d = first;
+    while d <= 9 and spent + weight * d * d <= 9 {
+        digits[at] = d;
+        digits[len - 1 - at] = d;
+        found += squares_fill(mut digits, at + 1, spent + weight * d * d, lo, hi);
+        d += 1;
+    }
+    found
+}
+
+fn squares_superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    let mut len = 1;
+    // the smallest root of each length is 10^(len - 1) + 1, or 1
+    let mut smallest = 1;
+    while smallest <= hi / smallest {
+        let mut digits: Vec[i64] = Vec.filled(len, 0);
+        count += squares_fill(mut digits, 0, 0, lo, hi);
+        len += 1;
+        smallest = if len == 2 { 11 } else { (smallest - 1) * 10 + 1 };
+    }
+    count
+}
+
+// ---- the recursive arm: every palindromic root, filled from both ends inward 
+fn recursive_is_palindrome(x: i64) -> bool {
+    let mut back = 0;
+    let mut rest = x;
+    while rest > 0 {
+        back = back * 10 + rest % 10;
+        rest /= 10;
+    }
+    back == x
+}
+
+fn recursive_fill(digits: mut ref Vec[i64], at: i64, lo: i64, hi: i64) -> i64 {
+    let len = digits.len();
+    if at > (len - 1) / 2 {
+        let mut root = 0;
+        for d in digits.iter() {
+            root = root * 10 + *d;
+        }
+        if root > hi / root {
+            return 0;
+        }
+        let square = root * root;
+        return if square >= lo and recursive_is_palindrome(square) { 1 } else { 0 };
+    }
+    let mut found = 0;
+    let first = if at == 0 { 1 } else { 0 };
+    for d in first..10 {
+        digits[at] = d;
+        digits[len - 1 - at] = d;
+        found += recursive_fill(mut digits, at + 1, lo, hi);
+    }
+    found
+}
+
+fn recursive_superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    let mut len = 1;
+    let mut smallest = 1;
+    while smallest <= hi / smallest {
+        let mut digits: Vec[i64] = Vec.filled(len, 0);
+        count += recursive_fill(mut digits, 0, lo, hi);
+        len += 1;
+        smallest = if len == 2 { 11 } else { (smallest - 1) * 10 + 1 };
+    }
+    count
+}
+
+fn arm(x: i64, lo: i64, hi: i64) -> i64 {
+    let left = f"{lo}";
+    let right = f"{hi}";
+    match x {
+        0 => star_superpalindromes_in_range(left, right),
+        1 => numeric_superpalindromes_in_range(left, right),
+        2 => digits_superpalindromes_in_range(left, right),
+        3 => squares_superpalindromes_in_range(left, right),
+        _ => recursive_superpalindromes_in_range(left, right),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+fn reads_back(x: i64) -> bool {
+    let shown = f"{x}";
+    let back: String = shown.chars().rev().collect();
+    shown == back
+}
+
+// every number in the range tried: a palindrome, and the square of some
+// number that is one
+fn literal(lo: i64, hi: i64) -> i64 {
+    let mut count = 0;
+    for x in lo..hi + 1 {
+        if reads_back(x) {
+            let mut y = 1;
+            while y * y < x {
+                y += 1;
+            }
+            if y * y == x and reads_back(y) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a palindrome made from a random half below `top`, of odd or even length
+fn random_palindrome(seed: mut ref i64, top: i64) -> i64 {
+    let half = 1 + next_random(mut seed) % (top - 1);
+    let mut out = half;
+    let mut rest = if next_random(mut seed) % 2 == 0 { half / 10 } else { half };
+    while rest > 0 {
+        out = out * 10 + rest % 10;
+        rest /= 10;
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one range over the five arms (P1 only when `small`); the
+// ★ arm's count.
+fn properties(t: mut ref Tally, seed: mut ref i64, lo: i64, hi: i64, small: bool) -> i64 {
+    let want = if small { literal(lo, hi) } else { 0 };
+    let mut counts: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        counts.push(arm(x, lo, hi));
+    }
+    // P2: the range cut in two
+    let cut = lo + next_random(mut seed) % (hi - lo + 1);
+    // P4: the square of a palindrome
+    let root = random_palindrome(mut seed, if small { 15 } else { 100 });
+    let square = root * root;
+    // P5: a wider range
+    let wide_lo = 1.max(lo - next_random(mut seed) % 1000);
+    let wide_hi = hi + next_random(mut seed) % 1000;
+    for x in 0..5 {
+        let got = counts[x];
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the two parts' counts sum to the whole
+        let first = arm(x, lo, cut);
+        let second = if cut < hi { arm(x, cut + 1, hi) } else { 0 };
+        check(mut t, 2, first + second == got);
+        // P3: everything up to hi less everything below lo
+        let below = if lo > 1 { arm(x, 1, lo - 1) } else { 0 };
+        check(mut t, 3, arm(x, 1, hi) - below == got);
+        // P4: the square of a palindrome counts once exactly when it
+        // reads the same backwards
+        let one = arm(x, square, square);
+        check(mut t, 4, one == if reads_back(square) { 1 } else { 0 });
+        // P5: a wider range counts at least as many
+        check(mut t, 5, arm(x, wide_lo, wide_hi) >= got);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and counts[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    counts[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 906;
+    let mut cases = 0;
+    let mut found = 0;
+    // ranges of up to 300 numbers below 20,000 against the statement, two
+    // thirds of them around the square of a palindrome below 142; then
+    // ranges anywhere below 10^8
+    for c in 0..3200 {
+        let small = c < 3000;
+        let (lo, hi) = if small {
+            let centre = if c % 3 == 2 {
+                1 + next_random(mut seed) % 20000
+            } else {
+                let half = 1 + next_random(mut seed) % 14;
+                let mut r = half;
+                let mut rest = if half >= 10 or c % 3 == 0 { half / 10 } else { half };
+                while rest > 0 {
+                    r = r * 10 + rest % 10;
+                    rest /= 10;
+                }
+                r * r
+            };
+            (1.max(centre - next_random(mut seed) % 150), centre + next_random(mut seed) % 150)
+        } else {
+            let a = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000;
+            let b = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000;
+            (a.min(b), a.max(b))
+        };
+        cases += 1;
+        found += properties(mut t, mut seed, lo, hi, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} ranges, {found} super-palindromes found, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

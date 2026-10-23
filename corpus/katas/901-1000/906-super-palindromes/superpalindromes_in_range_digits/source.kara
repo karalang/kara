@@ -1,0 +1,104 @@
+// LeetCode #906: Super Palindromes -- roots of the digits 0, 1 and 2.
+//
+// A palindrome's square reads the same backwards exactly when squaring it
+// carries nothing, and the largest column of that square, the middle one,
+// is the sum of the squares of the root's digits. So no digit is above 2,
+// except in the root 3 itself. Count in base 3 to get every half made of
+// the digits 0 to 2, mirror each into an odd and an even root, and test
+// those squares; 3 is tested on its own. O(3^(d/4)) roots for d digits of
+// right.
+
+fn mirrored(half: i64, odd: bool) -> i64 {
+    let mut out = half;
+    let mut rest = if odd { half / 10 } else { half };
+    while rest > 0 {
+        out = out * 10 + rest % 10;
+        rest /= 10;
+    }
+    out
+}
+
+fn is_palindrome(x: i64) -> bool {
+    let mut back = 0;
+    let mut rest = x;
+    while rest > 0 {
+        back = back * 10 + rest % 10;
+        rest /= 10;
+    }
+    back == x
+}
+
+fn superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = if 9 >= lo and 9 <= hi { 1 } else { 0 };
+    for odd in [true, false] {
+        let mut code = 1;
+        loop {
+            // the decimal number whose digits are `code` written in base 3
+            let mut half = 0;
+            let mut place = 1;
+            let mut rest = code;
+            while rest > 0 {
+                half += (rest % 3) * place;
+                place *= 10;
+                rest /= 3;
+            }
+            let root = mirrored(half, odd);
+            if root > hi / root {
+                break;
+            }
+            let square = root * root;
+            if square >= lo and is_palindrome(square) {
+                count += 1;
+            }
+            code += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(left: String, right: String) {
+    println(f"left = \"{left}\", right = \"{right}\" -> {superpalindromes_in_range(left, right)}");
+}
+
+fn main() {
+    show("4", "1000");
+    show("1", "2");
+    show("1", "1");
+    show("9", "9");
+    show("10", "120");
+    show("121", "121");
+    show("122", "483");
+    show("1", "10000");
+    show("40804", "44944");
+    show("1000000", "999999999");
+    // 60 random ranges, each end below 10^1 to 10^12
+    let mut seed = 906;
+    let mut sum = 0;
+    let mut check = 0;
+    for c in 0..60 {
+        let mut top = 1;
+        for _ in 0..1 + c % 12 {
+            top *= 10;
+        }
+        let a = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let b = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let got = superpalindromes_in_range(f"{a.min(b)}", f"{a.max(b)}");
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"60 ranges: counts summing to {sum}, checksum {check}");
+    // LeetCode's largest: everything below 10^18, the 17-digit numbers and
+    // the 18-digit ones
+    show("1", "999999999999999999");
+    show("10000000000000000", "99999999999999999");
+    show("100000000000000000", "999999999999999999");
+}

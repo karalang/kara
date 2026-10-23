@@ -1,0 +1,101 @@
+// LeetCode #906: Super Palindromes -- every palindromic root, filled from
+// both ends inward.
+//
+// For each length whose smallest palindrome's square is still within
+// `right`, choose the outer pair of digits, then the next pair in, and so
+// on down to the middle, every digit allowed (no leading 0). Each root so
+// finished is squared, and counted when the square is in range and reads
+// the same backwards. O(sqrt(sqrt(right))) roots.
+
+fn is_palindrome(x: i64) -> bool {
+    let mut back = 0;
+    let mut rest = x;
+    while rest > 0 {
+        back = back * 10 + rest % 10;
+        rest /= 10;
+    }
+    back == x
+}
+
+fn fill(digits: mut ref Vec[i64], at: i64, lo: i64, hi: i64) -> i64 {
+    let len = digits.len();
+    if at > (len - 1) / 2 {
+        let mut root = 0;
+        for d in digits.iter() {
+            root = root * 10 + *d;
+        }
+        if root > hi / root {
+            return 0;
+        }
+        let square = root * root;
+        return if square >= lo and is_palindrome(square) { 1 } else { 0 };
+    }
+    let mut found = 0;
+    let first = if at == 0 { 1 } else { 0 };
+    for d in first..10 {
+        digits[at] = d;
+        digits[len - 1 - at] = d;
+        found += fill(mut digits, at + 1, lo, hi);
+    }
+    found
+}
+
+fn superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    let mut len = 1;
+    let mut smallest = 1;
+    while smallest <= hi / smallest {
+        let mut digits: Vec[i64] = Vec.filled(len, 0);
+        count += fill(mut digits, 0, lo, hi);
+        len += 1;
+        smallest = if len == 2 { 11 } else { (smallest - 1) * 10 + 1 };
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(left: String, right: String) {
+    println(f"left = \"{left}\", right = \"{right}\" -> {superpalindromes_in_range(left, right)}");
+}
+
+fn main() {
+    show("4", "1000");
+    show("1", "2");
+    show("1", "1");
+    show("9", "9");
+    show("10", "120");
+    show("121", "121");
+    show("122", "483");
+    show("1", "10000");
+    show("40804", "44944");
+    show("1000000", "999999999");
+    // 60 random ranges, each end below 10^1 to 10^12
+    let mut seed = 906;
+    let mut sum = 0;
+    let mut check = 0;
+    for c in 0..60 {
+        let mut top = 1;
+        for _ in 0..1 + c % 12 {
+            top *= 10;
+        }
+        let a = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let b = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let got = superpalindromes_in_range(f"{a.min(b)}", f"{a.max(b)}");
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"60 ranges: counts summing to {sum}, checksum {check}");
+    // LeetCode's largest: everything below 10^18, the 17-digit numbers and
+    // the 18-digit ones
+    show("1", "999999999999999999");
+    show("10000000000000000", "99999999999999999");
+    show("100000000000000000", "999999999999999999");
+}

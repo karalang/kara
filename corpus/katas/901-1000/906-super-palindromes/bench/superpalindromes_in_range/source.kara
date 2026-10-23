@@ -1,0 +1,58 @@
+// LeetCode #906: Super Palindromes -- bench program.
+//
+// The ★ arm (palindromic roots built from their first halves) over random
+// ranges below 10^18 given as strings. Each query counts the
+// super-palindromes in its range and folds the count into a checksum.
+
+fn superpalindromes_in_range(left: String, right: String) -> i64 {
+    let lo = i64.parse(left).unwrap();
+    let hi = i64.parse(right).unwrap();
+    let mut count = 0;
+    for odd in [true, false] {
+        let mut half = 1;
+        loop {
+            let digits = f"{half}";
+            let back: String = digits.chars().rev().collect();
+            let tail = if odd { back.substring(1, back.len()) } else { back };
+            let root = i64.parse(digits + tail).unwrap();
+            if root > hi / root {
+                break;
+            }
+            let square = root * root;
+            let shown = f"{square}";
+            let mirrored: String = shown.chars().rev().collect();
+            if square >= lo and shown == mirrored {
+                count += 1;
+            }
+            half += 1;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn big_random(seed: mut ref i64) -> i64 {
+    let a = next_random(mut seed) * 32768 + next_random(mut seed);
+    let b = next_random(mut seed) * 32768 + next_random(mut seed);
+    a * 1073741824 + b
+}
+
+fn main() {
+    let queries = 40;
+    let top = 1000000000000000000;
+    let mut seed = 906;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..queries {
+        let a = 1 + big_random(mut seed) % (top - 1);
+        let b = 1 + big_random(mut seed) % (top - 1);
+        let got = superpalindromes_in_range(f"{a.min(b)}", f"{a.max(b)}");
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"{queries} ranges below 10^18: counts summing to {total}, checksum {check}");
+}

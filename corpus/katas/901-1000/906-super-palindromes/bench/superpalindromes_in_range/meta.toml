@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/901-1000/906-super-palindromes/bench/superpalindromes_in_range.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "1eeb03c67"
+extracted_src = "7e46262b"
+model_rev = "aafbe785"
+model_src = "7e46262b"

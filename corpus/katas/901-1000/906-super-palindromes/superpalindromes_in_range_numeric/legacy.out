@@ -1,0 +1,14 @@
+left = "4", right = "1000" -> 4
+left = "1", right = "2" -> 1
+left = "1", right = "1" -> 1
+left = "9", right = "9" -> 1
+left = "10", right = "120" -> 0
+left = "121", right = "121" -> 1
+left = "122", right = "483" -> 0
+left = "1", right = "10000" -> 5
+left = "40804", right = "44944" -> 2
+left = "1000000", right = "999999999" -> 11
+60 ranges: counts summing to 50, checksum 66115229
+left = "1", right = "999999999999999999" -> 70
+left = "10000000000000000", right = "99999999999999999" -> 22
+left = "100000000000000000", right = "999999999999999999" -> 0
