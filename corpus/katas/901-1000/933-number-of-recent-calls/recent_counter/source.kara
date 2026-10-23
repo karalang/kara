@@ -1,0 +1,118 @@
+// LeetCode #933: Number of Recent Calls -- a queue of the recent pings.
+//
+// The pings arrive in increasing time, so the ones still within 3000 of
+// the latest are the newest few. Keep them in a queue: push each ping at
+// the back, drop pings older than t - 3000 from the front, and the queue's
+// length is the answer. Each ping is pushed and dropped once, O(1) a call
+// amortized.
+
+struct RecentCounter {
+    pings: VecDeque[i64],
+}
+
+impl RecentCounter {
+    fn new() -> RecentCounter {
+        RecentCounter { pings: VecDeque.new() }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.pings.push_back(t);
+        while *self.pings.front().unwrap() < t - 3000 {
+            self.pings.pop_front();
+        }
+        self.pings.len()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// one new counter pinged at each time in turn
+fn answers(times: Vec[i64]) -> Vec[i64] {
+    let mut counter = RecentCounter.new();
+    let mut out: Vec[i64] = Vec.new();
+    for t in times.iter() {
+        out.push(counter.ping(*t));
+    }
+    out
+}
+
+fn join(v: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            s = s + ", ";
+        }
+        s = s + f"{v[i]}";
+    }
+    s
+}
+
+fn show(times: Vec[i64]) {
+    println(f"ping({join(times.clone())}) -> {join(answers(times))}");
+}
+
+// `len` increasing times, each from 1 to `gap` after the one before
+fn random_times(seed: mut ref i64, len: i64, gap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut t = 0;
+    for _ in 0..len {
+        t += 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % gap;
+        out.push(t);
+    }
+    out
+}
+
+fn fold(got: Vec[i64], sum: mut ref i64, check: mut ref i64) {
+    for x in got.iter() {
+        *sum += *x;
+        *check = (*check * 1000003 + *x) % 1000000007;
+    }
+}
+
+fn main() {
+    // LeetCode's example, then a ping at the largest time, pings exactly
+    // 3000 apart, 3001 apart, one a millisecond, and a burst, a gap and a
+    // burst
+    show(vec![1, 100, 3001, 3002]);
+    show(vec![1000000000]);
+    show(vec![1, 3001, 6001]);
+    show(vec![1, 3002, 6003]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    show(vec![1, 2, 3, 3003, 3004, 3005]);
+    show(vec![3000, 6000, 6001, 9001, 9002, 12002]);
+    // 300 random streams of up to 2000 pings, the gaps up to 1 to 6000
+    let mut seed = 933;
+    let mut calls = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let len = 1 + next_random(mut seed) % 2000;
+        let gap = 1 + next_random(mut seed) % 6000;
+        let got = answers(random_times(mut seed, len, gap));
+        calls += len;
+        fold(got, mut sum, mut check);
+    }
+    println(f"300 random streams: {calls} calls, answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 10^4 pings: one a millisecond, one every 1000,
+    // and random gaps up to 10^5
+    let mut dense: Vec[i64] = Vec.new();
+    let mut sparse: Vec[i64] = Vec.new();
+    for i in 1..10001 {
+        dense.push(i);
+        sparse.push(1000 * i);
+    }
+    let wide = random_times(mut seed, 10000, 100000);
+    let mut a = 0;
+    let mut b = 0;
+    let mut c = 0;
+    let mut ignore = 0;
+    fold(answers(dense), mut a, mut ignore);
+    fold(answers(sparse), mut b, mut ignore);
+    fold(answers(wide.clone()), mut c, mut ignore);
+    println(f"10^4 pings: one a millisecond {a}, one every 1000 {b}, random gaps {c} (last ping at {wide[9999]})");
+}

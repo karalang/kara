@@ -1,0 +1,332 @@
+// LeetCode #933: Number of Recent Calls -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: RecentCounter() initializes the counter with zero recent
+// requests. int ping(int t) adds a new request at time t, where t
+// represents some time in milliseconds, and returns the number of
+// requests that has happened in the past 3000 milliseconds (including the
+// new request): exactly the number of requests in the inclusive range
+// [t - 3000, t]. Every call to ping uses a strictly larger t than the
+// previous call.
+
+// ---- the ★ arm: a queue of the recent pings -------------------------------
+struct StarRecentCounter {
+    pings: VecDeque[i64],
+}
+
+impl StarRecentCounter {
+    fn new() -> StarRecentCounter {
+        StarRecentCounter { pings: VecDeque.new() }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.pings.push_back(t);
+        while *self.pings.front().unwrap() < t - 3000 {
+            self.pings.pop_front();
+        }
+        self.pings.len()
+    }
+}
+
+// ---- the search arm: every ping kept, binary search -----------------------
+struct SearchRecentCounter {
+    times: Vec[i64],
+}
+
+impl SearchRecentCounter {
+    fn new() -> SearchRecentCounter {
+        SearchRecentCounter { times: Vec.new() }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.times.push(t);
+        let mut lo = 0;
+        let mut hi = self.times.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.times[mid] < t - 3000 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.times.len() - lo
+    }
+}
+
+// ---- the stacks arm: a queue made of two stacks ---------------------------
+struct StacksRecentCounter {
+    inbox: Vec[i64],
+    outbox: Vec[i64],
+}
+
+impl StacksRecentCounter {
+    fn new() -> StacksRecentCounter {
+        StacksRecentCounter { inbox: Vec.new(), outbox: Vec.new() }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.inbox.push(t);
+        loop {
+            if self.outbox.len() == 0 {
+                while let Some(x) = self.inbox.pop() {
+                    self.outbox.push(x);
+                }
+            }
+            if self.outbox[self.outbox.len() - 1] < t - 3000 {
+                self.outbox.pop();
+            } else {
+                break;
+            }
+        }
+        self.inbox.len() + self.outbox.len()
+    }
+}
+
+// ---- the start arm: a start that only moves forward -----------------------
+struct StartRecentCounter {
+    times: Vec[i64],
+    start: i64,
+}
+
+impl StartRecentCounter {
+    fn new() -> StartRecentCounter {
+        StartRecentCounter { times: Vec.new(), start: 0 }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.times.push(t);
+        while self.times[self.start] < t - 3000 {
+            self.start += 1;
+        }
+        self.times.len() - self.start
+    }
+}
+
+// ---- the back arm: every ping kept, read back -----------------------------
+struct BackRecentCounter {
+    times: Vec[i64],
+}
+
+impl BackRecentCounter {
+    fn new() -> BackRecentCounter {
+        BackRecentCounter { times: Vec.new() }
+    }
+
+    fn ping(mut ref self, t: i64) -> i64 {
+        self.times.push(t);
+        let mut count = 0;
+        let mut i = self.times.len();
+        while i > 0 and self.times[i - 1] >= t - 3000 {
+            count += 1;
+            i -= 1;
+        }
+        count
+    }
+}
+
+// ---- the differential -----------------------------------------------------
+
+// one new counter of arm x pinged at each time in turn
+fn arm(x: i64, times: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if x == 0 {
+        let mut c = StarRecentCounter.new();
+        for t in times.iter() {
+            out.push(c.ping(*t));
+        }
+    } else if x == 1 {
+        let mut c = SearchRecentCounter.new();
+        for t in times.iter() {
+            out.push(c.ping(*t));
+        }
+    } else if x == 2 {
+        let mut c = StacksRecentCounter.new();
+        for t in times.iter() {
+            out.push(c.ping(*t));
+        }
+    } else if x == 3 {
+        let mut c = StartRecentCounter.new();
+        for t in times.iter() {
+            out.push(c.ping(*t));
+        }
+    } else {
+        let mut c = BackRecentCounter.new();
+        for t in times.iter() {
+            out.push(c.ping(*t));
+        }
+    }
+    out
+}
+
+// The statement read literally: each ping returns the number of requests
+// so far, the new one included, with times in [t - 3000, t].
+fn literal(times: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..times.len() {
+        let t = times[i];
+        let mut count = 0;
+        for j in 0..i + 1 {
+            if times[j] >= t - 3000 and times[j] <= t {
+                count += 1;
+            }
+        }
+        out.push(count);
+    }
+    out
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn total(v: Vec[i64]) -> i64 {
+    let mut s = 0;
+    for x in v.iter() {
+        s += *x;
+    }
+    s
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` increasing times, each from 1 to `gap` after the one before
+fn random_times(seed: mut ref i64, len: i64, gap: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut t = 0;
+    for _ in 0..len {
+        t += 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % gap;
+        out.push(t);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, times: Vec[i64], small: bool) {
+    let n = times.len();
+    // every time moved later by d
+    let d = next_random(mut seed) % 1000000;
+    let mut shifted: Vec[i64] = Vec.new();
+    for v in times.iter() {
+        shifted.push(*v + d);
+    }
+    // a prefix, then a ping 3001 after its last
+    let cut = 1 + next_random(mut seed) % n;
+    let mut prefix: Vec[i64] = Vec.new();
+    for i in 0..cut {
+        prefix.push(times[i]);
+    }
+    prefix.push(times[cut - 1] + 3001);
+    // played backwards: each time t becomes first + last - t, in reverse
+    let mut mirrored: Vec[i64] = Vec.new();
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        mirrored.push(times[0] + times[n - 1] - times[i]);
+    }
+    let truth = if small { literal(times.clone()) } else { Vec.new() };
+    let mut got: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, times.clone()));
+    }
+    for x in 0..5 {
+        let a = got[x].clone();
+        // P1: the statement's answers, on the small streams
+        if small {
+            check(mut t, 1, same(a.clone(), truth.clone()));
+        }
+        // P2: one answer a ping; each from 1 to one more than the answer
+        // before, and 1 exactly when the ping before is over 3000 earlier
+        let mut bounded = a.len() == n;
+        if bounded {
+            for k in 0..n {
+                let prev = if k == 0 { 0 } else { a[k - 1] };
+                let alone = k == 0 or times[k] - times[k - 1] > 3000;
+                if a[k] < 1 or a[k] > prev + 1 or (a[k] == 1) != alone {
+                    bounded = false;
+                }
+            }
+        }
+        check(mut t, 2, bounded);
+        // P3: the same answers with every time moved later by d
+        check(mut t, 3, same(arm(x, shifted.clone()), a.clone()));
+        // P4: a prefix answers as the stream's first pings did, and a ping
+        // 3001 after it answers 1
+        let p = arm(x, prefix.clone());
+        let mut kept = p.len() == cut + 1 and a.len() >= cut;
+        if kept {
+            for k in 0..cut {
+                if p[k] != a[k] {
+                    kept = false;
+                }
+            }
+            kept = kept and p[cut] == 1;
+        }
+        check(mut t, 4, kept);
+        // P5: played backwards, the answers have the same sum (each pair
+        // within 3000 counted once either way)
+        check(mut t, 5, total(arm(x, mirrored.clone())) == total(a.clone()));
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and same(got[y].clone(), a.clone()) {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 933;
+    let mut cases = 0;
+    let mut calls = 0;
+    let mut sum = 0;
+    // up to 30 pings against the statement, then up to 2000, the gaps up
+    // to 1 to 6000
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 30 } else { 1 + next_random(mut seed) % 2000 };
+        let gap = 1 + next_random(mut seed) % 6000;
+        let times = random_times(mut seed, len, gap);
+        cases += 1;
+        calls += len;
+        sum += total(arm(0, times.clone()));
+        properties(mut t, mut seed, times, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} streams, {calls} calls, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
