@@ -1,0 +1,183 @@
+// LeetCode #866: Prime Palindrome -- from one palindrome to the next, with
+// Miller-Rabin.
+//
+// `next_palindrome(x)` is the smallest palindrome at least x: x's first
+// half mirrored onto its second half, or, when that falls below x, the
+// first half plus one mirrored. (A first half of all nines mirrors to
+// 99...9, never below x, so the half plus one keeps its number of
+// digits.) Starting from n, each palindrome is tested and the search
+// moves on to the next palindrome after it; lengths of four, six or eight
+// digits are skipped, their palindromes being multiples of 11. Primality
+// is Miller-Rabin with the bases 2, 3, 5 and 7, which decide every number
+// below 3,215,031,751 exactly.
+
+fn prime_palindrome(n: i64) -> i64 {
+    let mut x = n;
+    loop {
+        let p = next_palindrome(x);
+        let digits = digit_count(p);
+        if digits > 2 and digits % 2 == 0 {
+            x = power_of_ten(digits);
+            continue;
+        }
+        if is_prime(p) {
+            return p;
+        }
+        x = p + 1;
+    }
+}
+
+fn digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn power_of_ten(k: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 10;
+    }
+    p
+}
+
+// the first `half` digits mirrored onto a palindrome of `length` digits
+fn mirror(half: i64, length: i64) -> i64 {
+    let mut y = half;
+    let mut rest = if length % 2 == 1 { half / 10 } else { half };
+    while rest > 0 {
+        y = y * 10 + rest % 10;
+        rest /= 10;
+    }
+    y
+}
+
+fn next_palindrome(x: i64) -> i64 {
+    let length = digit_count(x);
+    let tail = power_of_ten(length / 2);
+    let half = x / tail;
+    let p = mirror(half, length);
+    if p >= x {
+        return p;
+    }
+    mirror(half + 1, length)
+}
+
+fn power_mod(base: i64, exp: i64, m: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % m;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % m;
+        }
+        b = b * b % m;
+        e /= 2;
+    }
+    result
+}
+
+fn is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    for p in [2, 3, 5, 7] {
+        if x % p == 0 {
+            return x == p;
+        }
+    }
+    let mut d = x - 1;
+    let mut s = 0;
+    while d % 2 == 0 {
+        d /= 2;
+        s += 1;
+    }
+    for a in [2, 3, 5, 7] {
+        let mut y = power_mod(a, d, x);
+        if y == 1 or y == x - 1 {
+            continue;
+        }
+        let mut witness = true;
+        for _ in 1..s {
+            y = y * y % x;
+            if y == x - 1 {
+                witness = false;
+                break;
+            }
+        }
+        if witness {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n of 1 to 8 digits, each length as likely
+fn random_n(seed: mut ref i64) -> i64 {
+    let digits = 1 + next_random(mut seed) % 8;
+    let mut low = 1;
+    for _ in 1..digits {
+        low *= 10;
+    }
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    low + (hi * 32768 + lo) % (9 * low)
+}
+
+fn digit_count_of(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {prime_palindrome(n)}");
+}
+
+fn main() {
+    show(6);
+    show(8);
+    show(13);
+    for n in [1, 2, 11, 12, 102, 9990, 1000000, 9989899, 9989900, 100000000] {
+        show(n);
+    }
+    // every n from 1 to 2000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..2001 {
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+    }
+    println(f"n from 1 to 2000: answers sum to {total}, checksum {check}");
+    // random n of 1 to 8 digits
+    let mut seed = 866;
+    total = 0;
+    check = 0;
+    let mut longer = 0;
+    for _ in 0..200 {
+        let n = random_n(mut seed);
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+        if digit_count_of(p) > digit_count_of(n) {
+            longer += 1;
+        }
+    }
+    println(f"200 random n of 1 to 8 digits: {longer} answers longer than n, answers sum to {total}, checksum {check}");
+}

@@ -1,0 +1,536 @@
+// LeetCode #866: Prime Palindrome -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: the smallest integer at least n that has exactly two
+// divisors, 1 and itself, and reads the same from left to right as from
+// right to left.
+// ---- the ★ arm: the odd-length palindromes in order -----------------------
+fn star_prime_palindrome(n: i64) -> i64 {
+    if n >= 8 and n <= 11 {
+        return 11;
+    }
+    let mut root = 1;
+    loop {
+        let y = star_odd_palindrome(root);
+        if y >= n and star_is_prime(y) {
+            return y;
+        }
+        root += 1;
+    }
+}
+
+// the palindrome that starts with `root` and ends with it reversed,
+// sharing its last digit
+fn star_odd_palindrome(root: i64) -> i64 {
+    let mut y = root;
+    let mut rest = root / 10;
+    while rest > 0 {
+        y = y * 10 + rest % 10;
+        rest /= 10;
+    }
+    y
+}
+
+fn star_is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    if x % 2 == 0 {
+        return x == 2;
+    }
+    let mut d = 3;
+    while d * d <= x {
+        if x % d == 0 {
+            return false;
+        }
+        d += 2;
+    }
+    true
+}
+
+// ---- the scan arm: every number from n up ---------------------------------
+fn scan_prime_palindrome(n: i64) -> i64 {
+    let mut x = n;
+    let mut digits = scan_digit_count(x);
+    let mut next_power = scan_power_of_ten(digits);
+    loop {
+        if x == next_power {
+            digits += 1;
+            next_power *= 10;
+        }
+        if digits > 2 and digits % 2 == 0 {
+            x = next_power;
+            continue;
+        }
+        if scan_reversed(x) == x and scan_is_prime(x) {
+            return x;
+        }
+        x += 1;
+    }
+}
+
+fn scan_digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn scan_power_of_ten(k: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 10;
+    }
+    p
+}
+
+fn scan_reversed(x: i64) -> i64 {
+    let mut r = 0;
+    let mut rest = x;
+    while rest > 0 {
+        r = r * 10 + rest % 10;
+        rest /= 10;
+    }
+    r
+}
+
+fn scan_is_prime(x: i64) -> bool {
+    if x < 4 {
+        return x >= 2;
+    }
+    if x % 2 == 0 or x % 3 == 0 {
+        return false;
+    }
+    let mut k = 5;
+    while k * k <= x {
+        if x % k == 0 or x % (k + 2) == 0 {
+            return false;
+        }
+        k += 6;
+    }
+    true
+}
+
+// ---- the build arm: the palindromes of each length, a table of primes -----
+fn build_prime_palindrome(n: i64) -> i64 {
+    let mut length = build_digit_count(n);
+    loop {
+        let half = (length + 1) / 2;
+        let mut low = 1;
+        for _ in 1..half {
+            low *= 10;
+        }
+        // every palindrome of this length is below 10^length
+        let mut top = 1;
+        for _ in 0..length {
+            top *= 10;
+        }
+        let mut limit = 1;
+        while limit * limit < top {
+            limit += 1;
+        }
+        let primes = build_primes_up_to(limit);
+        for h in low..low * 10 {
+            let y = build_palindrome(h, length % 2 == 1);
+            if y >= n and build_is_prime(y, primes) {
+                return y;
+            }
+        }
+        length += 1;
+    }
+}
+
+fn build_primes_up_to(limit: i64) -> Vec[i64] {
+    let mut composite: Vec[bool] = Vec.filled(limit + 1, false);
+    let mut primes: Vec[i64] = Vec.new();
+    for p in 2..limit + 1 {
+        if not composite[p] {
+            primes.push(p);
+            let mut m = p * p;
+            while m <= limit {
+                composite[m] = true;
+                m += p;
+            }
+        }
+    }
+    primes
+}
+
+fn build_digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+// the half followed by itself reversed, its last digit shared when odd
+fn build_palindrome(half: i64, odd: bool) -> i64 {
+    let mut y = half;
+    let mut rest = if odd { half / 10 } else { half };
+    while rest > 0 {
+        y = y * 10 + rest % 10;
+        rest /= 10;
+    }
+    y
+}
+
+fn build_is_prime(x: i64, primes: Vec[i64]) -> bool {
+    if x < 2 {
+        return false;
+    }
+    for p in primes.iter() {
+        if *p * *p > x {
+            return true;
+        }
+        if x % *p == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the mirror arm: one palindrome to the next, Miller-Rabin -------------
+fn mirror_prime_palindrome(n: i64) -> i64 {
+    let mut x = n;
+    loop {
+        let p = mirror_next_palindrome(x);
+        let digits = mirror_digit_count(p);
+        if digits > 2 and digits % 2 == 0 {
+            x = mirror_power_of_ten(digits);
+            continue;
+        }
+        if mirror_is_prime(p) {
+            return p;
+        }
+        x = p + 1;
+    }
+}
+
+fn mirror_digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn mirror_power_of_ten(k: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 10;
+    }
+    p
+}
+
+// the first `half` digits mirrored onto a palindrome of `length` digits
+fn mirror_mirror(half: i64, length: i64) -> i64 {
+    let mut y = half;
+    let mut rest = if length % 2 == 1 { half / 10 } else { half };
+    while rest > 0 {
+        y = y * 10 + rest % 10;
+        rest /= 10;
+    }
+    y
+}
+
+fn mirror_next_palindrome(x: i64) -> i64 {
+    let length = mirror_digit_count(x);
+    let tail = mirror_power_of_ten(length / 2);
+    let half = x / tail;
+    let p = mirror_mirror(half, length);
+    if p >= x {
+        return p;
+    }
+    mirror_mirror(half + 1, length)
+}
+
+fn mirror_power_mod(base: i64, exp: i64, m: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % m;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % m;
+        }
+        b = b * b % m;
+        e /= 2;
+    }
+    result
+}
+
+fn mirror_is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    for p in [2, 3, 5, 7] {
+        if x % p == 0 {
+            return x == p;
+        }
+    }
+    let mut d = x - 1;
+    let mut s = 0;
+    while d % 2 == 0 {
+        d /= 2;
+        s += 1;
+    }
+    for a in [2, 3, 5, 7] {
+        let mut y = mirror_power_mod(a, d, x);
+        if y == 1 or y == x - 1 {
+            continue;
+        }
+        let mut witness = true;
+        for _ in 1..s {
+            y = y * y % x;
+            if y == x - 1 {
+                witness = false;
+                break;
+            }
+        }
+        if witness {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the digits arm: the digits filled from the outside in ----------------
+fn digits_prime_palindrome(n: i64) -> i64 {
+    let mut target: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        target.insert(0, rest % 10);
+        rest /= 10;
+    }
+    let mut length = target.len();
+    loop {
+        if length <= 2 or length % 2 == 1 {
+            let mut digits: Vec[i64] = Vec.filled(length, 0);
+            let tight = length == target.len();
+            let found = digits_search(mut digits, 0, tight, target, n);
+            if found > 0 {
+                return found;
+            }
+        }
+        length += 1;
+    }
+}
+
+// the smallest prime palindrome at least n with `digits[..i]` (and their
+// mirror) fixed, or -1; `tight` while those digits equal n's
+fn digits_search(digits: mut ref Vec[i64], i: i64, tight: bool, target: Vec[i64], n: i64) -> i64 {
+    let length = digits.len();
+    if 2 * i >= length {
+        let mut y = 0;
+        for d in digits.iter() {
+            y = y * 10 + *d;
+        }
+        if y >= n and digits_is_prime(y) {
+            return y;
+        }
+        return -1;
+    }
+    for d in 0..10 {
+        if i == 0 and length > 1 and d != 1 and d != 3 and d != 7 and d != 9 {
+            continue;
+        }
+        if tight and d < target[i] {
+            continue;
+        }
+        digits[i] = d;
+        digits[length - 1 - i] = d;
+        let found = digits_search(mut digits, i + 1, tight and d == target[i], target, n);
+        if found > 0 {
+            return found;
+        }
+    }
+    -1
+}
+
+fn digits_is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= x {
+        if x % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn arm(a: i64, n: i64) -> i64 {
+    match a {
+        0 => star_prime_palindrome(n),
+        1 => scan_prime_palindrome(n),
+        2 => build_prime_palindrome(n),
+        3 => mirror_prime_palindrome(n),
+        _ => digits_prime_palindrome(n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the same from left to right as from right to left
+fn literal_palindrome(x: i64) -> bool {
+    let digits = x.to_string().bytes().to_vec();
+    let len = digits.len();
+    for i in 0..len {
+        if digits[i] != digits[len - 1 - i] {
+            return false;
+        }
+    }
+    true
+}
+
+// exactly two divisors: every divisor d up to the square root pairs with
+// x / d, the two one divisor when they are equal
+fn literal_prime(x: i64) -> bool {
+    let mut count = 0;
+    let mut d = 1;
+    while d * d <= x {
+        if x % d == 0 {
+            count += if d * d == x { 1 } else { 2 };
+        }
+        d += 1;
+    }
+    count == 2
+}
+
+fn literal_both(x: i64) -> bool {
+    literal_palindrome(x) and literal_prime(x)
+}
+
+// The statement's answer for every n from 1 to the first prime palindrome
+// at least `limit`: going down from it, the answer for n is n itself when
+// n is a prime palindrome and otherwise the answer for n + 1. Entry 0 is
+// unused.
+fn literal_table(limit: i64) -> Vec[i64] {
+    let mut top = limit;
+    while not literal_both(top) {
+        top += 1;
+    }
+    let mut table: Vec[i64] = Vec.filled(top + 1, 0);
+    table[top] = top;
+    let mut n = top - 1;
+    while n >= 1 {
+        table[n] = if literal_both(n) { n } else { table[n + 1] };
+        n -= 1;
+    }
+    table
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide_random(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    hi * 32768 + lo
+}
+
+// a random n of 1 to 8 digits, each length as likely
+fn random_n(seed: mut ref i64) -> i64 {
+    let digits = 1 + next_random(mut seed) % 8;
+    let mut low = 1;
+    for _ in 1..digits {
+        low *= 10;
+    }
+    low + wide_random(mut seed) % (9 * low)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one n, each over the five arms; returns the ★
+// arm's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, table: Vec[i64], n: i64) -> i64 {
+    let mut star = 0;
+    for a in 0..5 {
+        let f = arm(a, n);
+        if a == 0 {
+            star = f;
+        }
+        // P1: the statement's answer
+        if n < table.len() {
+            check(mut t, 1, f == table[n]);
+        }
+        // P2: the answer is a palindrome with exactly two divisors
+        check(mut t, 2, literal_both(f));
+        // P3: the answer is at least n
+        check(mut t, 3, f >= n);
+        // P4: one less: the answer for n - 1 is n - 1 when that is a prime
+        // palindrome, and otherwise the answer for n
+        if n >= 2 {
+            let want = if literal_both(n - 1) { n - 1 } else { f };
+            check(mut t, 4, arm(a, n - 1) == want);
+        }
+        // P5: every m from n to the answer has the same answer
+        if f >= n {
+            let m = n + wide_random(mut seed) % (f - n + 1);
+            check(mut t, 5, arm(a, m) == f);
+        }
+        // P6: the answer is its own answer
+        check(mut t, 6, arm(a, f) == f);
+    }
+    star
+}
+
+fn main() {
+    let table = literal_table(1000000);
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut queries = 0;
+    let mut total = 0;
+    let mut seed = 866;
+    // every n from 1 to 2000
+    for n in 1..2001 {
+        queries += 1;
+        total += properties(mut t, mut seed, table, n);
+    }
+    // random n up to the table's end
+    for _ in 0..200 {
+        let n = 1 + wide_random(mut seed) % (table.len() - 1);
+        queries += 1;
+        total += properties(mut t, mut seed, table, n);
+    }
+    // random n of 1 to 8 digits
+    for _ in 0..100 {
+        let n = random_n(mut seed);
+        queries += 1;
+        total += properties(mut t, mut seed, table, n);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{queries} values of n, answers sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

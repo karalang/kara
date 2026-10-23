@@ -1,0 +1,144 @@
+// LeetCode #866: Prime Palindrome -- the digits filled from the outside
+// in.
+//
+// For each number of digits from n's upward (four, six and eight
+// skipped, their palindromes being multiples of 11), a depth-first
+// search sets the palindrome's digits a pair at a time from the outside
+// in, each pair's digit from 0 to 9, so the palindromes of that length
+// come in increasing order. While the digits set so far equal n's, a
+// smaller digit than n's is passed over, so nothing below n is built.
+// The outermost digit is the last digit too, so with more than one digit
+// it is 1, 3, 7 or 9. Primality is trial division by every number from 2
+// up to the square root.
+
+fn prime_palindrome(n: i64) -> i64 {
+    let mut target: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        target.insert(0, rest % 10);
+        rest /= 10;
+    }
+    let mut length = target.len();
+    loop {
+        if length <= 2 or length % 2 == 1 {
+            let mut digits: Vec[i64] = Vec.filled(length, 0);
+            let tight = length == target.len();
+            let found = search(mut digits, 0, tight, target, n);
+            if found > 0 {
+                return found;
+            }
+        }
+        length += 1;
+    }
+}
+
+// the smallest prime palindrome at least n with `digits[..i]` (and their
+// mirror) fixed, or -1; `tight` while those digits equal n's
+fn search(digits: mut ref Vec[i64], i: i64, tight: bool, target: Vec[i64], n: i64) -> i64 {
+    let length = digits.len();
+    if 2 * i >= length {
+        let mut y = 0;
+        for d in digits.iter() {
+            y = y * 10 + *d;
+        }
+        if y >= n and is_prime(y) {
+            return y;
+        }
+        return -1;
+    }
+    for d in 0..10 {
+        if i == 0 and length > 1 and d != 1 and d != 3 and d != 7 and d != 9 {
+            continue;
+        }
+        if tight and d < target[i] {
+            continue;
+        }
+        digits[i] = d;
+        digits[length - 1 - i] = d;
+        let found = search(mut digits, i + 1, tight and d == target[i], target, n);
+        if found > 0 {
+            return found;
+        }
+    }
+    -1
+}
+
+fn is_prime(x: i64) -> bool {
+    if x < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= x {
+        if x % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n of 1 to 8 digits, each length as likely
+fn random_n(seed: mut ref i64) -> i64 {
+    let digits = 1 + next_random(mut seed) % 8;
+    let mut low = 1;
+    for _ in 1..digits {
+        low *= 10;
+    }
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    low + (hi * 32768 + lo) % (9 * low)
+}
+
+fn digit_count_of(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {prime_palindrome(n)}");
+}
+
+fn main() {
+    show(6);
+    show(8);
+    show(13);
+    for n in [1, 2, 11, 12, 102, 9990, 1000000, 9989899, 9989900, 100000000] {
+        show(n);
+    }
+    // every n from 1 to 2000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..2001 {
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+    }
+    println(f"n from 1 to 2000: answers sum to {total}, checksum {check}");
+    // random n of 1 to 8 digits
+    let mut seed = 866;
+    total = 0;
+    check = 0;
+    let mut longer = 0;
+    for _ in 0..200 {
+        let n = random_n(mut seed);
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+        if digit_count_of(p) > digit_count_of(n) {
+            longer += 1;
+        }
+    }
+    println(f"200 random n of 1 to 8 digits: {longer} answers longer than n, answers sum to {total}, checksum {check}");
+}

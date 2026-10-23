@@ -1,0 +1,157 @@
+// LeetCode #866: Prime Palindrome -- the palindromes of each length in
+// turn, tested against a table of primes.
+//
+// For each number of digits L from n's upward, the palindromes of L
+// digits are built from their first halves in increasing order: a half
+// h of ceil(L / 2) digits gives h followed by h reversed, without h's
+// last digit when L is odd. The first of them at least n that is prime
+// is the answer. Primality is trial division by the primes up to the
+// square root of 10^L, found for each length by a sieve of Eratosthenes.
+// Even lengths are searched like odd ones, with no use of the fact that
+// their palindromes are multiples of 11.
+
+fn prime_palindrome(n: i64) -> i64 {
+    let mut length = digit_count(n);
+    loop {
+        let half = (length + 1) / 2;
+        let mut low = 1;
+        for _ in 1..half {
+            low *= 10;
+        }
+        // every palindrome of this length is below 10^length
+        let mut top = 1;
+        for _ in 0..length {
+            top *= 10;
+        }
+        let mut limit = 1;
+        while limit * limit < top {
+            limit += 1;
+        }
+        let primes = primes_up_to(limit);
+        for h in low..low * 10 {
+            let y = palindrome(h, length % 2 == 1);
+            if y >= n and is_prime(y, primes) {
+                return y;
+            }
+        }
+        length += 1;
+    }
+}
+
+fn primes_up_to(limit: i64) -> Vec[i64] {
+    let mut composite: Vec[bool] = Vec.filled(limit + 1, false);
+    let mut primes: Vec[i64] = Vec.new();
+    for p in 2..limit + 1 {
+        if not composite[p] {
+            primes.push(p);
+            let mut m = p * p;
+            while m <= limit {
+                composite[m] = true;
+                m += p;
+            }
+        }
+    }
+    primes
+}
+
+fn digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+// the half followed by itself reversed, its last digit shared when odd
+fn palindrome(half: i64, odd: bool) -> i64 {
+    let mut y = half;
+    let mut rest = if odd { half / 10 } else { half };
+    while rest > 0 {
+        y = y * 10 + rest % 10;
+        rest /= 10;
+    }
+    y
+}
+
+fn is_prime(x: i64, primes: Vec[i64]) -> bool {
+    if x < 2 {
+        return false;
+    }
+    for p in primes.iter() {
+        if *p * *p > x {
+            return true;
+        }
+        if x % *p == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n of 1 to 8 digits, each length as likely
+fn random_n(seed: mut ref i64) -> i64 {
+    let digits = 1 + next_random(mut seed) % 8;
+    let mut low = 1;
+    for _ in 1..digits {
+        low *= 10;
+    }
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    low + (hi * 32768 + lo) % (9 * low)
+}
+
+fn digit_count_of(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {prime_palindrome(n)}");
+}
+
+fn main() {
+    show(6);
+    show(8);
+    show(13);
+    for n in [1, 2, 11, 12, 102, 9990, 1000000, 9989899, 9989900, 100000000] {
+        show(n);
+    }
+    // every n from 1 to 2000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..2001 {
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+    }
+    println(f"n from 1 to 2000: answers sum to {total}, checksum {check}");
+    // random n of 1 to 8 digits
+    let mut seed = 866;
+    total = 0;
+    check = 0;
+    let mut longer = 0;
+    for _ in 0..200 {
+        let n = random_n(mut seed);
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+        if digit_count_of(p) > digit_count_of(n) {
+            longer += 1;
+        }
+    }
+    println(f"200 random n of 1 to 8 digits: {longer} answers longer than n, answers sum to {total}, checksum {check}");
+}

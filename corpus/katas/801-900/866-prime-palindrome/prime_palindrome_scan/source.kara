@@ -1,0 +1,141 @@
+// LeetCode #866: Prime Palindrome -- checking every number from n up.
+//
+// Each x from n upward is tested in turn: a palindrome when its digits
+// reversed give x again, and a prime when no number of the form 6k - 1
+// or 6k + 1 up to its square root divides it (2 and 3 aside). Every
+// palindrome with an even number of digits other than 11 is a multiple
+// of 11, so when x reaches a number of four, six or eight digits the
+// scan jumps to the next power of ten; the digits are counted once, and
+// again only as x passes a power of ten. Up to O(answer - n) numbers
+// tested.
+
+fn prime_palindrome(n: i64) -> i64 {
+    let mut x = n;
+    let mut digits = digit_count(x);
+    let mut next_power = power_of_ten(digits);
+    loop {
+        if x == next_power {
+            digits += 1;
+            next_power *= 10;
+        }
+        if digits > 2 and digits % 2 == 0 {
+            x = next_power;
+            continue;
+        }
+        if reversed(x) == x and is_prime(x) {
+            return x;
+        }
+        x += 1;
+    }
+}
+
+fn digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn power_of_ten(k: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..k {
+        p *= 10;
+    }
+    p
+}
+
+fn reversed(x: i64) -> i64 {
+    let mut r = 0;
+    let mut rest = x;
+    while rest > 0 {
+        r = r * 10 + rest % 10;
+        rest /= 10;
+    }
+    r
+}
+
+fn is_prime(x: i64) -> bool {
+    if x < 4 {
+        return x >= 2;
+    }
+    if x % 2 == 0 or x % 3 == 0 {
+        return false;
+    }
+    let mut k = 5;
+    while k * k <= x {
+        if x % k == 0 or x % (k + 2) == 0 {
+            return false;
+        }
+        k += 6;
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n of 1 to 8 digits, each length as likely
+fn random_n(seed: mut ref i64) -> i64 {
+    let digits = 1 + next_random(mut seed) % 8;
+    let mut low = 1;
+    for _ in 1..digits {
+        low *= 10;
+    }
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    low + (hi * 32768 + lo) % (9 * low)
+}
+
+fn digit_count_of(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {prime_palindrome(n)}");
+}
+
+fn main() {
+    show(6);
+    show(8);
+    show(13);
+    for n in [1, 2, 11, 12, 102, 9990, 1000000, 9989899, 9989900, 100000000] {
+        show(n);
+    }
+    // every n from 1 to 2000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..2001 {
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+    }
+    println(f"n from 1 to 2000: answers sum to {total}, checksum {check}");
+    // random n of 1 to 8 digits
+    let mut seed = 866;
+    total = 0;
+    check = 0;
+    let mut longer = 0;
+    for _ in 0..200 {
+        let n = random_n(mut seed);
+        let p = prime_palindrome(n);
+        total += p;
+        check = (check * 31 + p) % 1000000007;
+        if digit_count_of(p) > digit_count_of(n) {
+            longer += 1;
+        }
+    }
+    println(f"200 random n of 1 to 8 digits: {longer} answers longer than n, answers sum to {total}, checksum {check}");
+}

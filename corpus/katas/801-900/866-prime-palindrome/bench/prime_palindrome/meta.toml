@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/866-prime-palindrome/bench/prime_palindrome.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "292a4ca2f"
+extracted_src = "5bda1209"
+model_rev = "aafbe785"
+model_src = "5bda1209"
