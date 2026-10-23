@@ -1,0 +1,515 @@
+// mini_temporenc — a port of the temporenc library (Wouter Bolsterlee, 3-clause
+// BSD): the temporenc binary format for dates and times (https://temporenc.org/),
+// a compact byte encoding that stores a date, a time, a datetime, optional
+// sub-second precision (millisecond / microsecond / nanosecond) and an optional
+// time zone in as few as three bytes, with partial values (any component may be
+// absent) encoded directly.
+//
+// Each input line is a pack/unpack job:
+//
+//     TYPE year month day hour minute second subkind subval tz
+//
+// TYPE is one of D T DT DTZ DTS DTSZ; a missing year/month/day/hour/minute/
+// second is -1; subkind is n (none), ms, us or ns with its value in subval; tz
+// is -9999 for "no time zone" or an offset in minutes from UTC (a multiple of
+// 15). The job packs the fields into a temporenc byte string and unpacks it
+// back, printing:
+//
+//     pack <lowercase hex of the packed bytes>
+//     unpack y=<v> mo=<v> d=<v> h=<v> mi=<v> s=<v> ns=<v> tz=<v>   (- when absent)
+//
+// temporenc packs fields bit-by-bit (a 3-bit tag, then date/time/sub-second/tz
+// fields, zero-padded to a byte boundary). Kāra has no bitwise operators, so the
+// whole codec is written over a 0/1 bit vector: a field of width n contributes
+// its n bits most-significant-first (value / pow2(k) % 2), and reading is the
+// inverse. There is no floating point anywhere.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let neg = n < 0;
+    let mut v = if neg { -n } else { n };
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45); // '-'
+    }
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn atoi(s: String) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and (b[0] as i64) == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < n {
+        v = v * 10 + ((b[i] as i64) - 48);
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn hex2(v: i64) -> String {
+    let digs = str_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(digs[v / 16]);
+    out.push(digs[v % 16]);
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn to_hex(bytes: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        out.push_str(hex2(bytes[i] as i64));
+        i = i + 1;
+    }
+    out
+}
+
+// split a line on ASCII spaces into its whitespace-free tokens
+fn split_ws(s: String) -> Vec[String] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or (b[i] as i64) == 32 {
+            if i > start {
+                out.push(s.substring(start, i));
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// --- bit vector helpers (0/1 ints, most-significant bit first) ---
+
+// append `n` bits of `val` to the bit vector, most-significant first
+fn put_bits(out: mut ref Vec[i64], val: i64, n: i64) {
+    let mut i = 0;
+    while i < n {
+        let place = pow2(n - 1 - i);
+        out.push((val / place) % 2);
+        i = i + 1;
+    }
+}
+
+// pack a 0/1 bit vector to bytes, MSB-first, zero-padding the final partial
+// byte (no extra byte when the stream is already byte-aligned)
+fn pack_bits(bitv: ref Vec[i64]) -> Vec[u8] {
+    let total = bitv.len();
+    let mut nbytes = total / 8;
+    if total % 8 != 0 {
+        nbytes = nbytes + 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut b = 0;
+    while b < nbytes {
+        let base = b * 8;
+        let mut byte = 0;
+        let mut m = 0;
+        while m < 8 {
+            let idx = base + m;
+            let bit = if idx < total { bitv[idx] } else { 0 };
+            byte = byte * 2 + bit;
+            m = m + 1;
+        }
+        out.push(byte as u8);
+        b = b + 1;
+    }
+    out
+}
+
+fn bytes_to_bits(data: ref Vec[u8]) -> Vec[i64] {
+    let mut bits: Vec[i64] = Vec.new();
+    let n = data.len();
+    let mut i = 0;
+    while i < n {
+        put_bits(mut bits, data[i] as i64, 8);
+        i = i + 1;
+    }
+    bits
+}
+
+// read `nbits` MSB-first starting at bit index `pos` (missing bits read as 0)
+fn peek_bits(bits: ref Vec[i64], pos: i64, nbits: i64) -> i64 {
+    let n = bits.len();
+    let mut v = 0;
+    let mut k = 0;
+    while k < nbits {
+        let idx = pos + k;
+        let bit = if idx < n { bits[idx] } else { 0 };
+        v = v * 2 + bit;
+        k = k + 1;
+    }
+    v
+}
+
+// precision bits: ms -> 00, us -> 01, ns -> 10, none -> 11
+fn pp_of(subkind: String) -> i64 {
+    if subkind == "ms" {
+        0
+    } else if subkind == "us" {
+        1
+    } else if subkind == "ns" {
+        2
+    } else {
+        3
+    }
+}
+
+// pack the fields into a temporenc byte string of the named type
+fn pack(typ: String, y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64,
+        subkind: String, subval: i64, tz: i64) -> Vec[u8] {
+    // normalize: None -> the type's EMPTY sentinel; month/day stored 0-based
+    let ny = if y < 0 { 4095 } else { y };
+    let nmo = if mo < 0 { 15 } else { mo - 1 };
+    let nd = if d < 0 { 31 } else { d - 1 };
+    let nh = if h < 0 { 31 } else { h };
+    let nmi = if mi < 0 { 63 } else { mi };
+    let ns = if s < 0 { 63 } else { s };
+    let nz = if tz == -9999 { 127 } else { tz / 15 + 64 };
+    let pp = pp_of(subkind);
+
+    let mut bits: Vec[i64] = Vec.new();
+    if typ == "D" {
+        put_bits(mut bits, 4, 3); // tag 100
+        put_bits(mut bits, ny, 12);
+        put_bits(mut bits, nmo, 4);
+        put_bits(mut bits, nd, 5);
+    } else if typ == "T" {
+        put_bits(mut bits, 80, 7); // tag 1010000
+        put_bits(mut bits, nh, 5);
+        put_bits(mut bits, nmi, 6);
+        put_bits(mut bits, ns, 6);
+    } else if typ == "DT" {
+        put_bits(mut bits, 0, 2); // tag 00
+        put_bits(mut bits, ny, 12);
+        put_bits(mut bits, nmo, 4);
+        put_bits(mut bits, nd, 5);
+        put_bits(mut bits, nh, 5);
+        put_bits(mut bits, nmi, 6);
+        put_bits(mut bits, ns, 6);
+    } else if typ == "DTZ" {
+        put_bits(mut bits, 6, 3); // tag 110
+        put_bits(mut bits, ny, 12);
+        put_bits(mut bits, nmo, 4);
+        put_bits(mut bits, nd, 5);
+        put_bits(mut bits, nh, 5);
+        put_bits(mut bits, nmi, 6);
+        put_bits(mut bits, ns, 6);
+        put_bits(mut bits, nz, 7);
+    } else if typ == "DTS" {
+        put_bits(mut bits, 1, 2); // tag 01
+        put_bits(mut bits, pp, 2);
+        put_bits(mut bits, ny, 12);
+        put_bits(mut bits, nmo, 4);
+        put_bits(mut bits, nd, 5);
+        put_bits(mut bits, nh, 5);
+        put_bits(mut bits, nmi, 6);
+        put_bits(mut bits, ns, 6);
+        if subkind == "ms" {
+            put_bits(mut bits, subval, 10);
+        } else if subkind == "us" {
+            put_bits(mut bits, subval, 20);
+        } else if subkind == "ns" {
+            put_bits(mut bits, subval, 30);
+        }
+    } else {
+        // DTSZ
+        put_bits(mut bits, 7, 3); // tag 111
+        put_bits(mut bits, pp, 2);
+        put_bits(mut bits, ny, 12);
+        put_bits(mut bits, nmo, 4);
+        put_bits(mut bits, nd, 5);
+        put_bits(mut bits, nh, 5);
+        put_bits(mut bits, nmi, 6);
+        put_bits(mut bits, ns, 6);
+        if subkind == "ms" {
+            put_bits(mut bits, subval, 10);
+        } else if subkind == "us" {
+            put_bits(mut bits, subval, 20);
+        } else if subkind == "ns" {
+            put_bits(mut bits, subval, 30);
+        }
+        put_bits(mut bits, nz, 7);
+    }
+    pack_bits(bits)
+}
+
+// unpack a temporenc byte string; returns [y, mo, d, h, mi, s, ns, tz] with -1
+// for an absent date/time/sub-second component and -100000 for an absent tz
+fn decode(data: ref Vec[u8]) -> Vec[i64] {
+    let first = data[0] as i64;
+    // detect type (1=D 2=T 3=DT 4=DTZ 5=DTS 6=DTSZ) and sub-second precision
+    let mut typ = 0;
+    let mut prec = -1;
+    if first <= 63 {
+        typ = 3;
+    } else if first <= 127 {
+        typ = 5;
+        prec = (first / 16) % 4;
+    } else if first <= 159 {
+        typ = 1;
+    } else if first <= 161 {
+        typ = 2;
+    } else if first <= 191 {
+        typ = 0;
+    } else if first <= 223 {
+        typ = 4;
+    } else {
+        typ = 6;
+        prec = (first / 8) % 4;
+    }
+
+    let bits = bytes_to_bits(data);
+    let mut pos = 0;
+    let mut yr = -1;
+    let mut mo = -1;
+    let mut da = -1;
+    let mut hh = -1;
+    let mut mm = -1;
+    let mut ss = -1;
+    let mut ns = -1;
+    let mut tz = -100000;
+
+    // skip the tag, then read the fields this type carries, in order
+    if typ == 1 {
+        pos = 3;
+    } else if typ == 2 {
+        pos = 7;
+    } else if typ == 3 {
+        pos = 2;
+    } else if typ == 4 {
+        pos = 3;
+    } else if typ == 5 {
+        pos = 4;
+    } else {
+        pos = 5;
+    }
+
+    let has_date = typ == 1 or typ == 3 or typ == 4 or typ == 5 or typ == 6;
+    let has_time = typ == 2 or typ == 3 or typ == 4 or typ == 5 or typ == 6;
+
+    if has_date {
+        yr = peek_bits(bits, pos, 12);
+        pos = pos + 12;
+        mo = peek_bits(bits, pos, 4);
+        pos = pos + 4;
+        da = peek_bits(bits, pos, 5);
+        pos = pos + 5;
+    }
+    if has_time {
+        hh = peek_bits(bits, pos, 5);
+        pos = pos + 5;
+        mm = peek_bits(bits, pos, 6);
+        pos = pos + 6;
+        ss = peek_bits(bits, pos, 6);
+        pos = pos + 6;
+    }
+    if typ == 5 or typ == 6 {
+        if prec == 0 {
+            ns = peek_bits(bits, pos, 10) * 1000000;
+            pos = pos + 10;
+        } else if prec == 1 {
+            ns = peek_bits(bits, pos, 20) * 1000;
+            pos = pos + 20;
+        } else if prec == 2 {
+            ns = peek_bits(bits, pos, 30);
+            pos = pos + 30;
+        }
+    }
+    if typ == 4 or typ == 6 {
+        tz = peek_bits(bits, pos, 7);
+        pos = pos + 7;
+    }
+
+    // denormalize: EMPTY sentinels -> absent; month/day back to 1-based
+    if has_date {
+        if yr == 4095 {
+            yr = -1;
+        }
+        if mo == 15 {
+            mo = -1;
+        } else {
+            mo = mo + 1;
+        }
+        if da == 31 {
+            da = -1;
+        } else {
+            da = da + 1;
+        }
+    }
+    if has_time {
+        if hh == 31 {
+            hh = -1;
+        }
+        if mm == 63 {
+            mm = -1;
+        }
+        if ss == 63 {
+            ss = -1;
+        }
+    }
+    if tz != -100000 {
+        tz = 15 * (tz - 64);
+    }
+
+    let mut r: Vec[i64] = Vec.new();
+    r.push(yr);
+    r.push(mo);
+    r.push(da);
+    r.push(hh);
+    r.push(mm);
+    r.push(ss);
+    r.push(ns);
+    r.push(tz);
+    r
+}
+
+fn fieldstr(v: i64, none_sentinel: i64) -> String {
+    if v == none_sentinel {
+        "-"
+    } else {
+        itoa(v)
+    }
+}
+
+fn run_job(line: String) -> String {
+    let toks = split_ws(line);
+    let typ = toks[0].clone();
+    let y = atoi(toks[1].clone());
+    let mo = atoi(toks[2].clone());
+    let d = atoi(toks[3].clone());
+    let h = atoi(toks[4].clone());
+    let mi = atoi(toks[5].clone());
+    let s = atoi(toks[6].clone());
+    let subkind = toks[7].clone();
+    let subval = atoi(toks[8].clone());
+    let tz = atoi(toks[9].clone());
+
+    let packed = pack(typ, y, mo, d, h, mi, s, subkind, subval, tz);
+    let r = decode(packed);
+
+    let mut out = String.new();
+    out.push_str("pack ");
+    out.push_str(to_hex(packed));
+    out.push_str("\nunpack y=");
+    out.push_str(fieldstr(r[0], -1));
+    out.push_str(" mo=");
+    out.push_str(fieldstr(r[1], -1));
+    out.push_str(" d=");
+    out.push_str(fieldstr(r[2], -1));
+    out.push_str(" h=");
+    out.push_str(fieldstr(r[3], -1));
+    out.push_str(" mi=");
+    out.push_str(fieldstr(r[4], -1));
+    out.push_str(" s=");
+    out.push_str(fieldstr(r[5], -1));
+    out.push_str(" ns=");
+    out.push_str(fieldstr(r[6], -1));
+    out.push_str(" tz=");
+    out.push_str(fieldstr(r[7], -100000));
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("D 2026 10 23 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D 1 1 1 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D 2000 2 29 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D 4094 12 31 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D 2026 -1 -1 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D 2026 10 -1 -1 -1 -1 n 0 -9999\n");
+    s.push_str("D -1 -1 -1 -1 -1 -1 n 0 -9999\n");
+    s.push_str("T -1 -1 -1 0 0 0 n 0 -9999\n");
+    s.push_str("T -1 -1 -1 23 59 59 n 0 -9999\n");
+    s.push_str("T -1 -1 -1 13 0 60 n 0 -9999\n");
+    s.push_str("T -1 -1 -1 -1 30 -1 n 0 -9999\n");
+    s.push_str("DT 2026 10 23 13 5 7 n 0 -9999\n");
+    s.push_str("DT 1970 1 1 0 0 0 n 0 -9999\n");
+    s.push_str("DT 2014 10 30 23 59 60 n 0 -9999\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 0\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 60\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 -60\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 345\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 930\n");
+    s.push_str("DTZ 2026 10 23 13 5 7 n 0 -960\n");
+    s.push_str("DTS 2026 10 23 13 5 7 n 0 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 ms 250 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 ms 999 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 us 123456 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 us 999999 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 ns 123456789 -9999\n");
+    s.push_str("DTS 2026 10 23 13 5 7 ns 999999999 -9999\n");
+    s.push_str("DTSZ 2026 10 23 13 5 7 n 0 60\n");
+    s.push_str("DTSZ 2026 10 23 13 5 7 ms 250 -300\n");
+    s.push_str("DTSZ 2026 10 23 13 5 7 us 123456 345\n");
+    s.push_str("DTSZ 2026 10 23 13 5 7 ns 123456789 -960\n");
+    s.push_str("DTSZ 1970 1 1 0 0 0 ns 0 0\n");
+    s
+}
