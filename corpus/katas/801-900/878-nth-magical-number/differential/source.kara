@@ -1,0 +1,270 @@
+// LeetCode #878: Nth Magical Number -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: a positive integer is magical if it is divisible by
+// either a or b. Given the three integers n, a and b, return the n-th
+// magical number, modulo 10^9 + 7.
+
+// ---- the ★ arm: binary search on the answer -------------------------------
+fn star_nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / star_gcd(a, b) * b;
+    let mut lo = 1;
+    let mut hi = n * a.min(b);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if mid / a + mid / b - mid / lcm >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo % 1000000007
+}
+
+fn star_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { star_gcd(b, a % b) }
+}
+
+// ---- the merge arm: whole periods, then a merge ---------------------------
+fn merge_nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / merge_gcd(a, b) * b;
+    let per = lcm / a + lcm / b - 1;
+    let q = n / per;
+    let r = n % per;
+    let mut x = 0;
+    let mut next_a = a;
+    let mut next_b = b;
+    for _ in 0..r {
+        if next_a < next_b {
+            x = next_a;
+            next_a += a;
+        } else if next_b < next_a {
+            x = next_b;
+            next_b += b;
+        } else {
+            x = next_a;
+            next_a += a;
+            next_b += b;
+        }
+    }
+    (q * lcm + x) % 1000000007
+}
+
+fn merge_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { merge_gcd(b, a % b) }
+}
+
+// ---- the period arm: whole periods, then a search in one period -----------
+fn period_nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / period_gcd(a, b) * b;
+    let per = lcm / a + lcm / b - 1;
+    let q = n / per;
+    let r = n % per;
+    if r == 0 {
+        return q * lcm % 1000000007;
+    }
+    let mut lo = 1;
+    let mut hi = lcm - 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if mid / a + mid / b >= r {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    (q * lcm + lo) % 1000000007
+}
+
+fn period_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { period_gcd(b, a % b) }
+}
+
+// ---- the listed arm: one period listed and sorted -------------------------
+fn listed_nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / listed_gcd(a, b) * b;
+    let mut period: Vec[i64] = Vec.new();
+    let mut x = a;
+    while x <= lcm {
+        period.push(x);
+        x += a;
+    }
+    x = b;
+    while x < lcm {
+        period.push(x);
+        x += b;
+    }
+    period.sort();
+    let per = period.len();
+    ((n - 1) / per * lcm + period[(n - 1) % per]) % 1000000007
+}
+
+fn listed_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { listed_gcd(b, a % b) }
+}
+
+// ---- the gallop arm: galloping up, then binary search ---------------------
+fn gallop_nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / gallop_gcd(a, b) * b;
+    let mut hi = a.min(b);
+    while gallop_count(hi, a, b, lcm) < n {
+        hi *= 2;
+    }
+    let mut lo = hi / 2 + 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if gallop_count(mid, a, b, lcm) >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    hi % 1000000007
+}
+
+// the magical numbers from 1 to x
+fn gallop_count(x: i64, a: i64, b: i64, lcm: i64) -> i64 {
+    x / a + x / b - x / lcm
+}
+
+fn gallop_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gallop_gcd(b, a % b) }
+}
+
+fn arm(x: i64, n: i64, a: i64, b: i64) -> i64 {
+    match x {
+        0 => star_nth_magical_number(n, a, b),
+        1 => merge_nth_magical_number(n, a, b),
+        2 => period_nth_magical_number(n, a, b),
+        3 => listed_nth_magical_number(n, a, b),
+        _ => gallop_nth_magical_number(n, a, b),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the positive integers 1, 2, 3, ... in turn, each divisible by a or by b
+// counted, until the n-th; returned modulo 10^9 + 7
+fn literal(n: i64, a: i64, b: i64) -> i64 {
+    let mut found = 0;
+    let mut x = 0;
+    while found < n {
+        x += 1;
+        if x % a == 0 or x % b == 0 {
+            found += 1;
+        }
+    }
+    x % 1000000007
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+// the magical numbers from 1 to x, by inclusion and exclusion
+fn magical_up_to(x: i64, a: i64, b: i64) -> i64 {
+    x / a + x / b - x / (a / gcd(a, b) * b)
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one case, each over the five arms (P1 only when
+// `small`); returns the ★ arm's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, n: i64, a: i64, b: i64, small: bool) -> i64 {
+    let modulus = 1000000007;
+    let want = if small { literal(n, a, b) } else { 0 };
+    // an answer below the modulus is the n-th magical number itself
+    let exact = n * a.min(b) < modulus;
+    let lcm = a / gcd(a, b) * b;
+    let per = lcm / a + lcm / b - 1;
+    let c = next_random(mut seed) % 3 + 2;
+    let k = next_random(mut seed) % 3 + 1;
+    let mut star = 0;
+    for x in 0..5 {
+        let got = arm(x, n, a, b);
+        if x == 0 {
+            star = got;
+        }
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: an exact answer is divisible by a or b, with n magical numbers
+        // up to it and n - 1 below it
+        if exact {
+            check(mut t, 2, (got % a == 0 or got % b == 0) and magical_up_to(got, a, b) == n and magical_up_to(got - 1, a, b) == n - 1);
+        }
+        // P3: a and b swapped give the same answer
+        check(mut t, 3, arm(x, n, b, a) == got);
+        // P4: a and b both multiplied by c multiply an exact answer by c
+        if exact and n * a.min(b) * c < modulus {
+            check(mut t, 4, arm(x, n, a * c, b * c) == got * c);
+        }
+        // P5: with b a multiple of a, the answer is the n-th multiple of a
+        if a * k <= 40000 {
+            check(mut t, 5, arm(x, n, a, a * k) == n * a % modulus);
+        }
+        // P6: one period further on, the per magical numbers of a period
+        // lcm(a, b) later, the answer is lcm larger
+        if n + per <= 1000000000 {
+            check(mut t, 6, arm(x, n + per, a, b) == (got + lcm) % modulus);
+        }
+    }
+    star
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut seed = 878;
+    // small cases against the statement
+    for _ in 0..1500 {
+        let n = next_random(mut seed) % 200 + 1;
+        let a = next_random(mut seed) % 29 + 2;
+        let b = next_random(mut seed) % 29 + 2;
+        count += 1;
+        total += properties(mut t, mut seed, n, a, b, true);
+    }
+    // LeetCode's sizes, half of them with an exact answer
+    for k in 0..300 {
+        let n = if k % 2 == 0 { up_to(mut seed, 1000000000) } else { up_to(mut seed, 20000) };
+        let a = up_to(mut seed, if k % 3 == 0 { 39999 } else { 99 }) + 1;
+        let b = up_to(mut seed, if k % 3 == 1 { 99 } else { 39999 }) + 1;
+        count += 1;
+        total += properties(mut t, mut seed, n, a, b, false);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} cases, answers sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

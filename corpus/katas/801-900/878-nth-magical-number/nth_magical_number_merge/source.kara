@@ -1,0 +1,86 @@
+// LeetCode #878: Nth Magical Number -- whole periods, then a merge.
+//
+// The magical numbers repeat with period lcm(a, b): each period holds
+// lcm / a + lcm / b - 1 of them, the last being the lcm itself. So the
+// n-th is q whole periods on from the r-th of the first period, for
+// n = q * per + r, and the r-th is found by merging the multiples of a
+// and of b in order, stepping past a common multiple once. O(a + b).
+
+fn nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / gcd(a, b) * b;
+    let per = lcm / a + lcm / b - 1;
+    let q = n / per;
+    let r = n % per;
+    let mut x = 0;
+    let mut next_a = a;
+    let mut next_b = b;
+    for _ in 0..r {
+        if next_a < next_b {
+            x = next_a;
+            next_a += a;
+        } else if next_b < next_a {
+            x = next_b;
+            next_b += b;
+        } else {
+            x = next_a;
+            next_a += a;
+            next_b += b;
+        }
+    }
+    (q * lcm + x) % 1000000007
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 1 to limit (up to 10^9)
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+fn show(n: i64, a: i64, b: i64) {
+    println(f"n = {n}, a = {a}, b = {b} -> {nth_magical_number(n, a, b)}");
+}
+
+fn main() {
+    show(1, 2, 3);
+    show(4, 2, 3);
+    show(5, 2, 4);
+    show(3, 6, 4);
+    show(1, 40000, 40000);
+    show(1000000000, 40000, 40000);
+    show(1000000000, 2, 3);
+    show(1000000000, 39999, 40000);
+    show(999999999, 2, 2);
+    show(123456789, 210, 330);
+    // small cases
+    let mut seed = 878;
+    let mut total = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 100 + 1;
+        let a = next_random(mut seed) % 19 + 2;
+        let b = next_random(mut seed) % 19 + 2;
+        total += nth_magical_number(n, a, b);
+    }
+    println(f"3000 cases with n up to 100 and a, b up to 20: answers sum to {total}");
+    // LeetCode's sizes: n up to 10^9, a and b up to 4 * 10^4
+    total = 0;
+    let mut check = 0;
+    for k in 0..200 {
+        let n = up_to(mut seed, 1000000000);
+        let a = up_to(mut seed, if k % 2 == 0 { 39999 } else { 199 }) + 1;
+        let b = if k % 5 == 0 { a * (next_random(mut seed) % 3 + 1) } else { up_to(mut seed, 39999) + 1 };
+        let answer = nth_magical_number(n, a, b.min(40000));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"200 cases with n up to 10^9 and a, b up to 4 * 10^4: answers sum to {total}, checksum {check}");
+}

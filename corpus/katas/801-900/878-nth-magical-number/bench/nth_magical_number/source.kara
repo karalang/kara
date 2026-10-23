@@ -1,0 +1,46 @@
+// LeetCode #878 bench: the ★ arm (binary search on the answer) on
+// 1,000,000 cases of LeetCode's sizes.
+
+fn nth_magical_number(n: i64, a: i64, b: i64) -> i64 {
+    let lcm = a / gcd(a, b) * b;
+    let mut lo = 1;
+    let mut hi = n * a.min(b);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if mid / a + mid / b - mid / lcm >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo % 1000000007
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 1 to limit (up to 10^9)
+fn up_to(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1
+}
+
+fn main() {
+    let mut seed = 878;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000000 {
+        let n = up_to(mut seed, 1000000000);
+        let a = up_to(mut seed, 39999) + 1;
+        let b = up_to(mut seed, 39999) + 1;
+        let answer = nth_magical_number(n, a, b);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"1000000 cases: answers sum to {total}, checksum {check}");
+}
