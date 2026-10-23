@@ -1,0 +1,4726 @@
+== the library's examples and tests
+> smartypants('"foo" -- bar', None)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('"Isn\'t this fun?"', None)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants("'Isn't this fun?'", None)
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> smartypants("1440-80's", None)
+  -> '1440-80&#8217;s'
+> smartypants("1440-'80s", None)
+  -> '1440-&#8216;80s'
+> smartypants("1440--'80s", None)
+  -> '1440&#8212;&#8216;80s'
+> smartypants('1960s', None)
+  -> '1960s'
+> smartypants("1960's", None)
+  -> '1960&#8217;s'
+> smartypants("one two '60s", None)
+  -> 'one two &#8216;60s'
+> smartypants("'60s", None)
+  -> '&#8216;60s'
+> smartypants("the '80s and the 90's", None)
+  -> 'the &#8216;80s and the 90&#8217;s'
+> smartypants('21st century', None)
+  -> '21st century'
+> smartypants('3rd', None)
+  -> '3rd'
+> smartypants('You should use ";" here', None)
+  -> 'You should use &#8220;;&#8221; here'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', None)
+  -> 'Take a look at the &#8220;<a>Essay on quoting</a>&#8221; paper.'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', None)
+  -> 'Take a look at &#8220;<a>Essay on quoting</a>&#8221;.'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", None)
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants('--', None)
+  -> '&#8212;'
+> smartypants('-->', None)
+  -> '&#8212;>'
+> smartypants('-- \t  >', None)
+  -> '&#8212; \t  >'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', None)
+  -> '<!-- "foo" --> blah&#8212;blah <!-- "bar" -->'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', None)
+  -> '<p>foo &#8212; &#8220;bar&#8221;<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<!-- comment -->', None)
+  -> '<!-- comment -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', None)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', None)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- -- -->', None)
+  -> '<!&#8212; &#8212; &#8212;>'
+> smartypants('<!-- -- -- \t >', None)
+  -> '<!&#8212; &#8212; &#8212; \t >'
+> smartypants('<!---->', None)
+  -> '<!---->'
+> smartypants('<!-- --->', None)
+  -> '<!-- --->'
+> smartypants('<!-- x -- >', None)
+  -> '<!-- x -- >'
+> smartypants('"quote here"', None)
+  -> '&#8220;quote here&#8221;'
+> smartypants('"quote&ndash;here"', None)
+  -> '&#8220;quote&ndash;here&#8221;'
+> smartypants('Nothing endures but change. -- Heraclitus', None)
+  -> 'Nothing endures but change. &#8212; Heraclitus'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', None)
+  -> 'Life itself is the proper binge. &#8212;- Julia Child (1912&#8212;2004)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', None)
+  -> 'Dare to be naïve. &#8212; Buckminster Fuller (1895&#8212;-1983)'
+> smartypants('Huh...?', None)
+  -> 'Huh&#8230;?'
+> smartypants('Wait. . . what?', None)
+  -> 'Wait&#8230; what?'
+> smartypants('Four.... dots', None)
+  -> 'Four&#8230;. dots'
+> smartypants('Spaced . . . . out', None)
+  -> 'Spaced &#8230; . out'
+> smartypants("``Isn't this fun?''", None)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants('"foo" -- bar', 8)
+  -> '"foo" &#8212; bar'
+> smartypants("<p>He said &quot;Let's write some code.&quot;</p>", 128)
+  -> '<p>He said "Let\'s write some code."</p>'
+> smartypants("<p>He said &quot;Let's write some code.&quot;</p>", 129)
+  -> '<p>He said &#8220;Let&#8217;s write some code.&#8221;</p>'
+> smartypants('"quote here"', 331)
+  -> '“quote here”'
+> smartypants('"quote&ndash;here"', 331)
+  -> '“quote&ndash;here”'
+> smartypants('"quote here"', 587)
+  -> '&ldquo;quote here&rdquo;'
+> smartypants('"quote here"', 843)
+  -> '"quote here"'
+== every text with every attribute
+> smartypants('"foo" -- bar', None)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('"foo" -- bar', 0)
+  -> '"foo" -- bar'
+> smartypants('"foo" -- bar', 91)
+  -> '&#8220;foo&#8221; &#8211; bar'
+> smartypants('"foo" -- bar', 875)
+  -> '"foo" -- bar'
+> smartypants('"foo" -- bar', 129)
+  -> '&#8220;foo&#8221; -- bar'
+> smartypants('"foo" -- bar', 78)
+  -> '"foo" &#8212; bar'
+> smartypants('"foo" -- bar', 1023)
+  -> '"foo" -- bar'
+> smartypants('"Isn\'t this fun?"', None)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants('"Isn\'t this fun?"', 0)
+  -> '"Isn\'t this fun?"'
+> smartypants('"Isn\'t this fun?"', 91)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants('"Isn\'t this fun?"', 875)
+  -> '"Isn\'t this fun?"'
+> smartypants('"Isn\'t this fun?"', 129)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants('"Isn\'t this fun?"', 78)
+  -> '"Isn&#8217;t this fun?"'
+> smartypants('"Isn\'t this fun?"', 1023)
+  -> '"Isn\'t this fun?"'
+> smartypants("'Isn't this fun?'", None)
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> smartypants("'Isn't this fun?'", 0)
+  -> "'Isn't this fun?'"
+> smartypants("'Isn't this fun?'", 91)
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> smartypants("'Isn't this fun?'", 875)
+  -> "'Isn't this fun?'"
+> smartypants("'Isn't this fun?'", 129)
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> smartypants("'Isn't this fun?'", 78)
+  -> '&#8217;Isn&#8217;t this fun?&#8217;'
+> smartypants("'Isn't this fun?'", 1023)
+  -> "'Isn't this fun?'"
+> smartypants("1440-80's", None)
+  -> '1440-80&#8217;s'
+> smartypants("1440-80's", 0)
+  -> "1440-80's"
+> smartypants("1440-80's", 91)
+  -> '1440-80&#8217;s'
+> smartypants("1440-80's", 875)
+  -> "1440-80's"
+> smartypants("1440-80's", 129)
+  -> '1440-80&#8217;s'
+> smartypants("1440-80's", 78)
+  -> '1440-80&#8217;s'
+> smartypants("1440-80's", 1023)
+  -> "1440-80's"
+> smartypants("1440-'80s", None)
+  -> '1440-&#8216;80s'
+> smartypants("1440-'80s", 0)
+  -> "1440-'80s"
+> smartypants("1440-'80s", 91)
+  -> '1440-&#8216;80s'
+> smartypants("1440-'80s", 875)
+  -> "1440-'80s"
+> smartypants("1440-'80s", 129)
+  -> '1440-&#8216;80s'
+> smartypants("1440-'80s", 78)
+  -> '1440-&#8217;80s'
+> smartypants("1440-'80s", 1023)
+  -> "1440-'80s"
+> smartypants("1440--'80s", None)
+  -> '1440&#8212;&#8216;80s'
+> smartypants("1440--'80s", 0)
+  -> "1440--'80s"
+> smartypants("1440--'80s", 91)
+  -> '1440&#8211;&#8216;80s'
+> smartypants("1440--'80s", 875)
+  -> "1440--'80s"
+> smartypants("1440--'80s", 129)
+  -> '1440--&#8216;80s'
+> smartypants("1440--'80s", 78)
+  -> '1440&#8212;&#8217;80s'
+> smartypants("1440--'80s", 1023)
+  -> "1440--'80s"
+> smartypants('1960s', None)
+  -> '1960s'
+> smartypants('1960s', 0)
+  -> '1960s'
+> smartypants('1960s', 91)
+  -> '1960s'
+> smartypants('1960s', 875)
+  -> '1960s'
+> smartypants('1960s', 129)
+  -> '1960s'
+> smartypants('1960s', 78)
+  -> '1960s'
+> smartypants('1960s', 1023)
+  -> '1960s'
+> smartypants("1960's", None)
+  -> '1960&#8217;s'
+> smartypants("1960's", 0)
+  -> "1960's"
+> smartypants("1960's", 91)
+  -> '1960&#8217;s'
+> smartypants("1960's", 875)
+  -> "1960's"
+> smartypants("1960's", 129)
+  -> '1960&#8217;s'
+> smartypants("1960's", 78)
+  -> '1960&#8217;s'
+> smartypants("1960's", 1023)
+  -> "1960's"
+> smartypants("one two '60s", None)
+  -> 'one two &#8216;60s'
+> smartypants("one two '60s", 0)
+  -> "one two '60s"
+> smartypants("one two '60s", 91)
+  -> 'one two &#8216;60s'
+> smartypants("one two '60s", 875)
+  -> "one two '60s"
+> smartypants("one two '60s", 129)
+  -> 'one two &#8216;60s'
+> smartypants("one two '60s", 78)
+  -> 'one two &#8217;60s'
+> smartypants("one two '60s", 1023)
+  -> "one two '60s"
+> smartypants("'60s", None)
+  -> '&#8216;60s'
+> smartypants("'60s", 0)
+  -> "'60s"
+> smartypants("'60s", 91)
+  -> '&#8216;60s'
+> smartypants("'60s", 875)
+  -> "'60s"
+> smartypants("'60s", 129)
+  -> '&#8216;60s'
+> smartypants("'60s", 78)
+  -> '&#8217;60s'
+> smartypants("'60s", 1023)
+  -> "'60s"
+> smartypants("the '80s and the 90's", None)
+  -> 'the &#8216;80s and the 90&#8217;s'
+> smartypants("the '80s and the 90's", 0)
+  -> "the '80s and the 90's"
+> smartypants("the '80s and the 90's", 91)
+  -> 'the &#8216;80s and the 90&#8217;s'
+> smartypants("the '80s and the 90's", 875)
+  -> "the '80s and the 90's"
+> smartypants("the '80s and the 90's", 129)
+  -> 'the &#8216;80s and the 90&#8217;s'
+> smartypants("the '80s and the 90's", 78)
+  -> 'the &#8217;80s and the 90&#8217;s'
+> smartypants("the '80s and the 90's", 1023)
+  -> "the '80s and the 90's"
+> smartypants('21st century', None)
+  -> '21st century'
+> smartypants('21st century', 0)
+  -> '21st century'
+> smartypants('21st century', 91)
+  -> '21st century'
+> smartypants('21st century', 875)
+  -> '21st century'
+> smartypants('21st century', 129)
+  -> '21st century'
+> smartypants('21st century', 78)
+  -> '21st century'
+> smartypants('21st century', 1023)
+  -> '21st century'
+> smartypants('3rd', None)
+  -> '3rd'
+> smartypants('3rd', 0)
+  -> '3rd'
+> smartypants('3rd', 91)
+  -> '3rd'
+> smartypants('3rd', 875)
+  -> '3rd'
+> smartypants('3rd', 129)
+  -> '3rd'
+> smartypants('3rd', 78)
+  -> '3rd'
+> smartypants('3rd', 1023)
+  -> '3rd'
+> smartypants('You should use ";" here', None)
+  -> 'You should use &#8220;;&#8221; here'
+> smartypants('You should use ";" here', 0)
+  -> 'You should use ";" here'
+> smartypants('You should use ";" here', 91)
+  -> 'You should use &#8220;;&#8221; here'
+> smartypants('You should use ";" here', 875)
+  -> 'You should use ";" here'
+> smartypants('You should use ";" here', 129)
+  -> 'You should use &#8220;;&#8221; here'
+> smartypants('You should use ";" here', 78)
+  -> 'You should use ";" here'
+> smartypants('You should use ";" here', 1023)
+  -> 'You should use ";" here'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', None)
+  -> 'Take a look at the &#8220;<a>Essay on quoting</a>&#8221; paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 0)
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 91)
+  -> 'Take a look at the &#8220;<a>Essay on quoting</a>&#8221; paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 875)
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 129)
+  -> 'Take a look at the &#8220;<a>Essay on quoting</a>&#8221; paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 78)
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> smartypants('Take a look at the "<a>Essay on quoting</a>" paper.', 1023)
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', None)
+  -> 'Take a look at &#8220;<a>Essay on quoting</a>&#8221;.'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 0)
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 91)
+  -> 'Take a look at &#8220;<a>Essay on quoting</a>&#8221;.'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 875)
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 129)
+  -> 'Take a look at &#8220;<a>Essay on quoting</a>&#8221;.'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 78)
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> smartypants('Take a look at "<a>Essay on quoting</a>".', 1023)
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", None)
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 0)
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 91)
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 875)
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 129)
+  -> '<p>He said &#8220;Let&#8217;s write some code.&#8221; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 78)
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>", 1023)
+  -> '<p>He said "Let\'s write some code." This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> smartypants('--', None)
+  -> '&#8212;'
+> smartypants('--', 0)
+  -> '--'
+> smartypants('--', 91)
+  -> '&#8211;'
+> smartypants('--', 875)
+  -> '--'
+> smartypants('--', 129)
+  -> '--'
+> smartypants('--', 78)
+  -> '&#8212;'
+> smartypants('--', 1023)
+  -> '--'
+> smartypants('-->', None)
+  -> '&#8212;>'
+> smartypants('-->', 0)
+  -> '-->'
+> smartypants('-->', 91)
+  -> '&#8211;>'
+> smartypants('-->', 875)
+  -> '-->'
+> smartypants('-->', 129)
+  -> '-->'
+> smartypants('-->', 78)
+  -> '&#8212;>'
+> smartypants('-->', 1023)
+  -> '-->'
+> smartypants('-- \t  >', None)
+  -> '&#8212; \t  >'
+> smartypants('-- \t  >', 0)
+  -> '-- \t  >'
+> smartypants('-- \t  >', 91)
+  -> '&#8211; \t  >'
+> smartypants('-- \t  >', 875)
+  -> '-- \t  >'
+> smartypants('-- \t  >', 129)
+  -> '-- \t  >'
+> smartypants('-- \t  >', 78)
+  -> '&#8212; \t  >'
+> smartypants('-- \t  >', 1023)
+  -> '-- \t  >'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', None)
+  -> '<!-- "foo" --> blah&#8212;blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 0)
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 91)
+  -> '<!-- "foo" --> blah&#8211;blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 875)
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 129)
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 78)
+  -> '<!-- "foo" --> blah&#8212;blah <!-- "bar" -->'
+> smartypants('<!-- "foo" --> blah--blah <!-- "bar" -->', 1023)
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', None)
+  -> '<p>foo &#8212; &#8220;bar&#8221;<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 0)
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 91)
+  -> '<p>foo &#8211; &#8220;bar&#8221;<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 875)
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 129)
+  -> '<p>foo -- &#8220;bar&#8221;<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 78)
+  -> '<p>foo &#8212; "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>', 1023)
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> smartypants('<!-- comment -->', None)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 0)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 91)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 875)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 129)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 78)
+  -> '<!-- comment -->'
+> smartypants('<!-- comment -->', 1023)
+  -> '<!-- comment -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', None)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 0)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 91)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 875)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 129)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 78)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- <li>Fee-fi-of-fum</li> -->', 1023)
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', None)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 0)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 91)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 875)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 129)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 78)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- "foo" --> <!-- "bar" -->', 1023)
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> smartypants('<!-- -- -->', None)
+  -> '<!&#8212; &#8212; &#8212;>'
+> smartypants('<!-- -- -->', 0)
+  -> '<!-- -- -->'
+> smartypants('<!-- -- -->', 91)
+  -> '<!&#8211; &#8211; &#8211;>'
+> smartypants('<!-- -- -->', 875)
+  -> '<!-- -- -->'
+> smartypants('<!-- -- -->', 129)
+  -> '<!-- -- -->'
+> smartypants('<!-- -- -->', 78)
+  -> '<!&#8212; &#8212; &#8212;>'
+> smartypants('<!-- -- -->', 1023)
+  -> '<!-- -- -->'
+> smartypants('<!-- -- -- \t >', None)
+  -> '<!&#8212; &#8212; &#8212; \t >'
+> smartypants('<!-- -- -- \t >', 0)
+  -> '<!-- -- -- \t >'
+> smartypants('<!-- -- -- \t >', 91)
+  -> '<!&#8211; &#8211; &#8211; \t >'
+> smartypants('<!-- -- -- \t >', 875)
+  -> '<!-- -- -- \t >'
+> smartypants('<!-- -- -- \t >', 129)
+  -> '<!-- -- -- \t >'
+> smartypants('<!-- -- -- \t >', 78)
+  -> '<!&#8212; &#8212; &#8212; \t >'
+> smartypants('<!-- -- -- \t >', 1023)
+  -> '<!-- -- -- \t >'
+> smartypants('<!---->', None)
+  -> '<!---->'
+> smartypants('<!---->', 0)
+  -> '<!---->'
+> smartypants('<!---->', 91)
+  -> '<!---->'
+> smartypants('<!---->', 875)
+  -> '<!---->'
+> smartypants('<!---->', 129)
+  -> '<!---->'
+> smartypants('<!---->', 78)
+  -> '<!---->'
+> smartypants('<!---->', 1023)
+  -> '<!---->'
+> smartypants('<!-- --->', None)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 0)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 91)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 875)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 129)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 78)
+  -> '<!-- --->'
+> smartypants('<!-- --->', 1023)
+  -> '<!-- --->'
+> smartypants('<!-- x -- >', None)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 0)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 91)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 875)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 129)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 78)
+  -> '<!-- x -- >'
+> smartypants('<!-- x -- >', 1023)
+  -> '<!-- x -- >'
+> smartypants('"quote here"', None)
+  -> '&#8220;quote here&#8221;'
+> smartypants('"quote here"', 0)
+  -> '"quote here"'
+> smartypants('"quote here"', 91)
+  -> '&#8220;quote here&#8221;'
+> smartypants('"quote here"', 875)
+  -> '"quote here"'
+> smartypants('"quote here"', 129)
+  -> '&#8220;quote here&#8221;'
+> smartypants('"quote here"', 78)
+  -> '"quote here"'
+> smartypants('"quote here"', 1023)
+  -> '"quote here"'
+> smartypants('"quote&ndash;here"', None)
+  -> '&#8220;quote&ndash;here&#8221;'
+> smartypants('"quote&ndash;here"', 0)
+  -> '"quote&ndash;here"'
+> smartypants('"quote&ndash;here"', 91)
+  -> '&#8220;quote&ndash;here&#8221;'
+> smartypants('"quote&ndash;here"', 875)
+  -> '"quote&ndash;here"'
+> smartypants('"quote&ndash;here"', 129)
+  -> '&#8220;quote&ndash;here&#8221;'
+> smartypants('"quote&ndash;here"', 78)
+  -> '"quote&ndash;here"'
+> smartypants('"quote&ndash;here"', 1023)
+  -> '"quote&ndash;here"'
+> smartypants('Nothing endures but change. -- Heraclitus', None)
+  -> 'Nothing endures but change. &#8212; Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 0)
+  -> 'Nothing endures but change. -- Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 91)
+  -> 'Nothing endures but change. &#8211; Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 875)
+  -> 'Nothing endures but change. -- Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 129)
+  -> 'Nothing endures but change. -- Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 78)
+  -> 'Nothing endures but change. &#8212; Heraclitus'
+> smartypants('Nothing endures but change. -- Heraclitus', 1023)
+  -> 'Nothing endures but change. -- Heraclitus'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', None)
+  -> 'Life itself is the proper binge. &#8212;- Julia Child (1912&#8212;2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 0)
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 91)
+  -> 'Life itself is the proper binge. &#8212; Julia Child (1912&#8211;2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 875)
+  -> 'Life itself is the proper binge. - Julia Child (1912--2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 129)
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 78)
+  -> 'Life itself is the proper binge. &#8212;- Julia Child (1912&#8212;2004)'
+> smartypants('Life itself is the proper binge. --- Julia Child (1912--2004)', 1023)
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', None)
+  -> 'Dare to be naïve. &#8212; Buckminster Fuller (1895&#8212;-1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 0)
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 91)
+  -> 'Dare to be naïve. &#8211; Buckminster Fuller (1895&#8212;1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 875)
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895-1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 129)
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 78)
+  -> 'Dare to be naïve. &#8212; Buckminster Fuller (1895&#8212;-1983)'
+> smartypants('Dare to be naïve. -- Buckminster Fuller (1895---1983)', 1023)
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> smartypants('Huh...?', None)
+  -> 'Huh&#8230;?'
+> smartypants('Huh...?', 0)
+  -> 'Huh...?'
+> smartypants('Huh...?', 91)
+  -> 'Huh&#8230;?'
+> smartypants('Huh...?', 875)
+  -> 'Huh...?'
+> smartypants('Huh...?', 129)
+  -> 'Huh...?'
+> smartypants('Huh...?', 78)
+  -> 'Huh&#8230;?'
+> smartypants('Huh...?', 1023)
+  -> 'Huh...?'
+> smartypants('Wait. . . what?', None)
+  -> 'Wait&#8230; what?'
+> smartypants('Wait. . . what?', 0)
+  -> 'Wait. . . what?'
+> smartypants('Wait. . . what?', 91)
+  -> 'Wait&#8230; what?'
+> smartypants('Wait. . . what?', 875)
+  -> 'Wait... what?'
+> smartypants('Wait. . . what?', 129)
+  -> 'Wait. . . what?'
+> smartypants('Wait. . . what?', 78)
+  -> 'Wait&#8230; what?'
+> smartypants('Wait. . . what?', 1023)
+  -> 'Wait... what?'
+> smartypants('Four.... dots', None)
+  -> 'Four&#8230;. dots'
+> smartypants('Four.... dots', 0)
+  -> 'Four.... dots'
+> smartypants('Four.... dots', 91)
+  -> 'Four&#8230;. dots'
+> smartypants('Four.... dots', 875)
+  -> 'Four.... dots'
+> smartypants('Four.... dots', 129)
+  -> 'Four.... dots'
+> smartypants('Four.... dots', 78)
+  -> 'Four&#8230;. dots'
+> smartypants('Four.... dots', 1023)
+  -> 'Four.... dots'
+> smartypants('Spaced . . . . out', None)
+  -> 'Spaced &#8230; . out'
+> smartypants('Spaced . . . . out', 0)
+  -> 'Spaced . . . . out'
+> smartypants('Spaced . . . . out', 91)
+  -> 'Spaced &#8230; . out'
+> smartypants('Spaced . . . . out', 875)
+  -> 'Spaced ... . out'
+> smartypants('Spaced . . . . out', 129)
+  -> 'Spaced . . . . out'
+> smartypants('Spaced . . . . out', 78)
+  -> 'Spaced &#8230; . out'
+> smartypants('Spaced . . . . out', 1023)
+  -> 'Spaced ... . out'
+> smartypants("``Isn't this fun?''", None)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants("``Isn't this fun?''", 0)
+  -> "``Isn't this fun?''"
+> smartypants("``Isn't this fun?''", 91)
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> smartypants("``Isn't this fun?''", 875)
+  -> '"Isn\'t this fun?"'
+> smartypants("``Isn't this fun?''", 129)
+  -> '``Isn&#8217;t this fun?&#8217;&#8216;'
+> smartypants("``Isn't this fun?''", 78)
+  -> '&#8216;&#8216;Isn&#8217;t this fun?&#8217;&#8217;'
+> smartypants("``Isn't this fun?''", 1023)
+  -> "''Isn't this fun?''"
+> smartypants("`Isn't this fun?'", None)
+  -> '`Isn&#8217;t this fun?&#8217;'
+> smartypants("`Isn't this fun?'", 0)
+  -> "`Isn't this fun?'"
+> smartypants("`Isn't this fun?'", 91)
+  -> '`Isn&#8217;t this fun?&#8217;'
+> smartypants("`Isn't this fun?'", 875)
+  -> "`Isn't this fun?'"
+> smartypants("`Isn't this fun?'", 129)
+  -> '`Isn&#8217;t this fun?&#8217;'
+> smartypants("`Isn't this fun?'", 78)
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> smartypants("`Isn't this fun?'", 1023)
+  -> "'Isn't this fun?'"
+> smartypants("``double'' and `single'", None)
+  -> '&#8220;double&#8221; and `single&#8217;'
+> smartypants("``double'' and `single'", 0)
+  -> "``double'' and `single'"
+> smartypants("``double'' and `single'", 91)
+  -> '&#8220;double&#8221; and `single&#8217;'
+> smartypants("``double'' and `single'", 875)
+  -> '"double" and `single\''
+> smartypants("``double'' and `single'", 129)
+  -> '``double&#8217;&#8217; and `single&#8217;'
+> smartypants("``double'' and `single'", 78)
+  -> '&#8216;&#8216;double&#8217;&#8217; and &#8216;single&#8217;'
+> smartypants("``double'' and `single'", 1023)
+  -> "''double'' and 'single'"
+> smartypants('"smarty" \\"pants\\"', None)
+  -> '&#8220;smarty&#8221; &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 0)
+  -> '"smarty" &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 91)
+  -> '&#8220;smarty&#8221; &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 875)
+  -> '"smarty" &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 129)
+  -> '&#8220;smarty&#8221; &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 78)
+  -> '"smarty" &#34;pants&#34;'
+> smartypants('"smarty" \\"pants\\"', 1023)
+  -> '"smarty" &#34;pants&#34;'
+> smartypants('\\\\', None)
+  -> '&#92;'
+> smartypants('\\\\', 0)
+  -> '&#92;'
+> smartypants('\\\\', 91)
+  -> '&#92;'
+> smartypants('\\\\', 875)
+  -> '&#92;'
+> smartypants('\\\\', 129)
+  -> '&#92;'
+> smartypants('\\\\', 78)
+  -> '&#92;'
+> smartypants('\\\\', 1023)
+  -> '&#92;'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', None)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 0)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 91)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 875)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 129)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 78)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants('a \\- b \\. c \\` d \\\' e \\" f \\\\ g', 1023)
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> smartypants("'", None)
+  -> '&#8216;'
+> smartypants("'", 0)
+  -> "'"
+> smartypants("'", 91)
+  -> '&#8216;'
+> smartypants("'", 875)
+  -> "'"
+> smartypants("'", 129)
+  -> '&#8216;'
+> smartypants("'", 78)
+  -> '&#8217;'
+> smartypants("'", 1023)
+  -> "'"
+> smartypants('"', None)
+  -> '&#8220;'
+> smartypants('"', 0)
+  -> '"'
+> smartypants('"', 91)
+  -> '&#8220;'
+> smartypants('"', 875)
+  -> '"'
+> smartypants('"', 129)
+  -> '&#8220;'
+> smartypants('"', 78)
+  -> '"'
+> smartypants('"', 1023)
+  -> '"'
+> smartypants("x'", None)
+  -> 'x&#8217;'
+> smartypants("x'", 0)
+  -> "x'"
+> smartypants("x'", 91)
+  -> 'x&#8217;'
+> smartypants("x'", 875)
+  -> "x'"
+> smartypants("x'", 129)
+  -> 'x&#8217;'
+> smartypants("x'", 78)
+  -> 'x&#8217;'
+> smartypants("x'", 1023)
+  -> "x'"
+> smartypants("'x", None)
+  -> '&#8216;x'
+> smartypants("'x", 0)
+  -> "'x"
+> smartypants("'x", 91)
+  -> '&#8216;x'
+> smartypants("'x", 875)
+  -> "'x"
+> smartypants("'x", 129)
+  -> '&#8216;x'
+> smartypants("'x", 78)
+  -> '&#8217;x'
+> smartypants("'x", 1023)
+  -> "'x"
+> smartypants('x"', None)
+  -> 'x&#8221;'
+> smartypants('x"', 0)
+  -> 'x"'
+> smartypants('x"', 91)
+  -> 'x&#8221;'
+> smartypants('x"', 875)
+  -> 'x"'
+> smartypants('x"', 129)
+  -> 'x&#8221;'
+> smartypants('x"', 78)
+  -> 'x"'
+> smartypants('x"', 1023)
+  -> 'x"'
+> smartypants('"x', None)
+  -> '&#8220;x'
+> smartypants('"x', 0)
+  -> '"x'
+> smartypants('"x', 91)
+  -> '&#8220;x'
+> smartypants('"x', 875)
+  -> '"x'
+> smartypants('"x', 129)
+  -> '&#8220;x'
+> smartypants('"x', 78)
+  -> '"x'
+> smartypants('"x', 1023)
+  -> '"x'
+> smartypants("' '", None)
+  -> '&#8216; &#8216;'
+> smartypants("' '", 0)
+  -> "' '"
+> smartypants("' '", 91)
+  -> '&#8216; &#8216;'
+> smartypants("' '", 875)
+  -> "' '"
+> smartypants("' '", 129)
+  -> '&#8216; &#8216;'
+> smartypants("' '", 78)
+  -> '&#8217; &#8217;'
+> smartypants("' '", 1023)
+  -> "' '"
+> smartypants('" "', None)
+  -> '&#8221; &#8220;'
+> smartypants('" "', 0)
+  -> '" "'
+> smartypants('" "', 91)
+  -> '&#8221; &#8220;'
+> smartypants('" "', 875)
+  -> '" "'
+> smartypants('" "', 129)
+  -> '&#8221; &#8220;'
+> smartypants('" "', 78)
+  -> '" "'
+> smartypants('" "', 1023)
+  -> '" "'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', None)
+  -> 'He said, &#8220;&#8216;Quoted&#8217; words in a larger quote.&#8221;'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 0)
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 91)
+  -> 'He said, &#8220;&#8216;Quoted&#8217; words in a larger quote.&#8221;'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 875)
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 129)
+  -> 'He said, &#8220;&#8216;Quoted&#8217; words in a larger quote.&#8221;'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 78)
+  -> 'He said, "&#8217;Quoted&#8217; words in a larger quote."'
+> smartypants('He said, "\'Quoted\' words in a larger quote."', 1023)
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> smartypants('\'"Nested" inside\'', None)
+  -> '&#8216;&#8220;Nested&#8221; inside&#8217;'
+> smartypants('\'"Nested" inside\'', 0)
+  -> '\'"Nested" inside\''
+> smartypants('\'"Nested" inside\'', 91)
+  -> '&#8216;&#8220;Nested&#8221; inside&#8217;'
+> smartypants('\'"Nested" inside\'', 875)
+  -> '\'"Nested" inside\''
+> smartypants('\'"Nested" inside\'', 129)
+  -> '&#8216;&#8220;Nested&#8221; inside&#8217;'
+> smartypants('\'"Nested" inside\'', 78)
+  -> '&#8217;"Nested" inside&#8217;'
+> smartypants('\'"Nested" inside\'', 1023)
+  -> '\'"Nested" inside\''
+> smartypants('"\'Double then single\'"', None)
+  -> '&#8220;&#8216;Double then single&#8217;&#8221;'
+> smartypants('"\'Double then single\'"', 0)
+  -> '"\'Double then single\'"'
+> smartypants('"\'Double then single\'"', 91)
+  -> '&#8220;&#8216;Double then single&#8217;&#8221;'
+> smartypants('"\'Double then single\'"', 875)
+  -> '"\'Double then single\'"'
+> smartypants('"\'Double then single\'"', 129)
+  -> '&#8220;&#8216;Double then single&#8217;&#8221;'
+> smartypants('"\'Double then single\'"', 78)
+  -> '"&#8217;Double then single&#8217;"'
+> smartypants('"\'Double then single\'"', 1023)
+  -> '"\'Double then single\'"'
+> smartypants('"..." and \'...\'', None)
+  -> '&#8220;&#8230;&#8221; and &#8216;&#8230;&#8217;'
+> smartypants('"..." and \'...\'', 0)
+  -> '"..." and \'...\''
+> smartypants('"..." and \'...\'', 91)
+  -> '&#8220;&#8230;&#8221; and &#8216;&#8230;&#8217;'
+> smartypants('"..." and \'...\'', 875)
+  -> '"..." and \'...\''
+> smartypants('"..." and \'...\'', 129)
+  -> '&#8221;...&#8221; and &#8216;...&#8217;'
+> smartypants('"..." and \'...\'', 78)
+  -> '"&#8230;" and &#8217;&#8230;&#8217;'
+> smartypants('"..." and \'...\'', 1023)
+  -> '"..." and \'...\''
+> smartypants('"?" she asked', None)
+  -> '&#8221;?&#8221; she asked'
+> smartypants('"?" she asked', 0)
+  -> '"?" she asked'
+> smartypants('"?" she asked', 91)
+  -> '&#8221;?&#8221; she asked'
+> smartypants('"?" she asked', 875)
+  -> '"?" she asked'
+> smartypants('"?" she asked', 129)
+  -> '&#8221;?&#8221; she asked'
+> smartypants('"?" she asked', 78)
+  -> '"?" she asked'
+> smartypants('"?" she asked', 1023)
+  -> '"?" she asked'
+> smartypants("'!' he said", None)
+  -> '&#8216;!&#8217; he said'
+> smartypants("'!' he said", 0)
+  -> "'!' he said"
+> smartypants("'!' he said", 91)
+  -> '&#8216;!&#8217; he said'
+> smartypants("'!' he said", 875)
+  -> "'!' he said"
+> smartypants("'!' he said", 129)
+  -> '&#8216;!&#8217; he said'
+> smartypants("'!' he said", 78)
+  -> '&#8217;!&#8217; he said'
+> smartypants("'!' he said", 1023)
+  -> "'!' he said"
+> smartypants('"!" -- \'?\'', None)
+  -> '&#8221;!&#8221; &#8212; &#8216;?&#8217;'
+> smartypants('"!" -- \'?\'', 0)
+  -> '"!" -- \'?\''
+> smartypants('"!" -- \'?\'', 91)
+  -> '&#8221;!&#8221; &#8211; &#8216;?&#8217;'
+> smartypants('"!" -- \'?\'', 875)
+  -> '"!" -- \'?\''
+> smartypants('"!" -- \'?\'', 129)
+  -> '&#8221;!&#8221; -- &#8216;?&#8217;'
+> smartypants('"!" -- \'?\'', 78)
+  -> '"!" &#8212; &#8217;?&#8217;'
+> smartypants('"!" -- \'?\'', 1023)
+  -> '"!" -- \'?\''
+> smartypants("Rock 'n' roll", None)
+  -> 'Rock &#8216;n&#8217; roll'
+> smartypants("Rock 'n' roll", 0)
+  -> "Rock 'n' roll"
+> smartypants("Rock 'n' roll", 91)
+  -> 'Rock &#8216;n&#8217; roll'
+> smartypants("Rock 'n' roll", 875)
+  -> "Rock 'n' roll"
+> smartypants("Rock 'n' roll", 129)
+  -> 'Rock &#8216;n&#8217; roll'
+> smartypants("Rock 'n' roll", 78)
+  -> 'Rock &#8217;n&#8217; roll'
+> smartypants("Rock 'n' roll", 1023)
+  -> "Rock 'n' roll"
+> smartypants("'Tis the season", None)
+  -> '&#8216;Tis the season'
+> smartypants("'Tis the season", 0)
+  -> "'Tis the season"
+> smartypants("'Tis the season", 91)
+  -> '&#8216;Tis the season'
+> smartypants("'Tis the season", 875)
+  -> "'Tis the season"
+> smartypants("'Tis the season", 129)
+  -> '&#8216;Tis the season'
+> smartypants("'Tis the season", 78)
+  -> '&#8217;Tis the season'
+> smartypants("'Tis the season", 1023)
+  -> "'Tis the season"
+> smartypants("the dog's bone, the dogs' bones", None)
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> smartypants("the dog's bone, the dogs' bones", 0)
+  -> "the dog's bone, the dogs' bones"
+> smartypants("the dog's bone, the dogs' bones", 91)
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> smartypants("the dog's bone, the dogs' bones", 875)
+  -> "the dog's bone, the dogs' bones"
+> smartypants("the dog's bone, the dogs' bones", 129)
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> smartypants("the dog's bone, the dogs' bones", 78)
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> smartypants("the dog's bone, the dogs' bones", 1023)
+  -> "the dog's bone, the dogs' bones"
+> smartypants('&nbsp;\'tis &nbsp;"so"', None)
+  -> '&nbsp;&#8216;tis &nbsp;&#8220;so&#8221;'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 0)
+  -> '&nbsp;\'tis &nbsp;"so"'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 91)
+  -> '&nbsp;&#8216;tis &nbsp;&#8220;so&#8221;'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 875)
+  -> '&nbsp;\'tis &nbsp;"so"'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 129)
+  -> '&nbsp;&#8216;tis &nbsp;&#8220;so&#8221;'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 78)
+  -> '&nbsp;&#8217;tis &nbsp;"so"'
+> smartypants('&nbsp;\'tis &nbsp;"so"', 1023)
+  -> '&nbsp;\'tis &nbsp;"so"'
+> smartypants('&mdash;\'word\' &ndash;"word"', None)
+  -> '&mdash;&#8216;word&#8217; &ndash;&#8220;word&#8221;'
+> smartypants('&mdash;\'word\' &ndash;"word"', 0)
+  -> '&mdash;\'word\' &ndash;"word"'
+> smartypants('&mdash;\'word\' &ndash;"word"', 91)
+  -> '&mdash;&#8216;word&#8217; &ndash;&#8220;word&#8221;'
+> smartypants('&mdash;\'word\' &ndash;"word"', 875)
+  -> '&mdash;\'word\' &ndash;"word"'
+> smartypants('&mdash;\'word\' &ndash;"word"', 129)
+  -> '&mdash;&#8216;word&#8217; &ndash;&#8220;word&#8221;'
+> smartypants('&mdash;\'word\' &ndash;"word"', 78)
+  -> '&mdash;&#8217;word&#8217; &ndash;"word"'
+> smartypants('&mdash;\'word\' &ndash;"word"', 1023)
+  -> '&mdash;\'word\' &ndash;"word"'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', None)
+  -> '&#8211;&#8217;dash&#8217; &#8212;&#8221;dash&#8221; &#x2013;&#8217;hex&#8217; &#x2014;&#8221;hex&#8221;'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 0)
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 91)
+  -> '&#8211;&#8217;dash&#8217; &#8212;&#8221;dash&#8221; &#x2013;&#8217;hex&#8217; &#x2014;&#8221;hex&#8221;'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 875)
+  -> '-\'dash\' --"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 129)
+  -> '&#8211;&#8217;dash&#8217; &#8212;&#8221;dash&#8221; &#x2013;&#8217;hex&#8217; &#x2014;&#8221;hex&#8221;'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 78)
+  -> '&#8211;&#8217;dash&#8217; &#8212;"dash" &#x2013;&#8217;hex&#8217; &#x2014;"hex"'
+> smartypants('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"', 1023)
+  -> '-\'dash\' --"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', None)
+  -> '(&#8220;paren&#8221;) [&#8216;bracket&#8217;] {&#8220;brace&#8221;} -&#8216;dash&#8217;-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 0)
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 91)
+  -> '(&#8220;paren&#8221;) [&#8216;bracket&#8217;] {&#8220;brace&#8221;} -&#8216;dash&#8217;-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 875)
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 129)
+  -> '(&#8220;paren&#8221;) [&#8216;bracket&#8217;] {&#8220;brace&#8221;} -&#8216;dash&#8217;-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 78)
+  -> '("paren") [&#8217;bracket&#8217;] {"brace"} -&#8217;dash&#8217;-'
+> smartypants('("paren") [\'bracket\'] {"brace"} -\'dash\'-', 1023)
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> smartypants('"5\'10" tall"', None)
+  -> '&#8220;5&#8216;10&#8221; tall&#8221;'
+> smartypants('"5\'10" tall"', 0)
+  -> '"5\'10" tall"'
+> smartypants('"5\'10" tall"', 91)
+  -> '&#8220;5&#8216;10&#8221; tall&#8221;'
+> smartypants('"5\'10" tall"', 875)
+  -> '"5\'10" tall"'
+> smartypants('"5\'10" tall"', 129)
+  -> '&#8220;5&#8216;10&#8221; tall&#8221;'
+> smartypants('"5\'10" tall"', 78)
+  -> '"5&#8217;10" tall"'
+> smartypants('"5\'10" tall"', 1023)
+  -> '"5\'10" tall"'
+> smartypants('a 9" pan, 12\' board', None)
+  -> 'a 9&#8221; pan, 12&#8217; board'
+> smartypants('a 9" pan, 12\' board', 0)
+  -> 'a 9" pan, 12\' board'
+> smartypants('a 9" pan, 12\' board', 91)
+  -> 'a 9&#8221; pan, 12&#8217; board'
+> smartypants('a 9" pan, 12\' board', 875)
+  -> 'a 9" pan, 12\' board'
+> smartypants('a 9" pan, 12\' board', 129)
+  -> 'a 9&#8221; pan, 12&#8217; board'
+> smartypants('a 9" pan, 12\' board', 78)
+  -> 'a 9" pan, 12&#8217; board'
+> smartypants('a 9" pan, 12\' board', 1023)
+  -> 'a 9" pan, 12\' board'
+> smartypants("'quoted'\n'next line'", None)
+  -> '&#8216;quoted&#8217;\n&#8216;next line&#8217;'
+> smartypants("'quoted'\n'next line'", 0)
+  -> "'quoted'\n'next line'"
+> smartypants("'quoted'\n'next line'", 91)
+  -> '&#8216;quoted&#8217;\n&#8216;next line&#8217;'
+> smartypants("'quoted'\n'next line'", 875)
+  -> "'quoted'\n'next line'"
+> smartypants("'quoted'\n'next line'", 129)
+  -> '&#8216;quoted&#8217;\n&#8216;next line&#8217;'
+> smartypants("'quoted'\n'next line'", 78)
+  -> '&#8217;quoted&#8217;\n&#8217;next line&#8217;'
+> smartypants("'quoted'\n'next line'", 1023)
+  -> "'quoted'\n'next line'"
+> smartypants('"tab"\t\'tab\'', None)
+  -> '&#8220;tab&#8221;\t&#8216;tab&#8217;'
+> smartypants('"tab"\t\'tab\'', 0)
+  -> '"tab"\t\'tab\''
+> smartypants('"tab"\t\'tab\'', 91)
+  -> '&#8220;tab&#8221;\t&#8216;tab&#8217;'
+> smartypants('"tab"\t\'tab\'', 875)
+  -> '"tab"\t\'tab\''
+> smartypants('"tab"\t\'tab\'', 129)
+  -> '&#8220;tab&#8221;\t&#8216;tab&#8217;'
+> smartypants('"tab"\t\'tab\'', 78)
+  -> '"tab"\t&#8217;tab&#8217;'
+> smartypants('"tab"\t\'tab\'', 1023)
+  -> '"tab"\t\'tab\''
+> smartypants('Ça va? "Très bien" -- \'merci\'', None)
+  -> 'Ça va? &#8220;Très bien&#8221; &#8212; &#8216;merci&#8217;'
+> smartypants('Ça va? "Très bien" -- \'merci\'', 0)
+  -> 'Ça va? "Très bien" -- \'merci\''
+> smartypants('Ça va? "Très bien" -- \'merci\'', 91)
+  -> 'Ça va? &#8220;Très bien&#8221; &#8211; &#8216;merci&#8217;'
+> smartypants('Ça va? "Très bien" -- \'merci\'', 875)
+  -> 'Ça va? "Très bien" -- \'merci\''
+> smartypants('Ça va? "Très bien" -- \'merci\'', 129)
+  -> 'Ça va? &#8220;Très bien&#8221; -- &#8216;merci&#8217;'
+> smartypants('Ça va? "Très bien" -- \'merci\'', 78)
+  -> 'Ça va? "Très bien" &#8212; &#8217;merci&#8217;'
+> smartypants('Ça va? "Très bien" -- \'merci\'', 1023)
+  -> 'Ça va? "Très bien" -- \'merci\''
+> smartypants('«Bonjour» "monde"', None)
+  -> '«Bonjour» &#8220;monde&#8221;'
+> smartypants('«Bonjour» "monde"', 0)
+  -> '«Bonjour» "monde"'
+> smartypants('«Bonjour» "monde"', 91)
+  -> '«Bonjour» &#8220;monde&#8221;'
+> smartypants('«Bonjour» "monde"', 875)
+  -> '«Bonjour» "monde"'
+> smartypants('«Bonjour» "monde"', 129)
+  -> '«Bonjour» &#8220;monde&#8221;'
+> smartypants('«Bonjour» "monde"', 78)
+  -> '«Bonjour» "monde"'
+> smartypants('«Bonjour» "monde"', 1023)
+  -> '«Bonjour» "monde"'
+> smartypants('数字 "引用" \'テスト\'', None)
+  -> '数字 &#8220;引用&#8221; &#8216;テスト&#8217;'
+> smartypants('数字 "引用" \'テスト\'', 0)
+  -> '数字 "引用" \'テスト\''
+> smartypants('数字 "引用" \'テスト\'', 91)
+  -> '数字 &#8220;引用&#8221; &#8216;テスト&#8217;'
+> smartypants('数字 "引用" \'テスト\'', 875)
+  -> '数字 "引用" \'テスト\''
+> smartypants('数字 "引用" \'テスト\'', 129)
+  -> '数字 &#8220;引用&#8221; &#8216;テスト&#8217;'
+> smartypants('数字 "引用" \'テスト\'', 78)
+  -> '数字 "引用" &#8217;テスト&#8217;'
+> smartypants('数字 "引用" \'テスト\'', 1023)
+  -> '数字 "引用" \'テスト\''
+> smartypants('emoji 🎉 "party" \'time\'', None)
+  -> 'emoji 🎉 &#8220;party&#8221; &#8216;time&#8217;'
+> smartypants('emoji 🎉 "party" \'time\'', 0)
+  -> 'emoji 🎉 "party" \'time\''
+> smartypants('emoji 🎉 "party" \'time\'', 91)
+  -> 'emoji 🎉 &#8220;party&#8221; &#8216;time&#8217;'
+> smartypants('emoji 🎉 "party" \'time\'', 875)
+  -> 'emoji 🎉 "party" \'time\''
+> smartypants('emoji 🎉 "party" \'time\'', 129)
+  -> 'emoji 🎉 &#8220;party&#8221; &#8216;time&#8217;'
+> smartypants('emoji 🎉 "party" \'time\'', 78)
+  -> 'emoji 🎉 "party" &#8217;time&#8217;'
+> smartypants('emoji 🎉 "party" \'time\'', 1023)
+  -> 'emoji 🎉 "party" \'time\''
+> smartypants('\'_underscore_\' "_also_"', None)
+  -> '&#8216;_underscore_&#8217; &#8220;_also_&#8221;'
+> smartypants('\'_underscore_\' "_also_"', 0)
+  -> '\'_underscore_\' "_also_"'
+> smartypants('\'_underscore_\' "_also_"', 91)
+  -> '&#8216;_underscore_&#8217; &#8220;_also_&#8221;'
+> smartypants('\'_underscore_\' "_also_"', 875)
+  -> '\'_underscore_\' "_also_"'
+> smartypants('\'_underscore_\' "_also_"', 129)
+  -> '&#8216;_underscore_&#8217; &#8220;_also_&#8221;'
+> smartypants('\'_underscore_\' "_also_"', 78)
+  -> '&#8217;_underscore_&#8217; "_also_"'
+> smartypants('\'_underscore_\' "_also_"', 1023)
+  -> '\'_underscore_\' "_also_"'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;italic&#8217;</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 0)
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 91)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;italic&#8217;</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 875)
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 129)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;italic&#8217;</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 78)
+  -> '<b>"bold"</b> <i>&#8217;italic&#8217;</i>'
+> smartypants('<b>"bold"</b> <i>\'italic\'</i>', 1023)
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> smartypants('<a href="x">"link"</a>', None)
+  -> '<a href="x">&#8220;link&#8221;</a>'
+> smartypants('<a href="x">"link"</a>', 0)
+  -> '<a href="x">"link"</a>'
+> smartypants('<a href="x">"link"</a>', 91)
+  -> '<a href="x">&#8220;link&#8221;</a>'
+> smartypants('<a href="x">"link"</a>', 875)
+  -> '<a href="x">"link"</a>'
+> smartypants('<a href="x">"link"</a>', 129)
+  -> '<a href="x">&#8220;link&#8221;</a>'
+> smartypants('<a href="x">"link"</a>', 78)
+  -> '<a href="x">"link"</a>'
+> smartypants('<a href="x">"link"</a>', 1023)
+  -> '<a href="x">"link"</a>'
+> smartypants('<code>"code"</code> "after"', None)
+  -> '<code>"code"</code> &#8220;after&#8221;'
+> smartypants('<code>"code"</code> "after"', 0)
+  -> '<code>"code"</code> "after"'
+> smartypants('<code>"code"</code> "after"', 91)
+  -> '<code>"code"</code> &#8220;after&#8221;'
+> smartypants('<code>"code"</code> "after"', 875)
+  -> '<code>"code"</code> "after"'
+> smartypants('<code>"code"</code> "after"', 129)
+  -> '<code>"code"</code> &#8220;after&#8221;'
+> smartypants('<code>"code"</code> "after"', 78)
+  -> '<code>"code"</code> "after"'
+> smartypants('<code>"code"</code> "after"', 1023)
+  -> '<code>"code"</code> "after"'
+> smartypants('<pre>"pre" -- </pre> -- "after"', None)
+  -> '<pre>"pre" -- </pre> &#8212; &#8220;after&#8221;'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 0)
+  -> '<pre>"pre" -- </pre> -- "after"'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 91)
+  -> '<pre>"pre" -- </pre> &#8211; &#8220;after&#8221;'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 875)
+  -> '<pre>"pre" -- </pre> -- "after"'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 129)
+  -> '<pre>"pre" -- </pre> -- &#8220;after&#8221;'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 78)
+  -> '<pre>"pre" -- </pre> &#8212; "after"'
+> smartypants('<pre>"pre" -- </pre> -- "after"', 1023)
+  -> '<pre>"pre" -- </pre> -- "after"'
+> smartypants('<PRE>"upper"</PRE> "after"', None)
+  -> '<PRE>"upper"</PRE> &#8220;after&#8221;'
+> smartypants('<PRE>"upper"</PRE> "after"', 0)
+  -> '<PRE>"upper"</PRE> "after"'
+> smartypants('<PRE>"upper"</PRE> "after"', 91)
+  -> '<PRE>"upper"</PRE> &#8220;after&#8221;'
+> smartypants('<PRE>"upper"</PRE> "after"', 875)
+  -> '<PRE>"upper"</PRE> "after"'
+> smartypants('<PRE>"upper"</PRE> "after"', 129)
+  -> '<PRE>"upper"</PRE> &#8220;after&#8221;'
+> smartypants('<PRE>"upper"</PRE> "after"', 78)
+  -> '<PRE>"upper"</PRE> "after"'
+> smartypants('<PRE>"upper"</PRE> "after"', 1023)
+  -> '<PRE>"upper"</PRE> "after"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', None)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 0)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 91)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 875)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 129)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 78)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<pre><code>"a"</pre> "b"</code> "c"', 1023)
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> smartypants('<code><pre>"a"</code></pre> "b"', None)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 0)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 91)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 875)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 129)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 78)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('<code><pre>"a"</code></pre> "b"', 1023)
+  -> '<code><pre>"a"</code></pre> "b"'
+> smartypants('</pre> "stray close"', None)
+  -> '</pre> &#8220;stray close&#8221;'
+> smartypants('</pre> "stray close"', 0)
+  -> '</pre> "stray close"'
+> smartypants('</pre> "stray close"', 91)
+  -> '</pre> &#8220;stray close&#8221;'
+> smartypants('</pre> "stray close"', 875)
+  -> '</pre> "stray close"'
+> smartypants('</pre> "stray close"', 129)
+  -> '</pre> &#8220;stray close&#8221;'
+> smartypants('</pre> "stray close"', 78)
+  -> '</pre> "stray close"'
+> smartypants('</pre> "stray close"', 1023)
+  -> '</pre> "stray close"'
+> smartypants('<pre/> "self closing"', None)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 0)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 91)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 875)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 129)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 78)
+  -> '<pre/> "self closing"'
+> smartypants('<pre/> "self closing"', 1023)
+  -> '<pre/> "self closing"'
+> smartypants('<prefix>"not pre"</prefix>', None)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 0)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 91)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 875)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 129)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 78)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<prefix>"not pre"</prefix>', 1023)
+  -> '<prefix>"not pre"</prefix>'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', None)
+  -> '<script>if (a--) { x = "y"; }</script> &#8212; &#8220;z&#8221;'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 0)
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 91)
+  -> '<script>if (a--) { x = "y"; }</script> &#8211; &#8220;z&#8221;'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 875)
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 129)
+  -> '<script>if (a--) { x = "y"; }</script> -- &#8220;z&#8221;'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 78)
+  -> '<script>if (a--) { x = "y"; }</script> &#8212; "z"'
+> smartypants('<script>if (a--) { x = "y"; }</script> -- "z"', 1023)
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> smartypants('<style>a { b: "c" }</style> "d"', None)
+  -> '<style>a { b: "c" }</style> &#8220;d&#8221;'
+> smartypants('<style>a { b: "c" }</style> "d"', 0)
+  -> '<style>a { b: "c" }</style> "d"'
+> smartypants('<style>a { b: "c" }</style> "d"', 91)
+  -> '<style>a { b: "c" }</style> &#8220;d&#8221;'
+> smartypants('<style>a { b: "c" }</style> "d"', 875)
+  -> '<style>a { b: "c" }</style> "d"'
+> smartypants('<style>a { b: "c" }</style> "d"', 129)
+  -> '<style>a { b: "c" }</style> &#8220;d&#8221;'
+> smartypants('<style>a { b: "c" }</style> "d"', 78)
+  -> '<style>a { b: "c" }</style> "d"'
+> smartypants('<style>a { b: "c" }</style> "d"', 1023)
+  -> '<style>a { b: "c" }</style> "d"'
+> smartypants('a < b and "c" > d', None)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 0)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 91)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 875)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 129)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 78)
+  -> 'a < b and "c" > d'
+> smartypants('a < b and "c" > d', 1023)
+  -> 'a < b and "c" > d'
+> smartypants('<p "unterminated tag', None)
+  -> '<p &#8220;unterminated tag'
+> smartypants('<p "unterminated tag', 0)
+  -> '<p "unterminated tag'
+> smartypants('<p "unterminated tag', 91)
+  -> '<p &#8220;unterminated tag'
+> smartypants('<p "unterminated tag', 875)
+  -> '<p "unterminated tag'
+> smartypants('<p "unterminated tag', 129)
+  -> '<p &#8220;unterminated tag'
+> smartypants('<p "unterminated tag', 78)
+  -> '<p "unterminated tag'
+> smartypants('<p "unterminated tag', 1023)
+  -> '<p "unterminated tag'
+> smartypants('text <', None)
+  -> 'text <'
+> smartypants('text <', 0)
+  -> 'text <'
+> smartypants('text <', 91)
+  -> 'text <'
+> smartypants('text <', 875)
+  -> 'text <'
+> smartypants('text <', 129)
+  -> 'text <'
+> smartypants('text <', 78)
+  -> 'text <'
+> smartypants('text <', 1023)
+  -> 'text <'
+> smartypants('> "gt" first', None)
+  -> '> &#8220;gt&#8221; first'
+> smartypants('> "gt" first', 0)
+  -> '> "gt" first'
+> smartypants('> "gt" first', 91)
+  -> '> &#8220;gt&#8221; first'
+> smartypants('> "gt" first', 875)
+  -> '> "gt" first'
+> smartypants('> "gt" first', 129)
+  -> '> &#8220;gt&#8221; first'
+> smartypants('> "gt" first', 78)
+  -> '> "gt" first'
+> smartypants('> "gt" first', 1023)
+  -> '> "gt" first'
+> smartypants('', None)
+  -> ''
+> smartypants('', 0)
+  -> ''
+> smartypants('', 91)
+  -> ''
+> smartypants('', 875)
+  -> ''
+> smartypants('', 129)
+  -> ''
+> smartypants('', 78)
+  -> ''
+> smartypants('', 1023)
+  -> ''
+> smartypants('plain', None)
+  -> 'plain'
+> smartypants('plain', 0)
+  -> 'plain'
+> smartypants('plain', 91)
+  -> 'plain'
+> smartypants('plain', 875)
+  -> 'plain'
+> smartypants('plain', 129)
+  -> 'plain'
+> smartypants('plain', 78)
+  -> 'plain'
+> smartypants('plain', 1023)
+  -> 'plain'
+> smartypants('...', None)
+  -> '&#8230;'
+> smartypants('...', 0)
+  -> '...'
+> smartypants('...', 91)
+  -> '&#8230;'
+> smartypants('...', 875)
+  -> '...'
+> smartypants('...', 129)
+  -> '...'
+> smartypants('...', 78)
+  -> '&#8230;'
+> smartypants('...', 1023)
+  -> '...'
+> smartypants('---', None)
+  -> '&#8212;-'
+> smartypants('---', 0)
+  -> '---'
+> smartypants('---', 91)
+  -> '&#8212;'
+> smartypants('---', 875)
+  -> '-'
+> smartypants('---', 129)
+  -> '---'
+> smartypants('---', 78)
+  -> '&#8212;-'
+> smartypants('---', 1023)
+  -> '---'
+> smartypants('----', None)
+  -> '&#8212;&#8212;'
+> smartypants('----', 0)
+  -> '----'
+> smartypants('----', 91)
+  -> '&#8212;-'
+> smartypants('----', 875)
+  -> '--'
+> smartypants('----', 129)
+  -> '----'
+> smartypants('----', 78)
+  -> '&#8212;&#8212;'
+> smartypants('----', 1023)
+  -> '----'
+> smartypants('-----', None)
+  -> '&#8212;&#8212;-'
+> smartypants('-----', 0)
+  -> '-----'
+> smartypants('-----', 91)
+  -> '&#8212;&#8211;'
+> smartypants('-----', 875)
+  -> '---'
+> smartypants('-----', 129)
+  -> '-----'
+> smartypants('-----', 78)
+  -> '&#8212;&#8212;-'
+> smartypants('-----', 1023)
+  -> '-----'
+> smartypants('&quot;', None)
+  -> '&quot;'
+> smartypants('&quot;', 0)
+  -> '&quot;'
+> smartypants('&quot;', 91)
+  -> '&quot;'
+> smartypants('&quot;', 875)
+  -> '&quot;'
+> smartypants('&quot;', 129)
+  -> '&#8220;'
+> smartypants('&quot;', 78)
+  -> '&quot;'
+> smartypants('&quot;', 1023)
+  -> '"'
+> smartypants('&quot;quot&quot;', None)
+  -> '&quot;quot&quot;'
+> smartypants('&quot;quot&quot;', 0)
+  -> '&quot;quot&quot;'
+> smartypants('&quot;quot&quot;', 91)
+  -> '&quot;quot&quot;'
+> smartypants('&quot;quot&quot;', 875)
+  -> '&quot;quot&quot;'
+> smartypants('&quot;quot&quot;', 129)
+  -> '&#8220;quot&#8221;'
+> smartypants('&quot;quot&quot;', 78)
+  -> '&quot;quot&quot;'
+> smartypants('&quot;quot&quot;', 1023)
+  -> '"quot"'
+> smartypants('&amp;quot; "x"', None)
+  -> '&amp;quot; &#8220;x&#8221;'
+> smartypants('&amp;quot; "x"', 0)
+  -> '&amp;quot; "x"'
+> smartypants('&amp;quot; "x"', 91)
+  -> '&amp;quot; &#8220;x&#8221;'
+> smartypants('&amp;quot; "x"', 875)
+  -> '&amp;quot; "x"'
+> smartypants('&amp;quot; "x"', 129)
+  -> '&amp;quot; &#8220;x&#8221;'
+> smartypants('&amp;quot; "x"', 78)
+  -> '&amp;quot; "x"'
+> smartypants('&amp;quot; "x"', 1023)
+  -> '&amp;quot; "x"'
+> smartypants('\\"escaped\\"', None)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 0)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 91)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 875)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 129)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 78)
+  -> '&#34;escaped&#34;'
+> smartypants('\\"escaped\\"', 1023)
+  -> '&#34;escaped&#34;'
+> smartypants('it\'s \'single\' and "double"', None)
+  -> 'it&#8217;s &#8216;single&#8217; and &#8220;double&#8221;'
+> smartypants('it\'s \'single\' and "double"', 0)
+  -> 'it\'s \'single\' and "double"'
+> smartypants('it\'s \'single\' and "double"', 91)
+  -> 'it&#8217;s &#8216;single&#8217; and &#8220;double&#8221;'
+> smartypants('it\'s \'single\' and "double"', 875)
+  -> 'it\'s \'single\' and "double"'
+> smartypants('it\'s \'single\' and "double"', 129)
+  -> 'it&#8217;s &#8216;single&#8217; and &#8220;double&#8221;'
+> smartypants('it\'s \'single\' and "double"', 78)
+  -> 'it&#8217;s &#8217;single&#8217; and "double"'
+> smartypants('it\'s \'single\' and "double"', 1023)
+  -> 'it\'s \'single\' and "double"'
+> smartypants("'''", None)
+  -> '&#8221;&#8217;'
+> smartypants("'''", 0)
+  -> "'''"
+> smartypants("'''", 91)
+  -> '&#8221;&#8217;'
+> smartypants("'''", 875)
+  -> '"\''
+> smartypants("'''", 129)
+  -> '&#8216;&#8217;&#8216;'
+> smartypants("'''", 78)
+  -> '&#8217;&#8217;&#8217;'
+> smartypants("'''", 1023)
+  -> "'''"
+> smartypants('"""', None)
+  -> '&#8221;&#8221;&#8220;'
+> smartypants('"""', 0)
+  -> '"""'
+> smartypants('"""', 91)
+  -> '&#8221;&#8221;&#8220;'
+> smartypants('"""', 875)
+  -> '"""'
+> smartypants('"""', 129)
+  -> '&#8221;&#8221;&#8220;'
+> smartypants('"""', 78)
+  -> '"""'
+> smartypants('"""', 1023)
+  -> '"""'
+> smartypants("''", None)
+  -> '&#8221;'
+> smartypants("''", 0)
+  -> "''"
+> smartypants("''", 91)
+  -> '&#8221;'
+> smartypants("''", 875)
+  -> '"'
+> smartypants("''", 129)
+  -> '&#8216;&#8217;'
+> smartypants("''", 78)
+  -> '&#8217;&#8217;'
+> smartypants("''", 1023)
+  -> "''"
+> smartypants('""', None)
+  -> '&#8221;&#8221;'
+> smartypants('""', 0)
+  -> '""'
+> smartypants('""', 91)
+  -> '&#8221;&#8221;'
+> smartypants('""', 875)
+  -> '""'
+> smartypants('""', 129)
+  -> '&#8221;&#8221;'
+> smartypants('""', 78)
+  -> '""'
+> smartypants('""', 1023)
+  -> '""'
+> smartypants('"\'"', None)
+  -> '&#8220;&#8217;&#8221;'
+> smartypants('"\'"', 0)
+  -> '"\'"'
+> smartypants('"\'"', 91)
+  -> '&#8220;&#8217;&#8221;'
+> smartypants('"\'"', 875)
+  -> '"\'"'
+> smartypants('"\'"', 129)
+  -> '&#8220;&#8217;&#8221;'
+> smartypants('"\'"', 78)
+  -> '"&#8217;"'
+> smartypants('"\'"', 1023)
+  -> '"\'"'
+> smartypants('\'"\'', None)
+  -> '&#8216;&#8221;&#8217;'
+> smartypants('\'"\'', 0)
+  -> '\'"\''
+> smartypants('\'"\'', 91)
+  -> '&#8216;&#8221;&#8217;'
+> smartypants('\'"\'', 875)
+  -> '\'"\''
+> smartypants('\'"\'', 129)
+  -> '&#8216;&#8221;&#8217;'
+> smartypants('\'"\'', 78)
+  -> '&#8217;"&#8217;'
+> smartypants('\'"\'', 1023)
+  -> '\'"\''
+> smartypants("x 'y z' w", None)
+  -> 'x &#8216;y z&#8217; w'
+> smartypants("x 'y z' w", 0)
+  -> "x 'y z' w"
+> smartypants("x 'y z' w", 91)
+  -> 'x &#8216;y z&#8217; w'
+> smartypants("x 'y z' w", 875)
+  -> "x 'y z' w"
+> smartypants("x 'y z' w", 129)
+  -> 'x &#8216;y z&#8217; w'
+> smartypants("x 'y z' w", 78)
+  -> 'x &#8217;y z&#8217; w'
+> smartypants("x 'y z' w", 1023)
+  -> "x 'y z' w"
+> smartypants('x "y z" w', None)
+  -> 'x &#8220;y z&#8221; w'
+> smartypants('x "y z" w', 0)
+  -> 'x "y z" w'
+> smartypants('x "y z" w', 91)
+  -> 'x &#8220;y z&#8221; w'
+> smartypants('x "y z" w', 875)
+  -> 'x "y z" w'
+> smartypants('x "y z" w', 129)
+  -> 'x &#8220;y z&#8221; w'
+> smartypants('x "y z" w', 78)
+  -> 'x "y z" w'
+> smartypants('x "y z" w', 1023)
+  -> 'x "y z" w'
+> smartypants('1\'2"3', None)
+  -> '1&#8216;2&#8221;3'
+> smartypants('1\'2"3', 0)
+  -> '1\'2"3'
+> smartypants('1\'2"3', 91)
+  -> '1&#8216;2&#8221;3'
+> smartypants('1\'2"3', 875)
+  -> '1\'2"3'
+> smartypants('1\'2"3', 129)
+  -> '1&#8216;2&#8221;3'
+> smartypants('1\'2"3', 78)
+  -> '1&#8217;2"3'
+> smartypants('1\'2"3', 1023)
+  -> '1\'2"3'
+> smartypants("'1' '2s' '3 '", None)
+  -> '&#8216;1&#8217; &#8216;2s&#8217; &#8216;3 &#8216;'
+> smartypants("'1' '2s' '3 '", 0)
+  -> "'1' '2s' '3 '"
+> smartypants("'1' '2s' '3 '", 91)
+  -> '&#8216;1&#8217; &#8216;2s&#8217; &#8216;3 &#8216;'
+> smartypants("'1' '2s' '3 '", 875)
+  -> "'1' '2s' '3 '"
+> smartypants("'1' '2s' '3 '", 129)
+  -> '&#8216;1&#8217; &#8216;2s&#8217; &#8216;3 &#8216;'
+> smartypants("'1' '2s' '3 '", 78)
+  -> '&#8217;1&#8217; &#8217;2s&#8217; &#8217;3 &#8217;'
+> smartypants("'1' '2s' '3 '", 1023)
+  -> "'1' '2s' '3 '"
+> smartypants("the '80s's music", None)
+  -> 'the &#8216;80s&#8217;s music'
+> smartypants("the '80s's music", 0)
+  -> "the '80s's music"
+> smartypants("the '80s's music", 91)
+  -> 'the &#8216;80s&#8217;s music'
+> smartypants("the '80s's music", 875)
+  -> "the '80s's music"
+> smartypants("the '80s's music", 129)
+  -> 'the &#8216;80s&#8217;s music'
+> smartypants("the '80s's music", 78)
+  -> 'the &#8217;80s&#8217;s music'
+> smartypants("the '80s's music", 1023)
+  -> "the '80s's music"
+> smartypants("'00s", None)
+  -> '&#8216;00s'
+> smartypants("'00s", 0)
+  -> "'00s"
+> smartypants("'00s", 91)
+  -> '&#8216;00s'
+> smartypants("'00s", 875)
+  -> "'00s"
+> smartypants("'00s", 129)
+  -> '&#8216;00s'
+> smartypants("'00s", 78)
+  -> '&#8217;00s'
+> smartypants("'00s", 1023)
+  -> "'00s"
+> smartypants("'12s", None)
+  -> '&#8216;12s'
+> smartypants("'12s", 0)
+  -> "'12s"
+> smartypants("'12s", 91)
+  -> '&#8216;12s'
+> smartypants("'12s", 875)
+  -> "'12s"
+> smartypants("'12s", 129)
+  -> '&#8216;12s'
+> smartypants("'12s", 78)
+  -> '&#8217;12s'
+> smartypants("'12s", 1023)
+  -> "'12s"
+> smartypants("'s", None)
+  -> '&#8216;s'
+> smartypants("'s", 0)
+  -> "'s"
+> smartypants("'s", 91)
+  -> '&#8216;s'
+> smartypants("'s", 875)
+  -> "'s"
+> smartypants("'s", 129)
+  -> '&#8216;s'
+> smartypants("'s", 78)
+  -> '&#8217;s'
+> smartypants("'s", 1023)
+  -> "'s"
+> smartypants("s'", None)
+  -> 's&#8217;'
+> smartypants("s'", 0)
+  -> "s'"
+> smartypants("s'", 91)
+  -> 's&#8217;'
+> smartypants("s'", 875)
+  -> "s'"
+> smartypants("s'", 129)
+  -> 's&#8217;'
+> smartypants("s'", 78)
+  -> 's&#8217;'
+> smartypants("s'", 1023)
+  -> "s'"
+> smartypants("'s'", None)
+  -> '&#8216;s&#8217;'
+> smartypants("'s'", 0)
+  -> "'s'"
+> smartypants("'s'", 91)
+  -> '&#8216;s&#8217;'
+> smartypants("'s'", 875)
+  -> "'s'"
+> smartypants("'s'", 129)
+  -> '&#8216;s&#8217;'
+> smartypants("'s'", 78)
+  -> '&#8217;s&#8217;'
+> smartypants("'s'", 1023)
+  -> "'s'"
+> smartypants("dogs's", None)
+  -> 'dogs&#8217;s'
+> smartypants("dogs's", 0)
+  -> "dogs's"
+> smartypants("dogs's", 91)
+  -> 'dogs&#8217;s'
+> smartypants("dogs's", 875)
+  -> "dogs's"
+> smartypants("dogs's", 129)
+  -> 'dogs&#8217;s'
+> smartypants("dogs's", 78)
+  -> 'dogs&#8217;s'
+> smartypants("dogs's", 1023)
+  -> "dogs's"
+> smartypants("-'x'", None)
+  -> '-&#8216;x&#8217;'
+> smartypants("-'x'", 0)
+  -> "-'x'"
+> smartypants("-'x'", 91)
+  -> '-&#8216;x&#8217;'
+> smartypants("-'x'", 875)
+  -> "-'x'"
+> smartypants("-'x'", 129)
+  -> '-&#8216;x&#8217;'
+> smartypants("-'x'", 78)
+  -> '-&#8217;x&#8217;'
+> smartypants("-'x'", 1023)
+  -> "-'x'"
+> smartypants("--'x'", None)
+  -> '&#8212;&#8217;x&#8217;'
+> smartypants("--'x'", 0)
+  -> "--'x'"
+> smartypants("--'x'", 91)
+  -> '&#8211;&#8217;x&#8217;'
+> smartypants("--'x'", 875)
+  -> "--'x'"
+> smartypants("--'x'", 129)
+  -> '--&#8216;x&#8217;'
+> smartypants("--'x'", 78)
+  -> '&#8212;&#8217;x&#8217;'
+> smartypants("--'x'", 1023)
+  -> "--'x'"
+> smartypants("—'x'", None)
+  -> '—&#8217;x&#8217;'
+> smartypants("—'x'", 0)
+  -> "—'x'"
+> smartypants("—'x'", 91)
+  -> '—&#8217;x&#8217;'
+> smartypants("—'x'", 875)
+  -> "—'x'"
+> smartypants("—'x'", 129)
+  -> '—&#8217;x&#8217;'
+> smartypants("—'x'", 78)
+  -> '—&#8217;x&#8217;'
+> smartypants("—'x'", 1023)
+  -> "—'x'"
+> smartypants('–"x"', None)
+  -> '–&#8221;x&#8221;'
+> smartypants('–"x"', 0)
+  -> '–"x"'
+> smartypants('–"x"', 91)
+  -> '–&#8221;x&#8221;'
+> smartypants('–"x"', 875)
+  -> '–"x"'
+> smartypants('–"x"', 129)
+  -> '–&#8221;x&#8221;'
+> smartypants('–"x"', 78)
+  -> '–"x"'
+> smartypants('–"x"', 1023)
+  -> '–"x"'
+== the converters one at a time
+> convert_quotes('"foo" -- bar')
+  -> '&#8220;foo&#8221; -- bar'
+> convert_quotes('"Isn\'t this fun?"')
+  -> '&#8220;Isn&#8217;t this fun?&#8221;'
+> convert_quotes("'Isn't this fun?'")
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> convert_quotes("1440-80's")
+  -> '1440-80&#8217;s'
+> convert_quotes("1440-'80s")
+  -> '1440-&#8216;80s'
+> convert_quotes("1440--'80s")
+  -> '1440--&#8216;80s'
+> convert_quotes('1960s')
+  -> '1960s'
+> convert_quotes("1960's")
+  -> '1960&#8217;s'
+> convert_quotes("one two '60s")
+  -> 'one two &#8216;60s'
+> convert_quotes("'60s")
+  -> '&#8216;60s'
+> convert_quotes("the '80s and the 90's")
+  -> 'the &#8216;80s and the 90&#8217;s'
+> convert_quotes('21st century')
+  -> '21st century'
+> convert_quotes('3rd')
+  -> '3rd'
+> convert_quotes('You should use ";" here')
+  -> 'You should use &#8220;;&#8221; here'
+> convert_quotes('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the &#8220;<a>Essay on quoting</a>&#8221; paper.'
+> convert_quotes('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at &#8220;<a>Essay on quoting</a>&#8221;.'
+> convert_quotes("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> convert_quotes('--')
+  -> '--'
+> convert_quotes('-->')
+  -> '-->'
+> convert_quotes('-- \t  >')
+  -> '-- \t  >'
+> convert_quotes('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!-- &#8220;foo&#8221; --> blah--blah <!-- &#8220;bar&#8221; -->'
+> convert_quotes('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo -- &#8220;bar&#8221;<!-- foo-bar\n<p>blah &#8220;this&#8221;</p>\n-->\n</p>'
+> convert_quotes('<!-- comment -->')
+  -> '<!-- comment -->'
+> convert_quotes('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> convert_quotes('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!-- &#8220;foo&#8221; --> <!-- &#8220;bar&#8221; -->'
+> convert_quotes('<!-- -- -->')
+  -> '<!-- -- -->'
+> convert_quotes('<!-- -- -- \t >')
+  -> '<!-- -- -- \t >'
+> convert_quotes('<!---->')
+  -> '<!---->'
+> convert_quotes('<!-- --->')
+  -> '<!-- --->'
+> convert_quotes('<!-- x -- >')
+  -> '<!-- x -- >'
+> convert_quotes('"quote here"')
+  -> '&#8220;quote here&#8221;'
+> convert_quotes('"quote&ndash;here"')
+  -> '&#8220;quote&ndash;here&#8221;'
+> convert_quotes('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. -- Heraclitus'
+> convert_quotes('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> convert_quotes('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> convert_quotes('Huh...?')
+  -> 'Huh...?'
+> convert_quotes('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_quotes('Four.... dots')
+  -> 'Four.... dots'
+> convert_quotes('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_quotes("``Isn't this fun?''")
+  -> '``Isn&#8217;t this fun?&#8217;&#8216;'
+> convert_quotes("`Isn't this fun?'")
+  -> '`Isn&#8217;t this fun?&#8217;'
+> convert_quotes("``double'' and `single'")
+  -> '``double&#8217;&#8217; and `single&#8217;'
+> convert_quotes('"smarty" \\"pants\\"')
+  -> '&#8220;smarty&#8221; \\&#8221;pants\\&#8221;'
+> convert_quotes('\\\\')
+  -> '\\\\'
+> convert_quotes('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\&#8217; e \\&#8221; f \\\\ g'
+> convert_quotes("'")
+  -> '&#8216;'
+> convert_quotes('"')
+  -> '&#8220;'
+> convert_quotes("x'")
+  -> 'x&#8217;'
+> convert_quotes("'x")
+  -> '&#8216;x'
+> convert_quotes('x"')
+  -> 'x&#8221;'
+> convert_quotes('"x')
+  -> '&#8220;x'
+> convert_quotes("' '")
+  -> '&#8216; &#8216;'
+> convert_quotes('" "')
+  -> '&#8221; &#8220;'
+> convert_quotes('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, &#8220;&#8216;Quoted&#8217; words in a larger quote.&#8221;'
+> convert_quotes('\'"Nested" inside\'')
+  -> '&#8216;&#8220;Nested&#8221; inside&#8217;'
+> convert_quotes('"\'Double then single\'"')
+  -> '&#8220;&#8216;Double then single&#8217;&#8221;'
+> convert_quotes('"..." and \'...\'')
+  -> '&#8221;...&#8221; and &#8216;...&#8217;'
+> convert_quotes('"?" she asked')
+  -> '&#8221;?&#8221; she asked'
+> convert_quotes("'!' he said")
+  -> '&#8216;!&#8217; he said'
+> convert_quotes('"!" -- \'?\'')
+  -> '&#8221;!&#8221; -- &#8216;?&#8217;'
+> convert_quotes("Rock 'n' roll")
+  -> 'Rock &#8216;n&#8217; roll'
+> convert_quotes("'Tis the season")
+  -> '&#8216;Tis the season'
+> convert_quotes("the dog's bone, the dogs' bones")
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> convert_quotes('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;&#8216;tis &nbsp;&#8220;so&#8221;'
+> convert_quotes('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;&#8216;word&#8217; &ndash;&#8220;word&#8221;'
+> convert_quotes('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;&#8217;dash&#8217; &#8212;&#8221;dash&#8221; &#x2013;&#8217;hex&#8217; &#x2014;&#8221;hex&#8221;'
+> convert_quotes('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '(&#8220;paren&#8221;) [&#8216;bracket&#8217;] {&#8220;brace&#8221;} -&#8216;dash&#8217;-'
+> convert_quotes('"5\'10" tall"')
+  -> '&#8220;5&#8216;10&#8221; tall&#8221;'
+> convert_quotes('a 9" pan, 12\' board')
+  -> 'a 9&#8221; pan, 12&#8217; board'
+> convert_quotes("'quoted'\n'next line'")
+  -> '&#8216;quoted&#8217;\n&#8216;next line&#8217;'
+> convert_quotes('"tab"\t\'tab\'')
+  -> '&#8220;tab&#8221;\t&#8216;tab&#8217;'
+> convert_quotes('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? &#8220;Très bien&#8221; -- &#8216;merci&#8217;'
+> convert_quotes('«Bonjour» "monde"')
+  -> '«Bonjour» &#8220;monde&#8221;'
+> convert_quotes('数字 "引用" \'テスト\'')
+  -> '数字 &#8220;引用&#8221; &#8216;テスト&#8217;'
+> convert_quotes('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 &#8220;party&#8221; &#8216;time&#8217;'
+> convert_quotes('\'_underscore_\' "_also_"')
+  -> '&#8216;_underscore_&#8217; &#8220;_also_&#8221;'
+> convert_quotes('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>&#8221;bold&#8221;</b> <i>&#8217;italic&#8217;</i>'
+> convert_quotes('<a href="x">"link"</a>')
+  -> '<a href=&#8221;x&#8221;>&#8221;link&#8221;</a>'
+> convert_quotes('<code>"code"</code> "after"')
+  -> '<code>&#8221;code&#8221;</code> &#8220;after&#8221;'
+> convert_quotes('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>&#8221;pre&#8221; -- </pre> -- &#8220;after&#8221;'
+> convert_quotes('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>&#8221;upper&#8221;</PRE> &#8220;after&#8221;'
+> convert_quotes('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>&#8221;a&#8221;</pre> &#8220;b&#8221;</code> &#8220;c&#8221;'
+> convert_quotes('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>&#8221;a&#8221;</code></pre> &#8220;b&#8221;'
+> convert_quotes('</pre> "stray close"')
+  -> '</pre> &#8220;stray close&#8221;'
+> convert_quotes('<pre/> "self closing"')
+  -> '<pre/> &#8220;self closing&#8221;'
+> convert_quotes('<prefix>"not pre"</prefix>')
+  -> '<prefix>&#8221;not pre&#8221;</prefix>'
+> convert_quotes('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a--) { x = &#8220;y&#8221;; }</script> -- &#8220;z&#8221;'
+> convert_quotes('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: &#8220;c&#8221; }</style> &#8220;d&#8221;'
+> convert_quotes('a < b and "c" > d')
+  -> 'a < b and &#8220;c&#8221; > d'
+> convert_quotes('<p "unterminated tag')
+  -> '<p &#8220;unterminated tag'
+> convert_quotes('text <')
+  -> 'text <'
+> convert_quotes('> "gt" first')
+  -> '> &#8220;gt&#8221; first'
+> convert_quotes('')
+  -> ''
+> convert_quotes('plain')
+  -> 'plain'
+> convert_quotes('...')
+  -> '...'
+> convert_quotes('---')
+  -> '---'
+> convert_quotes('----')
+  -> '----'
+> convert_quotes('-----')
+  -> '-----'
+> convert_quotes('&quot;')
+  -> '&quot;'
+> convert_quotes('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_quotes('&amp;quot; "x"')
+  -> '&amp;quot; &#8220;x&#8221;'
+> convert_quotes('\\"escaped\\"')
+  -> '\\&#8221;escaped\\&#8221;'
+> convert_quotes('it\'s \'single\' and "double"')
+  -> 'it&#8217;s &#8216;single&#8217; and &#8220;double&#8221;'
+> convert_quotes("'''")
+  -> '&#8216;&#8217;&#8216;'
+> convert_quotes('"""')
+  -> '&#8221;&#8221;&#8220;'
+> convert_quotes("''")
+  -> '&#8216;&#8217;'
+> convert_quotes('""')
+  -> '&#8221;&#8221;'
+> convert_quotes('"\'"')
+  -> '&#8220;&#8217;&#8221;'
+> convert_quotes('\'"\'')
+  -> '&#8216;&#8221;&#8217;'
+> convert_quotes("x 'y z' w")
+  -> 'x &#8216;y z&#8217; w'
+> convert_quotes('x "y z" w')
+  -> 'x &#8220;y z&#8221; w'
+> convert_quotes('1\'2"3')
+  -> '1&#8216;2&#8221;3'
+> convert_quotes("'1' '2s' '3 '")
+  -> '&#8216;1&#8217; &#8216;2s&#8217; &#8216;3 &#8216;'
+> convert_quotes("the '80s's music")
+  -> 'the &#8216;80s&#8217;s music'
+> convert_quotes("'00s")
+  -> '&#8216;00s'
+> convert_quotes("'12s")
+  -> '&#8216;12s'
+> convert_quotes("'s")
+  -> '&#8216;s'
+> convert_quotes("s'")
+  -> 's&#8217;'
+> convert_quotes("'s'")
+  -> '&#8216;s&#8217;'
+> convert_quotes("dogs's")
+  -> 'dogs&#8217;s'
+> convert_quotes("-'x'")
+  -> '-&#8216;x&#8217;'
+> convert_quotes("--'x'")
+  -> '--&#8216;x&#8217;'
+> convert_quotes("—'x'")
+  -> '—&#8217;x&#8217;'
+> convert_quotes('–"x"')
+  -> '–&#8221;x&#8221;'
+> convert_backticks('"foo" -- bar')
+  -> '"foo" -- bar'
+> convert_backticks('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> convert_backticks("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> convert_backticks("1440-80's")
+  -> "1440-80's"
+> convert_backticks("1440-'80s")
+  -> "1440-'80s"
+> convert_backticks("1440--'80s")
+  -> "1440--'80s"
+> convert_backticks('1960s')
+  -> '1960s'
+> convert_backticks("1960's")
+  -> "1960's"
+> convert_backticks("one two '60s")
+  -> "one two '60s"
+> convert_backticks("'60s")
+  -> "'60s"
+> convert_backticks("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> convert_backticks('21st century')
+  -> '21st century'
+> convert_backticks('3rd')
+  -> '3rd'
+> convert_backticks('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_backticks('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_backticks('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_backticks("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> convert_backticks('--')
+  -> '--'
+> convert_backticks('-->')
+  -> '-->'
+> convert_backticks('-- \t  >')
+  -> '-- \t  >'
+> convert_backticks('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> convert_backticks('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> convert_backticks('<!-- comment -->')
+  -> '<!-- comment -->'
+> convert_backticks('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> convert_backticks('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> convert_backticks('<!-- -- -->')
+  -> '<!-- -- -->'
+> convert_backticks('<!-- -- -- \t >')
+  -> '<!-- -- -- \t >'
+> convert_backticks('<!---->')
+  -> '<!---->'
+> convert_backticks('<!-- --->')
+  -> '<!-- --->'
+> convert_backticks('<!-- x -- >')
+  -> '<!-- x -- >'
+> convert_backticks('"quote here"')
+  -> '"quote here"'
+> convert_backticks('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_backticks('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. -- Heraclitus'
+> convert_backticks('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> convert_backticks('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> convert_backticks('Huh...?')
+  -> 'Huh...?'
+> convert_backticks('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_backticks('Four.... dots')
+  -> 'Four.... dots'
+> convert_backticks('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_backticks("``Isn't this fun?''")
+  -> "&#8220;Isn't this fun?&#8221;"
+> convert_backticks("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> convert_backticks("``double'' and `single'")
+  -> "&#8220;double&#8221; and `single'"
+> convert_backticks('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_backticks('\\\\')
+  -> '\\\\'
+> convert_backticks('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g'
+> convert_backticks("'")
+  -> "'"
+> convert_backticks('"')
+  -> '"'
+> convert_backticks("x'")
+  -> "x'"
+> convert_backticks("'x")
+  -> "'x"
+> convert_backticks('x"')
+  -> 'x"'
+> convert_backticks('"x')
+  -> '"x'
+> convert_backticks("' '")
+  -> "' '"
+> convert_backticks('" "')
+  -> '" "'
+> convert_backticks('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> convert_backticks('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> convert_backticks('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> convert_backticks('"..." and \'...\'')
+  -> '"..." and \'...\''
+> convert_backticks('"?" she asked')
+  -> '"?" she asked'
+> convert_backticks("'!' he said")
+  -> "'!' he said"
+> convert_backticks('"!" -- \'?\'')
+  -> '"!" -- \'?\''
+> convert_backticks("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> convert_backticks("'Tis the season")
+  -> "'Tis the season"
+> convert_backticks("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> convert_backticks('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> convert_backticks('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> convert_backticks('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> convert_backticks('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> convert_backticks('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> convert_backticks('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> convert_backticks("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> convert_backticks('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> convert_backticks('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" -- \'merci\''
+> convert_backticks('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_backticks('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> convert_backticks('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> convert_backticks('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> convert_backticks('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> convert_backticks('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_backticks('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_backticks('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" -- </pre> -- "after"'
+> convert_backticks('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_backticks('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_backticks('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_backticks('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_backticks('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_backticks('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_backticks('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> convert_backticks('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_backticks('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_backticks('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_backticks('text <')
+  -> 'text <'
+> convert_backticks('> "gt" first')
+  -> '> "gt" first'
+> convert_backticks('')
+  -> ''
+> convert_backticks('plain')
+  -> 'plain'
+> convert_backticks('...')
+  -> '...'
+> convert_backticks('---')
+  -> '---'
+> convert_backticks('----')
+  -> '----'
+> convert_backticks('-----')
+  -> '-----'
+> convert_backticks('&quot;')
+  -> '&quot;'
+> convert_backticks('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_backticks('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_backticks('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_backticks('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> convert_backticks("'''")
+  -> "&#8221;'"
+> convert_backticks('"""')
+  -> '"""'
+> convert_backticks("''")
+  -> '&#8221;'
+> convert_backticks('""')
+  -> '""'
+> convert_backticks('"\'"')
+  -> '"\'"'
+> convert_backticks('\'"\'')
+  -> '\'"\''
+> convert_backticks("x 'y z' w")
+  -> "x 'y z' w"
+> convert_backticks('x "y z" w')
+  -> 'x "y z" w'
+> convert_backticks('1\'2"3')
+  -> '1\'2"3'
+> convert_backticks("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> convert_backticks("the '80s's music")
+  -> "the '80s's music"
+> convert_backticks("'00s")
+  -> "'00s"
+> convert_backticks("'12s")
+  -> "'12s"
+> convert_backticks("'s")
+  -> "'s"
+> convert_backticks("s'")
+  -> "s'"
+> convert_backticks("'s'")
+  -> "'s'"
+> convert_backticks("dogs's")
+  -> "dogs's"
+> convert_backticks("-'x'")
+  -> "-'x'"
+> convert_backticks("--'x'")
+  -> "--'x'"
+> convert_backticks("—'x'")
+  -> "—'x'"
+> convert_backticks('–"x"')
+  -> '–"x"'
+> convert_single_backticks('"foo" -- bar')
+  -> '"foo" -- bar'
+> convert_single_backticks('"Isn\'t this fun?"')
+  -> '"Isn&#8217;t this fun?"'
+> convert_single_backticks("'Isn't this fun?'")
+  -> '&#8217;Isn&#8217;t this fun?&#8217;'
+> convert_single_backticks("1440-80's")
+  -> '1440-80&#8217;s'
+> convert_single_backticks("1440-'80s")
+  -> '1440-&#8217;80s'
+> convert_single_backticks("1440--'80s")
+  -> '1440--&#8217;80s'
+> convert_single_backticks('1960s')
+  -> '1960s'
+> convert_single_backticks("1960's")
+  -> '1960&#8217;s'
+> convert_single_backticks("one two '60s")
+  -> 'one two &#8217;60s'
+> convert_single_backticks("'60s")
+  -> '&#8217;60s'
+> convert_single_backticks("the '80s and the 90's")
+  -> 'the &#8217;80s and the 90&#8217;s'
+> convert_single_backticks('21st century')
+  -> '21st century'
+> convert_single_backticks('3rd')
+  -> '3rd'
+> convert_single_backticks('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_single_backticks('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_single_backticks('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_single_backticks("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> '<p>He said &quot;Let&#8217;s write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>'
+> convert_single_backticks('--')
+  -> '--'
+> convert_single_backticks('-->')
+  -> '-->'
+> convert_single_backticks('-- \t  >')
+  -> '-- \t  >'
+> convert_single_backticks('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> convert_single_backticks('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> convert_single_backticks('<!-- comment -->')
+  -> '<!-- comment -->'
+> convert_single_backticks('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> convert_single_backticks('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> convert_single_backticks('<!-- -- -->')
+  -> '<!-- -- -->'
+> convert_single_backticks('<!-- -- -- \t >')
+  -> '<!-- -- -- \t >'
+> convert_single_backticks('<!---->')
+  -> '<!---->'
+> convert_single_backticks('<!-- --->')
+  -> '<!-- --->'
+> convert_single_backticks('<!-- x -- >')
+  -> '<!-- x -- >'
+> convert_single_backticks('"quote here"')
+  -> '"quote here"'
+> convert_single_backticks('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_single_backticks('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. -- Heraclitus'
+> convert_single_backticks('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> convert_single_backticks('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> convert_single_backticks('Huh...?')
+  -> 'Huh...?'
+> convert_single_backticks('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_single_backticks('Four.... dots')
+  -> 'Four.... dots'
+> convert_single_backticks('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_single_backticks("``Isn't this fun?''")
+  -> '&#8216;&#8216;Isn&#8217;t this fun?&#8217;&#8217;'
+> convert_single_backticks("`Isn't this fun?'")
+  -> '&#8216;Isn&#8217;t this fun?&#8217;'
+> convert_single_backticks("``double'' and `single'")
+  -> '&#8216;&#8216;double&#8217;&#8217; and &#8216;single&#8217;'
+> convert_single_backticks('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_single_backticks('\\\\')
+  -> '\\\\'
+> convert_single_backticks('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\&#8216; d \\&#8217; e \\" f \\\\ g'
+> convert_single_backticks("'")
+  -> '&#8217;'
+> convert_single_backticks('"')
+  -> '"'
+> convert_single_backticks("x'")
+  -> 'x&#8217;'
+> convert_single_backticks("'x")
+  -> '&#8217;x'
+> convert_single_backticks('x"')
+  -> 'x"'
+> convert_single_backticks('"x')
+  -> '"x'
+> convert_single_backticks("' '")
+  -> '&#8217; &#8217;'
+> convert_single_backticks('" "')
+  -> '" "'
+> convert_single_backticks('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "&#8217;Quoted&#8217; words in a larger quote."'
+> convert_single_backticks('\'"Nested" inside\'')
+  -> '&#8217;"Nested" inside&#8217;'
+> convert_single_backticks('"\'Double then single\'"')
+  -> '"&#8217;Double then single&#8217;"'
+> convert_single_backticks('"..." and \'...\'')
+  -> '"..." and &#8217;...&#8217;'
+> convert_single_backticks('"?" she asked')
+  -> '"?" she asked'
+> convert_single_backticks("'!' he said")
+  -> '&#8217;!&#8217; he said'
+> convert_single_backticks('"!" -- \'?\'')
+  -> '"!" -- &#8217;?&#8217;'
+> convert_single_backticks("Rock 'n' roll")
+  -> 'Rock &#8217;n&#8217; roll'
+> convert_single_backticks("'Tis the season")
+  -> '&#8217;Tis the season'
+> convert_single_backticks("the dog's bone, the dogs' bones")
+  -> 'the dog&#8217;s bone, the dogs&#8217; bones'
+> convert_single_backticks('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;&#8217;tis &nbsp;"so"'
+> convert_single_backticks('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;&#8217;word&#8217; &ndash;"word"'
+> convert_single_backticks('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;&#8217;dash&#8217; &#8212;"dash" &#x2013;&#8217;hex&#8217; &#x2014;"hex"'
+> convert_single_backticks('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [&#8217;bracket&#8217;] {"brace"} -&#8217;dash&#8217;-'
+> convert_single_backticks('"5\'10" tall"')
+  -> '"5&#8217;10" tall"'
+> convert_single_backticks('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12&#8217; board'
+> convert_single_backticks("'quoted'\n'next line'")
+  -> '&#8217;quoted&#8217;\n&#8217;next line&#8217;'
+> convert_single_backticks('"tab"\t\'tab\'')
+  -> '"tab"\t&#8217;tab&#8217;'
+> convert_single_backticks('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" -- &#8217;merci&#8217;'
+> convert_single_backticks('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_single_backticks('数字 "引用" \'テスト\'')
+  -> '数字 "引用" &#8217;テスト&#8217;'
+> convert_single_backticks('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" &#8217;time&#8217;'
+> convert_single_backticks('\'_underscore_\' "_also_"')
+  -> '&#8217;_underscore_&#8217; "_also_"'
+> convert_single_backticks('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>&#8217;italic&#8217;</i>'
+> convert_single_backticks('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_single_backticks('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_single_backticks('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" -- </pre> -- "after"'
+> convert_single_backticks('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_single_backticks('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_single_backticks('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_single_backticks('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_single_backticks('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_single_backticks('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_single_backticks('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> convert_single_backticks('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_single_backticks('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_single_backticks('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_single_backticks('text <')
+  -> 'text <'
+> convert_single_backticks('> "gt" first')
+  -> '> "gt" first'
+> convert_single_backticks('')
+  -> ''
+> convert_single_backticks('plain')
+  -> 'plain'
+> convert_single_backticks('...')
+  -> '...'
+> convert_single_backticks('---')
+  -> '---'
+> convert_single_backticks('----')
+  -> '----'
+> convert_single_backticks('-----')
+  -> '-----'
+> convert_single_backticks('&quot;')
+  -> '&quot;'
+> convert_single_backticks('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_single_backticks('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_single_backticks('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_single_backticks('it\'s \'single\' and "double"')
+  -> 'it&#8217;s &#8217;single&#8217; and "double"'
+> convert_single_backticks("'''")
+  -> '&#8217;&#8217;&#8217;'
+> convert_single_backticks('"""')
+  -> '"""'
+> convert_single_backticks("''")
+  -> '&#8217;&#8217;'
+> convert_single_backticks('""')
+  -> '""'
+> convert_single_backticks('"\'"')
+  -> '"&#8217;"'
+> convert_single_backticks('\'"\'')
+  -> '&#8217;"&#8217;'
+> convert_single_backticks("x 'y z' w")
+  -> 'x &#8217;y z&#8217; w'
+> convert_single_backticks('x "y z" w')
+  -> 'x "y z" w'
+> convert_single_backticks('1\'2"3')
+  -> '1&#8217;2"3'
+> convert_single_backticks("'1' '2s' '3 '")
+  -> '&#8217;1&#8217; &#8217;2s&#8217; &#8217;3 &#8217;'
+> convert_single_backticks("the '80s's music")
+  -> 'the &#8217;80s&#8217;s music'
+> convert_single_backticks("'00s")
+  -> '&#8217;00s'
+> convert_single_backticks("'12s")
+  -> '&#8217;12s'
+> convert_single_backticks("'s")
+  -> '&#8217;s'
+> convert_single_backticks("s'")
+  -> 's&#8217;'
+> convert_single_backticks("'s'")
+  -> '&#8217;s&#8217;'
+> convert_single_backticks("dogs's")
+  -> 'dogs&#8217;s'
+> convert_single_backticks("-'x'")
+  -> '-&#8217;x&#8217;'
+> convert_single_backticks("--'x'")
+  -> '--&#8217;x&#8217;'
+> convert_single_backticks("—'x'")
+  -> '—&#8217;x&#8217;'
+> convert_single_backticks('–"x"')
+  -> '–"x"'
+> convert_dashes('"foo" -- bar')
+  -> '"foo" &#8212; bar'
+> convert_dashes('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> convert_dashes("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> convert_dashes("1440-80's")
+  -> "1440-80's"
+> convert_dashes("1440-'80s")
+  -> "1440-'80s"
+> convert_dashes("1440--'80s")
+  -> "1440&#8212;'80s"
+> convert_dashes('1960s')
+  -> '1960s'
+> convert_dashes("1960's")
+  -> "1960's"
+> convert_dashes("one two '60s")
+  -> "one two '60s"
+> convert_dashes("'60s")
+  -> "'60s"
+> convert_dashes("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> convert_dashes('21st century')
+  -> '21st century'
+> convert_dashes('3rd')
+  -> '3rd'
+> convert_dashes('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_dashes('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_dashes('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_dashes("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> convert_dashes('--')
+  -> '&#8212;'
+> convert_dashes('-->')
+  -> '&#8212;>'
+> convert_dashes('-- \t  >')
+  -> '&#8212; \t  >'
+> convert_dashes('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!&#8212; "foo" &#8212;> blah&#8212;blah <!&#8212; "bar" &#8212;>'
+> convert_dashes('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo &#8212; "bar"<!&#8212; foo-bar\n<p>blah "this"</p>\n&#8212;>\n</p>'
+> convert_dashes('<!-- comment -->')
+  -> '<!&#8212; comment &#8212;>'
+> convert_dashes('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!&#8212; <li>Fee-fi-of-fum</li> &#8212;>'
+> convert_dashes('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!&#8212; "foo" &#8212;> <!&#8212; "bar" &#8212;>'
+> convert_dashes('<!-- -- -->')
+  -> '<!&#8212; &#8212; &#8212;>'
+> convert_dashes('<!-- -- -- \t >')
+  -> '<!&#8212; &#8212; &#8212; \t >'
+> convert_dashes('<!---->')
+  -> '<!&#8212;&#8212;>'
+> convert_dashes('<!-- --->')
+  -> '<!&#8212; &#8212;->'
+> convert_dashes('<!-- x -- >')
+  -> '<!&#8212; x &#8212; >'
+> convert_dashes('"quote here"')
+  -> '"quote here"'
+> convert_dashes('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_dashes('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. &#8212; Heraclitus'
+> convert_dashes('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. &#8212;- Julia Child (1912&#8212;2004)'
+> convert_dashes('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. &#8212; Buckminster Fuller (1895&#8212;-1983)'
+> convert_dashes('Huh...?')
+  -> 'Huh...?'
+> convert_dashes('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_dashes('Four.... dots')
+  -> 'Four.... dots'
+> convert_dashes('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_dashes("``Isn't this fun?''")
+  -> "``Isn't this fun?''"
+> convert_dashes("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> convert_dashes("``double'' and `single'")
+  -> "``double'' and `single'"
+> convert_dashes('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_dashes('\\\\')
+  -> '\\\\'
+> convert_dashes('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g'
+> convert_dashes("'")
+  -> "'"
+> convert_dashes('"')
+  -> '"'
+> convert_dashes("x'")
+  -> "x'"
+> convert_dashes("'x")
+  -> "'x"
+> convert_dashes('x"')
+  -> 'x"'
+> convert_dashes('"x')
+  -> '"x'
+> convert_dashes("' '")
+  -> "' '"
+> convert_dashes('" "')
+  -> '" "'
+> convert_dashes('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> convert_dashes('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> convert_dashes('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> convert_dashes('"..." and \'...\'')
+  -> '"..." and \'...\''
+> convert_dashes('"?" she asked')
+  -> '"?" she asked'
+> convert_dashes("'!' he said")
+  -> "'!' he said"
+> convert_dashes('"!" -- \'?\'')
+  -> '"!" &#8212; \'?\''
+> convert_dashes("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> convert_dashes("'Tis the season")
+  -> "'Tis the season"
+> convert_dashes("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> convert_dashes('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> convert_dashes('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> convert_dashes('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> convert_dashes('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> convert_dashes('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> convert_dashes('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> convert_dashes("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> convert_dashes('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> convert_dashes('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" &#8212; \'merci\''
+> convert_dashes('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_dashes('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> convert_dashes('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> convert_dashes('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> convert_dashes('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> convert_dashes('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_dashes('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_dashes('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" &#8212; </pre> &#8212; "after"'
+> convert_dashes('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_dashes('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_dashes('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_dashes('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_dashes('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_dashes('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_dashes('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a&#8212;) { x = "y"; }</script> &#8212; "z"'
+> convert_dashes('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_dashes('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_dashes('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_dashes('text <')
+  -> 'text <'
+> convert_dashes('> "gt" first')
+  -> '> "gt" first'
+> convert_dashes('')
+  -> ''
+> convert_dashes('plain')
+  -> 'plain'
+> convert_dashes('...')
+  -> '...'
+> convert_dashes('---')
+  -> '&#8212;-'
+> convert_dashes('----')
+  -> '&#8212;&#8212;'
+> convert_dashes('-----')
+  -> '&#8212;&#8212;-'
+> convert_dashes('&quot;')
+  -> '&quot;'
+> convert_dashes('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_dashes('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_dashes('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_dashes('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> convert_dashes("'''")
+  -> "'''"
+> convert_dashes('"""')
+  -> '"""'
+> convert_dashes("''")
+  -> "''"
+> convert_dashes('""')
+  -> '""'
+> convert_dashes('"\'"')
+  -> '"\'"'
+> convert_dashes('\'"\'')
+  -> '\'"\''
+> convert_dashes("x 'y z' w")
+  -> "x 'y z' w"
+> convert_dashes('x "y z" w')
+  -> 'x "y z" w'
+> convert_dashes('1\'2"3')
+  -> '1\'2"3'
+> convert_dashes("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> convert_dashes("the '80s's music")
+  -> "the '80s's music"
+> convert_dashes("'00s")
+  -> "'00s"
+> convert_dashes("'12s")
+  -> "'12s"
+> convert_dashes("'s")
+  -> "'s"
+> convert_dashes("s'")
+  -> "s'"
+> convert_dashes("'s'")
+  -> "'s'"
+> convert_dashes("dogs's")
+  -> "dogs's"
+> convert_dashes("-'x'")
+  -> "-'x'"
+> convert_dashes("--'x'")
+  -> "&#8212;'x'"
+> convert_dashes("—'x'")
+  -> "—'x'"
+> convert_dashes('–"x"')
+  -> '–"x"'
+> convert_dashes_oldschool('"foo" -- bar')
+  -> '"foo" &#8211; bar'
+> convert_dashes_oldschool('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> convert_dashes_oldschool("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> convert_dashes_oldschool("1440-80's")
+  -> "1440-80's"
+> convert_dashes_oldschool("1440-'80s")
+  -> "1440-'80s"
+> convert_dashes_oldschool("1440--'80s")
+  -> "1440&#8211;'80s"
+> convert_dashes_oldschool('1960s')
+  -> '1960s'
+> convert_dashes_oldschool("1960's")
+  -> "1960's"
+> convert_dashes_oldschool("one two '60s")
+  -> "one two '60s"
+> convert_dashes_oldschool("'60s")
+  -> "'60s"
+> convert_dashes_oldschool("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> convert_dashes_oldschool('21st century')
+  -> '21st century'
+> convert_dashes_oldschool('3rd')
+  -> '3rd'
+> convert_dashes_oldschool('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_dashes_oldschool('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_dashes_oldschool('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_dashes_oldschool("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> convert_dashes_oldschool('--')
+  -> '&#8211;'
+> convert_dashes_oldschool('-->')
+  -> '&#8211;>'
+> convert_dashes_oldschool('-- \t  >')
+  -> '&#8211; \t  >'
+> convert_dashes_oldschool('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!&#8211; "foo" &#8211;> blah&#8211;blah <!&#8211; "bar" &#8211;>'
+> convert_dashes_oldschool('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo &#8211; "bar"<!&#8211; foo-bar\n<p>blah "this"</p>\n&#8211;>\n</p>'
+> convert_dashes_oldschool('<!-- comment -->')
+  -> '<!&#8211; comment &#8211;>'
+> convert_dashes_oldschool('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!&#8211; <li>Fee-fi-of-fum</li> &#8211;>'
+> convert_dashes_oldschool('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!&#8211; "foo" &#8211;> <!&#8211; "bar" &#8211;>'
+> convert_dashes_oldschool('<!-- -- -->')
+  -> '<!&#8211; &#8211; &#8211;>'
+> convert_dashes_oldschool('<!-- -- -- \t >')
+  -> '<!&#8211; &#8211; &#8211; \t >'
+> convert_dashes_oldschool('<!---->')
+  -> '<!&#8212;->'
+> convert_dashes_oldschool('<!-- --->')
+  -> '<!&#8211; &#8212;>'
+> convert_dashes_oldschool('<!-- x -- >')
+  -> '<!&#8211; x &#8211; >'
+> convert_dashes_oldschool('"quote here"')
+  -> '"quote here"'
+> convert_dashes_oldschool('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_dashes_oldschool('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. &#8211; Heraclitus'
+> convert_dashes_oldschool('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. &#8212; Julia Child (1912&#8211;2004)'
+> convert_dashes_oldschool('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. &#8211; Buckminster Fuller (1895&#8212;1983)'
+> convert_dashes_oldschool('Huh...?')
+  -> 'Huh...?'
+> convert_dashes_oldschool('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_dashes_oldschool('Four.... dots')
+  -> 'Four.... dots'
+> convert_dashes_oldschool('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_dashes_oldschool("``Isn't this fun?''")
+  -> "``Isn't this fun?''"
+> convert_dashes_oldschool("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> convert_dashes_oldschool("``double'' and `single'")
+  -> "``double'' and `single'"
+> convert_dashes_oldschool('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_dashes_oldschool('\\\\')
+  -> '\\\\'
+> convert_dashes_oldschool('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g'
+> convert_dashes_oldschool("'")
+  -> "'"
+> convert_dashes_oldschool('"')
+  -> '"'
+> convert_dashes_oldschool("x'")
+  -> "x'"
+> convert_dashes_oldschool("'x")
+  -> "'x"
+> convert_dashes_oldschool('x"')
+  -> 'x"'
+> convert_dashes_oldschool('"x')
+  -> '"x'
+> convert_dashes_oldschool("' '")
+  -> "' '"
+> convert_dashes_oldschool('" "')
+  -> '" "'
+> convert_dashes_oldschool('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> convert_dashes_oldschool('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> convert_dashes_oldschool('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> convert_dashes_oldschool('"..." and \'...\'')
+  -> '"..." and \'...\''
+> convert_dashes_oldschool('"?" she asked')
+  -> '"?" she asked'
+> convert_dashes_oldschool("'!' he said")
+  -> "'!' he said"
+> convert_dashes_oldschool('"!" -- \'?\'')
+  -> '"!" &#8211; \'?\''
+> convert_dashes_oldschool("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> convert_dashes_oldschool("'Tis the season")
+  -> "'Tis the season"
+> convert_dashes_oldschool("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> convert_dashes_oldschool('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> convert_dashes_oldschool('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> convert_dashes_oldschool('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> convert_dashes_oldschool('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> convert_dashes_oldschool('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> convert_dashes_oldschool('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> convert_dashes_oldschool("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> convert_dashes_oldschool('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> convert_dashes_oldschool('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" &#8211; \'merci\''
+> convert_dashes_oldschool('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_dashes_oldschool('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> convert_dashes_oldschool('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> convert_dashes_oldschool('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> convert_dashes_oldschool('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> convert_dashes_oldschool('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_dashes_oldschool('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_dashes_oldschool('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" &#8211; </pre> &#8211; "after"'
+> convert_dashes_oldschool('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_dashes_oldschool('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_dashes_oldschool('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_dashes_oldschool('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_dashes_oldschool('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_dashes_oldschool('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_dashes_oldschool('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a&#8211;) { x = "y"; }</script> &#8211; "z"'
+> convert_dashes_oldschool('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_dashes_oldschool('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_dashes_oldschool('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_dashes_oldschool('text <')
+  -> 'text <'
+> convert_dashes_oldschool('> "gt" first')
+  -> '> "gt" first'
+> convert_dashes_oldschool('')
+  -> ''
+> convert_dashes_oldschool('plain')
+  -> 'plain'
+> convert_dashes_oldschool('...')
+  -> '...'
+> convert_dashes_oldschool('---')
+  -> '&#8212;'
+> convert_dashes_oldschool('----')
+  -> '&#8212;-'
+> convert_dashes_oldschool('-----')
+  -> '&#8212;&#8211;'
+> convert_dashes_oldschool('&quot;')
+  -> '&quot;'
+> convert_dashes_oldschool('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_dashes_oldschool('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_dashes_oldschool('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_dashes_oldschool('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> convert_dashes_oldschool("'''")
+  -> "'''"
+> convert_dashes_oldschool('"""')
+  -> '"""'
+> convert_dashes_oldschool("''")
+  -> "''"
+> convert_dashes_oldschool('""')
+  -> '""'
+> convert_dashes_oldschool('"\'"')
+  -> '"\'"'
+> convert_dashes_oldschool('\'"\'')
+  -> '\'"\''
+> convert_dashes_oldschool("x 'y z' w")
+  -> "x 'y z' w"
+> convert_dashes_oldschool('x "y z" w')
+  -> 'x "y z" w'
+> convert_dashes_oldschool('1\'2"3')
+  -> '1\'2"3'
+> convert_dashes_oldschool("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> convert_dashes_oldschool("the '80s's music")
+  -> "the '80s's music"
+> convert_dashes_oldschool("'00s")
+  -> "'00s"
+> convert_dashes_oldschool("'12s")
+  -> "'12s"
+> convert_dashes_oldschool("'s")
+  -> "'s"
+> convert_dashes_oldschool("s'")
+  -> "s'"
+> convert_dashes_oldschool("'s'")
+  -> "'s'"
+> convert_dashes_oldschool("dogs's")
+  -> "dogs's"
+> convert_dashes_oldschool("-'x'")
+  -> "-'x'"
+> convert_dashes_oldschool("--'x'")
+  -> "&#8211;'x'"
+> convert_dashes_oldschool("—'x'")
+  -> "—'x'"
+> convert_dashes_oldschool('–"x"')
+  -> '–"x"'
+> convert_dashes_oldschool_inverted('"foo" -- bar')
+  -> '"foo" &#8212; bar'
+> convert_dashes_oldschool_inverted('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> convert_dashes_oldschool_inverted("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> convert_dashes_oldschool_inverted("1440-80's")
+  -> "1440-80's"
+> convert_dashes_oldschool_inverted("1440-'80s")
+  -> "1440-'80s"
+> convert_dashes_oldschool_inverted("1440--'80s")
+  -> "1440&#8212;'80s"
+> convert_dashes_oldschool_inverted('1960s')
+  -> '1960s'
+> convert_dashes_oldschool_inverted("1960's")
+  -> "1960's"
+> convert_dashes_oldschool_inverted("one two '60s")
+  -> "one two '60s"
+> convert_dashes_oldschool_inverted("'60s")
+  -> "'60s"
+> convert_dashes_oldschool_inverted("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> convert_dashes_oldschool_inverted('21st century')
+  -> '21st century'
+> convert_dashes_oldschool_inverted('3rd')
+  -> '3rd'
+> convert_dashes_oldschool_inverted('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_dashes_oldschool_inverted('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_dashes_oldschool_inverted('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_dashes_oldschool_inverted("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> convert_dashes_oldschool_inverted('--')
+  -> '&#8212;'
+> convert_dashes_oldschool_inverted('-->')
+  -> '&#8212;>'
+> convert_dashes_oldschool_inverted('-- \t  >')
+  -> '&#8212; \t  >'
+> convert_dashes_oldschool_inverted('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!&#8212; "foo" &#8212;> blah&#8212;blah <!&#8212; "bar" &#8212;>'
+> convert_dashes_oldschool_inverted('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo &#8212; "bar"<!&#8212; foo-bar\n<p>blah "this"</p>\n&#8212;>\n</p>'
+> convert_dashes_oldschool_inverted('<!-- comment -->')
+  -> '<!&#8212; comment &#8212;>'
+> convert_dashes_oldschool_inverted('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!&#8212; <li>Fee-fi-of-fum</li> &#8212;>'
+> convert_dashes_oldschool_inverted('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!&#8212; "foo" &#8212;> <!&#8212; "bar" &#8212;>'
+> convert_dashes_oldschool_inverted('<!-- -- -->')
+  -> '<!&#8212; &#8212; &#8212;>'
+> convert_dashes_oldschool_inverted('<!-- -- -- \t >')
+  -> '<!&#8212; &#8212; &#8212; \t >'
+> convert_dashes_oldschool_inverted('<!---->')
+  -> '<!&#8211;->'
+> convert_dashes_oldschool_inverted('<!-- --->')
+  -> '<!&#8212; &#8211;>'
+> convert_dashes_oldschool_inverted('<!-- x -- >')
+  -> '<!&#8212; x &#8212; >'
+> convert_dashes_oldschool_inverted('"quote here"')
+  -> '"quote here"'
+> convert_dashes_oldschool_inverted('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_dashes_oldschool_inverted('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. &#8212; Heraclitus'
+> convert_dashes_oldschool_inverted('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. &#8211; Julia Child (1912&#8212;2004)'
+> convert_dashes_oldschool_inverted('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. &#8212; Buckminster Fuller (1895&#8211;1983)'
+> convert_dashes_oldschool_inverted('Huh...?')
+  -> 'Huh...?'
+> convert_dashes_oldschool_inverted('Wait. . . what?')
+  -> 'Wait. . . what?'
+> convert_dashes_oldschool_inverted('Four.... dots')
+  -> 'Four.... dots'
+> convert_dashes_oldschool_inverted('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> convert_dashes_oldschool_inverted("``Isn't this fun?''")
+  -> "``Isn't this fun?''"
+> convert_dashes_oldschool_inverted("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> convert_dashes_oldschool_inverted("``double'' and `single'")
+  -> "``double'' and `single'"
+> convert_dashes_oldschool_inverted('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_dashes_oldschool_inverted('\\\\')
+  -> '\\\\'
+> convert_dashes_oldschool_inverted('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g'
+> convert_dashes_oldschool_inverted("'")
+  -> "'"
+> convert_dashes_oldschool_inverted('"')
+  -> '"'
+> convert_dashes_oldschool_inverted("x'")
+  -> "x'"
+> convert_dashes_oldschool_inverted("'x")
+  -> "'x"
+> convert_dashes_oldschool_inverted('x"')
+  -> 'x"'
+> convert_dashes_oldschool_inverted('"x')
+  -> '"x'
+> convert_dashes_oldschool_inverted("' '")
+  -> "' '"
+> convert_dashes_oldschool_inverted('" "')
+  -> '" "'
+> convert_dashes_oldschool_inverted('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> convert_dashes_oldschool_inverted('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> convert_dashes_oldschool_inverted('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> convert_dashes_oldschool_inverted('"..." and \'...\'')
+  -> '"..." and \'...\''
+> convert_dashes_oldschool_inverted('"?" she asked')
+  -> '"?" she asked'
+> convert_dashes_oldschool_inverted("'!' he said")
+  -> "'!' he said"
+> convert_dashes_oldschool_inverted('"!" -- \'?\'')
+  -> '"!" &#8212; \'?\''
+> convert_dashes_oldschool_inverted("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> convert_dashes_oldschool_inverted("'Tis the season")
+  -> "'Tis the season"
+> convert_dashes_oldschool_inverted("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> convert_dashes_oldschool_inverted('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> convert_dashes_oldschool_inverted('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> convert_dashes_oldschool_inverted('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> convert_dashes_oldschool_inverted('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> convert_dashes_oldschool_inverted('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> convert_dashes_oldschool_inverted('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> convert_dashes_oldschool_inverted("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> convert_dashes_oldschool_inverted('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> convert_dashes_oldschool_inverted('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" &#8212; \'merci\''
+> convert_dashes_oldschool_inverted('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_dashes_oldschool_inverted('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> convert_dashes_oldschool_inverted('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> convert_dashes_oldschool_inverted('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> convert_dashes_oldschool_inverted('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> convert_dashes_oldschool_inverted('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_dashes_oldschool_inverted('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_dashes_oldschool_inverted('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" &#8212; </pre> &#8212; "after"'
+> convert_dashes_oldschool_inverted('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_dashes_oldschool_inverted('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_dashes_oldschool_inverted('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_dashes_oldschool_inverted('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_dashes_oldschool_inverted('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_dashes_oldschool_inverted('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_dashes_oldschool_inverted('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a&#8212;) { x = "y"; }</script> &#8212; "z"'
+> convert_dashes_oldschool_inverted('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_dashes_oldschool_inverted('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_dashes_oldschool_inverted('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_dashes_oldschool_inverted('text <')
+  -> 'text <'
+> convert_dashes_oldschool_inverted('> "gt" first')
+  -> '> "gt" first'
+> convert_dashes_oldschool_inverted('')
+  -> ''
+> convert_dashes_oldschool_inverted('plain')
+  -> 'plain'
+> convert_dashes_oldschool_inverted('...')
+  -> '...'
+> convert_dashes_oldschool_inverted('---')
+  -> '&#8211;'
+> convert_dashes_oldschool_inverted('----')
+  -> '&#8211;-'
+> convert_dashes_oldschool_inverted('-----')
+  -> '&#8211;&#8212;'
+> convert_dashes_oldschool_inverted('&quot;')
+  -> '&quot;'
+> convert_dashes_oldschool_inverted('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_dashes_oldschool_inverted('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_dashes_oldschool_inverted('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_dashes_oldschool_inverted('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> convert_dashes_oldschool_inverted("'''")
+  -> "'''"
+> convert_dashes_oldschool_inverted('"""')
+  -> '"""'
+> convert_dashes_oldschool_inverted("''")
+  -> "''"
+> convert_dashes_oldschool_inverted('""')
+  -> '""'
+> convert_dashes_oldschool_inverted('"\'"')
+  -> '"\'"'
+> convert_dashes_oldschool_inverted('\'"\'')
+  -> '\'"\''
+> convert_dashes_oldschool_inverted("x 'y z' w")
+  -> "x 'y z' w"
+> convert_dashes_oldschool_inverted('x "y z" w')
+  -> 'x "y z" w'
+> convert_dashes_oldschool_inverted('1\'2"3')
+  -> '1\'2"3'
+> convert_dashes_oldschool_inverted("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> convert_dashes_oldschool_inverted("the '80s's music")
+  -> "the '80s's music"
+> convert_dashes_oldschool_inverted("'00s")
+  -> "'00s"
+> convert_dashes_oldschool_inverted("'12s")
+  -> "'12s"
+> convert_dashes_oldschool_inverted("'s")
+  -> "'s"
+> convert_dashes_oldschool_inverted("s'")
+  -> "s'"
+> convert_dashes_oldschool_inverted("'s'")
+  -> "'s'"
+> convert_dashes_oldschool_inverted("dogs's")
+  -> "dogs's"
+> convert_dashes_oldschool_inverted("-'x'")
+  -> "-'x'"
+> convert_dashes_oldschool_inverted("--'x'")
+  -> "&#8212;'x'"
+> convert_dashes_oldschool_inverted("—'x'")
+  -> "—'x'"
+> convert_dashes_oldschool_inverted('–"x"')
+  -> '–"x"'
+> convert_ellipses('"foo" -- bar')
+  -> '"foo" -- bar'
+> convert_ellipses('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> convert_ellipses("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> convert_ellipses("1440-80's")
+  -> "1440-80's"
+> convert_ellipses("1440-'80s")
+  -> "1440-'80s"
+> convert_ellipses("1440--'80s")
+  -> "1440--'80s"
+> convert_ellipses('1960s')
+  -> '1960s'
+> convert_ellipses("1960's")
+  -> "1960's"
+> convert_ellipses("one two '60s")
+  -> "one two '60s"
+> convert_ellipses("'60s")
+  -> "'60s"
+> convert_ellipses("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> convert_ellipses('21st century')
+  -> '21st century'
+> convert_ellipses('3rd')
+  -> '3rd'
+> convert_ellipses('You should use ";" here')
+  -> 'You should use ";" here'
+> convert_ellipses('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> convert_ellipses('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> convert_ellipses("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> convert_ellipses('--')
+  -> '--'
+> convert_ellipses('-->')
+  -> '-->'
+> convert_ellipses('-- \t  >')
+  -> '-- \t  >'
+> convert_ellipses('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> convert_ellipses('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> convert_ellipses('<!-- comment -->')
+  -> '<!-- comment -->'
+> convert_ellipses('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> convert_ellipses('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> convert_ellipses('<!-- -- -->')
+  -> '<!-- -- -->'
+> convert_ellipses('<!-- -- -- \t >')
+  -> '<!-- -- -- \t >'
+> convert_ellipses('<!---->')
+  -> '<!---->'
+> convert_ellipses('<!-- --->')
+  -> '<!-- --->'
+> convert_ellipses('<!-- x -- >')
+  -> '<!-- x -- >'
+> convert_ellipses('"quote here"')
+  -> '"quote here"'
+> convert_ellipses('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> convert_ellipses('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. -- Heraclitus'
+> convert_ellipses('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> convert_ellipses('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> convert_ellipses('Huh...?')
+  -> 'Huh&#8230;?'
+> convert_ellipses('Wait. . . what?')
+  -> 'Wait&#8230; what?'
+> convert_ellipses('Four.... dots')
+  -> 'Four&#8230;. dots'
+> convert_ellipses('Spaced . . . . out')
+  -> 'Spaced &#8230; . out'
+> convert_ellipses("``Isn't this fun?''")
+  -> "``Isn't this fun?''"
+> convert_ellipses("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> convert_ellipses("``double'' and `single'")
+  -> "``double'' and `single'"
+> convert_ellipses('"smarty" \\"pants\\"')
+  -> '"smarty" \\"pants\\"'
+> convert_ellipses('\\\\')
+  -> '\\\\'
+> convert_ellipses('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g'
+> convert_ellipses("'")
+  -> "'"
+> convert_ellipses('"')
+  -> '"'
+> convert_ellipses("x'")
+  -> "x'"
+> convert_ellipses("'x")
+  -> "'x"
+> convert_ellipses('x"')
+  -> 'x"'
+> convert_ellipses('"x')
+  -> '"x'
+> convert_ellipses("' '")
+  -> "' '"
+> convert_ellipses('" "')
+  -> '" "'
+> convert_ellipses('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> convert_ellipses('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> convert_ellipses('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> convert_ellipses('"..." and \'...\'')
+  -> '"&#8230;" and \'&#8230;\''
+> convert_ellipses('"?" she asked')
+  -> '"?" she asked'
+> convert_ellipses("'!' he said")
+  -> "'!' he said"
+> convert_ellipses('"!" -- \'?\'')
+  -> '"!" -- \'?\''
+> convert_ellipses("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> convert_ellipses("'Tis the season")
+  -> "'Tis the season"
+> convert_ellipses("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> convert_ellipses('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> convert_ellipses('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> convert_ellipses('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> convert_ellipses('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> convert_ellipses('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> convert_ellipses('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> convert_ellipses("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> convert_ellipses('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> convert_ellipses('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" -- \'merci\''
+> convert_ellipses('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> convert_ellipses('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> convert_ellipses('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> convert_ellipses('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> convert_ellipses('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> convert_ellipses('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> convert_ellipses('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> convert_ellipses('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" -- </pre> -- "after"'
+> convert_ellipses('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> convert_ellipses('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> convert_ellipses('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> convert_ellipses('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> convert_ellipses('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> convert_ellipses('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> convert_ellipses('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> convert_ellipses('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> convert_ellipses('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> convert_ellipses('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> convert_ellipses('text <')
+  -> 'text <'
+> convert_ellipses('> "gt" first')
+  -> '> "gt" first'
+> convert_ellipses('')
+  -> ''
+> convert_ellipses('plain')
+  -> 'plain'
+> convert_ellipses('...')
+  -> '&#8230;'
+> convert_ellipses('---')
+  -> '---'
+> convert_ellipses('----')
+  -> '----'
+> convert_ellipses('-----')
+  -> '-----'
+> convert_ellipses('&quot;')
+  -> '&quot;'
+> convert_ellipses('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> convert_ellipses('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> convert_ellipses('\\"escaped\\"')
+  -> '\\"escaped\\"'
+> convert_ellipses('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> convert_ellipses("'''")
+  -> "'''"
+> convert_ellipses('"""')
+  -> '"""'
+> convert_ellipses("''")
+  -> "''"
+> convert_ellipses('""')
+  -> '""'
+> convert_ellipses('"\'"')
+  -> '"\'"'
+> convert_ellipses('\'"\'')
+  -> '\'"\''
+> convert_ellipses("x 'y z' w")
+  -> "x 'y z' w"
+> convert_ellipses('x "y z" w')
+  -> 'x "y z" w'
+> convert_ellipses('1\'2"3')
+  -> '1\'2"3'
+> convert_ellipses("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> convert_ellipses("the '80s's music")
+  -> "the '80s's music"
+> convert_ellipses("'00s")
+  -> "'00s"
+> convert_ellipses("'12s")
+  -> "'12s"
+> convert_ellipses("'s")
+  -> "'s"
+> convert_ellipses("s'")
+  -> "s'"
+> convert_ellipses("'s'")
+  -> "'s'"
+> convert_ellipses("dogs's")
+  -> "dogs's"
+> convert_ellipses("-'x'")
+  -> "-'x'"
+> convert_ellipses("--'x'")
+  -> "--'x'"
+> convert_ellipses("—'x'")
+  -> "—'x'"
+> convert_ellipses('–"x"')
+  -> '–"x"'
+> process_escapes('"foo" -- bar')
+  -> '"foo" -- bar'
+> process_escapes('"Isn\'t this fun?"')
+  -> '"Isn\'t this fun?"'
+> process_escapes("'Isn't this fun?'")
+  -> "'Isn't this fun?'"
+> process_escapes("1440-80's")
+  -> "1440-80's"
+> process_escapes("1440-'80s")
+  -> "1440-'80s"
+> process_escapes("1440--'80s")
+  -> "1440--'80s"
+> process_escapes('1960s')
+  -> '1960s'
+> process_escapes("1960's")
+  -> "1960's"
+> process_escapes("one two '60s")
+  -> "one two '60s"
+> process_escapes("'60s")
+  -> "'60s"
+> process_escapes("the '80s and the 90's")
+  -> "the '80s and the 90's"
+> process_escapes('21st century')
+  -> '21st century'
+> process_escapes('3rd')
+  -> '3rd'
+> process_escapes('You should use ";" here')
+  -> 'You should use ";" here'
+> process_escapes('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> 'Take a look at the "<a>Essay on quoting</a>" paper.'
+> process_escapes('Take a look at "<a>Essay on quoting</a>".')
+  -> 'Take a look at "<a>Essay on quoting</a>".'
+> process_escapes("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> "<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>"
+> process_escapes('--')
+  -> '--'
+> process_escapes('-->')
+  -> '-->'
+> process_escapes('-- \t  >')
+  -> '-- \t  >'
+> process_escapes('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> '<!-- "foo" --> blah--blah <!-- "bar" -->'
+> process_escapes('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> '<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>'
+> process_escapes('<!-- comment -->')
+  -> '<!-- comment -->'
+> process_escapes('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> '<!-- <li>Fee-fi-of-fum</li> -->'
+> process_escapes('<!-- "foo" --> <!-- "bar" -->')
+  -> '<!-- "foo" --> <!-- "bar" -->'
+> process_escapes('<!-- -- -->')
+  -> '<!-- -- -->'
+> process_escapes('<!-- -- -- \t >')
+  -> '<!-- -- -- \t >'
+> process_escapes('<!---->')
+  -> '<!---->'
+> process_escapes('<!-- --->')
+  -> '<!-- --->'
+> process_escapes('<!-- x -- >')
+  -> '<!-- x -- >'
+> process_escapes('"quote here"')
+  -> '"quote here"'
+> process_escapes('"quote&ndash;here"')
+  -> '"quote&ndash;here"'
+> process_escapes('Nothing endures but change. -- Heraclitus')
+  -> 'Nothing endures but change. -- Heraclitus'
+> process_escapes('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> 'Life itself is the proper binge. --- Julia Child (1912--2004)'
+> process_escapes('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> 'Dare to be naïve. -- Buckminster Fuller (1895---1983)'
+> process_escapes('Huh...?')
+  -> 'Huh...?'
+> process_escapes('Wait. . . what?')
+  -> 'Wait. . . what?'
+> process_escapes('Four.... dots')
+  -> 'Four.... dots'
+> process_escapes('Spaced . . . . out')
+  -> 'Spaced . . . . out'
+> process_escapes("``Isn't this fun?''")
+  -> "``Isn't this fun?''"
+> process_escapes("`Isn't this fun?'")
+  -> "`Isn't this fun?'"
+> process_escapes("``double'' and `single'")
+  -> "``double'' and `single'"
+> process_escapes('"smarty" \\"pants\\"')
+  -> '"smarty" &#34;pants&#34;'
+> process_escapes('\\\\')
+  -> '&#92;'
+> process_escapes('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> 'a &#45; b &#46; c &#96; d &#39; e &#34; f &#92; g'
+> process_escapes("'")
+  -> "'"
+> process_escapes('"')
+  -> '"'
+> process_escapes("x'")
+  -> "x'"
+> process_escapes("'x")
+  -> "'x"
+> process_escapes('x"')
+  -> 'x"'
+> process_escapes('"x')
+  -> '"x'
+> process_escapes("' '")
+  -> "' '"
+> process_escapes('" "')
+  -> '" "'
+> process_escapes('He said, "\'Quoted\' words in a larger quote."')
+  -> 'He said, "\'Quoted\' words in a larger quote."'
+> process_escapes('\'"Nested" inside\'')
+  -> '\'"Nested" inside\''
+> process_escapes('"\'Double then single\'"')
+  -> '"\'Double then single\'"'
+> process_escapes('"..." and \'...\'')
+  -> '"..." and \'...\''
+> process_escapes('"?" she asked')
+  -> '"?" she asked'
+> process_escapes("'!' he said")
+  -> "'!' he said"
+> process_escapes('"!" -- \'?\'')
+  -> '"!" -- \'?\''
+> process_escapes("Rock 'n' roll")
+  -> "Rock 'n' roll"
+> process_escapes("'Tis the season")
+  -> "'Tis the season"
+> process_escapes("the dog's bone, the dogs' bones")
+  -> "the dog's bone, the dogs' bones"
+> process_escapes('&nbsp;\'tis &nbsp;"so"')
+  -> '&nbsp;\'tis &nbsp;"so"'
+> process_escapes('&mdash;\'word\' &ndash;"word"')
+  -> '&mdash;\'word\' &ndash;"word"'
+> process_escapes('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"'
+> process_escapes('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> '("paren") [\'bracket\'] {"brace"} -\'dash\'-'
+> process_escapes('"5\'10" tall"')
+  -> '"5\'10" tall"'
+> process_escapes('a 9" pan, 12\' board')
+  -> 'a 9" pan, 12\' board'
+> process_escapes("'quoted'\n'next line'")
+  -> "'quoted'\n'next line'"
+> process_escapes('"tab"\t\'tab\'')
+  -> '"tab"\t\'tab\''
+> process_escapes('Ça va? "Très bien" -- \'merci\'')
+  -> 'Ça va? "Très bien" -- \'merci\''
+> process_escapes('«Bonjour» "monde"')
+  -> '«Bonjour» "monde"'
+> process_escapes('数字 "引用" \'テスト\'')
+  -> '数字 "引用" \'テスト\''
+> process_escapes('emoji 🎉 "party" \'time\'')
+  -> 'emoji 🎉 "party" \'time\''
+> process_escapes('\'_underscore_\' "_also_"')
+  -> '\'_underscore_\' "_also_"'
+> process_escapes('<b>"bold"</b> <i>\'italic\'</i>')
+  -> '<b>"bold"</b> <i>\'italic\'</i>'
+> process_escapes('<a href="x">"link"</a>')
+  -> '<a href="x">"link"</a>'
+> process_escapes('<code>"code"</code> "after"')
+  -> '<code>"code"</code> "after"'
+> process_escapes('<pre>"pre" -- </pre> -- "after"')
+  -> '<pre>"pre" -- </pre> -- "after"'
+> process_escapes('<PRE>"upper"</PRE> "after"')
+  -> '<PRE>"upper"</PRE> "after"'
+> process_escapes('<pre><code>"a"</pre> "b"</code> "c"')
+  -> '<pre><code>"a"</pre> "b"</code> "c"'
+> process_escapes('<code><pre>"a"</code></pre> "b"')
+  -> '<code><pre>"a"</code></pre> "b"'
+> process_escapes('</pre> "stray close"')
+  -> '</pre> "stray close"'
+> process_escapes('<pre/> "self closing"')
+  -> '<pre/> "self closing"'
+> process_escapes('<prefix>"not pre"</prefix>')
+  -> '<prefix>"not pre"</prefix>'
+> process_escapes('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> '<script>if (a--) { x = "y"; }</script> -- "z"'
+> process_escapes('<style>a { b: "c" }</style> "d"')
+  -> '<style>a { b: "c" }</style> "d"'
+> process_escapes('a < b and "c" > d')
+  -> 'a < b and "c" > d'
+> process_escapes('<p "unterminated tag')
+  -> '<p "unterminated tag'
+> process_escapes('text <')
+  -> 'text <'
+> process_escapes('> "gt" first')
+  -> '> "gt" first'
+> process_escapes('')
+  -> ''
+> process_escapes('plain')
+  -> 'plain'
+> process_escapes('...')
+  -> '...'
+> process_escapes('---')
+  -> '---'
+> process_escapes('----')
+  -> '----'
+> process_escapes('-----')
+  -> '-----'
+> process_escapes('&quot;')
+  -> '&quot;'
+> process_escapes('&quot;quot&quot;')
+  -> '&quot;quot&quot;'
+> process_escapes('&amp;quot; "x"')
+  -> '&amp;quot; "x"'
+> process_escapes('\\"escaped\\"')
+  -> '&#34;escaped&#34;'
+> process_escapes('it\'s \'single\' and "double"')
+  -> 'it\'s \'single\' and "double"'
+> process_escapes("'''")
+  -> "'''"
+> process_escapes('"""')
+  -> '"""'
+> process_escapes("''")
+  -> "''"
+> process_escapes('""')
+  -> '""'
+> process_escapes('"\'"')
+  -> '"\'"'
+> process_escapes('\'"\'')
+  -> '\'"\''
+> process_escapes("x 'y z' w")
+  -> "x 'y z' w"
+> process_escapes('x "y z" w')
+  -> 'x "y z" w'
+> process_escapes('1\'2"3')
+  -> '1\'2"3'
+> process_escapes("'1' '2s' '3 '")
+  -> "'1' '2s' '3 '"
+> process_escapes("the '80s's music")
+  -> "the '80s's music"
+> process_escapes("'00s")
+  -> "'00s"
+> process_escapes("'12s")
+  -> "'12s"
+> process_escapes("'s")
+  -> "'s"
+> process_escapes("s'")
+  -> "s'"
+> process_escapes("'s'")
+  -> "'s'"
+> process_escapes("dogs's")
+  -> "dogs's"
+> process_escapes("-'x'")
+  -> "-'x'"
+> process_escapes("--'x'")
+  -> "--'x'"
+> process_escapes("—'x'")
+  -> "—'x'"
+> process_escapes('–"x"')
+  -> '–"x"'
+> convert_entities('&#8216;', 0)
+  -> '‘'
+> convert_entities('&#8216;', 1)
+  -> '&lsquo;'
+> convert_entities('&#8216;', 2)
+  -> "'"
+> convert_entities('&#8216;SmartyPants&#8217;', 0)
+  -> '‘SmartyPants’'
+> convert_entities('&#8216;SmartyPants&#8217;', 1)
+  -> '&lsquo;SmartyPants&rsquo;'
+> convert_entities('&#8216;SmartyPants&#8217;', 2)
+  -> "'SmartyPants'"
+> convert_entities('&#8220;Hello &#8212; world.&#8221;', 0)
+  -> '“Hello — world.”'
+> convert_entities('&#8220;Hello &#8212; world.&#8221;', 1)
+  -> '&ldquo;Hello &mdash; world.&rdquo;'
+> convert_entities('&#8220;Hello &#8212; world.&#8221;', 2)
+  -> '"Hello -- world."'
+> convert_entities('&#8211;&#8212;&#8216;&#8217;&#8220;&#8221;&#8230;', 0)
+  -> '–—‘’“”…'
+> convert_entities('&#8211;&#8212;&#8216;&#8217;&#8220;&#8221;&#8230;', 1)
+  -> '&ndash;&mdash;&lsquo;&rsquo;&ldquo;&rdquo;&hellip;'
+> convert_entities('&#8211;&#8212;&#8216;&#8217;&#8220;&#8221;&#8230;', 2)
+  -> '---\'\'""...'
+> convert_entities('&#8230;&#8230; &#8213; &#821;', 0)
+  -> '…… &#8213; &#821;'
+> convert_entities('&#8230;&#8230; &#8213; &#821;', 1)
+  -> '&hellip;&hellip; &#8213; &#821;'
+> convert_entities('&#8230;&#8230; &#8213; &#821;', 2)
+  -> '...... &#8213; &#821;'
+> convert_entities('&#38;#8220;', 0)
+  -> '&#38;#8220;'
+> convert_entities('&#38;#8220;', 1)
+  -> '&#38;#8220;'
+> convert_entities('&#38;#8220;', 2)
+  -> '&#38;#8220;'
+> convert_entities('plain', 0)
+  -> 'plain'
+> convert_entities('plain', 1)
+  -> 'plain'
+> convert_entities('plain', 2)
+  -> 'plain'
+> _tokenize('"foo" -- bar')
+  -> [['text', '"foo" -- bar']]
+> _tokenize('"Isn\'t this fun?"')
+  -> [['text', '"Isn\'t this fun?"']]
+> _tokenize("'Isn't this fun?'")
+  -> [['text', "'Isn't this fun?'"]]
+> _tokenize("1440-80's")
+  -> [['text', "1440-80's"]]
+> _tokenize("1440-'80s")
+  -> [['text', "1440-'80s"]]
+> _tokenize("1440--'80s")
+  -> [['text', "1440--'80s"]]
+> _tokenize('1960s')
+  -> [['text', '1960s']]
+> _tokenize("1960's")
+  -> [['text', "1960's"]]
+> _tokenize("one two '60s")
+  -> [['text', "one two '60s"]]
+> _tokenize("'60s")
+  -> [['text', "'60s"]]
+> _tokenize("the '80s and the 90's")
+  -> [['text', "the '80s and the 90's"]]
+> _tokenize('21st century')
+  -> [['text', '21st century']]
+> _tokenize('3rd')
+  -> [['text', '3rd']]
+> _tokenize('You should use ";" here')
+  -> [['text', 'You should use ";" here']]
+> _tokenize('Take a look at the "<a>Essay on quoting</a>" paper.')
+  -> [['text', 'Take a look at the "'], ['tag', '<a>'], ['text', 'Essay on quoting'], ['tag', '</a>'], ['text', '" paper.']]
+> _tokenize('Take a look at "<a>Essay on quoting</a>".')
+  -> [['text', 'Take a look at "'], ['tag', '<a>'], ['text', 'Essay on quoting'], ['tag', '</a>'], ['text', '".']]
+> _tokenize("<p>He said &quot;Let's write some code.&quot; This code here <code>if True:\n\tprint &quot;Okay&quot;</code> is python code.</p>")
+  -> [['tag', '<p>'], ['text', "He said &quot;Let's write some code.&quot; This code here "], ['tag', '<code>'], ['text', 'if True:\n\tprint &quot;Okay&quot;'], ['tag', '</code>'], ['text', ' is python code.'], ['tag', '</p>']]
+> _tokenize('--')
+  -> [['text', '--']]
+> _tokenize('-->')
+  -> [['text', '-->']]
+> _tokenize('-- \t  >')
+  -> [['text', '-- \t  >']]
+> _tokenize('<!-- "foo" --> blah--blah <!-- "bar" -->')
+  -> [['tag', '<!-- "foo" -->'], ['text', ' blah--blah '], ['tag', '<!-- "bar" -->']]
+> _tokenize('<p>foo -- "bar"<!-- foo-bar\n<p>blah "this"</p>\n-->\n</p>')
+  -> [['tag', '<p>'], ['text', 'foo -- "bar"'], ['tag', '<!-- foo-bar\n<p>blah "this"</p>\n-->'], ['text', '\n'], ['tag', '</p>']]
+> _tokenize('<!-- comment -->')
+  -> [['tag', '<!-- comment -->']]
+> _tokenize('<!-- <li>Fee-fi-of-fum</li> -->')
+  -> [['tag', '<!-- <li>Fee-fi-of-fum</li> -->']]
+> _tokenize('<!-- "foo" --> <!-- "bar" -->')
+  -> [['tag', '<!-- "foo" -->'], ['text', ' '], ['tag', '<!-- "bar" -->']]
+> _tokenize('<!-- -- -->')
+  -> [['text', '<!-- -- -->']]
+> _tokenize('<!-- -- -- \t >')
+  -> [['text', '<!-- -- -- \t >']]
+> _tokenize('<!---->')
+  -> [['tag', '<!---->']]
+> _tokenize('<!-- --->')
+  -> [['tag', '<!-- --->']]
+> _tokenize('<!-- x -- >')
+  -> [['tag', '<!-- x -- >']]
+> _tokenize('"quote here"')
+  -> [['text', '"quote here"']]
+> _tokenize('"quote&ndash;here"')
+  -> [['text', '"quote&ndash;here"']]
+> _tokenize('Nothing endures but change. -- Heraclitus')
+  -> [['text', 'Nothing endures but change. -- Heraclitus']]
+> _tokenize('Life itself is the proper binge. --- Julia Child (1912--2004)')
+  -> [['text', 'Life itself is the proper binge. --- Julia Child (1912--2004)']]
+> _tokenize('Dare to be naïve. -- Buckminster Fuller (1895---1983)')
+  -> [['text', 'Dare to be naïve. -- Buckminster Fuller (1895---1983)']]
+> _tokenize('Huh...?')
+  -> [['text', 'Huh...?']]
+> _tokenize('Wait. . . what?')
+  -> [['text', 'Wait. . . what?']]
+> _tokenize('Four.... dots')
+  -> [['text', 'Four.... dots']]
+> _tokenize('Spaced . . . . out')
+  -> [['text', 'Spaced . . . . out']]
+> _tokenize("``Isn't this fun?''")
+  -> [['text', "``Isn't this fun?''"]]
+> _tokenize("`Isn't this fun?'")
+  -> [['text', "`Isn't this fun?'"]]
+> _tokenize("``double'' and `single'")
+  -> [['text', "``double'' and `single'"]]
+> _tokenize('"smarty" \\"pants\\"')
+  -> [['text', '"smarty" \\"pants\\"']]
+> _tokenize('\\\\')
+  -> [['text', '\\\\']]
+> _tokenize('a \\- b \\. c \\` d \\\' e \\" f \\\\ g')
+  -> [['text', 'a \\- b \\. c \\` d \\\' e \\" f \\\\ g']]
+> _tokenize("'")
+  -> [['text', "'"]]
+> _tokenize('"')
+  -> [['text', '"']]
+> _tokenize("x'")
+  -> [['text', "x'"]]
+> _tokenize("'x")
+  -> [['text', "'x"]]
+> _tokenize('x"')
+  -> [['text', 'x"']]
+> _tokenize('"x')
+  -> [['text', '"x']]
+> _tokenize("' '")
+  -> [['text', "' '"]]
+> _tokenize('" "')
+  -> [['text', '" "']]
+> _tokenize('He said, "\'Quoted\' words in a larger quote."')
+  -> [['text', 'He said, "\'Quoted\' words in a larger quote."']]
+> _tokenize('\'"Nested" inside\'')
+  -> [['text', '\'"Nested" inside\'']]
+> _tokenize('"\'Double then single\'"')
+  -> [['text', '"\'Double then single\'"']]
+> _tokenize('"..." and \'...\'')
+  -> [['text', '"..." and \'...\'']]
+> _tokenize('"?" she asked')
+  -> [['text', '"?" she asked']]
+> _tokenize("'!' he said")
+  -> [['text', "'!' he said"]]
+> _tokenize('"!" -- \'?\'')
+  -> [['text', '"!" -- \'?\'']]
+> _tokenize("Rock 'n' roll")
+  -> [['text', "Rock 'n' roll"]]
+> _tokenize("'Tis the season")
+  -> [['text', "'Tis the season"]]
+> _tokenize("the dog's bone, the dogs' bones")
+  -> [['text', "the dog's bone, the dogs' bones"]]
+> _tokenize('&nbsp;\'tis &nbsp;"so"')
+  -> [['text', '&nbsp;\'tis &nbsp;"so"']]
+> _tokenize('&mdash;\'word\' &ndash;"word"')
+  -> [['text', '&mdash;\'word\' &ndash;"word"']]
+> _tokenize('&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"')
+  -> [['text', '&#8211;\'dash\' &#8212;"dash" &#x2013;\'hex\' &#x2014;"hex"']]
+> _tokenize('("paren") [\'bracket\'] {"brace"} -\'dash\'-')
+  -> [['text', '("paren") [\'bracket\'] {"brace"} -\'dash\'-']]
+> _tokenize('"5\'10" tall"')
+  -> [['text', '"5\'10" tall"']]
+> _tokenize('a 9" pan, 12\' board')
+  -> [['text', 'a 9" pan, 12\' board']]
+> _tokenize("'quoted'\n'next line'")
+  -> [['text', "'quoted'\n'next line'"]]
+> _tokenize('"tab"\t\'tab\'')
+  -> [['text', '"tab"\t\'tab\'']]
+> _tokenize('Ça va? "Très bien" -- \'merci\'')
+  -> [['text', 'Ça va? "Très bien" -- \'merci\'']]
+> _tokenize('«Bonjour» "monde"')
+  -> [['text', '«Bonjour» "monde"']]
+> _tokenize('数字 "引用" \'テスト\'')
+  -> [['text', '数字 "引用" \'テスト\'']]
+> _tokenize('emoji 🎉 "party" \'time\'')
+  -> [['text', 'emoji 🎉 "party" \'time\'']]
+> _tokenize('\'_underscore_\' "_also_"')
+  -> [['text', '\'_underscore_\' "_also_"']]
+> _tokenize('<b>"bold"</b> <i>\'italic\'</i>')
+  -> [['tag', '<b>'], ['text', '"bold"'], ['tag', '</b>'], ['text', ' '], ['tag', '<i>'], ['text', "'italic'"], ['tag', '</i>']]
+> _tokenize('<a href="x">"link"</a>')
+  -> [['tag', '<a href="x">'], ['text', '"link"'], ['tag', '</a>']]
+> _tokenize('<code>"code"</code> "after"')
+  -> [['tag', '<code>'], ['text', '"code"'], ['tag', '</code>'], ['text', ' "after"']]
+> _tokenize('<pre>"pre" -- </pre> -- "after"')
+  -> [['tag', '<pre>'], ['text', '"pre" -- '], ['tag', '</pre>'], ['text', ' -- "after"']]
+> _tokenize('<PRE>"upper"</PRE> "after"')
+  -> [['tag', '<PRE>'], ['text', '"upper"'], ['tag', '</PRE>'], ['text', ' "after"']]
+> _tokenize('<pre><code>"a"</pre> "b"</code> "c"')
+  -> [['tag', '<pre>'], ['tag', '<code>'], ['text', '"a"'], ['tag', '</pre>'], ['text', ' "b"'], ['tag', '</code>'], ['text', ' "c"']]
+> _tokenize('<code><pre>"a"</code></pre> "b"')
+  -> [['tag', '<code>'], ['tag', '<pre>'], ['text', '"a"'], ['tag', '</code>'], ['tag', '</pre>'], ['text', ' "b"']]
+> _tokenize('</pre> "stray close"')
+  -> [['tag', '</pre>'], ['text', ' "stray close"']]
+> _tokenize('<pre/> "self closing"')
+  -> [['tag', '<pre/>'], ['text', ' "self closing"']]
+> _tokenize('<prefix>"not pre"</prefix>')
+  -> [['tag', '<prefix>'], ['text', '"not pre"'], ['tag', '</prefix>']]
+> _tokenize('<script>if (a--) { x = "y"; }</script> -- "z"')
+  -> [['tag', '<script>'], ['text', 'if (a--) { x = "y"; }'], ['tag', '</script>'], ['text', ' -- "z"']]
+> _tokenize('<style>a { b: "c" }</style> "d"')
+  -> [['tag', '<style>'], ['text', 'a { b: "c" }'], ['tag', '</style>'], ['text', ' "d"']]
+> _tokenize('a < b and "c" > d')
+  -> [['text', 'a '], ['tag', '< b and "c" >'], ['text', ' d']]
+> _tokenize('<p "unterminated tag')
+  -> [['text', '<p "unterminated tag']]
+> _tokenize('text <')
+  -> [['text', 'text <']]
+> _tokenize('> "gt" first')
+  -> [['text', '> "gt" first']]
+> _tokenize('')
+  -> []
+> _tokenize('plain')
+  -> [['text', 'plain']]
+> _tokenize('...')
+  -> [['text', '...']]
+> _tokenize('---')
+  -> [['text', '---']]
+> _tokenize('----')
+  -> [['text', '----']]
+> _tokenize('-----')
+  -> [['text', '-----']]
+> _tokenize('&quot;')
+  -> [['text', '&quot;']]
+> _tokenize('&quot;quot&quot;')
+  -> [['text', '&quot;quot&quot;']]
+> _tokenize('&amp;quot; "x"')
+  -> [['text', '&amp;quot; "x"']]
+> _tokenize('\\"escaped\\"')
+  -> [['text', '\\"escaped\\"']]
+> _tokenize('it\'s \'single\' and "double"')
+  -> [['text', 'it\'s \'single\' and "double"']]
+> _tokenize("'''")
+  -> [['text', "'''"]]
+> _tokenize('"""')
+  -> [['text', '"""']]
+> _tokenize("''")
+  -> [['text', "''"]]
+> _tokenize('""')
+  -> [['text', '""']]
+> _tokenize('"\'"')
+  -> [['text', '"\'"']]
+> _tokenize('\'"\'')
+  -> [['text', '\'"\'']]
+> _tokenize("x 'y z' w")
+  -> [['text', "x 'y z' w"]]
+> _tokenize('x "y z" w')
+  -> [['text', 'x "y z" w']]
+> _tokenize('1\'2"3')
+  -> [['text', '1\'2"3']]
+> _tokenize("'1' '2s' '3 '")
+  -> [['text', "'1' '2s' '3 '"]]
+> _tokenize("the '80s's music")
+  -> [['text', "the '80s's music"]]
+> _tokenize("'00s")
+  -> [['text', "'00s"]]
+> _tokenize("'12s")
+  -> [['text', "'12s"]]
+> _tokenize("'s")
+  -> [['text', "'s"]]
+> _tokenize("s'")
+  -> [['text', "s'"]]
+> _tokenize("'s'")
+  -> [['text', "'s'"]]
+> _tokenize("dogs's")
+  -> [['text', "dogs's"]]
+> _tokenize("-'x'")
+  -> [['text', "-'x'"]]
+> _tokenize("--'x'")
+  -> [['text', "--'x'"]]
+> _tokenize("—'x'")
+  -> [['text', "—'x'"]]
+> _tokenize('–"x"')
+  -> [['text', '–"x"']]
+> _tokenize('<a><b>')
+  -> [['tag', '<a>'], ['tag', '<b>']]
+> _tokenize('<<a>>')
+  -> [['tag', '<<a>'], ['text', '>']]
+> _tokenize('a<!--b-->c')
+  -> [['text', 'a'], ['tag', '<!--b-->'], ['text', 'c']]
+> _tokenize('<!-- a -- b --> <!-- c --  >')
+  -> [['text', '<!-- a -- b -->'], ['text', ' '], ['tag', '<!-- c --  >']]
+> _tokenize('<!--\n-- \n-->')
+  -> [['text', '<!--\n-- \n-->']]
+> _tokenize('<!-- x --\t\n >')
+  -> [['tag', '<!-- x --\t\n >']]
+> _tokenize('<!-- unterminated')
+  -> [['text', '<!-- unterminated']]
+> _tokenize('x<y')
+  -> [['text', 'x<y']]
+> _tokenize('<a href="<MTFoo>">')
+  -> [['tag', '<a href="<MTFoo>'], ['text', '">']]
+> _tokenize('<!---->')
+  -> [['tag', '<!---->']]
+> _tokenize('<!-- -- ->')
+  -> [['text', '<!-- -- ->']]
+> _tokenize('<>')
+  -> [['tag', '<>']]
+> _tokenize('<!>')
+  -> [['tag', '<!>']]
+> _tags_to_skip_regex(None)
+  -> '<(/)?(pre|samp|code|tt|kbd|script|style|math)[^>]*>'
+> _tags_to_skip_regex(['pre'])
+  -> '<(/)?(pre)[^>]*>'
+> _tags_to_skip_regex(['pre', 'code'])
+  -> '<(/)?(pre|code)[^>]*>'
+> _tags_to_skip_regex(['a|b'])
+  -> '<(/)?(a|b)[^>]*>'
+> _tags_to_skip_regex([''])
+  -> '<(/)?()[^>]*>'
+> _tags_to_skip_regex(['x', '', 'y'])
+  -> '<(/)?(x||y)[^>]*>'
+== changing the default
+> Attr.default = 1
+> smartypants('"foo" -- bar', None)
+  -> '&#8220;foo&#8221; -- bar'
+> smartypants('"foo" -- bar', 107)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('\'tis... the \'80s --- "really"', None)
+  -> '&#8216;tis... the &#8216;80s --- &#8220;really&#8221;'
+> smartypants('\'tis... the \'80s --- "really"', 107)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8211; &#8220;really&#8221;'
+> Attr.default = 9
+> smartypants('"foo" -- bar', None)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('"foo" -- bar', 107)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('\'tis... the \'80s --- "really"', None)
+  -> '&#8216;tis... the &#8216;80s &#8212;- &#8220;really&#8221;'
+> smartypants('\'tis... the \'80s --- "really"', 107)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8211; &#8220;really&#8221;'
+> Attr.default = 603
+> smartypants('"foo" -- bar', None)
+  -> '&ldquo;foo&rdquo; &ndash; bar'
+> smartypants('"foo" -- bar', 107)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('\'tis... the \'80s --- "really"', None)
+  -> '&lsquo;tis&hellip; the &lsquo;80s &mdash; &ldquo;really&rdquo;'
+> smartypants('\'tis... the \'80s --- "really"', 107)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8211; &#8220;really&#8221;'
+> Attr.default = 0
+> smartypants('"foo" -- bar', None)
+  -> '"foo" -- bar'
+> smartypants('"foo" -- bar', 107)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('\'tis... the \'80s --- "really"', None)
+  -> '\'tis... the \'80s --- "really"'
+> smartypants('\'tis... the \'80s --- "really"', 107)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8211; &#8220;really&#8221;'
+> Attr.default = 75
+> smartypants('"foo" -- bar', None)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('"foo" -- bar', 107)
+  -> '&#8220;foo&#8221; &#8212; bar'
+> smartypants('\'tis... the \'80s --- "really"', None)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8212;- &#8220;really&#8221;'
+> smartypants('\'tis... the \'80s --- "really"', 107)
+  -> '&#8216;tis&#8230; the &#8216;80s &#8211; &#8220;really&#8221;'
+== skipping other elements
+> tags_to_skip = ['pre', 'code']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>"pre"</pre> <code>"code"</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>&#8220;q&#8221;</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['p']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>"para" -- \'x\'</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>"pre"</pre> <code>&#8220;code&#8221;</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>&#8220;q&#8221;</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['h1', 'h2']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>&#8220;pre&#8221;</pre> <code>&#8220;code&#8221;</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>"head"</h1><h2>\'sub\'</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>&#8220;q&#8221;</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['blockquote']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>&#8220;pre&#8221;</pre> <code>&#8220;code&#8221;</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>"q"</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>"para" -- \'x\'</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>"pre"</pre> <code>"code"</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>"head"</h1><h2>\'sub\'</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>"bold"</b> <i>\'it\'</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>"q"</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['PRE']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>"pre"</pre> <code>&#8220;code&#8221;</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>&#8220;q&#8221;</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['b', 'i']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>&#8220;pre&#8221;</pre> <code>&#8220;code&#8221;</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>"bold"</b> <i>\'it\'</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>"q"</blockquote> &#8220;after&#8221;'
+> tags_to_skip = ['pre', 'samp', 'code', 'tt', 'kbd', 'script', 'style', 'math']
+> smartypants('<p>"para" -- \'x\'</p> "out"', None)
+  -> '<p>&#8220;para&#8221; &#8212; &#8216;x&#8217;</p> &#8220;out&#8221;'
+> smartypants('<pre>"pre"</pre> <code>"code"</code> "out"', None)
+  -> '<pre>"pre"</pre> <code>"code"</code> &#8220;out&#8221;'
+> smartypants('<h1>"head"</h1><h2>\'sub\'</h2> -- "body"', None)
+  -> '<h1>&#8220;head&#8221;</h1><h2>&#8216;sub&#8217;</h2> &#8212; &#8220;body&#8221;'
+> smartypants('<b>"bold"</b> <i>\'it\'</i> "plain"', None)
+  -> '<b>&#8220;bold&#8221;</b> <i>&#8216;it&#8217;</i> &#8220;plain&#8221;'
+> smartypants('<blockquote>"q"</blockquote> "after"', None)
+  -> '<blockquote>&#8220;q&#8221;</blockquote> &#8220;after&#8221;'
+== rendering the posts
+> file broken.html attr=None
+  | <p>An <b>unclosed &#8220;tag <i>here</i> and &#8220;quotes&#8221; &#8212; still.</p>
+  | <PRE>Upper "case" pre -- kept</PRE>
+  | <prefix>"prefix" is not pre -- or is it?</prefix>
+  | </code> a stray close &#8220;tag&#8221; &#8212; then text.
+  | <sample>"sample" starts with samp</sample> &#8220;after&#8221;
+  | <code>"open" code <pre>"nested" pre</pre> "still" inside</code> &#8220;outside&#8221;
+  | <p>Ends without a newline &#8212; &#8220;here&#8221;</p>
+> file broken.html attr=619
+  | <p>An <b>unclosed &ldquo;tag <i>here</i> and &ldquo;quotes&rdquo; &mdash; still.</p>
+  | <PRE>Upper "case" pre -- kept</PRE>
+  | <prefix>"prefix" is not pre -- or is it?</prefix>
+  | </code> a stray close &ldquo;tag&rdquo; &mdash; then text.
+  | <sample>"sample" starts with samp</sample> &ldquo;after&rdquo;
+  | <code>"open" code <pre>"nested" pre</pre> "still" inside</code> &ldquo;outside&rdquo;
+  | <p>Ends without a newline &mdash; &ldquo;here&rdquo;</p>
+> file broken.html attr=129
+  | <p>An <b>unclosed &#8220;tag <i>here</i> and &#8220;quotes&#8221; -- still.</p>
+  | <PRE>Upper "case" pre -- kept</PRE>
+  | <prefix>"prefix" is not pre -- or is it?</prefix>
+  | </code> a stray close &#8220;tag&#8221; -- then text.
+  | <sample>"sample" starts with samp</sample> &#8220;after&#8221;
+  | <code>"open" code <pre>"nested" pre</pre> "still" inside</code> &#8220;outside&#8221;
+  | <p>Ends without a newline -- &#8220;here&#8221;</p>
+> file dreamweaver.html attr=None
+  | <p>He said &quot;Let&#8217;s write some code.&quot; &mdash; and we did.</p>
+  | <p>&quot;Quoted&quot; text&nbsp;&#8216;here&#8217; and&nbsp;&#8220;there&#8221; &ndash; plus &#8220;already curly&#8221;.</p>
+  | <p>Prices: &pound;5 &#8212; &euro;6 &#8230; &quot;cheap&quot;</p>
+  |
+> file dreamweaver.html attr=619
+  | <p>He said &quot;Let&rsquo;s write some code.&quot; &mdash; and we did.</p>
+  | <p>&quot;Quoted&quot; text&nbsp;&lsquo;here&rsquo; and&nbsp;&ldquo;there&rdquo; &ndash; plus &ldquo;already curly&rdquo;.</p>
+  | <p>Prices: &pound;5 &mdash; &euro;6 &hellip; &quot;cheap&quot;</p>
+  |
+> file dreamweaver.html attr=129
+  | <p>He said &#8220;Let&#8217;s write some code.&#8221; &mdash; and we did.</p>
+  | <p>&#8220;Quoted&#8221; text&nbsp;&#8216;here&#8217; and&nbsp;&#8220;there&#8221; &ndash; plus &#8220;already curly&#8221;.</p>
+  | <p>Prices: &pound;5 -- &euro;6 ... &#8220;cheap&#8221;</p>
+  |
+> file empty.html attr=None
+> file empty.html attr=619
+> file empty.html attr=129
+> file escapes.html attr=None
+  | <p>Use &#34;dumb quotes&#34; when you mean them, and &#39;single&#39; ones.</p>
+  | <p>A literal &#45;&#45; stays two dashes, &#46;&#46;&#46; stays three dots, a backslash is &#92;.</p>
+  | <p>&#8220;Backtick quotes&#8221; and `single backticks&#8217; too.</p>
+  | <p>A &#96;backtick&#96; escaped.</p>
+  |
+> file escapes.html attr=619
+  | <p>Use &#34;dumb quotes&#34; when you mean them, and &#39;single&#39; ones.</p>
+  | <p>A literal &#45;&#45; stays two dashes, &#46;&#46;&#46; stays three dots, a backslash is &#92;.</p>
+  | <p>&ldquo;Backtick quotes&rdquo; and `single backticks&rsquo; too.</p>
+  | <p>A &#96;backtick&#96; escaped.</p>
+  |
+> file escapes.html attr=129
+  | <p>Use &#34;dumb quotes&#34; when you mean them, and &#39;single&#39; ones.</p>
+  | <p>A literal &#45;&#45; stays two dashes, &#46;&#46;&#46; stays three dots, a backslash is &#92;.</p>
+  | <p>``Backtick quotes&#8217;&#8217; and `single backticks&#8217; too.</p>
+  | <p>A &#96;backtick&#96; escaped.</p>
+  |
+> file plain.txt attr=None
+  | Plain text with no tags at all.
+  | &#8220;Quotes&#8221;, &#8216;apostrophes&#8217;, it&#8217;s, &#8216;70s, 1970&#8217;s &#8212; and ellipses&#8230;
+  | Line three &#8212; with &#8212;- triple and &#8212;&#8212; quadruple dashes.
+  |
+> file plain.txt attr=619
+  | Plain text with no tags at all.
+  | &ldquo;Quotes&rdquo;, &lsquo;apostrophes&rsquo;, it&rsquo;s, &lsquo;70s, 1970&rsquo;s &mdash; and ellipses&hellip;
+  | Line three &mdash; with &ndash; triple and &ndash;- quadruple dashes.
+  |
+> file plain.txt attr=129
+  | Plain text with no tags at all.
+  | &#8220;Quotes&#8221;, &#8216;apostrophes&#8217;, it&#8217;s, &#8216;70s, 1970&#8217;s -- and ellipses...
+  | Line three -- with --- triple and ---- quadruple dashes.
+  |
+> file recipe.html attr=None
+  | <h1>Grandma&#8217;s &#8220;naïve&#8221; café crème</h1>
+  | <p>Serves 4&#8212;6. You&#8217;ll need a 9&#8221; pan (about 23 cm) and a friend who&#8217;s 5&#8216;10&#8221; to reach the top shelf.</p>
+  | <p>Whisk &#8216;em together until it&#8217;s &#8220;just right&#8221; &#8212; rock &#8216;n&#8217; roll style.</p>
+  | <p>Le chef a dit : « C&#8217;est l&#8217;heure ! » and she said &#8220;Ça va?&#8221; &#8212; yes, ça va.</p>
+  | <p>Bake at 180°C for 25&#8212;30 minutes&#8230;</p>
+  |
+> file recipe.html attr=619
+  | <h1>Grandma&rsquo;s &ldquo;naïve&rdquo; café crème</h1>
+  | <p>Serves 4&mdash;6. You&rsquo;ll need a 9&rdquo; pan (about 23 cm) and a friend who&rsquo;s 5&lsquo;10&rdquo; to reach the top shelf.</p>
+  | <p>Whisk &lsquo;em together until it&rsquo;s &ldquo;just right&rdquo; &mdash; rock &lsquo;n&rsquo; roll style.</p>
+  | <p>Le chef a dit : « C&rsquo;est l&rsquo;heure ! » and she said &ldquo;Ça va?&rdquo; &mdash; yes, ça va.</p>
+  | <p>Bake at 180°C for 25&mdash;30 minutes&hellip;</p>
+  |
+> file recipe.html attr=129
+  | <h1>Grandma&#8217;s &#8220;naïve&#8221; café crème</h1>
+  | <p>Serves 4--6. You&#8217;ll need a 9&#8221; pan (about 23 cm) and a friend who&#8217;s 5&#8216;10&#8221; to reach the top shelf.</p>
+  | <p>Whisk &#8216;em together until it&#8217;s &#8220;just right&#8221; -- rock &#8216;n&#8217; roll style.</p>
+  | <p>Le chef a dit : « C&#8217;est l&#8217;heure ! » and she said &#8220;Ça va?&#8221; -- yes, ça va.</p>
+  | <p>Bake at 180°C for 25--30 minutes...</p>
+  |
+> file release-notes.html attr=None
+  | <h2>Release 4.2 &#8212; &#8220;Larkspur&#8221;</h2>
+  | <p>Use the new <code>--dry-run</code> flag to preview changes. Press <kbd>Ctrl-"</kbd> to open the palette.</p>
+  | <pre><code>$ deploy --env "staging" --tag 'v4.2'
+  | echo "it's done" -- really
+  | </code></pre>
+  | <p>Upgrading from 3.x? Read the &#8220;Breaking changes&#8221; section first &#8212; it&#8217;s short.</p>
+  | <pre>
+  |   config['retries'] = 3   # "three" tries
+  | </pre>
+  | <p>Thanks to everyone who filed bugs in the &#8216;25 beta&#8230; you know who you are.</p>
+  |
+> file release-notes.html attr=619
+  | <h2>Release 4.2 &mdash; &ldquo;Larkspur&rdquo;</h2>
+  | <p>Use the new <code>--dry-run</code> flag to preview changes. Press <kbd>Ctrl-"</kbd> to open the palette.</p>
+  | <pre><code>$ deploy --env "staging" --tag 'v4.2'
+  | echo "it's done" -- really
+  | </code></pre>
+  | <p>Upgrading from 3.x? Read the &ldquo;Breaking changes&rdquo; section first &mdash; it&rsquo;s short.</p>
+  | <pre>
+  |   config['retries'] = 3   # "three" tries
+  | </pre>
+  | <p>Thanks to everyone who filed bugs in the &lsquo;25 beta&hellip; you know who you are.</p>
+  |
+> file release-notes.html attr=129
+  | <h2>Release 4.2 -- &#8220;Larkspur&#8221;</h2>
+  | <p>Use the new <code>--dry-run</code> flag to preview changes. Press <kbd>Ctrl-"</kbd> to open the palette.</p>
+  | <pre><code>$ deploy --env "staging" --tag 'v4.2'
+  | echo "it's done" -- really
+  | </code></pre>
+  | <p>Upgrading from 3.x? Read the &#8220;Breaking changes&#8221; section first -- it&#8217;s short.</p>
+  | <pre>
+  |   config['retries'] = 3   # "three" tries
+  | </pre>
+  | <p>Thanks to everyone who filed bugs in the &#8216;25 beta... you know who you are.</p>
+  |
+> file script-page.html attr=None
+  | <html><head>
+  | <style>
+  |   q:before { content: "\201C"; }  /* "quotes" -- in CSS */
+  | </style>
+  | <script type="text/javascript">
+  | <!--
+  | var msg = "it's a test -- ignore";
+  | document.write('<a href="' + msg + '">' + "link" + "</a>");
+  | //-->
+  | </script>
+  | </head><body>
+  | <!-- a "comment" with no double dash -->
+  | <!&#8212; a comment &#8212; with a double dash &#8212;>
+  | <p>After the &#8220;comments&#8221; &#8212; text.</p>
+  | <math><mi>x</mi><mo>"</mo></math>
+  | <p>Done &#8212; &#8216;really&#8217;.</p>
+  | </body></html>
+  |
+> file script-page.html attr=619
+  | <html><head>
+  | <style>
+  |   q:before { content: "\201C"; }  /* "quotes" -- in CSS */
+  | </style>
+  | <script type="text/javascript">
+  | <!--
+  | var msg = "it's a test -- ignore";
+  | document.write('<a href="' + msg + '">' + "link" + "</a>");
+  | //-->
+  | </script>
+  | </head><body>
+  | <!-- a "comment" with no double dash -->
+  | <!&mdash; a comment &mdash; with a double dash &mdash;>
+  | <p>After the &ldquo;comments&rdquo; &mdash; text.</p>
+  | <math><mi>x</mi><mo>"</mo></math>
+  | <p>Done &mdash; &lsquo;really&rsquo;.</p>
+  | </body></html>
+  |
+> file script-page.html attr=129
+  | <html><head>
+  | <style>
+  |   q:before { content: "\201C"; }  /* "quotes" -- in CSS */
+  | </style>
+  | <script type="text/javascript">
+  | <!--
+  | var msg = "it's a test -- ignore";
+  | document.write('<a href="' + msg + '">' + "link" + "</a>");
+  | //-->
+  | </script>
+  | </head><body>
+  | <!-- a "comment" with no double dash -->
+  | <!-- a comment -- with a double dash -->
+  | <p>After the &#8220;comments&#8221; -- text.</p>
+  | <math><mi>x</mi><mo>"</mo></math>
+  | <p>Done -- &#8216;really&#8217;.</p>
+  | </body></html>
+  |
+> file week-notes.html attr=None
+  | <h1>Week notes: &#8220;shipping&#8221; the &#8216;26 redesign</h1>
+  | <p>It&#8217;s been a long week &#8212; the kind where &#8220;done&#8221; means &#8216;mostly done&#8217;&#8230;
+  | We finally shipped the new navigation; the team&#8217;s reaction was, well, &#8220;fine.&#8221;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s &#8212; that&#8217;s a 54% cut. Not bad for the &#8216;90s-era
+  | backend we&#8217;re still running.</p>
+  | <p>Quote of the week: &#8220;Don&#8217;t ship on Fridays,&#8221; said nobody who&#8217;s ever met a deadline.</p>
+  | <p>Next week &#8230; more of the same?</p>
+  |
+> file week-notes.html attr=619
+  | <h1>Week notes: &ldquo;shipping&rdquo; the &lsquo;26 redesign</h1>
+  | <p>It&rsquo;s been a long week &mdash; the kind where &ldquo;done&rdquo; means &lsquo;mostly done&rsquo;&hellip;
+  | We finally shipped the new navigation; the team&rsquo;s reaction was, well, &ldquo;fine.&rdquo;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s &mdash; that&rsquo;s a 54% cut. Not bad for the &lsquo;90s-era
+  | backend we&rsquo;re still running.</p>
+  | <p>Quote of the week: &ldquo;Don&rsquo;t ship on Fridays,&rdquo; said nobody who&rsquo;s ever met a deadline.</p>
+  | <p>Next week &hellip; more of the same?</p>
+  |
+> file week-notes.html attr=129
+  | <h1>Week notes: &#8220;shipping&#8221; the &#8216;26 redesign</h1>
+  | <p>It&#8217;s been a long week -- the kind where &#8220;done&#8221; means &#8216;mostly done&#8217;...
+  | We finally shipped the new navigation; the team&#8217;s reaction was, well, &#8220;fine.&#8221;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s -- that&#8217;s a 54% cut. Not bad for the &#8216;90s-era
+  | backend we&#8217;re still running.</p>
+  | <p>Quote of the week: &#8220;Don&#8217;t ship on Fridays,&#8221; said nobody who&#8217;s ever met a deadline.</p>
+  | <p>Next week . . . more of the same?</p>
+  |
+> tags_to_skip = ['pre', 'samp', 'code', 'tt', 'kbd', 'script', 'style', 'math', 'h1']
+> file week-notes.html attr=None
+  | <h1>Week notes: "shipping" the '26 redesign</h1>
+  | <p>It&#8217;s been a long week &#8212; the kind where &#8220;done&#8221; means &#8216;mostly done&#8217;&#8230;
+  | We finally shipped the new navigation; the team&#8217;s reaction was, well, &#8220;fine.&#8221;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s &#8212; that&#8217;s a 54% cut. Not bad for the &#8216;90s-era
+  | backend we&#8217;re still running.</p>
+  | <p>Quote of the week: &#8220;Don&#8217;t ship on Fridays,&#8221; said nobody who&#8217;s ever met a deadline.</p>
+  | <p>Next week &#8230; more of the same?</p>
+  |
+> file recipe.html attr=331
+  | <h1>Grandma's "naïve" café crème</h1>
+  | <p>Serves 4—6. You’ll need a 9” pan (about 23 cm) and a friend who’s 5‘10” to reach the top shelf.</p>
+  | <p>Whisk ‘em together until it’s “just right” — rock ‘n’ roll style.</p>
+  | <p>Le chef a dit : « C’est l’heure ! » and she said “Ça va?” — yes, ça va.</p>
+  | <p>Bake at 180°C for 25—30 minutes…</p>
+  |
+> tags_to_skip = ['pre', 'samp', 'code', 'tt', 'kbd', 'script', 'style', 'math']
+== the command line
+> smartypants posts/week-notes.html
+  | <h1>Week notes: &#8220;shipping&#8221; the &#8216;26 redesign</h1>
+  | <p>It&#8217;s been a long week &#8212; the kind where &#8220;done&#8221; means &#8216;mostly done&#8217;&#8230;
+  | We finally shipped the new navigation; the team&#8217;s reaction was, well, &#8220;fine.&#8221;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s &#8212; that&#8217;s a 54% cut. Not bad for the &#8216;90s-era
+  | backend we&#8217;re still running.</p>
+  | <p>Quote of the week: &#8220;Don&#8217;t ship on Fridays,&#8221; said nobody who&#8217;s ever met a deadline.</p>
+  | <p>Next week &#8230; more of the same?</p>
+  |
+  exit 0
+> smartypants -a 2 posts/recipe.html
+  | <h1>Grandma&#8217;s &#8220;naïve&#8221; café crème</h1>
+  | <p>Serves 4&#8211;6. You&#8217;ll need a 9&#8221; pan (about 23 cm) and a friend who&#8217;s 5&#8216;10&#8221; to reach the top shelf.</p>
+  | <p>Whisk &#8216;em together until it&#8217;s &#8220;just right&#8221; &#8211; rock &#8216;n&#8217; roll style.</p>
+  | <p>Le chef a dit : « C&#8217;est l&#8217;heure ! » and she said &#8220;Ça va?&#8221; &#8211; yes, ça va.</p>
+  | <p>Bake at 180°C for 25&#8211;30 minutes&#8230;</p>
+  |
+  exit 0
+> smartypants -a qbdew posts/dreamweaver.html
+  | <p>He said &#8220;Let&#8217;s write some code.&#8221; &mdash; and we did.</p>
+  | <p>&#8220;Quoted&#8221; text&nbsp;&#8216;here&#8217; and&nbsp;&#8220;there&#8221; &ndash; plus &#8220;already curly&#8221;.</p>
+  | <p>Prices: &pound;5 &#8212; &euro;6 &#8230; &#8220;cheap&#8221;</p>
+  |
+  exit 0
+> smartypants --attr qw posts/dreamweaver.html
+  | <p>He said &#8220;Let&#8217;s write some code.&#8221; &mdash; and we did.</p>
+  | <p>&#8220;Quoted&#8221; text&nbsp;&#8216;here&#8217; and&nbsp;&#8220;there&#8221; &ndash; plus &#8220;already curly&#8221;.</p>
+  | <p>Prices: &pound;5 -- &euro;6 ... &#8220;cheap&#8221;</p>
+  |
+  exit 0
+> smartypants --attr=1u posts/recipe.html posts/plain.txt
+  | <h1>Grandma’s “naïve” café crème</h1>
+  | <p>Serves 4—6. You’ll need a 9” pan (about 23 cm) and a friend who’s 5‘10” to reach the top shelf.</p>
+  | <p>Whisk ‘em together until it’s “just right” — rock ‘n’ roll style.</p>
+  | <p>Le chef a dit : « C’est l’heure ! » and she said “Ça va?” — yes, ça va.</p>
+  | <p>Bake at 180°C for 25—30 minutes…</p>
+  | Plain text with no tags at all.
+  | “Quotes”, ‘apostrophes’, it’s, ‘70s, 1970’s — and ellipses…
+  | Line three — with —- triple and —— quadruple dashes.
+  |
+  exit 0
+> smartypants -a1h posts/escapes.html
+  | <p>Use &#34;dumb quotes&#34; when you mean them, and &#39;single&#39; ones.</p>
+  | <p>A literal &#45;&#45; stays two dashes, &#46;&#46;&#46; stays three dots, a backslash is &#92;.</p>
+  | <p>&ldquo;Backtick quotes&rdquo; and `single backticks&rsquo; too.</p>
+  | <p>A &#96;backtick&#96; escaped.</p>
+  |
+  exit 0
+> smartypants -a 3s posts/week-notes.html
+  | <h1>Week notes: "shipping" the '26 redesign</h1>
+  | <p>It's been a long week -- the kind where "done" means 'mostly done'...
+  | We finally shipped the new navigation; the team's reaction was, well, "fine."</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s -- that's a 54% cut. Not bad for the '90s-era
+  | backend we're still running.</p>
+  | <p>Quote of the week: "Don't ship on Fridays," said nobody who's ever met a deadline.</p>
+  | <p>Next week ... more of the same?</p>
+  |
+  exit 0
+> smartypants -a 0 posts/broken.html
+  | <p>An <b>unclosed "tag <i>here</i> and "quotes" -- still.</p>
+  | <PRE>Upper "case" pre -- kept</PRE>
+  | <prefix>"prefix" is not pre -- or is it?</prefix>
+  | </code> a stray close "tag" -- then text.
+  | <sample>"sample" starts with samp</sample> "after"
+  | <code>"open" code <pre>"nested" pre</pre> "still" inside</code> "outside"
+  | <p>Ends without a newline -- "here"</p>
+  exit 0
+> smartypants -a Bq posts/escapes.html
+  | <p>Use &#34;dumb quotes&#34; when you mean them, and &#39;single&#39; ones.</p>
+  | <p>A literal &#45;&#45; stays two dashes, &#46;&#46;&#46; stays three dots, a backslash is &#92;.</p>
+  | <p>&#8216;&#8216;Backtick quotes&#8217;&#8217; and &#8216;single backticks&#8217; too.</p>
+  | <p>A &#96;backtick&#96; escaped.</p>
+  |
+  exit 0
+> smartypants -a Dei posts/plain.txt
+  | Plain text with no tags at all.
+  | "Quotes", 'apostrophes', it's, '70s, 1970's -- and ellipses&#8230;
+  | Line three -- with --- triple and ---- quadruple dashes.
+  |
+  exit 0
+> smartypants -a '' posts/plain.txt
+  | Plain text with no tags at all.
+  | "Quotes", 'apostrophes', it's, '70s, 1970's -- and ellipses...
+  | Line three -- with --- triple and ---- quadruple dashes.
+  |
+  exit 0
+> smartypants -a qz posts/plain.txt
+  | Unknown attribute: z
+  |
+  exit 1
+> smartypants -a zyz posts/plain.txt
+  | Unknown attribute: y
+  |
+  exit 1
+> smartypants -a x1 posts/plain.txt
+  | Unknown attribute: x
+  |
+  exit 1
+> smartypants -a 4 posts/plain.txt
+  | Unknown attribute: 4
+  |
+  exit 1
+> smartypants -a set1 posts/plain.txt
+  | Unknown attribute: t
+  |
+  exit 1
+> smartypants -s pre,code,h1 posts/week-notes.html
+  | <h1>Week notes: "shipping" the '26 redesign</h1>
+  | <p>It&#8217;s been a long week &#8212; the kind where &#8220;done&#8221; means &#8216;mostly done&#8217;&#8230;
+  | We finally shipped the new navigation; the team&#8217;s reaction was, well, &#8220;fine.&#8221;</p>
+  | <p>Some numbers: 3 deploys, 2 rollbacks, 1 very patient on-call engineer.
+  | Load times dropped from 2.4s to 1.1s &#8212; that&#8217;s a 54% cut. Not bad for the &#8216;90s-era
+  | backend we&#8217;re still running.</p>
+  | <p>Quote of the week: &#8220;Don&#8217;t ship on Fridays,&#8221; said nobody who&#8217;s ever met a deadline.</p>
+  | <p>Next week &#8230; more of the same?</p>
+  |
+  exit 0
+> smartypants -s p posts/release-notes.html
+  | <h2>Release 4.2 &#8212; &#8220;Larkspur&#8221;</h2>
+  | <p>Use the new <code>--dry-run</code> flag to preview changes. Press <kbd>Ctrl-"</kbd> to open the palette.</p>
+  | <pre><code>$ deploy --env "staging" --tag 'v4.2'
+  | echo "it's done" -- really
+  | </code></pre>
+  | <p>Upgrading from 3.x? Read the "Breaking changes" section first -- it's short.</p>
+  | <pre>
+  |   config['retries'] = 3   # "three" tries
+  | </pre>
+  | <p>Thanks to everyone who filed bugs in the '25 beta... you know who you are.</p>
+  |
+  exit 0
+> smartypants --skip= posts/broken.html
+  | <p>An <b>unclosed "tag <i>here</i> and "quotes" -- still.</p>
+  | <PRE>Upper "case" pre -- kept</PRE>
+  | <prefix>"prefix" is not pre -- or is it?</prefix>
+  | </code> a stray close &#8220;tag&#8221; &#8212; then text.
+  | <sample>"sample" starts with samp</sample> &#8220;after&#8221;
+  | <code>"open" code <pre>"nested" pre</pre> "still" inside</code> &#8220;outside&#8221;
+  | <p>Ends without a newline -- "here"</p>
+  exit 0
+> smartypants -s script posts/script-page.html
+  | <html><head>
+  | <style>
+  |   q:before { content: &#8220;\201C&#8221;; }  /* &#8220;quotes&#8221; &#8212; in CSS */
+  | </style>
+  | <script type="text/javascript">
+  | <!--
+  | var msg = "it's a test -- ignore";
+  | document.write('<a href="' + msg + '">' + "link" + "</a>");
+  | //-->
+  | </script>
+  | </head><body>
+  | <!-- a "comment" with no double dash -->
+  | <!&#8212; a comment &#8212; with a double dash &#8212;>
+  | <p>After the &#8220;comments&#8221; &#8212; text.</p>
+  | <math><mi>x</mi><mo>&#8221;</mo></math>
+  | <p>Done &#8212; &#8216;really&#8217;.</p>
+  | </body></html>
+  |
+  exit 0
+> smartypants posts/empty.html posts/plain.txt posts/empty.html
+  | Plain text with no tags at all.
+  | &#8220;Quotes&#8221;, &#8216;apostrophes&#8217;, it&#8217;s, &#8216;70s, 1970&#8217;s &#8212; and ellipses&#8230;
+  | Line three &#8212; with &#8212;- triple and &#8212;&#8212; quadruple dashes.
+  |
+  exit 0
+> smartypants posts/missing.html
+  ! usage: smartypants [-h] [-v] [-a ATTR] [-s SKIP] [FILE ...]
+  ! smartypants: error: argument FILE: can't open 'posts/missing.html': [Errno 2] No such file or directory: 'posts/missing.html'
+  !
+  exit 2
+> smartypants posts/plain.txt posts/missing.html
+  ! usage: smartypants [-h] [-v] [-a ATTR] [-s SKIP] [FILE ...]
+  ! smartypants: error: argument FILE: can't open 'posts/missing.html': [Errno 2] No such file or directory: 'posts/missing.html'
+  !
+  exit 2
+> smartypants -v
+  | 2.0.2
+  |
+  exit 0
+> smartypants --version posts/plain.txt
+  | 2.0.2
+  |
+  exit 0
+> smartypants -x posts/plain.txt
+  ! usage: smartypants [-h] [-v] [-a ATTR] [-s SKIP] [FILE ...]
+  ! smartypants: error: unrecognized arguments: -x
+  !
+  exit 2
+> smartypants -a
+  ! usage: smartypants [-h] [-v] [-a ATTR] [-s SKIP] [FILE ...]
+  ! smartypants: error: argument -a/--attr: expected one argument
+  !
+  exit 2
+> smartypants posts/plain.txt -a q
+  | Plain text with no tags at all.
+  | &#8220;Quotes&#8221;, &#8216;apostrophes&#8217;, it&#8217;s, &#8216;70s, 1970&#8217;s -- and ellipses...
+  | Line three -- with --- triple and ---- quadruple dashes.
+  |
+  exit 0
+> smartypants -- -a
+  ! usage: smartypants [-h] [-v] [-a ATTR] [-s SKIP] [FILE ...]
+  ! smartypants: error: argument FILE: can't open '-a': [Errno 2] No such file or directory: '-a'
+  !
+  exit 2
