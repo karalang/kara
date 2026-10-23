@@ -1918,6 +1918,16 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 Type::Tuple(vec![mut_slice.clone(), mut_slice])
             }
+            // B-2026-10-23-5 — a `Vec` receiver finds every `Slice` method
+            // (docs/library/collections.md), `to_vec` among them: a copy
+            // into a new `Vec`, the value `clone` gives.
+            "to_vec" => {
+                self.expect_no_args("Vec.to_vec", args, span);
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem.clone()],
+                }
+            }
             "chunks" | "windows" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);

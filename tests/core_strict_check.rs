@@ -12010,15 +12010,14 @@ fn a_provider_cannot_leave_its_scope_through_a_callee_or_a_function_value() {
     for (tag, main, expect) in cases {
         rejected(tag, &format!("{CLK}{main}"), expect);
     }
-    // Check only: the MIR builder does not lower a closure other than the
-    // body closure that uses the provider yet (B-2026-10-23-9).
-    accepted(
+    accepted_and_runs(
         "provider-plain-data-leaves",
         &format!(
             "{CLK}fn apply(f: Fn() -> i64 with reads(Clk)) -> i64 reads(Clk) {{ f() }}\n\
              fn main() {{\n    let x = with_provider[Clk](F {{ t: 7 }}, || {{ let c = || tick() + 1; c() }});\n    \
              let y = with_provider[Clk](F {{ t: 3 }}, || apply(|| tick() * 2));\n    println(x + y);\n}}\n"
         ),
+        "14\n",
     );
 }
 
@@ -12099,5 +12098,18 @@ fn a_reference_to_a_returned_temporary_is_refused() {
          let p = P { name: String.from(\"n\") };\n    println(first(v));\n    println(pick(v[0], b, 0));\n    \
          println(p.name());\n    println(via(b));\n    println(get(v));\n}\n",
         "a\nb\nn\nb\na\n",
+    );
+}
+
+/// A `Vec` receiver finds every `Slice` method (docs/library/collections.md),
+/// `to_vec` among them (B-2026-10-23-5).
+#[test]
+fn vec_to_vec_copies_into_a_new_vec() {
+    accepted_and_runs(
+        "vec-to-vec",
+        "fn main() {\n    let v = [3, 1, 2];\n    let mut w = v.to_vec();\n    w.push(4);\n    \
+         println(f\"{v.len()} {w.len()} {w[3]}\");\n    \
+         let s = [String.from(\"a\"), String.from(\"b\")];\n    let t = s.to_vec();\n    println(t[1]);\n}\n",
+        "3 4 4\nb\n",
     );
 }
