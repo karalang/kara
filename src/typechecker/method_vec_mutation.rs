@@ -659,6 +659,108 @@ impl<'a> super::TypeChecker<'a> {
     /// with its own `Iterator` impl. `None` when the source is none of those.
     /// `v.extend(rest)` with `rest` borrowed: refused, with `.clone()` as the
     /// fix where the collection can be copied (B-2026-10-19-33).
+    /// `push_front` / `push_back` / `pop_front` / `pop_back` are
+    /// `VecDeque[T]`'s, and collections.md gives `Vec[T]` none of them
+    /// (B-2026-10-22-48). On v2 a `Vec` receiver is refused by name: the back
+    /// pair is fixed to `push` / `pop`, and the front pair is pointed at
+    /// `insert(0, x)` / `remove(0)` or a `VecDeque`. Legacy keeps accepting
+    /// them, as its backends run them.
+    pub(super) fn reject_deque_method_on_vec(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        obj_ty: &Type,
+    ) -> Option<Type> {
+        if !self.library_methods_from_source
+            || !matches!(
+                method,
+                "push_front" | "push_back" | "pop_front" | "pop_back"
+            )
+        {
+            return None;
+        }
+        let is_vec = |t: &Type| matches!(t, Type::Named { name, .. } if name == "Vec");
+        let is_vec = match obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => is_vec(inner),
+            t => is_vec(t),
+        };
+        if !is_vec {
+            return None;
+        }
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        let msg = format!("no method '{method}' on type 'Vec'");
+        let object_end = object.span.offset + object.span.length;
+        // The edit replaces `.push_back(` with `.push(` (or `.pop_back()`
+        // with `.pop()`), so it is offered only when that text sits there
+        // with nothing in between.
+        let fix = match (method, args) {
+            ("push_back", [arg]) => {
+                let from = object_end;
+                let to = arg.value.span.offset;
+                (to == from + ".push_back(".len()).then(|| (from, to, ".push(".to_string()))
+            }
+            ("pop_back", []) => {
+                let to = span.offset + span.length;
+                let from = to.saturating_sub(".pop_back()".len());
+                (from == object_end).then(|| (from, to, ".pop()".to_string()))
+            }
+            _ => None,
+        };
+        match (method, fix) {
+            (_, Some((from, to, replacement))) => {
+                let to_name = if method == "push_back" { "push" } else { "pop" };
+                self.type_error_with_fix_it(
+                    format!(
+                        "{msg}: `{method}` is a `VecDeque` method; a `Vec` grows and \
+                         shrinks at its back with `{to_name}`"
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                    FixIt {
+                        span: Span {
+                            line: object.span.line,
+                            column: object.span.column,
+                            offset: from,
+                            length: to - from,
+                        },
+                        replacement,
+                    },
+                );
+            }
+            ("push_back" | "pop_back", None) => {
+                let to_name = if method == "push_back" { "push" } else { "pop" };
+                self.type_error(
+                    format!(
+                        "{msg}: `{method}` is a `VecDeque` method; a `Vec` grows and \
+                         shrinks at its back with `{to_name}`"
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+            }
+            _ => {
+                let instead = if method == "push_front" {
+                    "`insert(0, x)`"
+                } else {
+                    "`remove(0)` (which returns the element, not an `Option`)"
+                };
+                self.type_error(
+                    format!(
+                        "{msg}: `{method}` is a `VecDeque` method; on a `Vec` write \
+                         {instead}, which moves every element, or use a `VecDeque`"
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+            }
+        }
+        Some(Type::Error)
+    }
+
     fn reject_extend_from_a_borrow(&mut self, arg: &Expr, inner: &Type) {
         let shown = type_display(inner);
         let postfix = matches!(

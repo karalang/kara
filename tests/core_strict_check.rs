@@ -11804,3 +11804,57 @@ fn main() {
 ",
     );
 }
+
+/// docs/library/collections.md: `push_front` / `push_back` / `pop_front` /
+/// `pop_back` are `VecDeque` methods. On a `Vec`, `karac check` refuses each
+/// by name; `karac fix` writes the back pair as `push` / `pop`, and the front
+/// pair points at `insert(0, x)` / `remove(0)` or a `VecDeque`
+/// (B-2026-10-22-48). A `VecDeque` still takes all four.
+#[test]
+fn deque_methods_on_a_vec_name_the_vec_spelling() {
+    let src = "fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push_back(1);
+    v.push_back(2);
+    let last = v.pop_back();
+    println(\"{v.len()} {last.is_some()}\");
+}
+";
+    rejected_then_fixed_by(
+        "vec-push-back",
+        src,
+        "no method 'push_back' on type 'Vec': `push_back` is a `VecDeque` method; a `Vec` grows and shrinks at its back with `push`",
+        "let last = v.pop();",
+    );
+    let src = "fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push_front(2);
+    let first = v.pop_front();
+    println(\"{v.len()} {first.is_some()}\");
+}
+";
+    let (dir, path) = fixture("vec-push-front", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    for want in [
+        "no method 'push_front' on type 'Vec': `push_front` is a `VecDeque` method; on a `Vec` write `insert(0, x)`",
+        "no method 'pop_front' on type 'Vec': `pop_front` is a `VecDeque` method; on a `Vec` write `remove(0)` (which returns the element, not an `Option`)",
+    ] {
+        assert!(err.contains(want), "expected `{want}` in: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    accepted(
+        "deque-four",
+        "fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(1);
+    d.push_front(2);
+    let a = d.pop_back();
+    let b = d.pop_front();
+    println(\"{d.len()} {a.is_some()} {b.is_some()}\");
+}
+",
+    );
+}

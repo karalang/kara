@@ -2121,6 +2121,9 @@ impl<'a> super::TypeChecker<'a> {
         // `insert`, `extend`, `pop`, `remove`, `get_unchecked`, `push_back` /
         // `push_front`). Extracted to `method_vec_mutation.rs`; it keeps this
         // position in the first-match-wins chain and the block order within it.
+        if let Some(t) = self.reject_deque_method_on_vec(object, method, args, span, &obj_ty) {
+            return t;
+        }
         if let Some(t) = self.try_vec_mutation_method(method, args, &obj_ty) {
             return t;
         }
