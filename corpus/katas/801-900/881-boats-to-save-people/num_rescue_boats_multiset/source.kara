@@ -1,0 +1,118 @@
+// LeetCode #881: Boats to Save People -- lightest first, from a multiset.
+//
+// The people waiting are kept as a SortedMap from weight to how many
+// weigh that. The lightest one left takes a boat with the heaviest other
+// person who fits beside them, found with `floor`. O(n log n).
+
+fn num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut waiting: SortedMap[i64, i64] = SortedMap.new();
+    for i in 0..people.len() {
+        let w = people[i];
+        let had = match waiting.get(w) {
+            Some(c) => *c,
+            None => 0,
+        };
+        waiting.insert(w, had + 1);
+    }
+    let mut boats = 0;
+    while not waiting.is_empty() {
+        let lightest = match waiting.ceiling(0) {
+            Some((w, _)) => *w,
+            None => 0,
+        };
+        take(mut waiting, lightest);
+        boats += 1;
+        let partner = match waiting.floor(limit - lightest) {
+            Some((w, _)) => *w,
+            None => 0,
+        };
+        if partner > 0 {
+            take(mut waiting, partner);
+        }
+    }
+    boats
+}
+
+// one person of weight w leaves the multiset
+fn take(waiting: mut ref SortedMap[i64, i64], w: i64) {
+    let left = waiting[w] - 1;
+    if left == 0 {
+        waiting.remove(w);
+    } else {
+        waiting.insert(w, left);
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn text(values: Vec[i64]) -> String {
+    if values.len() > 6 {
+        return f"[{values[0]}, {values[1]}, ... ({values.len()} people)]";
+    }
+    let mut out = "[";
+    for i in 0..values.len() {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + f"{values[i]}";
+    }
+    out + "]"
+}
+
+fn show(people: Vec[i64], limit: i64) {
+    println(f"people = {text(people)}, limit = {limit} -> {num_rescue_boats(people, limit)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([1, 2], 3);
+    show([3, 2, 2, 1], 3);
+    show([3, 5, 3, 4], 5);
+    show([7], 7);
+    show([5, 5, 5, 5, 5], 10);
+    show([1, 9, 2, 8, 3, 7, 4, 6, 5], 10);
+    show([6, 6, 6, 6], 11);
+    let mut halves: Vec[i64] = Vec.new();
+    let mut fulls: Vec[i64] = Vec.new();
+    let mut ramp: Vec[i64] = Vec.new();
+    for i in 0..50000 {
+        halves.push(15000);
+        fulls.push(30000);
+        ramp.push(i % 30000 + 1);
+    }
+    show(halves, 30000);
+    show(fulls, 30000);
+    show(ramp, 30000);
+    // small cases
+    let mut seed = 881;
+    let mut total = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 12 + 1;
+        let limit = next_random(mut seed) % 20 + 1;
+        let mut people: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            people.push(next_random(mut seed) % limit + 1);
+        }
+        total += num_rescue_boats(people, limit);
+    }
+    println(f"3000 cases of 1 to 12 people: {total} boats");
+    // LeetCode's sizes: up to 50000 people, limit up to 30000
+    total = 0;
+    let mut check = 0;
+    for _ in 0..10 {
+        let n = 40000 + next_random(mut seed) % 10001;
+        let limit = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 30000;
+        let mut people: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            people.push((next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1);
+        }
+        let boats = num_rescue_boats(people, limit);
+        total += boats;
+        check = (check * 131 + boats) % 1000000007;
+    }
+    println(f"10 cases of up to 50000 people: {total} boats, checksum {check}");
+}

@@ -1,0 +1,312 @@
+// LeetCode #881: Boats to Save People -- differential test of the five
+// arms against the statement read literally, with six properties.
+//
+// The statement: people[i] is the weight of the i-th person, and every
+// boat carries at most two people at the same time, whose weights add up
+// to at most limit; there is no limit on the number of boats, and each
+// person weighs at most limit. Return the minimum number of boats to carry
+// every person.
+
+// ---- the ★ arm: sort, then two pointers -----------------------------------
+fn star_num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut weights = people.clone();
+    weights.sort();
+    let mut light = 0;
+    let mut heavy = weights.len() - 1;
+    let mut boats = 0;
+    while light <= heavy {
+        if weights[light] + weights[heavy] <= limit {
+            light += 1;
+        }
+        heavy -= 1;
+        boats += 1;
+    }
+    boats
+}
+
+// ---- the counting arm: counting by weight ---------------------------------
+fn counting_num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(limit + 1, 0);
+    for i in 0..people.len() {
+        count[people[i]] += 1;
+    }
+    let mut left = people.len();
+    let mut light = 1;
+    let mut heavy = limit;
+    let mut boats = 0;
+    while left > 0 {
+        while count[heavy] == 0 {
+            heavy -= 1;
+        }
+        count[heavy] -= 1;
+        left -= 1;
+        boats += 1;
+        if left > 0 {
+            while count[light] == 0 {
+                light += 1;
+            }
+            if light + heavy <= limit {
+                count[light] -= 1;
+                left -= 1;
+            }
+        }
+    }
+    boats
+}
+
+// ---- the best-fit arm: the heaviest partner that fits ---------------------
+fn bestfit_num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut weights = people.clone();
+    weights.sort();
+    let n = weights.len();
+    let mut free: Vec[i64] = Vec.new();
+    for i in 0..n + 1 {
+        free.push(i);
+    }
+    let mut boats = 0;
+    let mut heavy = bestfit_find(mut free, n);
+    while heavy > 0 {
+        // the person at weights[heavy - 1] takes a boat
+        free[heavy] = heavy - 1;
+        boats += 1;
+        // the last of the people below heavy - 1 who fit beside them
+        let room = limit - weights[heavy - 1];
+        let mut lo = 0;
+        let mut hi = heavy - 1;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if weights[mid] <= room {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let partner = bestfit_find(mut free, lo);
+        if partner > 0 {
+            free[partner] = partner - 1;
+        }
+        heavy = bestfit_find(mut free, heavy - 1);
+    }
+    boats
+}
+
+// the nearest person at or below position i - 1 still waiting, as a
+// position plus one, with path halving; 0 when there is none
+fn bestfit_find(free: mut ref Vec[i64], i: i64) -> i64 {
+    let mut x = i;
+    while free[x] != x {
+        free[x] = free[free[x]];
+        x = free[x];
+    }
+    x
+}
+
+// ---- the pairs arm: binary search on the pairs ----------------------------
+fn pairs_num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut weights = people.clone();
+    weights.sort();
+    let n = weights.len();
+    let mut lo = 0;
+    let mut hi = n / 2;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if pairs_pairs_fit(weights, mid, limit) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    n - lo
+}
+
+fn pairs_pairs_fit(weights: Vec[i64], pairs: i64, limit: i64) -> bool {
+    for i in 0..pairs {
+        if weights[i] + weights[2 * pairs - 1 - i] > limit {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the multiset arm: lightest first, from a multiset --------------------
+fn multiset_num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut waiting: SortedMap[i64, i64] = SortedMap.new();
+    for i in 0..people.len() {
+        let w = people[i];
+        let had = match waiting.get(w) {
+            Some(c) => *c,
+            None => 0,
+        };
+        waiting.insert(w, had + 1);
+    }
+    let mut boats = 0;
+    while not waiting.is_empty() {
+        let lightest = match waiting.ceiling(0) {
+            Some((w, _)) => *w,
+            None => 0,
+        };
+        multiset_take(mut waiting, lightest);
+        boats += 1;
+        let partner = match waiting.floor(limit - lightest) {
+            Some((w, _)) => *w,
+            None => 0,
+        };
+        if partner > 0 {
+            multiset_take(mut waiting, partner);
+        }
+    }
+    boats
+}
+
+// one person of weight w leaves the multiset
+fn multiset_take(waiting: mut ref SortedMap[i64, i64], w: i64) {
+    let left = waiting[w] - 1;
+    if left == 0 {
+        waiting.remove(w);
+    } else {
+        waiting.insert(w, left);
+    }
+}
+
+fn arm(x: i64, people: Vec[i64], limit: i64) -> i64 {
+    match x {
+        0 => star_num_rescue_boats(people, limit),
+        1 => counting_num_rescue_boats(people, limit),
+        2 => bestfit_num_rescue_boats(people, limit),
+        3 => pairs_num_rescue_boats(people, limit),
+        _ => multiset_num_rescue_boats(people, limit),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every way of putting the people into boats of one or two: the first
+// person without a boat goes alone or with any other person without one
+// whose weight fits beside theirs; the fewest boats over all the ways
+fn literal(people: Vec[i64], limit: i64) -> i64 {
+    seat(people, limit, 0)
+}
+
+fn seat(people: Vec[i64], limit: i64, placed: i64) -> i64 {
+    let n = people.len();
+    let mut first = 0;
+    while first < n and (placed >> first) & 1 == 1 {
+        first += 1;
+    }
+    if first == n {
+        return 0;
+    }
+    let with_first = placed | (1 << first);
+    let mut best = 1 + seat(people, limit, with_first);
+    for other in first + 1..n {
+        if (placed >> other) & 1 == 0 and people[first] + people[other] <= limit {
+            best = best.min(1 + seat(people, limit, with_first | (1 << other)));
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`, P4 and
+// P5 only when `small`). Returns the ★ arm's count.
+fn properties(t: mut ref Tally, seed: mut ref i64, people: Vec[i64], limit: i64, small: bool) -> i64 {
+    let n = people.len();
+    let want = if small { literal(people, limit) } else { 0 };
+    let mut heavy = 0;
+    let mut most = 0;
+    for i in 0..n {
+        if 2 * people[i] > limit {
+            heavy += 1;
+        }
+        most = most.max(people[i]);
+    }
+    let mut shuffled = people.clone();
+    for i in 0..n {
+        let j = i + next_random(mut seed) % (n - i);
+        shuffled.swap(i, j);
+    }
+    let mut joined = people.clone();
+    joined.push(limit);
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, people, limit));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's answer
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: at least half the people, rounded up, and at least one boat
+        // for each person heavier than half the limit; at most one each
+        check(mut t, 2, got >= (n + 1) / 2 and got >= heavy and got <= n);
+        // P3: the people in another order need the same boats
+        check(mut t, 3, arm(x, shuffled, limit) == got);
+        if small {
+            // P4: a higher limit never needs more boats, and with room for
+            // any two people, the boats are half the people rounded up
+            check(mut t, 4, arm(x, people, limit + 1) <= got and arm(x, people, 2 * most) == (n + 1) / 2);
+            // P5: a person weighing the limit adds exactly one boat
+            check(mut t, 5, arm(x, joined, limit) == got + 1);
+        }
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 881;
+    // 1 to 10 people against the statement, then 1,000 to 2,000 people
+    // with LeetCode's weights against the rest
+    for c in 0..3040 {
+        let small = c < 3000;
+        let n = if small { next_random(mut seed) % 10 + 1 } else { 1000 + next_random(mut seed) % 1001 };
+        let limit = if small { next_random(mut seed) % 20 + 1 } else { 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 30000 };
+        let mut people: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            people.push((next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1);
+        }
+        cases += 1;
+        total += properties(mut t, mut seed, people, limit, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, boats sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

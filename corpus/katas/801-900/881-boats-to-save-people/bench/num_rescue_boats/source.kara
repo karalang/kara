@@ -1,0 +1,41 @@
+// LeetCode #881 bench: the ★ arm (sort, then two pointers) on 600 cases
+// of LeetCode's sizes.
+
+fn num_rescue_boats(people: Vec[i64], limit: i64) -> i64 {
+    let mut weights = people.clone();
+    weights.sort();
+    let mut light = 0;
+    let mut heavy = weights.len() - 1;
+    let mut boats = 0;
+    while light <= heavy {
+        if weights[light] + weights[heavy] <= limit {
+            light += 1;
+        }
+        heavy -= 1;
+        boats += 1;
+    }
+    boats
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 881;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..600 {
+        let n = 40000 + next_random(mut seed) % 10001;
+        let limit = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 30000;
+        let mut people: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            people.push((next_random(mut seed) * 32768 + next_random(mut seed)) % limit + 1);
+        }
+        let boats = num_rescue_boats(people, limit);
+        total += boats;
+        check = (check * 131 + boats) % 1000000007;
+    }
+    println(f"600 cases of up to 50000 people: {total} boats, checksum {check}");
+}
