@@ -1,0 +1,4 @@
+{TWINS}fn go() -> i64 {{ let t = mkp(); let mut i = 0i64;
+  while i < 0i64 {{ takep(t); i = i + 1; }}
+  return 1; }}
+fn main() {{ println(go()); }}

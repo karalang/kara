@@ -1,0 +1,3 @@
+{R}{Q}struct Z {{}}
+impl Z {{ fn zdup(o: Option[Q]) {{ match o {{ Some(t) => {{ println("mid"); }} None => {{ println("n"); }} }} }} }}
+fn main() {{ Z.zdup({ARG}); println("end") }}

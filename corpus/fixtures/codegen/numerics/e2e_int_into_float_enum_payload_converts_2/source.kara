@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+    let m: i64 = 9007199254740993;
+    let r: Result[f64, i64] = Ok(m);
+    match r {{ Ok(x) => println(f"{{x}}"), Err(_) => println("err") }}
+}}

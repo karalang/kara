@@ -1,0 +1,2 @@
+{POD}fn pass(x: Option[Kp]) -> Option[Kp] {{ return x; }}
+fn main() {{ let mut i = 0; while i < 3 {{ let y = pass(Option.Some(Kp.A(mkp(i)))); match y {{ Option.Some(Kp.A(p)) => {{ println(f"a:{{p.a}}"); }}, Option.Some(Kp.B) => {{}}, Option.None => {{}} }} i = i + 1; }} println("end") }}

@@ -1,0 +1,2 @@
+{hdr}fn mkr2(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }}
+fn main() {{ let v = s1(mkr2(1)); println(f"v={{v}}") }}

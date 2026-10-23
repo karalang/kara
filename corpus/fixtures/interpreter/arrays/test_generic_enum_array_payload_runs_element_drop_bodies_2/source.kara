@@ -1,0 +1,1 @@
+{hdr}fn main() {{ {{ let v: Vec[R] = [R {{ id: 31, s: f"aaa" }}, R {{ id: 32, s: f"bbb" }}]; let w: G[Vec[R]] = G.X(v); println("mid") }} println("done") }}

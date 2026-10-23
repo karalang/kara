@@ -1,0 +1,11 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let out = build(5);
+let mut sum = 0;
+let mut cur = out;
+while cur.is_some() {{
+let x = cur.unwrap();
+sum = sum + x.val;
+cur = x.next;
+}}
+println(sum);
+}}

@@ -1,0 +1,6 @@
+struct S {{ s: String, t: String }}
+{PAD}                     fn main() {{
+                         let a: Option[S] = Some(S {{ s: pad(1), t: pad(2) }});
+                         match a {{ Some(S {{ s, t }}) => {{ let owned: String = s; let extra: String = pad(3); println(owned.len() + t.len() + extra.len()); }} None => {{}} }}
+                         println("end");
+                     }}

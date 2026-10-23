@@ -1,0 +1,16 @@
+trait Recorder { fn record(ref self, value: i64) -> i64; }
+struct ProvA {}
+impl Recorder for ProvA { fn record(ref self, value: i64) -> i64 { 100 + value } }
+struct ProvB {}
+impl Recorder for ProvB { fn record(ref self, value: i64) -> i64 { 200 + value } }
+effect resource Ra: Recorder;
+effect resource Rb: Recorder;
+fn both() -> i64 with reads(Ra) reads(Rb) { Ra.record(1) + Rb.record(2) }
+fn main() {
+    with_provider[Ra](ProvA {}, || {
+        with_provider[Rb](ProvB {}, || {
+            println(Ra.record(0));
+            println(both());
+        });
+    });
+}

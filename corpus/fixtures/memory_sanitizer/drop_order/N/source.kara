@@ -1,0 +1,2 @@
+{N}fn main() {{ let (inner, n) = ((R {{ id: 41, tags: mkv(3) }}, 2), 1);
+             println(f"{{n}}") }}

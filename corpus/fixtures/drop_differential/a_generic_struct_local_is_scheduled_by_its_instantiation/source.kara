@@ -1,0 +1,2 @@
+struct W[T] {{ v: T }}
+fn main() {{ let w: W[String] = W {{ v: {S} }}; println(1i64); }}

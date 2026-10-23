@@ -1,0 +1,21 @@
+
+struct W[K] { x: K }
+trait Tr {
+    type Item;
+    fn get(self) -> Self.Item;
+    fn pair[K](self, k: own K) -> (Self.Item, K) { (self.get(), k) }
+    fn both[K: Clone](self, k: ref K) -> Vec[K] { [k.clone(), k.clone()] }
+}
+impl[K: Clone] Tr for W[K] {
+    type Item = K;
+    fn get(self) -> K { self.x.clone() }
+}
+fn main() {
+    let w: W[String] = W { x: "hello".to_string() };
+    let p = w.pair(42);
+    println(f"{p.0} {p.1}");
+    let q = w.pair("there".to_string());
+    println(f"{q.0} {q.1}");
+    let v = w.both(7);
+    println(f"{v}");
+}

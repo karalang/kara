@@ -1,0 +1,16 @@
+source = "tests/codegen/patterns.rs::e2e_discarded_let_wildcard_match_runs_its_drop_body_once"
+dedup_of = ["tests/interpreter/patterns.rs::test_discarded_let_wildcard_match_runs_its_drop_body_once"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "a162c4f7"

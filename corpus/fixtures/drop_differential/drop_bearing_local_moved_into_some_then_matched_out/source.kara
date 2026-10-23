@@ -1,0 +1,3 @@
+{DROP_T}fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }};
+let o: Option[T] = Some(t);
+match o {{ Some(x) => println(x.name.len()), None => {{}} }} }}

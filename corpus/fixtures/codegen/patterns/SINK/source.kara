@@ -1,0 +1,2 @@
+{P}fn fp(o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: "z" }}; }} }} }}
+{SINK}fn main() {{ sink(fp({PARG})); }}

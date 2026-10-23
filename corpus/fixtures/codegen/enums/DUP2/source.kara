@@ -1,0 +1,1 @@
+{R}{Q}{DUP2}fn main() {{ let g = A.dup({ARG}); println(f"got:{{g.id}}"); println("end") }}

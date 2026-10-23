@@ -1,0 +1,6 @@
+{H}struct H2 {{ n: i64 }}
+impl H2 {{ fn eat(ref self, p: (Array[String, 2], i64)) {{ let q = p; println(f"in:{{q.0[0]}}"); }} }}
+fn main() {{
+    let h = H2 {{ n: 1 }};
+    h.eat(([pay(1), pay(2)], 7));
+}}

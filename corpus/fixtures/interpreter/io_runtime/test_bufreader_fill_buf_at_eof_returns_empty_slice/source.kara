@@ -1,0 +1,12 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     match br.fill_buf() {{
+                         Ok(buf) => println("len=" + buf.len().to_string()),
+                         Err(_) => println("fill err"),
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

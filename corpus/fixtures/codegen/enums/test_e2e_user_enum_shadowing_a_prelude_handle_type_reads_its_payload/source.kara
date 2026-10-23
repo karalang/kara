@@ -1,0 +1,4 @@
+enum {name} {{ A(i64), B }}
+fn f(e: ref {name}) -> i64 {{ match e {{ A(x) => x, B => 0 }} }}
+fn g(e: {name}) -> i64 {{ match e {{ A(x) => x + 1, B => 0 }} }}
+fn main() {{ println(f({name}.A(4))); println(g({name}.A(4))); println(f({name}.B)); }}

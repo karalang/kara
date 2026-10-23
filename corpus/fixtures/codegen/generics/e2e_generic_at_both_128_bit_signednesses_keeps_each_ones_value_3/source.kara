@@ -1,0 +1,2 @@
+fn pair[T](x: T, y: T) -> String {{ f"{{x}},{{y}}" }}
+fn main() {{ let a: i128 = -3i128; let b: i128 = 4i128; let c: u128 = {big}u128; let d: u128 = 1u128; println(pair(a, b)); println(pair(c, d)); }}

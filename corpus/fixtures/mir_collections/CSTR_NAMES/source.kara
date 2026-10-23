@@ -1,0 +1,21 @@
+fn main() {
+    let c = c"hello";
+    println(c.bytes().len());
+    println(c.bytes()[0]);
+    match c.to_str() {
+        Ok(s) => println(f"Ok({s})"),
+        Err(_) => println("Err"),
+    }
+    match c"a\xffb".to_str() {
+        Ok(s) => println(f"Ok({s})"),
+        Err(_) => println("Err"),
+    }
+    match c.to_string() {
+        Ok(s) => println(f"Ok({s.len()})"),
+        Err(_) => println("Err"),
+    }
+    match "xyz".to_string().to_cstring() {
+        Ok(cs) => println(cs.bytes().len()),
+        Err(_) => println("nul"),
+    }
+}

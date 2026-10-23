@@ -1,0 +1,3 @@
+{effectful}let CACHE: LazyLock[i64] = LazyLock.new(|| load());
+pub fn peek() -> i64 with reads(Db) {{ return CACHE.get(); }}
+fn main() {{ println(peek()); }}

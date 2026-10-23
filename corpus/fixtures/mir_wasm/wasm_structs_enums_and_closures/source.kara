@@ -1,0 +1,13 @@
+enum Shape { Sq(i64), Rect(i64, i64) }
+struct Acc { total: i64 }
+fn area(s: Shape) -> i64 {
+    match s { Shape.Sq(a) => a * a, Shape.Rect(w, h) => w * h }
+}
+fn main() {
+    let shapes = vec![Shape.Sq(3), Shape.Rect(2, 5)];
+    let mut acc = Acc { total: 0 };
+    for s in shapes { acc.total += area(s); }
+    let k = 4;
+    let add = |x: i64| x + k;
+    println(f"{acc.total} {add(acc.total)}");
+}

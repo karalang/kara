@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+let mut u: Option[R] = Some(R {{ s: "g" }});
+while let Some(_) = u {{ println("hit"); u = None; }}
+println("end");
+}}

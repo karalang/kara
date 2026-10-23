@@ -1,0 +1,6 @@
+
+fn main() {
+    let v = Vec.filled(-1, 7);
+    let w = Vec.filled(-3, "s");
+    println(f"{v.len()} {w.len()} {Vec.filled(2, 7).len()}");
+}

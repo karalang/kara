@@ -1,12 +1,9 @@
-enum NetE { A, B(i32) }
-type OldE = NetE;
-
-fn f(x: i64) -> Result[i64, OldE] {
-    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
-}
+import std.time.{Duration, Instant, sleep};
 
 fn main() {
-    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
-    let u = OldE.A;
-    match u { NetE.A => println("a"), _ => println("x") }
+    let i0 = Instant.now();
+    sleep(Duration.ms(2));
+    let i1 = Instant.now();
+    let later = i0.add(Duration.ms(5));
+    println(f"{i1.duration_since(i0).as_ms() >= 2} {i0 < i1} {later.duration_since(i0).as_ms()} {i0.elapsed().as_ms() >= 2}");
 }

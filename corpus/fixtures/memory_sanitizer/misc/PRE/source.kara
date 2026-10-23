@@ -1,0 +1,2 @@
+{PRE}fn read(n: Node) -> i64 {{ return n.id; }}
+fn main() {{ let c = mkn(10); println(f"v{{read(c)}}"); println("end") }}

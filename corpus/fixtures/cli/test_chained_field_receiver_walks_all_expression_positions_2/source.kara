@@ -1,0 +1,3 @@
+{preamble}
+fn tail(e: ref Ed) -> i64 {{ return e.doc.lines.len() as i64; }}
+fn main() {{ let e = mk(); let _ = tail(e); }}

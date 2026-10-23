@@ -1,0 +1,2 @@
+fn f(n: i64) {{ {body} }}
+fn main() {{ f(4i64); }}

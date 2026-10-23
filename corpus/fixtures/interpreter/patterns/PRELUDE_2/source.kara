@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+let b: Option[H] = Some(H {{ r: R {{ s: "b" }}, n: 5 }});
+match b {{ Some(H {{ n, .. }}) => println(f"B{{n}}"), None => {{}} }}
+println("end");
+}}

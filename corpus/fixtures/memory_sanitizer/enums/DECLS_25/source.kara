@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let mut s = U.Ua; s = U.Ub; }}
+    println("end");
+}}

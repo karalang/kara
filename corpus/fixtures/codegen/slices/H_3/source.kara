@@ -1,0 +1,5 @@
+{H}fn main() {{
+    let mut a: Vec[D] = [D {{ s: f"aaaaaaaa-1", id: 1 }}, D {{ s: f"bbbbbbbb-2", id: 2 }}];
+    a[0] = D {{ s: f"MUTATED-3", id: 3 }};
+    println(f"a0:{{a[0].id}}");
+}}

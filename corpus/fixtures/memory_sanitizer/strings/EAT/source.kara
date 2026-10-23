@@ -1,0 +1,11 @@
+{EAT}fn main() {{
+    let mut v: Map[i64, Array[String, 2]] = Map.new();
+    let mut i: i64 = 0i64;
+    while i < 4i64 {{ v.insert(i, [f"row-aaaaaaaaaaaaaaaa-{{i}}", f"col-bbbbbbbbbbbbbbbb-{{i}}"]); i = i + 1i64; }}
+    let mut j: i64 = 0i64;
+    while j < 2i64 {{
+        match v.remove(j) {{ Option.Some(a) => {{ println(f"e:{{eat(a)}}") }} Option.None => {{ println("n") }} }}
+        j = j + 1i64;
+    }}
+    println("end");
+}}

@@ -1,0 +1,4 @@
+{PRELUDE}#[allow(partial_move_of_drop_enum)]
+fn go() -> i64 {{ {body}
+ println("mid"); return 7; }}
+fn main() {{ println(f"v={{go()}}"); }}

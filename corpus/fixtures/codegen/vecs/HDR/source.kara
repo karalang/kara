@@ -1,0 +1,5 @@
+{HDR}fn main() {{
+let n = 0;
+{body}
+println("mid");
+}}

@@ -1,0 +1,2 @@
+enum G[T] {{ X(T), Y }}
+fn main() {{ let g: G[String] = X({S}); println(1i64); }}

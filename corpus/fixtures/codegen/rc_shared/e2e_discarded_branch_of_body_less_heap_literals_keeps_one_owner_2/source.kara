@@ -1,0 +1,6 @@
+{hdr}fn main() {{
+let n = 0;
+let t = mkw(7);
+let _ = if n == 0 {{ W {{ r: t.r, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};
+println("end");
+}}

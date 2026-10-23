@@ -1,0 +1,5 @@
+{R}{Q}struct A {{}}
+struct B {{}}
+impl A {{ fn dup(o: Option[Q]) -> Option[Q] {{ return o; }} }}
+impl B {{ fn dup(o: Option[Q]) -> Option[Q] {{ return o; }} }}
+fn main() {{ let g = A.dup({ARG}); println("kept"); println("end") }}

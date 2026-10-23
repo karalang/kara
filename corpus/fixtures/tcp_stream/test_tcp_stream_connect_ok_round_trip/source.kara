@@ -1,0 +1,9 @@
+fn main() {{
+    match TcpStream.connect("127.0.0.1:{port}") {{
+        Result.Ok(stream) => {{
+            let msg: String = "hi from connect\n";
+            let _n = stream.write(msg.bytes());
+        }}
+        Result.Err(_) => {{ println(99); }}
+    }}
+}}

@@ -1,0 +1,5 @@
+{H}fn f(a: Array[String, 2]) -> String {{ return a[0]; }}
+fn main() {{
+    let x: Array[String, 2] = [pay(1), pay(2)];
+    println(f"a0:{{f(x)}}");
+}}

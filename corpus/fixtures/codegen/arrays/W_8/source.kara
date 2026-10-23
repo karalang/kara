@@ -1,0 +1,3 @@
+{W}fn sink(a: Array[W1, 1]) -> i64 {{ return a[0].v }}
+fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return sink(x) }} None => {{ return 0 }} }} }}
+fn main() {{ let r = take(Some([W1 {{ v: 40 }}])); println(f"r:{{r}}"); println("end") }}

@@ -1,0 +1,6 @@
+{PRELUDE}fn c_straight() {{
+    let mut o = Ou {{ h: In {{ r: mks(7), q: mks(8) }}, k: 5 }};
+    let x = o.h.r;
+    println(f"w{{x.id}}");
+}}
+fn main() {{ c_straight(); println("end"); }}

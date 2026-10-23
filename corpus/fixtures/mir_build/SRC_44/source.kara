@@ -1,8 +1,15 @@
-fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
-fn h() -> Result[(Str, (i64, Str)), String] { Ok(("c", (1, "d"))) }
+fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    x
+}
+
+fn g(k: i64, y: u8) -> u8 {
+    let z = match k { 0 => 255, 1 => y, _ => { 7 } };
+    z
+}
 
 fn main() {
-    let (x, y) = g().unwrap();
-    let (z, (n, w)) = h().unwrap();
-    println(f"{x}{y}{z}{n}{w}");
+    let y: u8 = 7;
+    let z: u8 = if true { 1 } else { y };
+    println(f"{f(true, 5)} {f(false, 5)} {z} {g(0, 3)} {g(1, 3)} {g(2, 3)}");
 }

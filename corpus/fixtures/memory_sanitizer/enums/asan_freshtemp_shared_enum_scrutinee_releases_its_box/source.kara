@@ -1,0 +1,3 @@
+shared enum E {{ Num(i64), Bin(E, E) }}
+fn mk(n: i64) -> E {{ if n <= 0 {{ return E.Num(n); }} return E.Bin(mk(n - 1), E.Num(n)); }}
+fn main() {{ {body} }}

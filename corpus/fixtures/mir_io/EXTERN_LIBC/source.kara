@@ -1,0 +1,15 @@
+
+unsafe extern "C" {
+    fn abs(x: i32) -> i32;
+    fn labs(x: i64) -> i64;
+    fn strlen(s: *const u8) -> usize;
+}
+
+fn main() {
+    println(abs(-7));
+    println(labs(-9000000000));
+    match "hello".to_cstring() {
+        Ok(cs) => println(strlen(cs.as_ptr())),
+        Err(_) => println("nul"),
+    }
+}

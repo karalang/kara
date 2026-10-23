@@ -1,0 +1,66 @@
+
+fn run(stop: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { println("a errdefer"); }
+            if stop { return Err("a stopped"); }
+            1
+        },
+        { 2 }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
+fn run_q(fail: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer(e) { println(f"q errdefer {e}"); }
+            defer { println("q defer"); }
+            let v: Result[i64, String] = if fail { Err("bad") } else { Ok(5) };
+            v?
+        },
+        { 3 }
+    };
+    let (x, y) = r;
+    Ok(x * y)
+}
+fn run_ok_return(early: bool) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { println("never"); }
+            if early { return Ok(100); }
+            7
+        },
+        { 1 }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
+// Each branch's errdefer follows its own exit, not the join's: at k == 1
+// branch a returns Ok (its errdefer, on stderr, stays silent) and wins as
+// the source-earliest exit, while b's Err still runs b's.
+fn mixed(k: i64) -> Result[i64, String] {
+    let r = par {
+        {
+            errdefer { eprintln("a errdefer"); }
+            if k == 1 { return Ok(10); }
+            1
+        },
+        {
+            errdefer { println("b errdefer"); }
+            if k >= 1 { return Err("b failed"); }
+            2
+        }
+    };
+    let (x, y) = r;
+    Ok(x + y)
+}
+fn main() {
+    println(f"{run(false)}");
+    println(f"{run(true)}");
+    println(f"{run_q(false)}");
+    println(f"{run_q(true)}");
+    println(f"{run_ok_return(false)}");
+    println(f"{run_ok_return(true)}");
+    for k in 0..3 { println(f"mixed {k}: {mixed(k)}"); }
+}

@@ -1,0 +1,1 @@
+{decls}fn main() {{ match mk()?.zip {{ Some(z) => {{ println(z); }} None => {{ println("none"); }} }} }}

@@ -1,0 +1,2 @@
+{H}#[allow(partial_move_of_drop_enum)]
+fn main() {{ {body} println("post") }}

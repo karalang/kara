@@ -1,0 +1,21 @@
+-10: floor none ceiling -5=v-5
+-5: floor -5=v-5 ceiling -5=v-5
+0: floor -5=v-5 ceiling 10=v10
+10: floor 10=v10 ceiling 10=v10
+15: floor 10=v10 ceiling 20=v20
+30: floor 30=v30 ceiling 30=v30
+35: floor 30=v30 ceiling 50=v50
+40: floor 30=v30 ceiling 50=v50
+50: floor 50=v50 ceiling 50=v50
+60: floor 50=v50 ceiling none
+[10,30) 10:v10 20:v20 | [10,30] 10:v10 20:v20 30:v30 
+[0,100) 10:v10 20:v20 30:v30 50:v50 | [0,100] 10:v10 20:v20 30:v30 50:v50 
+[30,30) | [30,30] 30:v30 
+[40,10) | [40,10] 
+[-5,10) -5:v-5 | [-5,10] -5:v-5 10:v10 
+empty: none none
+apple pear
+banana fig fig/kiwi/pear/
+7 3 | 9 1
+7 70
+3 30

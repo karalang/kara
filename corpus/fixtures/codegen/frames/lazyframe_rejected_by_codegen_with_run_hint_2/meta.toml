@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'a user method returning LazyExpr must be rejected by the v1 codegen twin'"
 bucket = "d"
-classified_with = "79705a229"
+classified_with = "9913c6855"
 extracted_src = "c67fac94"

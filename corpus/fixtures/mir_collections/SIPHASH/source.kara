@@ -1,0 +1,10 @@
+fn content_id(payload: Str) -> u64 {
+    StableHash.siphash24(payload.bytes(), 0, 0)
+}
+fn main() {
+    let empty: Vec[u8] = Vec.new();
+    println(f"{StableHash.siphash24(empty, 506097522914230528, 1084818905618843912)}");
+    let fifteen: Vec[u8] = Vec.from_fn(15, |i| i as u8);
+    println(f"{StableHash.siphash24(fifteen, 506097522914230528, 1084818905618843912)}");
+    println(f"{content_id("x") == content_id("x")} {content_id("x") == content_id("y")}");
+}

@@ -1,0 +1,4 @@
+{H}fn main() {{
+    let h: H = H {{ f: [[mkd(1)], [mkd(2)]] }};
+    println("end");
+}}

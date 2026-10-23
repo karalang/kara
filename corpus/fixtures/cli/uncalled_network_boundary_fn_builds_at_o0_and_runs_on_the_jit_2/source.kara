@@ -1,0 +1,4 @@
+{handler}fn simple(ws: WebSocket) {{ println("h"); }}
+#[allow(unstable_api)]
+fn mk(fd: i64) -> Result[WebSocket, i64] {{ return Result.Ok(WebSocket.from_fd(fd)); }}
+fn main() {{ match mk(-1) {{ Result.Ok(ws) => {{ simple(ws); }} Result.Err(_) => {{}} }} println("end"); }}

@@ -1,0 +1,10 @@
+{STATS}fn main() {{
+let mut grand = 0;
+let mut i = 0;
+while i < 10 {{
+let s = Stats {{ count: 0, total: i, active: true }};
+if s.total > 5 {{ grand = grand + s.total; }}
+i = i + 1;
+}}
+println(grand);
+}}

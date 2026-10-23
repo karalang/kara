@@ -1,0 +1,2 @@
+{H}fn main() {{ let o: Option[G] = Some(G.A(f"z{{9}}"));
+             if let Some(g) = o {{ println("got") }} }}

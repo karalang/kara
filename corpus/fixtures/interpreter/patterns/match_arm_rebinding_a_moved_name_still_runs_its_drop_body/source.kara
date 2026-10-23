@@ -1,0 +1,17 @@
+struct Res {{ id: i64, name: String }}
+impl Drop for Res {{ fn drop(mut ref self) {{ println("D" + self.id.to_string()); }} }}
+fn main() {{
+let o: Option[Res] = Option.Some(Res {{ id: 4, name: "pay4" }});
+let mut v: Vec[Res] = Vec.new();
+match o {{
+Option.Some(r) => {{ v.push(r); }}
+Option.None => {{}}
+}}
+println(v[0].name);
+let o2: Option[Res] = Option.Some(Res {{ id: 6, name: "pay6" }});
+match o2 {{
+Option.Some({second}) => {{ println({second}.name); }}
+Option.None => {{}}
+}}
+println("end");
+}}

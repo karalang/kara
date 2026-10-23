@@ -1,0 +1,16 @@
+
+fn main() {
+    print("x");
+    stdout.flush();
+    let _ = Command.new("echo").arg("y").status();
+    println("z");
+    print("partial ");
+    let _ = Command.new("echo").arg("then child").status();
+    println("parent first");
+    let _ = Command.new("echo").arg("child second").status();
+    println("parent third");
+    print("A");
+    stdout.flush();
+    eprintln("to stderr");
+    println("C");
+}

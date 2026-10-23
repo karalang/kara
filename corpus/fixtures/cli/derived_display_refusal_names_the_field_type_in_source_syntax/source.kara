@@ -1,0 +1,3 @@
+#[derive(Display)]
+struct Holder {{ n: i64, f: {ty} }}
+fn main() {{ let h: Holder = Holder {{ n: 1, f: {init} }}; println(f"{{h}}") }}

@@ -1,0 +1,4 @@
+fn main() {{
+    {decl}
+    match {body} {{ Some(x) => {{ println(x); }} None => {{}} }}
+}}

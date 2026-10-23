@@ -1,0 +1,6 @@
+[info] b-during
+[info] a-after span_id=7
+3
+[info] child span_id=5
+[info] after
+3

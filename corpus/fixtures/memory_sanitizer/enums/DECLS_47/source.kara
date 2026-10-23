@@ -1,0 +1,5 @@
+{DECLS}                 fn main() {{
+                     {{ let h = Hb {{ g: Eb.A(mk()) }}; eatb(h.g); }}
+                     {{ let h = Hb {{ g: Eb.A(mk()) }}; let s = Sink {{ n: 1 }}; s.take(h.g); }}
+                     println("end");
+                 }}

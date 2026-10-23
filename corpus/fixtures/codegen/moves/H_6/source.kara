@@ -1,0 +1,1 @@
+{H}fn main() {{ let x = mkw(7).r; println(f"idx{{x.id}}"); println("end") }}

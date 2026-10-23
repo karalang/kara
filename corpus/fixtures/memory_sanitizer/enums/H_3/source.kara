@@ -1,0 +1,3 @@
+{H}struct W {{ p: (E, i64) }}
+fn main() {{ let w = W {{ p: (E.A(R {{ id: 7, name: f"n{{7}}" }}), 1) }};
+             println("hi"); }}

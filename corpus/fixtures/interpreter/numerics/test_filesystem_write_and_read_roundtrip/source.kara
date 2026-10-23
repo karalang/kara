@@ -1,0 +1,7 @@
+fn main() {{
+             let r = FileSystem.read_to_string("{path}");
+             match r {{
+                 Ok(contents) => println(contents),
+                 Err(_) => println("read error"),
+             }}
+         }}

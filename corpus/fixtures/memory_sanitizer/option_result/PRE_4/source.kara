@@ -1,0 +1,5 @@
+{PRE}fn innerT(x: Result[(String, String), i64]) {{
+   match x {{ Ok((a, b)) => {{ println(f"s:{{a}}{{b}}") }} Err(e) => {{ println(f"e{{e}}") }} }} }}
+fn outerT(x: Result[(String, String), i64]) -> Result[(String, String), i64] {{ return x; }}
+fn main() {{ let mut i = 0; while i < 2 {{
+   innerT(outerT(Result.Ok((f"aaaaaaaa{{i}}{{seed()}}", f"bbbbbbbb{{i}}")))); i = i + 1; }} }}

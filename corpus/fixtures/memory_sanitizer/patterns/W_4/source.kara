@@ -1,0 +1,2 @@
+{W}fn take(o: Option[(W, i64)]) -> i64 {{ match o {{ Some(_) => {{ return 9; }} None => {{ return 0; }} }} }}
+fn main() {{ println(f"g{{take(Some((W {{ id: 3, name: f"n3" }}, 9)))}}") }}

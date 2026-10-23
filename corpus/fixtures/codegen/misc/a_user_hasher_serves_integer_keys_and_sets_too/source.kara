@@ -1,0 +1,14 @@
+{USER_HASHERS}fn main() {{
+let mut m: Map[i64, String, FnvBuild] = Map.new();
+m.insert(10, "ten");
+m.insert(20, "twenty");
+println(m.get(10).unwrap());
+println(m.get(20).unwrap());
+if m.contains_key(30) {{ println(1); }} else {{ println(0); }}
+let mut s: Set[String, SumBuild] = Set.new();
+s.insert("alpha");
+s.insert("bravo");
+s.insert("alpha");
+println(s.len());
+if s.contains("bravo") {{ println(1); }} else {{ println(0); }}
+}}

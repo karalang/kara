@@ -1,0 +1,15 @@
+
+fn show(r: Result[String, IoError]) -> String {
+    match r {
+        Ok(l) => f"ok {l.len()}",
+        Err(IoError.InvalidUtf8) => "invalid utf8".to_string(),
+        Err(_) => "other".to_string(),
+    }
+}
+fn main() {
+    println(show(stdin.read_line()));
+    for line in stdin.lines() {
+        println(show(line));
+    }
+    println(show(stdin.read_to_string()));
+}

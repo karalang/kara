@@ -1,0 +1,6 @@
+{PRE}fn takeR(x: Option[(Rt, Rt)]) {{
+   match x {{ Some(t) => {{ println("ok") }} None => {{ println("n") }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{
+   let o: Option[(Rt, Rt)] = Some((Rt {{ id: 70 + i + seed(), name: f"aaaaaaaa{{i}}" }},
+                                   Rt {{ id: 80 + i, name: f"bbbbbbbb{{i}}" }}));
+   takeR(o); i = i + 1; }} }}

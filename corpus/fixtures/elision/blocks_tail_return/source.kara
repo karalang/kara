@@ -1,0 +1,5 @@
+{STATS}fn build() -> Stats {{
+let s = Stats {{ count: 0, total: 0, active: true }};
+s
+}}
+fn main() {{ let b = build(); println(b.total); }}

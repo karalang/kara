@@ -1,0 +1,2 @@
+{HELD}fn eat(o: Option[Held]) -> i64 {{ match o {{ Some(t) => {{ 7i64 }}, None => {{ 0i64 }} }} }}
+fn main() {{ let ot: Option[Held] = Some(Held {{ tag: 7i64, buf: {S} }}); println(eat(ot)); }}

@@ -1,0 +1,9 @@
+trait Get {{ fn get_a({self_mode}) -> i64; }}
+impl Get for Map[String, i64] {{
+fn get_a({self_mode}) -> i64 {{ return self["a"]; }}
+}}
+fn main() {{
+let mut m: Map[String, i64] = Map.new();
+m.insert("a", 42);
+println(m.get_a().to_string());
+}}

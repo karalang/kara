@@ -1,0 +1,19 @@
+fn main() {{
+let mut m: {map_ty} = Map.new();
+let ks: Vec[{ty}] = vec![{keys}];
+let mut i = 0;
+while i < ks.len() {{
+let _ = m.insert(ks[i], (i as i64) + 100);
+i = i + 1;
+}}
+let mut hits = 0;
+let mut i2 = 0;
+while i2 < ks.len() {{
+match m.get(ks[i2]) {{
+Some(v) => {{ if v == (i2 as i64) + 100 {{ hits = hits + 1; }} }}
+None => {{}}
+}}
+i2 = i2 + 1;
+}}
+println(f"{{hits}} {{m.len()}}");
+}}

@@ -1,0 +1,16 @@
+struct Res {{ id: i64, name: String }}
+impl Drop for Res {{
+    fn drop(mut ref self) {{ println(f"drop {{self.id}}") }}
+}}
+enum Box2 {{ Full(Res), Empty }}
+fn into_id({param}: Box2) -> i64 {{
+    match {param} {{
+        Box2.Full(r) => {{ return r.id; }}
+        Box2.Empty => {{ return 0; }}
+    }}
+}}
+fn main() {{
+    let {caller}: Box2 = Box2.Full(Res {{ id: 7, name: f"e7" }});
+    let v: i64 = into_id({caller});
+    println(f"v={{v}}");
+}}

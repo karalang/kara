@@ -1,4 +1,11 @@
-a
-x+y
-a/c
-41
+[]  ok:
+[abcXYZ019-._~] abcXYZ019-._~ ok:abcXYZ019-._~
+[a b&c=d/e?f] a%20b%26c%3Dd%2Fe%3Ff ok:a b&c=d/e?f
+[héllo] h%C3%A9llo ok:héllo
+[100%] 100%25 ok:100%
+[a+b] a%2Bb ok:a+b
+ok:€+ .
+err:invalid byte at offset 2
+err:invalid byte at offset 2
+err:invalid byte at offset 1
+err:invalid byte at offset 3

@@ -1,0 +1,28 @@
+effect resource Clk: ClkP;
+trait ClkP { fn now(ref self) -> i64; fn bump(mut ref self) {} }
+struct F { t: i64 }
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+    fn bump(mut ref self) { self.t = self.t + 1; }
+}
+fn tick() -> i64 { Clk.now() }
+fn apply[G: Fn() -> i64](g: G) -> i64 { g() }
+fn twice(g: Fn() -> i64) -> i64 { g() + g() }
+fn each(xs: Vec[i64], g: Fn(i64) -> i64) -> i64 {
+    let mut s = 0;
+    for x in xs { s = s + g(x); }
+    s
+}
+fn main() {
+    let a = with_provider[Clk](F { t: 7 }, || { let c = || tick() + 1; c() });
+    let b = with_provider[Clk](F { t: 5 }, || apply(|| tick() * 2));
+    let k = 100;
+    let c = with_provider[Clk](F { t: 3 }, || twice(|| tick() + k));
+    let d = with_provider[Clk](F { t: 1 }, || each([1, 2, 3], |x| x * tick()));
+    let e = with_provider[Clk](F { t: 2 }, || {
+        let inner = || apply(|| tick() + 10);
+        apply(inner)
+    });
+    let f = with_provider[Clk](F { t: 0 }, || { Clk.bump(); apply(|| { Clk.bump(); tick() }) });
+    println(f"{a} {b} {c} {d} {e} {f}");
+}

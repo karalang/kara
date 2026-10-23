@@ -1,0 +1,6 @@
+{PRELUDE}struct Wq {{ r: Rq }}
+fn eat(w: Wq) {{ let m = w.r; println(f"m:{{m.id}}") }}
+fn main() {{
+    eat(Wq {{ r: Rq {{ id: 1 }} }});
+    println("end");
+}}

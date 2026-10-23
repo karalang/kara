@@ -1,0 +1,20 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     match br.fill_buf() {{
+                         Ok(buf) => println("peek len=" + buf.len().to_string()
+                             + " b0=" + buf[0].to_string()),
+                         Err(_) => println("fill err"),
+                     }}
+                     br.consume(5);
+                     let rest = [0u8, 0u8, 0u8, 0u8, 0u8];
+                     match br.read(rest[0..5]) {{
+                         Ok(n) => println("read n=" + n.to_string()
+                             + " first=" + rest[0].to_string()),
+                         Err(_) => println("read err"),
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

@@ -1,0 +1,4 @@
+struct G[T] {{ v: T, n: i64 }}
+enum E[T] {{ A {{ x: T, k: i64 }}, B }}
+{f}
+fn main() {{ }}

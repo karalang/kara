@@ -1,0 +1,3 @@
+{P}struct H {{ n: i64 }}
+impl H {{ fn ep(ref self, o: Option[(P, P)]) -> P {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return P {{ name: "z" }}; }} }} }} }}
+{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.ep({PARG})); }}

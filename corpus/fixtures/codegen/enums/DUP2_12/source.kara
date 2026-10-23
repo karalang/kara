@@ -1,0 +1,5 @@
+{R}{Q}struct A {{}}
+struct H {{ n: i64 }}
+impl H {{ fn dup(ref self, o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}
+impl A {{ fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }} }}
+fn main() {{ let h = H {{ n: 1 }}; let g = h.dup({ARG}); println(f"got:{{g.id}}"); println("end") }}

@@ -1,0 +1,8 @@
+{H}enum E {{ A((Vec[String], i64)), B }}
+fn main() {{
+    let e = E.A(([pay(1), pay(2)], 7));
+    match e {{
+        E.A(u) => {{ println(f"a0:{{u.0[0]}} n:{{u.1}}") }}
+        E.B => {{ println("b") }}
+    }}
+}}

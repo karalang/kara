@@ -1,0 +1,9 @@
+
+struct Env { names: Vec[String] }
+impl Env { fn put(mut ref self, name: ref String) { self.names.push(name.clone()); } }
+fn count(env: ref Env) -> i64 { env.names.len() }
+fn step(env: mut ref Env) -> Result[bool, String] { env.put("a".to_string()); Ok(true) }
+fn main() {
+    let mut env = Env { names: Vec.new() };
+    if step(mut env).unwrap() { println(f"{count(env)} Parser"); }
+}

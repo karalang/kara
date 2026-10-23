@@ -1,0 +1,1 @@
+{src}fn main() {{ match mk({arg})?.label() {{ Some(s) => {{ println(s); }} None => {{ println("none"); }} }} }}

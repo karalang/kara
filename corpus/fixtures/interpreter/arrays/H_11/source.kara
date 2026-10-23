@@ -1,0 +1,5 @@
+{H}struct G[T] {{ a: T }}
+             fn main() {{
+                 let g: G[Vec[D]] = G {{ a: [mkd(1), mkd(2)] }};
+                 println("end");
+             }}

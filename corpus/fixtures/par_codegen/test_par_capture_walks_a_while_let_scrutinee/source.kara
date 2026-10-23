@@ -1,0 +1,7 @@
+enum H {{ Full({payload}), Empty }}
+                 fn next(i: i64) -> H {{ if i < 6 {{ {mk} }} return H.Empty; }}
+                 fn main() {{
+                     let mut i = 0;
+                     while let H.Full(v) = next(i) {{ println({use_}); i = i + 1; }}
+                     println(99);
+                 }}

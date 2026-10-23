@@ -1,0 +1,21 @@
+
+// The Parser keeps cli.kara, whose `parse` reads(Env).
+struct Env {
+    n: i64,
+}
+
+struct Clock {
+    t: i64,
+}
+
+fn show(e: ref Env) -> i64 {
+    e.n
+}
+
+fn main() {
+    let e = Env { n: 3 };
+    let c = Clock { t: 4 };
+    println(f"{e.n} {show(e)} {c.t}");
+    let a = env.args();
+    println(f"{a.len() > 0}");
+}

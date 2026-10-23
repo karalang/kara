@@ -1,0 +1,2 @@
+{H}fn main() {{ match mk(10) {{ E.A(r) => {{ println(f"v{{r.id}}"); return }} E.B => {{}} }}
+  println("post") }}

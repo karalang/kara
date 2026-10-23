@@ -1,0 +1,7 @@
+{NODE}fn build() -> Option[ListNode] {{
+let dummy = ListNode {{ val: 0, next: None }};
+let node = ListNode {{ val: 1, next: None }};
+dummy.next = Some(node);
+dummy.next
+}}
+fn main() {{ let c = build(); if c.is_some() {{ println(1); }} }}

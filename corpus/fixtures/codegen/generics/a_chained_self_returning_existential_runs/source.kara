@@ -1,0 +1,1 @@
+{DECLS}fn main() {{ println(f"{{make(1).bumped().bumped().bumped().value()}}"); }}

@@ -1,0 +1,2 @@
+struct P {{ tag: i64, name: String, items: Vec[String] }}
+fn main() {{ let p: P = P {{ tag: 1i64, name: {S}, items: Vec[{S}] }}; let P {{ tag, name, items }} = p; println(tag + name.len() + items.len()); }}

@@ -1,0 +1,2 @@
+enum Box2 {{ Full(String), Empty }}
+fn main() {{ let b: Box2 = Full({S}); match b {{ Full(s2) => {{ println(s2.len()); }}, Empty => {{}} }} }}

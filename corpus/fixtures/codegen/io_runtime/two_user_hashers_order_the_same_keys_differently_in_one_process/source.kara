@@ -1,0 +1,16 @@
+{USER_HASHERS}fn main() {{
+let mut a: Map[String, i64, FnvBuild] = Map.new();
+let mut b: Map[String, i64, SumBuild] = Map.new();
+let names = ["zulu", "alpha", "mike", "bravo", "yankee",
+"charlie", "xray", "delta", "whiskey", "echo"];
+for n in names {{
+a.insert(n.to_string(), 1);
+b.insert(n.to_string(), 1);
+}}
+let mut x = "";
+for k in a.keys() {{ x = x + k + " "; }}
+println(x);
+let mut y = "";
+for k in b.keys() {{ y = y + k + " "; }}
+println(y);
+}}

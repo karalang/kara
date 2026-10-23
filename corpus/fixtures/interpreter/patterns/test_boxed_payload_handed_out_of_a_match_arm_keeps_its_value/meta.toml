@@ -1,5 +1,5 @@
 source = "tests/interpreter/patterns.rs::test_boxed_payload_handed_out_of_a_match_arm_keeps_its_value"
-dedup_of = []
+dedup_of = ["tests/codegen/patterns.rs::e2e_boxed_payload_handed_out_of_a_match_arm_keeps_its_value"]
 expect = "stdout"
 exit = 0
 tags = []
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_exit = 0
 model_rev = "aafbe785"
 model_src = "72b52e74"

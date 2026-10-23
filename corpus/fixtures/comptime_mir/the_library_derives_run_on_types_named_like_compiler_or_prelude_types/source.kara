@@ -1,0 +1,18 @@
+
+import std.json.{Json};
+
+#[derive(Message)]
+struct Item { v: i64 }
+
+#[derive(Message)]
+struct Bag { items: Vec[Item] }
+
+#[derive(Serialize)]
+struct Stats { hits: i64 }
+
+fn main() {
+    let b = Bag { items: [Item { v: 7 }, Item { v: -8 }] };
+    let back = Bag.decode(b.encode());
+    println(f"{back.items.len()} {back.items[0].v} {back.items[1].v}");
+    println(Json.serialize(Stats { hits: 3 }));
+}

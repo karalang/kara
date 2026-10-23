@@ -1,0 +1,5 @@
+{HDR}struct Hh {{ xs: Array[(D, i64), 2] }}
+fn main() {{
+{body}
+println("mid");
+}}

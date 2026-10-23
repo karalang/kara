@@ -1,0 +1,17 @@
+fn write_it() {{
+             match File.create("{path}") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.new(f);
+                     let data = [122u8, 122u8];
+                     let _ = bw.write(data[0..2]);
+                 }}
+                 Err(_) => println("create err"),
+             }}
+         }}
+         fn main() {{
+             write_it();
+             match FileSystem.read_to_string("{path}") {{
+                 Ok(s) => println("contents=[" + s + "]"),
+                 Err(_) => println("read err"),
+             }}
+         }}

@@ -1,0 +1,8 @@
+enum M {{ P((bool, String, String)), Q }}
+fn main() {{
+{ROUNDS}        let g: M = P((true, f"row-aaaaaaaaaaaaaaaa-{{i}}", f"two-bbbbbbbbbbbbbbbb-{{i}}"));
+        println(f"t");
+        i = i + 1i64;
+    }}
+    println(f"end");
+}}

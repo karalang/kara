@@ -1,0 +1,5 @@
+{hdr}fn f(r: R) -> i64 {{ let r = mk(99); r.id }}
+fn main() {{
+    let d = f(mk(15));
+    println(f"d={{d}}");
+}}

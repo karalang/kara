@@ -1,5 +1,5 @@
 source = "tests/codegen/misc.rs::e2e_param_wrapped_through_local_hands_back_once"
-dedup_of = ["tests/interpreter/misc.rs::test_param_wrapped_through_local_hands_back_once"]
+dedup_of = ["tests/interpreter/misc.rs::test_param_wrapped_through_local_hands_back_once", "tests/memory_sanitizer/misc.rs::asan_param_wrapped_through_local_has_one_owner"]
 expect = "stdout"
 exit = 0
 tags = ["drop"]
@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_exit = 0
 model_rev = "aafbe785"
 model_src = "1620a4a7"

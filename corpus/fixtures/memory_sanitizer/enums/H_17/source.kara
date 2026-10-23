@@ -1,0 +1,2 @@
+{H}fn take(e: E) -> i64 {{ 7 }}
+             fn main() {{ let e = E.A(f"n{{41}}"); println(f"{{take(e)}}") }}

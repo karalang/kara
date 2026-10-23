@@ -1,0 +1,19 @@
+
+fn first_square_over(n: i64) -> i64 {
+    for i in (1..) {
+        if i * i > n { return i; }
+    }
+    -1
+}
+fn main() {
+    for i in (1..) { if i > 3 { break; } println(f"{i}"); }
+    let mut total = 0;
+    'outer: for a in (10..) {
+        for b in (a..) {
+            if b > a + 2 { continue 'outer; }
+            if a > 11 { break 'outer; }
+            total += b;
+        }
+    }
+    println(f"{total} {first_square_over(50)}");
+}

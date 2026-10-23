@@ -1,0 +1,35 @@
+
+fn pick(word: own String, flip: bool) -> String {
+    let out = if flip {
+        let chars: Vec[char] = word.chars().collect();
+        chars.iter().rev().collect()
+    } else {
+        word
+    };
+    out
+}
+fn pick2(word: own String, flip: bool) -> String {
+    let out = if flip {
+        word
+    } else {
+        let chars: Vec[char] = word.chars().collect();
+        chars.iter().rev().collect()
+    };
+    out
+}
+fn upto(n: i64, k: i64) -> Vec[i64] {
+    let v = match k {
+        0 => (0..n).collect(),
+        _ => {
+            let mut w: Vec[i64] = Vec.new();
+            w.push(k);
+            w
+        }
+    };
+    v
+}
+fn main() {
+    println(f"{pick("abc".to_string(), true)} {pick("abc".to_string(), false)}");
+    println(f"{pick2("xyz".to_string(), true)} {pick2("xyz".to_string(), false)}");
+    println(f"{upto(3, 0)} {upto(3, 7)}");
+}

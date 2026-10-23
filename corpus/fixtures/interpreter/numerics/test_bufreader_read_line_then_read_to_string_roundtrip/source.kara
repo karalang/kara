@@ -1,0 +1,18 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut line = String.new();
+                     match br.read_line(line) {{
+                         Ok(n) => println("line n=" + n.to_string() + " [" + line + "]"),
+                         Err(_) => println("read err"),
+                     }}
+                     let mut rest = String.new();
+                     match br.read_to_string(rest) {{
+                         Ok(n) => println("rest n=" + n.to_string() + " [" + rest + "]"),
+                         Err(_) => println("read err"),
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

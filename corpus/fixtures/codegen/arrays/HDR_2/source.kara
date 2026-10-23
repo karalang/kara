@@ -1,0 +1,4 @@
+{HDR}{decls}fn main() {{
+{body}
+println("end");
+}}

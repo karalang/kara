@@ -1,5 +1,5 @@
 source = "tests/interpreter/structs.rs::test_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block"
-dedup_of = []
+dedup_of = ["tests/codegen/structs.rs::e2e_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block"]
 expect = "stdout"
 exit = 0
 tags = ["drop"]
@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_exit = 0
 model_rev = "aafbe785"
 model_src = "b7fb4e79"

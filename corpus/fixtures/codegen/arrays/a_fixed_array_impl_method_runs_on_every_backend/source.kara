@@ -1,0 +1,6 @@
+trait Head {{ fn pick({self_mode}) -> i64; }}
+impl Head for Array[i64, 3] {{ fn pick({self_mode}) -> i64 {{ {body} }} }}
+fn main() {{
+let a: Array[i64, 3] = [1, 2, 3];
+println(a.pick().to_string());
+}}

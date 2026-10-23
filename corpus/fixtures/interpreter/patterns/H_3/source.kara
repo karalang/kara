@@ -1,0 +1,2 @@
+{H}fn main() {{ let mut v: Vec[E] = Vec.new(); v.push(E.B);
+             println(f"{{v.len()}}"); }}

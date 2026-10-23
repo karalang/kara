@@ -1,0 +1,6 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn one(r: R) -> i64 {{ println("in-one"); 1 }}
+fn main() {{
+    let v = one(mk(one(mk(1)) + 1));
+    println(f"v={{v}}");
+}}

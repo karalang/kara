@@ -1,0 +1,3 @@
+{S}struct H {{ n: i64 }}
+impl H {{ fn omk(self, k: i64) -> S {{ return S {{ id: k }} }} }}
+{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.omk(3)); }}

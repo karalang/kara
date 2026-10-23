@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    {stmts}
+    println("end");
+}}

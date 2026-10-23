@@ -1,0 +1,5 @@
+{R}{Q}struct A {{}}
+struct B {{}}
+impl A {{ fn dup(o: Result[Q, i64]) -> R {{ match o {{ Ok(t) => {{ return t.r; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }} }}
+impl B {{ fn dup(o: Result[Q, i64]) -> R {{ match o {{ Ok(t) => {{ return t.r; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }} }}
+fn main() {{ let g = A.dup(Result.Ok(Q {{ r: R {{ id: 5 }}, s: R {{ id: 6 }} }})); println(f"got:{{g.id}}"); println("end") }}

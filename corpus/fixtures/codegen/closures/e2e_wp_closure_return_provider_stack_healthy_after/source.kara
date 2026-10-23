@@ -1,0 +1,6 @@
+{WP_PREAMBLE}fn f() -> i64 with reads(Ctr) {{
+let a = with_provider[Ctr](InMem {{ n: 5 }}, || {{ return read(); }});
+let b = with_provider[Ctr](InMem {{ n: 6 }}, || {{ read() }});
+a * 10 + b
+}}
+fn main() with reads(Ctr) {{ println(f"{{f()}}"); }}

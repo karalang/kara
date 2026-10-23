@@ -1,0 +1,4 @@
+struct R {{ id: i64 }}
+{drop_impl}struct P {{ v: i64 }}
+impl P {{ fn new(v: i64) -> P {{ return P {{ v: v }} }} }}
+fn main() {{ let p = P.new(5); println(f"v={{p.v}}") }}

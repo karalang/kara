@@ -1,0 +1,4 @@
+{H}fn main() {{
+let t: T = T {{ n: 1 }};
+{body}
+}}

@@ -1,0 +1,25 @@
+
+fn show(v: Vec[i64]) {
+    let mut s: String = "";
+    for x in v.iter() {
+        s.push_str(f"{x} ");
+    }
+    println(s);
+}
+fn main() {
+    show((0..=9223372036854775807).step_by(4611686018427387904).collect());
+    show((0..10).step_by(3).collect());
+    show((0..9).step_by(3).collect());
+    show((0..=9).step_by(3).collect());
+    show((5..5).step_by(2).collect());
+    show((5..=5).step_by(2).collect());
+    show((0..10).step_by(100).collect());
+    show((9223372036854775800..=9223372036854775807).step_by(3).collect());
+    let mut a: Vec[i64] = Vec.new();
+    for x in (0u8..=255u8).step_by(100) { a.push(x as i64); }
+    for x in (-128i8..=127i8).step_by(127) { a.push(x as i64); }
+    show(a);
+    let mut n = 0;
+    for _ in (0u128..=340282366920938463463374607431768211455u128).step_by(9223372036854775807).take(3) { n = n + 1; }
+    println(f"{n} {(0..10).step_by(4).count()}");
+}

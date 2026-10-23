@@ -1,0 +1,4 @@
+{hdr}
+fn main() {{
+    {body}
+}}

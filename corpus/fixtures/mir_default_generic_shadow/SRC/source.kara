@@ -1,0 +1,22 @@
+fn main() {
+    let mut s: SortedMap[String, i64] = SortedMap.new();
+    s.insert("ann".to_string(), 3);
+    s.insert("bob".to_string(), 2);
+    s.insert("cat".to_string(), 1);
+    let e = s.iter().max_by_key(|(w, n)| *n).unwrap();
+    println(f"{e.0} {e.1}");
+    let f = s.iter().min_by_key(|(w, n)| *n).unwrap();
+    println(f"{f.0} {f.1}");
+    let mut t: SortedMap[i64, String] = SortedMap.new();
+    t.insert(1, "ann".to_string());
+    t.insert(2, "cat".to_string());
+    t.insert(3, "bob".to_string());
+    let g = t.iter().max_by_key(|(k, v)| v.clone()).unwrap();
+    println(f"{g.0} {g.1}");
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("bob".to_string(), 2);
+    m.insert("ann".to_string(), 5);
+    m.insert("cat".to_string(), 3);
+    let h = m.iter().min_by_key(|(w, n)| (-*n, w.clone())).unwrap();
+    println(f"{h.0} {h.1}");
+}

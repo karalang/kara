@@ -1,0 +1,1 @@
+{H}fn main() {{ mkw(7); println("mid"); println("end") }}

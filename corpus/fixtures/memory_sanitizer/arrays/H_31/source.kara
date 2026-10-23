@@ -1,0 +1,7 @@
+{H}enum E {{ A((Array[String, 2], i64)), B }}
+fn main() {{
+{build}    match e {{
+        E.A(u) => {{ println(f"a0:{{u.0[0]}} n:{{u.1}}") }}
+        E.B => {{ println("b") }}
+    }}
+}}

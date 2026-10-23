@@ -1,0 +1,2 @@
+enum G4[T] {{ X(T), Y }}
+fn main() {{ let g: G4[String] = X({S}); match g {{ X(v) => {{ println(v.len()); }}, Y => {{}} }} }}

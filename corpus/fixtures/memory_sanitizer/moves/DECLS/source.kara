@@ -1,0 +1,11 @@
+{DECLS}fn stmtD[T](v: Vec[String], c: bool, t: T) -> T {{ if c {{ v[0] }} else {{ v[1] }}; return t; }}
+fn loopD[T](v: Vec[String], t: T) -> T {{ for i in 0..2 {{ if i == 0 {{ v[0] }} else {{ v[1] }} }} return t; }}
+fn blockD[T](v: Vec[String], c: bool, t: T) -> T {{ {{ if c {{ v[0] }} else {{ v[1] }} }}; return t; }}
+fn matchD[T](v: Vec[String], c: i64, t: T) -> T {{ match c {{ 0 => {{ v[0] }} _ => {{ v[1] }} }}; return t; }}
+fn main() {{
+    println(f"n{{stmtD(mkVec(), true, 1)}}");
+    println(f"n{{loopD(mkVec(), 2)}}");
+    println(f"n{{blockD(mkVec(), true, 3)}}");
+    println(f"n{{matchD(mkVec(), 0, 4)}}");
+    println("end");
+}}

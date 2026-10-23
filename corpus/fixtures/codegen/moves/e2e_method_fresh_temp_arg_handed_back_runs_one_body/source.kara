@@ -1,0 +1,6 @@
+{hdr2}fn main() {{
+let k = K {{ n: 1 }};
+let _ = k.f(mk(3), false); println("a");
+let _ = k.f(mk(4), true);  println("b");
+let _ = k.f(mk(5), false); println("c");
+}}

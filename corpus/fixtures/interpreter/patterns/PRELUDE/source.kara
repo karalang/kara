@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+let a: Option[H] = Some(H {{ r: R {{ s: "a" }}, n: 4 }});
+if let Some(H {{ n, .. }}) = a {{ println(f"A{{n}}"); }}
+println("end");
+}}

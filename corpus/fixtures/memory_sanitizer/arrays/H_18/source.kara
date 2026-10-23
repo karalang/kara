@@ -1,0 +1,4 @@
+{H}fn main() {{
+    let a: Array[String, 2] = [pay(1), pay(2)];
+    println(f"a0:{{a[0]}}");
+}}

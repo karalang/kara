@@ -1,0 +1,26 @@
+
+comptime fn derive_describe(comptime T: Type) -> Vec[Item] {
+    let mut text = "impl " + T.name() + " { fn describe(self) -> String { \"";
+    if T.is_struct() {
+        for f in T.fields() {
+            text = text + f.name.clone() + ":" + f.ty.name() + " ";
+        }
+    } else {
+        for v in T.variants() {
+            text = text + v.name.clone() + "/" + f"{v.field_count}" + " ";
+        }
+    }
+    text = text + "\" } }";
+    [ast.item(text)]
+}
+
+#[derive(Describe)]
+struct Point { x: i64, label: String }
+
+#[derive(Describe)]
+enum Shape { Dot, Circle(f64), Rect(f64, f64) }
+
+fn main() {
+    println(Point { x: 1, label: "a" }.describe());
+    println(Shape.Dot.describe());
+}

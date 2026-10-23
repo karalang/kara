@@ -1,0 +1,18 @@
+fn main() {{
+             match File.create("{path}") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.new(f);
+                     let data = [119u8, 120u8, 121u8, 122u8];
+                     match bw.write_all(data[0..4]) {{
+                         Ok(_) => println("wrote all"),
+                         Err(_) => println("write err"),
+                     }}
+                     let _ = bw.flush();
+                 }}
+                 Err(_) => println("create err"),
+             }}
+             match FileSystem.read_to_string("{path}") {{
+                 Ok(s) => println("contents=[" + s + "]"),
+                 Err(_) => println("read err"),
+             }}
+         }}

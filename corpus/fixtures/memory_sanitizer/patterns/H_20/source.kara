@@ -1,0 +1,3 @@
+{H}fn main() {{ let r: Result[G, i64] = Ok(G.A(f"z{{9}}"));
+             let k = match r {{ Ok(g) => {{ g }} Err(n) => {{ G.B }} }};
+             println("kept"); }}

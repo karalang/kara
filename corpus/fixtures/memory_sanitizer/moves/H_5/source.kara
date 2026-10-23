@@ -1,0 +1,4 @@
+{H}struct W {{ f: Array[D, 2] }}
+fn main() {{ let a: Array[D, 2] = [mkd(1), mkd(2)];
+             W {{ f: a }};
+             println("end"); }}

@@ -1,0 +1,2 @@
+{PRE}fn cs(n: Node, k: bool, v: mut ref Vec[Node]) {{ if k {{ v.push(n); }} }}
+fn main() {{ let mut v: Vec[Node] = Vec.new(); let c = mkn(10); cs(c, false, mut v); println(f"n{{v.len()}}"); println("end") }}

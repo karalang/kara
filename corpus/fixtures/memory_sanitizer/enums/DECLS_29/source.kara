@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let Uc = 7; let s = Uc; println(f"n{{s}}"); }}
+    println("end");
+}}

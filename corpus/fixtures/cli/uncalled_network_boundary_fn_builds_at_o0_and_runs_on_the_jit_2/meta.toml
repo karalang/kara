@@ -1,0 +1,16 @@
+source = "tests/cli.rs::uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests", "post-m1:net"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "611f8dae"

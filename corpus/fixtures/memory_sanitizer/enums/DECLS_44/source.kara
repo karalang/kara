@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let a: Result[String, i64] = Result.Ok("bbbbbbbb-2"); let b = idRes(a); match b {{ Result.Ok(v) => {{ println(f"n{{v.len()}}") }} Result.Err(e) => {{ println("err") }} }} }}
+    {{ let a: Option[String] = Option.Some("cccccccc-3"); let b = idOpt(a); }}
+    println("end");
+}}

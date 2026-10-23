@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "for-borrows ruling (review thread, 10-11): `for` over a Vec borrows (core-semantics §4.6), so `join(own self)` needs the loop to own the handles; migrated to `handles.into_iter()`."
 bucket = "a"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_rev = "aafbe785"
 model_src = "3aaa52eb"

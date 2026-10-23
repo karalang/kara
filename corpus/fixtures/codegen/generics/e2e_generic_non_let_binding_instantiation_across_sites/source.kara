@@ -1,0 +1,11 @@
+struct Bag[=T] {{ xs: Vec[T] }}
+impl[T: Ord] Bag[T] {{
+    fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}
+    fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}
+    fn inner(self) -> Vec[T] {{ let mut b = self; b.arrange(); b.xs }}
+    {mk}
+}}
+fn main() {{
+    let a = Bag.mk(["x", "y", "z"]); println(a[0]);
+    let b = Bag.mk([1, 2, 3]); println(b[0]);
+}}

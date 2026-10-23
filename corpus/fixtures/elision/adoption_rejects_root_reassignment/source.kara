@@ -1,0 +1,5 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let mut out = build(3);
+out = build(4);
+if out.is_some() {{ println(1); }}
+}}

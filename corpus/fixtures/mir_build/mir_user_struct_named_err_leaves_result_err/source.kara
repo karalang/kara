@@ -1,0 +1,17 @@
+
+struct Err { msg: String, }
+struct Pair { a: i64, b: i64 }
+fn f(x: i64) -> Result[i64, Err] {
+    if x > 0 { return Err(Err { msg: "no".to_string() }); }
+    Ok(x)
+}
+fn show(r: Result[i64, Err]) -> String {
+    match r { Ok(v) => f"ok {v}", Err(e) => e.msg.clone(), }
+}
+fn main() {
+    match f(1) { Ok(v) => println(f"{v}"), Err(e) => println(e.msg), }
+    println(show(f(0)));
+    println(show(Err(Err { msg: "lent".to_string() })));
+    let p = Pair { a: 3, b: 4 };
+    println(f"{p.a + p.b}");
+}

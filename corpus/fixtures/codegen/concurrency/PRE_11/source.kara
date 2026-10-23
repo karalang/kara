@@ -1,0 +1,5 @@
+{PRE}fn go() -> i64 {{
+  let outer = mkp(1);
+  let (t, k) = par {{ let k = payload().len(); (outer, k) }};
+  return t.a.len() + k; }}
+fn main() {{ println(go()); }}

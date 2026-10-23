@@ -1,0 +1,2 @@
+{PRE}fn stash(n: Node, v: mut ref Vec[Node]) {{ v.push(n); }}
+fn main() {{ let mut v: Vec[Node] = Vec.new(); let c = mkn(10); stash(c, mut v); println(f"n{{v.len()}}"); println("end") }}

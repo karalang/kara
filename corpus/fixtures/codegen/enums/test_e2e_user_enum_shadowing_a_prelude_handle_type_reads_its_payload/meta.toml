@@ -1,0 +1,16 @@
+source = "tests/codegen/enums.rs::test_e2e_user_enum_shadowing_a_prelude_handle_type_reads_its_payload"
+dedup_of = ["tests/interpreter/enums.rs::test_user_enum_shadowing_a_prelude_handle_type"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "6ae12b40"

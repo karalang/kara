@@ -1,0 +1,7 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+enum E {{ V(R), U }}
+fn takee(e: E) -> i64 {{ println("in-takee"); match e {{ E.V(r) => r.id, E.U => 0 }} }}
+fn main() {{
+    let v = takee(if true {{ E.V(mk(30)) }} else {{ E.U }});
+    println(f"v={{v}}");
+}}

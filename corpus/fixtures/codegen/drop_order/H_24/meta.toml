@@ -1,5 +1,5 @@
 source = "tests/codegen/drop_order.rs::H"
-dedup_of = []
+dedup_of = ["tests/memory_sanitizer/moves.rs::H__fmt"]
 expect = "stdout"
 exit = 0
 tags = ["drop", "src:legacy-tests"]
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a"
-classified_with = "79705a229"
+classified_with = "9913c6855"
 extracted_src = "12fdba80"
 model_exit = 0
 model_rev = "aafbe785"

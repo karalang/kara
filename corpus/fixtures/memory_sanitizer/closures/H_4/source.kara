@@ -1,0 +1,2 @@
+{H}fn take(r: R) -> i64 {{ r.id }}
+fn main() {{ println(f"{{take(R {{ id: 41, name: f"n{{41}}" }})}}"); }}

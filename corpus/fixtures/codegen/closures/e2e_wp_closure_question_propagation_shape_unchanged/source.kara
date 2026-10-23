@@ -1,0 +1,15 @@
+{WP_PREAMBLE}fn might_fail(x: i64) -> Result[i64, String] {{
+if x > 5 {{ return Err("big"); }}
+Ok(x)
+}}
+fn q(x: i64) -> Result[i64, String] with reads(Ctr) {{
+let v = with_provider[Ctr](InMem {{ n: x }}, || {{
+let got = might_fail(read())?;
+Ok(got * 10)
+}})?;
+Ok(v + 1)
+}}
+fn main() with reads(Ctr) {{
+println(f"{{q(2).unwrap()}}");
+println(f"{{q(7).unwrap_or(-1)}}");
+}}

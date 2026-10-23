@@ -1,0 +1,16 @@
+source = "tests/cli.rs::test_main_result_error_never_prints_a_bare_prefix"
+dedup_of = ["tests/cli.rs::test_main_result_error_nested_result_keeps_tag_and_payload"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "cb7d186d"

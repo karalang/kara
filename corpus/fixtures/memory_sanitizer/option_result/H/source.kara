@@ -1,0 +1,2 @@
+{H}fn main() {{ let o: Option[E] = Some(E.A(f"n{{7}}"));
+             println("mid"); }}

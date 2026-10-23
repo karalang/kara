@@ -1,0 +1,4 @@
+{H}fn main() {{
+    let v: Vec[Array[D, 1]] = [[mkd(1)], [mkd(2)]];
+    println("end");
+}}

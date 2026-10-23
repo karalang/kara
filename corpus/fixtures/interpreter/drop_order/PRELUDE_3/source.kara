@@ -1,0 +1,11 @@
+{PRELUDE}struct Sq {{ n: i64 }}
+impl Sq {{
+    fn take(mut ref self, x: Option[Rq]) {{
+        match x {{ Some(r) => {{ println(f"m:{{r.id}}") }} None => {{ println("n") }} }}
+    }}
+}}
+fn main() {{
+    let mut s = Sq {{ n: 0 }};
+    s.take(Some(Rq {{ id: 1 }}));
+    println("end");
+}}

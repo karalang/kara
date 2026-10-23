@@ -1,0 +1,46 @@
+{PRE}fn main() {{
+    {{
+        let o: Option[Wide] = Some(mkw(1i64));
+        match o {{
+            Some(r) => {{ println(f"a{{r.tag}}"); }}
+            None => {{ println("a-none"); }}
+        }}
+        println("a-end");
+    }}
+    {{
+        let o: Option[Wide] = Some(mkw(2i64));
+        if let Some(r) = o {{ println(f"b{{r.tag}}"); }}
+        println("b-end");
+    }}
+    {{
+        let o: Option[Wide] = Some(mkw(3i64));
+        let Some(r) = o else {{ return; }}
+        println(f"c{{r.tag}}");
+        println("c-end");
+    }}
+    {{
+        let o: Result[Wider, i64] = Ok(mkr(4i64));
+        match o {{
+            Ok(r) => {{ println(f"d{{r.tag}}"); }}
+            Err(e) => {{ println(f"d-err{{e}}"); }}
+        }}
+        println("d-end");
+    }}
+    {{
+        let o: Option[Wide] = Some(mkw(5i64));
+        match o {{
+            Some(_) => {{ println("e"); }}
+            None => {{ println("e-none"); }}
+        }}
+        println("e-end");
+    }}
+    {{
+        let o: Option[Narrow] = Some(Narrow {{ name: "n6" }});
+        match o {{
+            Some(r) => {{ println(f"f{{r.name}}"); }}
+            None => {{ println("f-none"); }}
+        }}
+        println("f-end");
+    }}
+    println("end");
+}}

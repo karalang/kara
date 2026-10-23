@@ -1,13 +1,18 @@
-import std.path.*;
-import std.encoding.{hex_encode};
-
-fn join(a: Str, b: Str) -> String {
-    f"{a}+{b}"
+import std.encoding.{percent_encode, percent_decode, DecodeError};
+fn show(r: Result[Vec[u8], DecodeError]) -> String {
+    match r {
+        Ok(v) => f"ok:{String.from_utf8(v.as_slice()).unwrap_or("?".to_string())}",
+        Err(e) => f"err:{e}",
+    }
 }
-
 fn main() {
-    println(parent("a/b") ?? "none");
-    println(join("x", "y"));
-    println(normalize("a/./b/../c"));
-    println(hex_encode("A".bytes()));
+    for s in ["", "abcXYZ019-._~", "a b&c=d/e?f", "h\u{e9}llo", "100%", "a+b"].iter() {
+        let e = percent_encode(s.bytes());
+        println(f"[{s}] {e} {show(percent_decode(e.as_str()))}");
+    }
+    println(show(percent_decode("%e2%82%AC+%20.")));
+    println(show(percent_decode("ab%4")));
+    println(show(percent_decode("ab%")));
+    println(show(percent_decode("x%G1")));
+    println(show(percent_decode("%41%")));
 }

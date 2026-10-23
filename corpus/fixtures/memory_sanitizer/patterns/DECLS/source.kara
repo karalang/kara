@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let g: i64 = oneOut(Option.Some((H {{ id: 1, s: "aaaaaaaaaaaa" }}, 9))); println(f"n{{g}}"); }}
+    {{ let g = dropOut(Option.Some((H {{ id: 2, s: "bbbbbbbbbbbb" }}, H {{ id: 3, s: "cccccccccccc" }}))); println(f"n{{g.id}}"); }}
+    println("end");
+}}

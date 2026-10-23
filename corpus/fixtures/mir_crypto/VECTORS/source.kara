@@ -1,0 +1,76 @@
+import std.crypto.sha2.{sha256, sha384, sha512, Sha256, Sha384, Sha512};
+import std.crypto.hmac.{hmac_sha256, hmac_sha384, hmac_sha512, HmacSha256, HmacSha384, HmacSha512};
+import std.crypto.legacy.{sha1, Sha1};
+import std.crypto.{constant_time_eq};
+import std.encoding.{hex_encode, base64_encode};
+
+fn main() {
+    let abc = "abc".bytes();
+    let empty = "".bytes();
+    let long = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".bytes();
+    println(hex_encode(sha1(abc)));
+    println(hex_encode(sha1(empty)));
+    println(hex_encode(sha1(long)));
+    println(hex_encode(sha256(abc)));
+    println(hex_encode(sha256(empty)));
+    println(hex_encode(sha256(long)));
+    println(hex_encode(sha384(abc)));
+    println(hex_encode(sha512(abc)));
+    println(hex_encode(sha512(empty)));
+    // One million `a`s, a thousand at a time.
+    let chunk = Vec.filled(1000, 97u8);
+    let mut a = Sha256.new();
+    let mut b = Sha1.new();
+    let mut i = 0;
+    while i < 1000 {
+        a.update(chunk);
+        b.update(chunk);
+        i = i + 1;
+    }
+    println(hex_encode(a.finish()));
+    println(hex_encode(b.finish()));
+    // RFC 4231 test cases 1, 2 and 6.
+    let k1 = [0x0bu8; 20];
+    let d1 = "Hi There".bytes();
+    println(hex_encode(hmac_sha256(k1, d1)));
+    println(hex_encode(hmac_sha384(k1, d1)));
+    println(hex_encode(hmac_sha512(k1, d1)));
+    let k2 = "Jefe".bytes();
+    let d2 = "what do ya want for nothing?".bytes();
+    println(hex_encode(hmac_sha256(k2, d2)));
+    println(hex_encode(hmac_sha384(k2, d2)));
+    println(hex_encode(hmac_sha512(k2, d2)));
+    let k6 = [0xaau8; 131];
+    let d6 = "Test Using Larger Than Block-Size Key - Hash Key First".bytes();
+    println(hex_encode(hmac_sha256(k6, d6)));
+    // The same MACs given in parts.
+    let mut m = HmacSha256.new(k2);
+    m.update("what do ya ".bytes());
+    m.update("want for nothing?".bytes());
+    println(hex_encode(m.finish()));
+    let mut m3 = HmacSha384.new(k2);
+    m3.update(d2);
+    println(hex_encode(m3.finish()));
+    let mut m5 = HmacSha512.new(k2);
+    m5.update(d2);
+    println(hex_encode(m5.finish()));
+    let mut s3 = Sha384.new();
+    s3.update("a".bytes());
+    s3.update("bc".bytes());
+    println(hex_encode(s3.finish()));
+    let mut s5 = Sha512.new();
+    s5.update(abc);
+    println(hex_encode(s5.finish()));
+    // RFC 6455 section 1.3: the accept value for its sample key.
+    let key = "dGhlIHNhbXBsZSBub25jZQ==";
+    println(base64_encode(sha1(f"{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".bytes())));
+    // Verifying a MAC, and the unequal-length case.
+    let tag = hmac_sha256(k2, d2);
+    println(f"{constant_time_eq(tag, hmac_sha256(k2, d2))} {constant_time_eq(tag, hmac_sha256(k1, d2))} {constant_time_eq(abc, long)} {constant_time_eq(empty, empty)}");
+    // A running hash dropped unfinished frees its state.
+    let mut dropped = Sha256.new();
+    dropped.update(abc);
+    let mut unused = HmacSha512.new(k1);
+    unused.update(d1);
+    println("done");
+}

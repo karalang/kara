@@ -1,0 +1,7 @@
+{STATS}fn main() {{
+let s = Stats {{ count: 0, total: 9, active: true }};
+par {{
+println(s.total);
+println(1);
+}}
+}}

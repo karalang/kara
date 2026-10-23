@@ -1,0 +1,1 @@
+{decls}fn main() {{ match mk()?.city {{ Some(c) => {{ println(c.name); }} None => {{ println("none"); }} }} }}

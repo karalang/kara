@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+let n = 1;
+{stmt}
+println("end");
+}}

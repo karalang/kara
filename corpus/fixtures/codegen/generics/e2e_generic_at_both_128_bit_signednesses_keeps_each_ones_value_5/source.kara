@@ -1,0 +1,1 @@
+{show}fn main() {{ let b: u128 = {big}u128; println(show(b)); }}

@@ -1,0 +1,4 @@
+{noown}fn main() {{
+    mk2(1);
+    println("mid");
+}}

@@ -1,0 +1,6 @@
+{HDR}struct W {{ r: R, n: i64 }}
+fn main() {{
+    let a = W {{ r: mk(13), n: 1 }};
+    let a = W {{ r: mk(14), n: 2 }};
+    println(f"a={{a.n}}");
+}}

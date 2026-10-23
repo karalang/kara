@@ -1,0 +1,16 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     let mut count = 0;
+                     for line in br.lines() {{
+                         match line {{
+                             Ok(s) => {{ println("[" + s + "]"); count = count + 1; }}
+                             Err(_) => println("read err"),
+                         }}
+                     }}
+                     println("count=" + count.to_string());
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

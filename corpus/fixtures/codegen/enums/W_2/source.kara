@@ -1,0 +1,13 @@
+{W}enum E {{ Y(Array[W1, 1]), N }}
+fn main() {{
+let _ = Some([W1 {{ v: 40 }}]);
+println("m1");
+let a: Array[W1, 1] = [W1 {{ v: 41 }}];
+let _ = Some(a);
+println("m2");
+let _ = E.Y([W1 {{ v: 42 }}]);
+println("m3");
+let b: Array[W1, 1] = [W1 {{ v: 43 }}];
+let _ = E.Y(b);
+println("end")
+}}

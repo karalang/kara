@@ -1,0 +1,30 @@
+
+shared struct Calls { mut n: i64 }
+struct K { v: i64, calls: Calls }
+impl PartialEq for K { fn eq(self, other: K) -> bool { self.v == other.v } }
+impl Eq for K {}
+impl PartialOrd for K { fn partial_cmp(self, other: K) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for K {
+    fn cmp(self, other: K) -> Ordering {
+        self.calls.n = self.calls.n + 1;
+        self.v.cmp(other.v)
+    }
+}
+fn main() {
+    let c = Calls { n: 0 };
+    let k = |v: i64| K { v: v, calls: c.clone() };
+    let mut m: SortedMap[K, i64] = SortedMap.new();
+    for i in 0..128 { m.insert(k((i * 37) % 128 * 2), i); }
+    let built = c.n;
+    let mut sum = 0;
+    for q in 0..128 {
+        match m.ceiling(k(q * 2 + 1)) { Some((x, _)) => { sum = sum + x.v; } None => {} }
+        match m.floor(k(q * 2 + 1)) { Some((x, _)) => { sum = sum + x.v; } None => {} }
+        if m.contains_key(k(q)) { sum = sum + 1; }
+    }
+    for q in 0..64 { m.remove(k(q * 4)); }
+    let mut r = 0;
+    for (x, _) in m.range(k(100), k(200)) { r = r + x.v; }
+    println(f"{sum} {m.len()} {r}");
+    println(f"cmp calls: insert under 4000 {built < 4000}, queries under 8000 {c.n - built < 8000}");
+}

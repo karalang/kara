@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+    let m: i64 = 9007199254740993;
+    let s = S.V {{ f: m }};
+    match s {{ S.V {{ f }} => println(f"{{f}}") }}
+}}

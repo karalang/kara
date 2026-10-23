@@ -1,0 +1,5 @@
+{CH}fn main() {{
+    let mut m: Map[Dk, i64] = Map.new();
+    m.insert(mks(0i64), 7i64);
+    println(f"len:{{m.len()}}");
+}}

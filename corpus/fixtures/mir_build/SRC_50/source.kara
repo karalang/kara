@@ -1,19 +1,24 @@
-fn o(x: Ordering) -> Str {
-    match x { Ordering.Less => "lt", Ordering.Equal => "eq", Ordering.Greater => "gt" }
-}
-fn biggest[T: Ord + Copy](a: T, b: T) -> T {
-    if a > b { a } else { b }
-}
-fn total[T: Add[Output = T] + Copy](a: T, b: T) -> T {
-    a + b
-}
 fn main() {
-    let a: u128 = 1u128 << 127;
-    let b: u128 = 5;
-    let c: i128 = -3;
-    println(f"{o(a.cmp(b))} {o(c.cmp(2))} {a.partial_cmp(b).is_some()} {o(b.cmp(b))}");
-    println(f"{biggest(a, b)} {biggest(c, 7)} {total(a, b)} {total(c, -4)}");
-    let mut v: Vec[u128] = vec![b, a, 1];
-    v.sort_by(|x, y| x.cmp(y));
-    println(f"{v[0]} {v[2]}");
+    let big: u128 = 1u128 << 127;
+    let one: u128 = 1;
+    let mut v: Vec[u128] = vec![5, big, 1];
+    v.sort();
+    println(f"{v[0]} {v[1]} {v[2]} {v.is_sorted()} {v.binary_search(big).unwrap()}");
+    let mut w: Vec[u128] = vec![5, big, 1];
+    w.sort_by_key(|k| k);
+    let mut t: Vec[(u128, i64)] = vec![(big, 1), (3, 2)];
+    t.sort();
+    println(f"{w[0]} {w[2]} {t[0].0} {t[1].0}");
+    let mut s: SortedSet[u128] = SortedSet.new();
+    s.insert(big);
+    s.insert(7);
+    s.insert(big + 1);
+    for x in s.iter() {
+        print(f"{x} ");
+    }
+    println("");
+    println(f"{big.max(5)} {big.min(5)} {v.iter().max().unwrap()} {v.iter().min().unwrap()}");
+    println(f"{big.checked_add(one).unwrap()} {big.checked_sub(one).unwrap()} {big.checked_mul(2).is_none()} {big.saturating_add(big)} {one.saturating_sub(big)}");
+    println(f"{big.abs_diff(one)} {one.abs_diff(big)} {big.overflowing_add(big)} {big.overflowing_mul(3)}");
+    println(f"{big.checked_div(2).unwrap()} {big.wrapping_shl(1)} {big.overflowing_neg()} {big.saturating_pow(2)} {(3u128).wrapping_pow(81)}");
 }

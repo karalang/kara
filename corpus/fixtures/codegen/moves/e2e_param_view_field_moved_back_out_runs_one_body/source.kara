@@ -1,0 +1,2 @@
+{hdr}fn take(r: R) -> i64 {{ let t = (r, 5); let x = t.0; return 7; }}
+fn main() {{ let v = take(mk(1)); println(f"v={{v}}"); }}

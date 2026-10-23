@@ -1,0 +1,1 @@
+fn main() {{ let v: Vec[String] = Vec[{S}]; let ov: Option[Vec[String]] = Some(v); match ov {{ Some(_) => {{ println(1i64); }}, None => {{}} }} }}

@@ -1,0 +1,8 @@
+fn main() {
+    let log = "0:start:3";
+    let parts: Vec[Str] = log.split(":").collect();
+    println(f"{parts.len()} [{parts[0]}] [{parts[1]}] [{parts[2]}]");
+    println(f"{i64.parse(parts[2])}");
+    let s = log.slice(2, 7);
+    println(f"<{s}> {s.len()} {log.find(":")}");
+}

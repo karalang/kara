@@ -1,0 +1,6 @@
+fn walk(word: ref String) -> i64 {{
+    let mut out = 0i64;
+    for ch in word.chars() {{ {body} }}
+    return out;
+}}
+fn main() {{ println(walk("ab".to_string())); }}

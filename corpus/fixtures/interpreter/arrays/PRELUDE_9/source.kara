@@ -1,0 +1,5 @@
+{PRELUDE}enum Vbin {{ V(Vec[Ar]), Z }}
+fn main() {{
+    let v: Vbin = Vbin.V(Vec[Ar {{ id: 1 }}, Ar {{ id: 2 }}]);
+    println("x");
+}}

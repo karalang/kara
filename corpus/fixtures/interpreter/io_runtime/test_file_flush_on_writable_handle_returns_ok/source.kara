@@ -1,0 +1,11 @@
+fn main() {{
+             match File.create("{path}") {{
+                 Ok(f) => {{
+                     match f.flush() {{
+                         Ok(_) => println("flushed"),
+                         Err(_) => println("err"),
+                     }}
+                 }}
+                 Err(_) => println("create err"),
+             }}
+         }}

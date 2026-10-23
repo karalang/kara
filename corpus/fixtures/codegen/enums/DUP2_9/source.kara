@@ -1,0 +1,2 @@
+{R}{Q}{DUP2}fn sink(r: R) {{ println(f"sank:{{r.id}}") }}
+fn main() {{ sink(A.dup({ARG})); println("end") }}

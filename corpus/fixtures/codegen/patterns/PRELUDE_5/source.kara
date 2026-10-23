@@ -1,0 +1,5 @@
+{PRELUDE}#[allow(partial_move_of_drop_enum)]
+fn main() {{
+    {body}
+    println("after");
+}}

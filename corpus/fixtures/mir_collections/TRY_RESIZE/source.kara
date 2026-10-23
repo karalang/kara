@@ -1,0 +1,24 @@
+fn show(r: Result[(), AllocError]) -> String {
+    match r {
+        Ok(_) => "ok".to_string(),
+        Err(AllocError.CapacityOverflow) => "overflow".to_string(),
+        Err(AllocError.OutOfMemory { requested_bytes }) => f"oom {requested_bytes}",
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    println(show(v.try_resize(i64.MAX, 0)));
+    println(f"{v.len()}");
+    println(show(v.try_resize(3, 7)));
+    println(f"{v}");
+    println(show(v.try_resize(1, 0)));
+    println(f"{v}");
+    println(show(v.try_resize(-2, 0)));
+    println(f"{v.len()}");
+    let mut w: Vec[String] = Vec.new();
+    println(show(w.try_resize(i64.MAX, "x".to_string())));
+    println(show(w.try_resize(2, "y".to_string())));
+    println(f"{w}");
+    println(show(w.try_resize(1 << 57, "z".to_string())));
+    println(f"{w.len()}");
+}

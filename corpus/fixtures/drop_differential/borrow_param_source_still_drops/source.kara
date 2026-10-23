@@ -1,0 +1,2 @@
+fn peek(s: ref String) -> i64 {{ return s.len(); }}
+fn main() {{ let s: String = {S}; let a: i64 = peek(s); println(a + s.len()); }}

@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let s: Sz = Sz.P(Z {{ n: 5 }}); }}
+    println("end");
+}}

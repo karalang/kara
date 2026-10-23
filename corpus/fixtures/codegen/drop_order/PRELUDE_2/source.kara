@@ -1,0 +1,5 @@
+{PRELUDE}impl Box2 {{
+    fn after(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} println(f"s{{r.inner.v}}"); }}
+}}
+fn ff(v: mut ref Vec[R], r: R, k: bool) {{ if k {{ v.push(r); }} println(f"s{{r.inner.v}}"); }}
+fn main() {{ }}

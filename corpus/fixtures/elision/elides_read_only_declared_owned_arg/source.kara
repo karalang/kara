@@ -1,0 +1,5 @@
+{STATS}fn consume(s: Stats) -> i64 {{ s.total }}
+fn main() {{
+let s = Stats {{ count: 0, total: 7, active: true }};
+println(consume(s));
+}}

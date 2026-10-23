@@ -1,0 +1,3 @@
+{R}fn eat(o: Option[(R, i64)]) {{ match o {{ Some(t) => {{ let x = t.0; println("mid"); }} None => {{ println("n"); }} }} }}
+fn inner() {{ let a: Option[(R, i64)] = Some((R {{ id: 7 }}, 1i64)); println("in") }}
+fn main() {{ let a = Some((R {{ id: 5 }}, 9i64)); eat(a); inner(); println("end") }}

@@ -1,0 +1,2 @@
+{H}fn main() {{ let r: Result[i64, E] = Err(E.A(f"n{{7}}"));
+             println("mid"); }}

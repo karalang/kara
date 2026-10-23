@@ -1,0 +1,2 @@
+{D}fn main() {{ let e = E.A(R {{ id: 41, s: S {{ tag: 9 }} }});
+             println("mid"); }}

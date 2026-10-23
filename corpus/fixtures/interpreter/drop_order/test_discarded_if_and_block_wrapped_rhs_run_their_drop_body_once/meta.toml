@@ -1,0 +1,16 @@
+source = "tests/interpreter/drop_order.rs::test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once"
+dedup_of = ["tests/interpreter/patterns.rs::test_discarded_match_arm_value_runs_its_drop_body_once", "tests/interpreter/patterns.rs::test_discarded_let_wildcard_match_runs_its_drop_body_once"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "e1846785"

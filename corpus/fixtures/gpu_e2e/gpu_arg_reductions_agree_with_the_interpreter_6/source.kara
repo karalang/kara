@@ -1,0 +1,10 @@
+fn main() {{
+    let zero: f32 = 0.0;
+    let nan: f32 = zero / zero;
+    let v: Vec[f32] = {buf};
+    let m = gpu.argmin(v);
+    match m {{
+        Some(x) => println(f"{{x}}"),
+        None => println("empty"),
+    }}
+}}

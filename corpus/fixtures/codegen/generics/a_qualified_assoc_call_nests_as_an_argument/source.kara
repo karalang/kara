@@ -1,0 +1,1 @@
+{DECLS}fn main() {{ let c = Box[i64].make(Box[i64].zero()); println(f"{{c.value}}"); }}

@@ -1,0 +1,12 @@
+#[derive(Ord, Eq)]
+struct P {{ a: i64 }}
+#[derive(Ord, Eq)]
+enum Suit {{ Clubs, Spades }}
+fn tag_suit(s: Suit) -> i64 {{
+match s {{ Clubs => return 0, Spades => return 1, }}
+}}
+fn main() {{
+let mut v: Vec[{elem}] = {lit};
+v.sort();
+for e in v {{ println({print}); }}
+}}

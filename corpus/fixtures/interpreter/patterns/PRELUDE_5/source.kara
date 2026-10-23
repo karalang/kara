@@ -1,0 +1,6 @@
+{PRELUDE}fn main() {{
+let o: Option[R] = Some(R {{ s: "e" }});
+let Some(r) = o else {{ return }};
+println(f"W{{r.s}}");
+println("end");
+}}

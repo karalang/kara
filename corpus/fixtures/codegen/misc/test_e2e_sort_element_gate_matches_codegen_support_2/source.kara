@@ -1,0 +1,13 @@
+#[derive(Ord, Eq)]
+struct P {{ a: i64 }}
+#[derive(Ord, Eq)]
+enum Suit {{ Clubs, Spades }}
+fn main() {{
+let mut v: Vec[{elem}] = {lit};
+v.sort();
+let r = v.binary_search({needle});
+match r {{
+Some(i) => println(f"found {{i}}"),
+None => println("absent"),
+}}
+}}

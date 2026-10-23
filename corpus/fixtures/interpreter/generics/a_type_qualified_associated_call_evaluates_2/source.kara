@@ -1,0 +1,1 @@
+{decls}fn main() {{ let b = Box.make(7i64); println(f"{{b.value}}"); }}

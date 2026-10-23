@@ -1,0 +1,5 @@
+{HDR}fn main() {{
+    let b = mk(8);
+    let b = mk(9);
+    println("mid");
+}}

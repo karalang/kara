@@ -1,9 +1,24 @@
+struct D { a: i64, name: String, c: bool }
+
+fn base() -> D {
+    println("base");
+    D { a: 1, name: "b".to_string(), c: true }
+}
+
+fn five() -> i64 {
+    println("five");
+    5
+}
+
+struct H { d: D }
+
 fn main() {
-    let c: u8 = 20;
-    let d: u8 = 0xC0 ^ c;
-    let g: u8 = (c >> 2) | 0x80;
-    let x: u8 = 0x80 | (c & 0x3F);
-    let mut out: Vec[u8] = Vec.new();
-    out.push(0xC0 | (c >> 6));
-    println(f"{d} {g} {x} {out[0]}");
+    let d = D { a: five(), ..base() };
+    println(f"{d.a} {d.name} {d.c}");
+    let e = D { c: false, ..base() };
+    println(f"{e.a} {e.name} {e.c}");
+    let h = H { d: D { a: 2, ..base() } };
+    println(f"{h.d.a} {h.d.name}");
+    let v = [D { a: 9, ..base() }, D { name: "x".to_string(), ..base() }];
+    println(f"{v[0].a} {v[1].name} {v[1].a}");
 }

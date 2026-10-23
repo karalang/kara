@@ -1,0 +1,4 @@
+{H}struct W {{ f: {ty} }}
+fn main() {{ let a: {ty} = {init};
+             let h = W {{ f: a }};
+             println("end"); }}

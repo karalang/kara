@@ -1,0 +1,16 @@
+source = "tests/cli.rs::test_char_renders_as_glyph_through_a_closure_on_every_backend"
+dedup_of = ["tests/codegen/iter_range.rs::e2e_for_unlowered_iter_adaptors_bail_loud", "tests/codegen/map_set.rs::e2e_dbg_of_set_and_sorted_containers_agrees_with_the_interpreter", "tests/codegen/map_set.rs::e2e_map_and_set_reserve_agree_with_the_interpreter", "tests/codegen/misc.rs::e2e_stable_hash_siphash24_agrees_with_the_interpreter", "tests/codegen/misc.rs::e2e_fallible_alloc_remainder_agrees_with_the_interpreter", "tests/codegen/numerics.rs::e2e_vector_display_agrees_with_the_interpreter", "tests/codegen/numerics.rs::e2e_nested_vector_display_agrees_with_the_interpreter", "tests/codegen/numerics.rs::e2e_dbg_of_a_vector_agrees_with_the_interpreter", "tests/codegen/numerics.rs::a_u64_keyed_map_or_set_finds_the_keys_it_inserted", "tests/codegen/numerics.rs::e2e_vector_lane_arithmetic_agrees_with_the_interpreter", "tests/codegen/vecs.rs::e2e_vec_capacity_family_agrees_with_the_interpreter"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "b2e4ef65"

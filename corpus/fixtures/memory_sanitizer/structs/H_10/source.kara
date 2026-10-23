@@ -1,0 +1,1 @@
+{H}fn main() {{ let W {{ r, n }} = mk(); println(f"{{r.name}} {{n}}") }}

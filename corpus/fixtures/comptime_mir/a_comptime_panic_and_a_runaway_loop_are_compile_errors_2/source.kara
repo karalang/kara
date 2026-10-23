@@ -1,0 +1,9 @@
+comptime fn spin() -> i64 {
+    let mut i = 0;
+    loop { i = i + 1; }
+    i
+}
+fn main() {
+    let x = comptime { spin() };
+    println(f"{x}");
+}

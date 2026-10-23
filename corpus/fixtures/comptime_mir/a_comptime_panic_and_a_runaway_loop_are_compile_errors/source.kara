@@ -1,0 +1,8 @@
+comptime fn boom(n: i64) -> i64 {
+    let v: Vec[i64] = Vec.new();
+    v[n]
+}
+fn main() {
+    let x = comptime { boom(3) };
+    println(f"{x}");
+}

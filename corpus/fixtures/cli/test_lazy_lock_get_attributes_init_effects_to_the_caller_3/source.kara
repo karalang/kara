@@ -1,0 +1,4 @@
+{effectful}let CACHE: LazyLock[i64] = LazyLock.new(|| load());
+fn helper() -> i64 {{ return CACHE.get(); }}
+pub fn peek() -> i64 {{ return helper(); }}
+fn main() {{ println(peek()); }}

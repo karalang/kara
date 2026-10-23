@@ -1,0 +1,5 @@
+{PRE}impl P {{ fn take(self) -> i64 {{ return self.b; }} }}
+fn go() -> i64 {{ let t = mkp(9); let mut i = 0i64; let mut acc = 0i64;
+  while i < 3i64 {{ acc = acc + t.take(); i = i + 1; }}
+  return acc; }}
+fn main() {{ println(go()); }}

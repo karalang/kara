@@ -1,0 +1,18 @@
+fn main() with reads(FileSystem) writes(FileSystem) {{
+let mut out: Vec[u8] = Vec.new();
+for i in 0..8 {{ out.push((i * 17) as u8); }}
+match File.create("{p}") {{
+Ok(f) => {{ match f.write(out.as_slice()) {{ Ok(n) => {{ }} Err(e) => {{ println("werr"); }} }} }}
+Err(e) => {{ println("cerr"); }}
+}}
+match File.open("{p}") {{
+Ok(f) => {{
+let mut buf: Array[u8, 8] = [0u8; 8];
+match f.read(mut buf) {{
+Ok(n) => {{ println(f"read {{n}} first={{buf[0]}} last={{buf[7]}}"); }}
+Err(e) => {{ println("rerr"); }}
+}}
+}}
+Err(e) => {{ println("oerr"); }}
+}}
+}}

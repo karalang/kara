@@ -1,5 +1,5 @@
 source = "tests/interpreter/enums.rs::test_generic_enum_with_generic_drop_impl_survives_an_owned_self_method"
-dedup_of = []
+dedup_of = ["tests/memory_sanitizer/enums.rs::asan_generic_enum_with_generic_drop_impl_keeps_one_owner"]
 expect = "stdout"
 exit = 0
 tags = ["drop"]
@@ -11,7 +11,7 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "9875e6b3f"
+classified_with = "9913c6855"
 model_note = "move out of the payload of a type with a Drop body (C3)"
 model_rev = "aafbe785"
 model_src = "07996e9d"

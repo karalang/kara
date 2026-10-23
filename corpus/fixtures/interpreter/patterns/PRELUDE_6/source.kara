@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+let c: H = H {{ r: R {{ s: "f" }}, n: 8 }};
+if let H {{ n, .. }} = c {{ println(f"C{{n}}"); }}
+println("end");
+}}

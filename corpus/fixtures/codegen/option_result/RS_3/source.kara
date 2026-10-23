@@ -1,0 +1,2 @@
+{R}fn eat(o: Result[(R, i64), i64]) -> R {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return R {{ id: 0 }}; }} }} }}
+fn main() {{ let a: Result[(R, i64), i64] = Result.Ok((R {{ id: 5 }}, 9)); let got: R = eat(a); println(f"got:{{got.id}}"); println("end"); }}

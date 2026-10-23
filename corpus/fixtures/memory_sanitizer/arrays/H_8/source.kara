@@ -1,0 +1,6 @@
+{H}fn main() {{
+    let mut v: Vec[D] = [mkd(1), mkd(2)];
+    v = [mkd(3), mkd(4)];
+    println("mid");
+    println("end");
+}}

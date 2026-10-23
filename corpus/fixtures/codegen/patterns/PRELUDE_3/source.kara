@@ -1,0 +1,3 @@
+{PRELUDE}fn go(c: bool) -> i64 {{ {stmt}
+ return 7; }}
+fn main() {{ println(f"v={{go({arg})}}"); }}

@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let a: G[String] = G.Y("eeeeeeee-5"); mid(a, true); }}
+    {{ let a: G[String] = G.Y("ffffffff-6"); mid(a, true) }};
+    println("end");
+}}

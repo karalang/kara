@@ -1,0 +1,5 @@
+{R}struct H {{ id: i64, s: String }}
+impl Drop for H {{ fn drop(mut ref self) {{ println(f"dH{{self.id}}") }} }}
+struct G {{ a: H, b: H }}
+fn eat(o: Option[(H, G)]) -> H {{ match o {{ Some(t) => {{ return t.1.a; }} None => {{ return H {{ id: 0, s: "zzzzzzzzzzzz" }}; }} }} }}
+fn main() {{ let got = eat(Some((H {{ id: 5, s: "aaaaaaaaaaaa" }}, G {{ a: H {{ id: 6, s: "bbbbbbbbbbbb" }}, b: H {{ id: 7, s: "cccccccccccc" }} }}))); println(f"got:{{got.id}}"); println("end") }}

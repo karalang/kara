@@ -1,0 +1,16 @@
+source = "tests/codegen/drop_order.rs::e2e_a_lookup_key_temporarys_user_drop_body_runs_at_the_lookup"
+dedup_of = ["tests/codegen/enums.rs::e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body", "tests/codegen/enums.rs::e2e_generic_boxed_enum_payload_body_survives_a_read_only_binding_arm", "tests/codegen/enums.rs::e2e_generic_enum_container_payload_runs_element_bodies_at_a_read_only_arm", "tests/codegen/enums.rs::e2e_freshtemp_generic_enum_scrutinee_owns_its_instantiated_payload", "tests/codegen/vecs.rs::e2e_arm_binding_owns_its_instantiated_vec_payload_elem_bodies", "tests/interpreter/drop_order.rs::test_a_lookup_key_temporarys_user_drop_body_runs_at_the_lookup", "tests/interpreter/enums.rs::test_generic_enum_ctor_temp_arg_runs_its_payload_drop_body", "tests/interpreter/enums.rs::test_generic_boxed_enum_payload_body_survives_a_read_only_binding_arm", "tests/interpreter/enums.rs::test_freshtemp_generic_enum_scrutinee_payload_drop_bodies", "tests/interpreter/vecs.rs::test_arm_binding_vec_payload_elem_drop_bodies"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "b67247bc"

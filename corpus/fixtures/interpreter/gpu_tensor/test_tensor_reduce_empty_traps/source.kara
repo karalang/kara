@@ -1,0 +1,4 @@
+fn main() {{
+let e: Tensor[i64, [0]] = Tensor.zeros([0]);
+let r = e.{m}();
+}}

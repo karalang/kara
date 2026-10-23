@@ -1,0 +1,7 @@
+{TWINS}fn gop() -> i64 {{ let t = mkp(); let mut i = 0i64;
+  while i < 0i64 {{ takep(t); i = i + 1; }}
+  return 1; }}
+fn goq() -> i64 {{ let u = mkq(); let mut j = 0i64;
+  while j < 0i64 {{ takeq(u); j = j + 1; }}
+  return 2; }}
+fn main() {{ println(gop()); println(goq()); }}

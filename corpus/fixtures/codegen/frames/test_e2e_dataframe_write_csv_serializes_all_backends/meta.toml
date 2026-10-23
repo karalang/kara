@@ -1,0 +1,16 @@
+source = "tests/codegen/frames.rs::test_e2e_dataframe_write_csv_serializes_all_backends"
+dedup_of = ["tests/interpreter/frames.rs::test_dataframe_write_csv_serializes_header_rows_quoting_and_nulls"]
+expect = "skip"
+exit = 0
+tags = ["deferred:dataframe", "format-template", "src:legacy-tests", "io:fs"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "d"
+classified_with = "9913c6855"
+extracted_src = "02fccad1"

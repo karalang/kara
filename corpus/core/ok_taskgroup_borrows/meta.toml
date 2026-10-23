@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "legacy.out recorded by Thread A with legacy-build (matches expected.out). for-borrows ruling (review thread, 10-11): `for` over a Vec borrows (core-semantics §4.6), so `join(own self)` needs the loop to own the handles; migrated to `handles.into_iter()`."
 bucket = "a"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"

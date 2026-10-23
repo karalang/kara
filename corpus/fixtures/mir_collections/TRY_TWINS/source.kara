@@ -1,0 +1,37 @@
+fn show(r: Result[(), AllocError]) -> String {
+    match r {
+        Ok(_) => "ok".to_string(),
+        Err(AllocError.CapacityOverflow) => "overflow".to_string(),
+        Err(AllocError.OutOfMemory { requested_bytes }) => f"oom {requested_bytes > 0}",
+    }
+}
+fn main() {
+    let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(i64.MAX);
+    match r { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let r2: Result[Vec[i64], AllocError] = Vec.try_with_capacity(10);
+    match r2 { Ok(v) => println(f"ok {v.len()} {v.capacity()}"), Err(e) => println(f"{e}") }
+    let s: Result[String, AllocError] = String.try_with_capacity(i64.MAX);
+    match s { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let q: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(i64.MAX / 4);
+    match q { Ok(_) => println("ok"), Err(e) => println(f"{e}") }
+    let q2: Result[VecDeque[i64], AllocError] = VecDeque.try_with_capacity(3);
+    match q2 { Ok(d) => println(f"ok {d.len()}"), Err(e) => println(f"{e}") }
+    let mut v: Vec[i64] = [1, 2];
+    println(show(v.try_reserve(i64.MAX)));
+    println(show(v.try_reserve_exact(i64.MAX - 1)));
+    println(show(v.try_reserve(1 << 58)));
+    println(show(v.try_reserve(100)));
+    println(show(v.try_reserve(0)));
+    println(f"{v.len()} {v.capacity() >= 102}");
+    v.push(3);
+    println(f"{v}");
+    let mut w: Vec[String] = Vec.new();
+    w.push("a".to_string());
+    println(show(w.try_reserve(i64.MAX / 8)));
+    println(f"{w}");
+    let mut t = "ab".to_string();
+    println(show(t.try_reserve(i64.MAX)));
+    println(show(t.try_reserve(10)));
+    t.push_str("cd");
+    println(t);
+}

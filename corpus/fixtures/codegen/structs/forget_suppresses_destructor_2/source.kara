@@ -1,0 +1,6 @@
+{base}fn main() {{
+  let a = G {{ id: 1 }};
+  let b = G {{ id: 2 }};
+  println(a.id); println(b.id);
+  println("end");
+}}

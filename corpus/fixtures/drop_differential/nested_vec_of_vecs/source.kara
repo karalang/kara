@@ -1,0 +1,1 @@
+fn main() {{ let mut vv: Vec[Vec[String]] = Vec.new(); vv.push(Vec[{S}, {S}]); for iv in vv.iter() {{ for e in iv.iter() {{ println(e.len()); }} }} }}

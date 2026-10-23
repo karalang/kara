@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'shared struct Node { val: i64 } fn main() { let n = Node { val: 2 }; n.val = 3; }'"
 bucket = "a"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 extracted_src = "67fb501e"
 model_rev = "aafbe785"
 model_src = "67fb501e"

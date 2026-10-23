@@ -1,0 +1,10 @@
+{prelude}fn main() {{
+let root = build();
+let g = freeze root;
+let (a, b) = par {{
+let a = {{ {} totala }};
+let b = {{ {} totalb }};
+(a, b)
+}};
+println(f"{{a}},{{b}}");
+}}

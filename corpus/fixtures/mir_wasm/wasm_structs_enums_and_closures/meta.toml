@@ -1,0 +1,17 @@
+source = "tests/mir_wasm.rs::wasm_structs_enums_and_closures"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "9913c6855"
+extracted_src = "c321ab8b"
+model_rev = "aafbe785"
+model_src = "c321ab8b"

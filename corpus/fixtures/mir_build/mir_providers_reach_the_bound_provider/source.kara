@@ -1,0 +1,17 @@
+trait Counter { fn get(ref self) -> i64; fn bump(mut ref self); }
+effect resource Ctr: Counter;
+struct Mem { n: i64 }
+impl Counter for Mem {
+    fn get(ref self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n = self.n + 1; }
+}
+impl Drop for Mem { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn twice() with writes(Ctr) { Ctr.bump(); Ctr.bump(); }
+fn main() {
+    let v = with_provider[Ctr](Mem { n: 5 }, || {
+        twice();
+        read()
+    });
+    println(f"got {v}");
+}

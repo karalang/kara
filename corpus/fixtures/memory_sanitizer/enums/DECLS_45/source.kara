@@ -1,0 +1,9 @@
+{DECLS}fn main() {{
+    let a: Option[String] = Option.Some("dddddddd-4");
+    let x = idOpt(a);
+    let c: Option[String] = Option.Some("eeeeeeee-5");
+    let y = idOpt(c);
+    match x {{ Option.Some(v) => {{ println(f"n{{v.len()}}") }} Option.None => {{ println("none") }} }}
+    match y {{ Option.Some(v) => {{ println(f"n{{v.len()}}") }} Option.None => {{ println("none") }} }}
+    println("end");
+}}

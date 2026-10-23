@@ -1,0 +1,5 @@
+{R}{Q}struct A {{}}
+struct B {{}}
+impl A {{ fn dup(o: Option[Q]) {{ match o {{ Some(t) => {{ println("mid"); }} None => {{ println("n"); }} }} }} }}
+impl B {{ fn dup(o: Option[Q]) {{ match o {{ Some(t) => {{ println("mid"); }} None => {{ println("n"); }} }} }} }}
+fn main() {{ A.dup({ARG}); println("end") }}

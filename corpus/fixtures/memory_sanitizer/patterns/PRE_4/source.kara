@@ -1,0 +1,5 @@
+{PRE}struct Holder {{ held: R3 }}
+fn f(x: Option[Ke], acc: mut ref Holder) {{ match x {{ Option.Some(Ke.A(r)) => {{ acc.held = r; }} _ => {{}} }} }}
+fn main() {{ let mut h = Holder {{ held: mk(9) }}; let mut i = 0;
+   while i < 2 {{ f(Option.Some(Ke.A(mk(i))), mut h); i = i + 1; }}
+   println(f"rb:{{h.held.s}}"); }}

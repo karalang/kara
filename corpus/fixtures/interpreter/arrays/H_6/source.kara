@@ -1,0 +1,6 @@
+{H}struct H {{ f: Array[D, 2] }}
+struct G {{ h: H }}
+fn main() {{
+    let g: G = G {{ h: H {{ f: [mkd(1), mkd(2)] }} }};
+    println("end");
+}}

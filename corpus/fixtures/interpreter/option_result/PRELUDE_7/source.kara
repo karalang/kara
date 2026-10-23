@@ -1,0 +1,7 @@
+{PRELUDE}fn takeW(x: Option[Option[W]]) {{
+    match x {{ Some(t) => {{ println("ok"); }} None => {{ println("n"); }} }}
+}}
+fn main() {{
+    takeW(Some(Some(W {{ id: 1 }})));
+    println("x");
+}}

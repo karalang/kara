@@ -1,0 +1,4 @@
+{N}struct Inner {{ tags: Vec[String] }}
+             struct Outer {{ id: i64, inner: Inner }}
+             fn main() {{ let p = (Outer {{ id: 41, inner: Inner {{ tags: mkv(3) }} }}, 1);
+             println(f"{{p.1}}") }}

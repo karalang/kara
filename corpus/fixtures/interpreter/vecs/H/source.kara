@@ -1,0 +1,4 @@
+{H}{decls}fn main() {{
+{body}
+println("end");
+}}

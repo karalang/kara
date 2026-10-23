@@ -1,0 +1,4 @@
+{PRE}fn plainR(x: Result[(String, String), i64]) {{
+   match x {{ Ok(t) => {{ println(f"s:{{t.0}}") }} Err(e) => {{ println(f"e{{e}}") }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{
+   plainR(Result.Ok((f"aaaaaaaa{{i}}{{seed()}}", f"bbbbbbbb{{i}}"))); i = i + 1; }} }}

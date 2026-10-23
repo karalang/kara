@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "an IR-shape test: its program drops a WebSocket over fd 3, which it never opened, so what it prints depends on what the process holds at fd 3 (legacy happened to own one; with a prototype `from_fd` on mir-llvm, where nothing is open at fd 3, the close aborts with an IO-safety violation); WebSocket itself is M4a (docs/library/io.md) (ADR-4 plan step 2)"
 bucket = "skip:an IR-shape test: its program drops a We"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_rev = "1aa23105"
 model_src = "9216554e"

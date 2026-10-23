@@ -1,0 +1,4 @@
+{PRE}fn mko(i: i64) -> Option[K] {{ return Option.Some(K.A(mkr(i))); }}
+fn show(i: i64) {{ let x = mko(i); let y = x;
+   match y {{ Option.Some(K.A(r)) => {{ println(f"a:{{r.s}}"); }} _ => {{ println("other"); }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{ show(i); i = i + 1; }} }}

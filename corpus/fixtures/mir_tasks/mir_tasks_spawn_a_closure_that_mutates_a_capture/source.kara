@@ -1,0 +1,23 @@
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let mut log: Vec[i64] = Vec.new();
+    let names: Vec[String] = vec!["a".to_string(), "b".to_string()];
+    let g = TaskGroup.new();
+    let h1 = g.spawn(|| {
+        let mut s = 0;
+        loop {
+            let v = rx.recv().unwrap();
+            if v < 0 { break; }
+            s = s + v;
+        }
+        s + names.len() as i64
+    });
+    let h2 = g.spawn(|| {
+        for i in 1..=5 { tx.send(i).unwrap(); log.push(i); }
+        tx.send(-1).unwrap();
+        log.len() as i64
+    });
+    let total = h1.join() + h2.join();
+    println(f"{total} {names[0]}");
+}

@@ -1,0 +1,11 @@
+{PRELUDE}fn main() {{
+    println("c2");
+    let mut h = Bs {{ one: mks(3), two: mks(4) }};
+    let straight = h.one;
+    println(f"t{{straight.id}}");
+    println("c3");
+    let mut p = Ps {{ a: "payload", b: 1 }};
+    let mut j = 0;
+    while j < 2 {{ let s = p.a; println(f"L{{s.len()}}"); j = j + 1; }}
+    println("end");
+}}

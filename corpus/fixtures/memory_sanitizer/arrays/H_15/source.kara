@@ -1,0 +1,5 @@
+{H}fn main() {{
+    let t: (Array[Vec[String], 2], i64) = ([[pay(1)], [pay(2)]], 7);
+    let t2 = t;
+    println(f"n:{{t2.1}}");
+}}

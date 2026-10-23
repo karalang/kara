@@ -1,0 +1,5 @@
+
+fn main() {
+    let s = "日本語";
+    println(f"[{s.substring(3, 3)}] [{s.substring(3, 6)}] [{s.substring(6, 3)}] [{s.substring(-2, 3)}] [{s.substring(3, 100)}] [{s.substring(20, 30)}]");
+}

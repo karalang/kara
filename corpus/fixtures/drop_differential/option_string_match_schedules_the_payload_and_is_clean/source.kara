@@ -1,0 +1,1 @@
+fn main() {{ let o: Option[String] = Some({S}); match o {{ Some(x) => {{ println(x.len()); }}, None => {{}} }} }}

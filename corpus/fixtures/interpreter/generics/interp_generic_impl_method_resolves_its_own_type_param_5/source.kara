@@ -1,0 +1,1 @@
+{hdr}fn main() {{ let n: u64 = {big}u64; let t = Two[u64, i64] {{ a: n, b: -5 }}; println(t.show()); }}

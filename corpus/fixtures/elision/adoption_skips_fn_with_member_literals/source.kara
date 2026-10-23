@@ -1,0 +1,5 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let out = build(3);
+let local = ListNode {{ val: 9, next: None }};
+if out.is_some() {{ println(local.val); }}
+}}

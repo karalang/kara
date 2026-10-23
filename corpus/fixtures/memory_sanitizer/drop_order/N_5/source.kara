@@ -1,0 +1,2 @@
+{N}fn mk() -> W {{ W {{ r: R {{ id: 41, tags: mkv(3) }}, n: 1 }} }}
+             fn main() {{ let W {{ r: _, n }} = mk(); println(f"{{n}}") }}

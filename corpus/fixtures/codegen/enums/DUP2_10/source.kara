@@ -1,0 +1,1 @@
+{R}{Q}{DUP2}fn main() {{ let mut i = 0; while i < 2 {{ let g = A.dup({ARG}); println(f"it:{{g.id}}"); i = i + 1; }} println("end") }}

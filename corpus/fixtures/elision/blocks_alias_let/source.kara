@@ -1,0 +1,5 @@
+{STATS}fn main() {{
+let s = Stats {{ count: 0, total: 0, active: true }};
+let t = s;
+println(t.total);
+}}

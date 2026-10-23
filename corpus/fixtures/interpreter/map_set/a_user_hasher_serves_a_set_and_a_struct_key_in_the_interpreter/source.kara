@@ -1,0 +1,14 @@
+{USER_HASHERS}struct Point {{ x: i64, y: i64 }}
+fn main() {{
+let mut s: Set[String, SumBuild] = Set.new();
+s.insert("alpha");
+s.insert("bravo");
+s.insert("alpha");
+println(s.len());
+println(s.contains("bravo"));
+let mut m: Map[Point, String, FnvBuild] = Map.new();
+m.insert(Point {{ x: 1, y: 2 }}, "a");
+m.insert(Point {{ x: 3, y: 4 }}, "b");
+println(m.get(Point {{ x: 3, y: 4 }}).unwrap());
+println(m.contains_key(Point {{ x: 9, y: 9 }}));
+}}

@@ -1,0 +1,5 @@
+{STATS}fn make() -> Stats {{ Stats {{ count: 0, total: 0, active: true }} }}
+fn main() {{
+let s = make();
+println(s.total);
+}}

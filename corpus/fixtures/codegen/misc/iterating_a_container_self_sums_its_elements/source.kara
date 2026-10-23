@@ -1,0 +1,12 @@
+trait Cnt {{ fn total({self_mode}) -> i64; }}
+impl Cnt for {head} {{
+fn total({self_mode}) -> i64 {{
+let mut t = 0;
+for x in self {{ t = t + x; }}
+return t;
+}}
+}}
+fn main() {{
+{fill}
+println(c.total().to_string());
+}}

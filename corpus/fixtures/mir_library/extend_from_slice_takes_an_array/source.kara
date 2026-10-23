@@ -1,0 +1,8 @@
+
+fn main() {
+    let data = Array[1u8, 2u8, 3u8, 250u8];
+    let mut payload: Vec[u8] = Vec.new();
+    payload.extend_from_slice(data);
+    payload.extend_from_slice(Array[9u8]);
+    println(f"{payload.len()} {payload[0]} {payload[3]} {payload[4]}");
+}

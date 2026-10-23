@@ -1,0 +1,2 @@
+{B_ENUM_PRELUDE}
+fn main() {{ if let Holder.Full(v, n) = make() {{ println(v.len() + n); }} }}

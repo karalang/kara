@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "TaskGroup.cancel is a no-op on v2 (cooperative cancellation is M4, core-semantics §11.7), so the group's join waits forever on the task parked in accept. Measured: both backends hang after main's `println(7)` (mir-interp prints it; a killed mir-llvm build loses it unflushed). Stays skipped until M4"
 bucket = "skip:TaskGroup.cancel is a no-op on v2 (coope"
-classified_with = "80ced416a+local"
+classified_with = "9913c6855"

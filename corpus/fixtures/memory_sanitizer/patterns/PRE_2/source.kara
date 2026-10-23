@@ -1,0 +1,4 @@
+{PRE}fn f(x: Option[Ke], acc: mut ref Vec[R3]) {{ match x {{ Option.Some(Ke.A(r)) => {{ acc.push(r); }} _ => {{}} }} }}
+fn main() {{ let mut acc: Vec[R3] = Vec.new(); let mut i = 0;
+   while i < 2 {{ f(Option.Some(Ke.A(mk(i))), mut acc); i = i + 1; }}
+   println(f"rb:{{acc[0].s}}"); }}

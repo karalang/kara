@@ -1,0 +1,8 @@
+enum M {{ P((i32, String)), Q }}
+fn main() {{
+{ROUNDS}        let g: M = P((3i32, f"row-aaaaaaaaaaaaaaaa-{{i}}"));
+        println(f"t");
+        i = i + 1i64;
+    }}
+    println(f"end");
+}}

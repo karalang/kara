@@ -1,0 +1,4 @@
+{H}fn sink(g: G) {{ println("sank") }}
+fn main() {{ let o: Option[G] = Some(G.A(f"z{{9}}"));
+             match o {{ Some(g) => {{ sink(g) }}
+                        None => {{ println("none") }} }} }}

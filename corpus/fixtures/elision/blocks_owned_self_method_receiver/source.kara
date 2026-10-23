@@ -1,0 +1,5 @@
+{STATS}impl Stats {{ fn into_total(self) -> i64 {{ self.total }} }}
+fn main() {{
+let s = Stats {{ count: 0, total: 7, active: true }};
+println(s.into_total());
+}}

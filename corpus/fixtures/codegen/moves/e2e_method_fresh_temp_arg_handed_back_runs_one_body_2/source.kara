@@ -1,0 +1,5 @@
+{hdr2}fn main() {{
+let t = T {{ n: 1 }};
+let n = t.keep(Box2.Full(mk(7)));
+println(f"n{{n}}");
+}}

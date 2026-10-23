@@ -1,0 +1,2 @@
+{R}fn eat(o: Option[((R, R), i64)]) -> i64 {{ match o {{ Some(t) => {{ let x = t.0.1; println("mid"); return x.id; }} None => {{ return 0i64; }} }} }}
+fn main() {{ println(f"got:{{eat(Some(((R {{ id: 31 }}, R {{ id: 32 }}), 9i64)))}}"); println("end") }}

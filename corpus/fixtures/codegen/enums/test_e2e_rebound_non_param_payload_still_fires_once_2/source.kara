@@ -1,0 +1,5 @@
+{hdr}fn mk() -> Box2 {{ Box2.Full(R {{ id: 1 }}) }}
+fn main() {{
+    let v = match mk() {{ Box2.Full(r) => {{ let m = r; m.id }} Box2.Empty => {{ 0 }} }};
+    println(f"v={{v}}");
+}}

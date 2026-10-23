@@ -1,0 +1,14 @@
+1 2 3 4 
+-1 9 0 1 2 3 4 
+ok
+-1 9 0 1 2 3 4 5 
+0 true
+6 
+3
+1
+drop 1
+drop 3
+drop 2
+cleared
+end
+drop 4

@@ -1,0 +1,21 @@
+fn show(x: f64) -> String {
+    f"{x.is_nan()} {x.is_infinite()} {x.is_finite()} {x.is_sign_negative()} {x.is_sign_positive()}"
+}
+fn show32(x: f32) -> String {
+    f"{x.is_nan()} {x.is_infinite()} {x.is_finite()} {x.is_sign_negative()} {x.is_sign_positive()}"
+}
+fn main() {
+    let zero = 0.0;
+    let xs: Vec[f64] = vec![2.0, -3.5, f64.NAN, f64.INFINITY, -1.0 / zero, -0.0, 0.0];
+    for x in xs.iter() {
+        println(show(*x));
+    }
+    let ys: Vec[f32] = vec![1.5f32, f32.NAN, -f32.INFINITY, -0.0f32];
+    for y in ys.iter() {
+        println(show32(*y));
+    }
+    let bad = zero / zero;
+    if bad.is_nan() {
+        println("nan");
+    }
+}

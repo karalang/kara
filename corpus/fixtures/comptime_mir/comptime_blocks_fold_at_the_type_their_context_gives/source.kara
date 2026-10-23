@@ -1,0 +1,14 @@
+
+comptime fn sq(n: u8) -> u8 { n * n }
+comptime fn half(x: f64) -> f64 { x / 2.0 }
+comptime fn fib(n: i64) -> i64 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+const SQ: u8 = comptime { sq(5) };
+const FIB_TEN: i64 = comptime { fib(10) };
+fn main() {
+    let h = comptime { half(3.0) };
+    let t = comptime { (1, true, 'c') };
+    let narrow: i32 = comptime { 4 };
+    let v: Vec[i32] = comptime { [4, 5] };
+    let s = comptime { "hi" + " there" };
+    println(f"{SQ} {FIB_TEN} {h} {t.0} {t.1} {t.2} {narrow} {v[1]} {s}");
+}

@@ -1,0 +1,2 @@
+{D}fn main() {{ let p = (E.A(R {{ id: 41, s: S {{ tag: 9 }} }}), 1);
+             let (_, n) = p; println(f"{{n}}"); }}

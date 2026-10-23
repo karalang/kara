@@ -1,0 +1,8 @@
+
+unsafe extern "C" {
+    fn sqrt(x: f64) -> f64;
+}
+
+fn main() {
+    println(sqrt(2.0));
+}

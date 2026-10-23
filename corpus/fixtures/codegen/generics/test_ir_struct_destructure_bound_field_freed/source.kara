@@ -1,0 +1,4 @@
+{STRUCT_DESTRUCTURE_PRELUDE}fn main() {{
+    let Point {{ items, count }} = make();
+    println(items.len() + count);
+}}

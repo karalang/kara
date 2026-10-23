@@ -1,0 +1,19 @@
+
+struct Pair { a: i64, b: String }
+fn words() -> Vec[String] { println("words"); return vec!["x".to_string(), "yz".to_string()]; }
+fn pair() -> Pair { println("pair"); return Pair { a: 7, b: "seven".to_string() }; }
+fn show(w: ref LazyLock[Vec[String]], p: ref LazyLock[Pair]) {
+    let v = w.get();
+    println(f"{v.len()} {v[1]}");
+    let q = p.get();
+    println(f"{q.a} {q.b}");
+}
+fn main() {
+    let w: LazyLock[Vec[String]] = LazyLock.new(|| words());
+    let p: LazyLock[Pair] = LazyLock.new(|| pair());
+    let unused: LazyLock[String] = LazyLock.new(|| "never".to_string());
+    println("start");
+    show(w, p);
+    show(w, p);
+    println(f"{w.get()[0]} {p.get().b.len()}");
+}

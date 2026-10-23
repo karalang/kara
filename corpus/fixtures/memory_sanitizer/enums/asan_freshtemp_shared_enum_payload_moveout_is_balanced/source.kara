@@ -1,0 +1,4 @@
+shared enum E {{ Num(i64), Tag(String, E) }}
+fn lbl() -> String {{ let a = "tag-"; let b = "0123456789abcdef"; return a + b; }}
+fn mk(n: i64) -> E {{ if n <= 0 {{ return E.Num(n); }} return E.Tag(lbl(), mk(n - 1)); }}
+fn main() {{ {body} }}

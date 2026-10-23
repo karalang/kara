@@ -1,0 +1,1 @@
+{prelude}fn main() {{ f(mk(20)); println("ok"); }}

@@ -1,9 +1,12 @@
-import std.time.{Duration, Instant, sleep};
+fn pick(v: Vec[String], i: i64) -> Option[Str] {
+    if i < v.len() { Some(v[i].as_str()) } else { None }
+}
 
 fn main() {
-    let i0 = Instant.now();
-    sleep(Duration.ms(2));
-    let i1 = Instant.now();
-    let later = i0.add(Duration.ms(5));
-    println(f"{i1.duration_since(i0).as_ms() >= 2} {i0 < i1} {later.duration_since(i0).as_ms()} {i0.elapsed().as_ms() >= 2}");
+    let v = ["x".to_string()];
+    let a = pick(v, 0) ?? "none";
+    let b = pick(v, 5) ?? "none";
+    let o: Option[String] = None;
+    let c = o ?? "owned";
+    println(f"{a} {b} {c} {c.len()}");
 }

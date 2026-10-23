@@ -1,0 +1,6 @@
+{prelude}{bfs}fn main() {{
+let r = build();
+let g = freeze r;
+let (a, b) = par {{ let a = bfs(g); let b = bfs(g); (a, b) }};
+println(f"{{a}},{{b}}");
+}}

@@ -1,0 +1,15 @@
+fn main() {
+    let xs = [1.0, 0.1, 1e21, 1e-7, 123456789.0, 1.5e300, -0.0, 2.5, 1e16, 1e15, 0.00001, 0.000001, 1e17, 0.3, 5e-324, 1.7976931348623157e308, 100.0, 12345.678];
+    let mut v: Vec[Json] = Vec.new();
+    for x in xs { v.push(Json.Number(x)); }
+    v.push(Json.Int(-9223372036854775807));
+    v.push(Json.String("a\"b\\c\n\t\r\u{1}\u{1f}\u{7f}é😀/"));
+    println(Json.Array(v).stringify());
+    let inputs = ["7", "7.0", "-0", "1e2", "1E2", "12345678901234567890", "-9223372036854775808", "[1,2", "{\"a\":1,\"a\":2,\"b\":3}", "\"\\u00e9\\ud83d\\ude00\\/\"", "  null ", "tru", "{\"a\" 1}", "[1,]", "01", "1.", "-", "\"\\x\"", "\"a\nb\"", "[]x", ""];
+    for s in inputs {
+        match Json.parse(s.to_string()) {
+            Ok(j) => println(f"ok {j.stringify()}"),
+            Err(e) => println(f"err {e.line}:{e.column} {e.message}"),
+        }
+    }
+}

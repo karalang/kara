@@ -1,0 +1,1 @@
+{DECLS}fn main() {{ let a = mk(); println(a.tag()); }}

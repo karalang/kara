@@ -1,0 +1,12 @@
+fn g(v: Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn h(v: ref Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn k(v: own Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn opt(a: Str) -> Option[String] { Some(a.to_string()) }
+fn main() {
+    for a in ["NONE", "abc"] {
+        println(f"{g(if a == "NONE" { None } else { Some(a.to_string()) })}");
+        println(f"{h(if a == "NONE" { None } else { opt(a) })}");
+        println(f"{k(if a == "NONE" { None } else { opt(a) })}");
+        println(f"{g(match a { "NONE" => None, _ => opt(a) })}");
+    }
+}

@@ -1,0 +1,20 @@
+
+fn main() {
+    match stdin.read_line() {
+        Ok(l) => println(f"first [{l.trim()}] {l.len()}"),
+        Err(_) => println("first failed"),
+    }
+    let mut n = 0;
+    for line in stdin.lines() {
+        match line {
+            Ok(l) => println(f"<{l}>"),
+            Err(_) => println("err"),
+        }
+        n += 1;
+    }
+    println(f"{n} lines");
+    for line in stdin.lines() {
+        println(f"after the end {line.unwrap()}");
+    }
+    println("done");
+}

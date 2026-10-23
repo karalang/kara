@@ -1,0 +1,2 @@
+{R}{Q}fn dup(o: Option[Q]) -> R {{ match o {{ Some(t) => {{ return t.r; }} None => {{ return R {{ id: 0 }}; }} }} }}
+{DUP2}fn main() {{ let g = dup({ARG}); println(f"got:{{g.id}}"); println("end") }}

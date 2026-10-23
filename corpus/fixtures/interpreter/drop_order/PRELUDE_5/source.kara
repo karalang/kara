@@ -1,0 +1,11 @@
+{PRELUDE}struct Sq {{ n: i64 }}
+impl Sq {{
+    fn keep(x: Option[Rq], acc: mut ref Vec[Rq]) {{
+        match x {{ Some(r) => {{ acc.push(r) }} None => {{ println("n") }} }}
+    }}
+}}
+fn main() {{
+    let mut acc: Vec[Rq] = [];
+    Sq.keep(Some(Rq {{ id: 1 }}), mut acc);
+    println(f"len:{{acc.len()}}");
+}}

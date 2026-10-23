@@ -1,0 +1,12 @@
+
+fn main() {
+    let c = Client.new();
+    let mut k = 0;
+    while k < 6 {
+        match c.get(f"http://127.0.0.1:PORT/redir/{k}") {
+            Ok(r) => println(f"{k + 1} redirects: {r.status()} [{r.body()}]"),
+            Err(_) => println(f"{k + 1} redirects: err"),
+        }
+        k += 1;
+    }
+}

@@ -1,0 +1,3 @@
+{PRE}fn show(x: Option[R2]) {{ let y = x;
+   match y {{ Option.Some(r) => {{ println(f"a:{{r.s}}"); }} _ => {{ println("other"); }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{ show(Option.Some(mkr(i))); i = i + 1; }} }}

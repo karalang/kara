@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let s = U.Ua; }}
+    println("end");
+}}

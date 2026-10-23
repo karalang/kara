@@ -1,0 +1,14 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.new(f);
+                     for line in br.lines() {{
+                         match line {{
+                             Ok(s) => println("[" + s + "]"),
+                             Err(_) => println("read err"),
+                         }}
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

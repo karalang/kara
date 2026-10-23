@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let a: G[String] = G.Y("cccccccc-3"); let b = allpaths(a); show(b) }}
+    {{ let a: G[String] = G.Y("dddddddd-4"); let b = diesinside(a); show(b) }}
+    println("end");
+}}

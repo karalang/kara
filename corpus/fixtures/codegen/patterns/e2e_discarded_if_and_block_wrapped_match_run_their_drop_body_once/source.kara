@@ -1,0 +1,6 @@
+{hdr}fn main() {{
+let r = R {{ id: 41 }};
+let n = 0;
+{stmt}
+println("end");
+}}

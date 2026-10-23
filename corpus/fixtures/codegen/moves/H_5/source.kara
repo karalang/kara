@@ -1,0 +1,1 @@
+{H}fn main() {{ let t = mkw(7); let w = (t.r, 1i64); println(f"idx{{w.1}}"); println("end") }}

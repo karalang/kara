@@ -1,30 +1,12 @@
-fn o(x: Ordering) -> String {
-    match x {
-        Ordering.Less => "Less",
-        Ordering.Equal => "Equal",
-        Ordering.Greater => "Greater",
-    }
+enum NetE { A, B(i32) }
+type OldE = NetE;
+
+fn f(x: i64) -> Result[i64, OldE] {
+    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
 }
 
 fn main() {
-    let a: i8 = -128;
-    let b: i8 = 7;
-    let z: i8 = 0;
-    let m: i8 = -1;
-    println(f"{a.checked_div(m).is_none()} {b.checked_div(z).is_none()} {a.checked_div(b).unwrap()} {a.checked_rem(m).is_none()} {b.checked_rem(2).unwrap()}");
-    println(f"{a.wrapping_div(m)} {a.wrapping_rem(m)} {a.wrapping_neg()} {b.wrapping_neg()} {b.wrapping_shl(9)} {a.wrapping_shr(9)} {b.wrapping_pow(3)}");
-    println(f"{a.saturating_div(m)} {a.saturating_neg()} {b.saturating_pow(3)} {a.saturating_pow(3)} {m.saturating_pow(3)}");
-    println(f"{a.overflowing_div(m)} {a.overflowing_rem(m)} {a.overflowing_neg()} {b.overflowing_shl(8)} {b.overflowing_shr(3)} {b.overflowing_pow(3)}");
-    println(f"{a.checked_neg().is_none()} {b.checked_shl(8).is_none()} {b.checked_shl(6).unwrap()} {a.checked_shr(7).unwrap()} {b.checked_pow(2).unwrap()} {b.checked_pow(3).is_none()}");
-    let u: u8 = 200;
-    let w: u8 = 3;
-    println(f"{u.checked_neg().is_none()} {u.wrapping_neg()} {u.overflowing_neg()} {u.wrapping_div(w)} {u.wrapping_rem(w)} {u.saturating_pow(2)} {w.wrapping_pow(6)} {u.wrapping_shr(10)} {u.overflowing_shl(1)}");
-    let n: i64 = -9223372036854775807 - 1;
-    println(f"{n.checked_div(-1).is_none()} {n.wrapping_div(-1)} {n.saturating_div(-1)} {n.overflowing_pow(2)} {n.wrapping_neg()} {n.checked_pow(1).unwrap()} {(-2i64).checked_pow(63).unwrap()} {3i64.wrapping_pow(41)}");
-    let q: u64 = 18446744073709551615;
-    println(f"{q.wrapping_pow(2)} {q.overflowing_neg()} {q.saturating_pow(2)} {q.wrapping_shl(65)}");
-    let x: i128 = 170141183460469231731687303715884105727;
-    println(f"{x.checked_pow(2).is_none()} {x.wrapping_pow(2)} {x.wrapping_neg()} {x.saturating_pow(3)} {(-x - 1).saturating_div(-1)}");
-    let f: f64 = 1.5;
-    println(f"{o(f.total_cmp(2.0))} {o(f.total_cmp(1.5))} {o((-0.0f64).total_cmp(0.0))}");
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let u = OldE.A;
+    match u { NetE.A => println("a"), _ => println("x") }
 }

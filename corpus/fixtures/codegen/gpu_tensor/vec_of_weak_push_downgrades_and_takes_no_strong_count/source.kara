@@ -1,0 +1,9 @@
+shared struct N {{ v: i64, mut ns: Vec[{elem}] }}
+fn build(s: i64) -> i64 {{
+let a = N {{ v: s, ns: Vec.new() }};
+let b = N {{ v: s + 1, ns: Vec.new() }};
+a.ns.push(b);
+b.ns.push(a);
+a.ns.len() + b.ns.len()
+}}
+fn main() {{ println(f"{{build(1)}}"); }}

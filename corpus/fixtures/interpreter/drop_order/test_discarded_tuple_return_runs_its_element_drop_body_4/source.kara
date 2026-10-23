@@ -1,0 +1,2 @@
+{prelude}fn fgen[T](t: T) -> (T, i64) {{ return (t, 5); }}
+fn main() {{ fgen(mk(31)); println("ok"); }}

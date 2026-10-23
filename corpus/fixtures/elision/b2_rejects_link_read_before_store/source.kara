@@ -1,0 +1,8 @@
+{NODE}fn run() -> i64 {{
+let dummy = ListNode {{ val: 0, next: None }};
+let early = dummy.next;
+let node = ListNode {{ val: 7, next: None }};
+dummy.next = Some(node);
+if early.is_none() {{ dummy.val }} else {{ node.val }}
+}}
+fn main() {{ println(run()); }}

@@ -1,0 +1,2 @@
+{S}impl S {{ fn dup(ref self) -> S {{ return S {{ id: self.id }} }} }}
+{SINK}fn main() {{ let s = S {{ id: 11 }}; sink(s.dup()); println("mid") }}

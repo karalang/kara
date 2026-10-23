@@ -1,0 +1,4 @@
+{PRE}fn plainO(x: Option[(String, String)]) {{
+   match x {{ Some(t) => {{ println(f"s:{{t.0}}") }} None => {{ println("n") }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{
+   plainO(Some((f"aaaaaaaa{{i}}{{seed()}}", f"bbbbbbbb{{i}}"))); i = i + 1; }} }}

@@ -1,0 +1,4 @@
+{DECLS}fn eat(o: Option[(R, i64, i64, i64)]) {{
+    match o {{ Option.Some(t) => {{ println(f"mid{{t.0.id}}"); }} Option.None => {{ println("n"); }} }}
+}}
+fn main() {{ eat(Option.Some((R {{ name: f"a", id: 5 }}, 1, 2, 3))); println("end"); }}

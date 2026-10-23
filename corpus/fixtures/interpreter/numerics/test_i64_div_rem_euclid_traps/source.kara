@@ -1,0 +1,1 @@
+fn main() {{ let z: i64 = 0; println((5i64).{m}(z)); }}

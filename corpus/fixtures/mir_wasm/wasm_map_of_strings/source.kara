@@ -1,0 +1,15 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    for w in "a b a c b a".split(" ") {
+        let k = w.to_string();
+        let n = m.get(k).unwrap_or(0);
+        m.insert(k, n + 1);
+    }
+    let n = m.len();
+    let mut keys: Vec[String] = Vec.new();
+    for (k, _) in m { keys.push(k.clone()); }
+    keys.sort();
+    let mut line = String.new();
+    for k in keys { line.push_str(k); }
+    println(f"{line} {n}");
+}

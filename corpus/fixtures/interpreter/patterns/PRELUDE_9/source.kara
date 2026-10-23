@@ -1,0 +1,10 @@
+{PRELUDE}fn main() {{
+let mut k: i64 = 0;
+let mut z: Option[R] = Some(R {{ s: "c" }});
+while let Some(r) = z {{
+println(f"{{r.s}}");
+k = k + 1;
+if k < 2 {{ z = Some(R {{ s: "d" }}); }} else {{ z = None; }}
+}}
+println("end");
+}}

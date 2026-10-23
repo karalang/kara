@@ -1,0 +1,8 @@
+fn main() {{
+    match TcpListener.bind("127.0.0.1:{port}") {{
+        Result.Ok(_) => {{ println("ok"); }}
+        Result.Err(TcpError.AddrInUse) => {{ println("addrinuse"); }}
+        Result.Err(TcpError.PermissionDenied) => {{ println("perm"); }}
+        Result.Err(_) => {{ println("other"); }}
+    }}
+}}

@@ -1,0 +1,6 @@
+{hdr}struct H {{ n: i64 }}
+impl H {{ fn s2(r: R, q: R) -> i64 {{ println("in-s"); 7 }} }}
+fn main() {{
+    let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}) + H.s2(R {{ id: 3 }}, R {{ id: 4 }});
+    println(f"v={{v}}");
+}}

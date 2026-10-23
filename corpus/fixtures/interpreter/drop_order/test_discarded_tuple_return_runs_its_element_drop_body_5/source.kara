@@ -1,0 +1,3 @@
+{prelude}struct S {{ r: R }}
+impl S {{ fn m(self) -> (R, i64) {{ return (self.r, 3); }} }}
+fn main() {{ let s: S = S {{ r: mk(32) }}; s.m(); println("ok"); }}

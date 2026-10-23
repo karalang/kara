@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "legacy run timed out after 60s"
 bucket = "skip:legacy run timed out after 60s"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 extracted_src = "765eb31e"

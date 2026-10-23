@@ -1,0 +1,4 @@
+{R}struct H {{ n: i64 }}
+impl H {{ fn eat(ref self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}
+fn sink(r: R) {{ println(f"sank:{{r.id}}") }}
+fn main() {{ let h = H {{ n: 1 }}; sink(h.eat({ARG})); println("end") }}

@@ -1,0 +1,6 @@
+{STATS}fn pass(s: Stats) -> Stats {{ s }}
+fn main() {{
+let s = Stats {{ count: 0, total: 7, active: true }};
+let t = pass(s);
+println(t.total);
+}}

@@ -1,0 +1,6 @@
+enum E {{ A {{ s: String }}, B }}
+{PAD}                     fn main() {{
+                         let a: Option[E] = Some(E.A {{ s: pad(1) }});
+                         match a {{ Some(E.A {{ s }}) => {{ let owned: String = s; let extra: String = pad(2); println(owned.len() + extra.len()); }} Some(E.B) => {{}} None => {{}} }}
+                         println("end");
+                     }}

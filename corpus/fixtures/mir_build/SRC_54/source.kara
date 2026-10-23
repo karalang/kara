@@ -1,0 +1,14 @@
+sync struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    bump(c);
+    c.count.fetch_add(4);
+    let old = c.count.swap(9);
+    let hit = c.count.compare_exchange(9, 11);
+    let miss = c.count.compare_exchange(9, 12);
+    c.count.fetch_sub(1, MemoryOrdering.Relaxed);
+    let f = Atomic.new(false);
+    let was = f.swap(true);
+    println(f"{old} {c.count.load()} {hit.is_ok()} {miss.is_err()} {was} {f.load(MemoryOrdering.Acquire)}");
+}

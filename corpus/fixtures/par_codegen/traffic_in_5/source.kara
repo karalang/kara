@@ -1,0 +1,7 @@
+shared struct Node {{ val: i64, kids: Vec[Node] }}
+fn outer() -> i64 {{
+let t = Node {{ val: 1, kids: [] }};
+{init}
+return g.val;
+}}
+fn main() {{ println(f"{{outer()}}"); }}

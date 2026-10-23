@@ -1,0 +1,12 @@
+import parser.parse_program;
+import codegen.emit_program;
+
+fn dump(src: String, sym: String) with panics {
+    println(";;;KARA_ENTRY;;;");
+    print(emit_program(parse_program(src), sym));
+}
+fn dumpx(src: String, sym: String) with panics {
+    println(";;;KARA_XHOST;;;");
+    print(emit_program(parse_program(src), sym));
+}
+fn main() {

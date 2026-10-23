@@ -1,0 +1,8 @@
+shared struct Inner {{ v: i64 }}
+shared struct Outer {{ a: i64, inner: Inner, kids: Vec[Inner] }}
+fn readi(i: {mode}Inner) -> i64 {{ i.v }}
+fn outer(o: {mode}Outer) -> i64 {{ {body} }}
+fn main() {{
+let g = Outer {{ a: 1, inner: Inner {{ v: 7 }}, kids: [Inner {{ v: 9 }}] }};
+println(f"{{outer(g)}}");
+}}

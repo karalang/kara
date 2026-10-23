@@ -1,0 +1,3 @@
+{hdr}struct H {{ n: i64 }}
+impl H {{ fn g[T](a: T, k: i64) -> i64 {{ k }} }}
+fn main() {{ let v = H.g(R {{ id: 1 }}, 7); println(f"v={{v}}"); }}

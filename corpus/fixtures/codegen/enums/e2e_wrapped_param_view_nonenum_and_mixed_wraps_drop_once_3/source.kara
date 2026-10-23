@@ -1,0 +1,2 @@
+{hdr}fn take() -> i64 {{ let m = R {{ id: 4 }}; {body} 7 }}
+fn main() {{ let v = take(); println(f"v={{v}}"); }}

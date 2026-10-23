@@ -1,0 +1,10 @@
+struct Res {{ id: i64 }}
+impl Drop for Res {{
+    fn drop(mut ref self) {{ println(f"drop {{self.id}}"); }}
+}}
+{callee}
+fn main() {{
+    let mut sink: Vec[Res] = Vec.new();
+    take(mut sink, Res {{ id: 7 }});
+    println(f"pushed {{sink.len()}}");
+}}

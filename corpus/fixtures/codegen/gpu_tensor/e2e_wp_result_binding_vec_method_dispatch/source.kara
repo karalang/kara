@@ -1,0 +1,10 @@
+{WP_PREAMBLE}fn f() -> i64 with reads(Ctr) {{
+let v = with_provider[Ctr](InMem {{ n: 3 }}, || {{
+let mut out = Vec.new();
+out.push(read());
+out.push(read() * 2);
+out
+}});
+v.len() * 100 + v[0] + v[1]
+}}
+fn main() with reads(Ctr) {{ println(f"{{f()}}"); }}

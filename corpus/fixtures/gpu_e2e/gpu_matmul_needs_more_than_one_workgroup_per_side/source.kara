@@ -1,0 +1,13 @@
+fn main() {{
+    let a: Tensor[f32, [?, ?]] = Tensor.from([{a}]);
+    let b: Tensor[f32, [?, ?]] = Tensor.from([{b}]);
+    let g = gpu.matmul(a, b);
+    let c = a.matmul(b);
+    let mut diffs = 0;
+    for i in 0..{n} {{
+        for j in 0..{n} {{
+            if g[i, j] != c[i, j] {{ diffs = diffs + 1; }}
+        }}
+    }}
+    println(f"{{diffs}}");
+}}

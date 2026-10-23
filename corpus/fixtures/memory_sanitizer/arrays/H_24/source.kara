@@ -1,0 +1,4 @@
+{H}fn eat(p: (Array[String, 2], i64)) {{ let q = p; println(f"in:{{q.0[0]}}"); }}
+fn main() {{
+    eat(([pay(1), pay(2)], 7));
+}}

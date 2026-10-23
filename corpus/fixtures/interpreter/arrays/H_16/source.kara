@@ -1,0 +1,5 @@
+{H}struct H {{ f: Vec[Array[D, 1]] }}
+fn main() {{
+    let h: H = H {{ f: [[mkd(1)], [mkd(2)]] }};
+    println("end");
+}}

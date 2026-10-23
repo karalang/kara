@@ -1,0 +1,44 @@
+
+fn make(n: i64, seed: i64, keys: i64) -> Vec[(i64, i64)] {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut s = seed;
+    let mut i = 0;
+    while i < n {
+        s = (s * 1103515245 + 12345) & 2147483647;
+        v.push((s % keys, i));
+        i += 1;
+    }
+    v
+}
+fn sum(v: ref Vec[(i64, i64)]) -> i64 {
+    let mut h = 0;
+    for (k, x) in v.iter() {
+        h = (h * 31 + k * 1000 + x) % 1000000007;
+    }
+    h
+}
+fn main() {
+    for n in [4097, 20000] {
+        for keys in [1, 2, 7, 50, 1000000] {
+            let mut a = make(n, n + keys, keys);
+            a.sort_by(|x, y| x.0.cmp(y.0));
+            let mut b = make(n, n + keys + 1, keys);
+            b.sort_by_key(|x| 0 - x.0);
+            let mut c = make(n, keys, keys);
+            c.sort_by(|x, y| y.0.cmp(x.0));
+            let mut d = c.clone();
+            d.sort_by(|x, y| x.0.cmp(y.0));
+            println(f"{n} {keys} {sum(a)} {sum(b)} {sum(c)} {sum(d)}");
+        }
+    }
+    let mut m = make(20000, 9, 1000000);
+    let mut i = 0;
+    while i < 20000 {
+        if i % 2 == 0 {
+            m[i] = (500000, i);
+        }
+        i += 1;
+    }
+    m.sort_by(|x, y| x.0.cmp(y.0));
+    println(f"mixed {sum(m)}");
+}

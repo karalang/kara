@@ -1,0 +1,4 @@
+{hdr}fn main() {{
+    let x = {{ let y = mk(16); let y = mk(17); y }};
+    println(f"x={{x.id}}");
+}}

@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+let n = 1;
+let _ = if n == 1 {{ R {{ id: 7 }} }};
+println("end");
+}}

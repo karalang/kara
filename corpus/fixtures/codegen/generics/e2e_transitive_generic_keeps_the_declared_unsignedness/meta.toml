@@ -1,0 +1,16 @@
+source = "tests/codegen/generics.rs::e2e_transitive_generic_keeps_the_declared_unsignedness"
+dedup_of = ["tests/codegen/generics.rs::e2e_generic_impl_field_keeps_the_declared_unsignedness", "tests/interpreter/generics.rs::interp_transitive_generic_is_the_codegen_unsignedness_oracle", "tests/interpreter/generics.rs::interp_generic_impl_field_is_the_codegen_unsignedness_oracle"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "a8f451ea"

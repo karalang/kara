@@ -1,0 +1,2 @@
+{hdr}fn idf(a: R) -> R {{ return a }}
+fn main() {{ let x = idf(R {{ id: 1, s: mk(1) }}); println(f"x={{x.id}}") }}

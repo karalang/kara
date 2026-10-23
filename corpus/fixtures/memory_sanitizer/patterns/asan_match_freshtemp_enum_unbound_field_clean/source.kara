@@ -1,0 +1,9 @@
+{B_ASAN_PRELUDE}
+fn main() {{
+    let mut i = 0;
+    while i < 8 {{
+        match make() {{ Holder.Full(_, n) => println(n), Holder.Empty => println(0) }}
+        i = i + 1;
+    }}
+    println(i);
+}}

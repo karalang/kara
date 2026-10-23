@@ -1,0 +1,2 @@
+{H}fn take(e: E) -> i64 {{ 7 }}
+             fn main() {{ let x = take(B); println(f"{{x}}") }}

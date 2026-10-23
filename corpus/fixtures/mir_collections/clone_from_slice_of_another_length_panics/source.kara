@@ -1,0 +1,7 @@
+fn main() {
+    let mut v: Vec[String] = ["a".to_string(), "b".to_string(), "c".to_string()];
+    let other: Vec[String] = ["x".to_string()];
+    println("before");
+    v[0..2].clone_from_slice(other);
+    println(f"{v}");
+}

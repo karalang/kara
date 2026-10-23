@@ -1,0 +1,11 @@
+{USER_HASHERS}fn main() {{
+let mut m: Map[String, i64, FnvBuild] = Map.new();
+m.insert("alpha", 1);
+m.insert("bravo", 2);
+m.insert("charlie", 3);
+m.remove("bravo");
+println(m.get("alpha").unwrap());
+println(m.get("charlie").unwrap());
+println(m.contains_key("bravo"));
+println(m.len());
+}}

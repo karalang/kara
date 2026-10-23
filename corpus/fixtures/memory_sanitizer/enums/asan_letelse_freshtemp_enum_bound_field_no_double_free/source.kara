@@ -1,0 +1,13 @@
+{B_ASAN_PRELUDE}
+fn count() -> i64 {{
+    let Holder.Full(v, n) = make() else {{ return 0 }}
+    return v.len() + n
+}}
+fn main() {{
+    let mut i = 0;
+    while i < 8 {{
+        println(count());
+        i = i + 1;
+    }}
+    println(i);
+}}

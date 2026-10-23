@@ -1,0 +1,1 @@
+{SHARED}fn main() {{ let x: Option[Kn] = Option.None; match x {{ Option.Some(Kn.A(n)) => {{ println(f"a:{{n}}"); }}, Option.Some(Kn.B) => {{ println("b"); }}, Option.None => {{ println("none"); }} }} }}

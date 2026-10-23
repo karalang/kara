@@ -1,0 +1,12 @@
+{WP_PREAMBLE}fn local(n: i64) -> i64 with reads(Ctr) {{
+let x = with_provider[Ctr](InMem {{ n: n }}, || {{
+let pad = f"pad-{{read()}}";
+if read() == 9 {{ return pad.len() * 100; }}
+read()
+}});
+x + 1
+}}
+fn main() with reads(Ctr) {{
+println(f"{{local(9)}}");
+println(f"{{local(4)}}");
+}}

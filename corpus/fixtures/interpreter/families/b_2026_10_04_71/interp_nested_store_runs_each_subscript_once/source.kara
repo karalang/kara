@@ -1,0 +1,11 @@
+{IDX}fn main() {{
+    let mut w: Vec[Vec[i64]] = [[1, 2], [3, 4]];
+    w[idx(0)][idx(1)] = val(5);
+    println("--");
+    let mut u: Vec[Vec[P]] = [[P {{ n: 1, s: "a" }}, P {{ n: 1, s: "a" }}], [P {{ n: 1, s: "a" }}, P {{ n: 1, s: "a" }}]];
+    u[idx(1)][idx(0)].n = val(6);
+    println("--");
+    let mut v: Vec[P] = [P {{ n: 1, s: "a" }}];
+    v[idx(0)].n = val(77);
+    println(f"{{w[0][1]}} {{u[1][0].n}} {{v[0].n}}");
+}}

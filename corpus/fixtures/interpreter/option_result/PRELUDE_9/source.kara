@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+    let o: Option[(W, W)] = Some((W {{ id: 1 }}, W {{ id: 2 }}));
+    println("x");
+    match o {{ Some((a, b)) => {{ println(f"t{{a.id}}"); }} None => {{ println("n"); }} }}
+}}

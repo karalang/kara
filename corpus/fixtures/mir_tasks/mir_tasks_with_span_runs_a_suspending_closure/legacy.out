@@ -1,0 +1,6 @@
+[info] after-resume span_id=7
+[info] outside
+42
+[info] owned span_id=9
+drop 1
+2

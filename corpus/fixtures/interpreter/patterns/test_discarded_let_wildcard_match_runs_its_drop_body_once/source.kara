@@ -1,0 +1,2 @@
+{hdr}fn mk() -> R {{ return R {{ id: 1 }}; }}
+fn main() {{ let _ = mk(); println("dropped"); }}

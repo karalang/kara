@@ -1,0 +1,1 @@
+fn main() {{ let a: Array[String, 2] = [{S}, {S}]; println(a[0].len() + a[1].len()); }}

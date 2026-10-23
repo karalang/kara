@@ -1,0 +1,6 @@
+{H}struct W2 {{ a: String }}
+fn main() {{
+    let t: (Array[String, 2], i64) = ([pay(1), pay(2)], 7);
+    let w = W2 {{ a: t.0[0] }};
+    println(f"a0:{{w.a}}");
+}}

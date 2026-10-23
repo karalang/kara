@@ -1,0 +1,2 @@
+{P}fn fp(o: Result[(P, P), i64]) -> P {{ match o {{ Ok(t) => {{ return t.0; }} Err(e) => {{ return P {{ name: "z" }}; }} }} }}
+{SINK}fn main() {{ sink(fp(Result.Ok((P {{ name: "a" }}, P {{ name: "b" }})))); }}

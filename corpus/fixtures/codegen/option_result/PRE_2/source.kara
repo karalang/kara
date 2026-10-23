@@ -1,0 +1,8 @@
+{PRE}fn main() {{
+    let o: Option[Res] = Option.Some(Res {{ id: 5, name: f"pay{{5}}" }});
+    match o {{
+        Option.Some(r) => {{ println(eat(r)); }}
+        Option.None => {{ println("none"); }}
+    }}
+    println("e-end");
+}}

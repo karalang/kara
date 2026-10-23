@@ -1,0 +1,7 @@
+{HDR}struct H {{ n: i64 }}
+impl H {{ fn take(ref self, r: R, q: R) -> i64 {{ 7 }} }}
+fn main() {{
+    let h = H {{ n: 0 }};
+    let v = h.take(R {{ id: 1 }}, R {{ id: 2 }});
+    println(f"v={{v}}")
+}}

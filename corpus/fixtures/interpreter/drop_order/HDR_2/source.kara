@@ -1,0 +1,6 @@
+{HDR}fn main() {{
+    let u = mk(3);
+    println(f"u={{u.id}}");
+    let u = mk(4);
+    println(f"u={{u.id}}");
+}}

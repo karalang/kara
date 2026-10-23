@@ -1,0 +1,5 @@
+{H}fn main() {{
+    let t: (Array[i64, 2], i64) = ([3, 4], 7);
+    let t2 = t;
+    println(f"a0:{{t2.0[0]}}");
+}}

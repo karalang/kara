@@ -1,0 +1,3 @@
+{hdr}enum E {{ A, B }}
+impl E {{ fn f(a: R) -> i64 {{ 7 }} }}
+fn main() {{ let v = E.f(R {{ id: 1 }}); println(f"v={{v}}"); }}

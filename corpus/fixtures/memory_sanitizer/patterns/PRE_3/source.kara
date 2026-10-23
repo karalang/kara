@@ -1,0 +1,2 @@
+{PRE}fn f(x: Option[Ke]) -> R3 {{ match x {{ Option.Some(Ke.A(r)) => {{ return r; }} _ => {{ return mk(9); }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{ let g = f(Option.Some(Ke.A(mk(i)))); println(f"rb:{{g.s}}"); i = i + 1; }} }}

@@ -1,0 +1,4 @@
+shared struct N {{ val: i64 }}
+fn inner(n: {mode}N) -> i64 {{ n.val }}
+fn outer(n: {mode}N) -> i64 {{ inner(n) }}
+fn main() {{ let g = N {{ val: 7 }}; println(outer(g)); }}

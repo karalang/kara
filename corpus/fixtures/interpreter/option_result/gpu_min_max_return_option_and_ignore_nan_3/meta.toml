@@ -1,0 +1,16 @@
+source = "tests/interpreter/option_result.rs::gpu_min_max_return_option_and_ignore_nan"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["deferred:gpu", "format-template", "src:legacy-tests"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "d"
+classified_with = "9913c6855"
+extracted_src = "1e663ae1"

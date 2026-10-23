@@ -1,0 +1,3 @@
+{R}struct H {{ n: i64 }}
+impl H {{ fn eat(self, o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}
+fn main() {{ let h = H {{ n: 1 }}; let g = h.eat({ARG}); println(f"got:{{g.id}}"); println("end") }}

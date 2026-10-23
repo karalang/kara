@@ -1,0 +1,1 @@
+{prelude}fn main() {{ let _ = f(mk(22)); println("ok"); }}

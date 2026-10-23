@@ -1,0 +1,14 @@
+
+fn fetch(url: own String) {{
+    let c = Client.new();
+    match c.get(url) {{
+        Ok(r) => {{
+            println(r.status());
+            println(r.body());
+        }}
+        Err(e) => println(f"error: {{e.message()}}"),
+    }}
+}}
+
+fn main() {{
+{calls}}}

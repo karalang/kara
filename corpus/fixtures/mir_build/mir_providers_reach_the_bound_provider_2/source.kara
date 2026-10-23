@@ -1,0 +1,11 @@
+trait Name { fn name(ref self) -> String; }
+effect resource N: Name;
+struct A {}
+struct B {}
+impl Name for A { fn name(ref self) -> String { "a".to_string() } }
+impl Name for B { fn name(ref self) -> String { "b".to_string() } }
+fn show() with reads(N) { println(N.name()); }
+fn main() {
+    with_provider[N](A {}, || show());
+    with_provider[N](B {}, || show());
+}

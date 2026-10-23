@@ -1,0 +1,2 @@
+{hdr}fn take(r: R) -> S {{ S {{ r: r }} }}
+fn main() {{ let s = take(R {{ id: 5 }}); println("mid"); }}

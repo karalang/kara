@@ -1,0 +1,8 @@
+{H}enum E {{ A(((Array[String, 2], i64), i64)), B }}
+fn main() {{
+    let e = E.A(((Array[pay(1), pay(2)], 7), 9));
+    match e {{
+        E.A(u) => {{ println(f"a0:{{u.0.0[0]}} k:{{u.1}}") }}
+        E.B => {{ println("b") }}
+    }}
+}}

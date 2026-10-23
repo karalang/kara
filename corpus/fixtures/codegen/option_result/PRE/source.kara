@@ -1,0 +1,45 @@
+{PRE}fn main() {{
+    {{
+        let o: Option[Res] = Option.Some(Res {{ id: 1, name: f"pay{{1}}" }});
+        match o {{
+            Option.Some(r) => {{ let w = W {{ r: r }}; println(w.r.name); }}
+            Option.None => {{ println("none"); }}
+        }}
+        println("a-end");
+    }}
+    {{
+        let o: Option[Res] = Option.Some(Res {{ id: 2, name: f"pay{{2}}" }});
+        let r2 = match o {{
+            Option.Some(r) => r,
+            Option.None => Res {{ id: 0, name: f"z{{0}}" }},
+        }};
+        println(r2.name);
+        println("b-end");
+    }}
+    {{
+        let o: Option[Res] = Option.Some(Res {{ id: 3, name: f"pay{{3}}" }});
+        match o {{
+            Option.Some(r) => {{ let x = r; println(x.name); }}
+            Option.None => {{ println("none"); }}
+        }}
+        println("c-end");
+    }}
+    {{
+        let o: Option[Res] = Option.Some(Res {{ id: 4, name: f"pay{{4}}" }});
+        let mut v: Vec[Res] = Vec.new();
+        match o {{
+            Option.Some(r) => {{ v.push(r); }}
+            Option.None => {{ println("none"); }}
+        }}
+        println(v[0].name);
+        println("d-end");
+    }}
+    {{
+        match mko(7i64) {{
+            Option.Some(r) => {{ let w = W {{ r: r }}; println(w.r.name); }}
+            Option.None => {{ println("none"); }}
+        }}
+        println("e-end");
+    }}
+    println("end");
+}}

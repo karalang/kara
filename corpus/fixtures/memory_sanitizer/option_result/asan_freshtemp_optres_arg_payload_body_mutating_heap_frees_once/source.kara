@@ -1,0 +1,12 @@
+struct Rv {{ id: i64, xs: Vec[i64] }}
+impl Drop for Rv {{
+    fn drop(mut ref self) {{
+        println(f"dv:{{self.id}}:{{self.xs.len()}}");
+        self.xs.clear();
+        println(f"cleared:{{self.xs.len()}}");
+    }}
+}}
+fn mkv(i: i64) -> Rv {{ return Rv {{ id: i, xs: [i, i + 1, i + 2, i + 3, i + 4, i + 5] }}; }}
+fn ignore(x: Option[Rv]) {{ println("  ig"); }}
+fn matchit(x: Option[Rv]) {{ match x {{ Option.Some(r) => {{ println(f"  m:{{r.id}}"); }} Option.None => {{ println("  mn"); }} }} }}
+fn main() {{ {call} }}

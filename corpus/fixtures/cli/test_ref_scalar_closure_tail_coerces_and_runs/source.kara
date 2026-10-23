@@ -1,0 +1,7 @@
+struct Box {{ v: {ty} }}
+impl Box {{ fn peek(ref self) -> ref {ty} {{ return self.v; }} }}
+fn main() {{
+let b = Box {{ v: {lit} }};
+let f: Fn() -> {ty} = || b.peek();
+println(f());
+}}

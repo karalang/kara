@@ -1,0 +1,17 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn one(r: R) -> i64 {{ println("in-one"); r.id }}
+enum P {{ A, B }}
+fn main() {{
+    let a = one(if true {{ mk(1) }} else {{ mk(2) }});
+    println(f"a={{a}}");
+    let p = P.A;
+    let b = one(match p {{ P.A => mk(3), P.B => mk(4) }});
+    println(f"b={{b}}");
+    let c = one({{ let t = mk(5); t }});
+    println(f"c={{c}}");
+    let d = one(mk(6));
+    println(f"d={{d}}");
+    let e0 = if true {{ mk(7) }} else {{ mk(8) }};
+    let e = one(e0);
+    println(f"e={{e}}");
+}}

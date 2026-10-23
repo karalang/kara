@@ -1,0 +1,7 @@
+{hdr}struct H {{ n: i64 }}
+impl H {{ fn t3(ref self, a: R, b: R, c: R) -> i64 {{ 7 }} }}
+fn main() {{
+    let h = H {{ n: 0 }};
+    let v = h.t3(R {{ id: 1 }}, R {{ id: 2 }}, R {{ id: 3 }});
+    println(f"v={{v}}");
+}}

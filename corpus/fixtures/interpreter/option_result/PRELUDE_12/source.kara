@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let o: Option[(i64, i64)] = Some((1, 2));
+    println("x");
+}}

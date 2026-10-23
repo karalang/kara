@@ -1,0 +1,3 @@
+fn f() -> () {{ println("x"); }}
+fn g(){ann} {{ return f(); }}
+fn main() {{ g(); println("after"); }}

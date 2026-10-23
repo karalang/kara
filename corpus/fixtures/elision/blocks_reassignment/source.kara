@@ -1,0 +1,5 @@
+{STATS}fn main() {{
+let mut s = Stats {{ count: 0, total: 0, active: true }};
+s = Stats {{ count: 1, total: 1, active: true }};
+println(s.total);
+}}

@@ -1,0 +1,18 @@
+{WP_PREAMBLE}fn might_fail(x: i64) -> Result[i64, String] {{
+if x > 5 {{ return Err(f"big-{{x}}"); }}
+Ok(x)
+}}
+fn probe(n: i64) -> String with reads(Ctr) {{
+let r = with_provider[Ctr](InMem {{ n: n }}, || {{
+let v = might_fail(read())?;
+Ok(v * 10)
+}});
+match r {{
+Ok(v) => f"ok-{{v}}",
+Err(e) => f"err-{{e}}",
+}}
+}}
+fn main() with reads(Ctr) {{
+println(f"{{probe(3)}}");
+println(f"{{probe(9)}}");
+}}

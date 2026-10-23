@@ -1,0 +1,7 @@
+{NODE}{ADOPT_BUILDER}fn peek(seed: ListNode) -> i64 {{ seed.val }}
+fn main() {{
+let out = build(5);
+if out.is_some() {{ println(1); }}
+let s = ListNode {{ val: 3, next: None }};
+println(peek(s));
+}}

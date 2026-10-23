@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("iiiiiiii-9"); wrap(g, true); }}
+    println("end");
+}}

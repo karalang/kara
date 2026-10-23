@@ -1,0 +1,1 @@
+{DECLS}fn main() {{ let d = Box[String].make("hi").value; println(d); }}

@@ -1,0 +1,7 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let out = build(5);
+match out {{
+Some(node) => {{ println(node.val); }}
+None => {{}}
+}}
+}}

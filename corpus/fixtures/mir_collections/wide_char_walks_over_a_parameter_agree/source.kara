@@ -1,0 +1,18 @@
+
+fn count(s: ref String, c: char) -> i64 {
+    let mut n = 0;
+    for ch in s.chars() {
+        if ch == c {
+            n = n + 1;
+        }
+    }
+    n
+}
+fn main() {
+    let s: String = "héllo wörld € 𝄞 é";
+    let mut back: String = "";
+    for ch in s.chars().rev() {
+        back.push(ch);
+    }
+    println(f"{count(s, 'é')} {count(s, 'l')} {count(s, '𝄞')} {back}");
+}

@@ -1,0 +1,2 @@
+{B_ENUM_PRELUDE}
+fn main() {{ match make() {{ Holder.Full(_, n) => println(n), Holder.Empty => println(0) }} }}

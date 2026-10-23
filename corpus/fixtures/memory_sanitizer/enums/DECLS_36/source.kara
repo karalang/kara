@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("bbbbbbbb-2"); let t = wrapTup(g, true); shw(t.0) }}
+    {{ let g: G1[String] = G1.Y("cccccccc-3"); let h = wrapNest(g, true); shw(h.h.g) }}
+    println("end");
+}}

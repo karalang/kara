@@ -1,0 +1,6 @@
+{STATS}shared struct Holder {{ mut inner_total: i64 }}
+fn main() {{
+let s = Stats {{ count: 0, total: 0, active: true }};
+let pair = (s, 1);
+println(pair.1);
+}}

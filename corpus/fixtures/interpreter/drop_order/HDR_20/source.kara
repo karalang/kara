@@ -1,0 +1,1 @@
+{HDR}fn main() {{ let q = mk(15); let q = eat(q); println(f"n={{q}}") }}

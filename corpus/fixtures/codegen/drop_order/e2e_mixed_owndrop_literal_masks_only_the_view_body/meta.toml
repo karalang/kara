@@ -1,0 +1,16 @@
+source = "tests/codegen/drop_order.rs::e2e_mixed_owndrop_literal_masks_only_the_view_body"
+dedup_of = ["tests/codegen/misc.rs::e2e_whole_value_rebind_inherits_the_wrap_mask", "tests/codegen/moves.rs::e2e_param_view_field_moved_back_out_runs_one_body", "tests/codegen/moves.rs::e2e_param_view_tuple_elem_moved_back_out_runs_one_body", "tests/interpreter/drop_order.rs::test_mixed_owndrop_literal_masks_only_the_view_body", "tests/interpreter/misc.rs::test_whole_value_rebind_inherits_the_wrap_mask", "tests/interpreter/moves.rs::test_param_view_field_moved_back_out_runs_one_body", "tests/interpreter/moves.rs::test_param_view_tuple_elem_moved_back_out_runs_one_body"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "3cdf85dc"

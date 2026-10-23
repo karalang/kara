@@ -1,0 +1,7 @@
+{PRE}enum EVecG[T] {{ V(Vec[T]), N }}
+fn main() {{
+  let a: Vec[R] = [mkr(1), mkr(2)];
+  let e: EVecG[R] = EVecG.V(a);
+  match e {{ EVecG.V(v) => {{ println(f"x{{v[0].id}}") }} EVecG.N => {{ println("no") }} }}
+  println("end")
+}}

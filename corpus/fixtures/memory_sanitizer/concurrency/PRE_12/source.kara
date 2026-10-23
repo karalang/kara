@@ -1,0 +1,6 @@
+{PRE}fn go() -> i64 {{
+  let t = mkq(9); let u = mkq(10);
+  let mut i = 0i64;
+  while i < 3i64 {{ t.take(); u.take(); i = i + 1; }}
+  return t.b + u.b; }}
+fn main() {{ println(go()); }}

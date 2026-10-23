@@ -1,0 +1,3 @@
+trait P {{ fn p({self_mode}) -> String; }}
+impl P for {head} {{ fn p({self_mode}) -> String {{ {body} }} }}
+fn main() {{ {setup} println(c.p()); }}

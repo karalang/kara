@@ -1,0 +1,17 @@
+fn work(v: i64) -> i64 {{
+    let mut a: i64 = v;
+    let mut j: i64 = 0i64;
+    while j < 40i64 {{ a = (a * 31i64 + j) % 1000003i64; j = j + 1i64; }}
+    a
+}}
+fn main() {{
+    let n: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut out: Vec[i64] = Vec.filled(n, 0i64);
+    let mut k: i64 = 0i64;
+    while k < n {{
+        {body}
+        k = k + 1i64;
+    }}
+    println(sum + out.len());
+}}

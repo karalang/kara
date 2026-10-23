@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+let r = R {{ id: 41 }};
+let _ = {{ r }};
+println("end");
+}}

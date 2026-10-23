@@ -1,0 +1,5 @@
+{HDR}fn one(r: R) -> i64 {{ println("in-one"); r.id }}
+fn main() {{
+    let v = one(if true {{ R {{ id: 1 }} }} else {{ R {{ id: 2 }} }});
+    println(f"v={{v}}");
+}}

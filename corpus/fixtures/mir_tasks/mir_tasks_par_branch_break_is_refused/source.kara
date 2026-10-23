@@ -1,0 +1,16 @@
+
+fn main() {
+    let mut n = 0;
+    for i in 0..3 {
+        let (a, b) = par {
+            { if i == 1 { continue; } 1 },
+            { if i == 2 { break; } 2 },
+        };
+        n += a + b;
+    }
+    'outer: loop {
+        let (a, b) = par { { if n > 0 { break 'outer; } 1 }, 2 };
+        n += a + b;
+    }
+    println(f"{n}");
+}

@@ -1,0 +1,2 @@
+{RS}fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ name: "z" }}; }} }} }}
+fn main() {{ let a = Option.Some((R {{ name: "alpha" }}, R {{ name: "beta" }})); let got: R = eat(a); println(f"got:{{got.name}}"); println("end"); }}

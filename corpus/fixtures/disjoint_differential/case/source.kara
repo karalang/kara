@@ -1,0 +1,13 @@
+{HEAVY}
+                 fn kernel({sig}) {{
+    {body}
+}}
+
+                 fn main() {{
+                 {extra_main}                     let mut buf: Vec[i64] = Vec.filled({len}, 4);
+                     kernel({call});
+                     let mut d: i64 = 0;
+                     let mut i: i64 = 0;
+                     while i < {len} {{ d = (d * 131 + buf[i]) % 1000000007; i = i + 1; }}
+                     println(f"{{d}}");
+                 }}

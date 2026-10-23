@@ -1,0 +1,17 @@
+
+fn by_return(image: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    image.iter().map(|row| row.iter().rev().map(|x| 1 - x).collect()).collect()
+}
+
+fn by_early(image: Vec[Vec[i64]], early: bool) -> Vec[Vec[i64]] {
+    if early {
+        return image.iter().map(|row| row.iter().map(|x| x * 2).collect()).collect();
+    }
+    Vec.new()
+}
+
+fn main() {
+    let image: Vec[Vec[i64]] = [[1, 1, 0], [0, 0, 1]];
+    println(f"{by_return(image.clone())}");
+    println(f"{by_early(image, true)}");
+}

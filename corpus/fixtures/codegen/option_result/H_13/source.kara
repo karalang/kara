@@ -1,0 +1,1 @@
+{S}{H}{SINK}fn main() {{ let h = H {{ n: 1 }}; sink(h.viaself(4)); }}

@@ -1,0 +1,9 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+struct H {{ n: i64 }}
+impl H {{ fn take(mut ref self, r: R) -> i64 {{ println("in-take"); r.id }} }}
+fn main() {{
+    let c = mk(20);
+    let mut h = H {{ n: 0 }};
+    let v = h.take(if false {{ c }} else {{ mk(21) }});
+    println(f"v={{v}}");
+}}

@@ -1,0 +1,4 @@
+{N}struct R {{ id: i64, tags: Vec[String] }}
+             fn take(r: R) -> i64 {{ r.tags.len() }}
+             fn main() {{ let p = (R {{ id: 41, tags: mkv(3) }}, 1);
+             println(f"{{take(p.0) + p.1}}") }}

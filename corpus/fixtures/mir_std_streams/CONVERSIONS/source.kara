@@ -1,0 +1,42 @@
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "NotFound".to_string(),
+        IoError.InvalidUtf8 => "InvalidUtf8".to_string(),
+        _ => "other".to_string(),
+    }
+}
+fn present(name: Str) -> String {
+    match env.var(name) {
+        Ok(v) => v,
+        Err(VarError.NotPresent) => "unset".to_string(),
+        Err(VarError.NotUnicode) => "not unicode".to_string(),
+    }
+}
+fn main() {
+    println(show(IoError.from(VarError.NotPresent)));
+    println(show(IoError.from(VarError.NotUnicode)));
+    println(present("KARA_STD_STREAMS_SET"));
+    println(present("KARA_STD_STREAMS_UNSET"));
+    println(present("KARA_STD_STREAMS_BAD"));
+    let p: String = "DIR/appended.txt".to_string();
+    let _ = fs.remove_file(p);
+    match File.append(p) {
+        Ok(f) => {
+            let mut f = f;
+            let _ = f.write("ab".bytes());
+        }
+        Err(e) => println(show(e)),
+    }
+    match File.append(p) {
+        Ok(f) => {
+            let mut f = f;
+            let _ = f.write("cd".bytes());
+        }
+        Err(e) => println(show(e)),
+    }
+    match fs.read_to_string(p) {
+        Ok(s) => println(f"{s} {p.len() > 0}"),
+        Err(e) => println(show(e)),
+    }
+}

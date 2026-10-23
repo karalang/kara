@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let o: Option[W] = Some(W {{ id: 1 }});
+    println("x");
+}}

@@ -1,0 +1,15 @@
+source = "tests/mir_library.rs::sorted_table_queries_call_cmp_log_n_times"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "shared", "lib:sortedmap"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "9913c6855"
+extracted_src = "24b40e66"
+model_rev = "aafbe785"
+model_src = "24b40e66"

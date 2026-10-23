@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let r: Result[(W, W), i64] = Result.Err(9);
+    println("x");
+}}

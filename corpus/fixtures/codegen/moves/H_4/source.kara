@@ -1,0 +1,2 @@
+{H}struct V {{ r: D, b: i64 }}
+fn main() {{ let w = V {{ r: mkw(7).r, b: 1i64 }}; println(f"idx{{w.b}}"); println("end") }}

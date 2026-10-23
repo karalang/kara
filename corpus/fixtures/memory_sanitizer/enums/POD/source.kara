@@ -1,0 +1,2 @@
+{POD}fn show(x: Option[Kp]) {{ match x {{ Option.Some(Kp.A(p)) => {{ println(f"a:{{p.a}}"); }}, Option.Some(Kp.B) => {{}}, Option.None => {{}} }} }}
+fn main() {{ let mut i = 0; while i < 3 {{ show(Option.Some(Kp.A(mkp(i)))); i = i + 1; }} println("end") }}

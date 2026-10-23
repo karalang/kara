@@ -1,0 +1,2 @@
+{PRE}fn rebind(w: W) -> i64 {{ return match w {{ W.T(x) => x.a.unwrap_or(0), W.U(n) => n }}; }}
+fn main() {{ println(f"c={{rebind(W.T(mkx(5)))}}"); println("end") }}

@@ -1,0 +1,16 @@
+source = "tests/memory_sanitizer/moves.rs::test_tuple_literal_temp_consuming_a_container_read_is_owned"
+dedup_of = ["tests/memory_sanitizer/rc_shared.rs::test_bare_shared_field_read_off_a_shared_temp_releases_its_ref"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "835d35dd"

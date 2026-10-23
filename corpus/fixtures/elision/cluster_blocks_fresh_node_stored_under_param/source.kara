@@ -1,0 +1,12 @@
+{NODE}fn leak_into(seed: ListNode) -> i64 {{
+let dummy = ListNode {{ val: 0, next: None }};
+let node = ListNode {{ val: 1, next: None }};
+dummy.next = Some(node);
+let node2 = ListNode {{ val: 2, next: None }};
+seed.next = Some(node2);
+dummy.val
+}}
+fn main() {{
+let s = ListNode {{ val: 9, next: None }};
+println(leak_into(s));
+}}

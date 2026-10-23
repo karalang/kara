@@ -1,0 +1,13 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    forget(a);
+    println("after forget");
+    let v = vec![R { id: 3 }, R { id: 4 }];
+    forget(v);
+    forget(String.from("text"));
+    println("end");
+}

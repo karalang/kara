@@ -1,0 +1,1 @@
+{N}fn main() {{ let p = (mkv(3), 1); println(f"{{p.1}}") }}

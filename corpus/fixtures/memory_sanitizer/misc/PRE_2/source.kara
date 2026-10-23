@@ -1,0 +1,2 @@
+{PRE}fn pass(n: Node) -> Node {{ return n; }}
+fn main() {{ let c = mkn(10); let d = pass(c); println(f"v{{d.id}}"); println("end") }}

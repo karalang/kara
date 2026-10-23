@@ -1,0 +1,31 @@
+
+struct Loud { n: i64 }
+impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn loud(n: i64) -> Result[Loud, String] { Ok(Loud { n: n }) }
+fn fail(n: i64) -> Result[i64, String] { Err(f"fail {n}") }
+fn produce(tx: own Sender[i64], k: i64) -> i64 { for i in 0..k { tx.send(i).unwrap(); } k }
+fn sum(rx: own Receiver[i64]) -> Result[i64, String] {
+    let mut s = 0;
+    for v in rx.into_iter() { s += v; }
+    if s > 100 { fail(s) } else { Ok(s) }
+}
+fn pipe(k: i64) -> Result[i64, String] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (a, b) = par { produce(tx, k), sum(rx)? };
+    Ok(a + b)
+}
+fn three() -> Result[i64, String] {
+    let (x, y, z) = par { loud(1)?, fail(2)?, fail(3)? };
+    Ok(x.n + y + z)
+}
+fn pick(k: i64) -> Option[i64] { if k > 0 { Some(k) } else { None } }
+fn opt(k: i64) -> Option[i64] {
+    let (a, b) = par { pick(k)?, pick(2)? };
+    Some(a + b)
+}
+fn main() {
+    println(f"{pipe(5)}");
+    println(f"{pipe(20)}");
+    println(f"{three()}");
+    println(f"{opt(3)} {opt(0)}");
+}

@@ -1,0 +1,1 @@
+fn main() {{ let {w} = 1; let mut y = {w} + 1; y = y + {w}; }}

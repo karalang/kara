@@ -1,0 +1,5 @@
+{preamble}
+fn main() {{
+    let e = mk();
+    {stmt}
+}}

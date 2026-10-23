@@ -1,0 +1,11 @@
+
+fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
+    for i in from..to { tx.send(i)?; }
+    Ok(())
+}
+fn main() {
+    let (tx1, rx1): (Sender[i64], Receiver[i64]) = channel(8);
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(8);
+    let (r1, r2) = par { produce(tx1, 0, 4), produce(tx2, 4, 8) };
+    println(f"{r1.is_ok()} {r2.is_ok()} {rx1.recv().unwrap()} {rx2.recv().unwrap()}");
+}

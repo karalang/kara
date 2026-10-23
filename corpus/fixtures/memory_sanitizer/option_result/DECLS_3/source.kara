@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("dddddddd-4"); optW(g, false); println("x") }}
+    println("end");
+}}

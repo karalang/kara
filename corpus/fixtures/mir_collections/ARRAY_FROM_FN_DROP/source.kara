@@ -1,0 +1,9 @@
+struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn main() {
+    let tag = "t".to_string();
+    let a: Array[Noisy, 3] = Array.from_fn(3, |i| Noisy { n: i + tag.len() });
+    println(f"{a[0].n} {a[2].n}");
+}

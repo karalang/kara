@@ -1,0 +1,4 @@
+{hdr}fn mk(i: i64) -> R {{ return R {{ id: i }}; }}
+fn main() {{
+{body}
+}}

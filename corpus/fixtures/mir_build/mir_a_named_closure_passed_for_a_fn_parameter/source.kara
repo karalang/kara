@@ -1,0 +1,9 @@
+fn apply[G: Fn() -> i64](g: G) -> i64 { g() }
+fn twice(g: Fn() -> i64) -> i64 { g() + g() }
+fn main() {
+    let k = 3;
+    let inner = || k + 1;
+    println(apply(inner));
+    println(apply(inner));
+    println(twice(inner));
+}

@@ -1,0 +1,7 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+struct W {{ r: R, n: i64 }}
+fn takew(w: W) -> i64 {{ println("in-takew"); w.n }}
+fn main() {{
+    let v = takew(if true {{ W {{ r: mk(50), n: 5 }} }} else {{ W {{ r: mk(51), n: 6 }} }});
+    println(f"v={{v}}");
+}}

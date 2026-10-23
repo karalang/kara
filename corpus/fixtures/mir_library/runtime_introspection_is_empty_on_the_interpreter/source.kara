@@ -1,0 +1,6 @@
+
+fn main() {
+    println(Runtime.list_tasks().len());
+    println(Runtime.list_par_blocks().len());
+    println(Runtime.has_debug_metadata());
+}

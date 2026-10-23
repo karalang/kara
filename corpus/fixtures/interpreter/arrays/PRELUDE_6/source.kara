@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let a: Array[Ar, 2] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}];
+    println("x");
+}}

@@ -1,0 +1,2 @@
+{DROP_T}fn peek(t: ref T) -> i64 {{ return t.name.len(); }}
+fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }}; println(peek(t)); }}

@@ -1,0 +1,15 @@
+fn main() with writes(FileSystem) reads(FileSystem) {{
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([30i64, 25i64, 41i64]));
+df.insert("score", Column.from_vec([91.5, 78.25, 88.0]));
+df.insert("name", Column.from_vec(["ada", "bob, jr.", "eve \"the\" grey"]));
+let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];
+df.insert("nullable", Column.from_iter_nullable(nn));
+match df.write_csv("{path}") {{
+Ok(_) => match fs.read_to_string("{path}") {{
+Ok(s) => print(s),
+Err(_) => println("read-err"),
+}},
+Err(_) => println("write-err"),
+}}
+}}

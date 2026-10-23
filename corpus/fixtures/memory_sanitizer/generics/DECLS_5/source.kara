@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); shg(g); shg(g) }}
+    {{ let g: G1[String] = G1.Y("abcdefghijklmnopqrstuvwx"); shc(g); shc(g) }}
+    println("end");
+}}

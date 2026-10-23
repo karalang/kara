@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let g: i64 = readOut(Option.Some((H {{ id: 8, s: "hhhhhhhhhhhh" }}, 9))); println(f"n{{g}}"); }}
+    {{ let g = midOut(Option.Some((H {{ id: 9, s: "iiiiiiiiiiii" }}, H {{ id: 10, s: "jjjjjjjjjjjj" }}, H {{ id: 11, s: "kkkkkkkkkkkk" }}))); println(f"n{{g.id}}"); }}
+    println("end");
+}}

@@ -1,0 +1,27 @@
+
+shared struct Node { val: i64, mut kids: Vec[Node] }
+fn build(depth: i64) -> Node {
+    if depth <= 0 { return Node { val: 1, kids: [] }; }
+    Node { val: depth, kids: [build(depth - 1), build(depth - 1)] }
+}
+fn walk(g: Node) -> i64 {
+    let mut work: Vec[Node] = Vec.new();
+    work.push(g);
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < work.len() {
+        let n = work[i as u64];
+        acc = acc + n.val;
+        for k in n.kids { work.push(k); }
+        i = i + 1;
+    }
+    acc
+}
+fn main() {
+    let g = freeze build(3);
+    let (x, y) = par {
+        { let mut w: Vec[Node] = Vec.new(); w.push(g); walk(w[0]) },
+        { let mut w: Vec[Node] = Vec.new(); w.push(g); walk(w[0]) + 1 },
+    };
+    println(f"{x} {y} {walk(g)}");
+}

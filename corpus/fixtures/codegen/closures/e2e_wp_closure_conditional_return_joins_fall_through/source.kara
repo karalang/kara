@@ -1,0 +1,11 @@
+{WP_PREAMBLE}fn cond(n: i64) -> i64 with reads(Ctr) {{
+let x = with_provider[Ctr](InMem {{ n: n }}, || {{
+if read() == 8 {{ return 100; }}
+read()
+}});
+x + 1
+}}
+fn main() with reads(Ctr) {{
+println(f"{{cond(8)}}");
+println(f"{{cond(3)}}");
+}}

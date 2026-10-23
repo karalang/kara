@@ -1,0 +1,4 @@
+{hdr}fn main() {{
+    let v = {{ let t = R {{ id: 3 }}; t.id }};
+    println(f"v={{v}}");
+}}

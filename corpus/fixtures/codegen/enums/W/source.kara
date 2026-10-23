@@ -1,0 +1,12 @@
+{W}fn main() {{
+let _ = [W1 {{ v: 40 }}];
+println("m1");
+let _ = Some(W1 {{ v: 41 }});
+println("m2");
+let _ = Some([W1 {{ v: 42 }}]);
+println("m3");
+let _ = Some(vec![W1 {{ v: 43 }}]);
+println("m4");
+let _ = Some((W1 {{ v: 44 }}, 1));
+println("end")
+}}

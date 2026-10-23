@@ -1,0 +1,1 @@
+{hdr}fn main() {{ let a: f64 = 0.1; let b: f64 = 0.3; let p = Pair[f64] {{ x: a, y: b }}; println(p.combine()); }}

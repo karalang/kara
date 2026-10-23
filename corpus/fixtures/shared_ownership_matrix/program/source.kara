@@ -1,0 +1,5 @@
+{NODE}
+{take}
+{extra}
+fn caller() -> i64 {{ {body} }}
+fn main() {{ let mut i: i64 = 0; let mut t: i64 = 0; while i < 200 {{ t = t + caller(); i = i + 1; }} println(f"{{t}}"); }}

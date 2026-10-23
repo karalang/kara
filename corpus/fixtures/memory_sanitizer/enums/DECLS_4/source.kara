@@ -1,0 +1,5 @@
+{DECLS}struct Hd2 {{ r: R, q: R }}
+fn eat(o: Option[Hd2]) {{
+    match o {{ Option.Some(t) => {{ let x = t.r; println("mid"); }} Option.None => {{ println("n"); }} }}
+}}
+fn main() {{ eat(Option.Some(Hd2 {{ r: R {{ name: f"a", id: 5 }}, q: R {{ name: f"b", id: 6 }} }})); println("end"); }}

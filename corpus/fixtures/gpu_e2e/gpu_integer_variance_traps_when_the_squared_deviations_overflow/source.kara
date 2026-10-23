@@ -1,0 +1,7 @@
+fn main() {{
+    let v: Vec[i32] = [{}];
+    match gpu.variance(v) {{
+        Some(x) => println(f"{{x}}"),
+        None => println("empty"),
+    }}
+}}

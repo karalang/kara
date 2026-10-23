@@ -1,0 +1,6 @@
+{H}struct H2 {{ xs: Array[D, 2] }}
+fn main() {{
+    let mut h: H2 = H2 {{ xs: [D {{ s: f"aaaaaaaa-1", id: 1 }}, D {{ s: f"bbbbbbbb-2", id: 2 }}] }};
+    h.xs[0] = D {{ s: f"MUTATED-3", id: 3 }};
+    println(f"a0:{{h.xs[0].id}}");
+}}

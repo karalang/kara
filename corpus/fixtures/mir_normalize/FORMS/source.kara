@@ -1,0 +1,22 @@
+fn show(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push_str(f"{c as u32} ");
+    }
+    out
+}
+fn main() {
+    let a = "caf\u{e9}";
+    let b = "cafe\u{301}";
+    println(f"{a == b}");
+    println(f"{a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc)}");
+    println(f"{a.normalize(NormalizationForm.Nfd) == b.normalize(NormalizationForm.Nfd)}");
+    println(f"{a.normalize(NormalizationForm.Nfd).len()} {b.normalize(NormalizationForm.Nfc).len()}");
+    let lig = "\u{fb01}x".to_string();
+    println(show(lig.normalize(NormalizationForm.Nfc).as_str()));
+    println(show(lig.normalize(NormalizationForm.Nfkc).as_str()));
+    println(show(lig.normalize(NormalizationForm.Nfkd).as_str()));
+    let v: Str = "e\u{301}";
+    println(show(v.normalize(NormalizationForm.Nfc).as_str()));
+    println(f"[{"".normalize(NormalizationForm.Nfc)}]");
+}

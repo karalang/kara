@@ -1,0 +1,7 @@
+fn main() {{
+{body}
+println(bytes.len());
+let mut sum: i64 = 0;
+for b in bytes {{ sum = sum + (b as i64); }}
+println(sum);
+}}

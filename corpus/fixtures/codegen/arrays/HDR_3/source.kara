@@ -1,0 +1,6 @@
+{HDR}fn main() {{
+let t: (Array[D, 2], i64) = ([mkd(1), mkd(2)], 7);
+let (a, j) = t;
+println(f"j:{{j}}");
+println("end");
+}}

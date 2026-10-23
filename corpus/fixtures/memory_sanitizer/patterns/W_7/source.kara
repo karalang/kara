@@ -1,0 +1,2 @@
+{W}fn take(o: ref Option[(W, i64)]) -> i64 {{ match o {{ Some(t) => {{ return t.1; }} None => {{ return 0; }} }} }}
+fn main() {{ let o: Option[(W, i64)] = Some((W {{ id: 3, name: f"n3" }}, 9)); println(f"g{{take(o)}}") }}

@@ -1,0 +1,1 @@
+{hdr}fn main() {{ let n: u64 = {big}u64; let bx = Box[u64] {{ v: n }}; println(bx.chained()); }}

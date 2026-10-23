@@ -1,0 +1,6 @@
+{H}struct H {{ f: Array[D, 2] }}
+impl Drop for H {{ fn drop(mut ref self) {{ println("dH") }} }}
+fn main() {{
+    let h: H = H {{ f: [mkd(1), mkd(2)] }};
+    println("end");
+}}

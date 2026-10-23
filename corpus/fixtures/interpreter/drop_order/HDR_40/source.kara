@@ -1,0 +1,7 @@
+{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn one(r: R) -> i64 {{ println("in-one"); r.id }}
+fn main() {{
+    let b = mk(10);
+    one(if false {{ b }} else {{ mk(11) }});
+    println("after");
+}}

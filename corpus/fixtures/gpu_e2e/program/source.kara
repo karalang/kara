@@ -1,0 +1,6 @@
+{kernel}
+fn main() {{
+    let buf: Vec[{elem_ty}] = [{literals}];
+    let out = gpu.dispatch(k, buf);
+    for v in out {{ println(f"{{v}}") }}
+}}

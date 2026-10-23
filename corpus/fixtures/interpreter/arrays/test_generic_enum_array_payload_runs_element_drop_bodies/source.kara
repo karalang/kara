@@ -1,0 +1,1 @@
+{hdr}fn main() {{ {{ let a: Array[R, 2] = [R {{ id: 21, s: f"aaa" }}, R {{ id: 22, s: f"bbb" }}]; let w: G[Array[R, 2]] = G.X(a); println("mid") }} println("done") }}

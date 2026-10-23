@@ -1,5 +1,5 @@
 source = "tests/interpreter/patterns.rs::test_agg_leaf_boxed_payload_moving_arm_frees_envelope"
-dedup_of = []
+dedup_of = ["tests/codegen/patterns.rs::e2e_agg_leaf_boxed_payload_moving_arm_frees_envelope"]
 expect = "stdout"
 exit = 0
 tags = ["drop"]
@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 extracted_src = "7ad964c9"
 model_exit = 0
 model_rev = "aafbe785"

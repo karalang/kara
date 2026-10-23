@@ -1,0 +1,6 @@
+{SRC}struct H {{ v: Vec[D] }}
+fn main() {{
+    let mut h: H = H {{ v: [mkd(1), mkd(2)] }};
+    h.v = [mkd(3), mkd(4)];
+    println("mid");
+}}

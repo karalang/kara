@@ -1,0 +1,10 @@
+fn main() with reads(FileSystem) {{
+match DataFrame.read_csv("/definitely-missing-kara.csv") {{
+Ok(_) => println("bad"),
+Err(_) => println("missing-err"),
+}}
+match DataFrame.read_csv("{path}") {{
+Ok(_) => println("bad"),
+Err(_) => println("ragged-err"),
+}}
+}}

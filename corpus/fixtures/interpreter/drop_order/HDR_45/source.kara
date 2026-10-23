@@ -1,0 +1,8 @@
+{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+struct H {{ n: i64 }}
+impl H {{ fn take(mut ref self, r: R) -> i64 {{ println("in-take"); r.id }} }}
+fn main() {{
+    let mut h = H {{ n: 0 }};
+    let v = h.take(if true {{ mk(10) }} else {{ mk(11) }});
+    println(f"v={{v}}");
+}}

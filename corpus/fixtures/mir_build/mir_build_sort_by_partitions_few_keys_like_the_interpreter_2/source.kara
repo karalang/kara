@@ -1,0 +1,18 @@
+
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < 6000 {
+        v.push(((i * 7) % 5, i));
+        i += 1;
+    }
+    let mut calls = 0;
+    v.sort_by(|x, y| {
+        calls += 1;
+        if calls % 5000 == 0 {
+            println(f"call {calls} {x.1} {y.1}");
+        }
+        x.0.cmp(y.0)
+    });
+    println(f"{calls} {v[0].1} {v[5999].1}");
+}

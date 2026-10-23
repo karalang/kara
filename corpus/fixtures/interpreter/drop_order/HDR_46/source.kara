@@ -1,0 +1,6 @@
+{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn two(a: R, b: R) -> i64 {{ println("in-two"); a.id + b.id }}
+fn main() {{
+    let v = two(if true {{ mk(1) }} else {{ mk(2) }}, if true {{ mk(3) }} else {{ mk(4) }});
+    println(f"v={{v}}");
+}}

@@ -1,0 +1,5 @@
+{PRE}fn takeA(x: Option[Array[E1, 2]]) {{ match x {{ Option.Some(t) => {{ println(f"s{{t[0].id}}"); }} Option.None => {{ println("n"); }} }} }}
+fn main() {{
+{body}
+println("mid");
+}}

@@ -1,0 +1,10 @@
+fn missing() -> VarError { VarError.NotPresent }
+fn main() {
+    let v = VarError.NotUnicode;
+    let e1: IoError = v.into();
+    println(e1);
+    let e2: IoError = missing().into();
+    println(e2);
+    let e3: IoError = IoError.from(VarError.NotUnicode);
+    println(e3);
+}

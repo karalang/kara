@@ -1,0 +1,11 @@
+{WP_PREAMBLE}fn quiet(n: i64) with reads(Ctr) {{
+with_provider[Ctr](InMem {{ n: n }}, || {{
+if read() == 3 {{ return; }}
+println(f"seen-{{read()}}");
+}});
+println("after");
+}}
+fn main() with reads(Ctr) {{
+quiet(3);
+quiet(5);
+}}

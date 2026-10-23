@@ -1,0 +1,4 @@
+shared enum E {{ Num(i64), Bin(E, E) }}
+fn mk() -> E {{ return E.Bin(E.Num(1), E.Num(2)); }}
+fn pick() -> E {{ let t = mk(); return match t {{ Num(a) => E.Num(a), Bin(l, r) => l }}; }}
+fn main() {{ {body} }}

@@ -1,0 +1,7 @@
+{prelude}fn take(s: Slice[i64]) -> i64 {{ return s.f(); }}
+fn main() {{
+let v: Vec[i64] = Vec[5, 6, 7];
+let a: Slice[i64] = v[0..2];
+println(a.f());
+println(take(v[0..2]));
+}}

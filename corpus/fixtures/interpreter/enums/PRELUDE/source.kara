@@ -1,0 +1,4 @@
+{nested}fn main() {{
+    let x = mkn(1);
+    println("mid");
+}}

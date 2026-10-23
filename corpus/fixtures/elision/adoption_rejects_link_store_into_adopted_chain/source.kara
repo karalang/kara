@@ -1,0 +1,7 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let out = build(3);
+let mut cur = out;
+let x = cur.unwrap();
+x.next = None;
+println(x.val);
+}}

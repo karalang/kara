@@ -1,0 +1,8 @@
+{WP_PREAMBLE}fn nested() -> i64 with reads(Ctr) {{
+let outer = with_provider[Ctr](InMem {{ n: 1 }}, || {{
+let inner = with_provider[Ctr](InMem {{ n: 2 }}, || {{ return read() * 10; }});
+inner + read()
+}});
+outer + 1000
+}}
+fn main() with reads(Ctr) {{ println(f"{{nested()}}"); }}

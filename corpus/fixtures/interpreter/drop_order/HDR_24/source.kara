@@ -1,0 +1,5 @@
+{HDR}fn take3(a: R, b: R, c: R) -> i64 {{ 7 }}
+fn main() {{
+    let v = take3(R {{ id: 1 }}, R {{ id: 2 }}, R {{ id: 3 }});
+    println(f"v={{v}}")
+}}

@@ -1,0 +1,1 @@
+{show}fn main() {{ let a: i128 = -7i128; let b: u128 = {big}u128; let c: i64 = -5; let d: u64 = 18446744073709551615u64; println(show(a)); println(show(b)); println(show(c)); println(show(d)); }}

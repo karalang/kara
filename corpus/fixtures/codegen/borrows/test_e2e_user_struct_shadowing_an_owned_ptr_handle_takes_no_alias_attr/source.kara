@@ -1,0 +1,3 @@
+struct {name} {{ v: i64 }}
+fn g(e: {name}) -> i64 {{ return e.v + 1; }}
+fn main() {{ println(g({name} {{ v: 4 }})); }}

@@ -1,0 +1,10 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let out = build(3);
+let mut t = 0;
+match out {{
+Some(node) if node.val > 0 => {{ t = t + 1; }}
+Some(node) => {{ t = t + node.val; }}
+None => {{}}
+}}
+println(t);
+}}

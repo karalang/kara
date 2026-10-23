@@ -1,0 +1,7 @@
+{PRE}fn take(p: P) -> i64 {{ return p.a.len(); }}
+fn go() -> i64 {{
+  let (t, k) = par {{ let t = mkp(9); let k = payload().len(); (t, k) }};
+  let mut n = 0i64; let mut i = 0i64;
+  while i < 3i64 {{ n = n + take(t); i = i + 1; }}
+  return n + k; }}
+fn main() {{ println(go()); }}

@@ -1,0 +1,16 @@
+source = "tests/mir_normalize.rs::FORMS"
+dedup_of = []
+expect = "skip"
+exit = -6
+tags = ["deferred:normalize", "literal-unmatched"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+note = "first literal of the holding test: 'MIR interpreter'"
+bucket = "d"
+classified_with = "9913c6855"
+extracted_src = "61569dd0"

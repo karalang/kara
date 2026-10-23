@@ -1,0 +1,3 @@
+{PRE}fn pair() -> (P, i64) {{ return (mkp(9), payload().len()); }}
+fn go() -> i64 {{ let (t, k) = pair(); return t.a.len() + k; }}
+fn main() {{ println(go()); }}

@@ -1,0 +1,4 @@
+{nested}fn main() {{
+    mkn(1);
+    println("mid");
+}}

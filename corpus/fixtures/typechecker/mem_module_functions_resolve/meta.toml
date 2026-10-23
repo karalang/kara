@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "a v2 record: legacy codegen refused the program; expected.out follows design.md and library/: swap leaves a = [2, 3] and b = [1]; replace hands back [2, 3] and leaves a = [9]; take hands back [1] and leaves b empty e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "c3f84545b"
+classified_with = "9913c6855"
 extracted_src = "918acf41"
 model_rev = "aafbe785"
 model_src = "918acf41"

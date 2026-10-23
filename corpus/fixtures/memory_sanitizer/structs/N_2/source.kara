@@ -1,0 +1,2 @@
+{N}fn mk() -> W {{ W {{ r: R {{ id: 41, name: f"n{{41}}" }}, n: 1 }} }}
+             fn main() {{ let W {{ r, n }} = mk(); println(f"{{r.name}} {{n}}") }}

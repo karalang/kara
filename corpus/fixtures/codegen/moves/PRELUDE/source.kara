@@ -1,0 +1,6 @@
+{PRELUDE}fn main() {{
+    {stmts}
+    let extra: String = payload(9);
+    println(extra.len());
+    println("end");
+}}

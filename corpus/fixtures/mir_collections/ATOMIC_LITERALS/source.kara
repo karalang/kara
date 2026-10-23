@@ -1,0 +1,19 @@
+import std.sync.{Atomic};
+sync struct Metrics {
+    requests: Atomic[u64],
+    small: Atomic[i32],
+}
+fn main() {
+    let m = Metrics { requests: Atomic.new(0), small: Atomic.new(-5) };
+    m.requests.fetch_add(3);
+    m.requests.store(18000000000000000000);
+    m.small.fetch_sub(-2);
+    println(f"{m.requests.load()} {m.small.load()}");
+    let a: Atomic[i32] = Atomic.new(2147483647);
+    let p = a.fetch_add(1);
+    println(f"{p} {a.load()}");
+    let r = m.small.compare_exchange(-3, 40);
+    println(f"{r.is_ok()} {m.small.load()}");
+    let u: Atomic[u32] = Atomic.new(0);
+    println(f"{u.fetch_sub(1)} {u.load()}");
+}

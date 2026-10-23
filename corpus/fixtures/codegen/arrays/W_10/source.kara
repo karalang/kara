@@ -1,0 +1,4 @@
+{W}struct W4 {{ v: i64, b: i64, c: i64, d: i64 }}
+impl Drop for W4 {{ fn drop(mut ref self) {{ println(f"dW4_{{self.v}}") }} }}
+fn take(o: Option[Array[W4, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}
+fn main() {{ let r = take(Some([W4 {{ v: 40, b: 1, c: 2, d: 3 }}])); println(f"r:{{r}}"); println("end") }}

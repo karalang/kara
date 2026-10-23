@@ -1,0 +1,9 @@
+{NODE}fn run() -> i64 {{
+let dummy = ListNode {{ val: 0, next: None }};
+let a = ListNode {{ val: 10, next: None }};
+let b = ListNode {{ val: 20, next: None }};
+dummy.next = Some(a);
+dummy.next = Some(b);
+dummy.val
+}}
+fn main() {{ println(run()); }}

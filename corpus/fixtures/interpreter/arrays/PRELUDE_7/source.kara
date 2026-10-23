@@ -1,0 +1,5 @@
+{PRELUDE}enum Bin {{ Packed(Array[Ar, 2]), Bare }}
+fn main() {{
+    let b: Bin = Bin.Packed([Ar {{ id: 1 }}, Ar {{ id: 2 }}]);
+    println("x");
+}}

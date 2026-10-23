@@ -1,0 +1,2 @@
+{prelude}fn walk(src: Node) -> i64 {{ {head}{} total }}
+fn main() {{ println(f"{{walk(build())}}"); }}

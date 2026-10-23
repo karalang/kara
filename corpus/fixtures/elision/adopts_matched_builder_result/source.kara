@@ -1,0 +1,13 @@
+{NODE}{ADOPT_BUILDER}fn main() {{
+let mut total = 0;
+let mut iter = 0;
+while iter < 3 {{
+let out = build(5);
+match out {{
+Some(node) => {{ total = total + node.val; }}
+None => {{}}
+}}
+iter = iter + 1;
+}}
+println(total);
+}}

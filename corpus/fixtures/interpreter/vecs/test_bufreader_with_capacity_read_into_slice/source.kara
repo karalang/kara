@@ -1,0 +1,13 @@
+fn main() {{
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let br = BufReader.with_capacity(f, 16);
+                     let buf = [0u8, 0u8, 0u8, 0u8, 0u8];
+                     match br.read(buf[0..5]) {{
+                         Ok(n) => println("n=" + n.to_string() + " b0=" + buf[0].to_string()),
+                         Err(_) => println("read err"),
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

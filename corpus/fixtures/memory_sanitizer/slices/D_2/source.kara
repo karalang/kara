@@ -1,0 +1,5 @@
+{D}fn main() {{
+    let mut a: Vec[Array[D, 1]] = [[D {{ s: f"aaaaaaaaaaaa1", id: 1 }}], [D {{ s: f"bbbbbbbbbbbb2", id: 2 }}]];
+    a[0] = [D {{ s: f"MUTATEDMUTATED3", id: 3 }}];
+    println("mid");
+}}

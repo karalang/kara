@@ -1,0 +1,7 @@
+{hdr}fn main() {{
+    for i in 0..2 {{
+        let h = mk(20 + i);
+        let h = mk(30 + i);
+        println(f"h={{h.id}}");
+    }}
+}}

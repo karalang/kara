@@ -1,0 +1,2 @@
+{D}fn main() {{ let got = take(W {{ r: R {{ id: 47 }}, n: 5 }});
+             println(f"got {{got.id}}"); println("end") }}

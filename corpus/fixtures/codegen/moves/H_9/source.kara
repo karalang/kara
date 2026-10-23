@@ -1,0 +1,2 @@
+{H}fn eat(d: D) -> i64 {{ return d.id; }}
+fn main() {{ println(f"v{{eat(mkw(7).r)}}"); println("end") }}

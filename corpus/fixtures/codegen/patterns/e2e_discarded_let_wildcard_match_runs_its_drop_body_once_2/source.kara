@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+let o: Option[R] = Some(R {{ id: 1 }});
+let _ = match o {{ Some(r) => {{ println(f"saw{{r.id}}") }} None => {{ println("none") }} }};
+println("dropped");
+}}

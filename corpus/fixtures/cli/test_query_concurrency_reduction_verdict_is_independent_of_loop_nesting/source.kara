@@ -1,0 +1,6 @@
+fn whole_body() -> i64 {{ let mut s = 0; {lp} return s; }}
+fn in_if(go: bool) -> i64 {{ let mut s = 0; if go {{ {lp} }} return s; }}
+fn in_block() -> i64 {{ let mut s = 0; {{ {lp} }} return s; }}
+fn in_else_if(k: i64) -> i64 {{ let mut s = 0; if k == 0 {{ }} else if k == 1 {{ {lp} }} return s; }}
+fn in_match(k: i64) -> i64 {{ let mut s = 0; match k {{ 0 => {{ {lp} }} _ => {{ }} }} return s; }}
+fn main() {{ println(1); }}

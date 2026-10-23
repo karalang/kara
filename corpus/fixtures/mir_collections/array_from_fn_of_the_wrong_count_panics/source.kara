@@ -1,0 +1,11 @@
+struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn count() -> i64 { 4 }
+fn main() {
+    let s: Array[String, 2] = Array.from_fn(2, |i| f"x{i}");
+    println(f"{s}");
+    let a: Array[Noisy, 3] = Array.from_fn(count(), |i| Noisy { n: i });
+    println(f"{a[0].n}");
+}

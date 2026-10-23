@@ -1,0 +1,2 @@
+{H}fn main() {{ let (inner, n) = ((R {{ id: 41, name: f"n{{41}}" }}, 2), 1);
+             println(f"{{n}}") }}

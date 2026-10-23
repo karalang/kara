@@ -1,24 +1,11 @@
-struct D { a: i64, name: String, c: bool }
-
-fn base() -> D {
-    println("base");
-    D { a: 1, name: "b".to_string(), c: true }
-}
-
-fn five() -> i64 {
-    println("five");
-    5
-}
-
-struct H { d: D }
-
+trait Zero { fn zero() -> Self; }
+impl Zero for i64 { fn zero() -> i64 { 41 } }
+impl Zero for u8 { fn zero() -> u8 { 7u8 } }
+impl i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
+impl bool { fn yes() -> bool { true } }
 fn main() {
-    let d = D { a: five(), ..base() };
-    println(f"{d.a} {d.name} {d.c}");
-    let e = D { c: false, ..base() };
-    println(f"{e.a} {e.name} {e.c}");
-    let h = H { d: D { a: 2, ..base() } };
-    println(f"{h.d.a} {h.d.name}");
-    let v = [D { a: 9, ..base() }, D { name: "x".to_string(), ..base() }];
-    println(f"{v[0].a} {v[1].name} {v[1].a}");
+    println(i64.zero());
+    println(u8.zero());
+    println(f"{i64.two() + 1} {i64.add_to(5)} {bool.yes()}");
+    println(i64.two().to_string().len());
 }

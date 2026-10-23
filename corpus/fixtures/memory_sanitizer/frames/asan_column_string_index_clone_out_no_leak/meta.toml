@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: '3 col-string-index-alpha-aaaaaaaaaaaaaaaaaaaa col-string-index-charlie-cccccccccccccccccc'"
 bucket = "d"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 extracted_src = "9d3f8e0a"

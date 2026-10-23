@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let h: Conc = Conc {{ g: G1.Y("abcdefghijklmnopqrstuvwx") }}; println("  x") }}
+    println("end");
+}}

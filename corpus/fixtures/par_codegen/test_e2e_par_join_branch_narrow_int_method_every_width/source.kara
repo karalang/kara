@@ -1,0 +1,9 @@
+fn main() {{
+    let base: {ty} = {lit};
+    let total = par {{
+        let x = base.abs();
+        let y = base + 100{ty};
+        x + y
+    }};
+    println(total);
+}}

@@ -1,0 +1,7 @@
+{NODE}fn just_none() -> Option[ListNode] {{
+None
+}}
+fn main() {{
+let out = just_none();
+if out.is_some() {{ println(1); }}
+}}

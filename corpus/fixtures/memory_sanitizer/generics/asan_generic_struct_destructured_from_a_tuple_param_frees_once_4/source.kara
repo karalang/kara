@@ -1,0 +1,3 @@
+struct Bag[T] {{ xs: Vec[T] }}
+fn take[T](p: {decl}) -> Vec[T] {{ let {pat} = p; b.xs }}
+fn main() {{ let r = take({arg}); println(f"len={{r.len()}} [{{r[0]}}]"); }}

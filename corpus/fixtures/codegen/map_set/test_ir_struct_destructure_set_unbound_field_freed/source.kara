@@ -1,0 +1,4 @@
+{SET_DESTRUCTURE_PRELUDE}fn main() {{
+    let Bag {{ tags: _, count }} = make();
+    println(count);
+}}

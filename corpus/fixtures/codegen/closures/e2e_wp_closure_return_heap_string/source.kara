@@ -1,0 +1,5 @@
+{WP_PREAMBLE}fn heap() -> String with reads(Ctr) {{
+let s = with_provider[Ctr](InMem {{ n: 42 }}, || {{ return f"v-{{read()}}"; }});
+f"got-{{s}}"
+}}
+fn main() with reads(Ctr) {{ println(f"{{heap()}}"); }}

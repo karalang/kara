@@ -1,0 +1,5 @@
+{DECLS}struct Wide {{ r: R, a: i64, b: i64, c: i64, d: i64, e: i64 }}
+fn eat(o: Result[Wide, i64]) {{
+    match o {{ Result.Ok(t) => {{ let x = t.r; println("mid"); }} Result.Err(v) => {{ println("n"); }} }}
+}}
+fn main() {{ eat(Result.Ok(Wide {{ r: R {{ name: f"a", id: 5 }}, a: 1, b: 2, c: 3, d: 4, e: 5 }})); println("end"); }}

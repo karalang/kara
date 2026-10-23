@@ -1,0 +1,8 @@
+shared struct Inner {{ v: i64 }}
+shared struct Node {{ val: i64, kids: Vec[Inner], nums: Vec[i64] }}
+fn g(i: {mode}Inner) -> i64 {{ i.v }}
+fn outer(n: {mode}Node) -> i64 {{ {body} }}
+fn main() {{
+let z = Node {{ val: 1, kids: [Inner {{ v: 2 }}], nums: [3] }};
+println(f"{{outer(z)}}");
+}}

@@ -1,0 +1,1 @@
+fn main() {{ let o: Option[(i64, String)] = Some((1i64, {S})); match o {{ Some((a, b)) => {{ println(a + b.len()); }}, None => {{}} }} }}

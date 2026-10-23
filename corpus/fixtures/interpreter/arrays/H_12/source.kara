@@ -1,0 +1,8 @@
+{H}struct G[T] {{ a: T }}
+fn main() {{
+    let mut d: VecDeque[D] = VecDeque.new();
+    d.push_back(mkd(1));
+    d.push_back(mkd(2));
+    let g: G[VecDeque[D]] = G {{ a: d }};
+    println("end");
+}}

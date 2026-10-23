@@ -1,0 +1,5 @@
+{HDR}fn f() -> R {{ let s = mk(18); let s = mk(19); s }}
+fn main() {{
+    let q = f();
+    println(f"q={{q.id}}");
+}}

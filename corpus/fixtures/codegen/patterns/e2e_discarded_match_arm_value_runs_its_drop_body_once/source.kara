@@ -1,0 +1,1 @@
+{hdr}fn main() {{ mk(1); println("dropped"); }}

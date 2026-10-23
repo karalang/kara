@@ -1,0 +1,7 @@
+struct {ty}[T] {{ items: Vec[T] }}
+fn of[T](v: Vec[T]) -> {ty}[T] {{ return {ty} {{ items: v }}; }}
+fn main() {{
+let v: Vec[u32] = [{elems}];
+let d: {ty}[u32] = of(v);
+println(d.items.len().to_string());
+}}

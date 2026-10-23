@@ -1,0 +1,6 @@
+{DECLS}fn main() {{
+    {{ let a: Option[D] = Option.Some(D {{ id: 6 }}); let b = idOpt(a); match b {{ Option.Some(v) => {{ println(f"g{{v.id}}") }} Option.None => {{ println("none") }} }} }}
+    {{ let a: Option[W] = Option.Some(W {{ id: 7, s: "ssssssss" }}); let b = idOpt(a); match b {{ Option.Some(v) => {{ println(f"g{{v.id}}") }} Option.None => {{ println("none") }} }} }}
+    {{ let a: Option[W] = Option.Some(W {{ id: 8, s: "tttttttt" }}); let b = idOpt(a); }}
+    println("end");
+}}

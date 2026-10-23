@@ -1,0 +1,2 @@
+{hdr}{fns}
+fn main() {{ let v = {call}; println(f"v={{v}}"); }}

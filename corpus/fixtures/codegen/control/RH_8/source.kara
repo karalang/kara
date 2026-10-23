@@ -1,0 +1,3 @@
+{R}struct Sk {{ n: i64 }}
+impl Sk {{ fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ id: 90 }} }} }}
+fn main() {{ let k = Sk.pick(R {{ id: 1 }}, false); println(f"k:{{k.id}}"); println("end") }}

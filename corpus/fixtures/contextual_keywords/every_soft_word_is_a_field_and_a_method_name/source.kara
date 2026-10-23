@@ -1,0 +1,3 @@
+struct S {{ {w}: i64 }}
+impl S {{ fn {w}(ref self) -> i64 {{ self.{w} }} }}
+fn main() {{ let s = S {{ {w}: 1 }}; let _ = s.{w}(); let _ = s.{w}; }}

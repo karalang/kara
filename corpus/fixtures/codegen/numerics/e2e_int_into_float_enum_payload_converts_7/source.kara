@@ -1,0 +1,5 @@
+{hdr}fn main() {{
+    let m: i64 = 9007199254740993;
+    let p = Plain {{ f: m }};
+    println(f"{{p.f}}");
+}}

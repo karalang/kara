@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let a: G[String] = G.Y("aaaaaaaa-1"); let b = mid(a, true); show(b) }}
+    println("end");
+}}

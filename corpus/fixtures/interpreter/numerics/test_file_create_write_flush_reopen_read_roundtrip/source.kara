@@ -1,0 +1,26 @@
+fn main() {{
+             match File.create("{path}") {{
+                 Ok(f) => {{
+                     let data = [104u8, 105u8, 10u8];
+                     match f.write(data[0..3]) {{
+                         Ok(n) => println("wrote " + n.to_string()),
+                         Err(_) => println("write err"),
+                     }}
+                     match f.flush() {{
+                         Ok(_) => println("flushed"),
+                         Err(_) => println("flush err"),
+                     }}
+                 }}
+                 Err(_) => println("create err"),
+             }}
+             match File.open("{path}") {{
+                 Ok(f) => {{
+                     let buf = [0u8, 0u8, 0u8, 0u8];
+                     match f.read(buf[0..4]) {{
+                         Ok(n) => println("read " + n.to_string()),
+                         Err(_) => println("read err"),
+                     }}
+                 }}
+                 Err(_) => println("open err"),
+             }}
+         }}

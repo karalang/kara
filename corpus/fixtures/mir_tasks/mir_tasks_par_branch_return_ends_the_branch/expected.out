@@ -1,0 +1,23 @@
+drop 1
+first 0 = 100
+drop 1
+first 1 = 200
+drop 1
+first 2 = 3
+tried 0 = Ok(6)
+tried 1 = Ok(7)
+tried 2 = Err(two)
+tried 3 = Err(three)
+waits 8 700
+drop 20
+drop 10
+earliest 0 = 10 20
+drop 20
+earliest 1 = first
+earliest 2 = first
+never 5
+unit 1 0
+nested 0 = 7
+nested 1 = 11
+nested 2 = 22
+looped 7

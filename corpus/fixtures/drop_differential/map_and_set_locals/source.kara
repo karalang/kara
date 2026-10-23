@@ -1,0 +1,1 @@
+fn main() {{ let mut m: Map[String, i64] = Map.new(); m.insert({S}, 1i64); let mut st: Set[String] = Set.new(); st.insert({S}); println(m.len() + st.len()); }}

@@ -1,0 +1,5 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("aaaaaaaa-1"); let h = optW(g, false); shwO(h.g) }}
+    {{ let g: G1[String] = G1.Y("bbbbbbbb-2"); let h = resW(g, false); shwR(h.g) }}
+    println("end");
+}}

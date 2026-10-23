@@ -1,0 +1,2 @@
+{R}{Q}struct Bx {{ v: R }}
+{DUP2}fn main() {{ let b = Bx {{ v: A.dup({ARG}) }}; println(f"in:{{b.v.id}}"); println("end") }}

@@ -1,0 +1,3 @@
+{PRE}fn show(x: Result[K, i64]) {{ let y = x;
+   match y {{ Result.Ok(K.A(r)) => {{ println(f"a:{{r.s}}"); }} _ => {{ println("other"); }} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{ show(Result.Ok(K.A(mkr(i)))); i = i + 1; }} }}

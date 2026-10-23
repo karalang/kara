@@ -1,0 +1,3 @@
+{H}fn main() {{ let o: Option[G] = Some(G.A(f"z{{9}}"));
+             let k = match o {{ Some(g) => {{ g }} None => {{ G.B }} }};
+             println("kept"); }}

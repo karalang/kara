@@ -1,0 +1,7 @@
+{H}struct Hold {{ mut v: Vec[D] }}
+fn main() {{
+    let mut h = Hold {{ v: [mkd(1), mkd(2)] }};
+    h.v = [mkd(3), mkd(4)];
+    println("mid");
+    println("end");
+}}

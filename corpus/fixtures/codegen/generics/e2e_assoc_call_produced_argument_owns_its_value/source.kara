@@ -1,0 +1,3 @@
+{hdr}struct H {{ n: i64 }}
+impl H {{ fn mkr(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }} }}
+fn main() {{ let v = s1(H.mkr(1)); println(f"v={{v}}") }}

@@ -1,0 +1,6 @@
+{DECLS}                 fn main() {{
+                     {{ let h = Hi {{ g: Ei.A(f"cccccccc-3") }}; eati(h.g); }}
+                     {{ let mut v: Vec[String] = Vec.new(); v.push(f"dddddddd-4"); let h = Hv {{ v: v }}; eatv(h.v); }}
+                     {{ let h = Hb {{ g: Eb.A(mk()) }}; eath(h); }}
+                     println("end");
+                 }}

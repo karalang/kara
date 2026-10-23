@@ -1,0 +1,5 @@
+{DECLS}fn eat() {{
+    let o: Option[W] = Option.Some(W {{ a: P {{ id: 6 }}, b: Q {{ id: 7 }}, n: 2, p: 3 }});
+    match o {{ Option.Some(t) => {{ println(f"mid{{t.a.id}}"); }} Option.None => {{ println("n"); }} }}
+}}
+fn main() {{ eat(); println("end"); }}

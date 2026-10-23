@@ -1,0 +1,1 @@
+{prelude}fn main() {{ let (a, b) = f(mk(24)); println("ok"); }}

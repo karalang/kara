@@ -1,0 +1,2 @@
+{S}fn mk(k: i64) -> S {{ return S {{ id: k }} }}
+{SINK}fn main() {{ sink(mk(6)); }}

@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let o: Option[Option[W]] = None;
+    println("x");
+}}

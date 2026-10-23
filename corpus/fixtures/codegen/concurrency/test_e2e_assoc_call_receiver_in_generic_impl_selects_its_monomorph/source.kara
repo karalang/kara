@@ -1,0 +1,4 @@
+{B28_BAG}    fn make(v: Vec[T]) -> Bag[T] {{ Bag {{ xs: v }} }}
+    fn mk2(v: Vec[T]) -> Vec[T] {{ Bag.make(v).inner() }}
+}}
+fn main() {{ let a = Bag.mk2(["x","y","z"]); println(a[0]); let b = Bag.mk2([1,2,3]); println(b[0]); }}

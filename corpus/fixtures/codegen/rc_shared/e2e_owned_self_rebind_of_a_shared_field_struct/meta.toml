@@ -1,5 +1,5 @@
 source = "tests/codegen/rc_shared.rs::e2e_owned_self_rebind_of_a_shared_field_struct"
-dedup_of = ["tests/interpreter/rc_shared.rs::test_owned_self_rebind_of_a_shared_field_struct"]
+dedup_of = ["tests/interpreter/rc_shared.rs::test_owned_self_rebind_of_a_shared_field_struct", "tests/memory_sanitizer/rc_shared.rs::asan_owned_self_rebind_of_a_shared_field_struct"]
 expect = "stdout"
 exit = 0
 tags = ["drop", "shared"]
@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 model_exit = 0
 model_rev = "aafbe785"
 model_src = "53b79b03"

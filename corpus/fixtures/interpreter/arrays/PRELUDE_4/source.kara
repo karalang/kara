@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+    let a: Array[Ar, 3] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}, Ar {{ id: 3 }}];
+    let o: Option[Array[Ar, 3]] = Some(a);
+    println("x");
+}}

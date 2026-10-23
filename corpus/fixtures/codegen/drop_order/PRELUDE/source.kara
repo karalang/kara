@@ -1,0 +1,2 @@
+{PRELUDE}{decls}
+fn main() {{ println(f"v={{take()}}"); }}

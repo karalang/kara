@@ -1,12 +1,10 @@
-import std.time.{Instant, Duration};
+const TBL: Array[u8, 3] = [1, 2, 3];
 
 fn main() {
-    let a = Instant.now();
-    let b = a + Duration.ms(1500);
-    let d = b - a;
-    let mut t = a;
-    t += Duration.secs(2);
-    println(f"{d.as_ms()} {b > a} {a == a} {(t - a).as_ms()} {(t - b).as_ms()}");
-    let z = a - a;
-    println(f"{z.as_ms()} {a + z == a}");
+    let a: Array[i64, 3] = [4, 5, 6];
+    let mut v = a.to_vec();
+    v.push(7);
+    let s: Array[String, 2] = ["x".to_string(), "yz".to_string()];
+    let t = s.to_vec();
+    println(f"{v} {TBL.to_vec()} {a[0]} {t} {s[1]}");
 }

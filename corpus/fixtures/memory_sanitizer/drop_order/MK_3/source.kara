@@ -1,0 +1,2 @@
+{D}fn main() {{ let got = take({MK});
+             println(f"got {{got.id}}"); println("end"); }}

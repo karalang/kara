@@ -1,0 +1,40 @@
+fn main() {
+    let primes = Set.from([2, 3, 5, 7, 7]);
+    let ages = Map.from([("ann", 31), ("bo", 27)]);
+    println(f"{primes.len()} {primes.contains(5)} {ages["ann"]} {ages.len()}");
+    let pq: PriorityQueue[i64] = [3, 1, 2].into_iter().collect();
+    println(f"{pq.into_sorted_vec()}");
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back("b".to_string());
+    d.push_front("a".to_string());
+    let e: VecDeque[String] = ["a".to_string(), "b".to_string()].into_iter().collect();
+    let empty: VecDeque[i64] = VecDeque.new();
+    println(f"{d} {empty} {d == e} {d < e}");
+    e.push_back("c".to_string());
+    println(f"{d < e} {d != e}");
+    let mut v: Vec[String] = ["ab".to_string(), "cde".to_string(), "fg".to_string()];
+    match v.remove_first(|s| s.len() == 3) {
+        Some(x) => println(f"{x} {v}"),
+        None => println("none"),
+    }
+    match v.remove_first(|s| s.len() > 9) {
+        Some(x) => println(x),
+        None => println(f"none {v}"),
+    }
+    let mut w: Vec[f64] = [2.5, -1.5, f64.NAN, 0.5];
+    w.sort_by(f64.total_cmp);
+    println(f"{w}");
+    let other: Vec[String] = ["x".to_string(), "y".to_string()];
+    v[0..2].clone_from_slice(other);
+    println(f"{v} {other}");
+    let mut a: Array[String, 3] = Array.from_fn(3, |i| f"s{3 - i}");
+    a.sort();
+    println(f"{a}");
+    a.sort_by_key(|s| s.len());
+    a.reverse();
+    a.swap(0, 2);
+    println(f"{a}");
+    let mut n = Array.from_fn(4, |i| i * i);
+    n.fill(7);
+    println(f"{n} {n.len()}");
+}

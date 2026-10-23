@@ -1,0 +1,7 @@
+struct FakeEnv {}
+impl EnvProvider for FakeEnv { fn args(ref self) -> Vec[String] { ["p", "x", "y"] } }
+fn count() -> i64 with reads(Env) { env.args().len() }
+fn main() {
+    println(count() >= 0);
+    with_provider[Env](FakeEnv {}, || println(count()));
+}

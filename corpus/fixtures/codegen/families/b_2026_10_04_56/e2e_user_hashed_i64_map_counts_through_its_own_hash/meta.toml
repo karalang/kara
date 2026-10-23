@@ -1,0 +1,16 @@
+source = "tests/codegen/families/b_2026_10_04_56.rs::e2e_user_hashed_i64_map_counts_through_its_own_hash"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests", "lib:map"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "164d2c4c"

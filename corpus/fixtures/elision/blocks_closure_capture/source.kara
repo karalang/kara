@@ -1,0 +1,5 @@
+{STATS}fn main() {{
+let s = Stats {{ count: 0, total: 9, active: true }};
+let get = || s.total;
+println(get());
+}}

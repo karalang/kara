@@ -1,0 +1,2 @@
+enum E2 {{ A(String), B(String), C }}
+fn main() {{ let e: E2 = A({S}); match e {{ A(t) => {{ println(t.len()); }}, B(_) => {{ println(2i64); }}, C => {{}} }} }}

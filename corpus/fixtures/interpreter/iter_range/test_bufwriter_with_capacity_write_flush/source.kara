@@ -1,0 +1,15 @@
+fn main() {{
+             match File.create("{path}") {{
+                 Ok(f) => {{
+                     let bw = BufWriter.with_capacity(f, 4);
+                     let data = [65u8, 66u8, 67u8];
+                     let _ = bw.write(data[0..3]);
+                     let _ = bw.flush();
+                 }}
+                 Err(_) => println("create err"),
+             }}
+             match FileSystem.read_to_string("{path}") {{
+                 Ok(s) => println("contents=[" + s + "]"),
+                 Err(_) => println("read err"),
+             }}
+         }}

@@ -1,0 +1,4 @@
+{PRE}fn go() -> i64 {{
+  let (t, u) = par {{ let t = mkp(9); let u = mkp(10); (t, u) }};
+  return t.a.len() + u.a.len(); }}
+fn main() {{ println(go()); }}

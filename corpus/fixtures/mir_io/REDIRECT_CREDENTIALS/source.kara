@@ -1,0 +1,16 @@
+
+fn fetch(url: own String) {
+    let c = Client.new();
+    let req = c.request("GET", url).header("Authorization", "Bearer t").header("Cookie", "c=1");
+    match req.send() {
+        Ok(r) => println(r.body()),
+        Err(e) => println(f"error: {e.message()}"),
+    }
+}
+
+fn main() {
+    fetch("FIRST/same");
+    fetch("FIRST/port");
+    fetch("FIRST/host");
+    fetch("FIRST/away");
+}

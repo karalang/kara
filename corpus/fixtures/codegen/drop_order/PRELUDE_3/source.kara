@@ -1,0 +1,19 @@
+{PRELUDE}impl Box2 {{
+    fn before(mut ref self, r: R, k: bool) {{ println(f"s{{r.inner.v}}"); if k {{ self.xs.push(r); }} }}
+    fn trailing(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} println("x"); }}
+    fn bare(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} }}
+}}
+fn pf(v: mut ref Vec[P], p: P, k: bool) {{ if k {{ v.push(p); }} println(f"s{{p.id}}"); }}
+fn main() {{
+    let mut b = Box2 {{ xs: Vec.new() }};
+    println("c2");
+    b.before(mk(2), false);
+    println("c3");
+    b.trailing(mk(3), false);
+    println("c4");
+    b.bare(mk(4), false);
+    println("c6");
+    let mut w: Vec[P] = Vec.new();
+    pf(mut w, mkp(6), false);
+    println("end");
+}}

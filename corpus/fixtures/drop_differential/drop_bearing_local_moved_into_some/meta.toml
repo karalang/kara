@@ -1,0 +1,16 @@
+source = "tests/drop_differential.rs::drop_bearing_local_moved_into_some"
+dedup_of = ["tests/drop_differential.rs::moving_into_some_schedules_the_option_not_the_source"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "329c5f11"

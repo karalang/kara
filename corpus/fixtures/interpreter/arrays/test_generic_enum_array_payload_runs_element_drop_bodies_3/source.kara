@@ -1,0 +1,1 @@
+{hdr}fn main() {{ {{ let r: R = R {{ id: 41, s: f"aaa" }}; let w: G[R] = G.X(r); println("mid") }} println("done") }}

@@ -10,5 +10,5 @@ backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "3208abb72+local"
-extracted_src = "92195cc0"
+classified_with = "9913c6855"
+extracted_src = "279af83c"

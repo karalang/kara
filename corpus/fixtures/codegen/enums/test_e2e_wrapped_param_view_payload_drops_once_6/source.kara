@@ -1,0 +1,6 @@
+{hdr}fn take() -> i64 {{
+    let m = R {{ id: 1 }};
+    let w = W.One(m);
+    match w {{ W.One(z) => {{ z.id }} W.None2 => {{ 0 }} }}
+}}
+fn main() {{ let v = take(); println(f"v={{v}}"); }}

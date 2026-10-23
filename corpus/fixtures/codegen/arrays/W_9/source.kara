@@ -1,0 +1,2 @@
+{W}fn take(o: Option[Array[W1, 1]]) -> Array[W1, 1] {{ match o {{ Some(x) => {{ return x }} None => {{ return [W1 {{ v: 0 }}] }} }} }}
+fn main() {{ let g = take(Some([W1 {{ v: 40 }}])); println(f"r:{{g[0].v}}"); println("end") }}

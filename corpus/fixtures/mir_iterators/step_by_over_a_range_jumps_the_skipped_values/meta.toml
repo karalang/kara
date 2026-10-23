@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::step_by_over_a_range_jumps_the_skipped_values"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "9913c6855"
+extracted_src = "23c639a7"
+model_rev = "aafbe785"
+model_src = "23c639a7"

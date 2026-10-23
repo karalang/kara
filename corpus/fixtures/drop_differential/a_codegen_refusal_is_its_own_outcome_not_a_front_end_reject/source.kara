@@ -1,0 +1,1 @@
+fn main() {{ let a: Atomic[bool] = Atomic.new(false); let v: Vec[String] = Vec[{S}]; match a.compare_exchange(false, true, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {{ Ok(_) => println(v.len()), Err(_) => println(0) }} }}

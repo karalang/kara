@@ -1,0 +1,29 @@
+fn main() with writes(FileSystem) reads(FileSystem) {{
+let mut df: DataFrame = DataFrame.new();
+df.insert("age", Column.from_vec([30i64, 25i64, 41i64]));
+df.insert("score", Column.from_vec([91.5, 78.25, 88.0]));
+df.insert("name", Column.from_vec(["ada", "bob, jr.", "eve \"the\" grey"]));
+let nn: Vec[Option[i64]] = vec![Some(1i64), None, Some(3i64)];
+df.insert("nullable", Column.from_iter_nullable(nn));
+let _ = df.write_csv("{path}");
+match DataFrame.read_csv("{path}") {{
+Ok(back) => {{
+println(back.width()); println(back.height());
+let ages: Column[i64] = back.column("age");
+match ages[2] {{ Some(v) => println(v), None => println(-1i64) }}
+let scores: Column[f64] = back.column("score");
+match scores[1] {{ Some(v) => println(v), None => println(-1.0) }}
+let names: Column[String] = back.column("name");
+match names[1] {{ Some(v) => println(v), None => println("null") }}
+match names[2] {{ Some(v) => println(v), None => println("null") }}
+let nulls: Column[i64] = back.column("nullable");
+println(nulls.null_count());
+match nulls[1] {{ Some(v) => println(v), None => println("null-ok") }}
+}}
+Err(_) => println("read failed"),
+}}
+match DataFrame.read_csv("/definitely-missing-kara.csv") {{
+Ok(_) => println("bad"),
+Err(_) => println("missing-err"),
+}}
+}}

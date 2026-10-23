@@ -1,0 +1,16 @@
+
+struct P { name: String, k: i64 }
+fn main() {
+    let pre = "n".to_string();
+    let v: Vec[String] = Vec.from_fn(3, |i| f"{pre}{i}");
+    let a: Array[String, 2] = Array.from_fn(2, |i| f"{pre}{i}");
+    println(f"{v} {a} {pre}");
+    let p = P { name: "p".to_string(), k: 10 };
+    let mut calls = 0;
+    let w: Vec[i64] = Vec.from_fn(4, |i| { calls += 1; i * p.k + p.name.len() });
+    println(f"{w} {calls} {p.name}");
+    let owned = "own".to_string();
+    let f = |i: i64| f"{owned}{i}";
+    let u: Vec[String] = Vec.from_fn(2, f);
+    println(f"{u} {owned}");
+}

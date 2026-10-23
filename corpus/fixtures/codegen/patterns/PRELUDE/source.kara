@@ -1,0 +1,5 @@
+{PRELUDE}fn mk3(n: i64) -> E {{ if n < 3 {{ return E.A(R {{ id: n }}) }} return E.B }}
+fn main() {{
+    {body}
+    println("after");
+}}

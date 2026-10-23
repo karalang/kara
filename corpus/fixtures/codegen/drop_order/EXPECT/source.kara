@@ -1,0 +1,5 @@
+{BODY}{kw} Sh {{ a: R, b: R }}
+fn main() {{
+let h = Sh {{ a: mk(9), b: mk(109) }};
+println("mid")
+}}

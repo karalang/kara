@@ -1,5 +1,5 @@
 source = "tests/extern_keep_list.rs::declared_symbols"
-dedup_of = []
+dedup_of = ["tests/codegen/strings.rs::test_ir_println_fuses_payload_and_newline_into_one_write"]
 expect = "stdout"
 exit = 0
 tags = ["literal-unmatched"]
@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'probe parse: {:?}'"
 bucket = "a"
-classified_with = "db0aa9a19"
+classified_with = "9913c6855"
 extracted_src = "a2fede5c"
 model_exit = 0
 model_rev = "aafbe785"

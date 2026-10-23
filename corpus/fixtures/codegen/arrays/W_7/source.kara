@@ -1,0 +1,4 @@
+{W}struct In {{ v: i64 }}
+impl Drop for In {{ fn drop(mut ref self) {{ println(f"dIn{{self.v}}") }} }}
+fn take(o: Option[In]) -> i64 {{ match o {{ Some(t) => {{ return t.v }} None => {{ return 0 }} }} }}
+fn main() {{ let r = take(Some(In {{ v: 5 }})); println(f"r:{{r}}"); println("end") }}

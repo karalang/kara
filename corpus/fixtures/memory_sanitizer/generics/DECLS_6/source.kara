@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let x: G1[String] = G1.Y("aaaaaaaaaaaaaaaaaaaaaaaa"); let y: G1[String] = G1.Y("bbbbbbbbbbbbbbbbbbbbbbbb"); two(x, y); shg(x); shg(y) }}
+    println("end");
+}}

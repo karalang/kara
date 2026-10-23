@@ -1,0 +1,8 @@
+{DECLS}fn keptV[T](v: Vec[String], c: bool, t: T) -> T {{ let s = if c {{ v[0] }} else {{ v[1] }}; println(f"k{{s.len()}}"); return t; }}
+fn innerD[T](v: Vec[String], c: bool, t: T) -> T {{ if c {{ v[0] }} else {{ v[1] }}; return t; }}
+fn outerC[T](v: Vec[String], c: bool, t: T) -> T {{ let r = innerD(v, c, t); return r; }}
+fn main() {{
+    println(f"n{{keptV(mkVec(), true, 5)}}");
+    println(f"n{{outerC(mkVec(), true, 6)}}");
+    println("end");
+}}

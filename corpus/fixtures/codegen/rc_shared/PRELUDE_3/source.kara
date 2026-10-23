@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+    let mut g = Bs {{ one: mks(1), two: mks(2) }};
+    let mut i = 0;
+    while i < 1 {{ let taken = g.one; println(f"t{{taken.id}}"); i = i + 1; }}
+}}

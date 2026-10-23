@@ -1,0 +1,12 @@
+fn main() {{
+             let first = [97u8, 98u8];
+             let second = [99u8, 100u8];
+             match File.append("{path}") {{
+                 Ok(f) => {{ f.write(first[0..2]); }}
+                 Err(_) => println("append1 err"),
+             }}
+             match File.append("{path}") {{
+                 Ok(f) => {{ f.write(second[0..2]); }}
+                 Err(_) => println("append2 err"),
+             }}
+         }}

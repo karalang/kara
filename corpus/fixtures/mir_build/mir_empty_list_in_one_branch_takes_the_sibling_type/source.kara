@@ -1,0 +1,22 @@
+
+fn pick(n: i64) -> Vec[String] {
+    if n == 0 { [] } else if n == 1 { ["one".to_string()] } else { let s = f"{n}"; [s.clone(), s] }
+}
+fn twice(n: i64) -> Vec[i64] {
+    let r = match n % 3 { 0 => { let k = n * 2; [k] }, 1 => [], _ => [n, n] };
+    r
+}
+fn z() -> u8 { 9 }
+fn main() {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    for i in 0..4 { v.push(if i < 2 { [i] } else { [] }); }
+    println(f"{v}");
+    let x = if true { [5] } else { [] };
+    let y = match v.len() { 0 => [], _ => [7, 8] };
+    let a = if x.len() > 1 { [z()] } else { [] };
+    println(f"{x} {y} {a.len()}");
+    for n in 0..3 { println(f"{pick(n).len()} {twice(n)}"); }
+    let mut w: Vec[Vec[f64]] = Vec.new();
+    for i in 0..3 { w.push(match i { 0 => [], 1 => [1.5], _ => [] }); }
+    println(f"{w}");
+}

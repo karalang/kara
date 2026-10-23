@@ -1,15 +1,15 @@
-fn f(c: bool, y: u128) -> u128 {
-    let x = if c { 0 } else { y };
-    x
-}
-
-fn g(k: i64, y: u8) -> u8 {
-    let z = match k { 0 => 255, 1 => y, _ => { 7 } };
-    z
-}
+import std.time.{Clock, Duration, SystemTime, sleep};
+import std.random.{next_u64};
+import std.uuid.{v4};
 
 fn main() {
-    let y: u8 = 7;
-    let z: u8 = if true { 1 } else { y };
-    println(f"{f(true, 5)} {f(false, 5)} {z} {g(0, 3)} {g(1, 3)} {g(2, 3)}");
+    let d = Duration.ms(1500);
+    println(f"{d.as_ms()} {Duration.secs(2).as_ms()} {d < Duration.secs(2)} {d == Duration.ms(1500)}");
+    let t0 = SystemTime.now();
+    sleep(Duration.ms(2));
+    let t1 = SystemTime.now();
+    println(f"{t0.since_epoch().as_ms() > 1700000000000} {t0 < t1}");
+    let u = v4();
+    let parts: Vec[Str] = u.split("-").collect();
+    println(f"{u.len()} {parts.len()} {parts[2].slice(0, 1)} {next_u64() != next_u64()} {Clock.now() > 0}");
 }

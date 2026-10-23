@@ -1,0 +1,3 @@
+{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn take(r: R, q: R) -> i64 {{ 7 }}
+fn main() {{ let v = take(mk(1), mk(2)); println(f"v={{v}}") }}

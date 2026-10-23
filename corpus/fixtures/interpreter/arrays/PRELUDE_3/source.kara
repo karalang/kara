@@ -1,0 +1,5 @@
+{PRELUDE}fn main() {{
+    let a: Array[Ar, 2] = [Ar {{ id: 1 }}, Ar {{ id: 2 }}];
+    let r: Result[Array[Ar, 2], i64] = Result.Ok(a);
+    println("x");
+}}

@@ -1,0 +1,1 @@
+{hdr}fn main() {{ let bi = Box[i64] {{ v: -7 }}; println(bi.get()); }}

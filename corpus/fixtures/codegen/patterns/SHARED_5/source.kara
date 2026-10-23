@@ -1,0 +1,1 @@
+{SHARED}fn main() {{ let k: Kn = Kn.A(7); match k {{ Kn.A(n) => {{ println(f"a:{{n}}"); }}, Kn.B => {{ println("b"); }} }} }}

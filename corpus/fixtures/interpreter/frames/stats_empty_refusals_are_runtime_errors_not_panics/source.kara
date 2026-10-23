@@ -1,0 +1,1 @@
+fn main() {{ let v: Vec[f64] = []; println({call}); }}

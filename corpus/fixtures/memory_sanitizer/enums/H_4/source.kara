@@ -1,0 +1,2 @@
+{H}fn main() {{ let p = (E.A(R {{ id: 7, name: f"n{{7}}" }}), 1);
+             let q = p; println(f"{{q.1}}"); }}

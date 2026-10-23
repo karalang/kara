@@ -1,0 +1,7 @@
+{PRE}enum Slot[T] {{ S(T), N }}
+fn main() {{
+  let a: Vec[R] = [mkr(1), mkr(2)];
+  let s: Slot[Vec[R]] = Slot.S(a);
+  println("mid");
+  println("end")
+}}

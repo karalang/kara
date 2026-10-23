@@ -1,0 +1,5 @@
+{PRE}fn main() {{
+    let mut o: Option[Tracked] = Some(new_tracked(1i64, {PAY}));
+    o = Some(new_tracked(2i64, {PAY}));
+    println(999);
+}}

@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let a: SMono = SMono.P(R {{ s: "ssssssss", t: "tttttttt" }}); let b = a; }}
+    println("end");
+}}

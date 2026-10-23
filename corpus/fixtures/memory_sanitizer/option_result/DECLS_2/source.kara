@@ -1,0 +1,4 @@
+{DECLS}fn main() {{
+    {{ let g: G1[String] = G1.Y("cccccccc-3"); let o = optBare(g, false); shwO(o) }}
+    println("end");
+}}

@@ -1,0 +1,15 @@
+Ok(3)
+a errdefer
+Err(a stopped)
+q defer
+Ok(15)
+q defer
+q errdefer bad
+Err(bad)
+Ok(8)
+Ok(100)
+mixed 0: Ok(3)
+b errdefer
+mixed 1: Ok(10)
+b errdefer
+mixed 2: Err(b failed)

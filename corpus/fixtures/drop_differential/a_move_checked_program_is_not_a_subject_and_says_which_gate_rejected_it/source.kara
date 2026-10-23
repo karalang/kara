@@ -1,0 +1,1 @@
+fn main() {{ let s: String = {S}; let mut v: Vec[String] = Vec.new(); v.push(s); println(s.len()); }}

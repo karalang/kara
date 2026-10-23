@@ -1,0 +1,6 @@
+{effectful}let CACHE: LazyLock[i64] = LazyLock.new(|| load());
+pub fn other() -> Option[i64] {{
+let CACHE: Map[String, i64] = Map.new();
+return CACHE.get("k");
+}}
+fn main() {{ println("ok"); }}

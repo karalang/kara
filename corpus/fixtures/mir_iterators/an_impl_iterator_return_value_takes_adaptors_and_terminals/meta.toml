@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::an_impl_iterator_return_value_takes_adaptors_and_terminals"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "9913c6855"
+extracted_src = "d233b8ea"
+model_rev = "aafbe785"
+model_src = "d233b8ea"

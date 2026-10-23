@@ -1,0 +1,1 @@
+{S}{SINK}fn main() {{ sink(S {{ id: 7 }}); }}

@@ -1,0 +1,12 @@
+{NODE}fn graft(head: Option[ListNode]) -> i64 {{
+if let Some(n) = head {{
+let node = ListNode {{ val: 1, next: None }};
+n.next = Some(node);
+return n.val;
+}}
+0
+}}
+fn main() {{
+let s = ListNode {{ val: 9, next: None }};
+println(graft(Some(s)));
+}}

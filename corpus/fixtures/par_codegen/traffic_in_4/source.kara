@@ -1,0 +1,8 @@
+shared struct Node {{ val: i64, kids: Vec[Node] }}
+impl Node {{
+  fn total({recv} self) -> i64 {{ {body} }}
+}}
+fn main() {{
+let r = Node {{ val: 1, kids: [] }};
+println(f"{{r.total()}}");
+}}

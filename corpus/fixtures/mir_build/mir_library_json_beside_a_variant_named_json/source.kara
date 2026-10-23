@@ -1,0 +1,20 @@
+
+import std.json.{Json};
+enum Fmt { Json, Csv }
+fn show(f: Fmt) -> String {
+    match f { Fmt.Json => "json".to_string(), Fmt.Csv => "csv".to_string() }
+}
+fn main() {
+    println(Json.Null.stringify());
+    let v = Json.Number(2.5);
+    println(v.stringify());
+    match Json.parse("[1, true, null]") {
+        Ok(j) => {
+            match j { Json.Array(xs) => println(f"{xs.len()} items"), _ => println("other") }
+        }
+        Err(_) => println("bad"),
+    }
+    if let Ok(j) = Json.parse("{\"k\": 1}") { println(j.stringify()); }
+    let b = Json.Bool(true);
+    println(f"{b.stringify()} {show(Fmt.Json)} {show(Fmt.Csv)}");
+}

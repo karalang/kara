@@ -1,0 +1,23 @@
+fn main() {
+    let a: Vec[i64] = vec![1, 2, 3];
+    let b: Vec[i64] = vec![4, 5];
+    let s = a.iter().chain(b.iter()).fold("x".to_string(), |acc, x| f"{acc}{x}");
+    println(s);
+    let t: Vec[String] = a.iter().map(|x| f"n{x}").filter(|s| s.len() > 1).map(|s| s.len() * 10).map(|n| f"<{n}>").collect();
+    println(f"{t.len()} {t[0]}");
+    let u = a.iter().scan(0, |acc, x| Some((acc + *x, f"{acc}"))).scan("s".to_string(), |acc, y| Some((f"{acc}{y}", acc.len()))).fold(0, |p, q| p + q);
+    println(u);
+    let m = a.iter().map(|x| *x as f64).filter_map(|f| if f > 1.0 { Some(f"{f}") } else { None }).fold(0, |p, q| p + q.len());
+    println(m);
+    let z = a.iter().zip(b.iter()).fold(0.5, |p, q| p + (*q.0 * *q.1) as f64);
+    println(z);
+    let mut sm: SortedMap[String, i64] = SortedMap.new();
+    sm.insert("ab".to_string(), 1);
+    sm.insert("c".to_string(), 2);
+    let r = sm.iter().fold(0.0, |p, kv| p + (kv.0.len() as f64) * (*kv.1 as f64));
+    println(r);
+    let w = sm.iter().map(|kv| kv.0.len()).fold("".to_string(), |acc, n| f"{acc}{n}");
+    println(w);
+    let fm = sm.iter().find_map(|kv| if *kv.1 == 2 { Some(kv.0.clone()) } else { None });
+    println(fm.unwrap());
+}

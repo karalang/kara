@@ -1,0 +1,11 @@
+fn mk() -> Vec[i64] {{ vec![2i64, 3i64] }}
+fn names() -> Vec[String] {{ vec!["ada", "bob"] }}
+fn empty() -> Vec[i64] {{ Vec.new() }}
+fn main() {{
+let t = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+println({expr});
+println(f"<{{{expr}}}>");
+let b: {ty} = {expr};
+println(b);
+println(f"<{{b}}>");
+}}

@@ -1,0 +1,10 @@
+{PRELUDE}struct Sq {{ n: i64 }}
+impl Sq {{
+    fn eat(x: Option[Rq]) {{
+        match x {{ Some(r) => {{ println(f"a:{{r.id}}") }} None => {{ println("n") }} }}
+    }}
+}}
+fn main() {{
+    Sq.eat(Some(Rq {{ id: 1 }}));
+    println("end");
+}}

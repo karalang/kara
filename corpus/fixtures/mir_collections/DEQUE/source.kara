@@ -1,0 +1,47 @@
+struct Noisy { id: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn show(d: VecDeque[i64]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < d.len() {
+        match d.get(i) { Some(x) => out.push_str(f"{x} "), None => out.push_str("? ") }
+        i += 1;
+    }
+    out
+}
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.insert(0, 2);
+    d.insert(0, 1);
+    d.insert(2, 4);
+    d.insert(2, 3);
+    println(show(d));
+    d.push_front(0);
+    d.push_front(-1);
+    d.insert(1, 9);
+    println(show(d));
+    match d.try_insert(7, 5) { Ok(_) => println("ok"), Err(_) => println("err") }
+    println(show(d));
+    d.clear();
+    println(f"{d.len()} {d.is_empty()}");
+    d.push_back(6);
+    println(show(d));
+    let mut s: VecDeque[String] = VecDeque.new();
+    s.push_back("a".to_string());
+    s.push_front("b".to_string());
+    s.insert(1, "c".to_string());
+    println(f"{s.len()}");
+    s.clear();
+    s.push_back("d".to_string());
+    println(f"{s.len()}");
+    let mut n: VecDeque[Noisy] = VecDeque.new();
+    n.push_back(Noisy { id: 1 });
+    n.push_back(Noisy { id: 2 });
+    n.insert(1, Noisy { id: 3 });
+    n.clear();
+    println("cleared");
+    n.push_back(Noisy { id: 4 });
+    println("end");
+}

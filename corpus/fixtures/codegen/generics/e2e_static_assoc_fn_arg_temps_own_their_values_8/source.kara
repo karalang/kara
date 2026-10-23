@@ -1,0 +1,3 @@
+{hdr_heap}struct H {{ n: i64 }}
+impl H {{ fn id(a: R) -> R {{ a }} }}
+fn main() {{ let x = H.id(R {{ id: 1, s: mk(1) }}); println(f"x={{x.id}}"); }}

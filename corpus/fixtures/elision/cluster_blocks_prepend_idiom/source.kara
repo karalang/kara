@@ -1,0 +1,18 @@
+{NODE}fn build(n: i64) -> i64 {{
+let mut head: Option[ListNode] = None;
+let mut i = 0;
+while i < n {{
+let node = ListNode {{ val: i, next: head }};
+head = Some(node);
+i = i + 1;
+}}
+let mut sum = 0;
+let mut cur = head;
+while cur.is_some() {{
+let x = cur.unwrap();
+sum = sum + x.val;
+cur = x.next;
+}}
+sum
+}}
+fn main() {{ println(build(5)); }}

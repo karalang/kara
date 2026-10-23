@@ -1,0 +1,9 @@
+
+fn main() {
+    let x = 10;
+    let y = comptime {
+        let n = 3;
+        ast.expr(f"x * {n + 1}")
+    };
+    println(y);
+}

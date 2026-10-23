@@ -1,0 +1,4 @@
+{ENUM_PRE}fn val_err() -> Result[Val, i64] {{ Result.Err(7) }}
+fn f(value: Result[Val, i64]) -> i64 {{ let mut vv = value; let mut acc = 0;
+   while let Ok(v) = vv {{ acc = acc + ident_len(v); vv = val_err(); }} acc }}
+fn main() {{ println(f(Result.Ok(Val.Ident(payload())))); }}

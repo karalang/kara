@@ -1,0 +1,3 @@
+{PRE}fn eat(v: R3) {{ println(f"rb:{{v.s}}"); }}
+fn f(x: Option[Ke]) {{ match x {{ Option.Some(Ke.A(r)) => {{ eat(r); }} _ => {{}} }} }}
+fn main() {{ let mut i = 0; while i < 2 {{ f(Option.Some(Ke.A(mk(i)))); i = i + 1; }} }}

@@ -1,0 +1,2 @@
+{H}{cell}
+fn main() {{ let z: i64 = c(); println(f"z={{z}}"); }}

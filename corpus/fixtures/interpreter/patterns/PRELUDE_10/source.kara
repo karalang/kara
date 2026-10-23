@@ -1,0 +1,7 @@
+{PRELUDE}fn main() {{
+let mut v: Vec[R] = Vec.new();
+v.push(R {{ s: "e" }});
+v.push(R {{ s: "f" }});
+while let Some(r) = v.pop() {{ println(f"pop{{r.s}}"); }}
+println("end");
+}}

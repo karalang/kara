@@ -1,0 +1,16 @@
+source = "tests/codegen/rc_shared.rs::e2e_discarded_branch_of_body_less_heap_literals_keeps_one_owner"
+dedup_of = ["tests/interpreter/rc_shared.rs::test_discarded_branch_of_body_less_heap_literals_keeps_one_owner"]
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "3b868952"

@@ -1,0 +1,8 @@
+shared struct N {{ mut v: i64 }}
+fn build(s: i64) -> i64 {{
+let mut m: Map[i64, {val}] = Map.new();
+let a = N {{ v: s }};
+m.insert(1i64, a);
+a.v + m.len()
+}}
+fn main() {{ println(f"{{build(1)}}"); }}

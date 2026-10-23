@@ -1,0 +1,9 @@
+fn main() with reads(FileSystem) {{
+             match FileSystem.read_lines("{path}") {{
+                 Ok(lines) => {{
+                     println(lines.len());
+                     for l in lines {{ println(l); }}
+                 }}
+                 Err(_) => println("read error"),
+             }}
+         }}

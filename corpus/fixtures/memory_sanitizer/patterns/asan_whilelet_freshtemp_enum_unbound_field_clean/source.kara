@@ -1,0 +1,9 @@
+{B_WHILELET_PRELUDE}
+fn main() {{
+    let mut i = 0;
+    while let Holder.Full(_, n) = next(i) {{
+        println(n);
+        i = i + 1;
+    }}
+    println(99);
+}}

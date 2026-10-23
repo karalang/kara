@@ -1,0 +1,9 @@
+fn whole_body(out: mut ref Vec[f64], n: i64) {{ {lp} }}
+fn tail_if(out: mut ref Vec[f64], n: i64, go: bool) {{ if go {{ {lp} }} }}
+fn tail_block(out: mut ref Vec[f64], n: i64) {{ {{ {lp} }} }}
+fn stmt_then_if(out: mut ref Vec[f64], n: i64, go: bool) {{ let z = n + 1; if go {{ {lp} }} }}
+fn else_arm(out: mut ref Vec[f64], n: i64, go: bool) {{ if go {{ }} else {{ {lp} }} }}
+fn else_if_arm(out: mut ref Vec[f64], n: i64, k: i64) {{ if k == 0 {{ }} else if k == 1 {{ {lp} }} }}
+fn match_arm(out: mut ref Vec[f64], n: i64, k: i64) {{ match k {{ 0 => {{ {lp} }} _ => {{ }} }} }}
+fn deep_nest(out: mut ref Vec[f64], n: i64, go: bool, k: i64) {{ if go {{ match k {{ 0 => {{ {{ {lp} }} }} _ => {{ }} }} }} }}
+fn main() {{ println(1); }}

@@ -1,0 +1,5 @@
+{HDR}fn main() {{
+    let z = mk(12);
+    let z = z;
+    println(f"z={{z.id}}");
+}}

@@ -1,0 +1,12 @@
+
+fn produce(tx: own Sender[i64]) { for i in 1..4 { tx.send(i).unwrap(); } }
+fn consume(rx: own Receiver[i64]) -> i64 {
+    let mut s = 0;
+    for v in rx.into_iter() { println(v); s += v; }
+    s
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let (s, _) = par { consume(rx), produce(tx) };
+    println(f"sum {s}");
+}

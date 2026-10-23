@@ -1,0 +1,5 @@
+{NODE}struct Holder {{ n: Option[ListNode] }}
+{ADOPT_BUILDER}fn main() {{
+let out = build(5);
+if out.is_some() {{ println(1); }}
+}}

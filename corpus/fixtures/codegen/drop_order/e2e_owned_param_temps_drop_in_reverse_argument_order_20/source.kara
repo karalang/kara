@@ -1,0 +1,7 @@
+{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}
+fn pass(r: R) -> R {{ r }}
+fn main() {{
+    let d = mk(30);
+    let v = pass(if false {{ d }} else {{ mk(31) }});
+    println(f"v={{v.id}}");
+}}

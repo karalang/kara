@@ -1,0 +1,1 @@
+fn main() {{ let m: i64 = -9223372036854775807i64 - 1i64; let n: i64 = 0i64 - 1i64; println(m {op} n); }}

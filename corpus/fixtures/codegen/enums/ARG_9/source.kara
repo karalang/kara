@@ -1,0 +1,3 @@
+{R}struct A {{}}
+impl A {{ fn eat(o: Option[(R, R)]) -> R {{ match o {{ Some(t) => {{ return t.0; }} None => {{ return R {{ id: 0 }}; }} }} }} }}
+fn main() {{ let g = A.eat({ARG}); println(f"got:{{g.id}}"); println("end") }}

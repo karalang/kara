@@ -1,0 +1,16 @@
+source = "tests/interpreter/families/b_2026_09_29_104.rs::interp_nested_generic_struct_pattern_still_refutable_where_it_can_fail"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["format-template", "src:legacy-tests"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-interp"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "a format! template; the test fills in its holes"
+bucket = "skip:a format! template; the test fills in it"
+classified_with = "9913c6855"
+extracted_src = "c9cad85e"

@@ -1,0 +1,4 @@
+{PRELUDE}fn main() {{
+    let r: Result[Result[W, i64], i64] = Result.Ok(Result.Ok(W {{ id: 1 }}));
+    println("x");
+}}

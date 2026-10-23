@@ -1,0 +1,4 @@
+fn main() {{ {decl} let r: Ordering = a.cmp(b);
+match r {{ Ordering.Less => {{ println("Less"); }}
+Ordering.Equal => {{ println("Equal"); }}
+Ordering.Greater => {{ println("Greater"); }} }} }}

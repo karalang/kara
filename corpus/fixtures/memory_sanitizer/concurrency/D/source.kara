@@ -1,0 +1,3 @@
+{D}fn main() {{ println("lead");
+             let a: Box3 = build(14);
+             println(f"v{{a.xs[0].id}}"); println("post"); }}

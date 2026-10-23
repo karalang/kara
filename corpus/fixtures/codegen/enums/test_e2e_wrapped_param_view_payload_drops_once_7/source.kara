@@ -1,0 +1,2 @@
+{hdr}fn take(k: i64) -> i64 {{ let w = W.One(R {{ id: k }}); 7 }}
+fn main() {{ let v = take(1); println(f"v={{v}}"); }}
