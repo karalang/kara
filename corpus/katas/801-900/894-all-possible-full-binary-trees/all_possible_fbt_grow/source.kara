@@ -1,0 +1,133 @@
+// LeetCode #894: All Possible Full Binary Trees -- leaves grown two at a
+// time.
+//
+// Every full tree of n nodes comes from one of n - 2 nodes by giving one
+// of its leaves two children. Start from a single node and, (n - 1) / 2
+// times, give each leaf of each tree two children in a copy of the tree;
+// a set of the copies' shapes, written in preorder, keeps each tree once.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut trees: Vec[TreeNode] = Vec.new();
+    if n % 2 == 0 {
+        return trees;
+    }
+    trees.push(TreeNode { val: 0, left: None, right: None });
+    for _ in 0..(n - 1) / 2 {
+        let mut seen: Set[String] = Set.new();
+        let mut next: Vec[TreeNode] = Vec.new();
+        for tree in trees.iter() {
+            let leaves = count_leaves(Some(*tree));
+            for k in 0..leaves {
+                let mut counter = 0;
+                let grown = grown_copy(*tree, k, mut counter);
+                let key = shape(Some(grown));
+                if not seen.contains(key) {
+                    seen.insert(key);
+                    next.push(grown);
+                }
+            }
+        }
+        trees = next;
+    }
+    trees
+}
+
+fn count_leaves(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            if t.left.is_none() { 1 } else { count_leaves(t.left) + count_leaves(t.right) }
+        }
+    }
+}
+
+// a copy of the tree with its k-th leaf, counting from the left, given two
+// children; `counter` counts the leaves passed
+fn grown_copy(node: TreeNode, k: i64, counter: mut ref i64) -> TreeNode {
+    match node.left {
+        None => {
+            let leaf = TreeNode { val: 0, left: None, right: None };
+            if *counter == k {
+                leaf.left = Some(TreeNode { val: 0, left: None, right: None });
+                leaf.right = Some(TreeNode { val: 0, left: None, right: None });
+            }
+            *counter += 1;
+            leaf
+        }
+        Some(l) => {
+            let left = grown_copy(l, k, mut counter);
+            let right = grown_copy(node.right.unwrap(), k, mut counter);
+            TreeNode { val: 0, left: Some(left), right: Some(right) }
+        }
+    }
+}
+
+// the tree written in preorder, 1 for a node with children and 0 for a leaf
+fn shape(node: Option[TreeNode]) -> String {
+    match node {
+        None => "".to_string(),
+        Some(t) => {
+            if t.left.is_none() { "0".to_string() } else { "1" + shape(t.left) + shape(t.right) }
+        }
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// the trees in level order, sorted: LeetCode takes them in any order
+fn sorted_trees(n: i64) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    for tree in all_possible_fbt(n).iter() {
+        texts.push(to_level_order(Some(*tree)));
+    }
+    texts.sort();
+    texts
+}
+
+fn main() {
+    for n in [7, 3, 1, 2, 5] {
+        println(f"n = {n} -> {sorted_trees(n)}");
+    }
+    // every n up to 20, LeetCode's largest
+    let mut counts: Vec[i64] = Vec.new();
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..21 {
+        let texts = sorted_trees(n);
+        counts.push(texts.len());
+        total += texts.len();
+        for t in texts.iter() {
+            for b in t.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"trees of 1 to 20 nodes: {counts}");
+    println(f"{total} trees in all, checksum {check}");
+}

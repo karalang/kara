@@ -1,0 +1,96 @@
+// LeetCode #894: All Possible Full Binary Trees -- recursion with a memo.
+//
+// A full tree of n nodes is a root over a full left subtree of some odd
+// size l and a full right subtree of n - 1 - l. So the trees of n nodes
+// are a root over every pair of a tree of l nodes and a tree of n - 1 - l,
+// for each odd l. Each size is built once and kept, and the trees share
+// those subtrees, as LeetCode's answers do. An even n has none.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut memo: Map[i64, Vec[TreeNode]] = Map.new();
+    build(n, mut memo)
+}
+
+fn build(n: i64, memo: mut ref Map[i64, Vec[TreeNode]]) -> Vec[TreeNode] {
+    if memo.contains_key(n) {
+        return memo[n].clone();
+    }
+    let mut out: Vec[TreeNode] = Vec.new();
+    if n == 1 {
+        out.push(TreeNode { val: 0, left: None, right: None });
+    } else if n % 2 == 1 {
+        let mut left = 1;
+        while left < n - 1 {
+            let lefts = build(left, mut memo);
+            let rights = build(n - 1 - left, mut memo);
+            for l in lefts.iter() {
+                for r in rights.iter() {
+                    out.push(TreeNode { val: 0, left: Some(*l), right: Some(*r) });
+                }
+            }
+            left += 2;
+        }
+    }
+    memo.insert(n, out.clone());
+    out
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// the trees in level order, sorted: LeetCode takes them in any order
+fn sorted_trees(n: i64) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    for tree in all_possible_fbt(n).iter() {
+        texts.push(to_level_order(Some(*tree)));
+    }
+    texts.sort();
+    texts
+}
+
+fn main() {
+    for n in [7, 3, 1, 2, 5] {
+        println(f"n = {n} -> {sorted_trees(n)}");
+    }
+    // every n up to 20, LeetCode's largest
+    let mut counts: Vec[i64] = Vec.new();
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..21 {
+        let texts = sorted_trees(n);
+        counts.push(texts.len());
+        total += texts.len();
+        for t in texts.iter() {
+            for b in t.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"trees of 1 to 20 nodes: {counts}");
+    println(f"{total} trees in all, checksum {check}");
+}

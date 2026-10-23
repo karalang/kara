@@ -1,0 +1,114 @@
+// LeetCode #894: All Possible Full Binary Trees -- every preorder code.
+//
+// Write a full tree in preorder as 1 for a node with children and 0 for a
+// leaf. A string of n of these is a full tree exactly when it has one
+// more 0 than 1s and no shorter prefix already holds a whole tree, that
+// is, the number of subtrees still owed never reaches 0 before the end.
+// Generate every such string, then build each tree from its code.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut codes: Vec[Vec[u8]] = Vec.new();
+    if n % 2 == 1 {
+        let mut code: Vec[u8] = Vec.new();
+        extend(n, 1, mut code, mut codes);
+    }
+    let mut out: Vec[TreeNode] = Vec.new();
+    for code in codes.iter() {
+        let mut at = 0;
+        out.push(decode(code, mut at));
+    }
+    out
+}
+
+// every code that extends `code` to n symbols, with `owed` subtrees still
+// to write
+fn extend(n: i64, owed: i64, code: mut ref Vec[u8], codes: mut ref Vec[Vec[u8]]) {
+    if owed == 0 {
+        if code.len() == n {
+            codes.push(code.clone());
+        }
+        return;
+    }
+    // the rest needs at least `owed` more symbols, and two more for each 1
+    if code.len() + owed > n {
+        return;
+    }
+    code.push(1);
+    extend(n, owed + 1, mut code, mut codes);
+    code.pop();
+    code.push(0);
+    extend(n, owed - 1, mut code, mut codes);
+    code.pop();
+}
+
+// the tree whose code starts at `at`
+fn decode(code: Vec[u8], at: mut ref i64) -> TreeNode {
+    let symbol = code[*at];
+    *at += 1;
+    let node = TreeNode { val: 0, left: None, right: None };
+    if symbol == 1 {
+        node.left = Some(decode(code, mut at));
+        node.right = Some(decode(code, mut at));
+    }
+    node
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// the trees in level order, sorted: LeetCode takes them in any order
+fn sorted_trees(n: i64) -> Vec[String] {
+    let mut texts: Vec[String] = Vec.new();
+    for tree in all_possible_fbt(n).iter() {
+        texts.push(to_level_order(Some(*tree)));
+    }
+    texts.sort();
+    texts
+}
+
+fn main() {
+    for n in [7, 3, 1, 2, 5] {
+        println(f"n = {n} -> {sorted_trees(n)}");
+    }
+    // every n up to 20, LeetCode's largest
+    let mut counts: Vec[i64] = Vec.new();
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..21 {
+        let texts = sorted_trees(n);
+        counts.push(texts.len());
+        total += texts.len();
+        for t in texts.iter() {
+            for b in t.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"trees of 1 to 20 nodes: {counts}");
+    println(f"{total} trees in all, checksum {check}");
+}

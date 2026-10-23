@@ -1,0 +1,441 @@
+// LeetCode #894: All Possible Full Binary Trees -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an integer n, return a list of all possible full
+// binary trees with n nodes. Each node of each tree in the answer must
+// have Node.val == 0, and each element of the answer is the root node of
+// one possible tree. The answer may be in any order. A full binary tree
+// is a binary tree where each node has exactly 0 or 2 children.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- the ★ arm: recursion with a memo -------------------------------------
+fn star_all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut memo: Map[i64, Vec[TreeNode]] = Map.new();
+    star_build(n, mut memo)
+}
+
+fn star_build(n: i64, memo: mut ref Map[i64, Vec[TreeNode]]) -> Vec[TreeNode] {
+    if memo.contains_key(n) {
+        return memo[n].clone();
+    }
+    let mut out: Vec[TreeNode] = Vec.new();
+    if n == 1 {
+        out.push(TreeNode { val: 0, left: None, right: None });
+    } else if n % 2 == 1 {
+        let mut left = 1;
+        while left < n - 1 {
+            let lefts = star_build(left, mut memo);
+            let rights = star_build(n - 1 - left, mut memo);
+            for l in lefts.iter() {
+                for r in rights.iter() {
+                    out.push(TreeNode { val: 0, left: Some(*l), right: Some(*r) });
+                }
+            }
+            left += 2;
+        }
+    }
+    memo.insert(n, out.clone());
+    out
+}
+
+// ---- the plain arm: recursion with no memo --------------------------------
+fn plain_all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut out: Vec[TreeNode] = Vec.new();
+    if n == 1 {
+        out.push(TreeNode { val: 0, left: None, right: None });
+        return out;
+    }
+    if n % 2 == 0 {
+        return out;
+    }
+    let mut left = 1;
+    while left < n - 1 {
+        let lefts = plain_all_possible_fbt(left);
+        let rights = plain_all_possible_fbt(n - 1 - left);
+        for l in lefts.iter() {
+            for r in rights.iter() {
+                out.push(TreeNode { val: 0, left: Some(*l), right: Some(*r) });
+            }
+        }
+        left += 2;
+    }
+    out
+}
+
+// ---- the table arm: a table built upwards ---------------------------------
+fn table_all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut table: Vec[Vec[TreeNode]] = Vec.new();
+    for size in 0..n + 1 {
+        let mut out: Vec[TreeNode] = Vec.new();
+        if size == 1 {
+            out.push(TreeNode { val: 0, left: None, right: None });
+        } else if size % 2 == 1 {
+            let mut left = 1;
+            while left < size - 1 {
+                for l in table[left].iter() {
+                    for r in table[size - 1 - left].iter() {
+                        out.push(TreeNode { val: 0, left: Some(*l), right: Some(*r) });
+                    }
+                }
+                left += 2;
+            }
+        }
+        table.push(out);
+    }
+    table[n].clone()
+}
+
+// ---- the grow arm: leaves grown two at a time -----------------------------
+fn grow_all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut trees: Vec[TreeNode] = Vec.new();
+    if n % 2 == 0 {
+        return trees;
+    }
+    trees.push(TreeNode { val: 0, left: None, right: None });
+    for _ in 0..(n - 1) / 2 {
+        let mut seen: Set[String] = Set.new();
+        let mut next: Vec[TreeNode] = Vec.new();
+        for tree in trees.iter() {
+            let leaves = grow_count_leaves(Some(*tree));
+            for k in 0..leaves {
+                let mut counter = 0;
+                let grown = grow_grown_copy(*tree, k, mut counter);
+                let key = grow_shape(Some(grown));
+                if not seen.contains(key) {
+                    seen.insert(key);
+                    next.push(grown);
+                }
+            }
+        }
+        trees = next;
+    }
+    trees
+}
+
+fn grow_count_leaves(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            if t.left.is_none() { 1 } else { grow_count_leaves(t.left) + grow_count_leaves(t.right) }
+        }
+    }
+}
+
+// a copy of the tree with its k-th leaf, counting from the left, given two
+// children; `counter` counts the leaves passed
+fn grow_grown_copy(node: TreeNode, k: i64, counter: mut ref i64) -> TreeNode {
+    match node.left {
+        None => {
+            let leaf = TreeNode { val: 0, left: None, right: None };
+            if *counter == k {
+                leaf.left = Some(TreeNode { val: 0, left: None, right: None });
+                leaf.right = Some(TreeNode { val: 0, left: None, right: None });
+            }
+            *counter += 1;
+            leaf
+        }
+        Some(l) => {
+            let left = grow_grown_copy(l, k, mut counter);
+            let right = grow_grown_copy(node.right.unwrap(), k, mut counter);
+            TreeNode { val: 0, left: Some(left), right: Some(right) }
+        }
+    }
+}
+
+// the tree written in preorder, 1 for a node with children and 0 for a leaf
+fn grow_shape(node: Option[TreeNode]) -> String {
+    match node {
+        None => "".to_string(),
+        Some(t) => {
+            if t.left.is_none() { "0".to_string() } else { "1" + grow_shape(t.left) + grow_shape(t.right) }
+        }
+    }
+}
+
+// ---- the codes arm: every preorder code -----------------------------------
+fn codes_all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut codes: Vec[Vec[u8]] = Vec.new();
+    if n % 2 == 1 {
+        let mut code: Vec[u8] = Vec.new();
+        codes_extend(n, 1, mut code, mut codes);
+    }
+    let mut out: Vec[TreeNode] = Vec.new();
+    for code in codes.iter() {
+        let mut at = 0;
+        out.push(codes_decode(code, mut at));
+    }
+    out
+}
+
+// every code that extends `code` to n symbols, with `owed` subtrees still
+// to write
+fn codes_extend(n: i64, owed: i64, code: mut ref Vec[u8], codes: mut ref Vec[Vec[u8]]) {
+    if owed == 0 {
+        if code.len() == n {
+            codes.push(code.clone());
+        }
+        return;
+    }
+    // the rest needs at least `owed` more symbols, and two more for each 1
+    if code.len() + owed > n {
+        return;
+    }
+    code.push(1);
+    codes_extend(n, owed + 1, mut code, mut codes);
+    code.pop();
+    code.push(0);
+    codes_extend(n, owed - 1, mut code, mut codes);
+    code.pop();
+}
+
+// the tree whose code starts at `at`
+fn codes_decode(code: Vec[u8], at: mut ref i64) -> TreeNode {
+    let symbol = code[*at];
+    *at += 1;
+    let node = TreeNode { val: 0, left: None, right: None };
+    if symbol == 1 {
+        node.left = Some(codes_decode(code, mut at));
+        node.right = Some(codes_decode(code, mut at));
+    }
+    node
+}
+
+fn arm(x: i64, n: i64) -> Vec[TreeNode] {
+    match x {
+        0 => star_all_possible_fbt(n),
+        1 => plain_all_possible_fbt(n),
+        2 => table_all_possible_fbt(n),
+        3 => grow_all_possible_fbt(n),
+        _ => codes_all_possible_fbt(n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every binary tree of n nodes: a root over each split of the other n - 1
+// between a left and a right subtree, any size including none
+fn every_tree(n: i64) -> Vec[Option[TreeNode]] {
+    let mut out: Vec[Option[TreeNode]] = Vec.new();
+    if n == 0 {
+        out.push(None);
+        return out;
+    }
+    for l in 0..n {
+        let lefts = every_tree(l);
+        let rights = every_tree(n - 1 - l);
+        for a in lefts.iter() {
+            for b in rights.iter() {
+                out.push(Some(TreeNode { val: 0, left: *a, right: *b }));
+            }
+        }
+    }
+    out
+}
+
+// does every node have exactly 0 or 2 children?
+fn is_full(node: Option[TreeNode]) -> bool {
+    match node {
+        None => true,
+        Some(t) => t.left.is_some() == t.right.is_some() and is_full(t.left) and is_full(t.right),
+    }
+}
+
+// the full ones among every binary tree of n nodes, in level order, sorted
+fn literal(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in every_tree(n).iter() {
+        if is_full(*t) {
+            out.push(to_level_order(*t));
+        }
+    }
+    out.sort();
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+fn texts(trees: Vec[TreeNode]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in trees.iter() {
+        out.push(to_level_order(Some(*t)));
+    }
+    out.sort();
+    out
+}
+
+// the number of nodes, and whether every value is 0
+fn size(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => 1 + size(t.left) + size(t.right),
+    }
+}
+
+fn all_zero(node: Option[TreeNode]) -> bool {
+    match node {
+        None => true,
+        Some(t) => t.val == 0 and all_zero(t.left) and all_zero(t.right),
+    }
+}
+
+// a copy of the tree with left and right swapped at every node
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(t) => Some(TreeNode { val: t.val, left: mirror(t.right), right: mirror(t.left) }),
+    }
+}
+
+// the Catalan number of full trees with k nodes that have children
+fn catalan(k: i64) -> i64 {
+    let mut c = 1;
+    for i in 0..k {
+        c = c * 2 * (2 * i + 1) / (i + 2);
+    }
+    c
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    // every n LeetCode allows, 1 to 20, for every arm; the statement read
+    // literally up to 9 nodes
+    let mut trees: Vec[Vec[Vec[TreeNode]]] = Vec.new();
+    let mut sorted: Vec[Vec[Vec[String]]] = Vec.new();
+    for x in 0..5 {
+        let mut by_n: Vec[Vec[TreeNode]] = Vec.new();
+        let mut text_by_n: Vec[Vec[String]] = Vec.new();
+        by_n.push(Vec.new());
+        text_by_n.push(Vec.new());
+        for n in 1..21 {
+            let got = arm(x, n);
+            text_by_n.push(texts(got));
+            by_n.push(got);
+        }
+        trees.push(by_n);
+        sorted.push(text_by_n);
+    }
+    let mut total = 0;
+    for n in 1..21 {
+        let want = if n <= 9 { literal(n) } else { Vec.new() };
+        total += sorted[0][n].len();
+        for x in 0..5 {
+            let got = sorted[x][n].clone();
+            // P1: the statement's trees
+            if n <= 9 {
+                check(mut t, 1, got == want);
+            }
+            // P2: every tree has n nodes, all 0, each with 0 or 2 children
+            let mut shaped = true;
+            for tree in trees[x][n].iter() {
+                if size(Some(*tree)) != n or not all_zero(Some(*tree)) or not is_full(Some(*tree)) {
+                    shaped = false;
+                }
+            }
+            check(mut t, 2, shaped);
+            // P3: no tree twice, and the Catalan number of them for odd n,
+            // none for even
+            let mut distinct = true;
+            for i in 1..got.len() {
+                if got[i] == got[i - 1] {
+                    distinct = false;
+                }
+            }
+            let count = if n % 2 == 1 { catalan((n - 1) / 2) } else { 0 };
+            check(mut t, 3, distinct and got.len() == count);
+            // P4: the mirror image of every tree is among them
+            let mut mirrored: Vec[String] = Vec.new();
+            for tree in trees[x][n].iter() {
+                mirrored.push(to_level_order(mirror(Some(*tree))));
+            }
+            mirrored.sort();
+            check(mut t, 4, mirrored == got);
+            // P5: every left subtree is one of the arm's trees of its size,
+            // and the trees whose left subtree has l nodes number the
+            // trees of l times the trees of n - 1 - l
+            let mut known: Set[String] = Set.new();
+            for l in 1..n {
+                for text in sorted[x][l].iter() {
+                    known.insert(text.clone());
+                }
+            }
+            let mut by_left: Vec[i64] = Vec.filled(n + 1, 0);
+            let mut subtrees = true;
+            for tree in trees[x][n].iter() {
+                if tree.left.is_some() {
+                    let l = size(tree.left);
+                    if l < n {
+                        by_left[l] += 1;
+                    } else {
+                        subtrees = false;
+                    }
+                    if not known.contains(to_level_order(tree.left)) {
+                        subtrees = false;
+                    }
+                }
+            }
+            for l in 1..n {
+                if by_left[l] != sorted[x][l].len() * sorted[x][n - 1 - l].len() {
+                    subtrees = false;
+                }
+            }
+            check(mut t, 5, subtrees);
+            // P6: the arm agrees with at least two of the other four
+            let mut agree = 0;
+            for y in 0..5 {
+                if y != x and sorted[y][n] == got {
+                    agree += 1;
+                }
+            }
+            check(mut t, 6, agree >= 2);
+        }
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"n from 1 to 20, {total} trees, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

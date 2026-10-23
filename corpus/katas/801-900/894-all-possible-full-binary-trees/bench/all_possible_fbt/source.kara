@@ -1,0 +1,66 @@
+// LeetCode #894 bench: the ★ arm (recursion with a memo, the trees sharing
+// their subtrees) asked 1,500 times for every full tree of 19 nodes, 4,862
+// of them; each tree is walked in preorder into a checksum.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn all_possible_fbt(n: i64) -> Vec[TreeNode] {
+    let mut memo: Map[i64, Vec[TreeNode]] = Map.new();
+    build(n, mut memo)
+}
+
+fn build(n: i64, memo: mut ref Map[i64, Vec[TreeNode]]) -> Vec[TreeNode] {
+    if memo.contains_key(n) {
+        return memo[n].clone();
+    }
+    let mut out: Vec[TreeNode] = Vec.new();
+    if n == 1 {
+        out.push(TreeNode { val: 0, left: None, right: None });
+    } else if n % 2 == 1 {
+        let mut left = 1;
+        while left < n - 1 {
+            let lefts = build(left, mut memo);
+            let rights = build(n - 1 - left, mut memo);
+            for l in lefts.iter() {
+                for r in rights.iter() {
+                    out.push(TreeNode { val: 0, left: Some(*l), right: Some(*r) });
+                }
+            }
+            left += 2;
+        }
+    }
+    memo.insert(n, out.clone());
+    out
+}
+
+// the tree's preorder code, 1 for a node with children and 0 for a leaf,
+// folded into a hash
+fn code(node: Option[TreeNode], h: i64) -> i64 {
+    match node {
+        None => h,
+        Some(t) => {
+            if t.left.is_none() {
+                h * 3 % 1000000007
+            } else {
+                code(t.right, code(t.left, (h * 3 + 1) % 1000000007))
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut trees = 0;
+    let mut check = 0;
+    for _ in 0..1500 {
+        let all = all_possible_fbt(19);
+        trees += all.len();
+        for t in all.iter() {
+            check = (check * 131 + code(Some(*t), 1)) % 1000000007;
+        }
+    }
+    println(f"1500 calls for 19 nodes: {trees} trees, checksum {check}");
+}
