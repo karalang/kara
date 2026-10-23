@@ -1,0 +1,2875 @@
+== ep01 clean
+> read ep01.vtt
+> show
+  repr <WebVTT file='ep01.vtt' encoding='utf-8'>
+  captions 4, styles 1, total_length 14
+  header_comments ['Translated by the Lisbon desk.\nChecked against the 2024 master.', 'Style for the narrator']
+  footer_comments ['end of reel one']
+  style 0 '::cue(v[voice="Narrator"]) {\n  color: lightblue;\n}' comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:04.500' text='The lighthouse had stood for two hundred years.' identifier='intro'>
+    str 00:00:01.000 00:00:04.500 The lighthouse had stood for two hundred years.
+    seconds 1 4, identifier 'intro', voice 'Narrator'
+    lines ['<v Narrator>The lighthouse had stood for two hundred years.']
+    comments ['second style has no comment\nSTYLE\n::cue(.yellow) { color: yellow; }']
+  caption 1 <Caption start='00:00:05.000' end='00:00:07.250' text="Who's there?\\nAnswer me!" identifier=None>
+    str 00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+    seconds 5 7, identifier None, voice 'Keeper'
+    lines ["<v.loud Keeper>Who's there?", '<c.yellow>Answer me!</c>']
+    comments []
+  caption 2 <Caption start='00:00:06.900' end='00:00:10.000' text='Thunder rolls across the bay.' identifier='storm-1'>
+    str 00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+    seconds 6 10, identifier 'storm-1', voice None
+    lines ['<i>Thunder</i> rolls <00:00:08.000>across the bay.']
+    comments ['The next cue overlaps on purpose.']
+  caption 3 <Caption start='00:00:12.000' end='00:00:15.000' text="I brought the oil, like you asked.\\nYou're late." identifier=None>
+    str 00:00:12.000 00:00:15.000 I brought the oil, like you asked.\nYou're late.
+    seconds 12 15, identifier None, voice 'Mara Silva'
+    lines ['<v Mara Silva>I brought the oil, like you asked.', "<v Keeper>You're late."]
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE
+  |Translated by the Lisbon desk.
+  |Checked against the 2024 master.
+  |
+  |NOTE Style for the narrator
+  |
+  |STYLE
+  |::cue(v[voice="Narrator"]) {
+  |  color: lightblue;
+  |}
+  |
+  |NOTE
+  |second style has no comment
+  |STYLE
+  |::cue(.yellow) { color: yellow; }
+  |
+  |intro
+  |00:00:01.000 --> 00:00:04.500
+  |<v Narrator>The lighthouse had stood for two hundred years.
+  |
+  |00:00:05.000 --> 00:00:07.250
+  |<v.loud Keeper>Who's there?
+  |<c.yellow>Answer me!</c>
+  |
+  |NOTE The next cue overlaps on purpose.
+  |
+  |storm-1
+  |00:00:06.900 --> 00:00:10.000
+  |<i>Thunder</i> rolls <00:00:08.000>across the bay.
+  |
+  |00:00:12.000 --> 00:00:15.000
+  |<v Mara Silva>I brought the oil, like you asked.
+  |<v Keeper>You're late.
+  |
+  |NOTE end of reel one
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:04,500
+  |The lighthouse had stood for two hundred years.
+  |
+  |2
+  |00:00:05,000 --> 00:00:07,250
+  |Who's there?
+  |Answer me!
+  |
+  |3
+  |00:00:06,900 --> 00:00:10,000
+  |Thunder rolls across the bay.
+  |
+  |4
+  |00:00:12,000 --> 00:00:15,000
+  |I brought the oil, like you asked.
+  |You're late.
+> slice 00:00:05.000 00:00:12.000
+  00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+  00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+> slice - 00:00:10.000
+  00:00:01.000 00:00:04.500 The lighthouse had stood for two hundred years.
+  00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+  00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+> slice 00:00:06.000 -
+  00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+  00:00:12.000 00:00:15.000 I brought the oil, like you asked.\nYou're late.
+> slice - -
+  00:00:01.000 00:00:04.500 The lighthouse had stood for two hundred years.
+  00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+  00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+  00:00:12.000 00:00:15.000 I brought the oil, like you asked.\nYou're late.
+
+== ep02 utf-8 BOM and CRLF
+> read ep02.vtt
+> show
+  repr <WebVTT file='ep02.vtt' encoding='utf-8'>
+  captions 3, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:00.500' end='00:00:02.000' text='Morning, harbour master.' identifier='1'>
+    str 00:00:00.500 00:00:02.000 Morning, harbour master.
+    seconds 0 2, identifier '1', voice None
+    lines ['Morning, harbour master.']
+    comments []
+  caption 1 <Caption start='00:00:02.500' end='00:00:05.000' text=' Two boats out, one back. ' identifier='2'>
+    str 00:00:02.500 00:00:05.000  Two boats out, one back. 
+    seconds 2 5, identifier '2', voice None
+    lines [' Two boats out, one back. ']
+    comments []
+  caption 2 <Caption start='00:00:05.500' end='00:00:09.999' text="- Where's the third?\\n- Still out past the reef." identifier='3'>
+    str 00:00:05.500 00:00:09.999 - Where's the third?\n- Still out past the reef.
+    seconds 5 9, identifier '3', voice None
+    lines ["- Where's the third?", '- Still out past the reef.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |1
+  |00:00:00.500 --> 00:00:02.000
+  |Morning, harbour master.
+  |
+  |2
+  |00:00:02.500 --> 00:00:05.000
+  | Two boats out, one back. 
+  |
+  |3
+  |00:00:05.500 --> 00:00:09.999
+  |- Where's the third?
+  |- Still out past the reef.
+  |
+> write srt
+  |1
+  |00:00:00,500 --> 00:00:02,000
+  |Morning, harbour master.
+  |
+  |2
+  |00:00:02,500 --> 00:00:05,000
+  | Two boats out, one back. 
+  |
+  |3
+  |00:00:05,500 --> 00:00:09,999
+  |- Where's the third?
+  |- Still out past the reef.
+
+== ep03_le.vtt BOM
+> read ep03_le.vtt
+> show
+  repr <WebVTT file='ep03_le.vtt' encoding='utf-16-le'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Japanese and French tracks merged by vendor
+  |
+  |00:00:01.000 --> 00:00:03.000
+  |<v Aiko>灯台はまだ光っている。
+  |
+  |00:00:03.500 --> 00:00:06.000
+  |<v Élodie>Le phare brille encore… 🌊
+  |
+  |00:01:00.000 --> 00:01:02.000
+  |Café, s’il vous plaît.
+  |
+
+== ep03_be.vtt BOM
+> read ep03_be.vtt
+> show
+  repr <WebVTT file='ep03_be.vtt' encoding='utf-16-be'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Japanese and French tracks merged by vendor
+  |
+  |00:00:01.000 --> 00:00:03.000
+  |<v Aiko>灯台はまだ光っている。
+  |
+  |00:00:03.500 --> 00:00:06.000
+  |<v Élodie>Le phare brille encore… 🌊
+  |
+  |00:01:00.000 --> 00:01:02.000
+  |Café, s’il vous plaît.
+  |
+
+== ep03_32.vtt BOM
+> read ep03_32.vtt
+> show
+  repr <WebVTT file='ep03_32.vtt' encoding='utf-32-le'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Japanese and French tracks merged by vendor
+  |
+  |00:00:01.000 --> 00:00:03.000
+  |<v Aiko>灯台はまだ光っている。
+  |
+  |00:00:03.500 --> 00:00:06.000
+  |<v Élodie>Le phare brille encore… 🌊
+  |
+  |00:01:00.000 --> 00:01:02.000
+  |Café, s’il vous plaît.
+  |
+
+== ep03_32be.vtt BOM
+> read ep03_32be.vtt
+> show
+  repr <WebVTT file='ep03_32be.vtt' encoding='utf-32-be'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Japanese and French tracks merged by vendor
+  |
+  |00:00:01.000 --> 00:00:03.000
+  |<v Aiko>灯台はまだ光っている。
+  |
+  |00:00:03.500 --> 00:00:06.000
+  |<v Élodie>Le phare brille encore… 🌊
+  |
+  |00:01:00.000 --> 00:01:02.000
+  |Café, s’il vous plaît.
+  |
+
+== ep03 utf-16 without BOM
+> read ep03_nobom.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf0 in position 194: invalid continuation byte
+> read ep03_nobom.vtt utf-16-le
+> show
+  repr <WebVTT file='ep03_nobom.vtt' encoding='utf-8'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+
+== quirks
+> read quirks.vtt
+> show
+  repr <WebVTT file='quirks.vtt' encoding='utf-8'>
+  captions 11, styles 1, total_length 24
+  header_comments []
+  footer_comments []
+  style 0 '::cue(b) {\n  font-weight: bold }\nNOTE trailing comment of the file' comments []
+  caption 0 <Caption start='00:00:03.000' end='00:00:04.000' text='no spaces around the arrow' identifier='timing only above, so that block is dropped'>
+    str 00:00:03.000 00:00:04.000 no spaces around the arrow
+    seconds 3 4, identifier 'timing only above, so that block is dropped', voice None
+    lines ['no spaces around the arrow']
+    comments []
+  caption 1 <Caption start='00:00:05.000' end='00:00:06.000' text='leading spaces before the timing' identifier=None>
+    str 00:00:05.000 00:00:06.000 leading spaces before the timing
+    seconds 5 6, identifier None, voice None
+    lines ['leading spaces before the timing']
+    comments []
+  caption 2 <Caption start='00:00:07.000' end='00:00:08.500' text='no hours' identifier=None>
+    str 00:00:07.000 00:00:08.500 no hours
+    seconds 7 8, identifier None, voice None
+    lines ['no hours']
+    comments []
+  caption 3 <Caption start='01:00:09.000' end='01:00:10.000' text='one-digit hours' identifier=None>
+    str 01:00:09.000 01:00:10.000 one-digit hours
+    seconds 3609 3610, identifier None, voice None
+    lines ['one-digit hours']
+    comments []
+  caption 4 <Caption start='00:00:11.000' end='00:00:12.000' text='a STYLE block with a timing is a cue' identifier='STYLE'>
+    str 00:00:11.000 00:00:12.000 a STYLE block with a timing is a cue
+    seconds 11 12, identifier 'STYLE', voice None
+    lines ['a STYLE block with a timing is a cue']
+    comments []
+  caption 5 <Caption start='00:00:20.000' end='00:00:21.000' text='first payload\\nsecond payload' identifier='cue with a second timing'>
+    str 00:00:20.000 00:00:21.000 first payload\nsecond payload
+    seconds 20 21, identifier 'cue with a second timing', voice None
+    lines ['first payload', 'second payload']
+    comments ['', '']
+  caption 6 <Caption start='00:00:17.000' end='00:00:18.000' text='tags: a  d, bold, open\\nclose, <c.\\nx>' identifier=None>
+    str 00:00:17.000 00:00:18.000 tags: a  d, bold, open\nclose, <c.\nx>
+    seconds 17 18, identifier None, voice None
+    lines ['tags: a < b and c > d, <b>bold</b>, <i>open', 'close</i>, <c.', 'x>']
+    comments []
+  caption 7 <Caption start='00:00:19.000' end='00:00:19.500' text='two spaces then the bracket' identifier=None>
+    str 00:00:19.000 00:00:19.500 two spaces then the bracket
+    seconds 19 19, identifier None, voice ' '
+    lines ['<v  >two spaces then the bracket']
+    comments []
+  caption 8 <Caption start='00:00:22.000' end='00:00:23.000' text='voice without a space' identifier=None>
+    str 00:00:22.000 00:00:23.000 voice without a space
+    seconds 22 23, identifier None, voice None
+    lines ['<vNoSpace>voice without a space']
+    comments []
+  caption 9 <Caption start='00:00:24.000' end='00:00:25.000' text='tab before the name\\nonly the first line counts' identifier=None>
+    str 00:00:24.000 00:00:25.000 tab before the name\nonly the first line counts
+    seconds 24 25, identifier None, voice 'Esme Ng'
+    lines ['<v.first.loud\tEsme Ng>tab before the name', '<v Second>only the first line counts']
+    comments []
+  caption 10 <Caption start='00:00:26.000' end='00:00:27.000' text='\tindented payload   ' identifier=None>
+    str 00:00:26.000 00:00:27.000 \x09indented payload   
+    seconds 26 27, identifier None, voice None
+    lines ['\tindented payload   ']
+    comments []
+> content
+  |WEBVTT
+  |
+  |STYLE
+  |::cue(b) {
+  |  font-weight: bold }
+  |NOTE trailing comment of the file
+  |
+  |timing only above, so that block is dropped
+  |00:00:03.000 --> 00:00:04.000
+  |no spaces around the arrow
+  |
+  |00:00:05.000 --> 00:00:06.000
+  |leading spaces before the timing
+  |
+  |00:00:07.000 --> 00:00:08.500
+  |no hours
+  |
+  |01:00:09.000 --> 01:00:10.000
+  |one-digit hours
+  |
+  |STYLE
+  |00:00:11.000 --> 00:00:12.000
+  |a STYLE block with a timing is a cue
+  |
+  |NOTE 
+  |
+  |NOTE 
+  |
+  |cue with a second timing
+  |00:00:20.000 --> 00:00:21.000
+  |first payload
+  |second payload
+  |
+  |00:00:17.000 --> 00:00:18.000
+  |tags: a < b and c > d, <b>bold</b>, <i>open
+  |close</i>, <c.
+  |x>
+  |
+  |00:00:19.000 --> 00:00:19.500
+  |<v  >two spaces then the bracket
+  |
+  |00:00:22.000 --> 00:00:23.000
+  |<vNoSpace>voice without a space
+  |
+  |00:00:24.000 --> 00:00:25.000
+  |<v.first.loud\x09Esme Ng>tab before the name
+  |<v Second>only the first line counts
+  |
+  |00:00:26.000 --> 00:00:27.000
+  |\x09indented payload   
+  |
+> write srt
+  |1
+  |00:00:03,000 --> 00:00:04,000
+  |no spaces around the arrow
+  |
+  |2
+  |00:00:05,000 --> 00:00:06,000
+  |leading spaces before the timing
+  |
+  |3
+  |00:00:07,000 --> 00:00:08,500
+  |no hours
+  |
+  |4
+  |01:00:09,000 --> 01:00:10,000
+  |one-digit hours
+  |
+  |5
+  |00:00:11,000 --> 00:00:12,000
+  |a STYLE block with a timing is a cue
+  |
+  |6
+  |00:00:20,000 --> 00:00:21,000
+  |first payload
+  |second payload
+  |
+  |7
+  |00:00:17,000 --> 00:00:18,000
+  |tags: a  d, bold, open
+  |close, <c.
+  |x>
+  |
+  |8
+  |00:00:19,000 --> 00:00:19,500
+  |two spaces then the bracket
+  |
+  |9
+  |00:00:22,000 --> 00:00:23,000
+  |voice without a space
+  |
+  |10
+  |00:00:24,000 --> 00:00:25,000
+  |tab before the name
+  |only the first line counts
+  |
+  |11
+  |00:00:26,000 --> 00:00:27,000
+  |\x09indented payload
+> write sbv
+  error ValueError: Format sbv is not supported.
+
+== long
+> read long.vtt
+> show
+  repr <WebVTT file='long.vtt' encoding='utf-8'>
+  captions 9, styles 0, total_length 65
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:00.500' end='00:00:03.000' text='Previously on The Lighthouse.' identifier='c1'>
+    str 00:00:00.500 00:00:03.000 Previously on The Lighthouse.
+    seconds 0 3, identifier 'c1', voice None
+    lines ['Previously on The Lighthouse.']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:08.000' text='Keep the lamp lit.' identifier='c2'>
+    str 00:00:03.500 00:00:08.000 Keep the lamp lit.
+    seconds 3 8, identifier 'c2', voice 'Keeper'
+    lines ['<v Keeper>Keep the lamp lit.']
+    comments []
+  caption 2 <Caption start='00:00:08.500' end='00:00:12.000' text='It crosses the ten-second mark.' identifier='c3'>
+    str 00:00:08.500 00:00:12.000 It crosses the ten-second mark.
+    seconds 8 12, identifier 'c3', voice None
+    lines ['It crosses the ten-second mark.']
+    comments []
+  caption 3 <Caption start='00:00:12.500' end='00:00:19.900' text='Waves.' identifier='c4'>
+    str 00:00:12.500 00:00:19.900 Waves.
+    seconds 12 19, identifier 'c4', voice None
+    lines ['<i>Waves.</i>']
+    comments []
+  caption 4 <Caption start='00:00:20.000' end='00:00:21.000' text='Exactly on a boundary.' identifier='c5'>
+    str 00:00:20.000 00:00:21.000 Exactly on a boundary.
+    seconds 20 21, identifier 'c5', voice None
+    lines ['Exactly on a boundary.']
+    comments []
+  caption 5 <Caption start='00:00:25.000' end='00:00:41.000' text='A long shot of the sea,\\nheld across two segments.' identifier='c6'>
+    str 00:00:25.000 00:00:41.000 A long shot of the sea,\nheld across two segments.
+    seconds 25 41, identifier 'c6', voice None
+    lines ['A long shot of the sea,', 'held across two segments.']
+    comments []
+  caption 6 <Caption start='00:00:42.000' end='00:00:44.000' text='Did you see that?' identifier='c7'>
+    str 00:00:42.000 00:00:44.000 Did you see that?
+    seconds 42 44, identifier 'c7', voice 'Mara Silva'
+    lines ['<v Mara Silva>Did you see that?']
+    comments []
+  caption 7 <Caption start='00:00:50.000' end='00:00:59.999' text='Fifty-nine point nine nine nine.' identifier='c8'>
+    str 00:00:50.000 00:00:59.999 Fifty-nine point nine nine nine.
+    seconds 50 59, identifier 'c8', voice None
+    lines ['Fifty-nine point nine nine nine.']
+    comments []
+  caption 8 <Caption start='00:01:00.000' end='00:01:05.500' text='The end of the cold open.' identifier='c9'>
+    str 00:01:00.000 00:01:05.500 The end of the cold open.
+    seconds 60 65, identifier 'c9', voice None
+    lines ['The end of the cold open.']
+    comments []
+> slice 00:00:20.000 00:00:45.000
+  00:00:20.000 00:00:21.000 Exactly on a boundary.
+  00:00:25.000 00:00:41.000 A long shot of the sea,\nheld across two segments.
+  00:00:42.000 00:00:44.000 Did you see that?
+> slice '' ''
+  00:00:00.500 00:00:03.000 Previously on The Lighthouse.
+  00:00:03.500 00:00:08.000 Keep the lamp lit.
+  00:00:08.500 00:00:12.000 It crosses the ten-second mark.
+  00:00:12.500 00:00:19.900 Waves.
+  00:00:20.000 00:00:21.000 Exactly on a boundary.
+  00:00:25.000 00:00:41.000 A long shot of the sea,\nheld across two segments.
+  00:00:42.000 00:00:44.000 Did you see that?
+  00:00:50.000 00:00:59.999 Fifty-nine point nine nine nine.
+  00:01:00.000 00:01:05.500 The end of the cold open.
+> content
+  |WEBVTT
+  |
+  |c1
+  |00:00:00.500 --> 00:00:03.000
+  |Previously on The Lighthouse.
+  |
+  |c2
+  |00:00:03.500 --> 00:00:08.000
+  |<v Keeper>Keep the lamp lit.
+  |
+  |c3
+  |00:00:08.500 --> 00:00:12.000
+  |It crosses the ten-second mark.
+  |
+  |c4
+  |00:00:12.500 --> 00:00:19.900
+  |<i>Waves.</i>
+  |
+  |c5
+  |00:00:20.000 --> 00:00:21.000
+  |Exactly on a boundary.
+  |
+  |c6
+  |00:00:25.000 --> 00:00:41.000
+  |A long shot of the sea,
+  |held across two segments.
+  |
+  |c7
+  |00:00:42.000 --> 00:00:44.000
+  |<v Mara Silva>Did you see that?
+  |
+  |c8
+  |00:00:50.000 --> 00:00:59.999
+  |Fifty-nine point nine nine nine.
+  |
+  |c9
+  |00:01:00.000 --> 00:01:05.500
+  |The end of the cold open.
+  |
+
+== broken bad_hours.vtt
+> read bad_hours.vtt
+  error MalformedCaptionError: Invalid timestamp '123:00:00.000'
+> buffer bad_hours.vtt vtt
+  error MalformedCaptionError: Invalid timestamp '123:00:00.000'
+> string bad_hours.vtt
+  error MalformedCaptionError: Invalid timestamp '123:00:00.000'
+
+== broken bad_comma.vtt
+> read bad_comma.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:01,000'
+> buffer bad_comma.vtt vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:01,000'
+> string bad_comma.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:01,000'
+
+== broken bad_seconds.vtt
+> read bad_seconds.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:75.000'
+> buffer bad_seconds.vtt vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:75.000'
+> string bad_seconds.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:75.000'
+
+== broken bad_colon.vtt
+> read bad_colon.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:00:500'
+> buffer bad_colon.vtt vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:00:500'
+> string bad_colon.vtt
+  error MalformedCaptionError: Invalid timestamp '00:00:00:500'
+
+== broken noheader.vtt
+> read noheader.vtt
+  error MalformedFileError: Invalid format
+> buffer noheader.vtt vtt
+  error MalformedFileError: Invalid format
+> string noheader.vtt
+  error MalformedFileError: Invalid format
+
+== broken lower.vtt
+> read lower.vtt
+  error MalformedFileError: Invalid format
+> buffer lower.vtt vtt
+  error MalformedFileError: Invalid format
+> string lower.vtt
+  error MalformedFileError: Invalid format
+
+== broken empty.vtt
+> read empty.vtt
+  error MalformedFileError: Invalid format
+> buffer empty.vtt vtt
+  error MalformedFileError: Invalid format
+> string empty.vtt
+  error MalformedFileError: Invalid format
+
+== broken not_vtt.vtt
+> read not_vtt.vtt
+  error MalformedFileError: Invalid format
+> buffer not_vtt.vtt vtt
+  error MalformedFileError: Invalid format
+> string not_vtt.vtt
+  error MalformedFileError: Invalid format
+
+== header only
+> read header_only.vtt
+> show
+  repr <WebVTT file='header_only.vtt' encoding='utf-8'>
+  captions 0, styles 0, total_length 0
+  header_comments []
+  footer_comments []
+> content
+  |WEBVTT
+  |
+> write srt
+  |
+
+== missing file
+> read gone.vtt
+  error FileNotFoundError: [Errno 2] No such file or directory: 'gone.vtt'
+> srt gone.srt
+  error FileNotFoundError: [Errno 2] No such file or directory: 'gone.srt'
+> sbv gone.sbv
+  error FileNotFoundError: [Errno 2] No such file or directory: 'gone.sbv'
+
+== directory
+> read out
+  error IsADirectoryError: [Errno 21] Is a directory: 'out'
+> segment out out 10 0
+  error IsADirectoryError: [Errno 21] Is a directory: 'out'
+
+== old Mac line ends
+> read cr.vtt
+> show
+  repr <WebVTT file='cr.vtt' encoding='utf-8'>
+  captions 1, styles 0, total_length 1
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:03.000' end='00:00:04.000' text='old Mac line ends\\nmixed\\nend' identifier=None>
+    str 00:00:03.000 00:00:04.000 old Mac line ends\nmixed\nend
+    seconds 3 4, identifier None, voice None
+    lines ['old Mac line ends', 'mixed', 'end']
+    comments []
+> buffer cr.vtt vtt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 0, styles 0, total_length 0
+  header_comments []
+  footer_comments []
+> string cr.vtt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 1, styles 0, total_length 1
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:03.000' end='00:00:04.000' text='old Mac line ends\\nmixed\\nend' identifier=None>
+    str 00:00:03.000 00:00:04.000 old Mac line ends\nmixed\nend
+    seconds 3 4, identifier None, voice None
+    lines ['old Mac line ends', 'mixed', 'end']
+    comments []
+
+== other line separators
+> read seps.vtt
+> show
+  repr <WebVTT file='seps.vtt' encoding='utf-8'>
+  captions 2, styles 0, total_length 3
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.000' text='line\x0bsplit\x1cby\u2028splitlines\x85too' identifier=None>
+    str 00:00:01.000 00:00:02.000 line\x0bsplit\x1cby\u2028splitlines\x85too
+    seconds 1 2, identifier None, voice None
+    lines ['line\x0bsplit\x1cby\u2028splitlines\x85too']
+    comments []
+  caption 1 <Caption start='00:00:03.000' end='00:00:04.000' text='form\x0cfeed' identifier=None>
+    str 00:00:03.000 00:00:04.000 form\x0cfeed
+    seconds 3 4, identifier None, voice None
+    lines ['form\x0cfeed']
+    comments []
+> string seps.vtt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 2, styles 0, total_length 3
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.000' text='line\\nsplit\\nby\\nsplitlines\\ntoo' identifier=None>
+    str 00:00:01.000 00:00:02.000 line\nsplit\nby\nsplitlines\ntoo
+    seconds 1 2, identifier None, voice None
+    lines ['line', 'split', 'by', 'splitlines', 'too']
+    comments []
+  caption 1 <Caption start='00:00:03.000' end='00:00:04.000' text='form\\nfeed' identifier=None>
+    str 00:00:03.000 00:00:04.000 form\nfeed
+    seconds 3 4, identifier None, voice None
+    lines ['form', 'feed']
+    comments []
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:02,000
+  |line
+  |split
+  |by
+  |splitlines
+  |too
+  |
+  |2
+  |00:00:03,000 --> 00:00:04,000
+  |form
+  |feed
+
+== latin-1
+> read latin1.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 44: invalid continuation byte
+> read latin1.vtt latin-1
+> show
+  repr <WebVTT file='latin1.vtt' encoding='utf-8'>
+  captions 1, styles 0, total_length 1
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.000' text='Un café, garçon.' identifier=None>
+    str 00:00:01.000 00:00:02.000 Un café, garçon.
+    seconds 1 2, identifier None, voice None
+    lines ['Un café, garçon.']
+    comments []
+> save -
+  file '/work/latin1.vtt'
+  wrote latin1.vtt (57 bytes)
+    |WEBVTT
+    |
+    |00:00:01.000 --> 00:00:02.000
+    |Un café, garçon.
+    |
+> save - latin-1
+  file '/work/latin1.vtt'
+  wrote latin1.vtt (55 bytes)
+    5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30
+    322e3030300a556e20636166e92c20676172e76f6e2e0a
+> string latin1.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 44: invalid continuation byte
+
+== bad bytes
+> read badbyte.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 76: invalid start byte
+> buffer badbyte.vtt vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 4: invalid start byte
+> string badbyte.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 76: invalid start byte
+> read badcont.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 42: invalid continuation byte
+> buffer badcont.vtt vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 4: invalid continuation byte
+> read lonecont.vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 38: invalid start byte
+> buffer lonecont.vtt vtt
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 0: invalid start byte
+> read lonecont.vtt latin-1
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 38: invalid start byte
+
+== buffers
+> buffer ep01.vtt vtt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 4, styles 1, total_length 14
+  header_comments ['Translated by the Lisbon desk.\nChecked against the 2024 master.', 'Style for the narrator']
+  footer_comments ['end of reel one']
+  style 0 '::cue(v[voice="Narrator"]) {\n  color: lightblue;\n}' comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:04.500' text='The lighthouse had stood for two hundred years.' identifier='intro'>
+    str 00:00:01.000 00:00:04.500 The lighthouse had stood for two hundred years.
+    seconds 1 4, identifier 'intro', voice 'Narrator'
+    lines ['<v Narrator>The lighthouse had stood for two hundred years.']
+    comments ['second style has no comment\nSTYLE\n::cue(.yellow) { color: yellow; }']
+  caption 1 <Caption start='00:00:05.000' end='00:00:07.250' text="Who's there?\\nAnswer me!" identifier=None>
+    str 00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+    seconds 5 7, identifier None, voice 'Keeper'
+    lines ["<v.loud Keeper>Who's there?", '<c.yellow>Answer me!</c>']
+    comments []
+  caption 2 <Caption start='00:00:06.900' end='00:00:10.000' text='Thunder rolls across the bay.' identifier='storm-1'>
+    str 00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+    seconds 6 10, identifier 'storm-1', voice None
+    lines ['<i>Thunder</i> rolls <00:00:08.000>across the bay.']
+    comments ['The next cue overlaps on purpose.']
+  caption 3 <Caption start='00:00:12.000' end='00:00:15.000' text="I brought the oil, like you asked.\\nYou're late." identifier=None>
+    str 00:00:12.000 00:00:15.000 I brought the oil, like you asked.\nYou're late.
+    seconds 12 15, identifier None, voice 'Mara Silva'
+    lines ['<v Mara Silva>I brought the oil, like you asked.', "<v Keeper>You're late."]
+    comments []
+> buffer ep02.vtt vtt
+  error MalformedFileError: Invalid format
+> buffer ep07.srt srt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 3, styles 0, total_length 7
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Previously...' identifier=None>
+    str 00:00:01.000 00:00:03.500 Previously...
+    seconds 1 3, identifier None, voice None
+    lines ['<i>Previously...</i>']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='The lamp went out\\nat midnight.' identifier=None>
+    str 00:00:04.000 00:00:06.000 The lamp went out\nat midnight.
+    seconds 4 6, identifier None, voice None
+    lines ['The lamp went out', 'at <b>midnight</b>.']
+    comments []
+  caption 2 <Caption start='00:00:06.500' end='00:00:08.000' text='Trailing spaces stay inside,   \\nbut not at the very end.   ' identifier=None>
+    str 00:00:06.500 00:00:08.000 Trailing spaces stay inside,   \nbut not at the very end.   
+    seconds 6 8, identifier None, voice None
+    lines ['Trailing spaces stay inside,   ', 'but not at the very end.   ']
+    comments []
+> buffer ep09.sbv sbv
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 4, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Welcome back to the harbour channel.' identifier=None>
+    str 00:00:01.000 00:00:03.500 Welcome back to the harbour channel.
+    seconds 1 3, identifier None, voice None
+    lines ['Welcome back to the harbour channel.']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='Today: knots\\nand splices' identifier=None>
+    str 00:00:04.000 00:00:06.000 Today: knots\nand splices
+    seconds 4 6, identifier None, voice None
+    lines ['Today: knots', 'and splices']
+    comments []
+  caption 2 <Caption start='00:00:07.000' end='00:00:08.000' text='>> Two speakers, one block.\\n>> Yes.' identifier=None>
+    str 00:00:07.000 00:00:08.000 >> Two speakers, one block.\n>> Yes.
+    seconds 7 8, identifier None, voice None
+    lines ['>> Two speakers, one block.', '>> Yes.']
+    comments []
+  caption 3 <Caption start='00:00:09.000' end='00:00:10.500' text='Last one.' identifier=None>
+    str 00:00:09.000 00:00:10.500 Last one.
+    seconds 9 10, identifier None, voice None
+    lines ['Last one.']
+    comments []
+> buffer ep01.vtt ass
+  error ValueError: Format ass is not supported.
+> buffer ep01.vtt srt
+  error MalformedFileError: Invalid format
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 4, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Welcome back to the harbour channel.' identifier=None>
+    str 00:00:01.000 00:00:03.500 Welcome back to the harbour channel.
+    seconds 1 3, identifier None, voice None
+    lines ['Welcome back to the harbour channel.']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='Today: knots\\nand splices' identifier=None>
+    str 00:00:04.000 00:00:06.000 Today: knots\nand splices
+    seconds 4 6, identifier None, voice None
+    lines ['Today: knots', 'and splices']
+    comments []
+  caption 2 <Caption start='00:00:07.000' end='00:00:08.000' text='>> Two speakers, one block.\\n>> Yes.' identifier=None>
+    str 00:00:07.000 00:00:08.000 >> Two speakers, one block.\n>> Yes.
+    seconds 7 8, identifier None, voice None
+    lines ['>> Two speakers, one block.', '>> Yes.']
+    comments []
+  caption 3 <Caption start='00:00:09.000' end='00:00:10.500' text='Last one.' identifier=None>
+    str 00:00:09.000 00:00:10.500 Last one.
+    seconds 9 10, identifier None, voice None
+    lines ['Last one.']
+    comments []
+> buffer ep07.srt vtt
+  error MalformedFileError: Invalid format
+> string ep01.vtt
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 4, styles 1, total_length 14
+  header_comments ['Translated by the Lisbon desk.\nChecked against the 2024 master.', 'Style for the narrator']
+  footer_comments ['end of reel one']
+  style 0 '::cue(v[voice="Narrator"]) {\n  color: lightblue;\n}' comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:04.500' text='The lighthouse had stood for two hundred years.' identifier='intro'>
+    str 00:00:01.000 00:00:04.500 The lighthouse had stood for two hundred years.
+    seconds 1 4, identifier 'intro', voice 'Narrator'
+    lines ['<v Narrator>The lighthouse had stood for two hundred years.']
+    comments ['second style has no comment\nSTYLE\n::cue(.yellow) { color: yellow; }']
+  caption 1 <Caption start='00:00:05.000' end='00:00:07.250' text="Who's there?\\nAnswer me!" identifier=None>
+    str 00:00:05.000 00:00:07.250 Who's there?\nAnswer me!
+    seconds 5 7, identifier None, voice 'Keeper'
+    lines ["<v.loud Keeper>Who's there?", '<c.yellow>Answer me!</c>']
+    comments []
+  caption 2 <Caption start='00:00:06.900' end='00:00:10.000' text='Thunder rolls across the bay.' identifier='storm-1'>
+    str 00:00:06.900 00:00:10.000 Thunder rolls across the bay.
+    seconds 6 10, identifier 'storm-1', voice None
+    lines ['<i>Thunder</i> rolls <00:00:08.000>across the bay.']
+    comments ['The next cue overlaps on purpose.']
+  caption 3 <Caption start='00:00:12.000' end='00:00:15.000' text="I brought the oil, like you asked.\\nYou're late." identifier=None>
+    str 00:00:12.000 00:00:15.000 I brought the oil, like you asked.\nYou're late.
+    seconds 12 15, identifier None, voice 'Mara Silva'
+    lines ['<v Mara Silva>I brought the oil, like you asked.', "<v Keeper>You're late."]
+    comments []
+
+== srt ep07
+> srt ep07.srt
+> show
+  repr <WebVTT file='ep07.srt' encoding='utf-8'>
+  captions 3, styles 0, total_length 7
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Previously...' identifier=None>
+    str 00:00:01.000 00:00:03.500 Previously...
+    seconds 1 3, identifier None, voice None
+    lines ['<i>Previously...</i>']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='The lamp went out\\nat midnight.' identifier=None>
+    str 00:00:04.000 00:00:06.000 The lamp went out\nat midnight.
+    seconds 4 6, identifier None, voice None
+    lines ['The lamp went out', 'at <b>midnight</b>.']
+    comments []
+  caption 2 <Caption start='00:00:06.500' end='00:00:08.000' text='Trailing spaces stay inside,   \\nbut not at the very end.   ' identifier=None>
+    str 00:00:06.500 00:00:08.000 Trailing spaces stay inside,   \nbut not at the very end.   
+    seconds 6 8, identifier None, voice None
+    lines ['Trailing spaces stay inside,   ', 'but not at the very end.   ']
+    comments []
+> content
+  |WEBVTT
+  |
+  |00:00:01.000 --> 00:00:03.500
+  |<i>Previously...</i>
+  |
+  |00:00:04.000 --> 00:00:06.000
+  |The lamp went out
+  |at <b>midnight</b>.
+  |
+  |00:00:06.500 --> 00:00:08.000
+  |Trailing spaces stay inside,   
+  |but not at the very end.   
+  |
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:03,500
+  |Previously...
+  |
+  |2
+  |00:00:04,000 --> 00:00:06,000
+  |The lamp went out
+  |at midnight.
+  |
+  |3
+  |00:00:06,500 --> 00:00:08,000
+  |Trailing spaces stay inside,   
+  |but not at the very end.
+> savesrt -
+  file '/work/ep07.srt'
+  wrote ep07.srt (199 bytes)
+    |1
+    |00:00:01,000 --> 00:00:03,500
+    |Previously...
+    |
+    |2
+    |00:00:04,000 --> 00:00:06,000
+    |The lamp went out
+    |at midnight.
+    |
+    |3
+    |00:00:06,500 --> 00:00:08,000
+    |Trailing spaces stay inside,   
+    |but not at the very end.
+> savesrt round.srt
+  file '/work/round.srt'
+  wrote round.srt (199 bytes)
+    |1
+    |00:00:01,000 --> 00:00:03,500
+    |Previously...
+    |
+    |2
+    |00:00:04,000 --> 00:00:06,000
+    |The lamp went out
+    |at midnight.
+    |
+    |3
+    |00:00:06,500 --> 00:00:08,000
+    |Trailing spaces stay inside,   
+    |but not at the very end.
+> srt round.srt
+> show
+  repr <WebVTT file='round.srt' encoding='utf-8'>
+  captions 3, styles 0, total_length 7
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Previously...' identifier=None>
+    str 00:00:01.000 00:00:03.500 Previously...
+    seconds 1 3, identifier None, voice None
+    lines ['Previously...']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='The lamp went out\\nat midnight.' identifier=None>
+    str 00:00:04.000 00:00:06.000 The lamp went out\nat midnight.
+    seconds 4 6, identifier None, voice None
+    lines ['The lamp went out', 'at midnight.']
+    comments []
+  caption 2 <Caption start='00:00:06.500' end='00:00:08.000' text='Trailing spaces stay inside,   \\nbut not at the very end.' identifier=None>
+    str 00:00:06.500 00:00:08.000 Trailing spaces stay inside,   \nbut not at the very end.
+    seconds 6 8, identifier None, voice None
+    lines ['Trailing spaces stay inside,   ', 'but not at the very end.']
+    comments []
+
+== srt ep08
+> srt ep08.srt
+> show
+  repr <WebVTT file='ep08.srt' encoding='utf-8'>
+  captions 3, styles 0, total_length 8
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.000' text='Index with leading zeros.' identifier=None>
+    str 00:00:01.000 00:00:02.000 Index with leading zeros.
+    seconds 1 2, identifier None, voice None
+    lines ['Index with leading zeros.']
+    comments []
+  caption 1 <Caption start='01:00:06.000' end='01:00:07.250' text='Spaces and coordinates after the timing.' identifier=None>
+    str 01:00:06.000 01:00:07.250 Spaces and coordinates after the timing.
+    seconds 3606 3607, identifier None, voice None
+    lines ['Spaces and coordinates after the timing.']
+    comments []
+  caption 2 <Caption start='00:00:08.000' end='00:00:09.000' text='Last one, no blank line after.' identifier=None>
+    str 00:00:08.000 00:00:09.000 Last one, no blank line after.
+    seconds 8 9, identifier None, voice None
+    lines ['Last one, no blank line after.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |00:00:01.000 --> 00:00:02.000
+  |Index with leading zeros.
+  |
+  |01:00:06.000 --> 01:00:07.250
+  |Spaces and coordinates after the timing.
+  |
+  |00:00:08.000 --> 00:00:09.000
+  |Last one, no blank line after.
+  |
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:02,000
+  |Index with leading zeros.
+  |
+  |2
+  |01:00:06,000 --> 01:00:07,250
+  |Spaces and coordinates after the timing.
+  |
+  |3
+  |00:00:08,000 --> 00:00:09,000
+  |Last one, no blank line after.
+> save ep08-converted
+  file '/work/ep08-converted.vtt'
+  wrote ep08-converted.vtt (198 bytes)
+    |WEBVTT
+    |
+    |00:00:01.000 --> 00:00:02.000
+    |Index with leading zeros.
+    |
+    |01:00:06.000 --> 01:00:07.250
+    |Spaces and coordinates after the timing.
+    |
+    |00:00:08.000 --> 00:00:09.000
+    |Last one, no blank line after.
+    |
+
+== srt broken bad_hours.srt
+> srt bad_hours.srt
+  error MalformedCaptionError: Invalid timestamp '100:00:00.000'
+> buffer bad_hours.srt srt
+  error MalformedCaptionError: Invalid timestamp '100:00:00.000'
+
+== srt broken blank_start.srt
+> srt blank_start.srt
+  error MalformedFileError: Invalid format
+> buffer blank_start.srt srt
+  error MalformedFileError: Invalid format
+
+== srt broken no_text.srt
+> srt no_text.srt
+  error MalformedFileError: Invalid format
+> buffer no_text.srt srt
+  error MalformedFileError: Invalid format
+
+== srt broken short.srt
+> srt short.srt
+  error MalformedFileError: Invalid format
+> buffer short.srt srt
+  error MalformedFileError: Invalid format
+
+== srt broken ep01.vtt
+> srt ep01.vtt
+  error MalformedFileError: Invalid format
+> buffer ep01.vtt srt
+  error MalformedFileError: Invalid format
+
+== sbv ep09
+> sbv ep09.sbv
+> show
+  repr <WebVTT file='ep09.sbv' encoding='utf-8'>
+  captions 4, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Welcome back to the harbour channel.' identifier=None>
+    str 00:00:01.000 00:00:03.500 Welcome back to the harbour channel.
+    seconds 1 3, identifier None, voice None
+    lines ['Welcome back to the harbour channel.']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='Today: knots\\nand splices' identifier=None>
+    str 00:00:04.000 00:00:06.000 Today: knots\nand splices
+    seconds 4 6, identifier None, voice None
+    lines ['Today: knots', 'and splices']
+    comments []
+  caption 2 <Caption start='00:00:07.000' end='00:00:08.000' text='>> Two speakers, one block.\\n>> Yes.' identifier=None>
+    str 00:00:07.000 00:00:08.000 >> Two speakers, one block.\n>> Yes.
+    seconds 7 8, identifier None, voice None
+    lines ['>> Two speakers, one block.', '>> Yes.']
+    comments []
+  caption 3 <Caption start='00:00:09.000' end='00:00:10.500' text='Last one.' identifier=None>
+    str 00:00:09.000 00:00:10.500 Last one.
+    seconds 9 10, identifier None, voice None
+    lines ['Last one.']
+    comments []
+> content
+  |WEBVTT
+  |
+  |00:00:01.000 --> 00:00:03.500
+  |Welcome back to the harbour channel.
+  |
+  |00:00:04.000 --> 00:00:06.000
+  |Today: knots
+  |and splices
+  |
+  |00:00:07.000 --> 00:00:08.000
+  |>> Two speakers, one block.
+  |>> Yes.
+  |
+  |00:00:09.000 --> 00:00:10.500
+  |Last one.
+  |
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:03,500
+  |Welcome back to the harbour channel.
+  |
+  |2
+  |00:00:04,000 --> 00:00:06,000
+  |Today: knots
+  |and splices
+  |
+  |3
+  |00:00:07,000 --> 00:00:08,000
+  |>> Two speakers, one block.
+  |>> Yes.
+  |
+  |4
+  |00:00:09,000 --> 00:00:10,500
+  |Last one.
+> sbv ep09_bom.sbv
+> show
+  repr <WebVTT file='ep09_bom.sbv' encoding='utf-8'>
+  captions 4, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.500' text='Welcome back to the harbour channel.' identifier=None>
+    str 00:00:01.000 00:00:03.500 Welcome back to the harbour channel.
+    seconds 1 3, identifier None, voice None
+    lines ['Welcome back to the harbour channel.']
+    comments []
+  caption 1 <Caption start='00:00:04.000' end='00:00:06.000' text='Today: knots\\nand splices' identifier=None>
+    str 00:00:04.000 00:00:06.000 Today: knots\nand splices
+    seconds 4 6, identifier None, voice None
+    lines ['Today: knots', 'and splices']
+    comments []
+  caption 2 <Caption start='00:00:07.000' end='00:00:08.000' text='>> Two speakers, one block.\\n>> Yes.' identifier=None>
+    str 00:00:07.000 00:00:08.000 >> Two speakers, one block.\n>> Yes.
+    seconds 7 8, identifier None, voice None
+    lines ['>> Two speakers, one block.', '>> Yes.']
+    comments []
+  caption 3 <Caption start='00:00:09.000' end='00:00:10.500' text='Last one.' identifier=None>
+    str 00:00:09.000 00:00:10.500 Last one.
+    seconds 9 10, identifier None, voice None
+    lines ['Last one.']
+    comments []
+> buffer ep09_bom.sbv sbv
+  error MalformedFileError: Invalid format
+
+== sbv broken bad.sbv
+> sbv bad.sbv
+  error MalformedCaptionError: Invalid timestamp '0:00:75.000'
+> buffer bad.sbv sbv
+  error MalformedCaptionError: Invalid timestamp '0:00:75.000'
+
+== sbv broken comma.sbv
+> sbv comma.sbv
+  error MalformedCaptionError: Invalid timestamp '0:00:01,000'
+> buffer comma.sbv sbv
+  error MalformedCaptionError: Invalid timestamp '0:00:01,000'
+
+== sbv broken blank.sbv
+> sbv blank.sbv
+  error StopIteration: 
+> buffer blank.sbv sbv
+  error StopIteration: 
+
+== sbv broken one_line.sbv
+> sbv one_line.sbv
+  error MalformedFileError: Invalid format
+> buffer one_line.sbv sbv
+  error MalformedFileError: Invalid format
+
+== sbv broken title.sbv
+> sbv title.sbv
+  error MalformedFileError: Invalid format
+> buffer title.sbv sbv
+  error MalformedFileError: Invalid format
+
+== sbv broken ep01.vtt
+> sbv ep01.vtt
+  error MalformedFileError: Invalid format
+> buffer ep01.vtt sbv
+  error MalformedFileError: Invalid format
+
+== sbv broken empty.vtt
+> sbv empty.vtt
+  error MalformedFileError: Invalid format
+> buffer empty.vtt sbv
+  error MalformedFileError: Invalid format
+
+== save utf-16
+> read ep03_le.vtt
+> save -
+  file '/work/ep03_le.vtt'
+> save out
+  file '/work/out/ep03_le.vtt'
+  wrote out/ep03_le.vtt (462 bytes)
+    fffe5700450042005600540054000a000a004e004f005400450020004a006100
+    700061006e00650073006500200061006e00640020004600720065006e006300
+    6800200074007200610063006b00730020006d00650072006700650064002000
+    620079002000760065006e0064006f0072000a000a00300030003a0030003000
+    3a00300031002e0030003000300020002d002d003e002000300030003a003000
+    30003a00300033002e003000300030000a003c0076002000410069006b006f00
+    3e006f70f0536f307e30603049516330663044308b3002300a000a0030003000
+    3a00300030003a00300033002e0035003000300020002d002d003e0020003000
+    30003a00300030003a00300036002e003000300030000a003c0076002000c900
+    6c006f006400690065003e004c00650020007000680061007200650020006200
+    720069006c006c006500200065006e0063006f0072006500262020003cd80adf
+    0a000a00300030003a00300031003a00300030002e0030003000300020002d00
+    2d003e002000300030003a00300031003a00300032002e003000300030000a00
+    430061006600e9002c0020007300192069006c00200076006f00750073002000
+    70006c006100ee0074002e000a00
+> save out/
+  file '/work/out/ep03_le.vtt'
+> save copy.txt
+  file '/work/copy.txt.vtt'
+  wrote copy.txt.vtt (462 bytes)
+    fffe5700450042005600540054000a000a004e004f005400450020004a006100
+    700061006e00650073006500200061006e00640020004600720065006e006300
+    6800200074007200610063006b00730020006d00650072006700650064002000
+    620079002000760065006e0064006f0072000a000a00300030003a0030003000
+    3a00300031002e0030003000300020002d002d003e002000300030003a003000
+    30003a00300033002e003000300030000a003c0076002000410069006b006f00
+    3e006f70f0536f307e30603049516330663044308b3002300a000a0030003000
+    3a00300030003a00300033002e0035003000300020002d002d003e0020003000
+    30003a00300030003a00300036002e003000300030000a003c0076002000c900
+    6c006f006400690065003e004c00650020007000680061007200650020006200
+    720069006c006c006500200065006e0063006f0072006500262020003cd80adf
+    0a000a00300030003a00300031003a00300030002e0030003000300020002d00
+    2d003e002000300030003a00300031003a00300032002e003000300030000a00
+    430061006600e9002c0020007300192069006c00200076006f00750073002000
+    70006c006100ee0074002e000a00
+> save CAPS.VTT
+  file '/work/CAPS.VTT'
+  wrote CAPS.VTT (462 bytes)
+    fffe5700450042005600540054000a000a004e004f005400450020004a006100
+    700061006e00650073006500200061006e00640020004600720065006e006300
+    6800200074007200610063006b00730020006d00650072006700650064002000
+    620079002000760065006e0064006f0072000a000a00300030003a0030003000
+    3a00300031002e0030003000300020002d002d003e002000300030003a003000
+    30003a00300033002e003000300030000a003c0076002000410069006b006f00
+    3e006f70f0536f307e30603049516330663044308b3002300a000a0030003000
+    3a00300030003a00300033002e0035003000300020002d002d003e0020003000
+    30003a00300030003a00300036002e003000300030000a003c0076002000c900
+    6c006f006400690065003e004c00650020007000680061007200650020006200
+    720069006c006c006500200065006e0063006f0072006500262020003cd80adf
+    0a000a00300030003a00300031003a00300030002e0030003000300020002d00
+    2d003e002000300030003a00300031003a00300032002e003000300030000a00
+    430061006600e9002c0020007300192069006c00200076006f00750073002000
+    70006c006100ee0074002e000a00
+> save out/sub/x.vtt
+  error FileNotFoundError: [Errno 2] No such file or directory: '/work/out/sub/x.vtt'
+> save a utf-8
+  file '/work/a.vtt'
+  wrote a.vtt (264 bytes)
+    |\ufeffWEBVTT
+    |
+    |NOTE Japanese and French tracks merged by vendor
+    |
+    |00:00:01.000 --> 00:00:03.000
+    |<v Aiko>灯台はまだ光っている。
+    |
+    |00:00:03.500 --> 00:00:06.000
+    |<v Élodie>Le phare brille encore… 🌊
+    |
+    |00:01:00.000 --> 00:01:02.000
+    |Café, s’il vous plaît.
+    |
+> save b UTF-8 1
+  file '/work/b.vtt'
+  wrote b.vtt (261 bytes)
+    |WEBVTT
+    |
+    |NOTE Japanese and French tracks merged by vendor
+    |
+    |00:00:01.000 --> 00:00:03.000
+    |<v Aiko>灯台はまだ光っている。
+    |
+    |00:00:03.500 --> 00:00:06.000
+    |<v Élodie>Le phare brille encore… 🌊
+    |
+    |00:01:00.000 --> 00:01:02.000
+    |Café, s’il vous plaît.
+    |
+> save c utf-8 0
+  file '/work/c.vtt'
+  wrote c.vtt (261 bytes)
+    |WEBVTT
+    |
+    |NOTE Japanese and French tracks merged by vendor
+    |
+    |00:00:01.000 --> 00:00:03.000
+    |<v Aiko>灯台はまだ光っている。
+    |
+    |00:00:03.500 --> 00:00:06.000
+    |<v Élodie>Le phare brille encore… 🌊
+    |
+    |00:01:00.000 --> 00:01:02.000
+    |Café, s’il vous plaît.
+    |
+> save d utf-16-be
+  file '/work/d.vtt'
+  wrote d.vtt (462 bytes)
+    feff005700450042005600540054000a000a004e004f005400450020004a0061
+    00700061006e00650073006500200061006e00640020004600720065006e0063
+    006800200074007200610063006b00730020006d006500720067006500640020
+    00620079002000760065006e0064006f0072000a000a00300030003a00300030
+    003a00300031002e0030003000300020002d002d003e002000300030003a0030
+    0030003a00300033002e003000300030000a003c0076002000410069006b006f
+    003e706f53f0306f307e30605149306330663044308b3002000a000a00300030
+    003a00300030003a00300033002e0035003000300020002d002d003e00200030
+    0030003a00300030003a00300036002e003000300030000a003c0076002000c9
+    006c006f006400690065003e004c006500200070006800610072006500200062
+    00720069006c006c006500200065006e0063006f0072006520260020d83cdf0a
+    000a000a00300030003a00300031003a00300030002e0030003000300020002d
+    002d003e002000300030003a00300031003a00300032002e003000300030000a
+    00430061006600e9002c0020007320190069006c00200076006f007500730020
+    0070006c006100ee0074002e000a
+> save e latin-1
+  error UnicodeEncodeError: 'latin-1' codec can't encode characters in position 96-106: ordinal not in range(256)
+  wrote e.vtt (0 bytes)
+    |
+> save f klingon
+  error LookupError: unknown encoding: klingon
+  wrote f.vtt (0 bytes)
+    |
+> save /work/out/abs
+  file '/work/out/abs.vtt'
+  wrote out/abs.vtt (462 bytes)
+    fffe5700450042005600540054000a000a004e004f005400450020004a006100
+    700061006e00650073006500200061006e00640020004600720065006e006300
+    6800200074007200610063006b00730020006d00650072006700650064002000
+    620079002000760065006e0064006f0072000a000a00300030003a0030003000
+    3a00300031002e0030003000300020002d002d003e002000300030003a003000
+    30003a00300033002e003000300030000a003c0076002000410069006b006f00
+    3e006f70f0536f307e30603049516330663044308b3002300a000a0030003000
+    3a00300030003a00300033002e0035003000300020002d002d003e0020003000
+    30003a00300030003a00300036002e003000300030000a003c0076002000c900
+    6c006f006400690065003e004c00650020007000680061007200650020006200
+    720069006c006c006500200065006e0063006f0072006500262020003cd80adf
+    0a000a00300030003a00300031003a00300030002e0030003000300020002d00
+    2d003e002000300030003a00300031003a00300032002e003000300030000a00
+    430061006600e9002c0020007300192069006c00200076006f00750073002000
+    70006c006100ee0074002e000a00
+> show
+  repr <WebVTT file='/work/out/abs.vtt' encoding='utf-16-le'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+> savesrt -
+  file '/work/out/abs.srt'
+  wrote out/abs.srt (189 bytes)
+    |1
+    |00:00:01,000 --> 00:00:03,000
+    |灯台はまだ光っている。
+    |
+    |2
+    |00:00:03,500 --> 00:00:06,000
+    |Le phare brille encore… 🌊
+    |
+    |3
+    |00:01:00,000 --> 00:01:02,000
+    |Café, s’il vous plaît.
+> savesrt out
+  file '/work/out/abs.srt'
+> show
+  repr <WebVTT file='/work/out/abs.srt' encoding='utf-16-le'>
+  captions 3, styles 0, total_length 61
+  header_comments ['Japanese and French tracks merged by vendor']
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:03.000' text='灯台はまだ光っている。' identifier=None>
+    str 00:00:01.000 00:00:03.000 灯台はまだ光っている。
+    seconds 1 3, identifier None, voice 'Aiko'
+    lines ['<v Aiko>灯台はまだ光っている。']
+    comments []
+  caption 1 <Caption start='00:00:03.500' end='00:00:06.000' text='Le phare brille encore… 🌊' identifier=None>
+    str 00:00:03.500 00:00:06.000 Le phare brille encore… 🌊
+    seconds 3 6, identifier None, voice 'Élodie'
+    lines ['<v Élodie>Le phare brille encore… 🌊']
+    comments []
+  caption 2 <Caption start='00:01:00.000' end='00:01:02.000' text='Café, s’il vous plaît.' identifier=None>
+    str 00:01:00.000 00:01:02.000 Café, s’il vous plaît.
+    seconds 60 62, identifier None, voice None
+    lines ['Café, s’il vous plaît.']
+    comments []
+
+== save new
+> new
+> save -
+  error MissingFilenameError: 
+> save out
+  error MissingFilenameError: 
+> savesrt -
+  error MissingFilenameError: 
+> save made
+  file '/work/made.vtt'
+  wrote made.vtt (7 bytes)
+    |WEBVTT
+    |
+> show
+  repr <WebVTT file='/work/made.vtt' encoding='utf-8'>
+  captions 0, styles 0, total_length 0
+  header_comments []
+  footer_comments []
+> content
+  |WEBVTT
+  |
+
+== save names
+> read ep02.vtt
+> save x.y.z
+  file '/work/x.y.z.vtt'
+  wrote x.y.z.vtt (209 bytes)
+    |\ufeffWEBVTT
+    |
+    |1
+    |00:00:00.500 --> 00:00:02.000
+    |Morning, harbour master.
+    |
+    |2
+    |00:00:02.500 --> 00:00:05.000
+    | Two boats out, one back. 
+    |
+    |3
+    |00:00:05.500 --> 00:00:09.999
+    |- Where's the third?
+    |- Still out past the reef.
+    |
+> save .hidden
+  file '/work/.hidden.vtt'
+  wrote .hidden.vtt (209 bytes)
+    |\ufeffWEBVTT
+    |
+    |1
+    |00:00:00.500 --> 00:00:02.000
+    |Morning, harbour master.
+    |
+    |2
+    |00:00:02.500 --> 00:00:05.000
+    | Two boats out, one back. 
+    |
+    |3
+    |00:00:05.500 --> 00:00:09.999
+    |- Where's the third?
+    |- Still out past the reef.
+    |
+> save out/..
+  file '/work/out/../.hidden.vtt'
+> save trailing.
+  file '/work/trailing..vtt'
+  wrote trailing..vtt (209 bytes)
+    |\ufeffWEBVTT
+    |
+    |1
+    |00:00:00.500 --> 00:00:02.000
+    |Morning, harbour master.
+    |
+    |2
+    |00:00:02.500 --> 00:00:05.000
+    | Two boats out, one back. 
+    |
+    |3
+    |00:00:05.500 --> 00:00:09.999
+    |- Where's the third?
+    |- Still out past the reef.
+    |
+> save ./dot
+  file '/work/./dot.vtt'
+  wrote dot.vtt (209 bytes)
+    |\ufeffWEBVTT
+    |
+    |1
+    |00:00:00.500 --> 00:00:02.000
+    |Morning, harbour master.
+    |
+    |2
+    |00:00:02.500 --> 00:00:05.000
+    | Two boats out, one back. 
+    |
+    |3
+    |00:00:05.500 --> 00:00:09.999
+    |- Where's the third?
+    |- Still out past the reef.
+    |
+> show
+  repr <WebVTT file='/work/./dot.vtt' encoding='utf-8'>
+  captions 3, styles 0, total_length 9
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:00.500' end='00:00:02.000' text='Morning, harbour master.' identifier='1'>
+    str 00:00:00.500 00:00:02.000 Morning, harbour master.
+    seconds 0 2, identifier '1', voice None
+    lines ['Morning, harbour master.']
+    comments []
+  caption 1 <Caption start='00:00:02.500' end='00:00:05.000' text=' Two boats out, one back. ' identifier='2'>
+    str 00:00:02.500 00:00:05.000  Two boats out, one back. 
+    seconds 2 5, identifier '2', voice None
+    lines [' Two boats out, one back. ']
+    comments []
+  caption 2 <Caption start='00:00:05.500' end='00:00:09.999' text="- Where's the third?\\n- Still out past the reef." identifier='3'>
+    str 00:00:05.500 00:00:09.999 - Where's the third?\n- Still out past the reef.
+    seconds 5 9, identifier '3', voice None
+    lines ["- Where's the third?", '- Still out past the reef.']
+    comments []
+
+== build
+> new
+> hdr 'Generated by the caption desk'
+> hdr 'two lines\nof header'
+> style '::cue { color: lime }'
+> stylecomment 0 'lime for the pilot'
+> cap 00:00:01.000 00:00:02.500 'Hello\nthere' intro
+> cap - - 'zero' -
+> cap 00:01.000 1:00:02.000 '<v Ana>short forms' -
+> cap 00:00:03.000 00:00:04.000 - ''
+> cap bad 00:00:04.000 'never added' -
+  error MalformedCaptionError: Invalid timestamp 'bad'
+> capcomment 1 'a note about zero'
+> capcomment 1 'and\nanother'
+> ftr 'the end'
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 4, styles 1, total_length 3
+  header_comments ['Generated by the caption desk', 'two lines\nof header']
+  footer_comments ['the end']
+  style 0 '::cue { color: lime }' comments ['lime for the pilot']
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.500' text='Hello\\nthere' identifier='intro'>
+    str 00:00:01.000 00:00:02.500 Hello\nthere
+    seconds 1 2, identifier 'intro', voice None
+    lines ['Hello', 'there']
+    comments []
+  caption 1 <Caption start='00:00:00.000' end='00:00:00.000' text='zero' identifier=None>
+    str 00:00:00.000 00:00:00.000 zero
+    seconds 0 0, identifier None, voice None
+    lines ['zero']
+    comments ['a note about zero', 'and\nanother']
+  caption 2 <Caption start='00:00:01.000' end='01:00:02.000' text='short forms' identifier=None>
+    str 00:00:01.000 01:00:02.000 short forms
+    seconds 1 3602, identifier None, voice 'Ana'
+    lines ['<v Ana>short forms']
+    comments []
+  caption 3 <Caption start='00:00:03.000' end='00:00:04.000' text='' identifier=''>
+    str 00:00:03.000 00:00:04.000 
+    seconds 3 4, identifier '', voice None
+    lines []
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Generated by the caption desk
+  |
+  |NOTE
+  |two lines
+  |of header
+  |
+  |NOTE lime for the pilot
+  |
+  |STYLE
+  |::cue { color: lime }
+  |
+  |intro
+  |00:00:01.000 --> 00:00:02.500
+  |Hello
+  |there
+  |
+  |NOTE a note about zero
+  |
+  |NOTE
+  |and
+  |another
+  |
+  |00:00:00.000 --> 00:00:00.000
+  |zero
+  |
+  |00:00:01.000 --> 01:00:02.000
+  |<v Ana>short forms
+  |
+  |00:00:03.000 --> 00:00:04.000
+  |
+  |NOTE the end
+> write srt
+  |1
+  |00:00:01,000 --> 00:00:02,500
+  |Hello
+  |there
+  |
+  |2
+  |00:00:00,000 --> 00:00:00,000
+  |zero
+  |
+  |3
+  |00:00:01,000 --> 01:00:02,000
+  |short forms
+  |
+  |4
+  |00:00:03,000 --> 00:00:04,000
+> settext 0 'Replaced\r\ntext\u2028here'
+> setstart 1 00:00:00.250
+> setend 1 99:59:59.999
+> setstart 2 00:60:00.000
+  error MalformedCaptionError: Invalid timestamp '00:60:00.000'
+> setend 2 1:2:3
+  error MalformedCaptionError: Invalid timestamp '1:2:3'
+> get 0
+  <Caption start='00:00:01.000' end='00:00:02.500' text='Replaced\\ntext\\nhere' identifier='intro'>
+> get -1
+  <Caption start='00:00:03.000' end='00:00:04.000' text='' identifier=''>
+> get 9
+  error IndexError: list index out of range
+> eq 0 0
+  True
+> eq 0 1
+  False
+> del 3
+> del 7
+  error IndexError: list assignment index out of range
+> show
+  repr <WebVTT file=None encoding='utf-8'>
+  captions 3, styles 1, total_length 3601
+  header_comments ['Generated by the caption desk', 'two lines\nof header']
+  footer_comments ['the end']
+  style 0 '::cue { color: lime }' comments ['lime for the pilot']
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.500' text='Replaced\\ntext\\nhere' identifier='intro'>
+    str 00:00:01.000 00:00:02.500 Replaced\ntext\nhere
+    seconds 1 2, identifier 'intro', voice None
+    lines ['Replaced', 'text', 'here']
+    comments []
+  caption 1 <Caption start='00:00:00.250' end='99:59:59.999' text='zero' identifier=None>
+    str 00:00:00.250 99:59:59.999 zero
+    seconds 0 359999, identifier None, voice None
+    lines ['zero']
+    comments ['a note about zero', 'and\nanother']
+  caption 2 <Caption start='00:00:01.000' end='01:00:02.000' text='short forms' identifier=None>
+    str 00:00:01.000 01:00:02.000 short forms
+    seconds 1 3602, identifier None, voice 'Ana'
+    lines ['<v Ana>short forms']
+    comments []
+> content
+  |WEBVTT
+  |
+  |NOTE Generated by the caption desk
+  |
+  |NOTE
+  |two lines
+  |of header
+  |
+  |NOTE lime for the pilot
+  |
+  |STYLE
+  |::cue { color: lime }
+  |
+  |intro
+  |00:00:01.000 --> 00:00:02.500
+  |Replaced
+  |text
+  |here
+  |
+  |NOTE a note about zero
+  |
+  |NOTE
+  |and
+  |another
+  |
+  |00:00:00.250 --> 99:59:59.999
+  |zero
+  |
+  |00:00:01.000 --> 01:00:02.000
+  |<v Ana>short forms
+  |
+  |NOTE the end
+> savesrt pilot
+  file '/work/pilot.srt'
+  wrote pilot.srt (133 bytes)
+    |1
+    |00:00:01,000 --> 00:00:02,500
+    |Replaced
+    |text
+    |here
+    |
+    |2
+    |00:00:00,250 --> 99:59:59,999
+    |zero
+    |
+    |3
+    |00:00:01,000 --> 01:00:02,000
+    |short forms
+> srt pilot.srt
+> show
+  repr <WebVTT file='pilot.srt' encoding='utf-8'>
+  captions 3, styles 0, total_length 3601
+  header_comments []
+  footer_comments []
+  caption 0 <Caption start='00:00:01.000' end='00:00:02.500' text='Replaced\\ntext\\nhere' identifier=None>
+    str 00:00:01.000 00:00:02.500 Replaced\ntext\nhere
+    seconds 1 2, identifier None, voice None
+    lines ['Replaced', 'text', 'here']
+    comments []
+  caption 1 <Caption start='00:00:00.250' end='99:59:59.999' text='zero' identifier=None>
+    str 00:00:00.250 99:59:59.999 zero
+    seconds 0 359999, identifier None, voice None
+    lines ['zero']
+    comments []
+  caption 2 <Caption start='00:00:01.000' end='01:00:02.000' text='short forms' identifier=None>
+    str 00:00:01.000 01:00:02.000 short forms
+    seconds 1 3602, identifier None, voice None
+    lines ['short forms']
+    comments []
+> segment pilot.srt seg 10 0
+  error MalformedFileError: Invalid format
+> save pilot
+  file '/work/pilot.vtt'
+  wrote pilot.vtt (136 bytes)
+    |WEBVTT
+    |
+    |00:00:01.000 --> 00:00:02.500
+    |Replaced
+    |text
+    |here
+    |
+    |00:00:00.250 --> 99:59:59.999
+    |zero
+    |
+    |00:00:01.000 --> 01:00:02.000
+    |short forms
+    |
+> segment pilot.vtt seg 3600 1
+  error IndexError: list index out of range
+
+== timestamps
+> ts 00:00:00.000
+  00:00:00.000 <Timestamp hours=0 minutes=0 seconds=0 milliseconds=0> 0 (0, 0, 0, 0)
+> ts 1:2:3.456
+  01:02:03.456 <Timestamp hours=1 minutes=2 seconds=3 milliseconds=456> 3723 (1, 2, 3, 456)
+> ts 01:02.345
+  00:01:02.345 <Timestamp hours=0 minutes=1 seconds=2 milliseconds=345> 62 (0, 1, 2, 345)
+> ts 99:59:59.999
+  99:59:59.999 <Timestamp hours=99 minutes=59 seconds=59 milliseconds=999> 359999 (99, 59, 59, 999)
+> ts 00:60:00.000
+  error MalformedCaptionError: Invalid timestamp '00:60:00.000'
+> ts 1:02:03.4567
+  01:02:03.456 <Timestamp hours=1 minutes=2 seconds=3 milliseconds=456> 3723 (1, 2, 3, 456)
+> ts 'abc'
+  error MalformedCaptionError: Invalid timestamp 'abc'
+> ts ' 00:00:01.000'
+  error MalformedCaptionError: Invalid timestamp ' 00:00:01.000'
+> ts 100:00:00.000
+  error MalformedCaptionError: Invalid timestamp '100:00:00.000'
+> ts 0:0.000
+  00:00:00.000 <Timestamp hours=0 minutes=0 seconds=0 milliseconds=0> 0 (0, 0, 0, 0)
+> ts 7.000
+  error MalformedCaptionError: Invalid timestamp '7.000'
+> ts ''
+  error MalformedCaptionError: Invalid timestamp ''
+> cmp 00:00:01.000 00:00:01.000
+  == True, != False, < False, <= True, > False, >= True
+> cmp 00:00:01.000 00:00:02.000
+  == False, != True, < True, <= True, > False, >= False
+> cmp 1:00:00.000 59:59.999
+  == False, != True, < False, <= False, > True, >= True
+> cmp 00:00:10.000 00:00:09.999
+  == False, != True, < False, <= False, > True, >= True
+
+== segment long
+> segment long.vtt hls 10 900000
+  wrote hls/fileSequence0.webvtt (240 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+  wrote hls/fileSequence1.webvtt (164 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+  wrote hls/fileSequence2.webvtt (191 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote hls/fileSequence3.webvtt (137 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote hls/fileSequence4.webvtt (200 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote hls/fileSequence5.webvtt (120 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote hls/fileSequence6.webvtt (113 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote hls/prog_index.m3u8 (356 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:10
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXTINF:30.00000
+    |fileSequence3.webvtt
+    |#EXTINF:30.00000
+    |fileSequence4.webvtt
+    |#EXTINF:30.00000
+    |fileSequence5.webvtt
+    |#EXTINF:30.00000
+    |fileSequence6.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== segment long 7s
+> segment long.vtt hls/a/b 7 0
+  wrote hls/a/b/fileSequence0.webvtt (172 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+  wrote hls/a/b/fileSequence1.webvtt (219 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+  wrote hls/a/b/fileSequence2.webvtt (150 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+  wrote hls/a/b/fileSequence3.webvtt (186 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote hls/a/b/fileSequence4.webvtt (132 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote hls/a/b/fileSequence5.webvtt (132 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote hls/a/b/fileSequence6.webvtt (114 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote hls/a/b/fileSequence7.webvtt (115 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote hls/a/b/fileSequence8.webvtt (172 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote hls/a/b/fileSequence9.webvtt (108 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote hls/a/b/prog_index.m3u8 (469 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:7
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXTINF:30.00000
+    |fileSequence3.webvtt
+    |#EXTINF:30.00000
+    |fileSequence4.webvtt
+    |#EXTINF:30.00000
+    |fileSequence5.webvtt
+    |#EXTINF:30.00000
+    |fileSequence6.webvtt
+    |#EXTINF:30.00000
+    |fileSequence7.webvtt
+    |#EXTINF:30.00000
+    |fileSequence8.webvtt
+    |#EXTINF:30.00000
+    |fileSequence9.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== segment boundaries
+> segment edge.vtt e 10 0
+  error IndexError: list index out of range
+> segment order.vtt o 10 0
+  error IndexError: list index out of range
+> segment zero.vtt z 10 0
+  error IndexError: list index out of range
+> segment ep01.vtt ep 0 0
+  error ZeroDivisionError: division by zero
+> segment ep01.vtt ep -5 0
+  error IndexError: list index out of range
+> segment ep01.vtt ep 1 0
+  error IndexError: list index out of range
+> segment header_only.vtt h 10 0
+  wrote h/prog_index.m3u8 (90 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:10
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXT-X-ENDLIST
+    |
+> segment ep01.vtt ep01.vtt 10 0
+  error FileExistsError: [Errno 17] File exists: 'ep01.vtt'
+
+== cli 1
+> cli 'segment' 'long.vtt' '-o' 'out'
+  wrote out/fileSequence0.webvtt (240 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+  wrote out/fileSequence1.webvtt (164 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+  wrote out/fileSequence2.webvtt (191 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out/fileSequence3.webvtt (137 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out/fileSequence4.webvtt (200 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote out/fileSequence5.webvtt (120 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote out/fileSequence6.webvtt (113 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out/prog_index.m3u8 (356 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:10
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXTINF:30.00000
+    |fileSequence3.webvtt
+    |#EXTINF:30.00000
+    |fileSequence4.webvtt
+    |#EXTINF:30.00000
+    |fileSequence5.webvtt
+    |#EXTINF:30.00000
+    |fileSequence6.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 2
+> cli 'segment' 'long.vtt' '--output' 'out2' '--target-duration' '30' '--mpegts' '0'
+  wrote out2/fileSequence0.webvtt (415 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out2/fileSequence1.webvtt (259 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote out2/fileSequence2.webvtt (108 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out2/prog_index.m3u8 (204 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:30
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 3
+> cli 'segment' 'long.vtt' '-oout3' '-d20' '-m=180000'
+  wrote out3/fileSequence0.webvtt (285 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:180000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+  wrote out3/fileSequence1.webvtt (191 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:180000,LOCAL:00:00:00.000
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out3/fileSequence2.webvtt (264 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:180000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote out3/fileSequence3.webvtt (113 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:180000,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out3/prog_index.m3u8 (242 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:20
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXTINF:30.00000
+    |fileSequence3.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 4
+> cli '-d' '40' 'segment' 'long.vtt' '-o' 'out4'
+  wrote out4/fileSequence0.webvtt (420 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out4/fileSequence1.webvtt (321 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out4/prog_index.m3u8 (166 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:40
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 5
+> cli 'segment' '-o' 'out5' 'long.vtt' '-d' '60'
+  wrote out5/fileSequence0.webvtt (547 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote out5/fileSequence1.webvtt (113 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out5/prog_index.m3u8 (166 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:60
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 6
+> cli 'segment' 'long.vtt' '--out' 'out6' '--target' '45' '--mp' '7'
+  wrote out6/fileSequence0.webvtt (478 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:7,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote out6/fileSequence1.webvtt (172 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:7,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out6/prog_index.m3u8 (166 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:45
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 7
+> cli 'segment' 'long.vtt' '--output=out7' '--target-duration=50'
+  wrote out7/fileSequence0.webvtt (483 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote out7/fileSequence1.webvtt (177 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out7/prog_index.m3u8 (166 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:50
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 8
+> cli 'segment' '-o' 'out8' '-d' '35' '--' 'long.vtt'
+  wrote out8/fileSequence0.webvtt (420 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out8/fileSequence1.webvtt (321 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out8/prog_index.m3u8 (166 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:35
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 9
+> cli 'segment' 'long.vtt' '-o' 'x' '-o' 'out9' '-d' ' 25 '
+  wrote out9/fileSequence0.webvtt (339 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+  wrote out9/fileSequence1.webvtt (200 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote out9/fileSequence2.webvtt (177 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out9/prog_index.m3u8 (204 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:25
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 10
+> cli 'segment' 'long.vtt' '-o' 'out10' '-d' '+1_5'
+  wrote out10/fileSequence0.webvtt (285 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+  wrote out10/fileSequence1.webvtt (236 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+  wrote out10/fileSequence2.webvtt (200 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+  wrote out10/fileSequence3.webvtt (120 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+  wrote out10/fileSequence4.webvtt (113 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out10/prog_index.m3u8 (280 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:15
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXTINF:30.00000
+    |fileSequence1.webvtt
+    |#EXTINF:30.00000
+    |fileSequence2.webvtt
+    |#EXTINF:30.00000
+    |fileSequence3.webvtt
+    |#EXTINF:30.00000
+    |fileSequence4.webvtt
+    |#EXT-X-ENDLIST
+    |
+
+== cli 11
+> cli 'segment' 'long.vtt'
+  error TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'NoneType'
+
+== cli 12
+> cli 'split' 'long.vtt' '-o' 'out'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument command: invalid choice: 'split' (choose from 'segment')
+  exit 2
+
+== cli 13
+> cli 'segment'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: the following arguments are required: PATH
+  exit 2
+
+== cli 14
+> cli
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: the following arguments are required: command, PATH
+  exit 2
+
+== cli 15
+> cli 'segment' 'long.vtt' '-o' 'out' '-d' 'ten'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument -d/--target-duration: invalid int value: 'ten'
+  exit 2
+
+== cli 16
+> cli 'segment' 'long.vtt' '-o' 'out' '-d' '1e3'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument -d/--target-duration: invalid int value: '1e3'
+  exit 2
+
+== cli 17
+> cli 'segment' 'long.vtt' '-o' 'out' '-d'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument -d/--target-duration: expected one argument
+  exit 2
+
+== cli 18
+> cli 'segment' 'long.vtt' '-o' '-x'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument -o/--output: expected one argument
+  exit 2
+
+== cli 19
+> cli 'segment' 'long.vtt' '-o' 'out' 'extra'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: unrecognized arguments: extra
+  exit 2
+
+== cli 20
+> cli 'segment' 'long.vtt' '-o' 'out' '--bogus' 'more'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: unrecognized arguments: --bogus more
+  exit 2
+
+== cli 21
+> cli 'segment' 'long.vtt' '-o' 'out' '-d' '-5'
+  error IndexError: list index out of range
+
+== cli 22
+> cli 'segment' 'long.vtt' '-o' 'out' '-d' '0'
+  error ZeroDivisionError: division by zero
+
+== cli 23
+> cli 'segment' 'gone.vtt' '-o' 'out'
+  error FileNotFoundError: [Errno 2] No such file or directory: 'gone.vtt'
+
+== cli 24
+> cli 'segment' 'gone.vtt'
+  error FileNotFoundError: [Errno 2] No such file or directory: 'gone.vtt'
+
+== cli 25
+> cli '-h'
+  out|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  out|
+  out|Segment WebVTT files.
+  out|
+  out|positional arguments:
+  out|  {segment}             command to perform
+  out|  PATH                  WebVTT file
+  out|
+  out|options:
+  out|  -h, --help            show this help message and exit
+  out|  -o, --output PATH     output directory
+  out|  -d, --target-duration NUMBER
+  out|                        target duration of each segment in seconds, default:
+  out|                        10
+  out|  -m, --mpegts NUMBER   presentation timestamp value, default: 900000
+  exit 0
+
+== cli 26
+> cli 'segment' 'long.vtt' '--help' '-d' 'ten'
+  out|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  out|
+  out|Segment WebVTT files.
+  out|
+  out|positional arguments:
+  out|  {segment}             command to perform
+  out|  PATH                  WebVTT file
+  out|
+  out|options:
+  out|  -h, --help            show this help message and exit
+  out|  -o, --output PATH     output directory
+  out|  -d, --target-duration NUMBER
+  out|                        target duration of each segment in seconds, default:
+  out|                        10
+  out|  -m, --mpegts NUMBER   presentation timestamp value, default: 900000
+  exit 0
+
+== cli 27
+> cli 'segment' 'long.vtt' '-d' 'ten' '--help'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument -d/--target-duration: invalid int value: 'ten'
+  exit 2
+
+== cli 28
+> cli 'split' 'long.vtt' '-d' 'ten'
+  err|usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH
+  err|webvtt: error: argument command: invalid choice: 'split' (choose from 'segment')
+  exit 2
+
+== cli 29
+> cli 'segment' 'long.vtt' '-o' 'out' '-m' '-1' '-d' '70'
+  wrote out/fileSequence0.webvtt (600 bytes)
+    |WEBVTT
+    |X-TIMESTAMP-MAP=MPEGTS:-1,LOCAL:00:00:00.000
+    |
+    |00:00:00.500 --> 00:00:03.000
+    |Previously on The Lighthouse.
+    |
+    |00:00:03.500 --> 00:00:08.000
+    |<v Keeper>Keep the lamp lit.
+    |
+    |00:00:08.500 --> 00:00:12.000
+    |It crosses the ten-second mark.
+    |
+    |00:00:12.500 --> 00:00:19.900
+    |<i>Waves.</i>
+    |
+    |00:00:20.000 --> 00:00:21.000
+    |Exactly on a boundary.
+    |
+    |00:00:25.000 --> 00:00:41.000
+    |A long shot of the sea,
+    |held across two segments.
+    |
+    |00:00:42.000 --> 00:00:44.000
+    |<v Mara Silva>Did you see that?
+    |
+    |00:00:50.000 --> 00:00:59.999
+    |Fifty-nine point nine nine nine.
+    |
+    |00:01:00.000 --> 00:01:05.500
+    |The end of the cold open.
+    |
+  wrote out/prog_index.m3u8 (128 bytes)
+    |#EXTM3U
+    |#EXT-X-TARGETDURATION:70
+    |#EXT-X-VERSION:3
+    |#EXT-X-PLAYLIST-TYPE:VOD
+    |#EXTINF:30.00000
+    |fileSequence0.webvtt
+    |#EXT-X-ENDLIST
+    |
+

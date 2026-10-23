@@ -1,0 +1,2573 @@
+// mini_webvtt: a port of webvtt-py 0.5.1 (MIT, Alejandro Mendez), the
+// WebVTT caption library, run as a streaming service's caption desk. The
+// jobs read, convert, edit, save and segment caption files held in a small
+// in-memory file system rooted at /work. See README.md.
+
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters captions hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn opt_repr(o: ref Option[String]) -> String {
+    match o {
+        Some(s) => py_repr_str(s),
+        None => "None".to_string(),
+    }
+}
+
+// repr() of a list of str.
+fn list_repr(xs: ref Vec[String]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    let mut first = true;
+    for x in xs {
+        if not first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(py_repr_str(x));
+    }
+    out.push(']');
+    out
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// How the output shows text that may hold control characters.
+fn vis(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let n = c as i64;
+        if n < 0x20 or n == 0x7f or (n >= 0x80 and n < 0xa0) {
+            out.push_str(f"\\x{hex_digits(n, 2)}");
+        } else if n == 0x2028 or n == 0x2029 or n == 0xfeff {
+            out.push_str(f"\\u{hex_digits(n, 4)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_line_break(c: char) -> bool {
+    let n = c as i64;
+    (n >= 10 and n <= 13) or (n >= 0x1c and n <= 0x1e) or n == 0x85 or n == 0x2028 or n == 0x2029
+}
+
+// str.splitlines().
+fn py_splitlines(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if is_line_break(c) {
+            out.push(cur);
+            cur = String.new();
+            if c == '\r' and i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// str.split(sep) for a one-character separator: always at least one piece.
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn join_lines(xs: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for i in 0..xs.len() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(xs[i]);
+    }
+    out
+}
+
+// str.isdigit() for ASCII and fullwidth digits.
+fn py_isdigit(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        let n = c as i64;
+        if not ((n >= 0x30 and n <= 0x39) or (n >= 0xff10 and n <= 0xff19)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Python's str.isspace(), which is also what `\s` matches.
+fn py_isspace(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f or n == 0x205f
+        or n == 0x3000
+}
+
+fn chars_str(s: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    for i in a..b {
+        out.push(s[i]);
+    }
+    out
+}
+
+// str.strip(), str.rstrip().
+fn py_strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and py_isspace(cs[a]) {
+        a += 1;
+    }
+    while b > a and py_isspace(cs[b - 1]) {
+        b -= 1;
+    }
+    chars_str(cs, a, b)
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and py_isspace(cs[b - 1]) {
+        b -= 1;
+    }
+    chars_str(cs, 0, b)
+}
+
+fn is_blank(s: ref String) -> bool {
+    for c in s.chars() {
+        if not py_isspace(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// line.rstrip('\n\r')
+fn rstrip_nl(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and (cs[b - 1] == '\n' or cs[b - 1] == '\r') {
+        b -= 1;
+    }
+    chars_str(cs, 0, b)
+}
+
+// f'{n:0<w>d}' for n >= 0.
+fn zpad(n: i64, w: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < w {
+        s = f"0{s}";
+    }
+    s
+}
+
+// Python's // for ints.
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.clone() }
+}
+
+// ------------------------------------------------------------ regular expressions
+//
+// The part of Python's `re` that webvtt-py uses: a backtracking matcher
+// with Python's leftmost, priority-ordered semantics. A pattern compiles to
+// a small program; Split tries its first branch before its second, which
+// is what makes `*` greedy and `*?` lazy. It works on code points, as
+// Python's str does.
+
+// `\w`: str.isalnum() or '_'.
+fn is_word(c: char) -> bool {
+    let n = c as i64;
+    if n < 128 {
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+    }
+    c.is_alphanumeric()
+}
+
+#[derive(Clone)]
+struct Cls {
+    ranges: Vec[(i64, i64)],
+    space: bool,
+    word: bool,
+    neg: bool,
+}
+
+fn cls_has(k: ref Cls, c: char) -> bool {
+    let n = c as i64;
+    let mut hit = (k.space and py_isspace(c)) or (k.word and is_word(c));
+    for r in k.ranges {
+        if n >= r.0 and n <= r.1 {
+            hit = true;
+        }
+    }
+    hit != k.neg
+}
+
+#[derive(Clone)]
+enum Node {
+    Char(Cls),
+    Any,
+    EndZ,
+    Seq(Vec[Node]),
+    Alt(Vec[Node]),
+    Group(i64, Vec[Node]),
+    // body (one node), min, max (-1 for none), greedy
+    Rep(Vec[Node], i64, i64, bool),
+}
+
+#[derive(Clone)]
+enum Inst {
+    Char(Cls),
+    Any,
+    EndZ,
+    Split(i64, i64),
+    Jmp(i64),
+    Save(i64),
+    Match,
+}
+
+struct Re {
+    prog: Vec[Inst],
+    groups: i64,
+    dotall: bool,
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+    groups: i64,
+}
+
+fn one(c: char) -> Cls {
+    let mut r: Vec[(i64, i64)] = Vec.new();
+    r.push((c as i64, c as i64));
+    Cls { ranges: r, space: false, word: false, neg: false }
+}
+
+impl ReParser {
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.cs.len() { Some(self.cs[self.pos]) } else { None }
+    }
+
+    fn eat(mut ref self, c: char) -> bool {
+        if self.pos < self.cs.len() and self.cs[self.pos] == c {
+            self.pos += 1;
+            return true;
+        }
+        false
+    }
+
+    fn alt(mut ref self) -> Node {
+        let mut arms: Vec[Node] = Vec.new();
+        arms.push(self.seq());
+        while self.eat('|') {
+            arms.push(self.seq());
+        }
+        if arms.len() == 1 { arms.remove(0) } else { Node.Alt(arms) }
+    }
+
+    fn seq(mut ref self) -> Node {
+        let mut items: Vec[Node] = Vec.new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some(c) => {
+                    if c == '|' or c == ')' {
+                        break;
+                    }
+                }
+            }
+            let atom = self.atom();
+            items.push(self.quantified(atom));
+        }
+        Node.Seq(items)
+    }
+
+    fn number(mut ref self) -> i64 {
+        let mut n = 0;
+        while self.pos < self.cs.len() and self.cs[self.pos] >= '0' and self.cs[self.pos] <= '9' {
+            n = n * 10 + (self.cs[self.pos] as i64 - 48);
+            self.pos += 1;
+        }
+        n
+    }
+
+    fn quantified(mut ref self, atom: own Node) -> Node {
+        let (lo, hi) = match self.peek() {
+            Some('*') => {
+                self.pos += 1;
+                (0, -1)
+            }
+            Some('+') => {
+                self.pos += 1;
+                (1, -1)
+            }
+            Some('?') => {
+                self.pos += 1;
+                (0, 1)
+            }
+            Some('{') => {
+                self.pos += 1;
+                let lo = self.number();
+                let hi = if self.eat(',') { self.number() } else { lo };
+                self.eat('}');
+                (lo, hi)
+            }
+            _ => return atom,
+        };
+        let greedy = not self.eat('?');
+        let mut body: Vec[Node] = Vec.new();
+        body.push(atom);
+        Node.Rep(body, lo, hi, greedy)
+    }
+
+    fn escape(mut ref self) -> Cls {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == 's' {
+            Cls { ranges: Vec.new(), space: true, word: false, neg: false }
+        } else if c == 'w' {
+            Cls { ranges: Vec.new(), space: false, word: true, neg: false }
+        } else if c == 'd' {
+            let mut r: Vec[(i64, i64)] = Vec.new();
+            r.push((48, 57));
+            Cls { ranges: r, space: false, word: false, neg: false }
+        } else if c == 'n' {
+            one('\n')
+        } else {
+            one(c)
+        }
+    }
+
+    fn class(mut ref self) -> Cls {
+        let neg = self.eat('^');
+        let mut k = Cls { ranges: Vec.new(), space: false, word: false, neg: neg };
+        let mut first = true;
+        while first or self.cs[self.pos] != ']' {
+            first = false;
+            let c = self.cs[self.pos];
+            self.pos += 1;
+            k.ranges.push((c as i64, c as i64));
+        }
+        self.pos += 1;
+        k
+    }
+
+    fn atom(mut ref self) -> Node {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == '(' {
+            let mut capture = true;
+            if self.eat('?') {
+                capture = false;
+                self.eat(':');
+            }
+            let mut idx = 0;
+            if capture {
+                self.groups += 1;
+                idx = self.groups;
+            }
+            let inner = self.alt();
+            self.eat(')');
+            let mut body: Vec[Node] = Vec.new();
+            body.push(inner);
+            if capture { Node.Group(idx, body) } else { Node.Seq(body) }
+        } else if c == '[' {
+            Node.Char(self.class())
+        } else if c == '.' {
+            Node.Any
+        } else if c == '\\' {
+            if self.eat('Z') { Node.EndZ } else { Node.Char(self.escape()) }
+        } else {
+            Node.Char(one(c))
+        }
+    }
+}
+
+fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
+    match n {
+        Node.Char(k) => prog.push(Inst.Char(k.clone())),
+        Node.Any => prog.push(Inst.Any),
+        Node.EndZ => prog.push(Inst.EndZ),
+        Node.Seq(items) => {
+            for x in items {
+                emit_node(mut prog, x);
+            }
+        }
+        Node.Alt(arms) => {
+            let mut jumps: Vec[i64] = Vec.new();
+            for i in 0..arms.len() {
+                if i + 1 < arms.len() {
+                    let split = prog.len();
+                    prog.push(Inst.Split(split + 1, 0));
+                    emit_node(mut prog, arms[i]);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(0));
+                    prog[split] = Inst.Split(split + 1, prog.len());
+                } else {
+                    emit_node(mut prog, arms[i]);
+                }
+            }
+            let end = prog.len();
+            for j in jumps {
+                prog[j] = Inst.Jmp(end);
+            }
+        }
+        Node.Group(idx, body) => {
+            prog.push(Inst.Save(2 * idx));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Save(2 * idx + 1));
+        }
+        Node.Rep(body, lo, hi, greedy) => {
+            for _ in 0..*lo {
+                emit_node(mut prog, body[0]);
+            }
+            if *hi < 0 {
+                // x*: L: split(body, out); body; jmp L
+                let l = prog.len();
+                prog.push(Inst.Split(0, 0));
+                emit_node(mut prog, body[0]);
+                prog.push(Inst.Jmp(l));
+                let out = prog.len();
+                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+            } else {
+                for _ in *lo..*hi {
+                    let l = prog.len();
+                    prog.push(Inst.Split(0, 0));
+                    emit_node(mut prog, body[0]);
+                    let out = prog.len();
+                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                }
+            }
+        }
+    }
+}
+
+fn re_compile(pattern: Str, dotall: bool) -> Re {
+    let mut p = ReParser { cs: pattern.chars().collect(), pos: 0, groups: 0 };
+    let tree = p.alt();
+    let mut prog: Vec[Inst] = Vec.new();
+    prog.push(Inst.Save(0));
+    emit_node(mut prog, tree);
+    prog.push(Inst.Save(1));
+    prog.push(Inst.Match);
+    Re { prog: prog, groups: p.groups, dotall: dotall }
+}
+
+enum Bt {
+    Try(i64, i64),
+    Restore(i64, i64),
+}
+
+// Runs the program at `pos`; the slots hold the group bounds of the first
+// way through that reaches Match.
+fn re_run(re: ref Re, s: ref Vec[char], pos0: i64, slots: mut ref Vec[i64]) -> bool {
+    let mut stack: Vec[Bt] = Vec.new();
+    stack.push(Bt.Try(0, pos0));
+    while stack.len() > 0 {
+        let mut (pc, pos) = match stack.pop().unwrap() {
+            Bt.Restore(k, old) => {
+                slots[k] = old;
+                continue;
+            }
+            Bt.Try(pc, pos) => (pc, pos),
+        };
+        loop {
+            match re.prog[pc] {
+                Inst.Char(k) => {
+                    if pos < s.len() and cls_has(k, s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Any => {
+                    if pos < s.len() and (re.dotall or s[pos] != '\n') {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.EndZ => {
+                    if pos == s.len() { pc += 1; } else { break; }
+                }
+                Inst.Split(a, b) => {
+                    stack.push(Bt.Try(*b, pos));
+                    pc = *a;
+                }
+                Inst.Jmp(a) => pc = *a,
+                Inst.Save(k) => {
+                    stack.push(Bt.Restore(*k, slots[*k]));
+                    slots[*k] = pos;
+                    pc += 1;
+                }
+                Inst.Match => return true,
+            }
+        }
+    }
+    false
+}
+
+// re.match at `pos`: the group bounds (-1 for a group that took no part),
+// or None.
+fn re_match_at(re: ref Re, s: ref Vec[char], pos: i64) -> Option[Vec[i64]] {
+    let mut slots: Vec[i64] = Vec.new();
+    for _ in 0..(2 * re.groups + 2) {
+        slots.push(-1);
+    }
+    if re_run(re, s, pos, mut slots) { Some(slots) } else { None }
+}
+
+fn re_match(re: ref Re, text: ref String) -> Option[Vec[String]] {
+    let s: Vec[char] = text.chars().collect();
+    match re_match_at(re, s, 0) {
+        None => None,
+        Some(m) => {
+            let mut out: Vec[String] = Vec.new();
+            for g in 0..(re.groups + 1) {
+                if m[2 * g] < 0 {
+                    out.push(String.new());
+                } else {
+                    out.push(chars_str(s, m[2 * g], m[2 * g + 1]));
+                }
+            }
+            Some(out)
+        }
+    }
+}
+
+fn re_search(re: ref Re, s: ref Vec[char], from: i64) -> Option[Vec[i64]] {
+    let mut pos = from;
+    while pos <= s.len() {
+        if let Some(m) = re_match_at(re, s, pos) {
+            return Some(m);
+        }
+        pos += 1;
+    }
+    None
+}
+
+// re.sub with an empty replacement.
+fn re_delete(re: ref Re, text: ref String) -> String {
+    let s: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut last = 0;
+    let mut pos = 0;
+    while pos <= s.len() {
+        match re_search(re, s, pos) {
+            None => break,
+            Some(m) => {
+                out.push_str(chars_str(s, last, m[0]));
+                last = m[1];
+                pos = if m[1] == m[0] { m[1] + 1 } else { m[1] };
+            }
+        }
+    }
+    out.push_str(chars_str(s, last, s.len()));
+    out
+}
+
+struct Pats {
+    ts: Re,
+    tags: Re,
+    voice: Re,
+    vtt_cue: Re,
+    comment: Re,
+    style: Re,
+    srt_cue: Re,
+    sbv_cue: Re,
+}
+
+fn patterns() -> Pats {
+    Pats {
+        ts: re_compile("(?:(\\d{1,2}):)?(\\d{1,2}):(\\d{1,2})\\.(\\d{3})", false),
+        tags: re_compile("<.*?>", false),
+        voice: re_compile("<v(?:\\.\\w+)*\\s+([^>]+)>", false),
+        vtt_cue: re_compile("\\s*((?:\\d+:)?\\d{2}:\\d{2}.\\d{3})\\s*-->\\s*((?:\\d+:)?\\d{2}:\\d{2}.\\d{3})", false),
+        comment: re_compile("NOTE\\s(.*?)\\Z", true),
+        style: re_compile("STYLE\\s(.*?)\\Z", true),
+        srt_cue: re_compile("\\s*(\\d+:\\d{2}:\\d{2},\\d{3})\\s*-->\\s*(\\d+:\\d{2}:\\d{2},\\d{3})", false),
+        sbv_cue: re_compile("\\s*(\\d{1,2}:\\d{1,2}:\\d{1,2}.\\d{3}),(\\d{1,2}:\\d{1,2}:\\d{1,2}.\\d{3})", false),
+    }
+}
+
+// ------------------------------------------------------------ models.py
+
+#[derive(Clone)]
+struct Ts {
+    h: i64,
+    m: i64,
+    s: i64,
+    ms: i64,
+}
+
+fn digits_value(s: ref String) -> i64 {
+    let mut n = 0;
+    for c in s.chars() {
+        n = n * 10 + (c as i64 - 48);
+    }
+    n
+}
+
+fn ts_str(t: ref Ts) -> String {
+    f"{zpad(t.h, 2)}:{zpad(t.m, 2)}:{zpad(t.s, 2)}.{zpad(t.ms, 3)}"
+}
+
+fn ts_repr(t: ref Ts) -> String {
+    f"<Timestamp hours={t.h} minutes={t.m} seconds={t.s} milliseconds={t.ms}>"
+}
+
+fn ts_seconds(t: ref Ts) -> i64 {
+    t.h * 3600 + t.m * 60 + t.s
+}
+
+// Tuple order: -1, 0 or 1.
+fn ts_cmp(a: ref Ts, b: ref Ts) -> i64 {
+    let x: Vec[i64] = vec![a.h, a.m, a.s, a.ms];
+    let y: Vec[i64] = vec![b.h, b.m, b.s, b.ms];
+    for i in 0..4 {
+        if x[i] < y[i] {
+            return -1;
+        }
+        if x[i] > y[i] {
+            return 1;
+        }
+    }
+    0
+}
+
+fn bad_ts(value: ref String) -> Exc {
+    exc("MalformedCaptionError", f"Invalid timestamp {py_repr_str(value)}")
+}
+
+// Timestamp.from_string
+fn ts_from(p: ref Pats, value: ref String) -> Result[Ts, Exc] {
+    let g = match re_match(p.ts, value) {
+        Some(g) => g,
+        None => return Err(bad_ts(value)),
+    };
+    let h = if g[1].len() > 0 { digits_value(g[1]) } else { 0 };
+    let t = Ts { h: h, m: digits_value(g[2]), s: digits_value(g[3]), ms: digits_value(g[4]) };
+    if t.m > 59 or t.s > 59 {
+        return Err(bad_ts(value));
+    }
+    Ok(t)
+}
+
+#[derive(Clone)]
+struct Cap {
+    start: Ts,
+    end: Ts,
+    ident: Option[String],
+    lines: Vec[String],
+    comments: Vec[String],
+}
+
+fn truthy(o: ref Option[String]) -> Option[String] {
+    match o {
+        Some(s) => if s.len() > 0 { Some(s.clone()) } else { None },
+        None => None,
+    }
+}
+
+// Caption(start, end, text, identifier): the start setter runs first.
+fn cap_new(p: ref Pats, start: ref Option[String], end: ref Option[String], lines: own Vec[String], ident: own Option[String]) -> Result[Cap, Exc] {
+    let s = match truthy(start) {
+        Some(x) => x,
+        None => "00:00:00.000".to_string(),
+    };
+    let e = match truthy(end) {
+        Some(x) => x,
+        None => "00:00:00.000".to_string(),
+    };
+    let st = ts_from(p, s)?;
+    let en = ts_from(p, e)?;
+    Ok(Cap { start: st, end: en, ident: ident, lines: lines, comments: Vec.new() })
+}
+
+fn cap_raw(c: ref Cap) -> String {
+    join_lines(c.lines)
+}
+
+fn cap_text(p: ref Pats, c: ref Cap) -> String {
+    re_delete(p.tags, cap_raw(c))
+}
+
+fn cleaned(p: ref Pats, c: ref Cap) -> String {
+    let mut out = String.new();
+    for ch in cap_text(p, c).chars() {
+        if ch == '\n' {
+            out.push_str("\\n");
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn cap_repr(p: ref Pats, c: ref Cap) -> String {
+    f"<Caption start={py_repr_str(ts_str(c.start))} end={py_repr_str(ts_str(c.end))} text={py_repr_str(cleaned(p, c))} identifier={opt_repr(c.ident)}>"
+}
+
+fn cap_str(p: ref Pats, c: ref Cap) -> String {
+    f"{ts_str(c.start)} {ts_str(c.end)} {cleaned(p, c)}"
+}
+
+fn cap_voice(p: ref Pats, c: ref Cap) -> Option[String] {
+    if c.lines.len() > 0 and c.lines[0].starts_with("<v") {
+        if let Some(g) = re_match(p.voice, c.lines[0]) {
+            return Some(g[1].clone());
+        }
+    }
+    None
+}
+
+fn cap_eq(a: ref Cap, b: ref Cap) -> bool {
+    let same_id = match (a.ident.clone(), b.ident.clone()) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => true,
+        _ => false,
+    };
+    ts_cmp(a.start, b.start) == 0 and ts_cmp(a.end, b.end) == 0 and cap_raw(a) == cap_raw(b) and same_id
+}
+
+#[derive(Clone)]
+struct Style {
+    lines: Vec[String],
+    comments: Vec[String],
+}
+
+// ------------------------------------------------------------ webvtt.py
+
+#[derive(Clone)]
+struct Vtt {
+    file: Option[String],
+    caps: Vec[Cap],
+    styles: Vec[Style],
+    hdr: Vec[String],
+    ftr: Vec[String],
+    has_bom: bool,
+    encoding: String,
+}
+
+fn vtt_new(file: own Option[String]) -> Vtt {
+    Vtt {
+        file: file,
+        caps: Vec.new(),
+        styles: Vec.new(),
+        hdr: Vec.new(),
+        ftr: Vec.new(),
+        has_bom: false,
+        encoding: "utf-8".to_string(),
+    }
+}
+
+fn vtt_repr(w: ref Vtt) -> String {
+    f"<WebVTT file={opt_repr(w.file)} encoding={py_repr_str(w.encoding)}>"
+}
+
+fn total_length(w: ref Vtt) -> i64 {
+    if w.caps.len() == 0 {
+        return 0;
+    }
+    ts_seconds(w.caps[w.caps.len() - 1].end) - ts_seconds(w.caps[0].start)
+}
+
+// utils.iter_blocks_of_lines
+fn blocks(lines: ref Vec[String]) -> Vec[Vec[String]] {
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut cur: Vec[String] = Vec.new();
+    for line in lines {
+        if not is_blank(line) {
+            cur.push(line.clone());
+        } else if cur.len() > 0 {
+            out.push(cur);
+            cur = Vec.new();
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ vtt.py
+
+fn has_arrow(s: ref String) -> bool {
+    s.contains("-->")
+}
+
+fn cue_valid(p: ref Pats, lines: ref Vec[String]) -> bool {
+    (lines.len() >= 2 and re_match(p.vtt_cue, lines[0]).is_some() and not has_arrow(lines[1]))
+        or (lines.len() >= 3 and not has_arrow(lines[0]) and re_match(p.vtt_cue, lines[1]).is_some()
+            and not has_arrow(lines[2]))
+}
+
+fn comment_from(p: ref Pats, lines: ref Vec[String]) -> String {
+    match re_match(p.comment, join_lines(lines)) {
+        Some(g) => py_strip(g[1]),
+        None => String.new(),
+    }
+}
+
+fn style_valid(lines: ref Vec[String]) -> bool {
+    if lines.len() < 2 or lines[0] != "STYLE" {
+        return false;
+    }
+    for line in lines {
+        if is_blank(line) or has_arrow(line) {
+            return false;
+        }
+    }
+    true
+}
+
+enum Item {
+    C(Cap),
+    S(Style),
+}
+
+// parse_item: a caption, a style or nothing.
+fn parse_item(p: ref Pats, lines: ref Vec[String]) -> Result[Option[Item], Exc] {
+    if cue_valid(p, lines) {
+        let mut ident: Option[String] = None;
+        let mut start: Option[String] = None;
+        let mut end: Option[String] = None;
+        let mut payload: Vec[String] = Vec.new();
+        for line in lines {
+            if let Some(g) = re_match(p.vtt_cue, line) {
+                start = Some(g[1].clone());
+                end = Some(g[2].clone());
+            } else if start.is_none() {
+                ident = Some(line.clone());
+            } else {
+                payload.push(line.clone());
+            }
+        }
+        let c = cap_new(p, start, end, payload, ident)?;
+        return Ok(Some(Item.C(c)));
+    }
+    if style_valid(lines) {
+        let text = match re_match(p.style, join_lines(lines)) {
+            Some(g) => py_strip(g[1]),
+            None => String.new(),
+        };
+        return Ok(Some(Item.S(Style { lines: py_splitlines(text), comments: Vec.new() })));
+    }
+    Ok(None)
+}
+
+fn vtt_parse(p: ref Pats, lines: ref Vec[String], w: mut ref Vtt) -> Result[(), Exc] {
+    if lines.len() == 0 or not lines[0].starts_with("WEBVTT") {
+        return Err(exc("MalformedFileError", "Invalid format".to_string()));
+    }
+    let mut items: Vec[Item] = Vec.new();
+    let mut comments: Vec[String] = Vec.new();
+    for block in blocks(lines) {
+        match parse_item(p, block)? {
+            Some(item) => {
+                let mut it = item;
+                match it {
+                    Item.C(mut ref c) => c.comments = comments,
+                    Item.S(mut ref s) => s.comments = comments,
+                }
+                comments = Vec.new();
+                items.push(it);
+            }
+            None => {
+                if block[0].starts_with("NOTE") {
+                    comments.push(comment_from(p, block));
+                }
+            }
+        }
+    }
+    let mut hdr: Vec[String] = Vec.new();
+    if items.len() > 0 {
+        match items[0] {
+            Item.C(mut ref c) => {
+                hdr = c.comments.clone();
+                c.comments = Vec.new();
+            }
+            Item.S(mut ref s) => {
+                hdr = s.comments.clone();
+                s.comments = Vec.new();
+            }
+        }
+    }
+    for it in items {
+        match it {
+            Item.C(c) => w.caps.push(c.clone()),
+            Item.S(s) => w.styles.push(s.clone()),
+        }
+    }
+    w.hdr = hdr;
+    w.ftr = comments;
+    Ok(())
+}
+
+fn comment_lines(c: ref String, out: mut ref Vec[String]) {
+    let parts = split_on(c, '\n');
+    if parts.len() == 1 {
+        out.push(f"NOTE {c}");
+        return;
+    }
+    out.push("NOTE".to_string());
+    for x in parts {
+        out.push(x.clone());
+    }
+}
+
+// vtt.to_str
+fn vtt_to_str(w: ref Vtt) -> String {
+    let mut out: Vec[String] = Vec.new();
+    out.push("WEBVTT".to_string());
+    for c in w.hdr {
+        out.push(String.new());
+        comment_lines(c, mut out);
+    }
+    for s in w.styles {
+        for c in s.comments {
+            out.push(String.new());
+            comment_lines(c, mut out);
+        }
+        out.push(String.new());
+        out.push("STYLE".to_string());
+        for line in s.lines {
+            out.push(line.clone());
+        }
+    }
+    for cap in w.caps {
+        for c in cap.comments {
+            out.push(String.new());
+            comment_lines(c, mut out);
+        }
+        out.push(String.new());
+        if let Some(id) = truthy(cap.ident) {
+            out.push(id);
+        }
+        out.push(f"{ts_str(cap.start)} --> {ts_str(cap.end)}");
+        for line in cap.lines {
+            out.push(line.clone());
+        }
+    }
+    if w.ftr.len() == 0 {
+        out.push(String.new());
+    }
+    for c in w.ftr {
+        out.push(String.new());
+        comment_lines(c, mut out);
+    }
+    join_lines(out)
+}
+
+// ------------------------------------------------------------ srt.py and sbv.py
+
+fn dots_to_commas(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == '.' { ',' } else { c });
+    }
+    out
+}
+
+fn commas_to_dots(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == ',' { '.' } else { c });
+    }
+    out
+}
+
+fn srt_parse(p: ref Pats, lines: ref Vec[String]) -> Result[Vec[Cap], Exc] {
+    let ok = lines.len() >= 3 and py_isdigit(lines[0]) and has_arrow(lines[1]) and not is_blank(lines[2]);
+    if not ok {
+        return Err(exc("MalformedFileError", "Invalid format".to_string()));
+    }
+    let mut caps: Vec[Cap] = Vec.new();
+    for block in blocks(lines) {
+        if block.len() < 3 or not py_isdigit(block[0]) {
+            continue;
+        }
+        let g = match re_match(p.srt_cue, block[1]) {
+            Some(g) => g,
+            None => continue,
+        };
+        let mut payload: Vec[String] = Vec.new();
+        for i in 2..block.len() {
+            payload.push(block[i].clone());
+        }
+        caps.push(cap_new(p, Some(commas_to_dots(g[1])), Some(commas_to_dots(g[2])), payload, None)?);
+    }
+    Ok(caps)
+}
+
+fn srt_write(p: ref Pats, caps: ref Vec[Cap]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut index = 1;
+    for c in caps {
+        out.push(f"{index}");
+        out.push(f"{dots_to_commas(ts_str(c.start))} --> {dots_to_commas(ts_str(c.end))}");
+        for line in py_splitlines(cap_text(p, c)) {
+            out.push(line.clone());
+        }
+        out.push(String.new());
+        index += 1;
+    }
+    py_rstrip(join_lines(out))
+}
+
+fn sbv_parse(p: ref Pats, lines: ref Vec[String]) -> Result[Vec[Cap], Exc] {
+    if lines.len() < 2 {
+        return Err(exc("MalformedFileError", "Invalid format".to_string()));
+    }
+    let bs = blocks(lines);
+    if bs.len() == 0 {
+        // next() on the exhausted generator
+        return Err(exc("StopIteration", String.new()));
+    }
+    let valid = |b: ref Vec[String]| {
+        b.len() >= 2 and re_match(p.sbv_cue, b[0]).is_some() and not is_blank(b[1])
+    };
+    if not valid(bs[0]) {
+        return Err(exc("MalformedFileError", "Invalid format".to_string()));
+    }
+    let mut caps: Vec[Cap] = Vec.new();
+    for block in bs {
+        if not valid(block) {
+            continue;
+        }
+        let g = re_match(p.sbv_cue, block[0]).unwrap();
+        let mut payload: Vec[String] = Vec.new();
+        for i in 1..block.len() {
+            payload.push(block[i].clone());
+        }
+        caps.push(cap_new(p, Some(g[1].clone()), Some(g[2].clone()), payload, None)?);
+    }
+    Ok(caps)
+}
+
+// ------------------------------------------------------------ codecs
+
+#[derive(Clone)]
+enum Codec {
+    U8,
+    U16(bool),
+    U32(bool),
+    L1,
+}
+
+fn codec_lookup(name: ref String) -> Result[Codec, Exc] {
+    let mut k = String.new();
+    for c in name.chars() {
+        if (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') {
+            k.push(c);
+        } else if c >= 'A' and c <= 'Z' {
+            k.push(char.try_from(c as u32 + 32).unwrap());
+        }
+    }
+    if k == "utf8" {
+        Ok(Codec.U8)
+    } else if k == "utf16le" {
+        Ok(Codec.U16(true))
+    } else if k == "utf16be" {
+        Ok(Codec.U16(false))
+    } else if k == "utf32le" {
+        Ok(Codec.U32(true))
+    } else if k == "utf32be" {
+        Ok(Codec.U32(false))
+    } else if k == "latin1" or k == "iso88591" or k == "l1" {
+        Ok(Codec.L1)
+    } else {
+        Err(exc("LookupError", f"unknown encoding: {name}"))
+    }
+}
+
+fn decode_err(codec: Str, a: i64, b: i64, bytes: ref Vec[u8], reason: Str) -> Exc {
+    if b == a {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode byte 0x{hex_digits(bytes[a] as i64, 2)} in position {a}: {reason}")
+    } else {
+        exc("UnicodeDecodeError", f"'{codec}' codec can't decode bytes in position {a}-{b}: {reason}")
+    }
+}
+
+fn utf8_decode(b: ref Vec[u8]) -> Result[String, Exc] {
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let x = b[i] as i64;
+        if x < 0x80 {
+            i += 1;
+            continue;
+        }
+        let (need, lo, hi) = if x >= 0xc2 and x <= 0xdf {
+            (1, 0x80, 0xbf)
+        } else if x == 0xe0 {
+            (2, 0xa0, 0xbf)
+        } else if x == 0xed {
+            (2, 0x80, 0x9f)
+        } else if x >= 0xe1 and x <= 0xef {
+            (2, 0x80, 0xbf)
+        } else if x == 0xf0 {
+            (3, 0x90, 0xbf)
+        } else if x == 0xf4 {
+            (3, 0x80, 0x8f)
+        } else if x >= 0xf1 and x <= 0xf3 {
+            (3, 0x80, 0xbf)
+        } else {
+            return Err(decode_err("utf-8", i, i, b, "invalid start byte"));
+        };
+        for k in 1..(need + 1) {
+            if i + k >= n {
+                return Err(decode_err("utf-8", i, n - 1, b, "unexpected end of data"));
+            }
+            let y = b[i + k] as i64;
+            let (l, h) = if k == 1 { (lo, hi) } else { (0x80, 0xbf) };
+            if y < l or y > h {
+                return Err(decode_err("utf-8", i, i + k - 1, b, "invalid continuation byte"));
+            }
+        }
+        i += need + 1;
+    }
+    Ok(String.from_utf8(b.clone()).unwrap())
+}
+
+fn push_cp(out: mut ref String, cp: i64) {
+    out.push(char.try_from(cp as u32).unwrap());
+}
+
+fn decode(codec: ref Codec, b: ref Vec[u8]) -> Result[String, Exc] {
+    match codec {
+        Codec.U8 => utf8_decode(b),
+        Codec.L1 => {
+            let mut out = String.new();
+            for x in b {
+                push_cp(mut out, *x as i64);
+            }
+            Ok(out)
+        }
+        Codec.U16(le) => {
+            let name = if *le { "utf-16-le" } else { "utf-16-be" };
+            let mut out = String.new();
+            let mut i = 0;
+            let unit = |j: i64| {
+                if *le { b[j] as i64 + 256 * (b[j + 1] as i64) } else { 256 * (b[j] as i64) + b[j + 1] as i64 }
+            };
+            while i < b.len() {
+                if i + 1 >= b.len() {
+                    return Err(decode_err(name, i, i, b, "truncated data"));
+                }
+                let u = unit(i);
+                if u >= 0xd800 and u <= 0xdbff {
+                    if i + 3 >= b.len() {
+                        return Err(decode_err(name, i, b.len() - 1, b, "unexpected end of data"));
+                    }
+                    let v = unit(i + 2);
+                    if v < 0xdc00 or v > 0xdfff {
+                        return Err(decode_err(name, i, i + 1, b, "illegal UTF-16 surrogate"));
+                    }
+                    push_cp(mut out, 0x10000 + (u - 0xd800) * 1024 + (v - 0xdc00));
+                    i += 4;
+                } else if u >= 0xdc00 and u <= 0xdfff {
+                    return Err(decode_err(name, i, i + 1, b, "illegal encoding"));
+                } else {
+                    push_cp(mut out, u);
+                    i += 2;
+                }
+            }
+            Ok(out)
+        }
+        Codec.U32(le) => {
+            let name = if *le { "utf-32-le" } else { "utf-32-be" };
+            let mut out = String.new();
+            let mut i = 0;
+            while i < b.len() {
+                if i + 3 >= b.len() {
+                    return Err(decode_err(name, i, b.len() - 1, b, "truncated data"));
+                }
+                let mut u = 0;
+                for k in 0..4 {
+                    let j = if *le { i + 3 - k } else { i + k };
+                    u = u * 256 + b[j] as i64;
+                }
+                if u > 0x10ffff {
+                    return Err(decode_err(name, i, i + 3, b, "code point not in range(0x110000)"));
+                }
+                if u >= 0xd800 and u <= 0xdfff {
+                    return Err(decode_err(name, i, i + 3, b, "code point in surrogate code point range(0xd800, 0xe000)"));
+                }
+                push_cp(mut out, u);
+                i += 4;
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn char_esc(n: i64) -> String {
+    if n < 0x100 {
+        f"\\x{hex_digits(n, 2)}"
+    } else if n < 0x10000 {
+        f"\\u{hex_digits(n, 4)}"
+    } else {
+        f"\\U{hex_digits(n, 8)}"
+    }
+}
+
+fn push_unit(out: mut ref Vec[u8], u: i64, le: bool) {
+    if le {
+        out.push((u % 256) as u8);
+        out.push((u / 256) as u8);
+    } else {
+        out.push((u / 256) as u8);
+        out.push((u % 256) as u8);
+    }
+}
+
+fn encode(codec: ref Codec, s: ref String) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    match codec {
+        Codec.U8 => {
+            for x in s.bytes() {
+                out.push(x);
+            }
+        }
+        Codec.L1 => {
+            let cs: Vec[char] = s.chars().collect();
+            let mut i = 0;
+            while i < cs.len() {
+                let n = cs[i] as i64;
+                if n > 255 {
+                    let mut j = i;
+                    while j < cs.len() and cs[j] as i64 > 255 {
+                        j += 1;
+                    }
+                    let msg = if j == i + 1 {
+                        f"'latin-1' codec can't encode character '{char_esc(n)}' in position {i}: ordinal not in range(256)"
+                    } else {
+                        f"'latin-1' codec can't encode characters in position {i}-{j - 1}: ordinal not in range(256)"
+                    };
+                    return Err(exc("UnicodeEncodeError", msg));
+                }
+                out.push(n as u8);
+                i += 1;
+            }
+        }
+        Codec.U16(le) => {
+            for c in s.chars() {
+                let n = c as i64;
+                if n >= 0x10000 {
+                    let v = n - 0x10000;
+                    push_unit(mut out, 0xd800 + v / 1024, *le);
+                    push_unit(mut out, 0xdc00 + v % 1024, *le);
+                } else {
+                    push_unit(mut out, n, *le);
+                }
+            }
+        }
+        Codec.U32(le) => {
+            for c in s.chars() {
+                let n = c as i64;
+                let bs: Vec[i64] = vec![n / 16777216, (n / 65536) % 256, (n / 256) % 256, n % 256];
+                for k in 0..4 {
+                    out.push((if *le { bs[3 - k] } else { bs[k] }) as u8);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+// utils.CODEC_BOMS, in its order. The byte lists are bound with their type
+// first because a `vec![..]` of integer literals inside a tuple is typed
+// Vec[i64] even where (String, Vec[u8]) is expected (B-2026-10-23-7).
+fn codec_boms() -> Vec[(String, Vec[u8])] {
+    let mut v: Vec[(String, Vec[u8])] = Vec.new();
+    let u8bom: Vec[u8] = vec![0xef, 0xbb, 0xbf];
+    let u32le: Vec[u8] = vec![0xff, 0xfe, 0, 0];
+    let u32be: Vec[u8] = vec![0, 0, 0xfe, 0xff];
+    let u16le: Vec[u8] = vec![0xff, 0xfe];
+    let u16be: Vec[u8] = vec![0xfe, 0xff];
+    v.push(("utf-8".to_string(), u8bom));
+    v.push(("utf-32-le".to_string(), u32le));
+    v.push(("utf-32-be".to_string(), u32be));
+    v.push(("utf-16-le".to_string(), u16le));
+    v.push(("utf-16-be".to_string(), u16be));
+    v
+}
+
+fn detect_bom(data: ref Vec[u8]) -> Option[(String, i64)] {
+    for (enc, bom) in codec_boms() {
+        let mut hit = data.len() >= bom.len();
+        if hit {
+            for i in 0..bom.len() {
+                if data[i] != bom[i] {
+                    hit = false;
+                }
+            }
+        }
+        if hit {
+            return Some((enc.clone(), bom.len()));
+        }
+    }
+    None
+}
+
+// A text-mode file's lines: universal newlines, then rstrip('\n\r').
+fn text_lines(text: ref String) -> Vec[String] {
+    let mut t = String.new();
+    let cs: Vec[char] = text.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\r' {
+            t.push('\n');
+            if i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            t.push(cs[i]);
+        }
+        i += 1;
+    }
+    let mut out = split_on(t, '\n');
+    if out[out.len() - 1].len() == 0 {
+        out.pop();
+    }
+    out
+}
+
+// ------------------------------------------------------------ the file system
+
+struct World {
+    out: String,
+    files: Map[String, Vec[u8]],
+    dirs: Map[String, bool],
+}
+
+fn emit(w: mut ref World, s: ref String) {
+    w.out.push_str(s);
+    w.out.push('\n');
+}
+
+// An absolute, normalized path, the cwd being /work.
+fn norm_path(path: ref String) -> String {
+    let full = if path.starts_with("/") { path.clone() } else { f"/work/{path}" };
+    let mut parts: Vec[String] = Vec.new();
+    for x in split_on(full, '/') {
+        if x.len() == 0 or x == "." {
+            continue;
+        }
+        if x == ".." {
+            if parts.len() > 0 {
+                parts.pop();
+            }
+            continue;
+        }
+        parts.push(x.clone());
+    }
+    let mut out = String.new();
+    for x in parts {
+        out.push('/');
+        out.push_str(x);
+    }
+    if out.len() == 0 { "/".to_string() } else { out }
+}
+
+fn parent_of(abs: ref String) -> String {
+    let cs: Vec[char] = abs.chars().collect();
+    let mut i = cs.len() - 1;
+    while i > 0 and cs[i] != '/' {
+        i -= 1;
+    }
+    if i == 0 { "/".to_string() } else { chars_str(cs, 0, i) }
+}
+
+fn is_dir(w: ref World, path: ref String) -> bool {
+    w.dirs.contains_key(norm_path(path))
+}
+
+fn errno(kind: Str, num: i64, text: Str, path: ref String) -> Exc {
+    exc(kind, f"[Errno {num}] {text}: {py_repr_str(path)}")
+}
+
+// open(path, 'rb').read()
+fn fs_read(w: ref World, path: ref String) -> Result[Vec[u8], Exc] {
+    let abs = norm_path(path);
+    if w.dirs.contains_key(abs) {
+        return Err(errno("IsADirectoryError", 21, "Is a directory", path));
+    }
+    match w.files.get(abs) {
+        Some(b) => Ok(b.clone()),
+        None => Err(errno("FileNotFoundError", 2, "No such file or directory", path)),
+    }
+}
+
+// open(path, 'w'): creates or truncates the file.
+fn fs_create(w: mut ref World, path: ref String) -> Result[(), Exc] {
+    let abs = norm_path(path);
+    if w.dirs.contains_key(abs) {
+        return Err(errno("IsADirectoryError", 21, "Is a directory", path));
+    }
+    if not w.dirs.contains_key(parent_of(abs)) {
+        return Err(errno("FileNotFoundError", 2, "No such file or directory", path));
+    }
+    w.files.insert(abs, Vec.new());
+    Ok(())
+}
+
+fn fs_put(w: mut ref World, path: ref String, data: own Vec[u8]) {
+    w.files.insert(norm_path(path), data);
+}
+
+// os.makedirs(path, exist_ok=True)
+fn fs_makedirs(w: mut ref World, path: ref String) -> Result[(), Exc] {
+    let abs = norm_path(path);
+    if w.dirs.contains_key(abs) {
+        return Ok(());
+    }
+    if w.files.contains_key(abs) {
+        return Err(errno("FileExistsError", 17, "File exists", path));
+    }
+    let mut cur = String.new();
+    for x in split_on(abs, '/') {
+        if x.len() == 0 {
+            continue;
+        }
+        cur.push('/');
+        cur.push_str(x);
+        w.dirs.insert(cur.clone(), true);
+    }
+    Ok(())
+}
+
+// str(pathlib.Path(p))
+fn path_str(p: ref String) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in split_on(p, '/') {
+        if x.len() > 0 and x != "." {
+            parts.push(x.clone());
+        }
+    }
+    let mut out = if p.starts_with("/") { "/".to_string() } else { String.new() };
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(parts[i]);
+    }
+    if out.len() == 0 { ".".to_string() } else { out }
+}
+
+// os.path.join with two parts.
+fn path_join(a: ref String, b: ref String) -> String {
+    if b.starts_with("/") {
+        b.clone()
+    } else if a.len() == 0 or a.ends_with("/") {
+        f"{a}{b}"
+    } else {
+        f"{a}/{b}"
+    }
+}
+
+// os.path.splitext(p)[0]
+fn splitext_root(p: ref String) -> String {
+    let cs: Vec[char] = p.chars().collect();
+    let mut sep = -1;
+    let mut dot = -1;
+    for i in 0..cs.len() {
+        if cs[i] == '/' {
+            sep = i;
+        }
+        if cs[i] == '.' {
+            dot = i;
+        }
+    }
+    if dot > sep {
+        let mut k = sep + 1;
+        while k < dot {
+            if cs[k] != '.' {
+                return chars_str(cs, 0, dot);
+            }
+            k += 1;
+        }
+    }
+    p.clone()
+}
+
+fn basename(p: ref String) -> String {
+    let cs: Vec[char] = p.chars().collect();
+    let mut sep = -1;
+    for i in 0..cs.len() {
+        if cs[i] == '/' {
+            sep = i;
+        }
+    }
+    chars_str(cs, sep + 1, cs.len())
+}
+
+// ------------------------------------------------------------ reading
+
+struct Text {
+    lines: Vec[String],
+    bom: Option[String],
+}
+
+// utils.FileWrapper: BOM detection, then the file read in text mode.
+fn read_text(w: ref World, path: ref String, encoding: ref Option[String]) -> Result[Text, Exc] {
+    let data = fs_read(w, path)?;
+    let bom = detect_bom(data);
+    let (enc, skip) = match bom {
+        Some((ref e, n)) => (e.clone(), n),
+        None => match truthy(encoding) {
+            Some(e) => (e, 0),
+            None => ("utf-8".to_string(), 0),
+        },
+    };
+    let codec = codec_lookup(enc)?;
+    let text = decode(codec, data[skip..].to_vec())?;
+    let b = match bom {
+        Some((e, _)) => Some(e.clone()),
+        None => None,
+    };
+    Ok(Text { lines: text_lines(text), bom: b })
+}
+
+fn webvtt_read(p: ref Pats, w: ref World, path: ref String, encoding: ref Option[String]) -> Result[Vtt, Exc] {
+    let t = read_text(w, path, encoding)?;
+    let mut v = vtt_new(Some(path.clone()));
+    vtt_parse(p, t.lines, mut v)?;
+    if let Some(e) = t.bom {
+        v.encoding = e;
+        v.has_bom = true;
+    }
+    Ok(v)
+}
+
+// The lines of a BytesIO, each decoded as UTF-8 on its own.
+fn buffer_lines(data: ref Vec[u8]) -> Result[Vec[String], Exc] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for x in data {
+        cur.push(*x);
+        if *x == 10 {
+            out.push(rstrip_nl(utf8_decode(cur)?));
+            cur = Vec.new();
+        }
+    }
+    if cur.len() > 0 {
+        out.push(rstrip_nl(utf8_decode(cur)?));
+    }
+    Ok(out)
+}
+
+fn unsupported(fmt: ref String) -> Exc {
+    exc("ValueError", f"Format {fmt} is not supported.")
+}
+
+// ------------------------------------------------------------ saving
+
+// WebVTT._get_destination_file
+fn destination(w: ref World, v: ref Vtt, dest: ref Option[String], ext: Str) -> Result[String, Exc] {
+    let missing = exc("MissingFilenameError", String.new());
+    let file = truthy(v.file);
+    let d = match truthy(dest) {
+        Some(d) => d,
+        None => match file {
+            Some(ref f) => f"{splitext_root(f)}.{ext}",
+            None => return Err(missing),
+        },
+    };
+    let mut target = path_join("/work".to_string(), d);
+    if is_dir(w, target) {
+        return match file {
+            Some(f) => Ok(path_join(target, f"{splitext_root(basename(f))}.{ext}")),
+            None => Err(missing),
+        };
+    }
+    let cs: Vec[char] = target.chars().collect();
+    let tail = chars_str(cs, if cs.len() > 4 { cs.len() - 4 } else { 0 }, cs.len()).to_lowercase();
+    if tail != f".{ext}" {
+        target = f"{target}.{ext}";
+    }
+    Ok(target)
+}
+
+// open(file, 'w', encoding=...) and the writes into it.
+fn write_text(w: mut ref World, file: ref String, encoding: ref String, bom: bool, text: ref String) -> Result[(), Exc] {
+    fs_create(mut w, file)?;
+    let codec = codec_lookup(encoding)?;
+    let mut data: Vec[u8] = Vec.new();
+    let mut known = false;
+    for (name, _) in codec_boms() {
+        if name == *encoding {
+            known = true;
+        }
+    }
+    if bom and known {
+        for x in encode(codec, "\u{feff}".to_string())? {
+            data.push(x);
+        }
+    }
+    for x in encode(codec, text)? {
+        data.push(x);
+    }
+    fs_put(mut w, file, data);
+    Ok(())
+}
+
+fn save(p: ref Pats, w: mut ref World, v: mut ref Vtt, dest: ref Option[String], enc: ref Option[String], add_bom: ref Option[bool]) -> Result[(), Exc] {
+    let file = destination(w, v, dest, "vtt")?;
+    v.file = Some(file.clone());
+    let encoding = match truthy(enc) {
+        Some(e) => e,
+        None => v.encoding.clone(),
+    };
+    let bom = match add_bom {
+        Some(b) => *b,
+        None => v.has_bom,
+    };
+    write_text(mut w, file, encoding, bom, vtt_to_str(v))
+}
+
+fn save_srt(p: ref Pats, w: mut ref World, v: mut ref Vtt, dest: ref Option[String], enc: ref String) -> Result[(), Exc] {
+    let file = destination(w, v, dest, "srt")?;
+    v.file = Some(file.clone());
+    write_text(mut w, file, enc, false, srt_write(p, v.caps))
+}
+
+// ------------------------------------------------------------ segmenter.py
+
+fn py_index(i: i64, n: i64) -> Option[i64] {
+    let j = if i < 0 { i + n } else { i };
+    if j < 0 or j >= n { None } else { Some(j) }
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "list index out of range".to_string())
+}
+
+fn slice_segments(caps: ref Vec[Cap], seconds: i64) -> Result[Vec[Vec[i64]], Exc] {
+    let zero = exc("ZeroDivisionError", "division by zero".to_string());
+    let total = if caps.len() == 0 {
+        0
+    } else {
+        if seconds == 0 {
+            return Err(zero);
+        }
+        0 - floor_div(0 - ts_seconds(caps[caps.len() - 1].end), seconds)
+    };
+    let mut segs: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..total {
+        segs.push(Vec.new());
+    }
+    let n = segs.len();
+    for ci in 0..caps.len() {
+        if seconds == 0 {
+            return Err(zero);
+        }
+        let a = floor_div(ts_seconds(caps[ci].start), seconds);
+        match py_index(a, n) {
+            Some(j) => segs[j].push(ci),
+            None => return Err(index_error()),
+        }
+        let b = floor_div(ts_seconds(caps[ci].end), seconds);
+        if b > a {
+            for i in (a + 1)..(b + 1) {
+                match py_index(i, n) {
+                    Some(j) => segs[j].push(ci),
+                    None => return Err(index_error()),
+                }
+            }
+        }
+    }
+    Ok(segs)
+}
+
+fn segment(p: ref Pats, w: mut ref World, path: ref String, output: ref Option[String], seconds: i64, mpegts: i64) -> Result[(), Exc] {
+    let v = webvtt_read(p, w, path, None)?;
+    let folder = match output {
+        Some(o) => path_str(o),
+        None => {
+            return Err(exc("TypeError", "argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'NoneType'".to_string()));
+        }
+    };
+    fs_makedirs(mut w, folder)?;
+    let segs = slice_segments(v.caps, seconds)?;
+    let within = |name: ref String| {
+        if folder == "." { name.clone() } else { f"{folder}/{name}" }
+    };
+    for i in 0..segs.len() {
+        let mut s = String.new();
+        s.push_str("WEBVTT\n");
+        s.push_str(f"X-TIMESTAMP-MAP=MPEGTS:{mpegts},LOCAL:00:00:00.000\n");
+        for ci in segs[i] {
+            let c = v.caps[*ci].clone();
+            s.push_str(f"\n{ts_str(c.start)} --> {ts_str(c.end)}\n");
+            for line in c.lines {
+                s.push_str(f"{line}\n");
+            }
+        }
+        write_text(mut w, within(f"fileSequence{i}.webvtt"), "utf-8".to_string(), false, s)?;
+    }
+    let mut m = String.new();
+    m.push_str("#EXTM3U\n");
+    m.push_str(f"#EXT-X-TARGETDURATION:{seconds}\n");
+    m.push_str("#EXT-X-VERSION:3\n");
+    m.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
+    for i in 0..segs.len() {
+        m.push_str("#EXTINF:30.00000\n");
+        m.push_str(f"fileSequence{i}.webvtt\n");
+    }
+    m.push_str("#EXT-X-ENDLIST\n");
+    write_text(mut w, within("prog_index.m3u8".to_string()), "utf-8".to_string(), false, m)
+}
+
+// ------------------------------------------------------------ cli.py (argparse)
+
+fn usage() -> String {
+    "usage: webvtt [-h] [-o PATH] [-d NUMBER] [-m NUMBER] {segment} PATH".to_string()
+}
+
+fn help_text() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(usage());
+    v.push(String.new());
+    v.push("Segment WebVTT files.".to_string());
+    v.push(String.new());
+    v.push("positional arguments:".to_string());
+    v.push("  {segment}             command to perform".to_string());
+    v.push("  PATH                  WebVTT file".to_string());
+    v.push(String.new());
+    v.push("options:".to_string());
+    v.push("  -h, --help            show this help message and exit".to_string());
+    v.push("  -o, --output PATH     output directory".to_string());
+    v.push("  -d, --target-duration NUMBER".to_string());
+    v.push("                        target duration of each segment in seconds, default:".to_string());
+    v.push("                        10".to_string());
+    v.push("  -m, --mpegts NUMBER   presentation timestamp value, default: 900000".to_string());
+    v
+}
+
+// The option strings in the order the parser registered them, and the
+// action each one names: 0 help, 1 output, 2 target-duration, 3 mpegts.
+fn option_strings() -> Vec[(String, i64)] {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    v.push(("-h".to_string(), 0));
+    v.push(("--help".to_string(), 0));
+    v.push(("-o".to_string(), 1));
+    v.push(("--output".to_string(), 1));
+    v.push(("-d".to_string(), 2));
+    v.push(("--target-duration".to_string(), 2));
+    v.push(("-m".to_string(), 3));
+    v.push(("--mpegts".to_string(), 3));
+    v
+}
+
+fn action_name(a: i64) -> String {
+    if a == 1 {
+        "-o/--output".to_string()
+    } else if a == 2 {
+        "-d/--target-duration".to_string()
+    } else {
+        "-m/--mpegts".to_string()
+    }
+}
+
+// What _parse_optional makes of one argument.
+enum CliArg {
+    Pos,
+    // a known option and its explicit argument
+    Opt(i64, Option[String]),
+    Unknown,
+}
+
+fn find_option(s: ref String) -> Option[i64] {
+    for (o, a) in option_strings() {
+        if o == *s {
+            return Some(a);
+        }
+    }
+    None
+}
+
+fn is_negative_number(s: ref String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    if cs.len() < 2 or cs[0] != '-' {
+        return false;
+    }
+    let mut digits = 0;
+    let mut dots = 0;
+    let mut after_dot = 0;
+    for i in 1..cs.len() {
+        if cs[i] >= '0' and cs[i] <= '9' {
+            digits += 1;
+            if dots > 0 {
+                after_dot += 1;
+            }
+        } else if cs[i] == '.' {
+            dots += 1;
+        } else {
+            return false;
+        }
+    }
+    (dots == 0 and digits > 0) or (dots == 1 and after_dot > 0)
+}
+
+fn parse_optional(s: ref String) -> Result[CliArg, String] {
+    if s.len() == 0 or not s.starts_with("-") {
+        return Ok(CliArg.Pos);
+    }
+    if let Some(a) = find_option(s) {
+        return Ok(CliArg.Opt(a, None));
+    }
+    let cs: Vec[char] = s.chars().collect();
+    if cs.len() == 1 {
+        return Ok(CliArg.Pos);
+    }
+    let mut eq = -1;
+    for i in 0..cs.len() {
+        if eq < 0 and cs[i] == '=' {
+            eq = i;
+        }
+    }
+    if eq >= 0 {
+        if let Some(a) = find_option(chars_str(cs, 0, eq)) {
+            return Ok(CliArg.Opt(a, Some(chars_str(cs, eq + 1, cs.len()))));
+        }
+    }
+    // _get_option_tuples
+    let mut found: Vec[(i64, Option[String], String)] = Vec.new();
+    if cs[1] == '-' {
+        let (prefix, explicit) = if eq >= 0 {
+            (chars_str(cs, 0, eq), Some(chars_str(cs, eq + 1, cs.len())))
+        } else {
+            (s.clone(), None)
+        };
+        for (o, a) in option_strings() {
+            if o.starts_with(prefix) {
+                found.push((a, explicit.clone(), o.clone()));
+            }
+        }
+    } else {
+        let short = chars_str(cs, 0, 2);
+        let rest = chars_str(cs, 2, cs.len());
+        for (o, a) in option_strings() {
+            // `o` is compared without `*`; see B-2026-10-23-8.
+            if o == short {
+                found.push((a, Some(rest.clone()), o.clone()));
+            } else if o.starts_with(s) {
+                found.push((a, None, o.clone()));
+            }
+        }
+    }
+    if found.len() > 1 {
+        let mut names: Vec[String] = Vec.new();
+        for f in found {
+            names.push(f.2.clone());
+        }
+        return Err(f"ambiguous option: {s} could match {names.join(", ")}");
+    }
+    if found.len() == 1 {
+        return Ok(CliArg.Opt(found[0].0, found[0].1.clone()));
+    }
+    if is_negative_number(s) {
+        return Ok(CliArg.Pos);
+    }
+    if s.contains(" ") {
+        return Ok(CliArg.Pos);
+    }
+    Ok(CliArg.Unknown)
+}
+
+// int(s) for a str.
+fn py_int(s: ref String) -> Option[i64] {
+    let t: Vec[char] = py_strip(s).chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut n = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if c >= '0' and c <= '9' {
+            n = n * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < t.len() and t[i + 1] >= '0' and t[i + 1] <= '9' {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { 0 - n } else { n })
+}
+
+struct CliOut {
+    out: Vec[String],
+    err: Vec[String],
+    code: Option[i64],
+}
+
+// argparse's parse_args for webvtt's parser; Err is the error message.
+fn cli_parse(args: ref Vec[String], co: mut ref CliOut) -> Result[(Option[String], Option[String], i64, i64), String] {
+    let mut command: Option[String] = None;
+    let mut file: Option[String] = None;
+    let mut output: Option[String] = None;
+    let mut seconds = 10;
+    let mut mpegts = 900000;
+    let mut kinds: Vec[CliArg] = Vec.new();
+    let mut dashdash = false;
+    let mut skip: Vec[bool] = Vec.new();
+    for a in args {
+        if dashdash {
+            kinds.push(CliArg.Pos);
+            skip.push(false);
+        } else if *a == "--" {
+            dashdash = true;
+            kinds.push(CliArg.Pos);
+            skip.push(true);
+        } else {
+            kinds.push(parse_optional(a)?);
+            skip.push(false);
+        }
+    }
+    let mut extras: Vec[String] = Vec.new();
+    let mut npos = 0;
+    let mut i = 0;
+    while i < args.len() {
+        if skip[i] {
+            i += 1;
+            continue;
+        }
+        match kinds[i] {
+            CliArg.Pos => {
+                if npos == 0 {
+                    if args[i] != "segment" {
+                        return Err(f"argument command: invalid choice: {py_repr_str(args[i])} (choose from 'segment')");
+                    }
+                    command = Some(args[i].clone());
+                    npos = 1;
+                } else if npos == 1 {
+                    file = Some(args[i].clone());
+                    npos = 2;
+                } else {
+                    extras.push(args[i].clone());
+                }
+            }
+            CliArg.Unknown => extras.push(args[i].clone()),
+            CliArg.Opt(a, explicit) => {
+                if *a == 0 {
+                    for line in help_text() {
+                        co.out.push(line.clone());
+                    }
+                    co.code = Some(0);
+                    return Err(String.new());
+                }
+                let value = match explicit {
+                    Some(x) => x.clone(),
+                    None => {
+                        let next_ok = i + 1 < args.len() and not skip[i + 1] and match kinds[i + 1] {
+                            CliArg.Pos => true,
+                            _ => false,
+                        };
+                        if not next_ok {
+                            return Err(f"argument {action_name(*a)}: expected one argument");
+                        }
+                        i += 1;
+                        args[i].clone()
+                    }
+                };
+                if *a == 1 {
+                    output = Some(value);
+                } else {
+                    let n = match py_int(value) {
+                        Some(n) => n,
+                        None => return Err(f"argument {action_name(*a)}: invalid int value: {py_repr_str(value)}"),
+                    };
+                    if *a == 2 {
+                        seconds = n;
+                    } else {
+                        mpegts = n;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    if npos < 2 {
+        let names = if npos == 0 { "command, PATH" } else { "PATH" };
+        return Err(f"the following arguments are required: {names}");
+    }
+    if extras.len() > 0 {
+        return Err(f"unrecognized arguments: {extras.join(" ")}");
+    }
+    Ok((file, output, seconds, mpegts))
+}
+
+fn cli_main(p: ref Pats, w: mut ref World, args: ref Vec[String]) -> Result[(), Exc] {
+    let mut co = CliOut { out: Vec.new(), err: Vec.new(), code: None };
+    let parsed = cli_parse(args, mut co);
+    let result = match parsed {
+        Ok((file, output, seconds, mpegts)) => segment(p, mut w, file.unwrap(), output, seconds, mpegts),
+        Err(msg) => {
+            if co.code.is_none() {
+                co.err.push(usage());
+                co.err.push(f"webvtt: error: {msg}");
+                co.code = Some(2);
+            }
+            Ok(())
+        }
+    };
+    for line in co.out {
+        emit(mut w, f"  out|{line}");
+    }
+    for line in co.err {
+        emit(mut w, f"  err|{line}");
+    }
+    result?;
+    if let Some(c) = co.code {
+        emit(mut w, f"  exit {c}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn hex_val(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 { n - 87 } else if n >= 65 { n - 55 } else { n - 48 }
+}
+
+fn hex_bytes(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push((hex_val(cs[i]) * 16 + hex_val(cs[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// An op word: "-" is None, "h:<hex>" a UTF-8 string.
+fn word_arg(x: ref String) -> Option[String] {
+    if *x == "-" {
+        return None;
+    }
+    if x.starts_with("h:") {
+        let cs: Vec[char] = x.chars().collect();
+        return Some(String.from_utf8(hex_bytes(chars_str(cs, 2, cs.len()))).unwrap());
+    }
+    Some(x.clone())
+}
+
+fn word_shown(x: ref String) -> String {
+    if x.starts_with("h:") {
+        return py_repr_str(word_arg(x).unwrap());
+    }
+    x.clone()
+}
+
+fn describe(p: ref Pats, w: mut ref World, v: ref Vtt) {
+    emit(mut w, f"  repr {vtt_repr(v)}");
+    emit(mut w, f"  captions {v.caps.len()}, styles {v.styles.len()}, total_length {total_length(v)}");
+    emit(mut w, f"  header_comments {list_repr(v.hdr)}");
+    emit(mut w, f"  footer_comments {list_repr(v.ftr)}");
+    for i in 0..v.styles.len() {
+        let s = v.styles[i].clone();
+        emit(mut w, f"  style {i} {py_repr_str(join_lines(s.lines))} comments {list_repr(s.comments)}");
+    }
+    for i in 0..v.caps.len() {
+        let c = v.caps[i].clone();
+        emit(mut w, f"  caption {i} {cap_repr(p, c)}");
+        emit(mut w, f"    str {vis(cap_str(p, c))}");
+        emit(mut w, f"    seconds {ts_seconds(c.start)} {ts_seconds(c.end)}, identifier {opt_repr(c.ident)}, voice {opt_repr(cap_voice(p, c))}");
+        emit(mut w, f"    lines {list_repr(c.lines)}");
+        emit(mut w, f"    comments {list_repr(c.comments)}");
+    }
+}
+
+fn text_block(w: mut ref World, s: ref String) {
+    for line in split_on(s, '\n') {
+        emit(mut w, f"  |{vis(line)}");
+    }
+}
+
+fn file_block(w: mut ref World, data: ref Vec[u8]) {
+    let mut text: Option[String] = None;
+    if not data.contains(0) {
+        if let Ok(s) = utf8_decode(data) {
+            text = Some(s);
+        }
+    }
+    match text {
+        Some(s) => {
+            for line in split_on(s, '\n') {
+                emit(mut w, f"    |{vis(line)}");
+            }
+        }
+        None => {
+            let mut i = 0;
+            while i < data.len() {
+                let mut row = String.new();
+                let mut k = i;
+                while k < data.len() and k < i + 32 {
+                    row.push_str(hex_digits(data[k] as i64, 2));
+                    k += 1;
+                }
+                emit(mut w, f"    {row}");
+                i += 32;
+            }
+        }
+    }
+}
+
+fn need(v: ref Option[Vtt]) -> Result[Vtt, Exc] {
+    match v {
+        Some(x) => Ok(x.clone()),
+        None => Err(exc("AttributeError", "'NoneType' object has no attribute 'captions'".to_string())),
+    }
+}
+
+fn arg_at(a: ref Vec[Option[String]], i: i64) -> Option[String] {
+    if i < a.len() { a[i].clone() } else { None }
+}
+
+fn int_arg(a: ref Vec[Option[String]], i: i64) -> i64 {
+    py_int(a[i].clone().unwrap()).unwrap()
+}
+
+fn cap_index(v: ref Vtt, i: i64) -> Result[i64, Exc] {
+    match py_index(i, v.caps.len()) {
+        Some(j) => Ok(j),
+        None => Err(index_error()),
+    }
+}
+
+fn text_arg(o: ref Option[String]) -> Vec[String] {
+    match o {
+        Some(s) => py_splitlines(s),
+        None => Vec.new(),
+    }
+}
+
+fn run_op(p: ref Pats, w: mut ref World, cur: mut ref Option[Vtt], words: ref Vec[String]) -> Result[(), Exc] {
+    let op = words[0].clone();
+    let mut a: Vec[Option[String]] = Vec.new();
+    for i in 1..words.len() {
+        a.push(word_arg(words[i]));
+    }
+    if op == "read" or op == "srt" or op == "sbv" {
+        let path = a[0].clone().unwrap();
+        let enc = arg_at(a, 1);
+        if op == "read" {
+            *cur = Some(webvtt_read(p, w, path, enc)?);
+        } else {
+            let t = read_text(w, path, enc)?;
+            let caps = if op == "srt" { srt_parse(p, t.lines)? } else { sbv_parse(p, t.lines)? };
+            let mut v = vtt_new(Some(path));
+            v.caps = caps;
+            *cur = Some(v);
+        }
+    } else if op == "buffer" {
+        let data = fs_read(w, a[0].clone().unwrap())?;
+        let fmt = a[1].clone().unwrap();
+        if fmt != "vtt" and fmt != "srt" and fmt != "sbv" {
+            return Err(unsupported(fmt));
+        }
+        let lines = buffer_lines(data)?;
+        let mut v = vtt_new(None);
+        if fmt == "vtt" {
+            vtt_parse(p, lines, mut v)?;
+        } else if fmt == "srt" {
+            v.caps = srt_parse(p, lines)?;
+        } else {
+            v.caps = sbv_parse(p, lines)?;
+        }
+        *cur = Some(v);
+    } else if op == "string" {
+        let data = fs_read(w, a[0].clone().unwrap())?;
+        let text = utf8_decode(data)?;
+        let mut v = vtt_new(None);
+        vtt_parse(p, py_splitlines(text), mut v)?;
+        *cur = Some(v);
+    } else if op == "new" {
+        *cur = Some(vtt_new(None));
+    } else if op == "show" {
+        let v = need(cur)?;
+        describe(p, mut w, v);
+    } else if op == "content" {
+        let v = need(cur)?;
+        text_block(mut w, vtt_to_str(v));
+    } else if op == "write" {
+        let v = need(cur)?;
+        let fmt = a[0].clone().unwrap();
+        if fmt == "vtt" {
+            text_block(mut w, vtt_to_str(v));
+        } else if fmt == "srt" {
+            text_block(mut w, srt_write(p, v.caps));
+        } else {
+            return Err(unsupported(fmt));
+        }
+    } else if op == "slice" {
+        let v = need(cur)?;
+        let start = match truthy(a[0]) {
+            Some(s) => Some(ts_from(p, s)?),
+            None => None,
+        };
+        let end = match truthy(a[1]) {
+            Some(s) => Some(ts_from(p, s)?),
+            None => None,
+        };
+        for c in v.caps {
+            let after = match start {
+                Some(ref t) => ts_cmp(c.start, t) >= 0,
+                None => true,
+            };
+            let before = match end {
+                Some(ref t) => ts_cmp(c.end, t) <= 0,
+                None => true,
+            };
+            if after and before {
+                emit(mut w, f"  {vis(cap_str(p, c))}");
+            }
+        }
+    } else if op == "segment" {
+        segment(p, mut w, a[0].clone().unwrap(), a[1], int_arg(a, 2), int_arg(a, 3))?;
+    } else if op == "save" or op == "savesrt" {
+        let mut v = need(cur)?;
+        let enc = arg_at(a, 1);
+        let r = if op == "save" {
+            let bom = match arg_at(a, 2) {
+                Some(x) => Some(x == "1"),
+                None => None,
+            };
+            save(p, mut w, mut v, a[0], enc, bom)
+        } else {
+            let e = match enc {
+                Some(e) => e,
+                None => "utf-8".to_string(),
+            };
+            save_srt(p, mut w, mut v, a[0], e)
+        };
+        let shown = opt_repr(v.file);
+        *cur = Some(v);
+        r?;
+        emit(mut w, f"  file {shown}");
+    } else if op == "cli" {
+        let mut args: Vec[String] = Vec.new();
+        for x in a {
+            args.push(x.clone().unwrap());
+        }
+        cli_main(p, mut w, args)?;
+    } else {
+        let mut v = need(cur)?;
+        let r = edit(p, mut w, mut v, op, a);
+        *cur = Some(v);
+        r?;
+    }
+    Ok(())
+}
+
+// The ops that build or change a WebVTT by hand.
+fn edit(p: ref Pats, w: mut ref World, v: mut ref Vtt, op: ref String, a: ref Vec[Option[String]]) -> Result[(), Exc] {
+    if *op == "cap" {
+        let c = cap_new(p, a[0], a[1], text_arg(a[2]), a[3].clone())?;
+        v.caps.push(c);
+    } else if *op == "settext" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        v.caps[i].lines = text_arg(a[1]);
+    } else if *op == "setstart" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        v.caps[i].start = ts_from(p, a[1].clone().unwrap())?;
+    } else if *op == "setend" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        v.caps[i].end = ts_from(p, a[1].clone().unwrap())?;
+    } else if *op == "style" {
+        v.styles.push(Style { lines: text_arg(a[0]), comments: Vec.new() });
+    } else if *op == "hdr" {
+        v.hdr.push(a[0].clone().unwrap());
+    } else if *op == "ftr" {
+        v.ftr.push(a[0].clone().unwrap());
+    } else if *op == "capcomment" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        v.caps[i].comments.push(a[1].clone().unwrap());
+    } else if *op == "stylecomment" {
+        let i = int_arg(a, 0);
+        v.styles[i].comments.push(a[1].clone().unwrap());
+    } else if *op == "del" {
+        match py_index(int_arg(a, 0), v.caps.len()) {
+            Some(j) => {
+                v.caps.remove(j);
+            }
+            None => return Err(exc("IndexError", "list assignment index out of range".to_string())),
+        }
+    } else if *op == "get" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        emit(mut w, f"  {cap_repr(p, v.caps[i])}");
+    } else if *op == "eq" {
+        let i = cap_index(v, int_arg(a, 0))?;
+        let j = cap_index(v, int_arg(a, 1))?;
+        emit(mut w, f"  {py_bool(cap_eq(v.caps[i], v.caps[j]))}");
+    } else if *op == "ts" {
+        let t = ts_from(p, a[0].clone().unwrap())?;
+        emit(mut w, f"  {ts_str(t)} {ts_repr(t)} {ts_seconds(t)} ({t.h}, {t.m}, {t.s}, {t.ms})");
+    } else if *op == "cmp" {
+        let x = ts_from(p, a[0].clone().unwrap())?;
+        let y = ts_from(p, a[1].clone().unwrap())?;
+        let c = ts_cmp(x, y);
+        emit(mut w, f"  == {py_bool(c == 0)}, != {py_bool(c != 0)}, < {py_bool(c < 0)}, <= {py_bool(c <= 0)}, > {py_bool(c > 0)}, >= {py_bool(c >= 0)}");
+    } else {
+        return Err(exc("SystemExit", f"bad op {op}"));
+    }
+    Ok(())
+}
+
+fn run_job(p: ref Pats, w: mut ref World, f: ref Vec[String]) {
+    w.files = Map.new();
+    w.dirs = Map.new();
+    w.dirs.insert("/".to_string(), true);
+    w.dirs.insert("/work".to_string(), true);
+    if f[2] != "-" {
+        for d in split_on(f[2], ',') {
+            fs_makedirs(mut w, d).unwrap();
+        }
+    }
+    if f[1] != "-" {
+        for pair in split_on(f[1], ',') {
+            let kv = split_on(pair, '=');
+            fs_put(mut w, kv[0], hex_bytes(kv[1]));
+        }
+    }
+    emit(mut w, f"== {f[0]}");
+    // The tests of the timestamp ops need no WebVTT; give them an empty one.
+    let mut cur: Option[Vtt] = if f[3].starts_with("ts ") { Some(vtt_new(None)) } else { None };
+    let mut before = w.files.clone();
+    for k in 3..f.len() {
+        let words = split_on(f[k], ' ');
+        let mut shown: Vec[String] = Vec.new();
+        for x in words {
+            shown.push(word_shown(x));
+        }
+        emit(mut w, f"> {shown.join(" ")}");
+        if let Err(e) = run_op(p, mut w, mut cur, words) {
+            emit(mut w, f"  error {e.kind}: {vis(e.msg)}");
+        }
+        let mut keys: Vec[String] = Vec.new();
+        for (key, _) in w.files.iter() {
+            keys.push(key.clone());
+        }
+        keys.sort();
+        for key in keys {
+            let now = w.files.get(key).unwrap().clone();
+            let changed = match before.get(key) {
+                Some(old) => *old != now,
+                None => true,
+            };
+            if changed {
+                let cs: Vec[char] = key.chars().collect();
+                let rel = chars_str(cs, 6, cs.len());
+                emit(mut w, f"  wrote {rel} ({now.len()} bytes)");
+                file_block(mut w, now);
+            }
+        }
+        before = w.files.clone();
+    }
+    emit(mut w, String.new());
+}
+
+fn main() {
+    let p = patterns();
+    let mut w = World { out: String.new(), files: Map.new(), dirs: Map.new() };
+    for line in split_on(jobs_text(), '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        let f = split_on(line, '\t');
+        run_job(p, mut w, f);
+    }
+    print(w.out);
+}
+
+// Generated by gen_kara.py from data/jobs.tsv.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("ep01 clean\tep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a\t-\tread ep01.vtt\tshow\tcontent\twrite srt\tslice 00:00:05.000 00:00:12.000\tslice - 00:00:10.000\tslice 00:00:06.000 -\tslice - -\n");
+    s.push_str("ep02 utf-8 BOM and CRLF\tep02.vtt=efbbbf5745425654540d0a0d0a310d0a30303a30303a30302e353030202d2d3e2030303a30303a30322e3030300d0a4d6f726e696e672c20686172626f7572206d61737465722e0d0a0d0a320d0a30303a30303a30322e353030202d2d3e2030303a30303a30352e3030300d0a2054776f20626f617473206f75742c206f6e65206261636b2e200d0a0d0a330d0a30303a30303a30352e353030202d2d3e2030303a30303a30392e3939390d0a2d2057686572652773207468652074686972643f0d0a2d205374696c6c206f757420706173742074686520726565662e0d0a\t-\tread ep02.vtt\tshow\tcontent\twrite srt\n");
+    s.push_str("ep03_le.vtt BOM\tep03_le.vtt=fffe5700450042005600540054000a000a004e004f005400450020004a006100700061006e00650073006500200061006e00640020004600720065006e0063006800200074007200610063006b00730020006d00650072006700650064002000620079002000760065006e0064006f0072000a000a00300030003a00300030003a00300031002e0030003000300020002d002d003e002000300030003a00300030003a00300033002e003000300030000a003c0076002000410069006b006f003e006f70f0536f307e30603049516330663044308b3002300a000a00300030003a00300030003a00300033002e0035003000300020002d002d003e002000300030003a00300030003a00300036002e003000300030000a003c0076002000c9006c006f006400690065003e004c00650020007000680061007200650020006200720069006c006c006500200065006e0063006f0072006500262020003cd80adf0a000a00300030003a00300031003a00300030002e0030003000300020002d002d003e002000300030003a00300031003a00300032002e003000300030000a00430061006600e9002c0020007300192069006c00200076006f0075007300200070006c006100ee0074002e000a00\t-\tread ep03_le.vtt\tshow\tcontent\n");
+    s.push_str("ep03_be.vtt BOM\tep03_be.vtt=feff005700450042005600540054000a000a004e004f005400450020004a006100700061006e00650073006500200061006e00640020004600720065006e0063006800200074007200610063006b00730020006d00650072006700650064002000620079002000760065006e0064006f0072000a000a00300030003a00300030003a00300031002e0030003000300020002d002d003e002000300030003a00300030003a00300033002e003000300030000a003c0076002000410069006b006f003e706f53f0306f307e30605149306330663044308b3002000a000a00300030003a00300030003a00300033002e0035003000300020002d002d003e002000300030003a00300030003a00300036002e003000300030000a003c0076002000c9006c006f006400690065003e004c00650020007000680061007200650020006200720069006c006c006500200065006e0063006f0072006520260020d83cdf0a000a000a00300030003a00300031003a00300030002e0030003000300020002d002d003e002000300030003a00300031003a00300032002e003000300030000a00430061006600e9002c0020007320190069006c00200076006f0075007300200070006c006100ee0074002e000a\t-\tread ep03_be.vtt\tshow\tcontent\n");
+    s.push_str("ep03_32.vtt BOM\tep03_32.vtt=fffe00005700000045000000420000005600000054000000540000000a0000000a0000004e0000004f0000005400000045000000200000004a0000006100000070000000610000006e00000065000000730000006500000020000000610000006e00000064000000200000004600000072000000650000006e000000630000006800000020000000740000007200000061000000630000006b00000073000000200000006d00000065000000720000006700000065000000640000002000000062000000790000002000000076000000650000006e000000640000006f000000720000000a0000000a00000030000000300000003a00000030000000300000003a00000030000000310000002e000000300000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000300000003a00000030000000330000002e0000003000000030000000300000000a0000003c000000760000002000000041000000690000006b0000006f0000003e0000006f700000f05300006f3000007e30000060300000495100006330000066300000443000008b300000023000000a0000000a00000030000000300000003a00000030000000300000003a00000030000000330000002e000000350000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000300000003a00000030000000360000002e0000003000000030000000300000000a0000003c0000007600000020000000c90000006c0000006f0000006400000069000000650000003e0000004c00000065000000200000007000000068000000610000007200000065000000200000006200000072000000690000006c0000006c0000006500000020000000650000006e000000630000006f000000720000006500000026200000200000000af301000a0000000a00000030000000300000003a00000030000000310000003a00000030000000300000002e000000300000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000310000003a00000030000000320000002e0000003000000030000000300000000a000000430000006100000066000000e90000002c000000200000007300000019200000690000006c00000020000000760000006f000000750000007300000020000000700000006c00000061000000ee000000740000002e0000000a000000\t-\tread ep03_32.vtt\tshow\tcontent\n");
+    s.push_str("ep03_32be.vtt BOM\tep03_32be.vtt=0000feff0000005700000045000000420000005600000054000000540000000a0000000a0000004e0000004f0000005400000045000000200000004a0000006100000070000000610000006e00000065000000730000006500000020000000610000006e00000064000000200000004600000072000000650000006e000000630000006800000020000000740000007200000061000000630000006b00000073000000200000006d00000065000000720000006700000065000000640000002000000062000000790000002000000076000000650000006e000000640000006f000000720000000a0000000a00000030000000300000003a00000030000000300000003a00000030000000310000002e000000300000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000300000003a00000030000000330000002e0000003000000030000000300000000a0000003c000000760000002000000041000000690000006b0000006f0000003e0000706f000053f00000306f0000307e00003060000051490000306300003066000030440000308b000030020000000a0000000a00000030000000300000003a00000030000000300000003a00000030000000330000002e000000350000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000300000003a00000030000000360000002e0000003000000030000000300000000a0000003c0000007600000020000000c90000006c0000006f0000006400000069000000650000003e0000004c00000065000000200000007000000068000000610000007200000065000000200000006200000072000000690000006c0000006c0000006500000020000000650000006e000000630000006f000000720000006500002026000000200001f30a0000000a0000000a00000030000000300000003a00000030000000310000003a00000030000000300000002e000000300000003000000030000000200000002d0000002d0000003e0000002000000030000000300000003a00000030000000310000003a00000030000000320000002e0000003000000030000000300000000a000000430000006100000066000000e90000002c000000200000007300002019000000690000006c00000020000000760000006f000000750000007300000020000000700000006c00000061000000ee000000740000002e0000000a\t-\tread ep03_32be.vtt\tshow\tcontent\n");
+    s.push_str("ep03 utf-16 without BOM\tep03_nobom.vtt=5700450042005600540054000a000a004e004f005400450020004a006100700061006e00650073006500200061006e00640020004600720065006e0063006800200074007200610063006b00730020006d00650072006700650064002000620079002000760065006e0064006f0072000a000a00300030003a00300030003a00300031002e0030003000300020002d002d003e002000300030003a00300030003a00300033002e003000300030000a003c0076002000410069006b006f003e006f70f0536f307e30603049516330663044308b3002300a000a00300030003a00300030003a00300033002e0035003000300020002d002d003e002000300030003a00300030003a00300036002e003000300030000a003c0076002000c9006c006f006400690065003e004c00650020007000680061007200650020006200720069006c006c006500200065006e0063006f0072006500262020003cd80adf0a000a00300030003a00300031003a00300030002e0030003000300020002d002d003e002000300030003a00300031003a00300032002e003000300030000a00430061006600e9002c0020007300192069006c00200076006f0075007300200070006c006100ee0074002e000a00\t-\tread ep03_nobom.vtt\tread ep03_nobom.vtt utf-16-le\tshow\n");
+    s.push_str("quirks\tquirks.vtt=5745425654540a582d54494d455354414d502d4d41503d4d50454754533a3930303030302c4c4f43414c3a30303a30303a30302e3030300a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a0a74696d696e67206f6e6c792061626f76652c20736f207468617420626c6f636b2069732064726f707065640a30303a30303a30332e3030302d2d3e30303a30303a30342e3030300a6e6f207370616365732061726f756e6420746865206172726f770a0a202030303a30303a30352e303030202d2d3e2030303a30303a30362e3030300a6c656164696e6720737061636573206265666f7265207468652074696d696e670a0a30303a30372e303030202d2d3e2030303a30382e3530300a6e6f20686f7572730a0a313a30303a30392e303030202d2d3e20313a30303a31302e3030300a6f6e652d646967697420686f7572730a0a5354594c450a30303a30303a31312e303030202d2d3e2030303a30303a31322e3030300a61205354594c4520626c6f636b207769746820612074696d696e672069732061206375650a0a4e4f54450a0a4e4f5445776f727468793a206e6f207370616365206166746572204e4f54450a0a30303a30303a31332e303030202d2d3e2030303a30303a31342e3030300a61202d2d3e206220696e20746865206669727374207061796c6f6164206c696e650a0a63756520776974682061207365636f6e642074696d696e670a30303a30303a31352e303030202d2d3e2030303a30303a31362e3030300a6669727374207061796c6f61640a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a7365636f6e64207061796c6f61640a0a30303a30303a31372e303030202d2d3e2030303a30303a31382e3030300a746167733a2061203c206220616e642063203e20642c203c623e626f6c643c2f623e2c203c693e6f70656e0a636c6f73653c2f693e2c203c632e0a783e0a0a30303a30303a31392e303030202d2d3e2030303a30303a31392e3530300a3c7620203e74776f20737061636573207468656e2074686520627261636b65740a0a30303a30303a32322e303030202d2d3e2030303a30303a32332e3030300a3c764e6f53706163653e766f69636520776974686f757420612073706163650a0a30303a30303a32342e303030202d2d3e2030303a30303a32352e3030300a3c762e66697273742e6c6f75640945736d65204e673e746162206265666f726520746865206e616d650a3c76205365636f6e643e6f6e6c7920746865206669727374206c696e6520636f756e74730a0a090a30303a30303a32362e303030202d2d3e2030303a30303a32372e3030300a09696e64656e746564207061796c6f61642020200a0a5354594c450a3a3a637565207b20636f6c6f723a20726564207d0a2d2d3e206172726f7720696e736964652061207374796c650a0a5354594c450a3a3a637565286229207b0a2020666f6e742d7765696768743a20626f6c64207d0a4e4f544520747261696c696e6720636f6d6d656e74206f66207468652066696c650a\t-\tread quirks.vtt\tshow\tcontent\twrite srt\twrite sbv\n");
+    s.push_str("long\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tread long.vtt\tshow\tslice 00:00:20.000 00:00:45.000\tslice h: h:\tcontent\n");
+    s.push_str("broken bad_hours.vtt\tbad_hours.vtt=5745425654540a0a3132333a30303a30302e303030202d2d3e203132333a30303a30312e3030300a74687265652d646967697420686f7572730a\t-\tread bad_hours.vtt\tbuffer bad_hours.vtt vtt\tstring bad_hours.vtt\n");
+    s.push_str("broken bad_comma.vtt\tbad_comma.vtt=5745425654540a0a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a636f6d6d61732066726f6d20616e205352540a\t-\tread bad_comma.vtt\tbuffer bad_comma.vtt vtt\tstring bad_comma.vtt\n");
+    s.push_str("broken bad_seconds.vtt\tbad_seconds.vtt=5745425654540a0a30303a30303a37352e303030202d2d3e2030303a30303a37362e3030300a736576656e74792d66697665207365636f6e64730a\t-\tread bad_seconds.vtt\tbuffer bad_seconds.vtt vtt\tstring bad_seconds.vtt\n");
+    s.push_str("broken bad_colon.vtt\tbad_colon.vtt=5745425654540a0a30303a30303a30303a353030202d2d3e2030303a30303a30313a3030300a6120636f6c6f6e206265666f726520746865206d730a\t-\tread bad_colon.vtt\tbuffer bad_colon.vtt vtt\tstring bad_colon.vtt\n");
+    s.push_str("broken noheader.vtt\tnoheader.vtt=30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a6e6f20574542565454206c696e650a\t-\tread noheader.vtt\tbuffer noheader.vtt vtt\tstring noheader.vtt\n");
+    s.push_str("broken lower.vtt\tlower.vtt=7765627674740a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a6c6f77657263617365206865616465720a\t-\tread lower.vtt\tbuffer lower.vtt vtt\tstring lower.vtt\n");
+    s.push_str("broken empty.vtt\tempty.vtt=\t-\tread empty.vtt\tbuffer empty.vtt vtt\tstring empty.vtt\n");
+    s.push_str("broken not_vtt.vtt\tnot_vtt.vtt=3c68746d6c3e3c626f64793e343034204e6f7420466f756e643c2f626f64793e3c2f68746d6c3e0a\t-\tread not_vtt.vtt\tbuffer not_vtt.vtt vtt\tstring not_vtt.vtt\n");
+    s.push_str("header only\theader_only.vtt=5745425654540a\t-\tread header_only.vtt\tshow\tcontent\twrite srt\n");
+    s.push_str("missing file\t-\t-\tread gone.vtt\tsrt gone.srt\tsbv gone.sbv\n");
+    s.push_str("directory\tep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a\tout\tread out\tsegment out out 10 0\n");
+    s.push_str("old Mac line ends\tcr.vtt=5745425654540d0d30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300d6f6c64204d6163206c696e6520656e64730d0a30303a30303a30332e303030202d2d3e2030303a30303a30342e3030300a6d697865640d656e640a\t-\tread cr.vtt\tshow\tbuffer cr.vtt vtt\tshow\tstring cr.vtt\tshow\n");
+    s.push_str("other line separators\tseps.vtt=5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a6c696e650b73706c69741c6279e280a873706c69746c696e6573c285746f6f0a0a30303a30303a30332e303030202d2d3e2030303a30303a30342e3030300a666f726d0c666565640a\t-\tread seps.vtt\tshow\tstring seps.vtt\tshow\twrite srt\n");
+    s.push_str("latin-1\tlatin1.vtt=5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a556e20636166e92c20676172e76f6e2e0a\t-\tread latin1.vtt\tread latin1.vtt latin-1\tshow\tsave -\tsave - latin-1\tstring latin1.vtt\n");
+    s.push_str("bad bytes\tbadbyte.vtt=5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a6f6b0a0a30303a30303a30332e303030202d2d3e2030303a30303a30342e3030300a62616420ff20627974650a,badcont.vtt=5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a62616420c32820636f6e74696e756174696f6e0a,lonecont.vtt=efbbbf5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30322e3030300a80206c6f6e6520636f6e74696e756174696f6e0a\t-\tread badbyte.vtt\tbuffer badbyte.vtt vtt\tstring badbyte.vtt\tread badcont.vtt\tbuffer badcont.vtt vtt\tread lonecont.vtt\tbuffer lonecont.vtt vtt\tread lonecont.vtt latin-1\n");
+    s.push_str("buffers\tep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a,ep02.vtt=efbbbf5745425654540d0a0d0a310d0a30303a30303a30302e353030202d2d3e2030303a30303a30322e3030300d0a4d6f726e696e672c20686172626f7572206d61737465722e0d0a0d0a320d0a30303a30303a30322e353030202d2d3e2030303a30303a30352e3030300d0a2054776f20626f617473206f75742c206f6e65206261636b2e200d0a0d0a330d0a30303a30303a30352e353030202d2d3e2030303a30303a30392e3939390d0a2d2057686572652773207468652074686972643f0d0a2d205374696c6c206f757420706173742074686520726565662e0d0a,ep07.srt=310d0a30303a30303a30312c303030202d2d3e2030303a30303a30332c3530300d0a3c693e50726576696f75736c792e2e2e3c2f693e0d0a0d0a320d0a30303a30303a30342c303030202d2d3e2030303a30303a30362c3030300d0a546865206c616d702077656e74206f75740d0a6174203c623e6d69646e696768743c2f623e2e0d0a0d0a330d0a30303a30303a30362c353030202d2d3e2030303a30303a30382c3030300d0a547261696c696e6720737061636573207374617920696e736964652c2020200d0a627574206e6f7420617420746865207665727920656e642e2020200d0a,ep09.sbv=303a30303a30312e3030302c303a30303a30332e3530300a57656c636f6d65206261636b20746f2074686520686172626f7572206368616e6e656c2e0a0a303a30303a30342e3030302c303a30303a30362e3030300a546f6461793a206b6e6f74730a616e642073706c696365730a0a303a30303a30372e3030302c303a30303a30382e3030300a3e3e2054776f20737065616b6572732c206f6e6520626c6f636b2e0a3e3e205965732e0a0a6e6f746520776974686f757420612074696d696e670a0a303a30303a30392e3030302c303a30303a31302e3530300a4c617374206f6e652e0a\t-\tbuffer ep01.vtt vtt\tshow\tbuffer ep02.vtt vtt\tbuffer ep07.srt srt\tshow\tbuffer ep09.sbv sbv\tshow\tbuffer ep01.vtt ass\tbuffer ep01.vtt srt\tshow\tbuffer ep07.srt vtt\tstring ep01.vtt\tshow\n");
+    s.push_str("srt ep07\tep07.srt=310d0a30303a30303a30312c303030202d2d3e2030303a30303a30332c3530300d0a3c693e50726576696f75736c792e2e2e3c2f693e0d0a0d0a320d0a30303a30303a30342c303030202d2d3e2030303a30303a30362c3030300d0a546865206c616d702077656e74206f75740d0a6174203c623e6d69646e696768743c2f623e2e0d0a0d0a330d0a30303a30303a30362c353030202d2d3e2030303a30303a30382c3030300d0a547261696c696e6720737061636573207374617920696e736964652c2020200d0a627574206e6f7420617420746865207665727920656e642e2020200d0a\t-\tsrt ep07.srt\tshow\tcontent\twrite srt\tsavesrt -\tsavesrt round.srt\tsrt round.srt\tshow\n");
+    s.push_str("srt ep08\tep08.srt=efbbbf3030370a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a496e6465782077697468206c656164696e67207a65726f732e0a0a410a30303a30303a30322c303030202d2d3e2030303a30303a30332c3030300a41206c657474657220696e64657820697320736b69707065642e0a0a330a30303a30303a30332c303030202d2d3e2030303a30303a30342c3030300a0a340a30303a30303a30342c303030202d2d3e2030303a30303a30352c3030300a0a350a30303a30303a30352e303030202d2d3e2030303a30303a30362e3030300a446f747320696e7374656164206f6620636f6d6d61732061726520736b69707065642e0a0a360a20313a30303a30362c30303020202d2d3e2020313a30303a30372c323530202058313a34302058323a3630300a53706163657320616e6420636f6f7264696e61746573206166746572207468652074696d696e672e0a0a370a30303a30303a30382c303030202d2d3e2030303a30303a30392c3030300a4c617374206f6e652c206e6f20626c616e6b206c696e652061667465722e\t-\tsrt ep08.srt\tshow\tcontent\twrite srt\tsave ep08-converted\n");
+    s.push_str("srt broken bad_hours.srt\tbad_hours.srt=310a3130303a30303a30302c303030202d2d3e203130303a30303a30312c3030300a68756e6472656420686f7572730a\t-\tsrt bad_hours.srt\tbuffer bad_hours.srt srt\n");
+    s.push_str("srt broken blank_start.srt\tblank_start.srt=0a310a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a626c616e6b206c696e652066697273740a\t-\tsrt blank_start.srt\tbuffer blank_start.srt srt\n");
+    s.push_str("srt broken no_text.srt\tno_text.srt=310a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a2020200a\t-\tsrt no_text.srt\tbuffer no_text.srt srt\n");
+    s.push_str("srt broken short.srt\tshort.srt=310a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a\t-\tsrt short.srt\tbuffer short.srt srt\n");
+    s.push_str("srt broken ep01.vtt\tep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a\t-\tsrt ep01.vtt\tbuffer ep01.vtt srt\n");
+    s.push_str("sbv ep09\tep09.sbv=303a30303a30312e3030302c303a30303a30332e3530300a57656c636f6d65206261636b20746f2074686520686172626f7572206368616e6e656c2e0a0a303a30303a30342e3030302c303a30303a30362e3030300a546f6461793a206b6e6f74730a616e642073706c696365730a0a303a30303a30372e3030302c303a30303a30382e3030300a3e3e2054776f20737065616b6572732c206f6e6520626c6f636b2e0a3e3e205965732e0a0a6e6f746520776974686f757420612074696d696e670a0a303a30303a30392e3030302c303a30303a31302e3530300a4c617374206f6e652e0a,ep09_bom.sbv=efbbbf303a30303a30312e3030302c303a30303a30332e3530300d0a57656c636f6d65206261636b20746f2074686520686172626f7572206368616e6e656c2e0d0a0d0a303a30303a30342e3030302c303a30303a30362e3030300d0a546f6461793a206b6e6f74730d0a616e642073706c696365730d0a0d0a303a30303a30372e3030302c303a30303a30382e3030300d0a3e3e2054776f20737065616b6572732c206f6e6520626c6f636b2e0d0a3e3e205965732e0d0a0d0a6e6f746520776974686f757420612074696d696e670d0a0d0a303a30303a30392e3030302c303a30303a31302e3530300d0a4c617374206f6e652e0d0a\t-\tsbv ep09.sbv\tshow\tcontent\twrite srt\tsbv ep09_bom.sbv\tshow\tbuffer ep09_bom.sbv sbv\n");
+    s.push_str("sbv broken bad.sbv\tbad.sbv=303a30303a30312e3030302c303a30303a37352e3030300a736576656e74792d666976650a\t-\tsbv bad.sbv\tbuffer bad.sbv sbv\n");
+    s.push_str("sbv broken comma.sbv\tcomma.sbv=303a30303a30312c3030302c303a30303a30322c3030300a636f6d6d617320657665727977686572650a\t-\tsbv comma.sbv\tbuffer comma.sbv sbv\n");
+    s.push_str("sbv broken blank.sbv\tblank.sbv=0a20200a\t-\tsbv blank.sbv\tbuffer blank.sbv sbv\n");
+    s.push_str("sbv broken one_line.sbv\tone_line.sbv=303a30303a30312e3030302c303a30303a30322e3030300a\t-\tsbv one_line.sbv\tbuffer one_line.sbv sbv\n");
+    s.push_str("sbv broken title.sbv\ttitle.sbv=486172626f7572206368616e6e656c0a303a30303a30312e3030302c303a30303a30322e3030300a7469746c652066697273740a\t-\tsbv title.sbv\tbuffer title.sbv sbv\n");
+    s.push_str("sbv broken ep01.vtt\tep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a\t-\tsbv ep01.vtt\tbuffer ep01.vtt sbv\n");
+    s.push_str("sbv broken empty.vtt\tempty.vtt=\t-\tsbv empty.vtt\tbuffer empty.vtt sbv\n");
+    s.push_str("save utf-16\tep03_le.vtt=fffe5700450042005600540054000a000a004e004f005400450020004a006100700061006e00650073006500200061006e00640020004600720065006e0063006800200074007200610063006b00730020006d00650072006700650064002000620079002000760065006e0064006f0072000a000a00300030003a00300030003a00300031002e0030003000300020002d002d003e002000300030003a00300030003a00300033002e003000300030000a003c0076002000410069006b006f003e006f70f0536f307e30603049516330663044308b3002300a000a00300030003a00300030003a00300033002e0035003000300020002d002d003e002000300030003a00300030003a00300036002e003000300030000a003c0076002000c9006c006f006400690065003e004c00650020007000680061007200650020006200720069006c006c006500200065006e0063006f0072006500262020003cd80adf0a000a00300030003a00300031003a00300030002e0030003000300020002d002d003e002000300030003a00300031003a00300032002e003000300030000a00430061006600e9002c0020007300192069006c00200076006f0075007300200070006c006100ee0074002e000a00\tout\tread ep03_le.vtt\tsave -\tsave out\tsave out/\tsave copy.txt\tsave CAPS.VTT\tsave out/sub/x.vtt\tsave a utf-8\tsave b UTF-8 1\tsave c utf-8 0\tsave d utf-16-be\tsave e latin-1\tsave f klingon\tsave /work/out/abs\tshow\tsavesrt -\tsavesrt out\tshow\n");
+    s.push_str("save new\t-\tout\tnew\tsave -\tsave out\tsavesrt -\tsave made\tshow\tcontent\n");
+    s.push_str("save names\tep02.vtt=efbbbf5745425654540d0a0d0a310d0a30303a30303a30302e353030202d2d3e2030303a30303a30322e3030300d0a4d6f726e696e672c20686172626f7572206d61737465722e0d0a0d0a320d0a30303a30303a30322e353030202d2d3e2030303a30303a30352e3030300d0a2054776f20626f617473206f75742c206f6e65206261636b2e200d0a0d0a330d0a30303a30303a30352e353030202d2d3e2030303a30303a30392e3939390d0a2d2057686572652773207468652074686972643f0d0a2d205374696c6c206f757420706173742074686520726565662e0d0a\tout\tread ep02.vtt\tsave x.y.z\tsave .hidden\tsave out/..\tsave trailing.\tsave ./dot\tshow\n");
+    s.push_str("build\t-\t-\tnew\thdr h:47656e657261746564206279207468652063617074696f6e206465736b\thdr h:74776f206c696e65730a6f6620686561646572\tstyle h:3a3a637565207b20636f6c6f723a206c696d65207d\tstylecomment 0 h:6c696d6520666f72207468652070696c6f74\tcap 00:00:01.000 00:00:02.500 h:48656c6c6f0a7468657265 intro\tcap - - h:7a65726f -\tcap 00:01.000 1:00:02.000 h:3c7620416e613e73686f727420666f726d73 -\tcap 00:00:03.000 00:00:04.000 - h:\tcap bad 00:00:04.000 h:6e65766572206164646564 -\tcapcomment 1 h:61206e6f74652061626f7574207a65726f\tcapcomment 1 h:616e640a616e6f74686572\tftr h:74686520656e64\tshow\tcontent\twrite srt\tsettext 0 h:5265706c616365640d0a74657874e280a868657265\tsetstart 1 00:00:00.250\tsetend 1 99:59:59.999\tsetstart 2 00:60:00.000\tsetend 2 1:2:3\tget 0\tget -1\tget 9\teq 0 0\teq 0 1\tdel 3\tdel 7\tshow\tcontent\tsavesrt pilot\tsrt pilot.srt\tshow\tsegment pilot.srt seg 10 0\tsave pilot\tsegment pilot.vtt seg 3600 1\n");
+    s.push_str("timestamps\t-\t-\tts 00:00:00.000\tts 1:2:3.456\tts 01:02.345\tts 99:59:59.999\tts 00:60:00.000\tts 1:02:03.4567\tts h:616263\tts h:2030303a30303a30312e303030\tts 100:00:00.000\tts 0:0.000\tts 7.000\tts h:\tcmp 00:00:01.000 00:00:01.000\tcmp 00:00:01.000 00:00:02.000\tcmp 1:00:00.000 59:59.999\tcmp 00:00:10.000 00:00:09.999\n");
+    s.push_str("segment long\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tsegment long.vtt hls 10 900000\n");
+    s.push_str("segment long 7s\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tsegment long.vtt hls/a/b 7 0\n");
+    s.push_str("segment boundaries\tedge.vtt=5745425654540a0a30303a30303a30312e303030202d2d3e2030303a30303a30392e3030300a66697273740a0a30303a30303a31312e303030202d2d3e2030303a30303a32302e3235300a656e64732061742032302e323520730a,order.vtt=5745425654540a0a30303a30303a33302e303030202d2d3e2030303a30303a33322e3030300a6f7574206f66206f726465720a0a30303a30303a30312e303030202d2d3e2030303a30303a30352e3030300a74686973206f6e65206973206c6173740a,zero.vtt=5745425654540a0a30303a30303a30302e303030202d2d3e2030303a30303a30302e3930300a756e6465722061207365636f6e640a,ep01.vtt=574542565454202d20546865204c69676874686f7573652c20657069736f646520310a4b696e643a2063617074696f6e730a4c616e67756167653a20656e0a0a4e4f5445205472616e736c6174656420627920746865204c6973626f6e206465736b2e0a436865636b656420616761696e7374207468652032303234206d61737465722e0a0a4e4f5445205374796c6520666f7220746865206e61727261746f720a0a5354594c450a3a3a63756528765b766f6963653d224e61727261746f72225d29207b0a2020636f6c6f723a206c69676874626c75653b0a7d0a0a4e4f5445207365636f6e64207374796c6520686173206e6f20636f6d6d656e740a5354594c450a3a3a637565282e79656c6c6f7729207b20636f6c6f723a2079656c6c6f773b207d0a0a696e74726f0a30303a30303a30312e303030202d2d3e2030303a30303a30342e35303020616c69676e3a737461727420706f736974696f6e3a3130250a3c76204e61727261746f723e546865206c69676874686f757365206861642073746f6f6420666f722074776f2068756e647265642079656172732e0a0a30303a30303a30352e303030202d2d3e2030303a30303a30372e3235300a3c762e6c6f7564204b65657065723e57686f27732074686572653f0a3c632e79656c6c6f773e416e73776572206d65213c2f633e0a0a4e4f544520546865206e65787420637565206f7665726c617073206f6e20707572706f73652e0a0a73746f726d2d310a30303a30303a30362e393030202d2d3e2030303a30303a31302e3030300a3c693e5468756e6465723c2f693e20726f6c6c73203c30303a30303a30382e3030303e6163726f737320746865206261792e0a0a30303a30303a31322e303030202d2d3e2030303a30303a31352e3030300a3c76204d6172612053696c76613e492062726f7567687420746865206f696c2c206c696b6520796f752061736b65642e0a3c76204b65657065723e596f75277265206c6174652e0a0a4e4f544520656e64206f66207265656c206f6e650a,header_only.vtt=5745425654540a\t-\tsegment edge.vtt e 10 0\tsegment order.vtt o 10 0\tsegment zero.vtt z 10 0\tsegment ep01.vtt ep 0 0\tsegment ep01.vtt ep -5 0\tsegment ep01.vtt ep 1 0\tsegment header_only.vtt h 10 0\tsegment ep01.vtt ep01.vtt 10 0\n");
+    s.push_str("cli 1\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574\n");
+    s.push_str("cli 2\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d2d6f7574707574 h:6f757432 h:2d2d7461726765742d6475726174696f6e h:3330 h:2d2d6d7065677473 h:30\n");
+    s.push_str("cli 3\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f6f757433 h:2d643230 h:2d6d3d313830303030\n");
+    s.push_str("cli 4\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:2d64 h:3430 h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f757434\n");
+    s.push_str("cli 5\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:2d6f h:6f757435 h:6c6f6e672e767474 h:2d64 h:3630\n");
+    s.push_str("cli 6\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d2d6f7574 h:6f757436 h:2d2d746172676574 h:3435 h:2d2d6d70 h:37\n");
+    s.push_str("cli 7\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d2d6f75747075743d6f757437 h:2d2d7461726765742d6475726174696f6e3d3530\n");
+    s.push_str("cli 8\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:2d6f h:6f757438 h:2d64 h:3335 h:2d2d h:6c6f6e672e767474\n");
+    s.push_str("cli 9\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:78 h:2d6f h:6f757439 h:2d64 h:20323520\n");
+    s.push_str("cli 10\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f75743130 h:2d64 h:2b315f35\n");
+    s.push_str("cli 11\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474\n");
+    s.push_str("cli 12\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:73706c6974 h:6c6f6e672e767474 h:2d6f h:6f7574\n");
+    s.push_str("cli 13\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74\n");
+    s.push_str("cli 14\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli\n");
+    s.push_str("cli 15\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d64 h:74656e\n");
+    s.push_str("cli 16\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d64 h:316533\n");
+    s.push_str("cli 17\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d64\n");
+    s.push_str("cli 18\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:2d78\n");
+    s.push_str("cli 19\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:6578747261\n");
+    s.push_str("cli 20\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d2d626f677573 h:6d6f7265\n");
+    s.push_str("cli 21\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d64 h:2d35\n");
+    s.push_str("cli 22\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d64 h:30\n");
+    s.push_str("cli 23\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:676f6e652e767474 h:2d6f h:6f7574\n");
+    s.push_str("cli 24\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:676f6e652e767474\n");
+    s.push_str("cli 25\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:2d68\n");
+    s.push_str("cli 26\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d2d68656c70 h:2d64 h:74656e\n");
+    s.push_str("cli 27\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d64 h:74656e h:2d2d68656c70\n");
+    s.push_str("cli 28\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:73706c6974 h:6c6f6e672e767474 h:2d64 h:74656e\n");
+    s.push_str("cli 29\tlong.vtt=5745425654540a0a63310a30303a30303a30302e353030202d2d3e2030303a30303a30332e3030300a50726576696f75736c79206f6e20546865204c69676874686f7573652e0a0a63320a30303a30303a30332e353030202d2d3e2030303a30303a30382e3030300a3c76204b65657065723e4b65657020746865206c616d70206c69742e0a0a63330a30303a30303a30382e353030202d2d3e2030303a30303a31322e3030300a49742063726f73736573207468652074656e2d7365636f6e64206d61726b2e0a0a63340a30303a30303a31322e353030202d2d3e2030303a30303a31392e3930300a3c693e57617665732e3c2f693e0a0a63350a30303a30303a32302e303030202d2d3e2030303a30303a32312e3030300a45786163746c79206f6e206120626f756e646172792e0a0a63360a30303a30303a32352e303030202d2d3e2030303a30303a34312e3030300a41206c6f6e672073686f74206f6620746865207365612c0a68656c64206163726f73732074776f207365676d656e74732e0a0a63370a30303a30303a34322e303030202d2d3e2030303a30303a34342e3030300a3c76204d6172612053696c76613e44696420796f752073656520746861743f0a0a63380a30303a30303a35302e303030202d2d3e2030303a30303a35392e3939390a46696674792d6e696e6520706f696e74206e696e65206e696e65206e696e652e0a0a63390a30303a30313a30302e303030202d2d3e2030303a30313a30352e3530300a54686520656e64206f662074686520636f6c64206f70656e2e0a\t-\tcli h:7365676d656e74 h:6c6f6e672e767474 h:2d6f h:6f7574 h:2d6d h:2d31 h:2d64 h:3730\n");
+    s
+}

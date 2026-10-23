@@ -93,12 +93,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 759 |
-| run-vs-build | 611 |
+| run-vs-build | 612 |
 | leak | 606 |
 | double-free | 428 |
 | missing-feature | 344 |
 | codegen-gap | 291 |
-| false-positive | 286 |
+| false-positive | 287 |
 | other | 199 |
 | diagnostics | 192 |
 | perf | 184 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 3043 |
-| interp | 1053 |
-| typecheck | 576 |
+| codegen | 3044 |
+| interp | 1054 |
+| typecheck | 578 |
 | ownership | 133 |
 | other | 127 |
 | cli | 93 |
@@ -190,6 +190,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-23-4 | 2026-10-23 | interp+codegen | low | Float Display breaks an exact tie between two equally short decimals away from zero, where Python's repr keeps the even last digit: -75455689800034.625 prints -75455689800034.63 on every v2 backend and in `--interp`, Python prints -75455689800034.62; library/core-types.md § Printing says only "the shortest digits that read back", so which of the two is unspecified | — |
 | B-2026-10-23-5 | 2026-10-23 | typecheck | low | `to_vec()` on a `Vec[T]` receiver is refused ("no method 'to_vec' on type 'Vec'") though library/collections.md says a Vec finds every Slice method, to_vec among them | — |
 | B-2026-10-23-6 | 2026-10-23 | cli+interp | medium | The v2 REPL carries no values across cells: a later cell replays every earlier statement cell, so their side effects run again (a `read_line()` waits for input again, a file is written again, a clock is read again) and a slow cell slows every cell after it; `%show` and `--auto-clone` / `%set auto-clone` are legacy-only, and `:provide` does not check that the provider implements the resource's trait | — |
+| B-2026-10-23-7 | 2026-10-23 | typecheck | low | A `vec![..]` of integer literals inside a tuple literal is typed `Vec[i64]` even where the tuple's expected type says `Vec[u8]`: `let b: (String, Vec[u8]) = ("x".to_string(), vec![1, 2]);` and `v.push(("y".to_string(), vec![3]))` on a `Vec[(String, Vec[u8])]` are refused, while `let a: Vec[u8] = vec![1, 2];` and `let c: Option[Vec[u8]] = Some(vec![1, 2]);` are accepted | — |
+| B-2026-10-23-8 | 2026-10-23 | typecheck+interp+codegen | low | `karac check` accepts `*o` on a String bound by a destructuring `for (o, n) in v` over a `Vec[(String, i64)]`, typing `o` as a borrow, while every MIR front end (`__mir-run`, `__mir-llvm-run`, `build --mir`) types `o` as `String` and refuses the `*` | — |
 
 ### Relocated
 
