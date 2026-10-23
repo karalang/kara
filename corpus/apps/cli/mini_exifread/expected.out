@@ -1,0 +1,4990 @@
+== cli - nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF InteroperabilityOffset (Long): 1094
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Interoperability InteroperabilityIndex (ASCII): R98
+Interoperability InteroperabilityVersion (Undefined): [48, 49, 48, 48]
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli q nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF InteroperabilityOffset (Long): 1094
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Interoperability InteroperabilityIndex (ASCII): R98
+Interoperability InteroperabilityVersion (Undefined): [48, 49, 48, 48]
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli b nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF InteroperabilityOffset (str): '1094'
+EXIF MakerNote (bytes): b'Nikon\x00\x02\x10\x00\x00MM\x00*\x00\x00\x00\x08\n\x00\x01\x00\x07\x00\x04\x00\x00\x000210\x02\x00\x03\x00\x02\x00\x00\x00\x00\x00\x90\x01\x03\x00\x02\x00\x06\x00\x00\x00\x86\x00\x00\x00\x04\x00\x02\x00\x07\x00\x00\x00\x8c\x00\x00\x00\x05\x00\x02\x00\x06\x00\x00\x00\x94\x00\x00\x00\x07\x00\x02\x00\x07\x00\x00\x00\x9a\x00\x00\x00\x0b\x00\x08\x00\x02\x00\x00\x00\x00\x00\x00\x00\r\x00\x07\x00\x04\x00\x00\x00\xfc\x01\x06\x00\x1d\x00\x02\x00\x08\x00\x00\x00\xa2\x00\x00\x00\x1e\x00\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00COLOR\x00FINE  \x00\x00AUTO1\x00AF-S  \x00\x006012345'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 318
+Image GPSInfo (str): '868'
+Image Make (str): 'NIKON CORPORATION'
+Image Model (str): 'NIKON D70'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+Interoperability InteroperabilityIndex (str): 'R98'
+Interoperability InteroperabilityVersion (str): '0100'
+MakerNote ColorMode (str): 'COLOR'
+MakerNote ColorSpace (str): 'sRGB'
+MakerNote FocusMode (str): 'AF-S'
+MakerNote ISOSetting (list): [0, 400]
+MakerNote MakernoteVersion (str): '0210'
+MakerNote ProgramShift (str): '-2/3 EV'
+MakerNote Quality (str): 'FINE'
+MakerNote SerialNumber (str): '6012345'
+MakerNote WhiteBalanceBias (list): [0, 0]
+MakerNote Whitebalance (str): 'AUTO1'
+Thumbnail Compression (str): 'JPEG (old-style)'
+Thumbnail JPEGInterchangeFormat (int): 1124
+Thumbnail JPEGInterchangeFormatLength (int): 13
+Thumbnail ResolutionUnit (str): 'Pixels/Inch'
+Thumbnail XResolution (int): 72
+Thumbnail YResolution (int): 72
+
+== cli t=Model nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=FNumber nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli q,b nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF InteroperabilityOffset (str): '1094'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 318
+Image GPSInfo (str): '868'
+Image Make (str): 'NIKON CORPORATION'
+Image Model (str): 'NIKON D70'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+Interoperability InteroperabilityIndex (str): 'R98'
+Interoperability InteroperabilityVersion (str): '0100'
+Thumbnail Compression (str): 'JPEG (old-style)'
+Thumbnail JPEGInterchangeFormat (int): 1124
+Thumbnail JPEGInterchangeFormatLength (int): 13
+Thumbnail ResolutionUnit (str): 'Pixels/Inch'
+Thumbnail XResolution (int): 72
+Thumbnail YResolution (int): 72
+
+== gps - nikon_d70.nef (1138 bytes)
+coords (51.50736666666667, -0.1277)
+== gps b nikon_d70.nef (1138 bytes)
+coords (51.50736666666667, -0.1277)
+== thumb - nikon_d70.nef (1138 bytes)
+JPEGThumbnail 13 ffd8ffdb00070000000000ffd9
+TIFFThumbnail none
+== cli - nikon_d3.nef (988 bytes)
+Opening: nikon_d3.nef
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 0, 10, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 224
+Image GPSInfo (Long): 762
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D3
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli s nikon_d3.nef (988 bytes)
+Opening: nikon_d3.nef
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 0, 10, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 224
+Image GPSInfo (Long): 762
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D3
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli - nikon_ev_a.jpg (879 bytes)
+Opening: nikon_ev_a.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 14, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): E995
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote ExposureDifference (Undefined): -1/2 EV
+MakerNote ExternalFlashExposureComp (Undefined): 0 EV
+MakerNote FlashBracketCompensationApplied (Undefined): +1/3 EV
+MakerNote FlashCompensation (Undefined): -1/3 EV
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli - nikon_ev_b.jpg (879 bytes)
+Opening: nikon_ev_b.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 14, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): E995
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote ExposureDifference (Undefined): +2/3 EV
+MakerNote ExternalFlashExposureComp (Undefined): +1.5 1/2 EV
+MakerNote FlashBracketCompensationApplied (Undefined): -2.0 EV
+MakerNote FlashCompensation (Undefined): +2.0 EV
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): +1/2 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli - nikon_ev_c.jpg (879 bytes)
+Opening: nikon_ev_c.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 14, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): E995
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote ExposureDifference (Undefined): -0.5 1/2 EV
+MakerNote ExternalFlashExposureComp (Undefined): 
+MakerNote FlashBracketCompensationApplied (Undefined): 0 EV
+MakerNote FlashCompensation (Undefined): +3.5 1/2 EV
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): +0.08333333333333333 1/12 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli - nikon_ev_zero.jpg (831 bytes)
+Opening: nikon_ev_zero.jpg
+error ZeroDivisionError: division by zero
+
+== cli - nikon_e950.jpg (725 bytes)
+Opening: nikon_e950.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 1, 0, 0, 5, 0, 3, 0, 3, 0, 0, 0, 1, 0, 2, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): E950
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote CCDSpeed (Short): 9
+MakerNote ColorMode (Short): Color
+MakerNote ImageAdjustment (Short): Normal
+MakerNote Quality (Short): VGA Normal
+MakerNote WhiteBalance (Short): Cloudy
+
+== cli - nikon_d1.jpg (807 bytes)
+Opening: nikon_d1.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [0, 10, 0, 1, 0, 7, 0, 0, 0, 4, 48, 50, 49, 48, 0, 2, 0, 3, 0, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 190
+Image Make (ASCII): NIKON
+Image Model (ASCII): D1
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+
+== cli - nikon_nomark.jpg (681 bytes)
+Opening: nikon_nomark.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): D200
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli s nikon_nomark.jpg (681 bytes)
+Opening: nikon_nomark.jpg
+error ValueError: Missing marker tag 42 in MakerNote.
+
+== cli - nikon_jfif.jpg (849 bytes)
+Opening: nikon_jfif.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): NIKON
+Image Model (ASCII): D200
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): 1
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): 
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII):   
+MakerNote SerialNumber (ASCII): 	
+
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): 345
+
+== cli - olympus_em1.orf (734 bytes)
+Opening: olympus_em1.orf
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [79, 76, 89, 77, 80, 0, 1, 0, 7, 0, 0, 2, 4, 0, 3, 0, 0, 0, 158, 2, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image Make (ASCII): OLYMPUS IMAGING CORP.  
+Image Model (ASCII): E-M1
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote CameraID (Undefined): OLYMPUS DIGITAL CAMERA
+MakerNote DigitalZoom (Ratio): 1
+MakerNote JPEGQual (Short): HQ
+MakerNote JPEGThumbnail (Undefined): [255, 216, 255, 219, 0, 7, 0, 0, 0, 0, 0, 255, 217]
+MakerNote Macro (Short): Normal
+MakerNote SoftwareRelease (ASCII): SX756
+MakerNote SpecialMode (Long): Normal - Sequence 3 - Left to right
+
+== thumb - olympus_em1.orf (734 bytes)
+JPEGThumbnail none
+TIFFThumbnail none
+== cli - olympus_em5.orf (762 bytes)
+Opening: olympus_em5.orf
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [79, 76, 89, 77, 80, 0, 1, 0, 7, 0, 0, 2, 4, 0, 3, 0, 0, 0, 186, 2, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 242
+Image Make (ASCII): OLYMPUS IMAGING CORP.
+Image Model (ASCII): E-M5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote CameraID (Undefined): OLYMPUS DIGITAL CAMERA
+MakerNote DigitalZoom (Ratio): 1
+MakerNote JPEGQual (Short): HQ
+MakerNote JPEGThumbnail (Undefined): [255, 216, 255, 219, 0, 7, 0, 0, 0, 0, 0, 255, 217]
+MakerNote Macro (Short): Normal
+MakerNote SoftwareRelease (ASCII): SX756
+MakerNote SpecialMode (Long): Normal - Sequence 3 - Left to right
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+
+== thumb - olympus_em5.orf (762 bytes)
+JPEGThumbnail 13 009d8205000100000008020000
+TIFFThumbnail none
+== cli - olympus_short.orf (592 bytes)
+Opening: olympus_short.orf
+error IndexError: list index out of range
+
+== cli - casio_qv.jpg (749 bytes)
+Opening: casio_qv.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [0, 6, 0, 1, 0, 3, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 3, 0, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 216
+Image Make (ASCII): CASIO COMPUTER CO.,LTD.
+Image Model (ASCII): QV-R62
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote DigitalZoom (Long): 65536
+MakerNote FlashMode (Short): Auto
+MakerNote FocusingMode (Short): Auto Focus
+MakerNote Quality (Short): Fine
+MakerNote RecordingMode (Short): Single Shutter
+MakerNote WhiteBalance (Short): Auto
+
+== cli - casio_ex.jpg (695 bytes)
+Opening: casio_ex.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [0, 3, 0, 1, 0, 3, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2, 0, 3, 0, 0, 0, 1, 0, 3, 0, 0, 0, 3, 0, 3, 0, 0, 0, 1, 0, 3, 0, 0, 0, 0, 0, 0]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 198
+Image Make (ASCII): Casio
+Image Model (ASCII): EX-Z750
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote FocusingMode (Short): Auto Focus
+MakerNote Quality (Short): Fine
+MakerNote RecordingMode (Short): Single Shutter
+
+== cli - sony_a7.arw (870 bytes)
+Opening: sony_a7.arw
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [5, 0, 2, 1, 4, 0, 1, 0, 0, 0, 2, 0, 0, 0, 4, 1, 10, 0, 1, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 644
+Image Make (ASCII): SONY
+Image Model (ASCII): ILCE-7M3
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote FlashExposureComp (Signed Ratio): 0
+MakerNote MultiBurstMode (Short): Off
+MakerNote Quality (Long): Fine
+MakerNote Teleconverter (Long): None
+MakerNote WhiteBalance (Long): Daylight
+
+== cli - fuji_xt4.raf (1019 bytes)
+Opening: fuji_xt4.raf
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [70, 85, 74, 73, 70, 73, 76, 77, 12, 0, 0, 0, 7, 0, 0, 0, 7, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 696
+Image Make (ASCII): FUJIFILM
+Image Model (ASCII): X-T4
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote FlashMode (Short): On
+MakerNote InternalSerialNumber (ASCII): FC  X-T4 12345
+MakerNote NoteVersion (Undefined): 0130
+MakerNote Quality (ASCII): NORMAL 
+MakerNote Saturation (Short): Normal
+MakerNote Sharpness (Short): Normal
+MakerNote WhiteBalance (Short): Daylight
+
+== cli b fuji_xt4.raf (1019 bytes)
+Opening: fuji_xt4.raf
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MakerNote (str): 'FUJIFILM\x0c\x00\x00\x00\x07\x00\x00\x00\x07\x00\x04\x00\x00\x000130\x10\x00\x02\x00\x0f\x00\x00\x00f\x00\x00\x00\x00\x10\x02\x00\x08\x00\x00\x00v\x00\x00\x00\x01\x10\x03\x00\x01\x00\x00\x00\x03\x00\x00\x00\x02\x10\x03\x00\x01\x00\x00\x00\x00\x01\x00\x00\x03\x10\x03\x00\x01\x00\x00\x00\x00\x00\x00\x00\x10\x10\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00FC  X-T4 12345\x00\x00NORMAL'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 212
+Image GPSInfo (str): '696'
+Image Make (str): 'FUJIFILM'
+Image Model (str): 'X-T4'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+MakerNote FlashMode (str): 'On'
+MakerNote InternalSerialNumber (str): 'FC  X-T4 12345'
+MakerNote NoteVersion (str): '0130'
+MakerNote Quality (str): 'NORMAL'
+MakerNote Saturation (str): 'Normal'
+MakerNote Sharpness (str): 'Normal'
+MakerNote WhiteBalance (str): 'Daylight'
+
+== cli - iphone.jpg (995 bytes)
+Opening: iphone.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [65, 112, 112, 108, 101, 32, 105, 79, 83, 0, 0, 1, 77, 77, 0, 7, 0, 1, 0, 9, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 210
+Image GPSInfo (Long): 672
+Image Make (ASCII): Apple
+Image Model (ASCII): iPhone 15 Pro
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): 17.4.1
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AEStable (Signed Long): Yes
+MakerNote AETarget (Signed Long): 178
+MakerNote AFStable (Signed Long): Yes
+MakerNote CameraType (Signed Long): Back Wide Angle
+MakerNote HDRImageType (Signed Long): Original Image
+MakerNote ImageCaptureType (Signed Long): Photo
+MakerNote MakerNoteVersion (Signed Long): 14
+
+== cli b iphone.jpg (995 bytes)
+Opening: iphone.jpg
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MakerNote (bytes): b'Apple iOS\x00\x00\x01MM\x00\x07\x00\x01\x00\t\x00\x00\x00\x01\x00\x00\x00\x0e\x00\x04\x00\t\x00\x00\x00\x01\x00\x00\x00\x01\x00\x05\x00\t\x00\x00\x00\x01\x00\x00\x00\xb2\x00\x07\x00\t\x00\x00\x00\x01\x00\x00\x00\x01\x00\n\x00\t\x00\x00\x00\x01\x00\x00\x00\x04\x00\x14\x00\t\x00\x00\x00\x01\x00\x00\x00\n\x00.\x00\t\x00\x00\x00\x01'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 210
+Image GPSInfo (str): '672'
+Image Make (str): 'Apple'
+Image Model (str): 'iPhone 15 Pro'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): '17.4.1'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+MakerNote AEStable (str): 'Yes'
+MakerNote AETarget (int): 178
+MakerNote AFStable (str): 'Yes'
+MakerNote CameraType (str): 'Back Wide Angle'
+MakerNote HDRImageType (str): 'Original Image'
+MakerNote ImageCaptureType (str): 'Photo'
+MakerNote MakerNoteVersion (int): 14
+
+== cli - apple_nohdr.jpg (745 bytes)
+Opening: apple_nohdr.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [0, 7, 0, 1, 0, 9, 0, 0, 0, 1, 0, 0, 0, 14, 0, 4, 0, 9, 0, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Apple
+Image Model (ASCII): iPhone 6
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - dji_mavic.jpg (975 bytes)
+Opening: dji_mavic.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [7, 0, 1, 0, 2, 0, 4, 0, 0, 0, 68, 74, 73, 0, 3, 0, 11, 0, 1, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 204
+Image GPSInfo (Long): 652
+Image Make (ASCII): DJI
+Image Model (ASCII): FC3170
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote CameraPitch (Single-Precision Floating Point (32-bit)): (-90.0,)
+MakerNote CameraRoll (Single-Precision Floating Point (32-bit)): (2.499999993688107e-07,)
+MakerNote Make (ASCII): DJI
+MakerNote Pitch (Single-Precision Floating Point (32-bit)): (0.10000000149011612,)
+MakerNote SpeedX (Single-Precision Floating Point (32-bit)): (0.0,)
+MakerNote SpeedY (Single-Precision Floating Point (32-bit)): (-1.25,)
+MakerNote Yaw (Single-Precision Floating Point (32-bit)): (178.5,)
+
+== cli b dji_mavic.jpg (975 bytes)
+Opening: dji_mavic.jpg
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MakerNote (bytes): b'\x07\x00\x01\x00\x02\x00\x04\x00\x00\x00DJI\x00\x03\x00\x0b\x00\x01\x00\x00\x00\x00\x00\x00\x00\x04\x00\x0b\x00\x01\x00\x00\x00\x00\x00\xa0\xbf\x06\x00\x0b\x00\x01\x00\x00\x00\xcd\xcc\xcc=\x07\x00\x0b\x00\x01\x00\x00\x00\x00\x802C\t\x00\x0b\x00\x01\x00\x00\x00\x00\x00\xb4\xc2\x0b\x00\x0b\x00\x01\x00\x00\x00\xbd7\x864'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 204
+Image GPSInfo (str): '652'
+Image Make (str): 'DJI'
+Image Model (str): 'FC3170'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+MakerNote CameraPitch (tuple): (-90.0,)
+MakerNote CameraRoll (tuple): (2.499999993688107e-07,)
+MakerNote Make (str): 'DJI'
+MakerNote Pitch (tuple): (0.10000000149011612,)
+MakerNote SpeedX (tuple): (0.0,)
+MakerNote SpeedY (tuple): (-1.25,)
+MakerNote Yaw (tuple): (178.5,)
+
+== cli - unknown_maker.jpg (729 bytes)
+Opening: unknown_maker.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [6, 0, 1, 0, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 3, 0, 1, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 196
+Image Make (ASCII): Hasselblad
+Image Model (ASCII): X2D
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - canon_5d3.cr2 (1972 bytes)
+Opening: canon_5d3.cr2
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 46, 3, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 1732
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D Mark III
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 32 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote DirectoryIndex (Proprietary): 100
+MakerNote DirectoryIndex2 (Proprietary): 101
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileIndex (Proprietary): 3402
+MakerNote FileIndex2 (Proprietary): 3403
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1958
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli b canon_5d3.cr2 (1972 bytes)
+Opening: canon_5d3.cr2
+File has JPEG thumbnail
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MakerNote (bytes): b'\x0b\x00\x01\x00\x03\x00"\x00\x00\x00.\x03\x00\x00\x02\x00\x03\x00\x04\x00\x00\x00r\x03\x00\x00\x04\x00\x03\x00\x12\x00\x00\x00z\x03\x00\x00\x06\x00\x02\x00\x16\x00\x00\x00\x9e\x03\x00\x00\x07\x00\x02\x00\x17\x00\x00\x00\xb4\x03\x00\x00\t\x00\x02\x00\r\x00\x00\x00\xcc\x03\x00\x00\r\x00\x07\x00\xbc\x02\x00\x00\xda\x03\x00\x00\x10\x00\x04\x00\x01\x00\x00\x00\x85\x02\x00\x80\x12\x00\x03\x00\x08\x00\x00\x00\x96\x06\x00\x00\x93\x00\x03\x00\x0f\x00\x00\x00\xa6\x06\x00\x00\xb4\x00\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00i\x00\x18\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x002\x00$\x00\x18\x00D\x00\x00\x00\xa0\x00\x1c\x01\x80\x00\x90\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x98\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00Canon EOS 5D Mark III\x00Firmware Version 1.3.6\x00\x00Ada Lovelace\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xa0\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00I\r\x00\x00J\r\x00\x00\x00\x00\x00\x00e\x00\x00\x00f\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\t\x00\t\x00\x80\x16\x00\x0f\x80\x16\x00\x0fc\x00c\x00\x1e\x00\x00\x00h\x00\x00\x00\x00\x00\x00\x00\x01'
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 318
+Image GPSInfo (str): '1732'
+Image Make (str): 'Canon'
+Image Model (str): 'Canon EOS 5D Mark III'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+MakerNote AESetting (str): 'Normal AE'
+MakerNote AFAreaHeight (str): '99'
+MakerNote AFAreaWidth (str): '99'
+MakerNote AFImageHeight (str): '3840'
+MakerNote AFImageWidth (str): '5760'
+MakerNote AFPointSelected (str): 'Unknown'
+MakerNote AFPointUsed (str): '0'
+MakerNote AutoExposureBracketing (str): 'Off'
+MakerNote AutoISO (str): '0'
+MakerNote BaseISO (str): '160'
+MakerNote BracketMode (str): 'Off'
+MakerNote BracketShotNumber (str): '0'
+MakerNote BracketValue (str): '0'
+MakerNote CameraTemperature (str): '32 C'
+MakerNote CanonImageHeight (str): '3840'
+MakerNote CanonImageWidth (str): '5760'
+MakerNote ColorSpace (str): 'sRGB'
+MakerNote ContinuousDriveMode (str): 'Single Or Timer'
+MakerNote Contrast (str): 'Normal'
+MakerNote DigitalZoom (str): 'None'
+MakerNote DirectoryIndex (str): '100'
+MakerNote DirectoryIndex2 (str): '101'
+MakerNote EasyShootingMode (str): 'Full Auto'
+MakerNote ExposureCompensation (str): '0'
+MakerNote ExposureMode (str): 'Easy Shooting'
+MakerNote FileIndex (str): '3402'
+MakerNote FileIndex2 (str): '3403'
+MakerNote FileNumber (str): '0'
+MakerNote FilterEffect (str): 'None'
+MakerNote FirmwareVersion (str): 'Firmware Version 1.3.6'
+MakerNote FlashActivity (str): 'Did Not Fire'
+MakerNote FlashBias (str): '0 EV'
+MakerNote FlashDetails (str): 'Manual'
+MakerNote FlashGuideNumber (str): '0'
+MakerNote FlashMode (str): 'Flash Not Fired'
+MakerNote FocalLength (str): '36'
+MakerNote FocalType (str): 'Unknown'
+MakerNote FocalUnitsPerMM (str): '24'
+MakerNote FocusMode (str): 'Single'
+MakerNote FocusType (str): 'Manual'
+MakerNote ISO (str): 'Unknown'
+MakerNote ImageSize (str): 'Large'
+MakerNote ImageType (str): 'Canon EOS 5D Mark III'
+MakerNote LensType (str): 'Canon EF 50mm f/1.8'
+MakerNote LongExposureNoiseReduction2 (str): 'Off'
+MakerNote LongFocalLengthOfLensInFocalUnits (str): '0'
+MakerNote Macromode (str): 'Normal'
+MakerNote MaxAperture (str): '1'
+MakerNote MeasuredEV (str): '284'
+MakerNote MeteringMode (str): 'Default'
+MakerNote MinAperture (str): '0'
+MakerNote ModelID (str): 'EOS 5D Mark III'
+MakerNote OpticalZoomCode (str): '0'
+MakerNote OwnerName (str): 'Ada Lovelace'
+MakerNote Quality (str): 'Fine'
+MakerNote RawJpgQuality (str): 'Economy'
+MakerNote RawJpgSize (str): 'Large'
+MakerNote RecordMode (str): 'JPEG'
+MakerNote Saturation (str): 'Normal'
+MakerNote SelfTimer (str): '0'
+MakerNote SequenceNumber (str): '0'
+MakerNote Sharpness (str): 'Unknown'
+MakerNote ShortFocalLengthOfLensInFocalUnits (str): '105'
+MakerNote SlowShutter (str): 'Off'
+MakerNote TargetAperture (str): '128'
+MakerNote TargetExposureTime (str): '144'
+MakerNote Unknown (str): '0'
+MakerNote ValidAFPoints (str): '9'
+MakerNote WBBracketMode (str): 'Off'
+MakerNote WBBracketValueAB (str): '0'
+MakerNote WBBracketValueGM (str): '0'
+MakerNote WhiteBalance (str): 'Auto'
+Thumbnail Compression (str): 'JPEG (old-style)'
+Thumbnail JPEGInterchangeFormat (int): 1958
+Thumbnail JPEGInterchangeFormatLength (int): 13
+Thumbnail ResolutionUnit (str): 'Pixels/Inch'
+Thumbnail XResolution (int): 72
+Thumbnail YResolution (int): 72
+
+== cli q canon_5d3.cr2 (1972 bytes)
+Opening: canon_5d3.cr2
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 1732
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D Mark III
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1958
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli - canon_5d.jpg (1239 bytes)
+Opening: canon_5d.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 188, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 204
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 25 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote DirectoryIndex (Proprietary): 100
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileIndex (Proprietary): 1248
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_5d2.jpg (1723 bytes)
+Opening: canon_5d2.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 196, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D Mark II
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): -128 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote DirectoryIndex (Proprietary): -1
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileIndex (Proprietary): 1
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_t3i.jpg (1521 bytes)
+Opening: canon_t3i.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 194, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 210
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS REBEL T3i
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 22 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote DirectoryIndex (Proprietary): 99
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileIndex (Proprietary): 6604
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_kiss.jpg (1519 bytes)
+Opening: canon_kiss.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 192, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 208
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS Kiss X5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 22 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote DirectoryIndex (Proprietary): 99
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileIndex (Proprietary): 6604
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_600dx.jpg (1517 bytes)
+Opening: canon_600dx.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 190, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 206
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 600DX
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 24 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_r5.jpg (1715 bytes)
+Opening: canon_r5.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 188, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 204
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS R5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 24 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_big.jpg (2123 bytes)
+Opening: canon_big.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 196, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D Mark III
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 24 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_short.jpg (1165 bytes)
+Opening: canon_short.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 188, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 204
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 25 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_shortinfo.jpg (1021 bytes)
+Opening: canon_shortinfo.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 188, 2, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 204
+Image Make (ASCII): Canon
+Image Model (ASCII): Canon EOS 5D
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 24 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - canon_nomodel.jpg (739 bytes)
+Opening: canon_nomodel.jpg
+EXIF MakerNote (Undefined): [11, 0, 1, 0, 3, 0, 34, 0, 0, 0, 200, 0, 0, 0, 2, 0, 3, 0, 4, 0, ... ]
+Image ExifOffset (Long): 44
+Image Make (ASCII): Canon
+MakerNote AESetting (Proprietary): Normal AE
+MakerNote AFAreaHeight (Proprietary): 99
+MakerNote AFAreaWidth (Proprietary): 99
+MakerNote AFImageHeight (Proprietary): 3840
+MakerNote AFImageWidth (Proprietary): 5760
+MakerNote AFPointSelected (Proprietary): Unknown
+MakerNote AFPointUsed (Proprietary): 0
+MakerNote AutoExposureBracketing (Proprietary): Off
+MakerNote AutoISO (Proprietary): 0
+MakerNote BaseISO (Proprietary): 160
+MakerNote BracketMode (Proprietary): Off
+MakerNote BracketShotNumber (Proprietary): 0
+MakerNote BracketValue (Proprietary): 0
+MakerNote CameraTemperature (Proprietary): 24 C
+MakerNote CanonImageHeight (Proprietary): 3840
+MakerNote CanonImageWidth (Proprietary): 5760
+MakerNote ColorSpace (Short): sRGB
+MakerNote ContinuousDriveMode (Proprietary): Single Or Timer
+MakerNote Contrast (Proprietary): Normal
+MakerNote DigitalZoom (Proprietary): None
+MakerNote EasyShootingMode (Proprietary): Full Auto
+MakerNote ExposureCompensation (Proprietary): 0
+MakerNote ExposureMode (Proprietary): Easy Shooting
+MakerNote FileNumber (Proprietary): 0
+MakerNote FilterEffect (Proprietary): None
+MakerNote FirmwareVersion (ASCII): Firmware Version 1.3.6
+MakerNote FlashActivity (Proprietary): Did Not Fire
+MakerNote FlashBias (Proprietary): 0 EV
+MakerNote FlashDetails (Proprietary): Manual
+MakerNote FlashGuideNumber (Proprietary): 0
+MakerNote FlashMode (Proprietary): Flash Not Fired
+MakerNote FocalLength (Proprietary): 36
+MakerNote FocalType (Proprietary): Unknown
+MakerNote FocalUnitsPerMM (Proprietary): 24
+MakerNote FocusMode (Proprietary): Single
+MakerNote FocusType (Proprietary): Manual
+MakerNote ISO (Proprietary): Unknown
+MakerNote ImageSize (Proprietary): Large
+MakerNote ImageType (ASCII): Canon EOS 5D Mark III
+MakerNote LensType (Proprietary): Canon EF 50mm f/1.8
+MakerNote LongExposureNoiseReduction2 (Proprietary): Off
+MakerNote LongFocalLengthOfLensInFocalUnits (Proprietary): 0
+MakerNote Macromode (Proprietary): Normal
+MakerNote MaxAperture (Proprietary): 1
+MakerNote MeasuredEV (Proprietary): 284
+MakerNote MeteringMode (Proprietary): Default
+MakerNote MinAperture (Proprietary): 0
+MakerNote ModelID (Long): EOS 5D Mark III
+MakerNote OpticalZoomCode (Proprietary): 0
+MakerNote OwnerName (ASCII): Ada Lovelace
+MakerNote Quality (Proprietary): Fine
+MakerNote RawJpgQuality (Proprietary): Economy
+MakerNote RawJpgSize (Proprietary): Large
+MakerNote RecordMode (Proprietary): JPEG
+MakerNote Saturation (Proprietary): Normal
+MakerNote SelfTimer (Proprietary): 0
+MakerNote SequenceNumber (Proprietary): 0
+MakerNote Sharpness (Proprietary): Unknown
+MakerNote ShortFocalLengthOfLensInFocalUnits (Proprietary): 105
+MakerNote SlowShutter (Proprietary): Off
+MakerNote TargetAperture (Proprietary): 128
+MakerNote TargetExposureTime (Proprietary): 144
+MakerNote Unknown (Proprietary): 0
+MakerNote ValidAFPoints (Proprietary): 9
+MakerNote WBBracketMode (Proprietary): Off
+MakerNote WBBracketValueAB (Proprietary): 0
+MakerNote WBBracketValueGM (Proprietary): 0
+MakerNote WhiteBalance (Proprietary): Auto
+
+== cli - gh5.jpg (923 bytes)
+Opening: gh5.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_jfif.jpg (941 bytes)
+Opening: gh5_jfif.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_jfif_jfxx.jpg (955 bytes)
+Opening: gh5_jfif_jfxx.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_icc.jpg (965 bytes)
+Opening: gh5_icc.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_jfif_icc.jpg (983 bytes)
+Opening: gh5_jfif_icc.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_adobe.jpg (950 bytes)
+Opening: gh5_adobe.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_xmp_first.jpg (960 bytes)
+Opening: gh5_xmp_first.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_com.jpg (943 bytes)
+Opening: gh5_com.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - gh5_double_soi.jpg (927 bytes)
+Opening: gh5_double_soi.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - noexif.jpg (105 bytes)
+Opening: noexif.jpg
+No EXIF information found
+
+== cli - noexif_raw.jpg (87 bytes)
+Opening: noexif_raw.jpg
+No EXIF information found
+
+== cli - trunc_app0.jpg (4 bytes)
+Opening: trunc_app0.jpg
+error IndexError: index out of range
+
+== cli - trunc_soi.jpg (2 bytes)
+Opening: trunc_soi.jpg
+error IndexError: index out of range
+
+== cli - trunc_app1.jpg (40 bytes)
+Opening: trunc_app1.jpg
+Unexpected slice length: 2
+Image Make (ASCII): 
+Image Model (ASCII): 
+
+== cli - garbage_after_soi.jpg (5 bytes)
+Opening: garbage_after_soi.jpg
+No EXIF information found
+
+== cli - jfif_short.jpg (8 bytes)
+Opening: jfif_short.jpg
+No EXIF information found
+
+== cli - screenshot.png (906 bytes)
+Opening: screenshot.png
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - screenshot_text.png (931 bytes)
+Opening: screenshot_text.png
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - noexif.png (68 bytes)
+Opening: noexif.png
+PNG file does not have exif data.
+No EXIF information found
+
+== cli - trunc.png (30 bytes)
+Opening: trunc.png
+PNG file does not have exif data.
+No EXIF information found
+
+== cli - odd_chunk.png (920 bytes)
+Opening: odd_chunk.png
+error UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 0: ordinal not in range(128)
+
+== cli - photo.webp (896 bytes)
+Opening: photo.webp
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - photo_iccp.webp (910 bytes)
+Opening: photo_iccp.webp
+No EXIF information found
+
+== cli - photo_odd_unpadded.webp (909 bytes)
+Opening: photo_odd_unpadded.webp
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - photo_noprefix.webp (890 bytes)
+Opening: photo_noprefix.webp
+No EXIF information found
+
+== cli - noexif_flag.webp (896 bytes)
+Opening: noexif_flag.webp
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Lake Bled at dawn
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 214
+Image GPSInfo (Long): 600
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DMC-GH5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - simple.webp (38 bytes)
+Opening: simple.webp
+Webp file does not have exif data.
+No EXIF information found
+
+== cli - trunc.webp (56 bytes)
+Opening: trunc.webp
+No EXIF information found
+
+== cli - pixel.heic (994 bytes)
+Opening: pixel.heic
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli b pixel.heic (994 bytes)
+Opening: pixel.heic
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF WhiteBalance (str): 'Auto'
+GPS GPSAltitude (float): 35.5
+GPS GPSAltitudeRef (int): 0
+GPS GPSDate (str): '2024-05-17'
+GPS GPSLatitude (list): [51, 30, 26.52]
+GPS GPSLatitudeRef (str): 'N'
+GPS GPSLongitude (list): [0, 7, 39.72]
+GPS GPSLongitudeRef (str): 'W'
+GPS GPSMapDatum (str): 'WGS-84'
+GPS GPSTimeStamp (list): [14, 32, 5]
+GPS GPSVersionID (str): '2.3.0.0'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 212
+Image GPSInfo (str): '558'
+Image Make (str): 'Google'
+Image Model (str): 'Pixel 8'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+
+== gps - pixel.heic (994 bytes)
+coords (51.50736666666667, -0.1277)
+== cli - android_q.heic (1010 bytes)
+Opening: android_q.heic
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - iloc_v2.heic (1032 bytes)
+Opening: iloc_v2.heic
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - photo.avif (994 bytes)
+Opening: photo.avif
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - photo.mif1 (994 bytes)
+Opening: photo.mif1
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - nokia.heif (988 bytes)
+Opening: nokia.heif
+No EXIF information found
+
+== cli - nokia_ii.heif (998 bytes)
+Opening: nokia_ii.heif
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 222
+Image GPSInfo (Long): 568
+Image Make (ASCII): HMD Global
+Image Model (ASCII): Nokia 8.3 5G
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - nokia_short.heif (38 bytes)
+Opening: nokia_short.heif
+error EOFError: 
+
+== cli - minor1.heic (994 bytes)
+Opening: minor1.heic
+No EXIF information found
+
+== cli - noexif_item.heic (986 bytes)
+Opening: noexif_item.heic
+No EXIF information found
+
+== cli - lost_item.heic (994 bytes)
+Opening: lost_item.heic
+error KeyError: 2
+
+== cli - two_extents.heic (1002 bytes)
+Opening: two_extents.heic
+error AssertionError: 
+
+== cli - iloc_v3.heic (1000 bytes)
+Opening: iloc_v3.heic
+error BoxVersion: (2, 3)
+
+== cli - bad_size.heic (994 bytes)
+Opening: bad_size.heic
+error BadSize: 3
+
+== cli - short_hdr.heic (994 bytes)
+Opening: short_hdr.heic
+error AssertionError: 
+
+== cli - wrong_hdr.heic (994 bytes)
+Opening: wrong_hdr.heic
+error AssertionError: 
+
+== cli - trunc.heic (300 bytes)
+Opening: trunc.heic
+Image Make (ASCII): 
+Image Model (ASCII): 
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): 
+Image XResolution (Ratio): 0/0
+Image YResolution (Ratio): 0/0
+
+== cli - no_meta.heic (40 bytes)
+Opening: no_meta.heic
+error EOFError: 
+
+== cli - stale_boxes.heic (889 bytes)
+Opening: stale_boxes.heic
+error BadSize: get(nbytes=838861312) found 689 bytes at position 889
+
+== cli - photo.jxl (848 bytes)
+Opening: photo.jxl
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli q photo.jxl (848 bytes)
+Opening: photo.jxl
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 212
+Image GPSInfo (Long): 558
+Image Make (ASCII): Google
+Image Model (ASCII): Pixel 8
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - bad_brand.jxl (848 bytes)
+Opening: bad_brand.jxl
+error AssertionError: 
+
+== cli - noexif.jxl (52 bytes)
+Opening: noexif.jxl
+error EOFError: 
+
+== cli - notes.txt (46 bytes)
+Opening: notes.txt
+File format not recognized.
+No EXIF information found
+
+== cli - empty.bin (0 bytes)
+Opening: empty.bin
+File format not recognized.
+No EXIF information found
+
+== cli - gif89a.gif (14 bytes)
+Opening: gif89a.gif
+File format not recognized.
+No EXIF information found
+
+== cli - loop.tif (82 bytes)
+Opening: loop.tif
+IFD loop detected.
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Thumbnail ImageWidth (Short): 640
+
+== cli - self_next.tif (64 bytes)
+Opening: self_next.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - three_ifds.tif (124 bytes)
+Opening: three_ifds.tif
+IFD 2 ImageLength (Long): 24
+IFD 2 ImageWidth (Long): 32
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Thumbnail ImageLength (Long): 120
+Thumbnail ImageWidth (Long): 160
+
+== cli - bad_type.tif (88 bytes)
+Opening: bad_type.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli s bad_type.tif (88 bytes)
+Opening: bad_type.tif
+error ValueError: Unknown field type 17 in tag 0x0131
+
+== cli s bad_type0.tif (76 bytes)
+Opening: bad_type0.tif
+error ValueError: Unknown field type 0 in tag 0x0132
+
+== cli - past_eof.tif (100 bytes)
+Opening: past_eof.tif
+Image Artist (Short): [0, 0, 0]
+Image DateTime (Long): [0, 0, 0]
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image Software (ASCII): 
+
+== cli - bad_utf8.tif (98 bytes)
+Opening: bad_utf8.tif
+Possibly corrupted field Artist in Image IFD
+Image Artist (ASCII): b'Bj\xf6rk Gu\xf0mundsd\xf3ttir'
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli b bad_utf8.tif (98 bytes)
+Opening: bad_utf8.tif
+Possibly corrupted field Artist in Image IFD
+Image Artist (bytes): b'Bj\xf6rk Gu\xf0mundsd\xf3ttir'
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+
+== cli - utf8.tif (114 bytes)
+Opening: utf8.tif
+Image Artist (ASCII): Ana María Muñoz
+Image Copyright (ASCII): © 2024
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli b utf8.tif (114 bytes)
+Opening: utf8.tif
+Image Artist (str): 'Ana María Muñoz'
+Image Copyright (str): '© 2024'
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+
+== cli - after_nul.tif (94 bytes)
+Opening: after_nul.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image Software (ASCII): GIMP 2.10
+
+== cli - empty_ascii.tif (106 bytes)
+Opening: empty_ascii.tif
+Image Artist (ASCII): 
+Image Copyright (ASCII):    
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image Software (ASCII): 
+
+== cli b empty_ascii.tif (106 bytes)
+Opening: empty_ascii.tif
+Image Artist (NoneType): None
+Image Copyright (NoneType): None
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+Image Software (NoneType): None
+
+== cli - ratios.tif (204 bytes)
+Opening: ratios.tif
+Image ExposureBiasValue (Signed Ratio): -1/3
+Image ExposureTime (Ratio): 1/400
+Image FNumber (Ratio): 28/5
+Image FocalLength (Ratio): 9/2
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image ShutterSpeedValue (Signed Ratio): -1/2
+Image XResolution (Ratio): 0/0
+Image YResolution (Ratio): 300/0
+
+== cli b ratios.tif (204 bytes)
+Opening: ratios.tif
+Image ExposureBiasValue (float): -0.3333333333333333
+Image ExposureTime (float): 0.0025
+Image FNumber (float): 5.6
+Image FocalLength (float): 4.5
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+Image ShutterSpeedValue (float): -0.5
+Image XResolution (int): 0
+Image YResolution (int): 300
+
+== cli - numbers.tif (498 bytes)
+Opening: numbers.tif
+Image BitsPerSample (Short): [8, 8, 8]
+Image ColorMap (Short): [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ... ]
+Image FocalPlaneXResolution (Single-Precision Floating Point (32-bit)): [(0.10000000149011612,), (-2.5,), (3.0000000054977558e+38,)]
+Image FocalPlaneYResolution (Double-Precision Floating Point (64-bit)): [(1e-300,), (0.6666666666666666,)]
+Image ImageLength (Signed Short): -32768
+Image ImageWidth (Short): 65535
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image PrintIM (Undefined): [80, 114, 105, 110, 116, 73, 77, 0, 48, 51, 48, 48]
+Image SMinSampleValue (Double-Precision Floating Point (64-bit)): (nan,)
+Image SampleFormat (Single-Precision Floating Point (32-bit)): (inf,)
+Image SamplesPerPixel (Signed Byte): -5
+Image Tag 0xC612 (Byte): [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, ... ]
+Image WhitePoint (Signed Long): [-1, 2147483647, -2147483648]
+Image XPAuthor (Byte): Ana
+Image XPTitle (Byte): [84, 0, 105, 0, 116, 0, 108, 0, 101, 0, 0, 0]
+
+== cli b numbers.tif (498 bytes)
+Opening: numbers.tif
+Image BitsPerSample (list): [8, 8, 8]
+Image ColorMap (list): [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]
+Image FocalPlaneXResolution (list): [(0.10000000149011612,), (-2.5,), (3.0000000054977558e+38,)]
+Image FocalPlaneYResolution (list): [(1e-300,), (0.6666666666666666,)]
+Image ImageLength (int): -32768
+Image ImageWidth (int): 65535
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+Image PrintIM (str): 'PrintIM\x000300'
+Image SMinSampleValue (tuple): (nan,)
+Image SampleFormat (str): '(inf,)'
+Image SamplesPerPixel (int): -5
+Image Tag 0xC612 (str): '\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<'
+Image WhitePoint (list): [-1, 2147483647, -2147483648]
+Image XPAuthor (str): 'Ana'
+Image XPTitle (str): 'T\x00i\x00t\x00l\x00e'
+
+== cli - ifd_type.tif (96 bytes)
+Opening: ifd_type.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image Tag 0xC7A1 (IFD): [300, 400]
+Image Tag 0xC7A2 (IFD): 7
+
+== cli b ifd_type.tif (96 bytes)
+Opening: ifd_type.tif
+error ValueError: bytes must be in range(0, 256)
+
+== cli - bad_date.tif (96 bytes)
+Opening: bad_date.tif
+Possibly corrupted field DateTime in Image IFD
+Image DateTime (ASCII): b'2024:05:17 14:32:\xff\xfe'
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli b bad_date.tif (96 bytes)
+Opening: bad_date.tif
+Possibly corrupted field DateTime in Image IFD
+error TypeError: argument should be integer or bytes-like object, not 'str'
+
+== cli - big_counts.tif (3308 bytes)
+Opening: big_counts.tif
+Image ColorMap (Short): []
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image PrintIM (Undefined): []
+Image UserComment (Undefined): 
+
+== cli b big_counts.tif (3308 bytes)
+Opening: big_counts.tif
+Image ColorMap (NoneType): None
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+Image PrintIM (NoneType): None
+Image UserComment (NoneType): None
+
+== cli - double_eof.tif (76 bytes)
+Opening: double_eof.tif
+Possibly corrupted field FocalPlaneYResolution
+error IndexError: list index out of range
+
+== cli - float_eof.tif (88 bytes)
+Opening: float_eof.tif
+Possibly corrupted field FocalPlaneXResolution
+Possibly corrupted field FocalPlaneXResolution
+Possibly corrupted field FocalPlaneYResolution
+Possibly corrupted field FocalPlaneYResolution
+Image FocalPlaneXResolution (Single-Precision Floating Point (32-bit)): []
+Image FocalPlaneYResolution (Double-Precision Floating Point (64-bit)): []
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli b float_eof.tif (88 bytes)
+Opening: float_eof.tif
+Possibly corrupted field FocalPlaneXResolution
+Possibly corrupted field FocalPlaneXResolution
+Possibly corrupted field FocalPlaneYResolution
+Possibly corrupted field FocalPlaneYResolution
+Image FocalPlaneXResolution (NoneType): None
+Image FocalPlaneYResolution (NoneType): None
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+
+== cli - ascii_bytes_long.tif (150 bytes)
+Opening: ascii_bytes_long.tif
+Possibly corrupted field Software in Image IFD
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image Software (ASCII): b'\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93, ... ]
+
+== cli - lookups.tif (182 bytes)
+Opening: lookups.tif
+Image Compression (Short): 
+Image CustomRendered (Undefined): CustomNormal
+Image ExposureProgram (ASCII): 'A''B'
+Image Flash (Signed Ratio): 1/2
+Image Make (ASCII): Leica Camera AG
+Image MeteringMode (Short): other
+Image Model (ASCII): LEICA Q2
+Image Orientation (Ratio): Rotated 90 CW
+Image ResolutionUnit (Short): Pixels/InchPixels/Centimeter9
+Image SceneCaptureType (Single-Precision Floating Point (32-bit)): (1.0,)
+
+== cli b lookups.tif (182 bytes)
+Opening: lookups.tif
+Image Compression (NoneType): None
+Image CustomRendered (str): 'CustomNormal'
+Image ExposureProgram (str): "'A''B'"
+Image Flash (str): '1/2'
+Image Make (str): 'Leica Camera AG'
+Image MeteringMode (str): 'other'
+Image Model (str): 'LEICA Q2'
+Image Orientation (str): 'Rotated 90 CW'
+Image ResolutionUnit (str): 'Pixels/InchPixels/Centimeter9'
+Image SceneCaptureType (str): '(1.0,)'
+
+== cli - comment0.jpg (681 bytes)
+Opening: comment0.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Kayaking the fjord
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment1.jpg (673 bytes)
+Opening: comment1.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): Fjord
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment2.jpg (677 bytes)
+Opening: comment2.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): After the rain
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment3.jpg (667 bytes)
+Opening: comment3.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): $B
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment4.jpg (669 bytes)
+Opening: comment4.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): SJIShello
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment5.jpg (679 bytes)
+Opening: comment5.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): 
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment6.jpg (673 bytes)
+Opening: comment6.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): spaced
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli - comment7.jpg (665 bytes)
+Opening: comment7.jpg
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): 123456789
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 200
+Image Make (ASCII): Panasonic
+Image Model (ASCII): DC-S5
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli b comment_b.jpg (679 bytes)
+Opening: comment_b.jpg
+EXIF ApertureValue (float): 2.970854
+EXIF ColorSpace (str): 'sRGB'
+EXIF ComponentsConfiguration (str): 'YCbCr'
+EXIF DateTimeDigitized (str): '2024-05-17 14:32:05'
+EXIF DateTimeOriginal (str): '2024-05-17 14:32:05'
+EXIF ExifImageLength (int): 3000
+EXIF ExifImageWidth (int): 4000
+EXIF ExifVersion (str): '0232'
+EXIF ExposureBiasValue (float): -0.3333333333333333
+EXIF ExposureMode (str): 'Auto Exposure'
+EXIF ExposureProgram (str): 'Aperture Priority'
+EXIF ExposureTime (float): 0.004
+EXIF FNumber (float): 2.8
+EXIF Flash (str): 'Flash did not fire, compulsory flash mode'
+EXIF FlashPixVersion (str): '0100'
+EXIF FocalLength (int): 50
+EXIF ISOSpeedRatings (int): 200
+EXIF MeteringMode (str): 'Pattern'
+EXIF SceneCaptureType (str): 'Standard'
+EXIF ShutterSpeedValue (float): 7.965784
+EXIF UserComment (NoneType): None
+EXIF WhiteBalance (str): 'Auto'
+Image DateTime (str): '2024-05-17 14:32:05'
+Image ExifOffset (int): 200
+Image Make (str): 'Panasonic'
+Image Model (str): 'DC-S5'
+Image Orientation (str): 'Horizontal (normal)'
+Image ResolutionUnit (str): 'Pixels/Inch'
+Image Software (str): 'Firmware 1.02'
+Image XResolution (int): 72
+Image YCbCrPositioning (str): 'Co-sited'
+Image YResolution (int): 72
+
+== cli - make_string.tif (156 bytes)
+Opening: make_string.tif
+Image ExifVersion (Short): 0232
+Image FlashPixVersion (ASCII): 0100
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image PageName (Ratio): 6566
+Image XPAuthor (Undefined): 123
+Image XPSubject (Byte): [233, 116, 233]
+
+== cli b make_string.tif (156 bytes)
+Opening: make_string.tif
+Image ExifVersion (str): '0232'
+Image FlashPixVersion (str): '0100'
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA Q2'
+Image PageName (str): '6566'
+Image XPAuthor (str): '123'
+Image XPSubject (bytes): b'\xe9t\xe9'
+
+== cli - make_string_u.tif (90 bytes)
+Opening: make_string_u.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image UserComment (ASCII): ASCII   hello
+
+== cli - make_string_f.tif (84 bytes)
+Opening: make_string_f.tif
+Image ExifVersion (Single-Precision Floating Point (32-bit)): (1.5,)(2.0,)
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - gps_ratio.tif (84 bytes)
+Opening: gps_ratio.tif
+Possibly corrupted IFD: GPS
+Image GPSInfo (Ratio): 8
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - gps_ascii.tif (76 bytes)
+Opening: gps_ascii.tif
+Possibly corrupted IFD: GPS
+Image GPSInfo (ASCII): ab
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - gps_empty.tif (76 bytes)
+Opening: gps_empty.tif
+No values found for GPS SubIFD
+Image GPSInfo (Long): []
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - gps_float.tif (76 bytes)
+Opening: gps_float.tif
+Possibly corrupted IFD: GPS
+Image GPSInfo (Single-Precision Floating Point (32-bit)): (8.0,)
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - exif_ascii.tif (76 bytes)
+Opening: exif_ascii.tif
+Possibly corrupted IFD: EXIF
+Image ExifOffset (ASCII): ab
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - exif_empty.tif (76 bytes)
+Opening: exif_empty.tif
+error IndexError: list index out of range
+
+== cli - exif_eof.tif (76 bytes)
+Opening: exif_eof.tif
+Image ExifOffset (Long): 7000
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - exif_short.tif (76 bytes)
+Opening: exif_short.tif
+EXIF ExifOffset (Short): 8
+EXIF Make (ASCII): Leica Camera AG
+EXIF Model (ASCII): LEICA Q2
+Image ExifOffset (Short): 8
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+
+== cli - subifds.dng (168 bytes)
+Opening: subifds.dng
+EXIF SubIFD0 ImageLength (Long): 384
+EXIF SubIFD0 ImageWidth (Long): 512
+EXIF SubIFD0 SubfileType (Long): Reduced-resolution image
+EXIF SubIFD1 Compression (Short): JPEG
+EXIF SubIFD1 ImageWidth (Long): 6000
+EXIF SubIFD1 SubfileType (Long): Full-resolution Image
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA M11
+Image SubIFDs (Long): [84, 126]
+
+== cli q subifds.dng (168 bytes)
+Opening: subifds.dng
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA M11
+Image SubIFDs (Long): [84, 126]
+
+== cli b subifds.dng (168 bytes)
+Opening: subifds.dng
+EXIF SubIFD0 ImageLength (int): 384
+EXIF SubIFD0 ImageWidth (int): 512
+EXIF SubIFD0 SubfileType (str): 'Reduced-resolution image'
+EXIF SubIFD1 Compression (str): 'JPEG'
+EXIF SubIFD1 ImageWidth (int): 6000
+EXIF SubIFD1 SubfileType (str): 'Full-resolution Image'
+Image Make (str): 'Leica Camera AG'
+Image Model (str): 'LEICA M11'
+Image SubIFDs (list): [84, 126]
+
+== cli - subifd_ascii.dng (76 bytes)
+Opening: subifd_ascii.dng
+Possibly corrupted IFD: EXIF SubIFD0
+Possibly corrupted IFD: EXIF SubIFD1
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Image SubIFDs (ASCII): xy
+
+== cli t=Make nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+Image Make (ASCII): NIKON CORPORATION
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=GPSLatitude nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF InteroperabilityOffset (Long): 1094
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Interoperability InteroperabilityIndex (ASCII): R98
+Interoperability InteroperabilityVersion (Undefined): [48, 49, 48, 48]
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=MakerNote nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=ExifOffset nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF InteroperabilityOffset (Long): 1094
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Interoperability InteroperabilityIndex (ASCII): R98
+Interoperability InteroperabilityVersion (Undefined): [48, 49, 48, 48]
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=Tag 0x0213 nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF InteroperabilityOffset (Long): 1094
+EXIF MakerNote (Undefined): [78, 105, 107, 111, 110, 0, 2, 16, 0, 0, 77, 77, 0, 42, 0, 0, 0, 8, 10, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 318
+Image GPSInfo (Long): 868
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Interoperability InteroperabilityIndex (ASCII): R98
+Interoperability InteroperabilityVersion (Undefined): [48, 49, 48, 48]
+MakerNote ColorMode (ASCII): COLOR
+MakerNote ColorSpace (Short): sRGB
+MakerNote FocusMode (ASCII): AF-S  
+MakerNote ISOSetting (Short): [0, 400]
+MakerNote MakernoteVersion (Undefined): 0210
+MakerNote ProgramShift (Undefined): -2/3 EV
+MakerNote Quality (ASCII): FINE  
+MakerNote SerialNumber (ASCII): 6012345
+MakerNote WhiteBalanceBias (Signed Short): [0, 0]
+MakerNote Whitebalance (ASCII): AUTO1
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli t=YCbCrPositioning nikon_d70.nef (1138 bytes)
+Opening: nikon_d70.nef
+File has JPEG thumbnail
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image Make (ASCII): NIKON CORPORATION
+Image Model (ASCII): NIKON D70
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+Thumbnail Compression (Short): JPEG (old-style)
+Thumbnail JPEGInterchangeFormat (Long): 1124
+Thumbnail JPEGInterchangeFormatLength (Long): 13
+Thumbnail ResolutionUnit (Short): Pixels/Inch
+Thumbnail XResolution (Ratio): 72
+Thumbnail YResolution (Ratio): 72
+
+== cli - sony_xmp.arw (914 bytes)
+Opening: sony_xmp.arw
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MakerNote (Undefined): [5, 0, 2, 1, 4, 0, 1, 0, 0, 0, 2, 0, 0, 0, 4, 1, 10, 0, 1, 0, ... ]
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF UserComment (Undefined): hi
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image ApplicationNotes (Byte): [60, 120, 58, 120, 109, 112, 109, 101, 116, 97, 47, 62]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 234
+Image GPSInfo (Long): 688
+Image Make (ASCII): SONY
+Image Model (ASCII): ILCE-1
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+MakerNote FlashExposureComp (Signed Ratio): 0
+MakerNote MultiBurstMode (Short): Off
+MakerNote Quality (Long): Fine
+MakerNote Teleconverter (Long): None
+MakerNote WhiteBalance (Long): Daylight
+
+== cli q sony_xmp.arw (914 bytes)
+Opening: sony_xmp.arw
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ColorSpace (Short): sRGB
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifImageLength (Long): 3000
+EXIF ExifImageWidth (Long): 4000
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureMode (Short): Auto Exposure
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FlashPixVersion (Undefined): 0100
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF SceneCaptureType (Short): Standard
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+EXIF WhiteBalance (Short): Auto
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 234
+Image GPSInfo (Long): 688
+Image Make (ASCII): SONY
+Image Model (ASCII): ILCE-1
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== cli t=MakerNote,q sony_xmp.arw (914 bytes)
+Opening: sony_xmp.arw
+EXIF ApertureValue (Ratio): 1485427/500000
+EXIF ComponentsConfiguration (Undefined): YCbCr
+EXIF DateTimeDigitized (ASCII): 2024:05:17 14:32:05
+EXIF DateTimeOriginal (ASCII): 2024:05:17 14:32:05
+EXIF ExifVersion (Undefined): 0232
+EXIF ExposureBiasValue (Signed Ratio): -1/3
+EXIF ExposureProgram (Short): Aperture Priority
+EXIF ExposureTime (Ratio): 1/250
+EXIF FNumber (Ratio): 14/5
+EXIF Flash (Short): Flash did not fire, compulsory flash mode
+EXIF FocalLength (Ratio): 50
+EXIF ISOSpeedRatings (Short): 200
+EXIF MeteringMode (Short): Pattern
+EXIF ShutterSpeedValue (Signed Ratio): 995723/125000
+GPS GPSAltitude (Ratio): 71/2
+GPS GPSAltitudeRef (Byte): 0
+GPS GPSDate (ASCII): 2024:05:17
+GPS GPSLatitude (Ratio): [51, 30, 663/25]
+GPS GPSLatitudeRef (ASCII): N
+GPS GPSLongitude (Ratio): [0, 7, 993/25]
+GPS GPSLongitudeRef (ASCII): W
+GPS GPSMapDatum (ASCII): WGS-84
+GPS GPSTimeStamp (Ratio): [14, 32, 5]
+GPS GPSVersionID (Byte): [2, 3, 0, 0]
+Image DateTime (ASCII): 2024:05:17 14:32:05
+Image ExifOffset (Long): 234
+Image GPSInfo (Long): 688
+Image Make (ASCII): SONY
+Image Model (ASCII): ILCE-1
+Image Orientation (Short): Horizontal (normal)
+Image ResolutionUnit (Short): Pixels/Inch
+Image Software (ASCII): Firmware 1.02
+Image XResolution (Ratio): 72
+Image YCbCrPositioning (Short): Co-sited
+Image YResolution (Ratio): 72
+
+== gps - south_east.jpg (349 bytes)
+coords (-33.859833333333334, 151.20566666666664)
+== gps b south_east.jpg (349 bytes)
+coords (-33.859833333333334, 151.20566666666664)
+== gps - equator.jpg (349 bytes)
+coords (-0.0, -0.0)
+== gps - nogps.jpg (923 bytes)
+coords (51.50736666666667, -0.1277)
+== gps - gps_two.jpg (209 bytes)
+error TypeError: _degrees_to_decimal() missing 1 required positional argument: 'seconds'
+
+== gps - gps_four.jpg (233 bytes)
+error TypeError: _degrees_to_decimal() takes 3 positional arguments but 4 were given
+
+== gps - gps_none.jpg (177 bytes)
+error TypeError: _degrees_to_decimal() missing 3 required positional arguments: 'degrees', 'minutes', and 'seconds'
+
+== gps - gps_zero.jpg (225 bytes)
+error ZeroDivisionError: division by zero
+
+== gps b gps_zero.jpg (225 bytes)
+coords (51.5, -0.11750000000000001)
+== gps - gps_short.jpg (189 bytes)
+error AttributeError: 'int' object has no attribute 'decimal'
+
+== gps b gps_short.jpg (189 bytes)
+coords (51.507222222222225, -0.1275)
+== gps - gps_signed.jpg (225 bytes)
+coords (-50.49263333333333, -0.1277)
+== gps b gps_signed.jpg (225 bytes)
+coords (-50.49263333333333, -0.1277)
+== gps - pixel.webp (854 bytes)
+coords (51.50736666666667, -0.1277)
+== thumb - canon_5d3.cr2 (1972 bytes)
+JPEGThumbnail 13 ffd8ffdb00070000000000ffd9
+TIFFThumbnail none
+== thumb - gh5.jpg (923 bytes)
+JPEGThumbnail none
+TIFFThumbnail none
+== thumb - thumb_long.tif (106 bytes)
+JPEGThumbnail 98 02000f0102001000000026000000100102000900000036000000400000004c656963612043616d657261204147004c45494341205132000003000301030001000000060000000102040001000000080000000202040001000000a00f000000000000
+TIFFThumbnail none
+== thumb - thumb_uncompressed.tif (106 bytes)
+JPEGThumbnail none
+TIFFThumbnail none
+== cli - thumb_uncompressed.tif (106 bytes)
+Opening: thumb_uncompressed.tif
+Image Make (ASCII): Leica Camera AG
+Image Model (ASCII): LEICA Q2
+Thumbnail Compression (Short): Uncompressed
+Thumbnail StripByteCounts (Long): 16
+Thumbnail StripOffsets (Long): 8
+
