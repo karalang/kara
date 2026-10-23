@@ -1,0 +1,10 @@
+piles = [5, 3, 4, 5] -> true
+piles = [3, 7, 2, 3] -> true
+piles = [1, 2] -> true
+piles = [2, 1] -> true
+piles = [1, 100, 2, 1] -> true
+piles = [500, 1, 1, 1] -> true
+piles = [1, 1, 1, 500] -> true
+piles = [2, 9, 1, 1, 1, 7] -> true
+piles = [500, 500, ... (500 piles)] -> true
+100 games of 2 to 500 piles: Alice wins 100, checksum 443020855

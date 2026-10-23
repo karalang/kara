@@ -1,0 +1,82 @@
+// LeetCode #877: Stone Game -- the margins in one row.
+//
+// The margin of a run of length L needs only the margins of length
+// L - 1, so one row holds them: after the pass for length L, row[i] is
+// the margin on the piles i..i + L - 1. Each pass overwrites row[i] from
+// row[i] (the run one shorter at the right) and row[i + 1] (one shorter at
+// the left), left to right. O(n^2) time, O(n) space.
+
+fn stone_game(piles: Vec[i64]) -> bool {
+    let n = piles.len();
+    let mut row = piles.clone();
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            row[i] = (piles[i] - row[i + 1]).max(piles[j] - row[i]);
+        }
+    }
+    row[0] > 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n piles of 1 to limit stones with an odd total, LeetCode's constraints
+// for an even n
+fn random_piles(seed: mut ref i64, n: i64, limit: i64) -> Vec[i64] {
+    let mut piles: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for _ in 0..n {
+        let p = next_random(mut seed) % limit + 1;
+        piles.push(p);
+        total += p;
+    }
+    if total % 2 == 0 {
+        let i = next_random(mut seed) % n;
+        piles[i] = if piles[i] == limit { piles[i] - 1 } else { piles[i] + 1 };
+    }
+    piles
+}
+
+fn show(piles: Vec[i64]) {
+    let mut text: Vec[String] = Vec.new();
+    for p in piles.iter() {
+        text.push(f"{p}");
+    }
+    let shown = if text.len() > 8 { f"{text[0]}, {text[1]}, ... ({text.len()} piles)" } else { text.join(", ") };
+    println(f"piles = [{shown}] -> {stone_game(piles)}");
+}
+
+fn main() {
+    show([5, 3, 4, 5]);
+    show([3, 7, 2, 3]);
+    show([1, 2]);
+    show([2, 1]);
+    show([1, 100, 2, 1]);
+    show([500, 1, 1, 1]);
+    show([1, 1, 1, 500]);
+    show([2, 9, 1, 1, 1, 7]);
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..500 {
+        big.push(if i == 0 { 500 } else { 499 + i % 2 });
+    }
+    show(big);
+    // LeetCode's sizes: an even number of piles from 2 to 500, an odd total
+    let mut seed = 877;
+    let mut wins = 0;
+    let mut check = 0;
+    for k in 0..100 {
+        let n = if k < 20 { 2 * (k + 1) } else { 2 * (next_random(mut seed) % 250 + 1) };
+        let limit = if k % 2 == 0 { 500 } else { 3 };
+        let answer = stone_game(random_piles(mut seed, n, limit));
+        if answer {
+            wins += 1;
+        }
+        check = (check * 3 + if answer { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"100 games of 2 to 500 piles: Alice wins {wins}, checksum {check}");
+}

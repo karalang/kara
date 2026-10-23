@@ -1,0 +1,273 @@
+// LeetCode #877: Stone Game -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: an even number of piles in a row, piles[i] stones each,
+// with an odd total. Alice and Bob take turns, Alice first, each taking
+// the whole pile at either end of the row, until none are left; the one
+// with more stones wins. Assuming both play optimally, return true if
+// Alice wins.
+
+// ---- the ★ arm: the best margin of every run of piles ---------------------
+fn star_stone_game(piles: Vec[i64]) -> bool {
+    let n = piles.len();
+    let mut margin: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(if i == j { piles[i] } else { 0 });
+        }
+        margin.push(row);
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            margin[i][j] = (piles[i] - margin[i + 1][j]).max(piles[j] - margin[i][j - 1]);
+        }
+    }
+    margin[0][n - 1] > 0
+}
+
+// ---- the memo arm: the margin by memoized recursion -----------------------
+fn memo_stone_game(piles: Vec[i64]) -> bool {
+    let mut memo: Map[i64, i64] = Map.new();
+    memo_best(piles, 0, piles.len() - 1, mut memo) > 0
+}
+
+fn memo_best(piles: Vec[i64], i: i64, j: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if i == j {
+        return piles[i];
+    }
+    let key = i * piles.len() + j;
+    if let Some(known) = memo.get(key) {
+        return known;
+    }
+    let left = piles[i] - memo_best(piles, i + 1, j, mut memo);
+    let right = piles[j] - memo_best(piles, i, j - 1, mut memo);
+    let answer = left.max(right);
+    memo.insert(key, answer);
+    answer
+}
+
+// ---- the rolling arm: the margins in one row ------------------------------
+fn rolling_stone_game(piles: Vec[i64]) -> bool {
+    let n = piles.len();
+    let mut row = piles.clone();
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            row[i] = (piles[i] - row[i + 1]).max(piles[j] - row[i]);
+        }
+    }
+    row[0] > 0
+}
+
+// ---- the totals arm: the best total rather than the margin ----------------
+fn totals_stone_game(piles: Vec[i64]) -> bool {
+    let n = piles.len();
+    let mut prefix: Vec[i64] = Vec.new();
+    prefix.push(0);
+    for p in piles.iter() {
+        prefix.push(prefix[prefix.len() - 1] + *p);
+    }
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..n {
+            row.push(if i == j { piles[i] } else { 0 });
+        }
+        best.push(row);
+    }
+    for length in 2..n + 1 {
+        for i in 0..n - length + 1 {
+            let j = i + length - 1;
+            best[i][j] = prefix[j + 1] - prefix[i] - best[i + 1][j].min(best[i][j - 1]);
+        }
+    }
+    2 * best[0][n - 1] > prefix[n]
+}
+
+// ---- the parity arm: the first player's strategy by parity ----------------
+fn parity_stone_game(piles: Vec[i64]) -> bool {
+    let mut evens = 0;
+    let mut odds = 0;
+    for i in 0..piles.len() {
+        if i % 2 == 0 {
+            evens += piles[i];
+        } else {
+            odds += piles[i];
+        }
+    }
+    evens != odds
+}
+
+fn arm(a: i64, piles: Vec[i64]) -> bool {
+    match a {
+        0 => star_stone_game(piles),
+        1 => memo_stone_game(piles),
+        2 => rolling_stone_game(piles),
+        3 => totals_stone_game(piles),
+        _ => parity_stone_game(piles),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the stones the player to move and the other player end with on the
+// piles i..j, when each, on every turn, takes the end that leaves them the
+// most stones at the end of the game; every line of play is followed out
+fn literal_totals(piles: Vec[i64], i: i64, j: i64) -> (i64, i64) {
+    if i > j {
+        return (0, 0);
+    }
+    let (left_other, left_mine) = literal_totals(piles, i + 1, j);
+    let (right_other, right_mine) = literal_totals(piles, i, j - 1);
+    if piles[i] + left_mine >= piles[j] + right_mine {
+        (piles[i] + left_mine, left_other)
+    } else {
+        (piles[j] + right_mine, right_other)
+    }
+}
+
+// Alice moves first and wins with more stones than Bob
+fn literal(piles: Vec[i64]) -> bool {
+    let (alice, bob) = literal_totals(piles, 0, piles.len() - 1);
+    alice > bob
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n piles of 1 to limit stones
+fn any_piles(seed: mut ref i64, n: i64, limit: i64) -> Vec[i64] {
+    let mut piles: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        piles.push(next_random(mut seed) % limit + 1);
+    }
+    piles
+}
+
+// the same with an odd total, LeetCode's constraints for an even n
+fn valid_piles(seed: mut ref i64, n: i64, limit: i64) -> Vec[i64] {
+    let mut piles = any_piles(mut seed, n, limit);
+    let mut total = 0;
+    for p in piles.iter() {
+        total += *p;
+    }
+    if total % 2 == 0 {
+        let i = next_random(mut seed) % n;
+        piles[i] = if piles[i] == limit { piles[i] - 1 } else { piles[i] + 1 };
+    }
+    piles
+}
+
+fn reversed(piles: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..piles.len() {
+        out.push(piles[piles.len() - 1 - i]);
+    }
+    out
+}
+
+fn scaled(piles: Vec[i64], c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for p in piles.iter() {
+        out.push(*p * c);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 877;
+    let mut games = 0;
+    let mut alice = 0;
+    // LeetCode's constraints, 2 to 12 piles: every arm against the statement
+    for k in 0..1000 {
+        let piles = valid_piles(mut seed, 2 * (k % 6 + 1), if k % 2 == 0 { 500 } else { 3 });
+        let want = literal(piles);
+        let c = next_random(mut seed) % 3 + 2;
+        for x in 0..5 {
+            let got = arm(x, piles);
+            // P1: the statement's answer
+            check(mut t, 1, got == want);
+            // P3: the row reversed gives the same answer
+            check(mut t, 3, arm(x, reversed(piles)) == got);
+            // P4: every pile multiplied by the same number gives the same answer
+            check(mut t, 4, arm(x, scaled(piles, c)) == got);
+        }
+        games += 1;
+    }
+    // any number of piles from 1 to 12 and any total: the four arms that
+    // play the game (the parity arm answers only LeetCode's constraints)
+    for k in 0..1000 {
+        let n = k % 12 + 1;
+        let piles = any_piles(mut seed, n, if k % 2 == 0 { 500 } else { 3 });
+        let want = literal(piles);
+        if want {
+            alice += 1;
+        }
+        let c = next_random(mut seed) % 3 + 2;
+        let mut same: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            same.push(piles[0]);
+        }
+        for x in 0..4 {
+            let got = arm(x, piles);
+            // P2: the statement's answer away from LeetCode's constraints
+            check(mut t, 2, got == want);
+            check(mut t, 3, arm(x, reversed(piles)) == got);
+            check(mut t, 4, arm(x, scaled(piles, c)) == got);
+            // P5: equal piles: Alice wins with an odd number, ties with an even
+            check(mut t, 5, arm(x, same) == (n % 2 == 1));
+        }
+        games += 1;
+    }
+    // 13 to 60 piles, too many to play out: each of the four agrees with at
+    // least two of the other three
+    for k in 0..200 {
+        let piles = any_piles(mut seed, next_random(mut seed) % 48 + 13, if k % 2 == 0 { 500 } else { 3 });
+        let mut answers: Vec[bool] = Vec.new();
+        for x in 0..4 {
+            answers.push(arm(x, piles));
+        }
+        for x in 0..4 {
+            let mut agree = 0;
+            for y in 0..4 {
+                if y != x and answers[y] == answers[x] {
+                    agree += 1;
+                }
+            }
+            // P6: the arms agree
+            check(mut t, 6, agree >= 2);
+        }
+        games += 1;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{games} games, Alice wins {alice} of the 1000 away from the constraints, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
