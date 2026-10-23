@@ -2169,9 +2169,14 @@ impl<'a> super::TypeChecker<'a> {
             // `comptime`-prefixed (`comptime T: Type`) or the whole function
             // is a `comptime fn`. Spec: deferred.md § Comptime — Types as
             // first-class values.
+            // A bare parameter borrows (D5), so its type is `ref Type`.
+            let bare = match &ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
             if !param.is_comptime
                 && !f.is_comptime
-                && matches!(&ty, Type::Named { name, args } if name == "Type" && args.is_empty())
+                && matches!(bare, Type::Named { name, args } if name == "Type" && args.is_empty())
             {
                 self.type_error(
                     "error[E_TYPE_VALUE_AT_RUNTIME]: a runtime function may not take a `Type` \
@@ -3548,6 +3553,48 @@ impl<'a> super::TypeChecker<'a> {
     /// going through the trait only lent it. Reported under `karac check`
     /// (`strict_core`) while the v2 core is staged; the fix rewrites the impl
     /// to the trait's mode.
+    /// B-2026-10-22-33: an impl defines every method its trait declares
+    /// without a body. The operator traits `Index` / `IndexMut` /
+    /// `IndexSet` are declared with their `Output` alone, since the
+    /// compiler finds the method by name, so their method is named here.
+    fn check_impl_defines_required_methods(&mut self, imp: &ImplBlock, trait_name: &str) {
+        let mut required: Vec<String> = match trait_name {
+            "Index" => vec!["index".to_string()],
+            "IndexMut" => vec!["index_mut".to_string()],
+            "IndexSet" => vec!["index_set".to_string()],
+            _ => Vec::new(),
+        };
+        if let Some(t) = self.find_trait_def(trait_name) {
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    if m.body.is_none() && !required.contains(&m.name) {
+                        required.push(m.name.clone());
+                    }
+                }
+            }
+        }
+        let type_name = match &imp.target_type.kind {
+            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        for name in required {
+            let defined = imp
+                .items
+                .iter()
+                .any(|it| matches!(it, ImplItem::Method(m) if m.name == name));
+            if !defined {
+                self.type_error(
+                    format!(
+                        "impl of trait '{trait_name}' for '{type_name}' is missing method \
+                         '{name}', which the trait declares without a default body"
+                    ),
+                    imp.span,
+                    TypeErrorKind::MissingField,
+                );
+            }
+        }
+    }
+
     fn check_impl_modes_not_stronger(&mut self, imp: &ImplBlock, trait_name: &str) {
         // Strength rank: lower is stronger.
         fn param_rank(ty: &TypeExpr) -> (u8, &'static str) {
@@ -4043,6 +4090,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             if self.cli_lint_overrides.strict_core {
                 self.check_impl_modes_not_stronger(imp, &trait_name);
+                self.check_impl_defines_required_methods(imp, &trait_name);
             }
             if let Some(trait_info) = self.env.traits.get(&trait_name).cloned() {
                 let provided: HashSet<String> = imp
@@ -8678,6 +8726,11 @@ impl<'a> super::TypeChecker<'a> {
                     && ty.is_none()
                     && matches!(pattern.kind, PatternKind::Binding(_))
                     && (matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
+                        // `let b = self;` over a borrowed receiver copies the
+                        // reference (§4.6; B-2026-10-22-33).
+                        || (self.cli_lint_overrides.strict_core
+                            && matches!(value.kind, ExprKind::SelfValue)
+                            && self.current_fn_ref_params.contains("self"))
                         || self.core_map_get_view(value, true)
                         || self.core_map_get_view(value, false));
                 if (!self.cli_lint_overrides.strict_core

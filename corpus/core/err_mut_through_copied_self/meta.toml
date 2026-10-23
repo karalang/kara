@@ -11,3 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "the expected.out wording of an error pin is guidance, not a byte oracle; the error belongs at b.arrange() and b.xs, not at the let (B-2026-10-22-33)"
+bucket = "a:refused"
+classified_with = "135418fdf+local"

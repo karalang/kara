@@ -213,6 +213,8 @@ enum Origin {
     /// A `mut ref name` pattern binding: writable, and the write through
     /// its scrutinee is checked where it is bound.
     MutRefPattern,
+    /// `let b = self;` over a borrowed receiver: `b` is a `ref Self` (§4.6).
+    SelfCopy,
 }
 
 /// What a step of a place's projection chain says about writing through it.
@@ -931,6 +933,11 @@ impl Walk<'_, '_> {
                     ExprKind::Identifier(n) => self
                         .lookup(n)
                         .map_or((Origin::Owned, None), |b| (b.1, b.2.clone())),
+                    // `let mut b = self;` over a borrowed receiver copies the
+                    // reference (§4.6; B-2026-10-22-33).
+                    ExprKind::SelfValue if self.self_read_only => {
+                        (Origin::SelfCopy, self.self_fix.clone())
+                    }
                     _ => (Origin::Owned, None),
                 };
                 self.bind(pattern, origin, fix);
@@ -1058,6 +1065,14 @@ impl Walk<'_, '_> {
                 | ExprKind::Index { .. }
         ) {
             self.check_borrowed_read(e);
+        }
+        if let ExprKind::Pipe { .. } = &e.kind {
+            self.removed_calls.push((
+                e.span,
+                "there is no pipe operator `|>` (design.md § Function values): write \
+                 `f(x)` for `x |> f`, or a method chain"
+                    .to_string(),
+            ));
         }
         match &e.kind {
             // Nothing after a `return` runs once its value is computed.
@@ -1310,6 +1325,7 @@ impl Walk<'_, '_> {
             ("Server", "serve_ws" | "serve_ws_tls") => "WebSocket",
             ("TlsListener", _) => "the TLS server",
             ("WebSocket", _) => "WebSocket",
+            ("Base64" | "Hex" | "Url" | "Stats", _) => "",
             _ => return false,
         };
         // A local of that name, or a program's own type, is not the library's.
@@ -1322,6 +1338,10 @@ impl Walk<'_, '_> {
         {
             return false;
         }
+        if what.is_empty() {
+            self.check_removed_namespace(call, ty, method);
+            return false;
+        }
         self.m4a_calls.push((
             call.span,
             format!(
@@ -1331,6 +1351,44 @@ impl Walk<'_, '_> {
             ),
         ));
         false
+    }
+
+    /// B-2026-10-22-33: the legacy library's `Base64` / `Hex` / `Url`
+    /// namespaces are `std.encoding`'s free functions on v2
+    /// (docs/library/encoding.md), and `Stats` is the `kara-data` package's
+    /// (docs/deferred.md § Numerical types), so a call of either is refused
+    /// with the spelling that replaces it rather than reach the backend.
+    fn check_removed_namespace(&mut self, call: &Expr, ty: &str, method: &str) {
+        let instead = match (ty, method) {
+            ("Base64", "encode") => "`base64_encode(bytes)`",
+            ("Base64", "encode_url_safe") => "`base64url_encode(bytes)` (no padding)",
+            ("Base64", "decode") => "`base64_decode(text)`",
+            ("Hex", "encode") => "`hex_encode(bytes)`",
+            ("Hex", "encode_upper") => "`hex_encode(bytes).to_uppercase()`",
+            ("Hex", "decode") => "`hex_decode(text)`",
+            ("Url", "encode") => "`percent_encode(text.bytes())`",
+            ("Url", "decode") => "`percent_decode(text)` and then `String.from_utf8`",
+            ("Stats", _) => {
+                self.removed_calls.push((
+                    call.span,
+                    format!(
+                        "`Stats.{method}` is not in the standard library: statistics come \
+                         with the `kara-data` package after v1 (docs/deferred.md § \
+                         Numerical types)"
+                    ),
+                ));
+                return;
+            }
+            _ => "the free functions of `std.encoding`",
+        };
+        self.removed_calls.push((
+            call.span,
+            format!(
+                "`{ty}.{method}` is removed: encodings are the free functions of \
+                 `std.encoding` (docs/library/encoding.md), so write {instead} after \
+                 `import std.encoding.{{...}}`"
+            ),
+        ));
     }
 
     /// A `Server.serve` handler returns a `Response`, and a program may declare
@@ -1772,6 +1830,10 @@ impl Walk<'_, '_> {
                 "`{name}` is a `ref` parameter, so {action} cannot modify it \
                  (core-semantics.md §5.9). Declare it `{name}: mut ref ...` and mark its \
                  call sites `mut`"
+            ),
+            Origin::SelfCopy => format!(
+                "`{name}` copies the receiver `ref self` (core-semantics.md §4.6), so \
+                 {action} cannot modify it (§5.9). Declare the method `mut ref self`"
             ),
             Origin::ForElem => format!(
                 "`{name}` is a `ref` to an element of the collection the `for` iterates \

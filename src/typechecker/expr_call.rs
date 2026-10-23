@@ -2358,6 +2358,25 @@ impl<'a> super::TypeChecker<'a> {
                     0 => Type::Unit,
                     1 => {
                         let t = self.infer_expr(&args[0].value);
+                        // B-2026-10-22-33: a function value has no `Debug`,
+                        // so v2 has nothing to print for it.
+                        if self.cli_lint_overrides.strict_core {
+                            let mut peeled = resolve_type_var_top(&t, &self.env.substitutions);
+                            while let Type::Ref(i) | Type::MutRef(i) = peeled {
+                                peeled = *i;
+                            }
+                            if matches!(peeled, Type::Function { .. } | Type::OnceFunction { .. }) {
+                                self.type_error(
+                                    format!(
+                                        "dbg() argument must implement Debug, but '{}' is a \
+                                         function value, which has no Debug",
+                                        type_display(&t)
+                                    ),
+                                    args[0].value.span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                );
+                            }
+                        }
                         // Hand codegen the argument's static type: it renders
                         // the value through a synthesized `Debug` function and
                         // has no way to recover the type from the expression

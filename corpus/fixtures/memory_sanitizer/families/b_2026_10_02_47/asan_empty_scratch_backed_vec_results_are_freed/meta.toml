@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "d"
-classified_with = "9913c6855"
+classified_with = "135418fdf+local"
 v2_reject = "deferred.md § M4c data: `Stats` is a type of the `kara-data` package after v1, not std; check refuses it once runtime/stdlib/stats.kara goes to the archive with legacy (review thread ruling, relayed by Thread C 2026-10-22)"

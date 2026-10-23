@@ -12225,3 +12225,128 @@ fn a_let_mut_copy_of_a_for_element_is_its_own() {
         "2\n3\n11 10\n",
     );
 }
+
+/// B-2026-10-22-33: programs v2 has no meaning for are refused at check,
+/// not later by the MIR builder or at run time: a pipe, the legacy
+/// encoding and statistics namespaces, an impl that omits a required
+/// method, `dbg` of a function value, and a run-time `Type` parameter.
+#[test]
+fn check_refuses_what_v2_has_no_meaning_for() {
+    rejected(
+        "pipe",
+        "fn double(x: i64) -> i64 {\n    x * 2\n}\nfn main() {\n    let y = 21 |> double;\n    \
+         println(f\"{y}\");\n}\n",
+        "there is no pipe operator `|>`",
+    );
+    rejected(
+        "base64-namespace",
+        "fn main() {\n    println(Base64.encode(\"hi\".bytes()));\n}\n",
+        "write `base64_encode(bytes)`",
+    );
+    rejected(
+        "url-namespace",
+        "fn main() {\n    println(Url.encode(\"a b\"));\n}\n",
+        "write `percent_encode(text.bytes())`",
+    );
+    rejected(
+        "stats-namespace",
+        "fn main() {\n    let xs = vec![1.0, 2.0];\n    println(f\"{Stats.mean(xs.as_slice())}\");\n}\n",
+        "statistics come with the `kara-data` package",
+    );
+    accepted_and_runs(
+        "own-hex-namespace",
+        "struct Hex {}\nimpl Hex {\n    fn encode(n: i64) -> i64 {\n        n + 1\n    }\n}\n\
+         fn main() {\n    println(f\"{Hex.encode(1)}\");\n}\n",
+        "2\n",
+    );
+    rejected(
+        "index-without-index",
+        "struct P { x: i64 }\nimpl Index for P { type Output = i64; }\nfn main() { }\n",
+        "impl of trait 'Index' for 'P' is missing method 'index'",
+    );
+    rejected(
+        "trait-without-method",
+        "trait Shape {\n    fn area(self) -> i64;\n    fn twice(self) -> i64 {\n        self.area() * 2\n    }\n}\n\
+         struct P { x: i64 }\nimpl Shape for P { }\nfn main() { }\n",
+        "impl of trait 'Shape' for 'P' is missing method 'area'",
+    );
+    rejected(
+        "dbg-of-fn",
+        "fn add(a: i64) -> i64 {\n    a\n}\nfn main() {\n    let g = add;\n    dbg(g);\n}\n",
+        "is a function value, which has no Debug",
+    );
+    rejected(
+        "type-param",
+        "fn describe(t: Type) -> i64 {\n    0\n}\nfn main() { }\n",
+        "E_TYPE_VALUE_AT_RUNTIME",
+    );
+}
+
+/// A tuple literal owns what it is built from, so passing one to a borrowed
+/// parameter still moves its elements in (core-semantics.md §3), as the MIR
+/// move check finds; `karac fix` clones at the move (B-2026-10-22-33).
+#[test]
+fn a_tuple_literal_argument_moves_its_elements() {
+    rejected_then_fixed(
+        "tuple-arg-move",
+        "fn look(k: (String, String)) -> i64 {\n    k.0.len()\n}\nfn main() {\n    \
+         let c: String = f\"cc\";\n    let d: String = f\"dd\";\n    let n = look((c, d));\n    \
+         println(f\"{n} {c.len()}\");\n}\n",
+        "value 'c' moved here, used again here",
+    );
+    rejected(
+        "tuple-key-move",
+        "fn main() {\n    let mut m: Map[(String, String), i64] = Map.new();\n    \
+         m.insert((f\"a\", f\"b\"), 0);\n    let a: String = f\"a\";\n    let b: String = f\"b\";\n    \
+         println(f\"{m.get((a, b)).is_some()} {a.len()}\");\n}\n",
+        "value 'a' moved here, used again here",
+    );
+}
+
+/// Under D5 a bare `a: T` borrows, so `a + b` on a generic `T: Add` names
+/// the two fixes, `own T` and a `Copy` bound, both of which then run
+/// (B-2026-10-22-40).
+#[test]
+fn a_generic_operator_on_borrowed_operands_names_the_fix() {
+    rejected(
+        "generic-add-borrowed",
+        "fn g[T: Add](a: T, b: T) -> T {\n    a + b\n}\nfn main() {\n    println(f\"{g(1, 2)}\");\n}\n",
+        "declare it `own T`, or bound `T: Copy` as well",
+    );
+    accepted_and_runs(
+        "generic-add-own-or-copy",
+        "fn h[T: Add + Copy](a: T, b: T) -> T {\n    a + b\n}\n\
+         fn k[T: Add](a: own T, b: own T) -> T {\n    a + b\n}\n\
+         fn main() {\n    println(f\"{h(1, 2)} {k(3, 4)}\");\n}\n",
+        "3 7\n",
+    );
+}
+
+/// A `let` of a reference binding copies the reference (core-semantics.md
+/// §4.6): `let m = r` over a bare parameter is accepted, and `let mut b =
+/// self` over a borrowed receiver is a `ref Self`, so a mutating call and a
+/// part move through it are refused (B-2026-10-22-33).
+#[test]
+fn a_let_of_a_borrowed_receiver_is_a_ref() {
+    accepted(
+        "let-copies-a-ref",
+        "struct R { name: String }\nfn g(r: R) -> i64 {\n    let m = r;\n    \
+         m.name.len() + r.name.len()\n}\nfn main() {\n    let r = R { name: \"abc\".to_string() };\n    \
+         println(g(r));\n}\n",
+    );
+    rejected(
+        "mut-through-copied-self",
+        "struct Bag { xs: Vec[i64] }\nimpl Bag {\n    fn arrange(mut ref self) {\n        \
+         self.xs.reverse();\n    }\n    fn inner(self) -> i64 {\n        let mut b = self;\n        \
+         b.arrange();\n        b.xs.len()\n    }\n}\nfn main() {\n    let bag = Bag { xs: [1, 2] };\n    \
+         println(bag.inner());\n}\n",
+        "`b` copies the receiver `ref self`",
+    );
+    rejected(
+        "move-through-copied-self",
+        "struct Bag { xs: Vec[i64] }\nimpl Bag {\n    fn inner(self) -> Vec[i64] {\n        \
+         let b = self;\n        b.xs\n    }\n}\nfn main() {\n    let bag = Bag { xs: [1, 2] };\n    \
+         println(bag.inner().len());\n}\n",
+        "cannot move a non-`Copy` value out of a borrowed place",
+    );
+}

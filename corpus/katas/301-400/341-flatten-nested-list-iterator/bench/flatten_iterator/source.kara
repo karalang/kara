@@ -35,7 +35,7 @@ impl NestedIterator {
         while let Some(top) = self.stack.pop() {
             match top {
                 Int(v) => {
-                    self.stack.push(Int(v));
+                    self.stack.push(Nested.Int(v));
                     return true;
                 }
                 List(inner) => { self.push_reversed(inner); }
@@ -67,9 +67,9 @@ fn gen_member(state: mut ref i64, depth: i64, max_depth: i64) -> Nested {
         for _ in 0..count {
             items.push(gen_member(mut state, depth + 1, max_depth));
         }
-        return List(items);
+        return Nested.List(items);
     }
-    return Int(next(mut state) % 201 - 100);
+    return Nested.Int(next(mut state) % 201 - 100);
 }
 
 fn gen_list(seed: i64, top: i64, max_depth: i64) -> Vec[Nested] {

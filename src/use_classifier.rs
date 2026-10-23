@@ -1438,12 +1438,25 @@ impl<'a> UseClassifier<'a> {
                 }
             }
 
+            // v2 core: a tuple or collection literal builds a value that
+            // owns its elements, so it moves them in wherever it stands, a
+            // borrowed argument or an operand included (B-2026-10-22-33).
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+                let mode = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    mode
+                };
                 for e in es {
                     self.walk_expr(e, mode);
                 }
             }
             ExprKind::PrefixCollectionLiteral { items, .. } => {
+                let mode = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    mode
+                };
                 for e in items {
                     self.walk_expr(e, mode);
                 }

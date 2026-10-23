@@ -3023,6 +3023,14 @@ impl<'a> super::TypeChecker<'a> {
                 "{base}; add #[derive(Arithmetic)] to '{name}' to use arithmetic \
                  operators between two '{name}' values, or unwrap explicitly"
             ),
+            // B-2026-10-22-40: under D5 a bare `a: T` borrows, and the
+            // operator traits take their operands by value.
+            Type::Ref(inner) if matches!(inner.as_ref(), Type::TypeParam(_)) => format!(
+                "{base}: a bare `{t}` parameter borrows (core-semantics.md §4.1), and \
+                 `{trait_name}` takes its operands by value, so declare it `own {t}`, \
+                 or bound `{t}: Copy` as well",
+                t = type_display(inner),
+            ),
             _ => base,
         }
     }

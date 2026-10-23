@@ -11,3 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "core-semantics §1.1/§4.6 (B-2026-10-22-33): case (c), a tuple destructure of a place behind a ref, is refused by v2 today; that refusal is the MIR bug"
+bucket = "mir-gap:build"
+classified_with = "135418fdf+local"
