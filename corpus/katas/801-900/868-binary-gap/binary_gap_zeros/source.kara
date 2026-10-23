@@ -1,0 +1,83 @@
+// LeetCode #868: Binary Gap -- counting the zeros between ones.
+//
+// A walk from bit 30 down (2^30 is above 10^9) keeps how many 0s it has
+// passed since the last 1; at each 1 after the first, that count plus one
+// is the distance back to the previous 1. The zeros above the highest 1
+// are never counted, since nothing is counted before it. O(log n).
+
+fn binary_gap(n: i64) -> i64 {
+    let mut best = 0;
+    let mut seen = false;
+    let mut zeros = 0;
+    let mut position = 30;
+    while position >= 0 {
+        if (n >> position) & 1 == 1 {
+            if seen {
+                best = best.max(zeros + 1);
+            }
+            seen = true;
+            zeros = 0;
+        } else if seen {
+            zeros += 1;
+        }
+        position -= 1;
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random n from 1 to 10^9, LeetCode's range
+fn random_n(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % 1000000000 + 1
+}
+
+fn show(n: i64) {
+    println(f"n = {n} ({n:b}) -> {binary_gap(n)}");
+}
+
+fn main() {
+    show(22);
+    show(8);
+    show(5);
+    for n in [1, 3, 6, 7, 9, 1041, 529, 20, 15, 32, 805306369, 1000000000, 536870913, 999999999] {
+        show(n);
+    }
+    // every n from 1 to 100000
+    let mut total = 0;
+    let mut check = 0;
+    let mut most = 0;
+    for n in 1..100001 {
+        let g = binary_gap(n);
+        total += g;
+        check = (check * 31 + g) % 1000000007;
+        most = most.max(g);
+    }
+    println(f"n from 1 to 100000: gaps sum to {total}, largest {most}, checksum {check}");
+    // random n up to 10^9
+    let mut seed = 868;
+    total = 0;
+    check = 0;
+    let mut counts: Vec[i64] = Vec.filled(31, 0);
+    for _ in 0..100000 {
+        let g = binary_gap(random_n(mut seed));
+        total += g;
+        check = (check * 31 + g) % 1000000007;
+        counts[g] += 1;
+    }
+    let mut spread: Vec[String] = Vec.new();
+    for g in 0..31 {
+        if counts[g] > 0 {
+            spread.push(f"{g}:{counts[g]}");
+        }
+    }
+    println(f"100000 random n up to 10^9: gaps sum to {total}, checksum {check}");
+    println(f"gaps by length: {spread.join(" ")}");
+}

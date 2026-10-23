@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '3 45 45 3 named-fn-map-payload-bravo-bbbbbbbbbbbbbbbbbb'"
 bucket = "mir-gap:error[mir]: borrow check IterMap[VecIter[String], Fn(String)"
-classified_with = "b221fb02e"
+classified_with = "c1609da8c"
 model_rev = "aafbe785"
 model_src = "f07e96f4"

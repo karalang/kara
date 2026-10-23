@@ -1,0 +1,283 @@
+// LeetCode #868: Binary Gap -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: the longest distance between any two adjacent 1s in the
+// binary representation of n, two 1s being adjacent when only 0s separate
+// them, and the distance between them the difference of their bit
+// positions; 0 if there are no two adjacent 1s.
+// ---- the ★ arm: one pass over the bits ------------------------------------
+fn star_binary_gap(n: i64) -> i64 {
+    let mut best = 0;
+    let mut last = -1;
+    let mut rest = n;
+    let mut position = 0;
+    while rest > 0 {
+        if rest % 2 == 1 {
+            if last >= 0 {
+                best = best.max(position - last);
+            }
+            last = position;
+        }
+        rest /= 2;
+        position += 1;
+    }
+    best
+}
+
+// ---- the string arm: in the binary string ---------------------------------
+fn string_binary_gap(n: i64) -> i64 {
+    let bits = f"{n:b}";
+    let mut best = 0;
+    let mut last = -1;
+    let mut i = 0;
+    for b in bits.bytes() {
+        if b == b'1' {
+            if last >= 0 {
+                best = best.max(i - last);
+            }
+            last = i;
+        }
+        i += 1;
+    }
+    best
+}
+
+// ---- the positions arm: the positions of the 1s ---------------------------
+fn positions_binary_gap(n: i64) -> i64 {
+    let mut ones: Vec[i64] = Vec.new();
+    for position in 0..31 {
+        if (n >> position) & 1 == 1 {
+            ones.push(position);
+        }
+    }
+    let mut best = 0;
+    for i in 1..ones.len() {
+        best = best.max(ones[i] - ones[i - 1]);
+    }
+    best
+}
+
+// ---- the lowbit arm: from one lowest set bit to the next ------------------
+fn lowbit_binary_gap(n: i64) -> i64 {
+    let mut rest = n;
+    let mut low = rest.trailing_zeros() as i64;
+    rest = rest & (rest - 1);
+    let mut best = 0;
+    while rest > 0 {
+        let next = rest.trailing_zeros() as i64;
+        best = best.max(next - low);
+        low = next;
+        rest = rest & (rest - 1);
+    }
+    best
+}
+
+// ---- the zeros arm: counting the zeros between ones -----------------------
+fn zeros_binary_gap(n: i64) -> i64 {
+    let mut best = 0;
+    let mut seen = false;
+    let mut zeros = 0;
+    let mut position = 30;
+    while position >= 0 {
+        if (n >> position) & 1 == 1 {
+            if seen {
+                best = best.max(zeros + 1);
+            }
+            seen = true;
+            zeros = 0;
+        } else if seen {
+            zeros += 1;
+        }
+        position -= 1;
+    }
+    best
+}
+
+fn arm(a: i64, n: i64) -> i64 {
+    match a {
+        0 => star_binary_gap(n),
+        1 => string_binary_gap(n),
+        2 => positions_binary_gap(n),
+        3 => lowbit_binary_gap(n),
+        _ => zeros_binary_gap(n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// n in binary, the highest bit first, by repeated division
+fn literal_bits(n: i64) -> Vec[i64] {
+    let mut bits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        bits.insert(0, rest % 2);
+        rest /= 2;
+    }
+    bits
+}
+
+// the longest distance between two 1s with only 0s between them, or 0
+fn literal_gap(n: i64) -> i64 {
+    let bits = literal_bits(n);
+    let len = bits.len();
+    let mut best = 0;
+    for i in 0..len {
+        for j in i + 1..len {
+            if bits[i] == 1 and bits[j] == 1 {
+                let mut only_zeros = true;
+                for k in i + 1..j {
+                    if bits[k] != 0 {
+                        only_zeros = false;
+                    }
+                }
+                if only_zeros {
+                    best = best.max(j - i);
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_n(seed: mut ref i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % 1000000000 + 1
+}
+
+// the number of binary digits of n
+fn bit_length(n: i64) -> i64 {
+    let mut len = 0;
+    let mut rest = n;
+    while rest > 0 {
+        len += 1;
+        rest /= 2;
+    }
+    len
+}
+
+// the position of the lowest 1
+fn lowest_one(n: i64) -> i64 {
+    let mut position = 0;
+    let mut rest = n;
+    while rest % 2 == 0 {
+        rest /= 2;
+        position += 1;
+    }
+    position
+}
+
+fn ones(n: i64) -> i64 {
+    let mut count = 0;
+    let mut rest = n;
+    while rest > 0 {
+        count += rest % 2;
+        rest /= 2;
+    }
+    count
+}
+
+// the bits of n in reverse order, as many as n has
+fn reversed_bits(n: i64) -> i64 {
+    let mut r = 0;
+    let mut rest = n;
+    while rest > 0 {
+        r = r * 2 + rest % 2;
+        rest /= 2;
+    }
+    r
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// the six properties for one n, each over the five arms; returns the
+// statement's answer
+fn properties(t: mut ref Tally, seed: mut ref i64, n: i64) -> i64 {
+    let want = literal_gap(n);
+    let len = bit_length(n);
+    let k = 1 + next_random(mut seed) % 30;
+    for a in 0..5 {
+        let g = arm(a, n);
+        // P1: the statement's answer
+        check(mut t, 1, g == want);
+        // P2: a 0 added below the lowest bit changes nothing
+        if 2 * n <= 1000000000 {
+            check(mut t, 2, arm(a, 2 * n) == g);
+        }
+        // P3: a 1 added k places above the highest bit is k from the old
+        // highest 1, the answer the larger of that and the old one
+        if len - 1 + k <= 29 {
+            check(mut t, 3, arm(a, n + (1 << (len - 1 + k))) == g.max(k));
+        }
+        // P4: the bits in reverse order give the same answer
+        check(mut t, 4, arm(a, reversed_bits(n) << lowest_one(n)) == g);
+        // P5: 0 exactly when n has a single 1, and otherwise from 1 to one
+        // less than the number of bits
+        let bounds = if ones(n) == 1 { g == 0 } else { g >= 1 and g <= len - 1 };
+        check(mut t, 5, bounds);
+        // P6: the lowest 1 cleared, the answer is the larger of the answer
+        // without it and its distance to the next 1
+        let rest = n & (n - 1);
+        if rest > 0 {
+            let step = lowest_one(rest) - lowest_one(n);
+            check(mut t, 6, g == arm(a, rest).max(step));
+        }
+    }
+    want
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut count = 0;
+    let mut total = 0;
+    let mut seed = 868;
+    // every n from 1 to 4096
+    for n in 1..4097 {
+        count += 1;
+        total += properties(mut t, mut seed, n);
+    }
+    // every n with one or two 1s
+    for hi in 0..30 {
+        for lo in 0..hi + 1 {
+            let n = if lo == hi { 1 << hi } else { (1 << hi) + (1 << lo) };
+            if n <= 1000000000 {
+                count += 1;
+                total += properties(mut t, mut seed, n);
+            }
+        }
+    }
+    // random n up to 10^9
+    for _ in 0..3000 {
+        count += 1;
+        total += properties(mut t, mut seed, random_n(mut seed));
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{count} values of n, gaps sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
