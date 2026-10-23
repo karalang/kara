@@ -718,8 +718,7 @@ MakerNote ISOSetting (Short): [0, 400]
 MakerNote MakernoteVersion (Undefined): 0210
 MakerNote ProgramShift (Undefined): -2/3 EV
 MakerNote Quality (ASCII):   
-MakerNote SerialNumber (ASCII): 	
-
+MakerNote SerialNumber (ASCII): 56789:;<
 MakerNote WhiteBalanceBias (Signed Short): [0, 0]
 MakerNote Whitebalance (ASCII): 345
 
