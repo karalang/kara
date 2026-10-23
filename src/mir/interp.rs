@@ -6435,7 +6435,7 @@ impl<'a> Interp<'a> {
             ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
             ("get" | "get_mut_by_view" | "contains_key" | "contains", [key]) => {
-                let found = self.find_key(id, key, key_ty, is_map)?;
+                let found = self.table_find(sorted, id, key, key_ty, is_map)?;
                 if !matches!(method, "get" | "get_mut_by_view") {
                     return Ok(Value::Bool(found.is_some()));
                 }
@@ -6450,7 +6450,7 @@ impl<'a> Interp<'a> {
             ("index" | "index_mut", [key]) if is_map => {
                 // `m[k]`: a missing key panics (design.md § Collection
                 // Core Methods).
-                let Some(i) = self.find_key(id, key, key_ty, true)? else {
+                let Some(i) = self.table_find(sorted, id, key, key_ty, true)? else {
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::Panic));
                     }
@@ -6462,7 +6462,7 @@ impl<'a> Interp<'a> {
                 }))
             }
             ("insert", [key, rest @ ..]) => {
-                let found = self.find_key(id, key, key_ty, is_map)?;
+                let found = self.table_find(sorted, id, key, key_ty, is_map)?;
                 match (is_map, found, rest) {
                     // An existing key is kept and the new one dropped;
                     // the old value is handed back.
@@ -6502,7 +6502,7 @@ impl<'a> Interp<'a> {
                 }
             }
             ("remove", [key]) => {
-                let found = self.find_key(id, key, key_ty, is_map)?;
+                let found = self.table_find(sorted, id, key, key_ty, is_map)?;
                 let Some(i) = found else {
                     return if is_map {
                         self.option(ret, None)
@@ -6535,7 +6535,7 @@ impl<'a> Interp<'a> {
             ("get_or", [key, default]) if is_map => {
                 // A copy of the stored value, or the default (cloned when
                 // it came by reference).
-                let found = self.find_key(id, key, key_ty, true)?;
+                let found = self.table_find(sorted, id, key, key_ty, true)?;
                 let owned_default = !matches!(default, Value::Ref(_));
                 match found {
                     Some(i) => {
@@ -6607,7 +6607,7 @@ impl<'a> Interp<'a> {
             ("entry", [key]) if is_map => {
                 // `Occupied` lends the stored value; `Vacant` keeps the key
                 // and the map until `or_insert` (design.md § Entry[K, V]).
-                let found = self.find_key(id, key, key_ty, true)?;
+                let found = self.table_find(sorted, id, key, key_ty, true)?;
                 if let Some(i) = found {
                     self.drop_value(key.clone(), key_ty)?;
                     let at = Value::Ref(Addr {
@@ -6628,7 +6628,7 @@ impl<'a> Interp<'a> {
                 // `m.entry(k).or_insert(v)`, fused: a reference to the
                 // stored value, inserting `v` (or `f()`) when `k` is new.
                 // A found key drops the new key and the unused value.
-                let found = self.find_key(id, key, key_ty, true)?;
+                let found = self.table_find(sorted, id, key, key_ty, true)?;
                 let i = match found {
                     Some(i) => {
                         self.drop_value(key.clone(), key_ty)?;
@@ -6657,6 +6657,85 @@ impl<'a> Interp<'a> {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64, 1]),
                 }))
+            }
+            // A sorted table's entries are in key order with no holes, so
+            // its bounds are binary searches (B-2026-10-23-1).
+            (
+                "range" | "range_inclusive" | "floor" | "ceiling" | "min" | "max" | "first"
+                | "last",
+                rest,
+            ) if sorted && (is_map || !matches!(method, "floor" | "ceiling")) => {
+                let n = self.vec_elems(id)?.len();
+                let mut bounds = Vec::with_capacity(rest.len());
+                for v in rest {
+                    let mut v = v.clone();
+                    while let Value::Ref(a) = &v {
+                        v = self.slot(a)?;
+                    }
+                    bounds.push(v);
+                }
+                let picked: std::ops::Range<usize> = match (method, bounds.as_slice()) {
+                    ("range" | "range_inclusive", [lo, hi]) => {
+                        let start = self.sorted_bound(id, is_map, key_ty, lo, false)?;
+                        let end = self.sorted_bound(id, is_map, key_ty, hi, method != "range")?;
+                        start..end.max(start)
+                    }
+                    ("floor", [k]) => {
+                        let i = self.sorted_bound(id, is_map, key_ty, k, true)?;
+                        i.saturating_sub(1)..i
+                    }
+                    ("ceiling", [k]) => {
+                        let i = self.sorted_bound(id, is_map, key_ty, k, false)?;
+                        i..(i + 1).min(n)
+                    }
+                    ("min" | "first", []) => 0..n.min(1),
+                    ("max" | "last", []) => n.saturating_sub(1)..n,
+                    _ => return err(format!("{name} takes {} arguments", rest.len())),
+                };
+                let ranged = matches!(method, "range" | "range_inclusive");
+                if !is_map && !ranged {
+                    let at = picked.clone().next().map(|i| {
+                        Value::Ref(Addr {
+                            root: Root::Heap(id),
+                            path: Path::from_slice(&[i as u64]),
+                        })
+                    });
+                    return self.option_of_place(ret, at);
+                }
+                // A set's range: references when the result holds
+                // references, else clones; a map's entries: clones as
+                // `(K, V)` tuples.
+                let by_ref = !is_map
+                    && match self.tys.kind(ret) {
+                        TyKind::Intrinsic(IntrinsicTy::Vec(e)) => {
+                            matches!(self.tys.kind(e), TyKind::Ref(_))
+                        }
+                        _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                    };
+                let mut out = Vec::with_capacity(picked.len());
+                for i in picked {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: Path::from_slice(&[i as u64]),
+                    };
+                    if by_ref {
+                        out.push(Value::Ref(at));
+                    } else if is_map {
+                        let (k, v) = (self.slot(&at.child(0))?, self.slot(&at.child(1))?);
+                        out.push(Value::Agg(vec![
+                            self.clone_value(&k, key_ty)?,
+                            self.clone_value(&v, val_ty)?,
+                        ]));
+                    } else {
+                        let v = self.slot(&at)?;
+                        out.push(self.clone_value(&v, key_ty)?);
+                    }
+                }
+                if ranged {
+                    let vname = self.tys.display(ret);
+                    return Ok(self.alloc_box(&vname, Value::Agg(out)));
+                }
+                self.option(ret, out.pop())
             }
             ("range" | "range_inclusive", [lo, hi]) if !is_map => {
                 // The elements in `[lo, hi)` (`[lo, hi]` inclusive),
@@ -6835,7 +6914,7 @@ impl<'a> Interp<'a> {
                 let theirs = self.table_entries(other)?;
                 let mut out = Vec::new();
                 for x in &mine {
-                    let in_other = self.find_key(other, x, key_ty, false)?.is_some();
+                    let in_other = self.table_find(sorted, other, x, key_ty, false)?.is_some();
                     let keep = match method {
                         "union" => true,
                         "intersection" => in_other,
@@ -6847,7 +6926,7 @@ impl<'a> Interp<'a> {
                 }
                 if matches!(method, "union" | "symmetric_difference") {
                     for x in &theirs {
-                        if self.find_key(id, x, key_ty, false)?.is_none() {
+                        if self.table_find(sorted, id, x, key_ty, false)?.is_none() {
                             out.push(self.clone_value(x, key_ty)?);
                         }
                     }
@@ -6935,6 +7014,45 @@ impl<'a> Interp<'a> {
             let mid = (lo + hi) / 2;
             let k = self.entry_key(id, mid, is_map)?;
             if key_order(&self.order_form(&k, key_ty)?, &want) == std::cmp::Ordering::Greater {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        Ok(lo)
+    }
+
+    /// The first entry of sorted table `id` whose key is greater than `k`
+    /// (`strict`) or at least `k`, by binary search: the entries are in key
+    /// order.
+    fn sorted_bound(
+        &mut self,
+        id: AllocId,
+        is_map: bool,
+        key_ty: Ty,
+        k: &Value,
+        strict: bool,
+    ) -> R<usize> {
+        use std::cmp::Ordering::*;
+        let cmp = self.user_cmp(key_ty);
+        let want = match cmp {
+            Some(_) => Value::Unit,
+            None => self.order_form(k, key_ty)?,
+        };
+        let (mut lo, mut hi) = (0, self.vec_elems(id)?.len());
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let e = self.entry_key(id, mid, is_map)?;
+            let o = match &cmp {
+                Some(c) => self.call_cmp(c, &e, k)?,
+                None => key_order(&self.order_form(&e, key_ty)?, &want),
+            };
+            let past = match o {
+                Greater => true,
+                Equal => !strict,
+                Less => false,
+            };
+            if past {
                 hi = mid;
             } else {
                 lo = mid + 1;
@@ -7414,6 +7532,42 @@ impl<'a> Interp<'a> {
     }
 
     /// The index of the entry whose key equals `key`, if any.
+    /// [`Self::find_key`], by binary search when the table is sorted
+    /// (B-2026-10-23-1): its entries are in key order, and a key type's
+    /// `cmp` agrees with its `eq`. A total-order float key or a user `eq`
+    /// with no user `cmp` is found by `find_key`.
+    fn table_find(
+        &mut self,
+        sorted: bool,
+        id: AllocId,
+        key: &Value,
+        key_ty: Ty,
+        is_map: bool,
+    ) -> R<Option<usize>> {
+        let cmp = self.user_cmp(key_ty);
+        if !sorted
+            || self.total_float_key(key_ty)
+            || (cmp.is_none() && self.user_eq(key_ty).is_some())
+        {
+            return self.find_key(id, key, key_ty, is_map);
+        }
+        let i = self.sorted_bound(id, is_map, key_ty, key, false)?;
+        if i == self.vec_elems(id)?.len() {
+            return Ok(None);
+        }
+        let e = self.entry_key(id, i, is_map)?;
+        let equal = match &cmp {
+            Some(c) => self.call_cmp(c, &e, key)? == std::cmp::Ordering::Equal,
+            None => {
+                key_order(
+                    &self.order_form(&e, key_ty)?,
+                    &self.order_form(key, key_ty)?,
+                ) == std::cmp::Ordering::Equal
+            }
+        };
+        Ok(equal.then_some(i))
+    }
+
     fn find_key(&mut self, id: AllocId, key: &Value, key_ty: Ty, is_map: bool) -> R<Option<usize>> {
         let (total_float, user_eq) = match self.key_tys.get(&key_ty) {
             Some(info) => info.clone(),

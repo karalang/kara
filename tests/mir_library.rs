@@ -1348,3 +1348,97 @@ fn main() {
         "after forget\nend\ndrop 2\n",
     );
 }
+
+/// A sorted map's and set's bounds, ranges and lookups, by the key type's
+/// own order too, after removals.
+#[test]
+fn sorted_table_bounds_and_ranges() {
+    assert_runs(
+        r#"
+#[derive(PartialEq, Eq, Clone)]
+struct Rev { v: i64 }
+impl PartialOrd for Rev { fn partial_cmp(self, other: Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(self, other: Rev) -> Ordering { other.v.cmp(self.v) } }
+fn show(o: Option[(i64, String)]) -> String {
+    match o { Some((k, v)) => f"{k}={v}", None => "none" }
+}
+fn main() {
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    for k in [50, 10, 40, 20, 30, -5].iter() { m.insert(k, f"v{k}"); }
+    m.remove(40);
+    for q in [-10, -5, 0, 10, 15, 30, 35, 40, 50, 60].iter() {
+        println(f"{q}: floor {show(m.floor(q))} ceiling {show(m.ceiling(q))}");
+    }
+    for (a, b) in [(10, 30), (0, 100), (30, 30), (40, 10), (-5, 10)].iter() {
+        let mut s = String.new();
+        for (k, v) in m.range(a, b) { s = s + f"{k}:{v} "; }
+        let mut t = String.new();
+        for (k, v) in m.range_inclusive(a, b) { t = t + f"{k}:{v} "; }
+        println(f"[{a},{b}) {s}| [{a},{b}] {t}");
+    }
+    let e: SortedMap[i64, String] = SortedMap.new();
+    println(f"empty: {show(e.floor(1))} {show(e.ceiling(1))}");
+    let mut st: SortedSet[String] = SortedSet.new();
+    for w in ["pear", "apple", "fig", "kiwi", "banana"].iter() { st.insert(w.to_string()); }
+    println(f"{st.min() ?? "none"} {st.max() ?? "none"}");
+    let mut r = String.new();
+    for w in st.range("b", "k") { r = r + w + " "; }
+    for w in st.range_inclusive("fig", "pear") { r = r + w + "/"; }
+    println(r);
+    let mut rv: SortedSet[Rev] = SortedSet.new();
+    for x in [3, 9, 1, 7].iter() { rv.insert(Rev { v: x }); }
+    let mut q = String.new();
+    for x in rv.range(Rev { v: 8 }, Rev { v: 1 }) { q = q + f"{x.v} "; }
+    println(f"{q}| {rv.min().map(|x| x.v) ?? 0} {rv.max().map(|x| x.v) ?? 0}");
+    let mut rm: SortedMap[Rev, i64] = SortedMap.new();
+    for x in [3, 9, 1, 7].iter() { rm.insert(Rev { v: x }, x * 10); }
+    match rm.floor(Rev { v: 5 }) { Some((k, v)) => println(f"{k.v} {v}"), None => println("none") }
+    match rm.ceiling(Rev { v: 5 }) { Some((k, v)) => println(f"{k.v} {v}"), None => println("none") }
+}
+"#,
+        "-10: floor none ceiling -5=v-5\n-5: floor -5=v-5 ceiling -5=v-5\n0: floor -5=v-5 ceiling 10=v10\n10: floor 10=v10 ceiling 10=v10\n15: floor 10=v10 ceiling 20=v20\n30: floor 30=v30 ceiling 30=v30\n35: floor 30=v30 ceiling 50=v50\n40: floor 30=v30 ceiling 50=v50\n50: floor 50=v50 ceiling 50=v50\n60: floor 50=v50 ceiling none\n[10,30) 10:v10 20:v20 | [10,30] 10:v10 20:v20 30:v30 \n[0,100) 10:v10 20:v20 30:v30 50:v50 | [0,100] 10:v10 20:v20 30:v30 50:v50 \n[30,30) | [30,30] 30:v30 \n[40,10) | [40,10] \n[-5,10) -5:v-5 | [-5,10] -5:v-5 10:v10 \nempty: none none\napple pear\nbanana fig fig/kiwi/pear/\n7 3 | 9 1\n7 70\n3 30\n",
+    );
+}
+
+/// A sorted map's `ceiling`, `floor`, `contains_key`, `remove` and `range`
+/// are binary searches: each calls the key type's `cmp` about log n times,
+/// where they used to order every key per call (B-2026-10-23-1).
+#[test]
+fn sorted_table_queries_call_cmp_log_n_times() {
+    assert_runs(
+        r#"
+shared struct Calls { mut n: i64 }
+struct K { v: i64, calls: Calls }
+impl PartialEq for K { fn eq(self, other: K) -> bool { self.v == other.v } }
+impl Eq for K {}
+impl PartialOrd for K { fn partial_cmp(self, other: K) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for K {
+    fn cmp(self, other: K) -> Ordering {
+        self.calls.n = self.calls.n + 1;
+        self.v.cmp(other.v)
+    }
+}
+fn main() {
+    let c = Calls { n: 0 };
+    let k = |v: i64| K { v: v, calls: c.clone() };
+    let mut m: SortedMap[K, i64] = SortedMap.new();
+    for i in 0..128 { m.insert(k((i * 37) % 128 * 2), i); }
+    let built = c.n;
+    let mut sum = 0;
+    for q in 0..128 {
+        match m.ceiling(k(q * 2 + 1)) { Some((x, _)) => { sum = sum + x.v; } None => {} }
+        match m.floor(k(q * 2 + 1)) { Some((x, _)) => { sum = sum + x.v; } None => {} }
+        if m.contains_key(k(q)) { sum = sum + 1; }
+    }
+    for q in 0..64 { m.remove(k(q * 4)); }
+    let mut r = 0;
+    for (x, _) in m.range(k(100), k(200)) { r = r + x.v; }
+    println(f"{sum} {m.len()} {r}");
+    println(f"cmp calls: insert under 4000 {built < 4000}, queries under 8000 {c.n - built < 8000}");
+}
+"#,
+        "32576 64 3750
+cmp calls: insert under 4000 true, queries under 8000 true
+",
+    );
+}
