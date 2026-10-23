@@ -1,0 +1,394 @@
+// LeetCode #899: Orderly Queue -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: you are given a string s and an integer k. You can
+// choose one of the first k letters of s and append it at the end of the
+// string. Return the lexicographically smallest string you could have
+// after applying the mentioned step any number of moves.
+
+// ---- the ★ arm: every rotation, or the letters sorted ---------------------
+fn star_orderly_queue(s: String, k: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    if k == 1 {
+        let mut best = s.clone();
+        for i in 1..n {
+            let mut r = String.new();
+            for j in 0..n {
+                r.push(b[(i + j) % n] as char);
+            }
+            if r < best {
+                best = r;
+            }
+        }
+        return best;
+    }
+    let mut sorted = b;
+    sorted.sort();
+    let mut out = String.new();
+    for c in sorted.iter() {
+        out.push(*c as char);
+    }
+    out
+}
+
+// ---- the counts arm: rotations compared in place, letters counted ---------
+fn counts_orderly_queue(s: String, k: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut out = String.new();
+    if k == 1 {
+        let mut best = 0;
+        for i in 1..n {
+            let mut d = 0;
+            while d < n and b[(i + d) % n] == b[(best + d) % n] {
+                d += 1;
+            }
+            if d < n and b[(i + d) % n] < b[(best + d) % n] {
+                best = i;
+            }
+        }
+        for j in 0..n {
+            out.push(b[(best + j) % n] as char);
+        }
+        return out;
+    }
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for c in b.iter() {
+        count[(*c - 97) as i64] += 1;
+    }
+    for letter in 0..26 {
+        for _ in 0..count[letter] {
+            out.push((97 + letter) as u8 as char);
+        }
+    }
+    out
+}
+
+// ---- the booth arm: Booth's least rotation --------------------------------
+fn booth_least_rotation(b: Vec[u8]) -> i64 {
+    let n = b.len();
+    let mut f: Vec[i64] = Vec.filled(2 * n, -1);
+    let mut k = 0;
+    for j in 1..2 * n {
+        let sj = b[j % n];
+        let mut i = f[j - k - 1];
+        while i != -1 and sj != b[(k + i + 1) % n] {
+            if sj < b[(k + i + 1) % n] {
+                k = j - i - 1;
+            }
+            i = f[i];
+        }
+        if i == -1 and sj != b[(k + i + 1) % n] {
+            if sj < b[(k + i + 1) % n] {
+                k = j;
+            }
+            f[j - k] = -1;
+        } else {
+            f[j - k] = i + 1;
+        }
+    }
+    k % n
+}
+
+fn booth_orderly_queue(s: String, k: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut out = String.new();
+    if k == 1 {
+        let start = booth_least_rotation(b);
+        for j in 0..n {
+            out.push(b[(start + j) % n] as char);
+        }
+        return out;
+    }
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for c in b.iter() {
+        count[(*c - 97) as i64] += 1;
+    }
+    for letter in 0..26 {
+        for _ in 0..count[letter] {
+            out.push((97 + letter) as u8 as char);
+        }
+    }
+    out
+}
+
+// ---- the duval arm: Duval's Lyndon factorization --------------------------
+fn duval_smallest_start(b: Vec[u8]) -> i64 {
+    let n = b.len();
+    let mut i = 0;
+    let mut start = 0;
+    while i < n {
+        start = i;
+        let mut j = i + 1;
+        let mut k = i;
+        while j < 2 * n and b[k % n] <= b[j % n] {
+            if b[k % n] < b[j % n] {
+                k = i;
+            } else {
+                k += 1;
+            }
+            j += 1;
+        }
+        while i <= k {
+            i += j - k;
+        }
+    }
+    start
+}
+
+fn duval_orderly_queue(s: String, k: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut out = String.new();
+    if k == 1 {
+        let start = duval_smallest_start(b);
+        for j in 0..n {
+            out.push(b[(start + j) % n] as char);
+        }
+        return out;
+    }
+    let mut sorted = b;
+    sorted.sort();
+    for c in sorted.iter() {
+        out.push(*c as char);
+    }
+    out
+}
+
+// ---- the pointers arm: two candidate starts, and neighbours swapped -------
+fn pointers_orderly_queue(s: String, k: i64) -> String {
+    let mut b = s.bytes().to_vec();
+    let n = b.len();
+    let mut out = String.new();
+    if k == 1 {
+        let mut i = 0;
+        let mut j = 1;
+        let mut d = 0;
+        while i < n and j < n and d < n {
+            let x = b[(i + d) % n];
+            let y = b[(j + d) % n];
+            if x == y {
+                d += 1;
+            } else {
+                if x > y {
+                    i = i + d + 1;
+                } else {
+                    j = j + d + 1;
+                }
+                if i == j {
+                    j += 1;
+                }
+                d = 0;
+            }
+        }
+        let start = i.min(j);
+        for t in 0..n {
+            out.push(b[(start + t) % n] as char);
+        }
+        return out;
+    }
+    let mut swapped = true;
+    while swapped {
+        swapped = false;
+        for t in 1..n {
+            if b[t - 1] > b[t] {
+                b.swap(t - 1, t);
+                swapped = true;
+            }
+        }
+    }
+    for c in b.iter() {
+        out.push(*c as char);
+    }
+    out
+}
+
+fn arm(x: i64, s: String, k: i64) -> String {
+    match x {
+        0 => star_orderly_queue(s, k),
+        1 => counts_orderly_queue(s, k),
+        2 => booth_orderly_queue(s, k),
+        3 => duval_orderly_queue(s, k),
+        _ => pointers_orderly_queue(s, k),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every string the moves reach from s, a move taking one of the first k
+// letters out and writing it at the end, found breadth first; the
+// smallest of them
+fn literal(s: String, k: i64) -> String {
+    let mut seen: Set[String] = Set.new();
+    let mut queue: VecDeque[String] = VecDeque.new();
+    let mut best = s.clone();
+    seen.insert(s.clone());
+    queue.push_back(s.clone());
+    while let Some(cur) = queue.pop_front() {
+        if cur < best {
+            best = cur.clone();
+        }
+        let b = cur.bytes().to_vec();
+        let n = b.len();
+        for pick in 0..k.min(n) {
+            let mut next = String.new();
+            for i in 0..n {
+                if i != pick {
+                    next.push(b[i] as char);
+                }
+            }
+            next.push(b[pick] as char);
+            if not seen.contains(next) {
+                seen.insert(next.clone());
+                queue.push_back(next);
+            }
+        }
+    }
+    best
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` random letters from the first `letters` of the alphabet; with
+// `repeat`, a random piece of up to 5 letters written over and over
+fn random_string(seed: mut ref i64, len: i64, letters: i64, repeat: bool) -> String {
+    let mut piece: Vec[u8] = Vec.new();
+    let p = 1 + next_random(mut seed) % 5;
+    for _ in 0..p {
+        piece.push((97 + next_random(mut seed) % letters) as u8);
+    }
+    let mut s = String.new();
+    for i in 0..len {
+        if repeat {
+            s.push(piece[i % p] as char);
+        } else {
+            s.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+    }
+    s
+}
+
+// s rotated left by r
+fn rotated(s: String, r: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    let mut out = String.new();
+    for j in 0..n {
+        out.push(b[(r + j) % n] as char);
+    }
+    out
+}
+
+fn letter_counts(s: String) -> Vec[i64] {
+    let mut count: Vec[i64] = Vec.filled(26, 0);
+    for c in s.bytes() {
+        count[(c - 97) as i64] += 1;
+    }
+    count
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, k: i64, small: bool) {
+    let n = s.len();
+    let want = if small { literal(s, k) } else { String.new() };
+    let mut answers: Vec[String] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, s, k));
+    }
+    // the rotations of s, and the smallest
+    let mut rotations: Set[String] = Set.new();
+    let mut smallest = s.clone();
+    for r in 0..n {
+        let rot = rotated(s, r);
+        if rot < smallest {
+            smallest = rot.clone();
+        }
+        rotations.insert(rot);
+    }
+    let counts = letter_counts(s);
+    let turned = rotated(s, next_random(mut seed) % n);
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's smallest string
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the letters of s rearranged, and for k = 1 one of its
+        // rotations
+        check(mut t, 2, letter_counts(got) == counts and (k > 1 or rotations.contains(got)));
+        // P3: no larger than the smallest rotation, which the moves reach
+        // for any k; for k >= 2, letters that never go down
+        let mut rising = true;
+        let gb = got.bytes().to_vec();
+        for i in 1..gb.len() {
+            if gb[i] < gb[i - 1] {
+                rising = false;
+            }
+        }
+        check(mut t, 3, got <= smallest and (k == 1 or rising));
+        // P4: any k >= 2 gives what k = n gives, and k = 1 nothing smaller
+        let other = if k == 1 { arm(x, s, 2.max(n)) } else { arm(x, s, n) };
+        check(mut t, 4, if k == 1 { other <= got } else { other == got });
+        // P5: the same answer for s rotated, and the answer as s gives
+        // itself
+        check(mut t, 5, arm(x, turned, k) == got and arm(x, got, k) == got);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 899;
+    let mut cases = 0;
+    let mut letters_in_all = 0;
+    // up to 6 letters from 1 to 3 against the statement; then up to 300
+    // from 1 to 26; half of them with k = 1, a quarter a repeated piece
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 300 };
+        let letters = if small { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 26 };
+        let s = random_string(mut seed, len, letters, c % 4 == 0);
+        let k = if c % 2 == 0 { 1 } else { 1 + next_random(mut seed) % len };
+        cases += 1;
+        letters_in_all += len;
+        properties(mut t, mut seed, s, k, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {letters_in_all} letters, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

@@ -1,0 +1,13 @@
+s = "cba", k = 1 -> "acb"
+s = "baaca", k = 3 -> "aaabc"
+s = "a", k = 1 -> "a"
+s = "aaaa", k = 1 -> "aaaa"
+s = "bab", k = 1 -> "abb"
+s = "bab", k = 2 -> "abb"
+s = "abab", k = 1 -> "abab"
+s = "dcba", k = 4 -> "abcd"
+s = "zyxwvutsrqponmlkjihgfedcba", k = 1 -> "azyxwvutsrqponmlkjihgfedcb"
+s = "zyxwvutsrqponmlkjihgfedcba", k = 2 -> "abcdefghijklmnopqrstuvwxyz"
+300 cases of up to 300 letters (42964 letters): checksum 332158409
+1000 letters, k = 1 -> checksum 630178852
+1000 random letters, k = 2 -> checksum 724456175

@@ -1,0 +1,107 @@
+// LeetCode #899: Orderly Queue -- every rotation, or the letters sorted.
+//
+// With k = 1 the only move takes the first letter to the end, so the
+// strings reachable are the rotations of s: build each and keep the
+// smallest. With k >= 2 the first two letters can be sent to the end in
+// either order, which (with rotating) swaps any two neighbours, so every
+// order of the letters is reachable and the answer is them sorted.
+// O(n^2) for k = 1, O(n log n) otherwise.
+
+fn orderly_queue(s: String, k: i64) -> String {
+    let b = s.bytes().to_vec();
+    let n = b.len();
+    if k == 1 {
+        let mut best = s.clone();
+        for i in 1..n {
+            let mut r = String.new();
+            for j in 0..n {
+                r.push(b[(i + j) % n] as char);
+            }
+            if r < best {
+                best = r;
+            }
+        }
+        return best;
+    }
+    let mut sorted = b;
+    sorted.sort();
+    let mut out = String.new();
+    for c in sorted.iter() {
+        out.push(*c as char);
+    }
+    out
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, k: i64) {
+    println(f"s = \"{s}\", k = {k} -> \"{orderly_queue(s.to_string(), k)}\"");
+}
+
+// `len` random letters from the first `letters` of the alphabet; with
+// `repeat`, a random piece of up to 5 letters written over and over
+fn random_string(seed: mut ref i64, len: i64, letters: i64, repeat: bool) -> String {
+    let mut piece: Vec[u8] = Vec.new();
+    let p = 1 + next_random(mut seed) % 5;
+    for _ in 0..p {
+        piece.push((97 + next_random(mut seed) % letters) as u8);
+    }
+    let mut s = String.new();
+    for i in 0..len {
+        if repeat {
+            s.push(piece[i % p] as char);
+        } else {
+            s.push((97 + next_random(mut seed) % letters) as u8 as char);
+        }
+    }
+    s
+}
+
+fn checksum(s: String, check: i64) -> i64 {
+    let mut c = check;
+    for b in s.bytes() {
+        c = (c * 131 + b as i64) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    show("cba", 1);
+    show("baaca", 3);
+    show("a", 1);
+    show("aaaa", 1);
+    show("bab", 1);
+    show("bab", 2);
+    show("abab", 1);
+    show("dcba", 4);
+    show("zyxwvutsrqponmlkjihgfedcba", 1);
+    show("zyxwvutsrqponmlkjihgfedcba", 2);
+    // random cases of up to 300 letters from 1 to 26 letters, half of
+    // them with k = 1, a quarter of them a short piece repeated
+    let mut seed = 899;
+    let mut check = 0;
+    let mut letters_in_all = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 300;
+        let letters = 1 + next_random(mut seed) % 26;
+        let s = random_string(mut seed, len, letters, c % 4 == 0);
+        let k = if c % 2 == 0 { 1 } else { 1 + next_random(mut seed) % len };
+        check = checksum(orderly_queue(s, k), check);
+        letters_in_all += len;
+    }
+    println(f"300 cases of up to 300 letters ({letters_in_all} letters): checksum {check}");
+    // LeetCode's largest: 1000 letters, a repeated piece with one letter
+    // changed near the end, k = 1; and 1000 random letters, k = 2
+    let mut big = String.new();
+    for i in 0..1000 {
+        big.push(if i == 991 { 'a' } else if i % 3 == 0 { 'a' } else { 'b' });
+    }
+    println(f"1000 letters, k = 1 -> checksum {checksum(orderly_queue(big, 1), 0)}");
+    let sorted = orderly_queue(random_string(mut seed, 1000, 26, false), 2);
+    println(f"1000 random letters, k = 2 -> checksum {checksum(sorted, 0)}");
+}
