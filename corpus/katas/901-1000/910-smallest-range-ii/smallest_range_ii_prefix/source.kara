@@ -1,0 +1,94 @@
+// LeetCode #910: Smallest Range II -- every split's extremes read from
+// prefix and suffix arrays.
+//
+// Sort, so that the values that go up are a prefix. Then compute, for
+// every prefix, the largest and smallest of its values plus k, and for
+// every suffix the largest and smallest of its values less k. A split's
+// range is the larger of the two largests less the smaller of the two
+// smallests; the empty prefix and the empty suffix are tried too. Nothing
+// here relies on the sorted order to name the extremes. O(n log n).
+
+fn smallest_range_ii(nums: Vec[i64], k: i64) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut up_hi: Vec[i64] = Vec.filled(n, 0);
+    let mut up_lo: Vec[i64] = Vec.filled(n, 0);
+    let mut down_hi: Vec[i64] = Vec.filled(n, 0);
+    let mut down_lo: Vec[i64] = Vec.filled(n, 0);
+    for i in 0..n {
+        up_hi[i] = if i == 0 { a[i] + k } else { up_hi[i - 1].max(a[i] + k) };
+        up_lo[i] = if i == 0 { a[i] + k } else { up_lo[i - 1].min(a[i] + k) };
+    }
+    let mut j = n - 1;
+    while j >= 0 {
+        down_hi[j] = if j == n - 1 { a[j] - k } else { down_hi[j + 1].max(a[j] - k) };
+        down_lo[j] = if j == n - 1 { a[j] - k } else { down_lo[j + 1].min(a[j] - k) };
+        j -= 1;
+    }
+    // every value down, then the first `ups` values up
+    let mut best = down_hi[0] - down_lo[0];
+    for ups in 1..n + 1 {
+        let range = if ups == n {
+            up_hi[n - 1] - up_lo[n - 1]
+        } else {
+            up_hi[ups - 1].max(down_hi[ups]) - up_lo[ups - 1].min(down_lo[ups])
+        };
+        best = best.min(range);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    let mut listed = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            listed.push_str(",");
+        }
+        listed.push_str(f"{nums[i]}");
+    }
+    println(f"nums = [{listed}], k = {k} -> {smallest_range_ii(nums, k)}");
+}
+
+fn main() {
+    show(vec![1], 0);
+    show(vec![0, 10], 2);
+    show(vec![1, 3, 6], 3);
+    show(vec![7, 7, 7], 0);
+    show(vec![0, 10000], 0);
+    show(vec![0, 10000], 10000);
+    show(vec![2, 9, 4, 13, 5], 2);
+    show(vec![2, 9, 4, 13, 5], 5);
+    // random cases of up to 2000 numbers below 10, 1000 or 10001, with k
+    // up to 10000
+    let mut seed = 910;
+    let mut sum = 0;
+    let mut check = 0;
+    for c in 0..300 {
+        let len = 1 + next_random(mut seed) % 2000;
+        let top = if c % 3 == 0 { 10 } else if c % 3 == 1 { 1000 } else { 10001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..len {
+            nums.push(next_random(mut seed) % top);
+        }
+        let k = next_random(mut seed) % (top / 2 + 1);
+        let got = smallest_range_ii(nums, k);
+        sum += got;
+        check = (check * 1000003 + got) % 1000000007;
+    }
+    println(f"300 cases: scores summing to {sum}, checksum {check}");
+    // LeetCode's largest: 10^4 numbers up to 10^4, with k = 0 and k = 2500
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        big.push(next_random(mut seed) % 10001);
+    }
+    println(f"10000 numbers, k = 0 -> {smallest_range_ii(big, 0)}");
+    println(f"10000 numbers, k = 2500 -> {smallest_range_ii(big, 2500)}");
+}

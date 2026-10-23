@@ -1,0 +1,42 @@
+// LeetCode #910: Smallest Range II -- bench program.
+//
+// The ★ arm (the sorted values split in two) over 500,000 numbers up to
+// 10^4 built once. Each round solves them with a k that changes from
+// round to round, folds the score into a checksum and changes one number.
+
+fn smallest_range_ii(nums: Vec[i64], k: i64) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut best = a[n - 1] - a[0];
+    for i in 0..n - 1 {
+        let hi = (a[i] + k).max(a[n - 1] - k);
+        let lo = (a[0] + k).min(a[i + 1] - k);
+        best = best.min(hi - lo);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 500000;
+    let rounds = 40;
+    let mut seed = 910;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(mut seed) % 10001);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for round in 0..rounds {
+        let got = smallest_range_ii(nums, round * 373 % 5001);
+        total += got;
+        check = (check * 31 + got) % 1000000007;
+        nums[round * 7919 % n] = next_random(mut seed) % 10001;
+    }
+    println(f"{rounds} rounds over {n} numbers: scores summing to {total}, checksum {check}");
+}
