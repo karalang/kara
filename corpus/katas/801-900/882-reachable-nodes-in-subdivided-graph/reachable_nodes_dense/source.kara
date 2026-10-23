@@ -1,0 +1,132 @@
+// LeetCode #882: Reachable Nodes In Subdivided Graph -- Dijkstra by
+// scanning.
+//
+// The same distances over the original nodes, with an edge of cnt new
+// nodes weighing cnt + 1, found without a queue: each round settles the
+// nearest node not yet settled, found by scanning all n, and relaxes its
+// edges, until no node within max_moves is left. The new nodes are then
+// counted on each edge from both ends. O(n^2 + E).
+
+fn reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    let unreached = max_moves + 1;
+    let mut dist: Vec[i64] = Vec.filled(n, unreached);
+    let mut settled: Vec[bool] = Vec.filled(n, false);
+    dist[0] = 0;
+    loop {
+        let mut u = -1;
+        for x in 0..n {
+            if not settled[x] and dist[x] < unreached and (u < 0 or dist[x] < dist[u]) {
+                u = x;
+            }
+        }
+        if u < 0 {
+            break;
+        }
+        settled[u] = true;
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let v = edges[e][0] + edges[e][1] - u;
+            dist[v] = dist[v].min(dist[u] + edges[e][2] + 1);
+        }
+    }
+    let mut seen = 0;
+    for u in 0..n {
+        if dist[u] <= max_moves {
+            seen += 1;
+        }
+    }
+    for e in 0..edges.len() {
+        let from_u = (max_moves - dist[edges[e][0]]).max(0);
+        let from_v = (max_moves - dist[edges[e][1]]).max(0);
+        seen += (from_u + from_v).min(edges[e][2]);
+    }
+    seen
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn text(edges: Vec[Vec[i64]]) -> String {
+    if edges.len() > 5 {
+        return f"[[{edges[0][0]}, {edges[0][1]}, {edges[0][2]}], ... ({edges.len()} edges)]";
+    }
+    let mut out = "[";
+    for i in 0..edges.len() {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + f"[{edges[i][0]}, {edges[i][1]}, {edges[i][2]}]";
+    }
+    out + "]"
+}
+
+fn show(edges: Vec[Vec[i64]], max_moves: i64, n: i64) {
+    println(f"edges = {text(edges)}, maxMoves = {max_moves}, n = {n} -> {reachable_nodes(edges, max_moves, n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a value from 0 to limit - 1 (limit up to 10^9)
+fn below(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit
+}
+
+// up to m edges between distinct pairs of n nodes, each subdivided into
+// 0 to most - 1 new nodes
+fn graph(seed: mut ref i64, n: i64, m: i64, most: i64) -> Vec[Vec[i64]] {
+    let mut used: Set[i64] = Set.new();
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let u = below(mut seed, n);
+        let v = below(mut seed, n);
+        let key = u.min(v) * n + u.max(v);
+        if u != v and not used.contains(key) {
+            used.insert(key);
+            edges.push([u.min(v), u.max(v), below(mut seed, most)]);
+        }
+    }
+    edges
+}
+
+fn main() {
+    show([[0, 1, 10], [0, 2, 1], [1, 2, 2]], 6, 3);
+    show([[0, 1, 4], [1, 2, 6], [0, 2, 8], [1, 3, 1]], 10, 4);
+    show([[1, 2, 4], [1, 4, 5], [1, 3, 1], [2, 3, 4], [3, 4, 5]], 17, 5);
+    show([], 5, 1);
+    show([[0, 1, 3]], 0, 2);
+    show([[0, 1, 3]], 4, 2);
+    show([[0, 1, 3]], 2, 2);
+    show([[0, 1, 0], [1, 2, 0], [2, 3, 0]], 2, 4);
+    show([[0, 1, 10000]], 1000000000, 2);
+    // small cases
+    let mut seed = 882;
+    let mut total = 0;
+    for _ in 0..2000 {
+        let n = next_random(mut seed) % 8 + 1;
+        let edges = graph(mut seed, n, next_random(mut seed) % 12, 6);
+        total += reachable_nodes(edges, next_random(mut seed) % 15, n);
+    }
+    println(f"2000 cases of up to 8 nodes: {total} nodes reached");
+    // LeetCode's sizes: n up to 3000, up to 10^4 edges, cnt up to 10^4
+    total = 0;
+    let mut check = 0;
+    for k in 0..12 {
+        let n = 1000 + below(mut seed, 2001);
+        let edges = graph(mut seed, n, 10000, 10001);
+        let max_moves = if k % 3 == 0 { below(mut seed, 1000000001) } else { below(mut seed, 100000) };
+        let reached = reachable_nodes(edges, max_moves, n);
+        total += reached;
+        check = (check * 131 + reached) % 1000000007;
+    }
+    println(f"12 cases of up to 3000 nodes: {total} nodes reached, checksum {check}");
+}

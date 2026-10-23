@@ -1,0 +1,490 @@
+// LeetCode #882: Reachable Nodes In Subdivided Graph -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: an undirected graph of n nodes 0..n-1, each edge
+// [u, v, cnt] subdivided into a chain of cnt new nodes x1..xcnt, with
+// edges u-x1, x1-x2, ..., xcnt-v. In the new graph, return how many nodes
+// are reachable from node 0, a node being reachable when it is at most
+// maxMoves away.
+
+// ---- the ★ arm: Dijkstra with a priority queue ----------------------------
+fn star_reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    let mut dist: Vec[i64] = Vec.filled(n, max_moves + 1);
+    dist[0] = 0;
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    queue.push((0, 0));
+    while let Some((d, u)) = queue.pop() {
+        if d > dist[u] {
+            continue;
+        }
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let v = edges[e][0] + edges[e][1] - u;
+            let next = d + edges[e][2] + 1;
+            if next < dist[v] {
+                dist[v] = next;
+                queue.push((next, v));
+            }
+        }
+    }
+    let mut seen = 0;
+    for u in 0..n {
+        if dist[u] <= max_moves {
+            seen += 1;
+        }
+    }
+    for e in 0..edges.len() {
+        let from_u = (max_moves - dist[edges[e][0]]).max(0);
+        let from_v = (max_moves - dist[edges[e][1]]).max(0);
+        seen += (from_u + from_v).min(edges[e][2]);
+    }
+    seen
+}
+
+// ---- the dense arm: Dijkstra by scanning ----------------------------------
+fn dense_reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    let unreached = max_moves + 1;
+    let mut dist: Vec[i64] = Vec.filled(n, unreached);
+    let mut settled: Vec[bool] = Vec.filled(n, false);
+    dist[0] = 0;
+    loop {
+        let mut u = -1;
+        for x in 0..n {
+            if not settled[x] and dist[x] < unreached and (u < 0 or dist[x] < dist[u]) {
+                u = x;
+            }
+        }
+        if u < 0 {
+            break;
+        }
+        settled[u] = true;
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let v = edges[e][0] + edges[e][1] - u;
+            dist[v] = dist[v].min(dist[u] + edges[e][2] + 1);
+        }
+    }
+    let mut seen = 0;
+    for u in 0..n {
+        if dist[u] <= max_moves {
+            seen += 1;
+        }
+    }
+    for e in 0..edges.len() {
+        let from_u = (max_moves - dist[edges[e][0]]).max(0);
+        let from_v = (max_moves - dist[edges[e][1]]).max(0);
+        seen += (from_u + from_v).min(edges[e][2]);
+    }
+    seen
+}
+
+// ---- the queue arm: shortest paths by a work queue ------------------------
+fn spfa_reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    let mut dist: Vec[i64] = Vec.filled(n, max_moves + 1);
+    let mut queued: Vec[bool] = Vec.filled(n, false);
+    let mut work: VecDeque[i64] = VecDeque.new();
+    dist[0] = 0;
+    work.push_back(0);
+    queued[0] = true;
+    while let Some(u) = work.pop_front() {
+        queued[u] = false;
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let v = edges[e][0] + edges[e][1] - u;
+            let next = dist[u] + edges[e][2] + 1;
+            if next < dist[v] {
+                dist[v] = next;
+                if not queued[v] {
+                    work.push_back(v);
+                    queued[v] = true;
+                }
+            }
+        }
+    }
+    let mut seen = 0;
+    for u in 0..n {
+        if dist[u] <= max_moves {
+            seen += 1;
+        }
+    }
+    for e in 0..edges.len() {
+        let from_u = (max_moves - dist[edges[e][0]]).max(0);
+        let from_v = (max_moves - dist[edges[e][1]]).max(0);
+        seen += (from_u + from_v).min(edges[e][2]);
+    }
+    seen
+}
+
+// ---- the heap arm: Dijkstra with a hand-built heap ------------------------
+fn heap_reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    let mut dist: Vec[i64] = Vec.filled(n, max_moves + 1);
+    dist[0] = 0;
+    let mut heap: Vec[i64] = Vec.new();
+    heap_insert(mut heap, 0);
+    while heap.len() > 0 {
+        let top = heap_remove_min(mut heap);
+        let d = top / 4096;
+        let u = top % 4096;
+        if d > dist[u] {
+            continue;
+        }
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let v = edges[e][0] + edges[e][1] - u;
+            let next = d + edges[e][2] + 1;
+            if next < dist[v] {
+                dist[v] = next;
+                heap_insert(mut heap, next * 4096 + v);
+            }
+        }
+    }
+    let mut seen = 0;
+    for u in 0..n {
+        if dist[u] <= max_moves {
+            seen += 1;
+        }
+    }
+    for e in 0..edges.len() {
+        let from_u = (max_moves - dist[edges[e][0]]).max(0);
+        let from_v = (max_moves - dist[edges[e][1]]).max(0);
+        seen += (from_u + from_v).min(edges[e][2]);
+    }
+    seen
+}
+
+fn heap_insert(heap: mut ref Vec[i64], x: i64) {
+    heap.push(x);
+    let mut i = heap.len() - 1;
+    while i > 0 and heap[(i - 1) / 2] > heap[i] {
+        heap.swap(i, (i - 1) / 2);
+        i = (i - 1) / 2;
+    }
+}
+
+fn heap_remove_min(heap: mut ref Vec[i64]) -> i64 {
+    let top = heap[0];
+    let last = heap.len() - 1;
+    heap.swap(0, last);
+    heap.pop();
+    let mut i = 0;
+    loop {
+        let mut least = i;
+        let left = 2 * i + 1;
+        let right = 2 * i + 2;
+        if left < heap.len() and heap[left] < heap[least] {
+            least = left;
+        }
+        if right < heap.len() and heap[right] < heap[least] {
+            least = right;
+        }
+        if least == i {
+            break;
+        }
+        heap.swap(i, least);
+        i = least;
+    }
+    top
+}
+
+// ---- the moves-left arm: the moves left -----------------------------------
+fn left_reachable_nodes(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(e);
+        adj[edges[e][1]].push(e);
+    }
+    // best[u]: the most moves left on reaching u, -1 for not reached
+    let mut best: Vec[i64] = Vec.filled(n, -1);
+    let mut done: Vec[bool] = Vec.filled(n, false);
+    // walked[2 * e]: new nodes of edge e walked from its first end;
+    // walked[2 * e + 1]: from its second end
+    let mut walked: Vec[i64] = Vec.filled(2 * edges.len(), 0);
+    best[0] = max_moves;
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    queue.push((max_moves, 0));
+    let mut seen = 0;
+    while let Some((left, u)) = queue.pop() {
+        if done[u] {
+            continue;
+        }
+        done[u] = true;
+        seen += 1;
+        for k in 0..adj[u].len() {
+            let e = adj[u][k];
+            let cnt = edges[e][2];
+            let side = if edges[e][0] == u { 0 } else { 1 };
+            walked[2 * e + side] = left.min(cnt);
+            let v = edges[e][0] + edges[e][1] - u;
+            let there = left - cnt - 1;
+            if there > best[v] {
+                best[v] = there;
+                queue.push((there, v));
+            }
+        }
+    }
+    for e in 0..edges.len() {
+        seen += (walked[2 * e] + walked[2 * e + 1]).min(edges[e][2]);
+    }
+    seen
+}
+
+fn arm(x: i64, edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    match x {
+        0 => star_reachable_nodes(edges, max_moves, n),
+        1 => dense_reachable_nodes(edges, max_moves, n),
+        2 => spfa_reachable_nodes(edges, max_moves, n),
+        3 => heap_reachable_nodes(edges, max_moves, n),
+        _ => left_reachable_nodes(edges, max_moves, n),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the new graph built: each edge [u, v, cnt] replaced by a chain u, x1,
+// ..., xcnt, v of new nodes; then a breadth-first search from node 0,
+// counting the nodes at most max_moves away
+fn literal(edges: Vec[Vec[i64]], max_moves: i64, n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        let mut prev = edges[e][0];
+        for _ in 0..edges[e][2] {
+            let x = adj.len();
+            adj.push(Vec.new());
+            adj[prev].push(x);
+            adj[x].push(prev);
+            prev = x;
+        }
+        adj[prev].push(edges[e][1]);
+        adj[edges[e][1]].push(prev);
+    }
+    let mut depth: Vec[i64] = Vec.filled(adj.len(), -1);
+    depth[0] = 0;
+    let mut order: Vec[i64] = [0];
+    let mut at = 0;
+    while at < order.len() {
+        let u = order[at];
+        at += 1;
+        if depth[u] < max_moves {
+            for k in 0..adj[u].len() {
+                let v = adj[u][k];
+                if depth[v] < 0 {
+                    depth[v] = depth[u] + 1;
+                    order.push(v);
+                }
+            }
+        }
+    }
+    order.len()
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn below(seed: mut ref i64, limit: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % limit
+}
+
+fn graph(seed: mut ref i64, n: i64, m: i64, most: i64) -> Vec[Vec[i64]] {
+    let mut used: Set[i64] = Set.new();
+    let mut edges: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let u = below(mut seed, n);
+        let v = below(mut seed, n);
+        let key = u.min(v) * n + u.max(v);
+        if u != v and not used.contains(key) {
+            used.insert(key);
+            edges.push([u.min(v), u.max(v), below(mut seed, most)]);
+        }
+    }
+    edges
+}
+
+// the original nodes joined to node 0, and the new nodes on their edges
+fn component(edges: Vec[Vec[i64]], n: i64) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        adj.push(Vec.new());
+    }
+    for e in 0..edges.len() {
+        adj[edges[e][0]].push(edges[e][1]);
+        adj[edges[e][1]].push(edges[e][0]);
+    }
+    let mut joined: Vec[bool] = Vec.filled(n, false);
+    joined[0] = true;
+    let mut order: Vec[i64] = [0];
+    let mut at = 0;
+    while at < order.len() {
+        let u = order[at];
+        at += 1;
+        for k in 0..adj[u].len() {
+            let v = adj[u][k];
+            if not joined[v] {
+                joined[v] = true;
+                order.push(v);
+            }
+        }
+    }
+    let mut count = order.len();
+    for e in 0..edges.len() {
+        if joined[edges[e][0]] {
+            count += edges[e][2];
+        }
+    }
+    count
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one graph over the five arms (P1 only when `small`).
+// Returns the ★ arm's count.
+fn properties(t: mut ref Tally, seed: mut ref i64, edges: Vec[Vec[i64]], max_moves: i64, n: i64, small: bool) -> i64 {
+    let want = if small { literal(edges, max_moves, n) } else { 0 };
+    let mut new_nodes = 0;
+    let mut longest = 0;
+    for e in 0..edges.len() {
+        new_nodes += edges[e][2];
+        longest += edges[e][2] + 1;
+    }
+    let everything = component(edges, n);
+    // the nodes 1..n-1 relabelled, the edges reordered and each turned
+    // round half the time
+    let mut label: Vec[i64] = Vec.new();
+    for u in 0..n {
+        label.push(u);
+    }
+    for i in 1..n {
+        let j = i + next_random(mut seed) % (n - i);
+        label.swap(i, j);
+    }
+    let mut moved: Vec[Vec[i64]] = Vec.new();
+    for e in 0..edges.len() {
+        let u = label[edges[e][0]];
+        let v = label[edges[e][1]];
+        if next_random(mut seed) % 2 == 0 {
+            moved.push([u, v, edges[e][2]]);
+        } else {
+            moved.push([v, u, edges[e][2]]);
+        }
+    }
+    for i in 0..moved.len() {
+        let j = i + next_random(mut seed) % (moved.len() - i);
+        moved.swap(i, j);
+    }
+    // one more edge, from node 0 to a new original node n
+    let extra = next_random(mut seed) % 30;
+    let mut longer = edges.clone();
+    longer.push([0, n, extra]);
+    let gained = max_moves.min(extra) + if max_moves >= extra + 1 { 1 } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, edges, max_moves, n));
+    }
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: node 0 at least, every node at most
+        check(mut t, 2, got >= 1 and got <= n + new_nodes);
+        // P3: the same graph with other labels and in another order
+        check(mut t, 3, arm(x, moved, max_moves, n) == got);
+        // P4: one more move never reaches fewer, and enough moves to walk
+        // every edge reach all of 0's component
+        check(mut t, 4, arm(x, edges, max_moves + 1, n) >= got and arm(x, edges, longest, n) == everything);
+        // P5: an edge of extra new nodes from 0 to a node of its own adds
+        // the new nodes walked, and that node when the walk reaches it
+        check(mut t, 5, arm(x, longer, max_moves, n + 1) == got + gained);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    answers[0]
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 882;
+    // up to 8 nodes and 6 new nodes an edge against the statement; then
+    // 100 to 500 nodes with up to 2,000 edges and 100 new nodes an edge
+    for c in 0..2040 {
+        let small = c < 2000;
+        let n = if small { next_random(mut seed) % 8 + 1 } else { 100 + below(mut seed, 401) };
+        let edges = if small { graph(mut seed, n, next_random(mut seed) % 14, 7) } else { graph(mut seed, n, 2000, 101) };
+        let max_moves = if small { next_random(mut seed) % 20 } else { below(mut seed, 3000) };
+        cases += 1;
+        total += properties(mut t, mut seed, edges, max_moves, n, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, nodes reached sum to {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
