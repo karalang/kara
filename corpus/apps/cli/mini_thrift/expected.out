@@ -1,0 +1,1579 @@
+> spec Point
+  slots x, y
+  -
+  1 x i32
+  2 y i32
+> spec Item
+  slots sku, qty, price, tags, thumb
+  -
+  1 sku string
+  2 qty i16
+  3 price double
+  4 tags list
+  -
+  6 thumb string
+> spec Order
+  slots id, customer, items, coupons, flags, paid, priority, ship_to, notes
+  -
+  1 id i64
+  2 customer string
+  3 items list
+  4 coupons map
+  5 flags set
+  6 paid bool
+  7 priority byte
+  -
+  9 ship_to struct
+  -
+  -
+  12 notes map
+> spec Event
+  slots kind, ts, user, ms, attrs
+  -
+  1 ts i64
+  2 user i32
+  3 kind string
+  4 ms double
+  5 attrs map
+> spec Work
+  slots num1, num2, op, comment
+  -
+  1 num1 i32
+  2 num2 i32
+  3 op i32
+  4 comment string
+> spec InvalidOperation
+  slots whatOp, why
+  -
+  1 whatOp i32
+  2 why string
+> spec Empty
+  slots 
+> spec calculate_args
+  slots logid, w
+  -
+  1 logid i32
+  2 w struct
+> spec calculate_result
+  slots success, ouch
+  0 success i32
+  1 ouch struct
+> spec ping_result
+  slots 
+> spec add_result
+  slots success
+  0 success i32
+> spec getStruct_args
+  slots key
+  -
+  1 key i32
+> const INT32CONSTANT
+  9853
+> const MAPCONSTANT
+  {'hello': 'world', 'goodnight': 'moon'}
+> const RETRY_MS
+  [100, 250, 1000]
+> enum Operation
+  ADD=1, SUBTRACT=2, MULTIPLY=3, DIVIDE=4
+> enum Level
+  DEBUG=0, INFO=1, WARN=5, ERROR=6
+> enc binary Point(x=3, y=-4)
+  15 08000100000003080002fffffffc00
+> enc binary Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'])
+  60 0b000100000007424f4f542d3432060002000204000340567ccccccccccd0f00040b00000002000000076c6561746865720000000677696e74657200
+> enc binary Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  266 0a0001000000000001878a0b000200000008416e61204c696d610f00030c000000020b000100000007424f4f542d3432060002000204000340567ccccccccccd0f00040b00000002000000076c6561746865720000000677696e746572000b000100000006534f434b2d31060002000104000340120000000000000f00040b000000000b00060000000489504e47000d00040b08000000020000000957454c434f4d4531300000000a000000084652454553484950000000000e0005060000000300030001000202000601030007fe0c00090800010000000c08000200000007000d000c080f00000002000000010b0000000100000009676966742077726170fffffffb0b0000000000
+> enc binary AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  218 020001010300027f06000380000800047fffffff0a0005800000000000000004000680000000000000000b0007000000166e61c3af766520636166c3a920e2989520092271225c0b00080000000300ff100f0009080000000400000000ffffffff000000010000012c0e000a0b00000002000000016200000001610d000b0b0400000003000000027069400921fb54442d180000000474696e790000000000000001000000036269677e37e43c8800759c0f000c0f0000000306000000020001000206000000000600000001fffd0f000d020000000301000100
+> enc binary Empty()
+  1 00
+> enc binary Work()
+  8 0800010000000000
+> enc binary Tree(name='root', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='b1')])])
+  64 0b000100000004726f6f740f00020c000000020b000100000001610f00020c00000000000b000100000001620f00020c000000010b0001000000026231000000
+> enc compact Point(x=3, y=-4)
+  5 1506150700
+> enc compact Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'])
+  38 1807424f4f542d3432140417cdcccccccc7c56401928076c6561746865720677696e74657200
+> enc compact Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  138 16949e0c1808416e61204c696d61192c1807424f4f542d3432140417cdcccccccc7c56401928076c6561746865720677696e746572001806534f434b2d3114021700000000000012401908280489504e47001b02850957454c434f4d45313014084652454553484950001a340602041113fe2c1518150e003b0259021809676966742077726170090800
+> enc compact AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  128 11137f14ffff0315feffffff0f16ffffffffffffffffff0117000000000000008018166e61c3af766520636166c3a920e2989520092271225c180300ff101945000102d8041a28016201611b0387027069182d4454fb2109400474696e790100000000000000036269679c7500883ce4377e1939240204041405193101020100
+> enc compact Empty()
+  1 00
+> enc compact Work()
+  3 150000
+> enc compact Tree(name='root', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='b1')])])
+  26 1804726f6f74192c180161190c00180162191c18026231000000
+> enc json Point(x=3, y=-4)
+  30 b'{"1":{"i32":3},"2":{"i32":-4}}'
+> enc json Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'])
+  109 b'{"1":{"str":"BOOT-42"},"2":{"i16":2},"3":{"dbl":89.950000000000003},"4":{"lst":["str",2,"leather","winter"]}}'
+> enc json Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  501 b'{"1":{"i64":100234},"2":{"str":"Ana Lima"},"3":{"lst":["rec",2,{"1":{"str":"BOOT-42"},"2":{"i16":2},"3":{"dbl":89.950000000000003},"4":{"lst":["str",2,"leather","winter"]}},{"1":{"str":"SOCK-1"},"2":{"i16":1},"3":{"dbl":4.5},"4":{"lst":["str",0]},"6":{"str":"iVBORw=="}}]},"4":{"map":["str","i32",2,{"WELCOME10":10,"FREESHIP":0}]},"5":{"set":["i16",3,3,1,2]},"6":{"tf":1},"7":{"i8":-2},"9":{"rec":{"1":{"i32":12},"2":{"i32":7}}},"12":{"map":["i32","lst",2,{"1":["str",1,"gift wrap"],"-5":["str",0]}]}}'
+> enc json AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  447 b'{"1":{"tf":1},"2":{"i8":127},"3":{"i16":-32768},"4":{"i32":2147483647},"5":{"i64":-9223372036854775808},"6":{"dbl":-0},"7":{"str":"na\xc3\xafve caf\xc3\xa9 \xe2\x98\x95 \\t\\"q\\"\\\\"},"8":{"str":"AP8Q"},"9":{"lst":["i32",4,0,-1,1,300]},"10":{"set":["str",2,"b","a"]},"11":{"map":["str","dbl",3,{"pi":3.1415926535897931,"tiny":4.9406564584124654e-324,"big":1.0000000000000001e+300}]},"12":{"lst":["lst",3,["i16",2,1,2],["i16",0],["i16",1,-3]]},"13":{"lst":["tf",3,1,0,1]}}'
+> enc json Empty()
+  2 b'{}'
+> enc json Work()
+  15 b'{"1":{"i32":0}}'
+> enc json Tree(name='root', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='b1')])])
+  141 b'{"1":{"str":"root"},"2":{"lst":["rec",2,{"1":{"str":"a"},"2":{"lst":["rec",0]}},{"1":{"str":"b"},"2":{"lst":["rec",1,{"1":{"str":"b1"}}]}}]}}'
+> enc sjson Point(x=3, y=-4)
+  14 b'{"x":3,"y":-4}'
+> enc sjson Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'])
+  67 b'{"sku":"BOOT-42","qty":2,"price":89.95,"tags":["leather","winter"]}'
+> enc sjson Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  319 b'{"id":100234,"customer":"Ana Lima","items":[{"sku":"BOOT-42","qty":2,"price":89.95,"tags":["leather","winter"]},{"sku":"SOCK-1","qty":1,"price":4.5,"tags":[],"thumb":"iVBORw=="}],"coupons":{"WELCOME10":10,"FREESHIP":0},"flags":[3,1,2],"paid":1,"priority":-2,"ship_to":{"x":12,"y":7},"notes":{"1":["gift wrap"],"-5":[]}}'
+> enc sjson AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  248 b'{"b":1,"by":127,"s":-32768,"i":2147483647,"l":-9223372036854775808,"d":-0.0,"str":"na\xc3\xafve caf\xc3\xa9 \xe2\x98\x95 \\t\\"q\\"\\\\","bin":"AP8Q","li":[0,-1,1,300],"ss":["b","a"],"md":{"pi":3.141592653589793,"tiny":5e-324,"big":1e+300},"ll":[[1,2],[],[-3]],"lb":[1,0,1]}'
+> enc sjson Empty()
+  2 b'{}'
+> enc sjson Work()
+  10 b'{"num1":0}'
+> enc sjson Tree(name='root', kids=[Tree(name='a', kids=[]), Tree(name='b', kids=[Tree(name='b1')])])
+  83 b'{"name":"root","kids":[{"name":"a","kids":[]},{"name":"b","kids":[{"name":"b1"}]}]}'
+> rt binary Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  266 0a0001000000000001878a0b000200000008416e61204c696d610f00030c000000020b000100000007424f4f542d3432060002000204000340567ccccccccccd0f00040b00000002000000076c6561746865720000000677696e746572000b000100000006534f434b2d31060002000104000340120000000000000f00040b000000000b00060000000489504e47000d00040b08000000020000000957454c434f4d4531300000000a000000084652454553484950000000000e0005060000000300030001000202000601030007fe0c00090800010000000c08000200000007000d000c080f00000002000000010b0000000100000009676966742077726170fffffffb0b0000000000
+  Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'], thumb=None), Item(sku='SOCK-1', qty=1, price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags={1, 2, 3}, paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  equal False
+> rt binary AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  218 020001010300027f06000380000800047fffffff0a0005800000000000000004000680000000000000000b0007000000166e61c3af766520636166c3a920e2989520092271225c0b00080000000300ff100f0009080000000400000000ffffffff000000010000012c0e000a0b00000002000000016200000001610d000b0b0400000003000000027069400921fb54442d180000000474696e790000000000000001000000036269677e37e43c8800759c0f000c0f0000000306000000020001000206000000000600000001fffd0f000d020000000301000100
+  AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss={'a', 'b'}, md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  equal False
+> rt binary AllTypes(d=nan)
+  12 0400067ff800000000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=nan, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal False
+> rt binary AllTypes(d=inf)
+  12 0400067ff000000000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt binary AllTypes(d=-inf)
+  12 040006fff000000000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=-inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt binary AllTypes(d=0.1)
+  12 0400063fb999999999999a00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=0.1, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt binary AllTypes(d=1e+16, md={'x': 1.5e-07})
+  34 0400064341c37937e080000d000b0b040000000100000001783e8421f5f40d837600
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=1e+16, str=None, bin=None, li=None, ss=None, md={'x': 1.5e-07}, ll=None, lb=None)
+  equal True
+> rt compact Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  138 16949e0c1808416e61204c696d61192c1807424f4f542d3432140417cdcccccccc7c56401928076c6561746865720677696e746572001806534f434b2d3114021700000000000012401908280489504e47001b02850957454c434f4d45313014084652454553484950001a340602041113fe2c1518150e003b0259021809676966742077726170090800
+  Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'], thumb=None), Item(sku='SOCK-1', qty=1, price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags={1, 2, 3}, paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  equal False
+> rt compact AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  128 11137f14ffff0315feffffff0f16ffffffffffffffffff0117000000000000008018166e61c3af766520636166c3a920e2989520092271225c180300ff101945000102d8041a28016201611b0387027069182d4454fb2109400474696e790100000000000000036269679c7500883ce4377e1939240204041405193101020100
+  AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss={'a', 'b'}, md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  equal False
+> rt compact AllTypes(d=nan)
+  10 67000000000000f87f00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=nan, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal False
+> rt compact AllTypes(d=inf)
+  10 67000000000000f07f00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt compact AllTypes(d=-inf)
+  10 67000000000000f0ff00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=-inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt compact AllTypes(d=0.1)
+  10 679a9999999999b93f00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=0.1, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt compact AllTypes(d=1e+16, md={'x': 1.5e-07})
+  23 670080e03779c341435b0187017876830df4f521843e00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=1e+16, str=None, bin=None, li=None, ss=None, md={'x': 1.5e-07}, ll=None, lb=None)
+  equal True
+> rt json Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  501 b'{"1":{"i64":100234},"2":{"str":"Ana Lima"},"3":{"lst":["rec",2,{"1":{"str":"BOOT-42"},"2":{"i16":2},"3":{"dbl":89.950000000000003},"4":{"lst":["str",2,"leather","winter"]}},{"1":{"str":"SOCK-1"},"2":{"i16":1},"3":{"dbl":4.5},"4":{"lst":["str",0]},"6":{"str":"iVBORw=="}}]},"4":{"map":["str","i32",2,{"WELCOME10":10,"FREESHIP":0}]},"5":{"set":["i16",3,3,1,2]},"6":{"tf":1},"7":{"i8":-2},"9":{"rec":{"1":{"i32":12},"2":{"i32":7}}},"12":{"map":["i32","lst",2,{"1":["str",1,"gift wrap"],"-5":["str",0]}]}}'
+  Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'], thumb=None), Item(sku='SOCK-1', qty=1, price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags={1, 2, 3}, paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  equal False
+> rt json AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  447 b'{"1":{"tf":1},"2":{"i8":127},"3":{"i16":-32768},"4":{"i32":2147483647},"5":{"i64":-9223372036854775808},"6":{"dbl":-0},"7":{"str":"na\xc3\xafve caf\xc3\xa9 \xe2\x98\x95 \\t\\"q\\"\\\\"},"8":{"str":"AP8Q"},"9":{"lst":["i32",4,0,-1,1,300]},"10":{"set":["str",2,"b","a"]},"11":{"map":["str","dbl",3,{"pi":3.1415926535897931,"tiny":4.9406564584124654e-324,"big":1.0000000000000001e+300}]},"12":{"lst":["lst",3,["i16",2,1,2],["i16",0],["i16",1,-3]]},"13":{"lst":["tf",3,1,0,1]}}'
+  AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss={'a', 'b'}, md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  equal False
+> rt json AllTypes(d=nan)
+  17 b'{"6":{"dbl":nan}}'
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> rt json AllTypes(d=inf)
+  17 b'{"6":{"dbl":inf}}'
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> rt json AllTypes(d=-inf)
+  18 b'{"6":{"dbl":-inf}}'
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> rt json AllTypes(d=0.1)
+  33 b'{"6":{"dbl":0.10000000000000001}}'
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=0.1, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+  equal True
+> rt json AllTypes(d=1e+16, md={'x': 1.5e-07})
+  89 b'{"6":{"dbl":10000000000000000},"11":{"map":["str","dbl",1,{"x":1.4999999999999999e-07}]}}'
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=1e+16, str=None, bin=None, li=None, ss=None, md={'x': 1.5e-07}, ll=None, lb=None)
+  equal True
+> sizes Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=[3, 1, 2], paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  binary    266
+  compact   138
+  json      501
+  sjson     319
+> sizes AllTypes(b=True, by=127, s=-32768, i=2147483647, l=-9223372036854775808, d=-0.0, str='naïve café ☕ \t"q"\\', bin=b'\x00\xff\x10', li=[0, -1, 1, 300], ss=['b', 'a'], md={'pi': 3.141592653589793, 'tiny': 5e-324, 'big': 1e+300}, ll=[[1, 2], [], [-3]], lb=[True, False, True])
+  binary    218
+  compact   128
+  json      447
+  sjson     248
+> rt binary Point(x=-1, y=2147483647)
+  15 080001ffffffff0800027fffffff00
+  Point(x=-1, y=2147483647)
+  equal True
+> rt compact Tree(name='r', kids=[Tree(name='s', kids=[Tree(name='t', kids=[])])])
+  18 180172191c180173191c180174190c000000
+  Tree(name='r', kids=[Tree(name='s', kids=[Tree(name='t', kids=[])])])
+  equal True
+> rt json UserV2(id=9, name='Zoë', email='zoe@example.com')
+  122 b'{"1":{"i32":9},"2":{"str":"Zo\xc3\xab"},"3":{"str":"zoe@example.com"},"4":{"lst":["str",1,"member"]},"5":{"tf":1},"6":{"dbl":0}}'
+  UserV2(id=9, name='Zoë', email='zoe@example.com', roles=['member'], active=True, score=0.0)
+  equal True
+> dec binary Point x:08000100000003080002fffffffc00
+  Point(x=3, y=-4)
+> dec binary Point x:08000100000003080002fffffffc000102
+  Point(x=3, y=-4)  rest 2
+> dec binary Point x:08000100000003
+  error EOFError: 
+> dec binary Point x:
+  error EOFError: 
+> dec binary Point x:0b000900000005657874726108000100000003080002fffffffc00
+  Point(x=3, y=-4)
+> dec binary Point x:0b000100000001330800020000000500
+  Point(x=None, y=5)
+> dec binary Point x:08ffff0000000900
+  Point(x=None, y=9)
+> dec binary Point x:08fffe0000000900
+  Point(x=9, y=None)
+> dec binary Point x:08fffd0000000900
+  Point(x=None, y=None)
+> dec binary Point x:08fffc0000000900
+  Point(x=None, y=None)
+> dec binary Point x:0800000000000900
+  Point(x=None, y=None)
+> dec binary Point x:080001000000010800010000000200
+  Point(x=2, y=None)
+> dec binary Point x:05000100
+  error thrift.protocol.TProtocol.TProtocolException: invalid TType
+> dec binary Point x:01000100
+  error thrift.protocol.TProtocol.TProtocolException: invalid TType
+> dec binary Point x:10000700
+  error thrift.protocol.TProtocol.TProtocolException: invalid TType
+> dec binary Point x:0c000708000100000001020002010000
+  Point(x=None, y=None)
+> dec binary Point x:0d00070b0800000001000000016b0000000500
+  Point(x=None, y=None)
+> dec binary Point x:0f0007020000000301000200
+  Point(x=None, y=None)
+> dec binary Point x:0e0007040000000100000000000000000800020000000600
+  Point(x=None, y=6)
+> dec binary UserV1 x:080001000000050b000200000006c389646974680b0003000000066540782e667200
+  UserV1(id=5, name='Édith', email='e@x.fr')
+> dec binary UserV1 x:0b0002fffffffb00
+  error thrift.transport.TTransport.TTransportException: Negative length: -5
+> dec binary UserV1 x:0b000200000004636166e900
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 3: unexpected end of data
+> dec binary UserV1 x:0b000200000002e29800
+  error UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 0-1: unexpected end of data
+> dec binary UserV1 x:0b0002000000056f6beda08000
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xed in position 2: invalid continuation byte
+> dec binary UserV1 x:0b0002000003e8616263
+  error EOFError: 
+> dec binary UserV1 x:0b00020000000000
+  UserV1(id=None, name='', email=None)
+> dec binary AllTypes x:0200010200
+  AllTypes(b=True, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec binary AllTypes x:02000100030002ff060003fffe00
+  AllTypes(b=False, by=-1, s=-2, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec binary AllTypes x:0f000908ffffffff00
+  error thrift.transport.TTransport.TTransportException: Negative length: -1
+> dec binary AllTypes x:0f00090b00000002000000010000000200
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[1, 2], ss=None, md=None, ll=None, lb=None)
+> dec binary Item x:0f000408000000020000000141000000014200
+  Item(sku=None, qty=1, price=None, tags=['A', 'B'], thumb=None)
+> dec binary AllTypes x:0e000a0b0000000300000001620000000161000000016200
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss={'a', 'b'}, md=None, ll=None, lb=None)
+> dec binary AllTypes x:0e000a0b0000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=set(), md=None, ll=None, lb=None)
+> dec binary AllTypes x:0d000b0b0400000002000000017800000000000000010000000178400000000000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md={'x': 2.0}, ll=None, lb=None)
+> dec binary AllTypes x:0f000c0f0000000206000000010007060000000000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=[[7], []], lb=None)
+> dec binary AllTypes x:0f000d020000000301000700
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=[True, False, True])
+> dec binary AllTypes x:0400067ff000000000000100
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=nan, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec binary AllTypes x:040006000000000000000100
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=5e-324, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec binary AllTypes x:0a0005ffffffffffffffff0800048000000000
+  AllTypes(b=None, by=None, s=None, i=-2147483648, l=-1, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec binary Grid x:0d00010c0b000000010800010000000100000000016100
+  error TypeError: unhashable type: 'Point'
+> dec binary Grid x:0d00010c0b0000000000
+  Grid(labels={}, cells=None, levels=None, marks=None, votes=None, blobs=None, groups=None, spots=None)
+> dec binary Grid x:0d00020f08000000010800000001000000050000000900
+  error TypeError: unhashable type: 'list'
+> dec binary Grid x:0e00080c00000001080002000000030000
+  error TypeError: unhashable type: 'Point'
+> dec binary Grid x:0e00030400000003800000000000000000000000000000003ff800000000000000
+  Grid(labels=None, cells=None, levels={-0.0, 1.5}, marks=None, votes=None, blobs=None, groups=None, spots=None)
+> dec binary Grid x:0d0004040b000000027ff800000000000000000001617ff8000000000000000000016200
+  Grid(labels=None, cells=None, levels=None, marks={nan: 'a', nan: 'b'}, votes=None, blobs=None, groups=None, spots=None)
+> dec binary Grid x:0d000502080000000301000000030000000002050000000400
+  Grid(labels=None, cells=None, levels=None, marks=None, votes={True: 4, False: 2}, blobs=None, groups=None, spots=None)
+> dec binary Grid x:0d00060b0a000000020000000200010000000000000007000000027a7afffffffffffffff900
+  Grid(labels=None, cells=None, levels=None, marks=None, votes=None, blobs={b'\x00\x01': 7, b'zz': -7}, groups=None, spots=None)
+> dec binary Grid x:0f00070e000000020b00000002000000017900000001780b0000000000
+  Grid(labels=None, cells=None, levels=None, marks=None, votes=None, blobs=None, groups=[{'x', 'y'}, set()], spots=None)
+> dec binary Order x:0d00040b080000000300000001410000000100000001420000000200000001410000000300
+  Order(id=None, customer=None, items=None, coupons={'A': 3, 'B': 2}, flags=None, paid=False, priority=None, ship_to=None, notes=None)
+> dec binary Order x:0c0009080001000000010b000200000002793f00060002000300
+  Order(id=None, customer=None, items=None, coupons=None, flags=None, paid=False, priority=None, ship_to=Point(x=1, y=None), notes=None)
+> dec binary Tree x:0b0001000000026e300f00020c000000010b0001000000026e310f00020c000000010b0001000000026e320f00020c000000010b0001000000026e330f00020c000000010b0001000000026e340f00020c000000010b0001000000026e350f00020c000000010b0001000000046c65616600000000000000
+  Tree(name='n0', kids=[Tree(name='n1', kids=[Tree(name='n2', kids=[Tree(name='n3', kids=[Tree(name='n4', kids=[Tree(name='n5', kids=[Tree(name='leaf', kids=None)])])])])])])
+> dec binary ping_result x:00
+  ping_result()
+> dec binary ping_result x:0800010000000500
+  ping_result()
+> dec binary Empty x:0800010000000500
+  Empty()
+> dec binary calculate_result x:0800000000002a00
+  calculate_result(success=42, ouch=None)
+> dec binary calculate_result x:0c0001080001000000040b0002000000026e6f0000
+  calculate_result(success=None, ouch=InvalidOperation(whatOp=4, why='no'))
+> lim binary 4 -1 Item x:0b000100000007424f4f542d34320f00040b000000020000000161000000016200
+  error thrift.transport.TTransport.TTransportException: Length exceeded max allowed: 4
+> lim binary 7 -1 Item x:0b000100000007424f4f542d34320f00040b000000020000000161000000016200
+  Item(sku='BOOT-42', qty=1, price=None, tags=['a', 'b'], thumb=None)
+> lim binary -1 1 Item x:0b000100000007424f4f542d34320f00040b000000020000000161000000016200
+  error thrift.transport.TTransport.TTransportException: Length exceeded max allowed: 1
+> lim binary -1 2 Item x:0b000100000007424f4f542d34320f00040b000000020000000161000000016200
+  Item(sku='BOOT-42', qty=1, price=None, tags=['a', 'b'], thumb=None)
+> lim binary 0 0 Item x:0b000100000007424f4f542d34320f00040b000000020000000161000000016200
+  error thrift.transport.TTransport.TTransportException: Length exceeded max allowed: 0
+> lim binary -1 0 Item x:0f00040b0000000000
+  Item(sku=None, qty=1, price=None, tags=[], thumb=None)
+> dec compact Point x:1506150700
+  Point(x=3, y=-4)
+> dec compact Point x:1506
+  error EOFError: 
+> dec compact Point x:05020605040a00
+  Point(x=3, y=5)
+> dec compact Point x:05011200
+  Point(x=None, y=9)
+> dec compact Point x:251000
+  Point(x=None, y=8)
+> dec compact Point x:15808080804000
+  Point(x=8589934592, y=None)
+> dec compact Point x:1d00
+  error KeyError: 13
+> dec compact Point x:180133150a00
+  Point(x=None, y=5)
+> dec compact Point x:1c1112150200150400
+  Point(x=None, y=2)
+> dec compact Point x:1931010200150c00
+  Point(x=None, y=6)
+> dec compact Point x:1b0285016b02016a0400
+  Point(x=None, y=None)
+> dec compact Point x:15ffff
+  error EOFError: 
+> dec compact AllTypes x:111200
+  AllTypes(b=True, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:1200
+  AllTypes(b=False, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:138000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:11138014d70400
+  AllTypes(b=True, by=-128, s=-300, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:0508ffffffff0f16ffffffffffffffffff0100
+  AllTypes(b=None, by=None, s=None, i=-2147483648, l=-9223372036854775808, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:070c182d4454fb21094000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=3.141592653589793, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:070c182d4454fb21
+  error EOFError: 
+> dec compact AllTypes x:080e05636166c3a9180200ff00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='café', bin=b'\x00\xff', li=None, ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:080e01ff00
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> dec compact AllTypes x:0912f51000020812203248628001a201c801f201a002d2028803c20300
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225], ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:0912d500
+  error EOFError: 
+> dec compact AllTypes x:09122b017800
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[-1, 60], ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:090925020400
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[1, 2], ss=None, md=None, ll=None, lb=None)
+> dec compact AllTypes x:0a143801620161016200
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss={'a', 'b'}, md=None, ll=None, lb=None)
+> dec compact AllTypes x:0b160287016100000000000000000161000000000000f03f00
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md={'a': 1.0}, ll=None, lb=None)
+> dec compact AllTypes x:0b160000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md={}, ll=None, lb=None)
+> dec compact AllTypes x:0b16018d016100
+  error KeyError: 13
+> dec compact AllTypes x:091a410102000100
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=[True, False, False, True])
+> dec compact AllTypes x:0918292402040400
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=[[1, 2], []], lb=None)
+> dec compact AllTypes x:091829240204040000
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=[[1, 2], []], lb=None)  rest 1
+> dec compact Order x:09061c1801411406002a340402041100
+  Order(id=None, customer=None, items=[Item(sku='A', qty=3, price=None, tags=None, thumb=None)], coupons=None, flags={1, 2}, paid=True, priority=None, ship_to=None, notes=None)
+> dec compact Order x:590000
+  Order(id=None, customer=None, items=None, coupons=None, flags=None, paid=False, priority=None, ship_to=None, notes=None)
+> dec compact Order x:6133fe00
+  Order(id=None, customer=None, items=None, coupons=None, flags=None, paid=True, priority=None, ship_to=None, notes=None)
+> dec compact Order x:160a0b1801590918017800
+  Order(id=5, customer=None, items=None, coupons=None, flags=None, paid=False, priority=None, ship_to=None, notes={-5: ['x']})
+> dec compact Tree x:180174191c1801750000
+  Tree(name='t', kids=[Tree(name='u', kids=None)])
+> dec compact Event x:16f6a5bf8ec16315ca01180476696577170000000000405f401b01880470616765012f00
+  Event(kind='view', ts=1709546400123, user=101, ms=125.0, attrs={'page': '/'})
+> lim compact 4 -1 Item x:1807424f4f542d343239280161016200
+  error thrift.transport.TTransport.TTransportException: Length exceeded max allowed: 4
+> lim compact -1 1 Item x:1807424f4f542d343239280161016200
+  error thrift.transport.TTransport.TTransportException: Length exceeded max allowed: 1
+> lim compact -1 2 Item x:1807424f4f542d343239280161016200
+  Item(sku='BOOT-42', qty=1, price=None, tags=['a', 'b'], thumb=None)
+> dec json Point t:{"1":{"i32":3},"2":{"i32":-4}}
+  Point(x=3, y=-4)
+> dec json Point t:{"2":{"i32":-4},"1":{"i32":3}}
+  Point(x=3, y=-4)
+> dec json Point t:{"1": {"i32":3}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b' '
+> dec json Point t: {"1":{"i32":3}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b' '
+> dec json Point t:{\n"1":{"i32":3}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'\n'
+> dec json Point t:{"1":{"i33":3}}
+  error KeyError: 'i33'
+> dec json Point t:{"1":{"i32":"3"}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json Point t:{1:{"i32":3}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'1'
+> dec json Point t:{"1":{"i32":+3},"2":{"i32":007}}
+  Point(x=3, y=7)
+> dec json Point t:{"1":{"i32":3.0}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json Point t:{"1":{"i32":1e3}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json Point t:{"1":{"i32":3}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b''
+> dec json Point t:{"1":{"i32":3}}tail
+  Point(x=3, y=None)  rest 4
+> dec json Point t:{"1":{"i32":99999999999}}
+  Point(x=99999999999, y=None)
+> dec json Point t:{"1":{"str":"x"},"2":{"i32":5}}
+  Point(x=None, y=5)
+> dec json Point t:{"9":{"lst":["rec",1,{"1":{"tf":1}}]},"2":{"i32":5}}
+  Point(x=None, y=5)
+> dec json Point t:{"-1":{"i32":5}}
+  Point(x=None, y=5)
+> dec json Point t:{"1":{"i32":3}"2":{"i32":4}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'"'
+> dec json Point t:{"1":{"i32":3},"2"{"i32":4}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'{'
+> dec json Point t:
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b''
+> dec json Point t:[]
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'['
+> dec json AllTypes t:{"6":{"dbl":"2.5"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=2.5, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":"NaN"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=nan, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":"-Infinity"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=-inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":"1_000.5"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=1000.5, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":" 7 "}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=7.0, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":"abc"}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json AllTypes t:{"6":{"dbl":1e400}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":-}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json AllTypes t:{"6":{"dbl":"0x10"}}
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> dec json AllTypes t:{"6":{"dbl":2.5e-3}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=0.0025, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":-0}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=-0.0, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":.5}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=0.5, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":5.}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=5.0, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"6":{"dbl":"inf"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=inf, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"a\\u00e9b"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='aéb', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"\\ud83d\\ude00!"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='😀!', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"x\\ud83d"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='x', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"\\ude00"}}
+  error thrift.protocol.TProtocol.TProtocolException: Expected high surrogate char
+> dec json AllTypes t:{"7":{"str":"\\ud83d\\u0041"}}
+  error thrift.protocol.TProtocol.TProtocolException: Expected low surrogate char
+> dec json AllTypes t:{"7":{"str":"\\ud83da"}}
+  error thrift.protocol.TProtocol.TProtocolException: Expected low surrogate char
+> dec json AllTypes t:{"7":{"str":"\\q"}}
+  error thrift.protocol.TProtocol.TProtocolException: Expected control char
+> dec json AllTypes t:{"7":{"str":"\\/\\b\\f\\n\\r\\t\\"\\\\"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='/\x08\x0c\n\r\t"\\', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"\\u00zz"}}
+  error ValueError: invalid literal for int() with base 16: '00zz'
+> dec json AllTypes t:{"7":{"str":"\\u0x41"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='A', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"\\u+041"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='A', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"tab\there"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='tab\there', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"café ☕"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='café ☕', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"a\x80"}}
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 1: invalid start byte
+> dec json AllTypes t:{"7":{"str":"\xc3"}}
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc3 in position 0: unexpected end of data
+> dec json AllTypes t:{"7":{"str":"\xe2\x98\x95\xc3\xa9"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str='☕é', bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"7":{"str":"open
+  error TypeError: ord() expected a character, but string of length 0 found
+> dec json AllTypes t:{"7":{"str":"open\\
+  error TypeError: ord() expected a character, but string of length 0 found
+> dec json AllTypes t:{"8":{"str":"AP8Q"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'\x00\xff\x10', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"AP8"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'\x00\xff', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"AP8Q===="}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'\x00\xff\x10', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"A"}}
+  error binascii.Error: Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4
+> dec json AllTypes t:{"8":{"str":"A P8Q"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'\x00\xff\x10', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"AP8Q!x"}}
+  error binascii.Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+> dec json AllTypes t:{"8":{"str":"AP8Qé"}}
+  error ValueError: string argument should contain only ASCII characters
+> dec json AllTypes t:{"8":{"str":""}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"AP==8Q"}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=b'\x00\xff\x10', li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"8":{"str":"_-8Q"}}
+  error binascii.Error: Incorrect padding
+> dec json AllTypes t:{"1":{"tf":2},"2":{"i8":-128},"3":{"i16":0}}
+  AllTypes(b=True, by=-128, s=0, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"1":{"tf":0}}
+  AllTypes(b=False, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"9":{"lst":["i32",2,1,2]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[1, 2], ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"9":{"lst":["i32",3,1,2]}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b']'
+> dec json AllTypes t:{"9":{"lst":["i32",1,1,2]}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b','
+> dec json AllTypes t:{"9":{"lst":["i32",-1]}}
+  error ValueError: Stop argument for islice() must be None or an integer: 0 <= x <= sys.maxsize.
+> dec json AllTypes t:{"9":{"lst":["str",2,1,2]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=[1, 2], ss=None, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"9":{"lst":["xyz",0]}}
+  error KeyError: 'xyz'
+> dec json AllTypes t:{"10":{"set":["str",3,"b","a","b"]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss={'a', 'b'}, md=None, ll=None, lb=None)
+> dec json AllTypes t:{"11":{"map":["str","dbl",2,{"pi":3.14,"e":"2.718"}]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md={'pi': 3.14, 'e': 2.718}, ll=None, lb=None)
+> dec json AllTypes t:{"11":{"map":["str","dbl",1,{pi:3.14}]}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'p'
+> dec json AllTypes t:{"12":{"lst":["lst",2,["i16",2,1,2],["i16",0]]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=[[1, 2], []], lb=None)
+> dec json AllTypes t:{"13":{"lst":["tf",3,1,0,5]}}
+  AllTypes(b=None, by=None, s=None, i=None, l=None, d=None, str=None, bin=None, li=None, ss=None, md=None, ll=None, lb=[True, False, True])
+> dec json Grid t:{"4":{"map":["dbl","str",2,{"0.5":"half","-1e3":"neg"}]}}
+  Grid(labels=None, cells=None, levels=None, marks={0.5: 'half', -1000.0: 'neg'}, votes=None, blobs=None, groups=None, spots=None)
+> dec json Grid t:{"4":{"map":["dbl","str",1,{0.5:"half"}]}}
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'0'
+> dec json Grid t:{"5":{"map":["tf","i32",2,{"1":10,"0":20}]}}
+  Grid(labels=None, cells=None, levels=None, marks=None, votes={True: 10, False: 20}, blobs=None, groups=None, spots=None)
+> dec json Grid t:{"6":{"map":["str","i64",1,{"AAE=":7}]}}
+  Grid(labels=None, cells=None, levels=None, marks=None, votes=None, blobs={b'\x00\x01': 7}, groups=None, spots=None)
+> dec json Grid t:{"3":{"set":["dbl",2,1.5,-0.25]}}
+  Grid(labels=None, cells=None, levels={-0.25, 1.5}, marks=None, votes=None, blobs=None, groups=None, spots=None)
+> dec json Grid t:{"1":{"map":["rec","str",1,{{"1":{"i32":1}}:"a"}]}}
+  error TypeError: unhashable type: 'Point'
+> dec json Order t:{"9":{"rec":{"1":{"i32":4},"2":{"i32":5}}},"1":{"i64":7}}
+  Order(id=7, customer=None, items=None, coupons=None, flags=None, paid=False, priority=None, ship_to=Point(x=4, y=5), notes=None)
+> dec json Tree t:{"1":{"str":"a"},"2":{"lst":["rec",1,{"1":{"str":"b"},"2":{"lst":["rec",0]}}]}}
+  Tree(name='a', kids=[Tree(name='b', kids=[])])
+> dec json UserV2 t:{"1":{"i32":1}}
+  UserV2(id=1, name=None, email=None, roles=['member'], active=True, score=0.0)
+> dec sjson Point t:{"x":1}
+  error NotImplementedError: 
+> enc binary Point(x=2147483648)
+  error struct.error: 'i' format requires -2147483648 <= number <= 2147483647
+> enc compact Point(x=2147483648)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc json Point(x=2147483648)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc binary Point(x=-2147483649)
+  error struct.error: 'i' format requires -2147483648 <= number <= 2147483647
+> enc compact Point(x=-2147483649)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc json Point(x=-2147483649)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc binary Point(x='3')
+  error struct.error: required argument is not an integer
+> enc compact Point(x='3')
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc json Point(x='3')
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc binary Point(x=1.5)
+  error struct.error: required argument is not an integer
+> enc compact Point(x=1.5)
+  error TypeError: unsupported operand type(s) for <<: 'float' and 'int'
+> enc json Point(x=1.5)
+  17 b'{"1":{"i32":1.5}}'
+> enc binary Point(x=1e10)
+  error struct.error: required argument is not an integer
+> enc compact Point(x=1e10)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc json Point(x=1e10)
+  error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+> enc binary Point(x=True, y=False)
+  15 080001000000010800020000000000
+> enc compact Point(x=True, y=False)
+  5 1502150000
+> enc json Point(x=True, y=False)
+  36 b'{"1":{"i32":True},"2":{"i32":False}}'
+> enc binary Point(x=None, y=None)
+  1 00
+> enc compact Point(x=None, y=None)
+  1 00
+> enc json Point(x=None, y=None)
+  2 b'{}'
+> enc binary Point(x=[1])
+  error struct.error: required argument is not an integer
+> enc compact Point(x=[1])
+  error TypeError: '<' not supported between instances of 'list' and 'int'
+> enc json Point(x=[1])
+  error TypeError: '<' not supported between instances of 'list' and 'int'
+> enc binary AllTypes(by=200)
+  error struct.error: 'b' format requires -128 <= number <= 127
+> enc compact AllTypes(by=200)
+  error struct.error: 'b' format requires -128 <= number <= 127
+> enc json AllTypes(by=200)
+  error thrift.protocol.TProtocol.TProtocolException: i8 requires -128 <= number <= 127
+> enc binary AllTypes(by=-129)
+  error struct.error: 'b' format requires -128 <= number <= 127
+> enc compact AllTypes(by=-129)
+  error struct.error: 'b' format requires -128 <= number <= 127
+> enc json AllTypes(by=-129)
+  error thrift.protocol.TProtocol.TProtocolException: i8 requires -128 <= number <= 127
+> enc binary AllTypes(by='a')
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(by='a')
+  error struct.error: required argument is not an integer
+> enc json AllTypes(by='a')
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc binary AllTypes(s=40000)
+  error struct.error: 'h' format requires -32768 <= number <= 32767
+> enc compact AllTypes(s=40000)
+  error thrift.protocol.TProtocol.TProtocolException: i16 requires -32768 <= number <= 32767
+> enc json AllTypes(s=40000)
+  error thrift.protocol.TProtocol.TProtocolException: i16 requires -32768 <= number <= 32767
+> enc binary AllTypes(s=2.0)
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(s=2.0)
+  error TypeError: unsupported operand type(s) for <<: 'float' and 'int'
+> enc json AllTypes(s=2.0)
+  17 b'{"3":{"i16":2.0}}'
+> enc binary AllTypes(l=9223372036854775807)
+  12 0a00057fffffffffffffff00
+> enc compact AllTypes(l=9223372036854775807)
+  12 56feffffffffffffffff0100
+> enc json AllTypes(l=9223372036854775807)
+  33 b'{"5":{"i64":9223372036854775807}}'
+> enc binary AllTypes(str=b'abc')
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=b'abc')
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=b'abc')
+  error TypeError: sequence item 1: expected str instance, int found
+> enc binary AllTypes(str=b'')
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=b'')
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=b'')
+  16 b'{"7":{"str":""}}'
+> enc binary AllTypes(str=5)
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=5)
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=5)
+  error TypeError: 'int' object is not iterable
+> enc binary AllTypes(str=['ab', 'c'])
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=['ab', 'c'])
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=['ab', 'c'])
+  19 b'{"7":{"str":"abc"}}'
+> enc binary AllTypes(str=['a', 1])
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=['a', 1])
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=['a', 1])
+  error TypeError: sequence item 2: expected str instance, int found
+> enc binary AllTypes(str=1.5)
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=1.5)
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=1.5)
+  error TypeError: 'float' object is not iterable
+> enc binary AllTypes(str=True)
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(str=True)
+  error TypeError: encoding without a string argument
+> enc json AllTypes(str=True)
+  error TypeError: 'bool' object is not iterable
+> enc binary AllTypes(bin='abc')
+  error TypeError: a bytes-like object is required, not 'str'
+> enc compact AllTypes(bin='abc')
+  error TypeError: a bytes-like object is required, not 'str'
+> enc json AllTypes(bin='abc')
+  error TypeError: a bytes-like object is required, not 'str'
+> enc binary AllTypes(bin=5)
+  error TypeError: object of type 'int' has no len()
+> enc compact AllTypes(bin=5)
+  error TypeError: object of type 'int' has no len()
+> enc json AllTypes(bin=5)
+  error TypeError: a bytes-like object is required, not 'int'
+> enc binary AllTypes(bin=b'')
+  8 0b00080000000000
+> enc compact AllTypes(bin=b'')
+  3 880000
+> enc json AllTypes(bin=b'')
+  16 b'{"8":{"str":""}}'
+> enc binary AllTypes(bin=[1, 2])
+  error TypeError: a bytes-like object is required, not 'list'
+> enc compact AllTypes(bin=[1, 2])
+  error TypeError: a bytes-like object is required, not 'list'
+> enc json AllTypes(bin=[1, 2])
+  error TypeError: a bytes-like object is required, not 'list'
+> enc binary AllTypes(b='yes')
+  5 0200010100
+> enc compact AllTypes(b='yes')
+  2 1100
+> enc json AllTypes(b='yes')
+  14 b'{"1":{"tf":0}}'
+> enc binary AllTypes(b=1)
+  5 0200010100
+> enc compact AllTypes(b=1)
+  2 1100
+> enc json AllTypes(b=1)
+  14 b'{"1":{"tf":0}}'
+> enc binary AllTypes(b=0)
+  5 0200010000
+> enc compact AllTypes(b=0)
+  2 1200
+> enc json AllTypes(b=0)
+  14 b'{"1":{"tf":0}}'
+> enc binary AllTypes(b='')
+  5 0200010000
+> enc compact AllTypes(b='')
+  2 1200
+> enc json AllTypes(b='')
+  14 b'{"1":{"tf":0}}'
+> enc binary AllTypes(b=[])
+  5 0200010000
+> enc compact AllTypes(b=[])
+  2 1200
+> enc json AllTypes(b=[])
+  14 b'{"1":{"tf":0}}'
+> enc binary AllTypes(d=3)
+  12 040006400800000000000000
+> enc compact AllTypes(d=3)
+  10 67000000000000084000
+> enc json AllTypes(d=3)
+  15 b'{"6":{"dbl":3}}'
+> enc binary AllTypes(d='x')
+  error struct.error: required argument is not a float
+> enc compact AllTypes(d='x')
+  error struct.error: required argument is not a float
+> enc json AllTypes(d='x')
+  error ValueError: Unknown format code 'g' for object of type 'str'
+> enc binary AllTypes(d=True)
+  12 0400063ff000000000000000
+> enc compact AllTypes(d=True)
+  10 67000000000000f03f00
+> enc json AllTypes(d=True)
+  15 b'{"6":{"dbl":1}}'
+> enc binary AllTypes(d=[1, 2])
+  error struct.error: required argument is not a float
+> enc compact AllTypes(d=[1, 2])
+  error struct.error: required argument is not a float
+> enc json AllTypes(d=[1, 2])
+  error TypeError: unsupported format string passed to list.__format__
+> enc binary AllTypes(d=b'1')
+  error struct.error: required argument is not a float
+> enc compact AllTypes(d=b'1')
+  error struct.error: required argument is not a float
+> enc json AllTypes(d=b'1')
+  error TypeError: unsupported format string passed to bytes.__format__
+> enc binary AllTypes(li='abc')
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(li='abc')
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc json AllTypes(li='abc')
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc binary AllTypes(li=5)
+  error TypeError: object of type 'int' has no len()
+> enc compact AllTypes(li=5)
+  error TypeError: object of type 'int' has no len()
+> enc json AllTypes(li=5)
+  error TypeError: object of type 'int' has no len()
+> enc binary AllTypes(li={1: 2, 3: 4})
+  17 0f00090800000002000000010000000300
+> enc compact AllTypes(li={1: 2, 3: 4})
+  5 9925020600
+> enc json AllTypes(li={1: 2, 3: 4})
+  27 b'{"9":{"lst":["i32",2,1,3]}}'
+> enc binary AllTypes(li=[1, None])
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(li=[1, None])
+  error TypeError: '<' not supported between instances of 'NoneType' and 'int'
+> enc json AllTypes(li=[1, None])
+  error TypeError: '<' not supported between instances of 'NoneType' and 'int'
+> enc binary AllTypes(li=[1, 2.5])
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(li=[1, 2.5])
+  error TypeError: unsupported operand type(s) for <<: 'float' and 'int'
+> enc json AllTypes(li=[1, 2.5])
+  29 b'{"9":{"lst":["i32",2,1,2.5]}}'
+> enc binary AllTypes(ss='ab')
+  19 0e000a0b000000020000000161000000016200
+> enc compact AllTypes(ss='ab')
+  7 aa280161016200
+> enc json AllTypes(ss='ab')
+  32 b'{"10":{"set":["str",2,"a","b"]}}'
+> enc binary AllTypes(ss=['b', 'b', 'a'])
+  24 0e000a0b0000000300000001620000000162000000016100
+> enc compact AllTypes(ss=['b', 'b', 'a'])
+  9 aa3801620162016100
+> enc json AllTypes(ss=['b', 'b', 'a'])
+  36 b'{"10":{"set":["str",3,"b","b","a"]}}'
+> enc binary AllTypes(md=[1])
+  error AttributeError: 'list' object has no attribute 'keys'
+> enc compact AllTypes(md=[1])
+  error AttributeError: 'list' object has no attribute 'keys'
+> enc json AllTypes(md=[1])
+  error AttributeError: 'list' object has no attribute 'keys'
+> enc binary AllTypes(md=5)
+  error TypeError: object of type 'int' has no len()
+> enc compact AllTypes(md=5)
+  error TypeError: object of type 'int' has no len()
+> enc json AllTypes(md=5)
+  error TypeError: object of type 'int' has no len()
+> enc binary AllTypes(md={'a': None})
+  error struct.error: required argument is not a float
+> enc compact AllTypes(md={'a': None})
+  error struct.error: required argument is not a float
+> enc json AllTypes(md={'a': None})
+  error TypeError: unsupported format string passed to NoneType.__format__
+> enc binary AllTypes(md={1: 2.0})
+  error TypeError: encoding without a string argument
+> enc compact AllTypes(md={1: 2.0})
+  error TypeError: encoding without a string argument
+> enc json AllTypes(md={1: 2.0})
+  error TypeError: 'int' object is not iterable
+> enc binary AllTypes(ll=[[1, 'x']])
+  error struct.error: required argument is not an integer
+> enc compact AllTypes(ll=[[1, 'x']])
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc json AllTypes(ll=[[1, 'x']])
+  error TypeError: '<' not supported between instances of 'str' and 'int'
+> enc binary AllTypes(ll=[5])
+  error TypeError: object of type 'int' has no len()
+> enc compact AllTypes(ll=[5])
+  error TypeError: object of type 'int' has no len()
+> enc json AllTypes(ll=[5])
+  error TypeError: object of type 'int' has no len()
+> enc binary AllTypes(lb=[1, 0, 'x', None, True])
+  14 0f000d0200000005010001000100
+> enc compact AllTypes(lb=[1, 0, 'x', None, True])
+  8 d951010201020100
+> enc json AllTypes(lb=[1, 0, 'x', None, True])
+  33 b'{"13":{"lst":["tf",5,0,0,0,0,1]}}'
+> enc binary Order(ship_to=5)
+  error AttributeError: 'int' object has no attribute 'write'
+> enc compact Order(ship_to=5)
+  error AttributeError: 'int' object has no attribute 'write'
+> enc json Order(ship_to=5)
+  error AttributeError: 'int' object has no attribute 'write'
+> enc binary Order(ship_to=Item(sku='x'))
+  22 020006000c00090b0001000000017806000200010000
+> enc compact Order(ship_to=Item(sku='x'))
+  9 623c18017814020000
+> enc json Order(ship_to=Item(sku='x'))
+  58 b'{"6":{"tf":0},"9":{"rec":{"1":{"str":"x"},"2":{"i16":1}}}}'
+> enc binary Order(items=[None])
+  error AttributeError: 'NoneType' object has no attribute 'write'
+> enc compact Order(items=[None])
+  error AttributeError: 'NoneType' object has no attribute 'write'
+> enc json Order(items=[None])
+  error AttributeError: 'NoneType' object has no attribute 'write'
+> enc binary Order(items=[Point(x=1)])
+  21 0f00030c0000000108000100000001000200060000
+> enc compact Order(items=[Point(x=1)])
+  7 391c1502003200
+> enc json Order(items=[Point(x=1)])
+  52 b'{"3":{"lst":["rec",1,{"1":{"i32":1}}]},"6":{"tf":0}}'
+> enc binary Order(ship_to={'x': 1})
+  error AttributeError: 'dict' object has no attribute 'write'
+> enc compact Order(ship_to={'x': 1})
+  error AttributeError: 'dict' object has no attribute 'write'
+> enc json Order(ship_to={'x': 1})
+  error AttributeError: 'dict' object has no attribute 'write'
+> enc binary Order(notes={1: 'ab'})
+  33 020006000d000c080f00000001000000010b000000020000000161000000016200
+> enc compact Order(notes={1: 'ab'})
+  11 626b015902280161016200
+> enc json Order(notes={1: 'ab'})
+  67 b'{"6":{"tf":0},"12":{"map":["i32","lst",1,{"1":["str",2,"a","b"]}]}}'
+> enc binary Grid(marks={0.5: 'half', -0.0: 'z'})
+  39 0d0004040b000000023fe00000000000000000000468616c668000000000000000000000017a00
+> enc compact Grid(marks={0.5: 'half', -0.0: 'z'})
+  27 4b0278000000000000e03f0468616c660000000000000080017a00
+> enc json Grid(marks={0.5: 'half', -0.0: 'z'})
+  53 b'{"4":{"map":["dbl","str",2,{"0.5":"half","-0":"z"}]}}'
+> enc binary Grid(votes={True: 1, False: 0})
+  20 0d00050208000000020100000001000000000000
+> enc compact Grid(votes={True: 1, False: 0})
+  8 5b02150102020000
+> enc json Grid(votes={True: 1, False: 0})
+  42 b'{"5":{"map":["tf","i32",2,{"1":1,"0":0}]}}'
+> enc binary Grid(blobs={b'\x00': 1})
+  23 0d00060b0a000000010000000100000000000000000100
+> enc compact Grid(blobs={b'\x00': 1})
+  7 6b018601000200
+> enc json Grid(blobs={b'\x00': 1})
+  40 b'{"6":{"map":["str","i64",1,{"AA==":1}]}}'
+> enc binary Grid(levels=[1.5, 1.5])
+  25 0e000304000000023ff80000000000003ff800000000000000
+> enc compact Grid(levels=[1.5, 1.5])
+  19 3a27000000000000f83f000000000000f83f00
+> enc json Grid(levels=[1.5, 1.5])
+  31 b'{"3":{"set":["dbl",2,1.5,1.5]}}'
+> enc binary 5
+  error AttributeError: 'int' object has no attribute 'write'
+> enc compact 5
+  error AttributeError: 'int' object has no attribute 'write'
+> enc json 5
+  error AttributeError: 'int' object has no attribute 'write'
+> enc binary 'text'
+  error AttributeError: 'str' object has no attribute 'write'
+> enc compact 'text'
+  error AttributeError: 'str' object has no attribute 'write'
+> enc json 'text'
+  error AttributeError: 'str' object has no attribute 'write'
+> enc binary Work(op=Operation.DIVIDE, comment='')
+  22 08000100000000080003000000040b00040000000000
+> enc compact Work(op=Operation.DIVIDE, comment='')
+  7 15002508180000
+> enc json Work(op=Operation.DIVIDE, comment='')
+  44 b'{"1":{"i32":0},"3":{"i32":4},"4":{"str":""}}'
+> enc sjson AllTypes(d='x')
+  7 b'{"d":x}'
+> enc sjson AllTypes(d='é')
+  error UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 0: ordinal not in range(128)
+> enc sjson AllTypes(d=[1, 2])
+  12 b'{"d":[1, 2]}'
+> enc sjson AllTypes(d=b'ab')
+  11 b'{"d":b\'ab\'}'
+> enc sjson AllTypes(d=True)
+  10 b'{"d":True}'
+> enc sjson AllTypes(d=nan)
+  9 b'{"d":nan}'
+> enc sjson AllTypes(i=True, b=1)
+  16 b'{"b":0,"i":True}'
+> enc sjson AllTypes(str=b'')
+  10 b'{"str":""}'
+> enc sjson Grid(marks={0.5: 'h'}, votes={True: 1})
+  37 b'{"marks":{"0.5":"h"},"votes":{"1":1}}'
+> enc sjson Grid(blobs={b'\xff': 2})
+  20 b'{"blobs":{"/w==":2}}'
+> msgw binary add 1 7
+  16 80010001000000036164640000000700
+> msgw binary getStruct 2 -1
+  22 8001000200000009676574537472756374ffffffff00
+> msgw binary zip 4 2147483647
+  16 80010004000000037a69707fffffff00
+> msgw binary-loose add 1 7
+  13 00000003616464010000000700
+> msgw binary-loose getStruct 2 -1
+  19 0000000967657453747275637402ffffffff00
+> msgw binary-loose zip 4 2147483647
+  13 000000037a6970047fffffff00
+> msgw compact add 1 7
+  8 8221070361646400
+> msgw compact getStruct 2 -1
+  18 8241ffffffff0f0967657453747275637400
+> msgw compact zip 4 2147483647
+  12 8281ffffffff07037a697000
+> msgw json add 1 7
+  16 b'[1,"add",1,7,{}]'
+> msgw json getStruct 2 -1
+  23 b'[1,"getStruct",2,-1,{}]'
+> msgw json zip 4 2147483647
+  25 b'[1,"zip",4,2147483647,{}]'
+> msgw sjson add 1 7
+  2 b'{}'
+> msgw sjson getStruct 2 -1
+  2 b'{}'
+> msgw sjson zip 4 2147483647
+  2 b'{}'
+> msgw compact big 8 1
+  error struct.error: 'B' format requires 0 <= number <= 255
+> msgw compact neg 1 -2147483648
+  12 82218080808008036e656700
+> msgw binary ünï 3 0
+  18 8001000300000005c3bc6ec3af0000000000
+> msgw json q"uote 1 0
+  20 b'[1,"q\\"uote",1,0,{}]'
+> msgr binary x:800100010000000361646400000007
+  name 'add' type 1 seqid 7
+> msgr binary x:800100ff00000003616464fffffff9
+  name 'add' type 255 seqid -7
+> msgr binary x:800200010000000361646400000007
+  error thrift.protocol.TProtocol.TProtocolException: Bad version in readMessageBegin: -2147352575
+> msgr binary x:000000036164640100000007
+  name 'add' type 1 seqid 7
+> msgr binary-strict x:000000036164640100000007
+  error thrift.protocol.TProtocol.TProtocolException: No protocol version header
+> msgr binary x:000000036164
+  error EOFError: 
+> msgr binary x:8001000100000001ff00000007
+  error UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+> msgr compact x:82210703616464
+  name 'add' type 1 seqid 7
+> msgr compact x:8221ffffffff0f03616464
+  name 'add' type 1 seqid -1
+> msgr compact x:8221808080800803616464
+  name 'add' type 1 seqid -2147483648
+> msgr compact x:80210703616464
+  error thrift.protocol.TProtocol.TProtocolException: Bad protocol id in the message: 128
+> msgr compact x:82220703616464
+  error thrift.protocol.TProtocol.TProtocolException: Bad version: 2 (expect 1)
+> msgr compact x:82e1070178
+  name 'x' type 7 seqid 7
+> msgr json t:[1,"add",1,7,{}]
+  name 'add' type 1 seqid 7
+> msgr json t:[2,"add",1,7,{}]
+  error thrift.protocol.TProtocol.TProtocolException: Message contained bad version.
+> msgr json t:[1,"add","1",7]
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> msgr json t:[1,add,1,7]
+  error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b'a'
+> msgr sjson t:[1,"add",1,7]
+  error NotImplementedError: 
+> rt compact Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter']), Item(sku='SOCK-1', price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  133 16949e0c1808416e61204c696d61192c1807424f4f542d3432140417cdcccccccc7c56401928076c6561746865720677696e746572001806534f434b2d3114021700000000000012401908280489504e47001b02850957454c434f4d45313014084652454553484950002113fe2c1518150e003b0259021809676966742077726170090800
+  Order(id=100234, customer='Ana Lima', items=[Item(sku='BOOT-42', qty=2, price=89.95, tags=['leather', 'winter'], thumb=None), Item(sku='SOCK-1', qty=1, price=4.5, tags=[], thumb=b'\x89PNG')], coupons={'WELCOME10': 10, 'FREESHIP': 0}, flags=None, paid=True, priority=-2, ship_to=Point(x=12, y=7), notes={1: ['gift wrap'], -5: []})
+  equal True
+> dump binary x:0a0001000000000001878a0b000200000003416e610f00030c000000010b00010000000158060002000200040006400000000000000000000d00040b080000000100000001410000000100 struct
+  struct
+    1: i64 100234
+    2: string 'Ana'
+    3: list<struct> 1
+      [0] struct
+        1: string 'X'
+        2: i16 2
+    6: double 2.0
+  rest 20
+> dump binary x:0a0001000000000001878a0b000200000003416e610f00030c000000010b00010000000158060002000200040006400000000000000000000d00040b080000000100000001410000 struct
+  struct
+    1: i64 100234
+    2: string 'Ana'
+    3: list<struct> 1
+      [0] struct
+        1: string 'X'
+        2: i16 2
+    6: double 2.0
+  rest 17
+> dump compact x:160a1804ff7261771a34020405112c150e0000 struct
+  struct
+    1: i64 5
+    2: binary ff726177
+    3: set<i16> 3
+      [0] i16 1
+      [1] i16 2
+      [2] i16 -3
+    4: bool True
+    6: struct
+      1: i32 7
+> dump json t:{"1":{"i64":5},"3":{"lst":["rec",1,{"1":{"str":"X"},"3":{"dbl":2}}]},"4":{"map":["str","i32",1,{"A":1}]},"6":{"tf":1}} struct
+  struct
+    1: i64 5
+    3: list<struct> 1
+      [0] struct
+        1: string 'X'
+        3: double 2.0
+    4: map<string,i32> 1
+      key string 'A'
+      val i32 1
+    6: bool True
+> dump binary x:800100010000000361646400000000080001000000010800020000000200 message
+  message 'add' type 1 seqid 0
+    struct
+      1: i32 1
+      2: i32 2
+> dump compact x:8241000963616c63756c6174650c02250e0000 message
+  message 'calculate' type 2 seqid 0
+    struct
+      1: struct
+        2: i32 7
+> dump json t:[1,"add",1,0,{"1":{"i32":1},"2":{"i32":2}}] message
+  message 'add' type 1 seqid 0
+    struct
+      1: i32 1
+      2: i32 2
+> dump binary x:05000100 struct
+  struct
+  error ValueError: cannot dump type 5
+> dump binary x:08000100000001006a756e6b struct
+  struct
+    1: i32 1
+  rest 4
+> skip binary 12 x:080001000000010099
+  skipped 8 of 9 bytes
+> skip binary 15 x:0b000000020000000161000000026263
+  skipped 16 of 16 bytes
+> skip compact 13 x:025502040608
+  error AssertionError: 0
+> skip compact 12 x:1112151200
+  skipped 5 of 5 bytes
+> skip json 12 t:{"1":{"i32":1}}
+  skipped 15 of 15 bytes
+> skip json 15 t:["str",2,"a","b"],"rest"
+  skipped 17 of 24 bytes
+> skip binary 99 x:00
+  error thrift.protocol.TProtocol.TProtocolException: invalid TType
+> skip binary 2 x:
+  error EOFError: 
+> frames binary data/out/points.bin Point(x=1, y=2) Point(x=-3) Point()
+  36 bytes
+> file data/out/points.bin
+  36 0000000f08000100000001080002000000020000000008080001fffffffd000000000100
+> readframes binary data/out/points.bin Point
+  Point(x=1, y=2)
+  Point(x=-3, y=None)
+  Point(x=None, y=None)
+  3 records
+> frames compact data/out/points.c Point(x=1, y=2) Point(x=-3) Point()
+  21 bytes
+> file data/out/points.c
+  21 000000051502150400000000031505000000000100
+> readframes compact data/out/points.c Point
+  Point(x=1, y=2)
+  Point(x=-3, y=None)
+  Point(x=None, y=None)
+  3 records
+> patch data/out/points.c 3 09
+  patched
+> readframes compact data/out/points.c Point
+  Point(x=1, y=2)
+  Point(x=None, y=None)
+  Point(x=None, y=None)
+  Point(x=None, y=None)
+  4 records
+  error EOFError: 
+> patch data/out/points.bin 0 80
+  patched
+> readframes binary data/out/points.bin Point
+  0 records
+  error EOFError: 
+> frames json data/out/points.j Point(x=1, y=2) Tree(name='x')
+  54 bytes
+> file data/out/points.j
+  54 0000001d7b2231223a7b22693332223a317d2c2232223a7b22693332223a327d7d000000117b2231223a7b22737472223a2278227d7d
+> readframes json data/out/points.j Point
+  Point(x=1, y=2)
+  Point(x=None, y=None)
+  2 records
+> readframes json data/out/points.j Tree
+  Tree(name=None, kids=None)
+  Tree(name='x', kids=None)
+  2 records
+> truncate data/out/points.j 20
+  truncated to 20
+> readframes json data/out/points.j Point
+  0 records
+  error EOFError: 
+> frames binary data/out/bad.bin Point(x='1')
+  error struct.error: required argument is not an integer
+> file data/out/bad.bin
+  0 (empty)
+> readframes binary data/out/nothing.bin Point
+  0 records
+  error FileNotFoundError: [Errno 2] No such file or directory: 'data/out/nothing.bin'
+> call binary framed - ping
+  request 00000011800100010000000470696e670000000000
+  server: ping()
+  response 00000011800100020000000470696e670000000000
+  result None
+> call binary framed - add 1 2
+  request 0000001e800100010000000361646400000000080001000000010800020000000200
+  server: add(1,2)
+  response 000000178001000200000003616464000000000800000000000300
+  result 3
+> call compact framed - ping
+  request 000000098221000470696e6700
+  server: ping()
+  response 000000098241000470696e6700
+  result None
+> call compact framed - add 1 2
+  request 0000000c822100036164641502150400
+  server: add(1,2)
+  response 0000000b8241000361646405000600
+  result 3
+> call json buffered - ping
+  request b'[1,"ping",1,0,{}]'
+  server: ping()
+  response b'[1,"ping",2,0,{}]'
+  result None
+> call json buffered - add 1 2
+  request b'[1,"add",1,0,{"1":{"i32":1},"2":{"i32":2}}]'
+  server: add(1,2)
+  response b'[1,"add",2,0,{"0":{"i32":3}}]'
+  result 3
+> call binary buffered - ping
+  request 800100010000000470696e670000000000
+  server: ping()
+  response 800100020000000470696e670000000000
+  result None
+> call binary buffered - add 1 2
+  request 800100010000000361646400000000080001000000010800020000000200
+  server: add(1,2)
+  response 8001000200000003616464000000000800000000000300
+  result 3
+> call compact plain - ping
+  request 8221000470696e6700
+  server: ping()
+  response 8241000470696e6700
+  result None
+> call compact plain - add 1 2
+  request 822100036164641502150400
+  server: add(1,2)
+  response 8241000361646405000600
+  result 3
+> call binary framed - add 2147483647 1
+  request 0000001e8001000100000003616464000000000800017fffffff0800020000000100
+  server: add(2147483647,1)
+  server error struct.error: 'i' format requires -2147483648 <= number <= 2147483647
+  response (empty)
+  error EOFError: 
+> call compact framed - add 2147483647 1
+  request 000000108221000361646415feffffff0f150200
+  server: add(2147483647,1)
+  server error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+  response (empty)
+  error EOFError: 
+> call json framed - add -2147483648 -1
+  request b'\x00\x00\x006[1,"add",1,0,{"1":{"i32":-2147483648},"2":{"i32":-1}}]'
+  server: add(-2147483648,-1)
+  server error thrift.protocol.TProtocol.TProtocolException: i32 requires -2147483648 <= number <= 2147483647
+  response b''
+  error EOFError: 
+> call binary framed - add '1' 2
+  error struct.error: required argument is not an integer
+> call binary framed - calculate 1 Work(num1=1, num2=0, op=Operation.DIVIDE)
+  request 00000036800100010000000963616c63756c61746500000000080001000000010c00020800010000000108000200000000080003000000040000
+  server: calculate(1, Work(num1=1, num2=0, op=4, comment=None))
+  response 0000003a800100020000000963616c63756c617465000000000c0001080001000000040b00020000001243616e6e6f742064697669646520627920300000
+  error app.ttypes.InvalidOperation: InvalidOperation(whatOp=4, why='Cannot divide by 0')
+> call compact framed - calculate 2 Work(num1=7, num2=2, op=Operation.DIVIDE)
+  request 000000188221000963616c63756c61746515041c150e150415080000
+  server: calculate(2, Work(num1=7, num2=2, op=4, comment=None))
+  server error TypeError: unsupported operand type(s) for <<: 'float' and 'int'
+  response (empty)
+  error EOFError: 
+> call binary framed - calculate 2 Work(num1=7, num2=2, op=Operation.DIVIDE)
+  request 00000036800100010000000963616c63756c61746500000000080001000000020c00020800010000000708000200000002080003000000040000
+  server: calculate(2, Work(num1=7, num2=2, op=4, comment=None))
+  server error struct.error: required argument is not an integer
+  response (empty)
+  error EOFError: 
+> call json buffered - calculate 2 Work(num1=7, num2=2, op=Operation.DIVIDE)
+  request b'[1,"calculate",1,0,{"1":{"i32":2},"2":{"rec":{"1":{"i32":7},"2":{"i32":2},"3":{"i32":4}}}}]'
+  server: calculate(2, Work(num1=7, num2=2, op=4, comment=None))
+  response b'[1,"calculate",2,0,{"0":{"i32":3.5}}]'
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> call json buffered - calculate 8 Work(num1=8, num2=2, op=Operation.DIVIDE)
+  request b'[1,"calculate",1,0,{"1":{"i32":8},"2":{"rec":{"1":{"i32":8},"2":{"i32":2},"3":{"i32":4}}}}]'
+  server: calculate(8, Work(num1=8, num2=2, op=4, comment=None))
+  response b'[1,"calculate",2,0,{"0":{"i32":4.0}}]'
+  error thrift.protocol.TProtocol.TProtocolException: Bad data encounted in numeric data
+> call binary framed - calculate 3 Work(num1=6, num2=7, op=Operation.MULTIPLY)
+  request 00000036800100010000000963616c63756c61746500000000080001000000030c00020800010000000608000200000007080003000000030000
+  server: calculate(3, Work(num1=6, num2=7, op=3, comment=None))
+  response 0000001d800100020000000963616c63756c617465000000000800000000002a00
+  result 42
+> call compact framed - calculate 4 Work(num1=1, num2=2, op=9)
+  request 000000188221000963616c63756c61746515081c1502150415120000
+  server: calculate(4, Work(num1=1, num2=2, op=9, comment=None))
+  response 000000258241000963616c63756c6174651c15121811496e76616c6964206f7065726174696f6e0000
+  error app.ttypes.InvalidOperation: InvalidOperation(whatOp=9, why='Invalid operation')
+> call binary framed - calculate 5 Work(num2=5, op=Operation.SUBTRACT)
+  request 00000036800100010000000963616c63756c61746500000000080001000000050c00020800010000000008000200000005080003000000020000
+  server: calculate(5, Work(num1=0, num2=5, op=2, comment=None))
+  response 0000001d800100020000000963616c63756c61746500000000080000fffffffb00
+  result -5
+> call binary framed - calculate 6 Work(num1=1, op=Operation.ADD)
+  request 0000002f800100010000000963616c63756c61746500000000080001000000060c000208000100000001080003000000010000
+  server: calculate(6, Work(num1=1, num2=None, op=1, comment=None))
+  server log: Unexpected exception in handler
+  response 00000032800100030000000963616c63756c617465000000000b00010000000e496e7465726e616c206572726f720800020000000600
+  error thrift.Thrift.TApplicationException: Internal error
+> call binary framed - calculate 7 None
+  request 0000001d800100010000000963616c63756c617465000000000800010000000700
+  server: calculate(7, None)
+  server log: Unexpected exception in handler
+  response 00000032800100030000000963616c63756c617465000000000b00010000000e496e7465726e616c206572726f720800020000000600
+  error thrift.Thrift.TApplicationException: Internal error
+> call json framed - getStruct 3
+  request b'\x00\x00\x00#[1,"getStruct",1,0,{"1":{"i32":3}}]'
+  server: getStruct(3)
+  response b'\x00\x00\x00B[1,"getStruct",2,0,{"0":{"rec":{"1":{"i32":3},"2":{"str":"42"}}}}]'
+  result SharedStruct(key=3, value='42')
+> call compact buffered - getStruct 8
+  request 82210009676574537472756374151000
+  server: getStruct(8)
+  response 824100096765745374727563740c0015101801340000
+  result SharedStruct(key=8, value='4')
+> call binary framed - getStruct 99
+  request 0000001d8001000100000009676574537472756374000000000800010000006300
+  server: getStruct(99)
+  server log: Unexpected exception in handler
+  response 000000328001000300000009676574537472756374000000000b00010000000e496e7465726e616c206572726f720800020000000600
+  error thrift.Thrift.TApplicationException: Internal error
+> call binary framed - getStruct 2
+  request 0000001d8001000100000009676574537472756374000000000800010000000200
+  server: getStruct(2)
+  response 000000298001000200000009676574537472756374000000000c0000080001000000020b000200000001330000
+  result SharedStruct(key=2, value='3')
+> call binary framed - zip
+  request 0000001080010004000000037a69700000000000
+  server: zip()
+  response (empty)
+> call json plain - zip
+  request b'[1,"zip",4,0,{}]'
+  server: zip()
+  response b''
+> call binary framed Calculator add 3 4
+  request 00000029800100010000000e43616c63756c61746f723a61646400000000080001000000030800020000000400
+  server: add(3,4)
+  response 000000178001000200000003616464000000000800000000000700
+  result 7
+> call compact framed Calculator ping
+  request 000000148221000f43616c63756c61746f723a70696e6700
+  server: ping()
+  response 000000098241000470696e6700
+  result None
+> call json buffered Calculator calculate 9 Work(num1=9, num2=3, op=Operation.SUBTRACT)
+  request b'[1,"Calculator:calculate",1,0,{"1":{"i32":9},"2":{"rec":{"1":{"i32":9},"2":{"i32":3},"3":{"i32":2}}}}]'
+  server: calculate(9, Work(num1=9, num2=3, op=2, comment=None))
+  response b'[1,"calculate",2,0,{"0":{"i32":6}}]'
+  result 6
+> call binary framed Calculator getStruct 9
+  request 00000028800100010000001443616c63756c61746f723a676574537472756374000000000800010000000900
+  server: getStruct(9)
+  response 000000298001000200000009676574537472756374000000000c0000080001000000090b000200000001360000
+  result SharedStruct(key=9, value='6')
+> call binary framed Calculator zip
+  request 0000001b800100040000000e43616c63756c61746f723a7a69700000000000
+  server: zip()
+  response (empty)
+> call binary framed Shop add 1 1
+  request 00000023800100010000000853686f703a61646400000000080001000000010800020000000100
+  server error thrift.protocol.TProtocol.TProtocolException: Service name not found: Shop.  Did you forget to call registerProcessor()?
+  response (empty)
+  error EOFError: 
+> raw binary framed plain x:0000002180010001000000066e6f7375636800000005080001000000020800020000000300
+  response 0000003880010003000000066e6f73756368000000050b000100000017556e6b6e6f776e2066756e6374696f6e206e6f737563680800020000000100
+> raw binary framed plain x:0000001e800100010000000361646400000005080001000000020800020000000300
+  server: add(2,3)
+  response 000000178001000200000003616464000000050800000000000500
+> raw binary framed plain x:0000001e800100020000000361646400000005080001000000020800020000000300
+  server: add(2,3)
+  response 000000178001000200000003616464000000050800000000000500
+> raw binary framed plain x:0000001380010001000000036164640000000505000100
+  server error thrift.protocol.TProtocol.TProtocolException: invalid TType
+  response (empty)
+> raw binary framed plain x:0000001f800100010000000361646400000005080001000000020b0002000000013300
+  server log: Unexpected exception in handler
+  response 0000002c8001000300000003616464000000050b00010000000e496e7465726e616c206572726f720800020000000600
+> raw binary framed plain x:0000000f800100010000000361646400000005
+  server error EOFError: 
+  response (empty)
+> raw binary framed plain x:
+  server error EOFError: 
+  response (empty)
+> raw binary framed plain x:00000064800100010000000361646400000005
+  server error EOFError: 
+  response (empty)
+> raw binary framed plain x:fffffffc800100010000000361646400000005
+  server error EOFError: 
+  response (empty)
+> raw binary framed mux x:0000001e800100010000000361646400000005080001000000020800020000000300
+  server error thrift.protocol.TProtocol.TProtocolException: Service name not found in message name: add.  Did you forget to use TMultiplexedProtocol in your client?
+  response (empty)
+> raw binary framed mux x:00000023800100010000000853686f703a61646400000005080001000000020800020000000300
+  server error thrift.protocol.TProtocol.TProtocolException: Service name not found: Shop.  Did you forget to call registerProcessor()?
+  response (empty)
+> raw binary framed mux x:00000029800100020000000e43616c63756c61746f723a61646400000005080001000000020800020000000300
+  server error thrift.protocol.TProtocol.TProtocolException: TMultiplexedProtocol only supports CALL & ONEWAY
+  response (empty)
+> raw binary framed mux x:0000002c800100010000001143616c63756c61746f723a6e6f7375636800000005080001000000020800020000000300
+  response 0000003880010003000000066e6f73756368000000050b000100000017556e6b6e6f776e2066756e6374696f6e206e6f737563680800020000000100
+> raw binary framed mux x:00000026800100010000000b43616c63756c61746f723a00000005080001000000020800020000000300
+  response 0000002c8001000300000000000000050b000100000011556e6b6e6f776e2066756e6374696f6e200800020000000100
+> raw binary framed mux x:0000001f80010001000000043a61646400000005080001000000020800020000000300
+  server error thrift.protocol.TProtocol.TProtocolException: Service name not found: .  Did you forget to call registerProcessor()?
+  response (empty)
+> raw binary framed mux x:0000002b800100010000001043616c63756c61746f723a6164643a7800000005080001000000020800020000000300
+  response 0000003680010003000000056164643a78000000050b000100000016556e6b6e6f776e2066756e6374696f6e206164643a780800020000000100
+> raw binary buffered plain x:000000036164640100000005080001000000020800020000000300
+  server: add(2,3)
+  response 8001000200000003616464000000050800000000000500
+> raw binary plain plain x:800100010000000361646400000005080001000000020800020000000300
+  server: add(2,3)
+  response 8001000200000003616464000000050800000000000500
+> raw compact plain plain x:8021010361646400
+  server error thrift.protocol.TProtocol.TProtocolException: Bad protocol id in the message: 128
+  response (empty)
+> raw compact plain plain x:822101036164641528152c00
+  server: add(20,22)
+  response 8241010361646405005400
+> raw json buffered plain t:[1,"add",1,0,{"1":{"i32":2},"2":{"i32":3}}]
+  server: add(2,3)
+  response b'[1,"add",2,0,{"0":{"i32":5}}]'
+> raw json buffered plain t:[2,"add",1,0,{}]
+  server error thrift.protocol.TProtocol.TProtocolException: Message contained bad version.
+  response b''
+> raw json buffered plain t:[1,"add",1,0,{"1":{"i32":2},"2":{"i32":3}}
+  server error thrift.protocol.TProtocol.TProtocolException: Unexpected character: b''
+  response b''
+> raw json buffered mux t:[1,"Calculator:add",4,0,{"1":{"i32":2},"2":{"i32":3}}]
+  server: add(2,3)
+  response b'[1,"add",2,0,{"0":{"i32":5}}]'
+> eventlog write compact data/out/events.bin
+  wrote 60 events, 2640 bytes
+> file data/out/events.bin
+  2640 0000001c16dca0c18ec16315cc01180476696577171f85eb51b8fc85401b00000000001d16f486c48ec16315cc011805636c69636b1748e17a14ae1f71401b00000000001c16fca4c48ec16315d4011804636172741766666666668a71401b00...
+> eventlog read compact data/out/events.bin Event
+  60 events from 9 users
+  buy        8  mean   482.72 ms  max   821.83 ms
+  cart      12  mean   477.57 ms  max   892.00 ms
+  click     14  mean   492.76 ms  max   858.27 ms
+  search    16  mean   493.69 ms  max   833.88 ms
+  view      10  mean   406.41 ms  max   800.60 ms
+> eventlog read compact data/out/events.bin EventV2
+  v2 view extra=[7] flag=True
+  v2 click extra=[7] flag=True
+  v2 cart extra=[7] flag=True
+  60 events from 9 users
+  buy        8  mean   482.72 ms  max   821.83 ms
+  cart      12  mean   477.57 ms  max   892.00 ms
+  click     14  mean   492.76 ms  max   858.27 ms
+  search    16  mean   493.69 ms  max   833.88 ms
+  view      10  mean   406.41 ms  max   800.60 ms
+> eventlog write binary data/out/events_b.bin
+  wrote 60 events, 4236 bytes
+> eventlog read binary data/out/events_b.bin Event
+  60 events from 9 users
+  buy        8  mean   482.72 ms  max   821.83 ms
+  cart      12  mean   477.57 ms  max   892.00 ms
+  click     14  mean   492.76 ms  max   858.27 ms
+  search    16  mean   493.69 ms  max   833.88 ms
+  view      10  mean   406.41 ms  max   800.60 ms
+> eventlog write json data/out/events.json
+  wrote 60 events, 8404 bytes
+> eventlog read json data/out/events.json Event
+  60 events from 9 users
+  buy        8  mean   482.72 ms  max   821.83 ms
+  cart      12  mean   477.57 ms  max   892.00 ms
+  click     14  mean   492.76 ms  max   858.27 ms
+  search    16  mean   493.69 ms  max   833.88 ms
+  view      10  mean   406.41 ms  max   800.60 ms
+> truncate data/out/events.bin 500
+  truncated to 500
+> eventlog read compact data/out/events.bin Event
+  12 events from 7 users
+  cart       4  mean   324.02 ms  max   848.13 ms
+  click      2  mean   220.01 ms  max   273.98 ms
+  search     3  mean   717.32 ms  max   773.66 ms
+  view       3  mean   572.38 ms  max   800.60 ms
+  error EOFError: 
+> patch data/out/events_b.bin 4 05
+  patched
+> eventlog read binary data/out/events_b.bin Event
+  0 events from 0 users
+  error thrift.protocol.TProtocol.TProtocolException: invalid TType
+> legacy binary data/out/users_v1.bin
+  wrote 7 users, 362 bytes
+> file data/out/users_v1.bin
+  362 00000031080001000000010b00020000000c416461204c6f76656c6163650b00030000000f616461406578616d706c652e636f6d0000000033080001000000020b00020000000c477261636520486f707065720b000300000011677261636540...
+> readframes binary data/out/users_v1.bin UserV1
+  UserV1(id=1, name='Ada Lovelace', email='ada@example.com')
+  UserV1(id=2, name='Grace Hopper', email='grace@example.com')
+  UserV1(id=3, name='Alan Turing', email='alan@example.com')
+  UserV1(id=4, name='Édith Piaf', email='edith@example.fr')
+  UserV1(id=5, name='Test Account', email='qa@example.invalid')
+  UserV1(id=6, name='Ken', email='ken@example.com')
+  UserV1(id=7, name='张伟', email='zhang@example.cn')
+  7 records
+> migrate binary data/out/users_v1.bin compact data/out/users_v2.bin
+  migrated 7 users, 402 bytes
+> readframes compact data/out/users_v2.bin UserV2
+  UserV2(id=1, name='Ada Lovelace', email='ada@example.com', roles=['member', 'admin'], active=True, score=3.0)
+  UserV2(id=2, name='Grace Hopper', email='grace@example.com', roles=['member'], active=True, score=3.0)
+  UserV2(id=3, name='Alan Turing', email='alan@example.com', roles=['member'], active=True, score=2.75)
+  UserV2(id=4, name='Édith Piaf', email='edith@example.fr', roles=['member'], active=True, score=2.5)
+  UserV2(id=5, name='Test Account', email='qa@example.invalid', roles=['member'], active=False, score=3.0)
+  UserV2(id=6, name='Ken', email='ken@example.com', roles=['member', 'admin'], active=True, score=0.75)
+  UserV2(id=7, name='张伟', email='zhang@example.cn', roles=['member'], active=True, score=0.5)
+  7 records
+> readframes compact data/out/users_v2.bin UserV1
+  UserV1(id=1, name='Ada Lovelace', email='ada@example.com')
+  UserV1(id=2, name='Grace Hopper', email='grace@example.com')
+  UserV1(id=3, name='Alan Turing', email='alan@example.com')
+  UserV1(id=4, name='Édith Piaf', email='edith@example.fr')
+  UserV1(id=5, name='Test Account', email='qa@example.invalid')
+  UserV1(id=6, name='Ken', email='ken@example.com')
+  UserV1(id=7, name='张伟', email='zhang@example.cn')
+  7 records
+> export compact data/out/users_v2.bin UserV2 data/out/users.jsonl
+  {"id":1,"name":"Ada Lovelace","email":"ada@example.com","roles":["member","admin"],"active":1,"score":3.0}
+  {"id":2,"name":"Grace Hopper","email":"grace@example.com","roles":["member"],"active":1,"score":3.0}
+  {"id":3,"name":"Alan Turing","email":"alan@example.com","roles":["member"],"active":1,"score":2.75}
+  {"id":4,"name":"Édith Piaf","email":"edith@example.fr","roles":["member"],"active":1,"score":2.5}
+  {"id":5,"name":"Test Account","email":"qa@example.invalid","roles":["member"],"active":0,"score":3.0}
+  {"id":6,"name":"Ken","email":"ken@example.com","roles":["member","admin"],"active":1,"score":0.75}
+  {"id":7,"name":"张伟","email":"zhang@example.cn","roles":["member"],"active":1,"score":0.5}
+> file data/out/users.jsonl
+  702 7b226964223a312c226e616d65223a22416461204c6f76656c616365222c22656d61696c223a22616461406578616d706c652e636f6d222c22726f6c6573223a5b226d656d626572222c2261646d696e225d2c22616374697665223a312c2273...
+> migrate compact data/out/users_v2.bin json data/out/users_v3.json
+  migrated 7 users, 955 bytes
+> export json data/out/users_v3.json UserV2 data/out/users3.jsonl
+  {"id":1,"name":"Ada Lovelace","email":"ada@example.com","roles":["member","admin"],"active":1,"score":3.0}
+  {"id":2,"name":"Grace Hopper","email":"grace@example.com","roles":["member"],"active":1,"score":3.0}
+  {"id":3,"name":"Alan Turing","email":"alan@example.com","roles":["member"],"active":1,"score":2.75}
+  {"id":4,"name":"Édith Piaf","email":"edith@example.fr","roles":["member"],"active":1,"score":2.5}
+  {"id":5,"name":"Test Account","email":"qa@example.invalid","roles":["member"],"active":0,"score":3.0}
+  {"id":6,"name":"Ken","email":"ken@example.com","roles":["member","admin"],"active":1,"score":0.75}
+  {"id":7,"name":"张伟","email":"zhang@example.cn","roles":["member"],"active":1,"score":0.5}
+612 jobs, 215 ended in an error
