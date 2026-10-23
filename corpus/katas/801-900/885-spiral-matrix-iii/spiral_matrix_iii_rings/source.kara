@@ -1,0 +1,121 @@
+// LeetCode #885: Spiral Matrix III -- ring by ring.
+//
+// The positions k steps from the start in both directions at most, and
+// exactly k in one, form a ring, and the spiral walks the rings in turn.
+// Ring k begins just below the top right corner and runs down its east
+// side, along its south side going west, up its west side and along its
+// north side going east, ending at the top right corner. Each ring's sides
+// are walked with the parts outside the grid skipped. O(max(rows, cols)^2).
+
+fn spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut k = 1;
+    while out.len() < rows * cols {
+        let top = r_start - k;
+        let bottom = r_start + k;
+        let left = c_start - k;
+        let right = c_start + k;
+        // the east side, going south
+        if right < cols {
+            for r in (top + 1).max(0)..(bottom + 1).min(rows) {
+                out.push([r, right]);
+            }
+        }
+        // the south side, going west
+        if bottom < rows {
+            let mut c = (right - 1).min(cols - 1);
+            while c >= left.max(0) {
+                out.push([bottom, c]);
+                c -= 1;
+            }
+        }
+        // the west side, going north
+        if left >= 0 {
+            let mut r = (bottom - 1).min(rows - 1);
+            while r >= top.max(0) {
+                out.push([r, left]);
+                r -= 1;
+            }
+        }
+        // the north side, going east
+        if top >= 0 {
+            for c in (left + 1).max(0)..(right + 1).min(cols) {
+                out.push([top, c]);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn fold(check: i64, cells: Vec[Vec[i64]]) -> i64 {
+    let mut c = check;
+    for i in 0..cells.len() {
+        c = (c * 131 + cells[i][0] * 101 + cells[i][1] + 1) % 1000000007;
+    }
+    c
+}
+
+fn show(rows: i64, cols: i64, r_start: i64, c_start: i64) {
+    let cells = spiral_matrix_iii(rows, cols, r_start, c_start);
+    let mut shown = "[";
+    if cells.len() <= 12 {
+        for i in 0..cells.len() {
+            if i > 0 {
+                shown = shown + ", ";
+            }
+            shown = shown + f"[{cells[i][0]}, {cells[i][1]}]";
+        }
+        shown = shown + "]";
+    } else {
+        for i in 0..4 {
+            shown = shown + f"[{cells[i][0]}, {cells[i][1]}], ";
+        }
+        let last = cells.len() - 1;
+        shown = shown + f"... [{cells[last][0]}, {cells[last][1]}]] ({cells.len()} cells, checksum {fold(0, cells)})";
+    }
+    println(f"rows = {rows}, cols = {cols}, rStart = {r_start}, cStart = {c_start} -> {shown}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(1, 4, 0, 0);
+    show(5, 6, 1, 4);
+    show(1, 1, 0, 0);
+    show(3, 3, 1, 1);
+    show(2, 2, 1, 1);
+    show(4, 1, 2, 0);
+    show(1, 5, 0, 2);
+    show(100, 100, 0, 0);
+    show(100, 100, 99, 99);
+    show(100, 1, 37, 0);
+    // small cases
+    let mut seed = 885;
+    let mut cells = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let rows = next_random(mut seed) % 8 + 1;
+        let cols = next_random(mut seed) % 8 + 1;
+        let out = spiral_matrix_iii(rows, cols, next_random(mut seed) % rows, next_random(mut seed) % cols);
+        cells += out.len();
+        check = fold(check, out);
+    }
+    println(f"2000 grids of up to 8 x 8: {cells} cells, checksum {check}");
+    // LeetCode's sizes: up to 100 x 100
+    cells = 0;
+    check = 0;
+    for _ in 0..100 {
+        let rows = next_random(mut seed) % 100 + 1;
+        let cols = next_random(mut seed) % 100 + 1;
+        let out = spiral_matrix_iii(rows, cols, next_random(mut seed) % rows, next_random(mut seed) % cols);
+        cells += out.len();
+        check = fold(check, out);
+    }
+    println(f"100 grids of up to 100 x 100: {cells} cells, checksum {check}");
+}

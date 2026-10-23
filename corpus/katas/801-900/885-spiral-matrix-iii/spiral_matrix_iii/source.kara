@@ -1,0 +1,104 @@
+// LeetCode #885: Spiral Matrix III -- walking the spiral.
+//
+// The spiral from the start goes east 1, south 1, west 2, north 2, east
+// 3, south 3, and on: two legs of each length, turning right after each
+// leg. Walking it a step at a time, off the grid as well as on it, and
+// keeping each position inside the grid, gives every one of the rows *
+// cols positions in order. The walk leaves the grid at most max(rows,
+// cols) rings out, so it takes O(max(rows, cols)^2) steps.
+
+fn spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let dr = [0, 1, 0, -1];
+    let dc = [1, 0, -1, 0];
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut r = r_start;
+    let mut c = c_start;
+    let mut d = 0;
+    let mut length = 1;
+    while out.len() < rows * cols {
+        for _ in 0..2 {
+            for _ in 0..length {
+                r += dr[d];
+                c += dc[d];
+                if r >= 0 and r < rows and c >= 0 and c < cols {
+                    out.push([r, c]);
+                }
+            }
+            d = (d + 1) % 4;
+        }
+        length += 1;
+    }
+    out
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn fold(check: i64, cells: Vec[Vec[i64]]) -> i64 {
+    let mut c = check;
+    for i in 0..cells.len() {
+        c = (c * 131 + cells[i][0] * 101 + cells[i][1] + 1) % 1000000007;
+    }
+    c
+}
+
+fn show(rows: i64, cols: i64, r_start: i64, c_start: i64) {
+    let cells = spiral_matrix_iii(rows, cols, r_start, c_start);
+    let mut shown = "[";
+    if cells.len() <= 12 {
+        for i in 0..cells.len() {
+            if i > 0 {
+                shown = shown + ", ";
+            }
+            shown = shown + f"[{cells[i][0]}, {cells[i][1]}]";
+        }
+        shown = shown + "]";
+    } else {
+        for i in 0..4 {
+            shown = shown + f"[{cells[i][0]}, {cells[i][1]}], ";
+        }
+        let last = cells.len() - 1;
+        shown = shown + f"... [{cells[last][0]}, {cells[last][1]}]] ({cells.len()} cells, checksum {fold(0, cells)})";
+    }
+    println(f"rows = {rows}, cols = {cols}, rStart = {r_start}, cStart = {c_start} -> {shown}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(1, 4, 0, 0);
+    show(5, 6, 1, 4);
+    show(1, 1, 0, 0);
+    show(3, 3, 1, 1);
+    show(2, 2, 1, 1);
+    show(4, 1, 2, 0);
+    show(1, 5, 0, 2);
+    show(100, 100, 0, 0);
+    show(100, 100, 99, 99);
+    show(100, 1, 37, 0);
+    // small cases
+    let mut seed = 885;
+    let mut cells = 0;
+    let mut check = 0;
+    for _ in 0..2000 {
+        let rows = next_random(mut seed) % 8 + 1;
+        let cols = next_random(mut seed) % 8 + 1;
+        let out = spiral_matrix_iii(rows, cols, next_random(mut seed) % rows, next_random(mut seed) % cols);
+        cells += out.len();
+        check = fold(check, out);
+    }
+    println(f"2000 grids of up to 8 x 8: {cells} cells, checksum {check}");
+    // LeetCode's sizes: up to 100 x 100
+    cells = 0;
+    check = 0;
+    for _ in 0..100 {
+        let rows = next_random(mut seed) % 100 + 1;
+        let cols = next_random(mut seed) % 100 + 1;
+        let out = spiral_matrix_iii(rows, cols, next_random(mut seed) % rows, next_random(mut seed) % cols);
+        cells += out.len();
+        check = fold(check, out);
+    }
+    println(f"100 grids of up to 100 x 100: {cells} cells, checksum {check}");
+}

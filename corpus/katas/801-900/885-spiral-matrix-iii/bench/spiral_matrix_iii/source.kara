@@ -1,0 +1,49 @@
+// LeetCode #885 bench: the ★ arm (walking the spiral) on 6000 grids of
+// LeetCode's sizes.
+
+fn spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let dr = [0, 1, 0, -1];
+    let dc = [1, 0, -1, 0];
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut r = r_start;
+    let mut c = c_start;
+    let mut d = 0;
+    let mut length = 1;
+    while out.len() < rows * cols {
+        for _ in 0..2 {
+            for _ in 0..length {
+                r += dr[d];
+                c += dc[d];
+                if r >= 0 and r < rows and c >= 0 and c < cols {
+                    out.push([r, c]);
+                }
+            }
+            d = (d + 1) % 4;
+        }
+        length += 1;
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 885;
+    let mut cells = 0;
+    let mut check = 0;
+    for _ in 0..6000 {
+        // 50 x 50 to 100 x 100, the start anywhere
+        let rows = 50 + next_random(mut seed) % 51;
+        let cols = 50 + next_random(mut seed) % 51;
+        let r_start = next_random(mut seed) % rows;
+        let c_start = next_random(mut seed) % cols;
+        let out = spiral_matrix_iii(rows, cols, r_start, c_start);
+        cells += out.len();
+        let last = out.len() - 1;
+        check = (check * 131 + out[last][0] * 101 + out[last][1] + out[out.len() / 2][0]) % 1000000007;
+    }
+    println(f"6000 grids of up to 100 x 100: {cells} cells, checksum {check}");
+}

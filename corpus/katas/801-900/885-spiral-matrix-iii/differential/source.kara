@@ -1,0 +1,412 @@
+// LeetCode #885: Spiral Matrix III -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: in a rows x cols grid, start at (rStart, cStart) facing
+// east and walk in a clockwise spiral to visit every position. Moving
+// outside the grid, the walk continues outside it (and may come back to
+// the grid later). Return the grid's positions in the order visited.
+
+// ---- the ★ arm: walking the spiral ----------------------------------------
+fn star_spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let dr = [0, 1, 0, -1];
+    let dc = [1, 0, -1, 0];
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut r = r_start;
+    let mut c = c_start;
+    let mut d = 0;
+    let mut length = 1;
+    while out.len() < rows * cols {
+        for _ in 0..2 {
+            for _ in 0..length {
+                r += dr[d];
+                c += dc[d];
+                if r >= 0 and r < rows and c >= 0 and c < cols {
+                    out.push([r, c]);
+                }
+            }
+            d = (d + 1) % 4;
+        }
+        length += 1;
+    }
+    out
+}
+
+// ---- the rings arm: ring by ring ------------------------------------------
+fn rings_spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut k = 1;
+    while out.len() < rows * cols {
+        let top = r_start - k;
+        let bottom = r_start + k;
+        let left = c_start - k;
+        let right = c_start + k;
+        // the east side, going south
+        if right < cols {
+            for r in (top + 1).max(0)..(bottom + 1).min(rows) {
+                out.push([r, right]);
+            }
+        }
+        // the south side, going west
+        if bottom < rows {
+            let mut c = (right - 1).min(cols - 1);
+            while c >= left.max(0) {
+                out.push([bottom, c]);
+                c -= 1;
+            }
+        }
+        // the west side, going north
+        if left >= 0 {
+            let mut r = (bottom - 1).min(rows - 1);
+            while r >= top.max(0) {
+                out.push([r, left]);
+                r -= 1;
+            }
+        }
+        // the north side, going east
+        if top >= 0 {
+            for c in (left + 1).max(0)..(right + 1).min(cols) {
+                out.push([top, c]);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+// ---- the ranked arm: each position's place, then a sort -------------------
+fn ranked_place(dr: i64, dc: i64) -> i64 {
+    let k = dr.abs().max(dc.abs());
+    if k == 0 {
+        return 0;
+    }
+    let before = (2 * k - 1) * (2 * k - 1);
+    if dc == k and dr > -k {
+        before + dr + k - 1
+    } else if dr == k {
+        before + 2 * k + (k - 1 - dc)
+    } else if dc == -k {
+        before + 4 * k + (k - 1 - dr)
+    } else {
+        before + 6 * k + (dc + k - 1)
+    }
+}
+
+fn ranked_spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let mut keyed: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            keyed.push((ranked_place(r - r_start, c - c_start), r, c));
+        }
+    }
+    keyed.sort();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..keyed.len() {
+        let (_, r, c) = keyed[i];
+        out.push([r, c]);
+    }
+    out
+}
+
+// ---- the turns arm: turning right whenever it can -------------------------
+fn turns_spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let dr = [-1, 0, 1, 0];
+    let dc = [0, 1, 0, -1];
+    let reach = rows.max(cols) + 1;
+    let side = 2 * reach + 1;
+    let mut visited: Vec[bool] = Vec.filled(side * side, false);
+    // the board's position (reach, reach) is the start
+    let mut br = reach;
+    let mut bc = reach;
+    visited[br * side + bc] = true;
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut d = 0;
+    while out.len() < rows * cols {
+        let right = (d + 1) % 4;
+        if not visited[(br + dr[right]) * side + bc + dc[right]] {
+            d = right;
+        }
+        br += dr[d];
+        bc += dc[d];
+        visited[br * side + bc] = true;
+        let r = r_start + br - reach;
+        let c = c_start + bc - reach;
+        if r >= 0 and r < rows and c >= 0 and c < cols {
+            out.push([r, c]);
+        }
+    }
+    out
+}
+
+// ---- the clipped arm: legs clipped to the grid ----------------------------
+fn clipped_spiral_matrix_iii(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut r = r_start;
+    let mut c = c_start;
+    let mut length = 1;
+    while out.len() < rows * cols {
+        // east, along row r from c + 1 to c + length
+        if r >= 0 and r < rows {
+            for x in (c + 1).max(0)..(c + length + 1).min(cols) {
+                out.push([r, x]);
+            }
+        }
+        c += length;
+        // south, down column c from r + 1 to r + length
+        if c >= 0 and c < cols {
+            for y in (r + 1).max(0)..(r + length + 1).min(rows) {
+                out.push([y, c]);
+            }
+        }
+        r += length;
+        length += 1;
+        // west, along row r from c - 1 to c - length
+        if r >= 0 and r < rows {
+            let mut x = (c - 1).min(cols - 1);
+            while x >= (c - length).max(0) {
+                out.push([r, x]);
+                x -= 1;
+            }
+        }
+        c -= length;
+        // north, up column c from r - 1 to r - length
+        if c >= 0 and c < cols {
+            let mut y = (r - 1).min(rows - 1);
+            while y >= (r - length).max(0) {
+                out.push([y, c]);
+                y -= 1;
+            }
+        }
+        r -= length;
+        length += 1;
+    }
+    out
+}
+
+fn arm(x: i64, rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    match x {
+        0 => star_spiral_matrix_iii(rows, cols, r_start, c_start),
+        1 => rings_spiral_matrix_iii(rows, cols, r_start, c_start),
+        2 => ranked_spiral_matrix_iii(rows, cols, r_start, c_start),
+        3 => turns_spiral_matrix_iii(rows, cols, r_start, c_start),
+        _ => clipped_spiral_matrix_iii(rows, cols, r_start, c_start),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the walk written out as moves, E S W W N N E E E S S S ..., one move a
+// letter, until it has passed every position of the grid; then the moves
+// taken from the start and the positions inside the grid kept in order,
+// the start first
+fn literal(rows: i64, cols: i64, r_start: i64, c_start: i64) -> Vec[Vec[i64]] {
+    let names = "ESWN";
+    let mut moves = String.new();
+    let mut length = 1;
+    let mut d = 0;
+    // 2 * max(rows, cols) + 1 legs reach every position of the grid
+    while length <= 2 * rows.max(cols) + 2 {
+        for _ in 0..2 {
+            for _ in 0..length {
+                moves.push_str(names[d..d + 1]);
+            }
+            d = (d + 1) % 4;
+        }
+        length += 1;
+    }
+    let mut out: Vec[Vec[i64]] = [[r_start, c_start]];
+    let mut r = r_start;
+    let mut c = c_start;
+    let steps = moves.bytes();
+    for i in 0..steps.len() {
+        if out.len() == rows * cols {
+            break;
+        }
+        if steps[i] == 69 {
+            c += 1;
+        } else if steps[i] == 83 {
+            r += 1;
+        } else if steps[i] == 87 {
+            c -= 1;
+        } else {
+            r -= 1;
+        }
+        if r >= 0 and r < rows and c >= 0 and c < cols {
+            out.push([r, c]);
+        }
+    }
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn same(a: Vec[Vec[i64]], b: Vec[Vec[i64]]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i][0] != b[i][0] or a[i][1] != b[i][1] {
+            return false;
+        }
+    }
+    true
+}
+
+// the larger of a position's row and column distance from the start
+fn ring(cell: Vec[i64], r_start: i64, c_start: i64) -> i64 {
+    (cell[0] - r_start).abs().max((cell[1] - c_start).abs())
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one grid over the five arms (P1 only when `small`).
+// Returns the ★ arm's checksum of the order.
+fn properties(t: mut ref Tally, seed: mut ref i64, rows: i64, cols: i64, r_start: i64, c_start: i64, small: bool) -> i64 {
+    let want = if small { literal(rows, cols, r_start, c_start) } else { Vec.new() };
+    // the grid inside a larger one: up to 5 more rows and columns on every
+    // side, the start moved with it
+    let above = next_random(mut seed) % 6;
+    let below = next_random(mut seed) % 6;
+    let before = next_random(mut seed) % 6;
+    let after = next_random(mut seed) % 6;
+    let mut answers: Vec[Vec[Vec[i64]]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, rows, cols, r_start, c_start));
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's walk
+        if small {
+            check(mut t, 1, same(got, want));
+        }
+        // P2: rows * cols positions, the start first, each inside the grid
+        // and none twice
+        let mut ok = got.len() == rows * cols and got.len() > 0 and got[0][0] == r_start and got[0][1] == c_start;
+        let mut seen: Vec[bool] = Vec.filled(rows * cols, false);
+        for i in 0..got.len() {
+            let r = got[i][0];
+            let c = got[i][1];
+            if r < 0 or r >= rows or c < 0 or c >= cols or seen[r * cols + c] {
+                ok = false;
+            } else {
+                seen[r * cols + c] = true;
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: the larger grid's order, its positions inside this grid kept
+        // and moved back, is this grid's order
+        let larger = arm(x, rows + above + below, cols + before + after, r_start + above, c_start + before);
+        let mut inside: Vec[Vec[i64]] = Vec.new();
+        for i in 0..larger.len() {
+            let r = larger[i][0] - above;
+            let c = larger[i][1] - before;
+            if r >= 0 and r < rows and c >= 0 and c < cols {
+                inside.push([r, c]);
+            }
+        }
+        check(mut t, 3, same(inside, got));
+        // P4: the distance from the start never falls along the order
+        let mut rising = true;
+        for i in 1..got.len() {
+            if ring(got[i], r_start, c_start) < ring(got[i - 1], r_start, c_start) {
+                rising = false;
+            }
+        }
+        check(mut t, 4, rising);
+        // P5: the start's row alone, and its column alone, are walked one
+        // step to the right (or down), one to the left (or up), two to the
+        // right, two to the left, and on, skipping the ends of the grid
+        let row = arm(x, 1, cols, 0, c_start);
+        let column = arm(x, rows, 1, r_start, 0);
+        let mut zigzag = row.len() == cols and column.len() == rows;
+        if zigzag {
+            let mut k = 0;
+            let mut at = 0;
+            while at < cols {
+                for s in [1, -1] {
+                    let c = c_start + s * k;
+                    if c >= 0 and c < cols and (k > 0 or s == 1) {
+                        if row[at][0] != 0 or row[at][1] != c {
+                            zigzag = false;
+                        }
+                        at += 1;
+                    }
+                }
+                k += 1;
+            }
+            k = 0;
+            at = 0;
+            while at < rows {
+                for s in [1, -1] {
+                    let r = r_start + s * k;
+                    if r >= 0 and r < rows and (k > 0 or s == 1) {
+                        if column[at][0] != r or column[at][1] != 0 {
+                            zigzag = false;
+                        }
+                        at += 1;
+                    }
+                }
+                k += 1;
+            }
+        }
+        check(mut t, 5, zigzag);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and same(answers[y], got) {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+    let mut sum = 0;
+    for i in 0..answers[0].len() {
+        sum = (sum * 131 + answers[0][i][0] * 101 + answers[0][i][1] + 1) % 1000000007;
+    }
+    sum
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut cases = 0;
+    let mut total = 0;
+    let mut seed = 885;
+    // up to 7 x 7 against the statement; then LeetCode's sizes, up to
+    // 100 x 100
+    for c in 0..2100 {
+        let small = c < 2000;
+        let most = if small { 7 } else { 100 };
+        let rows = next_random(mut seed) % most + 1;
+        let cols = next_random(mut seed) % most + 1;
+        let r_start = next_random(mut seed) % rows;
+        let c_start = next_random(mut seed) % cols;
+        cases += 1;
+        total = (total + properties(mut t, mut seed, rows, cols, r_start, c_start, small)) % 1000000007;
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, orders summing to checksum {total}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

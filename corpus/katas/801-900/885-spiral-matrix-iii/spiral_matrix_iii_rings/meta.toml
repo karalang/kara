@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/885-spiral-matrix-iii/spiral_matrix_iii_rings.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "d7088dcf0"
+extracted_src = "62bac837"
+model_rev = "aafbe785"
+model_src = "62bac837"
