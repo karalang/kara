@@ -1,0 +1,85 @@
+// LeetCode #874 bench: the ★ arm (the robot walked one square at a time
+// against a set of obstacles) on 600 walks of 10^4 commands among 10^4
+// obstacles, LeetCode's largest.
+
+fn robot_sim(commands: Vec[i64], obstacles: Vec[Vec[i64]]) -> i64 {
+    let mut blocked: Set[i64] = Set.new();
+    for o in obstacles.iter() {
+        blocked.insert(square(o[0], o[1]));
+    }
+    let dx = [0, 1, 0, -1];
+    let dy = [1, 0, -1, 0];
+    let mut facing = 0;
+    let mut x = 0;
+    let mut y = 0;
+    let mut best = 0;
+    for c in commands.iter() {
+        if *c == -2 {
+            facing = (facing + 3) % 4;
+        } else if *c == -1 {
+            facing = (facing + 1) % 4;
+        } else {
+            for _ in 0..*c {
+                let nx = x + dx[facing];
+                let ny = y + dy[facing];
+                if blocked.contains(square(nx, ny)) {
+                    break;
+                }
+                x = nx;
+                y = ny;
+                best = best.max(x * x + y * y);
+            }
+        }
+    }
+    best
+}
+
+// a square as one number; the robot stays within 10^5 of the origin
+fn square(x: i64, y: i64) -> i64 {
+    (x + 200000) * 400001 + (y + 200000)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_commands(seed: mut ref i64, n: i64, turns: i64) -> Vec[i64] {
+    let mut commands: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        if next_random(mut seed) % turns == 0 {
+            commands.push(-1 - next_random(mut seed) % 2);
+        } else {
+            commands.push(next_random(mut seed) % 9 + 1);
+        }
+    }
+    commands
+}
+
+fn random_obstacles(seed: mut ref i64, n: i64, reach: i64) -> Vec[Vec[i64]] {
+    let mut obstacles: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let x = next_random(mut seed) % (2 * reach + 1) - reach;
+        let y = next_random(mut seed) % (2 * reach + 1) - reach;
+        obstacles.push([x, y]);
+    }
+    obstacles
+}
+
+fn main() {
+    let mut seed = 874;
+    let mut command_lists: Vec[Vec[i64]] = Vec.new();
+    let mut obstacle_lists: Vec[Vec[Vec[i64]]] = Vec.new();
+    for k in 0..20 {
+        command_lists.push(random_commands(mut seed, 10000, 2 + k % 3));
+        obstacle_lists.push(random_obstacles(mut seed, 10000, 100 + 10 * k));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for k in 0..600 {
+        let answer = robot_sim(command_lists[k % 20], obstacle_lists[(k * 7 + k / 20) % 20]);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"600 walks of 10000 commands among 10000 obstacles: distances sum to {total}, checksum {check}");
+}
