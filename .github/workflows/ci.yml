@@ -157,9 +157,9 @@ jobs:
 
       - name: Codegen containment guard
         run: |
-          violations=$(grep -rlE '^\s*use\s+inkwell|\b(LLVMValue|LLVMType|BasicValueEnum|BasicTypeEnum)\b' src/ | grep -vE '^src/codegen(\.rs$|/)' || true)
+          violations=$(grep -rlE '^\s*use\s+inkwell|\b(LLVMValue|LLVMType|BasicValueEnum|BasicTypeEnum)\b' src/ | grep -vE '^src/(codegen(\.rs$|/)|backend/)' || true)
           if [ -n "$violations" ]; then
-            echo "::error::Codegen containment violation — LLVM/inkwell references outside src/codegen.{rs,/}:"
+            echo "::error::Codegen containment violation — LLVM/inkwell references outside src/codegen.{rs,/} and src/backend/:"
             echo "$violations"
             echo "See docs/design.md § Codegen architecture and CLAUDE.md § Architecture > Codegen containment."
             exit 1
