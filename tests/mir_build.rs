@@ -813,6 +813,67 @@ fn main() {
     }
 }
 
+/// B-2026-10-13-31: the ASCII char classes and case maps are range tests in
+/// line on the compiled backends, and the Unicode ones are in line below 128
+/// with the runtime above it. Every char below U+3000 and every byte must
+/// classify and map as the interpreter (Rust's own `char` methods) does.
+#[test]
+fn mir_char_classes_run_in_line() {
+    const SRC: &str = r#"fn bit(b: bool) -> i64 { if b { 1 } else { 0 } }
+
+fn classes(c: char) -> i64 {
+    bit(c.is_alphabetic()) + 2 * bit(c.is_numeric()) + 4 * bit(c.is_alphanumeric())
+        + 8 * bit(c.is_uppercase()) + 16 * bit(c.is_lowercase()) + 32 * bit(c.is_whitespace())
+        + 64 * bit(c.is_ascii()) + 128 * bit(c.is_ascii_digit()) + 256 * bit(c.is_ascii_alphabetic())
+        + 512 * bit(c.is_ascii_alphanumeric()) + 1024 * bit(c.is_ascii_uppercase())
+        + 2048 * bit(c.is_ascii_lowercase()) + 4096 * bit(c.is_ascii_punctuation())
+        + 8192 * bit(c.is_ascii_whitespace()) + 16384 * bit(c.is_ascii_hexdigit())
+}
+
+fn bclasses(c: u8) -> i64 {
+    2 * bit(c.is_ascii_digit()) + 4 * bit(c.is_ascii_alphabetic())
+        + 8 * bit(c.is_ascii_alphanumeric()) + 16 * bit(c.is_ascii_uppercase())
+        + 32 * bit(c.is_ascii_lowercase()) + 64 * bit(c.is_ascii_punctuation())
+        + 128 * bit(c.is_ascii_whitespace()) + 256 * bit(c.is_ascii_hexdigit())
+}
+
+fn main() {
+    let mut h = 0;
+    let mut n: u32 = 0;
+    while n < 0x3000 {
+        match char.try_from(n) {
+            Ok(c) => {
+                let k = classes(c);
+                let m = (c.to_lowercase() as i64) * 7 + (c.to_uppercase() as i64) * 11
+                    + (c.to_ascii_lowercase() as i64) * 13 + (c.to_ascii_uppercase() as i64) * 17;
+                h = (h * 1000003 + k * 31 + m) % 1000000007;
+                if n < 300 { print(f"{k}:{m} "); }
+            }
+            Err(_) => {}
+        }
+        n += 1;
+    }
+    println(f"\n{h}");
+    let mut x: u8 = 0;
+    let mut g = 0;
+    loop {
+        g = (g * 131 + bclasses(x) * 3) % 1000000007;
+        if x == 255 { break; }
+        x += 1;
+    }
+    println(f"{g}");
+}
+"#;
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    let want = interp.output.clone();
+    assert!(want.ends_with("\n394807808\n874490389\n"), "{want}");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
 /// squaring, with the same multiplications on both backends, so the bits
 /// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).

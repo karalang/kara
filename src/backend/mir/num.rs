@@ -228,7 +228,36 @@ impl<'ctx> Cx<'ctx, '_> {
             .llcx
             .i32_type()
             .const_int(k as u64 | if byte { 0x100 } else { 0 }, false);
-        let v = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
+        // The ASCII classes and case maps are range tests, computed in line
+        // (B-2026-10-13-31); the Unicode ones are in line below 128 only.
+        let v = match self.ascii_char(method, c, byte)? {
+            Some((a, true)) => a,
+            Some((a, false)) => {
+                let here = self.builder.get_insert_block().ok_or("no block")?;
+                let f = self.cur_fn()?;
+                let wide = self.llcx.append_basic_block(f, "char.wide");
+                let done = self.llcx.append_basic_block(f, "char.done");
+                let ascii = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, c, self.i64(128), "")
+                    .map_err(e)?;
+                self.builder
+                    .build_conditional_branch(ascii, done, wide)
+                    .map_err(e)?;
+                self.builder.position_at_end(wide);
+                let w = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
+                let wide_end = self.builder.get_insert_block().ok_or("no block")?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+                let phi = self
+                    .builder
+                    .build_phi(self.llcx.i64_type(), "")
+                    .map_err(e)?;
+                phi.add_incoming(&[(&a, here), (&w, wide_end)]);
+                phi.as_basic_value().into_int_value()
+            }
+            None => self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?,
+        };
         if radix {
             // The runtime set the panic's message for a radix outside 2..=36.
             let min = self.i64(i64::MIN as u64);
@@ -259,6 +288,89 @@ impl<'ctx> Cx<'ctx, '_> {
             }
         }
         Ok(Some(()))
+    }
+
+    /// The char method `method` of `c` (an `i64`) as range tests, as
+    /// `karac_mir_char` answers it: a predicate is 0 or 1, a case map the
+    /// mapped char. The flag says whether that holds for every `c`; when it
+    /// does not (the Unicode classes and maps) it holds below 128. A `byte`
+    /// receiver above 255 maps to 0, as the runtime's does.
+    fn ascii_char(
+        &self,
+        method: &str,
+        c: IntValue<'ctx>,
+        byte: bool,
+    ) -> R<Option<(IntValue<'ctx>, bool)>> {
+        let b = &self.builder;
+        let range = |x: IntValue<'ctx>, lo: u64, n: u64| -> R<IntValue<'ctx>> {
+            let d = b.build_int_sub(x, self.i64(lo), "").map_err(e)?;
+            b.build_int_compare(IntPredicate::ULT, d, self.i64(n), "")
+                .map_err(e)
+        };
+        let eq = |k: u64| -> R<IntValue<'ctx>> {
+            b.build_int_compare(IntPredicate::EQ, c, self.i64(k), "")
+                .map_err(e)
+        };
+        let or = |x: IntValue<'ctx>, y: IntValue<'ctx>| b.build_or(x, y, "").map_err(e);
+        let folded = b.build_or(c, self.i64(32), "").map_err(e)?;
+        let upper = || range(c, 65, 26);
+        let lower = || range(c, 97, 26);
+        let digit = || range(c, 48, 10);
+        let alpha = || range(folded, 97, 26);
+        // '\t' '\n' '\x0B' '\x0C' '\r', or ' '.
+        let space = || or(range(c, 9, 5)?, eq(32)?);
+        let (flag, exact) = match method {
+            "is_ascii" => (range(c, 0, 128)?, true),
+            "is_ascii_digit" => (digit()?, true),
+            "is_ascii_alphabetic" => (alpha()?, true),
+            "is_ascii_alphanumeric" => (or(alpha()?, digit()?)?, true),
+            "is_ascii_uppercase" => (upper()?, true),
+            "is_ascii_lowercase" => (lower()?, true),
+            "is_ascii_hexdigit" => (or(digit()?, range(folded, 97, 6)?)?, true),
+            "is_ascii_punctuation" => {
+                let a = or(range(c, 33, 15)?, range(c, 58, 7)?)?;
+                let z = or(range(c, 91, 6)?, range(c, 123, 4)?)?;
+                (or(a, z)?, true)
+            }
+            // Rust's ASCII whitespace leaves out '\x0B'.
+            "is_ascii_whitespace" => {
+                let vt = eq(11)?;
+                let s = space()?;
+                (
+                    b.build_and(s, b.build_not(vt, "").map_err(e)?, "")
+                        .map_err(e)?,
+                    true,
+                )
+            }
+            "is_alphabetic" => (alpha()?, false),
+            "is_numeric" => (digit()?, false),
+            "is_alphanumeric" => (or(alpha()?, digit()?)?, false),
+            "is_uppercase" => (upper()?, false),
+            "is_lowercase" => (lower()?, false),
+            "is_whitespace" => (space()?, false),
+            "to_ascii_lowercase" | "to_ascii_uppercase" | "to_lowercase" | "to_uppercase" => {
+                let down = method.contains("lower");
+                let hit = if down { upper()? } else { lower()? };
+                let flipped = b.build_xor(c, self.i64(32), "").map_err(e)?;
+                let mut m = b
+                    .build_select(hit, flipped, c, "")
+                    .map_err(e)?
+                    .into_int_value();
+                if byte {
+                    let fits = range(c, 0, 256)?;
+                    m = b
+                        .build_select(fits, m, self.i64(0), "")
+                        .map_err(e)?
+                        .into_int_value();
+                }
+                return Ok(Some((m, method.starts_with("to_ascii"))));
+            }
+            _ => return Ok(None),
+        };
+        let v = b
+            .build_int_z_extend(flag, self.llcx.i64_type(), "")
+            .map_err(e)?;
+        Ok(Some((v, exact)))
     }
 
     /// `char.try_from(n)`: `Ok(c)` for a Unicode scalar, else `Err(n)`.
