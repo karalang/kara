@@ -1,0 +1,7 @@
+words = [abcd, cdab, cbad, xyzz, zzxy, zzyx] -> 3
+words = [abc, acb, bac, bca, cab, cba] -> 3
+words = [a, b, a] -> 2
+words = [ab, ba] -> 2
+words = [abab, baba, aabb, bbaa] -> 3
+words = [abcdefghijklmnopqrst, srqponmlkjihgfedcbat, tsrqponmlkjihgfedcba] -> 2
+100 cases of up to 1000 words of up to 20 letters (48608 words): 19162 groups, checksum 908335804

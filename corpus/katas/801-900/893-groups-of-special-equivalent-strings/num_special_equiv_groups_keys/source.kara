@@ -1,0 +1,109 @@
+// LeetCode #893: Groups of Special-Equivalent Strings -- the keys sorted
+// and the changes counted.
+//
+// Give each word a key that is the same exactly within a group: its
+// counts of each letter at even positions, then at odd ones, as a vector
+// of 52. Sort the keys; the groups are the number of places where one key
+// differs from the one before, plus the first. O(n log n * 52).
+
+fn num_special_equiv_groups(words: Vec[String]) -> i64 {
+    let mut keys: Vec[Vec[i64]] = Vec.new();
+    for word in words.iter() {
+        let mut key: Vec[i64] = Vec.filled(52, 0);
+        let bytes = word.bytes();
+        for i in 0..bytes.len() {
+            key[(bytes[i] - 97) as i64 + 26 * (i % 2)] += 1;
+        }
+        keys.push(key);
+    }
+    keys.sort();
+    let mut groups = 0;
+    for i in 0..keys.len() {
+        if i == 0 or keys[i] != keys[i - 1] {
+            groups += 1;
+        }
+    }
+    groups
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(list: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in list.iter() {
+        out.push(s.to_string());
+    }
+    out
+}
+
+fn show(words: Vec[String]) {
+    println(f"words = {words} -> {num_special_equiv_groups(words)}");
+}
+
+// a random word of `len` letters from the first `letters` of the alphabet
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// the word with random swaps among its even positions and among its odd
+// ones, so it stays in the same group
+fn shuffled(seed: mut ref i64, word: String) -> String {
+    let mut b = word.bytes().to_vec();
+    let n = b.len();
+    for _ in 0..n {
+        let i = next_random(mut seed) % n;
+        let j = next_random(mut seed) % n;
+        if i % 2 == j % 2 {
+            b.swap(i, j);
+        }
+    }
+    let mut out = String.new();
+    for c in b.iter() {
+        out.push(*c as char);
+    }
+    out
+}
+
+fn main() {
+    show(strings(["abcd", "cdab", "cbad", "xyzz", "zzxy", "zzyx"]));
+    show(strings(["abc", "acb", "bac", "bca", "cab", "cba"]));
+    show(strings(["a", "b", "a"]));
+    show(strings(["ab", "ba"]));
+    show(strings(["abab", "baba", "aabb", "bbaa"]));
+    show(strings(["abcdefghijklmnopqrst", "srqponmlkjihgfedcbat", "tsrqponmlkjihgfedcba"]));
+    // random cases of LeetCode's sizes: up to 1000 words of up to 20
+    // letters from 2 to 26 letters; half the words are an earlier word
+    // with its even and odd letters shuffled
+    let mut seed = 893;
+    let mut words_in_all = 0;
+    let mut groups = 0;
+    let mut check = 0;
+    for _ in 0..100 {
+        let count = 1 + next_random(mut seed) % 1000;
+        let len = 1 + next_random(mut seed) % 20;
+        let letters = 2 + next_random(mut seed) % 25;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            if words.len() > 0 and next_random(mut seed) % 2 == 0 {
+                let k = next_random(mut seed) % words.len();
+                words.push(shuffled(mut seed, words[k]));
+            } else {
+                words.push(random_word(mut seed, len, letters));
+            }
+        }
+        let got = num_special_equiv_groups(words);
+        words_in_all += count;
+        groups += got;
+        check = (check * 131 + got) % 1000000007;
+    }
+    println(f"100 cases of up to 1000 words of up to 20 letters ({words_in_all} words): {groups} groups, checksum {check}");
+}
