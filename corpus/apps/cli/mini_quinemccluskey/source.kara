@@ -1,0 +1,413 @@
+// mini_quinemccluskey — a port of the quine-mccluskey library (Thomas Pircher,
+// MIT): the Quine–McCluskey algorithm, the classic tabular method for
+// minimising a Boolean function into a minimal sum of products. It is the
+// algorithmic backbone of digital-logic synthesis (reducing a truth table to
+// the fewest gates), and the same two-level minimisation shows up wherever a
+// set of boolean rules or conditions must be simplified.
+//
+// Each job gives a function as its ON-set (the minterms where the output is 1)
+// and an optional don't-care set, over `num_bits` input variables:
+//
+//     qm <num_bits> <ones-csv> <dc-csv>        (dc-csv is "-" when empty)
+//
+// and the port prints the minimal cover as implicant strings — one character
+// per variable, MSB first, where '1' means the variable is true, '0' false and
+// '-' means "don't care" (the variable drops out of that product term):
+//
+//     qm 4 2,6,10,14 - => 1
+//     --10
+//
+// Every job here is chosen so the minimal cover is UNIQUE — every prime
+// implicant is essential, so the cover is exactly the set of prime implicants.
+// That matters because the reference library walks Python sets, whose order is
+// per-process random; a unique cover is identical whatever that order is, which
+// is the one precondition for byte-identical output under `run` and `build`.
+//
+// Terms are character strings over {'0','1','-'}; "sets" are deduplicated Vecs
+// walked linearly, so the whole algorithm is integer/string only and the four
+// backends agree by construction. Kāra has no bitwise operators, so a bit of a
+// minterm is recovered with division and modulo: bit k is (m / 2^k) % 2.
+
+fn str_bytes(s: String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(b);
+    }
+    v
+}
+
+fn pow2(n: i64) -> i64 {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n {
+        r = r * 2;
+        i = i + 1;
+    }
+    r
+}
+
+fn itoa(n: i64) -> String {
+    if n == 0 {
+        return "0";
+    }
+    let neg = n < 0;
+    let mut v = if neg { -n } else { n };
+    let digs = str_bytes("0123456789");
+    let mut rev: Vec[u8] = Vec.new();
+    while v > 0 {
+        rev.push(digs[v % 10]);
+        v = v / 10;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if neg {
+        out.push(45);
+    }
+    let mut i = rev.len();
+    while i > 0 {
+        out.push(rev[i - 1]);
+        i = i - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn atoi(s: String) -> i64 {
+    let b = str_bytes(s);
+    let n = b.len();
+    let mut i = 0;
+    let mut neg = false;
+    if n > 0 and b[0] == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < n {
+        v = v * 10 + (b[i] as i64 - 48);
+        i = i + 1;
+    }
+    if neg { -v } else { v }
+}
+
+// split `s` on single-byte delimiter `d` into fields (empty fields kept).
+fn split_char(s: String, d: u8) -> Vec[String] {
+    let b = str_bytes(s.clone());
+    let n = b.len();
+    let mut out: Vec[String] = Vec.new();
+    let mut ls = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n or b[i] == d {
+            out.push(s.substring(ls, i));
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// parse a comma-separated list of ints; "-" yields the empty list.
+fn parse_csv(s: String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if s == "-" {
+        return out;
+    }
+    let parts = split_char(s, 44); // ','
+    for p in parts {
+        if p.len() > 0 {
+            out.push(atoi(p));
+        }
+    }
+    out
+}
+
+// minterm m as a bit string of length nbits, most significant bit first.
+fn num2str(m: i64, nbits: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = nbits - 1;
+    while k >= 0 {
+        let digit = (m / pow2(k)) % 2;
+        if digit == 1 {
+            out.push(49); // '1'
+        } else {
+            out.push(48); // '0'
+        }
+        k = k - 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn count_ones(t: String) -> i64 {
+    let mut n = 0;
+    for b in t.bytes() {
+        if b == 49 {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+// combine two equal-length terms if they differ in exactly one fixed bit
+// (and agree on every '-' position): that bit becomes '-'. "" means no combine.
+fn combine(t1: String, t2: String) -> String {
+    let a = str_bytes(t1.clone());
+    let b = str_bytes(t2);
+    let n = a.len();
+    let mut diff = 0;
+    let mut i = 0;
+    while i < n {
+        if a[i] != b[i] {
+            if a[i] == 45 or b[i] == 45 {
+                return "";
+            }
+            diff = diff + 1;
+        }
+        i = i + 1;
+    }
+    if diff != 1 {
+        return "";
+    }
+    let mut out: Vec[u8] = Vec.new();
+    i = 0;
+    while i < n {
+        if a[i] != b[i] {
+            out.push(45); // '-'
+        } else {
+            out.push(a[i]);
+        }
+        i = i + 1;
+    }
+    String.from_utf8(out).unwrap_or("")
+}
+
+fn contains(lst: ref Vec[String], x: String) -> bool {
+    for e in lst {
+        if e == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn add_uniq(lst: mut ref Vec[String], x: String) {
+    if not contains(lst, x.clone()) {
+        lst.push(x.clone());
+    }
+}
+
+// true if implicant `pi` matches minterm string `m` ('-' matches either bit).
+fn covers(pi: String, m: String) -> bool {
+    let p = str_bytes(pi);
+    let mb = str_bytes(m);
+    let n = p.len();
+    let mut i = 0;
+    while i < n {
+        if p[i] != 45 and p[i] != mb[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// all prime implicants of the term set (iterative pairwise reduction).
+fn prime_implicants(terms: Vec[String]) -> Vec[String] {
+    let mut pis: Vec[String] = Vec.new();
+    let mut current: Vec[String] = Vec.new();
+    for t in terms {
+        add_uniq(mut current, t);
+    }
+    while current.len() > 0 {
+        let mut used: Vec[String] = Vec.new();
+        let mut newterms: Vec[String] = Vec.new();
+        let n = current.len();
+        let mut a = 0;
+        while a < n {
+            let mut b = 0;
+            while b < n {
+                let t1 = current[a].clone();
+                let t2 = current[b].clone();
+                if count_ones(t2.clone()) == count_ones(t1.clone()) + 1 {
+                    let c = combine(t1.clone(), t2.clone());
+                    if c != "" {
+                        add_uniq(mut used, t1.clone());
+                        add_uniq(mut used, t2.clone());
+                        add_uniq(mut newterms, c);
+                    }
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        let mut i = 0;
+        while i < current.len() {
+            let t = current[i].clone();
+            if not contains(used, t.clone()) {
+                add_uniq(mut pis, t);
+            }
+            i = i + 1;
+        }
+        current = newterms;
+    }
+    pis
+}
+
+fn str_less(a: String, b: String) -> bool {
+    let ab = str_bytes(a);
+    let bb = str_bytes(b);
+    let mut n = ab.len();
+    if bb.len() < n {
+        n = bb.len();
+    }
+    let mut i = 0;
+    while i < n {
+        if ab[i] != bb[i] {
+            return ab[i] < bb[i];
+        }
+        i = i + 1;
+    }
+    ab.len() < bb.len()
+}
+
+fn sort_terms(lst: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for e in lst {
+        out.push(e.clone());
+    }
+    let n = out.len();
+    let mut i = 0;
+    while i < n {
+        let mut j = 0;
+        while j < n - 1 - i {
+            if str_less(out[j + 1].clone(), out[j].clone()) {
+                let tmp = out[j].clone();
+                out[j] = out[j + 1].clone();
+                out[j + 1] = tmp;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// minimal cover: the essential prime implicants. Returns them sorted. Every
+// job here is fully essential, so this is the complete, unique minimal cover.
+fn simplify(ones: Vec[i64], dc: Vec[i64], nbits: i64) -> Vec[String] {
+    let mut terms: Vec[String] = Vec.new();
+    for m in ones {
+        add_uniq(mut terms, num2str(m, nbits));
+    }
+    for m in dc {
+        add_uniq(mut terms, num2str(m, nbits));
+    }
+    let mut cover: Vec[String] = Vec.new();
+    if terms.len() == 0 {
+        return cover;
+    }
+    let pis = prime_implicants(terms);
+    let mut one_strs: Vec[String] = Vec.new();
+    for m in ones {
+        add_uniq(mut one_strs, num2str(m, nbits));
+    }
+    // an essential PI is the only prime implicant covering some ON minterm.
+    let mut i = 0;
+    while i < one_strs.len() {
+        let m = one_strs[i].clone();
+        let mut covering: Vec[String] = Vec.new();
+        let mut j = 0;
+        while j < pis.len() {
+            if covers(pis[j].clone(), m.clone()) {
+                add_uniq(mut covering, pis[j].clone());
+            }
+            j = j + 1;
+        }
+        if covering.len() == 1 {
+            add_uniq(mut cover, covering[0].clone());
+        }
+        i = i + 1;
+    }
+    sort_terms(cover)
+}
+
+fn run_job(line: String) -> String {
+    let toks = split_char(line.clone(), 32); // ' '
+    let nbits = atoi(toks[1].clone());
+    let ones = parse_csv(toks[2].clone());
+    let dc = parse_csv(toks[3].clone());
+    let cover = simplify(ones, dc, nbits);
+    let mut out = String.new();
+    out.push_str(line);
+    out.push_str(" => ");
+    out.push_str(itoa(cover.len()));
+    out.push_str("\n");
+    let mut i = 0;
+    while i < cover.len() {
+        if i > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(cover[i].clone());
+        i = i + 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let data = jobs_text();
+    let db = str_bytes(data.clone());
+    let n = db.len();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut ls = 0;
+    while i <= n {
+        if i == n or db[i] == 10 {
+            if i > ls {
+                let line = data.substring(ls, i);
+                out.push_str(run_job(line));
+                out.push_str("\n");
+            }
+            ls = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("qm 4 2,6,10,14 -\n");
+    s.push_str("qm 2 0 -\n");
+    s.push_str("qm 2 3 -\n");
+    s.push_str("qm 2 0,1,2,3 -\n");
+    s.push_str("qm 2 1,3 -\n");
+    s.push_str("qm 3 4,5,6,7 -\n");
+    s.push_str("qm 3 0,2,4,6 -\n");
+    s.push_str("qm 3 1,5 -\n");
+    s.push_str("qm 3 0,1,2,3,4,5,6,7 -\n");
+    s.push_str("qm 4 8,9,10,11,12,13,14,15 -\n");
+    s.push_str("qm 4 0,8 -\n");
+    s.push_str("qm 4 5,7,13,15 -\n");
+    s.push_str("qm 3 0,1,4,5 -\n");
+    s.push_str("qm 3 2,3,6,7 -\n");
+    s.push_str("qm 4 0,4,8,12 -\n");
+    s.push_str("qm 4 1,3,5,7,9,11,13,15 -\n");
+    s.push_str("qm 4 0,1,2,3,8,9,10,11 -\n");
+    s.push_str("qm 4 6,7,14,15 -\n");
+    s.push_str("qm 4 0,2,8,10 -\n");
+    s.push_str("qm 4 4,6,12,14 -\n");
+    s.push_str("qm 3 0,1 -\n");
+    s.push_str("qm 3 0,1,2,3,4,5 -\n");
+    s.push_str("qm 4 0,5,10,15 -\n");
+    s.push_str("qm 4 3,7,11,15 -\n");
+    s.push_str("qm 4 0,3,12,15 -\n");
+    s.push_str("qm 4 2,6,14 10\n");
+    s.push_str("qm 3 1,5,7 3\n");
+    s.push_str("qm 3 0,2,6 4\n");
+    s.push_str("qm 4 8,9,11 10\n");
+    s.push_str("qm 3 4,5,6 7\n");
+    s.push_str("qm 3 1,3,7 5\n");
+    s
+}
