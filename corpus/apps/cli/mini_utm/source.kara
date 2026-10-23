@@ -1,0 +1,646 @@
+// mini_utm — utm 0.9.0 (Tobias Bieniek), the bidirectional converter between
+// WGS84 latitude/longitude and Universal Transverse Mercator coordinates
+// that GIS scripts, drone and survey tooling, and map pipelines lean on. It
+// ports from_latlon (with the force_zone_number / force_zone_letter /
+// force_northern overrides), to_latlon (zone letter or hemisphere, strict or
+// not), the zone helpers (latitude_to_zone_letter, latlon_to_zone_number with
+// Norway's and Svalbard's special zones, zone_number_to_central_longitude,
+// zone_letter_to_central_latitude, check_valid_zone) and the `utm-converter`
+// command, with the library's exact OutOfRangeError and ValueError messages.
+//
+// The library runs on numpy when it is installed and on `math` otherwise; on
+// scalars the math path is the one that applies, and it is what is ported.
+// The series are transcribed term for term in the library's evaluation order
+// so every float rounds the same way. Python's `x**2` calls libm pow(), which
+// is not always the correctly rounded x*x (it differs for the cosine of
+// 12.99210956845755 degrees), so the port calls pow() too. math.radians and
+// math.degrees are a multiply by pi/180 and 180/pi; Python's float `%` is
+// fmod with the result moved into the divisor's sign. jobs_text() holds
+// data/jobs.tsv.
+
+const PI_F: f64 = 3.141592653589793;
+const SCALE_K0: f64 = 0.9996;
+const ECC: f64 = 0.00669438;
+const RADIUS: f64 = 6378137.0;
+const ZONE_LETTERS: Str = "CDEFGHJKLMNPQRSTUVWXX";
+
+struct Consts {
+    e_p2: f64,
+    m1: f64,
+    m2: f64,
+    m3: f64,
+    m4: f64,
+    p2: f64,
+    p3: f64,
+    p4: f64,
+    p5: f64,
+}
+
+fn consts() -> Consts {
+    let e = ECC;
+    let e2 = e * e;
+    let e3 = e2 * e;
+    let sqrt_e = (1.0 - e).sqrt();
+    let ee = (1.0 - sqrt_e) / (1.0 + sqrt_e);
+    let ee2 = ee * ee;
+    let ee3 = ee2 * ee;
+    let ee4 = ee3 * ee;
+    let ee5 = ee4 * ee;
+    Consts {
+        e_p2: e / (1.0 - e),
+        m1: 1.0 - e / 4.0 - 3.0 * e2 / 64.0 - 5.0 * e3 / 256.0,
+        m2: 3.0 * e / 8.0 + 3.0 * e2 / 32.0 + 45.0 * e3 / 1024.0,
+        m3: 15.0 * e2 / 256.0 + 45.0 * e3 / 1024.0,
+        m4: 35.0 * e3 / 3072.0,
+        p2: 3.0 / 2.0 * ee - 27.0 / 32.0 * ee3 + 269.0 / 512.0 * ee5,
+        p3: 21.0 / 16.0 * ee2 - 55.0 / 32.0 * ee4,
+        p4: 151.0 / 96.0 * ee3 - 417.0 / 128.0 * ee5,
+        p5: 1097.0 / 512.0 * ee4,
+    }
+}
+
+// ----------------------------------------------------------- small helpers
+
+fn split_on(s: String, sep: u8) -> Vec[String] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    for c in b {
+        if c == sep {
+            out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(String.from_utf8(cur).unwrap_or("?".to_string()));
+    out
+}
+
+fn to_i64(s: String) -> i64 {
+    let b = s.bytes().to_vec();
+    let mut i = 0;
+    let mut neg = false;
+    if b.len() > 0 and b[0] == b'-' {
+        neg = true;
+        i = 1;
+    }
+    let mut v = 0;
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
+}
+
+fn to_f64(s: String) -> f64 {
+    match f64.parse(s.clone()) {
+        Ok(v) => v,
+        Err(_) => 0.0,
+    }
+}
+
+fn upper(s: String) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.bytes().to_vec() {
+        if c >= b'a' and c <= b'z' {
+            out.push(c - 32);
+        } else {
+            out.push(c);
+        }
+    }
+    String.from_utf8(out).unwrap_or("?".to_string())
+}
+
+// Python's str comparison on ASCII: bytewise, a proper prefix is smaller.
+fn str_cmp(a: String, b: String) -> i64 {
+    let x = a.bytes().to_vec();
+    let y = b.bytes().to_vec();
+    let mut i = 0;
+    while i < x.len() and i < y.len() {
+        if x[i] != y[i] {
+            return if x[i] < y[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if x.len() < y.len() { -1 } else if x.len() > y.len() { 1 } else { 0 }
+}
+
+// Python's float %: fmod, then moved into the divisor's sign.
+fn py_mod(x: f64, w: f64) -> f64 {
+    let mut m = x % w;
+    if m != 0.0 {
+        if (w < 0.0) != (m < 0.0) {
+            m += w;
+        }
+    } else {
+        m = if w < 0.0 { -0.0 } else { 0.0 };
+    }
+    m
+}
+
+fn radians(x: f64) -> f64 {
+    x * (PI_F / 180.0)
+}
+
+fn degrees(x: f64) -> f64 {
+    x * (180.0 / PI_F)
+}
+
+fn mod_angle(v: f64) -> f64 {
+    py_mod(v + PI_F, 2.0 * PI_F) - PI_F
+}
+
+fn py_str_repr(s: String) -> String {
+    f"'{s}'"
+}
+
+// ----------------------------------------------------------- zone checks
+// Each check returns "" when the value is valid, else the exception line.
+
+const ERR_LETTER: Str = "OutOfRangeError: zone letter out of range (must be between C and X)";
+const ERR_NUMBER: Str = "OutOfRangeError: zone number out of range (must be between 1 and 60)";
+
+fn check_valid_zone_letter(zone_letter: String) -> String {
+    let z = upper(zone_letter);
+    let in_range = str_cmp("C".to_string(), z.clone()) <= 0 and str_cmp(z.clone(), "X".to_string()) <= 0;
+    if not in_range or z == "I" or z == "O" {
+        ERR_LETTER.to_string()
+    } else {
+        "".to_string()
+    }
+}
+
+fn check_valid_zone_number(zone_number: i64) -> String {
+    if zone_number < 1 or zone_number > 60 {
+        ERR_NUMBER.to_string()
+    } else {
+        "".to_string()
+    }
+}
+
+fn check_valid_zone(zone_number: i64, zone_letter: String) -> String {
+    let e = check_valid_zone_number(zone_number);
+    if e.len() > 0 {
+        return e;
+    }
+    if zone_letter.len() > 0 {
+        return check_valid_zone_letter(zone_letter);
+    }
+    "".to_string()
+}
+
+fn central_longitude(zone_number: i64) -> i64 {
+    (zone_number - 1) * 6 - 180 + 3
+}
+
+fn zone_letter_to_central_latitude(zone_letter: String) -> String {
+    let e = check_valid_zone_letter(zone_letter.clone());
+    if e.len() > 0 {
+        return e;
+    }
+    let z = upper(zone_letter);
+    if z == "X" {
+        return "78".to_string();
+    }
+    // ZONE_LETTERS.index(z): the first place z occurs as a substring.
+    let hay = ZONE_LETTERS.to_string().bytes().to_vec();
+    let needle = z.bytes().to_vec();
+    let mut at = -1;
+    let mut i = 0;
+    while at < 0 and i + needle.len() <= hay.len() {
+        let mut j = 0;
+        while j < needle.len() and hay[i + j] == needle[j] {
+            j += 1;
+        }
+        if j == needle.len() {
+            at = i;
+        }
+        i += 1;
+    }
+    if at < 0 {
+        return "ValueError: substring not found".to_string();
+    }
+    f"{-76 + at * 8}"
+}
+
+fn latitude_to_zone_letter(latitude: f64) -> String {
+    if latitude >= -80.0 and latitude <= 84.0 {
+        let idx = ((latitude + 80.0) as i64) >> 3;
+        ZONE_LETTERS.to_string().substring(idx, idx + 1)
+    } else {
+        "".to_string()
+    }
+}
+
+fn latlon_to_zone_number(latitude: f64, longitude_in: f64) -> i64 {
+    let longitude = py_mod(py_mod(longitude_in, 360.0) + 540.0, 360.0) - 180.0;
+    if latitude >= 56.0 and latitude < 64.0 and longitude >= 3.0 and longitude < 12.0 {
+        return 32;
+    }
+    if latitude >= 72.0 and latitude <= 84.0 and longitude >= 0.0 {
+        if longitude < 9.0 {
+            return 31;
+        } else if longitude < 21.0 {
+            return 33;
+        } else if longitude < 33.0 {
+            return 35;
+        } else if longitude < 42.0 {
+            return 37;
+        }
+    }
+    ((longitude + 180.0) / 6.0) as i64 + 1
+}
+
+// ----------------------------------------------------------- conversions
+
+struct LatLon {
+    err: String,
+    lat: f64,
+    lon: f64,
+}
+
+fn ll_err(e: own String) -> LatLon {
+    LatLon { err: e, lat: 0.0, lon: 0.0 }
+}
+
+// to_latlon. has_letter / has_north say which of zone_letter and northern
+// were passed (an empty zone letter counts as falsy, as in Python).
+fn to_latlon(easting: f64, northing: f64, zone_number: i64, zone_letter: String, has_north: bool, north_in: bool, strict: bool) -> LatLon {
+    let has_letter = zone_letter.len() > 0;
+    if not has_letter and not has_north {
+        return ll_err("ValueError: either zone_letter or northern needs to be set".to_string());
+    } else if has_letter and has_north {
+        return ll_err("ValueError: set either zone_letter or northern, but not both".to_string());
+    }
+    if strict {
+        if not (easting >= 100000.0 and easting < 1000000.0) {
+            return ll_err("OutOfRangeError: easting out of range (must be between 100,000 m and 999,999 m)".to_string());
+        }
+        if not (northing >= 0.0 and northing <= 10000000.0) {
+            return ll_err("OutOfRangeError: northing out of range (must be between 0 m and 10,000,000 m)".to_string());
+        }
+    }
+    let e = check_valid_zone(zone_number, zone_letter.clone());
+    if e.len() > 0 {
+        return ll_err(e);
+    }
+    let mut northern = north_in;
+    if has_letter {
+        northern = str_cmp(upper(zone_letter), "N".to_string()) >= 0;
+    }
+    let k = consts();
+    let x = easting - 500000.0;
+    let y = if northern { northing } else { northing - 10000000.0 };
+
+    let m = y / SCALE_K0;
+    let mu = m / (RADIUS * k.m1);
+
+    let p_rad = mu + k.p2 * (2.0 * mu).sin() + k.p3 * (4.0 * mu).sin() + k.p4 * (6.0 * mu).sin() + k.p5 * (8.0 * mu).sin();
+
+    let p_sin = p_rad.sin();
+    let p_sin2 = p_sin * p_sin;
+    let p_cos = p_rad.cos();
+
+    let p_tan = p_sin / p_cos;
+    let p_tan2 = p_tan * p_tan;
+    let p_tan4 = p_tan2 * p_tan2;
+
+    let ep_sin = 1.0 - ECC * p_sin2;
+    let ep_sin_sqrt = (1.0 - ECC * p_sin2).sqrt();
+
+    let n = RADIUS / ep_sin_sqrt;
+    let r = (1.0 - ECC) / ep_sin;
+
+    let c = k.e_p2 * p_cos.pow(2.0);
+    let c2 = c * c;
+
+    let d = x / (n * SCALE_K0);
+    let d2 = d * d;
+    let d3 = d2 * d;
+    let d4 = d3 * d;
+    let d5 = d4 * d;
+    let d6 = d5 * d;
+
+    let latitude = p_rad - (p_tan / r) * (d2 / 2.0 - d4 / 24.0 * (5.0 + 3.0 * p_tan2 + 10.0 * c - 4.0 * c2 - 9.0 * k.e_p2) + d6 / 720.0 * (61.0 + 90.0 * p_tan2 + 298.0 * c + 45.0 * p_tan4 - 252.0 * k.e_p2 - 3.0 * c2));
+
+    let mut longitude = (d - d3 / 6.0 * (1.0 + 2.0 * p_tan2 + c) + d5 / 120.0 * (5.0 - 2.0 * c + 28.0 * p_tan2 - 3.0 * c2 + 8.0 * k.e_p2 + 24.0 * p_tan4)) / p_cos;
+
+    longitude = mod_angle(longitude + radians(central_longitude(zone_number) as f64));
+
+    LatLon { err: "".to_string(), lat: degrees(latitude), lon: degrees(longitude) }
+}
+
+struct Utm {
+    err: String,
+    easting: f64,
+    northing: f64,
+    zone_number: i64,
+    // the zone letter as Python would repr it: 'U', '' or None
+    letter_repr: String,
+    letter: String,
+}
+
+fn utm_err(e: own String) -> Utm {
+    Utm { err: e, easting: 0.0, northing: 0.0, zone_number: 0, letter_repr: "".to_string(), letter: "".to_string() }
+}
+
+fn from_latlon(latitude: f64, longitude: f64, has_zn: bool, force_zn: i64, has_zl: bool, force_zl: String, has_north: bool, force_north: bool) -> Utm {
+    if not (latitude >= -80.0 and latitude <= 84.0) {
+        return utm_err("OutOfRangeError: latitude out of range (must be between 80 deg S and 84 deg N)".to_string());
+    }
+    if not (longitude >= -180.0 and longitude <= 180.0) {
+        return utm_err("OutOfRangeError: longitude out of range (must be between 180 deg W and 180 deg E)".to_string());
+    }
+    if has_zl and force_zl.len() > 0 and has_north {
+        return utm_err("ValueError: set either force_zone_letter or force_northern, but not both".to_string());
+    }
+    if has_zn {
+        let letter_arg = if has_zl { force_zl.clone() } else { "".to_string() };
+        let e = check_valid_zone(force_zn, letter_arg);
+        if e.len() > 0 {
+            return utm_err(e);
+        }
+    }
+    let k = consts();
+    let lat_rad = radians(latitude);
+    let lat_sin = lat_rad.sin();
+    let lat_cos = lat_rad.cos();
+
+    let lat_tan = lat_sin / lat_cos;
+    let lat_tan2 = lat_tan * lat_tan;
+    let lat_tan4 = lat_tan2 * lat_tan2;
+
+    let zone_number = if has_zn { force_zn } else { latlon_to_zone_number(latitude, longitude) };
+
+    // zone_letter is None only when force_northern is given without a letter.
+    let mut letter = "".to_string();
+    let mut letter_is_none = false;
+    if not has_zl and not has_north {
+        letter = latitude_to_zone_letter(latitude);
+    } else if has_zl {
+        letter = force_zl.clone();
+    } else {
+        letter_is_none = true;
+    }
+    let northern = if has_north { force_north } else { str_cmp(upper(letter.clone()), "N".to_string()) >= 0 };
+
+    let lon_rad = radians(longitude);
+    let central_lon_rad = radians(central_longitude(zone_number) as f64);
+
+    let n = RADIUS / (1.0 - ECC * lat_sin.pow(2.0)).sqrt();
+    let c = k.e_p2 * lat_cos.pow(2.0);
+
+    let a = lat_cos * mod_angle(lon_rad - central_lon_rad);
+    let a2 = a * a;
+    let a3 = a2 * a;
+    let a4 = a3 * a;
+    let a5 = a4 * a;
+    let a6 = a5 * a;
+
+    let m = RADIUS * (k.m1 * lat_rad - k.m2 * (2.0 * lat_rad).sin() + k.m3 * (4.0 * lat_rad).sin() - k.m4 * (6.0 * lat_rad).sin());
+
+    let easting = SCALE_K0 * n * (a + a3 / 6.0 * (1.0 - lat_tan2 + c) + a5 / 120.0 * (5.0 - 18.0 * lat_tan2 + lat_tan4 + 72.0 * c - 58.0 * k.e_p2)) + 500000.0;
+
+    let mut northing = SCALE_K0 * (m + n * lat_tan * (a2 / 2.0 + a4 / 24.0 * (5.0 - lat_tan2 + 9.0 * c + 4.0 * c.pow(2.0)) + a6 / 720.0 * (61.0 - 58.0 * lat_tan2 + lat_tan4 + 600.0 * c - 330.0 * k.e_p2)));
+    if not northern {
+        northing += 10000000.0;
+    }
+    let letter_repr = if letter_is_none { "None".to_string() } else { py_str_repr(letter.clone()) };
+    let letter_str = if letter_is_none { "None".to_string() } else { letter };
+    Utm { err: "".to_string(), easting: easting, northing: northing, zone_number: zone_number, letter_repr: letter_repr, letter: letter_str }
+}
+
+// ----------------------------------------------------------- driver
+
+fn is_none(s: String) -> bool {
+    s == "None"
+}
+
+fn run_job(f: Vec[String]) -> String {
+    let op = f[0].clone();
+    if op == "fl" {
+        let has_zn = not is_none(f[3].clone());
+        let zn = if has_zn { to_i64(f[3].clone()) } else { 0 };
+        let has_zl = not is_none(f[4].clone());
+        let has_north = not is_none(f[5].clone());
+        let u = from_latlon(to_f64(f[1].clone()), to_f64(f[2].clone()), has_zn, zn, has_zl, f[4].clone(), has_north, f[5] == "True");
+        if u.err.len() > 0 {
+            u.err
+        } else {
+            f"({u.easting}, {u.northing}, {u.zone_number}, {u.letter_repr})"
+        }
+    } else if op == "tl" {
+        let letter = if is_none(f[4].clone()) { "".to_string() } else { f[4].clone() };
+        let has_north = not is_none(f[5].clone());
+        let r = to_latlon(to_f64(f[1].clone()), to_f64(f[2].clone()), to_i64(f[3].clone()), letter, has_north, f[5] == "True", f[6] == "True");
+        if r.err.len() > 0 {
+            r.err
+        } else {
+            f"({r.lat}, {r.lon})"
+        }
+    } else if op == "zl" {
+        let z = latitude_to_zone_letter(to_f64(f[1].clone()));
+        if z.len() == 0 { "None".to_string() } else { py_str_repr(z) }
+    } else if op == "zn" {
+        f"{latlon_to_zone_number(to_f64(f[1].clone()), to_f64(f[2].clone()))}"
+    } else if op == "cl" {
+        let n = to_i64(f[1].clone());
+        let e = check_valid_zone_number(n);
+        if e.len() > 0 { e } else { f"{central_longitude(n)}" }
+    } else if op == "cz" {
+        zone_letter_to_central_latitude(f[1].clone())
+    } else if op == "cv" {
+        let e = check_valid_zone(to_i64(f[1].clone()), f[2].clone());
+        if e.len() > 0 { e } else { "None".to_string() }
+    } else {
+        f"unknown op {op}"
+    }
+}
+
+// The utm-converter script: `latlon LAT LON` or `utm E N ZONE LETTER`.
+fn cli(f: Vec[String]) -> Vec[String] {
+    let mut lines: Vec[String] = Vec.new();
+    if f[1] == "latlon" {
+        let u = from_latlon(to_f64(f[2].clone()), to_f64(f[3].clone()), false, 0, false, "".to_string(), false, false);
+        lines.push(f"{u.easting},{u.northing},{u.zone_number},{u.letter}");
+    } else {
+        if f[5].len() == 0 {
+            lines.push("usage: utm-converter utm [-h] easting northing zone_number zone_letter".to_string());
+            lines.push("utm-converter utm: error: too few arguments".to_string());
+        } else {
+            let r = to_latlon(to_i64(f[2].clone()) as f64, to_i64(f[3].clone()) as f64, to_i64(f[4].clone()), f[5].clone(), false, false, true);
+            lines.push(f"{r.lat},{r.lon}");
+        }
+    }
+    lines
+}
+
+fn join_args(f: Vec[String]) -> String {
+    let mut out = String.new();
+    let mut i = 1;
+    while i < f.len() {
+        if i > 1 {
+            out.push_str(", ");
+        }
+        out.push_str(f[i]);
+        i += 1;
+    }
+    out
+}
+
+fn main_run() -> String {
+    let mut out = String.new();
+    for line in split_on(jobs_text(), b'\n') {
+        if line.len() > 0 {
+            let f = split_on(line, b'\t');
+            if f[0] == "cli" {
+                out.push_str(f"cli({join_args(f.clone())}):\n");
+                for ln in cli(f) {
+                    out.push_str(f"  {ln}\n");
+                }
+            } else {
+                out.push_str(f"{f[0]}({join_args(f.clone())}) => {run_job(f)}\n");
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    print(main_run());
+}
+
+// data/jobs.tsv, as mk.py writes it.
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("fl\t50.77535\t6.08389\tNone\tNone\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\tNone\tNone\tNone\n");
+    s.push_str("fl\t-41.28646\t174.77624\tNone\tNone\tNone\n");
+    s.push_str("fl\t-33.92487\t18.42406\tNone\tNone\tNone\n");
+    s.push_str("fl\t-32.89018\t-68.84405\tNone\tNone\tNone\n");
+    s.push_str("fl\t64.83778\t-147.71639\tNone\tNone\tNone\n");
+    s.push_str("fl\t35.6812\t139.7671\tNone\tNone\tNone\n");
+    s.push_str("fl\t-33.8568\t151.2153\tNone\tNone\tNone\n");
+    s.push_str("fl\t51.4778\t-0.0015\tNone\tNone\tNone\n");
+    s.push_str("fl\t60.39299\t5.32415\tNone\tNone\tNone\n");
+    s.push_str("fl\t78.22317\t15.6267\tNone\tNone\tNone\n");
+    s.push_str("fl\t79.0\t5.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t80.0\t25.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t81.0\t40.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t64.1466\t-21.9426\tNone\tNone\tNone\n");
+    s.push_str("fl\t-0.1807\t-78.4678\tNone\tNone\tNone\n");
+    s.push_str("fl\t0.0\t0.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t-0.0\t3.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t-77.8463\t166.6683\tNone\tNone\tNone\n");
+    s.push_str("fl\t-80.0\t-180.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t84.0\t180.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t84.0\t-180.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t-80.0\t179.99999999999997\tNone\tNone\tNone\n");
+    s.push_str("fl\t12.99210956845755\t13.499569405566604\tNone\tNone\tNone\n");
+    s.push_str("fl\t12.99210956845755\t13.499569405566604\t50\tNone\tNone\n");
+    s.push_str("fl\t50.77535\t6.08389\t31\tNone\tNone\n");
+    s.push_str("fl\t50.77535\t6.08389\t32\tu\tNone\n");
+    s.push_str("fl\t-33.92487\t18.42406\t34\tNone\tTrue\n");
+    s.push_str("fl\t-33.92487\t18.42406\tNone\tNone\tFalse\n");
+    s.push_str("fl\t40.71435\t-74.00597\t18\tS\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\tNone\tZ\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\t0\tNone\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\t61\tNone\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\t18\tI\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\t18\tO\tNone\n");
+    s.push_str("fl\t40.71435\t-74.00597\t18\tT\tTrue\n");
+    s.push_str("fl\t40.71435\t-74.00597\t18\t\tTrue\n");
+    s.push_str("fl\t-41.28646\t174.77624\t1\tNone\tNone\n");
+    s.push_str("fl\t84.1\t0.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t-80.5\t0.0\tNone\tNone\tNone\n");
+    s.push_str("fl\t0.0\t180.5\tNone\tNone\tNone\n");
+    s.push_str("fl\t0.0\t-181.0\tNone\tNone\tNone\n");
+    s.push_str("tl\t294409.0\t5628898.0\t32\tU\tNone\tTrue\n");
+    s.push_str("tl\t583960.0\t4507523.0\t18\tT\tNone\tTrue\n");
+    s.push_str("tl\t313784.0\t5427057.0\t60\tG\tNone\tTrue\n");
+    s.push_str("tl\t261878.0\t6243186.0\t34\tH\tNone\tTrue\n");
+    s.push_str("tl\t514586.0\t6360877.0\t19\th\tNone\tTrue\n");
+    s.push_str("tl\t466013.0\t7190568.0\t6\tW\tNone\tTrue\n");
+    s.push_str("tl\t294409.0\t5628898.0\t32\tNone\tTrue\tTrue\n");
+    s.push_str("tl\t313784.0\t5427057.0\t60\tNone\tFalse\tTrue\n");
+    s.push_str("tl\t500000.0\t0.0\t31\tN\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t10000000.0\t31\tM\tNone\tTrue\n");
+    s.push_str("tl\t100000.0\t9000000.0\t1\tX\tNone\tTrue\n");
+    s.push_str("tl\t999999.0\t1234.5\t60\tC\tNone\tTrue\n");
+    s.push_str("tl\t166021.44317933032\t0.0\t31\tNone\tTrue\tTrue\n");
+    s.push_str("tl\t99999.0\t5000000.0\t32\tU\tNone\tTrue\n");
+    s.push_str("tl\t1000000.0\t5000000.0\t32\tU\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t-1.0\t32\tU\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t10000001.0\t32\tU\tNone\tTrue\n");
+    s.push_str("tl\t50000.0\t5000000.0\t32\tU\tNone\tFalse\n");
+    s.push_str("tl\t1200000.0\t-5.0\t32\tNone\tTrue\tFalse\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\tNone\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\tU\tTrue\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t0\tU\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t61\tU\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\tI\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\tB\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\tY\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\t\tNone\tTrue\n");
+    s.push_str("tl\t500000.0\t5000000.0\t32\t\tFalse\tTrue\n");
+    s.push_str("zl\t-80.0\n");
+    s.push_str("zl\t-79.9\n");
+    s.push_str("zl\t-72.0\n");
+    s.push_str("zl\t-0.1\n");
+    s.push_str("zl\t0.0\n");
+    s.push_str("zl\t7.99\n");
+    s.push_str("zl\t8.0\n");
+    s.push_str("zl\t71.9\n");
+    s.push_str("zl\t72.0\n");
+    s.push_str("zl\t79.99\n");
+    s.push_str("zl\t80.0\n");
+    s.push_str("zl\t84.0\n");
+    s.push_str("zl\t84.5\n");
+    s.push_str("zl\t-80.5\n");
+    s.push_str("zn\t0.0\t-180.0\n");
+    s.push_str("zn\t0.0\t180.0\n");
+    s.push_str("zn\t0.0\t179.9\n");
+    s.push_str("zn\t0.0\t540.0\n");
+    s.push_str("zn\t0.0\t-545.5\n");
+    s.push_str("zn\t56.0\t3.0\n");
+    s.push_str("zn\t63.99\t11.99\n");
+    s.push_str("zn\t64.0\t5.0\n");
+    s.push_str("zn\t55.99\t5.0\n");
+    s.push_str("zn\t72.0\t0.0\n");
+    s.push_str("zn\t84.0\t41.99\n");
+    s.push_str("zn\t71.99\t8.0\n");
+    s.push_str("zn\t85.0\t20.0\n");
+    s.push_str("zn\t0.0\t-0.0\n");
+    s.push_str("cl\t1\n");
+    s.push_str("cl\t30\n");
+    s.push_str("cl\t31\n");
+    s.push_str("cl\t60\n");
+    s.push_str("cl\t0\n");
+    s.push_str("cl\t61\n");
+    s.push_str("cl\t-3\n");
+    s.push_str("cz\tC\n");
+    s.push_str("cz\tM\n");
+    s.push_str("cz\tN\n");
+    s.push_str("cz\tW\n");
+    s.push_str("cz\tX\n");
+    s.push_str("cz\tx\n");
+    s.push_str("cz\th\n");
+    s.push_str("cz\tI\n");
+    s.push_str("cz\tO\n");
+    s.push_str("cz\tA\n");
+    s.push_str("cz\tY\n");
+    s.push_str("cz\tCX\n");
+    s.push_str("cv\t32\tU\n");
+    s.push_str("cv\t32\t\n");
+    s.push_str("cv\t0\tU\n");
+    s.push_str("cv\t32\tQ\n");
+    s.push_str("cv\t32\to\n");
+    s.push_str("cli\tlatlon\t50.77535\t6.08389\n");
+    s.push_str("cli\tlatlon\t-33.92487\t18.42406\n");
+    s.push_str("cli\tlatlon\t60.39299\t5.32415\n");
+    s.push_str("cli\tutm\t294409\t5628898\t32\tU\n");
+    s.push_str("cli\tutm\t313784\t5427057\t60\tG\n");
+    s.push_str("cli\tutm\t583960\t4507523\t18\t\n");
+    s
+}

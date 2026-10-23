@@ -1,0 +1,135 @@
+fl(50.77535, 6.08389, None, None, None) => (294408.9171386983, 5628897.997839693, 32, 'U')
+fl(40.71435, -74.00597, None, None, None) => (583959.9590449499, 4507523.087089199, 18, 'T')
+fl(-41.28646, 174.77624, None, None, None) => (313784.3058113374, 5427057.321855214, 60, 'G')
+fl(-33.92487, 18.42406, None, None, None) => (261877.81637467715, 6243185.58920387, 34, 'H')
+fl(-32.89018, -68.84405, None, None, None) => (514586.22783633356, 6360876.824955465, 19, 'H')
+fl(64.83778, -147.71639, None, None, None) => (466013.2722378757, 7190567.999434661, 6, 'W')
+fl(35.6812, 139.7671, None, None, None) => (388433.3746207064, 3949290.0135796187, 54, 'S')
+fl(-33.8568, 151.2153, None, None, None) => (334900.5696506013, 6252288.752863666, 56, 'H')
+fl(51.4778, -0.0015, None, None, None) => (708213.9506166289, 5707224.543012919, 30, 'U')
+fl(60.39299, 5.32415, None, None, None) => (297477.3069928783, 6700830.06397855, 32, 'V')
+fl(78.22317, 15.6267, None, None, None) => (514278.7509630344, 8683352.122379752, 33, 'X')
+fl(79.0, 5.0, None, None, None) => (542594.1345552698, 8770703.843466666, 31, 'X')
+fl(80.0, 25.0, None, None, None) => (461235.9422850323, 8882252.170427462, 35, 'X')
+fl(81.0, 40.0, None, None, None) => (517463.5154595396, 8993354.877979504, 37, 'X')
+fl(64.1466, -21.9426, None, None, None) => (454138.3765158411, 7113689.869814517, 27, 'W')
+fl(-0.1807, -78.4678, None, None, None) => (781861.4574242751, 9980007.566888703, 17, 'M')
+fl(0.0, 0.0, None, None, None) => (166021.4431793313, 0.0, 31, 'N')
+fl(-0.0, 3.0, None, None, None) => (500000.0, 0.0, 31, 'N')
+fl(-77.8463, 166.6683, None, None, None) => (539204.2772857655, 1358225.3078418933, 58, 'C')
+fl(-80.0, -180.0, None, None, None) => (441867.7848678133, 1116915.0433225483, 1, 'C')
+fl(84.0, 180.0, None, None, None) => (465005.3449388192, 9329005.18298811, 1, 'X')
+fl(84.0, -180.0, None, None, None) => (465005.3449388195, 9329005.18298811, 1, 'X')
+fl(-80.0, 179.99999999999997, None, None, None) => (441867.78486781276, 1116915.0433225483, 1, 'C')
+fl(12.99210956845755, 13.499569405566604, None, None, None) => (337269.2908982296, 1436742.2587359243, 33, 'P')
+fl(12.99210956845755, 13.499569405566604, 50, None, None) => (-19942576.829312727, 10277985.239278635, 50, 'P')
+fl(50.77535, 6.08389, 31, None, None) => (717417.6564355969, 5629378.1450078515, 31, 'U')
+fl(50.77535, 6.08389, 32, u, None) => (294408.9171386983, 5628897.997839693, 32, 'u')
+fl(-33.92487, 18.42406, 34, None, True) => (261877.81637467715, -3756814.41079613, 34, None)
+fl(-33.92487, 18.42406, None, None, False) => (261877.81637467715, 6243185.58920387, 34, None)
+fl(40.71435, -74.00597, 18, S, None) => (583959.9590449499, 4507523.087089199, 18, 'S')
+fl(40.71435, -74.00597, None, Z, None) => (583959.9590449499, 4507523.087089199, 18, 'Z')
+fl(40.71435, -74.00597, 0, None, None) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+fl(40.71435, -74.00597, 61, None, None) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+fl(40.71435, -74.00597, 18, I, None) => OutOfRangeError: zone letter out of range (must be between C and X)
+fl(40.71435, -74.00597, 18, O, None) => OutOfRangeError: zone letter out of range (must be between C and X)
+fl(40.71435, -74.00597, 18, T, True) => ValueError: set either force_zone_letter or force_northern, but not both
+fl(40.71435, -74.00597, 18, , True) => (583959.9590449499, 4507523.087089199, 18, '')
+fl(-41.28646, 174.77624, 1, None, None) => (-188931.89365099557, 5396698.929604941, 1, 'G')
+fl(84.1, 0.0, None, None, None) => OutOfRangeError: latitude out of range (must be between 80 deg S and 84 deg N)
+fl(-80.5, 0.0, None, None, None) => OutOfRangeError: latitude out of range (must be between 80 deg S and 84 deg N)
+fl(0.0, 180.5, None, None, None) => OutOfRangeError: longitude out of range (must be between 180 deg W and 180 deg E)
+fl(0.0, -181.0, None, None, None) => OutOfRangeError: longitude out of range (must be between 180 deg W and 180 deg E)
+tl(294409.0, 5628898.0, 32, U, None, True) => (50.77535005146448, 6.083891167944401)
+tl(583960.0, 4507523.0, 18, T, None, True) => (40.71434921189538, -74.00596952684724)
+tl(313784.0, 5427057.0, 60, G, None, True) => (-41.2864628270766, 174.77623625173158)
+tl(261878.0, 6243186.0, 34, H, None, True) => (-33.92486634006145, 18.424062094988543)
+tl(514586.0, 6360877.0, 19, h, None, True) => (-32.890178423765846, -68.84405243869196)
+tl(466013.0, 7190568.0, 6, W, None, True) => (64.83777998404308, -147.7163957381391)
+tl(294409.0, 5628898.0, 32, None, True, True) => (50.77535005146448, 6.083891167944401)
+tl(313784.0, 5427057.0, 60, None, False, True) => (-41.2864628270766, 174.77623625173158)
+tl(500000.0, 0.0, 31, N, None, True) => (0.0, 2.9999999999999916)
+tl(500000.0, 10000000.0, 31, M, None, True) => (0.0, 2.9999999999999916)
+tl(100000.0, 9000000.0, 1, X, None, True) => (80.375509067338, 161.0528313718463)
+tl(999999.0, 1234.5, 60, C, None, True) => (-26599647036735.336, -113.5642343217981)
+tl(166021.44317933032, 0.0, 31, None, True, True) => (0.0, 1.2752752050796116e-10)
+tl(99999.0, 5000000.0, 32, U, None, True) => OutOfRangeError: easting out of range (must be between 100,000 m and 999,999 m)
+tl(1000000.0, 5000000.0, 32, U, None, True) => OutOfRangeError: easting out of range (must be between 100,000 m and 999,999 m)
+tl(500000.0, -1.0, 32, U, None, True) => OutOfRangeError: northing out of range (must be between 0 m and 10,000,000 m)
+tl(500000.0, 10000001.0, 32, U, None, True) => OutOfRangeError: northing out of range (must be between 0 m and 10,000,000 m)
+tl(50000.0, 5000000.0, 32, U, None, False) => (45.0104697886426, 3.2894060885937564)
+tl(1200000.0, -5.0, 32, None, True, False) => (-4.496344834039108e-05, 15.278037713077678)
+tl(500000.0, 5000000.0, 32, None, None, True) => ValueError: either zone_letter or northern needs to be set
+tl(500000.0, 5000000.0, 32, U, True, True) => ValueError: set either zone_letter or northern, but not both
+tl(500000.0, 5000000.0, 0, U, None, True) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+tl(500000.0, 5000000.0, 61, U, None, True) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+tl(500000.0, 5000000.0, 32, I, None, True) => OutOfRangeError: zone letter out of range (must be between C and X)
+tl(500000.0, 5000000.0, 32, B, None, True) => OutOfRangeError: zone letter out of range (must be between C and X)
+tl(500000.0, 5000000.0, 32, Y, None, True) => OutOfRangeError: zone letter out of range (must be between C and X)
+tl(500000.0, 5000000.0, 32, , None, True) => ValueError: either zone_letter or northern needs to be set
+tl(500000.0, 5000000.0, 32, , False, True) => (-45.15347718270705, 9.0)
+zl(-80.0) => 'C'
+zl(-79.9) => 'C'
+zl(-72.0) => 'D'
+zl(-0.1) => 'M'
+zl(0.0) => 'N'
+zl(7.99) => 'N'
+zl(8.0) => 'P'
+zl(71.9) => 'W'
+zl(72.0) => 'X'
+zl(79.99) => 'X'
+zl(80.0) => 'X'
+zl(84.0) => 'X'
+zl(84.5) => None
+zl(-80.5) => None
+zn(0.0, -180.0) => 1
+zn(0.0, 180.0) => 1
+zn(0.0, 179.9) => 60
+zn(0.0, 540.0) => 1
+zn(0.0, -545.5) => 60
+zn(56.0, 3.0) => 32
+zn(63.99, 11.99) => 32
+zn(64.0, 5.0) => 31
+zn(55.99, 5.0) => 31
+zn(72.0, 0.0) => 31
+zn(84.0, 41.99) => 37
+zn(71.99, 8.0) => 32
+zn(85.0, 20.0) => 34
+zn(0.0, -0.0) => 31
+cl(1) => -177
+cl(30) => -3
+cl(31) => 3
+cl(60) => 177
+cl(0) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+cl(61) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+cl(-3) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+cz(C) => -76
+cz(M) => -4
+cz(N) => 4
+cz(W) => 68
+cz(X) => 78
+cz(x) => 78
+cz(h) => -36
+cz(I) => OutOfRangeError: zone letter out of range (must be between C and X)
+cz(O) => OutOfRangeError: zone letter out of range (must be between C and X)
+cz(A) => OutOfRangeError: zone letter out of range (must be between C and X)
+cz(Y) => OutOfRangeError: zone letter out of range (must be between C and X)
+cz(CX) => ValueError: substring not found
+cv(32, U) => None
+cv(32, ) => None
+cv(0, U) => OutOfRangeError: zone number out of range (must be between 1 and 60)
+cv(32, Q) => None
+cv(32, o) => OutOfRangeError: zone letter out of range (must be between C and X)
+cli(latlon, 50.77535, 6.08389):
+  294408.9171386983,5628897.997839693,32,U
+cli(latlon, -33.92487, 18.42406):
+  261877.81637467715,6243185.58920387,34,H
+cli(latlon, 60.39299, 5.32415):
+  297477.3069928783,6700830.06397855,32,V
+cli(utm, 294409, 5628898, 32, U):
+  50.77535005146448,6.083891167944401
+cli(utm, 313784, 5427057, 60, G):
+  -41.2864628270766,174.77623625173158
+cli(utm, 583960, 4507523, 18, ):
+  usage: utm-converter utm [-h] easting northing zone_number zone_letter
+  utm-converter utm: error: too few arguments
