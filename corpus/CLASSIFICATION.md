@@ -17,10 +17,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | bucket | programs |
 |---|---|
 | a | 5769 |
-| e-spec | 2876 |
+| e-spec | 2878 |
 | a:refused | 326 |
 | b->a | 238 |
-| b->e-spec | 65 |
+| b->e-spec | 63 |
 | check-refuses | 60 |
 | b-fix-incomplete | 35 |
 | c-unreviewed | 31 |

@@ -1181,6 +1181,19 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-23-2 — a named local passed where the parameter's type is a
+    /// `ref T` lends it, also when the parameter is declared by value and
+    /// its type parameter is the reference: `m.get(k).unwrap_or(empty)` on
+    /// an `Option[ref Vec[i64]]` borrows `empty` (`default: own T` with
+    /// `T = ref Vec[i64]`), as `m.get(k) ?? empty` does and as the MIR
+    /// builder lowers both. Not inside a closure body, where the same span
+    /// also carries the closure's by-move capture into a task.
+    pub(super) fn note_named_arg_lent_into_ref(&mut self, arg: &Expr, slot: &Type) {
+        if self.cli_lint_overrides.strict_core && self.closure_return_types.is_empty() {
+            self.note_view_lent_into_ref(arg, slot, true);
+        }
+    }
+
     /// B-2026-10-14-10 — whether a tuple literal of element types `found`
     /// fits the slot `expected` when each `ref` slot lends its element, as a
     /// `let r: ref Node = c` does. Nested tuples are asked the same question.
@@ -3803,6 +3816,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     self.check_expr(&arg.value, param_ty)
                 };
+                self.note_named_arg_lent_into_ref(&arg.value, param_ty);
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
                 // B-2026-08-26-37 — a call ARGUMENT is a value position exactly

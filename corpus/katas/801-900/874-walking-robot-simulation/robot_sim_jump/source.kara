@@ -41,16 +41,16 @@ fn robot_sim(commands: Vec[i64], obstacles: Vec[Vec[i64]]) -> i64 {
         } else {
             let k = *c;
             if facing == 0 {
-                let line = columns.get(x).cloned().unwrap_or(empty.clone());
+                let line = columns.get(x).unwrap_or(empty);
                 y = ahead(line, y, y + k);
             } else if facing == 2 {
-                let line = columns.get(x).cloned().unwrap_or(empty.clone());
+                let line = columns.get(x).unwrap_or(empty);
                 y = behind(line, y, y - k);
             } else if facing == 1 {
-                let line = rows.get(y).cloned().unwrap_or(empty.clone());
+                let line = rows.get(y).unwrap_or(empty);
                 x = ahead(line, x, x + k);
             } else {
-                let line = rows.get(y).cloned().unwrap_or(empty.clone());
+                let line = rows.get(y).unwrap_or(empty);
                 x = behind(line, x, x - k);
             }
             best = best.max(x * x + y * y);

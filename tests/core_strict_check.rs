@@ -11912,3 +11912,39 @@ fn an_import_from_no_module_is_refused_outside_a_package() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A named place passed as the default of `unwrap_or` on an `Option[ref T]`
+/// is lent, as under `??`: `default: own T` with `T = ref Vec[i64]` borrows
+/// `empty`, in a loop and before a later use (B-2026-10-23-2). An owned
+/// `Option[Vec]` default still moves it.
+#[test]
+fn a_named_default_of_an_option_ref_is_lent() {
+    accepted_and_runs(
+        "unwrap-or-named-default",
+        "fn main() {
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.insert(1, [5, 1]);
+    let empty: Vec[i64] = Vec.new();
+    for k in 0..3 {
+        let line = m.get(k).unwrap_or(empty);
+        let alt = m.get(k) ?? empty;
+        println(f\"{k} {line.len()} {alt.len()}\");
+    }
+    let last = m.get(9).unwrap_or(empty);
+    println(f\"{last.len()} {empty.len()}\");
+}
+",
+        "0 0 0\n1 2 2\n2 0 0\n0 0\n",
+    );
+    rejected(
+        "unwrap-or-owned-default",
+        "fn main() {
+    let o: Option[Vec[i64]] = None;
+    let empty: Vec[i64] = Vec.new();
+    let a = o.unwrap_or(empty);
+    println(f\"{a.len()} {empty.len()}\");
+}
+",
+        "value 'empty' moved here, used again here",
+    );
+}
