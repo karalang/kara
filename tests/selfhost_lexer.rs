@@ -765,6 +765,7 @@ fn escape_for_render(s: &str) -> String {
 }
 
 #[test]
+#[ignore = "v2 gap after M3: the v2 build refuses this selfhost/ port (it is legacy dialect), and the legacy build that accepted it is gone"]
 fn selfhost_lexer_matches_rust_lexer() {
     // 1. Build the generated program: the crate-root module of the split
     //    self-hosted lexer (`selfhost/src/main.kara` = imports + `render` +

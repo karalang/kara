@@ -515,6 +515,7 @@ fn backend_main_test_kara_parses_and_typechecks() {
 /// `backend_main_kara_typechecks_cleanly` covers) but fail codegen.
 #[cfg(feature = "llvm")]
 #[test]
+#[ignore = "v2 gap after M3: the backend scaffold calls `Server.serve_ws`, which comes with the services track (M4a)"]
 fn backend_main_kara_codegens_to_executable() {
     use std::process::Command;
     // Locate the runtime archive — same convention as

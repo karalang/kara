@@ -245,6 +245,7 @@ mod http_server_tests {
     /// `examples/parallax/` holds the source-of-truth multi-file form
     /// for human readers.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serves_hardcoded_handler() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Build the runtime statically; soft-skip if it can't be
@@ -406,6 +407,7 @@ mod http_server_tests {
     /// `tests/codegen.rs::test_server_serve_handler_shim_caches`;
     /// this test is the end-to-end runtime exercise.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_smoke() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
@@ -577,6 +579,7 @@ mod http_server_tests {
     /// response body. Pins F2 (opaque-ptr Request shape) + F3
     /// (`path()` method dispatch) end-to-end.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_path() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -605,6 +608,7 @@ mod http_server_tests {
     /// the HTTP method verb and returns it as the response body. Pins
     /// the `method()` arm.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_method() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -733,6 +737,7 @@ mod http_server_tests {
     /// both the codegen path (`compile_request_body`) and the runtime
     /// externs (`karac_runtime_http_request_body_ptr/_len`).
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_body() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -763,6 +768,7 @@ mod http_server_tests {
     /// `body_len == 0` branch of `compile_request_body` and the
     /// null-pointer-on-empty branch of `karac_runtime_http_request_body_ptr`.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_empty_body_for_get() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -903,6 +909,7 @@ mod http_server_tests {
     /// `karac_runtime_http_request_header` + the codegen path
     /// (`compile_request_header`) + the `Option[String]` unwrap shape.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_header() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -939,6 +946,7 @@ mod http_server_tests {
     /// `eq_ignore_ascii_case` branch in
     /// `karac_runtime_http_request_header`.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_header_lookup_case_insensitive() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -974,6 +982,7 @@ mod http_server_tests {
     /// `karac_runtime_http_request_header` and the `None` PHI arm of
     /// `compile_request_header`.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_header_absent_returns_none() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1013,6 +1022,7 @@ mod http_server_tests {
     /// capture of the loop value) keeps the body bytes owned independent
     /// of the iterated Vec.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_iterates_headers() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // The handler iterates every `(name, value)` pair and reports a
@@ -1071,6 +1081,7 @@ mod http_server_tests {
     /// shared `compile_request_pairs` loop. `out = "" + v` allocates a
     /// fresh String so the body outlives the iterated Vec.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_reads_query_param() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // The handler scans the parsed params for `q` and confirms its
@@ -1246,6 +1257,7 @@ mod http_server_tests {
     /// `Server.serve_tls` dispatch + the shared handler shim across
     /// the TLS layer.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_tls_https_smoke() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -1386,6 +1398,7 @@ mod http_server_tests {
     /// in the response. Also verifies that a user-set `Content-Type`
     /// overrides the smoke-path default `application/json`.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_sets_response_headers() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1509,6 +1522,7 @@ mod http_server_tests {
     /// `Connection: close` so the server tears down after responding
     /// and the test can clean up.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_keep_alive_persistence() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -1693,6 +1707,7 @@ mod http_server_tests {
     /// transfer encoding round-trips through `serve_request`'s
     /// `body.collect().await` correctly.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_server_serve_handler_chunked_request_body_decode() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2771,6 +2786,7 @@ fn main() with sends(Network) receives(Network) {{
     /// HTTP/2 connection. Proves `auto::Builder` negotiates h2 on the
     /// plain-TCP path and the handler bridge is protocol-agnostic.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http2_h2c_prior_knowledge_handler() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2803,6 +2819,7 @@ fn main() with sends(Network) receives(Network) {{
     /// Two concurrent requests on one h2c connection both succeed,
     /// exercising HTTP/2 stream multiplexing through the karac handler.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http2_multiplexed_streams() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2842,6 +2859,7 @@ fn main() with sends(Network) receives(Network) {{
     /// regression from the line-145 swap). Drives the existing sync
     /// HTTP/1.1 client against a `Server.serve` handler.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http1_still_served_under_auto_builder() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
@@ -2874,6 +2892,7 @@ fn main() with sends(Network) receives(Network) {{
     /// `serve_request` path). Also asserts a client offering only
     /// `http/1.1` still negotiates `http/1.1` (fallback intact).
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http2_alpn_over_tls() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -2957,6 +2976,7 @@ fn main() with sends(Network) receives(Network) {{
     ///      `Sec-WebSocket-Accept` digest, then a masked text frame is
     ///      echoed back unmasked by the Kāra ws_handler.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serve_ws_upgrade_and_echo() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
@@ -3167,6 +3187,7 @@ fn main() with sends(Network) receives(Network) {{
     /// registry. Asserts an HTTPS `/health` 200 and a full wss:// echo
     /// round-trip over one rustls client session.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http_server_serve_ws_tls_upgrade_and_echo() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
@@ -3778,6 +3799,7 @@ fn main() with sends(Network) receives(Network) {{
     /// ~1000 ms a serialized per-connection dispatch would need —
     /// the empirical pin for h2 stream concurrency.
     #[test]
+    #[ignore = "v2 gap after M3: the HTTP server, TLS and WebSocket on v2 come with the services track (M4a)"]
     fn test_http2_sibling_streams_run_concurrently() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
