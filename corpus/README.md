@@ -1,13 +1,21 @@
 # Program corpus
 
 Every runnable Kāra program the project has, as plain files, so that every
-backend can be measured against the same expectations: the legacy interpreter
-and AOT backend now, and the MIR pipeline as it lands (v2 plan, M0).
+backend can be measured against the same expectations. It was built against
+the legacy interpreter and AOT backend (v2 plan, M0) and now measures the v2
+pipeline.
+
+**The legacy record is archived.** The legacy pipeline went at M3, and nothing
+in `scripts/corpus/` runs it any more. Each program's `legacy.out` and the
+`legacy_*` keys in its `meta.toml` are what that pipeline printed when the
+program was recorded; `record.py` and `classify.py` read them and never write
+them. A program added from now on has no `legacy.out`, so it needs an
+`expected.out` of its own (`expected_from` = `pin`, `spec` or `mirror`).
 
 ```
 corpus/<area>/<name>/source.kara       the program
 corpus/<area>/<name>/source.orig.kara  the program before `karac fix` or a hand edit (only when changed)
-corpus/<area>/<name>/legacy.out        stdout of one run on today's compiler, recorded at extraction
+corpus/<area>/<name>/legacy.out        stdout of one run on the legacy compiler (archived; nothing rewrites it)
 corpus/<area>/<name>/expected.out      what the runner compares against
 corpus/<area>/<name>/meta.toml
 ```
@@ -86,30 +94,25 @@ verdict.
 
 ```bash
 cargo build --features llvm
-python3 scripts/corpus/run.py --backend legacy          # each program on the backend it was recorded on
-python3 scripts/corpus/run.py --backend legacy --exclude core --exclude drop-matrix   # M0 check: 0 FAIL
-python3 scripts/corpus/run.py --backend legacy-build --filter drop
-python3 scripts/corpus/run.py --backend legacy-interp --filter fixtures/interpreter/ --quiet
+python3 scripts/corpus/run.py --backend mir-interp
+python3 scripts/corpus/run.py --backend mir-build --filter drop --quiet
 ```
 
-`core/` and `drop-matrix/` hold v2 expectations that legacy is meant to miss
-(on legacy the matrix passes only its 28 programs where the model and legacy
-already agree), which is why the M0 check leaves them out; every other entry
-is held to legacy's own recorded output.
+The `legacy`, `legacy-build` and `legacy-interp` backends went with the
+legacy pipeline at M3.
 
 `--filter` takes a tag or a path substring. The runner pins
 `KARAC_HASH_SEED=1`, prints one `PASS|FAIL|SKIP` line per program, a summary by
 class and by tag, and how many programs actually executed. It exits 1 on any
 FAIL and 2 when nothing executed, so a filter that matches nothing cannot read
-as a pass. `mir-interp`, `mir-llvm` and `mir-llvm-asan` are named slots that
-SKIP until the new pipeline exists.
+as a pass.
 
 ## Rebuilding
 
 ```bash
 python3 scripts/corpus/extract.py --katas ../kara-katas    # sources -> source.kara + meta.toml
-python3 scripts/corpus/record.py                           # one legacy run + check per new program
-python3 scripts/corpus/record.py --recheck --filter <path>  # mark a program nondeterministic if a re-run differs
+python3 scripts/corpus/record.py                           # `karac check` tags per program; no legacy run
+python3 scripts/corpus/record.py --redo --filter <path>     # re-derive tags against the archived legacy.out
 python3 scripts/corpus/record.py --model                    # drop model output per program (model.out, model_verdict)
 ```
 
@@ -117,7 +120,7 @@ python3 scripts/corpus/record.py --model                    # drop model output 
 (`--no-matrix` leaves it out) and copies each program's model output to
 `expected.out`. `extract.py` reads the test files and never edits them. It keeps each
 holding test's string literals as candidate expectations, and `record.py`
-marks a program `expected_from = "assert"` only when one of them matches the
+marked a program `expected_from = "assert"` only when one of them matched the
 legacy run as the suites compare (exactly, trimmed, or line by line); the
 rest are `legacy-run`, most of them IR-shape tests that assert nothing about
 stdout. Re-extracting keeps every unchanged program's recorded files and
@@ -147,8 +150,8 @@ leaves out `post-m1:*` (par, net, process, `dyn`, escaping closures), `bench`
 variants and class d; the report also gives the number without `lib:`/`io:`.
 
 A class-b program is one `karac fix` repaired for a v2 ownership rule. Its
-fixed text is `source.kara` and is judged on its own output; the legacy
-backends run `source.orig.kara`, the text legacy recorded.
+fixed text is `source.kara` and is judged on its own output;
+`source.orig.kara` is the text legacy recorded.
 
 ## The drop model's output
 
@@ -164,6 +167,4 @@ On the mir backends `run.py` takes the expectation from `expected.out`, then
 `model.out` (held to `model_exit`; ORDER-UNSPEC compares lines as a set), then
 `legacy.out`. A V2-REJECT program is not run: `karac check` must refuse it, and
 when check accepts it the verdict is MREJ, "model rejects, check accepts",
-counted on its own. MREJ needs only `karac check`, so it is judged before any
-mir backend exists. The legacy backends ignore all of this and compare to
-`legacy.out` whenever it exists.
+counted on its own. MREJ needs only `karac check`.
