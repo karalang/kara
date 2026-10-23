@@ -1,0 +1,438 @@
+// LeetCode #900: RLE Iterator -- differential test of the five arms
+// against the statement read literally, with six properties.
+//
+// The statement: we can use run-length encoding to encode a sequence of
+// integers. In a run-length encoded array of even length, for all even
+// i, encoding[i] tells us the number of times that the non-negative
+// integer value encoding[i + 1] is repeated in the sequence.
+// RLEIterator(encoding) initializes the object with the encoded array;
+// next(n) exhausts the next n elements and returns the last element
+// exhausted in this way. If there is no element left to exhaust, return
+// -1 instead.
+
+// ---- the ★ arm: the runs used up in place ---------------------------------
+struct StarRLEIterator {
+    encoding: Vec[i64],
+    i: i64,
+}
+
+impl StarRLEIterator {
+    fn new(encoding: own Vec[i64]) -> StarRLEIterator {
+        StarRLEIterator { encoding: encoding, i: 0 }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        let mut need = n;
+        while self.i < self.encoding.len() and self.encoding[self.i] < need {
+            need -= self.encoding[self.i];
+            self.i += 2;
+        }
+        if self.i >= self.encoding.len() {
+            return -1;
+        }
+        self.encoding[self.i] -= need;
+        self.encoding[self.i + 1]
+    }
+}
+
+// ---- the offset arm: the encoding left as it is ---------------------------
+struct OffsetRLEIterator {
+    encoding: Vec[i64],
+    i: i64,
+    used: i64,
+}
+
+impl OffsetRLEIterator {
+    fn new(encoding: own Vec[i64]) -> OffsetRLEIterator {
+        OffsetRLEIterator { encoding: encoding, i: 0, used: 0 }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        let mut need = n;
+        while self.i < self.encoding.len() {
+            let left = self.encoding[self.i] - self.used;
+            if left >= need {
+                self.used += need;
+                return self.encoding[self.i + 1];
+            }
+            need -= left;
+            self.i += 2;
+            self.used = 0;
+        }
+        -1
+    }
+}
+
+// ---- the prefix arm: prefix sums and a binary search ----------------------
+struct PrefixRLEIterator {
+    ends: Vec[i64],
+    values: Vec[i64],
+    place: i64,
+}
+
+impl PrefixRLEIterator {
+    fn new(encoding: own Vec[i64]) -> PrefixRLEIterator {
+        let mut ends: Vec[i64] = Vec.new();
+        let mut values: Vec[i64] = Vec.new();
+        let mut total = 0;
+        let mut j = 0;
+        while j < encoding.len() {
+            total += encoding[j];
+            ends.push(total);
+            values.push(encoding[j + 1]);
+            j += 2;
+        }
+        PrefixRLEIterator { ends: ends, values: values, place: 0 }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        let runs = self.ends.len();
+        let total = if runs == 0 { 0 } else { self.ends[runs - 1] };
+        if self.place + n > total {
+            self.place = total + 1;
+            return -1;
+        }
+        self.place += n;
+        let mut lo = 0;
+        let mut hi = runs - 1;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.ends[mid] >= self.place {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        self.values[lo]
+    }
+}
+
+// ---- the stack arm: the runs on a stack -----------------------------------
+struct StackRun {
+    count: i64,
+    value: i64,
+}
+
+struct StackRLEIterator {
+    runs: Vec[StackRun],
+}
+
+impl StackRLEIterator {
+    fn new(encoding: own Vec[i64]) -> StackRLEIterator {
+        let mut runs: Vec[StackRun] = Vec.new();
+        let mut j = encoding.len() - 2;
+        while j >= 0 {
+            if encoding[j] > 0 {
+                runs.push(StackRun { count: encoding[j], value: encoding[j + 1] });
+            }
+            j -= 2;
+        }
+        StackRLEIterator { runs: runs }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        let mut need = n;
+        while let Some(top) = self.runs.last() {
+            if top.count >= need {
+                break;
+            }
+            need -= top.count;
+            self.runs.pop();
+        }
+        if self.runs.is_empty() {
+            return -1;
+        }
+        let t = self.runs.len() - 1;
+        self.runs[t].count -= need;
+        self.runs[t].value
+    }
+}
+
+// ---- the recursive arm: the rest asked of the next run --------------------
+struct RecursiveRLEIterator {
+    encoding: Vec[i64],
+    i: i64,
+}
+
+impl RecursiveRLEIterator {
+    fn new(encoding: own Vec[i64]) -> RecursiveRLEIterator {
+        RecursiveRLEIterator { encoding: encoding, i: 0 }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        if self.i >= self.encoding.len() {
+            return -1;
+        }
+        let count = self.encoding[self.i];
+        if count >= n {
+            self.encoding[self.i] = count - n;
+            return self.encoding[self.i + 1];
+        }
+        self.i += 2;
+        self.next(n - count)
+    }
+}
+
+fn star_answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = StarRLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn offset_answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = OffsetRLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn prefix_answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = PrefixRLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn stack_answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = StackRLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn recursive_answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = RecursiveRLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn arm(x: i64, encoding: Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    match x {
+        0 => star_answers(encoding.clone(), calls),
+        1 => offset_answers(encoding.clone(), calls),
+        2 => prefix_answers(encoding.clone(), calls),
+        3 => stack_answers(encoding.clone(), calls),
+        _ => recursive_answers(encoding.clone(), calls),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// the sequence written out term by term, and a place in it moved n on by
+// each call: the term there, or -1 once the place is past the last term
+fn literal(encoding: Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut terms: Vec[i64] = Vec.new();
+    let mut j = 0;
+    while j < encoding.len() {
+        for _ in 0..encoding[j] {
+            terms.push(encoding[j + 1]);
+        }
+        j += 2;
+    }
+    let mut place = 0;
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        place += *n;
+        if place > terms.len() {
+            out.push(-1);
+        } else {
+            out.push(terms[place - 1]);
+        }
+    }
+    out
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random number from 0 to below `limit`, up to 2^30
+fn random_below(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// v without the element at j
+fn without(v: Vec[i64], j: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..v.len() {
+        if i != j {
+            out.push(v[i]);
+        }
+    }
+    out
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, encoding: Vec[i64], calls: Vec[i64], small: bool, most: i64) {
+    let want = if small { literal(encoding, calls) } else { Vec.new() };
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, encoding, calls));
+    }
+    let mut total = 0;
+    let mut j = 0;
+    while j < encoding.len() {
+        total += encoding[j];
+        j += 2;
+    }
+    let c = calls.len();
+    // P3: two neighbouring calls merged into one, and a call split in two
+    let m = if c >= 2 { next_random(mut seed) % (c - 1) } else { 0 };
+    let mut merged = calls.clone();
+    if c >= 2 {
+        merged[m] = calls[m] + calls[m + 1];
+        merged.remove(m + 1);
+    }
+    let s = next_random(mut seed) % c;
+    let first = 1 + random_below(mut seed, calls[s]);
+    let mut split = calls.clone();
+    split.insert(s, first);
+    split[s + 1] = calls[s] - first;
+    let split_ok = calls[s] >= 2;
+    // P4: a run split in two runs of the same value, and a run of no
+    // terms with a random value put in at a random place
+    let runs = encoding.len() / 2;
+    let r = next_random(mut seed) % runs;
+    let part = random_below(mut seed, encoding[2 * r] + 1);
+    let mut rewritten = encoding.clone();
+    rewritten[2 * r] = encoding[2 * r] - part;
+    rewritten.insert(2 * r, encoding[2 * r + 1]);
+    rewritten.insert(2 * r, part);
+    let z = 2 * (next_random(mut seed) % (runs + 2));
+    rewritten.insert(z, random_below(mut seed, 1000000001));
+    rewritten.insert(z, 0);
+    // P5: a run of terms put in front and the first call asking for them
+    // as well, and every value v written 2v + 1
+    let front = random_below(mut seed, most);
+    let mut longer = encoding.clone();
+    longer.insert(0, random_below(mut seed, 1000000001));
+    longer.insert(0, front);
+    let mut asked = calls.clone();
+    asked[0] = calls[0] + front;
+    let mut mapped = encoding.clone();
+    let mut k = 1;
+    while k < mapped.len() {
+        mapped[k] = 2 * mapped[k] + 1;
+        k += 2;
+    }
+    for x in 0..5 {
+        let got = answers[x].clone();
+        // P1: the statement's answers
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: -1 exactly when the calls so far ask for more terms than
+        // there are, and otherwise the value of a run with terms
+        let mut ok = got.len() == c;
+        let mut asked_for = 0;
+        for i in 0..c {
+            asked_for += calls[i];
+            if ok {
+                if asked_for > total {
+                    ok = got[i] == -1;
+                } else {
+                    let mut found = false;
+                    let mut q = 0;
+                    while q < encoding.len() {
+                        if encoding[q] > 0 and encoding[q + 1] == got[i] {
+                            found = true;
+                        }
+                        q += 2;
+                    }
+                    ok = found;
+                }
+            }
+        }
+        check(mut t, 2, ok);
+        // P3: the answer depends only on how many terms have been asked for
+        let merged_ok = c < 2 or arm(x, encoding, merged) == without(got, m);
+        let split_same = not split_ok or without(arm(x, encoding, split), s) == got;
+        check(mut t, 3, merged_ok and split_same);
+        // P4: the same answers for the encoding rewritten
+        check(mut t, 4, arm(x, rewritten, calls) == got);
+        // P5: the same answers with a run in front asked for by the first
+        // call, and each answer v as 2v + 1 for the values mapped
+        let mut want_mapped: Vec[i64] = Vec.new();
+        for v in got.iter() {
+            want_mapped.push(if *v == -1 { -1 } else { 2 * *v + 1 });
+        }
+        check(mut t, 5, arm(x, longer, asked) == got and arm(x, mapped, calls) == want_mapped);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 900;
+    let mut cases = 0;
+    let mut calls_in_all = 0;
+    // up to 4 runs of up to 3 terms with values 1 to 3, and up to 6 calls
+    // of up to 4, against the statement; then up to 300 runs of up to 3,
+    // 1000 or 10^9 terms and up to 300 calls of up to a quarter of that
+    for c in 0..3200 {
+        let small = c < 3000;
+        let runs = if small { 1 + next_random(mut seed) % 4 } else { 1 + next_random(mut seed) % 300 };
+        let most = if small or c % 3 == 0 { 4 } else if c % 3 == 1 { 1001 } else { 1000000001 };
+        let mut encoding: Vec[i64] = Vec.new();
+        for _ in 0..runs {
+            encoding.push(random_below(mut seed, most));
+            encoding.push(if small { 1 + next_random(mut seed) % 3 } else { random_below(mut seed, 1000000001) });
+        }
+        let ncalls = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 300 };
+        let mut calls: Vec[i64] = Vec.new();
+        for _ in 0..ncalls {
+            calls.push(if small { 1 + next_random(mut seed) % 4 } else { 1 + random_below(mut seed, most / 4 + 1) });
+        }
+        cases += 1;
+        calls_in_all += ncalls;
+        properties(mut t, mut seed, encoding, calls, small, most);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {calls_in_all} calls, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

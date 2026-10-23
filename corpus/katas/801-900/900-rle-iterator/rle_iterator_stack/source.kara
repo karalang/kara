@@ -1,0 +1,156 @@
+// LeetCode #900: RLE Iterator -- the runs on a stack.
+//
+// Put the runs on a stack, the first run on top, dropping runs of no
+// terms. To use up n terms, pop every run with fewer terms than are still
+// needed, then take the rest off the run on top and answer its value; a
+// run used up exactly stays until the next call pops it. O(length +
+// calls).
+
+struct Run {
+    count: i64,
+    value: i64,
+}
+
+struct RLEIterator {
+    runs: Vec[Run],
+}
+
+impl RLEIterator {
+    fn new(encoding: own Vec[i64]) -> RLEIterator {
+        let mut runs: Vec[Run] = Vec.new();
+        let mut j = encoding.len() - 2;
+        while j >= 0 {
+            if encoding[j] > 0 {
+                runs.push(Run { count: encoding[j], value: encoding[j + 1] });
+            }
+            j -= 2;
+        }
+        RLEIterator { runs: runs }
+    }
+
+    fn next(mut ref self, n: i64) -> i64 {
+        let mut need = n;
+        while let Some(top) = self.runs.last() {
+            if top.count >= need {
+                break;
+            }
+            need -= top.count;
+            self.runs.pop();
+        }
+        if self.runs.is_empty() {
+            return -1;
+        }
+        let t = self.runs.len() - 1;
+        self.runs[t].count -= need;
+        self.runs[t].value
+    }
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random number from 0 to below `limit`, up to 2^30
+fn random_below(seed: mut ref i64, limit: i64) -> i64 {
+    let hi = next_random(mut seed);
+    let lo = next_random(mut seed);
+    (hi * 32768 + lo) % limit
+}
+
+fn answers(encoding: own Vec[i64], calls: Vec[i64]) -> Vec[i64] {
+    let mut it = RLEIterator.new(encoding);
+    let mut out: Vec[i64] = Vec.new();
+    for n in calls.iter() {
+        out.push(it.next(*n));
+    }
+    out
+}
+
+fn join(v: Vec[i64]) -> String {
+    let mut s = String.new();
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s
+}
+
+fn show(encoding: own Vec[i64], calls: Vec[i64]) {
+    let e = join(encoding);
+    let c = join(calls);
+    let got = join(answers(encoding, calls));
+    println(f"encoding = [{e}], next({c}) -> {got}");
+}
+
+fn checksum(got: Vec[i64], check: i64) -> i64 {
+    let mut c = check;
+    for x in got.iter() {
+        c = (c * 1000003 + *x + 1) % 1000000007;
+    }
+    c
+}
+
+fn main() {
+    show(vec![3, 8, 0, 9, 2, 5], vec![2, 1, 1, 2]);
+    show(vec![1, 7], vec![1, 1]);
+    show(vec![0, 1, 0, 2], vec![1]);
+    show(vec![5, 4], vec![5, 1]);
+    show(vec![3, 1], vec![4, 1]);
+    show(vec![2, 1, 3, 2, 1, 3], vec![3, 1, 1, 1, 1]);
+    show(vec![1, 6, 0, 6, 1, 6], vec![2, 1]);
+    show(vec![1000000000, 7, 1000000000, 9], vec![1000000000, 1, 999999999, 1]);
+    // random cases: up to 500 runs, counts up to 3 (zeros among them), up
+    // to 1000 or up to 10^9, values up to 10^9, and up to 1000 calls that
+    // each ask for up to a quarter of the largest count
+    let mut seed = 900;
+    let mut check = 0;
+    let mut calls_in_all = 0;
+    let mut minus = 0;
+    for c in 0..300 {
+        let runs = 1 + next_random(mut seed) % 500;
+        let most = if c % 3 == 0 { 4 } else if c % 3 == 1 { 1001 } else { 1000000001 };
+        let mut encoding: Vec[i64] = Vec.new();
+        for _ in 0..runs {
+            encoding.push(random_below(mut seed, most));
+            encoding.push(random_below(mut seed, 1000000001));
+        }
+        let ncalls = 1 + next_random(mut seed) % 1000;
+        let mut calls: Vec[i64] = Vec.new();
+        for _ in 0..ncalls {
+            calls.push(1 + random_below(mut seed, most / 4 + 1));
+        }
+        let got = answers(encoding, calls);
+        for x in got.iter() {
+            if *x == -1 {
+                minus += 1;
+            }
+        }
+        check = checksum(got, check);
+        calls_in_all += ncalls;
+    }
+    println(f"300 cases, {calls_in_all} calls, {minus} answered -1: checksum {check}");
+    // LeetCode's largest: 500 runs of 10^9 terms asked for 10^9 at a time,
+    // a run and a term over each time; and 500 runs of one term each,
+    // asked for one at a time
+    let mut big: Vec[i64] = Vec.new();
+    let mut ones: Vec[i64] = Vec.new();
+    for j in 0..500 {
+        big.push(1000000000);
+        big.push(j * 1000);
+        ones.push(1);
+        ones.push(random_below(mut seed, 1000000001));
+    }
+    let mut big_calls: Vec[i64] = Vec.new();
+    let mut one_calls: Vec[i64] = Vec.new();
+    for _ in 0..1000 {
+        big_calls.push(1000000001);
+        one_calls.push(1);
+    }
+    println(f"500 runs of 10^9, 1000 calls of 10^9 + 1 -> checksum {checksum(answers(big, big_calls), 0)}");
+    println(f"500 runs of 1, 1000 calls of 1 -> checksum {checksum(answers(ones, one_calls), 0)}");
+}
