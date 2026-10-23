@@ -1,0 +1,348 @@
+// LeetCode #931: Minimum Falling Path Sum -- differential test of the
+// five arms against the statement read literally, with six properties.
+//
+// The statement: given an n x n array of integers matrix, return the
+// minimum sum of any falling path through matrix. A falling path starts
+// at any element in the first row and chooses the element in the next row
+// that is either directly below or diagonally left/right. Specifically,
+// the next element from position (row, col) will be (row + 1, col - 1),
+// (row + 1, col), or (row + 1, col + 1).
+
+// ---- the ★ arm: one row of sums at a time ---------------------------------
+fn star_min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut prev = matrix[0].clone();
+    for r in 1..n {
+        let mut cur: Vec[i64] = Vec.filled(n, 0);
+        for c in 0..n {
+            let mut best = prev[c];
+            if c > 0 and prev[c - 1] < best {
+                best = prev[c - 1];
+            }
+            if c + 1 < n and prev[c + 1] < best {
+                best = prev[c + 1];
+            }
+            cur[c] = matrix[r][c] + best;
+        }
+        prev = cur;
+    }
+    let mut answer = prev[0];
+    for v in prev.iter() {
+        if *v < answer {
+            answer = *v;
+        }
+    }
+    answer
+}
+
+// ---- the inplace arm: sums written over a copy ----------------------------
+fn inplace_min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut sums = matrix.clone();
+    for r in 1..n {
+        for c in 0..n {
+            let lo = if c == 0 { 0 } else { c - 1 };
+            let hi = if c == n - 1 { n - 1 } else { c + 1 };
+            let mut best = sums[r - 1][lo];
+            for k in lo + 1..hi + 1 {
+                best = best.min(sums[r - 1][k]);
+            }
+            sums[r][c] += best;
+        }
+    }
+    let mut answer = sums[n - 1][0];
+    for c in 1..n {
+        answer = answer.min(sums[n - 1][c]);
+    }
+    answer
+}
+
+// ---- the rising arm: from the bottom row up -------------------------------
+fn rising_min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut below = matrix[n - 1].clone();
+    let mut r = n - 1;
+    while r > 0 {
+        r -= 1;
+        let mut here: Vec[i64] = Vec.new();
+        for c in 0..n {
+            let mut best = below[c];
+            if c > 0 {
+                best = best.min(below[c - 1]);
+            }
+            if c + 1 < n {
+                best = best.min(below[c + 1]);
+            }
+            here.push(matrix[r][c] + best);
+        }
+        below = here;
+    }
+    let mut answer = below[0];
+    for c in 1..n {
+        answer = answer.min(below[c]);
+    }
+    answer
+}
+
+// ---- the memo arm: recursion with a memo ----------------------------------
+fn memo_cheapest(matrix: Vec[Vec[i64]], memo: mut ref Vec[Vec[Option[i64]]], r: i64, c: i64) -> i64 {
+    match memo[r][c] {
+        Some(v) => return v,
+        None => {}
+    }
+    let n = matrix.len();
+    let mut best = 0;
+    if r + 1 < n {
+        best = memo_cheapest(matrix, mut memo, r + 1, c);
+        if c > 0 {
+            best = best.min(memo_cheapest(matrix, mut memo, r + 1, c - 1));
+        }
+        if c + 1 < n {
+            best = best.min(memo_cheapest(matrix, mut memo, r + 1, c + 1));
+        }
+    }
+    let v = matrix[r][c] + best;
+    memo[r][c] = Some(v);
+    v
+}
+
+fn memo_min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut memo: Vec[Vec[Option[i64]]] = Vec.new();
+    for _ in 0..n {
+        let row: Vec[Option[i64]] = Vec.filled(n, None);
+        memo.push(row);
+    }
+    let mut answer = memo_cheapest(matrix, mut memo, 0, 0);
+    for c in 1..n {
+        answer = answer.min(memo_cheapest(matrix, mut memo, 0, c));
+    }
+    answer
+}
+
+// ---- the shift arm: three shifted rows ------------------------------------
+fn shift_min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let far = 1000000000;
+    let mut prev = matrix[0].clone();
+    for r in 1..n {
+        let mut left: Vec[i64] = vec![far];
+        let mut right: Vec[i64] = Vec.new();
+        for c in 0..n {
+            if c + 1 < n {
+                left.push(prev[c]);
+            }
+            if c > 0 {
+                right.push(prev[c]);
+            }
+        }
+        right.push(far);
+        let mut cur: Vec[i64] = Vec.new();
+        for c in 0..n {
+            cur.push(matrix[r][c] + left[c].min(prev[c]).min(right[c]));
+        }
+        prev = cur;
+    }
+    let mut answer = far;
+    for v in prev.iter() {
+        answer = answer.min(*v);
+    }
+    answer
+}
+
+// ---- the differential -----------------------------------------------------
+
+fn arm(x: i64, matrix: Vec[Vec[i64]]) -> i64 {
+    if x == 0 {
+        star_min_falling_path_sum(matrix)
+    } else if x == 1 {
+        inplace_min_falling_path_sum(matrix)
+    } else if x == 2 {
+        rising_min_falling_path_sum(matrix)
+    } else if x == 3 {
+        memo_min_falling_path_sum(matrix)
+    } else {
+        shift_min_falling_path_sum(matrix)
+    }
+}
+
+// The statement read literally: every falling path, a starting column in
+// the first row and then a step of -1, 0 or +1 in column for each row
+// after it, read as a number in base 3 and kept when it stays inside the
+// matrix; the least sum among them.
+fn literal(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut steps = 1;
+    for _ in 1..n {
+        steps *= 3;
+    }
+    let mut best = 0;
+    let mut found = false;
+    for start in 0..n {
+        for code in 0..steps {
+            let mut c = start;
+            let mut sum = matrix[0][start];
+            let mut rest = code;
+            let mut inside = true;
+            for r in 1..n {
+                c += rest % 3 - 1;
+                rest = rest / 3;
+                if c < 0 or c >= n {
+                    inside = false;
+                    break;
+                }
+                sum += matrix[r][c];
+            }
+            if inside and (not found or sum < best) {
+                best = sum;
+                found = true;
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n x n values from lo to hi
+fn random_matrix(seed: mut ref i64, n: i64, lo: i64, hi: i64) -> Vec[Vec[i64]] {
+    let mut matrix: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(lo + next_random(mut seed) % (hi - lo + 1));
+        }
+        matrix.push(row);
+    }
+    matrix
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+fn properties(t: mut ref Tally, seed: mut ref i64, matrix: Vec[Vec[i64]], small: bool) {
+    let n = matrix.len();
+    // the least and greatest value, and the cheapest straight column
+    let mut least = matrix[0][0];
+    let mut most = matrix[0][0];
+    for row in matrix.iter() {
+        for v in row.iter() {
+            least = least.min(*v);
+            most = most.max(*v);
+        }
+    }
+    let mut straight = 0;
+    for c in 0..n {
+        let mut s = 0;
+        for r in 0..n {
+            s += matrix[r][c];
+        }
+        if c == 0 or s < straight {
+            straight = s;
+        }
+    }
+    // mirrored left to right
+    let mut mirrored: Vec[Vec[i64]] = Vec.new();
+    for row in matrix.iter() {
+        let mut m: Vec[i64] = Vec.new();
+        let mut c = n;
+        while c > 0 {
+            c -= 1;
+            m.push(row[c]);
+        }
+        mirrored.push(m);
+    }
+    // every value raised by k
+    let k = next_random(mut seed) % 41 - 20;
+    let mut raised: Vec[Vec[i64]] = Vec.new();
+    for row in matrix.iter() {
+        let mut m: Vec[i64] = Vec.new();
+        for v in row.iter() {
+            m.push(*v + k);
+        }
+        raised.push(m);
+    }
+    // one more column, far too dear to use, and one more row at the
+    // bottom, every cell w: the cheapest path is the old one and a w
+    let w = next_random(mut seed) % 201 - 100;
+    let mut grown: Vec[Vec[i64]] = Vec.new();
+    for row in matrix.iter() {
+        let mut m = row.clone();
+        m.push(1000000);
+        grown.push(m);
+    }
+    grown.push(Vec.filled(n + 1, w));
+    let truth = if small { literal(matrix) } else { 0 };
+    let mut got: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        got.push(arm(x, matrix));
+    }
+    for x in 0..5 {
+        let a = got[x];
+        // P1: the statement's answer, on the small matrices
+        if small {
+            check(mut t, 1, a == truth);
+        }
+        // P2: between n times the least value and the cheapest straight
+        // column
+        check(mut t, 2, a >= n * least and a <= straight);
+        // P3: the same answer for the matrix mirrored left to right
+        check(mut t, 3, arm(x, mirrored) == a);
+        // P4: every value raised by k raises the answer by n * k
+        check(mut t, 4, arm(x, raised) == a + n * k);
+        // P5: grown by a column of 1000000 and a last row of w, the
+        // answer plus w
+        check(mut t, 5, arm(x, grown) == a + w);
+        // P6: agreement with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and got[y] == a {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 931;
+    let mut cases = 0;
+    let mut cells = 0;
+    let mut sum = 0;
+    // 1 to 6 rows against the statement, then 1 to 60
+    for c in 0..3200 {
+        let small = c < 3000;
+        let n = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 60 };
+        let spread = 1 + next_random(mut seed) % 100;
+        let matrix = random_matrix(mut seed, n, -spread, spread);
+        cases += 1;
+        cells += n * n;
+        sum += arm(0, matrix);
+        properties(mut t, mut seed, matrix, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} matrices, {cells} cells, answers summing to {sum}, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}

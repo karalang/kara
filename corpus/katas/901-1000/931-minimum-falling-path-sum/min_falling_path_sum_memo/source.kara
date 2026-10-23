@@ -1,0 +1,108 @@
+// LeetCode #931: Minimum Falling Path Sum -- recursion with a memo.
+//
+// cheapest(r, c), the least sum of a path from row r and column c to the
+// bottom, is the cell plus the least cheapest(r + 1, c') over the
+// columns below it. Compute it recursively, keeping every result in a
+// table so each cell is worked out once, and take the least over the top
+// row. O(n^2), recursion n deep.
+
+fn cheapest(matrix: Vec[Vec[i64]], memo: mut ref Vec[Vec[Option[i64]]], r: i64, c: i64) -> i64 {
+    match memo[r][c] {
+        Some(v) => return v,
+        None => {}
+    }
+    let n = matrix.len();
+    let mut best = 0;
+    if r + 1 < n {
+        best = cheapest(matrix, mut memo, r + 1, c);
+        if c > 0 {
+            best = best.min(cheapest(matrix, mut memo, r + 1, c - 1));
+        }
+        if c + 1 < n {
+            best = best.min(cheapest(matrix, mut memo, r + 1, c + 1));
+        }
+    }
+    let v = matrix[r][c] + best;
+    memo[r][c] = Some(v);
+    v
+}
+
+fn min_falling_path_sum(matrix: Vec[Vec[i64]]) -> i64 {
+    let n = matrix.len();
+    let mut memo: Vec[Vec[Option[i64]]] = Vec.new();
+    for _ in 0..n {
+        let row: Vec[Option[i64]] = Vec.filled(n, None);
+        memo.push(row);
+    }
+    let mut answer = cheapest(matrix, mut memo, 0, 0);
+    for c in 1..n {
+        answer = answer.min(cheapest(matrix, mut memo, 0, c));
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: String, matrix: Vec[Vec[i64]]) {
+    println(f"{name}: {min_falling_path_sum(matrix)}");
+}
+
+// n x n values from lo to hi
+fn random_matrix(seed: mut ref i64, n: i64, lo: i64, hi: i64) -> Vec[Vec[i64]] {
+    let mut matrix: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(lo + next_random(mut seed) % (hi - lo + 1));
+        }
+        matrix.push(row);
+    }
+    matrix
+}
+
+fn main() {
+    // LeetCode's two examples
+    show("example 1", vec![vec![2, 1, 3], vec![6, 5, 4], vec![7, 8, 9]]);
+    show("example 2", vec![vec![-19, 57], vec![-40, -5]]);
+    // one cell; two cheap opposite corners joined along the diagonal; a
+    // zigzag; the cheapest path straight down an edge; equal values
+    show("one cell", vec![vec![-7]]);
+    show("opposite corners", vec![vec![0, 9, 9, -5], vec![9, 9, 9, 9], vec![9, 9, 9, 9], vec![-5, 9, 9, 0]]);
+    show("zigzag", vec![vec![1, 50, 50, 50], vec![50, 1, 50, 50], vec![50, 50, 1, 50], vec![50, 1, 50, 50]]);
+    show("down an edge", vec![vec![-1, 0, 0], vec![-1, 0, 0], vec![-1, 0, 0]]);
+    show("all 100", vec![vec![100, 100], vec![100, 100]]);
+    // 300 random matrices of 1 to 60 rows, values from -100 to 100
+    let mut seed = 931;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let matrix = random_matrix(mut seed, n, -100, 100);
+        let a = min_falling_path_sum(matrix);
+        sum += a;
+        check = (check * 1000003 + a + 1000000) % 1000000007;
+    }
+    println(f"300 random matrices: answers summing to {sum}, checksum {check}");
+    // LeetCode's largest, 100 x 100: random, all -100, and a checkerboard
+    // of -100 and 100
+    let big = random_matrix(mut seed, 100, -100, 100);
+    let mut low: Vec[Vec[i64]] = Vec.new();
+    let mut board: Vec[Vec[i64]] = Vec.new();
+    for r in 0..100 {
+        low.push(Vec.filled(100, -100));
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..100 {
+            row.push(if (r + c) % 2 == 0 { -100 } else { 100 });
+        }
+        board.push(row);
+    }
+    let a = min_falling_path_sum(big);
+    let b = min_falling_path_sum(low);
+    let c = min_falling_path_sum(board);
+    println(f"100 x 100: random {a}, all -100 {b}, checkerboard {c}");
+}

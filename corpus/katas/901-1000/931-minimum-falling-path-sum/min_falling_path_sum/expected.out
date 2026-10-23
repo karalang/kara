@@ -1,0 +1,9 @@
+example 1: 13
+example 2: -59
+one cell: -7
+opposite corners: 8
+zigzag: 4
+down an edge: -3
+all 100: 200
+300 random matrices: answers summing to -549416, checksum 40991711
+100 x 100: random -6674, all -100 -10000, checkerboard -10000
