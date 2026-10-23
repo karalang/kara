@@ -1,0 +1,13 @@
+s = "DID" -> 5
+s = "D" -> 1
+s = "I" -> 1
+s = "III" -> 1
+s = "DDD" -> 1
+s = "ID" -> 2
+s = "DI" -> 2
+s = "IDID" -> 16
+s = "DDIDI" -> 35
+s = "IIDDII" -> 71
+120 cases (12912 letters): checksum 177732845
+200 random letters -> 912652025
+200 letters DIDI... -> 180617435

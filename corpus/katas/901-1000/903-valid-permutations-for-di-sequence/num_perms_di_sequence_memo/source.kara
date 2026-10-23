@@ -1,0 +1,106 @@
+// LeetCode #903: Valid Permutations for DI Sequence -- the ranks asked for
+// from the end, remembered.
+//
+// ways(i, j), the orders of the first i + 1 numbers that fit the first i
+// letters and end on the j-th smallest, asked for recursively from the
+// last number back: ways(0, 0) = 1, and ways(i, j) is ways(i, j - 1) plus
+// one term after an 'I' (ways(i - 1, j - 1)), or ways(i, j + 1) plus one
+// term after a 'D' (ways(i - 1, j)), so each entry takes O(1) once those
+// it needs are known. Each answer is remembered. O(n^2).
+
+struct Memo {
+    letters: Vec[u8],
+    known: Vec[Vec[i64]],
+}
+
+fn ways(memo: mut ref Memo, i: i64, j: i64) -> i64 {
+    let m = 1000000007;
+    if j < 0 or j > i {
+        return 0;
+    }
+    if i == 0 {
+        return 1;
+    }
+    if memo.known[i][j] >= 0 {
+        return memo.known[i][j];
+    }
+    let got = if memo.letters[i - 1] == b'I' {
+        (ways(mut memo, i, j - 1) + ways(mut memo, i - 1, j - 1)) % m
+    } else {
+        (ways(mut memo, i, j + 1) + ways(mut memo, i - 1, j)) % m
+    };
+    memo.known[i][j] = got;
+    got
+}
+
+fn num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let n = s.len();
+    let mut known: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n + 1 {
+        known.push(Vec.filled(i + 1, -1));
+    }
+    let mut memo = Memo { letters: s.bytes().to_vec(), known: known };
+    // fill the rows from the top so the recursion stays shallow
+    let mut total = 0;
+    for i in 0..n + 1 {
+        for j in 0..i + 1 {
+            let w = ways(mut memo, i, j);
+            if i == n {
+                total = (total + w) % m;
+            }
+        }
+    }
+    total
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"s = \"{s}\" -> {num_perms_di_sequence(s.to_string())}");
+}
+
+// `len` letters: random, each 'D' with chance `d` in 10
+fn random_letters(seed: mut ref i64, len: i64, d: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 10 < d { 'D' } else { 'I' });
+    }
+    s
+}
+
+fn main() {
+    show("DID");
+    show("D");
+    show("I");
+    show("III");
+    show("DDD");
+    show("ID");
+    show("DI");
+    show("IDID");
+    show("DDIDI");
+    show("IIDDII");
+    // random cases of up to 200 letters, 'D' from 0 to 10 in 10
+    let mut seed = 903;
+    let mut check = 0;
+    let mut letters = 0;
+    for c in 0..120 {
+        let len = 1 + next_random(mut seed) % 200;
+        let got = num_perms_di_sequence(random_letters(mut seed, len, c % 11));
+        check = (check * 1000003 + got) % 1000000007;
+        letters += len;
+    }
+    println(f"120 cases ({letters} letters): checksum {check}");
+    // LeetCode's largest: 200 random letters, and 200 alternating
+    println(f"200 random letters -> {num_perms_di_sequence(random_letters(mut seed, 200, 5))}");
+    let mut zigzag = String.new();
+    for i in 0..200 {
+        zigzag.push(if i % 2 == 0 { 'D' } else { 'I' });
+    }
+    println(f"200 letters DIDI... -> {num_perms_di_sequence(zigzag)}");
+}

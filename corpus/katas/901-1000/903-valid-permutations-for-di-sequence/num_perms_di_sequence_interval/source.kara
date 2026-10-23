@@ -1,0 +1,98 @@
+// LeetCode #903: Valid Permutations for DI Sequence -- where the largest
+// number goes.
+//
+// In a fitting permutation of the places lo to hi, the largest number
+// sits at a place k with an 'I' before it (or none) and a 'D' after it
+// (or none). The places on either side then fit their own letters
+// independently, and which of the other numbers go left is free: C(hi -
+// lo, k - lo) ways. So count[lo][hi] is the sum over the allowed k of
+// that binomial times count[lo][k - 1] and count[k + 1][hi], an empty
+// side counting 1. O(n^3).
+
+fn num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let letters = s.bytes().to_vec();
+    let n = letters.len();
+    // Pascal's triangle up to n
+    let mut choose: Vec[Vec[i64]] = Vec.new();
+    for a in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.filled(a + 1, 1);
+        for b in 1..a {
+            row[b] = (choose[a - 1][b - 1] + choose[a - 1][b]) % m;
+        }
+        choose.push(row);
+    }
+    // count[lo][hi] for the places lo to hi; lo > hi counts 1
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        count.push(Vec.filled(n + 2, 1));
+    }
+    for len in 1..n + 2 {
+        for lo in 0..n + 2 - len {
+            let hi = lo + len - 1;
+            let mut sum = 0;
+            for k in lo..hi + 1 {
+                let rise = k == lo or letters[k - 1] == b'I';
+                let fall = k == hi or letters[k] == b'D';
+                if rise and fall {
+                    let left = if k == lo { 1 } else { count[lo][k - 1] };
+                    let right = count[k + 1][hi];
+                    sum = (sum + choose[hi - lo][k - lo] * left % m * right) % m;
+                }
+            }
+            count[lo][hi] = sum;
+        }
+    }
+    count[0][n]
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"s = \"{s}\" -> {num_perms_di_sequence(s.to_string())}");
+}
+
+// `len` letters: random, each 'D' with chance `d` in 10
+fn random_letters(seed: mut ref i64, len: i64, d: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 10 < d { 'D' } else { 'I' });
+    }
+    s
+}
+
+fn main() {
+    show("DID");
+    show("D");
+    show("I");
+    show("III");
+    show("DDD");
+    show("ID");
+    show("DI");
+    show("IDID");
+    show("DDIDI");
+    show("IIDDII");
+    // random cases of up to 200 letters, 'D' from 0 to 10 in 10
+    let mut seed = 903;
+    let mut check = 0;
+    let mut letters = 0;
+    for c in 0..120 {
+        let len = 1 + next_random(mut seed) % 200;
+        let got = num_perms_di_sequence(random_letters(mut seed, len, c % 11));
+        check = (check * 1000003 + got) % 1000000007;
+        letters += len;
+    }
+    println(f"120 cases ({letters} letters): checksum {check}");
+    // LeetCode's largest: 200 random letters, and 200 alternating
+    println(f"200 random letters -> {num_perms_di_sequence(random_letters(mut seed, 200, 5))}");
+    let mut zigzag = String.new();
+    for i in 0..200 {
+        zigzag.push(if i % 2 == 0 { 'D' } else { 'I' });
+    }
+    println(f"200 letters DIDI... -> {num_perms_di_sequence(zigzag)}");
+}

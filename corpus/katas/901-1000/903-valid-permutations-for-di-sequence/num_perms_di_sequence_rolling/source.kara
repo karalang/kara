@@ -1,0 +1,88 @@
+// LeetCode #903: Valid Permutations for DI Sequence -- one row, summed in
+// place.
+//
+// The table of ranks kept as one row, rewritten in place for each letter.
+// Turning the old row into running sums from the left gives, at j, the
+// ways the old last ranked below j, which is the new row after an 'I';
+// running sums from the right give the ways it ranked at j or above,
+// the new row after a 'D'. The row grows by one place a letter. O(n^2)
+// time, O(n) space.
+
+fn num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let mut row: Vec[i64] = vec![1];
+    for c in s.chars() {
+        let i = row.len();
+        if c == 'I' {
+            // new[j] = old[0] + ... + old[j - 1], new[0] = 0
+            row.insert(0, 0);
+            for j in 1..i + 1 {
+                row[j] = (row[j] + row[j - 1]) % m;
+            }
+        } else {
+            // new[j] = old[j] + ... + old[i - 1], new[i] = 0
+            row.push(0);
+            let mut j = i - 1;
+            while j >= 0 {
+                row[j] = (row[j] + row[j + 1]) % m;
+                j -= 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for w in row.iter() {
+        total = (total + *w) % m;
+    }
+    total
+}
+
+// ---- test harness ----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"s = \"{s}\" -> {num_perms_di_sequence(s.to_string())}");
+}
+
+// `len` letters: random, each 'D' with chance `d` in 10
+fn random_letters(seed: mut ref i64, len: i64, d: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 10 < d { 'D' } else { 'I' });
+    }
+    s
+}
+
+fn main() {
+    show("DID");
+    show("D");
+    show("I");
+    show("III");
+    show("DDD");
+    show("ID");
+    show("DI");
+    show("IDID");
+    show("DDIDI");
+    show("IIDDII");
+    // random cases of up to 200 letters, 'D' from 0 to 10 in 10
+    let mut seed = 903;
+    let mut check = 0;
+    let mut letters = 0;
+    for c in 0..120 {
+        let len = 1 + next_random(mut seed) % 200;
+        let got = num_perms_di_sequence(random_letters(mut seed, len, c % 11));
+        check = (check * 1000003 + got) % 1000000007;
+        letters += len;
+    }
+    println(f"120 cases ({letters} letters): checksum {check}");
+    // LeetCode's largest: 200 random letters, and 200 alternating
+    println(f"200 random letters -> {num_perms_di_sequence(random_letters(mut seed, 200, 5))}");
+    let mut zigzag = String.new();
+    for i in 0..200 {
+        zigzag.push(if i % 2 == 0 { 'D' } else { 'I' });
+    }
+    println(f"200 letters DIDI... -> {num_perms_di_sequence(zigzag)}");
+}

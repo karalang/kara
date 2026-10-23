@@ -1,0 +1,359 @@
+// LeetCode #903: Valid Permutations for DI Sequence -- differential
+// test of the five arms against the statement read literally, with six
+// properties.
+//
+// The statement: you are given a string s of length n where s[i] is
+// either 'D' (decreasing) or 'I' (increasing). A permutation perm of n + 1
+// integers of all the integers in the range [0, n] is called a valid
+// permutation if for all valid i: if s[i] == 'D', then perm[i] >
+// perm[i + 1], and if s[i] == 'I', then perm[i] < perm[i + 1]. Return the
+// number of valid permutations perm, modulo 10^9 + 7.
+
+// ---- the ★ arm: ranks of the last number, with running sums ---------------
+fn star_num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let letters = s.bytes().to_vec();
+    let n = letters.len();
+    let mut ways: Vec[i64] = vec![1];
+    for i in 1..n + 1 {
+        let mut below: Vec[i64] = Vec.filled(i + 1, 0);
+        for k in 0..i {
+            below[k + 1] = (below[k] + ways[k]) % m;
+        }
+        let mut next: Vec[i64] = Vec.filled(i + 1, 0);
+        for j in 0..i + 1 {
+            next[j] = if letters[i - 1] == b'I' {
+                below[j]
+            } else {
+                (below[i] - below[j] + m) % m
+            };
+        }
+        ways = next;
+    }
+    let mut total = 0;
+    for w in ways.iter() {
+        total = (total + *w) % m;
+    }
+    total
+}
+
+// ---- the cubic arm: ranks of the last number, every sum taken afresh ------
+fn cubic_num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let letters = s.bytes().to_vec();
+    let n = letters.len();
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    table.push(vec![1]);
+    for i in 1..n + 1 {
+        let mut row: Vec[i64] = Vec.filled(i + 1, 0);
+        for j in 0..i + 1 {
+            let mut sum = 0;
+            for k in 0..i {
+                let fits = if letters[i - 1] == b'I' { k < j } else { k >= j };
+                if fits {
+                    sum = (sum + table[i - 1][k]) % m;
+                }
+            }
+            row[j] = sum;
+        }
+        table.push(row);
+    }
+    let mut total = 0;
+    for w in table[n].iter() {
+        total = (total + *w) % m;
+    }
+    total
+}
+
+// ---- the rolling arm: one row, summed in place ----------------------------
+fn rolling_num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let mut row: Vec[i64] = vec![1];
+    for c in s.chars() {
+        let i = row.len();
+        if c == 'I' {
+            // new[j] = old[0] + ... + old[j - 1], new[0] = 0
+            row.insert(0, 0);
+            for j in 1..i + 1 {
+                row[j] = (row[j] + row[j - 1]) % m;
+            }
+        } else {
+            // new[j] = old[j] + ... + old[i - 1], new[i] = 0
+            row.push(0);
+            let mut j = i - 1;
+            while j >= 0 {
+                row[j] = (row[j] + row[j + 1]) % m;
+                j -= 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for w in row.iter() {
+        total = (total + *w) % m;
+    }
+    total
+}
+
+// ---- the memo arm: the ranks asked for from the end, remembered -----------
+struct MemoMemo {
+    letters: Vec[u8],
+    known: Vec[Vec[i64]],
+}
+
+fn memo_ways(memo: mut ref MemoMemo, i: i64, j: i64) -> i64 {
+    let m = 1000000007;
+    if j < 0 or j > i {
+        return 0;
+    }
+    if i == 0 {
+        return 1;
+    }
+    if memo.known[i][j] >= 0 {
+        return memo.known[i][j];
+    }
+    let got = if memo.letters[i - 1] == b'I' {
+        (memo_ways(mut memo, i, j - 1) + memo_ways(mut memo, i - 1, j - 1)) % m
+    } else {
+        (memo_ways(mut memo, i, j + 1) + memo_ways(mut memo, i - 1, j)) % m
+    };
+    memo.known[i][j] = got;
+    got
+}
+
+fn memo_num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let n = s.len();
+    let mut known: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n + 1 {
+        known.push(Vec.filled(i + 1, -1));
+    }
+    let mut memo = MemoMemo { letters: s.bytes().to_vec(), known: known };
+    // fill the rows from the top so the recursion stays shallow
+    let mut total = 0;
+    for i in 0..n + 1 {
+        for j in 0..i + 1 {
+            let w = memo_ways(mut memo, i, j);
+            if i == n {
+                total = (total + w) % m;
+            }
+        }
+    }
+    total
+}
+
+// ---- the interval arm: where the largest number goes ----------------------
+fn interval_num_perms_di_sequence(s: String) -> i64 {
+    let m = 1000000007;
+    let letters = s.bytes().to_vec();
+    let n = letters.len();
+    // Pascal's triangle up to n
+    let mut choose: Vec[Vec[i64]] = Vec.new();
+    for a in 0..n + 1 {
+        let mut row: Vec[i64] = Vec.filled(a + 1, 1);
+        for b in 1..a {
+            row[b] = (choose[a - 1][b - 1] + choose[a - 1][b]) % m;
+        }
+        choose.push(row);
+    }
+    // count[lo][hi] for the places lo to hi; lo > hi counts 1
+    let mut count: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        count.push(Vec.filled(n + 2, 1));
+    }
+    for len in 1..n + 2 {
+        for lo in 0..n + 2 - len {
+            let hi = lo + len - 1;
+            let mut sum = 0;
+            for k in lo..hi + 1 {
+                let rise = k == lo or letters[k - 1] == b'I';
+                let fall = k == hi or letters[k] == b'D';
+                if rise and fall {
+                    let left = if k == lo { 1 } else { count[lo][k - 1] };
+                    let right = count[k + 1][hi];
+                    sum = (sum + choose[hi - lo][k - lo] * left % m * right) % m;
+                }
+            }
+            count[lo][hi] = sum;
+        }
+    }
+    count[0][n]
+}
+
+fn arm(x: i64, s: String) -> i64 {
+    match x {
+        0 => star_num_perms_di_sequence(s.clone()),
+        1 => cubic_num_perms_di_sequence(s.clone()),
+        2 => rolling_num_perms_di_sequence(s.clone()),
+        3 => memo_num_perms_di_sequence(s.clone()),
+        _ => interval_num_perms_di_sequence(s.clone()),
+    }
+}
+
+// ---- the statement read literally -----------------------------------------
+
+// every permutation of 0 to n built, place by place, from the numbers not
+// yet used, and each whole one checked against every letter
+fn count_fitting(letters: Vec[u8], perm: mut ref Vec[i64], used: mut ref Vec[bool]) -> i64 {
+    let n = letters.len();
+    if perm.len() == n + 1 {
+        for i in 0..n {
+            let rising = perm[i] < perm[i + 1];
+            if rising != (letters[i] == b'I') {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    let mut count = 0;
+    for v in 0..n + 1 {
+        if not used[v] {
+            used[v] = true;
+            perm.push(v);
+            count += count_fitting(letters, mut perm, mut used);
+            perm.pop();
+            used[v] = false;
+        }
+    }
+    count
+}
+
+fn literal(s: String) -> i64 {
+    let letters = s.bytes().to_vec();
+    let mut perm: Vec[i64] = Vec.new();
+    let mut used: Vec[bool] = Vec.filled(letters.len() + 1, false);
+    count_fitting(letters, mut perm, mut used)
+}
+
+// ---- properties -----------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` letters: random, each 'D' with chance `d` in 10
+fn random_letters(seed: mut ref i64, len: i64, d: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if next_random(mut seed) % 10 < d { 'D' } else { 'I' });
+    }
+    s
+}
+
+// C(a, b) mod 10^9 + 7, from a row of Pascal's triangle
+fn binomial(a: i64, b: i64) -> i64 {
+    let m = 1000000007;
+    let mut row: Vec[i64] = vec![1];
+    for i in 1..a + 1 {
+        let mut next: Vec[i64] = Vec.filled(i + 1, 1);
+        for j in 1..i {
+            next[j] = (row[j - 1] + row[j]) % m;
+        }
+        row = next;
+    }
+    row[b]
+}
+
+fn substring(s: String, from: i64, to: i64) -> String {
+    let b = s.bytes().to_vec();
+    let mut out = String.new();
+    for i in from..to {
+        out.push(b[i] as char);
+    }
+    out
+}
+
+struct Tally {
+    checks: i64,
+    failures: Vec[i64],
+}
+
+fn check(t: mut ref Tally, p: i64, ok: bool) {
+    t.checks += 1;
+    if not ok {
+        t.failures[p - 1] += 1;
+    }
+}
+
+// P1 to P6 for one case over the five arms (P1 only when `small`).
+fn properties(t: mut ref Tally, seed: mut ref i64, s: String, small: bool) {
+    let m = 1000000007;
+    let n = s.len();
+    let want = if small { literal(s) } else { 0 };
+    let mut answers: Vec[i64] = Vec.new();
+    for x in 0..5 {
+        answers.push(arm(x, s));
+    }
+    // P2 and P3: every letter flipped, and the letters reversed
+    let mut flipped = String.new();
+    let mut reversed = String.new();
+    let b = s.bytes().to_vec();
+    for i in 0..n {
+        flipped.push(if b[i] == b'I' { 'D' } else { 'I' });
+        reversed.push(b[n - 1 - i] as char);
+    }
+    // P4: the letter at t made each way, the two sides then independent
+    let at = next_random(mut seed) % n;
+    let left = substring(s, 0, at);
+    let right = substring(s, at + 1, n);
+    let with_i = left.clone() + "I" + right.clone();
+    let with_d = left.clone() + "D" + right.clone();
+    let split = binomial(n + 1, at + 1);
+    for x in 0..5 {
+        let got = answers[x];
+        // P1: the statement's count
+        if small {
+            check(mut t, 1, got == want);
+        }
+        // P2: the same count with every letter flipped
+        check(mut t, 2, arm(x, flipped) == got);
+        // P3: the same count with the letters reversed
+        check(mut t, 3, arm(x, reversed) == got);
+        // P4: 'I' and 'D' at one place together count every order of the
+        // two sides' numbers: C(n + 1, at + 1) times the sides' counts
+        let both = (arm(x, with_i) + arm(x, with_d)) % m;
+        check(mut t, 4, both == split * arm(x, left) % m * arm(x, right) % m);
+        // P5: a letter of either kind after the rest, or before it, gives
+        // n + 2 times the count
+        let after = (arm(x, s.clone() + "I") + arm(x, s.clone() + "D")) % m;
+        let before = (arm(x, "I".to_string() + s.clone()) + arm(x, "D".to_string() + s.clone())) % m;
+        check(mut t, 5, after == (n + 2) * got % m and before == (n + 2) * got % m);
+        // P6: the arm agrees with at least two of the other four
+        let mut agree = 0;
+        for y in 0..5 {
+            if y != x and answers[y] == got {
+                agree += 1;
+            }
+        }
+        check(mut t, 6, agree >= 2);
+    }
+}
+
+fn main() {
+    let mut t = Tally { checks: 0, failures: [0, 0, 0, 0, 0, 0] };
+    let mut seed = 903;
+    let mut cases = 0;
+    let mut letters = 0;
+    // up to 5 letters against the statement; then up to 40; 'D' from 0 to
+    // 10 in 10
+    for c in 0..3200 {
+        let small = c < 3000;
+        let len = if small { 1 + next_random(mut seed) % 5 } else { 1 + next_random(mut seed) % 40 };
+        let s = random_letters(mut seed, len, c % 11);
+        cases += 1;
+        letters += len;
+        properties(mut t, mut seed, s, small);
+    }
+    let mut failures = 0;
+    let mut by = String.new();
+    for p in 0..6 {
+        failures += t.failures[p];
+        if t.failures[p] > 0 {
+            by = by + f" P{p + 1} {t.failures[p]}";
+        }
+    }
+    println(f"{cases} cases, {letters} letters, {t.checks} checks over 5 arms: {failures} failures");
+    if failures > 0 {
+        println(f"failures by property:{by}");
+    }
+}
